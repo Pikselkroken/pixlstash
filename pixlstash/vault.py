@@ -46,7 +46,8 @@ from .tasks.smart_score_task import SmartScoreTask
 from .utils.likeness.likeness_parameter_utils import LikenessParameterUtils
 from .tasks.base_task import TaskStatus
 from .task_runner import TaskRunner
-from .resources.arbiter import arbiter
+from .resources.arbiter import Lease, LeaseKind, Tenant, arbiter
+from .resources.ledger import ledger
 from .work_planner import WorkPlanner
 from .tasks import TaskType
 from .utils.reference_folder_watcher import ReferenceFolderWatcher
@@ -67,6 +68,16 @@ from pixlstash.utils.sql_chunking import chunked
 from pixlstash.services.scrapheap_service import DEFAULT_RETENTION_DAYS
 from pixlstash.services.workflow_ghost_service import DEFAULT_GHOST_RETENTION
 from pixlstash.services.snapshot_service import SnapshotService
+from pixlstash.utils.service.export_utils import ExportUtils
+from pixlstash.services.training_service import TrainingService
+from pixlstash.services.run_importer import STATUS_IMPORTED, RunImporter
+from pixlstash.services.model_mover import SHELF_IO_LOCK
+from pixlstash.services.managed_model_store import find_download_folder
+from pixlstash.services.model_shelf_service import (
+    fetch_attachments,
+    replace_attachments,
+)
+from pixlstash.db_models.adapter_attachment import ENTITY_CHARACTER, ENTITY_SET
 from pixlstash.services.restore import RestoreService
 from pixlstash.hub.registry import VAULT_FILENAME
 from pixlstash.trusted_sqlite import TrustedSQLiteLocation
@@ -82,6 +93,9 @@ logger = get_logger(__name__)
 #: How long making room waits, on the arbiter's thread, for the GPU batch in
 #: flight to end; past it the models are unloaded off that thread.
 YIELD_WAIT_S = 2.0
+#: What a LoRA training run asks the arbiter for: an estimate for the shipped
+#: template (Z-Image Turbo, quantized, low-VRAM), not a measurement.
+TRAINING_NEED_MB = 16 * 1024
 
 
 class Vault:
@@ -236,6 +250,9 @@ class Vault:
         # (§B4).
         self._hub = registered_hub
         self._library_uuid: Optional[str] = getattr(registered_library, "uuid", None)
+        # Built after the hub and library are known: training runs live in the
+        # hub, scoped to this library.
+        self.training_service = self._build_training_service(disable_background_workers)
         self._ghost_retention: str = ghost_retention
 
         self._planner_watchers = {}
@@ -446,6 +463,12 @@ class Vault:
         self._arbiter.add_listener(self._on_resource_lease)
         self._ref_folder_watcher.start()
         self._start_existing_folder_watches()
+        # Start the training worker after the yielder is registered, so the
+        # arbiter can move PixlStash's GPU work off the card for a run.
+        # reconcile_on_startup re-attaches any trainer that survived a restart (or finalizes a dead
+        # one) before new queued jobs are picked up.
+        self.training_service.start()
+        self.training_service.reconcile_on_startup()
         self._started = True
 
     def _create_engine(self) -> InferenceEngine:
@@ -784,6 +807,11 @@ class Vault:
         if timer is not None:
             timer.cancel()
         if self._started:
+            # Stop the training poll thread first.  This does NOT kill a running
+            # external trainer (by policy): it survives the restart and is
+            # re-attached by reconcile_on_startup on the next start().
+            if self.training_service is not None:
+                self.training_service.stop()
             if self._ref_folder_watcher is not None:
                 self._ref_folder_watcher.stop()
             if self._task_runner is not None:
@@ -905,6 +933,197 @@ class Vault:
             self._last_aggressive_unload_at = 0.0
             progress = self._build_worker_progress_snapshot()
             self._maybe_aggressive_unload(progress)
+
+    # -------------------------------------------------------------------------
+    # Training service
+    # -------------------------------------------------------------------------
+
+    def _build_training_service(
+        self, disable_background_workers: bool
+    ) -> TrainingService:
+        """Construct the TrainingService with vault-bound dependencies injected.
+
+        The service is decoupled from the Vault: it takes callables, not the
+        Vault itself.  Here we bind those callables to this vault: the VRAM
+        lease request, the event emitter, the owner-config reader, and the dataset
+        builder (``ExportUtils.build_training_dataset``, which needs an object
+        exposing ``.vault``; a tiny shim provides that).
+
+        Args:
+            disable_background_workers: Forwarded so the service's worker is a
+                no-op for read-only deployments.
+
+        Returns:
+            A configured :class:`TrainingService` (not yet started).
+        """
+        vault = self
+
+        class _DatasetServerShim:
+            """Minimal ``server`` stand-in exposing only ``.vault``.
+
+            ``ExportUtils.build_training_dataset`` reads only ``server.vault.*``
+            (db + image_root); the training dataset path never touches the
+            request/query branches, so this is sufficient and keeps the service
+            free of any HTTP-server coupling.
+            """
+
+            vault = None
+
+        shim = _DatasetServerShim()
+        shim.vault = vault
+
+        def dataset_builder(**kwargs):
+            return ExportUtils.build_training_dataset(shim, **kwargs)
+
+        return TrainingService(
+            self._hub,
+            self._library_uuid,
+            self.image_root,
+            request_gpu=self._request_training_gpu,
+            import_run=self._import_training_run,
+            notify=self.notify,
+            config_provider=self._training_config_provider,
+            dataset_builder=dataset_builder,
+            disable_background_workers=disable_background_workers,
+        )
+
+    def _training_config_provider(self) -> dict:
+        """Read the owner's ai-toolkit config from the hub-backed owner row.
+
+        The ai-toolkit paths and pinned commit are owner-level machine settings,
+        so they live on the hub's ``user`` row (the AuthService reads it), not
+        on this vault's legacy ``user`` table.
+
+        Returns:
+            ``{"repo_path", "python"}`` (empty values if unset, or
+            ``{}`` when no owner row or AuthService is attached yet).
+        """
+        auth = self.auth_service
+        if auth is None:
+            return {}
+        try:
+            user = auth.get_user()
+        except Exception as exc:
+            logger.warning("Could not read ai-toolkit owner config: %s", exc)
+            return {}
+        if user is None:
+            return {}
+        return {
+            "repo_path": user.ai_toolkit_repo_path,
+            "python": user.ai_toolkit_python,
+        }
+
+    def _import_training_run(self, run_dir: str, info: dict) -> dict:
+        """Bring a finished ai-toolkit run onto the model shelf as the job's LoRA.
+
+        The one path a trained LoRA takes onto the shelf: the run importer, into
+        the download folder's ``loras/`` subfolder when it has one (the rule a
+        LoRA download follows), with provenance ``trained``. The cover (stack
+        position 0) is then attached to the job's character or set.
+
+        Args:
+            run_dir: The ai-toolkit run folder holding the checkpoints.
+            info: The run's fields (``id``, ``name``, ``set_id``,
+                ``character_id``). ``id`` is the hub ``training_run`` row every
+                imported model is stamped with.
+
+        Returns:
+            ``{"stack_id", "imported", "cover_sha256"}``. ``cover_sha256`` is
+            ``None`` when the cover itself did not import.
+
+        Raises:
+            RuntimeError: No shelf or download folder to receive the run, or no
+                checkpoint of it imported.
+            MoveRefused: The importer refused the batch before writing anything.
+        """
+        hub = self._hub
+        if hub is None:
+            raise RuntimeError("No model shelf is open to receive the trained LoRA.")
+        folder = find_download_folder(hub)
+        if folder is None:
+            raise RuntimeError("No model folder is set up to receive the trained LoRA.")
+        subfolder = (
+            "loras" if os.path.isdir(os.path.join(folder["path"], "loras")) else None
+        )
+        # The run sits in the shelf's ai-toolkit folder, so that folder's
+        # `delete_after_import` decides whether its files stay, exactly as for
+        # an import the owner starts from the shelf.
+        run_real = os.path.realpath(run_dir)
+        delete_source = False
+        for row in hub.fetchall(
+            "SELECT path, delete_after_import FROM model_folder WHERE kind = 'source'"
+        ):
+            root = os.path.realpath(row["path"])
+            if os.path.commonpath([root, run_real]) == root:
+                delete_source = bool(row["delete_after_import"])
+                break
+        with SHELF_IO_LOCK:
+            report = RunImporter(hub).import_run(
+                run_dir,
+                folder["id"],
+                subfolder=subfolder,
+                delete_source=delete_source,
+                training_run_id=info["id"],
+            )
+        landed = [o for o in report.outcomes if o.status == STATUS_IMPORTED]
+        if not landed:
+            raise RuntimeError(f"No checkpoint of {report.run_name} could be imported.")
+
+        # Nothing is cancelled here, so outcomes[0] is the cover (position 0).
+        cover = report.outcomes[0]
+        cover_sha = None
+        if cover.status == STATUS_IMPORTED and cover.model_id is not None:
+            cover_sha = hub.fetchone(
+                "SELECT sha256 FROM model WHERE id = ?", (cover.model_id,)
+            )["sha256"]
+        else:
+            logger.warning(
+                "The cover of %s (%s) did not import; no LoRA is attached to %s.",
+                report.run_name,
+                cover.filename,
+                info.get("name"),
+            )
+
+        if cover_sha is not None:
+            wanted = []
+            if info.get("character_id") is not None:
+                wanted.append((ENTITY_CHARACTER, info["character_id"]))
+            elif info.get("set_id") is not None:
+                wanted.append((ENTITY_SET, info["set_id"]))
+            if wanted:
+                # A full replacement, so keep what the cover already carries.
+                held = fetch_attachments(self, sha256=cover_sha).get(cover_sha, [])
+                kept = [(a["entity_type"], a["entity_id"]) for a in held]
+                replace_attachments(self, cover_sha, kept + wanted)
+
+        return {
+            "stack_id": report.stack_id,
+            "imported": len(landed),
+            "cover_sha256": cover_sha,
+        }
+
+    def _request_training_gpu(self, label: str, job_uuid: str) -> Lease:
+        """Ask the arbiter for a training run's card: the one PixlStash uses.
+
+        Exclusive, so PixlStash yields its own GPU work first and an idle
+        ComfyUI frees its cache; the run's own process then has the card.
+        """
+        device = ledger().pixlstash_device()
+        reading = next((d for d in ledger().devices() if d.uuid == device), None)
+        need = TRAINING_NEED_MB
+        if reading is not None:
+            # ponytail: a fixed estimate capped at 60% of the card, so a small
+            # card running a low-VRAM config does not wait forever; the
+            # per-model presets replace it with each model's measured need.
+            need = min(need, int(reading.total_mb * 0.6))
+        return self._arbiter.request(
+            Tenant.AITOOLKIT,
+            label,
+            need_mb=need,
+            kind=LeaseKind.EXCLUSIVE,
+            device=device,
+            job_id=job_uuid,
+        )
 
     def set_max_vram_usage_gb(self, max_vram_gb: Optional[float]):
         """The most PixlStash's own GPU work may hold, and its batch sizing.

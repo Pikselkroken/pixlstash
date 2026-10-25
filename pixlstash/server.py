@@ -147,6 +147,8 @@ from pixlstash.routes.model_downloads import (
 )
 from pixlstash.routes.model_files import create_router as create_model_files_router
 from pixlstash.routes.model_folders import create_router as create_model_folders_router
+from pixlstash.routes.model_folders import register_model_folder
+from pixlstash.services.model_folder_scanner import SOURCE_FOLDER_KIND
 from pixlstash.routes.model_imports import create_router as create_model_imports_router
 from pixlstash.routes.model_moves import create_router as create_model_moves_router
 from pixlstash.routes.model_shelf import create_router as create_model_shelf_router
@@ -157,6 +159,7 @@ from pixlstash.routes.guest_scores import create_router as create_guest_scores_r
 from pixlstash.routes.share import create_router as create_share_router
 from pixlstash.routes.taggers import create_router as create_taggers_router
 from pixlstash.routes.snapshots import create_router as create_snapshots_router
+from pixlstash.routes.training import create_router as create_training_router
 from pixlstash.routes.telemetry import create_router as create_telemetry_router
 from pixlstash.routes.resources import create_router as create_resources_router
 from pixlstash.routes.test_hooks import create_router as create_test_hooks_router
@@ -2005,6 +2008,16 @@ class Server(
             prefix=API_V1_PREFIX,
             tags=["snapshots"],
             dependencies=gate,
+        )
+        self.api.include_router(
+            create_training_router(self),
+            prefix=API_V1_PREFIX,
+            dependencies=gate,
+        )
+        # A training job writes its run into the shelf's ai-toolkit (source)
+        # folder, registered through the same function the folder routes call.
+        self.vault.training_service.set_source_folder_registrar(
+            lambda path: register_model_folder(self, path, SOURCE_FOLDER_KIND)
         )
         # The workflow library's read side (implementation plan §F1/§F2). No
         # router-level ``tags=``: the module declares ``tags=["workflows"]``

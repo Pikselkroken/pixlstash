@@ -1534,3 +1534,70 @@ describe("the GPU queue in the task manager", () => {
     }
   });
 });
+
+describe("the AI Toolkit run in the task manager", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  function trainingLease(over = {}) {
+    return {
+      id: "lease-train",
+      tenant: "aitoolkit",
+      label: "LoRA training 'MyChar'",
+      kind: "exclusive",
+      state: "granted",
+      device: "GPU-1",
+      need_mb: 14336,
+      ram_mb: 0,
+      reserved_mb: 14336,
+      held_mb: 14336,
+      peak_mb: null,
+      since: "2026-10-22T10:00:00Z",
+      worker_type: null,
+      run_id: null,
+      job_id: "job-1",
+      workflow_id: null,
+      on_cpu: false,
+      warnings: [],
+      waiting_reason: null,
+      progress: { step: 2750, total: 4000, loss: 0.123 },
+      ...over,
+    };
+  }
+
+  it("is one row: its name, the step, total and loss it reports, and the VRAM it holds", () => {
+    setGpu(gpuAnswer({ leases: [trainingLease()] }));
+    const wrapper = mount(TasksPanel, globalOpts);
+    const row = wrapper.find('[data-testid="tm-aitoolkit-row"]');
+    expect(wrapper.findAll('[data-testid="tm-aitoolkit-row"]')).toHaveLength(1);
+    expect(row.find(".tm-name").text()).toContain("LoRA training 'MyChar'");
+    expect(row.find('[data-testid="tm-aitoolkit-progress"]').text()).toBe(
+      "step 2750/4000 · loss 0.123",
+    );
+    expect(row.find(".tm-fig-text").text()).toBe("14.0 GB");
+    expect(row.find(".tm-mark").classes("tm-mark--running")).toBe(true);
+  });
+
+  it("shows no step until the run reports a total", () => {
+    setGpu(gpuAnswer({ leases: [trainingLease({ progress: null })] }));
+    const wrapper = mount(TasksPanel, globalOpts);
+    expect(wrapper.find('[data-testid="tm-aitoolkit-row"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="tm-aitoolkit-progress"]').exists()).toBe(false);
+  });
+
+  it("draws the run once, with no PixlStash fold or worker row of its own", () => {
+    setGpu(gpuAnswer({ leases: [trainingLease()] }));
+    const wrapper = mount(TasksPanel, globalOpts);
+    expect(wrapper.find('[data-testid="tm-pixlstash"]').exists()).toBe(false);
+    expect(wrapper.findAll(".tm-worker-row")).toHaveLength(0);
+    expect(wrapper.findAll('[data-testid="tm-aitoolkit-row"]')).toHaveLength(1);
+  });
+
+  it("is listed under Waiting for the GPU while its lease waits, not as a running row", () => {
+    setGpu(gpuAnswer({ leases: [trainingLease({ state: "waiting", progress: null, held_mb: 0 })] }));
+    const wrapper = mount(TasksPanel, globalOpts);
+    expect(wrapper.find('[data-testid="tm-aitoolkit-row"]').exists()).toBe(false);
+    expect(wrapper.findAll('[data-testid="tm-waiting-row"]')).toHaveLength(1);
+  });
+});

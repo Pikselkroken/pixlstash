@@ -361,6 +361,14 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         # shelf holds, so the rollback must not hand either out.
         "/api/v1/comfyui/templates",
         "/api/v1/comfyui/templates/thumbnail",
+        # In-app LoRA training: the owner's jobs (rendered configs carry host
+        # paths) and the trainer templates.
+        "/api/v1/training/jobs",
+        "/api/v1/training/templates",
+        # The ai-toolkit install: where the checkout, its Python and the run
+        # folder are on this machine, and the discovery that finds them.
+        "/api/v1/training/ai-toolkit/discover",
+        "/api/v1/training/ai-toolkit/status",
     }
 )
 
@@ -392,6 +400,7 @@ READ_BLOCKED_GET_PREFIXES: tuple[str, ...] = (
     "/api/v1/recipes/",
     "/api/v1/reviews/",
     "/api/v1/snapshots/",
+    "/api/v1/training/jobs/",
     "/api/v1/workflows/",
 )
 

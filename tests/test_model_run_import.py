@@ -28,14 +28,18 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import struct
+from types import SimpleNamespace
 
 import pytest
 
+from pixlstash.hub import training_runs
 from pixlstash.services import model_mover as mover_module
 from pixlstash.services import run_importer as importer_module
 from pixlstash.services.model_mover import MoveRefused
 from pixlstash.services.stack_detector import set_cover
+from pixlstash.vault import Vault
 from pixlstash.services.run_importer import (
     PROVENANCE_TRAINED,
     STATUS_CANCELLED,
@@ -291,6 +295,39 @@ def test_an_import_records_trained_provenance_and_the_config_base_model(shelf):
     assert json.loads(row["trigger_words"]) == ["clemntn"]
     assert row["run_key"] == "Clementine"
     assert row["file_kind"] == "adapter"
+
+
+def test_a_run_imported_into_a_subfolder_lands_under_it(shelf):
+    """With a ``subfolder`` the files, their ``model_file`` rows and their
+    previews all sit under it - the shape a LoRA download gives a file that
+    belongs in ``loras/``."""
+    subfolder = shelf["destination_dir"] / "loras"
+    subfolder.mkdir()
+    report = RunImporter(shelf["hub"]).import_run(
+        str(shelf["run_dir"]), shelf["destination_id"], subfolder="loras"
+    )
+    assert {outcome.status for outcome in report.outcomes} == {STATUS_IMPORTED}
+    assert (subfolder / "Clementine.safetensors").is_file()
+    assert not (shelf["destination_dir"] / "Clementine.safetensors").exists()
+    assert (
+        subfolder / "Clementine_000000250_samples" / "1712345678901__000000250_0.jpg"
+    ).is_file()
+    relpaths = sorted(
+        row["relpath"]
+        for row in shelf["hub"].fetchall(
+            "SELECT relpath FROM model_file WHERE model_folder_id = ?",
+            (shelf["destination_id"],),
+        )
+    )
+    assert relpaths == sorted(
+        f"loras/{name}"
+        for name in (
+            "Clementine_000000250.safetensors",
+            "Clementine_000000500.safetensors",
+            "Clementine.safetensors",
+        )
+    )
+    assert_no_dangling_rows(shelf["hub"])
 
 
 def test_the_configs_trigger_word_beats_the_headers_tag_table(shelf):
@@ -756,3 +793,122 @@ def test_listing_runs_hashes_nothing_and_writes_nothing(shelf, monkeypatch):
     assert runs[0].base_model == "black-forest-labs/FLUX.1-dev"
     assert models(shelf["hub"]) == {}
     assert os.listdir(shelf["destination_dir"]) == []
+
+
+def _a_training_run(hub, run_uuid="run-clementine"):
+    """The hub row a PixlStash training run writes before it starts."""
+    return training_runs.create_run(
+        hub,
+        library_uuid="library-under-test",
+        uuid=run_uuid,
+        name="Clementine",
+        set_id=None,
+        character_id=None,
+        base_model="black-forest-labs/FLUX.1-dev",
+        trigger_word="clemntn",
+    )
+
+
+def test_every_model_an_import_creates_names_the_run_that_made_it(shelf):
+    run_id = _a_training_run(shelf["hub"])
+
+    RunImporter(shelf["hub"]).import_run(
+        str(shelf["run_dir"]), shelf["destination_id"], training_run_id=run_id
+    )
+
+    rows = models(shelf["hub"])
+    assert len(rows) == 3
+    assert {row["training_run_id"] for row in rows.values()} == {run_id}
+
+
+def test_a_run_trained_elsewhere_names_no_run(shelf):
+    RunImporter(shelf["hub"]).import_run(str(shelf["run_dir"]), shelf["destination_id"])
+
+    assert {row["training_run_id"] for row in models(shelf["hub"]).values()} == {None}
+
+
+def test_the_vault_hands_the_finished_runs_id_to_the_importer(shelf):
+    """The vault's hook is the one call site that knows the run's id.
+
+    ``_import_training_run`` reads only the hub, so it runs unbound on a
+    stand-in: the shelf's download folder receives the run, and every model it
+    lands names the run.
+    """
+    run_id = _a_training_run(shelf["hub"])
+    with shelf["hub"].transaction() as conn:
+        conn.execute(
+            "UPDATE model_folder SET is_download_target = 1 WHERE id = ?",
+            (shelf["destination_id"],),
+        )
+
+    stand_in = SimpleNamespace(_hub=shelf["hub"])
+    result = Vault._import_training_run(
+        stand_in,
+        str(shelf["run_dir"]),
+        {"id": run_id, "name": "Clementine", "set_id": None, "character_id": None},
+    )
+
+    assert result["imported"] == 3
+    assert {row["training_run_id"] for row in models(shelf["hub"]).values()} == {run_id}
+
+
+@pytest.mark.parametrize("delete_after_import", [0, 1])
+def test_a_trained_run_follows_its_source_folders_delete_after_import(
+    shelf, delete_after_import
+):
+    """The run lands in the shelf's ai-toolkit folder, so that folder decides.
+
+    Off, the trainer's files stay beside the shelf's copies; on, they go once
+    the copies are committed - the same rule an import from the shelf follows.
+    """
+    run_id = _a_training_run(shelf["hub"])
+    with shelf["hub"].transaction() as conn:
+        conn.execute(
+            "UPDATE model_folder SET is_download_target = 1 WHERE id = ?",
+            (shelf["destination_id"],),
+        )
+        conn.execute(
+            "UPDATE model_folder SET delete_after_import = ? WHERE id = ?",
+            (delete_after_import, shelf["source_id"]),
+        )
+
+    Vault._import_training_run(
+        SimpleNamespace(_hub=shelf["hub"]),
+        str(shelf["run_dir"]),
+        {"id": run_id, "name": "Clementine", "set_id": None, "character_id": None},
+    )
+
+    left = sorted(p.name for p in shelf["run_dir"].glob("*.safetensors"))
+    assert left == (
+        []
+        if delete_after_import
+        else [
+            "Clementine.safetensors",
+            "Clementine_000000250.safetensors",
+            "Clementine_000000500.safetensors",
+        ]
+    )
+
+
+def test_a_run_outside_the_source_folder_keeps_its_files(shelf, tmp_path):
+    """Only the folder holding the run decides: another one's switch is not it."""
+    run_id = _a_training_run(shelf["hub"])
+    with shelf["hub"].transaction() as conn:
+        conn.execute(
+            "UPDATE model_folder SET is_download_target = 1 WHERE id = ?",
+            (shelf["destination_id"],),
+        )
+        conn.execute(
+            "UPDATE model_folder SET delete_after_import = 1 WHERE id = ?",
+            (shelf["source_id"],),
+        )
+    elsewhere = tmp_path / "elsewhere" / "Clementine"
+    shutil.copytree(shelf["run_dir"], elsewhere)
+
+    Vault._import_training_run(
+        SimpleNamespace(_hub=shelf["hub"]),
+        str(elsewhere),
+        {"id": run_id, "name": "Clementine", "set_id": None, "character_id": None},
+    )
+
+    assert len(list(elsewhere.glob("*.safetensors"))) == 3

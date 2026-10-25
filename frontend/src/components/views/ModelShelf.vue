@@ -1330,6 +1330,17 @@
                          because it is a state of the listing and not of the
                          file. -->
                     <span v-if="row.hidden" class="shelf-chip">Hidden</span>
+                    <!-- A run PixlStash trained and imported. Neutral, like
+                         Hidden: it says where the file came from, not that
+                         anything needs doing. -->
+                    <span
+                      v-if="row.provenance === 'trained'"
+                      class="shelf-chip shelf-chip--trained"
+                      ><Tooltip
+                        text="Trained in PixlStash"
+                        activator="parent"
+                      />Trained</span
+                    >
                     <!-- The filename, on its own line under the name. It is what
                          the file is actually called, which the name above it may
                          well not be, and it is the string the reader pastes into
@@ -1467,6 +1478,20 @@
                 <template
                   v-if="row.memberCount > 1 && isStackOpen(row.stack_id)"
                 >
+                  <!-- The run's loss, first in its expansion: the curve of the
+                       training run these files came from. Only a trained run
+                       carries one; a run in another library draws nothing. -->
+                  <li
+                    v-if="row.training_run_id"
+                    class="shelf-run-loss-row"
+                    role="row"
+                    aria-level="2"
+                    data-testid="shelf-run-loss"
+                  >
+                    <span role="gridcell">
+                      <ShelfRunLoss :run-id="row.training_run_id" />
+                    </span>
+                  </li>
                   <li
                     v-for="member in row.members.slice(1)"
                     :key="memberKey(row, member)"
@@ -1759,6 +1784,7 @@ import TbGlobalActions from "../panels/TbGlobalActions.vue";
 import TbOverflowMenu from "../panels/TbOverflowMenu.vue";
 import AiToolkitIcon from "../widgets/AiToolkitIcon.vue";
 import TrainingRuns from "./TrainingRuns.vue";
+import ShelfRunLoss from "./ShelfRunLoss.vue";
 import { SOURCE_KIND } from "../../api/modelFolders";
 import FolderBrowser from "../editors/FolderBrowser.vue";
 import ModelMark from "../widgets/ModelMark.vue";
@@ -6472,6 +6498,13 @@ button.shelf-head-cell:hover {
 .shelf-row--member {
   padding-left: var(--space-7);
   color: rgb(var(--v-theme-on-surface-variant));
+}
+
+/* The run's loss chart: a full-width band, not a grid cell, so the chart takes
+   the row's width under the cover and its members. */
+.shelf-run-loss-row {
+  display: block;
+  padding: var(--space-3) var(--space-4) var(--space-3) var(--space-7);
 }
 
 .shelf-row--member .shelf-row-name {

@@ -451,8 +451,10 @@ jobs:
           CI_SHARD: ${{ matrix.shard }}
         run: >-
           python -m pytest $PYTEST_FLAGS --ci-shard "$CI_SHARD/8"
+          tests/db_models/test_training_models.py
           tests/multi_project_authz/test_generic_field_reader_allowlist.py
           tests/multi_project_authz/test_multi_project_membership_authz.py
+          tests/routes/test_training_api.py
           tests/test_adapter_attachment.py
           tests/test_adapter_header.py
           tests/test_aitoolkit_run.py
@@ -630,6 +632,7 @@ jobs:
           tests/test_telemetry_install_id.py
           tests/test_telemetry_install_id_authz.py
           tests/test_telemetry_sender.py
+          tests/test_training_dataset.py
           tests/test_vram_batch_budget.py
           tests/test_vram_oom_retry.py
           tests/test_watch_folder_worker.py
@@ -647,6 +650,10 @@ jobs:
           tests/test_workflow_versions.py
           tests/test_workflows_api.py
           tests/test_ws_broadcaster.py
+          tests/training/test_ai_toolkit_install.py
+          tests/training/test_config_render.py
+          tests/training/test_local_ai_toolkit.py
+          tests/training/test_training_service.py
 
   # ---------------------------------------------------------------------------
   # RELEASE-PREP ONLY — informational ordering sweep, sharded by contiguous

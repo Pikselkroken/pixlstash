@@ -2183,6 +2183,39 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
             "remains as defence in depth."
         ),
     ),
+    # ── routes/training.py (ai-toolkit LoRA training; owner-only, see the router docstring)
+    ("GET", "/api/v1/training/jobs"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/training/jobs/{job_id}"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/training/jobs/{job_id}/status"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/training/templates"): RoutePolicy(_OWNER),
+    ("POST", "/api/v1/training/jobs"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 starts an ai-toolkit trainer process on the host and writes the job's dataset and output under the image root; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("POST", "/api/v1/training/jobs/{job_id}/cancel"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 signals the host process group of a running trainer; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("DELETE", "/api/v1/training/jobs/{job_id}"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 removes a job's host work folder and dataset snapshot and its rows; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("GET", "/api/v1/training/ai-toolkit/discover"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 discloses host paths: it searches the owner's home directory and the shelf's folders for an ai-toolkit checkout and returns the paths it found and tried; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("POST", "/api/v1/training/ai-toolkit/check"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 starts the checkout's own Python on the host (a torch/CUDA probe and run.py --help); owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("GET", "/api/v1/training/ai-toolkit/status"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 discloses host paths: the configured checkout, its interpreter, its datasets folder and the run folder, with their run counts; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("PUT", "/api/v1/training/ai-toolkit/config"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 stores the host paths the trainer runs: the checkout (its working directory) and the Python that is argv[0] of the trainer process, both checked on this host; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
 }
 
 # Routes that exist only when a server-config flag is set. They are declared in

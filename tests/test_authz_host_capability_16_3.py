@@ -28,6 +28,7 @@ one-line rollback is ever taken.
 import contextlib
 import json
 import os
+import sys
 import tempfile
 
 import pytest
@@ -491,6 +492,18 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     has ComfyUI-Manager install third-party code (a pack from
     ``node_packs.KNOWN_PACKS`` at its pinned version) into the saved ComfyUI and
     restarts it, the host-shell class, so loopback only.
+    69 = 66 + 3 with in-app LoRA training: ``POST /training/jobs`` starts the
+    owner's configured trainer on this machine, and ``POST
+    /training/jobs/{job_id}/cancel`` and ``DELETE /training/jobs/{job_id}`` stop
+    it and remove its host work folder. A finished run's LoRA is a model-shelf
+    row now, so the ``/loras`` routes that once removed and disclosed its file
+    are gone with the ``TrainedLora`` table.
+    72 = 69 + 3 with the ai-toolkit install: ``GET /training/ai-toolkit/discover``
+    and ``GET /training/ai-toolkit/status`` disclose the checkout's host paths,
+    and ``POST /training/ai-toolkit/check`` starts the checkout's Python.
+    64 = 63 + 1 with ``PUT /training/ai-toolkit/config``, which stores the checkout
+    and its Python (the trainer's argv[0]) out of ``PATCH /users/me/config``, so the
+    gate, not the PATCH handler, carries the locality rule (review F2).
 
     Arithmetic, not judgement."""
     loopback = {
@@ -505,7 +518,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 9, sorted(loopback)
-    assert len(local) == 57, sorted(local)
+    assert len(local) == 64, sorted(local)
 
 
 # ===========================================================================
@@ -1363,3 +1376,140 @@ def test_conditionally_mounted_routes_are_all_declared():
     assert CONDITIONALLY_MOUNTED_ROUTES, "the set must not silently empty out"
     missing = CONDITIONALLY_MOUNTED_ROUTES - set(ROUTE_POLICIES)
     assert not missing, f"conditional routes with no declaration: {sorted(missing)}"
+
+
+# ---- ai-toolkit training: host-process routes and the trainer's settings -------
+
+
+def test_training_host_routes_refuse_a_remote_owner_and_admit_lan():
+    """POST /training/jobs, POST .../cancel and DELETE /training/jobs/{id} are
+    LOCAL_OWNER_ONLY: a public owner is 403'd naming the flag, and the same
+    route answers from the LAN, which is the in-scope control that proves the
+    route resolves and the 403 is the locality gate, not a dead path."""
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server), _remote_host_ops(server, False):
+            # POST with an empty body: the gate admits the LAN owner, then the
+            # body fails validation (422), which proves the route handled it.
+            remote = owner.post(
+                f"{API}/training/jobs", json={}, headers=_xff("8.8.8.8")
+            )
+            assert remote.status_code == 403, remote.text
+            assert "allow_remote_host_ops" in remote.text, remote.text
+            lan = owner.post(f"{API}/training/jobs", json={}, headers=_xff(LAN_IPV4))
+            assert not _is_locality_403(lan), lan.text
+            assert lan.status_code == 422, lan.text
+
+            for method in ("cancel", "delete"):
+                path = f"{API}/training/jobs/999999" + (
+                    "/cancel" if method == "cancel" else ""
+                )
+                call = owner.post if method == "cancel" else owner.delete
+                remote = call(path, headers=_xff("8.8.8.8"))
+                assert remote.status_code == 403, (path, remote.text)
+                assert "allow_remote_host_ops" in remote.text, remote.text
+                # The LAN owner reaches the handler: an unknown job is its 404.
+                lan = call(path, headers=_xff(LAN_IPV4))
+                assert lan.status_code == 404, (path, lan.text)
+                assert "Training job not found" in lan.text, lan.text
+
+
+def test_training_host_routes_admit_a_remote_owner_with_the_flag_on():
+    """The dedicated flag is the one way a remote owner starts or deletes a
+    trainer job; the same route answers the handler, not the gate."""
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server), _remote_host_ops(server, True):
+            r = owner.delete(f"{API}/training/jobs/999999", headers=_xff("8.8.8.8"))
+            assert r.status_code == 404, r.text
+            assert "Training job not found" in r.text, r.text
+
+
+def test_ai_toolkit_install_routes_refuse_a_remote_owner_and_admit_lan():
+    """discover and status disclose host paths; check starts the checkout's
+    Python. All three are LOCAL_OWNER_ONLY: a remote owner is 403'd naming the
+    flag, and the LAN owner reaches the handler (200 for the GETs, 422 for a
+    check with no body, which is the handler's own validation)."""
+    cases = (
+        ("get", f"{API}/training/ai-toolkit/discover", None, 200),
+        ("get", f"{API}/training/ai-toolkit/status", None, 200),
+        ("post", f"{API}/training/ai-toolkit/check", {}, 422),
+        (
+            "put",
+            f"{API}/training/ai-toolkit/config",
+            {"repo_path": None, "python": None},
+            200,
+        ),
+    )
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server), _remote_host_ops(server, False):
+            for method, path, body, lan_status in cases:
+                call = getattr(owner, method)
+                kwargs = {} if body is None else {"json": body}
+                remote = call(path, headers=_xff("8.8.8.8"), **kwargs)
+                assert remote.status_code == 403, (path, remote.text)
+                assert "allow_remote_host_ops" in remote.text, (path, remote.text)
+                lan = call(path, headers=_xff(LAN_IPV4), **kwargs)
+                assert not _is_locality_403(lan), (path, lan.text)
+                assert lan.status_code == lan_status, (path, lan.text)
+
+
+def test_ai_toolkit_discover_admits_a_remote_owner_with_the_flag_on():
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server), _remote_host_ops(server, True):
+            r = owner.get(
+                f"{API}/training/ai-toolkit/discover", headers=_xff("8.8.8.8")
+            )
+            assert r.status_code == 200, r.text
+            assert "searched" in r.json(), r.text
+
+
+def test_ai_toolkit_config_refuses_a_remote_owner_and_admits_lan():
+    """PUT /training/ai-toolkit/config stores the checkout and the Python that is
+    argv[0] of the trainer, so it is LOCAL_OWNER_ONLY: a remote owner is 403'd
+    naming the flag, even to disconnect, and the LAN owner saves the Python and
+    reads it back. The flag admits the remote owner. PATCH /users/me/config no
+    longer writes these keys: it refuses them with 422 from any address."""
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server), _remote_host_ops(server, False):
+            body = {"repo_path": None, "python": sys.executable}
+            remote = owner.put(
+                f"{API}/training/ai-toolkit/config", json=body, headers=_xff("8.8.8.8")
+            )
+            assert remote.status_code == 403, remote.text
+            assert "allow_remote_host_ops" in remote.text, remote.text
+            cleared = owner.put(
+                f"{API}/training/ai-toolkit/config",
+                json={"repo_path": None, "python": None},
+                headers=_xff("8.8.8.8"),
+            )
+            assert cleared.status_code == 403, cleared.text
+
+            lan = owner.put(
+                f"{API}/training/ai-toolkit/config", json=body, headers=_xff(LAN_IPV4)
+            )
+            assert lan.status_code == 200, lan.text
+            stored = owner.get(f"{API}/users/me/config", headers=_xff(LAN_IPV4)).json()
+            assert stored["ai_toolkit_python"] == sys.executable
+
+            for address in (LAN_IPV4, "8.8.8.8"):
+                patched = owner.patch(
+                    f"{API}/users/me/config",
+                    json={"ai_toolkit_python": None},
+                    headers=_xff(address),
+                )
+                assert patched.status_code == 422, (address, patched.text)
+                assert "PUT /api/v1/training/ai-toolkit/config" in patched.text
+            stored = owner.get(f"{API}/users/me/config", headers=_xff(LAN_IPV4)).json()
+            assert stored["ai_toolkit_python"] == sys.executable
+
+        with _enforcing(server), _remote_host_ops(server, True):
+            admitted = owner.put(
+                f"{API}/training/ai-toolkit/config",
+                json={"repo_path": None, "python": None},
+                headers=_xff("8.8.8.8"),
+            )
+            assert admitted.status_code == 200, admitted.text

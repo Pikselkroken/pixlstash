@@ -393,6 +393,23 @@ export const useTasksStore = defineStore("tasks", () => {
     );
   }
 
+  // The AI Toolkit run that holds the card: one row, with the step, total and
+  // latest loss the run reports on its lease. A waiting one is listed by
+  // waitingEntries, through the same lease.
+  const aitoolkitEntries = computed(() =>
+    leases.value
+      .filter(
+        (lease) => lease.tenant === "aitoolkit" && lease.state === "granted",
+      )
+      .map((lease) => ({
+        kind: "aitoolkit",
+        key: `lease:${lease.id}`,
+        label: lease.label || "AI Toolkit",
+        figureMb: lease.held_mb ?? null,
+        progress: lease.progress ?? null,
+      })),
+  );
+
   // One row per ComfyUI run that is not held: the run's own label, its percent
   // and the VRAM its lease holds. ComfyUI works through them one at a time, and
   // the abort on a row stops every run in flight.
@@ -574,6 +591,7 @@ export const useTasksStore = defineStore("tasks", () => {
   const runningEntries = computed(() => [
     ...comfyuiEntries.value,
     ...downloadEntries.value,
+    ...aitoolkitEntries.value,
     ...(pixlstashEntry.value ? [pixlstashEntry.value] : []),
     ...importEntries.value,
   ]);

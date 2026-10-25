@@ -1,11 +1,54 @@
 """User settings serialisation and patching utilities."""
 
 import json
+import os
 
 from pixlstash.utils.system_utils import (  # noqa: F401
     MAX_VRAM_BUDGET_GB,
     default_max_vram_gb,
     max_vram_budget_gb,
+)
+
+
+def validate_ai_toolkit_settings(repo_path: str | None, python: str | None) -> None:
+    """Check the ai-toolkit paths a PATCH is about to store.
+
+    ``python`` becomes argv[0] of the trainer process and ``repo_path`` is its
+    working directory, so both must name real things on this host. A ``None``
+    value is not checked (it clears the setting, or is left unchanged).
+
+    Args:
+        repo_path: The ai-toolkit checkout directory, or ``None``.
+        python: The interpreter that runs the trainer, or ``None``.
+
+    Raises:
+        ValueError: With a message naming the problem, if either path is not an
+            absolute path to the expected kind of file or directory.
+    """
+    if repo_path:
+        if not os.path.isabs(repo_path):
+            raise ValueError("ai_toolkit_repo_path must be an absolute path.")
+        if not os.path.isdir(repo_path):
+            raise ValueError("ai_toolkit_repo_path must be an existing directory.")
+        if not os.path.isfile(os.path.join(repo_path, "run.py")):
+            raise ValueError(
+                "ai_toolkit_repo_path has no run.py; point it at the ai-toolkit checkout."
+            )
+    if python:
+        if not os.path.isabs(python):
+            raise ValueError("ai_toolkit_python must be an absolute path.")
+        if not (os.path.isfile(python) and os.access(python, os.X_OK)):
+            raise ValueError("ai_toolkit_python must be an existing executable file.")
+
+
+# The ai-toolkit keys a PATCH to /users/me/config may not write. The checkout and
+# its Python are stored only by PUT /training/ai-toolkit/config, where the host
+# locality rule is declared on the route; the commit is read from the checkout
+# when a job starts.
+AI_TOOLKIT_CONFIG_KEYS = (
+    "ai_toolkit_repo_path",
+    "ai_toolkit_python",
+    "ai_toolkit_commit",
 )
 
 
@@ -64,6 +107,9 @@ def serialize_user_config(user) -> dict:
         "date_format",
         "theme_mode",
         "comfyui_url",
+        "ai_toolkit_repo_path",
+        "ai_toolkit_python",
+        "ai_toolkit_commit",
         "public_url",
         "similarity_character",
         "stack_strictness",
@@ -84,6 +130,9 @@ def serialize_user_config(user) -> dict:
     # predates a newly-added setting simply falls back to the default rather
     # than raising - keeps serialisation resilient to schema growth.
     config = {
+        # Fall back to the default when the source lacks the attribute or it is
+        # None. A source missing a newly-added field (e.g. a fake user in tests
+        # or an ORM row read before its column migration ran) must not raise.
         key: (
             getattr(source, key, None)
             if getattr(source, key, None) is not None
@@ -183,6 +232,9 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "date_format",
         "theme_mode",
         "comfyui_url",
+        "ai_toolkit_repo_path",
+        "ai_toolkit_python",
+        "ai_toolkit_commit",
         "public_url",
         "similarity_character",
         "stack_strictness",
@@ -254,6 +306,21 @@ def apply_user_config_patch(user, patch_data) -> bool:
                 new_value = str(value).strip()
             if user.comfyui_url != new_value:
                 user.comfyui_url = new_value
+                updated = True
+            continue
+        if key in {
+            "ai_toolkit_repo_path",
+            "ai_toolkit_python",
+            "ai_toolkit_commit",
+        }:
+            # Plain string path/commit settings: coerce empty/null to None and
+            # trim whitespace, exactly like comfyui_url.
+            if value in ("", None, "null"):
+                new_value = None
+            else:
+                new_value = str(value).strip()
+            if getattr(user, key) != new_value:
+                setattr(user, key, new_value)
                 updated = True
             continue
         if key == "public_url":

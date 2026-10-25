@@ -1,0 +1,1154 @@
+"""Durable single-worker orchestrator that turns queued jobs into LoRAs.
+
+The :class:`TrainingService` is the layer between PixlStash's data model and the
+trainer adapter (:class:`~pixlstash.training.local_ai_toolkit.LocalAiToolkit`).
+It owns the job lifecycle: pick the oldest queued training run, snapshot
+its dataset, wait for the VRAM arbiter's lease, drive the adapter (``prepare`` → ``submit`` →
+poll → finalize), and hand the finished run to the model shelf when it completes.
+Exactly one job runs at a time because a single GPU is the binding constraint.
+
+It is built with **dependency injection** so the whole thing is testable without
+a GPU (or even a full Vault): every external collaborator is a callable handed
+to the constructor: the VRAM lease request, the run importer, the event emitter,
+the owner-config reader, the dataset builder, and the trainer-backend factory. The default backend
+factory builds a real :class:`LocalAiToolkit`; tests pass one pointed at a CPU
+stub.
+
+Shutdown policy (important): :meth:`stop` does **not** terminate a running
+external trainer. The trainer runs in its own process group and is expected to
+survive a PixlStash restart; :meth:`stop` only halts the poll thread and joins
+it with a timeout. On the next startup, :meth:`reconcile_on_startup` re-attaches
+to any still-alive run (asking for its lease again and resuming polling) so a
+multi-hour run is never killed by a server bounce. The only thing that stops a
+run is an explicit :meth:`cancel` (a user action).
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import threading
+import uuid
+from typing import Callable
+
+from pixlstash.event_types import EventType
+from pixlstash.hub import training_runs
+from pixlstash.hub.db import HubDatabase, now_iso
+from pixlstash.pixl_logging import get_logger
+from pixlstash.resources.arbiter import Lease
+from pixlstash.services.model_folder_scanner import SOURCE_FOLDER_KIND
+from pixlstash.training import ai_toolkit_install
+from pixlstash.training.backend import TrainerBackend, TrainingProgress, TrainingSpec
+from pixlstash.training.local_ai_toolkit import LocalAiToolkit
+
+logger = get_logger(__name__)
+
+# Statuses that mean the job is finished and must not be re-polled / re-run.
+_TERMINAL_JOB_STATUSES = frozenset({"completed", "stopped", "error"})
+# Adapter progress statuses that mean the external process has reached an end
+# state; the poll loop exits once the process is dead AND status is terminal.
+_TERMINAL_PROGRESS_STATUSES = frozenset({"completed", "stopped", "error"})
+# Cap on the trainer log tail we persist onto the job row.
+_LOG_TAIL_BYTES = 8192
+
+
+class TrainingService:
+    """Drive queued training runs to finished LoRAs on the shelf.
+
+    One background thread runs at a time and processes queued jobs FIFO (oldest
+    ``created_at`` first). See the module docstring for the dependency-injection
+    rationale and the shutdown/reconcile policy.
+
+    Attributes:
+        poll_interval_s: Seconds between progress polls of a running job.
+    """
+
+    def __init__(
+        self,
+        hub: HubDatabase | None,
+        library_uuid: str | None,
+        image_root: str,
+        *,
+        request_gpu: Callable[[str, str], Lease],
+        import_run: Callable[[str, dict], dict],
+        notify: Callable[[EventType, dict], None],
+        config_provider: Callable[[], dict],
+        dataset_builder: Callable[..., dict],
+        backend_factory: Callable[[str, str], TrainerBackend] | None = None,
+        poll_interval_s: float = 5.0,
+        disable_background_workers: bool = False,
+        register_source_folder: Callable[[str], None] | None = None,
+    ) -> None:
+        """Initialise the service.
+
+        Args:
+            hub: The open hub, which holds the ``training_run`` rows. None when
+                no hub is open: the service then never starts and refuses new
+                runs.
+            library_uuid: The library this service trains for. Every run it
+                reads or writes is scoped to it, so another library's queue is
+                never claimed here.
+            image_root: Vault root. Per-job work dirs live in
+                ``<image_root>/training/<job_uuid>/``.
+            request_gpu: Asks the VRAM arbiter for a run's memory, called as
+                ``request_gpu(label, job_uuid)``; returns the arbiter's
+                :class:`~pixlstash.resources.arbiter.Lease`, granted or waiting.
+            import_run: Brings a completed run onto the model shelf, called as
+                ``import_run(run_dir, job_info)`` where ``run_dir`` is the
+                ai-toolkit run folder holding the checkpoints. Returns a dict
+                describing what landed. Raising marks the job ``error``.
+            notify: Emits an event (``event_type, data``) to the UI/listeners.
+            config_provider: Returns the owner's ai-toolkit config as
+                ``{"repo_path", "python"}``.
+            dataset_builder: Builds the dataset snapshot; called as
+                ``dataset_builder(dest_dir=..., set_id=..., character_id=...,
+                trigger_word=...)`` and returns a manifest with ``image_count``
+                and ``picture_ids``.
+            backend_factory: Builds a :class:`TrainerBackend` from
+                ``(repo_path, python)``. Defaults to constructing a real
+                :class:`LocalAiToolkit`.
+            poll_interval_s: Seconds between progress polls of a running job.
+            disable_background_workers: When True, :meth:`start` is a no-op
+                (mirrors the Vault flag for read-only deployments).
+            register_source_folder: Adds a folder to the model shelf as its
+                ``source`` (ai-toolkit output) folder, called as
+                ``register_source_folder(path)``. Goes through the same
+                registration the folder routes use. Called at most once, when a
+                job starts and the shelf has no source folder yet. ``None``
+                means a job that needs one fails with a clear error.
+        """
+        self._hub = hub
+        self._library_uuid = library_uuid
+        self._image_root = image_root
+        self._request_gpu = request_gpu
+        self._import_run = import_run
+        self._notify = notify
+        self._config_provider = config_provider
+        self._dataset_builder = dataset_builder
+        self._backend_factory = backend_factory or (
+            lambda repo_path, python: LocalAiToolkit(repo_path, python)
+        )
+        self.poll_interval_s = poll_interval_s
+        self._disable_background_workers = disable_background_workers
+        self._register_source_folder = register_source_folder
+
+        # Per-job work dirs (job.db, the rendered config, the pending sidecar).
+        # The run itself lives in the shelf's source folder, the dataset under
+        # the checkout's datasets/ folder.
+        self._training_root = os.path.join(image_root, "training")
+
+        # Per-job spec extras (template_path / config_overrides) that have no
+        # dedicated columns. Keyed by job uuid; populated by enqueue, consumed
+        # by the worker. Persisted to a per-job sidecar so a restart can recover
+        # them when re-running a job that was still queued.
+        self._pending_specs: dict[str, dict] = {}
+        self._pending_specs_lock = threading.Lock()
+
+        # Single worker thread + its lifecycle primitives.
+        self._stop = threading.Event()
+        self._wake = threading.Event()
+        self._thread: threading.Thread | None = None
+        # The adapter currently driving a job, so cancel() can reach it. Set
+        # while a job is running, cleared in the worker's finally.
+        self._active_backend: TrainerBackend | None = None
+        self._active_job_uuid: str | None = None
+        # The lease a claimed job is still waiting on, so cancel() can drop it.
+        self._waiting: tuple[str, Lease] | None = None
+        self._active_lock = threading.Lock()
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    def start(self) -> None:
+        """Start the single worker thread. No-op if workers are disabled."""
+        if self._disable_background_workers:
+            logger.info("TrainingService: background workers disabled; not starting.")
+            return
+        if self._hub is None or not self._library_uuid:
+            logger.warning(
+                "TrainingService: no hub or library open; training is unavailable."
+            )
+            return
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._wake.clear()
+        self._thread = threading.Thread(
+            target=self._run, name="TrainingService", daemon=True
+        )
+        self._thread.start()
+        logger.info("TrainingService worker started.")
+
+    def stop(self) -> None:
+        """Stop the poll thread and join it with a timeout.
+
+        Does NOT terminate a running external trainer (see the module
+        docstring): the process is left running and re-attached on the next
+        :meth:`reconcile_on_startup`. Safe to call multiple times.
+        """
+        self._stop.set()
+        self._wake.set()
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout=10.0)
+            if thread.is_alive():
+                logger.warning(
+                    "TrainingService worker did not stop within timeout; the poll "
+                    "loop will exit at its next iteration. The external trainer "
+                    "(if any) is intentionally left running for reconcile."
+                )
+        self._thread = None
+        logger.info("TrainingService worker stopped (external trainer left running).")
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def enqueue(
+        self,
+        *,
+        set_id: int | None = None,
+        character_id: int | None = None,
+        name: str,
+        base_model: str,
+        trigger_word: str,
+        template_path: str,
+        config_overrides: dict | None = None,
+    ) -> dict:
+        """Create a queued training run and wake the worker.
+
+        Exactly one of ``set_id`` / ``character_id`` must be given (the
+        set/character invariant). The job is persisted with a fresh uuid and
+        ``status="queued"``; the worker picks it up FIFO.
+
+        Args:
+            set_id: Picture-set to train on (mutually exclusive with
+                ``character_id``).
+            character_id: Character to train on (mutually exclusive with
+                ``set_id``).
+            name: Human-readable job name.
+            base_model: Base checkpoint the LoRA trains against.
+            trigger_word: Caption trigger word baked into the dataset.
+            template_path: Path to the golden ai-toolkit config template.
+            config_overrides: Optional deep-merge config patch (stored on the
+                job for the run; not persisted as a column).
+
+        Returns:
+            The persisted run, as the hub row (a dict of its columns).
+
+        Raises:
+            ValueError: If not exactly one of ``set_id`` / ``character_id`` is
+                provided.
+            RuntimeError: No hub or library is open to hold the run.
+        """
+        if (set_id is None) == (character_id is None):
+            raise ValueError(
+                "Exactly one of set_id / character_id must be provided "
+                f"(got set_id={set_id!r}, character_id={character_id!r})."
+            )
+        hub, library_uuid = self._store()
+
+        job_uuid = uuid.uuid4().hex
+        run_id = training_runs.create_run(
+            hub,
+            library_uuid=library_uuid,
+            uuid=job_uuid,
+            name=name,
+            set_id=set_id,
+            character_id=character_id,
+            base_model=base_model,
+            trigger_word=trigger_word,
+        )
+        job = training_runs.get_run(hub, library_uuid, run_id)
+        # The template path + config overrides have no dedicated column. Keep
+        # them in memory for the common (no-restart) case and also persist a
+        # sidecar so a restart can recover a still-queued job's spec.
+        pending = {"template_path": template_path, "config_overrides": config_overrides}
+        with self._pending_specs_lock:
+            self._pending_specs[job_uuid] = pending
+        self._write_pending_sidecar(job_uuid, pending)
+        logger.info(
+            "Enqueued training job %s (name=%s, set_id=%s, character_id=%s).",
+            job_uuid,
+            name,
+            set_id,
+            character_id,
+        )
+        self._wake.set()
+        return job
+
+    def set_source_folder_registrar(self, register: Callable[[str], None]) -> None:
+        """Bind the function that registers the shelf's ``source`` folder.
+
+        The server calls this once it has its folder registration; see the
+        ``register_source_folder`` argument of the constructor.
+
+        Args:
+            register: Called as ``register(path)``.
+        """
+        self._register_source_folder = register
+
+    def cancel(self, job_id: int) -> bool:
+        """Cooperatively cancel a job by primary-key id.
+
+        Loads the job, and if it is the one currently running, asks the active
+        backend to cancel it (cooperative stop, escalating to signals if
+        needed). Marks the job ``stopping``; the poll loop observes the terminal
+        process state and finalizes it. If the job is queued (not yet started),
+        it is marked ``stopped`` directly.
+
+        Args:
+            job_id: Primary key of the ``training_run`` row to cancel.
+
+        Returns:
+            ``True`` if a job was found and a cancel was actioned, else
+            ``False``.
+        """
+
+        hub, library_uuid = self._store()
+        info = training_runs.get_run(hub, library_uuid, job_id)
+        if info is None:
+            logger.warning("cancel: no training job with id=%s", job_id)
+            return False
+
+        if info["status"] in _TERMINAL_JOB_STATUSES:
+            logger.info(
+                "cancel: job %s already terminal (%s); nothing to do.",
+                info["uuid"],
+                info["status"],
+            )
+            return False
+
+        if info["status"] == "queued":
+            # Not started yet: mark it stopped so the worker skips it, and drop
+            # the lease it may be waiting on so the worker moves on.
+            with self._active_lock:
+                waiting = self._waiting
+            if waiting is not None and waiting[0] == info["uuid"]:
+                waiting[1].release()
+            self._update_job(
+                info["uuid"], status="stopped", error="Cancelled before start"
+            )
+            self._emit_progress(
+                info["uuid"], status="stopped", message="Cancelled before start"
+            )
+            logger.info("cancel: queued job %s marked stopped.", info["uuid"])
+            return True
+
+        # Running/stopping: mark the job 'stopping' BEFORE signalling the
+        # backend. backend.cancel() blocks until the process exits, by which
+        # point the worker's poll loop may have already finalized the job to its
+        # terminal status; writing 'stopping' after that would clobber the
+        # terminal state. Marking it first lets the worker's _finalize win.
+        self._update_job(info["uuid"], status="stopping")
+        logger.info("cancel: job %s asked to stop (status=stopping).", info["uuid"])
+
+        with self._active_lock:
+            backend = self._active_backend
+            active_uuid = self._active_job_uuid
+        if backend is not None and active_uuid == info["uuid"]:
+            handle = self._handle_for_job(backend, info)
+            backend.cancel(handle)
+        else:
+            # Not the active job (e.g. a re-attached run polled by another
+            # cycle): build a transient backend to deliver the cooperative stop.
+            transient = self._make_backend()
+            handle = self._handle_for_job(transient, info)
+            transient.cancel(handle)
+
+        return True
+
+    def reconcile_on_startup(self) -> None:
+        """Resolve jobs left ``running`` / ``stopping`` across a restart.
+
+        For each such job: reconstruct its handle and check liveness. If the
+        external trainer is still alive, re-attach: ask for its VRAM lease again and
+        resume polling it on the worker thread (a restart must not kill an
+        in-flight multi-hour run). If it is dead, finalize from its persisted
+        status / on-disk checkpoints (completed → imported to the shelf, else
+        ``error``).
+        """
+        if self._disable_background_workers or self._hub is None:
+            return
+
+        try:
+            unfinished = training_runs.unfinished_runs(self._hub, self._library_uuid)
+        except Exception:
+            logger.exception("reconcile_on_startup: failed to load unfinished jobs")
+            return
+
+        for info in unfinished:
+            try:
+                self._reconcile_one(info)
+            except Exception:
+                logger.exception(
+                    "reconcile_on_startup: failed to reconcile job %s", info["uuid"]
+                )
+
+    def _reconcile_one(self, info: dict) -> None:
+        """Reconcile a single unfinished job (alive → re-attach, dead → finish).
+
+        Args:
+            info: A dict of persisted job fields (uuid, name, status, pid,
+                training_folder, set_id, character_id).
+        """
+        if not info.get("training_folder"):
+            # Never got far enough to launch; treat as interrupted.
+            logger.warning(
+                "reconcile: job %s has no training_folder; marking error.",
+                info["uuid"],
+            )
+            self._update_job(
+                info["uuid"],
+                status="error",
+                error="Interrupted before launch (no training folder recorded)",
+            )
+            return
+
+        backend = self._make_backend()
+        handle = self._handle_for_job(backend, info)
+        if backend.is_alive(handle):
+            logger.info(
+                "reconcile: job %s still alive (pid=%s); re-attaching.",
+                info["uuid"],
+                info["pid"],
+            )
+            # ponytail: asked for, not adopted. The run already holds the card,
+            # so the lease is granted once PixlStash has yielded; the plan's
+            # adopt() would grant it at once, with a boot quiet period.
+            lease = self._request_gpu(self._lease_label(info), info["uuid"])
+            # Resume polling on the worker thread, owning the lease until the
+            # run ends. We deliberately hand off to a fresh thread so startup is
+            # not blocked by a multi-hour run.
+            self._wake.set()  # ensure the worker is awake to also pick queued work
+            reattach = threading.Thread(
+                target=self._poll_and_finalize_reattached,
+                args=(backend, handle, info, lease),
+                name=f"TrainingReattach-{info['uuid'][:8]}",
+                daemon=True,
+            )
+            reattach.start()
+            return
+
+        # Dead process: trust the adapter's reconcile to derive the terminal
+        # state, then finalize from it.
+        logger.info("reconcile: job %s is dead; finalizing from disk.", info["uuid"])
+        progress = backend.reconcile(handle)
+        self._finalize(backend, handle, info, progress)
+
+    def _poll_and_finalize_reattached(
+        self, backend: TrainerBackend, handle, info: dict, lease: Lease
+    ) -> None:
+        """Resume polling a re-attached live job, then finalize and release GPU.
+
+        Args:
+            backend: The backend bound to the live run.
+            handle: The reconstructed handle.
+            info: Persisted job fields.
+            lease: The run's VRAM lease, released when the run ends.
+        """
+        with self._active_lock:
+            self._active_backend = backend
+            self._active_job_uuid = info["uuid"]
+        try:
+            progress = self._poll_until_done(backend, handle, info["uuid"], lease)
+            self._finalize(backend, handle, info, progress)
+        except Exception:
+            logger.exception("Re-attached job %s failed during polling", info["uuid"])
+            self._update_job(
+                info["uuid"], status="error", error="Polling failed after re-attach"
+            )
+        finally:
+            with self._active_lock:
+                self._active_backend = None
+                self._active_job_uuid = None
+            lease.release()
+
+    # ------------------------------------------------------------------
+    # Worker loop
+    # ------------------------------------------------------------------
+
+    def _run(self) -> None:
+        """The single worker thread: process queued jobs FIFO."""
+        while not self._stop.is_set():
+            ran = False
+            try:
+                ran = self._process_next_queued_job()
+            except Exception:
+                logger.exception("TrainingService worker iteration failed")
+            if self._stop.is_set():
+                break
+            # If we ran a job, immediately look for the next one; otherwise wait
+            # for a wake (enqueue/cancel) or a poll interval.
+            if not ran:
+                self._wake.wait(self.poll_interval_s)
+            self._wake.clear()
+        logger.info("TrainingService worker loop exited.")
+
+    def _process_next_queued_job(self) -> bool:
+        """Pick the oldest queued job and run it to completion.
+
+        Returns:
+            ``True`` if a job was processed (so the loop should re-check
+            immediately), ``False`` if there was no queued work.
+        """
+
+        if self._hub is None:
+            return False
+        info = training_runs.next_queued_run(self._hub, self._library_uuid)
+        if info is None:
+            return False
+
+        self._run_job(info)
+        return True
+
+    def _run_job(self, info: dict) -> None:
+        """Run one job end to end: dataset → lease → train → finalize.
+
+        Args:
+            info: Persisted queued-job fields.
+        """
+        job_uuid = info["uuid"]
+        work_dir = os.path.join(self._training_root, job_uuid)
+
+        # 0. Where the run lands and where its dataset is written.
+        try:
+            training_folder, dataset_dir = self._run_folders(job_uuid)
+        except RuntimeError as exc:
+            logger.error("Job %s: %s", job_uuid, exc)
+            self._update_job(job_uuid, status="error", error=str(exc))
+            self._emit_progress(job_uuid, status="error", message=str(exc))
+            return
+
+        # 1. Build the dataset snapshot.
+        manifest = self._build_dataset(info, dataset_dir)
+        if manifest is None:
+            return  # dataset error already recorded
+        if int(manifest.get("image_count") or 0) <= 0:
+            msg = "Training dataset is empty (no eligible images)."
+            logger.warning("Job %s: %s", job_uuid, msg)
+            self._update_job(job_uuid, status="error", error=msg)
+            self._emit_progress(job_uuid, status="error", message=msg)
+            return
+
+        self._update_job(
+            job_uuid,
+            dataset_snapshot_path=manifest.get("dest_dir"),
+            dataset_picture_ids=json.dumps(manifest.get("picture_ids") or []),
+        )
+
+        # 2. Wait for the arbiter: PixlStash yields the card, an idle ComfyUI
+        # frees it, and the Tasks tab shows the job waiting until then.
+        lease = self._request_gpu(self._lease_label(info), job_uuid)
+        try:
+            with self._active_lock:
+                self._waiting = (job_uuid, lease)
+            granted = lease.wait(self._stop)
+            with self._active_lock:
+                self._waiting = None
+            if self._job_status(job_uuid) != "queued":
+                return  # cancelled while it waited
+            if not granted:
+                if not self._stop.is_set():
+                    # Cancelled from the Tasks tab's waiting row.
+                    msg = "Cancelled while waiting for the GPU"
+                    self._update_job(job_uuid, status="stopped", error=msg)
+                    self._emit_progress(job_uuid, status="stopped", message=msg)
+                return  # on shutdown it stays queued for the next start
+            backend = self._make_backend()
+            handle, progress = self._train_under_lease(
+                backend,
+                info,
+                work_dir,
+                manifest,
+                lease,
+                gpu_ids=lease.device or "0",
+                training_folder=training_folder,
+            )
+            self._finalize(backend, handle, info, progress)
+        except Exception:
+            logger.exception("Job %s failed during training", job_uuid)
+            self._update_job(job_uuid, status="error", error="Training run failed")
+            self._emit_progress(job_uuid, status="error", message="Training run failed")
+        finally:
+            with self._active_lock:
+                self._active_backend = None
+                self._active_job_uuid = None
+                self._waiting = None
+            lease.release()
+            with self._pending_specs_lock:
+                self._pending_specs.pop(job_uuid, None)
+            self._remove_pending_sidecar(job_uuid)
+
+    def _train_under_lease(
+        self,
+        backend: TrainerBackend,
+        info: dict,
+        work_dir: str,
+        manifest: dict,
+        lease: Lease,
+        gpu_ids: str = "0",
+        training_folder: str | None = None,
+    ) -> tuple[object, TrainingProgress]:
+        """Prepare + submit + poll a run while the GPU lease is held.
+
+        Args:
+            backend: The trainer backend.
+            info: Queued-job fields.
+            work_dir: The per-job work directory.
+            manifest: The dataset manifest (provides ``dest_dir``).
+            lease: The run's granted lease; its progress fields are kept live.
+            gpu_ids: ``CUDA_VISIBLE_DEVICES`` for the trainer: the leased
+                card's UUID, so it trains on the card the arbiter cleared.
+            training_folder: The shelf source folder the run is written into.
+
+        Returns:
+            A ``(handle, progress)`` tuple: the launched handle and the terminal
+            :class:`TrainingProgress` snapshot.
+        """
+        job_uuid = info["uuid"]
+        pending = self._load_pending_spec(job_uuid)
+        spec = TrainingSpec(
+            job_id=job_uuid,
+            job_name=info["name"],
+            template_path=pending.get("template_path"),
+            dataset_dir=manifest["dest_dir"],
+            trigger_word=info.get("trigger_word") or "",
+            work_dir=work_dir,
+            hf_token=os.environ.get("HF_TOKEN") or None,
+            config_overrides=pending.get("config_overrides"),
+            gpu_ids=gpu_ids,
+            training_folder=training_folder,
+        )
+        # The commit is what the checkout holds when the job starts, read from
+        # git and never from the owner's config (review F6).
+        cfg = self._config_provider() or {}
+        commit = (
+            ai_toolkit_install.read_commit(cfg["repo_path"])
+            if cfg.get("repo_path")
+            else None
+        )
+        handle = backend.prepare(spec)
+        backend.submit(handle, spec)
+
+        with self._active_lock:
+            self._active_backend = backend
+            self._active_job_uuid = job_uuid
+
+        config = self._read_rendered_config(handle.config_path)
+        total_steps = self._total_steps_from_config(config)
+        self._update_job(
+            job_uuid,
+            status="running",
+            pid=handle.pid,
+            training_folder=handle.training_folder,
+            rendered_config=json.dumps(config) if config is not None else None,
+            ai_toolkit_commit=commit,
+            total_steps=total_steps,
+            started_at=now_iso(),
+        )
+        self._emit_progress(
+            job_uuid, status="running", current=0, total=total_steps, message="Started"
+        )
+
+        progress = self._poll_until_done(backend, handle, job_uuid, lease)
+        return handle, progress
+
+    def _poll_until_done(
+        self, backend: TrainerBackend, handle, job_uuid: str, lease: Lease
+    ) -> TrainingProgress:
+        """Poll progress until the process is dead AND status is terminal.
+
+        Persists step / loss curve / samples / log tail and emits a
+        PLUGIN_PROGRESS event each cycle.
+
+        Args:
+            backend: The trainer backend.
+            handle: The job handle.
+            job_uuid: The job uuid (used as the event ``run_id``).
+            lease: The run's lease; the Tasks tab's AI Toolkit row reads its
+                step, total and latest loss from it.
+
+        Returns:
+            The final :class:`TrainingProgress` snapshot.
+        """
+        progress = backend.progress(handle)
+        while not self._stop.is_set():
+            self._persist_progress(job_uuid, progress, handle)
+            lease.set_progress(
+                step=progress.step,
+                total=progress.total_steps,
+                loss=progress.loss_curve[-1].get("loss")
+                if progress.loss_curve
+                else None,
+            )
+            self._emit_progress(
+                job_uuid,
+                status=progress.status,
+                current=progress.step,
+                total=progress.total_steps,
+                message=progress.info,
+            )
+            alive = backend.is_alive(handle)
+            terminal = progress.status in _TERMINAL_PROGRESS_STATUSES
+            if not alive and terminal:
+                break
+            if not alive and not terminal:
+                # Process gone but status not terminal; let the adapter reconcile
+                # the real end state (interrupted → error), then stop.
+                progress = backend.reconcile(handle)
+                self._persist_progress(job_uuid, progress, handle)
+                break
+            self._stop.wait(self.poll_interval_s)
+            progress = backend.progress(handle)
+        return progress
+
+    # ------------------------------------------------------------------
+    # Finalization
+    # ------------------------------------------------------------------
+
+    def _finalize(
+        self, backend: TrainerBackend, handle, info: dict, progress: TrainingProgress
+    ) -> None:
+        """Write the terminal job state and, on success, bring the run to the shelf.
+
+        Args:
+            backend: The trainer backend (unused beyond context, kept for
+                symmetry / future per-backend finalization).
+            handle: The job handle.
+            info: Persisted job fields (needs uuid, name, set_id, character_id).
+            progress: The terminal progress snapshot.
+        """
+        job_uuid = info["uuid"]
+        status = progress.status
+
+        if status == "completed" and progress.final_checkpoint:
+            try:
+                # The final checkpoint sits in the run folder, which is the
+                # ai-toolkit run the importer reads (``save_root``).
+                landed = self._import_run(
+                    os.path.dirname(progress.final_checkpoint), info
+                )
+                report = (
+                    f"Trained {info['name']} to step {progress.step}; "
+                    f"{landed['imported']} file(s) on the shelf "
+                    f"(stack {landed['stack_id']})."
+                )
+                self._update_job(
+                    job_uuid,
+                    status="completed",
+                    step=progress.step,
+                    report=report,
+                    completed_at=now_iso(),
+                )
+                self._emit_progress(
+                    job_uuid,
+                    status="completed",
+                    current=progress.step,
+                    total=progress.total_steps,
+                    message="Completed",
+                )
+                logger.info("Job %s completed: %s", job_uuid, report)
+                return
+            except Exception:
+                logger.exception(
+                    "Job %s reached 'completed' but importing the run to the shelf failed",
+                    job_uuid,
+                )
+                self._update_job(
+                    job_uuid,
+                    status="error",
+                    error="Run completed but the LoRA artifact could not be imported",
+                    completed_at=now_iso(),
+                )
+                self._emit_progress(
+                    job_uuid, status="error", message="LoRA import failed"
+                )
+                return
+
+        if status == "completed" and not progress.final_checkpoint:
+            msg = "Run reported completed but no final checkpoint was found."
+            logger.warning("Job %s: %s", job_uuid, msg)
+            self._update_job(
+                job_uuid,
+                status="error",
+                error=msg,
+                completed_at=now_iso(),
+            )
+            self._emit_progress(job_uuid, status="error", message=msg)
+            return
+
+        # stopped / error / anything else terminal.
+        final_status = "stopped" if status == "stopped" else "error"
+        error_msg = (
+            None if final_status == "stopped" else (progress.info or "Training failed")
+        )
+        self._update_job(
+            job_uuid,
+            status=final_status,
+            step=progress.step,
+            error=error_msg,
+            report=progress.info or None,
+            completed_at=now_iso(),
+        )
+        self._emit_progress(
+            job_uuid,
+            status=final_status,
+            current=progress.step,
+            total=progress.total_steps,
+            message=progress.info or final_status,
+        )
+        logger.info("Job %s finalized as %s.", job_uuid, final_status)
+
+    # ------------------------------------------------------------------
+    # Persistence helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _lease_label(info: dict) -> str:
+        """The name a job's lease carries in the Tasks tab."""
+        return f"LoRA training '{info.get('name') or info['uuid'][:8]}'"
+
+    def _store(self) -> tuple[HubDatabase, str]:
+        """The hub and library the runs live in, or raise if none is open.
+
+        Raises:
+            RuntimeError: The service was built without a hub or library.
+        """
+        if self._hub is None or not self._library_uuid:
+            raise RuntimeError(
+                "No hub or library is open, so training runs cannot be stored."
+            )
+        return self._hub, self._library_uuid
+
+    def _job_status(self, job_uuid: str) -> str | None:
+        """A job's persisted status, or None when it is gone."""
+        run = training_runs.get_run_by_uuid(self._hub, job_uuid)
+        return run["status"] if run is not None else None
+
+    def _update_job(self, job_uuid: str, **fields) -> None:
+        """Update columns on a training run by uuid.
+
+        Args:
+            job_uuid: The job uuid.
+            **fields: Column names → values to set.
+        """
+        try:
+            if not training_runs.update_run(self._hub, job_uuid, **fields):
+                logger.warning("_update_job: no job with uuid=%s", job_uuid)
+        except Exception:
+            logger.exception("Failed to update job %s with %s", job_uuid, list(fields))
+
+    def _persist_progress(
+        self, job_uuid: str, progress: TrainingProgress, handle
+    ) -> None:
+        """Persist the live progress fields onto the job row.
+
+        Args:
+            job_uuid: The job uuid.
+            progress: The latest progress snapshot.
+            handle: The job handle (for reading the log tail).
+        """
+        self._update_job(
+            job_uuid,
+            status=progress.status if progress.status != "unknown" else "running",
+            step=progress.step,
+            total_steps=progress.total_steps,
+            loss_curve=json.dumps(progress.loss_curve) if progress.loss_curve else None,
+            sample_image_paths=(
+                json.dumps(progress.samples) if progress.samples else None
+            ),
+            log_tail=self._read_log_tail(handle.log_path),
+        )
+
+    def _emit_progress(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        current: int = 0,
+        total: int | None = None,
+        message: str = "",
+    ) -> None:
+        """Emit a PLUGIN_PROGRESS event in the ComfyUI-compatible shape.
+
+        Args:
+            run_id: The job uuid (the event ``run_id``).
+            status: Lifecycle status string.
+            current: Current step.
+            total: Total steps (``None`` → treated as 0 for progress).
+            message: Human-readable info string.
+        """
+        total_val = int(total or 0)
+        progress_frac = (current / total_val) if total_val > 0 else 0.0
+        try:
+            self._notify(
+                EventType.PLUGIN_PROGRESS,
+                {
+                    "plugin": "ai-toolkit",
+                    "status": status,
+                    "run_id": run_id,
+                    "message": str(message or ""),
+                    "current": int(current or 0),
+                    "total": total_val,
+                    "progress": progress_frac,
+                },
+            )
+        except Exception as exc:
+            logger.debug("Failed to emit training progress event: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Dataset / backend / handle helpers
+    # ------------------------------------------------------------------
+
+    def _run_folders(self, job_uuid: str) -> tuple[str, str]:
+        """Resolve where a job's run and its dataset go.
+
+        The run goes in the model shelf's ``source`` folder. When the shelf has
+        none, ``<repo>/output`` is registered as one, the first time a job
+        needs it. The dataset goes in ``<repo>/datasets/pixlstash-<uuid>``.
+
+        Args:
+            job_uuid: The job's uuid.
+
+        Returns:
+            ``(training_folder, dataset_dir)``.
+
+        Raises:
+            RuntimeError: ai-toolkit is not configured, or no shelf folder could
+                be found or registered. The message names no host path; the
+                detail is logged.
+        """
+        cfg = self._config_provider() or {}
+        repo_path = cfg.get("repo_path")
+        if not repo_path:
+            raise RuntimeError("ai-toolkit is not configured; cannot run training.")
+
+        training_folder = self._shelf_source_folder()
+        if training_folder is None:
+            if self._register_source_folder is None:
+                raise RuntimeError(
+                    "No model shelf folder is set up for ai-toolkit runs."
+                )
+            output = os.path.join(repo_path, "output")
+            try:
+                self._register_source_folder(output)
+            except Exception as exc:
+                logger.exception(
+                    "Could not register %s as the shelf's ai-toolkit folder: %s",
+                    output,
+                    exc,
+                )
+                raise RuntimeError(
+                    "Could not add the ai-toolkit output folder to the model shelf."
+                ) from exc
+            training_folder = self._shelf_source_folder()
+            if training_folder is None:
+                raise RuntimeError(
+                    "No model shelf folder is set up for ai-toolkit runs."
+                )
+
+        dataset_dir = os.path.join(repo_path, "datasets", f"pixlstash-{job_uuid}")
+        return training_folder, dataset_dir
+
+    def _shelf_source_folder(self) -> str | None:
+        """The path of the first registered shelf ``source`` folder, or None.
+
+        Returns:
+            The folder's stored path, or None when none is registered.
+        """
+        row = self._hub.fetchone(
+            "SELECT path FROM model_folder WHERE kind = ? ORDER BY id LIMIT 1",
+            (SOURCE_FOLDER_KIND,),
+        )
+        return row["path"] if row is not None else None
+
+    def _build_dataset(self, info: dict, dataset_dir: str) -> dict | None:
+        """Build the dataset snapshot for a job into *dataset_dir*.
+
+        Args:
+            info: Queued-job fields (set_id / character_id / trigger_word).
+            dataset_dir: The directory the image/caption pairs are written to.
+
+        Returns:
+            The dataset manifest, or ``None`` if the build raised (the job is
+            marked ``error`` in that case).
+        """
+        os.makedirs(dataset_dir, exist_ok=True)
+        try:
+            return self._dataset_builder(
+                dest_dir=dataset_dir,
+                set_id=info.get("set_id"),
+                character_id=info.get("character_id"),
+                trigger_word=info.get("trigger_word"),
+            )
+        except Exception:
+            logger.exception("Job %s: dataset build failed", info["uuid"])
+            self._update_job(info["uuid"], status="error", error="Dataset build failed")
+            self._emit_progress(
+                info["uuid"], status="error", message="Dataset build failed"
+            )
+            return None
+
+    def _make_backend(self) -> TrainerBackend:
+        """Construct a trainer backend from the owner's ai-toolkit config.
+
+        Returns:
+            A :class:`TrainerBackend` from the injected factory.
+
+        Raises:
+            ValueError: If the owner config is missing the repo path / python.
+        """
+        cfg = self._config_provider() or {}
+        repo_path = cfg.get("repo_path")
+        python = cfg.get("python")
+        if not repo_path or not python:
+            raise ValueError(
+                "ai-toolkit is not configured (missing repo_path/python in owner "
+                "config); cannot run training."
+            )
+        return self._backend_factory(repo_path, python)
+
+    def _handle_for_job(self, backend: TrainerBackend, info: dict):
+        """Reconstruct a :class:`TrainingHandle` from persisted job fields.
+
+        The work dir is ``<training_root>/<uuid>``. The persisted
+        ``training_folder`` is the shelf source folder for a run started since
+        the shelf took runs, or the legacy ``<work_dir>/output`` for an older
+        one; only the former is passed on, so an older run keeps the save root
+        it was started with. The adapter's ``handle_for`` is the source of truth
+        for the paths.
+
+        Args:
+            backend: The backend (for its ``handle_for`` if present).
+            info: Persisted job fields (uuid, name, pid, training_folder).
+
+        Returns:
+            A reconstructed :class:`TrainingHandle`.
+        """
+        work_dir = os.path.join(self._training_root, info["uuid"])
+        stored = info.get("training_folder")
+        shared = None
+        if stored and os.path.abspath(stored) != os.path.join(
+            os.path.abspath(work_dir), "output"
+        ):
+            shared = stored
+        handle_for = getattr(backend, "handle_for", None)
+        if callable(handle_for):
+            return handle_for(
+                work_dir,
+                info["uuid"],
+                info["name"],
+                info.get("pid"),
+                training_folder=shared,
+            )
+        return LocalAiToolkit.handle_for(
+            work_dir,
+            info["uuid"],
+            info["name"],
+            info.get("pid"),
+            training_folder=shared,
+        )
+
+    # ------------------------------------------------------------------
+    # Pending-spec sidecar (template_path / config_overrides without columns)
+    # ------------------------------------------------------------------
+
+    def _pending_sidecar_path(self, job_uuid: str) -> str:
+        """Path to the per-job pending-spec sidecar JSON."""
+        return os.path.join(self._training_root, job_uuid, "pending_spec.json")
+
+    def _write_pending_sidecar(self, job_uuid: str, pending: dict) -> None:
+        """Persist the pending spec so a restart can recover a queued job.
+
+        Args:
+            job_uuid: The job uuid.
+            pending: ``{"template_path", "config_overrides"}``.
+        """
+        path = self._pending_sidecar_path(job_uuid)
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(pending, fh)
+        except OSError as exc:
+            logger.warning(
+                "Could not write pending-spec sidecar for job %s: %s", job_uuid, exc
+            )
+
+    def _load_pending_spec(self, job_uuid: str) -> dict:
+        """Load the pending spec from memory, falling back to the sidecar.
+
+        Args:
+            job_uuid: The job uuid.
+
+        Returns:
+            ``{"template_path", "config_overrides"}`` (possibly empty values).
+        """
+        with self._pending_specs_lock:
+            pending = self._pending_specs.get(job_uuid)
+        if pending is not None:
+            return pending
+        path = self._pending_sidecar_path(job_uuid)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                return json.load(fh)
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning(
+                "No pending spec for job %s (memory or sidecar %s): %s",
+                job_uuid,
+                path,
+                exc,
+            )
+            return {}
+
+    def _remove_pending_sidecar(self, job_uuid: str) -> None:
+        """Delete the pending-spec sidecar once the job is done with it."""
+        path = self._pending_sidecar_path(job_uuid)
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError as exc:
+            logger.debug(
+                "Could not remove pending-spec sidecar for job %s: %s", job_uuid, exc
+            )
+
+    # ------------------------------------------------------------------
+    # Small static helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _read_rendered_config(config_path: str) -> dict | None:
+        """Read the rendered job config JSON, or ``None`` if unreadable."""
+        try:
+            with open(config_path, encoding="utf-8") as fh:
+                return json.load(fh)
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("Could not read rendered config %s: %s", config_path, exc)
+            return None
+
+    @staticmethod
+    def _total_steps_from_config(config: dict | None) -> int | None:
+        """Pull ``config.process[0].train.steps`` from a rendered config."""
+        if not config:
+            return None
+        try:
+            return int(config["config"]["process"][0]["train"]["steps"])
+        except (KeyError, IndexError, TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _read_log_tail(log_path: str) -> str | None:
+        """Read the last ``_LOG_TAIL_BYTES`` of the trainer log, or ``None``."""
+        if not log_path or not os.path.exists(log_path):
+            return None
+        try:
+            size = os.path.getsize(log_path)
+            with open(log_path, "rb") as fh:
+                if size > _LOG_TAIL_BYTES:
+                    fh.seek(size - _LOG_TAIL_BYTES)
+                data = fh.read()
+            return data.decode("utf-8", errors="replace")
+        except OSError as exc:
+            logger.debug("Could not read log tail %s: %s", log_path, exc)
+            return None

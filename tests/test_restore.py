@@ -4604,3 +4604,54 @@ def test_full_restore_reset_failure_is_not_success_and_keeps_auth_closed(
         monkeypatch.setattr(server.auth, "reset_after_restore", original_reset)
         original_reset()
         server.auth.reopen_auth_after_restore()
+
+
+def _fake_interpreter(path):
+    """An executable file that passes ``validate_ai_toolkit_settings``."""
+    path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    path.chmod(0o755)
+    return str(path)
+
+
+def test_full_restore_neither_reinstates_nor_clears_the_ai_toolkit_python(
+    server, tmp_path
+):
+    """A full restore swaps vault.db; the ai-toolkit config is hub state.
+
+    The owner's interpreter lives on the hub ``user`` row, which the vault swap
+    never touches. So after a restore the trainer still reads the value saved
+    last, not the snapshot's, and the restore neither reinstates an old
+    interpreter nor clears the current one. If the config ever moves into the
+    vault, the swap would carry it and this test fails (review F1).
+    """
+    from fastapi.testclient import TestClient
+
+    client = TestClient(server.api, raise_server_exceptions=True)
+    login = client.post(
+        "/api/v1/login",
+        json={"username": "owner", "password": "example-owner-password"},
+    )
+    assert login.status_code == 200, login.text
+    at_snapshot = _fake_interpreter(tmp_path / "python-at-snapshot")
+    after_snapshot = _fake_interpreter(tmp_path / "python-after-snapshot")
+
+    r = client.put(
+        "/api/v1/training/ai-toolkit/config",
+        json={"repo_path": None, "python": at_snapshot},
+    )
+    assert r.status_code == 200, r.text
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    r = client.put(
+        "/api/v1/training/ai-toolkit/config",
+        json={"repo_path": None, "python": after_snapshot},
+    )
+    assert r.status_code == 200, r.text
+
+    report = server.vault.restore_service.restore_full(cp.id)
+    assert not report.errors, f"Restore errors: {report.errors}"
+
+    # The value the training service reads (vault._training_config_provider).
+    effective = server.vault._training_config_provider()
+    assert effective["python"] == after_snapshot, effective
+    assert effective["python"] != at_snapshot

@@ -49,6 +49,7 @@ from pixlstash.utils.service.smart_score_invalidation import (
     record_pending_invalidation,
 )
 from pixlstash.utils.service.user_settings_utils import (
+    AI_TOOLKIT_CONFIG_KEYS,
     apply_user_config_patch,
     serialize_user_config,
 )
@@ -185,6 +186,9 @@ def create_router(server) -> APIRouter:
         date_format: Optional[str] = None
         theme_mode: Optional[str] = None
         comfyui_url: Optional[str] = None
+        ai_toolkit_repo_path: Optional[str] = None
+        ai_toolkit_python: Optional[str] = None
+        ai_toolkit_commit: Optional[str] = None
         public_url: Optional[str] = None
         similarity_character: Optional[int] = None
         stack_strictness: Optional[float] = None
@@ -565,6 +569,19 @@ def create_router(server) -> APIRouter:
         start_time = time.time()
         logger.debug(f"[TIMING] PATCH /users/me/config called at {start_time:.3f}")
         patch_data = await request.json()
+        refused = [
+            key
+            for key in AI_TOOLKIT_CONFIG_KEYS
+            if isinstance(patch_data, dict) and key in patch_data
+        ]
+        if refused:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"{', '.join(refused)} cannot be set here. Save the ai-toolkit "
+                    "checkout and its Python with PUT /api/v1/training/ai-toolkit/config."
+                ),
+            )
         auto_exclusive = (
             patch_data.pop("auto_exclusive_after_oom", None)
             if isinstance(patch_data, dict)

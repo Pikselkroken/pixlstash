@@ -27,6 +27,8 @@ import time
 import pytest
 
 from pixlstash.auth import COMFYUI_SCOPE
+from pixlstash.hub import training_runs
+from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.schema import (
     CURRENT_DATA_VERSION,
     CURRENT_SCHEMA_VERSION,
@@ -1440,3 +1442,126 @@ def test_data_v11_re_derives_only_the_cached_reference_counts(hub):
         hub.execute("SELECT topology_hash, traits FROM workflow_topology_core")
     ) == {"t1": None, "t2": "two-pass", "t3": ""}
     assert hub.execute("PRAGMA user_version").fetchone()[0] == CURRENT_DATA_VERSION
+
+
+class TestTrainingRunTable:
+    """The ``training_run`` table: the record ``model.training_run_id`` names.
+
+    Amended into v2 like the shelf, so a hub that already exists gains it on its
+    next open. Nothing references it by foreign key, so the checks are the
+    table's own: its identity, its required library, and that ids never recycle.
+    """
+
+    def test_a_fresh_hub_has_the_table(self, hub):
+        apply_migrations(hub)
+        assert "training_run" in table_names(hub)
+
+    def test_the_id_never_recycles(self, hub):
+        # A deleted run's id must not be handed to the next one: a model still
+        # carrying the old id would silently name a different run.
+        apply_migrations(hub)
+        assert "AUTOINCREMENT" in ddl_for(hub, "training_run")
+
+    def test_the_uuid_is_unique(self, hub):
+        apply_migrations(hub)
+        insert = (
+            "INSERT INTO training_run (uuid, library_uuid, name, created_at) "
+            "VALUES ('same', 'lib', 'a', '2026-10-25T00:00:00+00:00')"
+        )
+        hub.execute(insert)
+        with pytest.raises(sqlite3.IntegrityError):
+            hub.execute(insert)
+
+    def test_every_run_names_its_library(self, hub):
+        # The set and character ids a run holds are vault ids, meaningful only
+        # in the library that owns them.
+        apply_migrations(hub)
+        with pytest.raises(sqlite3.IntegrityError):
+            hub.execute(
+                "INSERT INTO training_run (uuid, name, created_at) "
+                "VALUES ('no-library', 'a', '2026-10-25T00:00:00+00:00')"
+            )
+
+    def test_an_existing_v2_hub_gains_the_table_on_next_open(self, hub):
+        apply_migrations(hub)
+        hub.execute("DROP TABLE training_run")
+        assert read_schema_version(hub) == 2
+        assert "training_run" not in table_names(hub)
+
+        apply_migrations(hub)
+        assert read_schema_version(hub) == 2, "the amend must not bump to v3"
+        assert "training_run" in table_names(hub)
+
+
+@pytest.fixture
+def store(tmp_path):
+    """An open HubDatabase, for the training-run store's own reads and writes."""
+    with HubDatabase(str(tmp_path / "store.db")) as database:
+        yield database
+
+
+def _new_run(store, library_uuid, uuid):
+    return training_runs.create_run(
+        store,
+        library_uuid=library_uuid,
+        uuid=uuid,
+        name=uuid,
+        set_id=None,
+        character_id=None,
+        base_model="m",
+        trigger_word="t",
+    )
+
+
+class TestTrainingRunStore:
+    """Every read and write of a run is scoped to the library that owns it."""
+
+    def test_a_run_is_read_back_only_in_its_own_library(self, store):
+        mine = _new_run(store, "lib-a", "run-a")
+        theirs = _new_run(store, "lib-b", "run-b")
+
+        assert training_runs.get_run(store, "lib-a", mine)["uuid"] == "run-a"
+        assert training_runs.get_run(store, "lib-a", theirs) is None
+
+    def test_a_listing_holds_only_the_libraries_runs(self, store):
+        mine = _new_run(store, "lib-a", "run-a")
+        _new_run(store, "lib-b", "run-b")
+
+        listed = training_runs.list_runs(store, "lib-a")
+        assert [row["id"] for row in listed] == [mine]
+
+    def test_the_worker_claims_its_libraries_oldest_queued_run(self, store):
+        _new_run(store, "lib-b", "other")  # older, but not this library's
+        first = _new_run(store, "lib-a", "first")
+        second = _new_run(store, "lib-a", "second")
+
+        assert training_runs.next_queued_run(store, "lib-a")["id"] == first
+        training_runs.update_run(store, "first", status="running")
+        assert training_runs.next_queued_run(store, "lib-a")["id"] == second
+
+    def test_startup_reconcile_sees_only_its_libraries_unfinished_runs(self, store):
+        _new_run(store, "lib-a", "a-running")
+        _new_run(store, "lib-b", "b-running")
+        training_runs.update_run(store, "a-running", status="running")
+        training_runs.update_run(store, "b-running", status="running")
+
+        found = training_runs.unfinished_runs(store, "lib-a")
+        assert [row["uuid"] for row in found] == ["a-running"]
+
+    def test_only_mutable_columns_can_be_updated(self, store):
+        _new_run(store, "lib-a", "run-a")
+        with pytest.raises(ValueError):
+            training_runs.update_run(store, "run-a", library_uuid="lib-b")
+        with pytest.raises(ValueError):
+            training_runs.update_run(store, "run-a", uuid="other")
+
+        assert training_runs.update_run(store, "run-a", step=7) is True
+        assert training_runs.get_run_by_uuid(store, "run-a")["step"] == 7
+
+    def test_delete_refuses_another_librarys_run(self, store):
+        theirs = _new_run(store, "lib-b", "run-b")
+
+        assert training_runs.delete_run(store, "lib-a", theirs) is None
+        assert training_runs.get_run(store, "lib-b", theirs) is not None
+        assert training_runs.delete_run(store, "lib-b", theirs) == "run-b"
+        assert training_runs.get_run(store, "lib-b", theirs) is None

@@ -430,6 +430,35 @@
             @confirm-export-folder="emit('confirm-export-folder', $event)"
           />
         </v-menu>
+        <!-- ── Toolbar: Train LoRA (scope = the one set or character in view).
+             Owner-only, so it is absent from a read-only session like Import. -->
+        <v-menu
+          v-if="!isReadOnly"
+          v-model="trainingStore.trainMenuOpen"
+          :close-on-content-click="false"
+          location="bottom end"
+          origin="top end"
+          :offset="8"
+          transition="scale-transition"
+          :disabled="!canTrain"
+        >
+          <template #activator="{ props: menuProps }">
+            <AppBarButton
+              v-bind="menuProps"
+              class="tb-train-btn tb-fold-700"
+              icon="school-outline"
+              :disabled="!canTrain"
+              :open="trainingStore.trainMenuOpen"
+              :tooltip="
+                canTrain
+                  ? 'Train a LoRA on this set or character'
+                  : 'Open a set or character to train a LoRA on it.'
+              "
+              @click="canTrain && seedTrainScope()"
+            />
+          </template>
+          <TbTrainPanel />
+        </v-menu>
         <!-- ── Toolbar: Import (icon trigger → import menu popover) ────── -->
         <v-menu
           v-if="!isReadOnly"
@@ -530,6 +559,20 @@
               <span>Import photos…</span>
             </button>
             <button
+              v-if="canTrain"
+              type="button"
+              role="menuitem"
+              class="ctx-item tb-row-700"
+              @click="
+                close();
+                seedTrainScope();
+                trainingStore.trainMenuOpen = true;
+              "
+            >
+              <v-icon class="ctx-icon">mdi-school-outline</v-icon>
+              <span>Train LoRA…</span>
+            </button>
+            <button
               type="button"
               role="menuitem"
               class="ctx-item tb-row-600"
@@ -594,6 +637,14 @@ import { useSearchStore } from "../../stores/useSearchStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useProjectStore } from "../../stores/useProjectStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
+import { useSelectionStore } from "../../stores/useSelectionStore";
+import { useTrainingStore } from "../../stores/useTrainingStore";
+import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
+import {
+  ALL_PICTURES_ID,
+  UNASSIGNED_PICTURES_ID,
+  SCRAPHEAP_PICTURES_ID,
+} from "../../stores/useViewStore";
 import {
   MAX_THUMBNAIL_SIZE_LEVEL,
   DEFAULT_THUMBNAIL_SIZE_LEVEL,
@@ -605,6 +656,7 @@ import TbGlobalActions from "./TbGlobalActions.vue";
 import TbExportPanel from "./TbExportPanel.vue";
 import TbImportPanel from "./TbImportPanel.vue";
 import TbOverflowMenu from "./TbOverflowMenu.vue";
+import TbTrainPanel from "./TbTrainPanel.vue";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import UndoControl from "./UndoControl.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
@@ -631,6 +683,7 @@ const emit = defineEmits([
   "local-import",
   "open-settings",
   "open-duplicates",
+  "train-menu-open",
 ]);
 
 const runDialog = useRunDialogStore();
@@ -684,6 +737,73 @@ const searchStore = useSearchStore();
 const reviewSessionsStore = useReviewSessionsStore();
 const projectStore = useProjectStore();
 const sidebarStore = useSidebarStore();
+const selectionStore = useSelectionStore();
+const trainingStore = useTrainingStore();
+const entityNames = useEntityNamesStore();
+
+// ── Train LoRA: single-set / single-character scope gating ───────────────────
+// Training v1 accepts exactly one set OR one character (the API takes set_id
+// XOR character_id). Enable the button only when the current view is exactly
+// that; otherwise disable with a teaching tooltip.
+const TRAIN_SPECIAL_CHARACTER_IDS = new Set([
+  ALL_PICTURES_ID,
+  UNASSIGNED_PICTURES_ID,
+  SCRAPHEAP_PICTURES_ID,
+]);
+
+const trainScope = computed(() => {
+  const sel = selectionStore;
+  const setIds = Array.isArray(sel.selectedSetIds) ? sel.selectedSetIds : [];
+  const charIds = Array.isArray(sel.selectedCharacterIds)
+    ? sel.selectedCharacterIds
+    : [];
+  // Single set: one set selected, no multi-set overlap, no extra characters.
+  const singleSetId =
+    sel.selectedSet != null && sel.selectedSet !== "" && setIds.length <= 1
+      ? Number(sel.selectedSet)
+      : null;
+  if (singleSetId != null && Number.isFinite(singleSetId)) {
+    return {
+      type: "set",
+      id: singleSetId,
+      name: entityNames.setNames[singleSetId] || sel.lastSelectedSetLabel,
+    };
+  }
+  // Single character: a real character id (not ALL/UNASSIGNED/SCRAPHEAP), not a
+  // multi-character view, and no set selected.
+  const charId = sel.selectedCharacter;
+  const isSpecial =
+    charId == null || TRAIN_SPECIAL_CHARACTER_IDS.has(String(charId));
+  if (!isSpecial && charIds.length <= 1 && !setIds.length) {
+    const numId = Number(charId);
+    if (Number.isFinite(numId)) {
+      return {
+        type: "character",
+        id: numId,
+        name:
+          entityNames.characterNames[numId] ||
+          sel.lastSelectedCharacterLabel,
+      };
+    }
+  }
+  return null;
+});
+
+const canTrain = computed(() => trainScope.value != null && !isReadOnly.value);
+
+// Seed the panel's scope from the current view. The v-menu's own v-model
+// (trainingStore.trainMenuOpen, driven by the activator) handles open/close, so
+// we only set the scope here, never the open flag, to avoid fighting the menu.
+function seedTrainScope() {
+  const scope = trainScope.value;
+  if (!scope) return;
+  emit("train-menu-open");
+  trainingStore.setScope({
+    type: scope.type,
+    id: scope.id,
+    name: scope.name,
+  });
+}
 
 // Stack time belongs to the stack-deck lens, not to loose pictures. Keep it
 // visibly special while that lens is active and absent everywhere else. A

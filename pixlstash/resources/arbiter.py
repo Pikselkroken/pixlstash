@@ -139,6 +139,9 @@ class Lease:
     measured_by: str = "estimate"
     warnings: list[dict] = field(default_factory=list)
     waiting_reason: dict | None = None
+    #: Live figures a granted run reports for the Tasks tab (AI-toolkit's step,
+    #: total and loss); None until the run has reported one.
+    progress: dict | None = None
     reclaimed: set = field(default_factory=set)
     announced: bool = False
     _changed: threading.Event = field(default_factory=threading.Event)
@@ -182,6 +185,11 @@ class Lease:
         """
         if self._arbiter is not None:
             self._arbiter.shrink(self, need_mb)
+
+    def set_progress(self, **fields) -> None:
+        """Replace the live figures the Tasks tab shows for this lease."""
+        if self._arbiter is not None:
+            self._arbiter.set_progress(self, fields)
 
 
 def safety_margin_mb(total_mb: int) -> int:
@@ -444,6 +452,11 @@ class ResourceArbiter:
             changes = self._evaluate_locked()
         self._announce(changes)
 
+    def set_progress(self, lease: Lease, fields: dict) -> None:
+        """Store a lease's live figures. The next snapshot carries them."""
+        with self._lock:
+            lease.progress = dict(fields)
+
     def lease(self, lease_id: str) -> Lease | None:
         with self._lock:
             return self._leases.get(lease_id)
@@ -567,6 +580,7 @@ class ResourceArbiter:
             "run_id": lease.run_id,
             "job_id": lease.job_id,
             "workflow_id": lease.workflow_id,
+            "progress": dict(lease.progress) if lease.progress else None,
             "on_cpu": lease.on_cpu,
             "warnings": [dict(w) for w in lease.warnings],
             "waiting_reason": dict(lease.waiting_reason)
