@@ -569,9 +569,15 @@ def create_router(server) -> APIRouter:
             )
         user = server.auth.get_user()
         repo_path = user.ai_toolkit_repo_path if user is not None else None
-        if repo_path and not presets.offered(
-            preset, presets.checkout_architectures(repo_path)
-        ):
+        if not repo_path:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "AI-toolkit is not set up. Connect it in Settings › "
+                    "AI-toolkit before training."
+                ),
+            )
+        if not presets.offered(preset, presets.checkout_architectures(repo_path)):
             raise HTTPException(
                 status_code=422,
                 detail=(

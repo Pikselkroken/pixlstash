@@ -11347,8 +11347,9 @@ The check response also lists the training recipes (§25.15) with `offered`: a
 recipe is offered only when the checkout ships its model code,
 `extensions_built_in/diffusion_models/<requires_arch>/`
 (`presets.checkout_architectures`). `GET /training/presets` answers the same for
-the saved checkout, and `POST /training/jobs` refuses a recipe the saved
-checkout cannot run with a 422 naming the missing folder.
+the saved checkout, and `POST /training/jobs` refuses, with a 422, a job when no
+checkout is saved and a recipe the saved checkout cannot run (naming the
+missing folder).
 
 ### 25.15 Training recipes and the memory-profile resolver (#2116)
 

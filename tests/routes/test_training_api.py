@@ -123,8 +123,11 @@ class _FakeTrainingService:
         pass
 
 
-def _setup():
+def _setup(checkout=True):
     """Create a Server, log in as owner, and stub the training service.
+
+    With *checkout*, a fake ai-toolkit checkout that ships the z_image model
+    code is saved, as a job needs one to be queued.
 
     Returns ``(temp_dir, owner_client, server, read_token)`` where
     ``read_token`` is a global READ-scoped token (scoped, so the authz gate
@@ -162,6 +165,9 @@ def _setup():
     resp = client.post("/users/me/token", json={"description": "read", "scope": "READ"})
     assert resp.status_code == 200, resp.text
     read_token = resp.json()["token"]
+    if checkout:
+        repo = _fake_checkout(os.path.join(temp_dir.name, "aitk"))
+        _save_checkout(client, repo, sys.executable)
 
     return temp_dir, client, server, read_token
 
@@ -618,13 +624,22 @@ def test_delete_job_scoped_token_forbidden():
 def test_list_presets_offers_only_what_the_saved_checkout_can_run(tmp_path):
     """No checkout: nothing is offered. One with the z_image model code: Z-Image
     Turbo is. The recipe is listed either way, so the dialog can say why."""
-    temp_dir, owner, server, read_token = _setup()
+    temp_dir, owner, server, read_token = _setup(checkout=False)
     try:
         r = owner.get("/training/presets")
         assert r.status_code == 200, r.text
         entry = next(item for item in r.json() if item["id"] == "zimage-turbo")
         assert entry["base_model"] == "Tongyi-MAI/Z-Image-Turbo"
         assert entry["offered"] is False
+        # Not offered means not queued: with no checkout the job is refused.
+        char_id = _make_character(owner)
+        r = owner.post(
+            "/training/jobs",
+            json={"character_id": char_id, "name": "x", "trigger_word": "tw"},
+        )
+        assert r.status_code == 422, r.text
+        assert "not set up" in r.text
+        assert server.vault.training_service.enqueue_calls == []
 
         repo = _fake_checkout(str(tmp_path / "kit"))
         _save_checkout(owner, repo, sys.executable)
@@ -973,7 +988,7 @@ def test_job_error_with_spaced_path_and_file_uri_is_redacted():
 def test_put_config_refuses_ai_toolkit_values_that_are_not_real():
     """Each invalid repo or python value is a 422 with a message, and nothing is
     stored. Both null (disconnect) is accepted."""
-    temp_dir, owner, server, read_token = _setup()
+    temp_dir, owner, server, read_token = _setup(checkout=False)
     try:
         repo_no_run = os.path.join(temp_dir.name, "repo-without-run")
         os.makedirs(repo_no_run)
@@ -1013,7 +1028,7 @@ def test_patch_config_refuses_the_ai_toolkit_keys_and_names_the_route():
     """PATCH /users/me/config no longer writes the ai-toolkit keys: each one is a
     422 that names PUT /api/v1/training/ai-toolkit/config, and nothing is stored.
     This holds from the owner's own machine too (review F2, F6)."""
-    temp_dir, owner, server, read_token = _setup()
+    temp_dir, owner, server, read_token = _setup(checkout=False)
     try:
         for key in ("ai_toolkit_repo_path", "ai_toolkit_python", "ai_toolkit_commit"):
             r = owner.patch("/users/me/config", json={key: sys.executable})
@@ -1073,7 +1088,7 @@ def _probe_ok_runner(argv, cwd, timeout):
 
 
 def test_ai_toolkit_status_is_unconfigured_until_a_checkout_is_saved():
-    temp_dir, owner, server, read_token = _setup()
+    temp_dir, owner, server, read_token = _setup(checkout=False)
     try:
         r = owner.get("/training/ai-toolkit/status")
         assert r.status_code == 200, r.text
