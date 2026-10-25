@@ -60,6 +60,31 @@ def test_placeholders_substituted_everywhere():
         assert "{{TRIGGER_WORD}}" not in prompt
 
 
+def test_user_text_spelling_a_placeholder_is_never_expanded():
+    """A job name or trigger word naming another placeholder stays literal.
+
+    Substitution is a single pass, so text an earlier replacement inserted is
+    never scanned for a later placeholder. A user value must not turn into a
+    host path.
+    """
+    config = render_job_config(
+        _TEMPLATE_PATH,
+        job_name="{{SQLITE_DB_PATH}}",
+        training_folder="/work/output",
+        sqlite_db_path="/work/job.db",
+        trigger_word="{{DATASET_FOLDER}}",
+        dataset_dir="/work/dataset",
+    )
+
+    assert config["config"]["name"] == "{{SQLITE_DB_PATH}}"
+    process = config["config"]["process"][0]
+    assert process["trigger_word"] == "{{DATASET_FOLDER}}"
+    assert process["sqlite_db_path"] == "/work/job.db"
+    assert process["datasets"][0]["folder_path"] == "/work/dataset"
+    for sample in process["sample"]["samples"]:
+        assert sample["prompt"].startswith("{{DATASET_FOLDER}}, ")
+
+
 def test_no_placeholders_remain():
     """No ``{{NAME}}`` placeholder token survives rendering anywhere."""
     config = _render()
