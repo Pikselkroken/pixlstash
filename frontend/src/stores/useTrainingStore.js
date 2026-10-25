@@ -186,7 +186,8 @@ export const useTrainingStore = defineStore("training", () => {
   function buildConfigOverrides() {
     // A field is only emitted when the user actually provided it, so untouched
     // advanced fields fall through to the template's golden defaults. `steps` is
-    // a primary field and is always sent.
+    // a primary field, sent whenever it holds a number. A cleared field is
+    // skipped, not sent as 0 (Number("") is 0), so the template default applies.
     const overrides = {};
     const process = {};
     const network = {};
@@ -198,11 +199,12 @@ export const useTrainingStore = defineStore("training", () => {
 
     const train = {};
     const lr = String(learningRate.value ?? "").trim();
-    if (lr) train.lr = lr;
+    // The API tunables take a number. A typed value that is not one is sent as
+    // typed, so the server refuses it with its own message.
+    if (lr) train.lr = Number.isFinite(Number(lr)) ? Number(lr) : lr;
     if (isFilledNumber(batchSize.value))
       train.batch_size = Number(batchSize.value);
-    if (Number.isFinite(Number(steps.value)))
-      train.steps = Number(steps.value);
+    if (isFilledNumber(steps.value)) train.steps = Number(steps.value);
     if (Object.keys(train).length) process.train = train;
 
     const save = {};

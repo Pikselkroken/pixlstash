@@ -260,7 +260,7 @@ watch(() => props.curve, scheduleDraw, { deep: true });
 .lora-loss-table th,
 .lora-loss-table td {
   text-align: left;
-  padding: var(--radius-sm) var(--space-3);
+  padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.07);
 }
 

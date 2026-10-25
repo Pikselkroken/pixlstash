@@ -33,6 +33,8 @@ let pollTimer = null;
 const POLL_INTERVAL_MS = 4000;
 
 // ── Fetch on open + poll while running ────────────────────────────────────────
+// immediate: the dialog mounts this section already open on its first open, and
+// a watcher without it would never read the jobs until the tab changed.
 watch(
   () => props.open,
   (isOpen) => {
@@ -42,7 +44,12 @@ watch(
       stopPolling();
     }
   },
+  { immediate: true },
 );
+
+// A job started elsewhere (the toolbar panel) while this section is open changes
+// the store's jobs, so the poll is scheduled from here as well.
+watch(() => store.hasRunningJob, maybeSchedulePoll);
 
 function maybeSchedulePoll() {
   if (store.hasRunningJob && props.open) {

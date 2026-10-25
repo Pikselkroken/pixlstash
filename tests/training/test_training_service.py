@@ -31,6 +31,8 @@ from pixlstash.event_types import EventType
 from pixlstash.hub import training_runs
 from pixlstash.hub.db import now_iso
 from pixlstash.services.training_service import TrainingService
+from pixlstash.training.local_ai_toolkit import LocalAiToolkit
+from pixlstash.vault import Vault
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _FAST_TEMPLATE_PATH = os.path.join(_THIS_DIR, "fast_template.json")
@@ -78,6 +80,8 @@ class _StubLease:
     """
 
     device = None
+    #: Set on a lease the arbiter has already granted to the worker.
+    held = False
 
     def __init__(self, grant: bool = True):
         self.events: list[str] = []
@@ -94,7 +98,9 @@ class _StubLease:
     def wait(self, cancel_event=None, timeout=None) -> bool:
         return self.grant
 
-    def release(self) -> None:
+    def release(self, *, only_waiting: bool = False) -> None:
+        if only_waiting and self.held:
+            return  # the arbiter's only_waiting: a granted lease stays put
         self.release_count += 1
         self.events.append("release")
 
@@ -459,6 +465,60 @@ def test_cancel_midrun_ends_stopped_and_releases_lease(hub, repo_dir, monkeypatc
     assert lease.acquire_count == lease.release_count == 1
 
 
+def test_shutdown_mid_run_leaves_the_live_job_running(hub, repo_dir, monkeypatch):
+    """Stopping the service while a trainer runs must not mark it errored.
+
+    The trainer outlives the service; reconcile_on_startup re-attaches to it on
+    the next start. Finalizing it at shutdown would record a healthy run as an
+    error with a completed_at.
+    """
+    monkeypatch.setenv("FAKE_RUN_STEP_DELAY", "0.02")
+    lease = _StubLease(grant=True)
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=lease,
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    template = _write_template(repo_dir, steps=500, save_every=50)
+
+    service.start()
+    try:
+        job = service.enqueue(
+            set_id=_SET_ID,
+            name="shutdown",
+            base_model="m",
+            trigger_word="t",
+            template_path=template,
+        )
+        assert _poll_until(
+            lambda: (
+                _job_status(hub, job["uuid"]).status == "running"
+                and _job_status(hub, job["uuid"]).pid is not None
+            )
+        ), "job did not reach running with a pid"
+    finally:
+        service.stop()
+
+    final = _job_status(hub, job["uuid"])
+    assert final.status == "running", f"status={final.status!r}"
+    assert final.completed_at is None
+
+    # Stop the trainer the test left running, so nothing outlives the test.
+    cleanup = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    assert cleanup.cancel(job["id"]) is True
+    assert _poll_until(lambda: not LocalAiToolkit._pid_alive(final.pid)), (
+        f"trainer pid {final.pid} still alive after cancel"
+    )
+
+
 def test_zero_image_dataset_marks_error_no_lease_leak(hub, repo_dir):
     """A zero-image dataset marks the job error and never touches the GPU lease."""
     lease = _StubLease(grant=True)
@@ -536,6 +596,85 @@ def test_lease_cancelled_while_waiting_stops_the_job_unlaunched(hub, repo_dir):
     final = _job_status(hub, job["uuid"])
     assert final.pid is None and final.started_at is None
     assert lease.events == ["acquire", "release"]
+
+
+def test_cancel_queued_job_never_frees_a_lease_already_granted(hub, repo_dir):
+    """cancel() on a queued job leaves a lease the worker was just granted alone.
+
+    The worker is about to train on that card; freeing it would let the arbiter
+    hand the GPU to another tenant while the run is on it.
+    """
+    lease = _StubLease()
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=lease,
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    template = _write_template(repo_dir, steps=4, save_every=2)
+    # No worker is started, so the job stays queued and the test owns the state.
+    job = service.enqueue(
+        set_id=_SET_ID,
+        name="granted",
+        base_model="m",
+        trigger_word="t",
+        template_path=template,
+    )
+    granted = _StubLease()
+    granted.held = True
+    service._waiting = (job["uuid"], granted)
+
+    assert service.cancel(job["id"]) is True
+
+    assert granted.release_count == 0
+    assert _job_status(hub, job["uuid"]).status == "stopped"
+
+
+class _ShutdownLease(_StubLease):
+    """A lease that is never granted and gives up only when the service stops."""
+
+    def wait(self, cancel_event=None, timeout=None) -> bool:
+        while not (cancel_event and cancel_event.is_set()):
+            time.sleep(0.01)
+        return False
+
+
+def test_shutdown_while_queued_keeps_the_spec_for_the_next_start(hub, repo_dir):
+    """A job still queued at shutdown keeps its spec, so the next start can train it."""
+    lease = _ShutdownLease()
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=lease,
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    template = _write_template(repo_dir, steps=4, save_every=2)
+
+    service.start()
+    try:
+        job = service.enqueue(
+            set_id=_SET_ID,
+            name="kept",
+            base_model="m",
+            trigger_word="t",
+            template_path=template,
+        )
+        assert _poll_until(lambda: lease.acquire_count == 1), "lease never requested"
+    finally:
+        service.stop()
+
+    assert _job_status(hub, job["uuid"]).status == "queued"
+    # A fresh service has no in-memory spec, so it must read the sidecar.
+    restarted = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    assert restarted._load_pending_spec(job["uuid"])["template_path"] == template
 
 
 def test_cancel_queued_job_drops_the_lease_it_waits_on(hub, repo_dir):
@@ -973,3 +1112,35 @@ def test_a_job_with_no_shelf_folder_and_no_registrar_fails_without_training(
     assert final.error == "No model shelf folder is set up for ai-toolkit runs."
     assert builds == [], "no dataset is built when the run has nowhere to go"
     assert not os.path.exists(os.path.join(repo_dir, "output"))
+
+
+def test_vault_reconciles_a_surviving_trainer_before_the_worker_starts():
+    """A trainer that survived a restart is handled before the worker takes a job.
+
+    Otherwise the worker can claim a queued job and ask the arbiter for the card
+    while the surviving run still holds it.
+    """
+    order: list[str] = []
+
+    def noop(*_args, **_kwargs):
+        return None
+
+    stand_in = SimpleNamespace(
+        _disable_background_workers=False,
+        _started=False,
+        _task_runner=SimpleNamespace(start=noop),
+        _work_planner=SimpleNamespace(start=noop),
+        _arbiter=SimpleNamespace(add_yielder=noop, add_listener=noop),
+        _yield_gpu=noop,
+        _on_resource_lease=noop,
+        _ref_folder_watcher=SimpleNamespace(start=noop),
+        _start_existing_folder_watches=noop,
+        training_service=SimpleNamespace(
+            reconcile_on_startup=lambda: order.append("reconcile"),
+            start=lambda: order.append("start"),
+        ),
+    )
+
+    Vault.start(stand_in)
+
+    assert order == ["reconcile", "start"]

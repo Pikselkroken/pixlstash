@@ -757,7 +757,9 @@ const trainScope = computed(() => {
   const charIds = Array.isArray(sel.selectedCharacterIds)
     ? sel.selectedCharacterIds
     : [];
-  // Single set: one set selected, no multi-set overlap, no extra characters.
+  // Single set: one set selected, no multi-set overlap. A character next to a
+  // set is ignored here, as the grid ignores it (useGridFetch sends only the
+  // set_id), so the scope is the whole set the view shows.
   const singleSetId =
     sel.selectedSet != null && sel.selectedSet !== "" && setIds.length <= 1
       ? Number(sel.selectedSet)

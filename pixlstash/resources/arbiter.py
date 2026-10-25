@@ -172,10 +172,14 @@ class Lease:
             self._changed.clear()
         return self.state is LeaseState.GRANTED
 
-    def release(self) -> None:
-        """Give the memory back. Idempotent."""
+    def release(self, *, only_waiting: bool = False) -> None:
+        """Give the memory back. Idempotent.
+
+        With *only_waiting*, a lease granted meanwhile is left alone: the holder
+        is already training on it and releases it itself.
+        """
         if self._arbiter is not None:
-            self._arbiter.release(self)
+            self._arbiter.release(self, only_waiting=only_waiting)
 
     def shrink(self, need_mb: int) -> None:
         """Lower the reservation to what the work is now known to need.
