@@ -7,7 +7,6 @@ import {
   deleteTrainingJob,
   discoverAiToolkit,
   getAiToolkitStatus,
-  getWorkerProgress,
   listTrainingJobs,
   listTrainingTemplates,
 } from "../api/training";
@@ -60,10 +59,6 @@ export const useTrainingStore = defineStore("training", () => {
 
   const submitting = ref(false);
   const submitError = ref("");
-
-  // ── Available VRAM (read once when the panel opens; soft hint only) ─────────
-  const vramAvailableGb = ref(null);
-  const vramTotalGb = ref(null);
 
   // ── Jobs (settings section) ──────────────────────────────────────
   const jobs = ref([]);
@@ -144,25 +139,6 @@ export const useTrainingStore = defineStore("training", () => {
       console.warn("Failed to load training templates:", err);
     } finally {
       templatesLoading.value = false;
-    }
-  }
-
-  async function fetchVram() {
-    try {
-      const data = await getWorkerProgress();
-      const usage = data?.process || data?.system || {};
-      const total = Number(usage.vram_total_gb);
-      const used = Number(usage.vram_used_gb);
-      vramTotalGb.value = Number.isFinite(total) ? total : null;
-      vramAvailableGb.value =
-        Number.isFinite(total) && Number.isFinite(used)
-          ? Math.max(0, total - used)
-          : null;
-    } catch (err) {
-      // Soft hint only; leave VRAM unknown on failure.
-      console.warn("Failed to read VRAM usage for training hint:", err);
-      vramAvailableGb.value = null;
-      vramTotalGb.value = null;
     }
   }
 
@@ -372,8 +348,6 @@ export const useTrainingStore = defineStore("training", () => {
     aiToolkitDiscovery.value = null;
     aiToolkitCheck.value = null;
     aiToolkitStatus.value = null;
-    vramAvailableGb.value = null;
-    vramTotalGb.value = null;
     trainMenuOpen.value = false;
   }
 
@@ -406,10 +380,7 @@ export const useTrainingStore = defineStore("training", () => {
     rawConfig,
     submitting,
     submitError,
-    vramAvailableGb,
-    vramTotalGb,
     fetchTemplates,
-    fetchVram,
     startTraining,
     buildConfigOverrides,
     // jobs

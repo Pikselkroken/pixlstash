@@ -35,15 +35,7 @@
       density="comfortable"
       :loading="store.templatesLoading"
       hide-details="auto"
-    >
-      <template #append-inner>
-        <span v-if="vramHint" class="tb-train-vram">{{ vramHint }}</span>
-      </template>
-    </v-select>
-    <div v-if="vramWarning" class="tb-train-vram-warn">
-      <v-icon size="13" class="mr-1">mdi-alert-outline</v-icon>
-      {{ vramWarning }}
-    </div>
+    />
 
     <!-- Trigger word -->
     <v-text-field
@@ -191,7 +183,6 @@ watch(
   (isOpen) => {
     if (!isOpen) return;
     store.fetchTemplates();
-    store.fetchVram();
     if (!store.configLoaded) store.fetchConfig();
     triggerError.value = "";
     stepsError.value = "";
@@ -214,26 +205,6 @@ function shortModel(name) {
   const parts = String(name).split("/");
   return parts[parts.length - 1] || name;
 }
-
-// Rough per-template VRAM estimate. The backend template descriptions don't
-// carry a VRAM figure, so we use a conservative default for the turbo LoRA
-// recipe. This is a soft hint only, never a hard block (the GPU lease frees
-// PixlStash's own models first).
-const estimatedVramGb = computed(() => 12);
-
-const vramHint = computed(() => {
-  if (!estimatedVramGb.value) return "";
-  return `needs ~${estimatedVramGb.value} GB`;
-});
-
-const vramWarning = computed(() => {
-  const avail = store.vramAvailableGb;
-  if (avail == null || !estimatedVramGb.value) return "";
-  if (avail < estimatedVramGb.value) {
-    return `may not fit · ~${avail.toFixed(0)} GB free (PixlStash frees its own GPU memory first)`;
-  }
-  return "";
-});
 
 const templateModel = computed({
   get: () => store.selectedTemplate,
@@ -350,20 +321,6 @@ function goToSettings() {
   outline: var(--focus-width) solid rgb(var(--v-theme-primary));
   outline-offset: var(--focus-offset);
   border-radius: var(--radius-sm);
-}
-
-.tb-train-vram {
-  font-size: var(--text-2xs);
-  opacity: 0.7;
-  white-space: nowrap;
-}
-
-.tb-train-vram-warn {
-  display: flex;
-  align-items: center;
-  font-size: var(--text-xs);
-  color: rgb(var(--v-theme-warning));
-  margin-top: -var(--space-2);
 }
 
 .tb-train-adv :deep(.v-expansion-panel-title) {

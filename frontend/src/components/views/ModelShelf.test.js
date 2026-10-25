@@ -37,6 +37,12 @@ let hiddenOnServer = new Set();
 
 // The favourites are read on mount, and written by the heart and H. Doubled so
 // each test says what the hub holds and reads back what was asked to change.
+// The loss of a trained run, read by its id when a stack of its files opens.
+const getTrainingJob = vi.fn();
+vi.mock("../../api/training", () => ({
+  getTrainingJob: (...args) => getTrainingJob(...args),
+}));
+
 const listFavourites = vi.fn();
 const setFavourites = vi.fn();
 vi.mock("../../api/favourites", () => ({
@@ -1067,6 +1073,51 @@ describe("location state", () => {
     expect(tip(wrapper.find(".shelf-row--member .shelf-row-file"))).toBe(
       `/media/me/spare/b.st\nSHA-256: ${"b".repeat(64)}`,
     );
+  });
+
+  it("draws the loss of a trained run in its expansion", async () => {
+    getTrainingJob.mockResolvedValue({
+      id: 42,
+      loss_curve: [
+        { step: 1, loss: 0.5 },
+        { step: 2, loss: 0.4 },
+      ],
+    });
+    const wrapper = await mountShelf([
+      adapter({ id: 1, stack_id: 7, stack_position: 0, training_run_id: 42 }),
+      adapter({
+        id: 2,
+        stack_id: 7,
+        stack_position: 1,
+        sha256: "b".repeat(64),
+        training_run_id: 42,
+      }),
+    ]);
+    expect(wrapper.find("[data-testid='shelf-run-loss']").exists()).toBe(false);
+    await wrapper.find(".shelf-row").trigger("keydown", { key: "ArrowRight" });
+    await flushPromises();
+    expect(getTrainingJob).toHaveBeenCalledWith(42);
+    expect(
+      wrapper.find("[data-testid='shelf-run-loss'] .lora-loss-figure").exists(),
+    ).toBe(true);
+  });
+
+  it("draws no loss band for an expanded stack with no training run", async () => {
+    getTrainingJob.mockClear();
+    const wrapper = await mountShelf([
+      adapter({ id: 1, stack_id: 7, stack_position: 0, training_run_id: null }),
+      adapter({
+        id: 2,
+        stack_id: 7,
+        stack_position: 1,
+        sha256: "b".repeat(64),
+        training_run_id: null,
+      }),
+    ]);
+    await wrapper.find(".shelf-row").trigger("keydown", { key: "ArrowRight" });
+    await flushPromises();
+    expect(wrapper.find("[data-testid='shelf-run-loss']").exists()).toBe(false);
+    expect(getTrainingJob).not.toHaveBeenCalled();
   });
 
   it("still names the hash when every copy has been forgotten", async () => {

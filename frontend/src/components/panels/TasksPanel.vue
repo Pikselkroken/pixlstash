@@ -114,6 +114,30 @@
               :describe="false"
             />
           </div>
+          <!-- AI Toolkit's run holding the card: one row, named for the run, with
+               its step, total and latest loss beside the name and the VRAM it
+               holds as the figure. Its lease is the only source, so no worker
+               row repeats it. -->
+          <div
+            v-else-if="entry.kind === 'aitoolkit'"
+            class="tm-row tm-row--run"
+            data-testid="tm-aitoolkit-row"
+          >
+            <span class="tm-mark tm-mark--running" aria-hidden="true"></span>
+            <AiToolkitIcon :size="18" class="tm-app" aria-hidden="true" />
+            <span class="tm-name">
+              {{ entry.label }}
+              <span
+                v-if="aitoolkitProgress(entry)"
+                class="tm-count"
+                data-testid="tm-aitoolkit-progress"
+                >{{ aitoolkitProgress(entry) }}</span
+              >
+            </span>
+            <span class="tm-figure">
+              <span class="tm-fig-text">{{ formatGb(entry.figureMb) }}</span>
+            </span>
+          </div>
           <!-- PixlStash's own background work: one folded row with its count
                and the VRAM its leases hold. The caret lists one line per task:
                a worker with its sparkline, a lease or stopped task no worker
@@ -793,6 +817,19 @@ function togglePixl() {
 }
 
 /**
+ * The AI Toolkit row's "step 2750/4000 · loss 0.123", or "" until the run has
+ * reported a total. The loss is left out until the run has one.
+ */
+function aitoolkitProgress(entry) {
+  const progress = entry.progress;
+  if (!progress || !(Number(progress.total) > 0)) return "";
+  const step = `step ${Number(progress.step) || 0}/${Number(progress.total)}`;
+  if (progress.loss == null || !Number.isFinite(Number(progress.loss))) return step;
+  const loss = Number(progress.loss);
+  return `${step} · loss ${loss < 0.01 ? loss.toExponential(2) : loss.toFixed(3)}`;
+}
+
+/**
  * Whether a fold child is working now: not stopped, and a worker only while it
  * runs or moves, as its own dot says; between batches it is in the fold idle.
  */
@@ -1399,7 +1436,6 @@ const tmLabelMap = {
   text_score: "Text score",
   text_read: "Text in pictures",
   object_detection: "Object detection",
-  lora_training: "LoRA training",
 };
 
 const tmWorkerLabelMap = {

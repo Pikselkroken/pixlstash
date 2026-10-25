@@ -17,7 +17,6 @@ const training = vi.hoisted(() => ({
   cancelTrainingJob: vi.fn(),
   createTrainingJob: vi.fn(),
   deleteTrainingJob: vi.fn(),
-  getWorkerProgress: vi.fn(),
   listTrainingJobs: vi.fn(),
   listTrainingTemplates: vi.fn(),
 }));

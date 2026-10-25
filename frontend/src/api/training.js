@@ -1,5 +1,4 @@
-// LoRA training resource - /training/*, plus /workers/progress for
-// the VRAM hint. Every route is owner-only on the backend (routes/training.py).
+// LoRA training resource - /training/*. Every route is owner-only on the backend (routes/training.py).
 // The ai-toolkit paths are ordinary user config, so they go through api/config.js.
 //
 // URLs are written WITHOUT the `/api/v1` prefix: the apiClient request
@@ -11,11 +10,6 @@ import { unwrap } from "../utils/unwrap";
 /** The shipped and user training templates. */
 export function listTrainingTemplates() {
   return unwrap(apiClient.get("/training/templates"));
-}
-
-/** Live worker and GPU usage; the panel reads its VRAM figures from it. */
-export function getWorkerProgress() {
-  return unwrap(apiClient.get("/workers/progress"));
 }
 
 /** Queue a training job (XOR set_id / character_id in the body). */
