@@ -42,7 +42,6 @@ export const useTrainingStore = defineStore("training", () => {
   const templates = ref([]);
   const templatesLoading = ref(false);
   const selectedTemplate = ref(null); // template `name` (with .json)
-  const baseModelOverride = ref(null); // null → use template's base model
   const triggerWord = ref("");
   const steps = ref(3000);
   // Advanced settings. Left blank by default so an untouched panel sends NO
@@ -151,7 +150,8 @@ export const useTrainingStore = defineStore("training", () => {
     submitError.value = "";
     try {
       // CreateJobRequest forbids extra fields: only set_id/character_id, name,
-      // base_model, trigger_word, template, config_overrides are accepted.
+      // trigger_word, template, config_overrides are accepted. The base model is
+      // the template's, read by the server.
       // `steps` (and the advanced fields) go inside config_overrides, never at
       // the top level, or the API rejects the body with a 422.
       const body = {
@@ -160,8 +160,6 @@ export const useTrainingStore = defineStore("training", () => {
         trigger_word: triggerWord.value.trim(),
       };
       if (selectedTemplate.value) body.template = selectedTemplate.value;
-      if (baseModelOverride.value)
-        body.base_model = baseModelOverride.value;
 
       const overrides = buildConfigOverrides();
       if (overrides && Object.keys(overrides).length)
@@ -368,7 +366,6 @@ export const useTrainingStore = defineStore("training", () => {
     templates,
     templatesLoading,
     selectedTemplate,
-    baseModelOverride,
     triggerWord,
     steps,
     networkRank,

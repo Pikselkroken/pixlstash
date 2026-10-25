@@ -30,7 +30,11 @@ from pixlstash.hub import training_runs
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.model_folder_scanner import SOURCE_FOLDER_KIND
 from pixlstash.training import ai_toolkit_install
-from pixlstash.training.config_render import TunableOverrideError, validate_tunables
+from pixlstash.training.config_render import (
+    TunableOverrideError,
+    render_job_config,
+    validate_tunables,
+)
 from pixlstash.utils.aitoolkit_run import read_output_root
 from pixlstash.utils.path_utils import path_is_within, resolve_path_within
 from pixlstash.utils.service.user_settings_utils import validate_ai_toolkit_settings
@@ -40,8 +44,6 @@ logger = get_logger(__name__)
 # Default training template (resolved by name, .json appended) when the caller
 # does not specify one. Matches the file shipped in the built-in templates dir.
 DEFAULT_TEMPLATE = "zimage-turbo-lora"
-# Fallback base model when neither the request nor the template names one.
-DEFAULT_BASE_MODEL = "Tongyi-MAI/Z-Image-Turbo"
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +114,43 @@ def _resolve_template_path(name: str) -> tuple[str | None, str | None]:
         if os.path.isfile(path):
             return path, source
     return None, None
+
+
+def _trained_base_model(template_path: str, payload) -> str:
+    """The base model the trainer will load, read from the rendered config.
+
+    The model name is not tunable (the allow-list refuses ``model.*``), so an
+    override cannot change it; rendering with placeholder paths gives the value
+    the run will use. The job row records this, never a client's claim (review
+    F4).
+
+    Args:
+        template_path: Absolute path to the chosen template JSON.
+        payload: The validated create-job request (name, trigger word, overrides).
+
+    Returns:
+        The rendered ``config.process[0].model.name_or_path``.
+
+    Raises:
+        HTTPException: 422 when the template cannot be rendered or names no model.
+    """
+    try:
+        config = render_job_config(
+            template_path,
+            job_name=payload.name,
+            training_folder="",
+            sqlite_db_path="",
+            trigger_word=payload.trigger_word,
+            dataset_dir="",
+            overrides=payload.config_overrides,
+        )
+        return config["config"]["process"][0]["model"]["name_or_path"]
+    except (OSError, ValueError, KeyError, IndexError, TypeError) as exc:
+        logger.warning("No base model in template %s: %s", template_path, exc)
+        raise HTTPException(
+            status_code=422,
+            detail="The chosen template does not name a base model to train.",
+        ) from exc
 
 
 def _base_model_from_template(template_path: str) -> str | None:
@@ -316,13 +355,6 @@ def create_router(server) -> APIRouter:
         )
         name: str = Field(
             ..., min_length=1, description="Human-readable name for the job."
-        )
-        base_model: Optional[str] = Field(
-            default=None,
-            description=(
-                "Base checkpoint to train the LoRA against. Defaults to the "
-                "base model named in the chosen template."
-            ),
         )
         trigger_word: str = Field(
             ...,
@@ -578,11 +610,7 @@ def create_router(server) -> APIRouter:
                 status_code=404, detail=f"Template not found: {template_name}"
             )
 
-        base_model = (
-            payload.base_model
-            or _base_model_from_template(template_path)
-            or DEFAULT_BASE_MODEL
-        )
+        base_model = _trained_base_model(template_path, payload)
 
         try:
             job = server.vault.training_service.enqueue(

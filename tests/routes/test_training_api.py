@@ -243,6 +243,34 @@ def test_create_job_owner_works():
         _teardown(temp_dir, server)
 
 
+def test_create_job_takes_base_model_from_the_template_and_refuses_a_client_one():
+    """The job's base model is what the trainer loads: the template's rendered
+    model name, read by the server. A client-sent base_model is refused (review
+    F4), so the row cannot claim a model the run did not train."""
+    from pixlstash.routes.training import _template_builtin_dir
+
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        char_id = _make_character(owner)
+        with open(
+            os.path.join(_template_builtin_dir(), "zimage-turbo-lora.json"),
+            encoding="utf-8",
+        ) as fh:
+            expected = json.load(fh)["config"]["process"][0]["model"]["name_or_path"]
+        body = {"character_id": char_id, "name": "Alice", "trigger_word": "alice"}
+        r = owner.post("/training/jobs", json=body)
+        assert r.status_code == 200, r.text
+        assert r.json()["base_model"] == expected
+        assert server.vault.training_service.enqueue_calls[-1]["base_model"] == expected
+
+        calls_before = len(server.vault.training_service.enqueue_calls)
+        r = owner.post("/training/jobs", json={**body, "base_model": "Other/Model"})
+        assert r.status_code == 422, r.text
+        assert len(server.vault.training_service.enqueue_calls) == calls_before
+    finally:
+        _teardown(temp_dir, server)
+
+
 def test_create_job_scoped_token_forbidden():
     temp_dir, owner, server, read_token = _setup()
     try:
