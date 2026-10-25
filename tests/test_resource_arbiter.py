@@ -785,7 +785,7 @@ def test_an_unreachable_comfyui_is_not_taken_for_a_remote_one(monkeypatch):
     def unreachable(path):
         raise requests.ConnectionError("test-unreachable")
 
-    monkeypatch.setattr(comfyui_tenant, "ledger", lambda: FakeLedger())
+    monkeypatch.setattr(comfyui_tenant, "ledger", FakeLedger)
     probe = ComfyUIProbe("test-client")
     probe.watch("http://comfy.invalid")
     probe._get = unreachable
@@ -863,7 +863,7 @@ def test_a_read_failing_partway_through_the_card_match_is_not_cached_as_remote(
         except StopIteration:
             raise requests.ConnectionError("test-timeout") from None
 
-    monkeypatch.setattr(comfyui_tenant, "ledger", lambda: FakeLedger())
+    monkeypatch.setattr(comfyui_tenant, "ledger", FakeLedger)
     monkeypatch.setattr(comfyui_tenant.time, "sleep", lambda s: None)
     probe = ComfyUIProbe("test-client")
     probe.watch("http://comfy.invalid")
@@ -896,7 +896,7 @@ def test_a_comfyui_reporting_cudas_smaller_card_total_is_still_on_this_card(
     from pixlstash.resources import comfyui_tenant
     from pixlstash.resources.comfyui_tenant import ComfyUIProbe
 
-    monkeypatch.setattr(comfyui_tenant, "ledger", lambda: FakeLedger())
+    monkeypatch.setattr(comfyui_tenant, "ledger", FakeLedger)
     monkeypatch.setattr(comfyui_tenant.time, "sleep", lambda s: None)
     probe = ComfyUIProbe("test-client")
     probe.watch("http://comfy.invalid")
@@ -1042,7 +1042,7 @@ def test_a_comfyui_on_a_card_a_gb_off_in_size_is_not_on_this_card(monkeypatch):
     from pixlstash.resources import comfyui_tenant
     from pixlstash.resources.comfyui_tenant import ComfyUIProbe
 
-    monkeypatch.setattr(comfyui_tenant, "ledger", lambda: FakeLedger())
+    monkeypatch.setattr(comfyui_tenant, "ledger", FakeLedger)
     monkeypatch.setattr(comfyui_tenant.time, "sleep", lambda s: None)
     probe = ComfyUIProbe("test-client")
     probe.watch("http://comfy.invalid")
@@ -1059,7 +1059,7 @@ def test_an_identical_card_elsewhere_is_told_apart_by_a_fresh_second_read(
     from pixlstash.resources.comfyui_tenant import ComfyUIProbe
 
     reads = iter([_comfy_stats(TOTAL, TOTAL), _comfy_stats(TOTAL, TOTAL)])
-    monkeypatch.setattr(comfyui_tenant, "ledger", lambda: FakeLedger())
+    monkeypatch.setattr(comfyui_tenant, "ledger", FakeLedger)
     monkeypatch.setattr(comfyui_tenant.time, "sleep", lambda s: None)
     probe = ComfyUIProbe("test-client")
     probe.watch("http://comfy.invalid")
