@@ -28,7 +28,6 @@ from __future__ import annotations
 import json
 import os
 import threading
-import time
 import uuid
 from typing import Callable
 
@@ -152,10 +151,6 @@ class TrainingService:
         # while a job is running, cleared in the worker's finally.
         self._active_backend: TrainerBackend | None = None
         self._active_job_uuid: str | None = None
-        # Live snapshot of the running job, for the StatsSidebar "Tasks" tab
-        # (surfaced via /workers/progress). Set/cleared alongside the active job.
-        self._active_job_name: str | None = None
-        self._latest_progress: TrainingProgress | None = None
         # The lease a claimed job is still waiting on, so cancel() can drop it.
         self._waiting: tuple[str, Lease] | None = None
         self._active_lock = threading.Lock()
@@ -363,43 +358,6 @@ class TrainingService:
 
         return True
 
-    def current_worker_snapshot(self) -> dict | None:
-        """Return a ``/workers/progress``-style entry for the running job.
-
-        Lets the StatsSidebar "Tasks" tab render live training progress with the
-        same worker-row UI (label / current·total / rate sparkline) as the
-        background workers, instead of a bespoke panel. Returns ``None`` when no
-        job is actively running.
-
-        Returns:
-            A worker-snapshot dict (keyed under ``lora_training`` by the caller),
-            or ``None`` when idle.
-        """
-        with self._active_lock:
-            progress = self._latest_progress
-            name = self._active_job_name
-            active_uuid = self._active_job_uuid
-        if progress is None or active_uuid is None or progress.status != "running":
-            return None
-        total = int(progress.total_steps or 0)
-        step = int(progress.step or 0)
-        latest_loss = (
-            progress.loss_curve[-1].get("loss") if progress.loss_curve else None
-        )
-        return {
-            "label": "lora_training",
-            "current": step,
-            "total": total,
-            "remaining": max(total - step, 0),
-            "updated_at": time.time(),
-            "status": "running",
-            "running": True,
-            "active": True,
-            "job_name": name,
-            "loss": latest_loss,
-            "info": progress.info or "",
-        }
-
     def reconcile_on_startup(self) -> None:
         """Resolve jobs left ``running`` / ``stopping`` across a restart.
 
@@ -492,9 +450,8 @@ class TrainingService:
         with self._active_lock:
             self._active_backend = backend
             self._active_job_uuid = info["uuid"]
-            self._active_job_name = info.get("name")
         try:
-            progress = self._poll_until_done(backend, handle, info["uuid"])
+            progress = self._poll_until_done(backend, handle, info["uuid"], lease)
             self._finalize(backend, handle, info, progress)
         except Exception:
             logger.exception("Re-attached job %s failed during polling", info["uuid"])
@@ -505,8 +462,6 @@ class TrainingService:
             with self._active_lock:
                 self._active_backend = None
                 self._active_job_uuid = None
-                self._active_job_name = None
-                self._latest_progress = None
             lease.release()
 
     # ------------------------------------------------------------------
@@ -606,6 +561,7 @@ class TrainingService:
                 info,
                 work_dir,
                 manifest,
+                lease,
                 gpu_ids=lease.device or "0",
                 training_folder=training_folder,
             )
@@ -618,8 +574,6 @@ class TrainingService:
             with self._active_lock:
                 self._active_backend = None
                 self._active_job_uuid = None
-                self._active_job_name = None
-                self._latest_progress = None
                 self._waiting = None
             lease.release()
             with self._pending_specs_lock:
@@ -632,6 +586,7 @@ class TrainingService:
         info: dict,
         work_dir: str,
         manifest: dict,
+        lease: Lease,
         gpu_ids: str = "0",
         training_folder: str | None = None,
     ) -> tuple[object, TrainingProgress]:
@@ -642,6 +597,7 @@ class TrainingService:
             info: Queued-job fields.
             work_dir: The per-job work directory.
             manifest: The dataset manifest (provides ``dest_dir``).
+            lease: The run's granted lease; its progress fields are kept live.
             gpu_ids: ``CUDA_VISIBLE_DEVICES`` for the trainer: the leased
                 card's UUID, so it trains on the card the arbiter cleared.
             training_folder: The shelf source folder the run is written into.
@@ -670,7 +626,6 @@ class TrainingService:
         with self._active_lock:
             self._active_backend = backend
             self._active_job_uuid = job_uuid
-            self._active_job_name = info["name"]
 
         config = self._read_rendered_config(handle.config_path)
         total_steps = self._total_steps_from_config(config)
@@ -689,11 +644,11 @@ class TrainingService:
             job_uuid, status="running", current=0, total=total_steps, message="Started"
         )
 
-        progress = self._poll_until_done(backend, handle, job_uuid)
+        progress = self._poll_until_done(backend, handle, job_uuid, lease)
         return handle, progress
 
     def _poll_until_done(
-        self, backend: TrainerBackend, handle, job_uuid: str
+        self, backend: TrainerBackend, handle, job_uuid: str, lease: Lease
     ) -> TrainingProgress:
         """Poll progress until the process is dead AND status is terminal.
 
@@ -704,6 +659,8 @@ class TrainingService:
             backend: The trainer backend.
             handle: The job handle.
             job_uuid: The job uuid (used as the event ``run_id``).
+            lease: The run's lease; the Tasks tab's AI Toolkit row reads its
+                step, total and latest loss from it.
 
         Returns:
             The final :class:`TrainingProgress` snapshot.
@@ -711,8 +668,13 @@ class TrainingService:
         progress = backend.progress(handle)
         while not self._stop.is_set():
             self._persist_progress(job_uuid, progress, handle)
-            with self._active_lock:
-                self._latest_progress = progress
+            lease.set_progress(
+                step=progress.step,
+                total=progress.total_steps,
+                loss=progress.loss_curve[-1].get("loss")
+                if progress.loss_curve
+                else None,
+            )
             self._emit_progress(
                 job_uuid,
                 status=progress.status,

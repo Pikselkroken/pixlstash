@@ -1065,3 +1065,29 @@ def test_an_identical_card_elsewhere_is_told_apart_by_a_fresh_second_read(
     probe.watch("http://comfy.invalid")
     probe._get = lambda path: next(reads, _comfy_stats(TOTAL, TOTAL - 3000))
     assert probe.device() is None
+
+
+def test_a_granted_lease_carries_its_live_progress_in_the_snapshot():
+    arb, _fake, _ = make(used_mb=4000)
+    lease = arb.request(
+        Tenant.AITOOLKIT,
+        "LoRA training 'x'",
+        device=CARD,
+        need_mb=budget(TOTAL - 4000),
+        kind=LeaseKind.EXCLUSIVE,
+        job_id="job-1",
+    )
+    row = next(r for r in arb.snapshot()["leases"] if r["id"] == lease.id)
+    assert row["progress"] is None
+
+    lease.set_progress(step=2750, total=4000, loss=0.123)
+    row = next(r for r in arb.snapshot()["leases"] if r["id"] == lease.id)
+    assert row["progress"] == {"step": 2750, "total": 4000, "loss": 0.123}
+    assert row["job_id"] == "job-1"
+
+    lease.set_progress(step=2800, total=4000, loss=None)
+    row = next(r for r in arb.snapshot()["leases"] if r["id"] == lease.id)
+    assert row["progress"] == {"step": 2800, "total": 4000, "loss": None}
+
+    lease.release()
+    assert all(r["id"] != lease.id for r in arb.snapshot()["leases"])

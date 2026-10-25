@@ -2136,20 +2136,6 @@ class Vault:
                 "running": worker_active,
                 "active": worker_active,
             }
-        # Surface an active LoRA-training run as a worker row so the StatsSidebar
-        # "Tasks" tab renders its live progress alongside the background workers.
-        training_service = getattr(self, "training_service", None)
-        if training_service is not None:
-            try:
-                training_snapshot = training_service.current_worker_snapshot()
-            except Exception:
-                logger.warning(
-                    "Failed to read training worker snapshot for /workers/progress",
-                    exc_info=True,
-                )
-                training_snapshot = None
-            if training_snapshot is not None:
-                progress["lora_training"] = training_snapshot
         return progress
 
     @staticmethod

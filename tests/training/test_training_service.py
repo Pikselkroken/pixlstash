@@ -83,6 +83,7 @@ class _StubLease:
         self.grant = grant
         self.acquire_count = 0
         self.release_count = 0
+        self.progress_calls: list[dict] = []
 
     def request(self, label: str, job_uuid: str) -> "_StubLease":
         self.acquire_count += 1
@@ -95,6 +96,9 @@ class _StubLease:
     def release(self) -> None:
         self.release_count += 1
         self.events.append("release")
+
+    def set_progress(self, **fields) -> None:
+        self.progress_calls.append(fields)
 
 
 class _RecordingImport:
@@ -702,26 +706,17 @@ def test_reconcile_on_startup_dead_running_job_finalizes(hub, repo_dir):
     assert lease.release_count == 0
 
 
-def test_current_worker_snapshot_idle_and_running(hub, repo_dir):
-    """The /workers/progress snapshot is None when idle, populated when running."""
+def test_a_polling_run_keeps_its_lease_step_total_and_loss_live(hub, repo_dir):
+    """Each poll hands the granted lease the run's step, total and latest loss.
+
+    The Tasks tab's AI Toolkit row reads these from the arbiter snapshot, so a
+    run whose lease never gets them shows no progress at all.
+    """
+    from types import SimpleNamespace
+
     from pixlstash.training.backend import TrainingProgress
 
-    lease, notify = _StubLease(), _CapturingNotify()
-    service = _make_service(
-        hub,
-        repo_dir,
-        lease=lease,
-        notify=notify,
-        dataset_builder=_make_dataset_builder(),
-    )
-
-    # Idle: no active job → None.
-    assert service.current_worker_snapshot() is None
-
-    # Simulate a running job's stashed live state.
-    service._active_job_uuid = "abc123"
-    service._active_job_name = "my_lora"
-    service._latest_progress = TrainingProgress(
+    running = TrainingProgress(
         status="running",
         info="Training",
         step=120,
@@ -732,17 +727,7 @@ def test_current_worker_snapshot_idle_and_running(hub, repo_dir):
         checkpoints=[],
         final_checkpoint=None,
     )
-    snap = service.current_worker_snapshot()
-    assert snap is not None
-    assert snap["label"] == "lora_training"
-    assert snap["current"] == 120 and snap["total"] == 300
-    assert snap["remaining"] == 180
-    assert snap["active"] is True and snap["running"] is True
-    assert snap["job_name"] == "my_lora"
-    assert snap["loss"] == 0.42
-
-    # A terminal status is not "running" → snapshot drops back to None.
-    service._latest_progress = TrainingProgress(
+    done = TrainingProgress(
         status="completed",
         info="done",
         step=300,
@@ -753,7 +738,34 @@ def test_current_worker_snapshot_idle_and_running(hub, repo_dir):
         checkpoints=[],
         final_checkpoint="x.safetensors",
     )
-    assert service.current_worker_snapshot() is None
+
+    class _Backend:
+        def __init__(self):
+            self.calls = 0
+
+        def progress(self, handle):
+            self.calls += 1
+            return running if self.calls == 1 else done
+
+        def is_alive(self, handle):
+            return self.calls == 1
+
+    lease = _StubLease()
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=lease,
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    handle = SimpleNamespace(log_path=os.path.join(repo_dir, "missing.log"))
+
+    service._poll_until_done(_Backend(), handle, "abc123", lease)
+
+    assert lease.progress_calls == [
+        {"step": 120, "total": 300, "loss": 0.42},
+        {"step": 300, "total": 300, "loss": None},
+    ]
 
 
 def test_the_worker_leaves_another_librarys_runs_alone(hub, repo_dir):

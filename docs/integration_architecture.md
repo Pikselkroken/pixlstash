@@ -2187,7 +2187,8 @@ PixlStash admits the GPU work it starts against the card's measured free memory 
  ram: {total_mb, available_mb},
  holders: [{device, tenant, label, used_mb, measured_by, lease_id, outside_pixlstash}],
  leases: [{id, tenant, label, kind, state, device, need_mb, ram_mb, reserved_mb, held_mb, peak_mb, since,
-           worker_type, run_id, job_id, workflow_id, on_cpu, warnings: [{code, text}], waiting_reason}],
+           worker_type, run_id, job_id, workflow_id, progress: {step, total, loss} | null, on_cpu,
+           warnings: [{code, text}], waiting_reason}],
  preempted: [{worker_type, caused_by, since, text}],
  summary: {state: idle | running | waiting, headline}}
 ```
