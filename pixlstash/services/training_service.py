@@ -434,7 +434,10 @@ class TrainingService:
             )
             # ponytail: asked for, not adopted. The run already holds the card,
             # so the lease is granted once PixlStash has yielded; the plan's
-            # adopt() would grant it at once, with a boot quiet period.
+            # adopt() would grant it at once, with a boot quiet period. A live
+            # run without a profile (started before recipes) still takes the
+            # exclusive lease at 0 MB: it keeps other GPU work off the card
+            # under the running trainer, and is released when the run ends.
             vram_mb, ram_mb = self._lease_need(info) or (0, 0)
             lease = self._request_gpu(
                 self._lease_label(info), info["uuid"], vram_mb, ram_mb

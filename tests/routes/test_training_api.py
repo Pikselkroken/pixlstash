@@ -150,12 +150,6 @@ def _setup(checkout=True):
     )
     # A 24 GB card, as the arbiter would report it, unless a test says otherwise.
     server.vault.training_room = lambda: dict(_ROOM_24GB)
-    # The sets and characters here hold no picture files; a test sets the
-    # count the dataset would have. Restored in _teardown.
-    _PICTURES["count"] = 24
-    ExportUtils.count_training_pictures = staticmethod(
-        lambda server, **kwargs: _PICTURES["count"]
-    )
 
     client = TestClient(server.api, raise_server_exceptions=True)
     resp = client.post("/login", json={"username": "owner", "password": "ownerpass1"})
@@ -168,6 +162,14 @@ def _setup(checkout=True):
     if checkout:
         repo = _fake_checkout(os.path.join(temp_dir.name, "aitk"))
         _save_checkout(client, repo, sys.executable)
+
+    # The sets and characters here hold no picture files; a test sets the
+    # count the dataset would have. Patched last, so a failing step above
+    # cannot leak it into other modules; restored in _teardown.
+    _PICTURES["count"] = 24
+    ExportUtils.count_training_pictures = staticmethod(
+        lambda server, **kwargs: _PICTURES["count"]
+    )
 
     return temp_dir, client, server, read_token
 

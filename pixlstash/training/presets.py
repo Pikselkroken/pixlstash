@@ -189,6 +189,8 @@ def validate_preset(preset: dict) -> dict:
             raise PresetError(f"{pid}: profile {name} sets different keys.")
         setting_keys = keys
     for choice, names in preset["fit"].items():
+        if not names:
+            raise PresetError(f"{pid}: fit.{choice} names no profile.")
         for name in names:
             if name not in profiles:
                 raise PresetError(f"{pid}: fit.{choice} names unknown profile {name}.")

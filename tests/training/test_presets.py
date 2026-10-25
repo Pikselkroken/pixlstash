@@ -81,6 +81,7 @@ def test_table_keys_are_tunable_and_locked_keys_are_not():
         (lambda p: p["locked"].pop("model.name_or_path"), "model.name_or_path"),
         (lambda p: p["hardware_profiles"]["q8"].pop("max_rank"), "max_rank"),
         (lambda p: p["hardware_profiles"].clear(), "at least one profile"),
+        (lambda p: p["fit"]["save_memory"].clear(), "names no profile"),
     ],
 )
 def test_a_broken_preset_is_refused(breakage, message):

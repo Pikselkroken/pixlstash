@@ -264,6 +264,7 @@ async function onStart() {
   try {
     const job = await store.startTraining();
     store.trainMenuOpen = false;
+    // The create response carries the resolver's result as an object.
     const profile = job?.resolved_profile?.profile_label;
     store.showQueuedToast(
       profile
