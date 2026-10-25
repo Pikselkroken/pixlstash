@@ -1054,7 +1054,21 @@ class Vault:
             "SELECT path, delete_after_import FROM model_folder WHERE kind = 'source'"
         ):
             root = os.path.realpath(row["path"])
-            if os.path.commonpath([root, run_real]) == root:
+            try:
+                under_root = os.path.commonpath([root, run_real]) == root
+            except ValueError as exc:
+                # Windows: a source folder on another drive has no common path
+                # with the run, so it cannot be the run's folder. Logged, since
+                # it is the reason this source is skipped.
+                logger.warning(
+                    "Source folder %s and run folder %s share no common path (%s); "
+                    "the source is not the run's folder.",
+                    root,
+                    run_real,
+                    exc,
+                )
+                under_root = False
+            if under_root:
                 delete_source = bool(row["delete_after_import"])
                 break
         with SHELF_IO_LOCK:

@@ -938,3 +938,39 @@ def test_a_run_outside_the_source_folder_keeps_its_files(shelf, tmp_path):
     )
 
     assert len(list(elsewhere.glob("*.safetensors"))) == 3
+
+
+def test_a_source_on_another_drive_is_skipped_not_fatal(shelf, monkeypatch):
+    """Windows: commonpath raises across drives. The run still imports.
+
+    The source that cannot share a path with the run is not the run's folder,
+    so its delete_after_import switch does not apply and the files stay.
+    """
+    run_id = _a_training_run(shelf["hub"])
+    with shelf["hub"].transaction() as conn:
+        conn.execute(
+            "UPDATE model_folder SET is_download_target = 1 WHERE id = ?",
+            (shelf["destination_id"],),
+        )
+        conn.execute(
+            "UPDATE model_folder SET delete_after_import = 1 WHERE id = ?",
+            (shelf["source_id"],),
+        )
+    source_root = os.path.realpath(str(shelf["output_root"]))
+    real_commonpath = os.path.commonpath
+
+    def other_drive(paths):
+        if list(paths)[0] == source_root:
+            raise ValueError("Paths don't have the same drive")
+        return real_commonpath(paths)
+
+    monkeypatch.setattr(os.path, "commonpath", other_drive)
+
+    result = Vault._import_training_run(
+        SimpleNamespace(_hub=shelf["hub"]),
+        str(shelf["run_dir"]),
+        {"id": run_id, "name": "Clementine", "set_id": None, "character_id": None},
+    )
+
+    assert result["imported"] == 3
+    assert len(list(shelf["run_dir"].glob("*.safetensors"))) == 3
