@@ -297,6 +297,32 @@ def test_an_import_records_trained_provenance_and_the_config_base_model(shelf):
     assert row["file_kind"] == "adapter"
 
 
+def test_a_subfolder_that_does_not_exist_yet_is_created_for_the_import(shelf):
+    """The subfolder need not exist: the import creates it and lands the run."""
+    subfolder = shelf["destination_dir"] / "loras"
+    assert not subfolder.exists()
+    report = RunImporter(shelf["hub"]).import_run(
+        str(shelf["run_dir"]), shelf["destination_id"], subfolder="loras"
+    )
+    assert {outcome.status for outcome in report.outcomes} == {STATUS_IMPORTED}
+    assert (subfolder / "Clementine.safetensors").is_file()
+    assert_no_dangling_rows(shelf["hub"])
+
+
+def test_a_refused_subfolder_import_creates_no_folder(shelf, monkeypatch):
+    """The subfolder is made only once every check has passed."""
+
+    def refuse(destination, bytes_to_copy):
+        raise MoveRefused("not enough space", status_code=507)
+
+    monkeypatch.setattr(importer_module, "require_space", refuse)
+    with pytest.raises(MoveRefused):
+        RunImporter(shelf["hub"]).import_run(
+            str(shelf["run_dir"]), shelf["destination_id"], subfolder="loras"
+        )
+    assert not (shelf["destination_dir"] / "loras").exists()
+
+
 def test_a_run_imported_into_a_subfolder_lands_under_it(shelf):
     """With a ``subfolder`` the files, their ``model_file`` rows and their
     previews all sit under it - the shape a LoRA download gives a file that
