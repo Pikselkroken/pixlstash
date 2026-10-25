@@ -14,6 +14,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -517,3 +518,30 @@ def test_pid_alive_reports_an_unreaped_zombie_as_dead():
         assert LocalAiToolkit._pid_alive(child.pid) is False
     finally:
         child.wait()
+
+
+def test_scan_checkpoints_survives_a_checkpoint_pruned_mid_scan(tmp_path, monkeypatch):
+    """A checkpoint the trainer deletes between the glob and the stat is skipped.
+
+    Crashing here would kill the poll loop, which must never fail on a file the
+    trainer is free to prune.
+    """
+    save_root = tmp_path / "run"
+    save_root.mkdir()
+    for name in ("run_000000100.safetensors", "run_000000200.safetensors"):
+        (save_root / name).write_bytes(b"x")
+    gone = str(save_root / "run_000000100.safetensors")
+    real_getmtime = os.path.getmtime
+
+    def pruned_getmtime(path):
+        if path == gone:
+            raise FileNotFoundError(path)
+        return real_getmtime(path)
+
+    monkeypatch.setattr(os.path, "getmtime", pruned_getmtime)
+    handle = SimpleNamespace(save_root=str(save_root))
+
+    intermediate, final = _make_backend()._scan_checkpoints(handle)
+
+    assert intermediate == [str(save_root / "run_000000200.safetensors")]
+    assert final is None

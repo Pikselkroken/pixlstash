@@ -714,10 +714,20 @@ class LocalAiToolkit(TrainerBackend):
         # component of save_root (save_root == training_folder/job_name).
         job_name = os.path.basename(handle.save_root)
         final_path = os.path.join(handle.save_root, f"{job_name}.safetensors")
-        all_files = sorted(
-            glob.glob(os.path.join(handle.save_root, "*.safetensors")),
-            key=os.path.getmtime,
-        )
+        stamped: list[tuple[float, str]] = []
+        for path in glob.glob(os.path.join(handle.save_root, "*.safetensors")):
+            try:
+                stamped.append((os.path.getmtime(path), path))
+            except FileNotFoundError:
+                # The trainer pruned it between the glob and the stat. It is no
+                # longer a checkpoint, so it is left out rather than crashing
+                # the poll loop.
+                logger.warning(
+                    "Checkpoint %s vanished while scanning %s (pruned by the trainer?)",
+                    path,
+                    handle.save_root,
+                )
+        all_files = [path for _, path in sorted(stamped, key=lambda item: item[0])]
         final_checkpoint = final_path if os.path.exists(final_path) else None
         intermediate = [f for f in all_files if f != final_path]
         return intermediate, final_checkpoint
