@@ -543,7 +543,12 @@ class LocalAiToolkit(TrainerBackend):
                 return True
             self._processes.pop(handle.pid, None)
             return False
-        return self._pid_alive(handle.pid) and self._is_our_trainer(handle)
+        if not self._pid_alive(handle.pid):
+            return False
+        # Where the cmdline cannot be read, liveness is all there is: calling a
+        # running trainer dead would finalise it mid-run. Only a signal needs
+        # the identity, and cancel refuses one it cannot verify.
+        return self._is_our_trainer(handle) is not False
 
     def _is_this_jobs_trainer(self, handle: TrainingHandle) -> bool:
         """Return whether the recorded pid is a trainer this backend started.
@@ -558,9 +563,19 @@ class LocalAiToolkit(TrainerBackend):
         Returns:
             ``True`` if the pid is this job's trainer, else ``False``.
         """
-        return handle.pid in self._processes or self._is_our_trainer(handle)
+        if handle.pid in self._processes:
+            return True
+        ours = self._is_our_trainer(handle)
+        if ours is None:
+            logger.warning(
+                "Cannot verify pid %s is job %s's trainer on this platform; "
+                "not signalling it.",
+                handle.pid,
+                handle.job_id,
+            )
+        return ours is True
 
-    def _is_our_trainer(self, handle: TrainingHandle) -> bool:
+    def _is_our_trainer(self, handle: TrainingHandle) -> bool | None:
         """Check ``/proc/<pid>/cmdline`` for this job's trainer launch.
 
         Args:
@@ -568,20 +583,21 @@ class LocalAiToolkit(TrainerBackend):
 
         Returns:
             ``True`` if the cmdline holds the run script and the job's config
-            path as arguments; ``False`` if it does not, or cannot be read.
+            path as arguments, ``False`` if it does not, ``None`` if it cannot
+            be read (no ``/proc``, or the process has just gone).
         """
         cmdline = f"/proc/{handle.pid}/cmdline"
         try:
             with open(cmdline, "rb") as fh:
                 argv = fh.read().split(b"\0")
         except OSError as exc:
-            logger.warning(
-                "Cannot verify pid %s is job %s's trainer (%s); treating it as not ours",
+            logger.debug(
+                "Cannot read the cmdline of pid %s (job %s): %s",
                 handle.pid,
                 handle.job_id,
                 exc,
             )
-            return False
+            return None
         return (
             os.fsencode(self.run_script) in argv
             and os.fsencode(handle.config_path) in argv

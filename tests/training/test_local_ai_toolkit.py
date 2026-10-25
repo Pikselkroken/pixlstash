@@ -280,6 +280,30 @@ def test_cancel_never_signals_a_pid_that_is_not_the_trainer(tmp_path):
         sleeper.wait()
 
 
+def test_an_unverifiable_inherited_pid_stays_alive_but_is_never_signalled(
+    tmp_path, monkeypatch
+):
+    """Where the cmdline cannot be read (macOS has no /proc), liveness falls back
+    to the pid existing - calling a running trainer dead would finalise it
+    mid-run - while cancel still refuses to signal what it cannot verify."""
+    backend = _make_backend()
+    spec = _make_spec(tmp_path)
+    handle = backend.prepare(spec)
+    LocalAiToolkit._set_job_status(handle.sqlite_db_path, handle.job_id, "running")
+    monkeypatch.setattr(LocalAiToolkit, "_is_our_trainer", lambda self, h: None)
+    sleeper = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True
+    )
+    try:
+        handle.pid = sleeper.pid
+        assert backend.is_alive(handle), "a live, unverifiable trainer read as dead"
+        backend.cancel(handle)
+        assert sleeper.poll() is None, "cancel signalled a pid it could not verify"
+    finally:
+        sleeper.kill()
+        sleeper.wait()
+
+
 def test_cancel_still_signals_an_inherited_trainer_it_can_verify(tmp_path, monkeypatch):
     """The positive control for the check above: after a restart, a process whose
     cmdline names this backend's run script and the job's config is our trainer,
