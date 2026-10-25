@@ -463,12 +463,13 @@ class Vault:
         self._arbiter.add_listener(self._on_resource_lease)
         self._ref_folder_watcher.start()
         self._start_existing_folder_watches()
-        # Start the training worker after the yielder is registered, so the
-        # arbiter can move PixlStash's GPU work off the card for a run.
-        # reconcile_on_startup re-attaches any trainer that survived a restart (or finalizes a dead
-        # one) before new queued jobs are picked up.
-        self.training_service.start()
+        # Reconcile before the training worker starts: a trainer that survived a
+        # restart is re-attached (or finalized, if it died) before the worker can
+        # claim a queued job and ask the arbiter for the card. The yielder is
+        # registered above, so the arbiter can move PixlStash's GPU work off the
+        # card for either.
         self.training_service.reconcile_on_startup()
+        self.training_service.start()
         self._started = True
 
     def _create_engine(self) -> InferenceEngine:

@@ -32,6 +32,7 @@ from pixlstash.hub import training_runs
 from pixlstash.hub.db import now_iso
 from pixlstash.services.training_service import TrainingService
 from pixlstash.training.local_ai_toolkit import LocalAiToolkit
+from pixlstash.vault import Vault
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _FAST_TEMPLATE_PATH = os.path.join(_THIS_DIR, "fast_template.json")
@@ -1111,3 +1112,35 @@ def test_a_job_with_no_shelf_folder_and_no_registrar_fails_without_training(
     assert final.error == "No model shelf folder is set up for ai-toolkit runs."
     assert builds == [], "no dataset is built when the run has nowhere to go"
     assert not os.path.exists(os.path.join(repo_dir, "output"))
+
+
+def test_vault_reconciles_a_surviving_trainer_before_the_worker_starts():
+    """A trainer that survived a restart is handled before the worker takes a job.
+
+    Otherwise the worker can claim a queued job and ask the arbiter for the card
+    while the surviving run still holds it.
+    """
+    order: list[str] = []
+
+    def noop(*_args, **_kwargs):
+        return None
+
+    stand_in = SimpleNamespace(
+        _disable_background_workers=False,
+        _started=False,
+        _task_runner=SimpleNamespace(start=noop),
+        _work_planner=SimpleNamespace(start=noop),
+        _arbiter=SimpleNamespace(add_yielder=noop, add_listener=noop),
+        _yield_gpu=noop,
+        _on_resource_lease=noop,
+        _ref_folder_watcher=SimpleNamespace(start=noop),
+        _start_existing_folder_watches=noop,
+        training_service=SimpleNamespace(
+            reconcile_on_startup=lambda: order.append("reconcile"),
+            start=lambda: order.append("start"),
+        ),
+    )
+
+    Vault.start(stand_in)
+
+    assert order == ["reconcile", "start"]
