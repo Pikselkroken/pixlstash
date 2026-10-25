@@ -28,6 +28,7 @@ import pytest
 
 from pixlstash.event_types import EventType
 from pixlstash.hub import training_runs
+from pixlstash.hub.db import now_iso
 from pixlstash.services.training_service import TrainingService
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -169,6 +170,10 @@ def _make_dataset_builder(image_count: int = 2):
     return builder
 
 
+# Sentinel: "the default shelf registrar", distinct from an explicit None.
+_DEFAULT_REGISTRAR = object()
+
+
 def _make_service(
     hub,
     repo_dir,
@@ -178,8 +183,15 @@ def _make_service(
     dataset_builder,
     importer=None,
     poll_interval_s=0.05,
+    register_source_folder=_DEFAULT_REGISTRAR,
 ):
-    """Build a TrainingService wired to the temp repo + injected deps."""
+    """Build a TrainingService wired to the temp repo + injected deps.
+
+    By default the service can add the shelf's source folder, as the server
+    does; pass ``None`` for a service that cannot.
+    """
+    if register_source_folder is _DEFAULT_REGISTRAR:
+        register_source_folder = _shelf_registrar(hub)
     return TrainingService(
         hub,
         _LIBRARY_UUID,
@@ -195,7 +207,40 @@ def _make_service(
         },
         dataset_builder=dataset_builder,
         poll_interval_s=poll_interval_s,
+        register_source_folder=register_source_folder,
     )
+
+
+def _shelf_registrar(hub):
+    """A registrar that does what the folder route does for kind=source.
+
+    It records each path it was asked to add, and writes the ``model_folder``
+    row the route's INSERT writes. The row is what the service reads back.
+    """
+
+    class _Registrar:
+        def __init__(self):
+            self.paths: list[str] = []
+
+        def __call__(self, path: str) -> None:
+            self.paths.append(path)
+            with hub.transaction() as conn:
+                conn.execute(
+                    "INSERT INTO model_folder (path, kind, owner, movable, "
+                    "delete_after_import, created_at) VALUES (?, 'source', ?, 0, 0, ?)",
+                    (path, "builtin", now_iso()),
+                )
+
+    return _Registrar()
+
+
+def _add_source_folder(hub, path: str) -> None:
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model_folder (path, kind, owner, movable, "
+            "delete_after_import, created_at) VALUES (?, 'source', ?, 0, 0, ?)",
+            (path, "builtin", now_iso()),
+        )
 
 
 def _job_status(hub, job_uuid):
@@ -309,7 +354,9 @@ def test_full_lifecycle_queued_to_completed_lora(hub, repo_dir):
     # ai-toolkit run folder and the job's scope.
     assert len(importer.calls) == 1
     run_dir, info = importer.calls[0]
-    assert os.path.isfile(os.path.join(run_dir, "charjob.safetensors"))
+    assert os.path.isfile(
+        os.path.join(run_dir, f"charjob_{job['uuid'][:8]}.safetensors")
+    )
     assert info["uuid"] == job["uuid"]
     assert info["character_id"] == character_id
     assert info["set_id"] is None
@@ -531,7 +578,9 @@ def test_completed_run_is_handed_to_the_importer_and_the_job_completes(hub, repo
     assert len(importer.calls) == 1
     run_dir, info = importer.calls[0]
     # The run folder is the one holding the final checkpoint, not its parent.
-    assert os.path.isfile(os.path.join(run_dir, "shelfbound.safetensors"))
+    assert os.path.isfile(
+        os.path.join(run_dir, f"shelfbound_{job['uuid'][:8]}.safetensors")
+    )
     assert info["set_id"] == set_id and info["character_id"] is None
     # The importer is told which hub run made the model, so it can stamp it.
     assert info["id"] == job["id"]
@@ -751,3 +800,136 @@ def test_the_worker_leaves_another_librarys_runs_alone(hub, repo_dir):
     assert _job_status(hub, "other-queued").status == "queued"
     assert _job_status(hub, "other-running").status == "running"
     assert lease.acquire_count == 0
+
+
+# ---------------------------------------------------------------------------
+# The shelf's ai-toolkit folder and the dataset folder
+# ---------------------------------------------------------------------------
+
+
+def test_first_job_registers_the_checkouts_output_as_the_shelf_source_folder(
+    hub, repo_dir
+):
+    """With no source folder on the shelf, the first job registers <repo>/output
+    through the registrar and writes its run there; the dataset goes under
+    <repo>/datasets/pixlstash-<uuid>, not the vault's training root."""
+    lease = _StubLease(grant=True)
+    importer = _RecordingImport()
+    registrar = _shelf_registrar(hub)
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=lease,
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(image_count=2),
+        importer=importer,
+        register_source_folder=registrar,
+    )
+    template = _write_template(repo_dir, steps=4, save_every=4)
+
+    service.start()
+    try:
+        job = service.enqueue(
+            character_id=_CHARACTER_ID,
+            name="charjob",
+            base_model="Z-Image",
+            trigger_word="ohwx_person",
+            template_path=template,
+        )
+        _run_to_terminal(hub, service, job, expect="completed")
+    finally:
+        service.stop()
+
+    output = os.path.join(repo_dir, "output")
+    assert registrar.paths == [output], "the output folder is registered once"
+    final = _job_status(hub, job["uuid"])
+    assert final.training_folder == output
+    assert importer.calls, "the completed run reached the importer"
+    run_dir, _info = importer.calls[0]
+    # The run folder is inside the shelf folder, and named with the job id so
+    # two runs of one name cannot share a save_root in that shared folder.
+    assert os.path.dirname(run_dir) == output
+    assert os.path.basename(run_dir) == f"charjob_{job['uuid'][:8]}"
+    dataset = os.path.join(repo_dir, "datasets", f"pixlstash-{job['uuid']}")
+    assert json.loads(final.dataset_picture_ids) == [1, 2]
+    assert os.path.isfile(os.path.join(dataset, "img_00001.png"))
+    assert final.dataset_snapshot_path == dataset
+
+
+def test_a_later_job_uses_the_registered_source_folder_and_does_not_register_again(
+    hub, repo_dir, tmp_path
+):
+    """A source folder already on the shelf is the run folder; the registrar is
+    never asked for another one."""
+    shelf = str(tmp_path / "my-shelf-ai-toolkit")
+    _add_source_folder(hub, shelf)
+    registrar = _shelf_registrar(hub)
+    importer = _RecordingImport()
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(grant=True),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(image_count=2),
+        importer=importer,
+        register_source_folder=registrar,
+    )
+    template = _write_template(repo_dir, steps=4, save_every=4)
+
+    service.start()
+    try:
+        job = service.enqueue(
+            set_id=_SET_ID,
+            name="setjob",
+            base_model="Z-Image",
+            trigger_word="ohwx_style",
+            template_path=template,
+        )
+        _run_to_terminal(hub, service, job, expect="completed")
+    finally:
+        service.stop()
+
+    assert registrar.paths == [], "an existing source folder is never re-registered"
+    assert _job_status(hub, job["uuid"]).training_folder == shelf
+    run_dir, _info = importer.calls[0]
+    assert os.path.dirname(run_dir) == shelf
+
+
+def test_a_job_with_no_shelf_folder_and_no_registrar_fails_without_training(
+    hub, repo_dir
+):
+    """No source folder and no way to add one: the job is an error with a
+    message that names no host path, and nothing is built or launched."""
+    builds: list[str] = []
+
+    def builder(**kwargs):
+        builds.append(kwargs["dest_dir"])
+        return _make_dataset_builder()(**kwargs)
+
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(grant=True),
+        notify=_CapturingNotify(),
+        dataset_builder=builder,
+        register_source_folder=None,
+    )
+    template = _write_template(repo_dir, steps=4, save_every=4)
+
+    service.start()
+    try:
+        job = service.enqueue(
+            set_id=_SET_ID,
+            name="orphan",
+            base_model="Z-Image",
+            trigger_word="ohwx_style",
+            template_path=template,
+        )
+        _run_to_terminal(hub, service, job, expect="error")
+    finally:
+        service.stop()
+
+    final = _job_status(hub, job["uuid"])
+    assert final.error == "No model shelf folder is set up for ai-toolkit runs."
+    assert builds == [], "no dataset is built when the run has nowhere to go"
+    assert not os.path.exists(os.path.join(repo_dir, "output"))

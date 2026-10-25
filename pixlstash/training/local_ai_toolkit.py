@@ -171,6 +171,7 @@ class LocalAiToolkit(TrainerBackend):
         job_id: str,
         job_name: str,
         pid: int | None = None,
+        training_folder: str | None = None,
     ) -> TrainingHandle:
         """Derive the full on-disk handle layout for a job (paths only).
 
@@ -193,13 +194,22 @@ class LocalAiToolkit(TrainerBackend):
             job_name: The display job name. Sanitised to the filesystem stem that
                 defines ``save_root`` and the checkpoint stem.
             pid: The recorded trainer PID, or ``None`` if not (yet) launched.
+            training_folder: The shelf's ai-toolkit folder the run is written
+                into. ``None`` keeps the run under ``<work_dir>/output``. The
+                folder is shared by every run, so the stem then carries the
+                first eight characters of the job id: two runs with one name
+                must not share a ``save_root``.
 
         Returns:
             A :class:`TrainingHandle` with all paths resolved.
         """
         work_dir = os.path.abspath(work_dir)
-        training_folder = os.path.join(work_dir, "output")
-        stem = safe_job_stem(job_name, job_id)
+        if training_folder is None:
+            training_folder = os.path.join(work_dir, "output")
+            stem = safe_job_stem(job_name, job_id)
+        else:
+            training_folder = os.path.abspath(training_folder)
+            stem = f"{safe_job_stem(job_name, job_id)}_{job_id[:8]}"
         save_root = os.path.join(training_folder, stem)
         return TrainingHandle(
             job_id=job_id,
@@ -237,7 +247,12 @@ class LocalAiToolkit(TrainerBackend):
         Returns:
             A fully-resolved :class:`TrainingHandle` with ``pid=None``.
         """
-        handle = self.handle_for(spec.work_dir, spec.job_id, spec.job_name)
+        handle = self.handle_for(
+            spec.work_dir,
+            spec.job_id,
+            spec.job_name,
+            training_folder=spec.training_folder,
+        )
         training_folder = handle.training_folder
         save_root = handle.save_root
         sqlite_db_path = handle.sqlite_db_path

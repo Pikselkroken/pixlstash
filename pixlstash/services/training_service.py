@@ -37,6 +37,7 @@ from pixlstash.hub import training_runs
 from pixlstash.hub.db import HubDatabase, now_iso
 from pixlstash.pixl_logging import get_logger
 from pixlstash.resources.arbiter import Lease
+from pixlstash.services.model_folder_scanner import SOURCE_FOLDER_KIND
 from pixlstash.training.backend import TrainerBackend, TrainingProgress, TrainingSpec
 from pixlstash.training.local_ai_toolkit import LocalAiToolkit
 
@@ -76,6 +77,7 @@ class TrainingService:
         backend_factory: Callable[[str, str], TrainerBackend] | None = None,
         poll_interval_s: float = 5.0,
         disable_background_workers: bool = False,
+        register_source_folder: Callable[[str], None] | None = None,
     ) -> None:
         """Initialise the service.
 
@@ -108,6 +110,12 @@ class TrainingService:
             poll_interval_s: Seconds between progress polls of a running job.
             disable_background_workers: When True, :meth:`start` is a no-op
                 (mirrors the Vault flag for read-only deployments).
+            register_source_folder: Adds a folder to the model shelf as its
+                ``source`` (ai-toolkit output) folder, called as
+                ``register_source_folder(path)``. Goes through the same
+                registration the folder routes use. Called at most once, when a
+                job starts and the shelf has no source folder yet. ``None``
+                means a job that needs one fails with a clear error.
         """
         self._hub = hub
         self._library_uuid = library_uuid
@@ -122,7 +130,11 @@ class TrainingService:
         )
         self.poll_interval_s = poll_interval_s
         self._disable_background_workers = disable_background_workers
+        self._register_source_folder = register_source_folder
 
+        # Per-job work dirs (job.db, the rendered config, the pending sidecar).
+        # The run itself lives in the shelf's source folder, the dataset under
+        # the checkout's datasets/ folder.
         self._training_root = os.path.join(image_root, "training")
 
         # Per-job spec extras (template_path / config_overrides) that have no
@@ -269,6 +281,17 @@ class TrainingService:
         )
         self._wake.set()
         return job
+
+    def set_source_folder_registrar(self, register: Callable[[str], None]) -> None:
+        """Bind the function that registers the shelf's ``source`` folder.
+
+        The server calls this once it has its folder registration; see the
+        ``register_source_folder`` argument of the constructor.
+
+        Args:
+            register: Called as ``register(path)``.
+        """
+        self._register_source_folder = register
 
     def cancel(self, job_id: int) -> bool:
         """Cooperatively cancel a job by primary-key id.
@@ -533,8 +556,17 @@ class TrainingService:
         job_uuid = info["uuid"]
         work_dir = os.path.join(self._training_root, job_uuid)
 
+        # 0. Where the run lands and where its dataset is written.
+        try:
+            training_folder, dataset_dir = self._run_folders(job_uuid)
+        except RuntimeError as exc:
+            logger.error("Job %s: %s", job_uuid, exc)
+            self._update_job(job_uuid, status="error", error=str(exc))
+            self._emit_progress(job_uuid, status="error", message=str(exc))
+            return
+
         # 1. Build the dataset snapshot.
-        manifest = self._build_dataset(info, work_dir)
+        manifest = self._build_dataset(info, dataset_dir)
         if manifest is None:
             return  # dataset error already recorded
         if int(manifest.get("image_count") or 0) <= 0:
@@ -570,7 +602,12 @@ class TrainingService:
                 return  # on shutdown it stays queued for the next start
             backend = self._make_backend()
             handle, progress = self._train_under_lease(
-                backend, info, work_dir, manifest, gpu_ids=lease.device or "0"
+                backend,
+                info,
+                work_dir,
+                manifest,
+                gpu_ids=lease.device or "0",
+                training_folder=training_folder,
             )
             self._finalize(backend, handle, info, progress)
         except Exception:
@@ -596,6 +633,7 @@ class TrainingService:
         work_dir: str,
         manifest: dict,
         gpu_ids: str = "0",
+        training_folder: str | None = None,
     ) -> tuple[object, TrainingProgress]:
         """Prepare + submit + poll a run while the GPU lease is held.
 
@@ -606,6 +644,7 @@ class TrainingService:
             manifest: The dataset manifest (provides ``dest_dir``).
             gpu_ids: ``CUDA_VISIBLE_DEVICES`` for the trainer: the leased
                 card's UUID, so it trains on the card the arbiter cleared.
+            training_folder: The shelf source folder the run is written into.
 
         Returns:
             A ``(handle, progress)`` tuple: the launched handle and the terminal
@@ -623,6 +662,7 @@ class TrainingService:
             hf_token=os.environ.get("HF_TOKEN") or None,
             config_overrides=pending.get("config_overrides"),
             gpu_ids=gpu_ids,
+            training_folder=training_folder,
         )
         handle = backend.prepare(spec)
         backend.submit(handle, spec)
@@ -892,18 +932,79 @@ class TrainingService:
     # Dataset / backend / handle helpers
     # ------------------------------------------------------------------
 
-    def _build_dataset(self, info: dict, work_dir: str) -> dict | None:
-        """Build the dataset snapshot for a job into ``<work_dir>/dataset``.
+    def _run_folders(self, job_uuid: str) -> tuple[str, str]:
+        """Resolve where a job's run and its dataset go.
+
+        The run goes in the model shelf's ``source`` folder. When the shelf has
+        none, ``<repo>/output`` is registered as one, the first time a job
+        needs it. The dataset goes in ``<repo>/datasets/pixlstash-<uuid>``.
+
+        Args:
+            job_uuid: The job's uuid.
+
+        Returns:
+            ``(training_folder, dataset_dir)``.
+
+        Raises:
+            RuntimeError: ai-toolkit is not configured, or no shelf folder could
+                be found or registered. The message names no host path; the
+                detail is logged.
+        """
+        cfg = self._config_provider() or {}
+        repo_path = cfg.get("repo_path")
+        if not repo_path:
+            raise RuntimeError("ai-toolkit is not configured; cannot run training.")
+
+        training_folder = self._shelf_source_folder()
+        if training_folder is None:
+            if self._register_source_folder is None:
+                raise RuntimeError(
+                    "No model shelf folder is set up for ai-toolkit runs."
+                )
+            output = os.path.join(repo_path, "output")
+            try:
+                self._register_source_folder(output)
+            except Exception as exc:
+                logger.exception(
+                    "Could not register %s as the shelf's ai-toolkit folder: %s",
+                    output,
+                    exc,
+                )
+                raise RuntimeError(
+                    "Could not add the ai-toolkit output folder to the model shelf."
+                ) from exc
+            training_folder = self._shelf_source_folder()
+            if training_folder is None:
+                raise RuntimeError(
+                    "No model shelf folder is set up for ai-toolkit runs."
+                )
+
+        dataset_dir = os.path.join(repo_path, "datasets", f"pixlstash-{job_uuid}")
+        return training_folder, dataset_dir
+
+    def _shelf_source_folder(self) -> str | None:
+        """The path of the first registered shelf ``source`` folder, or None.
+
+        Returns:
+            The folder's stored path, or None when none is registered.
+        """
+        row = self._hub.fetchone(
+            "SELECT path FROM model_folder WHERE kind = ? ORDER BY id LIMIT 1",
+            (SOURCE_FOLDER_KIND,),
+        )
+        return row["path"] if row is not None else None
+
+    def _build_dataset(self, info: dict, dataset_dir: str) -> dict | None:
+        """Build the dataset snapshot for a job into *dataset_dir*.
 
         Args:
             info: Queued-job fields (set_id / character_id / trigger_word).
-            work_dir: The per-job work directory.
+            dataset_dir: The directory the image/caption pairs are written to.
 
         Returns:
             The dataset manifest, or ``None`` if the build raised (the job is
             marked ``error`` in that case).
         """
-        dataset_dir = os.path.join(work_dir, "dataset")
         os.makedirs(dataset_dir, exist_ok=True)
         try:
             return self._dataset_builder(
@@ -942,10 +1043,12 @@ class TrainingService:
     def _handle_for_job(self, backend: TrainerBackend, info: dict):
         """Reconstruct a :class:`TrainingHandle` from persisted job fields.
 
-        Derives the work dir from ``training_folder`` (which is
-        ``<work_dir>/output``) and rebuilds the layout via the adapter's
-        ``handle_for`` when available (the adapter is the source of truth for
-        paths). Falls back to the documented convention for a generic backend.
+        The work dir is ``<training_root>/<uuid>``. The persisted
+        ``training_folder`` is the shelf source folder for a run started since
+        the shelf took runs, or the legacy ``<work_dir>/output`` for an older
+        one; only the former is passed on, so an older run keeps the save root
+        it was started with. The adapter's ``handle_for`` is the source of truth
+        for the paths.
 
         Args:
             backend: The backend (for its ``handle_for`` if present).
@@ -954,13 +1057,28 @@ class TrainingService:
         Returns:
             A reconstructed :class:`TrainingHandle`.
         """
-        training_folder = info["training_folder"]
-        work_dir = os.path.dirname(training_folder)
+        work_dir = os.path.join(self._training_root, info["uuid"])
+        stored = info.get("training_folder")
+        shared = None
+        if stored and os.path.abspath(stored) != os.path.join(
+            os.path.abspath(work_dir), "output"
+        ):
+            shared = stored
         handle_for = getattr(backend, "handle_for", None)
         if callable(handle_for):
-            return handle_for(work_dir, info["uuid"], info["name"], info.get("pid"))
+            return handle_for(
+                work_dir,
+                info["uuid"],
+                info["name"],
+                info.get("pid"),
+                training_folder=shared,
+            )
         return LocalAiToolkit.handle_for(
-            work_dir, info["uuid"], info["name"], info.get("pid")
+            work_dir,
+            info["uuid"],
+            info["name"],
+            info.get("pid"),
+            training_folder=shared,
         )
 
     # ------------------------------------------------------------------

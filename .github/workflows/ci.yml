@@ -650,6 +650,7 @@ jobs:
           tests/test_workflow_versions.py
           tests/test_workflows_api.py
           tests/test_ws_broadcaster.py
+          tests/training/test_ai_toolkit_install.py
           tests/training/test_config_render.py
           tests/training/test_local_ai_toolkit.py
           tests/training/test_training_service.py

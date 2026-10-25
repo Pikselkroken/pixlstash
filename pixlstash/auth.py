@@ -365,6 +365,10 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         # paths) and the trainer templates.
         "/api/v1/training/jobs",
         "/api/v1/training/templates",
+        # The ai-toolkit install: where the checkout, its Python and the run
+        # folder are on this machine, and the discovery that finds them.
+        "/api/v1/training/ai-toolkit/discover",
+        "/api/v1/training/ai-toolkit/status",
     }
 )
 

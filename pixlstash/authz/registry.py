@@ -2198,7 +2198,19 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ),
     ("DELETE", "/api/v1/training/jobs/{job_id}"): RoutePolicy(
         _LOCAL,
-        justification="§16.3 removes a job's host training folder and its rows; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+        justification="§16.3 removes a job's host work folder and dataset snapshot and its rows; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("GET", "/api/v1/training/ai-toolkit/discover"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 discloses host paths: it searches the owner's home directory and the shelf's folders for an ai-toolkit checkout and returns the paths it found and tried; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("POST", "/api/v1/training/ai-toolkit/check"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 starts the checkout's own Python on the host (a torch/CUDA probe and run.py --help); owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("GET", "/api/v1/training/ai-toolkit/status"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 discloses host paths: the configured checkout, its interpreter, its datasets folder and the run folder, with their run counts; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
 }
 

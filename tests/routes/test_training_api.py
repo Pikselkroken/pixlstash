@@ -17,6 +17,7 @@ this file backs.
 import gc
 import json
 import os
+import sys
 import tempfile
 
 from fastapi.testclient import TestClient
@@ -794,5 +795,372 @@ def test_patch_config_refuses_ai_toolkit_values_that_are_not_real():
 
         r = owner.patch("/users/me/config", json={"ai_toolkit_python": None})
         assert r.status_code == 200, r.text
+    finally:
+        _teardown(temp_dir, server)
+
+
+# ---------------------------------------------------------------------------
+# ai-toolkit install: discover, check, status (Settings › AI-toolkit)
+# ---------------------------------------------------------------------------
+
+
+def _fake_checkout(root, version="0.12.26"):
+    """An ai-toolkit checkout as far as the install routes can tell."""
+    os.makedirs(os.path.join(root, "toolkit"), exist_ok=True)
+    with open(os.path.join(root, "run.py"), "w", encoding="utf-8") as fh:
+        fh.write("")
+    with open(os.path.join(root, "version.py"), "w", encoding="utf-8") as fh:
+        fh.write(f'VERSION = "{version}"\n')
+    return root
+
+
+def _save_checkout(owner, repo, python=None):
+    """Save the owner's ai-toolkit paths the way the Settings dialog does."""
+    body = {"ai_toolkit_repo_path": repo}
+    if python is not None:
+        body["ai_toolkit_python"] = python
+    r = owner.patch("/users/me/config", json=body)
+    assert r.status_code == 200, r.text
+
+
+def _venv_python(repo):
+    """A ``.venv/bin/python`` that is an executable file (a link to ours)."""
+    bin_dir = os.path.join(repo, ".venv", "bin")
+    os.makedirs(bin_dir, exist_ok=True)
+    link = os.path.join(bin_dir, "python")
+    os.symlink(sys.executable, link)
+    return link
+
+
+def _probe_ok_runner(argv, cwd, timeout):
+    """Stands in for the checkout's Python: torch sees CUDA, run.py --help exits 0."""
+    if argv[1:2] == ["-c"]:
+        return 0, '{"torch": "2.13.0+cu128", "cuda": true, "gpus": []}\n', ""
+    return 0, "usage", ""
+
+
+def test_ai_toolkit_status_is_unconfigured_until_a_checkout_is_saved():
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        r = owner.get("/training/ai-toolkit/status")
+        assert r.status_code == 200, r.text
+        assert r.json() == {
+            "configured": False,
+            "repo_path": None,
+            "python": None,
+            "version": None,
+            "datasets": None,
+            "runs": None,
+        }
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_ai_toolkit_status_reports_the_saved_checkout_and_its_folders():
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        repo = _fake_checkout(os.path.join(temp_dir.name, "kit"))
+        python = sys.executable
+        _save_checkout(owner, repo, python)
+
+        status = owner.get("/training/ai-toolkit/status").json()
+        assert status["configured"] is True
+        assert status["repo_path"] == repo
+        assert status["python"] == python
+        assert status["version"] == "0.12.26"
+        # No datasets folder yet: the checkout must be writable, since that is
+        # where the first job creates it.
+        assert status["datasets"] == {
+            "path": os.path.join(repo, "datasets"),
+            "writable": True,
+        }
+        # No shelf folder: runs go to <repo>/output and are not on the shelf.
+        assert status["runs"] == {
+            "path": os.path.join(repo, "output"),
+            "run_count": 0,
+            "on_shelf": False,
+        }
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_ai_toolkit_status_counts_runs_in_the_registered_shelf_folder():
+    """Once a source folder is on the shelf, runs are counted there, and
+    on_shelf says so. A run folder is one holding a checkpoint."""
+    from pixlstash.routes.model_folders import register_model_folder
+
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        repo = _fake_checkout(os.path.join(temp_dir.name, "kit"))
+        _save_checkout(owner, repo, sys.executable)
+        shelf = os.path.join(temp_dir.name, "shelf-output")
+        run = os.path.join(shelf, "trained_abcd1234")
+        os.makedirs(run)
+        open(os.path.join(run, "trained_abcd1234.safetensors"), "wb").close()
+        register_model_folder(server, shelf, "source")
+
+        runs = owner.get("/training/ai-toolkit/status").json()["runs"]
+        assert runs == {
+            "path": os.path.realpath(shelf),
+            "run_count": 1,
+            "on_shelf": True,
+        }
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_ai_toolkit_discover_finds_the_saved_checkout_and_its_python(monkeypatch):
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        repo = _fake_checkout(os.path.join(temp_dir.name, "kit"))
+        _venv_python(repo)
+        _save_checkout(owner, repo)
+
+        r = owner.get("/training/ai-toolkit/discover")
+        assert r.status_code == 200, r.text
+        found = r.json()
+        assert found["found"] is True
+        assert found["repo_path"] == repo
+        assert found["python"] == os.path.join(repo, ".venv", "bin", "python")
+        assert found["version"] == "0.12.26"
+        assert found["searched"][0] == repo
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_ai_toolkit_check_with_no_python_finds_the_checkouts_own_and_reports_folders(
+    monkeypatch,
+):
+    """Omitted python: the checkout's .venv is used, the probe and the trial run
+    through it, and the response carries the folders /status would report."""
+    from pixlstash.training import ai_toolkit_install
+
+    monkeypatch.setattr(ai_toolkit_install, "run_host_process", _probe_ok_runner)
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        repo = _fake_checkout(os.path.join(temp_dir.name, "kit"))
+        venv_python = _venv_python(repo)
+        # Not saved: a checkout chosen by hand must be checkable before Connect.
+        r = owner.post(
+            "/training/ai-toolkit/check",
+            json={"repo_path": repo},
+        )
+        assert r.status_code == 200, r.text
+        result = r.json()
+        assert result["ok"] is True, result
+        assert result["python"] == venv_python
+        assert result["version"] == "0.12.26"
+        assert result["datasets"] == {
+            "path": os.path.join(repo, "datasets"),
+            "writable": True,
+        }
+        assert result["runs"] == {
+            "path": os.path.join(repo, "output"),
+            "run_count": 0,
+            "on_shelf": False,
+        }
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_ai_toolkit_check_folders_match_status_for_the_same_checkout(monkeypatch):
+    from pixlstash.training import ai_toolkit_install
+
+    monkeypatch.setattr(ai_toolkit_install, "run_host_process", _probe_ok_runner)
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        repo = _fake_checkout(os.path.join(temp_dir.name, "kit"))
+        _save_checkout(owner, repo, sys.executable)
+        check = owner.post(
+            "/training/ai-toolkit/check",
+            json={"repo_path": repo, "python": sys.executable},
+        ).json()
+        status = owner.get("/training/ai-toolkit/status").json()
+        assert check["python"] == sys.executable
+        assert check["datasets"] == status["datasets"]
+        assert check["runs"] == status["runs"]
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_ai_toolkit_check_says_when_no_python_can_be_found(monkeypatch):
+    from pixlstash.training import ai_toolkit_install
+
+    monkeypatch.setattr(ai_toolkit_install, "run_host_process", _probe_ok_runner)
+    monkeypatch.setattr(ai_toolkit_install, "find_python", lambda repo: None)
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        repo = _fake_checkout(os.path.join(temp_dir.name, "kit"))
+        r = owner.post("/training/ai-toolkit/check", json={"repo_path": repo})
+        assert r.status_code == 422, r.text
+        assert "No Python found" in r.json()["detail"]
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_ai_toolkit_check_refuses_paths_that_are_not_real(monkeypatch):
+    """Each bad value is a 422 with a message and no process is started."""
+    from pixlstash.training import ai_toolkit_install
+
+    started = []
+
+    def runner(argv, cwd, timeout):
+        started.append(argv)
+        return _probe_ok_runner(argv, cwd, timeout)
+
+    monkeypatch.setattr(ai_toolkit_install, "run_host_process", runner)
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        repo = _fake_checkout(os.path.join(temp_dir.name, "kit"))
+        bad = [
+            {"repo_path": ""},
+            {"repo_path": "relative/kit"},
+            {"repo_path": os.path.join(temp_dir.name, "missing")},
+            {"repo_path": repo, "python": "python3"},
+            {"repo_path": repo, "python": os.path.join(temp_dir.name, "no-python")},
+        ]
+        for body in bad:
+            r = owner.post("/training/ai-toolkit/check", json=body)
+            assert r.status_code == 422, (body, r.text)
+            assert r.json()["detail"], r.text
+        assert started == [], "a refused path must not start a process"
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_ai_toolkit_install_routes_refuse_a_read_token():
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        scoped = _scoped_client(server, read_token)
+        assert scoped.get("/training/ai-toolkit/discover").status_code == 403
+        assert scoped.get("/training/ai-toolkit/status").status_code == 403
+        assert (
+            scoped.post(
+                "/training/ai-toolkit/check", json={"repo_path": "/x"}
+            ).status_code
+            == 403
+        )
+        # The owner reaches the same live routes, so the 403s are the scope.
+        assert owner.get("/training/ai-toolkit/status").status_code == 200
+        assert owner.get("/training/ai-toolkit/discover").status_code == 200
+
+        # The second belt: with the gate rolled back, the READ-blocked GET paths
+        # still refuse the share token (both GETs are untemplated).
+        previously = server.authz._enforcing
+        server.authz._enforcing = False
+        try:
+            for path in (
+                "/training/ai-toolkit/discover",
+                "/training/ai-toolkit/status",
+            ):
+                assert scoped.get(path).status_code == 403, path
+                assert owner.get(path).status_code == 200, path
+        finally:
+            server.authz._enforcing = previously
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_the_server_binds_the_shelf_folder_registrar_at_start_up():
+    """A real Server gives its training service the same registration the folder
+    routes use, so the first job can add <repo>/output to the shelf."""
+    temp_dir = tempfile.TemporaryDirectory()
+    try:
+        server_config_path = os.path.join(temp_dir.name, "server-config.json")
+        with open(server_config_path, "w") as f:
+            f.write(json.dumps({"port": 8000, "disable_background_workers": True}))
+        server = Server(server_config_path)
+        try:
+            service = server.vault.training_service
+            assert service._register_source_folder is not None
+            folder = os.path.join(temp_dir.name, "kit", "output")
+            os.makedirs(folder)
+            service._register_source_folder(folder)
+            assert service._shelf_source_folder() == os.path.realpath(folder)
+        finally:
+            server.close()
+    finally:
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_patch_config_disconnect_clears_both_ai_toolkit_paths():
+    """Disconnect is PATCHing both to null: accepted, and the saved values read
+    back as null."""
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        repo = _fake_checkout(os.path.join(temp_dir.name, "kit"))
+        _save_checkout(owner, repo, sys.executable)
+        assert owner.get("/training/ai-toolkit/status").json()["configured"] is True
+
+        r = owner.patch(
+            "/users/me/config",
+            json={"ai_toolkit_repo_path": None, "ai_toolkit_python": None},
+        )
+        assert r.status_code == 200, r.text
+        cfg = owner.get("/users/me/config").json()
+        assert cfg["ai_toolkit_repo_path"] in (None, "")
+        assert cfg["ai_toolkit_python"] in (None, "")
+        assert owner.get("/training/ai-toolkit/status").json()["configured"] is False
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_delete_job_removes_its_dataset_and_work_dir_never_the_shelf_run():
+    """Job delete removes the work dir and the pixlstash-<uuid> dataset it wrote.
+    A run folder in the shelf's source folder stays, and so does a dataset path
+    that is not the one PixlStash names, or that sits inside a shelf folder."""
+    from pixlstash.routes.model_folders import register_model_folder
+
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        shelf = os.path.join(temp_dir.name, "shelf-output")
+        shelf_run = os.path.join(shelf, "trained_run")
+        os.makedirs(shelf_run)
+        shelf_file = os.path.join(shelf_run, "trained_run.safetensors")
+        open(shelf_file, "wb").close()
+        register_model_folder(server, shelf, "source")
+
+        repo = os.path.join(temp_dir.name, "kit")
+        datasets = os.path.join(repo, "datasets")
+        job_id, job_uuid = _seed_job(server)
+        dataset = os.path.join(datasets, f"pixlstash-{job_uuid}")
+        os.makedirs(dataset)
+        open(os.path.join(dataset, "img.png"), "wb").close()
+        work_dir = os.path.join(server.vault.image_root, "training", job_uuid)
+        os.makedirs(work_dir)
+        training_runs.update_run(
+            server.vault.hub, job_uuid, dataset_snapshot_path=dataset
+        )
+
+        # A recorded path named like PixlStash's snapshot but not under a
+        # datasets/ folder: removing it would take a folder PixlStash did not make.
+        other_id, other_uuid = _seed_job(server)
+        other = os.path.join(temp_dir.name, "elsewhere", f"pixlstash-{other_uuid}")
+        os.makedirs(other)
+        training_runs.update_run(
+            server.vault.hub, other_uuid, dataset_snapshot_path=other
+        )
+        # A PixlStash-named dataset that sits inside the shelf folder.
+        in_shelf_id, in_shelf_uuid = _seed_job(server)
+        # Named and parented like PixlStash's own snapshot, but inside the shelf.
+        in_shelf = os.path.join(shelf, "datasets", f"pixlstash-{in_shelf_uuid}")
+        os.makedirs(in_shelf)
+        training_runs.update_run(
+            server.vault.hub, in_shelf_uuid, dataset_snapshot_path=in_shelf
+        )
+
+        assert owner.delete(f"/training/jobs/{job_id}").status_code == 200
+        assert not os.path.exists(work_dir)
+        assert not os.path.exists(dataset)
+        assert os.path.isdir(datasets), "the checkout's datasets folder stays"
+        assert os.path.exists(shelf_file), "the shelf run is never removed"
+
+        assert owner.delete(f"/training/jobs/{other_id}").status_code == 200
+        assert os.path.isdir(other), "a path outside datasets/ is left alone"
+
+        assert owner.delete(f"/training/jobs/{in_shelf_id}").status_code == 200
+        assert os.path.isdir(in_shelf), "a dataset inside the shelf is left alone"
+        assert os.path.exists(shelf_file)
     finally:
         _teardown(temp_dir, server)

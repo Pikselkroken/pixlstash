@@ -498,6 +498,9 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     it and remove its host work folder. A finished run's LoRA is a model-shelf
     row now, so the ``/loras`` routes that once removed and disclosed its file
     are gone with the ``TrainedLora`` table.
+    72 = 69 + 3 with the ai-toolkit install: ``GET /training/ai-toolkit/discover``
+    and ``GET /training/ai-toolkit/status`` disclose the checkout's host paths,
+    and ``POST /training/ai-toolkit/check`` starts the checkout's Python.
 
     Arithmetic, not judgement."""
     loopback = {
@@ -512,7 +515,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 9, sorted(loopback)
-    assert len(local) == 60, sorted(local)
+    assert len(local) == 63, sorted(local)
 
 
 # ===========================================================================
@@ -1417,6 +1420,41 @@ def test_training_host_routes_admit_a_remote_owner_with_the_flag_on():
             r = owner.delete(f"{API}/training/jobs/999999", headers=_xff("8.8.8.8"))
             assert r.status_code == 404, r.text
             assert "Training job not found" in r.text, r.text
+
+
+def test_ai_toolkit_install_routes_refuse_a_remote_owner_and_admit_lan():
+    """discover and status disclose host paths; check starts the checkout's
+    Python. All three are LOCAL_OWNER_ONLY: a remote owner is 403'd naming the
+    flag, and the LAN owner reaches the handler (200 for the GETs, 422 for a
+    check with no body, which is the handler's own validation)."""
+    cases = (
+        ("get", f"{API}/training/ai-toolkit/discover", None, 200),
+        ("get", f"{API}/training/ai-toolkit/status", None, 200),
+        ("post", f"{API}/training/ai-toolkit/check", {}, 422),
+    )
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server), _remote_host_ops(server, False):
+            for method, path, body, lan_status in cases:
+                call = getattr(owner, method)
+                kwargs = {} if body is None else {"json": body}
+                remote = call(path, headers=_xff("8.8.8.8"), **kwargs)
+                assert remote.status_code == 403, (path, remote.text)
+                assert "allow_remote_host_ops" in remote.text, (path, remote.text)
+                lan = call(path, headers=_xff(LAN_IPV4), **kwargs)
+                assert not _is_locality_403(lan), (path, lan.text)
+                assert lan.status_code == lan_status, (path, lan.text)
+
+
+def test_ai_toolkit_discover_admits_a_remote_owner_with_the_flag_on():
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server), _remote_host_ops(server, True):
+            r = owner.get(
+                f"{API}/training/ai-toolkit/discover", headers=_xff("8.8.8.8")
+            )
+            assert r.status_code == 200, r.text
+            assert "searched" in r.json(), r.text
 
 
 def test_ai_toolkit_host_paths_refuse_a_remote_owner_and_admit_lan():

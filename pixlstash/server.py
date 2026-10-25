@@ -147,6 +147,8 @@ from pixlstash.routes.model_downloads import (
 )
 from pixlstash.routes.model_files import create_router as create_model_files_router
 from pixlstash.routes.model_folders import create_router as create_model_folders_router
+from pixlstash.routes.model_folders import register_model_folder
+from pixlstash.services.model_folder_scanner import SOURCE_FOLDER_KIND
 from pixlstash.routes.model_imports import create_router as create_model_imports_router
 from pixlstash.routes.model_moves import create_router as create_model_moves_router
 from pixlstash.routes.model_shelf import create_router as create_model_shelf_router
@@ -2011,6 +2013,11 @@ class Server(
             create_training_router(self),
             prefix=API_V1_PREFIX,
             dependencies=gate,
+        )
+        # A training job writes its run into the shelf's ai-toolkit (source)
+        # folder, registered through the same function the folder routes call.
+        self.vault.training_service.set_source_folder_registrar(
+            lambda path: register_model_folder(self, path, SOURCE_FOLDER_KIND)
         )
         # The workflow library's read side (implementation plan §F1/§F2). No
         # router-level ``tags=``: the module declares ``tags=["workflows"]``

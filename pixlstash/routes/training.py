@@ -28,8 +28,12 @@ from platformdirs import user_data_dir
 
 from pixlstash.hub import training_runs
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.model_folder_scanner import SOURCE_FOLDER_KIND
+from pixlstash.training import ai_toolkit_install
 from pixlstash.training.config_render import TunableOverrideError, validate_tunables
-from pixlstash.utils.path_utils import resolve_path_within
+from pixlstash.utils.aitoolkit_run import read_output_root
+from pixlstash.utils.path_utils import path_is_within, resolve_path_within
+from pixlstash.utils.service.user_settings_utils import validate_ai_toolkit_settings
 
 logger = get_logger(__name__)
 
@@ -260,6 +264,27 @@ def create_router(server) -> APIRouter:
 
     def _training_root() -> str:
         return os.path.join(_image_root(), "training")
+
+    def _shelf_source_folders() -> list[str]:
+        """Paths of the shelf's registered ``source`` folders, oldest first."""
+        hub = server.vault.hub
+        if hub is None:
+            return []
+        rows = hub.fetchall(
+            "SELECT path FROM model_folder WHERE kind = ? ORDER BY id",
+            (SOURCE_FOLDER_KIND,),
+        )
+        return [row["path"] for row in rows]
+
+    def _count_runs(root: str) -> int:
+        """How many ai-toolkit run folders *root* holds; 0 if it is absent."""
+        if not os.path.isdir(root):
+            return 0
+        try:
+            return len(read_output_root(root))
+        except OSError as exc:
+            logger.warning("Could not count ai-toolkit runs in %s: %s", root, exc)
+            return 0
 
     # ── Request models ────────────────────────────────────────────────────
 
@@ -716,12 +741,15 @@ def create_router(server) -> APIRouter:
 
     @router.delete(
         "/training/jobs/{job_id}",
-        summary="Delete a training job and its work directory",
+        summary="Delete a training job, its work directory and its dataset",
         response_model=DeleteJobResponse,
         description=(
-            "Deletes the job row and the job's on-disk work directory. Models the "
-            "job put on the model shelf are left alone: the shelf holds its own "
-            "copy. Returns 404 if the job is unknown. Owner-only."
+            "Deletes the job row, its work directory and the dataset snapshot "
+            "PixlStash wrote for it. The run folder in the model shelf's "
+            "ai-toolkit folder is left where it is, and so is anything else "
+            "there: the run is listed by the shelf and its LoRA is a shelf "
+            "model with its own copy. Returns 404 if the job is unknown. "
+            "Owner-only."
         ),
     )
     def delete_training_job(job_id: int, request: Request):
@@ -730,15 +758,177 @@ def create_router(server) -> APIRouter:
         training_root = _training_root()
         hub, library_uuid = _store()
 
+        job = training_runs.get_run(hub, library_uuid, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Training job not found")
         job_uuid = training_runs.delete_run(hub, library_uuid, job_id)
         if job_uuid is None:
             raise HTTPException(status_code=404, detail="Training job not found")
 
         # Remove the job's work dir (validated under training/).
         _safe_remove_dir(training_root, job_uuid)
+        _remove_job_dataset(job_uuid, job.get("dataset_snapshot_path"))
 
         logger.info("Deleted training job id=%s (uuid=%s).", job_id, job_uuid)
         return {"status": "deleted", "job_id": job_id}
+
+    def _remove_job_dataset(job_uuid: str, dataset_path: str | None) -> None:
+        """Remove the dataset snapshot PixlStash wrote for one job, and nothing else.
+
+        The snapshot is ``<checkout>/datasets/pixlstash-<uuid>``. Anything else
+        recorded on the row is left alone, and so is anything inside a shelf
+        source folder.
+        """
+        if not dataset_path:
+            return
+        normalized = os.path.normpath(dataset_path)
+        name = f"pixlstash-{job_uuid}"
+        parent = os.path.dirname(normalized)
+        if (
+            os.path.basename(normalized) != name
+            or os.path.basename(parent) != "datasets"
+        ):
+            logger.warning(
+                "Not removing the dataset of job %s: unexpected path %s",
+                job_uuid,
+                normalized,
+            )
+            return
+        for folder in _shelf_source_folders():
+            if path_is_within(normalized, folder):
+                logger.warning(
+                    "Not removing the dataset of job %s: it lies in a shelf folder",
+                    job_uuid,
+                )
+                return
+        _safe_remove_dir(parent, name)
+
+    # ── ai-toolkit install (Settings › AI-toolkit) ─────────────────────────
+
+    class AiToolkitCheckRequest(BaseModel):
+        """Body for checking one ai-toolkit install: its checkout and its Python."""
+
+        model_config = ConfigDict(extra="forbid")
+
+        repo_path: str = Field(
+            ..., description="The ai-toolkit checkout directory (absolute)."
+        )
+        python: Optional[str] = Field(
+            default=None,
+            description=(
+                "The interpreter that runs the trainer (absolute). Omitted or "
+                "null: found in the checkout the way AI-toolkit finds it."
+            ),
+        )
+
+    def _ai_toolkit_folders(repo: str) -> dict:
+        """The dataset and run folders of one checkout, as /status reports them.
+
+        Shared by the status route (the saved checkout) and the check route (the
+        checkout being checked), so the Folders step and the status card agree.
+        """
+        datasets = os.path.join(repo, "datasets")
+        # The folder is created on the first job; until then the checkout must
+        # be writable, since that is where it is created.
+        writable_target = datasets if os.path.isdir(datasets) else repo
+        shelf = _shelf_source_folders()
+        runs_path = shelf[0] if shelf else os.path.join(repo, "output")
+        return {
+            "datasets": {
+                "path": datasets,
+                "writable": os.access(writable_target, os.W_OK),
+            },
+            "runs": {
+                "path": runs_path,
+                "run_count": _count_runs(runs_path),
+                "on_shelf": bool(shelf),
+            },
+        }
+
+    @router.get(
+        "/training/ai-toolkit/discover",
+        summary="Find an ai-toolkit checkout on this computer",
+        description=(
+            "Looks for an ai-toolkit checkout in the parent of each shelf "
+            "ai-toolkit folder, the saved path, then the usual places under the "
+            "home directory. Reports the path, the interpreter AI-toolkit would "
+            "use and the version, and every directory it looked in. Owner-only, "
+            "from this machine."
+        ),
+    )
+    def discover_ai_toolkit(request: Request):
+        _ensure_secure(request)
+        user = server.auth.get_user()
+        return ai_toolkit_install.discover(
+            shelf_source_folders=_shelf_source_folders(),
+            saved_repo_path=user.ai_toolkit_repo_path if user is not None else None,
+        )
+
+    @router.post(
+        "/training/ai-toolkit/check",
+        summary="Check that an ai-toolkit install can train",
+        description=(
+            "Runs the checkout's own Python to see whether torch imports with a "
+            "CUDA GPU, and runs `run.py --help`. Both are host processes, started "
+            "with an argument list and a timeout. With no `python`, the checkout's "
+            "own interpreter is found first. The response names the interpreter "
+            "checked and gives the dataset and run folders for this checkout, as "
+            "/status does. Owner-only, from this machine."
+        ),
+    )
+    def check_ai_toolkit(payload: AiToolkitCheckRequest, request: Request):
+        _ensure_secure(request)
+        if not payload.repo_path:
+            raise HTTPException(status_code=422, detail="repo_path is required.")
+        try:
+            validate_ai_toolkit_settings(payload.repo_path, None)
+            python = payload.python or ai_toolkit_install.find_python(payload.repo_path)
+            if not python:
+                raise ValueError(
+                    "No Python found for this checkout: it has no .venv or venv, "
+                    "and python3 is not on the PATH."
+                )
+            validate_ai_toolkit_settings(None, python)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        result = ai_toolkit_install.check(payload.repo_path, python)
+        result["python"] = python
+        result.update(_ai_toolkit_folders(payload.repo_path))
+        return result
+
+    @router.get(
+        "/training/ai-toolkit/status",
+        summary="The configured ai-toolkit install and its folders",
+        description=(
+            "Whether an ai-toolkit install is configured, its paths and version, "
+            "the dataset folder and whether PixlStash can write to it, and the "
+            "folder runs land in (the shelf's ai-toolkit folder when one is "
+            "registered) with its run count. Owner-only, from this machine."
+        ),
+    )
+    def ai_toolkit_status(request: Request):
+        _ensure_secure(request)
+        user = server.auth.get_user()
+        repo = user.ai_toolkit_repo_path if user is not None else None
+        python = user.ai_toolkit_python if user is not None else None
+        configured = bool(repo and python)
+        if not configured:
+            return {
+                "configured": False,
+                "repo_path": repo or None,
+                "python": python or None,
+                "version": None,
+                "datasets": None,
+                "runs": None,
+            }
+
+        return {
+            "configured": True,
+            "repo_path": repo,
+            "python": python,
+            "version": ai_toolkit_install.read_version(repo),
+            **_ai_toolkit_folders(repo),
+        }
 
     # ── Templates ─────────────────────────────────────────────────────────
 

@@ -50,6 +50,9 @@ class TrainingSpec:
         config_overrides: Optional deep-merge patch applied on top of the
             rendered template, for full passthrough of any config field
             (e.g. a different base model). ``None`` means no overrides.
+        training_folder: The shelf's ai-toolkit folder the run is written
+            into (the registered ``source`` folder). ``None`` keeps the run
+            under the work dir's ``output/``.
     """
 
     job_id: str
@@ -61,6 +64,7 @@ class TrainingSpec:
     gpu_ids: str = "0"
     hf_token: str | None = None
     config_overrides: dict | None = None
+    training_folder: str | None = None
 
 
 @dataclass
