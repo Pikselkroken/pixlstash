@@ -936,3 +936,142 @@ def test_create_job_all_resource_token_forbidden():
         assert server.vault.training_service.enqueue_calls == []
     finally:
         _teardown(temp_dir, server)
+
+
+def _walk_strings(value):
+    """Yield every string leaf of a JSON-decoded response body."""
+    if isinstance(value, dict):
+        for item in value.values():
+            yield from _walk_strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _walk_strings(item)
+    elif isinstance(value, str):
+        yield value
+
+
+def test_create_job_refuses_path_overrides_before_enqueue():
+    """A config_overrides key outside the tunables is a 422 naming the key, and
+    nothing is queued."""
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        char_id = _make_character(owner)
+        for overrides, key in (
+            ({"config": {"process": [{"training_folder": "/etc"}]}}, "training_folder"),
+            (
+                {"config": {"process": [{"datasets": [{"folder_path": "/etc"}]}]}},
+                "folder_path",
+            ),
+        ):
+            r = owner.post(
+                "/training/jobs",
+                json={
+                    "character_id": char_id,
+                    "name": "x",
+                    "trigger_word": "tw",
+                    "config_overrides": overrides,
+                },
+            )
+            assert r.status_code == 422, r.text
+            assert key in r.text, r.text
+        assert server.vault.training_service.enqueue_calls == []
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_create_job_accepts_an_allowed_tunable_override():
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        char_id = _make_character(owner)
+        overrides = {"config": {"process": [{"train": {"steps": 50, "lr": 0.0002}}]}}
+        r = owner.post(
+            "/training/jobs",
+            json={
+                "character_id": char_id,
+                "name": "x",
+                "trigger_word": "tw",
+                "config_overrides": overrides,
+            },
+        )
+        assert r.status_code == 200, r.text
+        assert server.vault.training_service.enqueue_calls[-1]["config_overrides"] == (
+            overrides
+        )
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_job_responses_carry_no_absolute_host_paths():
+    """Job detail, status and listing contain no absolute host path: the library
+    root and the temp dir are redacted wherever they appear."""
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        image_root = server.vault.image_root
+        config = {
+            "config": {
+                "process": [
+                    {
+                        "training_folder": os.path.join(image_root, "training", "j"),
+                        "sqlite_db_path": os.path.join(image_root, "training", "j.db"),
+                        "datasets": [
+                            {"folder_path": os.path.join(image_root, "ds", "x")}
+                        ],
+                        "train": {"steps": 3000},
+                    }
+                ]
+            }
+        }
+        job_id, _ = _seed_job(
+            server,
+            rendered_config=json.dumps(config),
+            report=None,
+            error=f"trainer failed reading {image_root}/training/j/log.txt",
+        )
+        detail = owner.get(f"/training/jobs/{job_id}").json()
+        status = owner.get(f"/training/jobs/{job_id}/status").json()
+        listing = owner.get("/training/jobs").json()
+        for body in (detail, status, listing):
+            for text in _walk_strings(body):
+                assert not text.startswith(image_root), text
+                assert not text.startswith(temp_dir.name), text
+                assert image_root not in text, text
+        process = detail["rendered_config"]["config"]["process"][0]
+        assert process["training_folder"] == "<host path>"
+        assert process["train"]["steps"] == 3000
+        assert "<host path>" in detail["error"]
+        assert "<host path>" in status["info"]
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_patch_config_refuses_ai_toolkit_values_that_are_not_real():
+    """Each invalid repo or python value is a 422 with a message, and nothing is
+    stored. Clearing a value is accepted."""
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        repo_no_run = os.path.join(temp_dir.name, "repo-without-run")
+        os.makedirs(repo_no_run)
+        not_exec = os.path.join(temp_dir.name, "not-executable")
+        with open(not_exec, "w") as fh:
+            fh.write("#!/bin/sh\n")
+        os.chmod(not_exec, 0o644)
+        bad = [
+            {"ai_toolkit_repo_path": "relative/ai-toolkit"},
+            {"ai_toolkit_repo_path": os.path.join(temp_dir.name, "missing")},
+            {"ai_toolkit_repo_path": repo_no_run},
+            {"ai_toolkit_python": "python3"},
+            {"ai_toolkit_python": os.path.join(temp_dir.name, "missing-python")},
+            {"ai_toolkit_python": not_exec},
+        ]
+        for patch in bad:
+            r = owner.patch("/users/me/config", json=patch)
+            assert r.status_code == 422, (patch, r.text)
+            assert r.json()["detail"], r.text
+        cfg = owner.get("/users/me/config").json()
+        assert cfg["ai_toolkit_repo_path"] in (None, "")
+        assert cfg["ai_toolkit_python"] in (None, "")
+
+        r = owner.patch("/users/me/config", json={"ai_toolkit_python": None})
+        assert r.status_code == 200, r.text
+    finally:
+        _teardown(temp_dir, server)

@@ -28,6 +28,7 @@ one-line rollback is ever taken.
 import contextlib
 import json
 import os
+import sys
 import tempfile
 
 import pytest
@@ -1368,3 +1369,80 @@ def test_conditionally_mounted_routes_are_all_declared():
     assert CONDITIONALLY_MOUNTED_ROUTES, "the set must not silently empty out"
     missing = CONDITIONALLY_MOUNTED_ROUTES - set(ROUTE_POLICIES)
     assert not missing, f"conditional routes with no declaration: {sorted(missing)}"
+
+
+# ---- ai-toolkit training: host-process routes and the trainer's settings -------
+
+
+def test_training_host_routes_refuse_a_remote_owner_and_admit_lan():
+    """POST /training/jobs, POST .../cancel and DELETE /training/jobs/{id} are
+    LOCAL_OWNER_ONLY: a public owner is 403'd naming the flag, and the same
+    route answers from the LAN, which is the in-scope control that proves the
+    route resolves and the 403 is the locality gate, not a dead path."""
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server), _remote_host_ops(server, False):
+            # POST with an empty body: the gate admits the LAN owner, then the
+            # body fails validation (422), which proves the route handled it.
+            remote = owner.post(
+                f"{API}/training/jobs", json={}, headers=_xff("8.8.8.8")
+            )
+            assert remote.status_code == 403, remote.text
+            assert "allow_remote_host_ops" in remote.text, remote.text
+            lan = owner.post(f"{API}/training/jobs", json={}, headers=_xff(LAN_IPV4))
+            assert not _is_locality_403(lan), lan.text
+            assert lan.status_code == 422, lan.text
+
+            for method in ("cancel", "delete"):
+                path = f"{API}/training/jobs/999999" + (
+                    "/cancel" if method == "cancel" else ""
+                )
+                call = owner.post if method == "cancel" else owner.delete
+                remote = call(path, headers=_xff("8.8.8.8"))
+                assert remote.status_code == 403, (path, remote.text)
+                assert "allow_remote_host_ops" in remote.text, remote.text
+                # The LAN owner reaches the handler: an unknown job is its 404.
+                lan = call(path, headers=_xff(LAN_IPV4))
+                assert lan.status_code == 404, (path, lan.text)
+                assert "Training job not found" in lan.text, lan.text
+
+
+def test_training_host_routes_admit_a_remote_owner_with_the_flag_on():
+    """The dedicated flag is the one way a remote owner starts or deletes a
+    trainer job; the same route answers the handler, not the gate."""
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server), _remote_host_ops(server, True):
+            r = owner.delete(f"{API}/training/jobs/999999", headers=_xff("8.8.8.8"))
+            assert r.status_code == 404, r.text
+            assert "Training job not found" in r.text, r.text
+
+
+def test_ai_toolkit_host_paths_refuse_a_remote_owner_and_admit_lan():
+    """PATCH /users/me/config is OWNER_ONLY, so the gate admits a remote owner.
+    Changing ai_toolkit_python (argv[0] of the trainer) or ai_toolkit_repo_path
+    is a host operation, so the handler applies the locality rule to a changed
+    value. Clearing a value is not refused."""
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server), _remote_host_ops(server, False):
+            body = {"ai_toolkit_python": sys.executable}
+            remote = owner.patch(
+                f"{API}/users/me/config", json=body, headers=_xff("8.8.8.8")
+            )
+            assert remote.status_code == 403, remote.text
+            assert "allow_remote_host_ops" in remote.text, remote.text
+
+            cleared = owner.patch(
+                f"{API}/users/me/config",
+                json={"ai_toolkit_python": None},
+                headers=_xff("8.8.8.8"),
+            )
+            assert cleared.status_code == 200, cleared.text
+
+            lan = owner.patch(
+                f"{API}/users/me/config", json=body, headers=_xff(LAN_IPV4)
+            )
+            assert lan.status_code == 200, lan.text
+            stored = owner.get(f"{API}/users/me/config", headers=_xff(LAN_IPV4)).json()
+            assert stored["ai_toolkit_python"] == sys.executable

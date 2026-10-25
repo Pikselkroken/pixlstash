@@ -6,6 +6,11 @@ verbatim. This module loads the template, substitutes those placeholders
 (including inside ``sample.samples[].prompt``), then deep-merges any caller
 overrides on top for full passthrough of arbitrary config fields.
 
+Caller overrides are restricted to :data:`TUNABLE_KEYS`: training
+hyper-parameters only. A path, a process type, a device or a model source can
+never be reached through an override, because :func:`validate_tunables` refuses
+any key outside the allow-list before the merge happens.
+
 No trainer-specific behaviour beyond the placeholder names lives here; the
 adapter (:mod:`pixlstash.training.local_ai_toolkit`) is responsible for
 injecting the resolved per-job paths via these arguments and for writing the
@@ -14,12 +19,242 @@ result to disk.
 
 from __future__ import annotations
 
+import copy
 import json
-from typing import Any
+import math
+from typing import Any, NamedTuple
 
 from pixlstash.pixl_logging import get_logger
 
 logger = get_logger(__name__)
+
+
+class _Rule(NamedTuple):
+    """Type and range check for one tunable.
+
+    Attributes:
+        kind: ``int``, ``float``, ``bool``, ``enum``, ``str`` or ``int_list``.
+        lo: Lower bound (inclusive) for numbers and list items.
+        hi: Upper bound (inclusive) for numbers and list items, or max length
+            for ``str``.
+        count: Maximum list length for ``int_list``.
+        choices: Allowed values for ``enum``.
+    """
+
+    kind: str
+    lo: float = 0
+    hi: float = 0
+    count: int = 0
+    choices: frozenset = frozenset()
+
+
+def _ints(lo: int, hi: int) -> _Rule:
+    return _Rule("int", lo, hi)
+
+
+def _floats(lo: float, hi: float) -> _Rule:
+    return _Rule("float", lo, hi)
+
+
+def _flag() -> _Rule:
+    return _Rule("bool")
+
+
+def _one_of(*choices: str) -> _Rule:
+    return _Rule("enum", choices=frozenset(choices))
+
+
+def _text(max_len: int) -> _Rule:
+    return _Rule("str", hi=max_len)
+
+
+def _int_list(lo: int, hi: int, count: int) -> _Rule:
+    return _Rule("int_list", lo, hi, count)
+
+
+# The one allow-list. Keys are dotted paths relative to ``config.process[0]``;
+# ``[*]`` matches any list index. Every caller-supplied override is checked
+# against this table in :func:`validate_tunables`, which the render path runs.
+TUNABLE_KEYS: dict[str, _Rule] = {
+    "train.steps": _ints(1, 100_000),
+    "train.lr": _floats(1e-7, 1e-1),
+    "train.batch_size": _ints(1, 64),
+    "train.gradient_accumulation": _ints(1, 64),
+    "train.optimizer": _one_of("adamw", "adamw8bit", "adafactor", "prodigy", "lion"),
+    "train.content_or_style": _one_of("balanced", "content", "style"),
+    "train.timestep_type": _one_of("linear", "sigmoid", "shift", "weighted"),
+    "train.train_text_encoder": _flag(),
+    "network.linear": _ints(1, 512),
+    "network.linear_alpha": _floats(0, 1024),
+    "network.conv": _ints(0, 512),
+    "network.conv_alpha": _floats(0, 1024),
+    "datasets[*].resolution": _int_list(64, 4096, 8),
+    "datasets[*].caption_dropout_rate": _floats(0, 1),
+    "datasets[*].num_repeats": _ints(1, 1000),
+    "datasets[*].flip_x": _flag(),
+    "save.save_every": _ints(1, 100_000),
+    "save.max_step_saves_to_keep": _ints(1, 1000),
+    "sample.sample_every": _ints(1, 100_000),
+    "sample.samples[*].prompt": _text(2000),
+    "sample.sample_steps": _ints(1, 200),
+    "sample.guidance_scale": _floats(0, 30),
+    "sample.width": _ints(64, 4096),
+    "sample.height": _ints(64, 4096),
+    "sample.seed": _ints(0, 2**32 - 1),
+    "model.quantize": _flag(),
+    "model.qtype": _one_of("qfloat8", "qint8", "qint4"),
+    "model.quantize_te": _flag(),
+    "model.qtype_te": _one_of("qfloat8", "qint8", "qint4"),
+    "model.low_vram": _flag(),
+    "model.layer_offloading": _flag(),
+    "model.layer_offloading_text_encoder_percent": _floats(0, 1),
+    "model.layer_offloading_transformer_percent": _floats(0, 1),
+}
+
+_PROCESS_PREFIX = ("config", "process", 0)
+_ANY_INDEX = "*"
+
+
+class TunableOverrideError(ValueError):
+    """A config override names a key outside the tunables, or breaks its rule."""
+
+
+def _parse_key(key: str) -> tuple:
+    """Turn ``datasets[*].resolution`` into ``("datasets", "*", "resolution")``."""
+    tokens: list = []
+    for part in key.split("."):
+        if part.endswith("[*]"):
+            tokens.append(part[:-3])
+            tokens.append(_ANY_INDEX)
+        else:
+            tokens.append(part)
+    return tuple(tokens)
+
+
+def _matches(pattern: tuple, rel: tuple) -> bool:
+    """Whether a parsed allow-list pattern matches a relative override path."""
+    if len(pattern) != len(rel):
+        return False
+    for want, got in zip(pattern, rel):
+        if want == _ANY_INDEX:
+            if isinstance(got, bool) or not isinstance(got, int):
+                return False
+        elif want != got:
+            return False
+    return True
+
+
+def _leaves(node: Any, path: tuple = ()):
+    """Yield ``(path, value)`` for every leaf of an override tree.
+
+    Non-empty dicts and lists of non-empty dicts are walked; anything else
+    (scalars, empty containers, lists of scalars) is a leaf, so a list such as
+    ``resolution: [512, 768]`` is checked as one value.
+    """
+    if isinstance(node, dict) and node:
+        for key, value in node.items():
+            yield from _leaves(value, path + (key,))
+    elif (
+        isinstance(node, list) and node and all(isinstance(i, dict) and i for i in node)
+    ):
+        for index, item in enumerate(node):
+            yield from _leaves(item, path + (index,))
+    else:
+        yield path, node
+
+
+def _format_path(path: tuple) -> str:
+    """Render an override path for an error message: ``a.b[0].c``."""
+    text = ""
+    for token in path:
+        if isinstance(token, int):
+            text += f"[{token}]"
+        else:
+            text += f".{token}" if text else str(token)
+    return text
+
+
+def _check_value(rule: _Rule, name: str, value: Any) -> None:
+    """Raise :class:`TunableOverrideError` if *value* breaks *rule*."""
+    if rule.kind == "bool":
+        ok = isinstance(value, bool)
+        detail = "must be true or false"
+    elif rule.kind == "int":
+        ok = (
+            isinstance(value, int)
+            and not isinstance(value, bool)
+            and rule.lo <= value <= rule.hi
+        )
+        detail = f"must be an integer from {rule.lo} to {rule.hi}"
+    elif rule.kind == "float":
+        ok = (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(value)
+            and rule.lo <= value <= rule.hi
+        )
+        detail = f"must be a number from {rule.lo} to {rule.hi}"
+    elif rule.kind == "enum":
+        ok = isinstance(value, str) and value in rule.choices
+        detail = f"must be one of {', '.join(sorted(rule.choices))}"
+    elif rule.kind == "str":
+        ok = isinstance(value, str) and len(value) <= rule.hi
+        detail = f"must be a string of at most {int(rule.hi)} characters"
+    else:  # int_list
+        ok = (
+            isinstance(value, list)
+            and 1 <= len(value) <= rule.count
+            and all(
+                isinstance(v, int)
+                and not isinstance(v, bool)
+                and rule.lo <= v <= rule.hi
+                for v in value
+            )
+        )
+        detail = (
+            f"must be a list of 1 to {rule.count} integers from {rule.lo} to {rule.hi}"
+        )
+    if not ok:
+        raise TunableOverrideError(f"'{name}' {detail}.")
+
+
+def validate_tunables(overrides: dict | None) -> dict:
+    """Check caller overrides against :data:`TUNABLE_KEYS` and return a copy.
+
+    The overrides use the same shape as the rendered config, so a patch of
+    ``process[0].train.steps`` is ``{"config": {"process": [{"train":
+    {"steps": 50}}]}}``. Every leaf must sit under ``config.process[0]`` and
+    match an allow-list entry, and its value must pass that entry's type and
+    range check. This has no route coupling and is safe to run on a preset
+    file loaded from anywhere.
+
+    Args:
+        overrides: The caller's deep-merge patch, or ``None``.
+
+    Returns:
+        A deep copy of *overrides* (``{}`` when none were given).
+
+    Raises:
+        TunableOverrideError: If a key is not tunable (the message names it) or
+            a value fails its check.
+    """
+    if not overrides:
+        return {}
+    if not isinstance(overrides, dict):
+        raise TunableOverrideError("config_overrides must be an object.")
+    for path, value in _leaves(overrides):
+        name = _format_path(path)
+        rel = path[3:] if path[:3] == _PROCESS_PREFIX else None
+        rule = None
+        if rel:
+            for key, candidate in TUNABLE_KEYS.items():
+                if _matches(_parse_key(key), rel):
+                    rule = candidate
+                    break
+        if rule is None:
+            raise TunableOverrideError(f"'{name}' is not a tunable training parameter.")
+        _check_value(rule, name, value)
+    return copy.deepcopy(overrides)
 
 
 def deep_merge(base: dict, patch: dict) -> dict:
@@ -148,7 +383,9 @@ def render_job_config(
         sqlite_db_path: Replaces ``{{SQLITE_DB_PATH}}``.
         trigger_word: Replaces ``{{TRIGGER_WORD}}``.
         dataset_dir: Replaces ``{{DATASET_FOLDER}}``.
-        overrides: Optional deep-merge patch applied after substitution.
+        overrides: Optional deep-merge patch applied after substitution. It is
+            checked by :func:`validate_tunables` first, so only allow-listed
+            training parameters can change.
 
     Returns:
         The rendered config as a plain dict, ready to serialise.
@@ -156,6 +393,8 @@ def render_job_config(
     Raises:
         OSError: If the template cannot be read.
         json.JSONDecodeError: If the template is not valid JSON.
+        TunableOverrideError: If *overrides* names a non-tunable key or a value
+            outside its range.
     """
     try:
         with open(template_path, encoding="utf-8") as handle:
@@ -178,6 +417,6 @@ def render_job_config(
     rendered = _substitute_placeholders(template, replacements)
 
     if overrides:
-        rendered = deep_merge(rendered, overrides)
+        rendered = deep_merge(rendered, validate_tunables(overrides))
 
     return rendered

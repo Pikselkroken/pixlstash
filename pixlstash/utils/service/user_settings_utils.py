@@ -1,12 +1,44 @@
 """User settings serialisation and patching utilities."""
 
 import json
+import os
 
 from pixlstash.utils.system_utils import (  # noqa: F401
     MAX_VRAM_BUDGET_GB,
     default_max_vram_gb,
     max_vram_budget_gb,
 )
+
+
+def validate_ai_toolkit_settings(repo_path: str | None, python: str | None) -> None:
+    """Check the ai-toolkit paths a PATCH is about to store.
+
+    ``python`` becomes argv[0] of the trainer process and ``repo_path`` is its
+    working directory, so both must name real things on this host. A ``None``
+    value is not checked (it clears the setting, or is left unchanged).
+
+    Args:
+        repo_path: The ai-toolkit checkout directory, or ``None``.
+        python: The interpreter that runs the trainer, or ``None``.
+
+    Raises:
+        ValueError: With a message naming the problem, if either path is not an
+            absolute path to the expected kind of file or directory.
+    """
+    if repo_path:
+        if not os.path.isabs(repo_path):
+            raise ValueError("ai_toolkit_repo_path must be an absolute path.")
+        if not os.path.isdir(repo_path):
+            raise ValueError("ai_toolkit_repo_path must be an existing directory.")
+        if not os.path.isfile(os.path.join(repo_path, "run.py")):
+            raise ValueError(
+                "ai_toolkit_repo_path has no run.py; point it at the ai-toolkit checkout."
+            )
+    if python:
+        if not os.path.isabs(python):
+            raise ValueError("ai_toolkit_python must be an absolute path.")
+        if not (os.path.isfile(python) and os.access(python, os.X_OK)):
+            raise ValueError("ai_toolkit_python must be an existing executable file.")
 
 
 # Bounds (in pixels) for the draggable, non-docked sidebar width.

@@ -89,7 +89,7 @@ def test_overrides_deep_merged():
                 "process": [
                     {
                         "train": {"steps": 50},
-                        "model": {"name_or_path": "some/other-model"},
+                        "model": {"qtype": "qint8"},
                     }
                 ]
             }
@@ -98,7 +98,7 @@ def test_overrides_deep_merged():
     process = config["config"]["process"][0]
     # Patched values landed.
     assert process["train"]["steps"] == 50
-    assert process["model"]["name_or_path"] == "some/other-model"
+    assert process["model"]["qtype"] == "qint8"
     # Sibling keys of the patched nested dicts survive (not wiped).
     assert process["train"]["optimizer"] == "adamw8bit"
     assert process["model"]["arch"] == "zimage:turbo"
@@ -147,3 +147,78 @@ def test_no_overrides_leaves_template_steps():
     """Without overrides, the template's own train.steps is preserved."""
     config = _render()
     assert config["config"]["process"][0]["train"]["steps"] == 3000
+
+
+def test_training_folder_override_is_refused():
+    """A path set through overrides never reaches the rendered config."""
+    import pytest
+
+    from pixlstash.training.config_render import TunableOverrideError
+
+    with pytest.raises(TunableOverrideError, match="training_folder"):
+        _render(
+            overrides={
+                "config": {"process": [{"training_folder": "/home/victim/library"}]}
+            }
+        )
+
+
+def test_dataset_folder_path_override_is_refused():
+    import pytest
+
+    from pixlstash.training.config_render import TunableOverrideError
+
+    with pytest.raises(TunableOverrideError, match="folder_path"):
+        _render(
+            overrides={
+                "config": {
+                    "process": [{"datasets": [{"folder_path": "/home/victim/pics"}]}]
+                }
+            }
+        )
+
+
+def test_allowed_tunable_override_renders():
+    """The positive control: an allow-listed key still lands in the config."""
+    config = _render(
+        overrides={
+            "config": {
+                "process": [
+                    {
+                        "train": {"steps": 500, "optimizer": "adamw"},
+                        "datasets": [{"resolution": [512, 768]}],
+                    }
+                ]
+            }
+        }
+    )
+    process = config["config"]["process"][0]
+    assert process["train"]["steps"] == 500
+    assert process["train"]["optimizer"] == "adamw"
+    assert process["datasets"][0]["resolution"] == [512, 768]
+    assert process["datasets"][0]["folder_path"] == "/work/dataset"
+
+
+def test_tunable_value_out_of_range_or_wrong_type_is_refused():
+    import pytest
+
+    from pixlstash.training.config_render import TunableOverrideError, validate_tunables
+
+    for bad, message in (
+        ({"config": {"process": [{"train": {"lr": 5}}]}}, "train.lr"),
+        ({"config": {"process": [{"train": {"optimizer": "sgd"}}]}}, "optimizer"),
+        ({"config": {"process": [{"train": {"steps": True}}]}}, "train.steps"),
+        ({"config": {"process": [{"model": {"qtype": "fp64"}}]}}, "qtype"),
+        ({"config": {"process": [{"device": "cuda:1"}]}}, "device"),
+        (
+            {"config": {"process": [{"model": {"name_or_path": "/evil"}}]}},
+            "name_or_path",
+        ),
+        ({"config": {"process": [{"train": {}}]}}, "train"),
+        (
+            {"config": {"process": [{"train": {"steps": 5}}, {"train": {"steps": 5}}]}},
+            "process\\[1\\]",
+        ),
+    ):
+        with pytest.raises(TunableOverrideError, match=message):
+            validate_tunables(bad)

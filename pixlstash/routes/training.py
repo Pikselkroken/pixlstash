@@ -15,6 +15,7 @@ privileged compute and filesystem operation, so a remote owner is refused unless
 
 import json
 import os
+import re
 import shutil
 from datetime import datetime
 from typing import Optional
@@ -29,6 +30,7 @@ from platformdirs import user_data_dir
 from pixlstash.db_models.trained_lora import TrainedLora
 from pixlstash.db_models.training_job import TrainingJob
 from pixlstash.pixl_logging import get_logger
+from pixlstash.training.config_render import TunableOverrideError, validate_tunables
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.path_utils import resolve_path_within
 
@@ -188,6 +190,33 @@ def _parse_json_field(raw: str | None, field_name: str, job_uuid: str | None = N
     except (json.JSONDecodeError, TypeError) as exc:
         logger.warning("Could not parse %s for job %s: %s", field_name, job_uuid, exc)
         return None
+
+
+# An absolute POSIX or Windows path, as it appears inside a string. The lookbehind
+# keeps URLs, ``1/2`` and ``and/or`` out of it.
+_HOST_PATH_RE = re.compile(r"(?<![\w./:])(?:[A-Za-z]:[\\/]|/)[^\s'\"<>|,;()\[\]{}]+")
+
+
+def _redact_host_paths(value):
+    """Replace absolute host paths in a response value with a placeholder.
+
+    Job responses go to the owner's browser and to any tool they run, so the
+    host's install and library locations must not travel with them. Relative
+    vault paths (``loras/...``) pass through unchanged.
+
+    Args:
+        value: A JSON-serialisable value (dict, list, str or scalar).
+
+    Returns:
+        A copy of *value* with each absolute path replaced by ``<host path>``.
+    """
+    if isinstance(value, dict):
+        return {key: _redact_host_paths(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_host_paths(item) for item in value]
+    if isinstance(value, str):
+        return _HOST_PATH_RE.sub("<host path>", value)
+    return value
 
 
 def _latest_loss(loss_curve) -> float | None:
@@ -566,21 +595,23 @@ def create_router(server) -> APIRouter:
     # ── Serialisation helpers ─────────────────────────────────────────────
 
     def _job_to_summary(job: TrainingJob) -> dict:
-        return {
-            "id": job.id,
-            "uuid": job.uuid,
-            "name": job.name,
-            "status": job.status,
-            "set_id": job.set_id,
-            "character_id": job.character_id,
-            "base_model": job.base_model,
-            "trigger_word": job.trigger_word,
-            "step": job.step,
-            "total_steps": job.total_steps,
-            "created_at": job.created_at,
-            "started_at": job.started_at,
-            "completed_at": job.completed_at,
-        }
+        return _redact_host_paths(
+            {
+                "id": job.id,
+                "uuid": job.uuid,
+                "name": job.name,
+                "status": job.status,
+                "set_id": job.set_id,
+                "character_id": job.character_id,
+                "base_model": job.base_model,
+                "trigger_word": job.trigger_word,
+                "step": job.step,
+                "total_steps": job.total_steps,
+                "created_at": job.created_at,
+                "started_at": job.started_at,
+                "completed_at": job.completed_at,
+            }
+        )
 
     def _lora_to_summary(lora: TrainedLora) -> dict:
         return {
@@ -610,6 +641,11 @@ def create_router(server) -> APIRouter:
     def create_training_job(payload: CreateJobRequest, request: Request):
         _ensure_secure(request)
 
+        try:
+            validate_tunables(payload.config_overrides)
+        except TunableOverrideError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
         template_name = payload.template or DEFAULT_TEMPLATE
         template_path, _source = _resolve_template_path(template_name)
         if not template_path:
@@ -637,17 +673,19 @@ def create_router(server) -> APIRouter:
             # Raised when not exactly one of set_id/character_id was provided.
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        return {
-            "id": job.id,
-            "uuid": job.uuid,
-            "name": job.name,
-            "status": job.status,
-            "set_id": job.set_id,
-            "character_id": job.character_id,
-            "base_model": job.base_model,
-            "trigger_word": job.trigger_word,
-            "created_at": job.created_at,
-        }
+        return _redact_host_paths(
+            {
+                "id": job.id,
+                "uuid": job.uuid,
+                "name": job.name,
+                "status": job.status,
+                "set_id": job.set_id,
+                "character_id": job.character_id,
+                "base_model": job.base_model,
+                "trigger_word": job.trigger_word,
+                "created_at": job.created_at,
+            }
+        )
 
     @router.get(
         "/training/jobs",
@@ -693,34 +731,38 @@ def create_router(server) -> APIRouter:
             job = session.get(TrainingJob, job_id)
             if job is None:
                 return None
-            return {
-                "id": job.id,
-                "uuid": job.uuid,
-                "name": job.name,
-                "status": job.status,
-                "set_id": job.set_id,
-                "character_id": job.character_id,
-                "base_model": job.base_model,
-                "trigger_word": job.trigger_word,
-                "step": job.step,
-                "total_steps": job.total_steps,
-                "loss_curve": _parse_json_field(job.loss_curve, "loss_curve", job.uuid),
-                "rendered_config": _parse_json_field(
-                    job.rendered_config, "rendered_config", job.uuid
-                ),
-                "report": job.report,
-                "sample_image_paths": _parse_json_field(
-                    job.sample_image_paths, "sample_image_paths", job.uuid
-                ),
-                "dataset_picture_ids": _parse_json_field(
-                    job.dataset_picture_ids, "dataset_picture_ids", job.uuid
-                ),
-                "ai_toolkit_commit": job.ai_toolkit_commit,
-                "error": job.error,
-                "created_at": job.created_at,
-                "started_at": job.started_at,
-                "completed_at": job.completed_at,
-            }
+            return _redact_host_paths(
+                {
+                    "id": job.id,
+                    "uuid": job.uuid,
+                    "name": job.name,
+                    "status": job.status,
+                    "set_id": job.set_id,
+                    "character_id": job.character_id,
+                    "base_model": job.base_model,
+                    "trigger_word": job.trigger_word,
+                    "step": job.step,
+                    "total_steps": job.total_steps,
+                    "loss_curve": _parse_json_field(
+                        job.loss_curve, "loss_curve", job.uuid
+                    ),
+                    "rendered_config": _parse_json_field(
+                        job.rendered_config, "rendered_config", job.uuid
+                    ),
+                    "report": job.report,
+                    "sample_image_paths": _parse_json_field(
+                        job.sample_image_paths, "sample_image_paths", job.uuid
+                    ),
+                    "dataset_picture_ids": _parse_json_field(
+                        job.dataset_picture_ids, "dataset_picture_ids", job.uuid
+                    ),
+                    "ai_toolkit_commit": job.ai_toolkit_commit,
+                    "error": job.error,
+                    "created_at": job.created_at,
+                    "started_at": job.started_at,
+                    "completed_at": job.completed_at,
+                }
+            )
 
         detail = server.vault.db.run_immediate_read_task(_query)
         if detail is None:
@@ -747,16 +789,18 @@ def create_router(server) -> APIRouter:
             loss_curve = _parse_json_field(job.loss_curve, "loss_curve", job.uuid)
             total = job.total_steps or 0
             progress = (job.step / total) if total > 0 else 0.0
-            return {
-                "id": job.id,
-                "uuid": job.uuid,
-                "status": job.status,
-                "step": job.step,
-                "total_steps": job.total_steps,
-                "latest_loss": _latest_loss(loss_curve),
-                "progress": progress,
-                "info": job.report or job.error,
-            }
+            return _redact_host_paths(
+                {
+                    "id": job.id,
+                    "uuid": job.uuid,
+                    "status": job.status,
+                    "step": job.step,
+                    "total_steps": job.total_steps,
+                    "latest_loss": _latest_loss(loss_curve),
+                    "progress": progress,
+                    "info": job.report or job.error,
+                }
+            )
 
         status = server.vault.db.run_immediate_read_task(_query)
         if status is None:

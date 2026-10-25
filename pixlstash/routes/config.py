@@ -51,6 +51,7 @@ from pixlstash.utils.service.smart_score_invalidation import (
 from pixlstash.utils.service.user_settings_utils import (
     apply_user_config_patch,
     serialize_user_config,
+    validate_ai_toolkit_settings,
 )
 from pixlstash.utils.watermark import get_default_watermark_bytes
 
@@ -543,6 +544,49 @@ def create_router(server) -> APIRouter:
         )
         return False
 
+    def _check_ai_toolkit_patch(user, patch_data: dict, request: Request) -> None:
+        """Gate and validate a changed ai-toolkit path before it is stored.
+
+        ``ai_toolkit_python`` becomes argv[0] of a host process, and the repo is
+        its working directory. The PATCH route is ``owner_only``, which admits a
+        remote owner, while starting a job is ``local_owner_only``. So a changed
+        value needs the same locality rule as a host operation. Clearing a value,
+        or re-sending the stored one, is never refused.
+
+        Raises:
+            HTTPException: 403 when a remote owner changes a path without
+                ``allow_remote_host_ops``; 422 when the path fails validation.
+        """
+        changed: dict[str, str] = {}
+        for key in ("ai_toolkit_repo_path", "ai_toolkit_python"):
+            if key not in patch_data:
+                continue
+            raw = patch_data[key]
+            new_value = None if raw in ("", None, "null") else str(raw).strip()
+            if new_value is None or new_value == getattr(user, key):
+                continue
+            changed[key] = new_value
+        if not changed:
+            return
+        client_ip = server.auth.real_client_ip(request)
+        if not (
+            is_local_or_tailscale_ip(client_ip) or server.auth.allow_remote_host_ops
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "ai_toolkit_repo_path and ai_toolkit_python are host operations: "
+                    "they can be changed from this machine, or remotely only when "
+                    "allow_remote_host_ops is set."
+                ),
+            )
+        try:
+            validate_ai_toolkit_settings(
+                changed.get("ai_toolkit_repo_path"), changed.get("ai_toolkit_python")
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     def _register_comfyui_model_folders(base_url: str) -> None:
         try:
             register_comfyui_model_folders(server, base_url)
@@ -589,6 +633,7 @@ def create_router(server) -> APIRouter:
             user = session.get(User, user_id)
             if user is None:
                 raise HTTPException(status_code=404, detail="User not found")
+            _check_ai_toolkit_patch(user, patch_data, request)
 
             old_penalised_tags = _resolved_penalised_tags(
                 user.smart_score_penalised_tags
