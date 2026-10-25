@@ -5,7 +5,7 @@
 // /api/v1 prefix and the backend origin, injects the share token on same-origin
 // absolute URLs, and leaves foreign hosts alone.
 
-import { apiClient } from "../utils/apiClient";
+import { apiClient, appendShareToken, API_BASE_URL } from "../utils/apiClient";
 import { unwrap } from "../utils/unwrap";
 
 /**
@@ -220,4 +220,95 @@ export async function unlinkComfyui() {
  */
 export async function installComfyuiPack() {
   return unwrap(apiClient.post(comfyUrl("/pack/install")));
+}
+
+// The server's worst case: its 180 s wait on Manager (which can overrun by one
+// 10 s status read), plus up to ten other calls of 10 s each, the probes and
+// the reboot attempts among them: about 290 s.
+const INSTALL_TIMEOUT_MS = 330000;
+
+/**
+ * Have the saved ComfyUI's ComfyUI-Manager install a node pack PixlStash knows
+ * (a `packs` entry on a `missing_nodes` reason), at the version PixlStash pins.
+ * Owner-only, local caller only (403 from another computer).
+ *
+ * `restart` is `"requested"` when ComfyUI is restarting, `"manual"` when the
+ * person has to restart it (`detail` says why). Rejects 409 when Manager is
+ * missing, refuses or already lists the pack, 404 for a pack not on the list.
+ *
+ * Past the client's default timeout: the server waits up to three minutes for
+ * Manager to finish, so the request may well outlast the usual 60 s.
+ *
+ * @param {string} packId - the pack's `id`.
+ * @returns {Promise<{pack: string, version: string, manager: ("v3"|"v4"),
+ *   restart: ("requested"|"manual"), detail: ?string}>}
+ */
+export async function installNodePack(packId) {
+  return unwrap(
+    apiClient.post(
+      comfyUrl(`/node-packs/${encodeURIComponent(packId)}/install`),
+      null,
+      { timeout: INSTALL_TIMEOUT_MS },
+    ),
+  );
+}
+
+/**
+ * Whether the saved ComfyUI offers every node of a known pack. `loaded` is
+ * false while ComfyUI does not answer, as while it restarts.
+ *
+ * @param {string} packId - the pack's `id`.
+ * @returns {Promise<{loaded: boolean}>}
+ */
+export async function getNodePack(packId) {
+  return unwrap(
+    apiClient.get(comfyUrl(`/node-packs/${encodeURIComponent(packId)}`)),
+  );
+}
+
+// ── Templates from the owner's ComfyUI (#2000) ──────────────────────────────
+
+/**
+ * Every workflow template the owner's ComfyUI serves, read through PixlStash.
+ *
+ * Always resolves for a ComfyUI that does not answer: `reachable` is false and
+ * `detail` says why, which the Templates tab draws as its empty state.
+ *
+ * @param {{refresh?: boolean}} [options] - read ComfyUI again now, past the
+ *   server's ten-minute keep.
+ * @returns {Promise<{comfyui_url: string, reachable: boolean, detail: ?string,
+ *   templates: Array<Object>}>}
+ */
+export async function listTemplates({ refresh = false } = {}) {
+  const query = refresh ? "?refresh=true" : "";
+  return unwrap(apiClient.get(comfyUrl(`/templates${query}`)));
+}
+
+/**
+ * Store templates as new workflows. A template PixlStash cannot convert comes
+ * back `draft: true` (finished by opening it in ComfyUI and saving it there).
+ *
+ * @param {Array<{module: string, name: string}>} refs
+ * @returns {Promise<{added: Array<Object>, failed: Array<Object>}>}
+ */
+export async function addTemplates(refs) {
+  return unwrap(
+    apiClient.post(comfyUrl("/templates/add"), {
+      templates: refs.map(({ module, name }) => ({ module, name })),
+    }),
+  );
+}
+
+/**
+ * The URL an `<img>` loads a template's picture from. An `<img src>` bypasses
+ * Axios, so the API base and the share token are spelled out here.
+ *
+ * @param {{module: string, name: string}} template
+ * @returns {string}
+ */
+export function templateThumbnailUrl({ module, name }) {
+  const query = new URLSearchParams({ module, name });
+  return appendShareToken(
+    `${API_BASE_URL}/comfyui/templates/thumbnail?${query}`,
+  );
 }

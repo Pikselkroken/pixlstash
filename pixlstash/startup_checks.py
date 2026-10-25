@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from pixlstash.resources.arbiter import safety_margin_mb
+from pixlstash.resources.ledger import ledger
 from pixlstash.startup_permissions import mkdir_private
 from pixlstash.utils.accelerator import (
     CUDA,
@@ -91,7 +93,6 @@ class StartupChecks:
     """
 
     MIN_FREE_DISK_GB_DEFAULT = 1.0
-    MIN_FREE_VRAM_MB_DEFAULT = 1024.0
 
     def __init__(self, server_config: dict, server_config_path: str, logger):
         self._server_config = server_config
@@ -529,14 +530,6 @@ class StartupChecks:
                 )
             # Don't return - continue with the VRAM check so other GPU paths work.
 
-        min_free_vram_mb = float(
-            self._server_config.get(
-                "min_free_vram_mb",
-                self.MIN_FREE_VRAM_MB_DEFAULT,
-            )
-        )
-        self._server_config["min_free_vram_mb"] = min_free_vram_mb
-
         try:
             if requested == MPS:
                 # Unified memory has no "free VRAM" to read: the GPU shares one
@@ -566,23 +559,22 @@ class StartupChecks:
             )
             return
 
-        if free_mb < min_free_vram_mb:
-            self._handle_gpu_check_failure(
-                outcome,
-                is_auto_mode,
-                is_explicit_gpu,
-                (
-                    f"Insufficient free {accel_name} memory ({free_mb:.0f} MB of "
-                    f"{total_mb:.0f} MB; requires >= {min_free_vram_mb:.0f} MB); "
-                    "forcing CPU inference."
-                ),
-                (
-                    f"Insufficient free {accel_name} memory while default_device "
-                    f"is set to {device_value} ({free_mb:.0f} MB of "
-                    f"{total_mb:.0f} MB; requires >= {min_free_vram_mb:.0f} MB)."
-                ),
+        # Little free memory at boot is no reason to leave the GPU: a ComfyUI
+        # with a model loaded is the normal neighbour, and the VRAM arbiter
+        # admits each task against what is free when it runs. This used to pin
+        # the whole session to the CPU (auto) or refuse to boot (an explicit
+        # device). Say who holds the card instead.
+        if free_mb < safety_margin_mb(int(total_mb)):
+            holders = ", ".join(
+                f"{row['name']} {row['used_mb']} MB"
+                for row in ledger().other_processes()
             )
-            return
+            outcome.notes.append(
+                f"Only {free_mb:.0f} MB of {total_mb:.0f} MB {accel_name} memory "
+                "is free at start-up"
+                + (f" ({holders})" if holders else "")
+                + "; GPU work waits for room rather than moving to the CPU."
+            )
 
         # "working set" rather than "free VRAM" on unified memory: the figure is
         # what Metal recommends this process claim from a pool it shares with

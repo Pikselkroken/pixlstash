@@ -35,11 +35,23 @@ export const UNCHECKED_CODES = ["comfyui_unreachable", "comfyui_not_configured"]
 export const PACK_OUTDATED = "pack_outdated";
 export const PACK_OUTDATED_ACTION = "Restart ComfyUI, or update the pack.";
 
+/** A model file the graph names that this machine does not have. */
+export const MISSING_MODELS = "missing_models";
+
+/** Node classes this ComfyUI lacks; `packs` names a pack PixlStash can install. */
+export const MISSING_NODES = "missing_nodes";
+
 /**
- * Installing a file, or restarting ComfyUI, is a trip away from the keyboard,
- * so either stops the batch.
+ * A model file the graph names that PixlStash is still downloading: put in
+ * while it was on its way, and refused until it lands. Each carries `percent`.
  */
-export const BLOCKS_BATCH = ["missing_models", PACK_OUTDATED];
+export const MODELS_DOWNLOADING = "models_downloading";
+
+/**
+ * Installing a file, restarting ComfyUI or waiting for a download is a trip
+ * away from the keyboard, so each stops the batch.
+ */
+export const BLOCKS_BATCH = [MISSING_MODELS, PACK_OUTDATED, MODELS_DOWNLOADING];
 
 /**
  * Not a refusal: a LoRA loader the server took out of the graph (#1463).
@@ -75,7 +87,7 @@ export const LORAS_SKIPPED = "loras_skipped";
  * the warning hue with Edit LoRAs… as its fix: adding a loader is a workflow
  * edit, and that dialog is where it is made.
  */
-export const LORAS_UNPLACED = "loras_unplaced";
+const LORAS_UNPLACED = "loras_unplaced";
 
 /**
  * A picture input nothing answered (#1457; it replaced `fixed_input_deleted`).
@@ -93,14 +105,14 @@ export const PICTURE_INPUT_UNFILLED = "picture_input_unfilled";
  * `Text Multiline`, `CR Text`, `Textbox`, `PrimitiveStringMultiline`) this ComfyUI lacks: its link becomes
  * a literal, so the run goes ahead without the pack. `RunGroup.replaced_nodes` carries it.
  */
-export const NODES_REPLACED = "nodes_replaced";
+const NODES_REPLACED = "nodes_replaced";
 
 /**
  * Not a refusal either: a LoRA this ComfyUI lacks, loaded through the
  * ComfyUI-PixlStash loader by its hash (`RunGroup.swapped_loaders`). The run
  * gets the LoRA; the graph that runs is not the one the card names.
  */
-export const LORAS_FETCHED = "loras_fetched";
+const LORAS_FETCHED = "loras_fetched";
 
 /**
  * Where the ComfyUI-PixlStash node pack lives, and how to get it.
@@ -127,6 +139,7 @@ export const MISSING_CHOICES = "missing_choices";
 export const FIX_SETTINGS = "settings";
 export const FIX_DROP_LORA = "drop-lora";
 export const FIX_EDIT_LORAS = "edit-loras";
+export const FIX_INSTALL_PACK = "install-pack";
 
 function names(list, key) {
   return (list || [])
@@ -299,11 +312,32 @@ export function readReason(reason) {
       );
     case "comfyui_unreachable":
       return read("ComfyUI did not answer, so its graph could not be checked.");
-    case "missing_models": {
+    case MISSING_MODELS: {
       const files = (reason.models || []).filter(Boolean);
-      const count = files.length;
+      // A caller may fold the files still downloading in (the Edit tab's one
+      // notice per card): they are not missing, and are said apart.
+      const count = files.filter((file) => !file.downloading).length;
+      const coming = files.length - count;
       return read(
-        `${count} ${count === 1 ? "model is" : "models are"} missing.`,
+        [
+          count ? `${count} ${count === 1 ? "model is" : "models are"} missing.` : "",
+          coming
+            ? `${coming} ${coming === 1 ? "model is" : "models are"} still downloading.`
+            : "",
+        ]
+          .filter(Boolean)
+          .join(" "),
+        null,
+        files,
+      );
+    }
+    case MODELS_DOWNLOADING: {
+      const files = (reason.models || [])
+        .filter(Boolean)
+        .map((file) => ({ ...file, downloading: true }));
+      const one = files.length === 1;
+      return read(
+        `${one ? "A model it needs is" : `${files.length} models it needs are`} still downloading. Run it once ${one ? "it has" : "they have"} finished: the Tasks tab shows how far.`,
         null,
         files,
       );
@@ -328,14 +362,19 @@ export function readReason(reason) {
         `This ComfyUI does not have ${values}. Set another in the workflow's Parameters.`,
       );
     }
-    case "missing_nodes": {
+    case MISSING_NODES: {
       const nodes = names(reason.nodes, "name");
       const ours = nodes.filter((n) => n.startsWith(PIXLSTASH_NODE_PREFIX));
       const others = nodes.filter((n) => !ours.includes(n));
       const sentences = [];
+      // A pack PixlStash can have ComfyUI-Manager install (#2054).
+      const packs = (reason.packs || []).filter((pack) => pack?.id);
       if (others.length) {
+        const from = packs.length
+          ? `, from ${packs.map((pack) => pack.name || pack.id).join(", ")}`
+          : "";
         sentences.push(
-          `This ComfyUI does not have ${others.length === 1 ? "the node" : "the nodes"} ${others.join(", ")}.`,
+          `This ComfyUI does not have ${others.length === 1 ? "the node" : "the nodes"} ${others.join(", ")}${from}.`,
         );
       }
       if (ours.length) {
@@ -343,7 +382,7 @@ export function readReason(reason) {
           `${ours.join(", ")} ${ours.length === 1 ? "comes" : "come"} from the ComfyUI-PixlStash node pack, which this ComfyUI does not have. ${PIXLSTASH_PACK_INSTALL}`,
         );
       }
-      return read(sentences.join(" "));
+      return read(sentences.join(" "), packs.length ? FIX_INSTALL_PACK : null);
     }
     case "no_lora_loader":
       // Fires only for a LoRA addressed to a slot (`loras`), so taking it out
@@ -394,6 +433,13 @@ export function readReason(reason) {
     }
     case "no_runnable_source":
       return read("Nothing on this machine can produce a graph for this workflow.");
+    case "mask_not_read":
+      // The Edit tab's selection on a workflow that never reads its MASK:
+      // refused rather than run over the whole picture.
+      return read(
+        String(reason.message || "").trim() ||
+          "This workflow does not use a mask, so it would change the whole picture.",
+      );
     default:
       return read("This workflow cannot be run just now.");
   }
@@ -462,40 +508,23 @@ export function unplacedNotice(group) {
 }
 
 /**
- * The replaced nodes of one pre-flight group, in the reason shape.
- *
- * Kept out of `reasons` for the reason `bypassNotice` is.
- *
- * @param {{replaced_nodes?: Array<Object>}} group
- * @returns {Array<Object>} zero or one entry, so a caller can spread it.
- */
-export function replacedNotice(group) {
-  const nodes = (group?.replaced_nodes || []).filter(Boolean);
-  return nodes.length ? [{ code: NODES_REPLACED, nodes }] : [];
-}
-
-/**
  * Every repair the server made to one group's graph, as notices (#1463).
  *
  * The server's repair registry is one mechanism with one report per repair;
- * this is its one reading, so a popup spreads this and not each notice.
+ * this is its one reading, so a popup spreads this and not each notice. Like
+ * `bypassNotice`, the replaced nodes and the LoRA loaders swapped to the
+ * ComfyUI-PixlStash loader are kept out of `reasons`: the run goes ahead.
  *
  * @param {Object} group - one pre-flight group.
  * @returns {Array<Object>}
  */
 export function repairNotices(group) {
-  return [...bypassNotice(group), ...replacedNotice(group), ...swappedNotice(group)];
-}
-
-/**
- * The LoRA loaders one pre-flight group swapped to the ComfyUI-PixlStash
- * loader, in the reason shape.
- *
- * @param {{swapped_loaders?: Array<Object>}} group
- * @returns {Array<Object>} zero or one entry, so a caller can spread it.
- */
-export function swappedNotice(group) {
+  const nodes = (group?.replaced_nodes || []).filter(Boolean);
   const loaders = (group?.swapped_loaders || []).filter(Boolean);
-  return loaders.length ? [{ code: LORAS_FETCHED, loaders }] : [];
+  return [
+    ...bypassNotice(group),
+    ...(nodes.length ? [{ code: NODES_REPLACED, nodes }] : []),
+    ...(loaders.length ? [{ code: LORAS_FETCHED, loaders }] : []),
+  ];
 }
 

@@ -142,6 +142,17 @@ const QUANT_VOCABULARY = [
   // case-folding bug in the lookup would otherwise pass the whole suite.
   ["Flux1-Dev-FP8_E4M3FN.safetensors", "Flux1 Dev", "fp8_e4m3"],
   ["Clementine_BF16.safetensors", "Clementine", "bf16"],
+  // ComfyUI template spellings (#2061).
+  ["Qwen_Image_Edit_2511_FP8Mixed.safetensors", "Qwen Image Edit 2511", "fp8"],
+  ["qwen_3_4b_fp8_mixed.safetensors", "qwen 3 4b", "fp8"],
+  ["gemma_3_12B_it_fp4_mixed.safetensors", "gemma 3 12B it", "fp4"],
+  ["z_image_int8_convrot.safetensors", "z image", "int8"],
+  ["Wan21-WanMove_fp8_scaled_e4m3fn_KJ.safetensors", "Wan21 WanMove", "fp8_e4m3"],
+  ["Wan_fp8_e4m3fn_scaled_KJ.safetensors", "Wan", "fp8_e4m3"],
+  ["qwen_pe_t2i.int8_convrot.safetensors", "qwen pe t2i", "int8"],
+  // A version after the precision stays in the name.
+  ["ltx-upscaler-x2-bf16-1.0.safetensors", "ltx upscaler x2 1.0", "bf16"],
+  ["qwen-360-int8-bf16-v2.safetensors", "qwen 360 v2", "bf16"],
 ];
 
 // Names that must come back untouched: `scaled`, `fast`, `m`, `l`, `1` and `0`
@@ -155,6 +166,8 @@ const QUANT_NON_VOCABULARY = [
   ["portrait_mix_v2.safetensors", "portrait mix v2"],
   ["juggernaut_xl_v9.safetensors", "juggernaut xl v9"],
   ["Anything-XL.safetensors", "Anything XL"],
+  ["clementine_mixed.safetensors", "clementine mixed"],
+  ["clementine_kj.safetensors", "clementine kj"],
   // `constructor` is on every Object, so a bare `in` lookup ate it as a quant.
   ["clementine_constructor.safetensors", "clementine constructor"],
 ];

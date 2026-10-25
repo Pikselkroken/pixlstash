@@ -20,14 +20,15 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from sqlmodel import Session, delete, select
+from sqlmodel import Session, select
 
 from pixlstash.auth import COMFYUI_SCOPE, COMFYUI_SCOPE_REFUSAL
 from pixlstash.authz.policy import AccessPolicy, LibraryAccessMode, RoutePolicy
 from pixlstash.authz.registry import ROUTE_POLICIES
-from pixlstash.db_models import User, UserToken
+from pixlstash.db_models import UserToken
 from pixlstash.server import Server
 from pixlstash.services.library_switch_service import SwitchState
+from tests.utils import reset_owner_auth
 
 API = "/api/v1"
 
@@ -44,20 +45,7 @@ def server():
 def clean_auth(server):
     """Start each test from a claimed owner with no tokens."""
 
-    def _wipe(session: Session):
-        session.exec(delete(UserToken))
-        session.exec(delete(User))
-        session.commit()
-
-    server.hub_engine.run_task(_wipe)
-    server.auth.password_hash = None
-    server.auth.username = None
-    server.auth.user = None
-    server.auth._clear_all_sessions()
-    server.auth._flush_token_cache()
-    server.auth._failed_login_attempts = 0
-    server.auth._login_lockout_until = 0.0
-    server.auth.ensure_user()
+    reset_owner_auth(server)
     yield
 
 

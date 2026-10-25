@@ -484,7 +484,7 @@ WORKFLOW_TOOLS = [
         "description": "Whether run_workflow would run this workflow, submitting "
         "nothing: {ok, runs, groups}, each group with the reasons it would "
         "not run (missing_nodes, missing_models, pack_outdated, "
-        "comfyui_unreachable...). Call "
+        "models_downloading, comfyui_unreachable...). Call "
         "it before run_workflow.",
         "inputSchema": _RUN_SCHEMA,
         "annotations": {"readOnlyHint": True, "openWorldHint": True},
@@ -500,7 +500,9 @@ WORKFLOW_TOOLS = [
         "with the picture_ids it added (none when every output was already "
         "in the library), failed with a message naming the node that "
         "failed and why (stopped true for a run that was interrupted), or "
-        "running, which get_workflow_run reads later. A call whose every run "
+        "running or waiting (held by PixlStash until the GPU has room, with a "
+        "run_id and no prompt_id yet), which get_workflow_run reads later. A "
+        "call whose every run "
         "failed is an error carrying that message.",
         "inputSchema": {
             **_RUN_SCHEMA,
@@ -522,8 +524,9 @@ WORKFLOW_TOOLS = [
     },
     {
         "name": "get_workflow_run",
-        "description": "How one run stands, by a prompt_id run_workflow "
-        "answered with: {status, message, stopped, picture_ids}, status "
+        "description": "How one run stands, by the prompt_id or run_id "
+        "run_workflow answered with (a run waiting for the GPU has only a "
+        "run_id): {status, message, stopped, picture_ids}, status waiting, "
         "running, completed or failed. Kept for recent runs only.",
         "inputSchema": {
             "type": "object",
@@ -964,17 +967,20 @@ def _follow_runs(fetch: Fetch, answer, wait_seconds: float) -> None:
     ``ToolError`` with the reasons when every run failed.
     """
     prompts = answer.get("prompts") if isinstance(answer, dict) else None
+    # A run held for the GPU has no prompt id yet; its run id names it.
     entries = [
         entry
         for entry in prompts or []
-        if isinstance(entry, dict) and entry.get("prompt_id")
+        if isinstance(entry, dict) and (entry.get("prompt_id") or entry.get("run_id"))
     ]
     pending = list(entries)
     deadline = time.monotonic() + wait_seconds
     while pending:
         for entry in list(pending):
             try:
-                outcome = json.loads(_get(fetch, _run_path(entry["prompt_id"]))[1])
+                outcome = json.loads(
+                    _get(fetch, _run_path(entry.get("run_id") or entry["prompt_id"]))[1]
+                )
             except ToolError as exc:
                 # The run is queued all the same; only its ending is unread.
                 entry.update(status="unknown", message=str(exc))
@@ -987,7 +993,10 @@ def _follow_runs(fetch: Fetch, answer, wait_seconds: float) -> None:
                 continue
             for key in ("status", "message", "stopped", "picture_ids"):
                 entry[key] = outcome.get(key)
-            if outcome.get("status") != "running":
+            if outcome.get("prompt_id"):
+                entry["prompt_id"] = outcome["prompt_id"]
+            # Waiting for the GPU is not an ending either.
+            if outcome.get("status") not in ("running", "waiting"):
                 pending.remove(entry)
         if not pending or time.monotonic() >= deadline:
             break

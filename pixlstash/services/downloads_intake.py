@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import os
 import struct
+from datetime import datetime, timezone
 from typing import Optional
 
 from pixlstash.hub.db import HubDatabase
@@ -276,7 +277,29 @@ def _register(
         return OUTCOME_RETRY, None
     if model_id is None:
         return OUTCOME_LEFT, None
+    _mark_arrived(hub, model_id)
     return OUTCOME_MOVED, model_id
+
+
+def _mark_arrived(hub: HubDatabase, model_id: int) -> None:
+    """Stamp ``model.arrived_at``; never undoes the move it follows.
+
+    Only the New workflow set picker's "new ready to make" line reads it, so a
+    failed write costs that hint for this file and nothing else.
+    """
+    try:
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model SET arrived_at = ? WHERE id = ?",
+                (datetime.now(timezone.utc).isoformat(), model_id),
+            )
+    except Exception as exc:  # noqa: BLE001 - the move stands whatever this was
+        logger.warning(
+            "Model %d is on the shelf, but its arrival time could not be "
+            "recorded (%s); the picker will not count it as new.",
+            model_id,
+            exc,
+        )
 
 
 def _signature(path: str) -> Optional[tuple[int, int]]:

@@ -33,7 +33,6 @@ import types
 
 import pytest
 
-import pixlstash.startup_checks as sc
 from pixlstash.startup_checks import StartupCheckOutcome, StartupChecks
 from pixlstash.utils.accelerator import (
     CPU,
@@ -47,6 +46,7 @@ from pixlstash.utils.accelerator import (
     resolve_device,
     supports_fp16,
 )
+from tests.utils import fake_ort
 
 
 def _torch(*, cuda=False, mps=False):
@@ -75,10 +75,6 @@ def _torch(*, cuda=False, mps=False):
             empty_cache=lambda: None,
         ),
     )
-
-
-def _ort(providers):
-    return types.SimpleNamespace(get_available_providers=lambda: list(providers))
 
 
 CUDA_HOST = dict(cuda=True, mps=False)
@@ -178,23 +174,6 @@ def test_accelerator_capabilities_are_answered_per_device(device, accelerated):
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def patch_runtime(monkeypatch):
-    """Seed ``startup_checks``' cached torch/ort handles with fakes.
-
-    The caches are what stop the accessors ever attempting the real import, so
-    seeding them both substitutes the fake and keeps the test off this machine's
-    actual hardware. ``startup_checks`` passes the handle down to the accelerator
-    probes, which is what lets a CPU-only runner verify a CUDA or Metal host.
-    """
-
-    def apply(torch_mod, ort_mod):
-        monkeypatch.setattr(sc, "_torch_mod", torch_mod)
-        monkeypatch.setattr(sc, "_ort_mod", ort_mod)
-
-    return apply
-
-
 def _run_device_check(device):
     cfg = {"default_device": device}
     outcome = StartupCheckOutcome()
@@ -210,7 +189,7 @@ def test_an_apple_silicon_host_is_not_quietly_pinned_to_the_cpu(patch_runtime):
     check forced the CPU, no amount of accelerator support anywhere else in the
     codebase could be reached.
     """
-    patch_runtime(_torch(**MPS_HOST), _ort(["CoreMLExecutionProvider"]))
+    patch_runtime(_torch(**MPS_HOST), fake_ort(["CoreMLExecutionProvider"]))
     cfg, outcome = _run_device_check("auto")
 
     assert not outcome.forced_cpu, "an Apple Silicon host must not be forced to CPU"
@@ -220,7 +199,7 @@ def test_an_apple_silicon_host_is_not_quietly_pinned_to_the_cpu(patch_runtime):
 
 def test_a_host_with_no_accelerator_still_lands_on_the_cpu(patch_runtime):
     """The other direction: the CPU path must survive the change intact."""
-    patch_runtime(_torch(**BARE_HOST), _ort(["CPUExecutionProvider"]))
+    patch_runtime(_torch(**BARE_HOST), fake_ort(["CPUExecutionProvider"]))
     _, outcome = _run_device_check("auto")
 
     assert outcome.forced_cpu
@@ -230,7 +209,7 @@ def test_a_host_with_no_accelerator_still_lands_on_the_cpu(patch_runtime):
 def test_a_cuda_host_is_unaffected_by_the_apple_silicon_work(patch_runtime):
     """NVIDIA is the primary platform. Speeding up Macs at its expense - or by
     blinding CI to its regressions - is not a trade worth making."""
-    patch_runtime(_torch(**CUDA_HOST), _ort(["CUDAExecutionProvider"]))
+    patch_runtime(_torch(**CUDA_HOST), fake_ort(["CUDAExecutionProvider"]))
     _, outcome = _run_device_check("auto")
 
     assert not outcome.forced_cpu
@@ -240,7 +219,7 @@ def test_a_cuda_host_is_unaffected_by_the_apple_silicon_work(patch_runtime):
 def test_naming_an_absent_accelerator_refuses_loudly(patch_runtime):
     """An owner who asked for CUDA on a Mac gets a refusal that says so, rather
     than a silent CPU downgrade they would only ever notice as slowness."""
-    patch_runtime(_torch(**MPS_HOST), _ort(["CoreMLExecutionProvider"]))
+    patch_runtime(_torch(**MPS_HOST), fake_ort(["CoreMLExecutionProvider"]))
     _, outcome = _run_device_check(CUDA)
 
     assert outcome.hard_failures
@@ -251,7 +230,7 @@ def test_an_explicit_cpu_choice_is_honoured_at_start_up(patch_runtime):
     """Asking for the CPU on a machine with a GPU gets the CPU. The owner may
     have a reason - thermal, a flaky driver, leaving the GPU to something else -
     and overriding it is the same silent override pointed the other way."""
-    patch_runtime(_torch(**MPS_HOST), _ort(["CoreMLExecutionProvider"]))
+    patch_runtime(_torch(**MPS_HOST), fake_ort(["CoreMLExecutionProvider"]))
     _, outcome = _run_device_check(CPU)
 
     assert outcome.forced_cpu

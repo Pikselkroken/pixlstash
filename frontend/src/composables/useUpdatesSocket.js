@@ -19,7 +19,9 @@ import { useMovesStore } from "../stores/useMovesStore";
 import { useNoticeStore } from "../stores/useNoticeStore";
 import { useTasksStore } from "../stores/useTasksStore";
 import { useWorkflowsStore } from "../stores/useWorkflowsStore";
+import { patchWorkflowCard } from "../api/workflows";
 import { useModelShelfStore } from "../stores/useModelShelfStore";
+import { useWorkflowTemplatesStore } from "../stores/useWorkflowTemplatesStore";
 import {
   isFullRestoreRequestInFlight,
   prepareForFullRestoreTransition,
@@ -463,6 +465,46 @@ export function useUpdatesSocket({
           key: Date.now(),
           payload,
         };
+      } else if (payload?.type === "resource_lease" && !isReadOnly.value) {
+        // The GPU's queue moved: the Tasks tab re-reads it from the poll rather
+        // than patching rows from the event. `preempted` stays quiet.
+        tasksStore.nudge();
+        if (
+          payload.change === "warning" &&
+          payload.code === "vram_oom_exclusive" &&
+          payload.workflow_id
+        ) {
+          // The backend switched the workflow to run alone after it ran out
+          // of memory several runs in a row; Turn off switches that back off.
+          const workflowId = payload.workflow_id;
+          noticeStore.push({
+            level: "warning",
+            text: payload.text || "A workflow ran out of GPU memory several runs in a row and now runs alone.",
+            key: `resource-lease-exclusive-${workflowId}`,
+            action: {
+              label: "Turn off",
+              handler: async () => {
+                // The notice can outlive a switch to a read-only session.
+                if (isReadOnly.value) return;
+                try {
+                  await patchWorkflowCard(workflowId, { exclusive: false });
+                  noticeStore.push({
+                    level: "success",
+                    text: "Running alone is off for this workflow.",
+                    timeout: 4000,
+                  });
+                } catch (err) {
+                  console.warn("Could not undo run-alone for", workflowId, err);
+                  noticeStore.push({
+                    level: "error",
+                    text: "Could not turn off running alone for this workflow.",
+                    key: `resource-lease-undo-${workflowId}`,
+                  });
+                }
+              },
+            },
+          });
+        }
       } else if (payload?.type === "vram_oom" && !isReadOnly.value) {
         // A fact about the machine, not about the library, so no grid-filter or
         // origin decision applies. The backend only delivers it to owner-level
@@ -518,8 +560,13 @@ export function useUpdatesSocket({
       } else if (payload?.type === "models_arrived" && !isReadOnly.value) {
         // Models moved onto the shelf from the Downloads folder. Owner-only,
         // like every /models route; the store re-reads its rows and raises the
-        // sidebar's `new` tag.
-        modelShelfStore.onModelsArrived();
+        // sidebar's `new` tag, and says so when the arrival completed a
+        // ComfyUI template (#2001).
+        modelShelfStore.onModelsArrived(
+          Array.isArray(payload.model_ids) ? payload.model_ids : [],
+        );
+        // A template's files are marked on the shelf or not as of its read.
+        useWorkflowTemplatesStore().onModelsArrived();
       } else if (payload?.type === "snapshot_created" && !isReadOnly.value) {
         snapshotsStore.onSnapshotCreated();
       } else if (payload?.type === "snapshot_deleted" && !isReadOnly.value) {

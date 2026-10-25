@@ -332,6 +332,8 @@ def test_the_vault_idle_sweep_is_the_caller(install_plugins):
         _disable_background_workers=True,
         _task_runner=types.SimpleNamespace(has_active_gpu_tasks=lambda: False),
     )
+    # The sweep's unload is the vault's own, shared with making room on the GPU.
+    fake_vault.unload_models = lambda: Vault.unload_models(fake_vault)
     busy = {"tagging": {"running": True, "status": "running", "remaining": 5}}
 
     Vault._maybe_aggressive_unload(fake_vault, busy)

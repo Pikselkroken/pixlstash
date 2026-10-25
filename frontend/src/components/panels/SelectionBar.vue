@@ -134,6 +134,7 @@
             :keep-cover-only-stack-count="props.keepCoverOnlyStackCount"
             :keep-cover-only-lock-reason="props.keepCoverOnlyLockReason"
             :rotate-block-reason="props.rotateBlockReason"
+            :compare-block-reason="props.compareBlockReason"
             @close="selectionMenuOpen = false"
             @set-project="$emit('set-project', $event)"
             @add-to-character="$emit('add-to-character', $event)"
@@ -151,7 +152,8 @@
             @open-plugin-panel="openPluginPanel()"
             @make-more="$emit('make-more')"
             @run-workflow="$emit('run-workflow')"
-            @edit-with-comfyui="$emit('edit-with-comfyui')"
+            @edit-pictures="$emit('edit-pictures')"
+            @compare-pictures="$emit('compare-pictures')"
             @reverse-image-search="$emit('reverse-image-search')"
             @segment="$emit('segment')"
             @rotate-left="$emit('rotate-left')"
@@ -190,6 +192,20 @@
             />
           </v-menu>
         </div>
+        <!-- Upscale… (#1868): the keepers picked after a run, upscaled and
+             stacked on top of themselves. Pictures only: a video has no
+             picture loader to go behind. -->
+        <AppBarButton
+          v-if="canUpscale"
+          class="upscale-btn"
+          shape="round"
+          icon="arrow-expand-all"
+          data-testid="selection-upscale"
+          :tooltip="`Upscale the ${selectedCount === 1 ? 'selected picture' : `${selectedCount} selected pictures`}`"
+          @click="upscale.openFor(props.selectedImageIds)"
+        >
+          <span class="bar-btn-apply-label">Upscale…</span>
+        </AppBarButton>
         <AppBarButton
           v-if="
             selectedCount > 0 &&
@@ -239,6 +255,7 @@ import { withRef } from "../../utils/withRef.js";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { isReadOnly } from "../../utils/apiClient";
 import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
+import { useUpscaleStore } from "../../stores/useUpscaleStore";
 import SelectionMenu from "./SelectionMenu.vue";
 import TbTagPanel from "./TbTagPanel.vue";
 import PluginParametersUI from "../widgets/PluginParametersUI.vue";
@@ -274,6 +291,7 @@ const props = defineProps({
   // Forwarded straight to SelectionMenu, like the two above: the rotate pair
   // lives in the overflow only, never as a top-level pill button.
   rotateBlockReason: { type: String, default: null },
+  compareBlockReason: { type: String, default: null },
   groupingLockReason: { type: String, default: null },
   availablePlugins: { type: Array, default: () => [] },
   taggerPlugins: { type: Array, default: () => [] },
@@ -312,8 +330,20 @@ const emit = defineEmits([
   "clear-impossible-tags",
   "make-more",
   "run-workflow",
-  "edit-with-comfyui",
+  "edit-pictures",
+  "compare-pictures",
 ]);
+
+const upscale = useUpscaleStore();
+const canUpscale = computed(
+  () =>
+    props.selectedCount > 0 &&
+    props.comfyuiConfigured &&
+    !isScrapheapView.value &&
+    !isReadOnly.value &&
+    props.selectedMediaSupport?.hasImages === true &&
+    props.selectedMediaSupport?.hasVideos !== true,
+);
 
 const isScrapheapView = computed(() => {
   const scrapheapId = String(

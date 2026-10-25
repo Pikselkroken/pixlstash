@@ -1769,11 +1769,8 @@ function projectMenuItems(container) {
   );
 }
 
-function focusProjectMenuItem(container, index) {
-  const items = projectMenuItems(container);
-  if (!items.length) return;
-  const wrappedIndex = ((index % items.length) + items.length) % items.length;
-  items[wrappedIndex].focus();
+function focusFirstProjectMenuItem(container) {
+  projectMenuItems(container)[0]?.focus();
 }
 
 function closeProjectMenu({ restoreFocus = false } = {}) {
@@ -1808,7 +1805,7 @@ function openProjectMenu({ focusFirst = false } = {}) {
   projectMenuSection.value = null;
   projectMenuOpen.value = true;
   if (focusFirst) {
-    nextTick(() => focusProjectMenuItem(collapsedProjectMenuRef.value, 0));
+    nextTick(() => focusFirstProjectMenuItem(collapsedProjectMenuRef.value));
   }
 }
 
@@ -1840,7 +1837,7 @@ function openProjectSubMenu(section, event, focusFirst = false) {
   projectMenuSubPos.value = { top: rect.top - 4, left: rect.right + 4 };
   projectMenuSection.value = section;
   if (focusFirst) {
-    nextTick(() => focusProjectMenuItem(collapsedProjectSubMenuRef.value, 0));
+    nextTick(() => focusFirstProjectMenuItem(collapsedProjectSubMenuRef.value));
   }
 }
 
@@ -1858,24 +1855,8 @@ function closeProjectSubMenu({ restoreFocus = false } = {}) {
   if (restoreFocus && section) focusProjectSubMenuTrigger(section);
 }
 
-function moveProjectMenuFocus(event, container) {
-  const items = projectMenuItems(container);
-  if (!items.length) return false;
-  const currentIndex = items.indexOf(document.activeElement);
-  let nextIndex = null;
-  if (event.key === "ArrowDown") nextIndex = currentIndex + 1;
-  if (event.key === "ArrowUp")
-    nextIndex = currentIndex < 0 ? items.length - 1 : currentIndex - 1;
-  if (event.key === "Home") nextIndex = 0;
-  if (event.key === "End") nextIndex = items.length - 1;
-  if (nextIndex === null) return false;
-  event.preventDefault();
-  focusProjectMenuItem(container, nextIndex);
-  return true;
-}
-
 function onProjectMenuKeydown(event) {
-  if (moveProjectMenuFocus(event, collapsedProjectMenuRef.value)) return;
+  if (onMenuKeydown(event)) return;
   if (event.key === "ArrowRight") {
     const section = document.activeElement?.dataset?.projectSubmenu;
     if (section) {
@@ -1897,7 +1878,7 @@ function onProjectMenuKeydown(event) {
 }
 
 function onProjectSubMenuKeydown(event) {
-  if (moveProjectMenuFocus(event, collapsedProjectSubMenuRef.value)) return;
+  if (onMenuKeydown(event)) return;
   if (event.key === "Escape" || event.key === "ArrowLeft") {
     event.preventDefault();
     closeProjectSubMenu({ restoreFocus: true });

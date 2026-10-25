@@ -95,7 +95,6 @@
                 answerMemberVerdict(openHand, modelId, verdict)
             "
             :can-fill-from-set="fillSetItems.length > 0"
-            :can-fill-from-pictures="fillPictureItems.length > 0"
             :base-offer="baseOffer"
             :fit-count="openFitCount"
             :drag-rows="store.railDrag"
@@ -112,10 +111,11 @@
             @add="({ slotId, el }) => openChooser('slot', el, slotId)"
             @fill="({ mode, el }) => openChooser(mode, el)"
             @pick="openWorksWith"
+            @restore="restoreGhost"
+            @reset="store.resetHandMadeSet(openHand.set)"
             @merge="mergeOffer()"
             @keep-separate="keepSeparate()"
             @add-ghost="(ghost) => mergeOffer([ghost])"
-            @offer-again="store.offerMergeAgain(openHand.set)"
             @cursor="(key) => moveToKey(key)"
           />
 
@@ -153,13 +153,18 @@
 
           <!-- The way in to a hand-made set, first because the grid leads with
                the newest sets. A row like any card, so the arrows reach it and
-               Enter presses it; N does the same from anywhere in the grid. -->
+               Enter presses it; N does the same from anywhere in the grid. It
+               opens the template picker, whose Make your own is the empty set
+               (#2001). The dot never speaks alone: its line is the
+               description. -->
           <div
             v-else-if="entry.kind === 'new'"
             class="msg__newrow"
             role="row"
             aria-level="1"
             aria-label="New workflow set"
+            aria-haspopup="dialog"
+            :aria-describedby="store.templatesNewReady ? NEW_READY_ID : undefined"
             aria-keyshortcuts="N"
             :tabindex="index === cursorIndex ? 0 : -1"
             data-key="new"
@@ -169,11 +174,23 @@
           >
             <div class="msg__cell" role="gridcell">
               <div class="msg__new" data-testid="new-workflow-set">
+                <span
+                  v-if="store.templatesNewReady"
+                  class="msg__new-dot"
+                  aria-hidden="true"
+                ></span>
                 <v-icon size="24" aria-hidden="true">mdi-plus</v-icon>
                 <span class="msg__new-label" aria-hidden="true"
                   >New workflow set</span
                 >
                 <kbd class="msg__kbd" aria-hidden="true">N</kbd>
+                <span
+                  v-if="store.templatesNewReady"
+                  :id="NEW_READY_ID"
+                  class="msg__new-ready"
+                  data-testid="new-ready-line"
+                  >{{ store.templatesNewReady }} new ready to make</span
+                >
               </div>
               <span
                 v-if="railTargets.has('new')"
@@ -221,13 +238,24 @@
             :tabindex="index === cursorIndex ? 0 : -1"
             :data-key="entry.key"
             @click="onRowClick(entry, $event)"
-            @dblclick="targetOwnsTheGesture($event) || toggle(entry)"
+            @dblclick="targetOwnsTheGesture($event) || onCardDblClick(entry)"
             @contextmenu="onRowMenu(entry, $event)"
             :data-rail-drop="railTargets.has(entry.key) ? entry.key : undefined"
             :data-rail-refused="railTargets.get(entry.key)?.refused || undefined"
             @rail-drop="onRailDrop(entry)"
           >
-            <div class="msg__cell" role="gridcell">
+            <!-- A model file dropped here from outside goes beside this set's
+                 models (useModelDropTarget). -->
+            <div
+              class="msg__cell"
+              :class="{ 'msg__cell--file-drop': fileDropKey === entry.key }"
+              role="gridcell"
+              :data-model-drop-models="entry.dropModels || undefined"
+              @dragover="
+                entry.dropModels && onFileDragOver(entry.key, $event)
+              "
+              @dragleave="onFileDragLeave(entry.key, $event)"
+            >
               <ModelSetCard
                 :card="entry.card"
                 :expanded="store.openSetKey === entry.key"
@@ -239,6 +267,9 @@
                       : cardSelected(entry)
                 "
                 :panel-id="store.openSetKey === entry.key ? PANEL_ID : ''"
+                favouritable
+                :favourite="favourites.isFavourite('set', entry.key)"
+                @favourite="store.toggleFavourites({ kind: 'set', keys: [entry.key] })"
                 @toggle="store.toggleSet(entry.key)"
                 @offer="openOffer(entry.setId)"
                 @add="answerOffer(entry, true)"
@@ -299,6 +330,19 @@
       @add="addChosen"
       @remove="unpick"
       @close="closeChooser"
+    />
+
+    <WorkflowTemplatePicker
+      :open="Boolean(templatePicker)"
+      :target="templatePicker?.target"
+      :rows="store.workflowTemplates.rows"
+      :version="store.workflowTemplates.version"
+      :loading="store.templatesLoading"
+      :error="store.templatesError"
+      @close="closeTemplatePicker()"
+      @make="makeFromTemplate"
+      @make-own="makeOwnFromPicker"
+      @open-set="openSetFromPicker"
     />
   </div>
 </template>
@@ -364,13 +408,14 @@ import { VIcon } from "vuetify/components";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
+import { useFavouritesStore } from "../../stores/useFavouritesStore";
+import { useTasksStore } from "../../stores/useTasksStore";
 import {
   assignmentRing,
   formatModelSize,
   modelName,
 } from "../../utils/modelShelf";
 import {
-  fillFromPictures,
   fillFromSets,
   handMadeName,
   headModel,
@@ -381,14 +426,15 @@ import {
   setFits,
   setSlots,
   slotSuggestions,
-  witnessCount,
 } from "../../utils/workflowSets";
 
 import ModelSetPanel from "../panels/ModelSetPanel.vue";
 import ModelSetSlotsPanel from "../panels/ModelSetSlotsPanel.vue";
 import WorkflowSetChooser from "../panels/WorkflowSetChooser.vue";
+import WorkflowTemplatePicker from "../panels/WorkflowTemplatePicker.vue";
 import AppButton from "../widgets/AppButton.vue";
 import ModelSetCard from "../widgets/ModelSetCard.vue";
+import { useFileDropHighlight } from "../../composables/useModelDropTarget";
 
 /**
  * The two numbers the column count is derived from, and the only copy of them.
@@ -414,6 +460,22 @@ const emit = defineEmits([
 ]);
 
 const store = useModelShelfStore();
+const tasksStore = useTasksStore();
+const {
+  dropKey: fileDropKey,
+  onDragOver: onFileDragOver,
+  onDragLeave: onFileDragLeave,
+} = useFileDropHighlight();
+
+/** A set's shelf models, by id, for a model file dropped on its card. */
+function dropModelIds(group) {
+  return (group.models ?? [])
+    .map((model) => model.id)
+    .filter((id) => id != null)
+    .join(" ");
+}
+
+const favourites = useFavouritesStore();
 
 const gridEl = ref(null);
 const columns = ref(1);
@@ -574,6 +636,7 @@ const flatRows = computed(() => {
       markIcon: iconsById.value.get(group.card.markModel?.id) ?? null,
     },
     headId: null,
+    dropModels: dropModelIds(group),
     cardIndex,
   }));
   const evidence = store.setGroups.map((group, cardIndex) => ({
@@ -586,6 +649,7 @@ const flatRows = computed(() => {
     // Named after a file the shelf does not hold: no row to select, so the
     // card is selected as itself, for Replace (`selectedMissingKeys`).
     missingKey: group.head?.missing ? group.key : null,
+    dropModels: dropModelIds(group),
     cardIndex: hand.length + cardIndex,
   }));
   const cards = [{ kind: "new", id: "new", key: "new" }, ...hand, ...evidence];
@@ -607,8 +671,8 @@ const flatRows = computed(() => {
     // A hand-made tray's stops are its tiles, slot by slot. Padded to whole
     // GRID rows, so every card after it keeps naming its column; inside the
     // tray the arrows walk slots rather than columns (see `onKeyDown`).
-    // The merge offer's strip (#1523) is the tray's first stop, a slot row
-    // of its own above the Checkpoint slot, so Up and Down step through it.
+    // The template offer's strip (#1999) is the tray's first stop, a slot
+    // row of its own above the Checkpoint slot, so Up and Down step through it.
     const offer = openHand.value.set.offer
       ? [
           {
@@ -685,6 +749,12 @@ const cursorIndex = computed(() => {
   // sets, and the tile is one arrow (or N) away.
   const card = flatRows.value.findIndex((entry) => entry.kind === "card");
   return card >= 0 ? card : (firstStop(0, 1) ?? 0);
+});
+
+/** The card under the cursor, by key, or "" when the cursor is elsewhere. */
+const focusedCardKey = computed(() => {
+  const entry = flatRows.value[cursorIndex.value];
+  return entry?.kind === "card" ? entry.key : "";
 });
 
 /** The cursor's key when it is inside the panel, else "". */
@@ -779,6 +849,12 @@ watch(
 
 function toggle(entry) {
   if (entry?.kind === "card") store.toggleSet(entry.key);
+}
+
+/** A double-click opens or closes the tray, and opens a shut rail. */
+function onCardDblClick(entry) {
+  toggle(entry);
+  sidebarStore.showCardInInspector("models");
 }
 
 /**
@@ -1050,12 +1126,67 @@ function openSetMenu(entry, x, y) {
 
 function onNewClick(entry) {
   cursorId.value = entry.id;
-  createSet();
+  openTemplatePicker();
 }
 
-/** Make an empty set and open it. Its tray says what to add first. */
-async function createSet() {
-  await store.createHandMadeSet({});
+// ── The template picker (#1999, #2001) ─────────────────────────────────────
+//
+// The New tile opens it; every way out puts focus somewhere on purpose,
+// because a programmatic overlay drops it to <body>.
+const NEW_READY_ID = "msg-new-ready";
+const templatePicker = ref(null);
+
+function openTemplatePicker() {
+  const tile = flatRows.value.find((entry) => entry.kind === "new");
+  if (!tile) return;
+  cursorId.value = tile.id;
+  // Read afresh on every open: the answer follows every shelf and set change.
+  store.loadWorkflowTemplates();
+  templatePicker.value = { target: rowElement(tile) };
+}
+
+/** Close; Escape and Close hand focus back to the tile. */
+function closeTemplatePicker({ refocus = true } = {}) {
+  templatePicker.value = null;
+  if (!refocus) return;
+  const at = flatRows.value.findIndex((entry) => entry.kind === "new");
+  if (at >= 0) moveCursor(at);
+}
+
+/**
+ * Focus the card of a hand-made set, once the grid draws it. A card the name
+ * filter leaves out is not drawn at all; focus then goes back to the tile,
+ * never to <body>.
+ */
+async function focusSetCard(setId) {
+  await nextTick();
+  const at = flatRows.value.findIndex(
+    (entry) => entry.kind === "card" && entry.key === `hand:${setId}`,
+  );
+  if (at >= 0) moveCursor(at);
+  else closeTemplatePicker();
+}
+
+async function makeFromTemplate(variant) {
+  closeTemplatePicker({ refocus: false });
+  const created = await store.createSetFromTemplate(variant);
+  if (created) focusSetCard(created.id);
+  else closeTemplatePicker();
+}
+
+/** Make your own: the empty set, opened. Its tray says what to add first. */
+async function makeOwnFromPicker() {
+  closeTemplatePicker({ refocus: false });
+  const created = await store.createHandMadeSet({});
+  if (created) focusSetCard(created.id);
+  else closeTemplatePicker();
+}
+
+/** A template a set already covers opens that set, never makes a second. */
+function openSetFromPicker(setId) {
+  closeTemplatePicker({ refocus: false });
+  if (store.openSetKey !== `hand:${setId}`) store.toggleSet(`hand:${setId}`);
+  focusSetCard(setId);
 }
 
 /** Delete the selected sets, or the one under the cursor. No file is touched. */
@@ -1113,20 +1244,11 @@ function removeMember(member) {
 const chooser = ref(null);
 const chooserQuery = ref("");
 
-const fillPictureItems = computed(() =>
-  openHand.value
-    ? fillFromPictures(
-        openHand.value.set,
-        store.workflowSets.combinations,
-        // The rows a list may offer: a model this library hides is not one.
-        store.offeredRows,
-      )
-    : [],
-);
-
 const fillSetItems = computed(() =>
   openHand.value
-    ? fillFromSets(openHand.value.set, store.shownHandMadeSets).filter(
+    ? fillFromSets(openHand.value.set, store.shownHandMadeSets, (key) =>
+        favourites.isFavourite("set", key),
+      ).filter(
         (item) => !store.hiddenModelIds.has(item.id) || store.filters.showHidden,
       )
     : [],
@@ -1172,13 +1294,18 @@ const chooserSections = computed(() => {
   const mode = chooser.value?.mode;
   const set = openHand.value?.set;
   if (!mode || !set) return [];
-  if (mode === "pictures") {
-    return fillSections(fillPictureItems.value, witnessCount);
-  }
   if (mode === "set") {
     return fillSections(fillSetItems.value, (item) => item.from.join(", "));
   }
-  const added = new Set(picked.value.map((entry) => entry.model_id));
+  const added = new Set(picked.value.map(pickKey));
+  return [
+    ...slotSections(set, added),
+    ...comingSection(chooser.value.held ?? set, chooser.value.slotId, added),
+  ];
+});
+
+/** The ranked shelf sections of a slot's picker. */
+function slotSections(set, added) {
   return slotSuggestions({
     // Ranked by the set's members as they stood when the popup opened, so an
     // add neither drops its row out of the list nor reshuffles the rows around
@@ -1202,11 +1329,40 @@ const chooserSections = computed(() => {
           checked: added.has(row.id),
         })),
   }));
-});
+}
+
+/** What a picker item stands for: a shelf model's id, or a download's key. */
+function pickKey(entry) {
+  return entry.download ?? entry.model_id;
+}
+
+/**
+ * The models still downloading that would fill this slot, under their own
+ * heading after the shelf's: a set holds a member by its digest, so one on
+ * its way can join now and is on the shelf the moment it lands. Only a
+ * download whose digest the template list records: without one there is
+ * nothing to hold it by until it has landed.
+ */
+function comingSection(set, slotId, added) {
+  const held = new Set((set?.members ?? []).map((m) => m.sha256));
+  const needle = chooserQuery.value.trim().toLowerCase();
+  const items = tasksStore.runningDownloads
+    .filter((d) => d.sha256 && d.slot === slotId && !held.has(d.sha256))
+    .map((d) => ({
+      id: `download:${d.id}`,
+      row: { filename: d.file, sha256: d.sha256 },
+      download: d,
+      detail: d.percent ? `${Math.round(d.percent)}%` : "",
+      checked: added.has(`download:${d.id}`),
+    }))
+    .filter((item) => rowMatches(item.row, needle));
+  return items.length
+    ? [{ id: "downloading", label: "Downloading", items, total: items.length }]
+    : [];
+}
 
 const chooserLabel = computed(() => {
   const name = openHand.value ? handMadeName(openHand.value.set) : "";
-  if (chooser.value?.mode === "pictures") return `Fill "${name}" from pictures`;
   if (chooser.value?.mode === "set") return `Fill "${name}" from a set`;
   return chooserSlot.value ? `${chooserSlot.value.add} to "${name}"` : "";
 });
@@ -1218,16 +1374,6 @@ const chooserHeading = computed(() => {
   if (!set || mode === "slot") return { title: "", sub: "" };
   const into = `into ${handMadeName(set)}`;
   const checkpoint = setCheckpoint(set);
-  if (mode === "pictures") {
-    return {
-      title: "Fill from pictures",
-      sub: `${into}, from pictures of ${
-        setCheckpoints(set).length > 1
-          ? "its checkpoints"
-          : (checkpoint?.name ?? "its checkpoint")
-      }`,
-    };
-  }
   return {
     title: "Fill from a set",
     sub: checkpoint?.base_model
@@ -1288,7 +1434,7 @@ const chooserStatus = computed(() => {
 /**
  * Open the chooser beside the control that asked for it.
  *
- * @param {"slot"|"pictures"|"set"} mode
+ * @param {"slot"|"set"} mode
  * @param {Element} el - the ＋ tile or fill button, which is also where focus
  *   goes back to.
  * @param {string} [slotId]
@@ -1373,7 +1519,7 @@ async function setCheckpointBase(value) {
   await store.loadWorkflowSets({ force: true });
 }
 
-// ── The merge offer (#1523) ───────────────────────────────────────────────
+// ── Removed models (#1972) and the template offer (#1999) ─────────────────
 
 /** Put the cursor on a tray stop by its key, if it is drawn. */
 function moveToKey(key) {
@@ -1382,6 +1528,21 @@ function moveToKey(key) {
   );
   if (at >= 0) moveCursor(at);
   return at >= 0;
+}
+
+/**
+ * Restore a model the owner removed: the ghost's Restore, or Enter on it. The
+ * ghost becomes a member tile, so the cursor follows it there - or, when the
+ * write failed and it is still a ghost, stays put rather than going to <body>.
+ */
+async function restoreGhost(ghost) {
+  const set = openHand.value?.set;
+  if (!set || !ghost) return;
+  await store.restoreToHandMadeSet(set, [ghost.sha256]);
+  if (moveToKey(`m:${ghost.sha256}`)) return;
+  if (flatRows.value.some((entry) => entry.id === cursorId.value)) return;
+  const first = flatRows.value.findIndex((entry) => entry.kind === "slot");
+  if (first >= 0) moveCursor(first);
 }
 
 /**
@@ -1396,7 +1557,7 @@ async function openOffer(setId) {
 }
 
 /**
- * After a merge or a Keep separate the strip, or the ghost, is gone: the
+ * After an add or a Keep separate the strip, or the ghost, is gone: the
  * cursor goes where the reader expects - `key` if it is drawn now, else the
  * tray's first stop - and never to <body>.
  */
@@ -1415,7 +1576,6 @@ async function mergeOffer(models) {
   await store.addToHandMadeSet(
     set,
     adding.map((model) => ({ model_id: model.id, slot: model.slot })),
-    { joined: true },
   );
   settleCursor(adding.length === 1 ? `m:${adding[0].sha256}` : "");
 }
@@ -1424,7 +1584,7 @@ async function mergeOffer(models) {
 const answering = new Set();
 
 /**
- * The card's own answer to a one-model offer: Add to set, or Stop asking
+ * The card's own answer to a one-file offer: Add to set, or Stop asking
  * (Keep separate). The panel goes with the answer, taking the clicked button
  * with it, so the cursor lands on the card rather than leaving focus on <body>.
  */
@@ -1439,7 +1599,6 @@ async function answerOffer(entry, add) {
       await store.addToHandMadeSet(
         set,
         set.offer.models.map((model) => ({ model_id: model.id, slot: model.slot })),
-        { joined: true },
       );
     } else {
       await store.keepOutOfHandMadeSet(set);
@@ -1451,7 +1610,7 @@ async function answerOffer(entry, add) {
   if (at >= 0) moveCursor(at);
 }
 
-/** Keep separate: the whole offer, or one ghost (Delete on it). */
+/** Keep separate: the whole offer, or one offered ghost (Delete on it). */
 async function keepSeparate(models) {
   const set = openHand.value?.set;
   if (!set?.offer) return;
@@ -1550,14 +1709,6 @@ function showFitsInRail() {
   sidebarStore.setModelsRailOpen(true);
 }
 
-/** Exposed so the shelf can open a new set with Fill from pictures ready. */
-function openFill(mode) {
-  const button = gridEl.value?.querySelector?.(
-    "[data-testid='model-set-slots-panel'] .msp__bar",
-  );
-  openChooser(mode, button);
-}
-
 function closeChooser() {
   const { returnTo, trigger, triggerIsTile, slotId, setId } =
     chooser.value ?? {};
@@ -1602,8 +1753,7 @@ async function addChosen(ids) {
     await pickIntoSlot(set, chooser.value.slotId, ids);
     return;
   }
-  const items =
-    mode === "pictures" ? fillPictureItems.value : fillSetItems.value;
+  const items = fillSetItems.value;
   const wanted = new Set(ids);
   const members = items
     .filter((item) => wanted.has(item.id))
@@ -1626,13 +1776,27 @@ async function pickIntoSlot(set, slotId, ids) {
   fresh.forEach((id) => picking.add(id));
   const single = slotId === "checkpoint";
   if (single) closeChooser();
+  // A download joins by the digest it will land with, named by its file.
+  // Every download the last poll listed, ended ones too: one that landed
+  // since the picker drew it is still added by its digest, which the shelf
+  // row now carries. A key no listing knows any more adds nothing.
+  const coming = new Map(
+    tasksStore.modelDownloads
+      .filter((d) => d.sha256)
+      .map((d) => [`download:${d.id}`, d]),
+  );
+  const members = fresh.flatMap((id) => {
+    const d = coming.get(id);
+    if (d) return [{ sha256: d.sha256, slot: slotId, label: d.file }];
+    return String(id).startsWith("download:")
+      ? []
+      : [{ model_id: id, slot: slotId }];
+  });
   let result;
   try {
-    result = await store.addToHandMadeSet(
-      set,
-      fresh.map((id) => ({ model_id: id, slot: slotId })),
-      { quiet: !single },
-    );
+    result = members.length
+      ? await store.addToHandMadeSet(set, members, { quiet: !single })
+      : null;
   } finally {
     fresh.forEach((id) => picking.delete(id));
   }
@@ -1641,14 +1805,27 @@ async function pickIntoSlot(set, slotId, ids) {
     // held is not an add, and must not be undone as one.
     const stored = new Set(result?.added ?? []);
     const added = fresh
-      .map((id) => rowsById.value.get(id))
-      .filter((row) => row && stored.has(row.sha256))
-      .map((row) => ({
-        model_id: row.id,
-        slot: slotId,
-        sha256: row.sha256,
-        name: modelName(row).text || row.filename,
-      }));
+      .map((id) => {
+        const d = coming.get(id);
+        if (d) {
+          return {
+            download: id,
+            slot: slotId,
+            sha256: d.sha256,
+            name: d.file,
+          };
+        }
+        const row = rowsById.value.get(id);
+        return (
+          row && {
+            model_id: row.id,
+            slot: slotId,
+            sha256: row.sha256,
+            name: modelName(row).text || row.filename,
+          }
+        );
+      })
+      .filter((entry) => entry && stored.has(entry.sha256));
     // The popup may have closed while the add was out - or another opened on
     // the same set - so its receipt is gone and this one is raised on its own.
     const open = chooser.value;
@@ -1673,7 +1850,9 @@ async function pickIntoSlot(set, slotId, ids) {
     }
     return;
   }
-  const sha = store.rows.find((row) => row.id === fresh[0])?.sha256;
+  const sha =
+    coming.get(fresh[0])?.sha256 ??
+    store.rows.find((row) => row.id === fresh[0])?.sha256;
   const at = flatRows.value.findIndex((entry) => entry.id === `slot:m:${sha}`);
   if (at >= 0) moveCursor(at);
 }
@@ -1685,7 +1864,7 @@ async function pickIntoSlot(set, slotId, ids) {
 async function unpick([modelId]) {
   const { setId, slotId } = chooser.value ?? {};
   const set = store.handMadeSets.find((candidate) => candidate.id === setId);
-  const entry = picked.value.find((candidate) => candidate.model_id === modelId);
+  const entry = picked.value.find((candidate) => pickKey(candidate) === modelId);
   if (!set || !entry || picking.has(modelId)) return;
   picking.add(modelId);
   picked.value = picked.value.filter((candidate) => candidate !== entry);
@@ -1719,7 +1898,7 @@ async function unpick([modelId]) {
   }
 }
 
-defineExpose({ openFill, openOffer, selectedCardGroups });
+defineExpose({ openOffer, selectedCardGroups, focusedCardKey });
 
 /**
  * Right-click a card or a tray row: the shelf's full verb inventory, at the
@@ -2048,12 +2227,12 @@ function onHandKey(event, entry) {
     (event.key === "n" || event.key === "N")
   ) {
     event.preventDefault();
-    createSet();
+    openTemplatePicker();
     return true;
   }
   if (entry?.kind === "new" && (event.key === "Enter" || event.key === " ")) {
     event.preventDefault();
-    createSet();
+    openTemplatePicker();
     return true;
   }
   if (entry?.kind === "slot") {
@@ -2070,6 +2249,8 @@ function onHandKey(event, entry) {
       event.preventDefault();
       if (entry.offer) {
         mergeOffer();
+      } else if (entry.ghost?.removed) {
+        restoreGhost(entry.ghost);
       } else if (entry.ghost) {
         mergeOffer([entry.ghost]);
       } else if (!entry.member) {
@@ -2083,12 +2264,14 @@ function onHandKey(event, entry) {
       (event.key === "Delete" || event.key === "Backspace") &&
       (entry.ghost || entry.offer)
     ) {
-      // Keep one model out (a ghost) or the whole offer (the strip). Stopped,
-      // so the shelf's file Delete never sees a press aimed at a row that
-      // holds no file.
+      // An offered ghost (or the strip) is kept out; a removed one is out
+      // already. Stopped either way, so the shelf's file Delete never sees a
+      // press aimed at a row that holds no file.
       event.preventDefault();
       event.stopPropagation();
-      if (!event.repeat) keepSeparate(entry.ghost ? [entry.ghost] : undefined);
+      if (!event.repeat && !entry.ghost?.removed) {
+        keepSeparate(entry.ghost ? [entry.ghost] : undefined);
+      }
       return true;
     }
     if (event.key === "Backspace" && entry.member) {
@@ -2269,6 +2452,12 @@ function onKeyDown(event) {
   border-radius: var(--radius-md);
 }
 
+/* Outside the card, which paints an opaque surface over its whole cell. */
+.msg__cell--file-drop {
+  outline: 2px solid var(--active-bar);
+  outline-offset: 2px;
+}
+
 /* A rail drag (design B). Every target wears a dashed rim for the whole drag;
    the one under the pointer fills with the active wash, solid rim, and says
    what the drop does. An OVERLAY over the card rather than a ring on it, for
@@ -2380,6 +2569,27 @@ function onKeyDown(event) {
 .msg__new:hover {
   background: var(--hover-wash);
   color: rgb(var(--v-theme-on-surface));
+}
+
+/* The attention dot (visual-language §12): a complete template's head arrived
+   in the last day. Never the only signal: the line under the label says it. */
+.msg__new {
+  position: relative;
+}
+
+.msg__new-dot {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
+  width: var(--badge-size-dot);
+  height: var(--badge-size-dot);
+  border-radius: var(--radius-pill);
+  background: rgb(var(--v-theme-accent));
+}
+
+.msg__new-ready {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-regular);
 }
 
 .msg__new-label {

@@ -7,7 +7,10 @@ never on a folder:
 * the watched inbox (``INBOX_ORIGIN``), keyed by content hash;
 * a user-folder file data step 7 made a manual workflow (``FILE_ORIGIN``),
   keyed by its file name;
-* a built-in made a manual workflow (``BUILTIN_ORIGIN``), keyed by file name.
+* a built-in made a manual workflow (``BUILTIN_ORIGIN``), keyed by file name;
+* a ComfyUI template made a manual workflow (``TEMPLATE_ORIGIN``, #2000),
+  keyed by the template and a nonce, so it dedupes nothing: it is what marks
+  the workflow a *draft* while it has no API graph.
 
 ``workflow_name`` names the manual workflow (``manual:<uuid>``) a document is
 stored as.
@@ -27,10 +30,9 @@ decides.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Optional
 
-from pixlstash.hub.db import HubDatabase
+from pixlstash.hub.db import HubDatabase, now_iso
 
 # The origin a watched-inbox file is recorded under, keyed by its content hash
 # (``remote_path`` is the hash too): one row per content, so a restart that
@@ -45,9 +47,12 @@ FILE_ORIGIN = "file"
 # its file name, so ``POST /comfyui/workflows/{name}/card`` makes it once.
 BUILTIN_ORIGIN = "builtin"
 
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+# The origin a ComfyUI template stored as a manual workflow is recorded under
+# (#2000), keyed ``<module>/<name>/<nonce>``: every Add is a workflow of its own,
+# so the key never matches a second one, and it carries no content hash, so an
+# inbox drop of the same graph is not matched to it. While such a workflow has
+# no API graph it is a draft (``workflow_card_reads._manual_cards``).
+TEMPLATE_ORIGIN = "template"
 
 
 def upsert(
@@ -62,7 +67,7 @@ def upsert(
 
     Inside the caller's transaction. An upsert that keeps ``first_pulled_at``.
     """
-    now = _now()
+    now = now_iso()
     conn.execute(
         "INSERT INTO workflow_origin (origin, remote_path, workflow_name, "
         "remote_modified, first_pulled_at, last_seen_at, content_hash) "

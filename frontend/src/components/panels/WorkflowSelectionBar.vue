@@ -77,6 +77,18 @@
     <!-- The way out to the pictures (#1797): the picture grid's own
          "pictures" glyph, first because it reads the selection rather than
          changing it. -->
+    <!-- Favourite leads (#1578): it is the one verb every card takes, and the
+         glyph says which way it will go. Filled when every selected card is one
+         already, so the next press unfavourites. -->
+    <AppBarButton
+      shape="round"
+      :icon="favouriteOn ? 'heart' : 'heart-outline'"
+      data-verb="favourite"
+      :aria-label="favouriteLabel"
+      :tooltip="favouriteTitle"
+      @click="emit('favourite')"
+    />
+
     <AppBarButton
       shape="round"
       icon="image-multiple-outline"
@@ -92,7 +104,7 @@
       icon="play"
       data-verb="run"
       aria-label="Run this workflow"
-      :disabled="!runnable || busy"
+      :disabled="!canRun || busy"
       :loading="running('run')"
       :tooltip="runTitle"
       @click="emit('run')"
@@ -203,27 +215,37 @@ import AppBarButton from "../widgets/AppBarButton.vue";
 import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import { useComfyuiOpen } from "../../composables/useComfyuiOpen";
+import { isReadOnly } from "../../utils/apiClient";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
+import {
+  favouriteVerb,
+  useFavouritesStore,
+} from "../../stores/useFavouritesStore";
 import { formatKeyHint, selectAllKeyHint } from "../../utils/shortcutHints";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import { outputNoun } from "../../utils/workflowCard";
 
 const emit = defineEmits([
   "select-all",
+  "favourite",
   "menu-closed",
   "open-cover",
   "show-pictures",
   "run",
   "open-comfyui",
   "rename",
+  "set-thumbnail",
+  "pin-thumbnail",
   "hide",
   "export",
   "duplicate",
   "use-set",
+  "download-missing",
   "delete",
 ]);
 
 const store = useWorkflowsStore();
+const favourites = useFavouritesStore();
 
 // The keycap beside "Select all shown", so the chord is taught where the
 // button is — the same job the `Esc` cap next to Clear does. Read once at
@@ -348,9 +370,15 @@ const countTitle = computed(() => {
 
 /** `POST /workflows/run` takes one workflow, and the Run popup shows one run. */
 const runnable = computed(() => Boolean(store.runnableCard));
-const runTitle = computed(() =>
-  runnable.value ? "Run this workflow" : "Select one workflow to run it",
-);
+// A draft (#2000) has no graph to run yet. Only Run is refused for it: Open in
+// ComfyUI, which `runnable` still gates, is how a draft is finished.
+const draft = computed(() => Boolean(store.runnableCard?.draft));
+const canRun = computed(() => runnable.value && !draft.value);
+const runTitle = computed(() => {
+  if (!runnable.value) return "Select one workflow to run it";
+  if (draft.value) return "Finish it in ComfyUI first: open it there and save it";
+  return "Run this workflow";
+});
 
 // *Open in ComfyUI*, the Workflow tab's two open verbs under one row. Absent
 // with no ComfyUI to open, as the tab's button is; refused for several cards,
@@ -480,9 +508,50 @@ const showPicturesTitle = computed(() => {
     : `Show the ${noun.value}s of this workflow`;
 });
 
+/**
+ * *Favourite*, or *Unfavourite* when every selected card already is one. A
+ * mixed selection reads Favourite and makes them all favourites: the store's
+ * `toggle` does the same.
+ */
+const favouriteOn = computed(() =>
+  favourites.allFavourite("workflow", store.selectedKeys),
+);
+const favouriteLabel = computed(() => favouriteVerb(favouriteOn.value));
+const favouriteTitle = computed(() => {
+  const n = store.selectedKeys.length;
+  const what = n === 1 ? "this workflow" : `these ${n.toLocaleString()} workflows`;
+  return `${favouriteLabel.value} ${what} (H)`;
+});
+
 const renameTitle = computed(() =>
   single.value ? "Give this workflow a name" : oneOnly("rename"),
 );
+
+/**
+ * The custom thumbnail (a picture of the owner's choosing, or the one a
+ * ComfyUI template came with). *Pin* shows it over the workflow's pictures;
+ * unpinned it shows only until there are some.
+ */
+const thumbnail = computed(() => store.runnableCard?.thumbnail ?? null);
+const setThumbnailTitle = computed(() =>
+  single.value
+    ? "Choose a PNG, JPEG or WebP to show on this workflow's card"
+    : "Select one workflow to give it a thumbnail",
+);
+const pinThumbnailLabel = computed(() =>
+  thumbnail.value?.pinned
+    ? `Show generated ${noun.value}s`
+    : "Always show custom thumbnail",
+);
+const pinThumbnailTitle = computed(() => {
+  if (!single.value) return "Select one workflow to change its thumbnail";
+  if (!thumbnail.value) {
+    return "This workflow has no custom thumbnail. Choose one first";
+  }
+  return thumbnail.value.pinned
+    ? `Show this workflow's ${noun.value}s on its card instead of its thumbnail`
+    : `Keep its thumbnail on the card even once it has ${noun.value}s`;
+});
 
 /**
  * Is every selected card already hidden?
@@ -565,6 +634,24 @@ const useSetTitle = computed(() =>
     : "Select one workflow to change its model set",
 );
 
+/**
+ * *Download missing models*: what the run pre-flight says each selected
+ * workflow lacks and PixlStash knows where to get. The view asks; the card
+ * alone cannot name a missing file. A draft has no graph to ask about.
+ */
+const downloadable = computed(
+  () => !isReadOnly.value && cards.value.some((card) => !card.draft),
+);
+const downloadTitle = computed(() => {
+  if (isReadOnly.value) return "This session cannot download models";
+  if (!downloadable.value) {
+    return "A draft has no graph to check yet: open it in ComfyUI and save it";
+  }
+  return single.value
+    ? "Download every model this workflow lacks that PixlStash knows where to get"
+    : "Download every model these workflows lack that PixlStash knows where to get";
+});
+
 /** Fire a verb and shut whichever surface it was pressed on. */
 function onVerb(verb) {
   countMenuOpen.value = false;
@@ -572,6 +659,7 @@ function onVerb(verb) {
   moreMenuOpen.value = false;
   comfyuiSubOpen.value = false;
   if (verb === "hide") emit("hide", allHidden.value);
+  else if (verb === "pin-thumbnail") emit("pin-thumbnail", !thumbnail.value?.pinned);
   else if (verb === "open-comfyui") emit("open-comfyui", false);
   else if (verb === "open-comfyui-original") emit("open-comfyui", true);
   else emit(verb);
@@ -785,6 +873,16 @@ const VerbMenu = () => {
       // action on a shipped surface could be performed by pointer alone
       // (WCAG 2.1.1) — and this menu calls itself the full inventory, which
       // was not true while it left one verb out.
+      // First, as the pill's first verb is (#1578). Its keycap is the shortcut.
+      item(
+        favouriteOn.value ? "mdi-heart" : "mdi-heart-outline",
+        favouriteLabel.value,
+        {
+          verb: "favourite",
+          title: favouriteTitle.value,
+          kbd: "H",
+        },
+      ),
       item("mdi-image-outline", openTarget.value.label, {
         verb: "open-cover",
         disabled: !coverOpenable.value,
@@ -792,7 +890,7 @@ const VerbMenu = () => {
       }),
       item("mdi-play", "Run…", {
         verb: "run",
-        disabled: !runnable.value,
+        disabled: !canRun.value,
         title: runTitle.value,
       }),
       comfyuiRow(),
@@ -801,6 +899,11 @@ const VerbMenu = () => {
         disabled: !hasPictures.value,
         title: showPicturesTitle.value,
       }),
+      item("mdi-download-outline", "Download missing models", {
+        verb: "download-missing",
+        disabled: !downloadable.value || busy.value,
+        title: downloadTitle.value,
+      }),
       sep(),
       item("mdi-pencil-outline", "Rename", {
         verb: "rename",
@@ -808,6 +911,20 @@ const VerbMenu = () => {
         title: renameTitle.value,
         kbd: "F2",
       }),
+      item("mdi-image-edit-outline", "Choose thumbnail…", {
+        verb: "set-thumbnail",
+        disabled: !single.value,
+        title: setThumbnailTitle.value,
+      }),
+      item(
+        thumbnail.value?.pinned ? "mdi-pin-off-outline" : "mdi-pin-outline",
+        pinThumbnailLabel.value,
+        {
+          verb: "pin-thumbnail",
+          disabled: !thumbnail.value,
+          title: pinThumbnailTitle.value,
+        },
+      ),
       item(
         allHidden.value ? "mdi-eye-outline" : "mdi-eye-off-outline",
         allHidden.value ? "Unhide" : "Hide",

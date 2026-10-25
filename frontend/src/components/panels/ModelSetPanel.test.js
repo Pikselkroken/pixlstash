@@ -5,6 +5,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import { nextTick } from "vue";
+import { createPinia, setActivePinia } from "pinia";
 
 vi.mock("vuetify/components", async (importOriginal) => ({
   ...(await importOriginal()),
@@ -63,6 +64,8 @@ const suspect = (id, extra = {}) => ({
 const saveSet = vi.fn();
 const saveMember = vi.fn();
 beforeEach(() => {
+  // The tray reads the favourites store for its heart; no request is made.
+  setActivePinia(createPinia());
   saveSet.mockReset().mockResolvedValue();
   saveMember.mockReset().mockResolvedValue();
 });

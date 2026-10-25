@@ -187,6 +187,7 @@ def test_the_listener_reads_progress_until_no_run_is_in_flight(listening, monkey
     assert opened == [f"wss://comfy.test/ws?clientId={comfyui_service.RUN_CLIENT_ID}"]
     assert seen == {
         "run-a": {
+            "run_id": None,
             "prompt_id": "run-a",
             "label": "ComfyUI",
             "workflow_id": None,
@@ -194,6 +195,7 @@ def test_the_listener_reads_progress_until_no_run_is_in_flight(listening, monkey
             "percent": 0.0,
         },
         "run-b": {
+            "run_id": None,
             "prompt_id": "run-b",
             "label": "Portrait",
             "workflow_id": "wf-1",
@@ -322,3 +324,43 @@ def test_a_run_already_started_is_read_off_the_queue(monkeypatch):
         "run-a": "running",
         "run-b": "queued",
     }
+
+
+def test_a_run_still_going_keeps_its_run_id_past_newer_ended_runs(monkeypatch):
+    monkeypatch.setattr(comfyui_service, "MAX_RUN_OUTCOMES", 2)
+    for name in ("_run_outcomes", "_run_ids", "_live_runs", "_held_cancels"):
+        monkeypatch.setattr(comfyui_service, name, {})
+    monkeypatch.setattr(comfyui_service, "_listening", {COMFY})
+    comfyui_service.follow_run("p-long", COMFY, run_id="run-long")
+    for n in (1, 2):
+        comfyui_service.follow_run(f"p-{n}", COMFY, run_id=f"run-{n}")
+        comfyui_service.record_run_outcome(f"p-{n}", "completed")
+    comfyui_service.follow_run("p-3", COMFY, run_id="run-3")
+    assert comfyui_service.run_outcome("run-long")["status"] == "running"
+    assert comfyui_service.run_outcome("run-3")["status"] == "running"
+    assert len(comfyui_service._run_ids) == 2
+
+
+def test_following_a_run_never_drops_its_own_run_id(monkeypatch):
+    for name in ("_run_outcomes", "_run_ids", "_live_runs", "_held_cancels"):
+        monkeypatch.setattr(comfyui_service, name, {})
+    monkeypatch.setattr(comfyui_service, "_listening", {COMFY})
+    comfyui_service.follow_run("p-a", COMFY, run_id="run-a")
+    comfyui_service.follow_run("p-b", COMFY, run_id="run-b")
+    monkeypatch.setattr(comfyui_service, "MAX_RUN_OUTCOMES", 1)
+    # Followed again, so first in the map, with every run still going.
+    comfyui_service.follow_run("p-a2", COMFY, run_id="run-a")
+    assert comfyui_service._run_ids == {"run-a": "p-a2"}
+
+
+def test_an_ending_dropped_by_retention_is_still_announced(monkeypatch):
+    """Wrong if the ending raises KeyError because retention evicted it."""
+    monkeypatch.setattr(comfyui_service, "MAX_RUN_OUTCOMES", 1)
+    for name in ("_run_outcomes", "_run_ids", "_live_runs", "_held_cancels"):
+        monkeypatch.setattr(comfyui_service, name, {})
+    monkeypatch.setattr(comfyui_service, "_listening", {COMFY})
+    heard = []
+    monkeypatch.setattr(comfyui_service, "_ending_listener", heard.append)
+    comfyui_service.follow_run("p-long", COMFY, run_id="run-long")
+    comfyui_service.record_run_outcome("p-x", "failed", run_id="run-x")
+    assert [(o["run_id"], o["status"]) for o in heard] == [("run-x", "failed")]

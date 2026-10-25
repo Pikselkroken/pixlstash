@@ -17,10 +17,16 @@
       <ul v-if="read.files.length" class="rrn-files">
         <li v-for="file in read.files" :key="file.file">
           <span class="rrn-mono">{{ file.file }}</span>
+          <template v-if="file.downloading">
+            <DownloadingMark :percent="file.percent" class="rrn-dl" />{{
+              file.percent ? ` ${Math.round(file.percent)}%` : ""
+            }}</template
+          >
           <template v-if="file.reason"> — {{ file.reason }}</template>
           <template v-if="file.folder">
             , expected in <span class="rrn-mono">models/{{ file.folder }}</span>
           </template>
+          <ModelDownloadButton v-if="file.downloadable" :file="file.file" />
         </li>
       </ul>
       <!-- No catch-all "learn more" link. A refusal with no fix has its whole
@@ -33,6 +39,7 @@
         <AppButton
           v-if="read.fix === FIX_SETTINGS"
           size="sm"
+          :on-dark="onDark"
           @click="emit('settings')"
         >
           Settings › ComfyUI
@@ -45,6 +52,7 @@
           size="sm"
           icon-left="refresh"
           :loading="busy"
+          :on-dark="onDark"
           @click="emit('retry')"
         >
           Retry
@@ -52,6 +60,7 @@
         <AppButton
           v-else-if="read.fix === FIX_DROP_LORA"
           size="sm"
+          :on-dark="onDark"
           @click="emit('drop-lora')"
         >
           Run without the LoRA
@@ -62,9 +71,86 @@
         <AppButton
           v-else-if="read.fix === FIX_EDIT_LORAS"
           size="sm"
+          :on-dark="onDark"
           @click="emit('edit-loras', reason.workflowId || '')"
         >
           Edit LoRAs…
+        </AppButton>
+        <!-- A pack PixlStash knows (#2054). The ellipsis is honest: the press
+             asks first, in place, rather than installing. A long pack name is
+             cut short where the column is narrow (the Edit tab, #2094), so the
+             tip says it whole. Not the button's own `tooltip`, which would
+             describe it with the words it is already named by. -->
+        <template v-else-if="read.fix === FIX_INSTALL_PACK && offering">
+          <Tooltip
+            v-for="pack in packs"
+            :key="pack.id"
+            :text="installLabel(pack)"
+            :describe="false"
+          >
+            <template #activator="{ props: tip }">
+              <AppButton
+                v-bind="tip"
+                class="rrn-install"
+                size="sm"
+                :on-dark="onDark"
+                @click="ask(pack)"
+              >
+                {{ installLabel(pack) }}
+              </AppButton>
+            </template>
+          </Tooltip>
+        </template>
+      </div>
+      <!-- Inline, not a dialog over the Run popup: the warning is about the
+           pack this sentence names, and a second modal would hide it. -->
+      <template v-if="install.phase === 'confirm' || install.phase === 'installing'">
+        <p class="rrn-text">
+          This installs third-party code ({{ install.pack.id }}
+          {{ install.pack.version }}, from the Comfy Registry) into your
+          ComfyUI, where it runs with ComfyUI's full access. ComfyUI restarts
+          afterwards if it is idle; a job it is running is never interrupted.
+          Want a different version? Install it yourself from ComfyUI Manager.
+        </p>
+        <div class="rrn-acts">
+          <AppButton
+            size="sm"
+            variant="primary"
+            :loading="install.phase === 'installing'"
+            :on-dark="onDark"
+            @click="installPack"
+          >
+            Install and restart
+          </AppButton>
+          <AppButton
+            size="sm"
+            :disabled="install.phase === 'installing'"
+            :on-dark="onDark"
+            @click="cancel"
+          >
+            Cancel
+          </AppButton>
+        </div>
+      </template>
+      <p
+        v-else-if="installNote"
+        class="rrn-text"
+        aria-live="polite"
+      >
+        {{ installNote }}
+      </p>
+      <div
+        v-if="install.phase === 'manual' || install.phase === 'timeout'"
+        class="rrn-acts"
+      >
+        <AppButton
+          size="sm"
+          icon-left="refresh"
+          :loading="busy"
+          :on-dark="onDark"
+          @click="emit('retry')"
+        >
+          Retry
         </AppButton>
       </div>
     </div>
@@ -84,16 +170,22 @@
  * Two hues rather than two components, because the owner reads one list and a
  * second surface would only make them work out which list to trust.
  */
-import { computed } from "vue";
+import { computed, onBeforeUnmount, ref } from "vue";
 import { VIcon } from "vuetify/components";
 
+import { getNodePack, installNodePack } from "../../api/comfyui";
+import { errorMessage } from "../../utils/apiError";
 import {
   FIX_DROP_LORA,
   FIX_EDIT_LORAS,
+  FIX_INSTALL_PACK,
   FIX_SETTINGS,
   readReason,
 } from "../../utils/runReasons";
 import AppButton from "../widgets/AppButton.vue";
+import DownloadingMark from "../widgets/DownloadingMark.vue";
+import ModelDownloadButton from "../widgets/ModelDownloadButton.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 
 const props = defineProps({
   /**
@@ -105,6 +197,8 @@ const props = defineProps({
   subject: { type: String, default: "" },
   /** A retry is in flight. */
   busy: { type: Boolean, default: false },
+  /** On a dark surface (the lightbox's Edit tab): the buttons follow it. */
+  onDark: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(["settings", "retry", "drop-lora", "edit-loras"]);
@@ -115,8 +209,126 @@ const read = computed(() => readReason(props.reason));
 const hasAction = computed(
   () =>
     read.value.retry ||
-    [FIX_SETTINGS, FIX_DROP_LORA, FIX_EDIT_LORAS].includes(read.value.fix),
+    [FIX_SETTINGS, FIX_DROP_LORA, FIX_EDIT_LORAS].includes(read.value.fix) ||
+    (read.value.fix === FIX_INSTALL_PACK && offering.value),
 );
+
+// ── Installing a node pack (#2054) ──────────────────────────────────────────
+// The notice owns the whole wait, so the Run popup, Make More and the Edit tab
+// need nothing of their own. It must NOT loop on `retry`: while ComfyUI
+// restarts, the parent's pre-flight turns this reason into
+// `comfyui_unreachable`, this notice unmounts, and a loop living here dies with
+// it. So `retry` is emitted once, after the pack's nodes are seen to load.
+
+const POLL_EVERY_MS = 3000;
+const POLL_FOR_MS = 120000;
+
+const packs = computed(() =>
+  (props.reason?.packs || []).filter((pack) => pack?.id),
+);
+
+/**
+ * `phase`: `idle`, `confirm` (the warning is up), `installing`, `waiting` (for
+ * ComfyUI to come back with the nodes), `loaded`, `manual` (restart it
+ * yourself), `timeout` or `failed`.
+ */
+const install = ref({ phase: "idle", pack: null, detail: "" });
+
+/** Whether the Install buttons are offered: before an install, or after one failed. */
+const offering = computed(() =>
+  ["idle", "failed"].includes(install.value.phase),
+);
+
+const installNote = computed(() => {
+  const { phase, pack, detail } = install.value;
+  const name = pack?.name || pack?.id || "";
+  if (phase === "waiting") return `Installed ${name}. Restarting ComfyUI…`;
+  if (phase === "loaded") return `${name} is installed.`;
+  if (phase === "manual") return `Installed ${name}. ${detail || "Restart ComfyUI yourself."}`;
+  if (phase === "timeout") {
+    return `ComfyUI has not come back with ${name} yet. If it did not restart, restart it yourself, then Retry.`;
+  }
+  if (phase === "failed") return detail;
+  return "";
+});
+
+let pollTimer = null;
+// Bumped on every stop, so an answer still in flight when the notice unmounts
+// (or a new install begins) cannot act.
+let pollRun = 0;
+
+function stopPolling() {
+  clearTimeout(pollTimer);
+  pollTimer = null;
+  pollRun += 1;
+}
+
+function installLabel(pack) {
+  return `Install ${pack.name || pack.id}…`;
+}
+
+function ask(pack) {
+  install.value = { phase: "confirm", pack, detail: "" };
+}
+
+function cancel() {
+  stopPolling();
+  install.value = { phase: "idle", pack: null, detail: "" };
+}
+
+async function installPack() {
+  const { pack } = install.value;
+  stopPolling();
+  install.value = { phase: "installing", pack, detail: "" };
+  const run = pollRun;
+  try {
+    const got = await installNodePack(pack.id);
+    if (run !== pollRun) return;
+    if (got?.restart === "manual") {
+      install.value = { phase: "manual", pack, detail: got.detail || "" };
+      return;
+    }
+    install.value = { phase: "waiting", pack, detail: "" };
+    pollForNodes(pack);
+  } catch (e) {
+    if (run !== pollRun) return;
+    install.value = {
+      phase: "failed",
+      pack,
+      // The loopback policy's refusal, said as what to do about it.
+      detail:
+        e?.response?.status === 403
+          ? "Install the pack from PixlStash on the computer it runs on, or from ComfyUI Manager."
+          : errorMessage(e, `Could not install ${pack.name || pack.id}.`),
+    };
+  }
+}
+
+function pollForNodes(pack) {
+  stopPolling();
+  const run = pollRun;
+  const deadline = Date.now() + POLL_FOR_MS;
+  const tick = async () => {
+    let loaded = false;
+    try {
+      loaded = (await getNodePack(pack.id))?.loaded === true;
+    } catch (e) {
+      console.debug("ComfyUI not answering yet while it restarts:", e);
+    }
+    if (run !== pollRun) return;
+    if (loaded) {
+      install.value = { phase: "loaded", pack, detail: "" };
+      emit("retry");
+    } else if (Date.now() >= deadline) {
+      install.value = { phase: "timeout", pack, detail: "" };
+    } else {
+      pollTimer = setTimeout(tick, POLL_EVERY_MS);
+    }
+  };
+  pollTimer = setTimeout(tick, POLL_EVERY_MS);
+}
+
+onBeforeUnmount(stopPolling);
 </script>
 
 <style scoped>
@@ -167,10 +379,26 @@ const hasAction = computed(
   font-size: var(--text-xs);
 }
 
+.rrn-dl {
+  margin-left: var(--space-2);
+}
+
 .rrn-acts {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-3);
+}
+
+/* As `.rund-trigger-add` in RunDialog: the button may shrink below its label,
+   and the label ends in an ellipsis rather than leaving the column. */
+.rrn-install {
+  min-width: 0;
+}
+
+.rrn-install :deep(.app-btn__label) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 </style>

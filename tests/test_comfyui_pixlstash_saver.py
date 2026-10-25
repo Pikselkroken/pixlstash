@@ -1322,6 +1322,8 @@ class TestTheEndingIsToldAndKept:
             "stopped": False,
             "picture_ids": [],
             "library_uuid": None,
+            "run_id": None,
+            "code": None,
         }
 
     def test_a_stopped_run_is_marked_stopped(self, monkeypatch):
@@ -1380,6 +1382,8 @@ class TestTheEndingIsToldAndKept:
             "stopped": False,
             "picture_ids": [41, 42],
             "library_uuid": None,
+            "run_id": None,
+            "code": None,
         }
 
     def test_a_run_that_made_only_what_the_library_has_says_so(self, monkeypatch):

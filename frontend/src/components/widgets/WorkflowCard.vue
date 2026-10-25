@@ -1,6 +1,6 @@
 <template>
   <article
-    class="wf-card"
+    class="wf-card fav-host"
     :class="{ 'wf-card--selected': selected }"
     role="group"
     :aria-label="accessibleName"
@@ -10,8 +10,31 @@
          whether or not there was an image for it, so a workflow with one or two
          pictures showed its picture beside painted `input-background`
          rectangles and read as a card that had failed to load (#1456). -->
+    <!-- A draft (#2000): a workflow made from a ComfyUI template that has no
+         graph PixlStash can run yet. Hatched, says why, and offers the one
+         verb that finishes it where Run would be. -->
     <div
-      v-if="hasPictures"
+      v-if="card.draft"
+      class="wf-card__cover wf-card__cover--empty wf-card__cover--draft"
+      data-testid="wf-card-draft"
+    >
+      <span class="wf-card__draft-label" aria-hidden="true">Draft</span>
+      <span class="wf-card__empty-line" aria-hidden="true"
+        >Not runnable until ComfyUI has saved it</span
+      >
+      <AppButton
+        variant="outline"
+        size="sm"
+        tabindex="-1"
+        data-testid="wf-card-finish"
+        @click.stop="openWorkflowInComfyui(card.id)"
+      >
+        <template #icon="{ size }"><ComfyuiIcon :size="size" /></template>
+        Finish in ComfyUI…
+      </AppButton>
+    </div>
+    <div
+      v-else-if="hasPictures || showThumbnail"
       class="wf-card__cover"
       :class="`wf-card__cover--${coverCells.length}`"
     >
@@ -37,7 +60,11 @@
           loading="lazy"
         />
       </span>
-      <span class="wf-card__badge wf-card__badge--end" aria-hidden="true">
+      <span
+        v-if="card.picture_count"
+        class="wf-card__badge wf-card__badge--end"
+        aria-hidden="true"
+      >
         <v-icon size="12">mdi-image-multiple</v-icon>{{ card.picture_count }}
       </span>
       <span
@@ -46,6 +73,20 @@
         aria-hidden="true"
       >
         <v-icon size="12">mdi-star</v-icon>{{ card.rating.toFixed(1) }}
+      </span>
+      <span
+        v-if="card.vram && (card.vram.need_mb != null || card.vram.exclusive)"
+        class="wf-card__badge wf-card__badge--need"
+        data-testid="wf-card-need"
+        aria-hidden="true"
+      >
+        <v-icon size="12">mdi-memory</v-icon>{{ formatGb(card.vram.need_mb) }}
+        <v-icon
+          v-if="card.vram.exclusive"
+          size="12"
+          data-testid="wf-card-need-lock"
+          >mdi-lock</v-icon
+        >
       </span>
     </div>
     <div v-else class="wf-card__cover wf-card__cover--empty">
@@ -58,6 +99,20 @@
       <span v-if="hasRecipe" class="wf-card__empty-line" aria-hidden="true"
         >No {{ outputNoun(card) }}s yet</span
       >
+      <span
+        v-if="card.vram && (card.vram.need_mb != null || card.vram.exclusive)"
+        class="wf-card__badge wf-card__badge--need"
+        data-testid="wf-card-need"
+        aria-hidden="true"
+      >
+        <v-icon size="12">mdi-memory</v-icon>{{ formatGb(card.vram.need_mb) }}
+        <v-icon
+          v-if="card.vram.exclusive"
+          size="12"
+          data-testid="wf-card-need-lock"
+          >mdi-lock</v-icon
+        >
+      </span>
       <AppButton
         variant="outline"
         size="sm"
@@ -143,10 +198,20 @@
     </div>
 
     <!-- Top-start of the card, the one corner the cover leaves free: the
-         picture count is top-end and the rating bottom-end. Where the
-         workflow came from leads, because that never changes; *Unsaved*
-         follows it, so a badge that comes and goes moves nothing. -->
+         picture count is top-end and the rating bottom-end. The favourite
+         leads, then where the workflow came from, because that never
+         changes; *Unsaved* follows it, so a badge that comes and goes moves
+         nothing. -->
     <div class="wf-card__start">
+      <!-- The favourite leads the row (#1578): filled when it is one, and the
+           outline on the pointer's card. Its own button, so it takes the
+           click here; the row is `pointer-events: none` around it. -->
+      <FavouriteHeart
+        variant="cover"
+        :on="favourite"
+        :label="card.name"
+        @toggle="emit('toggle-favourite')"
+      />
       <!-- Came from ComfyUI (#1440). The mark is decoration for the sighted,
            so the name is on the span itself and in the card's accessible
            name. -->
@@ -204,7 +269,9 @@ import { computed } from "vue";
 import { VIcon } from "vuetify/components";
 
 import { workflowCoverUrl } from "../../api/workflows";
+import { openWorkflowInComfyui } from "../../composables/useComfyuiOpen";
 import { quantBadge } from "../../utils/modelShelf";
+import { formatGb } from "../../utils/gpuMemory";
 import {
   cardAccessibleName,
   baseModels,
@@ -222,6 +289,7 @@ import {
 import AppButton from "./AppButton.vue";
 import ComfyuiIcon from "./ComfyuiIcon.vue";
 import ChipRow from "./ChipRow.vue";
+import FavouriteHeart from "./FavouriteHeart.vue";
 import InfoPopover from "./InfoPopover.vue";
 import ModelMark from "./ModelMark.vue";
 import Tooltip from "./Tooltip.vue";
@@ -255,9 +323,11 @@ const props = defineProps({
    * so the card says so where the run was started.
    */
   runFailure: { type: Object, default: null },
+  /** This workflow is a favourite (#1578). */
+  favourite: { type: Boolean, default: false },
 });
 
-const emit = defineEmits(["run"]);
+const emit = defineEmits(["run", "toggle-favourite"]);
 
 /**
  * The cover pictures this card can actually draw.
@@ -269,6 +339,17 @@ const emit = defineEmits(["run"]);
  */
 const covers = computed(() =>
   (props.card.covers ?? []).filter((cover) => cover?.url).slice(0, 3),
+);
+/**
+ * The workflow's own picture replaces its cover strip: always when the owner
+ * pinned it, else only until it has pictures (a ComfyUI template's picture,
+ * until the first run). It names no library picture, so the menu's open row
+ * falls back to the cover picture.
+ */
+const showThumbnail = computed(
+  () =>
+    Boolean(props.card.thumbnail?.url) &&
+    (props.card.thumbnail.pinned || !props.card.picture_count),
 );
 /**
  * The cells the cover draws: one per picture it was handed, each with the URL
@@ -289,6 +370,9 @@ const covers = computed(() =>
  * which is the `--empty` cover's own look and says "there is nothing here".
  */
 const coverCells = computed(() => {
+  if (showThumbnail.value) {
+    return [{ src: workflowCoverUrl(props.card.thumbnail), style: null, id: null }];
+  }
   const count = covers.value.length;
   if (!count) {
     return Array(Math.min(props.card.picture_count ?? 1, 3)).fill({
@@ -445,6 +529,7 @@ const facts = computed(() => [
 const accessibleName = computed(() =>
   [
     cardAccessibleName(props.card),
+    props.favourite ? "Favourite" : null,
     props.runFailure
       ? `last run ${props.runFailure.stopped ? "stopped" : "failed"}: ${props.runFailure.message}`
       : null,
@@ -596,7 +681,35 @@ const accessibleName = computed(() =>
   bottom: var(--space-3);
 }
 
+/* The draft's cover: the empty cover's ground under a hatch, so it reads as
+   not finished from across the grid, in the selection olive at a wash. */
+.wf-card__cover--draft {
+  background:
+    repeating-linear-gradient(
+      135deg,
+      rgba(var(--v-theme-primary), 0.12) 0 var(--space-2),
+      transparent var(--space-2) var(--space-4)
+    ),
+    rgb(var(--v-theme-input-background));
+}
+
+.wf-card__draft-label {
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+/* The need: the cover's free bottom-left corner, the fourth of the pills. */
+.wf-card__badge--need {
+  top: auto;
+  bottom: var(--space-3);
+  left: var(--space-3);
+}
+
 .wf-card__cover--empty {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: flex-start;

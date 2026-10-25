@@ -1,6 +1,6 @@
 [project]
 name = "pixlstash"
-version = "1.12.2"
+version = "1.13.0rc2"
 description = "Self-hosted picture library with AI tagging, semantic search, and a clean web UI"
 readme = "README.md"
 license = "GPL-3.0-only AND MIT"
@@ -132,6 +132,9 @@ pixlstash = [
     "data/anchors/*.npy",
     "data/comfyui-workflows/built-in/*.json",
     "data/scalar-assets/*",
+    "data/workflow_templates.json",
+    "data/workflow_templates_index.json",
+    "data/workflow_templates/*.json",
     "data/comfyui-pack/**/*",
 ]
 

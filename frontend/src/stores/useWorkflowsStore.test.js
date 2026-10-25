@@ -15,6 +15,7 @@ vi.mock("../api/workflows", () => ({
 }));
 
 import { useWorkflowsStore } from "./useWorkflowsStore";
+import { useFavouritesStore } from "./useFavouritesStore";
 
 // Input order is none of the sorted orders, and the undated card leads:
 // a comparator that reads NaN (`Date.parse(null)`) leaves it where it started,
@@ -467,5 +468,65 @@ describe("requestUseSet", () => {
     expect(store.useSetKey).toBe("");
     store.requestUseSet(null);
     expect(store.useSetKey).toBe("");
+  });
+});
+
+// #1578: favourites lead inside the grid's one group, Favourites only narrows
+// without re-sorting, and neither reads the server again.
+describe("favourites", () => {
+  const favourite = (ids) => {
+    useFavouritesStore().keys = { model: [], workflow: ids, set: [] };
+  };
+
+  it("lead the sorted grid while Favourites first is on, and not once it is off", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    const plain = order(store);
+    const last = plain.at(-1);
+    favourite([plain[2], last]);
+    // The sort still orders the favourites among themselves and the rest.
+    expect(order(store)).toEqual([
+      plain[2],
+      last,
+      plain[0],
+      plain[1],
+    ]);
+    store.setFavouritesLead(false);
+    expect(order(store)).toEqual(plain);
+  });
+
+  it("Favourites only narrows in the sort's own order and does not read the server", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    store.setFavouritesLead(false);
+    const plain = order(store);
+    favourite([plain[3], plain[1]]);
+    listWorkflowCards.mockClear();
+    store.setFilters({ favouritesOnly: true });
+    expect(order(store)).toEqual([plain[1], plain[3]]);
+    expect(listWorkflowCards).not.toHaveBeenCalled();
+  });
+
+  it("takes a selected card the filter removes out of the selection", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    const plain = order(store);
+    favourite([plain[1]]);
+    store.selectRange([plain[0], plain[1]]);
+    store.setFilters({ favouritesOnly: true });
+    expect(store.selectedKeys).toEqual([plain[1]]);
+  });
+
+  it("shows as a chip that removes itself", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    store.setFilters({ favouritesOnly: true });
+    const chip = store.filterChips.find((entry) => entry.key === "favourites");
+    expect(chip.value).toBe("favourites");
+    chip.remove();
+    expect(store.filters.favouritesOnly).toBe(false);
+    expect(store.filterChips.some((entry) => entry.key === "favourites")).toBe(
+      false,
+    );
   });
 });

@@ -27,6 +27,7 @@ import stat
 import threading
 import time
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator, Optional
 
@@ -232,6 +233,11 @@ def check_file_mode(path: str, *, repair: bool) -> None:
         HUB_FILE_MODE,
         shlex.quote(path),
     )
+
+
+def now_iso() -> str:
+    """The current UTC time as the ISO string the hub stores timestamps in."""
+    return datetime.now(timezone.utc).isoformat()
 
 
 class HubDatabase:

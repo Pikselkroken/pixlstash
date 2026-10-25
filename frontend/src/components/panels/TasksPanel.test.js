@@ -11,17 +11,31 @@
 
 import { afterEach, describe, it, expect, beforeEach, vi } from "vitest";
 import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
+import { h } from "vue";
 import { setActivePinia, createPinia } from "pinia";
 
 const getWorkflowChanges = vi.fn();
 const saveWorkflow = vi.fn();
 const saveWorkflowAsNew = vi.fn();
+const dismissFinishedRun = vi.fn();
+const clearFinishedRuns = vi.fn();
 // The rest of the module is the Workflows store's, which the panel only reads.
 vi.mock("../../api/workflows", async (original) => ({
   ...(await original()),
   getWorkflowChanges: (...args) => getWorkflowChanges(...args),
   saveWorkflow: (...args) => saveWorkflow(...args),
   saveWorkflowAsNew: (...args) => saveWorkflowAsNew(...args),
+  dismissFinishedRun: (...args) => dismissFinishedRun(...args),
+  clearFinishedRuns: (...args) => clearFinishedRuns(...args),
+}));
+// Where a run's picture opens: the screen the panel is on.
+const nav = vi.hoisted(() => ({
+  route: { name: "all-pictures", query: { set: "4" } },
+  push: null,
+}));
+vi.mock("vue-router", () => ({
+  useRoute: () => nav.route,
+  useRouter: () => ({ push: (...args) => nav.push(...args) }),
 }));
 const readOnly = vi.hoisted(() => ({ ref: null }));
 vi.mock("../../utils/apiClient", async (original) => {
@@ -36,8 +50,16 @@ import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { abortRun } from "../../api/comfyui";
+import RunAnywayDialog from "./RunAnywayDialog.vue";
 
 vi.mock("../../api/comfyui", () => ({ abortRun: vi.fn(async () => ({})) }));
+const runLeaseAnyway = vi.fn(async () => ({ status: "success" }));
+const cancelLease = vi.fn(async () => ({ status: "success" }));
+vi.mock("../../api/resources", () => ({
+  runLeaseAnyway: (...args) => runLeaseAnyway(...args),
+  cancelLease: (...args) => cancelLease(...args),
+  freeComfyui: vi.fn(async () => ({ status: "success", freed_mb: 0 })),
+}));
 
 const globalOpts = { global: { stubs: { "v-icon": true, Tooltip: true } } };
 
@@ -55,6 +77,10 @@ beforeEach(() => {
   getWorkflowChanges.mockReset();
   saveWorkflow.mockReset();
   saveWorkflowAsNew.mockReset();
+  dismissFinishedRun.mockReset();
+  clearFinishedRuns.mockReset();
+  nav.route = { name: "all-pictures", query: { set: "4" } };
+  nav.push = vi.fn();
 });
 
 describe("the tab the hosts declare", () => {
@@ -129,7 +155,7 @@ describe("what the task manager shows", () => {
   // #1862: the runs are what the backend's poll reported and nothing else, so
   // the row is there with no view mounted to follow them - a run another tab
   // or MCP started included.
-  it("draws the runs the backend reports, with progress and an abort", async () => {
+  it("draws each run the backend reports as a row of its own, the running one pulsing", async () => {
     const tasksStore = useTasksStore();
     tasksStore.comfyuiRuns = [
       { prompt_id: "p-1", label: "Night market", status: "queued", percent: 0 },
@@ -144,31 +170,95 @@ describe("what the task manager shows", () => {
     const wrapper = mount(TasksPanel, globalOpts);
     const text = textOf(wrapper);
     expect(text).not.toContain("No active tasks");
-    // One row, named for the run ComfyUI is on, counting the rest.
-    expect(wrapper.findAll(".tm-worker-row")).toHaveLength(1);
-    expect(text).toContain("Cinematic portrait");
-    expect(text).toContain("ComfyUI running… 2 more queued");
-    expect(wrapper.find(".tm-comfy-fill").attributes("style")).toContain(
-      "width: 40%",
-    );
+    // One row per run, not one row for them all.
+    const rows = wrapper.findAll('[data-testid="tm-comfy-row"]');
+    expect(rows).toHaveLength(3);
+    expect(rows.map((row) => row.find(".tm-name").text())).toEqual([
+      "Night market",
+      "Cinematic portrait",
+      "Upscale",
+    ]);
+    // Only the run on the GPU pulses; the others are queued, a plain dot.
+    expect(rows.map((row) => row.find(".tm-mark").classes("tm-mark--running"))).toEqual([
+      false,
+      true,
+      false,
+    ]);
 
-    // The abort asks the backend, not a handler some view registered.
-    const abort = wrapper.find('button[aria-label="Abort ComfyUI run"]');
-    expect(abort.exists()).toBe(true);
+    // The stop asks the backend, not a handler some view registered.
+    const stop = wrapper.find('button[aria-label="Stop ComfyUI"]');
+    expect(stop.exists()).toBe(true);
     expect(abortRun).not.toHaveBeenCalled();
-    await abort.trigger("click");
+    await stop.trigger("click");
     expect(abortRun).toHaveBeenCalledTimes(1);
   });
 
-  it("names the first run in line while none has started", () => {
+  // A row leaves with its run, and a focused Stop leaves with it: focus falls
+  // to <body>, out of the tab order. Every host is an inspector whose band
+  // holds the Tasks tab, so the panel hands the keyboard back to that tab.
+  function inInspector() {
+    const tasksStore = useTasksStore();
+    tasksStore.comfyuiRuns = [
+      { prompt_id: "p-1", label: "Night market", status: "running", percent: 40 },
+    ];
+    const wrapper = mount(
+      {
+        render: () =>
+          h("div", { class: "inspector" }, [
+            h("button", { class: "inspector-tab inspector-tab--active" }, "Tasks"),
+            h(TasksPanel),
+          ]),
+      },
+      { ...globalOpts, attachTo: document.body },
+    );
+    const stop = wrapper.find('button[aria-label="Stop ComfyUI"]').element;
+    stop.focus();
+    return { tasksStore, wrapper, stop, tab: wrapper.find(".inspector-tab").element };
+  }
+
+  it("hands focus to its tab when the focused control leaves with its row", async () => {
+    const { tasksStore, stop, tab } = inInspector();
+    tasksStore.comfyuiRuns = [];
+    // Chromium fires this as the button is removed; jsdom does not, so the
+    // test fires it, before the render that removes the row.
+    stop.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    await flushPromises();
+    expect(stop.isConnected).toBe(false);
+    expect(document.activeElement).toBe(tab);
+  });
+
+  it("leaves focus alone when the control is still there", async () => {
+    const { stop, tab } = inInspector();
+    stop.blur();
+    await flushPromises();
+    expect(document.activeElement).not.toBe(tab);
+  });
+
+  // The panel's own hand-off (a save's receipt line takes focus as its offer
+  // leaves) is not focus lost.
+  it("leaves focus alone when the row left but focus already went somewhere", async () => {
+    const { tasksStore, stop } = inInspector();
+    const elsewhere = document.createElement("button");
+    document.body.appendChild(elsewhere);
+    tasksStore.comfyuiRuns = [];
+    stop.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    elsewhere.focus();
+    await flushPromises();
+    expect(stop.isConnected).toBe(false);
+    expect(document.activeElement).toBe(elsewhere);
+    elsewhere.remove();
+  });
+
+  it("shows a queued run as a row with no figure, and no pulse", () => {
     const tasksStore = useTasksStore();
     tasksStore.comfyuiRuns = [
       { prompt_id: "p-1", label: "Night market", status: "queued", percent: 0 },
     ];
-    const text = textOf(mount(TasksPanel, globalOpts));
-    expect(text).toContain("Night market");
-    expect(text).toContain("ComfyUI queued…");
-    expect(text).not.toContain("more queued");
+    const wrapper = mount(TasksPanel, globalOpts);
+    const row = wrapper.find('[data-testid="tm-comfy-row"]');
+    expect(row.find(".tm-name").text()).toBe("Night market");
+    expect(row.find(".tm-mark").classes("tm-mark--running")).toBe(false);
+    expect(row.find(".tm-fig-text").text()).toBe("");
   });
 
   it("gives an import row the FLIP target the import dialog flies into", () => {
@@ -253,28 +343,50 @@ describe("the offer to save what a run changed", () => {
     text: "Checkpoint, 1 LoRA removed, Steps.",
     promptIds: ["p-1"],
   };
-  const completed = {
-    plugin: "ComfyUI",
-    status: "completed",
-    run_id: "comfyui-p-1",
+  /** One finished run, as the poll's `finished` lists it. */
+  const finishedRun = (overrides = {}) => ({
+    id: `run-${WF}`,
     workflow_id: WF,
-  };
+    label: record.name,
+    ended_at: new Date().toISOString(),
+    status: "completed",
+    message: null,
+    made: 2,
+    picture_ids: [11, 12],
+    offer: true,
+    ...overrides,
+  });
   const offer = (wrapper, id = WF) => wrapper.find(`[data-offer="${id}"]`);
   const button = (wrapper, text) =>
     wrapper.findAll("button").find((b) => b.text().trim() === text);
   const refusal = (status, detail) => ({ response: { status, data: { detail } } });
 
-  async function mountPanel() {
-    const wrapper = mount(TasksPanel, { ...globalOpts, attachTo: document.body });
+  async function mountPanel(props = {}) {
+    const wrapper = mount(TasksPanel, {
+      ...globalOpts,
+      props,
+      attachTo: document.body,
+    });
     await flushPromises();
     return wrapper;
+  }
+
+  /**
+   * The poll lists *run* as finished, after a poll that did not: it landed
+   * while the app was open, so a run with an offer opens by itself.
+   */
+  function lands(run) {
+    const tasks = useTasksStore();
+    if (!tasks.finishedRuns.length) tasks.noteFinished([]);
+    tasks.noteFinished([...tasks.finishedRuns, run]);
   }
 
   /** A changed run of a workflow, queued from the popup and finished. */
   function ranAndFinished(workflowId = WF, name = record.name) {
     const runDialog = useRunDialogStore();
-    runDialog.ranWith(workflowId, { ...record, name });
-    runDialog.runEvent({ ...completed, workflow_id: workflowId });
+    const id = `run-${workflowId}`;
+    runDialog.ranWith(workflowId, { ...record, name, runIds: [id] });
+    lands(finishedRun({ id, workflow_id: workflowId, label: name }));
     return runDialog;
   }
   const doneLine = (wrapper) => wrapper.find('[data-testid="tm-offer-done"]');
@@ -300,31 +412,66 @@ describe("the offer to save what a run changed", () => {
   });
 
   it("asks nothing and offers nothing where no run changed anything", async () => {
+    lands(finishedRun({ offer: false }));
     const wrapper = await mountPanel();
     expect(getWorkflowChanges).not.toHaveBeenCalled();
-    expect(wrapper.find('[data-testid="tm-offers"]').exists()).toBe(false);
-    expect(textOf(wrapper)).toContain("No active tasks");
+    expect(offer(wrapper).exists()).toBe(false);
+    expect(wrapper.find('[data-testid="tm-finished-pill"]').exists()).toBe(false);
+    // A receipt: its count, and opened, when it finished.
+    expect(textOf(wrapper.find('[data-testid="tm-finished-run"]'))).toContain(
+      "Portrait, soft window light 2",
+    );
+    await wrapper.find('[data-testid="tm-finished-caret"]').trigger("click");
+    expect(textOf(wrapper)).toContain("Finished just now.");
   });
 
   it("waits for the run's pictures, then says what it changed in the band's words", async () => {
     const runDialog = useRunDialogStore();
-    runDialog.ranWith(WF, record);
+    runDialog.ranWith(WF, { ...record, runIds: [`run-${WF}`] });
+    useTasksStore().noteFinished([]);
     const wrapper = await mountPanel();
     // Queued, not finished: nothing to decide yet.
     expect(getWorkflowChanges).not.toHaveBeenCalled();
     expect(offer(wrapper).exists()).toBe(false);
 
-    runDialog.runEvent(completed);
+    lands(finishedRun());
     await flushPromises();
     expect(getWorkflowChanges).toHaveBeenCalledWith(WF);
+    // Opened by itself, once, as it landed: its pictures, when, and what.
     expect(textOf(offer(wrapper))).toContain(
-      "Ran with 3 changes from the workflow: Checkpoint, 1 LoRA removed, Steps.",
+      "Ran just now with 3 changes from the workflow: Checkpoint, 1 LoRA removed, Steps.",
     );
+    expect(wrapper.findAll('[data-testid="tm-finished-tile"]')).toHaveLength(2);
+    expect(wrapper.find('[data-testid="tm-finished-pill"]').text()).toBe("3 changes");
     expect(textOf(offer(wrapper))).toContain("Portrait, soft window light");
     expect(button(wrapper, "Save")).toBeTruthy();
     expect(button(wrapper, "Save as new…")).toBeTruthy();
     // The panel is not empty with an offer in it.
     expect(textOf(wrapper)).not.toContain("No active tasks");
+  });
+
+  // The lightbox's pane is dark in both themes (#2056). The rows take the dark
+  // inks from the root's class; the offer's buttons are AppButtons, which carry
+  // their own theme inks and have to be told.
+  it("takes the dark-surface inks in the lightbox, buttons included", async () => {
+    ranAndFinished();
+    const wrapper = await mountPanel({ lightbox: true });
+    expect(wrapper.classes()).toContain("tm--lightbox");
+    const verbs = offer(wrapper).findAll(".app-btn");
+    expect(verbs.length).toBe(2);
+    for (const verb of verbs) expect(verb.classes()).toContain("app-btn--on-dark");
+
+    await button(wrapper, "Save as new…").trigger("click");
+    const named = offer(wrapper).findAll(".app-btn");
+    expect(named.length).toBe(2);
+    for (const verb of named) expect(verb.classes()).toContain("app-btn--on-dark");
+  });
+
+  it("keeps the theme's inks in a rail", async () => {
+    ranAndFinished();
+    const wrapper = await mountPanel();
+    expect(wrapper.classes()).not.toContain("tm--lightbox");
+    expect(offer(wrapper).find(".app-btn--on-dark").exists()).toBe(false);
   });
 
   it("draws nothing the server does not hold, whatever this tab remembers", async () => {
@@ -334,7 +481,7 @@ describe("the offer to save what a run changed", () => {
     const wrapper = await mountPanel();
     expect(getWorkflowChanges).toHaveBeenCalledWith(WF);
     expect(offer(wrapper).exists()).toBe(false);
-    expect(textOf(wrapper)).toContain("No active tasks");
+    expect(wrapper.find('[data-testid="tm-finished-pill"]').exists()).toBe(false);
   });
 
   it("offers what it could read when one workflow's answer does not come", async () => {
@@ -350,24 +497,33 @@ describe("the offer to save what a run changed", () => {
     warn.mockRestore();
   });
 
-  it("offers the selected workflow's from the server alone after a reload, with a count", async () => {
+  it("comes back folded after a reload, and opened reads with a count", async () => {
     const workflows = useWorkflowsStore();
     workflows.cards = [{ id: WF, name: "Portrait, soft window light" }];
-    workflows.selectedKeys = [WF];
+    // The first poll already lists it: nothing landed while the app was open.
+    useTasksStore().noteFinished([finishedRun({ label: "Krea 2: Text to Image" })]);
     const wrapper = await mountPanel();
     expect(getWorkflowChanges).toHaveBeenCalledWith(WF);
+    expect(offer(wrapper).find(".tm-detail").exists()).toBe(false);
+    // Folded, the pill is what says the changes are still unsaved.
+    expect(wrapper.find('[data-testid="tm-finished-pill"]').text()).toBe("3 changes");
+    await wrapper.find('[data-testid="tm-finished-caret"]').trigger("click");
     // The labels were the popup's: width and height apart, no Size, no names.
-    expect(textOf(offer(wrapper))).toContain("Ran with 3 changes from the workflow.");
+    expect(textOf(offer(wrapper))).toContain("Ran just now with 3 changes from the workflow.");
     expect(textOf(offer(wrapper))).not.toContain("Checkpoint");
-    expect(textOf(offer(wrapper))).toContain("Portrait, soft window light");
+    expect(offer(wrapper).attributes("aria-label")).toContain(
+      "Portrait, soft window light",
+    );
   });
 
-  it("does not offer a selected workflow whose run is still out", async () => {
-    const workflows = useWorkflowsStore();
-    workflows.selectedKeys = [WF];
-    useRunDialogStore().ranWith(WF, record);
+  it("words an offer from the record only of the run it is", async () => {
+    const runDialog = useRunDialogStore();
+    // The popup's record is of a later run of the workflow.
+    runDialog.ranWith(WF, { ...record, runIds: ["run-later"] });
+    lands(finishedRun());
     const wrapper = await mountPanel();
-    expect(offer(wrapper).exists()).toBe(false);
+    expect(textOf(offer(wrapper))).toContain("Ran just now with 3 changes from the workflow.");
+    expect(textOf(offer(wrapper))).not.toContain("Checkpoint");
   });
 
   it("saves exactly what the run was made with, as a save from a run", async () => {
@@ -396,8 +552,6 @@ describe("the offer to save what a run changed", () => {
   it("does not redraw an offer from an answer asked before the save", async () => {
     ranAndFinished();
     const workflows = useWorkflowsStore();
-    // Selected as well, so it is still asked about once its record is gone.
-    workflows.selectedKeys = [WF];
     const wrapper = await mountPanel();
     const answer = [];
     getWorkflowChanges.mockImplementation(
@@ -408,10 +562,8 @@ describe("the offer to save what a run changed", () => {
     await flushPromises();
     await button(wrapper, "Save").trigger("click");
     await flushPromises();
-    expect(answer).toHaveLength(2);
-    // The asking made after the save is answered first, the one before it last.
-    answer[1](state({ ran: null, ran_save: null }));
-    await flushPromises();
+    // Nothing is asked after the save: the run no longer offers anything.
+    expect(answer).toHaveLength(1);
     answer[0](state());
     await flushPromises();
     expect(offer(wrapper).exists()).toBe(false);
@@ -860,9 +1012,482 @@ describe("the offer to save what a run changed", () => {
   it("offers nothing, and asks nothing, in a read-only session", async () => {
     readOnly.ref.value = true;
     ranAndFinished();
-    useWorkflowsStore().selectedKeys = [WF];
     const wrapper = await mountPanel();
     expect(getWorkflowChanges).not.toHaveBeenCalled();
     expect(offer(wrapper).exists()).toBe(false);
+  });
+});
+
+// ── The Finished group (#2050) ───────────────────────────────────────────────
+
+describe("the Finished group", () => {
+  const WF = `auto:${"c".repeat(64)}`;
+  const RAN = { models: [], loras: [], skip_loras: [{ node_id: "8", field: "lora_name" }], stages: {}, values: [] };
+  const run = (overrides = {}) => ({
+    id: "run-a",
+    workflow_id: WF,
+    label: "Portrait SDXL",
+    ended_at: new Date(Date.now() - 2 * 3600 * 1000).toISOString(),
+    status: "completed",
+    message: null,
+    made: 4,
+    picture_ids: [21, 22, 23],
+    offer: false,
+    ...overrides,
+  });
+  const rows = (wrapper) => wrapper.findAll('[data-testid="tm-finished-run"]');
+  const within = (row, testid) => row.find(`[data-testid="${testid}"]`);
+
+  async function mountWith(list, { landed = false } = {}) {
+    const tasks = useTasksStore();
+    if (landed) tasks.noteFinished([]);
+    tasks.noteFinished(list);
+    const wrapper = mount(TasksPanel, { ...globalOpts, attachTo: document.body });
+    await flushPromises();
+    return wrapper;
+  }
+
+  beforeEach(() => {
+    getWorkflowChanges.mockResolvedValue({
+      workflow_id: WF,
+      version: 2,
+      ran: RAN,
+      ran_save: { open: true, reason: null },
+    });
+    dismissFinishedRun.mockResolvedValue({ cleared: 1, workflow_id: null });
+    clearFinishedRuns.mockResolvedValue({ cleared: 1, workflow_id: null });
+  });
+
+  it("lists each finished run on one line, with what it made, and the panel is not idle", async () => {
+    const wrapper = await mountWith([run(), run({ id: "run-b", label: "Inpaint fill", made: 1 })]);
+    expect(rows(wrapper).map((row) => textOf(row).trim())).toEqual([
+      "Portrait SDXL 4",
+      "Inpaint fill 1",
+    ]);
+    expect(rows(wrapper)[0].find(".tm-mark").attributes("data-state")).toBe("done");
+    expect(textOf(wrapper)).not.toContain("No active tasks");
+    // Folded until asked, then when it ran and the pictures it still has.
+    await within(rows(wrapper)[0], "tm-finished-caret").trigger("click");
+    expect(textOf(rows(wrapper)[0])).toContain("Finished 2h ago.");
+    expect(within(rows(wrapper)[0], "tm-finished-tile").exists()).toBe(true);
+    expect(rows(wrapper)[0].findAll('[data-testid="tm-finished-tile"]')).toHaveLength(3);
+  });
+
+  it("says a failed run failed, and why, with a mark of its own", async () => {
+    const wrapper = await mountWith([
+      run({ status: "failed", message: "KSampler: out of memory", made: 0, picture_ids: [] }),
+    ]);
+    expect(rows(wrapper)[0].find(".tm-mark").attributes("data-state")).toBe("failed");
+    await within(rows(wrapper)[0], "tm-finished-caret").trigger("click");
+    expect(textOf(rows(wrapper)[0])).toContain("Failed 2h ago: KSampler: out of memory");
+    expect(within(rows(wrapper)[0], "tm-finished-tile").exists()).toBe(false);
+  });
+
+  it("opens a run with changes by itself once as it lands, and never one already listed", async () => {
+    const tasks = useTasksStore();
+    const wrapper = await mountWith([run({ id: "run-old", offer: true })]);
+    // Listed by the first poll: a reload, so it comes back folded.
+    expect(wrapper.find(".tm-detail").exists()).toBe(false);
+    tasks.noteFinished([run({ id: "run-new", offer: true }), ...tasks.finishedRuns]);
+    tasks.noteFinished([run({ id: "run-plain" }), ...tasks.finishedRuns]);
+    await flushPromises();
+    expect(wrapper.findAll(".tm-detail")).toHaveLength(1);
+    expect(rows(wrapper)[1].find(".tm-detail").exists()).toBe(true);
+    // Folded by hand, it stays folded on the next poll.
+    await within(rows(wrapper)[1], "tm-finished-caret").trigger("click");
+    tasks.noteFinished([...tasks.finishedRuns]);
+    await flushPromises();
+    expect(wrapper.find(".tm-detail").exists()).toBe(false);
+  });
+
+  it("opens a run whose offer arrives a poll after it, and keeps the rows through a failed read", async () => {
+    const tasks = useTasksStore();
+    const wrapper = await mountWith([], { landed: true });
+    // It ended before its request was answered: listed first without the offer.
+    tasks.noteFinished([run()]);
+    await flushPromises();
+    expect(wrapper.find(".tm-detail").exists()).toBe(false);
+    tasks.noteFinished([run({ offer: true })]);
+    await flushPromises();
+    expect(wrapper.find(".tm-detail").exists()).toBe(true);
+    // The server could not read them: what is shown stays.
+    tasks.noteFinished(null);
+    await flushPromises();
+    expect(rows(wrapper)).toHaveLength(1);
+  });
+
+  it("opens a tile's picture in the lightbox of the grid behind the panel", async () => {
+    const wrapper = await mountWith([run()]);
+    await within(rows(wrapper)[0], "tm-finished-caret").trigger("click");
+    await within(rows(wrapper)[0], "tm-finished-tile").trigger("click");
+    expect(nav.push).toHaveBeenCalledWith({ query: { set: "4", overlay: "21" } });
+  });
+
+  it("asks the Workflows view to open it there, which parks its place first", async () => {
+    nav.route = { name: "workflows", query: {} };
+    const workflows = useWorkflowsStore();
+    const wrapper = await mountWith([run()]);
+    await within(rows(wrapper)[0], "tm-finished-caret").trigger("click");
+    await within(rows(wrapper)[0], "tm-finished-tile").trigger("click");
+    expect(workflows.pictureToOpen).toBe(21);
+    expect(nav.push).not.toHaveBeenCalled();
+  });
+
+  it("dismisses a run with changes on the server, which takes its offer with it", async () => {
+    dismissFinishedRun.mockResolvedValue({ cleared: 1, workflow_id: WF });
+    const runDialog = useRunDialogStore();
+    runDialog.ranWith(WF, { name: "Portrait SDXL", count: 1, text: "Steps.", runIds: ["run-a"] });
+    const wrapper = await mountWith([run({ offer: true }), run({ id: "run-b", label: "Inpaint fill" })]);
+    const dismiss = within(rows(wrapper)[0], "tm-finished-dismiss");
+    expect(dismiss.attributes("aria-label")).toBe(
+      "Dismiss what the run of Portrait SDXL changed",
+    );
+    await dismiss.trigger("click");
+    await flushPromises();
+    expect(dismissFinishedRun).toHaveBeenCalledWith("run-a");
+    expect(rows(wrapper).map((row) => row.attributes("data-run"))).toEqual(["run-b"]);
+    expect(runDialog.ranChanges[WF]).toBeUndefined();
+    // The keyboard goes to the row that took its place.
+    expect(document.activeElement).toBe(
+      within(rows(wrapper)[0], "tm-finished-caret").element,
+    );
+  });
+
+  it("keeps a run whose dismiss is refused, and says so", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    dismissFinishedRun.mockRejectedValue(new Error("Network Error"));
+    const wrapper = await mountWith([run()]);
+    await within(rows(wrapper)[0], "tm-finished-dismiss").trigger("click");
+    await flushPromises();
+    expect(rows(wrapper)).toHaveLength(1);
+    expect(useNoticeStore().notices).toMatchObject([
+      { level: "error", text: "The run of Portrait SDXL could not be dismissed." },
+    ]);
+    warn.mockRestore();
+  });
+
+  it("does not clear while a save is out, which keeps the keyboard where it is", async () => {
+    saveWorkflow.mockImplementation(() => new Promise(() => {}));
+    const wrapper = await mountWith([run({ offer: true }), run({ id: "run-b" })], {
+      landed: true,
+    });
+    const save = wrapper
+      .findAll("button")
+      .find((b) => b.text().trim() === "Save");
+    await save.trigger("click");
+    await flushPromises();
+    const clear = wrapper.find('[data-testid="tm-finished-clear"]');
+    expect(clear.attributes("disabled")).toBeDefined();
+    await clear.trigger("click");
+    await flushPromises();
+    expect(clearFinishedRuns).not.toHaveBeenCalled();
+    expect(rows(wrapper)).toHaveLength(2);
+  });
+
+  it("clears every run but those with unsaved changes", async () => {
+    const wrapper = await mountWith([
+      run({ id: "run-a", offer: true }),
+      run({ id: "run-b", label: "Inpaint fill" }),
+      run({ id: "run-c", label: "Flux upscale" }),
+    ]);
+    await wrapper.find('[data-testid="tm-finished-clear"]').trigger("click");
+    await flushPromises();
+    expect(clearFinishedRuns).toHaveBeenCalledTimes(1);
+    expect(dismissFinishedRun).not.toHaveBeenCalled();
+    expect(rows(wrapper).map((row) => row.attributes("data-run"))).toEqual(["run-a"]);
+    expect(within(rows(wrapper)[0], "tm-finished-pill").text()).toBe("1 change");
+  });
+});
+
+// ── The GPU queue: bars, Running and Waiting groups, Run anyway ──────────────
+
+const GPU_DEVICE = {
+  uuid: "GPU-1",
+  name: "NVIDIA GeForce RTX 4090",
+  total_mb: 24576,
+  used_mb: 13000,
+  free_mb: 11576,
+  reserved_mb: 0,
+  budget_mb: 10000,
+  measurable: true,
+  pixlstash: true,
+};
+
+function gpuLease(over) {
+  return {
+    id: "lease-x",
+    tenant: "pixlstash",
+    label: "Tagging",
+    kind: "light",
+    state: "granted",
+    device: "GPU-1",
+    need_mb: 2000,
+    ram_mb: 0,
+    reserved_mb: 0,
+    held_mb: 0,
+    peak_mb: null,
+    since: "2026-10-22T10:00:00Z",
+    worker_type: null,
+    run_id: null,
+    job_id: null,
+    on_cpu: false,
+    warnings: [],
+    waiting_reason: null,
+    ...over,
+  };
+}
+
+function gpuAnswer(over = {}) {
+  return {
+    enforcing: true,
+    devices: [GPU_DEVICE],
+    ram: { total_mb: 65536, available_mb: 40000 },
+    holders: [
+      { device: "GPU-1", tenant: "comfyui", label: "ComfyUI", used_mb: 9800, measured_by: "nvml", lease_id: null, outside_pixlstash: false },
+      { device: "GPU-1", tenant: "pixlstash", label: "PixlStash", used_mb: 2150, measured_by: "torch_reserved", lease_id: null, outside_pixlstash: false },
+    ],
+    leases: [],
+    preempted: [],
+    summary: { state: "running", headline: "" },
+    ...over,
+  };
+}
+
+/** Put the store in the state a poll would, without the poll. */
+function setGpu(resources, runs = []) {
+  const tasksStore = useTasksStore();
+  tasksStore.resources = resources;
+  tasksStore.comfyuiRuns = runs;
+  return tasksStore;
+}
+
+describe("the GPU queue in the task manager", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    runLeaseAnyway.mockClear();
+    cancelLease.mockClear();
+  });
+
+  it("draws one bar per GPU, its free VRAM, and the four-word legend", () => {
+    setGpu(gpuAnswer());
+    const wrapper = mount(TasksPanel, globalOpts);
+    const bar = wrapper.find('[data-testid="tm-gpu"]');
+    expect(bar.exists()).toBe(true);
+    expect(bar.find(".tm-gpu-name").text()).toBe("NVIDIA GeForce RTX 4090");
+    // 24576 MB card, 11576 MB free: the figures in GB at one decimal.
+    expect(bar.find(".tm-gpu-figs").text()).toContain("24.0 GB VRAM");
+    expect(bar.find(".tm-gpu-figs").text()).toContain("11.3 GB free");
+    expect(bar.findAll(".tm-legend li").map((item) => item.text())).toEqual([
+      "PixlStash",
+      "ComfyUI",
+      "Other apps",
+      "Spare",
+    ]);
+    // ComfyUI's 9.8 GB is its own segment, and a spare margin is drawn.
+    expect(bar.find(".tm-vram-seg--comfyui").exists()).toBe(true);
+    expect(bar.find(".tm-vram-seg--spare").exists()).toBe(true);
+  });
+
+  it("draws no bar and no fold on a server that sends no resources", () => {
+    setGpu(null);
+    const wrapper = mount(TasksPanel, globalOpts);
+    expect(wrapper.find('[data-testid="tm-gpu"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="tm-pixlstash"]').exists()).toBe(false);
+  });
+
+  it("folds PixlStash's own work behind one row, collapsed, and remembers the caret", async () => {
+    setGpu(
+      gpuAnswer({
+        leases: [
+          gpuLease({ id: "a", label: "Tagging", held_mb: 1200 }),
+          gpuLease({ id: "b", label: "OCR", held_mb: 600, on_cpu: true }),
+        ],
+      }),
+    );
+    const wrapper = mount(TasksPanel, globalOpts);
+    const fold = wrapper.find('[data-testid="tm-pixlstash"]');
+    expect(fold.find('[data-testid="tm-pixl-count"]').text()).toBe("2");
+    expect(fold.find(".tm-fig-text").text()).toBe("1.8 GB");
+    // Collapsed by default: no task lines.
+    expect(wrapper.findAll(".tm-row--child")).toHaveLength(0);
+    expect(fold.find(".tm-caret").attributes("aria-expanded")).toBe("false");
+
+    await fold.find(".tm-caret").trigger("click");
+    const children = wrapper.findAll(".tm-row--child");
+    expect(children).toHaveLength(2);
+    // A task on the CPU says so in its figure column, and is still running.
+    expect(children[1].find(".tm-fig-text").text()).toBe("CPU");
+    expect(children[1].find(".tm-mark").classes("tm-mark--running")).toBe(true);
+    expect(localStorage.getItem("pixlstash:tasks:pixlstash-fold")).toBe("1");
+  });
+
+  it("folds every background worker, lease or not, and draws its sparkline only when open", async () => {
+    // Between batches a worker holds no lease; it used to fall out of the fold.
+    const tasksStore = setGpu(
+      gpuAnswer({ leases: [gpuLease({ id: "a", label: "Tags", worker_type: "TagTask", held_mb: 1200 })] }),
+    );
+    tasksStore.workerSnapshots = {
+      ImageEmbeddingTask: { label: "Image embeddings", current: 5, total: 9, running: false, active: true },
+      TagTask: { label: "Tags", current: 1, total: 9, running: false, active: true },
+    };
+    const wrapper = mount(TasksPanel, globalOpts);
+    const fold = wrapper.find('[data-testid="tm-pixlstash"]');
+    expect(fold.find('[data-testid="tm-pixl-count"]').text()).toBe("2");
+    // Both idle between batches: the fold does not pulse for them.
+    expect(fold.find(".tm-mark").classes("tm-mark--running")).toBe(false);
+    // Collapsed: no worker is listed anywhere, inside the fold or beside it.
+    expect(wrapper.findAll(".tm-worker-row")).toHaveLength(0);
+    expect(wrapper.findAll("canvas.tm-sparkline")).toHaveLength(0);
+
+    tasksStore.workerSnapshots = {
+      ...tasksStore.workerSnapshots,
+      TagTask: { ...tasksStore.workerSnapshots.TagTask, running: true },
+    };
+    await flushPromises();
+    expect(fold.find(".tm-mark").classes("tm-mark--running")).toBe(true);
+
+    await fold.find(".tm-caret").trigger("click");
+    const rows = fold.findAll(".tm-worker-row");
+    expect(rows.map((row) => row.find(".tm-worker-label").text())).toEqual([
+      "Image Embeddings",
+      "Tags",
+    ]);
+    expect(rows.every((row) => row.find("canvas.tm-sparkline").exists())).toBe(true);
+    // The tagger's lease shows on the tagger's row, and is not a line of its own.
+    expect(rows[1].find('[data-testid="tm-worker-figure"]').text()).toBe("1.2 GB");
+    expect(rows[0].find('[data-testid="tm-worker-figure"]').exists()).toBe(false);
+    expect(wrapper.findAll(".tm-row--child")).toHaveLength(0);
+  });
+
+  it("marks a task the backend stopped as stopped, not as lost", async () => {
+    setGpu(
+      gpuAnswer({
+        leases: [gpuLease({ id: "a", label: "Tagging", held_mb: 1200 })],
+        preempted: [{ worker_type: "FaceTask", caused_by: "lease-z", since: "2026-10-22T10:01:00Z", text: "Stopped to make room" }],
+      }),
+    );
+    localStorage.setItem("pixlstash:tasks:pixlstash-fold", "1");
+    const wrapper = mount(TasksPanel, globalOpts);
+    const children = wrapper.findAll(".tm-row--child");
+    expect(children.map((child) => child.find(".tm-fig-text").text())).toEqual(["1.2 GB", "stopped"]);
+    expect(children[1].find(".tm-mark").attributes("data-state")).toBe("stopped");
+  });
+
+  it("lists the waiting run in the order the queue runs it, with its need and no units", () => {
+    setGpu(
+      gpuAnswer({
+        leases: [
+          gpuLease({
+            id: "lease-b",
+            tenant: "comfyui",
+            label: "ComfyUI 'Klein inpaint'",
+            kind: "heavy",
+            state: "waiting",
+            device: null,
+            need_mb: 14600,
+            run_id: "run-b",
+            waiting_reason: {
+              code: "vram",
+              text: "Needs 14.6 GB; 11.5 GB is free.",
+              need_mb: 14600,
+              free_mb: 11500,
+              short_by_mb: 3100,
+              position: 1,
+              blocked_by: [],
+              actions: ["run_anyway", "cancel"],
+            },
+          }),
+        ],
+      }),
+      [{ run_id: "run-b", prompt_id: null, label: "Klein inpaint", status: "waiting", percent: 0 }],
+    );
+    const wrapper = mount(TasksPanel, globalOpts);
+    const rows = wrapper.findAll('[data-testid="tm-waiting-row"]');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].find(".tm-name").text()).toBe("ComfyUI 'Klein inpaint'");
+    expect(rows[0].find(".tm-fig-text").text()).toBe("14.3 GB");
+    expect(rows[0].find(".tm-mark--waiting").exists()).toBe(true);
+    // The three actions the backend offered, and none it did not.
+    expect(wrapper.find('[data-testid="tm-run-anyway"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="tm-cancel-wait"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="tm-free-comfyui"]').exists()).toBe(false);
+    // The run is not also listed under Running.
+    expect(wrapper.findAll('[data-testid="tm-comfy-row"]')).toHaveLength(0);
+  });
+
+  it("asks before Run anyway, and starts the lease only when the dialog is confirmed", async () => {
+    setGpu(
+      gpuAnswer({
+        leases: [
+          gpuLease({
+            id: "lease-b",
+            tenant: "comfyui",
+            label: "ComfyUI 'Klein inpaint'",
+            kind: "heavy",
+            state: "waiting",
+            device: null,
+            need_mb: 14600,
+            run_id: "run-b",
+            waiting_reason: { code: "vram", text: "Needs 14.6 GB", need_mb: 14600, free_mb: 11500, short_by_mb: 3100, position: 1, blocked_by: [], actions: ["run_anyway"] },
+          }),
+        ],
+      }),
+    );
+    // The dialog's own overlay needs Vuetify's defaults; its content is tested
+    // in RunAnywayDialog.test.js, so the overlay itself is stubbed here.
+    const wrapper = mount(TasksPanel, {
+      global: { stubs: { ...globalOpts.global.stubs, AppDialog: true } },
+    });
+    // Nothing is asked of the backend by merely drawing the row.
+    expect(runLeaseAnyway).not.toHaveBeenCalled();
+    expect(wrapper.findComponent(RunAnywayDialog).exists()).toBe(false);
+
+    await wrapper.find('[data-testid="tm-run-anyway"]').trigger("click");
+    const dialog = wrapper.findComponent(RunAnywayDialog);
+    expect(dialog.props("open")).toBe(true);
+    expect(dialog.props("needMb")).toBe(14600);
+    expect(runLeaseAnyway).not.toHaveBeenCalled();
+
+    dialog.vm.$emit("confirm");
+    await flushPromises();
+    expect(runLeaseAnyway).toHaveBeenCalledWith("lease-b");
+  });
+
+  it("hands focus back to Run anyway when its dialog closes", async () => {
+    setGpu(
+      gpuAnswer({
+        leases: [
+          gpuLease({
+            id: "lease-b",
+            tenant: "comfyui",
+            label: "ComfyUI 'Klein inpaint'",
+            kind: "heavy",
+            state: "waiting",
+            device: null,
+            need_mb: 14600,
+            run_id: "run-b",
+            waiting_reason: { code: "vram", text: "Needs 14.6 GB", need_mb: 14600, free_mb: 11500, short_by_mb: 3100, position: 1, blocked_by: [], actions: ["run_anyway"] },
+          }),
+        ],
+      }),
+    );
+    const wrapper = mount(TasksPanel, {
+      global: { stubs: { ...globalOpts.global.stubs, AppDialog: true } },
+      attachTo: document.body,
+    });
+    // Where focus is while the dialog is up.
+    const inDialog = document.body.appendChild(document.createElement("button"));
+    try {
+      const button = wrapper.find('[data-testid="tm-run-anyway"]');
+      button.element.focus();
+      await button.trigger("click");
+      inDialog.focus();
+      wrapper.findComponent(RunAnywayDialog).vm.$emit("close");
+      await flushPromises();
+      expect(document.activeElement).toBe(button.element);
+    } finally {
+      inDialog.remove();
+      wrapper.unmount();
+    }
   });
 });

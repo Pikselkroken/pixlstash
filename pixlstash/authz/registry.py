@@ -243,6 +243,27 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ),
     ("GET", "/api/v1/session/context"): RoutePolicy(_ANY),
     ("GET", "/api/v1/workers/progress"): RoutePolicy(_ANY),
+    # ── resources.py (VRAM arbitration and the GPU picker) ─────────────────
+    ("POST", "/api/v1/resources/leases/{lease_id}/run-anyway"): RoutePolicy(
+        _OWNER,
+        justification="Starts the owner's own waiting GPU work (a ComfyUI run) now; a lease id names no library object; POST blocked for READ tokens; owner only",
+    ),
+    ("POST", "/api/v1/resources/leases/{lease_id}/cancel"): RoutePolicy(
+        _OWNER,
+        justification="Cancels the owner's own waiting GPU work and the ComfyUI run behind it; POST blocked for READ tokens; owner only",
+    ),
+    ("POST", "/api/v1/resources/comfyui/free"): RoutePolicy(
+        _OWNER,
+        justification="Asks the owner's configured ComfyUI to unload its models, the same reach the run route has; refused while it is busy; owner only",
+    ),
+    ("GET", "/api/v1/compute/gpus"): RoutePolicy(
+        _LOCAL,
+        justification="Names this host's GPUs, their memory and what runs on them: host hardware, local owner only (§16.3)",
+    ),
+    ("PATCH", "/api/v1/compute/gpu"): RoutePolicy(
+        _LOCAL,
+        justification="Changes which of this host's GPUs the server runs on at its next start: host capability, local owner only (§16.3)",
+    ),
     ("GET", "/api/v1/server-config/watch-folders"): RoutePolicy(
         _OWNER, justification="require_unscoped_owner; also READ_BLOCKED; owner only"
     ),
@@ -554,6 +575,11 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # narrow it to: a set is a fact about the machine's models, not about a
     # picture a token was granted.
     ("GET", "/api/v1/models/workflow-sets"): RoutePolicy(_OWNER),
+    # The New workflow set picker (#1999, #2001): ComfyUI's public template
+    # list matched against the shelf and the hand-made sets. Same tier as the
+    # set read above: it names the machine's models and sets, and there is no
+    # per-object scope to narrow it to. Reads only.
+    ("GET", "/api/v1/models/workflow-templates"): RoutePolicy(_OWNER),
     # Hand-made workflow sets (#1520): the owner's own groupings of shelf
     # models, stored in the hub. They write hub rows only (never a file or a
     # model row) and every answer carries the same whole-library evidence as
@@ -566,11 +592,20 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("POST", "/api/v1/models/workflow-sets/{set_id}/members/remove"): RoutePolicy(
         _OWNER
     ),
-    # The models kept out of a set's merge offer (#1523): same rows, same tier.
+    # The models removed from a set (#1523, #1972), merging sets on one
+    # checkpoint, and the models the owner has seen in a set: same rows, same
+    # tier.
     ("PUT", "/api/v1/models/workflow-sets/{set_id}/declines"): RoutePolicy(_OWNER),
+    ("POST", "/api/v1/models/workflow-sets/{set_id}/merge"): RoutePolicy(_OWNER),
+    ("PUT", "/api/v1/models/workflow-sets/{set_id}/seen"): RoutePolicy(_OWNER),
     # Which sets the active library hides (#1869): a hub row per library, the
     # grid's tier, the owner's own view of their shelf.
     ("PUT", "/api/v1/models/workflow-sets/hidden"): RoutePolicy(_OWNER),
+    # The owner's favourites (#1578): hub rows keyed by a model's sha256, a
+    # workflow card key or a set key, none of which a share token is ever
+    # scoped to. The owner's own view of their shelf and workflows: that tier.
+    ("GET", "/api/v1/favourites"): RoutePolicy(_OWNER),
+    ("PUT", "/api/v1/favourites"): RoutePolicy(_OWNER),
     # The owner's verdicts on a set and on its members (workflow-set-verdicts
     # spec). Hub rows keyed by a combination of `model.id`s, which no share
     # token is ever scoped to, and the owner's own judgement about the
@@ -767,6 +802,14 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # owner's files, which is the unlink of POST /model-moves without the copy
     # that justifies it, so it sits on the same tier as every other shelf route
     # that writes the host filesystem.
+    # ── model_downloads.py ────────────────────────────────────────────────
+    ("POST", "/api/v1/model-downloads"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 fetches a model file and writes it into the registered download folder, registering it - POST /model-files' file-writing class with the read coming off the network instead of the disk; takes no host path and no URL (the link is looked up server-side in the committed template list by file name), the name is contained against the folder and must carry a shelf suffix; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    # Stops a download and discards its own partial file; returns nothing but
+    # whether one was running.
+    ("POST", "/api/v1/model-downloads/{download_id}/cancel"): RoutePolicy(_OWNER),
     ("POST", "/api/v1/model-files/delete"): RoutePolicy(
         _LOCAL,
         justification="§16.3 unlinks the owner's model files (OS trash by default, permanent on request) out of registered host folders - the unlink half of POST /model-moves standing alone, and the shelf's only destructive verb. Takes no host path: the ids address rows the scanner wrote, every path is contained against its registered folder - lexically for the file so a symlinked model loses its link and not the bytes it points at, and by realpath for the directory holding it so no symlinked component can redirect the unlink (`_contained_path`) - and only `user` and `managed` folders are eligible, so PixlStash's own engine roots, the InsightFace packs and the shared HuggingFace cache are refused whole; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
@@ -894,6 +937,9 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # touched. Same class as the other per-picture mutations; READ tokens are
     # refused earlier by the middleware (POST not in READ_SAFE).
     ("POST", "/api/v1/pictures/{id}/text/read"): RoutePolicy(_PIC, id_param="id"),
+    # Renders a selection's mask on one picture (the Edit tab's preview):
+    # derived from the picture's own pixels, nothing is written.
+    ("POST", "/api/v1/pictures/{id}/mask"): RoutePolicy(_PIC, id_param="id"),
     ("GET", "/api/v1/pictures/thumbnails/{id}.webp"): RoutePolicy(_PIC, id_param="id"),
     ("PATCH", "/api/v1/pictures/{id}"): RoutePolicy(_PIC, id_param="id"),
     ("POST", "/api/v1/pictures/{id}/face"): RoutePolicy(_PIC, id_param="id"),
@@ -1552,6 +1598,14 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _LOOPBACK,
         justification="Writes code (the ComfyUI-PixlStash nodes) into a ComfyUI custom_nodes folder on this machine, trashes an older copy and restarts ComfyUI: the host-shell class, loopback only (§16.3)",
     ),
+    ("POST", "/api/v1/comfyui/node-packs/{pack_id}/install"): RoutePolicy(
+        _LOOPBACK,
+        justification="Has ComfyUI-Manager install third-party code (a pack from node_packs.KNOWN_PACKS, at its pinned version) into the saved ComfyUI and restarts it: the host-shell class, loopback only (§16.3, #2054)",
+    ),
+    ("GET", "/api/v1/comfyui/node-packs/{pack_id}"): RoutePolicy(
+        _OWNER,
+        justification="Whether the saved ComfyUI lists a known pack's node classes; no per-object data; owner only",
+    ),
     ("POST", "/api/v1/comfyui/probe"): RoutePolicy(
         _OWNER,
         justification="Makes this server fetch an address the owner names; the same reach comfyui_url already has; owner only",
@@ -1567,6 +1621,20 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("POST", "/api/v1/comfyui/workflows/convert"): RoutePolicy(
         _OWNER,
         justification="Store ComfyUI's API conversion of an editor workflow beside its stored file, storing the file first as an import would; writes stored workflow files like the import beside it; owner only",
+    ),
+    # The templates the owner's ComfyUI serves (#2000): reads that make this
+    # server ask the owner's ComfyUI, and a write that stores workflows.
+    ("GET", "/api/v1/comfyui/templates"): RoutePolicy(
+        _OWNER,
+        justification="Makes this server read the owner's ComfyUI template list and says which model files the shelf holds; owner only like GET /comfyui/pixlstash-node",
+    ),
+    ("GET", "/api/v1/comfyui/templates/thumbnail"): RoutePolicy(
+        _OWNER,
+        justification="Passes through a picture from the owner's ComfyUI for a template the list holds, never a caller-made path; owner only like the list",
+    ),
+    ("POST", "/api/v1/comfyui/templates/add"): RoutePolicy(
+        _OWNER,
+        justification="Stores templates read from the owner's ComfyUI as manual workflows, the authority POST /comfyui/workflows/import already has; owner only",
     ),
     ("GET", "/api/v1/comfyui/pictures/{picture_id}/workflow"): RoutePolicy(
         _PIC, id_param="picture_id"
@@ -1837,6 +1905,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Name, notes and hidden on one workflow; PATCH blocked for READ tokens; owner only",
     ),
+    ("POST", "/api/v1/workflows/{workflow_id}/thumbnail"): RoutePolicy(
+        _OWNER,
+        justification="Upload a workflow's custom thumbnail into the hub's icon store; POST blocked for READ tokens; owner only",
+    ),
     # The workflow's LoRAs counted over the whole vault.
     ("GET", "/api/v1/workflows/{workflow_id}/lora-summary"): RoutePolicy(
         _OWNER,
@@ -1953,6 +2025,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Make an earlier version of a workflow's graph its newest; POST blocked for READ tokens; owner only",
     ),
+    ("POST", "/api/v1/workflows/{workflow_id}/versions/{version}/opening"): RoutePolicy(
+        _OWNER,
+        justification="Hold an earlier version of a workflow's graph, resolved out of the whole library as Open in ComfyUI does, for ComfyUI to open; POST blocked for READ tokens; owner only",
+    ),
     ("PUT", "/api/v1/workflows/{workflow_id}/graph"): RoutePolicy(
         _OWNER,
         justification="Store a whole graph over a workflow as its next version, or as a new workflow; PUT blocked for READ tokens; owner only",
@@ -1992,9 +2068,30 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Build the graph a run would submit and hold it for the owner's ComfyUI to open; resolves a graph from the whole library and may upload its pictures to ComfyUI; POST blocked for READ tokens; owner only",
     ),
+    # Upscale… (#1868): the pictures named go to the owner's ComfyUI, and the
+    # results are stacked on them; owner only, as a run is.
+    ("POST", "/api/v1/workflows/upscale"): RoutePolicy(
+        _OWNER,
+        justification="Upscale pictures in the owner's ComfyUI, uploading them and stacking each result on its picture; POST blocked for READ tokens; owner only",
+    ),
+    ("POST", "/api/v1/workflows/upscale/preflight"): RoutePolicy(
+        _OWNER,
+        justification="Dry run of the above: each picture's size and whether its own run upscaled it; submits nothing; owner only",
+    ),
     ("GET", "/api/v1/workflows/runs/{prompt_id}"): RoutePolicy(
         _OWNER,
         justification="How a run the owner started ended: ComfyUI's error text and the ids of the pictures it added, whichever part of the library they landed in; owner only",
+    ),
+    # The Tasks tab's Finished group (#2050): forgetting the owner's own
+    # finished runs, and with one of them the changes its workflow kept from
+    # it. A run id names no library object a token could be scoped to.
+    ("DELETE", "/api/v1/workflows/runs"): RoutePolicy(
+        _OWNER,
+        justification="Forget the owner's finished runs, keeping any whose changes can still be saved; DELETE blocked for READ tokens; owner only",
+    ),
+    ("DELETE", "/api/v1/workflows/runs/{run_id}"): RoutePolicy(
+        _OWNER,
+        justification="Forget one finished run and the changes its workflow kept from it; DELETE blocked for READ tokens; owner only",
     ),
     # ── recipes.py (saved recipes, plan §5.5 / step B6) ─────────────────────
     # OWNER_ONLY throughout, and a decision rather than a default. A saved

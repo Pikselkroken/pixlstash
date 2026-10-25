@@ -87,7 +87,7 @@ from pixlstash.server import Server
 from pixlstash.services.workflow_hash import asset_reference, normalized_filename
 from pixlstash.utils.rate_limiter import RateLimitMiddleware
 from tests.test_workflow_identity import _graph as _workflow_graph
-from tests.utils import upload_pictures_and_wait
+from tests.utils import mint_read_token, upload_pictures_and_wait
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -422,16 +422,6 @@ def _reset_owner_credentials(server, owner_client) -> None:
     )
 
 
-def _mint_read_token(owner_client, description: str, **restriction) -> str:
-    """Mint a fresh READ token as the owner and return its secret value."""
-    r = owner_client.post(
-        f"{API}/users/me/token",
-        json={"description": description, "scope": "READ", **restriction},
-    )
-    assert r.status_code == 200, r.text
-    return r.json()["token"]
-
-
 def _prove_token_reads(server, token: str, path: str = "/pictures", **params) -> set:
     """Exercise *token* on an in-scope read and return the picture ids it saw.
 
@@ -490,7 +480,7 @@ class _SharedPictureLibrary:
     def library_env(self, _picture_library_env):
         env = _picture_library_env
         _reset_owner_credentials(env.server, env.owner_client)
-        token = _mint_read_token(env.owner_client, "per-test read")
+        token = mint_read_token(env.owner_client, "per-test read")
 
         seen = _prove_token_reads(env.server, token)
         assert seen == set(env.picture_ids), (
@@ -1142,7 +1132,7 @@ class TestResourceScopedReadTokenIsolation:
         e = _two_set_env
         _reset_two_set_library(e)
         _reset_owner_credentials(e.server, e.owner_client)
-        token_a = _mint_read_token(
+        token_a = mint_read_token(
             e.owner_client,
             "set A token",
             resource_type="picture_set",
@@ -1313,7 +1303,7 @@ class TestResourceScopedReadTokenIsolation:
         ``resource_type='picture'`` token fall through to an unrestricted query,
         leaking the entire library's grid metadata.
         """
-        pic_token = _mint_read_token(
+        pic_token = mint_read_token(
             env.owner_client,
             "single picture token",
             resource_type="picture",
@@ -1362,7 +1352,7 @@ class TestResourceScopedReadTokenIsolation:
         assert r.status_code == 200, r.text
         ref_char_id = r.json()["character"]["id"]
 
-        pic_token = _mint_read_token(
+        pic_token = mint_read_token(
             env.owner_client,
             "single picture token",
             resource_type="picture",
@@ -1489,7 +1479,7 @@ class TestResourceScopedReadTokenIsolation:
         flag must still open.
         """
         client = TestClient(env.server.api)
-        without = _mint_read_token(
+        without = mint_read_token(
             env.owner_client,
             "project token, attachments withheld",
             resource_type="project",
@@ -1511,7 +1501,7 @@ class TestResourceScopedReadTokenIsolation:
             )
 
         _reset_owner_credentials(env.server, env.owner_client)
-        with_attachments = _mint_read_token(
+        with_attachments = mint_read_token(
             env.owner_client,
             "project token, attachments granted",
             resource_type="project",
@@ -1767,7 +1757,7 @@ class TestResourceScopedReadTokenIsolation:
         test still sees the unstacked two-picture library it was written for.
         """
         # Single-picture share token for pic_a only.
-        pic_token = _mint_read_token(
+        pic_token = mint_read_token(
             env.owner_client,
             "single picture token",
             resource_type="picture",
@@ -1849,7 +1839,7 @@ class TestResourceScopedReadTokenIsolation:
         names = {option["value"]: option["name"] for option in r.json()}
         assert names[value] == name, names
 
-        whole_library = _mint_read_token(env.owner_client, "whole-library READ")
+        whole_library = mint_read_token(env.owner_client, "whole-library READ")
         r = TestClient(env.server.api).get(
             f"{API}{path}", headers={"Authorization": f"Bearer {whole_library}"}
         )
@@ -2051,7 +2041,7 @@ class TestComfyuiFilterCannotEscapeTokenScope:
         """
         e = _comfyui_stack_env
         _reset_owner_credentials(e.server, e.owner_client)
-        token = _mint_read_token(
+        token = mint_read_token(
             e.owner_client,
             "single picture share",
             resource_type="picture",

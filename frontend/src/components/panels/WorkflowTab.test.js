@@ -37,10 +37,14 @@ const saveWorkflow = vi.fn();
 const saveWorkflowAsNew = vi.fn();
 const getWorkflowVersions = vi.fn();
 const restoreWorkflowVersion = vi.fn();
+const duplicateWorkflow = vi.fn();
+const openWorkflowVersion = vi.fn();
 
 vi.mock("../../api/workflows", () => ({
   getWorkflowVersions: (...args) => getWorkflowVersions(...args),
   restoreWorkflowVersion: (...args) => restoreWorkflowVersion(...args),
+  duplicateWorkflow: (...args) => duplicateWorkflow(...args),
+  openWorkflowVersion: (...args) => openWorkflowVersion(...args),
   getWorkflowCard: (...args) => getWorkflowCard(...args),
   listWorkflowCards: (...args) => listWorkflowCards(...args),
   patchWorkflowCard: (...args) => patchWorkflowCard(...args),
@@ -78,6 +82,10 @@ vi.mock("../../api/comfyui", () => ({
 const push = vi.fn();
 const replace = vi.fn();
 const route = vi.hoisted(() => ({ name: "workflows", query: {} }));
+vi.mock("../../api/modelDownloads", () => ({
+  startModelDownload: vi.fn(async () => ({ id: "d-1", status: "running" })),
+  cancelModelDownload: vi.fn(async () => ({ cancelled: true })),
+}));
 vi.mock("vue-router", () => ({
   useRouter: () => ({ push, replace }),
   useRoute: () => route,
@@ -479,6 +487,16 @@ function held() {
   return { promise, release };
 }
 
+/**
+ * Go back to version `number` the way the head offers it: its row opens what
+ * can be done with it (#1792), and *Go back to this version* is one of those.
+ */
+async function goBackTo(wrapper, number) {
+  const menu = '[data-testid="wftab-version-menu"]';
+  await wrapper.find(`${menu} [data-version="${number}"]`).trigger("click");
+  await wrapper.find(`${menu} [data-action="go-back"]`).trigger("click");
+}
+
 describe("the version menu in the head", () => {
   const chip = (wrapper) => wrapper.find('[data-testid="wftab-version"]');
   const rows = (wrapper) =>
@@ -588,7 +606,8 @@ describe("the version menu in the head", () => {
     expect(row(wrapper, 3).text()).toContain("models changed");
     expect(row(wrapper, 2).text()).toContain("LoRAs edited");
     expect(row(wrapper, 3).attributes("aria-checked")).toBe("true");
-    expect(row(wrapper, 2).attributes("aria-checked")).toBe("false");
+    // An earlier one opens what can be done with it (#1792).
+    expect(row(wrapper, 2).attributes("aria-haspopup")).toBe("menu");
   });
 
   describe("a version saved from ComfyUI (#1852)", () => {
@@ -665,7 +684,7 @@ describe("the version menu in the head", () => {
       hidden: 0,
     });
 
-    await row(wrapper, 2).trigger("click");
+    await goBackTo(wrapper, 2);
     await flush(wrapper);
     await flush(wrapper);
 
@@ -690,7 +709,7 @@ describe("the version menu in the head", () => {
 
   it("says what it did, with an Undo that goes back to the version left", async () => {
     const { wrapper } = await mountVersioned();
-    await row(wrapper, 2).trigger("click");
+    await goBackTo(wrapper, 2);
     await flush(wrapper);
 
     const notice = useNoticeStore().notices.at(-1);
@@ -707,7 +726,7 @@ describe("the version menu in the head", () => {
 
   it("remembers the version an Undo left for the workflow it undid, whatever the rail shows by then", async () => {
     const { wrapper, store } = await mountTwoRails();
-    await row(wrapper, 2).trigger("click");
+    await goBackTo(wrapper, 2);
     await flush(wrapper);
     const first = useNoticeStore().notices.at(-1);
 
@@ -749,7 +768,7 @@ describe("the version menu in the head", () => {
       versions,
     });
     const { wrapper } = await mountVersioned();
-    await row(wrapper, 2).trigger("click");
+    await goBackTo(wrapper, 2);
     await flush(wrapper);
     const notice = useNoticeStore().notices.at(-1);
     expect(notice.text).toContain("Back on version 2");
@@ -768,13 +787,13 @@ describe("the version menu in the head", () => {
           })
         : Promise.resolve(versionsAt(4)),
     );
-    await row(wrapper, 2).trigger("click");
+    await goBackTo(wrapper, 2);
     await flush(wrapper);
     const undo = useNoticeStore().notices.at(-1).action;
 
     store.selectedKeys = [OTHER];
     await flush(wrapper);
-    await row(wrapper, 1).trigger("click");
+    await goBackTo(wrapper, 1);
     await flush(wrapper);
     expect(refusal(wrapper).text()).toContain("That version cannot be read.");
 
@@ -785,7 +804,7 @@ describe("the version menu in the head", () => {
 
   it("asks nothing first: going back is undone by going back", async () => {
     const { wrapper } = await mountVersioned();
-    await row(wrapper, 1).trigger("click");
+    await goBackTo(wrapper, 1);
     expect(restoreWorkflowVersion).toHaveBeenCalledWith(KEY, 1);
   });
 
@@ -794,6 +813,47 @@ describe("the version menu in the head", () => {
     await row(wrapper, 3).trigger("click");
     await flush(wrapper);
     expect(restoreWorkflowVersion).not.toHaveBeenCalled();
+  });
+
+  it("duplicates and opens an earlier version without going back to it (#1792)", async () => {
+    const tab = { opener: {}, location: { replace: vi.fn() }, close: vi.fn() };
+    const open = vi.spyOn(window, "open").mockImplementation(() => tab);
+    getPixlstashNode.mockResolvedValue({ can_open_workflows: true });
+    const filterStore = useFilterStore();
+    filterStore.comfyuiConfigured = true;
+    filterStore.comfyuiUrl = "http://127.0.0.1:8188/";
+    duplicateWorkflow.mockResolvedValue({
+      name: "Chain (version 1)",
+      workflow_id: "manual:copy",
+    });
+    openWorkflowVersion.mockResolvedValue({ opening: "ab12", workflow_id: KEY });
+    try {
+      const { wrapper } = await mountVersioned();
+      const menu = '[data-testid="wftab-version-menu"]';
+      const act = async (number, action) => {
+        await row(wrapper, number).trigger("click");
+        await wrapper.find(`${menu} [data-action="${action}"]`).trigger("click");
+        await flush(wrapper);
+      };
+
+      await act(1, "duplicate");
+      expect(duplicateWorkflow).toHaveBeenCalledWith(KEY, 1);
+      expect(useNoticeStore().notices.at(-1).text).toBe(
+        "Duplicated version 1 as Chain (version 1).",
+      );
+
+      await act(2, "open-comfyui");
+      expect(openWorkflowVersion).toHaveBeenCalledWith(KEY, 2);
+      // The tab first, before the request: a popup blocker refuses one after.
+      expect(open).toHaveBeenCalledWith("", "_blank");
+      expect(tab.location.replace).toHaveBeenCalledWith(
+        `http://127.0.0.1:8188/?pixlstash_run=ab12&pixlstash_of=${encodeURIComponent(KEY)}`,
+      );
+      // Neither went back.
+      expect(restoreWorkflowVersion).not.toHaveBeenCalled();
+    } finally {
+      open.mockRestore();
+    }
   });
 
   it("says a refusal under the head in the server's words, and reads the list again", async () => {
@@ -807,7 +867,7 @@ describe("the version menu in the head", () => {
     getWorkflowVersions.mockClear();
     const noticesBefore = useNoticeStore().notices.length;
 
-    await row(wrapper, 2).trigger("click");
+    await goBackTo(wrapper, 2);
     await flush(wrapper);
 
     expect(refusal(wrapper).attributes("role")).toBe("alert");
@@ -840,7 +900,7 @@ describe("the version menu in the head", () => {
       Promise.resolve(versionsAt(key === OTHER ? 2 : 3, key)),
     );
     const { wrapper, store } = await mountWith([KEY], [shown, other]);
-    await row(wrapper, 2).trigger("click");
+    await goBackTo(wrapper, 2);
     await flush(wrapper);
     expect(refusal(wrapper).exists()).toBe(true);
 
@@ -1135,14 +1195,14 @@ describe("a checkpoint that will not load", () => {
     ],
   });
 
-  function missingFile(file) {
+  function missingFile(file, extra = {}) {
     return {
       groups: [
         {
           reasons: [
             {
               code: "missing_models",
-              models: [{ file, folder: "checkpoints" }],
+              models: [{ file, folder: "checkpoints", ...extra }],
             },
           ],
         },
@@ -1169,8 +1229,52 @@ describe("a checkpoint that will not load", () => {
     expect(textOf(wrapper)).toContain("Checkpoint missing");
     const line = missingLine(wrapper);
     // The name as a person looks for it; the whole recorded value is the tip.
-    expect(line.text).toBe("realvisXL_v5 is not installed in ComfyUI.");
+    expect(line.text).toBe("realvisXL_v5 is not in ComfyUI or PixlStash.");
     expect(line.tooltip).toBe("SDXL/realvisXL_v5.safetensors");
+  });
+
+  it("offers a download beside the name only where the server can fetch it", async () => {
+    // A row's picker, and the text a card with no loader row shows instead.
+    for (const [shown, extra, offered] of [
+      [named, { downloadable: true }, true],
+      [named, {}, false],
+      [unnamed, { downloadable: true }, true],
+      [unnamed, {}, false],
+    ]) {
+      getWorkflowCard.mockResolvedValue(detail({ card: shown }));
+      preflightWorkflowRun.mockResolvedValue(
+        missingFile("SDXL/realvisXL_v5.safetensors", extra),
+      );
+      const { wrapper } = await mountWith([KEY], [shown]);
+      await settle(wrapper);
+      const button = wrapper
+        .find('[data-testid="wftab-row-checkpoint"]')
+        .find('[data-testid="model-download"]');
+      expect(button.exists()).toBe(offered);
+      wrapper.unmount();
+    }
+  });
+
+  it("says what to do in one line: download it, pick one, or both", async () => {
+    getWorkflowCard.mockResolvedValue(detail({ card: named }));
+    for (const [extra, replacements, said] of [
+      [{ downloadable: true }, [{ id: 7, filename: "sd15.safetensors" }], "Download it or pick a replacement below."],
+      [{ downloadable: true }, [], "Download it"],
+      [{}, [{ id: 7, filename: "sd15.safetensors" }], "Pick a replacement below."],
+      [{}, [], null],
+    ]) {
+      preflightWorkflowRun.mockResolvedValue(
+        missingFile("SDXL/realvisXL_v5.safetensors", extra),
+      );
+      readModelSwap
+        .mockReset()
+        .mockImplementation(replacementsByKind({ checkpoint: replacements }));
+      const { wrapper } = await mountWith([KEY], [named]);
+      await settle(wrapper);
+      const line = wrapper.find('[data-testid="wftab-missing-action"]');
+      expect(line.exists() ? line.text().replace(/\s+/g, " ") : null).toBe(said);
+      wrapper.unmount();
+    }
   });
 
   it("picks up a file downloaded after the last scan and asks again", async () => {
@@ -1226,6 +1330,37 @@ describe("a checkpoint that will not load", () => {
     );
   });
 
+  it("keeps the pick and its why on a stale row that has replacements", async () => {
+    preflightWorkflowRun.mockResolvedValue({
+      groups: [
+        {
+          reasons: [
+            {
+              code: "pack_outdated",
+              models: [
+                { file: "SDXL/realvisXL_v5.safetensors", folder: "checkpoints" },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    getWorkflowCard.mockResolvedValue(detail({ card: named }));
+    readModelSwap
+      .mockReset()
+      .mockImplementation(
+        replacementsByKind({ checkpoint: [{ id: 7, filename: "sd15.safetensors" }] }, {}, false),
+      );
+    const { wrapper } = await mountWith([KEY], [named]);
+    await settle(wrapper);
+    expect(wrapper.find('[data-testid="wftab-missing-action"]').text()).toBe(
+      "Pick a replacement below.",
+    );
+    expect(wrapper.find('[data-testid="wftab-replace-unmatched"]').exists()).toBe(
+      true,
+    );
+  });
+
   it("makes a missing checkpoint a row that needs a pick, asked for by the graph's spelling", async () => {
     // The recipe says `realvisXL_v5`, the graph loads the fp8 build of it:
     // the missing file is still the Checkpoint row's, and it is the graph's
@@ -1248,6 +1383,7 @@ describe("a checkpoint that will not load", () => {
       replacing: "SDXL/realvisXL_v5_fp8.safetensors",
       slotKind: "checkpoint",
       cached: true,
+      grouped: true,
     });
     expect(textOf(wrapper)).toContain("Checkpoint missing");
     const picker = wrapper.find('[data-testid="wftab-pick-checkpoint"] select');
@@ -1274,6 +1410,97 @@ describe("a checkpoint that will not load", () => {
     );
   });
 
+  it("files a missing checkpoint's candidates under how likely each is to work", async () => {
+    preflightWorkflowRun.mockResolvedValue(
+      missingFile("SDXL/realvisXL_v5_fp8.safetensors"),
+    );
+    getWorkflowCard.mockResolvedValue(detail({ card: named }));
+    const candidates = [
+      { id: 8, filename: "flux1-dev.safetensors", base_model: "FLUX.1 dev", verdict: "unlikely" },
+      { id: 9, filename: "merge.safetensors", base_model: null, verdict: "unknown" },
+      { id: 7, filename: "realvisXL_v5_bf16.safetensors", display_name: "RealVis 5", base_model: "SDXL 1.0", verdict: "likely", loader: "PixlStashCheckpointLoader" },
+      { id: 6, filename: "pony.safetensors", base_model: "Pony Diffusion V6 XL", verdict: "maybe" },
+    ];
+    readModelSwap.mockReset().mockImplementation((_key, { slotKind } = {}) =>
+      Promise.resolve({
+        replacements: slotKind === "checkpoint" ? candidates : [],
+        replacements_reason: null,
+        replacements_narrowed: slotKind === "checkpoint" ? true : null,
+        replacing_base_model: slotKind === "checkpoint" ? "SDXL 1.0" : null,
+      }),
+    );
+    const { wrapper } = await mountWith([KEY], [named]);
+    await settle(wrapper);
+
+    expect(wrapper.find('[data-testid="wftab-missing-base"]').text()).toContain(
+      "It is a SDXL 1.0 checkpoint, and so is 1 on your shelf.",
+    );
+    const field = wrapper.find('[data-testid="wftab-pick-checkpoint"] [role="combobox"]');
+    // The missing file is what the field reads, never an option.
+    expect(field.text()).toContain("realvisXL_v5_fp8 (missing)");
+    // The picker stands in for the saved value's text, never beside it.
+    expect(wrapper.find('[data-testid="wftab-row-checkpoint"] .wftab-value').exists()).toBe(false);
+    await field.trigger("click");
+    const list = wrapper.find('[data-testid="wftab-pick-checkpoint"] [role="listbox"]');
+    expect(list.find('[data-testid="wftab-replacing"]').text()).toBe(
+      "Replacing realvisXL_v5_fp8 · SDXL 1.0",
+    );
+    expect(list.find('[data-testid="wftab-none-likely"]').exists()).toBe(false);
+    const headings = list.findAll(".app-select__group .section-label").map((h) => h.text());
+    expect(headings).toEqual(["Likely to work", "Might work", "Not known", "Unlikely to work"]);
+    const options = list.findAll('[role="option"]');
+    expect(options.map((o) => o.attributes("aria-label"))).toEqual([
+      "RealVis 5, SDXL 1.0, PixlStash loader (This loader cannot load it, so a run loads it through PixlStash's.)",
+      "pony, Pony Diffusion V6 XL",
+      "merge, base not read",
+      "flux1-dev, FLUX.1 dev",
+    ]);
+    expect(options.some((o) => o.text().includes("missing"))).toBe(false);
+    expect(options[3].classes()).toContain("app-select__option--quiet");
+
+    // A poor pick is allowed, and says what it is.
+    await options[3].trigger("click");
+    await flush(wrapper);
+    expect(setWorkflowChanges.mock.calls.at(-1)[1].models).toEqual([
+      { address: "core:n1/ckpt_name/ckpt_name", filename: "flux1-dev.safetensors" },
+    ]);
+    expect(wrapper.find('[data-testid="wftab-verdict"]').text()).toBe(
+      "FLUX.1 dev, not SDXL 1.0: LoRAs made for SDXL 1.0 will not load on it.",
+    );
+    expect(
+      wrapper.find('[data-testid="wftab-pick-checkpoint"] .app-select__mark').classes(),
+    ).toContain("app-select__tone--error");
+  });
+
+  it("says at the top of the list when nothing on the shelf is the missing one's base model", async () => {
+    preflightWorkflowRun.mockResolvedValue(
+      missingFile("SDXL/realvisXL_v5_fp8.safetensors"),
+    );
+    getWorkflowCard.mockResolvedValue(detail({ card: named }));
+    readModelSwap.mockReset().mockImplementation((_key, { slotKind } = {}) =>
+      Promise.resolve({
+        replacements:
+          slotKind === "checkpoint"
+            ? [{ id: 8, filename: "flux1-dev.safetensors", base_model: "FLUX.1 dev", verdict: "unlikely" }]
+            : [],
+        replacements_reason: null,
+        replacements_narrowed: slotKind === "checkpoint" ? false : null,
+        replacing_base_model: slotKind === "checkpoint" ? "SDXL 1.0" : null,
+      }),
+    );
+    const { wrapper } = await mountWith([KEY], [named]);
+    await settle(wrapper);
+    expect(wrapper.find('[data-testid="wftab-missing-base"]').text()).toContain(
+      "and nothing on your shelf is.",
+    );
+    // The headings say it; the "every one is listed" mark is not needed.
+    expect(wrapper.find('[data-testid="wftab-replace-unmatched"]').exists()).toBe(false);
+    await wrapper.find('[data-testid="wftab-pick-checkpoint"] [role="combobox"]').trigger("click");
+    expect(wrapper.find('[data-testid="wftab-none-likely"]').text()).toBe(
+      "Nothing on your shelf is SDXL 1.0.",
+    );
+  });
+
   it("says so when the picker lists every checkpoint, none known to match", async () => {
     preflightWorkflowRun.mockResolvedValue(
       missingFile("SDXL/realvisXL_v5_fp8.safetensors"),
@@ -1287,9 +1514,13 @@ describe("a checkpoint that will not load", () => {
     const { wrapper } = await mountWith([KEY], [named]);
     await settle(wrapper);
     expect(wrapper.find('[data-testid="wftab-pick-checkpoint"]').exists()).toBe(true);
-    expect(wrapper.find('[data-testid="wftab-replace-unmatched"]').text()).toContain(
-      "is known to match it",
-    );
+    // The why is the mark's tooltip; the line says only what to do.
+    expect(
+      wrapper.find('[data-testid="wftab-missing-action"]').text(),
+    ).toBe("Pick a replacement below.");
+    expect(
+      wrapper.find('[data-testid="wftab-replace-unmatched"]').attributes("data-note"),
+    ).toContain("is known to match it");
   });
 
   it.each([
@@ -1372,7 +1603,7 @@ describe("a checkpoint that will not load", () => {
     const { wrapper } = await mountWith([KEY], [unnamed]);
     await settle(wrapper);
     const line = missingLine(wrapper);
-    expect(line.text).toBe("klein-9b-fp8 is not installed in ComfyUI.");
+    expect(line.text).toBe("klein-9b-fp8 is not in ComfyUI or PixlStash.");
     expect(line.tooltip).toBe("Flux/klein-9b-fp8.safetensors");
     expect(textOf(wrapper)).not.toContain("Not recorded");
     // Named, so never also "no file name was kept" (#1985 put a row between
@@ -1703,6 +1934,129 @@ describe("a VAE or text encoder row (#1596, #1850)", () => {
     ).toBe("t5xxl_fp8 (missing)");
   });
 
+  it("leaves a missing file that can be downloaded, or is, to its download", async () => {
+    // #2061: the download is the owner's fix; a renamed copy is a guess, and
+    // picking it on every selection fights the download.
+    readModelSwap.mockReset().mockImplementation(
+      replacementsByKind({
+        text_encoder: [{ id: 5, filename: "t5-xxl_fp8.safetensors", likely: true }],
+      }),
+    );
+    getWorkflowCard.mockResolvedValue(detail({ card: withSupport }));
+    for (const [extra, running] of [
+      [{ downloadable: true }, false],
+      [{}, true],
+    ]) {
+      setWorkflowChanges.mockClear();
+      useTasksStore().modelDownloads = running
+        ? [{ id: "d1", file: "t5xxl_fp8.safetensors", status: "running" }]
+        : [];
+      preflightWorkflowRun.mockResolvedValue(
+        missing({ file: "t5/t5xxl_fp8.safetensors", folder: "text_encoders", ...extra }),
+      );
+      const { wrapper } = await mountWith([KEY], [withSupport]);
+      await settle(wrapper);
+      expect(setWorkflowChanges).not.toHaveBeenCalled();
+      // On its way is said so, with its mark, rather than "missing".
+      const text = row(wrapper, "text_encoder").text();
+      if (running) {
+        expect(text).toContain("Downloading");
+        expect(text).toContain("is still downloading");
+        expect(text).not.toContain("Text encoder missing");
+        expect(
+          row(wrapper, "text_encoder")
+            .find('[data-testid="downloading-mark"]')
+            .exists(),
+        ).toBe(true);
+      } else {
+        expect(text).toContain("Text encoder missing");
+      }
+      wrapper.unmount();
+    }
+  });
+
+  it("offers a model still downloading to the row of its kind, marked", async () => {
+    // Put in before it lands; the run refuses it until then (server side).
+    readModelSwap.mockReset().mockImplementation(replacementsByKind({}));
+    getWorkflowCard.mockResolvedValue(detail({ card: withSupport }));
+    preflightWorkflowRun.mockResolvedValue({ groups: [{ reasons: [] }] });
+    useTasksStore().modelDownloads = [
+      {
+        id: "d2",
+        file: "UMT5_xxl.safetensors",
+        status: "running",
+        directory: "text_encoders",
+        percent: 40,
+      },
+      // Another kind's folder: never a text encoder's option.
+      { id: "d3", file: "big_vae.safetensors", status: "running", directory: "vae" },
+      // Ended: no longer on its way.
+      { id: "d4", file: "done.safetensors", status: "done", directory: "text_encoders" },
+    ];
+    const { wrapper } = await mountWith([KEY], [withSupport]);
+    await settle(wrapper);
+    const picker = row(wrapper, "text_encoder").find(
+      '[data-testid="wftab-pick-text_encoder"]',
+    );
+    expect(picker.exists()).toBe(true);
+    // The field is a listbox now: it draws the group's animated mark.
+    await picker.find('[role="combobox"]').trigger("click");
+    const options = picker.findAll('[role="option"]').map((o) => o.text());
+    expect(options.some((o) => o.includes("UMT5_xxl"))).toBe(true);
+    expect(options.some((o) => o.includes("big_vae"))).toBe(false);
+    expect(options.some((o) => o.includes("done"))).toBe(false);
+    expect(picker.text()).toContain("Downloading");
+    expect(picker.find('[data-testid="downloading-mark"]').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("drops the automatic pick when its file's download lands, not the owner's", async () => {
+    preflightWorkflowRun.mockResolvedValue(
+      missing({ file: "t5/t5xxl_fp8.safetensors", folder: "text_encoders" }),
+    );
+    getWorkflowCard.mockResolvedValue(detail({ card: withSupport }));
+    readModelSwap.mockReset().mockImplementation(
+      replacementsByKind({
+        text_encoder: [
+          { id: 4, filename: "t5xxl_fp16.safetensors" },
+          { id: 5, filename: "t5-xxl_fp8.safetensors", likely: true },
+        ],
+      }),
+    );
+    const tasks = useTasksStore();
+    const land = async (wrapper) => {
+      tasks.modelDownloads = [
+        { id: "d1", file: "t5xxl_fp8.safetensors", status: "done" },
+      ];
+      tasks.downloadsLanded += 1;
+      await settle(wrapper);
+    };
+
+    // The tab's own pick goes: the workflow loads the file it asked for.
+    let { wrapper } = await mountWith([KEY], [withSupport]);
+    await settle(wrapper);
+    expect(setWorkflowChanges).toHaveBeenCalledTimes(1);
+    await land(wrapper);
+    expect(setWorkflowChanges).toHaveBeenCalledTimes(2);
+    expect(setWorkflowChanges.mock.calls[1][1].models ?? []).toEqual([]);
+    wrapper.unmount();
+
+    // The owner's own pick stays.
+    waitingOnServer = null;
+    ({ wrapper } = await mountWith([KEY], [withSupport]));
+    await settle(wrapper);
+    await row(wrapper, "text_encoder")
+      .find('[data-testid="wftab-pick-text_encoder"] select')
+      .setValue("t5xxl_fp16.safetensors");
+    await settle(wrapper);
+    const calls = setWorkflowChanges.mock.calls.length;
+    expect(waitingOnServer.models[0].filename).toBe("t5xxl_fp16.safetensors");
+    await land(wrapper);
+    expect(setWorkflowChanges).toHaveBeenCalledTimes(calls);
+    expect(waitingOnServer.models[0].filename).toBe("t5xxl_fp16.safetensors");
+    wrapper.unmount();
+  });
+
   it("files the missing file's misfiled shelf copy and picks it, in one choice", async () => {
     // #1962 after #1966: the copy is on the shelf as Unclassified, so nothing
     // offers it until it is filed as a text encoder.
@@ -1860,7 +2214,7 @@ describe("a VAE or text encoder row (#1596, #1850)", () => {
     await settle(wrapper);
     expect(row(wrapper, "text_encoder").text()).toContain("Text encoder missing");
     expect(row(wrapper, "text_encoder").text()).toContain(
-      "t5xxl_fp8 is not installed in ComfyUI.",
+      "t5xxl_fp8 is not in ComfyUI.",
     );
     expect(
       wrapper.find('[data-testid="wftab-no-replacement-text_encoder"]').text(),
@@ -1952,6 +2306,58 @@ describe("a VAE or text encoder row (#1596, #1850)", () => {
     expect(
       wrapper.find('[data-testid="wftab-no-replacement-vae"]').text(),
     ).toContain("Could not read what could replace it");
+    // Only a checkpoint is loaded off the shelf, so only it says PixlStash.
+    expect(
+      row(wrapper, "vae").find('[data-testid="wftab-missing-file"]').text(),
+    ).toBe("sdxl_vae_fp8 is not in ComfyUI.");
+  });
+
+  it("files a missing VAE's candidates by their evidence, with no base model to name", async () => {
+    preflightWorkflowRun.mockResolvedValue(
+      missing({ file: "SDXL/sdxl_vae_fp8.safetensors", folder: "vae" }),
+    );
+    getWorkflowCard.mockResolvedValue(detail({ card: withSupport }));
+    readModelSwap.mockReset().mockImplementation(
+      replacementsByKind({
+        vae: [
+          { id: 4, filename: "fits.safetensors", via: "declared", verdict: "unknown" },
+          { id: 3, filename: "sdxl_vae_bf16.safetensors", via: "checkpoint", verdict: "likely" },
+        ],
+      }),
+    );
+    const { wrapper } = await mountWith([KEY], [withSupport]);
+    await settle(wrapper);
+    // A checkpoint's grouped read only: a VAE's verdicts come from `via`.
+    expect(readModelSwap).toHaveBeenCalledWith(KEY, {
+      replacing: "SDXL/sdxl_vae_fp8.safetensors",
+      slotKind: "vae",
+      cached: true,
+    });
+    const field = row(wrapper, "vae").find('[role="combobox"]');
+    expect(field.text()).toContain("sdxl_vae_fp8 (missing)");
+    await field.trigger("click");
+    const list = row(wrapper, "vae").find('[role="listbox"]');
+    expect(list.find('[data-testid="wftab-replacing"]').text()).toBe(
+      "Replacing sdxl_vae_fp8",
+    );
+    expect(list.find('[data-testid="wftab-none-likely"]').exists()).toBe(false);
+    expect(
+      list.findAll(".app-select__group").map((h) => h.text().replace(/\s+/g, " ")),
+    ).toEqual([
+      "Likely to work, goes with this workflow",
+      "Not known, nothing has run with it",
+    ]);
+    expect(list.findAll('[role="option"]').map((o) => o.attributes("aria-label"))).toEqual([
+      "sdxl_vae_bf16",
+      "fits, untested (Only its file layout fits; nothing has run with it.)",
+    ]);
+    // The caption is the field's description, not a child of the listbox's.
+    expect(field.attributes("aria-describedby")).toBe(
+      list.find(".app-select__head").attributes("id"),
+    );
+    expect(row(wrapper, "vae").find('[data-testid="wftab-missing-base"]').exists()).toBe(
+      false,
+    );
   });
 
   it("still reads the pickers when ComfyUI cannot be asked what is missing", async () => {
@@ -3529,6 +3935,20 @@ describe("the Tasks tab", () => {
     expect(textOf(wrapper)).toContain("No active tasks");
   });
 
+  it("comes back to the Workflow tab when a card's double-click opens it", async () => {
+    const { wrapper } = await mountWith([KEY]);
+    useSidebarStore().showTasksTab();
+    await flush(wrapper);
+    expect(textOf(wrapper)).toContain("No active tasks");
+
+    const sidebar = useSidebarStore();
+    sidebar.workflowInspectorOpen = false;
+    sidebar.showCardInInspector("workflows");
+    await flush(wrapper);
+    expect(textOf(wrapper)).not.toContain("No active tasks");
+    expect(wrapper.find(".inspector-tab--active").text()).toContain("Workflow");
+  });
+
   it("pulses the tab while work is running, and only then", async () => {
     const { wrapper } = await mountWith([KEY]);
     const tasksStore = useTasksStore();
@@ -3653,6 +4073,38 @@ describe("the LoRA chain (#1478)", () => {
     expect(names[0].find("tooltip-stub").attributes("text")).toBe(
       "lightning-8step.safetensors",
     );
+  });
+
+  it("flags a LoRA this ComfyUI lacks and offers its download where the server can fetch it", async () => {
+    preflightWorkflowRun.mockResolvedValue({
+      groups: [
+        {
+          reasons: [],
+          bypassed_loras: [
+            { file: "LCM/lightning-8step.safetensors", folder: "loras", requested: false, downloadable: true },
+            { file: "film-grain-35mm.safetensors", folder: "loras", requested: false },
+            // The owner's own skip is no missing file.
+            { file: "neon-rain-v2.safetensors", folder: "loras", requested: true, downloadable: true },
+          ],
+        },
+      ],
+    });
+    const { wrapper } = await mountChain();
+    await settle(wrapper);
+    const rows = wrapper.findAll("[data-testid='wftab-default-lora']");
+    expect(
+      rows.map((row) => [
+        row.find(".wftab-chain-name").text(),
+        row.find(".wftab-chain-flag").exists(),
+        row.find("[data-testid='model-download']").exists(),
+      ]),
+    ).toEqual([
+      ["lightning-8step", true, true],
+      ["neon-rain-v2", false, false],
+      ["film-grain-35mm", true, false],
+      // Flagged as off the shelf, as before.
+      ["hairstyle-v3.safetensors", true, false],
+    ]);
   });
 
   it("lists the default recipe's LoRAs in the chain's order, joined by digest", async () => {
@@ -5287,9 +5739,7 @@ describe("the tab as the editor (#1850)", () => {
             }),
           ),
         );
-        await wrapper
-          .find('[data-testid="wftab-version-menu"] [data-version="2"]')
-          .trigger("click");
+        await goBackTo(wrapper, 2);
         await flush(wrapper);
         await flush(wrapper);
 
@@ -5504,9 +5954,7 @@ describe("the tab as the editor (#1850)", () => {
       await settle(wrapper);
       const back = held();
       restoreWorkflowVersion.mockImplementation(() => back.promise);
-      await wrapper
-        .find('[data-testid="wftab-version-menu"] [data-version="2"]')
-        .trigger("click");
+      await goBackTo(wrapper, 2);
       await flush(wrapper);
       expect(stage(wrapper, "upscale").element.disabled).toBe(true);
       expect(picker(wrapper).element.disabled).toBe(true);
@@ -6431,3 +6879,174 @@ describe("the tab as the editor (#1850)", () => {
     });
   });
 });
+
+// #2000: a draft has no graph PixlStash can run until ComfyUI has saved it.
+describe("a draft", () => {
+  it("keeps Run… on screen, refused, with what finishes it attached", async () => {
+    const { wrapper } = await mountWith([KEY], [card({ draft: true, manual: true })]);
+    const run = wrapper
+      .findAll("button")
+      .find((b) => b.text().includes("Run…"));
+    expect(run.attributes("aria-disabled")).toBe("true");
+    expect(wrapper.find(`#${run.attributes("aria-describedby")}`).text()).toBe(
+      "Finish it in ComfyUI first: open it there and save it.",
+    );
+    await run.trigger("click");
+    await flush(wrapper);
+    expect(useRunDialogStore().source).toBe(null);
+  });
+});
+
+describe("the GPU memory section", () => {
+  const vram = (over = {}) => ({
+    need_mb: 9830,
+    measured_runs: 12,
+    exclusive: false,
+    exclusive_source: null,
+    exclusive_at: null,
+    trend: "rising",
+    peaks: [
+      { peak_mb: 9830, outcome: "completed", at: "2026-10-20T10:00:00Z", used: true },
+      { peak_mb: 9000, outcome: "completed", at: "2026-10-19T10:00:00Z", used: true },
+      { peak_mb: 22000, outcome: "oom", at: "2026-10-14T09:00:00Z", used: false },
+    ],
+    ...over,
+  });
+  const openWorkflowTab = async (wrapper) => {
+    await wrapper.findAll("button.inspector-tab")[1].trigger("click");
+    await settle(wrapper);
+  };
+
+  it("says what the workflow needs, on what it rests, and draws the peaks oldest first, the oom one as an error", async () => {
+    getWorkflowCard.mockResolvedValue(detail({ card: { vram: vram() } }));
+    const { wrapper } = await mountWith([KEY]);
+    await openWorkflowTab(wrapper);
+    expect(wrapper.find('[data-testid="wftab-gpu-need"]').text()).toBe("9.6 GB");
+    expect(wrapper.find('[data-testid="wftab-gpu-basis"]').text()).toBe("2 of 12 runs · rising");
+    // Oldest to newest, so the oom run (the oldest) comes first and the newest
+    // peak, one the need is taken from, ends the line.
+    const bars = wrapper.findAll(".wftab-peak");
+    expect(bars.map((bar) => bar.classes("wftab-peak--oom"))).toEqual([true, false, false]);
+    expect(bars.map((bar) => bar.classes("wftab-peak--used"))).toEqual([false, true, true]);
+    expect(bars[2].attributes("aria-label")).toBe("9.6 GB, completed, used for the need");
+  });
+
+  it("draws only the newest 16 peaks", async () => {
+    const peaks = Array.from({ length: 20 }, (_, i) => ({
+      peak_mb: 1024 * (i + 1),
+      outcome: "completed",
+      at: "2026-10-20T10:00:00Z",
+      used: i < 5,
+    }));
+    getWorkflowCard.mockResolvedValue(detail({ card: { vram: vram({ peaks }) } }));
+    const { wrapper } = await mountWith([KEY]);
+    await openWorkflowTab(wrapper);
+    const bars = wrapper.findAll(".wftab-peak");
+    expect(bars).toHaveLength(16);
+    // The last bar is the newest peak (the first on the wire); 17-20 GB are
+    // the oldest four and are left out.
+    expect(bars[15].attributes("aria-label")).toMatch(/^1\.0 GB,/);
+    expect(bars[0].attributes("aria-label")).toMatch(/^16\.0 GB,/);
+  });
+
+  it("says one run in the singular", async () => {
+    getWorkflowCard.mockResolvedValue(
+      detail({
+        card: {
+          vram: vram({
+            measured_runs: 1,
+            trend: null,
+            peaks: [{ peak_mb: 9000, outcome: "completed", at: "2026-10-20T10:00:00Z", used: true }],
+          }),
+        },
+      }),
+    );
+    const { wrapper } = await mountWith([KEY]);
+    await openWorkflowTab(wrapper);
+    expect(wrapper.find('[data-testid="wftab-gpu-basis"]').text()).toBe("1 of 1 run");
+  });
+
+  it("says not measured, and draws no bars, for a workflow nothing has run", async () => {
+    getWorkflowCard.mockResolvedValue(detail({ card: { vram: vram({ need_mb: null, measured_runs: 0, peaks: [], trend: null }) } }));
+    const { wrapper } = await mountWith([KEY]);
+    await openWorkflowTab(wrapper);
+    expect(wrapper.find('[data-testid="wftab-gpu-need"]').text()).toBe("Not measured yet");
+    expect(wrapper.find('[data-testid="wftab-gpu-peaks"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="wftab-gpu-basis"]').text()).toBe("No runs yet");
+    expect(wrapper.find('[data-testid="wftab-gpu-exclusive"]').exists()).toBe(true);
+  });
+
+  it("offers no reset for a workflow nothing has run", async () => {
+    getWorkflowCard.mockResolvedValue(detail({ card: { vram: vram({ need_mb: null, measured_runs: 0, peaks: [], trend: null }) } }));
+    const { wrapper } = await mountWith([KEY]);
+    await openWorkflowTab(wrapper);
+    expect(wrapper.find('[data-testid="wftab-gpu-reset"]').exists()).toBe(false);
+  });
+
+  it("forgets the measured runs from Reset and shows the workflow unmeasured", async () => {
+    getWorkflowCard.mockResolvedValue(detail({ card: { vram: vram() } }));
+    patchWorkflowCard.mockResolvedValue(
+      detail({ card: { vram: vram({ need_mb: null, measured_runs: 0, peaks: [], trend: null }) } }),
+    );
+    const { wrapper } = await mountWith([KEY]);
+    await openWorkflowTab(wrapper);
+    await wrapper.find('[data-testid="wftab-gpu-reset"]').trigger("click");
+    await flush(wrapper);
+    expect(patchWorkflowCard).toHaveBeenCalledWith(KEY, { forget_vram_peaks: true });
+    expect(wrapper.find('[data-testid="wftab-gpu-need"]').text()).toBe("Not measured yet");
+    expect(wrapper.find('[data-testid="wftab-gpu-reset"]').exists()).toBe(false);
+  });
+
+  it("names the image size a peak was measured at", async () => {
+    const peaks = [
+      { peak_mb: 9830, pixels: 1048576, outcome: "completed", at: "2026-10-20T10:00:00Z", used: true },
+    ];
+    getWorkflowCard.mockResolvedValue(detail({ card: { vram: vram({ peaks }) } }));
+    const { wrapper } = await mountWith([KEY]);
+    await openWorkflowTab(wrapper);
+    expect(wrapper.find(".wftab-peak").attributes("aria-label")).toBe(
+      "9.6 GB, 1.0 MP, completed, used for the need",
+    );
+  });
+
+  it("writes run-alone through the card, and bands the day an out-of-memory streak turned it on", async () => {
+    const at = "2026-10-14T09:00:00Z";
+    getWorkflowCard.mockResolvedValue(
+      detail({ card: { vram: vram({ exclusive: true, exclusive_source: "oom", exclusive_at: at }) } }),
+    );
+    patchWorkflowCard.mockResolvedValue(detail({ card: { vram: vram({ exclusive: false }) } }));
+    const { wrapper } = await mountWith([KEY]);
+    await openWorkflowTab(wrapper);
+    const day = new Date(at).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+    expect(wrapper.find('[data-testid="wftab-gpu-oom"]').text()).toBe(
+      `Switched on ${day} after running out of memory`,
+    );
+    const toggle = wrapper.find('[data-testid="wftab-gpu-exclusive"]');
+    expect(toggle.attributes("aria-checked")).toBe("true");
+
+    await toggle.trigger("click");
+    await flush(wrapper);
+    expect(patchWorkflowCard).toHaveBeenCalledWith(KEY, { exclusive: false });
+    expect(wrapper.find('[data-testid="wftab-gpu-oom"]').exists()).toBe(false);
+  });
+
+  it("turns run-alone on from the switch", async () => {
+    getWorkflowCard.mockResolvedValue(detail({ card: { vram: vram() } }));
+    patchWorkflowCard.mockResolvedValue(detail({ card: { vram: vram({ exclusive: true, exclusive_source: "owner" }) } }));
+    const { wrapper } = await mountWith([KEY]);
+    await openWorkflowTab(wrapper);
+    const toggle = wrapper.find('[data-testid="wftab-gpu-exclusive"]');
+    expect(toggle.attributes("aria-checked")).toBe("false");
+    await toggle.trigger("click");
+    await flush(wrapper);
+    expect(patchWorkflowCard).toHaveBeenCalledWith(KEY, { exclusive: true });
+  });
+
+  it("does not band an out-of-memory day for a switch the owner turned on", async () => {
+    getWorkflowCard.mockResolvedValue(detail({ card: { vram: vram({ exclusive: true, exclusive_source: "owner", exclusive_at: "2026-10-14T09:00:00Z" }) } }));
+    const { wrapper } = await mountWith([KEY]);
+    await openWorkflowTab(wrapper);
+    expect(wrapper.find('[data-testid="wftab-gpu-oom"]').exists()).toBe(false);
+  });
+});
+

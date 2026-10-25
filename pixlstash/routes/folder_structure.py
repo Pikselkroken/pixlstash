@@ -51,6 +51,8 @@ _FACE_BATCH_TIMEOUT_S = 180.0
 #: on its own, and a walk that outlasts it simply shares the machine again
 #: until the face stage renews it.
 _WORKER_HOLD_S = 60.0
+# Whose hold it is: the planner has other holders (a VRAM lease making room).
+_WORKER_HOLD_OWNER = "folder-structure-read"
 
 # Matches any non-empty string with no null bytes or newlines. Applied with
 # fullmatch() after realpath so CodeQL recognises the result as a path-injection
@@ -298,14 +300,14 @@ def create_router(server) -> APIRouter:
     def _hold_workers() -> None:
         planner = getattr(server.vault, "_work_planner", None)
         if planner is not None:
-            planner.hold(_WORKER_HOLD_S)
+            planner.hold(_WORKER_HOLD_OWNER, _WORKER_HOLD_S)
 
     def _release_workers() -> None:
         # The lease would expire on its own, but the commit that follows a
         # read imports through the planner and must not wait out the minute.
         planner = getattr(server.vault, "_work_planner", None)
         if planner is not None:
-            planner.release()
+            planner.release(_WORKER_HOLD_OWNER)
 
     @router.post(
         "/folder-structure/read",

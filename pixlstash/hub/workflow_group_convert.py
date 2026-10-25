@@ -605,19 +605,19 @@ def _core_strip_v1(document: dict) -> dict[str, ReducedNode]:
     return _strip(_reduce(document), _core_strip(STRIP_LORAS_FOR_STACKS))
 
 
-def _core_strip_v2(document: dict) -> dict[str, ReducedNode]:
-    """Core rule v2's graph, for data step 10's label maps. Not the live rule."""
-    return _core_pass(document, STRIP_LORAS_FOR_STACKS, rule=2)[0]
+def _retired_core_strip(rule: int):
+    """Core rule *rule*'s graph, for the label maps of the data step that
+    re-derives from it (10, 13 and 15 for v2-v4). Not the live rule."""
+
+    def strip(document: dict) -> dict[str, ReducedNode]:
+        return _core_pass(document, STRIP_LORAS_FOR_STACKS, rule=rule)[0]
+
+    return strip
 
 
-def _core_strip_v3(document: dict) -> dict[str, ReducedNode]:
-    """Core rule v3's graph, for data step 13's label maps. Not the live rule."""
-    return _core_pass(document, STRIP_LORAS_FOR_STACKS, rule=3)[0]
-
-
-def _core_strip_v4(document: dict) -> dict[str, ReducedNode]:
-    """Core rule v4's graph, for data step 15's label maps. Not the live rule."""
-    return _core_pass(document, STRIP_LORAS_FOR_STACKS, rule=4)[0]
+_core_strip_v2 = _retired_core_strip(2)
+_core_strip_v3 = _retired_core_strip(3)
+_core_strip_v4 = _retired_core_strip(4)
 
 
 # What data steps 10, 13 and 15 re-derive from, by the rule's name: its stamp,
@@ -1406,9 +1406,12 @@ _WORKFLOW_ID_COLUMNS = (
     ("workflow_version", "workflow_id"),
     ("workflow_change", "workflow_id"),
     ("workflow_layout", "workflow_id"),
+    ("workflow_thumbnail", "workflow_id"),
     ("workflow_key_successor", "workflow_id"),
     ("workflow_id_successor", "successor_id"),
     ("workflow_document", "from_workflow_id"),
+    ("workflow_vram_peak", "workflow_id"),
+    ("workflow_vram_policy", "workflow_id"),
 )
 
 
@@ -1727,6 +1730,9 @@ def _carry_group_state(
         # Each library's own hide rides with the id, so re-identifying a
         # workflow does not drop it back to the machine-wide fallback (#1869).
         ("workflow_group_hidden", "library_uuid"),
+        # "Runs alone on the GPU" is a fact about the graphs, which every
+        # heir runs.
+        ("workflow_vram_policy", None),
     ):
         if table == "workflow_group_pins" and both_pinned:
             if not keep:
@@ -1761,7 +1767,34 @@ def _carry_group_state(
             )
         if not keep:
             conn.execute(f"DELETE FROM {table} WHERE workflow_id = ?", (group,))
+    # The measured GPU peaks go to every heir of a split, copied: each runs
+    # the same graphs, and an heir without them would run as never measured.
+    # Not by ``INSERT OR IGNORE`` above: the rows have their own ids. A row
+    # the heir already has (a re-run of the carry) is not copied twice.
+    conn.execute(
+        "INSERT INTO workflow_vram_peak (workflow_id, model_set, device_name, "
+        "device_total_mb, peak_mb, measured_by, outcome, at, pixels) "
+        "SELECT ?, model_set, device_name, device_total_mb, peak_mb, "
+        "measured_by, outcome, at, pixels FROM workflow_vram_peak AS p WHERE "
+        "workflow_id = ? AND NOT EXISTS (SELECT 1 FROM workflow_vram_peak AS h "
+        "WHERE h.workflow_id = ? AND h.at = p.at AND h.peak_mb = p.peak_mb "
+        "AND h.model_set = p.model_set AND h.device_name = p.device_name "
+        "AND h.device_total_mb = p.device_total_mb "
+        "AND h.measured_by = p.measured_by AND h.outcome = p.outcome "
+        "AND h.pixels IS p.pixels)",
+        (heir, group, heir),
+    )
     if not keep:
+        conn.execute("DELETE FROM workflow_vram_peak WHERE workflow_id = ?", (group,))
+    # The owner's picture for the workflow is not of its graph, so it goes
+    # with the heir; the heir's own wins.
+    conn.execute(
+        "INSERT OR IGNORE INTO workflow_thumbnail (workflow_id, icon_sha256, pinned) "
+        "SELECT ?, icon_sha256, pinned FROM workflow_thumbnail WHERE workflow_id = ?",
+        (heir, group),
+    )
+    if not keep:
+        conn.execute("DELETE FROM workflow_thumbnail WHERE workflow_id = ?", (group,))
         conn.execute("DELETE FROM workflow_group_attr WHERE workflow_id = ?", (group,))
         # Changes that waited unsaved name loaders of the graph this id read
         # off its pictures; an heir may read another, so they go with the id.

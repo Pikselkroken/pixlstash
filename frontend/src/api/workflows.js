@@ -98,11 +98,25 @@ export async function getWorkflowCard(workflowId) {
  * the field out — so callers pass only what they mean to change.
  *
  * @param {string} workflowId
- * @param {{name?: ?string, notes?: ?string, hidden?: boolean}} changes
+ * @param {{name?: ?string, notes?: ?string, hidden?: boolean, thumbnail_pinned?: boolean}} changes
  * @returns {Promise<Object>} the same shape `getWorkflowCard` returns
  */
 export async function patchWorkflowCard(workflowId, changes) {
   return unwrap(apiClient.patch(wf(workflowId), changes));
+}
+
+/**
+ * Give a workflow a custom thumbnail, pinned over its pictures. Answers with
+ * the card re-read; `patchWorkflowCard(id, {thumbnail_pinned})` toggles it.
+ *
+ * @param {string} workflowId
+ * @param {File|Blob} file - PNG, JPEG or WebP, checked server-side by its bytes.
+ * @returns {Promise<Object>} the same shape `getWorkflowCard` returns
+ */
+export async function setWorkflowThumbnail(workflowId, file) {
+  const form = new FormData();
+  form.append("file", file);
+  return unwrap(apiClient.post(wf(workflowId, "/thumbnail"), form));
 }
 
 /**
@@ -270,17 +284,69 @@ export async function runWorkflowCard(body) {
 }
 
 /**
- * How one run `runWorkflowCard` queued stands, by its prompt id: `running`,
- * `completed` or `failed`, with the message the app shows. A 404 for a run the
- * backend no longer knows (it restarted, or the run is another library's).
+ * Upscale pictures (#1868): each one is upscaled in ComfyUI and the result
+ * stacked on top of it. One run per picture, followed as `runWorkflowCard`'s
+ * are.
  *
- * @param {string} promptId
- * @returns {Promise<{prompt_id: string, status: string, message: ?string, stopped: boolean, picture_ids: number[]}>}
+ * @param {number[]} pictureIds
+ * @param {{factor: number, model_sha256: ?string}} upscale
+ * @returns {Promise<{status: string, runs: number, prompts: Array<Object>}>}
  */
-export async function getRunOutcome(promptId) {
+export async function upscalePictures(pictureIds, upscale) {
   return unwrap(
-    apiClient.get(`/workflows/runs/${encodeURIComponent(promptId)}`),
+    apiClient.post("/workflows/upscale", { picture_ids: pictureIds, upscale }),
   );
+}
+
+/**
+ * What `upscalePictures` would start from: each picture's size, and whether
+ * the run that made it upscaled it already. Submits nothing.
+ *
+ * @param {number[]} pictureIds
+ * @returns {Promise<{pictures: Array<{picture_id: number, width: ?number, height: ?number, upscaled: boolean}>}>}
+ */
+export async function preflightUpscale(pictureIds) {
+  return unwrap(
+    apiClient.post("/workflows/upscale/preflight", { picture_ids: pictureIds }),
+  );
+}
+
+/**
+ * How one run `runWorkflowCard` queued stands: `waiting` (held by PixlStash
+ * for GPU memory), `running`, `completed` or `failed`, with the message the app
+ * shows. Takes the run's `run_id` or its `prompt_id`, which is null while the
+ * run is held. A 404 for a run the backend no longer knows (it restarted, or
+ * the run is another library's).
+ *
+ * @param {string} runId a `run_id` or a `prompt_id`
+ * @returns {Promise<{run_id: string, prompt_id: ?string, status: string, message: ?string, stopped: boolean, picture_ids: number[], code: ?string}>}
+ */
+export async function getRunOutcome(runId) {
+  return unwrap(
+    apiClient.get(`/workflows/runs/${encodeURIComponent(runId)}`),
+  );
+}
+
+/**
+ * Dismiss one finished run, by the `id` `GET /workers/progress` lists it under
+ * in `finished`, and with it the changes its workflow kept from it (#2050).
+ *
+ * @param {string} runId
+ * @returns {Promise<{cleared: number, workflow_id: ?string}>}
+ */
+export async function dismissFinishedRun(runId) {
+  return unwrap(
+    apiClient.delete(`/workflows/runs/${encodeURIComponent(runId)}`),
+  );
+}
+
+/**
+ * Clear the finished runs, keeping any whose changes can still be saved.
+ *
+ * @returns {Promise<{cleared: number, workflow_id: null}>}
+ */
+export async function clearFinishedRuns() {
+  return unwrap(apiClient.delete("/workflows/runs"));
 }
 
 /**
@@ -304,10 +370,18 @@ export async function exportWorkflow(workflowId) {
  * to run. The answer's `workflow_id` is the new manual workflow.
  *
  * @param {string} workflowId
+ * @param {number} [version] - copy this version of its graph (`… (version
+ *   N)`), not the current one; the workflow stays on the version it has.
  * @returns {Promise<{name: string, workflow_id: string}>}
  */
-export async function duplicateWorkflow(workflowId) {
-  return unwrap(apiClient.post(wf(workflowId, "/duplicate")));
+export async function duplicateWorkflow(workflowId, version) {
+  return unwrap(
+    apiClient.post(
+      wf(workflowId, "/duplicate"),
+      undefined,
+      version != null ? { params: { version } } : undefined,
+    ),
+  );
 }
 
 /**
@@ -331,21 +405,24 @@ export async function duplicateWorkflow(workflowId) {
  * @param {string} workflowId
  * `cached` (with `replacing`) is for a screen that asks on every selection:
  * what each loader lists is read from ComfyUI's node list as the server last
- * read it, up to a minute ago.
+ * read it, up to a minute ago. `grouped` (with `replacing` a checkpoint) offers
+ * every checkpoint the loader can load, each with a `verdict`, rather than only
+ * those of the missing one's base model.
  *
  * @param {{checkpointId?: number, replacing?: string, slotKind?: string,
- *   cached?: boolean}} [options]
+ *   cached?: boolean, grouped?: boolean}} [options]
  * @returns {Promise<Object>}
  */
 export async function readModelSwap(
   workflowId,
-  { checkpointId, replacing, slotKind, cached = false } = {},
+  { checkpointId, replacing, slotKind, cached = false, grouped = false } = {},
 ) {
   const params = {};
   if (checkpointId != null) params.checkpoint_id = checkpointId;
   if (replacing != null) params.replacing = replacing;
   if (slotKind != null) params.slot_kind = slotKind;
   if (cached) params.cached = true;
+  if (grouped) params.grouped = true;
   return unwrap(apiClient.get(wf(workflowId, "/model-swap"), { params }));
 }
 
@@ -413,6 +490,20 @@ export async function getWorkflowVersions(workflowId) {
  */
 export async function restoreWorkflowVersion(workflowId, version) {
   return unwrap(apiClient.post(wf(workflowId, `/versions/${version}/restore`)));
+}
+
+/**
+ * Hold one version of a workflow for ComfyUI to open, without going back to
+ * it (#1792). Answered as `openWorkflowRun` is, and opened the same way:
+ * `?pixlstash_run=<opening>&pixlstash_of=<workflow_id>`, where the
+ * ComfyUI-PixlStash node sends a save back as a new workflow.
+ *
+ * @param {string} workflowId
+ * @param {number} version
+ * @returns {Promise<{opening: string, workflow_id: string}>}
+ */
+export async function openWorkflowVersion(workflowId, version) {
+  return unwrap(apiClient.post(wf(workflowId, `/versions/${version}/opening`)));
 }
 
 /**

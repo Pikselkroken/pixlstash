@@ -88,9 +88,17 @@ import { VMenu } from "vuetify/components";
 
 import { fetchWorkflowSets } from "../../api/modelShelf";
 import { planSetClones } from "../../api/workflows";
+import { useFavouritesStore } from "../../stores/useFavouritesStore";
+import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useTasksStore } from "../../stores/useTasksStore";
 import { loraBase } from "../../utils/loraChain";
 import { onMenuKeydown } from "../../utils/menuKeyboard";
-import { handMadeName, headName, setGroups } from "../../utils/workflowSets";
+import {
+  favouriteSetsFirst,
+  handMadeName,
+  headName,
+  setGroups,
+} from "../../utils/workflowSets";
 import AppButton from "../widgets/AppButton.vue";
 
 // The root is a wrapper round the menu, whose content is teleported: what the
@@ -127,6 +135,9 @@ const props = defineProps({
  */
 const emit = defineEmits(["use"]);
 
+const favourites = useFavouritesStore();
+const tasksStore = useTasksStore();
+favourites.ensureLoaded();
 const open = ref(false);
 const root = ref(null);
 /** The button itself, as the page has it. */
@@ -162,6 +173,11 @@ function setsOf(payload) {
     return {
       key: `hand:${set.id}`,
       name: handMadeName(set),
+      // Held by digest while they download: no shelf id to plan with, so the
+      // set is used without them, and says so rather than quietly.
+      downloading: set.members
+        .filter((m) => !m.on_shelf && tasksStore.runningDownload({ sha256: m.sha256 }))
+        .map((m) => m.name),
       // Every checkpoint: a two-model graph takes one per base loader (#1690).
       checkpointIds: members
         .filter((m) => m.slot === "checkpoint")
@@ -252,10 +268,20 @@ function fillOf(plan) {
   });
 }
 
+/**
+ * The sets in the order they are drawn: hand-made first, a favourite leading
+ * inside each group. Null while the sets are unread.
+ */
+const rankedSets = computed(
+  () =>
+    sets.value &&
+    favouriteSetsFirst(sets.value, (key) => favourites.isFavourite("set", key)),
+);
+
 /** The rows as drawn, or null while the sets are unread. */
 const rows = computed(
   () =>
-    sets.value?.map((set) => {
+    rankedSets.value?.map((set) => {
       const fill = fillOf(set.plan);
       const wontLoad = set.plan.fit === "wont_load";
       const meta = wontLoad
@@ -270,12 +296,16 @@ const rows = computed(
             ]
               .filter(Boolean)
               .join(" · ");
+      const coming = set.downloading ?? [];
       return {
         key: set.key,
         name: set.name,
         fill,
-        meta,
+        meta: coming.length
+          ? `${meta} · ${comingWhat(coming)} still downloading, left out`
+          : meta,
         off: wontLoad || !fill.length,
+        coming,
       };
     }) ?? null,
 );
@@ -311,10 +341,22 @@ async function read() {
   }
 }
 
+/** "flux1-dev.safetensors", or "2 of its models". */
+function comingWhat(names) {
+  return names.length === 1 ? names[0] : `${names.length} of its models`;
+}
+
 function choose(row) {
   if (row.off) return;
   open.value = false;
   emit("use", { name: row.name, models: row.fill });
+  if (row.coming.length) {
+    useNoticeStore().push({
+      level: "warning",
+      text: `${comingWhat(row.coming)} ${row.coming.length === 1 ? "is" : "are"} still downloading, so "${row.name}" was used without ${row.coming.length === 1 ? "it" : "them"}. Use the set again once the download has finished.`,
+      key: `use-set-downloading-${row.key}`,
+    });
+  }
 }
 
 /** Put the keyboard on the button. */

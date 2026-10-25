@@ -11,7 +11,6 @@ import hashlib
 
 import pytest
 
-from pixlstash.hub.db import HubDatabase
 from pixlstash.services.stack_detector import (
     MAX_MEMBERS_PER_STACK,
     StackRefused,
@@ -22,13 +21,6 @@ from pixlstash.services.stack_detector import (
     set_cover,
     unstack,
 )
-
-
-@pytest.fixture
-def hub(tmp_path):
-    database = HubDatabase(str(tmp_path / "hub.db"))
-    yield database
-    database.close()
 
 
 def _folder(hub, path):

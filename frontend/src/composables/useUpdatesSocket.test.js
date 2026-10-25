@@ -31,6 +31,9 @@ const {
   reloadAfterFullRestore: vi.fn(),
 }));
 
+const patchWorkflowCard = vi.hoisted(() => vi.fn(async () => ({})));
+vi.mock("../api/workflows", () => ({ patchWorkflowCard }));
+
 vi.mock("../stores/useDedupStore", () => ({
   useDedupStore: () => ({ applyPictureEvent }),
 }));
@@ -68,6 +71,7 @@ import { useTasksStore } from "../stores/useTasksStore";
 import { useGridStore } from "../stores/useGridStore";
 import { useWorkflowsStore } from "../stores/useWorkflowsStore";
 import { useModelShelfStore } from "../stores/useModelShelfStore";
+import { useWorkflowTemplatesStore } from "../stores/useWorkflowTemplatesStore";
 // The real ones: the apiClient mock below spreads `importOriginal`, so a test
 // can drive an actual session transition rather than a stand-in for one.
 import { API_BASE_URL, notifySessionReset } from "../utils/apiClient";
@@ -685,6 +689,15 @@ describe("useUpdatesSocket: models_arrived", () => {
     const arrived = vi.spyOn(useModelShelfStore(), "onModelsArrived");
     receive({ type: "models_arrived", model_ids: [4] });
     expect(arrived).toHaveBeenCalledTimes(1);
+    // The ids go along: they are what says an arrival completed a template.
+    expect(arrived).toHaveBeenCalledWith([4]);
+  });
+
+  it("has the Templates tab re-read which of its files are on the shelf", () => {
+    connect();
+    const reread = vi.spyOn(useWorkflowTemplatesStore(), "onModelsArrived");
+    receive({ type: "models_arrived", model_ids: [4] });
+    expect(reread).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -744,3 +757,61 @@ describe("useUpdatesSocket: workflows_changed (#1696)", () => {
     expect(changed).not.toHaveBeenCalled();
   });
 });
+
+describe("useUpdatesSocket: the GPU queue's resource_lease event", () => {
+  it("re-reads the Tasks tab's poll on every lease change, and says nothing for a preemption", () => {
+    connect();
+    const tasks = useTasksStore();
+    const nudge = vi.spyOn(tasks, "nudge");
+
+    receive({ type: "resource_lease", lease_id: "lease-1", tenant: "comfyui", label: "x", kind: "heavy", state: "waiting", change: "waiting", worker_type: null, run_id: "run-1", workflow_id: "auto:k", code: null, text: "" });
+    expect(nudge).toHaveBeenCalledTimes(1);
+
+    receive({ type: "resource_lease", lease_id: "lease-2", tenant: "pixlstash", label: "Tagging", kind: "light", state: "released", change: "preempted", worker_type: "TagTask", run_id: null, workflow_id: null, code: null, text: "Stopped to make room" });
+    expect(nudge).toHaveBeenCalledTimes(2);
+    expect(useNoticeStore().notices).toHaveLength(0);
+  });
+
+  it("warns once that a workflow now runs alone after it ran out of memory, with Turn off", async () => {
+    connect();
+    receive({
+      type: "resource_lease",
+      lease_id: "lease-3",
+      tenant: "comfyui",
+      label: "ComfyUI 'Portrait upscale ×4'",
+      kind: "exclusive",
+      state: "granted",
+      change: "warning",
+      worker_type: null,
+      run_id: "run-3",
+      workflow_id: "auto:portrait",
+      code: "vram_oom_exclusive",
+      text: "Portrait upscale ×4 ran out of GPU memory 3 runs in a row and now runs alone.",
+    });
+
+    const noticeStore = useNoticeStore();
+    const [notice] = noticeStore.notices;
+    expect(notice.level).toBe("warning");
+    expect(notice.text).toContain("now runs alone.");
+    expect(notice.action.label).toBe("Turn off");
+
+    // Turn off turns the switch back off, for that workflow only.
+    noticeStore.invokeAction(notice.id);
+    await vi.waitFor(() =>
+      expect(patchWorkflowCard).toHaveBeenCalledWith("auto:portrait", { exclusive: false }),
+    );
+  });
+
+  it("does not warn for a run-alone switch that names no workflow", () => {
+    connect();
+    receive({ type: "resource_lease", change: "warning", code: "vram_oom_exclusive", text: "x" });
+    expect(useNoticeStore().notices).toHaveLength(0);
+  });
+
+  it("does not warn for a warning with another code", () => {
+    connect();
+    receive({ type: "resource_lease", change: "warning", code: "something_else", workflow_id: "w", text: "x" });
+    expect(useNoticeStore().notices).toHaveLength(0);
+  });
+});
+

@@ -16,12 +16,13 @@ import tempfile
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlmodel import Session, delete, select
+from sqlmodel import Session, select
 
-from pixlstash.db_models import User, UserToken
+from pixlstash.db_models import User
 from pixlstash.db_models.library_settings import LibrarySettings
 from pixlstash.server import Server
 from pixlstash.services import library_settings_service
+from tests.utils import reset_owner_auth
 
 API = "/api/v1"
 
@@ -38,20 +39,7 @@ def server():
 
 @pytest.fixture(autouse=True)
 def clean(server):
-    def _wipe(session: Session):
-        session.exec(delete(UserToken))
-        session.exec(delete(User))
-        session.commit()
-
-    server.hub_engine.run_task(_wipe)
-    server.auth.password_hash = None
-    server.auth.username = None
-    server.auth.user = None
-    server.auth._clear_all_sessions()
-    server.auth._flush_token_cache()
-    server.auth._failed_login_attempts = 0
-    server.auth._login_lockout_until = 0.0
-    server.auth.ensure_user()
+    reset_owner_auth(server)
     library_settings_service.set_similarity_character(server.vault.db, None)
     yield
 

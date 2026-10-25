@@ -77,7 +77,7 @@ CURRENT_SCHEMA_VERSION = 2
 # reasoning the model-shelf tables were amended into v2 for. ``user_version`` is
 # free (nothing in PixlStash has ever written it), costs no DDL, and an older
 # build ignores it entirely.
-CURRENT_DATA_VERSION = 23
+CURRENT_DATA_VERSION = 24
 
 # `model_file.state` for a copy the last scan actually looked at, spelled out
 # rather than imported from `services.model_folder_scanner`. That module imports
@@ -342,7 +342,8 @@ CREATE TABLE IF NOT EXISTS model_folder (
     delete_after_import  INTEGER,
     last_checked         TEXT,
     created_at           TEXT,
-    is_default           INTEGER NOT NULL DEFAULT 0
+    is_default           INTEGER NOT NULL DEFAULT 0,
+    is_download_target   INTEGER NOT NULL DEFAULT 0
 )
 """
 
@@ -426,6 +427,11 @@ CREATE TABLE IF NOT EXISTS model (
     -- not to suggest one (#1962). A workflow loading the file as another
     -- kind is offered to the owner only while this is 0.
     file_kind_decided     INTEGER NOT NULL DEFAULT 0,
+    -- When the file last arrived through the Downloads folder intake
+    -- (services.downloads_intake). NULL for a file a scan found, however new:
+    -- a first scan of an old folder registers everything at once, and that is
+    -- not an arrival. The template picker's "new ready to make" reads it.
+    arrived_at            TEXT,
     CHECK (file_kind <> 'adapter' OR sha256 IS NOT NULL),
     -- Same shape one column over: every producer already supplies an algorithm
     -- for an adapter ('unknown' is a first-class value, never NULL), so an
@@ -524,7 +530,11 @@ CREATE TABLE IF NOT EXISTS model_workflow_set (
     name        TEXT,
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL,
-    cloned      INTEGER NOT NULL DEFAULT 0
+    cloned      INTEGER NOT NULL DEFAULT 0,
+    -- The ComfyUI template (services.workflow_templates) the set was made
+    -- from, by name; NULL for a set made any other way. Covers that template
+    -- in the picker whatever members the set holds since.
+    template    TEXT
 )
 """
 
@@ -546,18 +556,31 @@ CREATE TABLE IF NOT EXISTS model_workflow_set_member (
 )
 """
 
-# A model the owner kept OUT of a hand-made set's merge offer (#1523, "Keep
-# separate"). Keyed by sha256 like a member, so a decline outlives the file's
-# shelf row. Only the offer reads it: a declined model is never offered to that
-# set again, while a picture needing some OTHER model still brings the offer
-# back for that one. Clearing the rows is "Offer the merge again". CASCADE so
-# a build that predates this table can still delete a set that has declines.
+# A model the owner REMOVED from a hand-made set. Kept since #1523 ("Keep
+# separate" from the merge offer); since #1972 a set holds every model the
+# pictures on its checkpoint ran with, and a row here keeps that model out of
+# it for good. Keyed by sha256 like a member, so a removal outlives the file's
+# shelf row. Clearing a row is Restore. CASCADE so a build that predates this
+# table can still delete a set that has some.
 _V2_MODEL_WORKFLOW_SET_DECLINE = """
 CREATE TABLE IF NOT EXISTS model_workflow_set_decline (
     set_id       INTEGER NOT NULL
                  REFERENCES model_workflow_set(id) ON DELETE CASCADE,
     sha256       TEXT NOT NULL,
     declined_at  TEXT NOT NULL,
+    PRIMARY KEY (set_id, sha256)
+)
+"""
+
+# A model the pictures brought into a hand-made set that the owner has seen in
+# its tray (#1972): one the base holds and no row here names is drawn as new.
+# Keyed by sha256 like a member; CASCADE as above.
+_V2_MODEL_WORKFLOW_SET_SEEN = """
+CREATE TABLE IF NOT EXISTS model_workflow_set_seen (
+    set_id   INTEGER NOT NULL
+             REFERENCES model_workflow_set(id) ON DELETE CASCADE,
+    sha256   TEXT NOT NULL,
+    seen_at  TEXT NOT NULL,
     PRIMARY KEY (set_id, sha256)
 )
 """
@@ -620,6 +643,23 @@ CREATE TABLE IF NOT EXISTS model_hidden (
 )
 """
 
+# The owner's favourites (#1578): a model, a workflow card or a workflow set
+# they want first wherever they choose from a list. Per HUB, not per library,
+# because all three are hub-level facts and a favourite follows the machine. A
+# row means favourite; no row means not. Keyed by stable identity rather than a
+# row id, with no foreign key: `model` by sha256 so a forget and re-add keeps
+# it, `workflow` by card key, `set` by the grid's set key (`hand:<id>`,
+# `model:<head id>`). A key that names nothing today is kept, not purged, so a
+# favourite comes back when its model does.
+_V2_FAVOURITE = """
+CREATE TABLE IF NOT EXISTS favourite (
+    kind        TEXT NOT NULL CHECK (kind IN ('model', 'workflow', 'set')),
+    key         TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    PRIMARY KEY (kind, key)
+)
+"""
+
 _V2_MODEL_SHELF_INDEXES = (
     # The scanner's hot path: "which files does this model have, and where".
     "CREATE INDEX IF NOT EXISTS ix_model_file_model ON model_file(model_id)",
@@ -649,8 +689,10 @@ _V2_MODEL_SHELF_TABLES = (
     # After the set: it references `model_workflow_set(id)`.
     _V2_MODEL_WORKFLOW_SET_MEMBER,
     _V2_MODEL_WORKFLOW_SET_DECLINE,
+    _V2_MODEL_WORKFLOW_SET_SEEN,
     _V2_WORKFLOW_SET_HIDDEN,
     _V2_MODEL_HIDDEN,
+    _V2_FAVOURITE,
     _V2_MODEL_SET_VERDICT,
     _V2_MODEL_SET_MEMBER_VERDICT,
     *_V2_MODEL_SHELF_INDEXES,
@@ -1568,6 +1610,19 @@ CREATE TABLE IF NOT EXISTS workflow_layout (
 )
 """
 
+# A workflow's own picture (the custom thumbnail): the hash of an image in the
+# hub's icon store (``services/model_icons.py``), so it survives a library
+# switch as the workflow does. ``pinned`` 0 shows it only while the workflow
+# has no pictures, which is how a ComfyUI template arrives; 1 is the owner
+# choosing it over the pictures for good.
+_V2_WORKFLOW_THUMBNAIL = """
+CREATE TABLE IF NOT EXISTS workflow_thumbnail (
+    workflow_id  TEXT PRIMARY KEY,
+    icon_sha256  TEXT NOT NULL,
+    pinned       INTEGER NOT NULL DEFAULT 0
+)
+"""
+
 # This shelf's own id (#1912): what a graph names beside a shelf row id, so
 # the id can be told from another PixlStash's when the graph is read back out
 # of a picture. A row id alone cannot say: ids start at 1 on every shelf. One
@@ -1577,6 +1632,78 @@ _V2_SHELF_IDENTITY = """
 CREATE TABLE IF NOT EXISTS shelf_identity (
     id    INTEGER PRIMARY KEY CHECK (id = 1),
     uuid  TEXT NOT NULL
+)
+"""
+
+# What a workflow's ComfyUI runs measured on the GPU (VRAM orchestration,
+# ``services/vram_history.py``). ``peak_mb`` is ComfyUI's whole allocation at
+# the run's peak (``/system_stats`` ``torch_vram_total``), so it is what
+# ComfyUI grows *to*, cache included. ``model_set`` digests the base model,
+# text encoder and VAE only, not LoRAs: every LoRA combination would otherwise
+# be a workflow never measured. ``outcome`` is ``completed``, ``failed``,
+# ``oom`` (``peak_mb`` is then the card's total) or ``aborted``, which the need
+# ignores. ``measured_by`` is ``torch_reserved`` or ``device_delta``.
+# ``pixels`` is the size of the image the run worked on (``run_pixels``), null
+# where it could not be read from the graph. The 50 newest rows per workflow
+# are kept.
+_V2_WORKFLOW_VRAM_PEAK = """
+CREATE TABLE IF NOT EXISTS workflow_vram_peak (
+    id               INTEGER PRIMARY KEY,
+    workflow_id      TEXT NOT NULL,
+    model_set        TEXT NOT NULL,
+    device_name      TEXT NOT NULL,
+    device_total_mb  INTEGER NOT NULL,
+    peak_mb          INTEGER NOT NULL,
+    measured_by      TEXT NOT NULL,
+    outcome          TEXT NOT NULL,
+    at               TEXT NOT NULL,
+    pixels           INTEGER
+)
+"""
+
+# A workflow that runs alone on the GPU: set by the owner on the workflow card
+# (``source`` ``owner``), or after a run of it ran out of memory (``oom``),
+# when the owner's ``user_vram_preference`` allows. No row: it shares the GPU.
+_V2_WORKFLOW_VRAM_POLICY = """
+CREATE TABLE IF NOT EXISTS workflow_vram_policy (
+    workflow_id  TEXT PRIMARY KEY,
+    exclusive    INTEGER NOT NULL,
+    source       TEXT NOT NULL,
+    at           TEXT NOT NULL
+)
+"""
+
+# Per-user VRAM settings that are not columns on ``user`` (hub rule: new
+# tables only). No row means the defaults.
+_V2_USER_VRAM_PREFERENCE = """
+CREATE TABLE IF NOT EXISTS user_vram_preference (
+    user_id                   INTEGER PRIMARY KEY,
+    auto_exclusive_after_oom  INTEGER NOT NULL DEFAULT 1
+)
+"""
+
+# The runs that ended, for the Tasks tab's Finished group (#2050): one row per
+# run PixlStash queued (``run_id``, ``run-<hex>``), grouped into the batch one
+# ``POST /workflows/run`` made of one workflow (``batch_id``, its first run's
+# id). Written as the run is queued and settled where every ending is recorded
+# (``comfyui_service.record_run_outcome``), so what a run made outlives a
+# restart; the outcomes themselves are in memory only. ``status`` is
+# ``queued``, ``completed`` or ``failed``; ``picture_ids`` a JSON list, ids in
+# ``library_uuid``'s vault. The newest 10 batches of the last 24 hours are
+# kept, and a batch a workflow's run set names (``workflow_change.changes``'
+# ``run_id``) until that set goes (``services/run_log.py``).
+_V2_WORKFLOW_RUN_LOG = """
+CREATE TABLE IF NOT EXISTS workflow_run_log (
+    run_id        TEXT PRIMARY KEY,
+    batch_id      TEXT NOT NULL,
+    workflow_id   TEXT,
+    label         TEXT NOT NULL,
+    library_uuid  TEXT,
+    status        TEXT NOT NULL,
+    message       TEXT,
+    picture_ids   TEXT NOT NULL DEFAULT '[]',
+    queued_at     TEXT NOT NULL,
+    ended_at      TEXT
 )
 """
 
@@ -1609,6 +1736,12 @@ _V2_WORKFLOW_INDEXES = (
     # manual workflow.
     "CREATE INDEX IF NOT EXISTS ix_workflow_group_member_workflow "
     "ON workflow_group_member(workflow_id)",
+    # "The newest peaks of this workflow" - every run's admission.
+    "CREATE INDEX IF NOT EXISTS ix_workflow_vram_peak_by_wf "
+    "ON workflow_vram_peak(workflow_id, at)",
+    # "The runs of this batch" - every Finished row, and a dismiss.
+    "CREATE INDEX IF NOT EXISTS ix_workflow_run_log_batch "
+    "ON workflow_run_log(batch_id)",
 )
 
 _V2_WORKFLOW_TABLES = (
@@ -1662,7 +1795,13 @@ _V2_WORKFLOW_TABLES = (
     _V2_WORKFLOW_CHANGE,
     _V2_WORKFLOW_KEPT_VARIANT,
     _V2_WORKFLOW_LAYOUT,
+    _V2_WORKFLOW_THUMBNAIL,
     _V2_SHELF_IDENTITY,
+    # VRAM orchestration, in v2 for the same reason as every table above.
+    _V2_WORKFLOW_VRAM_PEAK,
+    _V2_WORKFLOW_VRAM_POLICY,
+    _V2_USER_VRAM_PREFERENCE,
+    _V2_WORKFLOW_RUN_LOG,
     *_V2_WORKFLOW_INDEXES,
 )
 
@@ -1998,6 +2137,15 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
             "slot_kind TEXT NOT NULL DEFAULT 'checkpoint'"
         )
 
+    # The image size a VRAM peak was measured at, the same way. An older row
+    # has none, and a run of a known size does not take its need from it.
+    peak_columns = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(workflow_vram_peak)").fetchall()
+    }
+    if "pixels" not in peak_columns:
+        conn.execute("ALTER TABLE workflow_vram_peak ADD COLUMN pixels INTEGER")
+
     # The icon column (shelf plan, the sixth verb) lands the same way the rest
     # of v2 does: amended in place rather than as a v3, because a build shipped
     # before this change has CURRENT_SCHEMA_VERSION = 2 and would refuse a v3
@@ -2024,6 +2172,9 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE model ADD COLUMN file_kind_decided INTEGER NOT NULL DEFAULT 0"
         )
+    # The Downloads arrival time (#2001), the same way and for the same reason.
+    if "arrived_at" not in model_columns:
+        conn.execute("ALTER TABLE model ADD COLUMN arrived_at TEXT")
 
     # The owner's chosen default destination for a new model, guarded the same
     # way. 0 everywhere means "the managed store", so an existing hub keeps the
@@ -2040,6 +2191,18 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS ux_model_folder_single_default "
         "ON model_folder(is_default) WHERE is_default = 1"
+    )
+    # Where a model PixlStash downloads goes, the same way again. 0 everywhere
+    # means "the default folder", so a hub from before the column sends
+    # downloads where Add file sends a file.
+    if "is_download_target" not in folder_columns:
+        conn.execute(
+            "ALTER TABLE model_folder ADD COLUMN "
+            "is_download_target INTEGER NOT NULL DEFAULT 0"
+        )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_model_folder_single_download_target "
+        "ON model_folder(is_download_target) WHERE is_download_target = 1"
     )
     # At most one Downloads folder, held by the database for the same reason:
     # two registrations racing past the route's own check must not both land.
@@ -2059,6 +2222,9 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
             "ALTER TABLE model_workflow_set "
             "ADD COLUMN cloned INTEGER NOT NULL DEFAULT 0"
         )
+    # The template a set was made from (#2001), guarded the same way.
+    if "template" not in set_columns:
+        conn.execute("ALTER TABLE model_workflow_set ADD COLUMN template TEXT")
 
     # The ComfyUI link token's source binding (#1810), guarded the same way.
     # NULL, every existing token, means "from any address".
@@ -2673,6 +2839,13 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
                     _refile_by_tensors(
                         conn, FILE_TEXT_ENCODER, has_text_encoder_markers
                     )
+                if data_version < 24:
+                    # Wan's VAE layout, which the Qwen Image VAEs share,
+                    # names its first convolutions `conv1`, which step 19
+                    # did not know, so one downloaded into a flat folder is
+                    # still `unknown` and no run loads it off the shelf.
+                    # Step 19 again, with the wider rule.
+                    _refile_by_tensors(conn, FILE_VAE, has_vae_markers, (FILE_UNKNOWN,))
                 if data_version < CURRENT_DATA_VERSION:
                     # No placeholder: PRAGMA takes no parameters, and the value
                     # is this module's own constant, nothing from outside.

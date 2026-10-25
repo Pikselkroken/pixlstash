@@ -14,6 +14,7 @@ import { computed, onScopeDispose, reactive, ref, unref, watch } from "vue";
 import { getPictureMetadata } from "../api/pictures";
 import { listStackPictures } from "../api/stacks";
 import { getRunOutcome } from "../api/workflows";
+import { runKey, runKeys } from "../utils/gpuMemory";
 import { useTasksStore } from "../stores/useTasksStore";
 
 // What a run PixlStash stopped following is said to have done.
@@ -48,8 +49,8 @@ export function useGridComfyuiRuns({
   refreshSidebar,
 }) {
   const tasksStore = useTasksStore();
-  // The runs started here that have not ended: prompt id -> the one picture
-  // the run was made from, or null.
+  // The runs started here that have not ended: run id (a held run has no
+  // prompt id yet) -> the one picture the run was made from, or null.
   const active = ref(new Map());
   // How the last of them ended, for the lightbox and its Edit tab.
   const ended = reactive({ status: "idle", message: "" });
@@ -62,7 +63,8 @@ export function useGridComfyuiRuns({
     if (active.value.size) {
       const front = tasksStore.comfyuiRuns.find(
         (run) =>
-          run.status === "running" && active.value.has(String(run.prompt_id)),
+          run.status === "running" &&
+          runKeys(run).some((key) => active.value.has(key)),
       );
       return {
         visible: true,
@@ -82,10 +84,8 @@ export function useGridComfyuiRuns({
   });
 
   function follow({ prompts = [], pictureId = null } = {}) {
-    const ids = prompts
-      .map((prompt) => prompt?.prompt_id)
-      .filter((id) => id != null)
-      .map(String);
+    // Keyed by run id: every run has one, and the poll lists a held run by it.
+    const ids = prompts.map((prompt) => runKey(prompt)).filter(Boolean);
     if (!ids.length) return;
     const next = new Map(active.value);
     for (const id of ids) next.set(id, pictureId ?? null);
@@ -185,8 +185,15 @@ export function useGridComfyuiRuns({
     } finally {
       asking.delete(id);
     }
-    // Still running: the poll that missed it was read before it was queued.
-    if (outcome?.status === "running" || !active.value.has(id)) return;
+    // Still running, or still held: the poll that missed it was read before it
+    // was queued. Neither is an ending.
+    if (
+      outcome?.status === "running" ||
+      outcome?.status === "waiting" ||
+      !active.value.has(id)
+    ) {
+      return;
+    }
     end(id, outcome);
   }
 
@@ -194,7 +201,8 @@ export function useGridComfyuiRuns({
     () => tasksStore.comfyuiRuns,
     (runs) => {
       if (!active.value.size) return;
-      const listed = new Set(runs.map((run) => String(run.prompt_id)));
+      // Listed by either id: a held run is listed by its run id alone.
+      const listed = new Set(runs.flatMap((run) => runKeys(run)));
       for (const id of active.value.keys()) {
         if (!listed.has(id)) void ask(id);
       }

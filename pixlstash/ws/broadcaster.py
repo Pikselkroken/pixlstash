@@ -168,6 +168,7 @@ class WsBroadcasterMixin:
                 # Machine-level, not view-level: the GPU is full whatever the
                 # client's grid filters are.
                 EventType.VRAM_OOM,
+                EventType.RESOURCE_LEASE,
                 # Vault-wide, like VRAM_OOM: the reconciliation queue is not a
                 # grid view a client's filters could exclude it from.
                 EventType.EXTERNAL_MOVES_PENDING,
@@ -296,6 +297,38 @@ class WsBroadcasterMixin:
                 "max_attempts": int(info.get("max_attempts") or 0),
                 "gave_up": bool(info.get("gave_up")),
                 "recovered": bool(info.get("recovered")),
+                # Who else is on the card, so the toast names it. It was
+                # dropped here, so the notice never named anybody.
+                "other_processes": [
+                    {
+                        "name": str(row.get("name") or ""),
+                        "used_mb": int(row.get("used_mb") or 0),
+                    }
+                    for row in (info.get("other_processes") or [])
+                    if isinstance(row, dict)
+                ],
+            }
+        elif event_type == EventType.RESOURCE_LEASE:
+            info = data if isinstance(data, dict) else {}
+            payload = {
+                "type": "resource_lease",
+                "event": event_type.name,
+                **{
+                    key: info.get(key)
+                    for key in (
+                        "lease_id",
+                        "tenant",
+                        "label",
+                        "kind",
+                        "state",
+                        "change",
+                        "worker_type",
+                        "run_id",
+                        "workflow_id",
+                        "code",
+                        "text",
+                    )
+                },
             }
         elif event_type == EventType.EXTERNAL_MOVES_PENDING:
             # A "look again" nudge, not a count: the buckets (unambiguous /

@@ -1,16 +1,27 @@
 <template>
   <article
-    class="msc"
+    class="msc fav-host"
     :class="{
       'msc--open': expanded,
       'msc--on': selected,
       'msc--hand': card.handMade,
       'msc--hidden': card.hidden,
+      'msc--favouritable': favouritable,
     }"
     role="group"
     :aria-label="accessibleName"
     data-testid="model-set-card"
   >
+    <!-- The favourite heart on the cover's top-left corner (#1578). It leads the
+         corner, and the cover's own badges move in beside it. -->
+    <span v-if="favouritable" class="msc__fav">
+      <FavouriteHeart
+        variant="cover"
+        :on="favourite"
+        :label="card.name"
+        @toggle="emit('favourite')"
+      />
+    </span>
     <div
       v-if="card.covers.length"
       class="msc__cover"
@@ -23,17 +34,14 @@
       >
         <img :src="coverSrc(cover)" alt="" loading="lazy" />
       </span>
-      <!-- A hand-made card never states a recipe count as its own: the set is
-           the owner's claim, and the recipes are only what happens to fit it. -->
+      <!-- Automatic while the set holds exactly what its pictures ran with,
+           Custom once the owner has added or removed something (#1972). -->
       <span
-        v-if="card.handMade"
-        class="msc__badge msc__badge--start msc__badge--hand"
+        class="msc__badge msc__badge--start"
+        :class="{ 'msc__badge--hand': !automatic }"
         aria-hidden="true"
-        >Grouped by you</span
+        ><span v-if="card.fresh" class="msc__new"></span>{{ badge }}</span
       >
-      <span v-else class="msc__badge msc__badge--start" aria-hidden="true">
-        <v-icon size="12">mdi-layers</v-icon>{{ card.recipes }} recipes
-      </span>
       <span class="msc__badge msc__badge--end" aria-hidden="true">
         <v-icon size="12">mdi-image-multiple</v-icon
         >{{ card.pictures.toLocaleString() }}
@@ -46,8 +54,10 @@
       class="msc__cover msc__cover--empty msc__cover--hand"
       aria-hidden="true"
     >
-      <span class="msc__badge msc__badge--start msc__badge--hand"
-        >Grouped by you</span
+      <span
+        class="msc__badge msc__badge--start"
+        :class="{ 'msc__badge--hand': !automatic }"
+        ><span v-if="card.fresh" class="msc__new"></span>{{ badge }}</span
       >
       <ModelMark
         v-if="card.markModel"
@@ -78,7 +88,7 @@
       </template>
       <span v-else class="msc__empty-line">No picture to show</span>
     </div>
-    <!-- The lasting offer (#1523), asked as a question on the cover's foot
+    <!-- The template offer (#1999), asked as a question on the cover's foot
          until the owner answers it. One model is answered here: Add to set is
          the ordinary members add, with its receipt and Undo. Several open the
          tray to review, since three files added blind is a bigger claim.
@@ -135,8 +145,8 @@
           data-testid="set-offer-no"
           :tooltip="
             card.offer.model
-              ? 'Keeps this model out of the set. The set\'s menu can suggest it again.'
-              : 'Keeps these models out of the set. The set\'s menu can suggest them again.'
+              ? 'Keeps this file out of the set. Reset to automatic suggests it again.'
+              : 'Keeps these files out of the set. Reset to automatic suggests them again.'
           "
           @click="emit('keep-separate')"
         >
@@ -264,8 +274,11 @@
 // the whole set picked (`trayPicked` in `ModelSetGrid.vue`).
 //
 // A HAND-MADE card (`card.handMade`, #1520) is the owner's set rather than the
-// evidence for one: dashed, badged "Grouped by you", no recipe count, and
-// selected means the SET is selected - its verbs touch no file.
+// evidence for one: dashed, and selected means the SET is selected - its verbs
+// touch no file. Both kinds wear the same badge (#1972): Automatic while the
+// set holds exactly what its pictures ran with, Custom once the owner has
+// changed it, with an amber dot while the pictures have brought in a model the
+// owner has not seen yet.
 
 import { computed } from "vue";
 import { VIcon } from "vuetify/components";
@@ -273,6 +286,7 @@ import { VIcon } from "vuetify/components";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import AppButton from "./AppButton.vue";
 import ChipRow from "./ChipRow.vue";
+import FavouriteHeart from "./FavouriteHeart.vue";
 import ModelMark from "./ModelMark.vue";
 import VerdictIcon from "./VerdictIcon.vue";
 import { setVerdictText } from "../../utils/setVerdicts";
@@ -286,9 +300,14 @@ const props = defineProps({
   panelId: { type: String, default: "" },
   /** This card's base model is in the shelf's selection. */
   selected: { type: Boolean, default: false },
+  /** Draw the favourite heart: the grid's cards carry one, other lists do not. */
+  favouritable: { type: Boolean, default: false },
+  /** Is this set a favourite now? */
+  favourite: { type: Boolean, default: false },
 });
 
 const emit = defineEmits([
+  "favourite",
   "toggle",
   "offer",
   "add",
@@ -296,6 +315,13 @@ const emit = defineEmits([
   "hide",
   "unhide",
 ]);
+
+/** An evidence card is automatic by definition; a hand-made one says. */
+const automatic = computed(
+  () => !props.card.handMade || Boolean(props.card.automatic),
+);
+
+const badge = computed(() => (automatic.value ? "Automatic" : "Custom"));
 
 /**
  * The URL a browser loads one cover from.
@@ -349,7 +375,10 @@ const accessibleName = computed(() => {
   if (handMade) {
     return [
       name,
-      "grouped by you",
+      automatic.value ? "automatic" : "custom",
+      props.card.fresh
+        ? `${props.card.fresh} new from pictures`
+        : null,
       props.card.hidden ? "hidden" : null,
       kindLabel,
       incomplete
@@ -367,6 +396,7 @@ const accessibleName = computed(() => {
   }
   return [
     name,
+    "automatic",
     props.card.missing ? "base model not on shelf" : kindLabel,
     props.card.fromComfyUI ? "ran in ComfyUI" : null,
     props.card.hidden ? "hidden" : null,
@@ -552,9 +582,31 @@ const accessibleName = computed(() => {
   gap: var(--space-3);
 }
 
+/* A model the pictures brought in that the owner has not seen yet (#1972):
+   the attention dot, in the amber kept for the dot alone. */
+.msc__new {
+  flex: none;
+  width: var(--badge-size-dot);
+  height: var(--badge-size-dot);
+  border-radius: var(--radius-pill);
+  background: rgb(var(--v-theme-accent));
+}
+
 .msc__badge--start {
   left: var(--space-3);
   z-index: var(--z-raised);
+}
+
+/* The heart leads the cover's top-left corner; the badges step in past it. */
+.msc__fav {
+  position: absolute;
+  top: var(--space-3);
+  left: var(--space-3);
+  z-index: var(--z-raised);
+}
+
+.msc--favouritable .msc__badge--start {
+  left: calc(var(--space-3) + var(--control-h) + var(--space-2));
 }
 
 .msc__meta {

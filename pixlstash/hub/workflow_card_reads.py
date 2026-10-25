@@ -35,6 +35,7 @@ from pixlstash.hub.workflow_cards import (
     STRIP_LORAS_FOR_STACKS,
     variant_workflow_id,
 )
+from pixlstash.hub.workflow_origin import TEMPLATE_ORIGIN
 from pixlstash.hub.workflow_versions import saved_over_ids
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_hash import (
@@ -118,6 +119,11 @@ class Card:
     version_at: Optional[str] = None
     # When a manual workflow was stored (``workflow_document.created_at``).
     created_at: Optional[str] = None
+    # Made from a ComfyUI template and holding no API graph yet (#2000): its
+    # editor document did not convert, and ComfyUI has not saved it. A save
+    # from ComfyUI (a version holding the API graph) or a conversion stored
+    # on it ends it.
+    draft: bool = False
 
 
 @dataclass(frozen=True)
@@ -188,6 +194,30 @@ def card_index(hub: HubDatabase) -> list[Card]:
     return list(cards.values()) + _manual_cards(hub)
 
 
+# Whether the manual workflow ``d`` is a draft (``Card.draft``): a template made
+# it, and its document is still an editor graph with no conversion beside it.
+# An editor document has a ``nodes`` array; an API graph is keyed by node id.
+_DRAFT_SQL = (
+    "(EXISTS (SELECT 1 FROM workflow_origin o WHERE o.workflow_name = "
+    f"d.workflow_id AND o.origin = '{TEMPLATE_ORIGIN}') "
+    "AND d.api_document IS NULL "
+    # CASE, not AND: SQLite does not promise to skip `json_type` on a document
+    # that will not parse, and a malformed one would take the grid down.
+    "AND CASE WHEN json_valid(d.document) "
+    "THEN json_type(d.document, '$.nodes') END = 'array')"
+)
+
+
+def is_draft(hub: HubDatabase, workflow_id: str) -> bool:
+    """Whether manual workflow *workflow_id* is a draft (``Card.draft``)."""
+    row = hub.fetchone(
+        f"SELECT {_DRAFT_SQL} AS draft FROM workflow_document d "
+        "WHERE d.workflow_id = ?",
+        (workflow_id,),
+    )
+    return bool(row and row["draft"])
+
+
 def _manual_cards(hub: HubDatabase) -> list[Card]:
     """One card per manual workflow: its own ``workflow_document`` row.
 
@@ -205,7 +235,8 @@ def _manual_cards(hub: HubDatabase) -> list[Card]:
         "WHERE v.workflow_id = d.workflow_id ORDER BY v.version DESC LIMIT 1), "
         "d.created_at) AS version_at, "
         "(SELECT MAX(v.version) FROM workflow_version v "
-        "WHERE v.workflow_id = d.workflow_id) AS current_version "
+        "WHERE v.workflow_id = d.workflow_id) AS current_version, "
+        f"{_DRAFT_SQL} AS draft "
         "FROM workflow_document d ORDER BY d.workflow_id"
     )
     # A deleted workflow's description goes with it.
@@ -225,6 +256,7 @@ def _manual_cards(hub: HubDatabase) -> list[Card]:
             version=row["current_version"] or 1,
             version_at=row["version_at"],
             created_at=row["created_at"],
+            draft=bool(row["draft"]),
         )
         for row in rows
         for facts in (

@@ -1360,6 +1360,10 @@ def propose_companions(
         "  ON member.set_id = s.id AND member.slot IN ('vae', 'text_encoder') "
         "JOIN model AS member_model ON member_model.sha256 = member.sha256 "
         "WHERE ckpt_model.id = ? "
+        # A member the owner removed from the set is not grouped with it
+        # (#1972): the removal wins over its row.
+        "AND NOT EXISTS (SELECT 1 FROM model_workflow_set_decline AS d "
+        "  WHERE d.set_id = s.id AND d.sha256 = member.sha256) "
         "ORDER BY s.created_at DESC, s.id DESC",
         (checkpoint_id,),
     ):
@@ -1676,7 +1680,7 @@ def fetch_workflow_sets(hub, vault) -> dict:
         shelf or missing, is served but counts for no model's set.
         ``hub_combinations`` is every combination some recipe names,
         before the "a picture here" cut, so it holds every library's recipes
-        and no run-only combination; only the merge offer reads it.
+        and no run-only combination; only the hand-made sets' base reads it.
         ``recipe_models`` is each recipe's resolved model ids, which only the
         sets' check reads (:mod:`pixlstash.services.workflow_set_verdicts`).
     """
@@ -1786,7 +1790,7 @@ def fetch_workflow_sets(hub, vault) -> dict:
                     }
                     for model_id in ordered
                 ],
-                # Internal, for the merge offer (`model_workflow_sets._lacks`):
+                # Internal, for the hand-made sets (`model_workflow_sets._base`):
                 # each set of members one name reached together. The route
                 # does not serve it.
                 "namesakes": sorted(sorted(group) for group in entry["namesakes"]),
@@ -1839,10 +1843,9 @@ def fetch_workflow_sets(hub, vault) -> dict:
     }
     return {
         "combinations": combinations,
-        # Every library's recipes, pictures here or not: the hand-made sets'
-        # merge offer is a hub fact, like the sets (#1523). Not served.
-        # Recipe combinations only: the offer is worded in pictures and
-        # recipes, and a run-only one would read "0 recipes need N more".
+        # Every library's recipes, pictures here or not: what a hand-made set
+        # holds is a hub fact, like the set (#1972). Not served. Recipe
+        # combinations only; the base adds this library's run-only ones.
         "hub_combinations": [c for c in every if c["recipes"]],
         # Each recipe's resolved models, model fixes applied, so the sets'
         # check (`workflow_set_verdicts.fetch_set_checks`) reads the very

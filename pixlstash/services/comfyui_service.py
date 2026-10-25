@@ -43,6 +43,10 @@ from pixlstash.db_models import (
     TAG_PENDING_SENTINEL,
 )
 from pixlstash.event_types import EventType
+from pixlstash.resources import comfyui_tenant
+from pixlstash.resources.arbiter import arbiter
+from pixlstash.resources.comfyui_tenant import PeakSampler
+from pixlstash.resources.ledger import ledger
 from pixlstash.services import import_dedup_service
 from pixlstash.services.layout_move_service import resolve_placement
 from pixlstash.services.move_reconciliation_service import add_person
@@ -59,8 +63,10 @@ from pixlstash.services.comfyui_recipe_service import (
     format_prompt_rejection,
 )
 from pixlstash.services.set_lock_service import drop_locked_set_ids
+from pixlstash.services import vram_history
 from pixlstash.stacking import normalize_stack_positions
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.vram_utils import is_vram_oom
 
 from pixlstash.pixl_logging import get_logger
 
@@ -135,6 +141,29 @@ LISTEN_MAX_FRAME = 16 * 1024 * 1024
 _live_runs: dict[str, dict] = {}
 # The ComfyUI addresses ``_listen_for_progress`` has a thread on. Same lock.
 _listening: set[str] = set()
+# PixlStash's run id (``run-<hex>``) -> ComfyUI's prompt id, once submitted. A
+# run held for the GPU has a run id and no prompt id yet; every reader that
+# names a run by either finds it. Same lock.
+_run_ids: dict[str, str] = {}
+# Held runs' cancel events, by run id: set by an abort or a lease cancel, and
+# the run then never reaches ComfyUI. Same lock.
+_held_cancels: dict[str, threading.Event] = {}
+# Told of every ending, outside the lock, with what ``run_outcome`` would
+# answer: the run log (``services/run_log.py``) keeps it past a restart. One,
+# set by the workflows routes for the server they serve (``on_run_ended``).
+_ending_listener = None
+
+
+def on_run_ended(listener) -> None:
+    """Have *listener* told of every run's ending from now on, in place of
+    whatever was told before: ``listener(outcome)``, outside the lock."""
+    global _ending_listener
+    _ending_listener = listener
+
+
+def new_run_id() -> str:
+    """A PixlStash run id: what a run is called before ComfyUI has seen it."""
+    return f"run-{uuid.uuid4().hex[:16]}"
 
 
 class ComfyUIRunStopped(RuntimeError):
@@ -149,9 +178,13 @@ def record_run_outcome(
     stopped: bool = False,
     picture_ids: list[int] | None = None,
     library_uuid: str | None = None,
+    code: str | None = None,
+    run_id: str | None = None,
 ) -> None:
-    """Remember how a followed prompt stands: ``running``, ``completed`` or
-    ``failed``. In memory, the newest ``MAX_RUN_OUTCOMES``.
+    """Remember how a followed run stands: ``waiting`` (held for the GPU,
+    keyed by its run id), ``running``, ``completed`` or ``failed``. In memory,
+    the newest ``MAX_RUN_OUTCOMES``. *code* is ``vram_oom`` for a run that ran
+    out of GPU memory.
 
     *library_uuid* is the library the run was started in, given when it is
     queued and kept by every later update: its picture ids mean nothing in
@@ -159,34 +192,153 @@ def record_run_outcome(
 
     An ending also takes the run out of the runs in flight (``live_runs``):
     every ending is recorded here before it is announced, so a tab that reads
-    the runs on hearing of one never finds it still listed.
+    the runs on hearing of one never finds it still listed. It is also
+    written to the run log (``on_run_ended``) before it is announced, so the
+    Finished row a tab reads on hearing of it is there.
     """
     with _run_outcomes_lock:
-        if status != "running":
-            _live_runs.pop(prompt_id, None)
-        previous = _run_outcomes.pop(prompt_id, None) or {}
-        _run_outcomes[prompt_id] = {
-            "prompt_id": prompt_id,
-            "status": status,
-            "message": message,
-            "stopped": stopped,
-            "picture_ids": list(picture_ids or []),
-            "library_uuid": library_uuid or previous.get("library_uuid"),
-        }
-        while len(_run_outcomes) > MAX_RUN_OUTCOMES:
-            ended = (
-                key
-                for key, outcome in _run_outcomes.items()
-                if outcome["status"] != "running"
-            )
-            del _run_outcomes[next(ended, None) or next(iter(_run_outcomes))]
+        outcome = _record_run_outcome_locked(
+            prompt_id,
+            status,
+            message,
+            stopped,
+            picture_ids,
+            library_uuid,
+            code,
+            run_id,
+        )
+    listener = _ending_listener
+    if listener is None or status in ("running", "waiting"):
+        return
+    try:
+        listener(outcome)
+    except Exception:
+        # The ending is recorded and the run is over; what is lost is its
+        # Finished row past a restart, never the run.
+        logger.exception(
+            "Run %s ended %s, but the run log could not be told, so the Tasks "
+            "tab's Finished group may not show it.",
+            outcome.get("run_id") or prompt_id,
+            status,
+        )
 
 
-def run_outcome(prompt_id: str) -> dict | None:
-    """What ``record_run_outcome`` last said of *prompt_id*, or None."""
+def _record_run_outcome_locked(
+    prompt_id: str,
+    status: str,
+    message: str | None = None,
+    stopped: bool = False,
+    picture_ids: list[int] | None = None,
+    library_uuid: str | None = None,
+    code: str | None = None,
+    run_id: str | None = None,
+) -> dict:
+    """``record_run_outcome``'s body; call under ``_run_outcomes_lock``.
+
+    Returns a copy of the outcome, which the retention below may already have
+    dropped when every other run is still going.
+    """
+    if status not in ("running", "waiting"):
+        _live_runs.pop(prompt_id, None)
+        _held_cancels.pop(prompt_id, None)
+    previous = _run_outcomes.pop(prompt_id, None) or {}
+    run_id = run_id or previous.get("run_id")
+    outcome = {
+        "run_id": run_id,
+        "prompt_id": None if prompt_id == run_id else prompt_id,
+        "status": status,
+        "message": message,
+        "stopped": stopped,
+        "picture_ids": list(picture_ids or []),
+        "library_uuid": library_uuid or previous.get("library_uuid"),
+        "code": code,
+    }
+    _run_outcomes[prompt_id] = outcome
+    while len(_run_outcomes) > MAX_RUN_OUTCOMES:
+        ended = (
+            key
+            for key, outcome in _run_outcomes.items()
+            if outcome["status"] not in ("running", "waiting")
+        )
+        del _run_outcomes[next(ended, None) or next(iter(_run_outcomes))]
+    return dict(outcome)
+
+
+def run_outcome(run_or_prompt_id: str) -> dict | None:
+    """What ``record_run_outcome`` last said of a run, by run id or prompt id."""
     with _run_outcomes_lock:
-        outcome = _run_outcomes.get(prompt_id)
+        key = _run_ids.get(run_or_prompt_id, run_or_prompt_id)
+        outcome = _run_outcomes.get(key)
         return dict(outcome) if outcome else None
+
+
+def hold_run(
+    run_id: str,
+    base_url: str,
+    label: str | None = None,
+    workflow_id: str | None = None,
+    library_uuid: str | None = None,
+) -> threading.Event:
+    """Take a run PixlStash is holding for the GPU as a run in flight.
+
+    Listed by ``live_runs`` as ``waiting`` with no prompt id until
+    ``follow_run`` names the prompt ComfyUI accepted. Returns the event that
+    cancels it (an abort, or the lease's cancel) before it is submitted.
+    One step under the lock: an abort that can see the run can cancel it.
+    """
+    cancel = threading.Event()
+    with _run_outcomes_lock:
+        _record_run_outcome_locked(
+            run_id, "waiting", library_uuid=library_uuid, run_id=run_id
+        )
+        _held_cancels[run_id] = cancel
+        _live_runs[run_id] = {
+            "run_id": run_id,
+            "prompt_id": None,
+            "label": label or RUN_LABEL_FALLBACK,
+            "workflow_id": workflow_id,
+            "status": "waiting",
+            "percent": 0.0,
+            "library_uuid": library_uuid,
+            "base_url": base_url,
+        }
+    return cancel
+
+
+def claim_held_run(run_id: str) -> bool:
+    """Take a held run out of the cancellable set, to submit it.
+
+    False when it was cancelled first. Under the same lock as
+    ``cancel_held_runs``, so exactly one of the two wins: a run is either
+    submitted or cancelled, never cancelled and then submitted.
+    """
+    with _run_outcomes_lock:
+        cancel = _held_cancels.pop(run_id, None)
+    return cancel is not None and not cancel.is_set()
+
+
+def cancel_held_runs(run_id: str | None = None) -> list[str]:
+    """Cancel one held run, or every one; the run ids cancelled.
+
+    A held run has not reached ComfyUI, so cancelling it is the whole of
+    stopping it: it ends as ``failed`` and ``stopped``.
+    """
+    with _run_outcomes_lock:
+        ids = [run_id] if run_id is not None else list(_held_cancels)
+        cancels = [(rid, _held_cancels.pop(rid, None)) for rid in ids]
+    cancelled = []
+    for rid, cancel in cancels:
+        if cancel is None:
+            continue
+        cancel.set()
+        record_run_outcome(
+            rid,
+            "failed",
+            message="Cancelled before it started: it was waiting for the GPU.",
+            stopped=True,
+        )
+        cancelled.append(rid)
+    return cancelled
 
 
 def follow_run(
@@ -195,16 +347,44 @@ def follow_run(
     label: str | None = None,
     workflow_id: str | None = None,
     library_uuid: str | None = None,
+    run_id: str | None = None,
 ) -> None:
     """Take a prompt ComfyUI accepted as a run in flight.
 
-    Recorded as ``running`` for ``GET /workflows/runs/{prompt_id}`` and listed
+    Recorded as ``running`` for ``GET /workflows/runs/{id}`` and listed
     by ``live_runs`` as ``queued`` until ComfyUI speaks of it. *label* is what
-    the Tasks tab calls it. Starts the listener on *base_url* if none is up.
+    the Tasks tab calls it. *run_id* is PixlStash's id for the run, which a
+    run held for the GPU was known by until now. Starts the listener on
+    *base_url* if none is up.
     """
-    record_run_outcome(prompt_id, "running", library_uuid=library_uuid)
     with _run_outcomes_lock:
+        if run_id is not None:
+            _live_runs.pop(run_id, None)
+            _held_cancels.pop(run_id, None)
+            _run_outcomes.pop(run_id, None)
+            _run_ids[run_id] = prompt_id
+            # As the outcomes are kept: an ended run's id goes before an older
+            # one still going, and never the one just added.
+            while len(_run_ids) > MAX_RUN_OUTCOMES:
+                ended = (
+                    rid
+                    for rid, pid in _run_ids.items()
+                    if rid != run_id
+                    and (_run_outcomes.get(pid) or {}).get("status")
+                    not in ("running", "waiting")
+                )
+                victim = next(ended, None) or next(
+                    (rid for rid in _run_ids if rid != run_id), None
+                )
+                if victim is None:
+                    break
+                del _run_ids[victim]
+        # In the same step: the run is never missing under either id.
+        _record_run_outcome_locked(
+            prompt_id, "running", library_uuid=library_uuid, run_id=run_id
+        )
         _live_runs[prompt_id] = {
+            "run_id": run_id,
             "prompt_id": prompt_id,
             "label": label or RUN_LABEL_FALLBACK,
             "workflow_id": workflow_id,
@@ -224,9 +404,10 @@ def follow_run(
 
 def live_runs(library_uuid: str | None) -> list[dict]:
     """The runs in flight that were started in *library_uuid*, oldest first:
-    ``prompt_id``, ``label``, ``workflow_id``, ``status`` (``queued`` or
-    ``running``) and ``percent``, the running node's own progress."""
-    shown = ("prompt_id", "label", "workflow_id", "status", "percent")
+    ``run_id``, ``prompt_id`` (None while held), ``label``, ``workflow_id``,
+    ``status`` (``waiting`` for the GPU, ``queued`` or ``running``) and
+    ``percent``, the running node's own progress."""
+    shown = ("run_id", "prompt_id", "label", "workflow_id", "status", "percent")
     with _run_outcomes_lock:
         return [
             {key: run[key] for key in shown}
@@ -260,13 +441,31 @@ def _note_run_message(raw: str) -> None:
         except (TypeError, ValueError, ArithmeticError) as exc:
             # Not two numbers, a max of zero, or one too large to be a step.
             logger.debug("Unreadable progress for prompt %s: %s", prompt_id, exc)
+    kind = payload.get("type")
     with _run_outcomes_lock:
         run = _live_runs.get(prompt_id)
         if run is None:
             return
         run["status"] = "running"
+        # Explicit start and end, for the peak sampler: it measures this run
+        # and no other, and the next prompt starts the moment this one ends.
+        if kind == "execution_start":
+            run["started"] = True
+        elif kind == "executing" and data.get("node") is None:
+            run["ended"] = True
+        elif kind in ("execution_success", "execution_error", "execution_interrupted"):
+            run["ended"] = True
+        else:
+            run.setdefault("started", True)
         if percent is not None:
             run["percent"] = max(0.0, min(100.0, percent))
+
+
+def run_executing(prompt_id: str) -> bool:
+    """Whether ComfyUI is executing *prompt_id* now, as its socket last said."""
+    with _run_outcomes_lock:
+        run = _live_runs.get(prompt_id)
+        return bool(run and run.get("status") == "running" and not run.get("ended"))
 
 
 def _note_running_prompts(base_url: str) -> None:
@@ -299,6 +498,7 @@ def _note_running_prompts(base_url: str) -> None:
         for prompt_id, run in _live_runs.items():
             if prompt_id in ids:
                 run["status"] = "running"
+                run.setdefault("started", True)
 
 
 def _runs_on(base_url: str) -> bool:
@@ -1245,7 +1445,12 @@ def _emit_comfyui_progress(
 ) -> None:
     """Say how a prompt's run ended. *workflow_id* is the workflow that ran,
     so the failure can be shown on it; *stopped* marks a failure that is a
-    run somebody stopped; *notice* is shown for a run that completed."""
+    run somebody stopped; *notice* is shown for a run that completed.
+
+    ``pixlstash_run_id`` is PixlStash's id for the run (``run-<hex>``), which
+    is all a reader knew of a run held for the GPU when ``/workflows/run``
+    answered. ``run_id`` keeps its old ``comfyui-<prompt_id>`` meaning."""
+    recorded = run_outcome(prompt_id) or {}
     try:
         server.vault.notify(
             EventType.PLUGIN_PROGRESS,
@@ -1253,6 +1458,7 @@ def _emit_comfyui_progress(
                 "plugin": "ComfyUI",
                 "status": status,
                 "run_id": f"comfyui-{prompt_id}",
+                "pixlstash_run_id": recorded.get("run_id"),
                 "workflow_id": workflow_id,
                 "stopped": stopped,
                 "message": message,
@@ -1854,8 +2060,21 @@ def _process_comfyui_outputs(
     run_workflow_version: int | None = None,
     workflow_id: str | None = None,
     lora_character_ids: list[int] | None = None,
+    vram_lease=None,
+    vram_model_set: str | None = None,
+    vram_pixels: int | None = None,
+    label: str | None = None,
 ) -> None:
     """Poll ComfyUI for a prompt's outputs, import them, and say how it ended.
+
+    *vram_lease* is the run's lease from the VRAM arbiter. It is released the
+    moment ComfyUI's history gives the run's final status - not after the
+    outputs are imported, which holds no GPU memory - and the run's measured
+    peak is written with how it ended and *vram_pixels*, the size of the image
+    it worked on (``services/vram_history.py``). A run
+    that ran out of GPU memory fails with ``code`` ``vram_oom`` and, once the
+    workflow's newest ``vram_history.OOM_STREAK`` runs all did and the owner's
+    setting allows, makes it run alone from now on. It is not retried.
 
     *workflow_id* is the workflow the run was of, manual or automatic; it
     travels on the ending's event so a failure is shown on that workflow.
@@ -1910,6 +2129,111 @@ def _process_comfyui_outputs(
     lease = None
     pinned_server = None
     started = datetime.now(timezone.utc)
+    sampler = None
+    if vram_lease is not None and vram_lease.device is not None:
+        sampler = PeakSampler(
+            comfyui_tenant.probe(RUN_CLIENT_ID, base_url),
+            lambda: run_executing(prompt_id),
+        )
+    released = False
+    settled = False
+
+    def release_vram() -> None:
+        """Give the card back the moment ComfyUI is done with the run. Once."""
+        nonlocal released
+        if released:
+            return
+        released = True
+        if vram_lease is not None:
+            vram_lease.release()
+
+    def settle_vram(outcome: str) -> None:
+        """Release the lease if it is still held, and write the run's peak with
+        how the run ended. Once."""
+        nonlocal settled
+        if settled:
+            return
+        settled = True
+        # First, so nothing below can keep the card from the other tenants.
+        release_vram()
+        # Bookkeeping only: it runs inside the run's error handling, which
+        # must go on to record and announce how the run ended.
+        try:
+            write_peak(outcome)
+        except Exception as exc:
+            logger.error(
+                "Could not record the VRAM peak of run %s (workflow %s, ended %s): %s",
+                prompt_id,
+                workflow_id,
+                outcome,
+                exc,
+                exc_info=True,
+            )
+
+    def write_peak(outcome: str) -> None:
+        peak = sampler.stop() if sampler is not None else None
+        if sampler is None or not workflow_id:
+            return
+        card = ledger().device(vram_lease.device)
+        if outcome == "oom" and card is not None:
+            peak = card.total_mb
+        if peak is None or card is None:
+            logger.info(
+                "Run %s of workflow %s ended %s without a measured peak",
+                prompt_id,
+                workflow_id,
+                outcome,
+            )
+            return
+        vram_history.record_peak(
+            server.hub,
+            workflow_id,
+            vram_model_set or "",
+            card.name,
+            card.total_mb,
+            peak,
+            "torch_reserved",
+            outcome,
+            vram_pixels,
+        )
+
+    def mark_alone_after_oom() -> str:
+        """Make the workflow run alone once its newest runs all ran out of
+        memory and the owner allows; the sentence to show. Called after the
+        run's peak is written, so the streak counts this run."""
+        name = f"ComfyUI '{label}'" if label else "This ComfyUI run"
+        user = getattr(server, "_user", None)
+        try:
+            allowed = workflow_id and vram_history.auto_exclusive_after_oom(
+                server.hub, getattr(user, "id", None)
+            )
+            if (
+                allowed
+                and vram_history.policy(server.hub, workflow_id) is None
+                and vram_history.ran_out_in_a_row(server.hub, workflow_id)
+            ):
+                vram_history.set_exclusive(server.hub, workflow_id, True, "oom")
+                text = (
+                    f"{label or 'This workflow'} ran out of GPU memory "
+                    f"{vram_history.OOM_STREAK} runs in a row and now runs alone."
+                )
+                arbiter().warn(
+                    vram_lease,
+                    "vram_oom_exclusive",
+                    text,
+                    workflow_id=workflow_id,
+                    tenant="comfyui",
+                    label=label,
+                )
+                return text
+        except Exception as exc:
+            logger.error(
+                "Could not make workflow %s run alone after it ran out of memory: %s",
+                workflow_id,
+                exc,
+                exc_info=True,
+            )
+        return f"{name} ran out of GPU memory."
 
     def acquire_origin():
         coordinator = getattr(server, "library_coordinator", None)
@@ -1937,10 +2261,14 @@ def _process_comfyui_outputs(
 
         return candidate, PinnedServer(server, candidate.vault)
 
-    def emit_failure(message: str, stopped: bool = False) -> None:
+    def emit_failure(
+        message: str, stopped: bool = False, code: str | None = None
+    ) -> None:
         """Say the run failed: on the library already pinned, else on the
         origin if it is still the current one."""
-        record_run_outcome(prompt_id, "failed", message=message, stopped=stopped)
+        record_run_outcome(
+            prompt_id, "failed", message=message, stopped=stopped, code=code
+        )
         failure_lease, failure_server = None, pinned_server
         if failure_server is None:
             failure_lease, failure_server = acquire_origin()
@@ -1966,6 +2294,8 @@ def _process_comfyui_outputs(
         images, pixlstash_ids = _wait_for_comfyui_outputs(
             base_url, prompt_id, output_node_ids
         )
+        # ComfyUI is done with the card; the peak waits for how the run ends.
+        release_vram()
         if not images and pixlstash_ids is None:
             logger.warning("ComfyUI produced no outputs for prompt %s", prompt_id)
             emit_failure(rejected or "ComfyUI finished without outputs.")
@@ -2094,23 +2424,44 @@ def _process_comfyui_outputs(
                     exc,
                 )
         notice = _duplicates_notice(len(new_ids), len(held)) if held else None
+        settle_vram("completed")
         record_run_outcome(prompt_id, "completed", message=notice, picture_ids=new_ids)
         _emit_comfyui_completed_progress(pinned_server, prompt_id, workflow_id, notice)
     except ComfyUIRunStopped as exc:
+        settle_vram("aborted")
         logger.warning("ComfyUI prompt %s was stopped: %s", prompt_id, exc)
         emit_failure(str(exc), stopped=True)
     except RuntimeError as exc:
         logger.warning("ComfyUI prompt %s failed before outputs: %s", prompt_id, exc)
-        emit_failure(str(exc))
+        if not released and _is_vram_oom_text(str(exc)):
+            settle_vram("oom")
+            emit_failure(f"{mark_alone_after_oom()} {exc}", code="vram_oom")
+        else:
+            settle_vram("failed")
+            emit_failure(str(exc))
     except Exception as exc:
+        settle_vram("failed")
         logger.warning(
             "Failed to import ComfyUI outputs of prompt %s: %s", prompt_id, exc
         )
         # An HTTPException's str() is "502: <detail>"; the detail is the sentence.
         emit_failure(str(getattr(exc, "detail", None) or exc))
     finally:
+        # Every ending releases the lease: a leaked one keeps the card from
+        # every other heavy tenant for the rest of the session.
+        settle_vram("failed")
         if lease is not None:
             server.library_coordinator.release_read(lease)
+
+
+def _is_vram_oom_text(text: str) -> bool:
+    """Whether ComfyUI's account of a failure is the GPU running out of memory.
+
+    ComfyUI reports ``torch.OutOfMemoryError Allocation on device ...``, which
+    names the type rather than saying "out of memory" with a device word.
+    """
+    squashed = text.lower().replace(" ", "")
+    return "outofmemoryerror" in squashed or is_vram_oom(RuntimeError(text))
 
 
 def _comfyui_abort(base_url: str) -> dict:
@@ -2150,6 +2501,9 @@ def _comfyui_abort(base_url: str) -> dict:
     # about their prompt now, and one that still holds them answers nothing new.
     if result["queue_cleared"]:
         _queue_cleared += 1
+    # The runs PixlStash is still holding for the GPU are part of "every run
+    # in flight" too; they never reach ComfyUI now.
+    result["held_cancelled"] = len(cancel_held_runs())
     return result
 
 

@@ -91,6 +91,7 @@
  * Workflow menus. Ticking emits `toggle`; the parent owns what that means.
  */
 import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { formatCount } from "../../utils/filterChips";
 
 const MAX_SHOWN = 50;
 
@@ -135,10 +136,6 @@ function isChecked(value) {
 
 function countOf(item) {
   return props.countFor ? props.countFor(item) : item.count;
-}
-
-function formatCount(n) {
-  return n == null ? "" : Number(n).toLocaleString();
 }
 
 function move(step) {

@@ -9,9 +9,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { h, ref } from "vue";
 import { flushPromises, mount } from "@vue/test-utils";
+import { createPinia } from "pinia";
 
 const fetchWorkflowSets = vi.fn();
 const planSetClones = vi.fn();
+const listFavourites = vi.fn();
 
 vi.mock("../../api/modelShelf", () => ({
   fetchWorkflowSets: (...args) => fetchWorkflowSets(...args),
@@ -19,8 +21,14 @@ vi.mock("../../api/modelShelf", () => ({
 vi.mock("../../api/workflows", () => ({
   planSetClones: (...args) => planSetClones(...args),
 }));
+vi.mock("../../api/favourites", () => ({
+  listFavourites: (...args) => listFavourites(...args),
+  setFavourites: vi.fn(),
+}));
 
 import WorkflowUseSetMenu from "./WorkflowUseSetMenu.vue";
+import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useTasksStore } from "../../stores/useTasksStore";
 
 // Vuetify is not installed in the test app, so `v-menu` is stubbed with the
 // two behaviours the component relies on: the activator's click toggles it,
@@ -142,13 +150,17 @@ afterEach(() => {
 beforeEach(() => {
   fetchWorkflowSets.mockReset().mockResolvedValue(SHELF);
   planSetClones.mockReset().mockResolvedValue(PLANS);
+  listFavourites.mockReset().mockResolvedValue({ model: [], workflow: [], set: [] });
 });
 
 function mountMenu(props = {}) {
   const wrapper = mount(WorkflowUseSetMenu, {
     props: { workflowId: "a", models: MODELS, ...props },
     attachTo: document.body,
-    global: { stubs: { VMenu: VMenuStub, VIcon: true, Tooltip: true } },
+    global: {
+      plugins: [createPinia()],
+      stubs: { VMenu: VMenuStub, VIcon: true, Tooltip: true },
+    },
   });
   mounted.push(wrapper);
   return wrapper;
@@ -370,6 +382,42 @@ describe("choosing a set", () => {
       ],
     ]);
     expect(menu(wrapper).exists()).toBe(false);
+  });
+
+  it("says loudly that a member still downloading was left out", async () => {
+    // Held by its digest, with no shelf id the plan could use: the set is
+    // used without it, and that is said on the row and once it is chosen.
+    const sha = "f".repeat(64);
+    fetchWorkflowSets.mockResolvedValue({
+      ...SHELF,
+      hand_made: SHELF.hand_made.map((set) =>
+        set.id === 7
+          ? {
+              ...set,
+              members: [
+                ...set.members,
+                { id: null, slot: "lora", on_shelf: false, sha256: sha, name: "Coming LoRA" },
+              ],
+            }
+          : set,
+      ),
+    });
+    const wrapper = mountMenu();
+    useTasksStore().modelDownloads = [
+      { id: "d", file: "coming.safetensors", status: "running", sha256: sha },
+    ];
+    await openMenu(wrapper);
+    expect(meta(wrapper, "hand:7")).toContain(
+      "Coming LoRA still downloading, left out",
+    );
+    expect(meta(wrapper, "hand:9")).not.toContain("downloading");
+    await row(wrapper, "hand:7").trigger("click");
+    expect(wrapper.emitted("use")).toHaveLength(1);
+    const warned = useNoticeStore().notices.find((n) => n.level === "warning");
+    expect(warned?.text).toBe(
+      'Coming LoRA is still downloading, so "Portraits" was used without it. ' +
+        "Use the set again once the download has finished.",
+    );
   });
 
   describe("over a row that already has an unsaved pick", () => {
@@ -686,5 +734,33 @@ describe("from outside the tab", () => {
     const wrapper = mountMenu();
     wrapper.vm.focus();
     expect(document.activeElement).toBe(button(wrapper).element);
+  });
+});
+
+describe("favourite sets (#1578)", () => {
+  const order = (wrapper) =>
+    wrapper.findAll("[data-set]").map((entry) => entry.attributes("data-set"));
+
+  it("a favourite hand-made set leads inside the hand-made group", async () => {
+    listFavourites.mockResolvedValue({ model: [], workflow: [], set: ["hand:8"] });
+    const wrapper = mountMenu();
+    await openMenu(wrapper);
+    await flushPromises();
+    expect(order(wrapper)).toEqual(["hand:8", "hand:7", "hand:9", "model:31"]);
+  });
+
+  it("a favourite pictures set never climbs over the hand-made group", async () => {
+    listFavourites.mockResolvedValue({ model: [], workflow: [], set: ["model:31"] });
+    const wrapper = mountMenu();
+    await openMenu(wrapper);
+    await flushPromises();
+    expect(order(wrapper)).toEqual(["hand:7", "hand:8", "hand:9", "model:31"]);
+  });
+
+  it("with no favourites the order is the shelf's own", async () => {
+    const wrapper = mountMenu();
+    await openMenu(wrapper);
+    await flushPromises();
+    expect(order(wrapper)).toEqual(["hand:7", "hand:8", "hand:9", "model:31"]);
   });
 });

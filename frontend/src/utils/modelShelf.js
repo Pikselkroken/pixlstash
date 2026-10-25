@@ -48,6 +48,7 @@ const QUANT_TOKENS = {
   e4m3: "fp8_e4m3",
   e4m3fn: "fp8_e4m3",
   e5m2: "fp8_e5m2",
+  fp8mixed: "fp8",
   nvfp4: "nvfp4",
   mxfp4: "mxfp4",
   fp4: "fp4",
@@ -59,7 +60,18 @@ const QUANT_TOKENS = {
 };
 
 /** Popped only alongside a real quant token; alone they are somebody's name. */
-const QUANT_MODIFIERS = new Set(["scaled", "awq", "gptq", "fast"]);
+const QUANT_MODIFIERS = new Set([
+  "scaled",
+  "awq",
+  "gptq",
+  "fast",
+  "mixed",
+  "convrot",
+  "kj",
+]);
+
+/** A version after the precision (`…-bf16-1.0`), kept in the name. */
+const QUANT_TRAILING_VERSION_RE = /^(?:v\d+(?:\.\d+)?|\d+\.\d+)$/i;
 
 /**
  * Split a token list into its name and the quant postfix on the end.
@@ -83,11 +95,25 @@ function splitQuant(tokens) {
     };
   }
   const kept = [...tokens];
+  const version =
+    kept.length > 1 && QUANT_TRAILING_VERSION_RE.test(kept[kept.length - 1])
+      ? [kept.pop()]
+      : [];
   const popped = [];
   while (kept.length) {
-    const last = kept[kept.length - 1].toLowerCase();
-    if (!Object.hasOwn(QUANT_TOKENS, last) && !QUANT_MODIFIERS.has(last)) break;
-    popped.push(kept.pop());
+    const token = kept[kept.length - 1];
+    const last = token.toLowerCase();
+    const dot = token.lastIndexOf(".");
+    const tail = token.slice(dot + 1);
+    if (Object.hasOwn(QUANT_TOKENS, last) || QUANT_MODIFIERS.has(last)) {
+      popped.push(kept.pop());
+    } else if (dot > 0 && Object.hasOwn(QUANT_TOKENS, tail.toLowerCase())) {
+      // `…_t2i.int8_convrot`: a dot, not a separator, before the quant.
+      kept[kept.length - 1] = token.slice(0, dot);
+      popped.push(tail);
+    } else {
+      break;
+    }
   }
   // The guard the whole safety of this rests on: `scaled` and `fast` are
   // ordinary tokens in real model names and may only be eaten when a genuine
@@ -97,7 +123,10 @@ function splitQuant(tokens) {
     Object.hasOwn(QUANT_TOKENS, t.toLowerCase()),
   );
   if (!real) return { tokens: [...tokens], quant: null };
-  return { tokens: kept, quant: QUANT_TOKENS[real.toLowerCase()] };
+  return {
+    tokens: [...kept, ...version],
+    quant: QUANT_TOKENS[real.toLowerCase()],
+  };
 }
 
 /**
@@ -1108,7 +1137,7 @@ export function bandGroups(groups, deviceByFolderId) {
  * per cent of a 256 GB SSD is 25 GB, which IS a problem - but so is 60 GB free
  * on that same disk, and the fraction calls that fine.
  */
-export const LOW_FREE_BYTES = 50 * 1024 ** 3;
+const LOW_FREE_BYTES = 50 * 1024 ** 3;
 
 /**
  * How a drive's space divides into the three things a reader asks about.
@@ -1622,6 +1651,8 @@ export function companionsSentences(companions, count) {
   }
   const said = [];
   const { in_use = [], orphaned = [], shared = [], unknown = [] } = companions;
+  // Not lockedDelete's `plural`: tests/test_comfyui_pack_model_mark.py runs this
+  // file in Node beside setAppearance.js alone, so it imports nothing else.
   const plural = (items, one, many) => (items.length === 1 ? one : many);
   if (in_use.length) {
     said.push(

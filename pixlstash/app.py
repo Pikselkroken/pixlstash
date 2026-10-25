@@ -10,23 +10,29 @@ import time
 from platformdirs import user_config_dir
 from passlib.hash import bcrypt
 
+# First of PixlStash's own imports, and applied at once: the GPU PixlStash runs
+# on is chosen by CUDA_VISIBLE_DEVICES, which only works if it is set before
+# anything below loads torch (``pixlstash.server`` does). See gpu_select.py.
+from pixlstash import gpu_select
 
-from pixlstash.pixl_logging import setup_logging, get_logger, hold_log_output
-from pixlstash.server import Server
-from pixlstash.startup_checks import StartupCheckError
-from pixlstash.hub.bootstrap import (
+gpu_select.apply()
+
+from pixlstash.pixl_logging import setup_logging, get_logger, hold_log_output  # noqa: E402
+from pixlstash.server import Server  # noqa: E402
+from pixlstash.startup_checks import StartupCheckError  # noqa: E402
+from pixlstash.hub.bootstrap import (  # noqa: E402
     HubBootstrapError,
     UnusableVaultError,
     VAULT_RECREATE_ENV,
 )
-from pixlstash.hub.db import HubPermissionError
-from pixlstash.startup_permissions import (
+from pixlstash.hub.db import HubPermissionError  # noqa: E402
+from pixlstash.startup_permissions import (  # noqa: E402
     PERMISSION_REPAIR_ENV,
     find_startup_permission_issues,
     format_permission_problem,
     repair_permission_issues,
 )
-from pixlstash.trusted_sqlite import TrustedSQLiteLocationError
+from pixlstash.trusted_sqlite import TrustedSQLiteLocationError  # noqa: E402
 
 logger = get_logger(__name__)
 
@@ -553,6 +559,8 @@ def main():
         setup_logging(log_file=log_file, log_level=log_level)
     else:
         setup_logging(log_level=log_level)
+    if gpu_select.NOTE is not None:
+        logger.log(*gpu_select.NOTE)
 
     def build_server() -> Server:
         return Server(

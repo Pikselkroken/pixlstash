@@ -13,6 +13,15 @@ import ShelfSelectionBar from "./ShelfSelectionBar.vue";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useFavouritesStore } from "../../stores/useFavouritesStore";
+
+// The heart verb writes through the favourites api; doubled so no test reaches
+// the network and the write can be asserted.
+const setFavourites = vi.fn();
+vi.mock("../../api/favourites", () => ({
+  listFavourites: vi.fn(async () => ({ model: [], workflow: [], set: [] })),
+  setFavourites: (...args) => setFavourites(...args),
+}));
 
 // `AddToEntityControl` is stubbed rather than mounted: it reads the shared
 // entity lists on mount, and what this file has to assert about it is the props
@@ -848,8 +857,12 @@ describe("Hide, over selected cards from pictures", () => {
       "Hide 2 workflow sets",
       "Hide 2 workflow sets",
     ]);
+    // Favourite leads the menu now; the hide verb is still in it.
     for (const menu of wrapper.findAll(".shelf-menu[role='menu']").slice(-2)) {
-      expect(menu.find(".ctx-item").text()).toBe("Hide 2 workflow sets");
+      expect(menu.findAll(".ctx-item")[0].text()).toContain("Favourite");
+      expect(
+        menu.findAll(".ctx-item").map((item) => item.text()),
+      ).toContain("Hide 2 workflow sets");
     }
     await hideRows(wrapper)[0].trigger("click");
     expect(wrapper.emitted("hide-sets")).toHaveLength(1);
@@ -947,11 +960,11 @@ describe("Keep one copy", () => {
   });
 });
 
-describe("Clone set to edit", () => {
+describe("Edit set, on a set from pictures", () => {
   const cloneItem = (wrapper) =>
     wrapper
       .findAll(".ctx-item")
-      .find((b) => b.text().includes("Clone set to edit"));
+      .find((b) => b.text().includes("Edit set"));
 
   /** A checkpoint that ran with one LoRA, the checkpoint selected. */
   function selectHead() {
@@ -1081,3 +1094,55 @@ describe("the Models rail's selection", () => {
     menu.unmount();
   });
 });
+
+describe("favourites (#1578)", () => {
+  beforeEach(() => {
+    setFavourites.mockReset().mockResolvedValue({ model: [], workflow: [], set: [] });
+  });
+
+  it("leads the menu with Favourite, and says Unfavourite when every keyed model already is one", async () => {
+    selectRows([row(1, "present"), row(2, "present")]);
+    useFavouritesStore().keys = {
+      model: ["1".repeat(64), "2".repeat(64)],
+      workflow: [],
+      set: [],
+    };
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    const menu = wrapper.findAll(".shelf-menu[role='menu']").at(-1);
+    expect(menu.findAll(".ctx-item")[0].text()).toContain("Unfavourite");
+  });
+
+  it("reads Favourite on a mixed selection, and the heart favourites every hash in it", async () => {
+    selectRows([row(1, "present"), row(2, "present")]);
+    useFavouritesStore().keys = { model: ["1".repeat(64)], workflow: [], set: [] };
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    const menu = wrapper.findAll(".shelf-menu[role='menu']").at(-1);
+    expect(menu.findAll(".ctx-item")[0].text()).toContain("Favourite");
+    expect(menu.findAll(".ctx-item")[0].text()).not.toContain("Unfavourite");
+    await wrapper.find('[data-verb="favourite"]').trigger("click");
+    await flushPromises();
+    expect(setFavourites).toHaveBeenCalledWith(
+      "model",
+      ["1".repeat(64), "2".repeat(64)],
+      true,
+    );
+  });
+
+  it("forgets the card a closed context menu was opened on", async () => {
+    selectRows([row(1, "present")]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    wrapper.vm.openContextMenu(1, 2, "model:9");
+    wrapper.vm.contextOpen = false;
+    await wrapper.vm.$nextTick();
+    await wrapper.find('[data-verb="favourite"]').trigger("click");
+    await flushPromises();
+    expect(setFavourites.mock.calls).toEqual([["model", ["1".repeat(64)], true]]);
+  });
+
+  it("disables the heart, with its reason, when no selected model has a hash", async () => {
+    selectRows([row(1, "present", { sha256: null })]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(wrapper.find('[data-verb="favourite"]').attributes("disabled")).toBeDefined();
+  });
+});
+

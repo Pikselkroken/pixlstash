@@ -786,6 +786,44 @@ describe("WorkflowCard", () => {
     expect(wrapper.emitted("run")).toHaveLength(1);
   });
 
+  // The custom thumbnail: a ComfyUI template's picture until the first run,
+  // or the owner's, pinned over the pictures.
+  it("shows an unpinned thumbnail only until the workflow has pictures", () => {
+    const thumbnail = { url: "/model-icons/abc", pinned: false };
+    const before = mountCard({
+      ...BARE,
+      covers: [],
+      picture_count: 0,
+      rating: 0,
+      thumbnail,
+    });
+    const cells = before.findAll(".wf-card__pic img");
+    expect(cells).toHaveLength(1);
+    expect(cells[0].attributes("src")).toContain("/model-icons/abc");
+    // No "0" badge on a workflow that has made nothing yet.
+    expect(before.find(".wf-card__cover .wf-card__badge--end").exists()).toBe(
+      false,
+    );
+
+    const after = mountCard({ ...BARE, thumbnail });
+    const srcs = after.findAll(".wf-card__pic img").map((img) => img.attributes("src"));
+    expect(srcs).toHaveLength(3);
+    expect(srcs.join(" ")).not.toContain("/model-icons/");
+  });
+
+  it("shows a pinned thumbnail over the pictures, keeping their count", () => {
+    const wrapper = mountCard({
+      ...BARE,
+      thumbnail: { url: "/model-icons/abc", pinned: true },
+    });
+    const cells = wrapper.findAll(".wf-card__pic");
+    expect(cells).toHaveLength(1);
+    expect(cells[0].find("img").attributes("src")).toContain("/model-icons/abc");
+    // It is no library picture, so a right-click on it offers none.
+    expect(cells[0].attributes("data-picture-id")).toBeUndefined();
+    expect(wrapper.find(".wf-card__badge--end").text()).toContain("22");
+  });
+
   it("hides every visible row from assistive tech", () => {
     // The card's own label already reads all four rows, including the marks
     // "+N" clipped; leaving them exposed reads the card out twice.
@@ -1412,8 +1450,9 @@ describe("the Unsaved badge", () => {
       origin_category: "comfyui",
       unsaved_changes: 2,
     }).find(".wf-card__start");
+    // The favourite heart leads the row (#1578); the two badges follow it.
     expect(
-      [...start.element.children].map((el) => el.dataset.testid),
+      [...start.element.children].slice(1).map((el) => el.dataset.testid),
     ).toEqual(["wf-card-comfyui", "wf-card-unsaved"]);
   });
 
@@ -1472,3 +1511,174 @@ describe("a run that ended without a picture", () => {
     );
   });
 });
+
+// #2000: a workflow made from a ComfyUI template that PixlStash could not
+// convert has no graph to run until ComfyUI has saved it.
+describe("a draft", () => {
+  beforeEach(() => setActivePinia(createPinia()));
+  const draft = {
+    id: "manual:abc",
+    name: "Flux.1 Krea Dev",
+    manual: true,
+    draft: true,
+    picture_count: 0,
+    covers: [],
+  };
+
+  it("is hatched, says why it cannot run and offers Finish where Run would be", () => {
+    const wrapper = mountCard(draft);
+    const cover = wrapper.find('[data-testid="wf-card-draft"]');
+    expect(cover.exists()).toBe(true);
+    expect(cover.text()).toContain("Not runnable until ComfyUI has saved it");
+    expect(wrapper.find('[data-testid="wf-card-finish"]').text()).toContain(
+      "Finish in ComfyUI…",
+    );
+    expect(wrapper.text()).not.toContain("Run it…");
+    expect(
+      wrapper.findComponent({ name: "ChipRow" }).props("items")[0].label,
+    ).toBe("Draft · from a template");
+    expect(wrapper.find("article").attributes("aria-label")).toContain(
+      "Draft · from a template",
+    );
+  });
+
+  it("opens it in ComfyUI, the one way a draft is finished", async () => {
+    const { useFilterStore } = await import("../../stores/useFilterStore");
+    useFilterStore().comfyuiUrl = "http://127.0.0.1:8188";
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    try {
+      const wrapper = mountCard(draft);
+      await wrapper.find('[data-testid="wf-card-finish"]').trigger("click");
+      expect(open).toHaveBeenCalledTimes(1);
+      expect(open.mock.calls[0][0]).toContain("pixlstash_workflow=manual%3Aabc");
+    } finally {
+      open.mockRestore();
+    }
+  });
+
+  it("is an ordinary card once it is not a draft", () => {
+    const wrapper = mountCard({ ...draft, draft: false });
+    expect(wrapper.find('[data-testid="wf-card-draft"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain("Run it…");
+  });
+});
+
+// #1578: the heart, shown with its activator rendered (the stub above drops it).
+const ActivatorTooltip = {
+  template: '<span><slot name="activator" :props="{}" /></span>',
+};
+const mountFav = (card, props = {}) =>
+  mount(WorkflowCard, {
+    props: { card, ...props },
+    global: { stubs: { Tooltip: ActivatorTooltip } },
+  });
+const heart = (w) => w.find('[data-testid="favourite-heart"]');
+
+describe("the favourite heart (#1578)", () => {
+  const base = { id: "w", name: "Flux", picture_count: 2, covers: [] };
+
+  it("is filled when the workflow is a favourite, and outlined when not", () => {
+    const on = mountFav(base, { favourite: true });
+    expect(heart(on).attributes("aria-pressed")).toBe("true");
+    expect(heart(on).text()).toBe("mdi-heart");
+    expect(heart(on).classes()).not.toContain("fav-heart--off");
+
+    const off = mountFav(base);
+    expect(heart(off).attributes("aria-pressed")).toBe("false");
+    expect(heart(off).text()).toBe("mdi-heart-outline");
+    expect(heart(off).classes()).toContain("fav-heart--off");
+  });
+
+  it("leads the top-start row, on a card with no pictures too", () => {
+    const empty = mountFav({ ...base, picture_count: 0 });
+    const start = empty.find(".wf-card__start").element;
+    expect(start.firstElementChild.contains(heart(empty).element)).toBe(true);
+    expect(empty.find(".wf-card__cover--empty").exists()).toBe(true);
+    expect(heart(empty).exists()).toBe(true);
+  });
+
+  it("is named in the card's accessible name only while it is one", () => {
+    expect(mountFav(base, { favourite: true }).attributes("aria-label")).toContain(
+      "Favourite",
+    );
+    expect(mountFav(base).attributes("aria-label")).not.toContain("Favourite");
+  });
+
+  it("asks the view to toggle the card, and does not bubble a click", async () => {
+    const wrapper = mountFav(base);
+    await heart(wrapper).trigger("click");
+    expect(wrapper.emitted("toggle-favourite")).toHaveLength(1);
+    expect(wrapper.emitted("run")).toBeUndefined();
+  });
+
+  it("the card carries the fav-host class the outline reveals on", () => {
+    expect(mountFav(base).classes()).toContain("fav-host");
+  });
+});
+
+// The workflow's GPU need is the fourth corner of the cover: the same pill as
+// the picture count, in the bottom-left, on a cover with pictures and on an
+// empty one (#GPU queue). Nothing is added to the meta block or facts row.
+describe("the GPU need pill", () => {
+  const vram = (over = {}) => ({
+    need_mb: 9800,
+    measured_runs: 12,
+    exclusive: false,
+    exclusive_source: null,
+    exclusive_at: null,
+    trend: "flat",
+    peaks: [],
+    ...over,
+  });
+  const pill = (w) => w.find('[data-testid="wf-card-need"]');
+
+  it("shows the need, as GB, in the bottom-left of a cover with pictures", () => {
+    const w = mountCard({ ...BARE, vram: vram() });
+    expect(pill(w).exists()).toBe(true);
+    expect(pill(w).text()).toContain("9.6 GB");
+    // Inside the cover, so it is positioned against the cover's corner.
+    expect(pill(w).element.parentElement.classList.contains("wf-card__cover")).toBe(true);
+  });
+
+  it("draws no pill while the need is unknown, rather than a label or zero", () => {
+    const w = mountCard({ ...BARE, vram: vram({ need_mb: null, measured_runs: 0 }) });
+    expect(pill(w).exists()).toBe(false);
+    const empty = mountCard({
+      ...BARE,
+      picture_count: 0,
+      covers: [],
+      vram: vram({ need_mb: null, measured_runs: 0 }),
+    });
+    expect(empty.find(".wf-card__cover--empty").exists()).toBe(true);
+    expect(pill(empty).exists()).toBe(false);
+  });
+
+  it("keeps the lock, with no figure, for an unmeasured workflow that runs alone", () => {
+    const w = mountCard({
+      ...BARE,
+      vram: vram({ need_mb: null, measured_runs: 0, exclusive: true }),
+    });
+    expect(w.find('[data-testid="wf-card-need-lock"]').exists()).toBe(true);
+    expect(pill(w).text()).not.toMatch(/GB|measured/i);
+  });
+
+  it("adds a lock inside the pill when the workflow runs alone", () => {
+    const alone = mountCard({ ...BARE, vram: vram({ exclusive: true }) });
+    expect(alone.find('[data-testid="wf-card-need-lock"]').exists()).toBe(true);
+    const shared = mountCard({ ...BARE, vram: vram({ exclusive: false }) });
+    expect(shared.find('[data-testid="wf-card-need-lock"]').exists()).toBe(false);
+  });
+
+  it("wears the same pill on an empty cover, in the same corner", () => {
+    const w = mountCard({ ...BARE, picture_count: 0, covers: [], vram: vram() });
+    expect(w.find(".wf-card__cover--empty").exists()).toBe(true);
+    expect(pill(w).exists()).toBe(true);
+    expect(pill(w).element.parentElement.classList.contains("wf-card__cover--empty")).toBe(true);
+  });
+
+  it("draws nothing for a card the server sent with no vram field", () => {
+    const w = mountCard({ ...BARE });
+    expect(pill(w).exists()).toBe(false);
+  });
+});
+

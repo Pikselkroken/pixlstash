@@ -43,7 +43,16 @@ from pixlstash.services.comfyui_recipe_service import (
     sanitize_prompt_graph,
     unchecked_preflight,
 )
-from pixlstash.services.comfyui_service import pixlstash_node_refusals
+from pixlstash.services.comfyui_service import (
+    SAVE_NODE_CLASSES,
+    pixlstash_node_refusals,
+)
+from pixlstash.services import node_packs
+from pixlstash.services.model_downloads import (
+    digest_source,
+    download_source,
+    running_download,
+)
 from pixlstash.services.workflow_bindings import BINDINGS_KEY
 from pixlstash.services.workflow_hash import (
     SECRET_FIELD_RE,
@@ -51,8 +60,16 @@ from pixlstash.services.workflow_hash import (
     asset_reference,
     is_link,
     normalized_filename,
+    reduce_api_graph,
+    structural_document,
 )
-from pixlstash.services.workflow_identity import CORE_ADDRESS_PREFIX, model_fix_kind
+from pixlstash.services.workflow_identity import (
+    CORE_ADDRESS_PREFIX,
+    UPSCALE,
+    intermediate_saves,
+    model_fix_kind,
+    special_groups,
+)
 from pixlstash.services.workflow_io import (
     WorkflowIO,
     api_graph,
@@ -84,6 +101,10 @@ MISSING_MODELS = "missing_models"
 # a pack from before its `shelf` widget (#1923): a restart, not an install, is
 # the fix.
 PACK_OUTDATED = "pack_outdated"
+# A model the graph names that PixlStash is downloading right now
+# (`POST /model-downloads`): a run would fail on it inside ComfyUI, or go
+# without a LoRA the owner picked, so it is refused until the file has landed.
+MODELS_DOWNLOADING = "models_downloading"
 A1111 = "a1111"
 PICTURE_INPUT_UNFILLED = "picture_input_unfilled"
 NO_LORA_LOADER = "no_lora_loader"
@@ -93,6 +114,7 @@ NO_SAVE_NODE = "no_save_node"
 NO_RUNNABLE_SOURCE = "no_runnable_source"
 LORA_NOT_SKIPPABLE = "lora_not_skippable"
 STAGE_NOT_SKIPPABLE = "stage_not_skippable"
+MASK_NOT_READ = "mask_not_read"
 MISSING_CHOICES = "missing_choices"
 
 # The sampler settings a run can swap for one this ComfyUI lists, and the
@@ -154,6 +176,21 @@ TEXT_NODE_CLASSES = {
 # any spelling). A literal cannot expand them, so a text holding anything in
 # square brackets keeps its refusal; core ComfyUI gives brackets no meaning.
 WAS_TOKEN_RE = re.compile(r"\[[^\[\]]*\]")
+
+# The ComfyUI-PixlStash loaders that name their file by SHA-256 alone, as the
+# ComfyUI folder each loads from, and the widgets holding a digest. No file
+# name is in the graph, so the pre-flight's own name check never sees them: a
+# digest the shelf has no copy of is found by :func:`missing_digest_models`.
+DIGEST_LOADER_FOLDERS = {
+    "PixlStashVAELoader": "vae",
+    "PixlStashCLIPLoader": "text_encoders",
+    "PixlStashAdapterLoader": "loras",
+    "PixlStashMultiAdapterLoader": "loras",
+    "PixlStashControlNetLoader": "controlnet",
+    "PixlStashUpscaleModelLoader": "upscale_models",
+}
+DIGEST_WIDGET_RE = re.compile(r"sha256(_\d+)?$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def overriding_text_inputs(class_type: str, inputs: dict) -> list[str]:
@@ -330,6 +367,43 @@ FROM_FILE = "file"
 FROM_EDIT = "edit"
 FROM_PICTURE = "picture"
 FROM_INSTANCE = "instance"
+
+
+def missing_digest_models(
+    graph: dict, digest_present: Callable[[str], bool]
+) -> list[dict]:
+    """Every model a digest loader names that the shelf has no copy of.
+
+    ``[{file, folder, sha256}]``, once per digest. ``file`` is the name the
+    template list links that digest under (:func:`digest_source`), so the owner
+    reads a model and ``POST /model-downloads`` can fetch it; the digest itself
+    where the list has none. A row left empty, or wired, is no model.
+    """
+    found: dict[str, dict] = {}
+    for node in graph.values():
+        if not isinstance(node, dict):
+            continue
+        folder = DIGEST_LOADER_FOLDERS.get(node.get("class_type"))
+        if folder is None:
+            continue
+        for widget, value in (node.get("inputs") or {}).items():
+            if not DIGEST_WIDGET_RE.search(str(widget)) or not isinstance(value, str):
+                continue
+            digest = value.strip().lower()
+            if not _SHA256_RE.match(digest) or digest in found:
+                continue
+            if digest_present(digest):
+                continue
+            source = digest_source(digest)
+            # The folder the download puts it in, which is the one said: the
+            # loader finds it by digest wherever it lands.
+            placed = download_source(source["name"]) if source else None
+            found[digest] = {
+                "file": source["name"] if source else digest,
+                "folder": (placed or source or {}).get("directory") or folder,
+                "sha256": digest,
+            }
+    return list(found.values())
 
 
 def model_folder(class_type: str, field_name: str) -> Optional[str]:
@@ -562,6 +636,7 @@ def judge(
     picture_loader: bool = False,
     from_file: bool = False,
     shelf_uuid: Optional[str] = None,
+    digest_present: Optional[Callable[[str], bool]] = None,
 ) -> tuple[list[Reason], dict]:
     """Every reason this graph would not run, and the pre-flight behind them.
 
@@ -579,6 +654,11 @@ def judge(
     what the ComfyUI-PixlStash node policy needs to know about this run (#1521, see
     :func:`~pixlstash.services.comfyui_service.pixlstash_node_refusals`); the
     defaults refuse.
+
+    ``digest_present`` says whether the shelf has a copy of a SHA-256: given,
+    a model a ComfyUI-PixlStash loader names by digest alone and the shelf
+    lacks is a missing model too (:func:`missing_digest_models`), which the
+    loader would otherwise only fail on inside ComfyUI.
 
     Returns:
         ``(reasons, preflight)``. ``reasons`` empty means it would run.
@@ -604,7 +684,12 @@ def judge(
 
     classes = preflight.get("missing_node_classes") or []
     if classes:
-        reasons.append(Reason(MISSING_NODES, {"nodes": list(classes)}))
+        detail: dict[str, Any] = {"nodes": list(classes)}
+        # A pack PixlStash can have ComfyUI-Manager install (#2054).
+        packs = node_packs.packs_for(classes)
+        if packs:
+            detail["packs"] = packs
+        reasons.append(Reason(MISSING_NODES, detail))
     models = [
         {
             "file": str(item.get("value")),
@@ -613,6 +698,31 @@ def judge(
         for item in preflight.get("missing_models") or []
         if item
     ]
+    if digest_present is not None:
+        models += missing_digest_models(graph, digest_present)
+    downloading = []
+    for model in models:
+        live = running_download(
+            model["file"], model.get("sha256"), folder=model.get("folder")
+        )
+        if live is not None:
+            model["percent"] = live["percent"]
+            downloading.append(model)
+    if downloading:
+        # Ahead of the missing ones: it is not missing, only not here yet.
+        reasons.append(Reason(MODELS_DOWNLOADING, {"models": downloading}))
+        models = [model for model in models if model not in downloading]
+    for model in models:
+        # Only where it is true: `POST /model-downloads` can fetch it, because
+        # the template list links a file of this name. For a digest, only
+        # where that name's link is the one listed under the digest: a fetch
+        # of another file of the name would leave the loader still missing.
+        source = download_source(model["file"])
+        if source is not None and (
+            "sha256" not in model
+            or source["url"] == (digest_source(model["sha256"]) or {}).get("url")
+        ):
+            model["downloadable"] = True
     if models:
         reasons.append(Reason(MISSING_MODELS, {"models": models}))
     if object_info is not None:
@@ -784,6 +894,23 @@ def bypass_missing_loras(graph: dict, object_info: dict) -> list[dict]:
     bypassed: list[dict] = []
     for node_id, missing in missing_by_node.items():
         item = missing[0]
+        on_its_way = [
+            str(entry.get("value"))
+            for entry in missing
+            if running_download(str(entry.get("value")), folder="loras") is not None
+        ]
+        if on_its_way:
+            # The owner put it in and PixlStash is fetching it: a run without
+            # it would be quietly not the run they asked for. Left in, it is
+            # `judge`'s MODELS_DOWNLOADING, which refuses until it lands.
+            logger.info(
+                "Node %s (%s) keeps its refusal rather than being bypassed: "
+                "%s is still downloading.",
+                node_id,
+                item.get("class_type"),
+                ", ".join(on_its_way),
+            )
+            continue
         if any(item.get("value") == FORGOTTEN_MODEL for item in missing):
             # The hub lost this reference's NAME; the file itself may well be
             # installed. :func:`resolve_references` puts the token in on
@@ -856,6 +983,13 @@ def bypass_missing_loras(graph: dict, object_info: dict) -> list[dict]:
                 # Taken out because the file is not here, not because the owner
                 # asked: `skip_requested_loras` marks its own `True`.
                 "requested": False,
+                # As on `missing_models`, and only where true: the run goes
+                # ahead without it, but it can still be fetched for the next.
+                **(
+                    {"downloadable": True}
+                    if download_source(str(item.get("value"))) is not None
+                    else {}
+                ),
             }
             for item in missing
         )
@@ -1751,6 +1885,87 @@ def _close_adapter_rows(inputs: dict) -> None:
                 inputs[f"{widget}{suffix(digest)}"] = strength
 
 
+# What an added upscale scales by (#1868): the Run popup's stage row and the
+# Upscale… verb offer these and nothing else.
+UPSCALE_FACTORS = (1.5, 2.0, 4.0)
+# An upscale model's own factor, as its filename says it: `4x-UltraSharp`,
+# `RealESRGAN_x2`, `4xNMKD-Superscale`. # ponytail: read off the name, and a
+# name saying neither is taken as 4x, the usual one; read the scale off the
+# loaded model if that guess ever sends a picture out at the wrong size.
+_MODEL_SCALE_RE = re.compile(r"(?<![a-z0-9])([1-8])x|x([1-8])(?![0-9])")
+
+
+def upscale_model_scale(filename: str) -> int:
+    """How many times an upscale model enlarges, read off its *filename*."""
+    match = _MODEL_SCALE_RE.search(filename.lower())
+    return int(match.group(1) or match.group(2)) if match else 4
+
+
+def has_upscale(graph: dict) -> bool:
+    """Whether an API graph upscales already: the stage the Run popup draws."""
+    try:
+        return UPSCALE in special_groups(structural_document(graph))
+    except WorkflowGraphError as exc:
+        logger.warning("Cannot tell whether a graph upscales: %s", exc)
+        return False
+
+
+def add_upscale(graph: dict, factor: float, model: Optional[str]) -> list[str]:
+    """Upscale every picture *graph* saves by *factor*, in place (#1868).
+
+    Each save's ``images`` goes through *model* (``UpscaleModelLoader`` and
+    ``ImageUpscaleWithModel``), then a Lanczos resize to *factor*; with no
+    model, the resize alone. Saves of one picture share one chain. An
+    intermediate save (the picture before a second pass) keeps its 1x: only
+    the graph's results are upscaled. A video save is left alone: a model pass
+    over every frame is not what the stage offers. Nothing is added for a graph
+    that saves no picture.
+
+    Returns:
+        The ids of the saves now fed by the upscale.
+    """
+    staged = intermediate_saves(reduce_api_graph(graph))
+    saves = [
+        node_id
+        for node_id, node in graph.items()
+        if isinstance(node, dict)
+        and node.get("class_type") in SAVE_NODE_CLASSES
+        and node.get("class_type") not in VIDEO_SAVE_CLASSES
+        and is_link((node.get("inputs") or {}).get("images"))
+        and node_id not in staged
+    ]
+    next_id = max((int(k) for k in graph if str(k).isdigit()), default=0) + 1
+
+    def add(class_type: str, inputs: dict) -> list:
+        nonlocal next_id
+        node_id = str(next_id)
+        next_id += 1
+        graph[node_id] = {"class_type": class_type, "inputs": inputs}
+        return [node_id, 0]
+
+    loader = (
+        add("UpscaleModelLoader", {"model_name": model}) if saves and model else None
+    )
+    scale_by = factor / upscale_model_scale(model) if model else factor
+    chains: dict[tuple, list] = {}
+    for node_id in saves:
+        source = tuple(graph[node_id]["inputs"]["images"])
+        if source not in chains:
+            image = list(source)
+            if loader:
+                image = add(
+                    "ImageUpscaleWithModel", {"upscale_model": loader, "image": image}
+                )
+            if scale_by != 1:
+                image = add(
+                    "ImageScaleBy",
+                    {"image": image, "upscale_method": "lanczos", "scale_by": scale_by},
+                )
+            chains[source] = image
+        graph[node_id]["inputs"]["images"] = chains[source]
+    return saves
+
+
 def skip_requested_stages(
     graph: dict, stages: list[str], object_info: Optional[dict]
 ) -> list[Reason]:
@@ -1794,7 +2009,8 @@ def blocks_batch(reasons: list[Reason], *, allow_unchecked: bool = False) -> boo
     the owner would expect: installing a file is a trip away from the keyboard,
     so queueing the rest of a mixed batch would leave them re-running the same
     gesture afterwards to catch the ones that were skipped. Restarting ComfyUI
-    for an out-of-date pack (``pack_outdated``) is the same trip.
+    for an out-of-date pack (``pack_outdated``) is the same trip, and so is
+    waiting for a download to land (``models_downloading``).
 
     **An uninspectable ComfyUI blocks unless the owner has consented**, which is
     the whole of the ``allow_unchecked`` rule: without it nothing at all is
@@ -1806,7 +2022,7 @@ def blocks_batch(reasons: list[Reason], *, allow_unchecked: bool = False) -> boo
     """
     unchecked = (COMFYUI_UNREACHABLE, COMFYUI_NOT_CONFIGURED)
     return any(
-        reason.code in (MISSING_MODELS, PACK_OUTDATED)
+        reason.code in (MISSING_MODELS, PACK_OUTDATED, MODELS_DOWNLOADING)
         or (reason.code in unchecked and not allow_unchecked)
         for reason in reasons
     )

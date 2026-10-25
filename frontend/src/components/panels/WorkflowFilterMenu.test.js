@@ -24,6 +24,7 @@ vi.mock("../../api/workflows", () => ({
 
 import WorkflowFilterMenu from "./WorkflowFilterMenu.vue";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
+import { useFavouritesStore } from "../../stores/useFavouritesStore";
 
 function card(overrides = {}) {
   return {
@@ -167,7 +168,8 @@ describe("the Workflows filter menu", () => {
       "Hidden",
       "Ghosts",
     ]);
-    expect(wrapper.find('input[type="checkbox"]').exists()).toBe(false);
+    // The one box is Favourites only, above the kinds (#1578).
+    expect(wrapper.findAll('input[type="checkbox"]')).toHaveLength(1);
     // Nothing open until a row is.
     expect(wrapper.find(".fm-sub").exists()).toBe(false);
   });
@@ -528,5 +530,41 @@ describe("the selection and the filters", () => {
     store.setFilters({ type: "upscale" });
 
     expect(store.selectedKeys).toEqual([CARDS[1].id]);
+  });
+});
+
+// #1578: one box above the kinds, counting the favourites in the grid.
+describe("Favourites only (#1578)", () => {
+  it("is the one box above the kinds, with the favourites of the grid as its count", async () => {
+    const { wrapper } = await mountMenu();
+    useFavouritesStore().keys = {
+      model: [],
+      workflow: [CARDS[0].id, CARDS[2].id],
+      set: [],
+    };
+    await flushPromises();
+    const box = wrapper.find('input[type="checkbox"]');
+    const label = box.element.closest("label");
+    expect(label.textContent).toContain("Favourites only");
+    expect(label.querySelector(".fm-n").textContent).toBe("2");
+    // Above the first section label.
+    const first = wrapper.find(".tbm-label").element;
+    expect(
+      label.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("narrows the grid when ticked, and the strip says so", async () => {
+    const { wrapper, store } = await mountMenu();
+    useFavouritesStore().keys = {
+      model: [],
+      workflow: [CARDS[1].id],
+      set: [],
+    };
+    await flushPromises();
+    await wrapper.find('input[type="checkbox"]').setValue(true);
+    expect(store.filters.favouritesOnly).toBe(true);
+    expect(store.filteredCards.map((card) => card.id)).toEqual([CARDS[1].id]);
+    expect(store.filterChips.map((chip) => chip.key)).toContain("favourites");
   });
 });

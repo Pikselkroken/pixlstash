@@ -63,6 +63,20 @@
 
     <span class="selbar-sep"></span>
 
+    <!-- The favourite leads the icon row (#1578): a heart, H, the same verb the
+         menu leads with. Disabled, with its reason, when nothing is keyed. -->
+    <AppBarButton
+      shape="round"
+      :icon="favouriteOn ? 'heart' : 'heart-outline'"
+      data-verb="favourite"
+      :aria-label="favouriteLabel"
+      :disabled="!favouritable"
+      :tooltip="favouriteTitle || `${favouriteLabel} (H)`"
+      @click="store.toggleFavourites(favouriteTargets)"
+    />
+
+    <span class="selbar-sep"></span>
+
     <!-- Assign is one button and one popover, because "person or set" is one
          question: which thing does this adapter belong to. The two pickers
          inside it are the shared `AddToEntityControl` the grid uses, so the
@@ -274,6 +288,7 @@ import { computed, h, onMounted, onUnmounted, ref } from "vue";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
+import { favouriteVerb } from "../../stores/useFavouritesStore";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
@@ -303,6 +318,11 @@ const props = defineProps({
    * rail is not the shelf's child, and `picked` tells the rail to close.
    */
   rail: { type: Boolean, default: false },
+  /**
+   * The evidence cards picked on the set grid. Read by the favourite verb, so
+   * it favourites a set and not the model the card is named after.
+   */
+  cardKeys: { type: Array, default: () => [] },
 });
 
 const emit = defineEmits([
@@ -365,6 +385,27 @@ function openContextMenu(x, y, setKey = "") {
 }
 
 const single = computed(() => store.selectedRows.length === 1);
+
+// ── Favourites (#1578) ─────────────────────────────────────────────────────
+
+/**
+ * What the verb acts on: the picked cards, the rows, and the card the context
+ * menu is open on - only while it is open, since nothing clears the key after.
+ */
+const favouriteTargets = computed(() =>
+  store.favouriteTargets(
+    [...props.cardKeys, contextOpen.value ? contextSetKey.value : ""].filter(Boolean),
+  ),
+);
+const favouritable = computed(() => favouriteTargets.value.length > 0);
+/** Unfavourite only when every keyed item already is one. */
+const favouriteOn = computed(() =>
+  store.allFavouriteTargets(favouriteTargets.value),
+);
+const favouriteLabel = computed(() => favouriteVerb(favouriteOn.value));
+const favouriteTitle = computed(() =>
+  favouritable.value ? "" : "Favourite once its hash is read",
+);
 
 // ── Hand-made workflow sets (#1520) ─────────────────────────────────────────
 
@@ -1034,9 +1075,14 @@ const verbHandlers = computed(() => ({
   deleteLabel: deleteLabel.value,
   deleteTitle: deleteTitle.value,
   rail: props.rail,
+  favouriteOn: favouriteOn.value,
+  favouriteLabel: favouriteLabel.value,
+  favouritable: favouritable.value,
+  favouriteTitle: favouriteTitle.value,
   onVerb: (verb, event) => {
     // Read before the menu closes: it is the open menu's card.
     const cloned = clonableSet.value;
+    const targets = favouriteTargets.value;
     contextOpen.value = false;
     moreMenuOpen.value = false;
     const send = props.rail ? store.requestVerb : emit;
@@ -1052,6 +1098,7 @@ const verbHandlers = computed(() => ({
     // label and nothing else, so a stale one can never turn a trash into an
     // unlink.
     else if (verb === "delete") send("delete", Boolean(event?.shiftKey));
+    else if (verb === "favourite") store.toggleFavourites(targets);
     else if (verb === "clone-set") send("clone-set", cloned);
     else send(verb);
   },
@@ -1116,6 +1163,19 @@ const VerbItems = (props) => {
     );
 
   return [
+    // Favourite leads the whole menu (#1578): it touches no file, and it is the
+    // one verb every surface shares. Unhashed models have no key and say why.
+    item(
+      props.favouriteOn ? "mdi-heart" : "mdi-heart-outline",
+      props.favouriteLabel,
+      {
+        on: () => props.onVerb("favourite"),
+        disabled: !props.favouritable,
+        title: props.favouriteTitle,
+        kbd: "H",
+      },
+    ),
+    sep(),
     // Inside an open hand-made set's tray the set's own verb leads: it is what
     // the reader is working on, and it never touches a file.
     props.removableFromSet
@@ -1249,10 +1309,10 @@ const VerbItems = (props) => {
         })
       : null,
     props.clonable
-      ? item("mdi-content-duplicate", "Clone set to edit", {
+      ? item("mdi-pencil-outline", "Edit set", {
           on: () => props.onVerb("clone-set"),
           title:
-            'A "Grouped by you" copy of this set, which you can edit. No file is touched.',
+            "Makes it a set of your own on this checkpoint. It keeps following the pictures and reads Automatic until you change it. No file is touched.",
         })
       : null,
     item(

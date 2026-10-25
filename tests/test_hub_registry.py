@@ -120,14 +120,6 @@ def _token_rows(hub, library_uuid):
 
 
 @pytest.fixture
-def hub(tmp_path):
-    """An open hub database in a temporary directory."""
-    database = HubDatabase(str(tmp_path / "hub.db"))
-    yield database
-    database.close()
-
-
-@pytest.fixture
 def registry(hub):
     """A registry over the temporary hub."""
     return LibraryRegistry(hub)

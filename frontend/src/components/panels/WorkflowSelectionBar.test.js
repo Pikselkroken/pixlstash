@@ -26,6 +26,7 @@ vi.mock("../../api/comfyui", () => ({
 import WorkflowSelectionBar from "./WorkflowSelectionBar.vue";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
+import { useFavouritesStore } from "../../stores/useFavouritesStore";
 
 // `v-menu` is stubbed because Vuetify is not installed in these mounts, and an
 // UNRESOLVED component renders its default slot while silently dropping its
@@ -267,7 +268,9 @@ describe("the two menus cannot diverge", () => {
       "Show the pictures of these 3 workflows",
     );
     const menu = verbMenus(wrapper)[1];
-    expect(rowVerbs(menu).slice(0, 3)).toEqual([
+    // Favourite leads the menu (#1578), then the picture rows.
+    expect(rowVerbs(menu).slice(0, 4)).toEqual([
+      "favourite",
       "open-cover",
       "run",
       "show-pictures",
@@ -463,6 +466,8 @@ describe("Change model set…", () => {
     const verbs = rowVerbs(verbMenus(wrapper)[0]);
     expect(verbs.slice(verbs.indexOf("rename"))).toEqual([
       "rename",
+      "set-thumbnail",
+      "pin-thumbnail",
       "hide",
       "use-set",
       "export",
@@ -486,6 +491,58 @@ describe("Change model set…", () => {
       expect(said).not.toMatch(/\b(cop(y|ies|ied)|clon(e|ed|ing)|fixed|edited|original)\b/i);
       wrapper.unmount();
     }
+  });
+});
+
+// The custom thumbnail's two rows (#2000's template pictures, and the owner's).
+describe("the thumbnail rows", () => {
+  const rowOf = (wrapper, name) =>
+    verbMenus(wrapper)[0]
+      .findAll(".ctx-item")
+      .find((el) => el.attributes("data-verb") === name);
+
+  beforeEach(() => setActivePinia(createPinia()));
+
+  it("refuses to pin a workflow with no thumbnail, saying why", async () => {
+    const { wrapper } = bar(["a"]);
+    const pin = rowOf(wrapper, "pin-thumbnail");
+    expect(pin.attributes("aria-disabled")).toBe("true");
+    expect(pin.find(".tip").attributes("data-text")).toBe(
+      "This workflow has no custom thumbnail. Choose one first",
+    );
+    await pin.trigger("click");
+    expect(wrapper.emitted("pin-thumbnail")).toBeUndefined();
+    // Choosing one is still offered.
+    const choose = rowOf(wrapper, "set-thumbnail");
+    expect(choose.attributes("aria-disabled")).toBeUndefined();
+    await choose.trigger("click");
+    expect(wrapper.emitted("set-thumbnail")).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it("pins an unpinned thumbnail and unpins a pinned one", async () => {
+    for (const [pinned, label, sent] of [
+      [false, "Always show custom thumbnail", true],
+      [true, "Show generated pictures", false],
+    ]) {
+      const { wrapper, store } = bar([]);
+      store.cards = [card("t", { thumbnail: { url: "/model-icons/x", pinned } })];
+      store.selectRange(["t"]);
+      await flushPromises();
+      const pin = rowOf(wrapper, "pin-thumbnail");
+      expect(pin.find(".ctx-label-text").text()).toBe(label);
+      await pin.trigger("click");
+      expect(wrapper.emitted("pin-thumbnail")).toEqual([[sent]]);
+      wrapper.unmount();
+    }
+  });
+
+  it("is refused for several workflows", () => {
+    const { wrapper } = bar(["a", "b"]);
+    for (const name of ["set-thumbnail", "pin-thumbnail"]) {
+      expect(rowOf(wrapper, name).attributes("aria-disabled")).toBe("true");
+    }
+    wrapper.unmount();
   });
 });
 
@@ -595,6 +652,96 @@ describe("Open in ComfyUI", () => {
     await rows[1].trigger("keydown", { key: "ArrowLeft" });
     expect(document.activeElement).toBe(row.element);
     expect(wrapper.find(".ctx-submenu").exists()).toBe(false);
+    wrapper.unmount();
+  });
+});
+
+// #2000: a draft has no graph to run, and Open in ComfyUI is how it is
+// finished, so only Run is refused, with the way out in its tooltip.
+describe("a draft's gates", () => {
+  beforeEach(() => setActivePinia(createPinia()));
+
+  it("refuses Run and says what finishes it", async () => {
+    const store = useWorkflowsStore();
+    store.cards = [...CARDS, card("x", { manual: true, draft: true })];
+    store.selectRange(["x"]);
+    const wrapper = mount(WorkflowSelectionBar, globalOpts);
+    expect(enabled(wrapper, "run")).toBe(false);
+    expect(tooltip(wrapper, "run")).toBe(
+      "Finish it in ComfyUI first: open it there and save it",
+    );
+    // A workflow that is not a draft still runs.
+    store.selectRange(["a"]);
+    await flushPromises();
+    expect(enabled(wrapper, "run")).toBe(true);
+  });
+});
+
+// #1578: Favourite leads the pill and the menu; the verb follows the selection.
+describe("Favourite (#1578)", () => {
+  beforeEach(() => setActivePinia(createPinia()));
+
+  const favouriteRow = (wrapper) =>
+    verbMenus(wrapper)[1]
+      .findAll(".ctx-item")
+      .find((el) => el.attributes("data-verb") === "favourite");
+
+  it("reads Favourite over a mixed selection, and Unfavourite over one that is all favourites", () => {
+    useFavouritesStore().keys = { model: [], workflow: ["a"], set: [] };
+    const mixed = bar(["a", "b"]).wrapper;
+    expect(verb(mixed, "favourite").attributes("aria-label")).toBe("Favourite");
+    expect(favouriteRow(mixed).find(".ctx-label-text").text()).toBe("Favourite");
+    expect(favouriteRow(mixed).find(".ctx-shortcut").text()).toBe("H");
+
+    useFavouritesStore().keys = { model: [], workflow: ["a", "b"], set: [] };
+    const all = bar(["a", "b"]).wrapper;
+    expect(verb(all, "favourite").attributes("aria-label")).toBe("Unfavourite");
+    expect(favouriteRow(all).find(".ctx-label-text").text()).toBe("Unfavourite");
+  });
+
+  it("emits favourite from the pill and from its menu row", async () => {
+    const { wrapper } = bar(["a"]);
+    await verb(wrapper, "favourite").trigger("click");
+    expect(wrapper.emitted("favourite")).toHaveLength(1);
+    await favouriteRow(wrapper).trigger("click");
+    expect(wrapper.emitted("favourite")).toHaveLength(2);
+  });
+});
+
+// Download missing models: the view asks the pre-flight; the row only says
+// whether there is a graph to ask about.
+describe("Download missing models", () => {
+  beforeEach(() => setActivePinia(createPinia()));
+
+  const rowOf = (wrapper) =>
+    verbMenus(wrapper)[0]
+      .findAll(".ctx-item")
+      .find((el) => el.attributes("data-verb") === "download-missing");
+
+  it("is offered over several workflows, drafts among them, and asks", async () => {
+    const store = useWorkflowsStore();
+    store.cards = [...CARDS, card("x", { manual: true, draft: true })];
+    store.selectRange(["a", "x"]);
+    const wrapper = mount(WorkflowSelectionBar, globalOpts);
+    const row = rowOf(wrapper);
+    expect(row.attributes("aria-disabled")).toBeUndefined();
+    await row.trigger("click");
+    expect(wrapper.emitted("download-missing")).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it("is refused over drafts alone, saying what finishes one", async () => {
+    const store = useWorkflowsStore();
+    store.cards = [...CARDS, card("x", { manual: true, draft: true })];
+    store.selectRange(["x"]);
+    const wrapper = mount(WorkflowSelectionBar, globalOpts);
+    const row = rowOf(wrapper);
+    expect(row.attributes("aria-disabled")).toBe("true");
+    expect(row.find(".tip").attributes("data-text")).toBe(
+      "A draft has no graph to check yet: open it in ComfyUI and save it",
+    );
+    await row.trigger("click");
+    expect(wrapper.emitted("download-missing")).toBeUndefined();
     wrapper.unmount();
   });
 });

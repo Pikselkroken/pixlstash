@@ -9,6 +9,7 @@ import types
 from fastapi.testclient import TestClient
 
 from pixlstash.server import Server
+from pixlstash.resources.ledger import Ledger
 from pixlstash.services import config_service
 from pixlstash.tasks.dedup_scan_task import DedupScanTask
 from pixlstash.tasks.task_type import TaskType
@@ -170,7 +171,8 @@ def test_vram_falls_back_to_torch_when_nvml_reports_no_process_figure(monkeypatc
         nvmlDeviceGetGraphicsRunningProcesses=lambda h: [],
         NVML_VALUE_NOT_AVAILABLE=-1,
     )
-    monkeypatch.setattr(config_service, "pynvml", fake_nvml)
+    fake_ledger = Ledger(fake_nvml)
+    monkeypatch.setattr(config_service, "ledger", lambda: fake_ledger)
 
     def torch_reading(payload):
         payload["vram_used_gb"] = 4.5

@@ -83,6 +83,7 @@ PRIVILEGED_WORKFLOW_PATHS = tuple(
         "record-test-durations.yml",
         "release-test-issues.yml",
         "release-version.yml",
+        "template-suggestions.yml",
         "windows-installer.yml",
         "windows-signing-test.yml",
     )
@@ -216,7 +217,6 @@ DEFERRED_FROM_GATE = frozenset(
         "test_detection_florence.py",
         "test_detection_model.py",
         "test_docker_windows_host_paths.py",
-        "test_except_hygiene_guardrail.py",
         "test_face_detection_extreme_aspect_ratio.py",
         "test_face_extraction_speed.py",
         "test_full_pipeline.py",
@@ -759,9 +759,18 @@ def test_telemetry_worker_config_and_d1_contract_are_validated(workflow):
     assert scripts.get("check:config", "").startswith(
         "WRANGLER_LOG_PATH=.wrangler/logs wrangler deploy --dry-run"
     )
-    assert scripts.get("deploy") == (
-        "wrangler deploy --no-x-provision --no-x-auto-create"
+    # The deploy runs through a script that injects the database id, so the
+    # no-provisioning flags live there: every `wrangler deploy` it makes must
+    # carry them.
+    assert scripts.get("deploy") == "node scripts/deploy.mjs"
+    deploy_script = (worker_root / "scripts/deploy.mjs").read_text(encoding="utf-8")
+    assert (
+        'export const DEPLOY_FLAGS = ["--no-x-provision", "--no-x-auto-create"];'
+        in deploy_script
     )
+    deploy_calls = re.findall(r'wrangler\(\["deploy",[^\]]*\]', deploy_script)
+    assert deploy_calls, "deploy.mjs no longer runs wrangler deploy"
+    assert all("...DEPLOY_FLAGS" in call for call in deploy_calls)
     d1_bindings = config.get("d1_databases", [])
     assert any(binding.get("binding") == "DB" for binding in d1_bindings)
     assert all("database_id" not in binding for binding in d1_bindings)

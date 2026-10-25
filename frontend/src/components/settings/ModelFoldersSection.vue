@@ -202,6 +202,82 @@
         </div>
       </section>
 
+      <!-- Where a model downloaded for a workflow goes: the default folder
+           until the owner picks another. Pinned like the default, so it too
+           appears in one place only. -->
+      <section class="mf-default" aria-labelledby="mf-download-label">
+        <div class="mf-default__head">
+          <span id="mf-download-label" class="section-label"
+            >Download folder</span
+          >
+          <span class="mf-default__from">
+            <v-icon size="12">mdi-download</v-icon>
+            Models downloaded for a workflow land here
+          </span>
+        </div>
+        <div class="mf-row mf-row--default" data-testid="mf-download-folder">
+          <span class="mf-row__label">
+            <FolderPath
+              v-if="store.downloadFolder"
+              :path="store.downloadFolder.path"
+            />
+            <span v-else class="mf-row__none">None set</span>
+            <span
+              v-if="store.downloadFolder?.is_default"
+              class="mf-chip"
+              >Same as default</span
+            >
+          </span>
+          <span class="mf-row__meta">{{
+            store.downloadFolder && !store.downloadFolder.is_default
+              ? folderStats(store.downloadFolder)
+              : ""
+          }}</span>
+          <v-menu
+            v-model="downloadMenuOpen"
+            :disabled="Boolean(changeDownloadReason)"
+            location="bottom end"
+            origin="top end"
+            :offset="6"
+          >
+            <template #activator="{ props: menuProps }">
+              <AppButton
+                v-bind="{ ...menuProps, ...blockedAttrs(changeDownloadReason) }"
+                size="sm"
+                variant="secondary"
+                aria-haspopup="menu"
+                :tooltip="changeDownloadReason"
+                data-testid="mf-download-change"
+              >
+                Change<v-icon size="16" class="mf-chevron"
+                  >mdi-chevron-down</v-icon
+                >
+              </AppButton>
+            </template>
+            <div
+              class="ctx-menu"
+              role="menu"
+              tabindex="-1"
+              @keydown="onMenuKeydown"
+            >
+              <button
+                v-for="folder in downloadChoices"
+                :key="folder.id"
+                class="ctx-item"
+                type="button"
+                role="menuitem"
+                @click="onDownloadChange(folder)"
+              >
+                <span class="ctx-label-text mf-choice">
+                  <span>{{ basename(folder.path) }}</span>
+                  <span class="mf-choice__path">{{ folder.path }}</span>
+                </span>
+              </button>
+            </div>
+          </v-menu>
+        </div>
+      </section>
+
       <!-- The one scroller. A plain list of rows carrying verbs, not a
            `role="listbox"`: nothing here is selected, and real `<button>`s in a
            `<ul>` give Tab and Enter for free. -->
@@ -357,6 +433,7 @@ const {
 const browseOpen = ref(false);
 const downloadsMenuOpen = ref(false);
 const defaultMenuOpen = ref(false);
+const downloadMenuOpen = ref(false);
 // Which verb opened the picker. One browser serves them all, so the pick has
 // to be told apart: Move empties `relocating` into it, otherwise it registers
 // a folder of `addingKind` (null for a plain Add). `replacing` is the Downloads
@@ -367,16 +444,24 @@ const replacing = ref(null);
 // The folders the last Rescan all started, so its label can count them down.
 const rescanBatch = ref([]);
 
-/** Every folder but the two the header and the pinned card already show. */
+/** Every folder but the ones the header and the pinned cards already show. */
 const listed = computed(() =>
   store.folders.filter(
-    (folder) => folder.kind !== DOWNLOADS_KIND && !folder.is_default,
+    (folder) =>
+      folder.kind !== DOWNLOADS_KIND &&
+      !folder.is_default &&
+      !folder.is_download_target,
   ),
 );
 
 /** The folders that can take over as the default, minus the one that is. */
 const defaultChoices = computed(() =>
   store.defaultCandidates.filter((folder) => !folder.is_default),
+);
+
+/** The folders downloads can go to instead, minus the one they go to. */
+const downloadChoices = computed(() =>
+  store.defaultCandidates.filter((folder) => !folder.is_download_target),
 );
 
 /** `user` and `source` rows only; `managed` and `foreign` are PixlStash's own. */
@@ -427,6 +512,15 @@ const changeDefaultReason = computed(
       : "No other folder can be the default yet. Add one first."),
 );
 
+/** Why the download folder cannot be changed here, or "" when it can. */
+const changeDownloadReason = computed(
+  () =>
+    remoteReason.value ||
+    (downloadChoices.value.length
+      ? ""
+      : "No other folder can take downloads yet. Add one first."),
+);
+
 /** A swap is a forget then an add, so either refusal blocks it. */
 const changeDownloadsReason = computed(
   () =>
@@ -470,6 +564,12 @@ function onDefaultChange(folder) {
   defaultMenuOpen.value = false;
   if (remoteReason.value || folder.is_default) return;
   store.setDefault(folder);
+}
+
+function onDownloadChange(folder) {
+  downloadMenuOpen.value = false;
+  if (remoteReason.value || folder.is_download_target) return;
+  store.setDownloadTarget(folder);
 }
 
 function onRelocate(folder) {

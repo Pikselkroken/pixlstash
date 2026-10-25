@@ -228,6 +228,8 @@ READ_SAFE_POST_PATHS: frozenset[str] = frozenset(
 READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
     {
         "/api/v1/users/me/config",
+        # This host's GPUs and what runs on them; LOCAL_OWNER_ONLY in the gate.
+        "/api/v1/compute/gpus",
         "/api/v1/server-config/watch-folders",
         "/api/v1/server-config/filesystem-roots",
         "/api/v1/filesystem/browse",
@@ -308,6 +310,7 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         "/api/v1/dedup/mixed-stacks",
         "/api/v1/dedup/policy",
         "/api/v1/dedup/sweep/policy",
+        "/api/v1/favourites",
         "/api/v1/insights",
         "/api/v1/libraries",
         "/api/v1/model-folders",
@@ -315,6 +318,7 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         "/api/v1/model-stacks/proposals",
         "/api/v1/models/base-models",
         "/api/v1/models/workflow-sets",
+        "/api/v1/models/workflow-templates",
         "/api/v1/moves/pending",
         "/api/v1/operations",
         "/api/v1/operations/undo-state",
@@ -352,6 +356,11 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         # Every stored workflow file by name: the workflow library's listing
         # under another path, hidden workflows included.
         "/api/v1/comfyui/workflows",
+        # The templates the owner's ComfyUI serves (#2000): it makes this
+        # server read the owner's ComfyUI and says which model files the
+        # shelf holds, so the rollback must not hand either out.
+        "/api/v1/comfyui/templates",
+        "/api/v1/comfyui/templates/thumbnail",
     }
 )
 
@@ -367,6 +376,9 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
 # templated owner-class GET that no prefix covers.
 READ_BLOCKED_GET_PREFIXES: tuple[str, ...] = (
     "/api/v1/adapters/",
+    # Whether the owner's ComfyUI offers a known node pack (#2054): it makes
+    # this server read the owner's ComfyUI.
+    "/api/v1/comfyui/node-packs/",
     "/api/v1/dedup/",
     "/api/v1/model-folders/",
     "/api/v1/model-icons/",

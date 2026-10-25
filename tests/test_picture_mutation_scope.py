@@ -27,7 +27,6 @@ import gc
 import json
 import os
 import tempfile
-import time
 from types import SimpleNamespace
 
 import pytest
@@ -44,7 +43,7 @@ from pixlstash.db_models import Picture, UserToken
 from pixlstash.routes.pictures import _helpers as helpers_module
 from pixlstash.server import Server
 from tests.authz_guard import assert_real_route, no_spa_fallback  # noqa: F401
-from tests.utils import upload_pictures_and_wait
+from tests.utils import quiesce_background_work, upload_pictures_and_wait
 
 API = "/api/v1"
 
@@ -128,57 +127,6 @@ def _picture_rows(server):
     )
 
 
-def _quiesce_background_work(server):
-    """Take every work finder out of the planner and let the pipeline settle.
-
-    The per-test ``Server`` this module used to build was hiding the import
-    pipeline rather than avoiding it: a vault that had just come up had nothing
-    to backfill and no models loaded, so the sweeps were still in a long
-    backoff when the test ended. A shared server is warm, and the sweeps land
-    *inside* the tests instead - where they rewrite the very rows the fixtures
-    hand-place. ``TagTask`` runs ``delete(Tag).where(picture_id.in_(...))``
-    before writing its own labels, ``FaceExtractionTask`` adds ``Face`` rows
-    beside the ones a test just created and indexes by position, and the dedup
-    sweep stacks pictures, which changes how many rows a bulk delete touches.
-
-    Nothing in this module needs derived data - every assertion is a status
-    code against hand-made objects - so every finder goes, not a curated
-    subset. The planner thread itself keeps running (a route that wakes it must
-    still find it alive) and so does the task runner, so routes that submit
-    work directly are unaffected. ``detach_finders`` edits the planner's finder
-    structures under the planner's own lock, so the loop no longer has to be
-    stopped around the removal.
-
-    Waiting the pipeline out per test instead was measured slower than the
-    per-test servers this replaces (PR #814), which is why it is switched off
-    once here rather than polled for.
-
-    Returns the names of the finders it removed, so the per-test fixture can
-    re-check before every test that they are still gone.
-    """
-    planner = server.vault._work_planner
-    task_types = list(server.vault._planner_work_finders)
-    for task_type in task_types:
-        server.vault._planner_work_finders.pop(task_type)
-    removed = planner.detach_finders(task_types)
-
-    # Work already queued or running when the finders went is still ours to
-    # wait for: it would otherwise write into the first test's freshly reset
-    # library.
-    runner = server.vault._task_runner
-    runner.cancel_pending_tasks()
-    deadline = time.monotonic() + 60.0
-    while time.monotonic() < deadline:
-        with runner._active_task_lock:
-            active = list(runner._active_tasks.values())
-        if not active:
-            return removed
-        time.sleep(0.05)
-    raise AssertionError(
-        f"import pipeline did not settle within 60s; still running: {active}"
-    )
-
-
 @pytest.fixture(scope="module")
 def _shared_env():
     """One Server, one imported library, shared by every test in this module.
@@ -213,7 +161,7 @@ def _shared_env():
             st = upload_pictures_and_wait(client, files, timeout_s=30)
             assert st["status"] == "completed", st
 
-            disabled_finders = _quiesce_background_work(server)
+            disabled_finders = quiesce_background_work(server)
 
             r = client.get(f"{API}/pictures")
             assert r.status_code == 200, r.text
@@ -292,7 +240,7 @@ def fresh_state(_shared_env):
       a missing picture and a scope refusal are indistinguishable from a status
       code;
     * a backfill finder rewriting the row under the test - so the finders
-      ``_quiesce_background_work`` removed are re-checked by name.
+      ``quiesce_background_work`` removed are re-checked by name.
     """
     shared = _shared_env
     _reset_library(shared)

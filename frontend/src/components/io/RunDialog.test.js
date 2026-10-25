@@ -82,6 +82,11 @@ vi.mock("../../api/pictureSets", () => ({
   listPictureSets: vi.fn().mockResolvedValue([]),
 }));
 // The person picker and "Pictures are of" read the people the same way.
+const listFavourites = vi.fn();
+vi.mock("../../api/favourites", () => ({
+  listFavourites: (...args) => listFavourites(...args),
+  setFavourites: vi.fn(),
+}));
 const listCharacters = vi.fn();
 vi.mock("../../api/characters", () => ({
   listCharacters: (...args) => listCharacters(...args),
@@ -114,6 +119,7 @@ vi.mock("vuetify/components", async () => {
 import RunDialog from "./RunDialog.vue";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
+import { useTasksStore } from "../../stores/useTasksStore";
 import { notifySessionReset } from "../../utils/apiClient";
 import { pictureThumbnailUrl } from "../../api/pictures";
 
@@ -244,6 +250,7 @@ beforeEach(() => {
       : { card: card() },
   );
   listWorkflowCards.mockResolvedValue({ cards: [] });
+  listFavourites.mockResolvedValue({ model: [], workflow: [], set: [] });
   fetchWorkflowSets.mockResolvedValue({ hand_made: [] });
   listCharacters.mockResolvedValue([]);
   setWorkflowInputs.mockResolvedValue({ inputs: [] });
@@ -752,6 +759,36 @@ describe("a refusal the popup offers to fix", () => {
         models: [{ file: "character.safetensors", folder: "loras" }],
       },
     ]);
+  });
+
+  it("asks the pre-flight again when a download lands", async () => {
+    preflightWorkflowRun.mockResolvedValueOnce({
+      ok: true,
+      runs: 1,
+      groups: [
+        {
+          workflow_id: KEY,
+          reasons: [],
+          bypassed_loras: [
+            { file: "character.safetensors", folder: "loras", downloadable: true },
+          ],
+        },
+      ],
+    });
+    const wrapper = await mountRun();
+    expect(wrapper.vm.runNotes.map((note) => note.code)).toEqual(["loras_bypassed"]);
+    preflightWorkflowRun.mockResolvedValue({
+      ok: true,
+      runs: 1,
+      groups: [{ workflow_id: KEY, reasons: [], bypassed_loras: [] }],
+    });
+    const asked = preflightWorkflowRun.mock.calls.length;
+
+    useTasksStore().downloadsLanded += 1;
+    await flushPromises();
+
+    expect(preflightWorkflowRun.mock.calls.length).toBe(asked + 1);
+    expect(wrapper.vm.runNotes).toEqual([]);
   });
 
   it("names a replaced seed node beside a bypassed LoRA, blocking neither (#1463)", async () => {
@@ -1602,7 +1639,7 @@ describe("\"Run a workflow on these…\", which opens with no workflow chosen", 
   });
 });
 
-describe("Edit with ComfyUI, the built-in edit card over the selection", () => {
+describe("Edit, a workflow run over the picture being edited", () => {
   it("reads no recipe and sends the pictures to the card with the typed prompt", async () => {
     const wrapper = await mountRun({
       kind: "edit",
@@ -1612,7 +1649,7 @@ describe("Edit with ComfyUI, the built-in edit card over the selection", () => {
     });
     // The picture is what is edited, not a recipe to replay.
     expect(getPictureRecipe).not.toHaveBeenCalled();
-    expect(wrapper.vm.title).toBe("Edit with ComfyUI");
+    expect(wrapper.vm.title).toBe("Edit");
     const box = wrapper
       .findAllComponents({ name: "AppTextarea" })
       .find((c) => c.props("label") === "Prompt");
@@ -2041,9 +2078,12 @@ describe("the body it sends", () => {
       }),
     });
     const wrapper = await mountRun({ kind: "card", workflowId: KEY });
-    expect(wrapper.find("fieldset").findAll("label").map((l) => l.text())).toEqual([
-      "Seed variance",
-    ]);
+    expect(
+      wrapper
+        .find("fieldset")
+        .findAll("label")
+        .map((l) => l.text().replace(/\s+/g, " ")),
+    ).toEqual(["Seed variance", "Upscale · added for this run"]);
     await wrapper.vm.setStage("seed_variance", false);
     await wrapper.vm.submit();
     await flushPromises();
@@ -2155,12 +2195,95 @@ describe("the body it sends", () => {
     expect(runWorkflowCard.mock.calls[0][0]).not.toHaveProperty("skip_stages");
   });
 
-  it("draws no Stages fieldset when the workflow has no optional stage", async () => {
-    getWorkflowCard.mockResolvedValue({
-      card: card({ specials: [], default_recipe: { stages: {} } }),
+  describe("an upscale added for this run (#1868)", () => {
+    const UPSCALER = "a".repeat(64);
+    beforeEach(() => {
+      window.localStorage.removeItem("pixlstash:upscale");
+      listAdapters.mockImplementation(async ({ fileKind } = {}) =>
+        fileKind === "upscaler"
+          ? [{ sha256: UPSCALER, filename: "4x-UltraSharp.pth" }]
+          : [],
+      );
     });
-    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
-    expect(wrapper.find("fieldset").exists()).toBe(false);
+    const labels = (wrapper) =>
+      wrapper
+        .find("fieldset")
+        .findAll("label")
+        .map((l) => l.text().replace(/\s+/g, " "));
+
+    it("is offered, off, on a workflow with no upscale of its own", async () => {
+      getWorkflowCard.mockResolvedValue({
+        card: card({ specials: [], default_recipe: { stages: {} } }),
+      });
+      const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+      expect(labels(wrapper)).toEqual(["Upscale · added for this run"]);
+      expect(wrapper.find("[data-testid=rund-added-upscale]").element.checked).toBe(
+        false,
+      );
+      await wrapper.vm.submit();
+      await flushPromises();
+      expect(runWorkflowCard.mock.calls[0][0]).not.toHaveProperty("upscale");
+    });
+
+    it("sends the remembered factor and the shelf's model once ticked", async () => {
+      getWorkflowCard.mockResolvedValue({
+        card: card({ specials: [], default_recipe: { stages: {} } }),
+      });
+      const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+      await wrapper.find("[data-testid=rund-added-upscale]").setValue(true);
+      await flushPromises();
+      // The form makes 832 × 1216; the default factor is 2.
+      expect(wrapper.find("[data-testid=upscale-target]").text()).toBe(
+        "→ 1664 × 2432",
+      );
+      await wrapper.findAll(".seg__opt").at(2).trigger("click");
+      expect(wrapper.find("[data-testid=upscale-target]").text()).toBe(
+        "→ 3328 × 4864",
+      );
+      await wrapper.vm.submit();
+      await flushPromises();
+      expect(runWorkflowCard.mock.calls[0][0].upscale).toEqual({
+        factor: 4,
+        model_sha256: UPSCALER,
+      });
+      expect(JSON.parse(window.localStorage.getItem("pixlstash:upscale"))).toEqual(
+        { factor: 4, model: null },
+      );
+    });
+
+    it("says it only resizes when the shelf has no upscaler", async () => {
+      listAdapters.mockResolvedValue([]);
+      getWorkflowCard.mockResolvedValue({
+        card: card({ specials: [], default_recipe: { stages: {} } }),
+      });
+      const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+      await wrapper.find("[data-testid=rund-added-upscale]").setValue(true);
+      await flushPromises();
+      expect(wrapper.find("[data-testid=upscale-no-model]").exists()).toBe(true);
+      await wrapper.vm.submit();
+      await flushPromises();
+      expect(runWorkflowCard.mock.calls[0][0].upscale).toEqual({
+        factor: 2,
+        model_sha256: null,
+      });
+    });
+
+    it("leaves a graph with its own upscale its own row only", async () => {
+      getWorkflowCard.mockResolvedValue({
+        card: card({ specials: ["upscale"], default_recipe: { stages: {} } }),
+      });
+      const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+      expect(labels(wrapper)).toEqual(["Upscale"]);
+      expect(wrapper.find("[data-testid=rund-added-upscale]").exists()).toBe(false);
+    });
+
+    it.each(["upscale", "video"])("is not offered on a %s workflow", async (type) => {
+      getWorkflowCard.mockResolvedValue({
+        card: card({ type, specials: [], default_recipe: { stages: {} } }),
+      });
+      const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+      expect(wrapper.find("fieldset").exists()).toBe(false);
+    });
   });
 
   it("puts a stage turned off back on from its reset chip", async () => {
@@ -2962,7 +3085,7 @@ describe("the pictures a workflow takes", () => {
     // ones they came from".
     preflightWorkflowRun.mockResolvedValue(answer([input(SUBJECT, { fill: "graph" })]));
     const wrapper = await mountRun({ kind: "picture", pictureIds: [1, 2], workflowId: KEY });
-    expect(wrapper.find(".rund-box").exists()).toBe(false);
+    expect(wrapper.text()).not.toContain("Stack new pictures");
   });
 
   it("shows the slot a refused run found empty, and says to look there", async () => {
@@ -6021,11 +6144,17 @@ describe("Save what you ran", () => {
     it("is recorded with the band's own words when a changed run is queued", async () => {
       const wrapper = await mountRun(fromCard);
       await changeThree(wrapper);
+      // The server answers with the run's id and its prompt id, as it does now.
+      runWorkflowCard.mockResolvedValueOnce({
+        status: "success",
+        prompts: [{ run_id: "run-1", prompt_id: "p1", status: "queued" }],
+      });
       await wrapper.vm.submit();
       expect(useRunDialogStore().ranChanges[KEY]).toEqual({
         name: "Cinematic portrait",
         count: 3,
         text: "Checkpoint, 1 LoRA removed, Steps.",
+        runIds: ["run-1"],
         promptIds: ["p1"],
         finished: false,
       });
@@ -6269,5 +6398,51 @@ describe("Open in ComfyUI", () => {
     const [body] = openWorkflowRun.mock.calls[0];
     expect(body.picture_ids).toEqual([42]);
     expect(body.target).toBe(KEY);
+  });
+});
+
+describe("favourites lead the Run popup's pickers (#1578)", () => {
+  const ALPHA = `auto:${"c".repeat(64)}`;
+  const MIRA = "s".repeat(64);
+  const FILM = "t".repeat(64);
+
+  it("the card being run stays first; a favourite workflow leads the rest", async () => {
+    listWorkflowCards.mockResolvedValue({
+      cards: [
+        { id: KEY, name: "Krea 2" },
+        { id: ALPHA, name: "Alpha" },
+        { id: OTHER, name: "Beta" },
+      ],
+    });
+    listFavourites.mockResolvedValue({ model: [], workflow: [OTHER], set: [] });
+    const wrapper = await mountRun({ kind: "selection", pictureIds: [1, 2], pickWorkflow: true });
+    wrapper.vm.workflowId = KEY;
+    await flushPromises();
+    expect(wrapper.vm.workflowOptions.map((o) => o.value)).toEqual([KEY, OTHER, ALPHA]);
+  });
+
+  it("with no favourite workflow the list is the cards' own order", async () => {
+    listWorkflowCards.mockResolvedValue({
+      cards: [
+        { id: KEY, name: "Krea 2" },
+        { id: ALPHA, name: "Alpha" },
+        { id: OTHER, name: "Beta" },
+      ],
+    });
+    const wrapper = await mountRun({ kind: "selection", pictureIds: [1, 2], pickWorkflow: true });
+    wrapper.vm.workflowId = KEY;
+    await flushPromises();
+    expect(wrapper.vm.workflowOptions.map((o) => o.value)).toEqual([KEY, ALPHA, OTHER]);
+  });
+
+  it("a favourite LoRA leads, and the rest stay alphabetical", async () => {
+    listFavourites.mockResolvedValue({ model: [MIRA], workflow: [], set: [] });
+    const wrapper = await mountRun();
+    expect(wrapper.vm.adapterOptions.map((o) => o.value)).toEqual([MIRA, FILM]);
+  });
+
+  it("with no favourite LoRA the options are alphabetical, as before", async () => {
+    const wrapper = await mountRun();
+    expect(wrapper.vm.adapterOptions.map((o) => o.value)).toEqual([FILM, MIRA]);
   });
 });

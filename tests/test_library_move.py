@@ -21,7 +21,7 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
-from sqlmodel import Session, delete, select
+from sqlmodel import Session, select
 
 from pixlstash.db_models import (
     Picture,
@@ -29,12 +29,12 @@ from pixlstash.db_models import (
     PictureSetMember,
     PictureStack,
     Tag,
-    User,
     UserToken,
 )
 from pixlstash.server import Server
 from pixlstash.services.library_switch_service import LibrarySwitchError
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from tests.utils import reset_owner_auth
 
 API = "/api/v1"
 MOVE = f"{API}/pictures/move-to-library"
@@ -73,20 +73,7 @@ def other(server, tmp_path_factory):
 def clean_auth(server):
     """Start each test from a claimed owner with no tokens."""
 
-    def _wipe(session: Session):
-        session.exec(delete(UserToken))
-        session.exec(delete(User))
-        session.commit()
-
-    server.hub_engine.run_task(_wipe)
-    server.auth.password_hash = None
-    server.auth.username = None
-    server.auth.user = None
-    server.auth._clear_all_sessions()
-    server.auth._flush_token_cache()
-    server.auth._failed_login_attempts = 0
-    server.auth._login_lockout_until = 0.0
-    server.auth.ensure_user()
+    reset_owner_auth(server)
     yield
 
 

@@ -36,6 +36,22 @@
         aria-label="Sort by"
         @update:model-value="(key) => store.setView({ sortKey: key })"
       />
+      <!-- A tie-break inside each group, not a place: the groups and the sort
+           stay as they are, and a favourite leads its own group. -->
+      <label class="tbm-check fm-check shelf-sort-favourites">
+        <input
+          type="checkbox"
+          :checked="view.favouritesFirst"
+          @change="
+            store.setView({ favouritesFirst: $event.target.checked })
+          "
+        />
+        <span class="fm-check-label">Favourites first</span>
+      </label>
+      <p class="tbm-footer">
+        Inside each group, favourites lead and the sort orders the rest. Off, a
+        favourite sits where the sort puts it.
+      </p>
     </div>
 
     <!-- Type is not an axis: it is already a Show checkbox and already on every

@@ -20,7 +20,9 @@
       <div role="gridcell">
         <div class="msp__bar">
           <span class="msp__name">{{ name }}</span>
-          <span class="mss__mark">Grouped by you</span>
+          <span class="mss__mark">{{
+            set.automatic ? "Automatic" : "Custom"
+          }}</span>
           <span class="msp__count num">{{ facts }}</span>
           <!-- One unit, so a narrow bar wraps the actions together to the
                right of the next line rather than stranding Close on the left. -->
@@ -36,6 +38,18 @@
               @click="emit('models-fit')"
               >Models · {{ fitCount }} fit</AppButton
             >
+            <!-- Only while there is something to undo: an automatic set
+                 already holds exactly what its pictures ran with. -->
+            <AppButton
+              v-if="canReset(set)"
+              variant="ghost"
+              size="sm"
+              icon-left="backup-restore"
+              data-testid="set-reset"
+              tooltip="Take out what you added and restore what you removed. Your name stays."
+              @click="emit('reset')"
+              >Reset to automatic</AppButton
+            >
             <AppButton
               variant="ghost"
               size="sm"
@@ -48,21 +62,6 @@
               "
               @click="emit('fill', { mode: 'set', el: $event.currentTarget })"
               >Fill from a set…</AppButton
-            >
-            <AppButton
-              variant="ghost"
-              size="sm"
-              icon-left="image-multiple-outline"
-              :disabled="!canFillFromPictures"
-              :tooltip="
-                canFillFromPictures
-                  ? 'Add models your pictures used with this checkpoint'
-                  : fillFromPicturesRefusal
-              "
-              @click="
-                emit('fill', { mode: 'pictures', el: $event.currentTarget })
-              "
-              >Fill from pictures…</AppButton
             >
             <AppButton
               variant="ghost"
@@ -151,8 +150,22 @@
       </div>
     </div>
 
-    <!-- The offer (#1523): lasting, until the owner adds the models or keeps
-         the set separate. A cursor stop ahead of the slots, so Enter adds. In
+    <!-- What the set follows, and what the owner changed on top (#1972). -->
+    <div
+      v-if="followLine"
+      class="msp__note mss__follow"
+      role="row"
+      aria-level="2"
+      data-testid="set-follows"
+    >
+      <div role="gridcell">
+        <v-icon size="16">mdi-image-multiple-outline</v-icon>
+        <span>{{ followLine }}</span>
+      </div>
+    </div>
+
+    <!-- The template offer (#1999): lasting, until the owner adds the files
+         or stops asking. A cursor stop ahead of the slots, so Enter adds. In
          the card's words, so the card and the tray ask one question. -->
     <div
       v-if="set.offer"
@@ -161,40 +174,55 @@
       :class="{ 'mss__offer--cur': cursorKey === 'offer' }"
       role="row"
       aria-level="2"
-      :aria-label="`${offerLead} ${offerNote} Enter adds ${set.offer.models.length === 1 ? 'it' : 'them'}.`"
+      :aria-label="`${offerLead} ${offerNote}${set.offer.models.length ? ` Enter adds ${set.offer.models.length === 1 ? 'it' : 'them'}.` : ''}`"
       :tabindex="cursorKey === 'offer' ? 0 : -1"
       data-key="offer"
       data-testid="merge-offer-strip"
       @click="emit('cursor', 'offer')"
     >
       <div class="mss__offercell" role="gridcell">
-        <span
-          v-if="set.offer.covers.length"
-          class="mss__mosaic"
-          :class="`mss__mosaic--${set.offer.covers.length}`"
-          aria-hidden="true"
-        >
-          <img
-            v-for="cover in set.offer.covers"
-            :key="cover.picture_id"
-            :src="pictureThumbnailUrl(cover.picture_id, { version: cover.version })"
-            alt=""
-            loading="lazy"
-          />
-        </span>
-        <span class="mss__offertext" aria-hidden="true"
-          ><strong>{{ offerLead }}</strong>
-          <span class="mss__offernote">{{ offerNote }}</span></span
-        >
+        <div class="mss__offertext">
+          <span aria-hidden="true"
+            ><strong>{{ offerLead }}</strong>
+            <span class="mss__offernote">{{ offerNote }}</span></span
+          >
+          <!-- A template's files the shelf lacks (#1999), downloaded in the
+               app as a run's missing model is: the committed template list
+               is the download's own source. A read-only session cannot
+               download, so it keeps the https link. -->
+          <span
+            v-if="set.offer.downloads?.length"
+            class="mss__offernote"
+            data-testid="offer-downloads"
+            >Not on your shelf:
+            <template v-for="(file, i) in set.offer.downloads" :key="file.sha256"
+              >{{ i ? ", " : ""
+              }}<template v-if="/^https:\/\//.test(file.url) && !isReadOnly"
+                >{{ file.name
+                }}<ModelDownloadButton :file="file.name" @click.stop /></template
+              ><a
+                v-else-if="/^https:\/\//.test(file.url)"
+                class="mss__dl"
+                :href="file.url"
+                target="_blank"
+                rel="noopener noreferrer"
+                :aria-label="`Download ${file.name}`"
+                @click.stop
+                >{{ file.name }}</a
+              ><template v-else>{{ file.name }}</template></template
+            ></span
+          >
+        </div>
         <AppButton
           variant="ghost"
           size="sm"
           tabindex="-1"
-          :tooltip="`Keep this set separate from ${offerThose}. The set's menu can suggest them again.`"
+          :tooltip="`Keep this set separate from ${offerThose}. Reset to automatic suggests them again.`"
           @click.stop="emit('keep-separate')"
           >Stop asking</AppButton
         >
         <AppButton
+          v-if="set.offer.models.length"
           variant="primary"
           size="sm"
           icon-left="plus"
@@ -205,23 +233,6 @@
               ? "Add to set"
               : `Add all ${set.offer.models.length}`
           }}</AppButton
-        >
-      </div>
-    </div>
-    <div
-      v-else-if="set.declined?.length"
-      class="msp__note mss__kept"
-      role="row"
-      aria-level="2"
-    >
-      <div role="gridcell">
-        <span>{{
-          set.kept_separate
-            ? `Kept separate from ${pictureCount(set.kept_separate)}.`
-            : "Some suggested models are kept out of this set."
-        }}</span>
-        <AppButton variant="ghost" size="sm" @click="emit('offer-again')"
-          >Suggest again</AppButton
         >
       </div>
     </div>
@@ -257,7 +268,7 @@
               :id="`${panelId}-row-${item.key}`"
               class="mss__tile msp__member"
               :class="{
-                'mss__tile--gone': !item.member.on_shelf,
+                'mss__tile--gone': !item.member.on_shelf && !coming(item.member),
                 'mss__tile--on': isSelected(item.member),
               }"
               role="row"
@@ -303,11 +314,33 @@
                     activator="parent"
                   />{{ quantBadge(item.member.quant).label }}</span
                 >
+                <!-- Held by its digest while it downloads: on its way, not
+                     gone, and on the shelf the moment it lands. -->
                 <span
-                  v-if="!item.member.on_shelf"
+                  v-if="coming(item.member)"
+                  class="mss__coming"
+                  aria-hidden="true"
+                  ><DownloadingMark
+                    :percent="coming(item.member).percent"
+                  />Downloading</span
+                >
+                <span
+                  v-else-if="!item.member.on_shelf"
                   class="mss__gone"
                   aria-hidden="true"
                   >Not on shelf</span
+                >
+                <span
+                  v-if="item.member.new"
+                  class="mss__origin mss__origin--new"
+                  aria-hidden="true"
+                  >New</span
+                >
+                <span
+                  v-else-if="item.member.origin === 'added'"
+                  class="mss__origin"
+                  aria-hidden="true"
+                  >Added by you</span
                 >
                 <span
                   v-else-if="item.member.base_model"
@@ -338,7 +371,8 @@
                 />
               </span>
             </div>
-            <!-- A model the merge would add, drawn where it would land. -->
+            <!-- A model the owner removed (#1972), or one the template offer
+                 would add (#1999), drawn where it would be. -->
             <div
               v-else-if="item.ghost"
               :id="`${panelId}-row-${item.key}`"
@@ -372,6 +406,16 @@
                   ghostCount(item.ghost)
                 }}</span>
                 <AppButton
+                  v-if="item.ghost.removed"
+                  variant="outline"
+                  size="sm"
+                  tabindex="-1"
+                  :tooltip="`Put ${withQuant(item.ghost)} back in this set`"
+                  @click.stop="emit('restore', item.ghost)"
+                  >Restore</AppButton
+                >
+                <AppButton
+                  v-else
                   variant="outline"
                   size="sm"
                   tabindex="-1"
@@ -427,18 +471,24 @@
 import { computed, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
-import { pictureThumbnailUrl } from "../../api/pictures";
+import { useTasksStore } from "../../stores/useTasksStore";
+import { isReadOnly } from "../../utils/apiClient";
 import { modelFileTitle, quantBadge } from "../../utils/modelShelf";
 import { memberVerdictOf, memberVerdictText } from "../../utils/setVerdicts";
 import {
   fitsSlot,
-  offerQuestion,
   pictureCount,
   recipeCount,
+  offerQuestion,
+  setChanges,
+  canReset,
+  setCheckpoint,
   setSlots,
 } from "../../utils/workflowSets";
 import AppButton from "../widgets/AppButton.vue";
 import BaseModelInput from "../widgets/BaseModelInput.vue";
+import DownloadingMark from "../widgets/DownloadingMark.vue";
+import ModelDownloadButton from "../widgets/ModelDownloadButton.vue";
 import ModelMark from "../widgets/ModelMark.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import VerdictIcon from "../widgets/VerdictIcon.vue";
@@ -461,7 +511,6 @@ const props = defineProps({
    */
   marks: { type: Object, default: () => new Map() },
   canFillFromSet: { type: Boolean, default: false },
-  canFillFromPictures: { type: Boolean, default: false },
   /**
    * `{key, name, guess}` while the one-time base-model offer is up, else null.
    * `key` names the offer (set and checkpoint), so a refetch is not a new one.
@@ -496,12 +545,14 @@ const emit = defineEmits([
   "pick",
   "set-base",
   "dismiss-base",
-  // The merge offer (#1523): the strip's two verbs, one ghost's Add, the kept
-  // line's Offer again, and a click that only moves the cursor.
+  // A removed model's Restore, Reset to automatic (#1972), the template
+  // offer's Add all, Stop asking and one ghost's Add (#1999), and a click
+  // that only moves the cursor.
+  "restore",
+  "reset",
   "merge",
   "keep-separate",
   "add-ghost",
-  "offer-again",
   "cursor",
   // The Models rail (design B): open it with Fits on, and a drop on a slot.
   "models-fit",
@@ -577,22 +628,43 @@ const incomplete = computed(
   () => !(props.set.members ?? []).some((m) => m.slot === "checkpoint"),
 );
 
-const fillFromPicturesRefusal = computed(() =>
-  incomplete.value
-    ? "Add a checkpoint first: this reads what your pictures used with it."
-    : "No picture used anything else with this checkpoint.",
+/** What the owner changed over what the pictures ran with. */
+const changes = computed(() => setChanges(props.set));
+const changeCount = computed(
+  () => changes.value.added + changes.value.removed,
 );
 
 const facts = computed(() => {
   const count = (props.set.members ?? []).length;
   const pictures = Number(props.set.picture_count) || 0;
+  const recipes = Number(props.set.recipes) || 0;
+  const n = changeCount.value;
   return [
-    madeLabel(props.set.created_at),
-    pictures ? pictureCount(pictures) : "no pictures yet",
     count === 1 ? "1 model" : `${count} models`,
+    recipes ? recipeCount(recipes) : null,
+    pictures ? pictureCount(pictures) : "no pictures yet",
+    n ? `${n} ${n === 1 ? "change" : "changes"} from automatic` : null,
+    madeLabel(props.set.created_at),
   ]
     .filter(Boolean)
     .join(" · ");
+});
+
+/**
+ * What the set follows, said once: a set with a checkpoint on the shelf moves
+ * with the pictures made with it, and the owner's changes stay on top.
+ */
+const followLine = computed(() => {
+  const checkpoint = setCheckpoint(props.set);
+  if (!checkpoint?.on_shelf) return "";
+  const { added, removed } = changes.value;
+  const lead = `Follows the pictures made with ${checkpoint.name}: a model they start using joins this set.`;
+  if (!added && !removed) return lead;
+  const parts = [
+    added ? `${added} added` : null,
+    removed ? `${removed} removed` : null,
+  ].filter(Boolean);
+  return `${lead} Your changes stay on top of it: ${parts.join(", ")}.`;
 });
 
 /** "made today", "made 3 Sep" - when the set was made, in the reader's words. */
@@ -637,27 +709,46 @@ const offerLead = computed(() => {
   return question ? `${question.who}${question.rest}` : "";
 });
 
-/** What the offer is counted in: pictures here, or recipes when none is. */
+/** What the template offer is from, for the strip and its Stop asking. */
 const offerThose = computed(() =>
-  props.set.offer?.picture_count ? "those pictures" : "those recipes",
+  props.set.offer ? `the ${props.set.offer.template.title} template` : "",
 );
 
 const offerNote = computed(() => {
   const n = props.set.offer?.models.length ?? 0;
-  return n === 1
-    ? `It is dashed below. Adding it brings ${offerThose.value} into this set.`
-    : `They are dashed below. Adding all ${n} brings ${offerThose.value} into this set.`;
+  const others = props.set.offer?.others ?? [];
+  return [
+    n
+      ? n === 1
+        ? "The one on your shelf is dashed below."
+        : `The ${n} on your shelf are dashed below.`
+      : "",
+    others.length
+      ? `Other templates built around it: ${others.map((o) => o.title).join(", ")}.`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 });
 
-/** "812 pictures", or the recipes when none of its pictures is here. */
+/**
+ * A ghost's note: "Removed by you · 4 recipes", what the pictures still use a
+ * removed model in, or "template" for one the template offer would add.
+ */
 function ghostCount(ghost) {
-  return ghost.picture_count
-    ? pictureCount(ghost.picture_count)
-    : recipeCount(ghost.recipes);
+  if (!ghost.removed) return "template";
+  return `Removed by you · ${
+    ghost.picture_count
+      ? pictureCount(ghost.picture_count)
+      : recipeCount(ghost.recipes)
+  }`;
 }
 
 function ghostName(ghost, slot) {
-  return `${withQuant(ghost)}, ${slot.label}, offered: used in ${ghostCount(ghost)}. Enter adds it, Delete keeps it out.`;
+  if (!ghost.removed) {
+    return `${withQuant(ghost)}, ${slot.label}, offered by ${offerThose.value}. Enter adds it, Delete keeps it out.`;
+  }
+  return `${withQuant(ghost)}, ${slot.label}, removed by you: used in ${ghostCount(ghost)}. Enter restores it.`;
 }
 
 /** A name with the precision `modelName` took out of it, for a spoken label. */
@@ -665,11 +756,29 @@ function withQuant(model) {
   return [model.name, quantBadge(model.quant)?.label].filter(Boolean).join(" ");
 }
 
+const tasksStore = useTasksStore();
+
+/** The download an off-shelf member is, by its digest, or null. */
+function coming(member) {
+  return member.on_shelf
+    ? null
+    : tasksStore.runningDownload({ sha256: member.sha256 });
+}
+
 function tileName(member, slot) {
   return [
     withQuant(member),
     slot.label,
-    member.on_shelf ? member.base_model : "not on shelf, kept by its hash",
+    member.on_shelf
+      ? member.base_model
+      : coming(member)
+        ? "still downloading"
+        : "not on shelf, kept by its hash",
+    member.new
+      ? "new: the pictures started using it"
+      : member.origin === "added"
+        ? "added by you"
+        : null,
   ]
     .filter(Boolean)
     .join(", ");
@@ -912,6 +1021,15 @@ const notchStyle = computed(() => {
   color: rgb(var(--v-theme-surface-warning));
 }
 
+.mss__coming {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
+}
+
 .mss__tile--add {
   border-style: dashed;
   background: transparent;
@@ -927,7 +1045,12 @@ const notchStyle = computed(() => {
   flex-shrink: 0;
 }
 
-/* The merge offer strip: dashed like the ghosts it announces. */
+.mss__follow > [role="gridcell"] {
+  align-items: center;
+  color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
+}
+
+/* The template offer strip (#1999): dashed like the ghosts it announces. */
 .mss__offer {
   margin: var(--space-4) var(--space-4) 0;
   border: 1px dashed rgb(var(--v-theme-border));
@@ -960,43 +1083,28 @@ const notchStyle = computed(() => {
   color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
 }
 
-/* The pictures' set's own covers, the card mosaic in miniature. */
-.mss__mosaic {
-  display: grid;
-  flex: none;
-  gap: 1px;
-  width: var(--bar-height);
-  height: var(--control-h-bar);
-  overflow: hidden;
-  border-radius: var(--radius-sm);
+.mss__dl {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
-.mss__mosaic--2 {
-  grid-template-columns: 1fr 1fr;
-}
-
-.mss__mosaic--3 {
-  grid-template-columns: 2fr 1fr;
-  grid-template-rows: 1fr 1fr;
-}
-
-.mss__mosaic--3 img:first-child {
-  grid-row: 1 / 3;
-}
-
-.mss__mosaic img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.mss__kept > [role="gridcell"] {
-  align-items: center;
+/* Where a member came from, when it is not simply the pictures: added by the
+   owner, or new from the pictures. Small text takes primary, not the amber the
+   card's dot wears (design-tokens.css, Badge). */
+.mss__origin {
+  flex-shrink: 0;
+  font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
 }
 
-/* A ghost: a model the merge would add. Dashed like a ＋ tile, full ink, and
-   never struck through - struck is "Not on shelf", which this is not. */
+.mss__origin--new {
+  font-weight: var(--weight-semibold);
+  color: rgb(var(--v-theme-primary));
+}
+
+/* A ghost: a model the owner removed (#1972). Dashed like a ＋ tile, full ink,
+   and never struck through - struck is "Not on shelf", which this is not. */
 .mss__tile--ghost {
   border-style: dashed;
   background: transparent;

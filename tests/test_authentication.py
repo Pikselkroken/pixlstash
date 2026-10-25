@@ -6,12 +6,11 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlmodel import Session, delete
 
 from pixlstash import auth as auth_module
-from pixlstash.db_models import User, UserToken
 from pixlstash.server import Server
 from tests.network_vectors import LAN_IPV4, PRIVATE_172_IPV4
+from tests.utils import reset_owner_auth
 
 API_PREFIX = "/api/v1"
 
@@ -41,31 +40,7 @@ def reset_auth(server):
     a fresh database.
     """
 
-    def _wipe(session: Session):
-        session.exec(delete(UserToken))
-        session.exec(delete(User))
-        session.commit()
-
-    server.hub_engine.run_task(_wipe)
-
-    # Reset in-memory auth caches that mirror the on-disk state.
-    server.auth.password_hash = None
-    server.auth.username = None
-    server.auth.user = None
-    # _clear_all_sessions also drops the session→token maps, which a bare
-    # active_session_ids = {} would leave behind.
-    server.auth._clear_all_sessions()
-    # Go through the flush helper so the revocation epoch is bumped too - a
-    # bare _token_cache.clear() skips it (see AuthService._flush_token_cache).
-    server.auth._flush_token_cache()
-    # The login lockout counter is process-wide, so a test that exercises
-    # rejected logins would otherwise lock out the tests that follow it.
-    server.auth._failed_login_attempts = 0
-    server.auth._login_lockout_until = 0.0
-
-    # Re-create the User row so the rest of the server behaves as on first
-    # startup (no password set yet).
-    server.auth.ensure_user()
+    reset_owner_auth(server)
 
     yield
 

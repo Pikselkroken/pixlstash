@@ -3,6 +3,10 @@ import { defineStore } from "pinia";
 import { isReadOnly } from "../utils/apiClient";
 import { getWorkerProgress } from "../api/workers";
 import { abortRun } from "../api/comfyui";
+import { cancelModelDownload } from "../api/modelDownloads";
+import { formatModelSize } from "../utils/modelShelf";
+import { cancelLease, freeComfyui, runLeaseAnyway } from "../api/resources";
+import { deviceVramBar, runKey, runMatches } from "../utils/gpuMemory";
 import { useNoticeStore } from "./useNoticeStore";
 
 // Adaptive poll cadence (ms). Fast while the Tasks tab is open or something is
@@ -21,6 +25,15 @@ const RATE_AVERAGE_WINDOW_SECONDS = 60;
 // How much sparkline history to retain per worker.
 const SERIES_WINDOW_SECONDS = 120;
 
+/** "Downloading… 1.2 GB of 6.5 GB", or the bytes alone while the size is unknown. */
+export function downloadMessage(download) {
+  const received = formatModelSize(Number(download?.received) || 0);
+  const total = Number(download?.total) || 0;
+  return total
+    ? `Downloading… ${received} of ${formatModelSize(total)}`
+    : `Downloading… ${received}`;
+}
+
 /**
  * Cross-component "what is the app working on right now" store.
  *
@@ -35,6 +48,7 @@ const SERIES_WINDOW_SECONDS = 120;
  *  - ComfyUI runs in flight, which the backend follows and reports in the same
  *    poll (`runs`), so a run's row is there on every view and in every tab,
  *    whoever started it;
+ *  - model downloads (`downloads`, POST /model-downloads), one row each;
  *  - the async import, which is frontend-driven (ImageImporter).
  */
 export const useTasksStore = defineStore("tasks", () => {
@@ -51,8 +65,60 @@ export const useTasksStore = defineStore("tasks", () => {
 
   // ── ComfyUI runs (backend-reported) ───────────────────────────────────────
   // The runs in flight as the last poll listed them, oldest first:
-  // [{ prompt_id, label, workflow_id, status: "queued" | "running", percent }].
+  // [{ run_id, prompt_id, label, workflow_id, status: "waiting" | "queued" |
+  // "running", percent }]. A `waiting` run has no prompt_id yet.
   const comfyuiRuns = ref([]);
+  // The runs that ended, newest first, as the last poll listed them
+  // (`finished`, #2050): [{ id, workflow_id, label, ended_at, status,
+  // message, made, picture_ids, offer }]. `offer` marks the one whose changes
+  // from the workflow can still be saved.
+  const finishedRuns = ref([]);
+  // Which Finished rows are open, by id. A run with changes opens by itself,
+  // once, when its offer arrives; one the first poll already listed with it
+  // (a reload, a second tab) comes back folded. An offer can arrive a poll
+  // after its run (a run that ended before its request was answered), so it
+  // is the offer that is remembered. In the store so a tab switch keeps it.
+  const finishedOpen = ref({});
+  // ponytail: grows by one id per offer for the life of the page.
+  const offersSeen = new Set();
+  let finishedPolled = false;
+
+  /**
+   * Take the poll's `finished`, opening the offers that arrived since the
+   * last. `null` (the server could not read them) keeps what is shown.
+   */
+  function noteFinished(list) {
+    if (!Array.isArray(list)) return;
+    const opened = { ...finishedOpen.value };
+    for (const run of list) {
+      if (!run.offer || offersSeen.has(run.id)) continue;
+      offersSeen.add(run.id);
+      if (finishedPolled) opened[run.id] = true;
+    }
+    finishedPolled = true;
+    finishedOpen.value = opened;
+    finishedRuns.value = list;
+  }
+
+  function toggleFinished(id) {
+    finishedOpen.value = { ...finishedOpen.value, [id]: !finishedOpen.value[id] };
+  }
+
+  /** A workflow's run set was saved: no run of it offers it any more. */
+  function dropOffer(workflowId) {
+    finishedRuns.value = finishedRuns.value.map((run) =>
+      run.workflow_id === workflowId ? { ...run, offer: false } : run,
+    );
+  }
+
+  /** Take dismissed or cleared runs off the list before the next poll does. */
+  function forgetFinished(ids) {
+    const gone = new Set(ids);
+    finishedRuns.value = finishedRuns.value.filter((run) => !gone.has(run.id));
+  }
+  // The GPU's state as the poll reports it (`resources`), or null when the
+  // backend does not send it (an older server, or a read-only session).
+  const resources = ref(null);
 
   /**
    * Stop ComfyUI: the run in progress is interrupted and its queue emptied,
@@ -69,6 +135,158 @@ export const useTasksStore = defineStore("tasks", () => {
       });
     }
     nudge();
+  }
+
+  // ── Model downloads (backend-reported) ────────────────────────────────────
+  // As the last poll listed them: [{ id, file, status, received, total,
+  // percent, error }]. A finished one stays listed for a few seconds, which is
+  // how its ending is heard here and told once (`endedDownloads`).
+  const modelDownloads = ref([]);
+  const seenDownloadStatus = new Map();
+  // Bumped when a download lands, so a view showing what is missing asks again.
+  const downloadsLanded = ref(0);
+
+  const runningDownloadFiles = computed(
+    () =>
+      new Set(
+        modelDownloads.value
+          .filter((d) => d.status === "running")
+          .map((d) => d.file),
+      ),
+  );
+
+  /** The downloads still on their way, as the last poll listed them. */
+  const runningDownloads = computed(() =>
+    modelDownloads.value.filter((d) => d.status === "running"),
+  );
+
+  /**
+   * The running download of *file* (by its own name, any case, as the server
+   * matches it) or of *sha256*, or null. What a workflow row or a set member
+   * asks to say it is on its way rather than missing.
+   *
+   * *slot*, the set slot the asker's kind fills, keeps a name match to a
+   * download of that kind, as the server's `running_download` does with a
+   * folder: a VAE named like a checkpoint being fetched is not on its way.
+   * Nor is a file asked for by a digest the download does not have.
+   */
+  function runningDownload({ file = "", sha256 = "", slot = "" } = {}) {
+    const name = String(file).split(/[\\/]/).pop().toLowerCase();
+    const digest = String(sha256 || "").toLowerCase();
+    return (
+      runningDownloads.value.find(
+        (d) =>
+          (digest && d.sha256 === digest) ||
+          (name &&
+            (!slot || !d.slot || d.slot === slot) &&
+            // Two known digests that differ are two files, named alike or not.
+            !(digest && d.sha256) &&
+            String(d.file).toLowerCase() === name),
+      ) ?? null
+    );
+  }
+
+  function noteDownloads(list) {
+    modelDownloads.value = list;
+    const notices = useNoticeStore();
+    for (const download of list) {
+      const before = seenDownloadStatus.get(download.id);
+      seenDownloadStatus.set(download.id, download.status);
+      // Only an ending this tab saw happen: one that ended before the first
+      // poll is old news.
+      if (before !== "running" || download.status === "running") continue;
+      if (download.status === "done") {
+        downloadsLanded.value += 1;
+        notices.push({
+          level: "success",
+          text: `Downloaded ${download.file}.`,
+          key: `model-download-${download.id}`,
+        });
+      } else if (download.status === "failed") {
+        notices.error(
+          `Could not download ${download.file}: ${download.error || "it failed."}`,
+          { key: `model-download-${download.id}` },
+        );
+      }
+    }
+    for (const id of Array.from(seenDownloadStatus.keys())) {
+      if (!list.some((download) => download.id === id)) {
+        seenDownloadStatus.delete(id);
+      }
+    }
+  }
+
+  /** Record a download this tab just started, so its ending is told here. */
+  function downloadStarted(download) {
+    if (!download?.id) return;
+    seenDownloadStatus.set(download.id, "running");
+    modelDownloads.value = [
+      ...modelDownloads.value.filter((d) => d.id !== download.id),
+      download,
+    ];
+    nudge();
+  }
+
+  async function cancelDownload(id) {
+    try {
+      await cancelModelDownload(id);
+    } catch (e) {
+      console.warn("tasks: the download could not be cancelled", e);
+      useNoticeStore().error("The download could not be cancelled.", {
+        key: "model-download-cancel-failed",
+      });
+    }
+    nudge();
+  }
+
+  const downloadEntries = computed(() =>
+    modelDownloads.value
+      .filter((download) => download.status === "running")
+      .map((download) => ({
+        kind: "download",
+        key: `download-${download.id}`,
+        id: download.id,
+        run: {
+          status: "running",
+          percent: Number(download.percent) || 0,
+          label: download.file,
+          message: downloadMessage(download),
+        },
+      })),
+  );
+
+  /**
+   * Start a waiting lease now, past the memory it is short of ("Run anyway").
+   * A refusal (409: no longer waiting) is an error notice; the poll then shows
+   * what is true now.
+   */
+  async function runWaitingAnyway(leaseId) {
+    return waitingAction(() => runLeaseAnyway(leaseId), "Could not start that run.");
+  }
+
+  /** Cancel a waiting lease, and the ComfyUI run held behind it. */
+  async function cancelWaiting(leaseId) {
+    return waitingAction(() => cancelLease(leaseId), "Could not cancel that run.");
+  }
+
+  /** Ask ComfyUI to free its cache for a non-ComfyUI job that is short of memory. */
+  async function freeComfyuiCache() {
+    return waitingAction(
+      () => freeComfyui(),
+      "ComfyUI could not free its cache.",
+    );
+  }
+
+  async function waitingAction(call, failure) {
+    let answer = null;
+    try {
+      answer = await call();
+    } catch (e) {
+      console.warn(`tasks: ${failure}`, e);
+      useNoticeStore().error(failure, { key: `gpu-action-failed:${failure}` });
+    }
+    nudge();
+    return answer;
   }
 
   // ── Import run state (frontend-driven, #459) ──────────────────────────────
@@ -163,28 +381,183 @@ export const useTasksStore = defineStore("tasks", () => {
       .map(([key, snapshot]) => ({ kind: "worker", key, snapshot }));
   });
 
-  // One row for the runs in flight, not one each: ComfyUI works through them
-  // one at a time, and the row's abort stops them all. It names the run
-  // ComfyUI is on (the first in line until one starts) and counts the rest.
-  const comfyuiEntries = computed(() => {
-    const runs = comfyuiRuns.value;
-    if (!runs.length) return [];
-    const front = runs.find((run) => run.status === "running") || runs[0];
-    const state =
-      front.status === "running" ? "ComfyUI running…" : "ComfyUI queued…";
-    const behind = runs.length - 1;
-    return [
-      {
+  // ── GPU leases (backend-reported, `resources`) ────────────────────────────
+  const leases = computed(() => resources.value?.leases ?? []);
+
+  /** The lease a ComfyUI run holds, joined by run id; null when it has none. */
+  function leaseOfRun(run) {
+    return (
+      leases.value.find(
+        (lease) => lease.run_id && runMatches(run, lease.run_id),
+      ) ?? null
+    );
+  }
+
+  // One row per ComfyUI run that is not held: the run's own label, its percent
+  // and the VRAM its lease holds. ComfyUI works through them one at a time, and
+  // the abort on a row stops every run in flight.
+  const comfyuiEntries = computed(() =>
+    comfyuiRuns.value
+      .filter((run) => run.status !== "waiting")
+      .map((run) => ({
         kind: "comfyui",
-        key: "comfyui",
+        key: `run:${runKey(run)}`,
+        runId: runKey(run),
         run: {
-          status: front.status,
-          percent: Number(front.percent) || 0,
-          label: front.label || "ComfyUI",
-          message: behind ? `${state} ${behind} more queued` : state,
+          status: run.status,
+          percent: Number(run.percent) || 0,
+          label: run.label || "ComfyUI",
+          message:
+            run.status === "running" ? "ComfyUI running…" : "Queued in ComfyUI",
         },
-      },
-    ];
+        figureMb: leaseOfRun(run)?.held_mb ?? null,
+      })),
+  );
+
+  // "Waiting for the GPU": a lease in the wait, in the order it was asked for
+  // (`waiting_reason.position`). A ComfyUI run that fits may start before
+  // ComfyUI runs listed above it. A ComfyUI run held by PixlStash is
+  // listed once, through its lease; one with no lease yet still gets a row.
+  const waitingEntries = computed(() => {
+    const out = [];
+    const coveredRuns = new Set();
+    for (const lease of leases.value) {
+      if (lease.state !== "waiting") continue;
+      const run = comfyuiRuns.value.find(
+        (entry) =>
+          entry.status === "waiting" &&
+          lease.run_id &&
+          runMatches(entry, lease.run_id),
+      );
+      if (run) coveredRuns.add(runKey(run));
+      const reason = lease.waiting_reason ?? null;
+      out.push({
+        kind: "waiting",
+        key: `lease:${lease.id}`,
+        lease,
+        runId: lease.run_id || "",
+        tenant: lease.tenant,
+        label: lease.label || run?.label || "Waiting",
+        needMb: lease.need_mb ?? null,
+        text: reason?.text || "",
+        position: reason?.position ?? Number.POSITIVE_INFINITY,
+        actions: reason?.actions ?? [],
+      });
+    }
+    for (const run of comfyuiRuns.value) {
+      if (run.status !== "waiting" || coveredRuns.has(runKey(run))) continue;
+      out.push({
+        kind: "waiting",
+        key: `run:${runKey(run)}`,
+        lease: null,
+        runId: runKey(run),
+        tenant: "comfyui",
+        label: run.label || "ComfyUI",
+        needMb: null,
+        text: "",
+        position: Number.POSITIVE_INFINITY,
+        actions: [],
+      });
+    }
+    // Stable, so rows with no position keep the order they came in.
+    return out.sort((a, b) =>
+      a.position === b.position ? 0 : a.position < b.position ? -1 : 1,
+    );
+  });
+
+  // PixlStash's own background work, folded into one entry: one child per
+  // active backend worker, plus every granted PixlStash light lease and every
+  // task the backend stopped to make room (`preempted`). A lease is taken per
+  // task, so a worker between batches holds none; folding by lease alone left
+  // it, and every CPU-only worker, as a flat row beside the fold. A lease or a
+  // stopped task naming a worker in the fold lands on that worker's child.
+  // Null when there is none, so no fold row is drawn.
+  const pixlstashEntry = computed(() => {
+    const children = [];
+    const byWorker = new Map();
+    for (const entry of activeWorkerEntries.value) {
+      const child = {
+        key: `worker:${entry.key}`,
+        label: entry.snapshot.label || entry.key,
+        workerKey: entry.key,
+        snapshot: entry.snapshot,
+        mb: 0,
+        onCpu: false,
+        stopped: false,
+        text: "",
+        progress: null,
+      };
+      children.push(child);
+      byWorker.set(entry.key, child);
+    }
+    for (const lease of leases.value) {
+      if (lease.tenant !== "pixlstash" || lease.state !== "granted") continue;
+      const own = lease.worker_type ? byWorker.get(lease.worker_type) : null;
+      if (own) {
+        own.mb += Number(lease.held_mb) || 0;
+        own.onCpu = own.onCpu || Boolean(lease.on_cpu);
+        continue;
+      }
+      const snapshot = lease.worker_type
+        ? workerSnapshots.value?.[lease.worker_type]
+        : null;
+      children.push({
+        key: `lease:${lease.id}`,
+        label: lease.label || "PixlStash task",
+        workerKey: lease.worker_type || null,
+        snapshot: null,
+        mb: Number(lease.held_mb) || 0,
+        onCpu: Boolean(lease.on_cpu),
+        stopped: false,
+        text: "",
+        progress: snapshot
+          ? { current: Number(snapshot.current) || 0, total: Number(snapshot.total) || 0 }
+          : null,
+      });
+    }
+    for (const [index, stopped] of (resources.value?.preempted ?? []).entries()) {
+      // Each waiting run that paused a worker names it once, so two runs can
+      // name one worker: still one task, paused for both reasons.
+      const own = stopped.worker_type ? byWorker.get(stopped.worker_type) : null;
+      if (own) {
+        own.stopped = true;
+        if (stopped.text && !own.text.includes(stopped.text)) {
+          own.text = own.text ? `${own.text} · ${stopped.text}` : stopped.text;
+        }
+        continue;
+      }
+      const child = {
+        key: `preempted:${index}`,
+        label: stopped.worker_type || "PixlStash task",
+        workerKey: stopped.worker_type || null,
+        snapshot: null,
+        mb: 0,
+        onCpu: false,
+        stopped: true,
+        text: stopped.text || "",
+        progress: null,
+      };
+      children.push(child);
+      if (stopped.worker_type) byWorker.set(stopped.worker_type, child);
+    }
+    if (!children.length) return null;
+    return {
+      kind: "pixlstash",
+      key: "pixlstash",
+      count: children.length,
+      mb: children.reduce((sum, child) => sum + child.mb, 0),
+      children,
+    };
+  });
+
+  // Per-GPU bars: each card's split of what is on it, from `devices` and
+  // `holders`. Empty when the backend sends no resources.
+  const vramBars = computed(() => {
+    const holders = resources.value?.holders ?? [];
+    return (resources.value?.devices ?? []).map((device) => ({
+      device,
+      ...deviceVramBar(device, holders),
+    }));
   });
 
   const importEntries = computed(() =>
@@ -198,13 +571,25 @@ export const useTasksStore = defineStore("tasks", () => {
   // ComfyUI runs and imports lead: they are the work the user just kicked off
   // and is waiting on, so they read first in the Tasks tab, above the ambient
   // backend workers.
-  const activeEntries = computed(() => [
+  const runningEntries = computed(() => [
     ...comfyuiEntries.value,
+    ...downloadEntries.value,
+    ...(pixlstashEntry.value ? [pixlstashEntry.value] : []),
     ...importEntries.value,
-    ...activeWorkerEntries.value,
   ]);
 
-  const activeCount = computed(() => activeEntries.value.length);
+  const activeEntries = computed(() => [
+    ...runningEntries.value,
+    ...waitingEntries.value,
+  ]);
+
+  // The PixlStash fold is one row but counts each task in it.
+  const activeCount = computed(() =>
+    activeEntries.value.reduce(
+      (sum, entry) => sum + (entry.kind === "pixlstash" ? entry.count : 1),
+      0,
+    ),
+  );
   const hasActiveTasks = computed(() => activeCount.value > 0);
 
   // The tagger's worker key is its TaskType value. While it is running, a
@@ -302,6 +687,11 @@ export const useTasksStore = defineStore("tasks", () => {
       const workers = progress?.workers || {};
       systemUsage.value = progress?.process || progress?.system || null;
       comfyuiRuns.value = Array.isArray(progress?.runs) ? progress.runs : [];
+      noteFinished(progress?.finished);
+      noteDownloads(
+        Array.isArray(progress?.downloads) ? progress.downloads : [],
+      );
+      resources.value = progress?.resources ?? null;
       const now = Date.now() / 1000;
       nowSeconds.value = now;
       const nextSeries = { ...series.value };
@@ -410,6 +800,29 @@ export const useTasksStore = defineStore("tasks", () => {
     // comfyui runs
     comfyuiRuns,
     abortComfyuiRuns,
+    finishedRuns,
+    finishedOpen,
+    noteFinished,
+    toggleFinished,
+    forgetFinished,
+    dropOffer,
+    // model downloads
+    modelDownloads,
+    runningDownloadFiles,
+    runningDownloads,
+    runningDownload,
+    downloadsLanded,
+    downloadStarted,
+    cancelDownload,
+    // gpu resources (VRAM orchestration)
+    resources,
+    vramBars,
+    runningEntries,
+    waitingEntries,
+    pixlstashEntry,
+    runWaitingAnyway,
+    cancelWaiting,
+    freeComfyuiCache,
     // import runs (#459)
     importRuns,
     setImportRun,

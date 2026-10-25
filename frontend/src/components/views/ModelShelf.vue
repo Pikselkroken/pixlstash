@@ -627,6 +627,9 @@
           role="group"
           aria-label="Sort and size the columns"
         >
+          <!-- The favourite column's track (#1578): the same 24px lead the rows
+               draw before the mark, so the headings keep their left edges. -->
+          <span class="shelf-head-fav" aria-hidden="true"></span>
           <!-- Matches `.shelf-row-ident`, which holds the mark and the ring.
                There is nothing to name: the mark IS the row's identity and the
                hidden `Model` columnheader already says so. -->
@@ -934,7 +937,8 @@
                   `shelf-group-btn--${group.tier || 'plain'}`,
                   {
                     'shelf-group-btn--drop':
-                      dropTargetKey === group.key && dropFits(group.band),
+                      (dropTargetKey === group.key && dropFits(group.band)) ||
+                      fileDropKey === group.key,
                     'shelf-group-btn--offline': group.offline,
                     'shelf-group-btn--nested': group.nested,
                   },
@@ -943,11 +947,12 @@
                 type="button"
                 :aria-expanded="!store.isCollapsed(group.key)"
                 :aria-label="groupLabel(group)"
+                :data-model-drop-folder="fileDropFolderId(group)"
                 @click="store.toggleGroup(group.key)"
                 @contextmenu="openFolderMenu(group, $event)"
                 @keydown="onFolderHeaderKeydown(group, $event)"
                 @dragover="onGroupDragOver(group, $event)"
-                @dragleave="onGroupDragLeave(group)"
+                @dragleave="onGroupDragLeave(group, $event)"
                 @drop="onGroupDrop(group, $event)"
               >
                 <v-icon
@@ -991,6 +996,15 @@
                   {{ group.drive.label }}
                 </span>
                 <span v-if="group.offline" class="shelf-chip">Offline</span>
+                <!-- Why the rows are not in date order: the favourites lead. -->
+                <span
+                  v-if="group.favourites && store.view.favouritesFirst"
+                  class="shelf-chip"
+                  >{{ group.favourites }} favourite{{
+                    group.favourites === 1 ? "" : "s"
+                  }}
+                  first</span
+                >
                 <span class="shelf-spacer"></span>
                 <span class="shelf-group-count">{{
                   modelCount(group.rows.length)
@@ -1013,6 +1027,9 @@
               role="treegrid"
               aria-multiselectable="true"
               :aria-label="grouped ? group.label : 'Models'"
+              :data-model-drop-folder="fileDropFolderId(group)"
+              @dragover="onFolderFileDragOver(group, $event)"
+              @dragleave="onFileDragLeave(group.key, $event)"
             >
               <!-- The column names, on every grid and drawn on none of them.
                    `columnheader`s head the grid they are in and nothing else, so
@@ -1023,6 +1040,7 @@
                    readable from inside the treegrid rather than only from the
                    control group above it. -->
               <li class="visually-hidden" role="row">
+                <span role="columnheader">Favourite</span>
                 <span role="columnheader">Model</span>
                 <span role="columnheader" :aria-sort="columnSortState('name')"
                   >Name</span
@@ -1064,7 +1082,7 @@
                    the same iteration and still see `row`. -->
               <template v-for="row in group.rows" :key="row.rowKey">
                 <li
-                  class="shelf-row"
+                  class="shelf-row fav-host"
                   :class="{
                     'shelf-row--selected': store.isSelected(row.id),
                     'shelf-row--offline': row.locState === 'unreachable',
@@ -1076,7 +1094,7 @@
                     row.memberCount > 1 ? isStackOpen(row.stack_id) : undefined
                   "
                   :aria-selected="store.isSelected(row.id)"
-                  aria-keyshortcuts="F2 Shift+F2 Shift+F10"
+                  aria-keyshortcuts="F2 Shift+F2 Shift+F10 H"
                   :tabindex="row.rowKey === rovingRowKey ? 0 : -1"
                   :data-row-key="row.rowKey"
                   :draggable="
@@ -1091,6 +1109,24 @@
                   @dragstart="onRowDragStart(row, $event)"
                   @dragend="clearDropState()"
                 >
+                  <!-- The favourite column (#1578): a run is favourited whole,
+                       so only its cover carries the heart. Unhashed models have
+                       no key to favourite by, and say why. -->
+                  <span role="gridcell" class="shelf-row-fav">
+                    <FavouriteHeart
+                      :on="store.isFavouriteRow(row)"
+                      :label="row.filename || ''"
+                      :disabled-reason="
+                        row.sha256 ? '' : 'Favourite once its hash is read'
+                      "
+                      @toggle="
+                        store.toggleFavourites({
+                          kind: 'model',
+                          keys: [row.sha256],
+                        })
+                      "
+                    />
+                  </span>
                   <!-- The identity slot, and the assignment (#904). The RING is
                        the assignment: its hue is the entity's own and its style
                        is hashed off the entity, so the pair survives greyscale
@@ -1449,6 +1485,7 @@
                     @keydown="onMemberKeydown(row, member, $event)"
                     @focus="focusedRowKey = memberKey(row, member)"
                   >
+                    <span class="shelf-row-fav" aria-hidden="true"></span>
                     <span role="gridcell" class="shelf-row-ident">
                       <v-icon size="14">mdi-subdirectory-arrow-right</v-icon>
                     </span>
@@ -1530,6 +1567,7 @@
       <ShelfSelectionBar
         ref="selBarRef"
         :sets="hideableSets"
+        :card-keys="gridCardKeys"
         v-on="verbListeners"
       />
       <WorkflowSetSelectionBar
@@ -1540,9 +1578,10 @@
         @rename="startRenameSet"
         @duplicate="store.duplicateHandMadeSet(store.selectedSets[0])"
         @delete="store.deleteHandMadeSets(store.selectedSets)"
+        @merge="({ into, others }) => store.mergeHandMadeSets(into, others)"
+        @reset="store.resetHandMadeSet(store.selectedSets[0])"
         @merge-offer="setGridRef?.openOffer(store.selectedSets[0]?.id)"
         @keep-separate="store.keepOutOfHandMadeSet(store.selectedSets[0])"
-        @offer-again="store.offerMergeAgain(store.selectedSets[0])"
       />
       <MissingSetSelectionBar
         v-if="isSetGrid"
@@ -1723,6 +1762,11 @@ import TrainingRuns from "./TrainingRuns.vue";
 import { SOURCE_KIND } from "../../api/modelFolders";
 import FolderBrowser from "../editors/FolderBrowser.vue";
 import ModelMark from "../widgets/ModelMark.vue";
+import FavouriteHeart from "../widgets/FavouriteHeart.vue";
+import {
+  FAVOURITE_KEY,
+  useFavouritesStore,
+} from "../../stores/useFavouritesStore";
 import VerdictIcon from "../widgets/VerdictIcon.vue";
 import { modelVerdictMark } from "../../utils/setVerdicts";
 import PicturePicker from "../widgets/PicturePicker.vue";
@@ -1762,6 +1806,7 @@ import { errorDetail } from "../../utils/apiError";
 import { formatUserDate, formatUserDay } from "../../utils/utils";
 import { isTypingTarget } from "../../utils/dom.js";
 import { isModelFileDrag, setInternalDragPayload } from "../../utils/media";
+import { useFileDropHighlight } from "../../composables/useModelDropTarget";
 import {
   adapterKindLabel,
   assignmentRing,
@@ -2159,6 +2204,15 @@ const moveItems = ref([]);
 const moveBytes = ref(0);
 /** The group header the pointer is currently over, for the drop affordance. */
 const dropTargetKey = ref("");
+/**
+ * The folder header lit while model files are dragged in from outside the app.
+ * Apart from `dropTargetKey`, which is a move's and carries its fit check.
+ */
+const {
+  dropKey: fileDropKey,
+  onDragOver: onFileDragOver,
+  onDragLeave: onFileDragLeave,
+} = useFileDropHighlight();
 /** The band the pointer is currently over, for its meter's projection (#894). */
 const dropBandKey = ref("");
 /**
@@ -2413,6 +2467,7 @@ function isDropTarget(group) {
  * grid (#757, one payload kind later).
  */
 function onGroupDragOver(group, event) {
+  onFolderFileDragOver(group, event);
   if (!isModelFileDrag(event.dataTransfer) || !isDropTarget(group)) return;
   // Recorded BEFORE the fit is judged, so a refused header still has something
   // for `dragleave` to clear and the band above it keeps projecting for exactly
@@ -2427,7 +2482,27 @@ function onGroupDragOver(group, event) {
   event.dataTransfer.dropEffect = "move";
 }
 
-function onGroupDragLeave(group) {
+/**
+ * The folder a model file dropped in from outside lands in, read by the window's
+ * drop handler (`useModelDropTarget`): only one the owner may add a file to, and
+ * only while it is plugged in. Undefined leaves the attribute off, and a drop
+ * there goes to the default folder.
+ */
+function fileDropFolderId(group) {
+  if (!Number.isInteger(group?.folderId) || group.offline) return undefined;
+  return foldersStore.defaultCandidates.some(
+    (folder) => Number(folder.id) === group.folderId,
+  )
+    ? group.folderId
+    : undefined;
+}
+
+function onFolderFileDragOver(group, event) {
+  if (fileDropFolderId(group) !== undefined) onFileDragOver(group.key, event);
+}
+
+function onGroupDragLeave(group, event) {
+  onFileDragLeave(group.key, event);
   // Only when the pointer really left: moving header to header inside one band
   // fires this AFTER `dragover` on the new one, so the key has already moved on
   // and clearing here would blink the projection off between two targets.
@@ -2621,6 +2696,14 @@ function shelfOwnsTheKey(event) {
  * them, once per repeat.
  */
 function onShelfKeydown(event) {
+  // H toggles a favourite (#1578), before the Escape/Delete gate below, which
+  // would otherwise return first. Claimed only when the shelf owns the key.
+  if (isFavouriteKey(event)) {
+    if (!shelfOwnsTheKey(event)) return;
+    event.preventDefault();
+    if (!event.repeat) toggleFavouriteFromKey();
+    return;
+  }
   const wantsSelectAll =
     (event.ctrlKey || event.metaKey) &&
     !event.altKey &&
@@ -2648,7 +2731,7 @@ function onShelfKeydown(event) {
     // pill's *Select all shown* never had the guard at all, so moving it into
     // the store fixed a second caller as well. The press is still claimed either
     // way, or declining would hand it to the native select-all. On the set grid
-    // it takes the hand-made "Grouped by you" sets as well as the models.
+    // it takes the owner's own sets as well as the models.
     store.selectVisible();
     return;
   }
@@ -2707,6 +2790,69 @@ function onShelfKeydown(event) {
   confirmDelete(event.shiftKey);
 }
 
+/** H with no modifiers: the favourite key, the same on every surface. */
+function isFavouriteKey(event) {
+  return (
+    String(event.key).toLowerCase() === FAVOURITE_KEY &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.altKey &&
+    !event.shiftKey
+  );
+}
+
+/** The evidence cards picked on the set grid, by key: a set, not a model. */
+const gridCardKeys = computed(() =>
+  isSetGrid.value
+    ? (setGridRef.value?.selectedCardGroups ?? []).map((group) => group.key)
+    : [],
+);
+
+/**
+ * H: the selection when there is one, else the focused row or card. On the set
+ * grid the cards picked there count as the selection, as a set always has.
+ */
+function toggleFavouriteFromKey() {
+  const selected =
+    store.selectedRows.length ||
+    store.selectedSets.length ||
+    store.selectedMissingKeys.size ||
+    gridCardKeys.value.length;
+  if (selected) {
+    store.toggleFavourites(store.favouriteTargets(gridCardKeys.value));
+    return;
+  }
+  // Nothing picked: the card the grid's cursor is on, when the grid has one.
+  const cursorCard = isSetGrid.value
+    ? setGridRef.value?.focusedCardKey
+    : "";
+  if (cursorCard) {
+    store.toggleFavourites(store.favouriteTargets([cursorCard]));
+    return;
+  }
+  // A drawn row, or a member of an open run, by the key the cursor holds.
+  const key = focusedRowKey.value;
+  for (const group of shownGroups.value) {
+    for (const row of group.rows) {
+      const member = (row.members ?? []).slice(1).find(
+        (m) => memberKey(row, m) === key,
+      );
+      // A member is favourited through its run, which is keyed by the cover.
+      if (row.rowKey === key || member) {
+        if (row.sha256) {
+          store.toggleFavourites({ kind: "model", keys: [row.sha256] });
+        } else {
+          useNoticeStore().push({
+            level: "info",
+            text: "This model can be a favourite once its hash is read.",
+          });
+        }
+        return;
+      }
+    }
+  }
+}
+
 /**
  * The rows the shelf's own keys act on. The Models rail's selection is not
  * among them: the rail answers Delete and Escape on its own list, and a press
@@ -2717,6 +2863,8 @@ const ownSelection = computed(() =>
 );
 
 onMounted(() => window.addEventListener("keydown", onShelfKeydown));
+// The favourites are read once for the shelf; the store shares that read.
+onMounted(() => useFavouritesStore().ensureLoaded());
 onUnmounted(() => window.removeEventListener("keydown", onShelfKeydown));
 
 // ── Hand-made workflow sets (#1520) ─────────────────────────────────────────
@@ -2799,22 +2947,17 @@ async function saveSetName(name) {
 /**
  * "New workflow set with this checkpoint", from a checkpoint's menu.
  *
- * The set grid is where a set is filled, so the shelf goes there. Asked from an
- * EVIDENCE card, the new set opens with Fill from pictures ready: that card is
- * the pictures, and they are what the owner is most likely to want to keep.
+ * The set grid is where a set is filled, so the shelf goes there. The new set
+ * holds what the pictures made with the checkpoint ran with (#1972), so it
+ * opens reading Automatic, ready to be changed.
  */
 async function newSetWithCheckpoint() {
   const row = store.selectedRows[0];
   if (!row) return;
-  const fromEvidence = isSetGrid.value;
   if (!isSetGrid.value) store.setView({ groupBy: "workflow_set" });
-  const created = await store.createHandMadeSet({
+  await store.createHandMadeSet({
     members: [{ model_id: row.id, slot: "checkpoint" }],
   });
-  if (created && fromEvidence) {
-    await nextTick();
-    setGridRef.value?.openFill("pictures");
-  }
 }
 
 /** Remove from set: the selected members of the open hand-made tray. */
@@ -4232,7 +4375,7 @@ function ringStyle(row) {
  * `aria-colspan` cannot drift apart. A grid where one row has a different cell
  * count is a grid a reader is lied to about.
  */
-const COLUMN_COUNT = 6;
+const COLUMN_COUNT = 7;
 
 /**
  * The date column, named and sorted by whichever date axis it is drawn in.
@@ -5619,6 +5762,13 @@ watch(
   flex: none;
 }
 
+/* The favourite column (#1578): a heart is 24px, the same track the rows give
+   it, so the heading strip keeps its left edges with the column in it. */
+.shelf-head-fav {
+  width: var(--control-h-sm);
+  flex: none;
+}
+
 /* The wrapper that carries the column's width and anchors its grip. Its own
    width classes rather than the rows' `.shelf-col--*`: those are the DATA
    cells, several selectors reach for them by name, and a heading answering to
@@ -5979,6 +6129,16 @@ button.shelf-head-cell:hover {
    only its file is gone. */
 .shelf-row--offline .shelf-row-name {
   color: rgba(var(--v-theme-on-background), 0.7);
+}
+
+/* The favourite column: the heart's own 24px box, reserved on every row so the
+   column never moves, drawn only on the cover of a run and on a hover. */
+.shelf-row-fav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-h-sm);
+  flex: none;
 }
 
 /* The identity slot, sized to hold the ring's widest treatment: the mark is

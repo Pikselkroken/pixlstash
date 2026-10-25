@@ -8,13 +8,13 @@ from typing import Annotated, Literal, Optional
 from fastapi import APIRouter, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
-from sqlmodel import Session
+from sqlmodel import Session, col, select
 
 from PIL import Image
 
 from pixlstash.auth import is_local_or_tailscale_ip
 from pixlstash.database import DBPriority
-from pixlstash.db_models import User
+from pixlstash.db_models import Picture, User
 from pixlstash.hub.workflows import (
     forget_model_ghosts,
     model_ghost_names,
@@ -28,13 +28,17 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.routes._helpers import require_hub
 from pixlstash.routes.model_folders import register_comfyui_model_folders
 from pixlstash.utils.path_utils import LibraryRootsUnavailable
+from pixlstash.utils.sql_chunking import chunked
 from pixlstash.services import (
     config_service,
     library_settings_service,
     scrapheap_service,
     workflow_ghost_service,
 )
+from pixlstash.services import run_log, vram_history
 from pixlstash.services.comfyui_service import live_runs
+from pixlstash.services.model_downloads import live_downloads
+from pixlstash.resources.arbiter import arbiter
 from pixlstash.telemetry import mark_install_established
 from pixlstash.server_config_io import persist_server_config
 from pixlstash.utils.quality.smart_score_utils import smart_score_penalised_tags
@@ -82,6 +86,10 @@ def create_router(server) -> APIRouter:
         payload = serialize_user_config(user)
         payload["similarity_character"] = (
             library_settings_service.get_similarity_character(server.vault.db)
+        )
+        # A table of its own in the hub (no new columns on ``user``).
+        payload["auto_exclusive_after_oom"] = vram_history.auto_exclusive_after_oom(
+            server.hub, getattr(user, "id", None)
         )
         return payload
 
@@ -182,7 +190,20 @@ def create_router(server) -> APIRouter:
         stack_strictness: Optional[float] = None
         apply_tag_filter: Optional[bool] = None
         keep_models_in_memory: Optional[bool] = None
-        max_vram_gb: Optional[float] = None
+        max_vram_gb: Optional[float] = Field(
+            default=None,
+            description=(
+                "The most PixlStash's own GPU work (tagging, search, faces) may "
+                "hold, in GB. ComfyUI runs are not limited by it."
+            ),
+        )
+        auto_exclusive_after_oom: Optional[bool] = Field(
+            default=None,
+            description=(
+                "When a ComfyUI run of a workflow runs out of GPU memory, make "
+                "that workflow run alone from then on. On unless turned off."
+            ),
+        )
         check_for_updates: Optional[bool] = None
         telemetry_send_install_id: Optional[bool] = Field(
             default=None,
@@ -335,7 +356,27 @@ def create_router(server) -> APIRouter:
         status: str
         workers: dict
         runs: list[dict] = []
+        finished: Optional[list[dict]] = Field(
+            default_factory=list,
+            description=(
+                "The runs of this library that ended, newest first, one per "
+                "workflow per `POST /workflows/run` (`services/run_log.py`). "
+                "Empty for any token but the owner's; null when they could "
+                "not be read, which is not the same as none."
+            ),
+        )
+        downloads: list[dict] = []
         process: dict
+        resources: Optional[dict] = Field(
+            default=None,
+            description=(
+                "The VRAM arbiter's view of this machine's GPUs: each device's "
+                "memory and budget, who holds it, every lease (granted or "
+                "waiting, with why it waits and what can be done), and the "
+                "PixlStash work paused to make room. Null for any token but "
+                "the owner's."
+            ),
+        )
 
     class WatchFoldersResponse(BaseModel):
         model_config = ConfigDict(extra="allow")
@@ -524,6 +565,15 @@ def create_router(server) -> APIRouter:
         start_time = time.time()
         logger.debug(f"[TIMING] PATCH /users/me/config called at {start_time:.3f}")
         patch_data = await request.json()
+        auto_exclusive = (
+            patch_data.pop("auto_exclusive_after_oom", None)
+            if isinstance(patch_data, dict)
+            else None
+        )
+        if auto_exclusive is not None and not isinstance(auto_exclusive, bool):
+            raise HTTPException(
+                status_code=400, detail="auto_exclusive_after_oom must be true or false"
+            )
 
         def preview_patch(session: Session, user_id: int):
             """Validate the patch and work out which tag weights would change.
@@ -730,6 +780,14 @@ def create_router(server) -> APIRouter:
                     logger.warning(
                         "Could not apply tagger_settings from patch: %s", exc
                     )
+        if auto_exclusive is not None:
+            if auto_exclusive != vram_history.auto_exclusive_after_oom(
+                server.hub, user_id
+            ):
+                vram_history.set_auto_exclusive_after_oom(
+                    server.hub, user_id, auto_exclusive
+                )
+                updated = True
         elapsed = time.time() - start_time
         logger.debug(
             f"[TIMING] PATCH /users/me/config completed in {elapsed:.3f} seconds"
@@ -984,6 +1042,36 @@ def create_router(server) -> APIRouter:
     def get_session_context(request: Request):
         return server.auth.get_session_context(request)
 
+    def _finished_runs(library_uuid: str | None) -> list[dict] | None:
+        """The poll's ``finished``; ``None``, logged, when it cannot be read:
+        a poll that failed over it would take every other row with it, and
+        an empty list would say nothing finished."""
+
+        def existing(ids: list[int]) -> set[int]:
+            def read(session):
+                found = set()
+                for batch in chunked(sorted(set(ids))):
+                    found.update(
+                        session.exec(
+                            select(Picture.id).where(
+                                col(Picture.id).in_(batch),
+                                Picture.deleted.is_(False),
+                            )
+                        ).all()
+                    )
+                return found
+
+            return server.vault.db.run_immediate_read_task(read)
+
+        try:
+            return run_log.finished(require_hub(server), library_uuid, existing)
+        except Exception:
+            logger.exception(
+                "The finished runs could not be read, so the Tasks tab keeps "
+                "the ones it last had."
+            )
+            return None
+
     @router.get(
         "/workers/progress",
         summary="Get worker progress",
@@ -991,9 +1079,21 @@ def create_router(server) -> APIRouter:
         description=(
             "Returns background worker progress plus process CPU, RAM, and VRAM "
             "usage metrics. runs lists the ComfyUI runs in flight in this "
-            "library, oldest first, each with its prompt_id, label, "
-            "workflow_id, status (queued or running) and percent (the running "
-            "node's own progress); empty for any token but the owner's."
+            "library, oldest first, each with its run_id, prompt_id (null "
+            "while held), label, workflow_id, status (waiting for the GPU, "
+            "queued or running) and percent (the running node's own "
+            "progress); empty for any token but the owner's. "
+            "finished lists the runs that ended (the Tasks tab's Finished "
+            "group), newest first, each with its id (what DELETE "
+            "/workflows/runs/{run_id} takes), workflow_id, label, ended_at, "
+            "status (completed or failed), message, made (how many pictures "
+            "it imported), picture_ids (those still in the library) and "
+            "offer (its changes from the workflow can still be saved); "
+            "likewise for the owner only. "
+            "downloads lists the model downloads running or just ended "
+            "(`POST /model-downloads`), likewise for the owner only. "
+            "resources is the VRAM arbiter's snapshot, null for any token but "
+            "the owner's."
         ),
     )
     def get_workers_progress(request: Request):
@@ -1009,7 +1109,27 @@ def create_router(server) -> APIRouter:
                 if server.auth.is_unscoped_owner_request(request)
                 else []
             ),
+            # The owner's as the runs are, and their pictures are named
+            # wherever in the library they were filed.
+            "finished": (
+                _finished_runs(request.state.library_lease.library_uuid)
+                if server.auth.is_unscoped_owner_request(request)
+                else []
+            ),
+            # Machine-wide, and they name the owner's folders and files.
+            "downloads": (
+                live_downloads()
+                if server.auth.is_unscoped_owner_request(request)
+                else []
+            ),
             "process": hw_monitor.get_usage(),
+            # The machine's GPUs and who holds them: the owner's alone, like
+            # the runs, since a lease label names a workflow.
+            "resources": (
+                arbiter().snapshot()
+                if server.auth.is_unscoped_owner_request(request)
+                else None
+            ),
         }
 
     @router.get(

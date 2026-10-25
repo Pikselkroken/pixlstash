@@ -496,6 +496,8 @@ jobs:
           tests/test_detections_scope.py
           tests/test_docker_demo_hub_rewrite.py
           tests/test_downloads_intake.py
+          tests/test_edit_selection.py
+          tests/test_except_hygiene_guardrail.py
           tests/test_export_api.py
           tests/test_face_score_aggregation.py
           tests/test_facial_features_worker.py
@@ -545,6 +547,7 @@ jobs:
           tests/test_metadata_hash.py
           tests/test_metadata_hash_batching.py
           tests/test_migrations.py
+          tests/test_model_downloads.py
           tests/test_model_file_classification.py
           tests/test_model_folder_scanner.py
           tests/test_model_icons.py
@@ -557,6 +560,7 @@ jobs:
           tests/test_model_unload_race.py
           tests/test_mps_device_check.py
           tests/test_mps_memory_and_providers.py
+          tests/test_node_pack_install.py
           tests/test_ocr_text.py
           tests/test_openapi_response_schemas.py
           tests/test_operation_log.py
@@ -586,6 +590,8 @@ jobs:
           tests/test_reference_folder_moves.py
           tests/test_reference_folder_watcher.py
           tests/test_repair_copied_face_rows.py
+          tests/test_resource_arbiter.py
+          tests/test_resources_routes.py
           tests/test_restore.py
           tests/test_reviews_api.py
           tests/test_rocm_device_check.py
@@ -615,6 +621,7 @@ jobs:
           tests/test_tag_worker.py
           tests/test_tagger_plugin_registry.py
           tests/test_tagger_user_plugins.py
+          tests/test_task_preemption.py
           tests/test_task_runner_submit_and_wait.py
           tests/test_temp_vault_first_import.py
           tests/test_thumbnail_cache_headers.py
@@ -636,6 +643,7 @@ jobs:
           tests/test_workflow_library.py
           tests/test_workflow_parameters.py
           tests/test_workflow_stage_bypass.py
+          tests/test_workflow_templates.py
           tests/test_workflow_versions.py
           tests/test_workflows_api.py
           tests/test_ws_broadcaster.py

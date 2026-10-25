@@ -127,10 +127,12 @@ const navItems = computed(() =>
       show: !isReadOnly.value,
     },
     {
+      // Which GPU PixlStash uses and what it may take work on every install;
+      // the acceleration runtime inside it is desktop-only.
       id: "compute",
       icon: "expansion-card-variant",
       label: "Compute",
-      show: isDesktop && !isReadOnly.value,
+      show: !isReadOnly.value,
     },
     {
       id: "backend",
@@ -323,7 +325,7 @@ watch(
         />
       </div>
       <div
-        v-if="isDesktop && !isReadOnly"
+        v-if="!isReadOnly"
         v-show="settingsTab === 'compute'"
         id="settings-pane-compute"
         class="settings-pane"

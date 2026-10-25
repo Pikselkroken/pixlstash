@@ -31,7 +31,6 @@ from __future__ import annotations
 import hashlib
 import json
 import tempfile
-import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -52,6 +51,7 @@ from pixlstash.hub.workflow_group_writes import (
 from pixlstash.server import Server
 from pixlstash.services import saved_recipe_service
 from tests.authz_guard import assert_real_route, no_spa_fallback  # noqa: F401
+from tests.utils import bearer_client, mint_read_token, quiesce_background_work
 
 API = "/api/v1"
 
@@ -198,34 +198,6 @@ def _seed_pictures(server) -> None:
     server.vault.db.run_task(write, priority=DBPriority.IMMEDIATE)
 
 
-def _quiesce_background_work(server):
-    """Take every work finder out of the planner and let the pipeline settle.
-
-    A shared server is warm, and ``MissingComfyUIExtractionFinder`` looks for
-    exactly the rows this module hand-writes: it would re-read the (nonexistent)
-    files and blank the ``comfyui_*`` columns credit is measured from. The
-    planner thread and the task runner keep running.
-    """
-    planner = server.vault._work_planner
-    task_types = list(server.vault._planner_work_finders)
-    for task_type in task_types:
-        server.vault._planner_work_finders.pop(task_type)
-    removed = planner.detach_finders(task_types)
-
-    runner = server.vault._task_runner
-    runner.cancel_pending_tasks()
-    deadline = time.monotonic() + 60.0
-    while time.monotonic() < deadline:
-        with runner._active_task_lock:
-            active = list(runner._active_tasks.values())
-        if not active:
-            return removed
-        time.sleep(0.05)
-    raise AssertionError(
-        f"background work did not settle within 60s; still running: {active}"
-    )
-
-
 @pytest.fixture(scope="module")
 def recipe_env():
     """One Server and one owner login, for every test in the module."""
@@ -247,7 +219,7 @@ def recipe_env():
         assert r.status_code in {200, 201}, r.text
         character_id = r.json().get("id") or r.json()["character"]["id"]
 
-        _quiesce_background_work(server)
+        quiesce_background_work(server)
         yield SimpleNamespace(server=server, owner=owner, character_id=character_id)
     finally:
         server.__exit__(None, None, None)
@@ -286,21 +258,6 @@ def _ada(strength: float = 1.0) -> list[dict]:
     return [{"filename": ADA, "sha256": None, "strength": strength}]
 
 
-def _mint(owner_client, description: str, **restriction) -> str:
-    r = owner_client.post(
-        f"{API}/users/me/token",
-        json={"description": description, "scope": "READ", **restriction},
-    )
-    assert r.status_code == 200, r.text
-    return r.json()["token"]
-
-
-def _bearer(server, token: str) -> TestClient:
-    client = TestClient(server.api)
-    client.headers.update({"Authorization": f"Bearer {token}"})
-    return client
-
-
 # ===========================================================================
 # Declarations — the registry entry is the route's only authorization
 # ===========================================================================
@@ -328,13 +285,13 @@ def test_no_scoped_token_can_read_or_write_a_saved_recipe(recipe_env):
     dissolve into a test of nothing.
     """
     saved = _save(recipe_env.owner, WF_AB, loras=_ada())
-    token = _mint(
+    token = mint_read_token(
         recipe_env.owner,
         "recipe scope probe",
         resource_type="character",
         resource_id=recipe_env.character_id,
     )
-    client = _bearer(recipe_env.server, token)
+    client = bearer_client(recipe_env.server, token)
     assert client.get(f"{API}/pictures").status_code == 200, (
         "the scoped token is dead; the refusals below would prove nothing"
     )
@@ -1298,16 +1255,18 @@ def test_the_export_stays_closed_with_the_gate_rolled_back(recipe_env):
     saved = _save(recipe_env.owner, WF_AB, loras=_ada())
     path = f"{API}/recipes/{saved['id']}/export"
     server = recipe_env.server
-    scoped = _bearer(
+    scoped = bearer_client(
         server,
-        _mint(
+        mint_read_token(
             recipe_env.owner,
             "recipe rollback scoped",
             resource_type="character",
             resource_id=recipe_env.character_id,
         ),
     )
-    unscoped = _bearer(server, _mint(recipe_env.owner, "recipe rollback unscoped"))
+    unscoped = bearer_client(
+        server, mint_read_token(recipe_env.owner, "recipe rollback unscoped")
+    )
     previously_enforcing = server.authz._enforcing
     server.authz._enforcing = False
     try:
@@ -1334,9 +1293,9 @@ def test_the_belt_and_not_only_the_gate_is_what_refuses_the_export(recipe_env):
     saved = _save(recipe_env.owner, WF_AB)
     path = f"{API}/recipes/{saved['id']}/export"
     server = recipe_env.server
-    scoped = _bearer(
+    scoped = bearer_client(
         server,
-        _mint(
+        mint_read_token(
             recipe_env.owner,
             "recipe belt probe",
             resource_type="character",
@@ -1573,9 +1532,9 @@ def test_no_scoped_token_can_read_the_used_looks(recipe_env):
         return picture.id
 
     picture_id = recipe_env.server.vault.db.run_immediate_read_task(write_one_picture)
-    scoped = _bearer(
+    scoped = bearer_client(
         recipe_env.server,
-        _mint(recipe_env.owner, "used-looks probe", picture_id=picture_id),
+        mint_read_token(recipe_env.owner, "used-looks probe", picture_id=picture_id),
     )
     r = scoped.get(f"{API}/recipes/used", params={"workflow_id": WF_AB})
     assert r.status_code == 403, r.text
@@ -1598,7 +1557,9 @@ def test_the_read_token_belt_also_closes_the_used_looks(recipe_env):
     # And by its own path, which is what an untemplated owner-class GET needs
     # to survive the `AUTHZ_GATE_ENFORCING = False` rollback.
     assert "/api/v1/recipes/used" in auth.READ_BLOCKED_GET_PATHS
-    scoped = _bearer(recipe_env.server, _mint(recipe_env.owner, "belt probe"))
+    scoped = bearer_client(
+        recipe_env.server, mint_read_token(recipe_env.owner, "belt probe")
+    )
     r = scoped.get(f"{API}/recipes/used", params={"workflow_id": WF_AB})
     assert r.status_code == 403, r.text
 
@@ -1634,7 +1595,9 @@ def test_the_gate_alone_refuses_the_used_looks_with_the_belt_lifted(recipe_env):
     assert len(without_path) == len(auth.READ_BLOCKED_GET_PATHS) - 1, (
         "this route is no longer on the exact-path belt; the belt has moved"
     )
-    scoped = _bearer(recipe_env.server, _mint(recipe_env.owner, "gate probe"))
+    scoped = bearer_client(
+        recipe_env.server, mint_read_token(recipe_env.owner, "gate probe")
+    )
     original = auth.READ_BLOCKED_GET_PREFIXES
     original_paths = auth.READ_BLOCKED_GET_PATHS
     auth.READ_BLOCKED_GET_PREFIXES = without_prefix

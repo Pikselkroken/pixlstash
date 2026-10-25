@@ -6,6 +6,7 @@ import { describe, it, expect } from "vitest";
 
 import {
   BLOCKS_BATCH,
+  FIX_INSTALL_PACK,
   LORAS_BYPASSED,
   LORAS_SKIPPED,
   PICTURE_INPUT_UNFILLED,
@@ -89,6 +90,35 @@ describe("pack_outdated says restart ComfyUI", () => {
   });
 });
 
+describe("models_downloading refuses until the download lands", () => {
+  it("says it is on its way, marks each file, and blocks the batch", () => {
+    const files = [{ file: "flux1-dev.safetensors", folder: "checkpoints", percent: 40 }];
+    const read = readReason({ code: "models_downloading", models: files });
+    expect(read.text).toBe(
+      "A model it needs is still downloading. Run it once it has finished: " +
+        "the Tasks tab shows how far.",
+    );
+    expect(read.files).toEqual([{ ...files[0], downloading: true }]);
+    expect(read.blocking).toBe(true);
+    expect(BLOCKS_BATCH).toContain("models_downloading");
+  });
+
+  it("counts a file folded into missing_models as downloading, not missing", () => {
+    const read = readReason({
+      code: "missing_models",
+      models: [
+        { file: "a.safetensors" },
+        { file: "b.safetensors", downloading: true },
+      ],
+    });
+    expect(read.text).toBe("1 model is missing. 1 model is still downloading.");
+    expect(
+      readReason({ code: "missing_models", models: [{ file: "a.safetensors" }] })
+        .text,
+    ).toBe("1 model is missing.");
+  });
+});
+
 describe("missing_nodes names our own pack", () => {
   it("says a PixlStash node comes from the pack, and how to install it", () => {
     const read = readReason({
@@ -125,6 +155,42 @@ describe("missing_nodes names our own pack", () => {
       "This ComfyUI does not have the nodes rgthreeSeed, KSamplerAdvanced.",
     );
     expect(read.text).not.toContain("PixlStash");
+  });
+});
+
+describe("missing_nodes offers a pack PixlStash knows (#2054)", () => {
+  const packs = [
+    {
+      id: "comfyui-inpaint-cropandstitch",
+      name: "ComfyUI-Inpaint-CropAndStitch",
+      version: "3.0.11",
+      nodes: ["InpaintCropImproved", "InpaintStitchImproved"],
+    },
+  ];
+
+  it("names the pack and offers to install it", () => {
+    const read = readReason({
+      code: "missing_nodes",
+      nodes: ["InpaintCropImproved", "InpaintStitchImproved"],
+      packs,
+    });
+    expect(read.text).toBe(
+      "This ComfyUI does not have the nodes InpaintCropImproved, " +
+        "InpaintStitchImproved, from ComfyUI-Inpaint-CropAndStitch.",
+    );
+    expect(read.fix).toBe(FIX_INSTALL_PACK);
+    expect(read.blocking).toBe(true);
+  });
+
+  it("offers nothing without a pack", () => {
+    const read = readReason({
+      code: "missing_nodes",
+      nodes: ["InpaintCropImproved"],
+    });
+    expect(read.text).toBe(
+      "This ComfyUI does not have the node InpaintCropImproved.",
+    );
+    expect(read.fix).toBe(null);
   });
 });
 

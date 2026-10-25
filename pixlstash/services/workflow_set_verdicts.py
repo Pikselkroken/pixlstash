@@ -24,7 +24,6 @@ counts here too.
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
 from fractions import Fraction
 from typing import Iterable, Optional
 
@@ -32,9 +31,11 @@ from sqlalchemy import and_, case, func
 from sqlmodel import Session, select
 
 from pixlstash.db_models.picture import Picture
+from pixlstash.hub.db import now_iso
 from pixlstash.pixl_logging import get_logger
 from pixlstash.scoring.prompt_match import PROMPT_MATCH_THRESHOLD
 from pixlstash.services.model_shelf_service import _SET_BASE_KINDS, _set_kind_rank
+from pixlstash.services.model_workflow_sets import WorkflowSetNotFoundError
 from pixlstash.tasks.missing_prompt_match_finder import MissingPromptMatchFinder
 from pixlstash.tasks.task_type import TaskType
 
@@ -67,10 +68,6 @@ SET_VERDICTS = ("yes", "no")
 MEMBER_VERDICTS = ("problem", "not_problem")
 
 _COMBO_KEY_RE = re.compile(r"^[1-9][0-9]*(,[1-9][0-9]*)*$")
-
-
-class VerdictTargetError(LookupError):
-    """A verdict named a model that is not on the shelf or not in the set. 404."""
 
 
 def combo_key(model_ids: Iterable[int]) -> str:
@@ -341,13 +338,9 @@ def _require_models(conn, ids: list[int], key: str) -> None:
     }
     gone = sorted(set(ids) - found)
     if gone:
-        raise VerdictTargetError(
+        raise WorkflowSetNotFoundError(
             f"Set {key} names model(s) {gone} the shelf does not hold."
         )
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def write_set_verdict(hub, key: str, verdict: Optional[str]) -> Optional[str]:
@@ -372,7 +365,7 @@ def write_set_verdict(hub, key: str, verdict: Optional[str]) -> Optional[str]:
                 "INSERT INTO model_set_verdict (combo_key, verdict, answered_at) "
                 "VALUES (?, ?, ?) ON CONFLICT(combo_key) DO UPDATE SET "
                 "verdict = excluded.verdict, answered_at = excluded.answered_at",
-                (key, verdict, _now()),
+                (key, verdict, now_iso()),
             )
     logger.info("Workflow set %s verdict: %s (was %s).", key, verdict, previous)
     return previous
@@ -387,7 +380,9 @@ def write_member_verdict(
     """
     ids = parse_combo_key(key)
     if model_id not in ids:
-        raise VerdictTargetError(f"Model {model_id} is not a member of set {key}.")
+        raise WorkflowSetNotFoundError(
+            f"Model {model_id} is not a member of set {key}."
+        )
     with hub.transaction() as conn:
         # Clearing never checks the shelf: a member that left it must not pin
         # the answer that names it.
@@ -411,7 +406,7 @@ def write_member_verdict(
                 "(combo_key, model_id, verdict, answered_at) VALUES (?, ?, ?, ?) "
                 "ON CONFLICT(combo_key, model_id) DO UPDATE SET "
                 "verdict = excluded.verdict, answered_at = excluded.answered_at",
-                (key, model_id, verdict, _now()),
+                (key, model_id, verdict, now_iso()),
             )
     logger.info(
         "Workflow set %s member %d verdict: %s (was %s).",

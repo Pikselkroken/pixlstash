@@ -12,7 +12,6 @@ import copy
 import json
 import sqlite3
 import tempfile
-import time
 import uuid
 from pathlib import Path
 from datetime import datetime, timezone
@@ -93,6 +92,7 @@ from tests.test_workflow_identity import (
     _second_pass,
     _split_loaders,
 )
+from tests.utils import quiesce_background_work
 
 API = "/api/v1"
 LIB = "test-library"
@@ -1883,6 +1883,59 @@ def test_carrying_one_workflow_twice_onto_an_heir_writes_its_notes_once(tmp_path
         hub.close()
 
 
+def test_a_split_gives_every_heir_the_gpu_peaks_and_the_run_alone_flag(tmp_path):
+    """A re-keyed workflow must not run as never measured, nor lose "runs alone"."""
+    hub = HubDatabase(str(tmp_path / "hub.db"))
+    try:
+        with hub.transaction() as conn:
+            conn.executemany(
+                "INSERT INTO workflow_vram_peak (workflow_id, model_set, "
+                "device_name, device_total_mb, peak_mb, measured_by, outcome, at) "
+                "VALUES ('auto:old', 'm', 'GPU', 24576, ?, 'torch_reserved', "
+                "'completed', ?)",
+                [(9000, "2026-10-01T00:00:00"), (9500, "2026-10-02T00:00:00")],
+            )
+            conn.execute(
+                "INSERT INTO workflow_vram_policy (workflow_id, exclusive, source, at) "
+                "VALUES ('auto:old', 1, 'oom', '2026-10-02T00:00:00')"
+            )
+            # The last heir's own run, alike but for the card: not a copy.
+            conn.execute(
+                "INSERT INTO workflow_vram_peak (workflow_id, model_set, "
+                "device_name, device_total_mb, peak_mb, measured_by, outcome, at) "
+                "VALUES ('auto:b', 'm', 'Other GPU', 24576, 9000, 'torch_reserved', "
+                "'completed', '2026-10-01T00:00:00')"
+            )
+            # A split: a copy for the first heir (twice, as a re-run would),
+            # then the move to the last.
+            _carry_group_state(conn, "auto:old", "auto:a", keep=True)
+            _carry_group_state(conn, "auto:old", "auto:a", keep=True)
+            _carry_group_state(conn, "auto:old", "auto:b")
+        for heir, expected in (
+            ("auto:a", [9000, 9500]),
+            ("auto:b", [9000, 9000, 9500]),
+        ):
+            peaks = hub.fetchall(
+                "SELECT peak_mb FROM workflow_vram_peak WHERE workflow_id = ? "
+                "ORDER BY peak_mb",
+                (heir,),
+            )
+            assert [row[0] for row in peaks] == expected, heir
+            policy = hub.fetchone(
+                "SELECT source FROM workflow_vram_policy WHERE workflow_id = ?",
+                (heir,),
+            )
+            assert policy is not None and policy[0] == "oom", heir
+        assert not hub.fetchall(
+            "SELECT 1 FROM workflow_vram_peak WHERE workflow_id = 'auto:old'"
+        )
+        assert not hub.fetchall(
+            "SELECT 1 FROM workflow_vram_policy WHERE workflow_id = 'auto:old'"
+        )
+    finally:
+        hub.close()
+
+
 def test_a_carry_contained_in_longer_notes_is_still_written(tmp_path):
     """Only an exact repeat is dropped: "Also named: Foo" is not "...: Foo bar"."""
     hub = HubDatabase(str(tmp_path / "hub.db"))
@@ -1908,23 +1961,6 @@ def test_a_carry_contained_in_longer_notes_is_still_written(tmp_path):
 # ── the vault half: a saved recipe keeps its checkpoint ────────────────────
 
 
-def _quiesce(server) -> None:
-    """Take every work finder out of the planner and let the pipeline settle."""
-    task_types = list(server.vault._planner_work_finders)
-    for task_type in task_types:
-        server.vault._planner_work_finders.pop(task_type)
-    server.vault._work_planner.detach_finders(task_types)
-    runner = server.vault._task_runner
-    runner.cancel_pending_tasks()
-    deadline = time.monotonic() + 60.0
-    while time.monotonic() < deadline:
-        with runner._active_task_lock:
-            if not runner._active_tasks:
-                return
-        time.sleep(0.05)
-    raise AssertionError("background work did not settle within 60s")
-
-
 @pytest.fixture(scope="module")
 def run_env():
     tmp = tempfile.TemporaryDirectory()
@@ -1940,7 +1976,7 @@ def run_env():
             json={"username": "owner", "password": "example-ownerpass1"},
         )
         assert r.status_code == 200, r.text
-        _quiesce(server)
+        quiesce_background_work(server)
         yield SimpleNamespace(server=server, owner=owner)
     finally:
         server.__exit__(None, None, None)
@@ -3143,6 +3179,38 @@ def test_a_retired_workflows_versions_go_with_it_and_are_not_carried(tmp_path):
         "SELECT workflow_id, version FROM workflow_version ORDER BY workflow_id, version"
     )
     assert [tuple(row) for row in rows] == [(living, 1), (living, 2), (manual, 1)]
+
+
+def test_a_retired_workflows_thumbnail_goes_to_its_heir(tmp_path):
+    """The owner's picture is not of the graph, so it is carried, the heir's
+    own winning; a workflow that lives on through a split keeps its own."""
+    hub = HubDatabase(str(tmp_path / "hub.db"))
+    retired, living, heir, owned, split = (f"auto:{d * 64}" for d in "12345")
+    try:
+        with hub.transaction() as conn:
+            conn.executemany(
+                "INSERT INTO workflow_thumbnail (workflow_id, icon_sha256, pinned) "
+                "VALUES (?, ?, ?)",
+                [(retired, "a" * 64, 1), (living, "b" * 64, 0), (owned, "c" * 64, 0)],
+            )
+        assert retired in stranded_workflow_ids(hub, {living, owned}, set())
+        with hub.transaction() as conn:
+            _carry_group_state(conn, retired, heir)
+            _carry_group_state(conn, living, owned, keep=True)
+            # A split's other heir gets a copy, as it does the rest.
+            _carry_group_state(conn, living, split, keep=True)
+        rows = hub.fetchall(
+            "SELECT workflow_id, icon_sha256, pinned FROM workflow_thumbnail "
+            "ORDER BY workflow_id"
+        )
+        assert [tuple(row) for row in rows] == [
+            (living, "b" * 64, 0),
+            (heir, "a" * 64, 1),
+            (owned, "c" * 64, 0),
+            (split, "b" * 64, 0),
+        ]
+    finally:
+        hub.close()
 
 
 def test_a_retired_workflows_unsaved_changes_go_with_it(tmp_path):

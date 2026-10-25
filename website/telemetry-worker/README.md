@@ -50,9 +50,8 @@ npx wrangler@4.118.0 d1 create pixlstash-telemetry \
 `--jurisdiction=eu` is a binding compliance constraint, not the best-effort
 latency hint provided by `--location`. It is creation-only. The command writes
 the real database UUID into the local `wrangler.jsonc`; never commit that
-environment-specific edit. The deploy script disables automatic provisioning,
-so a missing UUID fails closed instead of silently creating an unconstrained
-database.
+environment-specific edit, and remove it before deploying (the deploy script
+refuses a config that already carries one).
 
 Capture the complete create-command output in the release ticket, then attach
 the D1 dashboard's database details showing the EU jurisdiction and database
@@ -68,6 +67,15 @@ npx wrangler@4.118.0 d1 execute pixlstash-telemetry \
 npm run deploy
 npx wrangler secret put AGGREGATES_TOKEN
 ```
+
+The schema and the secret are one-time steps; a code change needs only
+`npm run deploy`, logged in with `npx wrangler login`. It runs
+`scripts/deploy.mjs`, which looks the database UUID up by name, refuses to
+deploy unless that database reports the `eu` jurisdiction, and deploys from a
+temporary gitignored `wrangler.deploy.jsonc` that it deletes afterwards, so the
+UUID never touches the tracked config. It also disables Wrangler's automatic
+provisioning, so a missing database fails closed instead of silently creating
+an unconstrained one.
 
 ## Endpoints
 
@@ -166,6 +174,23 @@ column is stored. Two consequences for the consumer:
   check-ins are unrecoverable and the snapshot is never backfilled, so the day
   is reported as uncountable rather than as a confident undercount. A pre-field
   checkpoint that had scanned nothing yet lost nothing, and still counts.
+
+**Daily active installs** (`daily_active_installs`) is the per-day distinct
+count: an object keyed by UTC date, each `{ total, by_type }`, holding the
+installs whose bitmap has that day's bit set. Unlike `active_installs` the days
+do not overlap, so they can be plotted as a series. Points for the consumer:
+
+- The snapshot date itself is **not** included. The snapshot is taken on the
+  first cron slice of its UTC day, when that day has barely started. Each
+  snapshot reports the `DAILY_LOOKBACK_DAYS` (7) completed days before it.
+- A completed day's count does not change, so consecutive snapshots republish
+  the same value for the dates they share. That overlap means a run of missed
+  crons shorter than seven days loses nothing; the consumer keeps one value per
+  date. A longer outage loses the days that fell out of every snapshot's reach.
+- Like `active_installs`, this counts installs that sent an ID, so it is a
+  floor, and Docker (daily pings) is overrepresented against desktop and pip
+  (pings only when run). Read it by type.
+- `null` under the same legacy-checkpoint rule as `id_bearing_checkins_by_type`.
 
 **Resurrection rate** is the metric that answers pause-versus-churn directly: a
 silence of 14 days or more that a later ping closes. `first_seen`/`last_seen`

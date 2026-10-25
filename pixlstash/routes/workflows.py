@@ -34,12 +34,14 @@ notes and hidden flag, its default-recipe parameters, pins and picture inputs
 from __future__ import annotations
 
 import functools
+import hashlib
 import json
 import math
 import sqlite3
 import os
 import re
 import secrets
+import tempfile
 import threading
 import time
 from collections.abc import Callable
@@ -51,7 +53,17 @@ from typing import Annotated, Literal, get_args
 
 from sqlalchemy.exc import SQLAlchemyError
 
-from fastapi import APIRouter, Body, HTTPException, Path, Query, Request, Response
+from fastapi import (
+    APIRouter,
+    Body,
+    File,
+    HTTPException,
+    Path,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+)
 from pydantic import (
     BaseModel,
     Field,
@@ -62,7 +74,7 @@ from pydantic import (
 )
 
 from pixlstash.auth import COMFYUI_SCOPE
-from pixlstash.hub import workflow_versions
+from pixlstash.hub import workflow_thumbnails, workflow_versions
 from pixlstash.hub.workflow_card_reads import (
     Workflow,
     asset_names,
@@ -72,6 +84,8 @@ from pixlstash.hub.workflow_card_reads import (
     group_picture_inputs,
     group_pins,
     instance_documents,
+    is_draft,
+    manual_document_and_version,
     model_fix_labels,
     model_fixes,
     picture_keys,
@@ -87,6 +101,7 @@ from pixlstash.hub.workflow_cards import STRIP_LORAS_FOR_STACKS
 from pixlstash.hub.workflow_group_writes import (
     LORA_ADDRESS_PREFIX,
     RAN,
+    RAN_BY,
     STAGE_ADDRESS_PREFIX,
     WAITED,
     STAGE_OFF,
@@ -160,18 +175,38 @@ from pixlstash.services.comfyui_service import (
     PIXLSTASH_PICTURE_LOADER,
     _extract_output_node_ids,
     RUN_CLIENT_ID,
+    RUN_LABEL_FALLBACK,
+    _emit_comfyui_failure_progress,
     _process_comfyui_outputs,
     _submit_comfyui_prompt,
     _download_comfyui_image,
     _upload_image_to_comfyui,
     library_ids_named,
     own_picture_ids,
+    claim_held_run,
     follow_run,
+    hold_run,
+    new_run_id,
+    on_run_ended,
+    record_run_outcome,
     run_outcome,
     swap_pixlstash_savers,
     unfed_picture_loaders,
 )
-from pixlstash.services import workflow_bindings, workflow_inbox
+from pixlstash.services import (
+    run_log,
+    vram_history,
+    workflow_bindings,
+    workflow_inbox,
+)
+from pixlstash.resources import comfyui_tenant
+from pixlstash.resources.arbiter import LeaseKind, LeaseState, Tenant, arbiter
+from pixlstash.services.model_icons import MAX_ICON_BYTES, IconRefused, store_icon
+from pixlstash.services.edit_selection import (
+    UNREADABLE_PICTURE,
+    Selection,
+    write_masked_picture,
+)
 from pixlstash.services import workflow_run_service as run_service
 from pixlstash.services.workflow_card_service import (
     BASE_MODEL_KINDS,
@@ -212,6 +247,11 @@ from pixlstash.services.model_shelf_service import (
     propose_companions,
     recipe_asset_index,
     shelf_uuid,
+    VIA_BASE_MODEL,
+    VIA_CHECKPOINT,
+    VIA_DECLARED,
+    VIA_FAMILY,
+    VIA_GROUPED,
 )
 from pixlstash.services.comfyui_link_service import locate
 from pixlstash.services.workflow_events import announce_changed_workflows
@@ -285,6 +325,8 @@ from pixlstash.services.workflow_library_service import (
     read_instance_hashes,
     read_kept_picture_files,
     read_library_ids,
+    read_picture_pixels,
+    read_picture_sizes,
     read_oldest_kept_by_pixel_sha,
     read_recipe_activity,
     read_variant_picture_counts,
@@ -603,6 +645,24 @@ class WorkflowCover(BaseModel):
     )
 
 
+class WorkflowThumbnail(BaseModel):
+    """A workflow's own picture, which its card can show in place of covers."""
+
+    url: str = Field(
+        description=(
+            "API-relative (`/model-icons/{sha256}`), prefixed by the client as a "
+            "cover's `url` is."
+        )
+    )
+    pinned: bool = Field(
+        description=(
+            "Shown over the workflow's pictures. Unpinned, it is shown only "
+            "while the workflow has none, which is how a ComfyUI template "
+            "arrives."
+        )
+    )
+
+
 class RecipeValue(BaseModel):
     """One value a workflow's kept pictures used, and on how many of them."""
 
@@ -730,6 +790,16 @@ class WorkflowCard(BaseModel):
             "The name of the workflow or recipe a manual workflow was made "
             "from (duplicate, fixed copy, clone, LoRA edit, extract), as it "
             "was called then; null for an imported one."
+        ),
+    )
+    draft: bool = Field(
+        False,
+        description=(
+            "A manual workflow made from a ComfyUI template that has no API "
+            "graph yet (#2000): PixlStash could not convert its editor "
+            "document, and ComfyUI has not saved it. Run, its pre-flight and "
+            "export refuse it; *Open in ComfyUI* opens the template for the "
+            "ComfyUI-PixlStash node to save back, which ends it."
         ),
     )
     origin_category: Literal["comfyui", "pictures", "own"] = Field(
@@ -893,6 +963,67 @@ class WorkflowCard(BaseModel):
             "badge is drawn from. 0 when nothing waits."
         ),
     )
+    vram: "WorkflowVram | None" = Field(
+        None,
+        description=(
+            "What a ComfyUI run of this workflow needs on the GPU, learned "
+            "from its measured runs, and whether it runs alone."
+        ),
+    )
+    thumbnail: WorkflowThumbnail | None = Field(
+        None, description="Its custom thumbnail, or null when it has none."
+    )
+
+
+class WorkflowVramPeak(BaseModel):
+    """One measured run of a workflow, newest first."""
+
+    peak_mb: int
+    pixels: int | None = Field(
+        None, description="The size of the image the run worked on, when known."
+    )
+    outcome: Literal["completed", "failed", "oom", "aborted"]
+    at: str
+    used: bool = Field(
+        description="One of the (up to) five runs the need is taken from."
+    )
+
+
+class WorkflowVram(BaseModel):
+    """A workflow's GPU memory, as the VRAM arbiter admits its runs."""
+
+    need_mb: int | None = Field(
+        None,
+        description=(
+            "What a run like the newest needs: the largest of the newest five "
+            "peaks measured at about its image size, with 10 % headroom; null "
+            "when never measured there (its runs then keep other heavy work "
+            "off the GPU)."
+        ),
+    )
+    measured_runs: int = 0
+    exclusive: bool = Field(
+        False, description="Runs alone on the GPU: PixlStash moves its own work off it."
+    )
+    exclusive_source: Literal["owner", "oom"] | None = Field(
+        None,
+        description="owner when set on the card, oom when set after it ran out of memory.",
+    )
+    exclusive_at: str | None = None
+    trend: Literal["rising", "falling", "flat"] | None = Field(
+        None,
+        description=(
+            "The mean of the newest five peaks against the five before, "
+            "beyond 10 %; null below ten measured runs."
+        ),
+    )
+    peaks: list[WorkflowVramPeak] = Field(
+        default_factory=list,
+        description="The kept peaks, newest first; on the detail route only.",
+    )
+
+
+WorkflowCard.model_rebuild()
 
 
 class WorkflowCards(BaseModel):
@@ -1054,10 +1185,31 @@ _KIND_NAME_MARKERS = {
 # file ComfyUI lacks (`_digest_swap_kind`).
 _PACK_MODEL_LOADERS = {"VAELoader": FILE_VAE, "CLIPLoader": FILE_TEXT_ENCODER}
 # The name `_upload_files` gives a hashed picture, read back for its content:
-# a loader still holding one says what its run loaded (`_made_from`).
+# a loader still holding one says what its run loaded (`_made_from`). A run
+# with a selection names its upload for the selection too (`-mask-<digest>`),
+# and that loader still read the picture.
 _UPLOAD_NAME_RE = re.compile(
-    r"pixlstash-[0-9a-zA-Z]+-\d+-([0-9a-f]{64})(?:\.[a-z0-9]{1,8})?"
+    r"pixlstash-[0-9a-zA-Z]+-\d+-([0-9a-f]{64})(?:-mask-[0-9a-f]{16})?"
+    r"(?:\.[a-z0-9]{1,8})?"
 )
+# Any upload carrying a selection's mask, whichever content stands in its name
+# (a digest, or a not-yet-hashed file's mtime and size).
+_MASKED_UPLOAD_RE = re.compile(
+    r"pixlstash-[0-9a-zA-Z]+-\d+-[0-9a-f-]+-mask-[0-9a-f]{16}(?:\.[a-z0-9]{1,8})?"
+)
+
+
+def _masked_loaders(graph: dict) -> frozenset[str]:
+    """The ``LoadImage`` nodes of *graph* holding a masked upload: the pack's
+    loader, fetching the picture by id, would lose the mask."""
+    return frozenset(
+        str(node_id)
+        for node_id, node in graph.items()
+        if isinstance(node, dict)
+        and node.get("class_type") == "LoadImage"
+        and isinstance((node.get("inputs") or {}).get("image"), str)
+        and _MASKED_UPLOAD_RE.fullmatch(node["inputs"]["image"])
+    )
 
 
 class WorkflowCardEdit(BaseModel):
@@ -1071,6 +1223,27 @@ class WorkflowCardEdit(BaseModel):
     name: str | None = Field(None, max_length=MAX_NAME_LENGTH)
     notes: str | None = Field(None, max_length=MAX_NOTES_LENGTH)
     hidden: bool | None = None
+    exclusive: bool | None = Field(
+        None,
+        description=(
+            "Run alone on the GPU. true sets it as the owner's choice; false "
+            "or null clears it, including one set after an out-of-memory run."
+        ),
+    )
+    forget_vram_peaks: bool | None = Field(
+        None,
+        description=(
+            "true forgets every GPU peak measured for it, so its next run is "
+            "measured again. Leaves running alone as it is."
+        ),
+    )
+    thumbnail_pinned: bool | None = Field(
+        None,
+        description=(
+            "Show its custom thumbnail over its pictures (true), or only "
+            "until it has pictures (false). 409 when it has no thumbnail."
+        ),
+    )
 
 
 def _one_row_per_address(entries) -> None:
@@ -1348,6 +1521,29 @@ class WorkflowLoraSummary(BaseModel):
 
 # The optional stages a graph can have (`workflow_identity.SPECIAL_GROUPS`).
 Stage = Literal["upscale", "face_detailer", "seed_variance", "intermediate_save"]
+
+
+class RunUpscale(BaseModel):
+    """An upscale a run adds before each save (#1868), on a graph with none.
+
+    PixlStash's own: *model* (an upscaler on the shelf, by digest), then a
+    Lanczos resize to *factor*; with no model, the resize alone. For this run
+    only, never saved into the workflow.
+    """
+
+    factor: float = 2.0
+    model_sha256: str | None = Field(None, min_length=64, max_length=64)
+
+    @field_validator("factor")
+    @classmethod
+    def _offered_factor(cls, value: float) -> float:
+        if value not in run_service.UPSCALE_FACTORS:
+            raise ValueError(
+                "factor is one of "
+                + ", ".join(f"{f:g}" for f in run_service.UPSCALE_FACTORS)
+                + "."
+            )
+        return value
 
 
 class RunLora(BaseModel):
@@ -1639,6 +1835,9 @@ class RunRequest(BaseModel):
     # runs without them (#1849): the other half of `skip_stages`, so a stage
     # the default has switched off can be switched on for one run.
     keep_stages: list[Stage] = Field(default_factory=list, max_length=4)
+    # An upscale this run adds before each save (#1868). Only on a graph with
+    # no upscale stage of its own, which keeps its own row and is left alone.
+    upscale: RunUpscale | None = None
     values: list[RunValue] = Field(default_factory=list, max_length=MAX_DEFAULTS)
     # Samplers and schedulers this run swaps in for ones this ComfyUI does not
     # list (`missing_choices`), applied last so they win over `values`.
@@ -1692,6 +1891,12 @@ class RunRequest(BaseModel):
     # keeps anything, so it is ignored with pictures or a saved recipe, as
     # `replay` is where it does not apply, and by the pre-flight.
     waited: WorkflowChanges | None = None
+    # Where on the picture the run changes (the Edit tab's Paint tools): the
+    # selection as steps, rendered server-side into the picture's alpha
+    # channel, which is the MASK its loader hands on. One picture only: a hand
+    # selection belongs to the picture it was drawn on. A workflow whose
+    # loader's MASK nothing reads is refused with `mask_not_read`.
+    selection: Selection | None = None
 
     @field_validator("inputs")
     @classmethod
@@ -1750,6 +1955,8 @@ class RunRequest(BaseModel):
                 f"Stage {', '.join(twice)} is both skipped and kept; name it in "
                 "skip_stages or in keep_stages, not both."
             )
+        if self.selection is not None and len(self.picture_ids) != 1:
+            raise ValueError("A selection runs on exactly one picture.")
         return self
 
     stack: bool = False
@@ -1767,6 +1974,38 @@ class RunRequest(BaseModel):
     label: str | None = Field(None, max_length=MAX_LABEL_LENGTH)
 
 
+class UpscaleRequest(BaseModel):
+    """``POST /workflows/upscale`` and its pre-flight (#1868)."""
+
+    picture_ids: list[Annotated[int, Field(le=MAX_PICTURE_ID)]] = Field(
+        min_length=1, max_length=MAX_RUN_PICTURES
+    )
+    upscale: RunUpscale = Field(default_factory=RunUpscale)
+
+    @field_validator("picture_ids")
+    @classmethod
+    def _once_each(cls, value: list[int]) -> list[int]:
+        return list(dict.fromkeys(value))
+
+
+class UpscalePicture(BaseModel):
+    """One picture an upscale would read."""
+
+    picture_id: int
+    width: int | None = None
+    height: int | None = None
+    upscaled: bool = Field(
+        False,
+        description="Whether the run that made the picture upscaled it already.",
+    )
+
+
+class UpscalePreflight(BaseModel):
+    """``POST /workflows/upscale/preflight``: what the upscale would start from."""
+
+    pictures: list[UpscalePicture]
+
+
 class SaveVerb(BaseModel):
     """Whether one of the two verbs is offered, and the sentence saying why not."""
 
@@ -1775,6 +2014,24 @@ class SaveVerb(BaseModel):
         None,
         description=(
             "Why the verb is not offered, as every surface prints it. Null when it is."
+        ),
+    )
+
+
+class RunsCleared(BaseModel):
+    """``DELETE /workflows/runs`` and ``DELETE /workflows/runs/{run_id}``."""
+
+    cleared: int = Field(
+        description=(
+            "How many finished runs were forgotten, counted as the Finished "
+            "group lists them: one per workflow per `POST /workflows/run`, "
+            "however many pictures it was asked for."
+        )
+    )
+    workflow_id: str | None = Field(
+        None,
+        description=(
+            "The workflow whose kept changes went with the run, null when none did."
         ),
     )
 
@@ -2253,7 +2510,16 @@ class RunResult(BaseModel):
     status: str = "success"
     runs: int = 0
     groups: list[RunGroup] = Field(default_factory=list)
-    prompts: list[dict] = Field(default_factory=list)
+    prompts: list[dict] = Field(
+        default_factory=list,
+        description=(
+            "One entry per submission: workflow_id, run_id, prompt_id and "
+            "status. status is queued (sent to ComfyUI), waiting (held by "
+            "PixlStash until the GPU has room; prompt_id is then null, and "
+            "the run is followed by its run_id) or failed (ComfyUI took it "
+            "but named no prompt)."
+        ),
+    )
     error: str | None = Field(
         default=None,
         description=(
@@ -2264,10 +2530,28 @@ class RunResult(BaseModel):
 
 
 class RunOutcome(BaseModel):
-    """``GET /workflows/runs/{prompt_id}``: how one submitted run stands."""
+    """``GET /workflows/runs/{run_id}``: how one submitted run stands."""
 
-    prompt_id: str
-    status: str = Field(description="running, completed or failed.")
+    run_id: str | None = Field(
+        default=None,
+        description="PixlStash's id for the run, which it has from the start.",
+    )
+    prompt_id: str | None = Field(
+        default=None,
+        description=(
+            "ComfyUI's id for the run; null while PixlStash holds it for the GPU."
+        ),
+    )
+    status: str = Field(
+        description=(
+            "waiting (held by PixlStash until the GPU has room, not yet sent "
+            "to ComfyUI), running, completed or failed."
+        )
+    )
+    code: str | None = Field(
+        default=None,
+        description="vram_oom for a run that ran out of GPU memory, else null.",
+    )
     message: str | None = Field(
         default=None,
         description=(
@@ -2372,7 +2656,21 @@ class WorkflowRunnableGraph(BaseModel):
     """
 
     name: str = Field(description="What to call the workflow in ComfyUI.")
-    workflow: dict = Field(description="The ComfyUI API-format graph.")
+    workflow: dict | None = Field(
+        description=(
+            "The ComfyUI API-format graph. Null only for a `draft`, which has "
+            "none: open `editor`."
+        )
+    )
+    draft: bool = Field(
+        False,
+        description=(
+            "A workflow made from a ComfyUI template that has no API graph yet "
+            "(#2000), answered only to a caller that asked with `drafts`. "
+            "`editor` is the template as stored, to open as it is; a save of "
+            "it from ComfyUI (`PUT …/graph`) gives the workflow its graph."
+        ),
+    )
     source: str | None = Field(
         description="Where the graph was resolved from: edit, file, picture or instance."
     )
@@ -2778,6 +3076,21 @@ class ModelFixCandidate(BaseModel):
             "picks it for the owner to save."
         ),
     )
+    base_model: str | None = Field(
+        None,
+        description="A checkpoint's known base model (`SwapModel.base_model`).",
+    )
+    verdict: Literal["likely", "maybe", "unknown", "unlikely"] | None = Field(
+        None,
+        description=(
+            "How likely it is to run the workflow in the missing one's place. "
+            "A checkpoint against `replacing_base_model`: the same base model, "
+            "the same family, a base model never read, another base model; "
+            "null when nothing says what the missing one was. A VAE or text "
+            "encoder by its `via`: grouped, checkpoint or base_model is "
+            "likely, family maybe, declared unknown."
+        ),
+    )
 
 
 class MisfiledCopy(BaseModel):
@@ -2823,7 +3136,17 @@ class ModelSwapOptions(BaseModel):
             "Only with `?replacing=` a checkpoint: true when `replacements` "
             "were held to the missing one's base model, false when nothing "
             "said which it was, or no loadable checkpoint has it, and every "
-            "loadable checkpoint is offered."
+            "loadable checkpoint is offered. With `grouped`, nothing is held "
+            "back, and it says whether it would have been."
+        ),
+    )
+    replacing_base_model: str | None = Field(
+        None,
+        description=(
+            "Only with `?replacing=` a checkpoint: the base model a "
+            "replacement should share (the shelf's for the missing file, else "
+            "the one its LoRAs and ControlNets agree on), which each "
+            "candidate's `verdict` is read against. Null when nothing says."
         ),
     )
     refile: MisfiledCopy | None = Field(
@@ -2857,6 +3180,17 @@ class ModelSwapOptions(BaseModel):
         ),
     )
 
+
+# A companion's `via` as the verdict a "Replace with…" picker files it under:
+# the owner's set or a run with it is evidence, a family is a likeness, and a
+# fitting file layout says nothing.
+_VIA_VERDICTS = {
+    VIA_GROUPED: "likely",
+    VIA_CHECKPOINT: "likely",
+    VIA_BASE_MODEL: "likely",
+    VIA_FAMILY: "maybe",
+    VIA_DECLARED: "unknown",
+}
 
 # Ceiling on one clone's swap map. A graph names a handful of model files; the
 # bound is here so a hand-made request cannot post an unbounded map.
@@ -3107,6 +3441,50 @@ class Feed:
     by_id: bool = False
 
 
+def _masked(body: "RunRequest") -> tuple[int, str] | None:
+    """``(picture_id, digest)`` of the picture a run's selection is drawn on.
+
+    The digest names the upload, so two selections of one picture queued
+    back to back never load each other's mask.
+    """
+    if body.selection is None:
+        return None
+    digest = hashlib.sha256(body.selection.model_dump_json().encode()).hexdigest()
+    return body.picture_ids[0], digest[:16]
+
+
+def _reads_mask(graph: dict, feeds: list[Feed], picture_id: int) -> bool:
+    """Whether anything in *graph* reads the MASK of a loader fed *picture_id*,
+    the picture the selection is drawn on: by the selection, or pinned to it.
+
+    ``LoadImage`` and the ComfyUI-PixlStash picture loader both hand on
+    ``IMAGE`` then ``MASK``, so a link to output 1 of either is a mask read.
+    ``LoadImageMask`` hands on only ``MASK``, at output 0, and it is the
+    selection only from the ``alpha`` channel: any other is a colour of the
+    picture.
+    """
+    mask_output: dict[str, int] = {}
+    for feed in feeds:
+        if feed.picture_id not in (None, picture_id):
+            continue
+        for target in feed.targets:
+            node_id = str(workflow_bindings.target_node(graph, target.get("path")))
+            node = graph.get(node_id)
+            if isinstance(node, dict) and node.get("class_type") == "LoadImageMask":
+                if (node.get("inputs") or {}).get("channel") == "alpha":
+                    mask_output[node_id] = 0
+            else:
+                mask_output[node_id] = 1
+    return any(
+        isinstance(value, list)
+        and len(value) == 2
+        and mask_output.get(str(value[0])) == value[1]
+        for node in graph.values()
+        if isinstance(node, dict)
+        for value in (node.get("inputs") or {}).values()
+    )
+
+
 @dataclass
 class Plan:
     """One run request, resolved: what it would do and what it asked ComfyUI.
@@ -3154,6 +3532,48 @@ def _shelf_digest(hub, kind: str):
         return rows[0][0] if len(rows) == 1 else None
 
     return digest_of
+
+
+def _shelf_upscaler(hub, sha256: str | None) -> str | None:
+    """The filename of the upscaler on the shelf with *sha256*, or ``None``.
+
+    Raises:
+        HTTPException: 400 when the shelf has no copy of it.
+    """
+    if sha256 is None:
+        return None
+    row = hub.fetchone(
+        "SELECT m.filename FROM model m "
+        "JOIN model_file f ON f.model_id = m.id AND f.state = 'present' "
+        "WHERE m.sha256 = ? AND m.file_kind = ? LIMIT 1",
+        (sha256.strip().lower(), FILE_UPSCALER),
+    )
+    if row is None:
+        raise HTTPException(
+            status_code=400,
+            detail="That upscale model is not on the shelf. Pick another one.",
+        )
+    return row[0]
+
+
+def _shelf_holds_digest(hub):
+    """A SHA-256 -> whether the shelf has a copy of it present.
+
+    :func:`_shelf_digest`'s rule from the other side, for a loader that names
+    its file by digest alone: without a present copy it has nothing to fetch.
+    """
+
+    def present(digest: str) -> bool:
+        return (
+            hub.fetchone(
+                "SELECT 1 FROM model m JOIN model_file f ON f.model_id = m.id "
+                "AND f.state = 'present' WHERE m.sha256 = ? LIMIT 1",
+                (digest,),
+            )
+            is not None
+        )
+
+    return present
 
 
 def _shelf_checkpoint(hub):
@@ -3372,6 +3792,17 @@ def _covers(covers) -> list[WorkflowCover]:
             )
         )
     return strip
+
+
+def _add_thumbnails(hub, cards: list[WorkflowCard]) -> None:
+    """Put each card's custom thumbnail on it, from one read of the table."""
+    stored = workflow_thumbnails.thumbnails(hub)
+    for card in cards:
+        thumbnail = stored.get(card.id)
+        if thumbnail is not None:
+            card.thumbnail = WorkflowThumbnail(
+                url=f"/model-icons/{thumbnail.icon_sha256}", pinned=thumbnail.pinned
+            )
 
 
 # The last resort, when a card has no base model to be named after and no type
@@ -3761,6 +4192,7 @@ def _entry(figure, recipe=None, names=None) -> WorkflowCard:
         imported=figure.card.imported,
         manual=figure.card.manual,
         from_name=figure.card.from_name,
+        draft=figure.card.draft,
         origin_category=_origin_category(figure.card),
         versions=figure.card.versions,
         version=figure.card.version,
@@ -3973,6 +4405,9 @@ def create_router(server) -> APIRouter:
 
     _hub = functools.partial(require_hub, server)
 
+    # Every run's ending, into this server's run log (`services/run_log.py`).
+    on_run_ended(lambda outcome: run_log.ended(_hub(), outcome))
+
     # ── The workflows (#1623) ───────────────────────────────────────────────
     # The grid is `/workflows` itself, one entry per workflow. The payload is
     # `frontend/src/utils/workflowCard.js`'s documented card; see
@@ -4083,8 +4518,11 @@ def create_router(server) -> APIRouter:
         )
         names = _display_names(grid.figures)
         cards = [_entry(figure, names=names) for figure in grid.cards]
+        _add_thumbnails(_hub(), cards)
         waiting = waiting_counts(_hub())
+        vram = vram_history.card_vram(_hub(), [card.id for card in cards])
         for card in cards:
+            card.vram = WorkflowVram(**vram[card.id])
             if card.id in waiting:
                 card.unsaved_changes = _count_changes(waiting[card.id], card.id)
         return WorkflowCards(cards=cards, one_offs=grid.one_offs, hidden=grid.hidden)
@@ -4125,6 +4563,10 @@ def create_router(server) -> APIRouter:
             else _graph_base_models(hub, figure.base)
         )
         card = _entry(figure, recipe, _display_names(grid.figures))
+        card.vram = WorkflowVram(
+            **vram_history.card_vram(hub, [workflow_id], with_peaks=True)[workflow_id]
+        )
+        _add_thumbnails(hub, [card])
         card.unsaved_changes = _count_changes(
             read_changes(hub, workflow_id).get(WAITING, ({}, None))[0], workflow_id
         )
@@ -4591,6 +5033,23 @@ def create_router(server) -> APIRouter:
         hub = _hub()
         _require_workflow(hub, workflow_id)
         changes = payload.model_dump(exclude_unset=True)
+        pinned = changes.pop("thumbnail_pinned", None)
+        # Refused before anything is written, so a 409 leaves the whole PATCH
+        # unapplied; the pin itself is written last, after the attributes.
+        if pinned is not None and workflow_id not in workflow_thumbnails.thumbnails(
+            hub
+        ):
+            raise HTTPException(
+                status_code=409, detail="This workflow has no custom thumbnail."
+            )
+        if "exclusive" in changes:
+            # A hub table of its own, not a group attribute: the VRAM
+            # arbiter reads it on every run of the workflow.
+            vram_history.set_exclusive(
+                hub, workflow_id, bool(changes.pop("exclusive")), "owner"
+            )
+        if changes.pop("forget_vram_peaks", None):
+            vram_history.forget_peaks(hub, workflow_id)
         if "hidden" in changes and changes["hidden"] is None:
             # The column is NOT NULL and has no "unset" state: a null there is
             # a caller meaning "not hidden", which the hub is told plainly
@@ -4602,6 +5061,38 @@ def create_router(server) -> APIRouter:
             library_uuid=_library_uuid(),
             **changes,
         )
+        if pinned is not None:
+            workflow_thumbnails.set_pinned(hub, workflow_id, pinned)
+        _announce(request, [workflow_id], "changed")
+        return _read_detail(hub, workflow_id)
+
+    @router.post(
+        "/workflows/{workflow_id}/thumbnail",
+        summary="Give a workflow a custom thumbnail",
+        description=(
+            "Stores the uploaded PNG, JPEG or WebP in the hub's icon store and "
+            "makes it the workflow's thumbnail, pinned: its card shows it over "
+            "its pictures until `PATCH` unpins it. Answers with the workflow."
+        ),
+        response_model=WorkflowCardDetail,
+        responses={
+            400: {"description": "Empty, too large, or not an image."},
+            404: {"description": "This machine has no such workflow."},
+        },
+    )
+    async def upload_thumbnail(
+        request: Request, workflow_id: str, file: UploadFile = File(...)
+    ):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        workflow_id = _require_workflow(hub, workflow_id).workflow_id
+        try:
+            # One byte past the cap is enough for store_icon to refuse it.
+            digest = store_icon(hub.path, await file.read(MAX_ICON_BYTES + 1))
+        except IconRefused as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        workflow_thumbnails.set_thumbnail(hub, workflow_id, digest, pinned=True)
+        logger.info("Workflow %s has custom thumbnail %s.", workflow_id, digest[:12])
         _announce(request, [workflow_id], "changed")
         return _read_detail(hub, workflow_id)
 
@@ -5399,8 +5890,11 @@ def create_router(server) -> APIRouter:
         )
         if source is not None:
             # A stored version that would not read: the pictures' graph runs,
-            # and an overwrite made on it is still made on that version.
-            source.workflow_version = edited_version
+            # and an overwrite made on it is still made on that version. Not
+            # when an earlier *version* was asked for: the pictures' graph is
+            # not that version, and a gesture on it (#1792) must not take it
+            # for one (`_require_version_read`).
+            source.workflow_version = edited_version if version is None else None
         return source, reason
 
     def _apply_addressed(graph: dict, values: list[RunValue]) -> None:
@@ -6325,7 +6819,9 @@ def create_router(server) -> APIRouter:
             return True
         return isinstance(value, str) and bool(value) and node_id not in missing
 
-    def _upload_files(submittable) -> dict[int, tuple[str, str]]:
+    def _upload_files(
+        submittable, masked: tuple[int, str] | None = None
+    ) -> dict[int, tuple[str, str]]:
         """``{picture_id: (path, upload name)}`` for every picture a run feeds.
 
         Resolved in ``_plan`` and not at upload time, so a picture that has
@@ -6340,6 +6836,11 @@ def create_router(server) -> APIRouter:
 
         A picture only a PixlStash picture loader reads (``Feed.by_id``) is
         checked the same way and not uploaded: that loader fetches it itself.
+        The picture a selection is drawn on (*masked*, ``(picture_id,
+        digest)``, :func:`_masked`) is uploaded whoever reads it, as a PNG
+        with the selection in its alpha channel and named for the selection
+        too: that loader would fetch the picture without it, and two
+        selections of one picture must not overwrite each other's upload.
         """
         fed = [
             (picture_id, feed.by_id)
@@ -6351,6 +6852,15 @@ def create_router(server) -> APIRouter:
         ]
         wanted = sorted({picture_id for picture_id, _by_id in fed})
         uploads = {picture_id for picture_id, by_id in fed if not by_id}
+        if masked and masked[0] in wanted:
+            uploads.add(masked[0])
+        return _picture_files(wanted, uploads, masked)
+
+    def _picture_files(
+        wanted: list[int], uploads: set[int], masked: tuple[int, str] | None = None
+    ) -> dict[int, tuple[str, str]]:
+        """:func:`_upload_files` for pictures already named: every one of
+        *wanted* checked, ``(path, upload name)`` for each of *uploads*."""
         if not wanted:
             return {}
         kept = read_kept_picture_files(server.vault, wanted)
@@ -6394,7 +6904,12 @@ def create_router(server) -> APIRouter:
             else:
                 stat = os.stat(path)
                 content = f"{stat.st_mtime_ns:x}-{stat.st_size:x}"
-            if picture_id in uploads:
+            if masked and picture_id == masked[0]:
+                files[picture_id] = (
+                    path,
+                    f"pixlstash-{library}-{picture_id}-{content}-mask-{masked[1]}.png",
+                )
+            elif picture_id in uploads:
                 files[picture_id] = (
                     path,
                     f"pixlstash-{library}-{picture_id}-{content}{extension}",
@@ -6676,6 +7191,7 @@ def create_router(server) -> APIRouter:
         extract: bool = False,
         saving: Literal["over", "new"] | None = None,
         cached: bool = False,
+        version: int | None = None,
     ) -> Plan:
         """Resolve, judge and prepare every run this body asks for.
 
@@ -6708,6 +7224,10 @@ def create_router(server) -> APIRouter:
 
         *cached* is a pre-flight asked only to draw its answer: ComfyUI's
         ``object_info`` may be the last minute's. Never a run's.
+
+        *version* builds the workflow's graph at that version, under the
+        default recipe it had then, as a saved recipe's is built on its own
+        (an opening of an earlier version, #1792).
         """
         hub = _hub()
         opening = opening or saving is not None
@@ -6750,6 +7270,8 @@ def create_router(server) -> APIRouter:
             saved_at = _saved_recipe(body).created_at
             if saved_at is not None:
                 as_of = workflow_versions.version_at(hub, workflow_id, saved_at)
+        if version is not None:
+            as_of = version
         recipe = _workflow_recipe(workflow_id, as_of) if workflow_id else None
         # A workflow run by itself is nobody's portrait: a person's LoRA is a
         # recipe's business, so only a run made from pictures places one the
@@ -7187,10 +7709,30 @@ def create_router(server) -> APIRouter:
             # had when the request was made. Still before `judge`.
             # A graph being saved keeps every stage: which of them run is a
             # default stored beside it, not a node taken out of it.
+            # Asked before the stages are taken out: a graph whose own upscale
+            # is switched off for this run still has one, and keeps its row.
+            own_upscale = body.upscale is not None and run_service.has_upscale(graph)
             if not saving:
                 found += run_service.skip_requested_stages(
                     graph, body.skip_stages, object_info
                 )
+            # The upscale this run adds (#1868): per run, so never into a save.
+            if body.upscale is not None and not saving and not own_upscale:
+                if not run_service.add_upscale(
+                    graph,
+                    body.upscale.factor,
+                    _shelf_upscaler(hub, body.upscale.model_sha256),
+                ):
+                    # Asked for and impossible: never a run that quietly comes
+                    # out at 1x.
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "This workflow saves no picture PixlStash can "
+                            "upscale (a video, or a saver it does not know), "
+                            "so it cannot add an upscale. Run it without one."
+                        ),
+                    )
             # Not on a saved recipe's own card: that graph already has exactly
             # the stages the recipe ran with. Nor a stage this run keeps.
             off = [
@@ -7305,6 +7847,7 @@ def create_router(server) -> APIRouter:
                 object_info_error,
                 wants_lora=bool(body.loras),
                 lora_slots=slots_in_graph,
+                digest_present=_shelf_holds_digest(hub),
                 **node_policy,
             )
             if object_info is not None and not found and not opening:
@@ -7329,6 +7872,7 @@ def create_router(server) -> APIRouter:
                         object_info_error,
                         wants_lora=bool(body.loras),
                         lora_slots=slots_in_graph,
+                        digest_present=_shelf_holds_digest(hub),
                         **node_policy,
                     )
             if stale_pack:
@@ -7377,6 +7921,21 @@ def create_router(server) -> APIRouter:
             )
             if unfed:
                 found = run_service.with_pixlstash_refusals(found, unfed)
+            if body.selection is not None and not _reads_mask(
+                graph, feeds, body.picture_ids[0]
+            ):
+                found.append(
+                    run_service.Reason(
+                        run_service.MASK_NOT_READ,
+                        {
+                            "message": (
+                                "This workflow does not use a mask, so it "
+                                "would change the whole picture. Choose an "
+                                "inpaint workflow, or clear the selection."
+                            )
+                        },
+                    )
+                )
             group.reasons = [r.as_dict() for r in found]
             # A replacement this ComfyUI does not have left its loader naming
             # the original, which is missing too. The file to name is the one
@@ -7496,7 +8055,7 @@ def create_router(server) -> APIRouter:
             comfyui_url=comfyui_url,
             object_info=object_info,
             object_info_error=object_info_error,
-            files=_upload_files(submittable),
+            files=_upload_files(submittable, _masked(body)),
             loader_swaps=loader_swaps,
             built=built,
         )
@@ -7511,7 +8070,8 @@ def create_router(server) -> APIRouter:
             "missing_nodes, missing_models, a1111, picture_input_unfilled, "
             "no_lora_loader, pixlstash_nodes, no_save_node, no_runnable_source, "
             "lora_not_skippable, stage_not_skippable, missing_choices, "
-            "pack_outdated. "
+            "pack_outdated, models_downloading (a model the graph names "
+            "that PixlStash is still downloading, with its percent). "
             "A group runs when its reasons are empty - or when the only ones "
             "left are an uninspectable ComfyUI the body said allow_unchecked "
             "to. A LoRA this ComfyUI does not have is NOT among them: its "
@@ -7642,17 +8202,138 @@ def create_router(server) -> APIRouter:
                 prompts=prompts,
                 error=str(getattr(exc, "detail", None) or exc),
             )
-        _keep_run_changes(asked, groups)
+        _keep_run_changes(asked, groups, prompts)
         return RunResult(
             status="success", runs=len(prompts), groups=groups, prompts=prompts
         )
+
+    def _upscale_graph(upload_name: str, upscale: RunUpscale, model: str | None):
+        """The graph that upscales one uploaded picture: load, upscale, save.
+
+        The run stage's own nodes (:func:`run_service.add_upscale`) behind a
+        picture loader, so both ways in upscale alike.
+        """
+        graph = {
+            "1": {"class_type": "LoadImage", "inputs": {"image": upload_name}},
+            "2": {
+                "class_type": "SaveImage",
+                "inputs": {"filename_prefix": "PixlStash-upscale", "images": ["1", 0]},
+            },
+        }
+        run_service.add_upscale(graph, upscale.factor, model)
+        return graph
+
+    @router.post(
+        "/workflows/upscale/preflight",
+        summary="What an upscale of pictures would start from",
+        description=(
+            "Each picture's size and whether the run that made it upscaled it "
+            "already, so a second upscale is a choice rather than an accident. "
+            "Submits nothing."
+        ),
+        response_model=UpscalePreflight,
+    )
+    def preflight_upscale(request: Request, body: UpscaleRequest = Body(...)):
+        server.auth.ensure_secure_when_required(request)
+        sizes = read_picture_sizes(server.vault, body.picture_ids)
+        pictures = []
+        for picture_id in body.picture_ids:
+            width, height = sizes.get(picture_id, (None, None))
+            own = _embedded_graph(picture_id)
+            pictures.append(
+                UpscalePicture(
+                    picture_id=picture_id,
+                    width=width,
+                    height=height,
+                    upscaled=bool(own) and run_service.has_upscale(own),
+                )
+            )
+        return UpscalePreflight(pictures=pictures)
+
+    @router.post(
+        "/workflows/upscale",
+        summary="Upscale pictures",
+        description=(
+            "Upscales each picture in ComfyUI by upscale.factor, through the "
+            "shelf's upscale model upscale.model_sha256 and a Lanczos resize, "
+            "or the resize alone without one. Each result is stacked on top of "
+            "its picture, which stays behind it. One run per picture, followed "
+            "as any run is (GET /workflows/runs/{prompt_id})."
+        ),
+        response_model=RunResult,
+    )
+    def upscale_pictures(request: Request, body: UpscaleRequest = Body(...)):
+        server.auth.ensure_secure_when_required(request)
+        comfyui_url = _comfyui_url(_user(request))
+        object_info = _require_object_info(
+            _read_object_info(comfyui_url), "to upscale these pictures"
+        )
+        model = _shelf_upscaler(_hub(), body.upscale.model_sha256)
+        # Every picture checked before anything is uploaded or queued.
+        files = _picture_files(body.picture_ids, set(body.picture_ids))
+        pixels_of = read_picture_pixels(server.vault, body.picture_ids)
+        library = request.state.library_lease
+        label = f"Upscale {body.upscale.factor:g}x"
+        batches: dict[str | None, str] = {}
+        prompts: list[dict] = []
+        try:
+            for picture_id in body.picture_ids:
+                path, upload_name = files[picture_id]
+                uploaded = _upload_image_to_comfyui(comfyui_url, path, upload_name)
+                graph = _upscale_graph(uploaded, body.upscale, model)
+                _swap_in_shelf_loaders(request, "upscale", graph, object_info)
+                stack_id = stack_for_picture(server.vault, picture_id)
+                if stack_id:
+                    _tag_for_stack(graph, stack_id, picture_id)
+                poll_kwargs = {
+                    "view_context": None,
+                    "origin_generation": library.generation,
+                    "origin_library_uuid": library.library_uuid,
+                    "run_workflow_id": None,
+                    "run_workflow_version": None,
+                    "workflow_id": None,
+                    "lora_character_ids": [],
+                    "label": label,
+                    "vram_pixels": vram_history.run_pixels(
+                        graph, [pixels_of.get(picture_id)]
+                    ),
+                }
+                prompts.append(
+                    _queue_run(
+                        comfyui_url,
+                        graph,
+                        _extract_output_node_ids(graph, {}),
+                        stack_id,
+                        picture_id,
+                        poll_kwargs,
+                        batches,
+                    )
+                )
+        except Exception as exc:
+            if not prompts:
+                raise
+            # As `run_workflow`: the ones already queued are answered, not lost.
+            logger.exception(
+                "[workflows] Upscale stopped after %d of %d pictures: %s",
+                len(prompts),
+                len(body.picture_ids),
+                exc,
+            )
+            return RunResult(
+                status="partial",
+                runs=len(prompts),
+                prompts=prompts,
+                error=str(getattr(exc, "detail", None) or exc),
+            )
+        return RunResult(status="success", runs=len(prompts), prompts=prompts)
 
     @router.get(
         "/workflows/runs/{prompt_id}",
         summary="How a run ended",
         description=(
-            "One run POST /workflows/run submitted, by the prompt_id it "
-            "answered with: running, completed (with the pictures it added) "
+            "One run POST /workflows/run submitted, by the run_id or the "
+            "prompt_id it answered with: waiting (held by PixlStash until the "
+            "GPU has room), running, completed (with the pictures it added) "
             "or failed, with the message the app shows - the node that failed "
             "and why. stopped marks a failed run that was interrupted or "
             "taken off ComfyUI's queue. Kept in memory for the most recent "
@@ -7675,6 +8356,76 @@ def create_router(server) -> APIRouter:
             )
         return outcome
 
+    @router.delete(
+        "/workflows/runs",
+        summary="Clear the finished runs",
+        description=(
+            "Forget the runs of this library that have ended, as the Tasks "
+            "tab's Finished group lists them (`GET /workers/progress`, "
+            "`finished`). A run whose changes can still be saved is kept: "
+            "only its own `DELETE /workflows/runs/{run_id}` throws them away."
+        ),
+        response_model=RunsCleared,
+    )
+    def clear_finished_runs(request: Request):
+        server.auth.ensure_secure_when_required(request)
+        return RunsCleared(
+            cleared=run_log.forget_finished(
+                _hub(), request.state.library_lease.library_uuid
+            )
+        )
+
+    @router.delete(
+        "/workflows/runs/{run_id}",
+        summary="Dismiss a finished run",
+        description=(
+            "Forget one finished run, by the `id` the Finished group lists it "
+            "under, and with it the changes its workflow kept from it, which "
+            "can then no longer be saved (each picture's recipe still holds "
+            "them). `workflow_id` names that workflow, null when the run kept "
+            "none. A run already forgotten clears nothing."
+        ),
+        response_model=RunsCleared,
+    )
+    def dismiss_run(request: Request, run_id: str):
+        server.auth.ensure_secure_when_required(request)
+        gone, workflow_id = run_log.forget(
+            _hub(), run_id, request.state.library_lease.library_uuid
+        )
+        if workflow_id is not None:
+            _announce(request, [workflow_id], "changed")
+        return RunsCleared(cleared=1 if gone else 0, workflow_id=workflow_id)
+
+    def _upload_planned(plan: Plan, picture_id: int) -> str:
+        """Upload one of ``plan.files`` to ComfyUI, answering the name it loads by.
+
+        The picture a selection is drawn on goes up with the selection's mask
+        in its alpha channel (``write_masked_picture``), never as its file.
+        """
+        path, upload_name = plan.files[picture_id]
+        masked = _masked(plan.body)
+        if not masked or picture_id != masked[0]:
+            return _upload_image_to_comfyui(plan.comfyui_url, path, upload_name)
+        with tempfile.TemporaryDirectory() as scratch:
+            with_mask = os.path.join(scratch, upload_name)
+            try:
+                write_masked_picture(plan.body.selection, path, with_mask)
+            except UNREADABLE_PICTURE as exc:
+                logger.warning(
+                    "Picture %s (%s) cannot carry a selection's mask: %s",
+                    picture_id,
+                    path,
+                    exc,
+                )
+                raise HTTPException(
+                    status_code=415,
+                    detail=(
+                        f"Picture {picture_id} cannot be read as an image, so "
+                        "a selection cannot be drawn on it."
+                    ),
+                ) from exc
+            return _upload_image_to_comfyui(plan.comfyui_url, with_mask, upload_name)
+
     def _submit_every(
         request: Request,
         plan: Plan,
@@ -7695,15 +8446,39 @@ def create_router(server) -> APIRouter:
         distinct picture once per request however many runs read it, so an
         upload that fails has queued nothing.
         """
+        masked = _masked(body)
+        # The masked picture first: it is the one upload that can be refused
+        # (a file that is not a picture), and nothing should be up before it.
+        masked_picture_id = masked[0] if masked else None
+        order = sorted(
+            plan.files, key=lambda picture_id: picture_id != masked_picture_id
+        )
         uploaded = {
-            picture_id: _upload_image_to_comfyui(comfyui_url, path, upload_name)
-            for picture_id, (path, upload_name) in plan.files.items()
+            picture_id: _upload_planned(plan, picture_id) for picture_id in order
         }
+        # How large each picture put in is: what a run's VRAM need is sized by.
+        pixels_of = read_picture_pixels(
+            server.vault,
+            sorted(
+                {
+                    picture_id
+                    for _graph, group, feeds in plan.submittable
+                    for picture_id in [
+                        *group.picture_ids,
+                        *(feed.picture_id for feed in feeds),
+                    ]
+                    if picture_id is not None
+                }
+            ),
+        )
         # Here, not in `_plan`: a preflight submits nothing, and the graphs
         # are final.
         for card, graph, swapped in plan.loader_swaps:
             _record_loader_swaps(card, graph, swapped)
         saved_over = workflow_versions.saved_over_ids(_hub())
+        # The batch each workflow's runs are, for the Tasks tab's Finished
+        # row: the first run's id, by workflow (`run_log`).
+        batches: dict[str | None, str] = {}
         # What a run nobody named is called: its workflow, as the grid shows it
         # (a generated name needs the models, `Krea 2: Text to Image`).
         names = (
@@ -7777,7 +8552,23 @@ def create_router(server) -> APIRouter:
                     picture_id = (
                         feed.picture_id if feed.picture_id is not None else selected
                     )
-                    value = str(picture_id) if feed.by_id else uploaded[picture_id]
+                    # The picture a selection is drawn on loads as an upload
+                    # even where a PixlStash loader would fetch it by id.
+                    by_id = feed.by_id and not (masked and picture_id == masked[0])
+                    if feed.by_id and not by_id:
+                        for target in feed.targets:
+                            loader = workflow_bindings.target_node(
+                                filled, target.get("path")
+                            )
+                            if loader in filled:
+                                # Same outputs in the same order: IMAGE, MASK.
+                                filled[loader] = {
+                                    **filled[loader],
+                                    "class_type": "LoadImage",
+                                    "inputs": {"image": uploaded[picture_id]},
+                                }
+                        continue
+                    value = str(picture_id) if by_id else uploaded[picture_id]
                     for target in feed.targets:
                         workflow_bindings.fill(
                             filled,
@@ -7787,72 +8578,349 @@ def create_router(server) -> APIRouter:
                         loader = workflow_bindings.target_node(
                             filled, target.get("path")
                         )
-                        if feed.by_id and loader in filled:
+                        if by_id and loader in filled:
                             # With the id and never apart from it: whose it
                             # is, for whoever reads this graph back out of
                             # the picture (`own_picture_ids`).
                             filled[loader]["inputs"][PICTURE_LOADER_LIBRARY] = (
                                 _library_uuid() or ""
                             )
+                fed_pixels = [
+                    pixels_of.get(
+                        feed.picture_id if feed.picture_id is not None else selected
+                    )
+                    for feed in feeds
+                ]
                 for _ in range(body.count):
                     instance = deepcopy(filled)
                     if body.seed_mode == "fixed":
                         apply_seeds(instance, seed_targets, body.seed)
                     elif body.seed_mode == "new":
                         apply_seeds(instance, seed_targets, None)
-                    # Under the backend's own client, so ComfyUI tells the
-                    # one listener how far the run is (`follow_run`).
-                    submitted = _submit_comfyui_prompt(
-                        comfyui_url, instance, RUN_CLIENT_ID
-                    )
-                    prompt_id = submitted.get("prompt_id") or submitted.get("id")
-                    # ComfyUI accepts a prompt when ANY output validates and
-                    # drops the rest, naming them in `node_errors`.
-                    rejected = format_prompt_rejection(
-                        {"node_errors": submitted.get("node_errors")}
-                    )
-                    if rejected:
-                        logger.warning(
-                            "[workflows] ComfyUI dropped outputs of prompt %s: %s",
-                            prompt_id,
-                            rejected,
-                        )
-                    if prompt_id:
-                        lease = request.state.library_lease
-                        # Before the thread, so a read straight after this
-                        # answer never finds the run unknown.
-                        follow_run(
-                            str(prompt_id),
-                            comfyui_url,
-                            label=label,
-                            workflow_id=group.workflow_id,
-                            library_uuid=lease.library_uuid,
-                        )
-                        threading.Thread(
-                            target=_process_comfyui_outputs,
-                            args=(
-                                server,
-                                comfyui_url,
-                                str(prompt_id),
-                                output_node_ids,
-                                stack_id,
-                                source_id,
-                            ),
-                            kwargs={
-                                "view_context": destination,
-                                "origin_generation": lease.generation,
-                                "origin_library_uuid": lease.library_uuid,
-                                "run_workflow_id": run_workflow_id,
-                                "run_workflow_version": run_workflow_version,
-                                "rejected": rejected,
-                                "workflow_id": group.workflow_id,
-                                "lora_character_ids": lora_character_ids,
-                            },
-                            daemon=True,
-                        ).start()
+                    pixels = vram_history.run_pixels(instance, fed_pixels)
+                    library = request.state.library_lease
+                    poll_kwargs = {
+                        "view_context": destination,
+                        "origin_generation": library.generation,
+                        "origin_library_uuid": library.library_uuid,
+                        "run_workflow_id": run_workflow_id,
+                        "run_workflow_version": run_workflow_version,
+                        "workflow_id": group.workflow_id,
+                        "lora_character_ids": lora_character_ids,
+                        "label": label,
+                        "vram_pixels": pixels,
+                    }
                     prompts.append(
-                        {"workflow_id": group.workflow_id, "prompt_id": prompt_id}
+                        _queue_run(
+                            comfyui_url,
+                            instance,
+                            output_node_ids,
+                            stack_id,
+                            source_id,
+                            poll_kwargs,
+                            batches,
+                        )
                     )
+
+    def _queue_run(
+        comfyui_url: str,
+        instance: dict,
+        output_node_ids,
+        stack_id,
+        source_id,
+        poll_kwargs: dict,
+        batches: dict,
+    ) -> dict:
+        """Queue one run: submitted now where the GPU has room, else held.
+
+        Answers its ``{workflow_id, run_id, prompt_id, status}``. *batches* is
+        the request's first run id by workflow, for the Tasks tab's Finished
+        row (``run_log``).
+        """
+        workflow_id = poll_kwargs["workflow_id"]
+        label = poll_kwargs["label"]
+        pixels = poll_kwargs["vram_pixels"]
+        library_uuid = poll_kwargs["origin_library_uuid"]
+        run_id = new_run_id()
+        vram_lease, model_set = _vram_lease(
+            comfyui_url, instance, workflow_id, label, run_id, pixels
+        )
+        # Before it can end: an ending settles the row it finds.
+        _log_queued(
+            run_id,
+            batches.setdefault(workflow_id, run_id),
+            workflow_id,
+            label,
+            library_uuid,
+        )
+        if vram_lease.state is LeaseState.GRANTED:
+            # The common case: room now, so submitted inline
+            # exactly as before, and ComfyUI's validation answer
+            # still reaches this response.
+            try:
+                prompt_id = _dispatch_run(
+                    comfyui_url,
+                    instance,
+                    output_node_ids,
+                    stack_id,
+                    source_id,
+                    run_id,
+                    vram_lease,
+                    model_set,
+                    poll_kwargs,
+                )
+            except BaseException as exc:
+                vram_lease.release()
+                # ComfyUI refused it (a 502 with its validation
+                # answer) or it never got there: an ending, so
+                # its Finished row is not left going forever.
+                record_run_outcome(
+                    run_id,
+                    "failed",
+                    message=str(getattr(exc, "detail", None) or exc),
+                    run_id=run_id,
+                )
+                raise
+            # None: ComfyUI took it but named no prompt, which
+            # `_dispatch_run` has recorded as the run's failure.
+            status = "queued" if prompt_id else "failed"
+        else:
+            # No room: held here, not in ComfyUI's queue, and sent
+            # once the arbiter grants it (`_dispatch_held_run`).
+            prompt_id = None
+            status = "waiting"
+            try:
+                cancel = hold_run(
+                    run_id,
+                    comfyui_url,
+                    label=label,
+                    workflow_id=workflow_id,
+                    library_uuid=library_uuid,
+                )
+                threading.Thread(
+                    target=_dispatch_held_run,
+                    args=(
+                        comfyui_url,
+                        instance,
+                        output_node_ids,
+                        stack_id,
+                        source_id,
+                        run_id,
+                        vram_lease,
+                        model_set,
+                        poll_kwargs,
+                        cancel,
+                    ),
+                    name=f"held-run-{run_id}",
+                    daemon=True,
+                ).start()
+            except BaseException as exc:
+                # As above: a waiting lease left behind keeps the card
+                # from every other tenant, and its row going forever.
+                vram_lease.release()
+                logger.exception(
+                    "[workflows] Held run %s of %s could not be parked.",
+                    run_id,
+                    workflow_id,
+                )
+                record_run_outcome(run_id, "failed", message=str(exc), run_id=run_id)
+                raise
+        return {
+            "workflow_id": workflow_id,
+            "run_id": run_id,
+            "prompt_id": prompt_id,
+            "status": status,
+        }
+
+    def _log_queued(run_id, batch_id, workflow_id, label, library_uuid) -> None:
+        """Note a run in the run log as it is queued. Never fails the run: the
+        whole cost is its Finished row, which is logged."""
+        try:
+            run_log.queued(
+                _hub(),
+                run_id,
+                batch_id,
+                workflow_id,
+                label or RUN_LABEL_FALLBACK,
+                library_uuid,
+            )
+        except Exception:
+            logger.exception(
+                "[workflows] Run %s of %s could not be noted in the run log, so "
+                "the Tasks tab will not list it under Finished.",
+                run_id,
+                workflow_id,
+            )
+
+    def _vram_lease(
+        comfyui_url: str,
+        graph: dict,
+        workflow_id: str | None,
+        label,
+        run_id: str,
+        pixels: int | None,
+    ):
+        """Ask the VRAM arbiter for one run's memory; ``(lease, model_set)``.
+
+        A workflow that runs alone asks for the card to itself. One measured
+        before at about this run's image size (*pixels*) asks for the largest
+        of those newest peaks with headroom; one never measured there keeps
+        the other heavy tenants off the card without asking anyone to free
+        memory (D2), and is measured by this run.
+        """
+        hub = _hub()
+        model_set = vram_history.model_set_of(graph)
+        runs_alone = vram_history.policy(hub, workflow_id) is not None
+        need = vram_history.need_mb(hub, workflow_id, model_set, pixels)
+        comfyui_tenant.probe(RUN_CLIENT_ID, comfyui_url)
+        name = f"ComfyUI '{label}'" if label else "ComfyUI run"
+        lease = arbiter().request(
+            Tenant.COMFYUI,
+            name,
+            need_mb=need or 0,
+            kind=LeaseKind.EXCLUSIVE if runs_alone else LeaseKind.HEAVY,
+            alone=need is None and not runs_alone,
+            run_id=run_id,
+            workflow_id=workflow_id,
+        )
+        if lease.state is LeaseState.WAITING:
+            logger.info(
+                "[workflows] Run %s of %s waits for the GPU: %s",
+                run_id,
+                workflow_id,
+                (lease.waiting_reason or {}).get("text"),
+            )
+        return lease, model_set
+
+    def _dispatch_run(
+        comfyui_url: str,
+        instance: dict,
+        output_node_ids,
+        stack_id,
+        source_id,
+        run_id: str,
+        vram_lease,
+        model_set: str,
+        poll_kwargs: dict,
+    ) -> str | None:
+        """Submit one run to ComfyUI and follow it; its prompt id.
+
+        Raises what ``_submit_comfyui_prompt`` raises: a 502 carrying
+        ComfyUI's validation answer.
+        """
+        # Under the backend's own client, so ComfyUI tells the one listener
+        # how far the run is (`follow_run`).
+        submitted = _submit_comfyui_prompt(comfyui_url, instance, RUN_CLIENT_ID)
+        prompt_id = submitted.get("prompt_id") or submitted.get("id")
+        # ComfyUI accepts a prompt when ANY output validates and drops the
+        # rest, naming them in `node_errors`.
+        rejected = format_prompt_rejection(
+            {"node_errors": submitted.get("node_errors")}
+        )
+        if rejected:
+            logger.warning(
+                "[workflows] ComfyUI dropped outputs of prompt %s: %s",
+                prompt_id,
+                rejected,
+            )
+        if not prompt_id:
+            vram_lease.release()
+            logger.warning(
+                "[workflows] ComfyUI accepted run %s but named no prompt: %s",
+                run_id,
+                submitted,
+            )
+            # Keyed by the run id: there is no prompt id to key it by.
+            record_run_outcome(
+                prompt_id=run_id,
+                status="failed",
+                message="ComfyUI accepted the run but did not say which it was.",
+                run_id=run_id,
+            )
+            return None
+        # Before the thread, so a read straight after this answer never finds
+        # the run unknown.
+        follow_run(
+            str(prompt_id),
+            comfyui_url,
+            label=poll_kwargs["label"],
+            workflow_id=poll_kwargs["workflow_id"],
+            library_uuid=poll_kwargs["origin_library_uuid"],
+            run_id=run_id,
+        )
+        threading.Thread(
+            target=_process_comfyui_outputs,
+            args=(
+                server,
+                comfyui_url,
+                str(prompt_id),
+                output_node_ids,
+                stack_id,
+                source_id,
+            ),
+            kwargs={
+                **poll_kwargs,
+                "rejected": rejected,
+                "vram_lease": vram_lease,
+                "vram_model_set": model_set,
+            },
+            daemon=True,
+        ).start()
+        return str(prompt_id)
+
+    def _dispatch_held_run(
+        comfyui_url: str,
+        instance: dict,
+        output_node_ids,
+        stack_id,
+        source_id,
+        run_id: str,
+        vram_lease,
+        model_set: str,
+        poll_kwargs: dict,
+        cancel: threading.Event,
+    ) -> None:
+        """Wait for a held run's lease, then submit it as ``_dispatch_run`` does.
+
+        A run cancelled meanwhile (an abort, the lease's cancel) is never sent.
+        ComfyUI refusing the graph now becomes the run's failure, with
+        ComfyUI's own words, since the request that asked for it has long been
+        answered.
+        """
+        try:
+            granted = vram_lease.wait(cancel)
+            if not granted or not claim_held_run(run_id):
+                logger.info(
+                    "[workflows] Held run %s was cancelled before it started", run_id
+                )
+                vram_lease.release()
+                return
+            _dispatch_run(
+                comfyui_url,
+                instance,
+                output_node_ids,
+                stack_id,
+                source_id,
+                run_id,
+                vram_lease,
+                model_set,
+                poll_kwargs,
+            )
+        except Exception as exc:
+            vram_lease.release()
+            message = str(getattr(exc, "detail", None) or exc)
+            logger.warning(
+                "[workflows] Held run %s could not be submitted once it had room: %s",
+                run_id,
+                message,
+                exc_info=not isinstance(exc, HTTPException),
+            )
+            record_run_outcome(run_id, "failed", message=message, run_id=run_id)
+            announce = getattr(server, "vault", None)
+            if announce is not None:
+                _emit_comfyui_failure_progress(
+                    server, run_id, message, workflow_id=poll_kwargs["workflow_id"]
+                )
 
     def _keep_seeds_of(
         graph: dict, targets: list[dict], picture_id: int, object_info: dict | None
@@ -7983,6 +9051,7 @@ def create_router(server) -> APIRouter:
         object_info: dict | None = None,
         comfyui_url: str | None = None,
         workflow_id: str | None = None,
+        version: int | None = None,
     ):
         """One card's runnable graph, or the 409 that says why there is none.
 
@@ -7992,7 +9061,8 @@ def create_router(server) -> APIRouter:
         answered. One that does not need it passes *comfyui_url* instead, read
         (cached) only when there is an editor graph to convert. *workflow_id*
         is the workflow the card is the base of, so the graph saved over that
-        workflow is the one read.
+        workflow is the one read; *version* reads that version of it instead
+        of the current one, and is the 404 of a version it does not keep.
 
         ``RecursionError`` is caught here rather than at each gesture because
         all three resolve through this one function and share the exposure: an
@@ -8004,7 +9074,7 @@ def create_router(server) -> APIRouter:
         """
         try:
             source, reason = _source_graph_for(
-                card, object_info, comfyui_url, workflow_id=workflow_id
+                card, object_info, comfyui_url, workflow_id=workflow_id, version=version
             )
         except RecursionError as exc:
             logger.warning(
@@ -8024,7 +9094,21 @@ def create_router(server) -> APIRouter:
                 status_code=409,
                 detail=_no_graph_sentence(reason.as_dict() if reason else None),
             )
+        _require_version_read(source, version)
         return source
+
+    def _require_version_read(source, version: int | None) -> None:
+        """The 404 of a *version* the graph was not read at.
+
+        A version the workflow no longer keeps (pruned), or one whose document
+        will not read, is answered by its current graph
+        (:func:`_source_graph_for`), which a gesture on that version must not
+        act on in its place.
+        """
+        if version is not None and source.workflow_version != version:
+            raise HTTPException(
+                status_code=404, detail="This workflow keeps no such version."
+            )
 
     def _file_stem(card, name: str | None = None) -> str:
         """What a file written for this workflow should be called, without .json.
@@ -8185,13 +9269,22 @@ def create_router(server) -> APIRouter:
             source=source.origin,
         )
 
-    def _opening_graph(request: Request, workflow, *, waiting: bool, all_stages: bool):
+    def _opening_graph(
+        request: Request,
+        workflow,
+        *,
+        waiting: bool,
+        all_stages: bool,
+        version: int | None = None,
+    ):
         """The graph *Open in ComfyUI* answers for *workflow*, and what it was
         built from: ``(graph, source, card, waiting_applied, object_info)``.
 
         ``GET …/graph``'s whole reading, apart from the route so a save from
         ComfyUI can ask what the workflow will open as next
-        (:func:`_keep_layout`). Raises the route's own 409s.
+        (:func:`_keep_layout`). *version* builds it on that version of the
+        workflow's graph, under the default recipe it had then. Raises the
+        route's own 409s.
         """
         hub = _hub()
         unsaved = WorkflowChanges()
@@ -8212,7 +9305,7 @@ def create_router(server) -> APIRouter:
             asked = asked.model_copy(
                 update={"skip_stages": [], "keep_stages": list(get_args(Stage))}
             )
-        plan, graph, source, card = _graph_to_open(request, asked)
+        plan, graph, source, card = _graph_to_open(request, asked, version)
         # The seed is a parameter like any other, and the default recipe's is
         # already applied. A stored recipe keeps none by design, and
         # `resolve_references` stands a 0 in for each null it had: those get a
@@ -8230,7 +9323,7 @@ def create_router(server) -> APIRouter:
             apply_seeds(graph, placeholders, None)
         return graph, source, card, unsaved.count() > 0, plan.object_info
 
-    def _graph_to_open(request: Request, asked: RunRequest):
+    def _graph_to_open(request: Request, asked: RunRequest, version: int | None = None):
         """``(plan, graph, source, card)``: the one graph *asked* opens in ComfyUI.
 
         Run's own plan with none of Run's workarounds (``_plan``'s
@@ -8243,7 +9336,7 @@ def create_router(server) -> APIRouter:
         # `RecursionError` for `_card_source`'s reason: the source graph came
         # out of a picture from somewhere else, so its depth is not ours to trust.
         try:
-            plan = _plan(request, asked, opening=True)
+            plan = _plan(request, asked, opening=True, version=version)
         except RecursionError as exc:
             logger.warning(
                 "Workflow %s has a source graph too deeply nested to read: %s",
@@ -8648,6 +9741,7 @@ def create_router(server) -> APIRouter:
             and _holds_class(graph, "LoadImage")
             else None,
             library_uuid=_library_uuid(),
+            keep_loaders=_masked_loaders(graph),
             checkpoint_id=_shelf_checkpoint(hub) if by_row else None,
             shelf_uuid=("trial" if trial else shelf_uuid(hub)) if by_row else None,
             controlnet_digest=_shelf_digest(hub, FILE_CONTROLNET),
@@ -8926,12 +10020,23 @@ def create_router(server) -> APIRouter:
             picture_id = feed.picture_id if feed.picture_id is not None else first
             if picture_id is None:
                 continue
-            if not feed.by_id and picture_id not in uploaded:
-                path, upload_name = plan.files[picture_id]
-                uploaded[picture_id] = _upload_image_to_comfyui(
-                    plan.comfyui_url, path, upload_name
-                )
-            value = str(picture_id) if feed.by_id else uploaded[picture_id]
+            # The picture a selection is drawn on is never fetched by id: the
+            # mask rides in the upload (`_upload_files`), as on a run.
+            masked = _masked(plan.body)
+            by_id = feed.by_id and not (masked and picture_id == masked[0])
+            if not by_id and picture_id not in uploaded:
+                uploaded[picture_id] = _upload_planned(plan, picture_id)
+            if feed.by_id and not by_id:
+                for target in feed.targets:
+                    node_id = workflow_bindings.target_node(graph, target.get("path"))
+                    if node_id in graph:
+                        graph[node_id] = {
+                            **graph[node_id],
+                            "class_type": "LoadImage",
+                            "inputs": {"image": uploaded[picture_id]},
+                        }
+                continue
+            value = str(picture_id) if by_id else uploaded[picture_id]
             for target in feed.targets:
                 workflow_bindings.fill(
                     graph,
@@ -9066,6 +10171,15 @@ def create_router(server) -> APIRouter:
                 "parameters do not apply to it. 404 once it is no longer held."
             ),
         ),
+        drafts: bool = Query(
+            False,
+            description=(
+                "The caller can open a draft (#2000): a workflow made from a "
+                "ComfyUI template with no API graph yet is answered as "
+                "`draft` with its editor document, where it is otherwise a "
+                "409 saying what it is."
+            ),
+        ),
     ):
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
@@ -9081,9 +10195,17 @@ def create_router(server) -> APIRouter:
                     ),
                 )
             return held
-        graph, source, card, waiting_applied, object_info = _opening_graph(
-            request, workflow, waiting=waiting, all_stages=all_stages
-        )
+        try:
+            graph, source, card, waiting_applied, object_info = _opening_graph(
+                request, workflow, waiting=waiting, all_stages=all_stages
+            )
+        except HTTPException as exc:
+            # Asked after the read, not before: a draft PixlStash can convert
+            # now (a pack installed since) stores the conversion on that read
+            # and opens as any workflow does.
+            if exc.status_code != 409 or not is_draft(hub, workflow.workflow_id):
+                raise
+            return _draft_opening(hub, workflow, drafts, exc)
         # A layout kept from before workflows opened with ComfyUI-PixlStash
         # nodes was matched on the workflow's own classes: still that layout,
         # so the graph is read for it as it was before the swap too.
@@ -9119,6 +10241,41 @@ def create_router(server) -> APIRouter:
             ),
         )
 
+    def _draft_opening(hub, workflow, drafts: bool, refusal: HTTPException):
+        """``GET …/graph``'s answer for a draft: its editor document, or a 409.
+
+        Only a caller that says it can open one (``drafts``, the
+        ComfyUI-PixlStash node from #2000 on) gets the document: an older
+        node, the MCP server and every other reader of an API graph get a 409
+        that says what the workflow is and what finishes it.
+        """
+        if not drafts:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This workflow is a draft made from a ComfyUI template, "
+                    "and has no graph PixlStash can run yet. Open it in "
+                    "ComfyUI from PixlStash and save it there (this needs "
+                    "an up-to-date ComfyUI-PixlStash node). "
+                    f"{refusal.detail}"
+                ),
+            ) from refusal
+        document, version = manual_document_and_version(hub, workflow.workflow_id)
+        if document is None or api_graph(document) is not None:
+            raise refusal
+        logger.info(
+            "[workflows] Draft %s opens in ComfyUI as its template.",
+            workflow.workflow_id,
+        )
+        return WorkflowRunnableGraph(
+            name=download_stem(workflow.name or "") or "PixlStash workflow",
+            workflow=None,
+            draft=True,
+            source=None,
+            version=version,
+            editor=document,
+        )
+
     @router.post(
         "/workflows/{workflow_id}/duplicate",
         summary="Duplicate a workflow",
@@ -9126,12 +10283,14 @@ def create_router(server) -> APIRouter:
             "Write this workflow into the user's workflow folder under a free "
             "name, so it can be opened and changed in ComfyUI without touching "
             "the original. A workflow the library only knows from its pictures "
-            "gets a file this way for the first time."
+            "gets a file this way for the first time. With `version`, that "
+            "version of its graph is copied instead of the current one, and "
+            "the workflow stays on the version it has."
         ),
         response_model=WorkflowFile,
         status_code=201,
         responses={
-            404: {"description": "This machine has no such card."},
+            404: {"description": "This machine has no such card, or version."},
             409: {"description": "There is no graph to duplicate."},
             413: {
                 "description": "The graph is past the size a stored workflow may be."
@@ -9139,7 +10298,19 @@ def create_router(server) -> APIRouter:
             500: {"description": "The copy could not be written."},
         },
     )
-    def duplicate_workflow(request: Request, workflow_id: str):
+    def duplicate_workflow(
+        request: Request,
+        workflow_id: str,
+        version: int | None = Query(
+            None,
+            ge=1,
+            le=MAX_VERSION_NUMBER,
+            description=(
+                "Copy this version of the workflow's graph "
+                "(`GET …/versions`), not the current one (#1792)."
+            ),
+        ),
+    ):
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
         workflow, card = _require_base(hub, workflow_id)
@@ -9147,12 +10318,14 @@ def create_router(server) -> APIRouter:
             card,
             workflow_id=workflow.workflow_id,
             comfyui_url=_comfyui_url(_user(request)),
+            version=version,
         )
         # Unscrubbed on purpose: this file stays on the owner's machine and is
         # meant to RUN, and a copy with its models blanked would not.
         name, landed = _store_copy(
             hub,
-            f"{_file_stem(card, workflow.name)} (copy)",
+            f"{_file_stem(card, workflow.name)} "
+            + (f"(version {version})" if version is not None else "(copy)"),
             source.graph,
             source.bindings,
             "duplicate",
@@ -9773,12 +10946,23 @@ def create_router(server) -> APIRouter:
         """*base_model* as two spellings of one base model compare, or None."""
         return (base_model or "").strip().casefold() or None
 
+    def _checkpoint_verdict(base_model: str | None, wanted: str | None) -> str | None:
+        """How a checkpoint of *base_model* fits in place of one of *wanted*."""
+        if wanted is None:
+            return None
+        if _base_key(base_model) is None:
+            return "unknown"
+        if _base_key(base_model) == _base_key(wanted):
+            return "likely"
+        family = family_of(base_model)
+        return "maybe" if family and family == family_of(wanted) else "unlikely"
+
     def _replaced_base_model(
         graph: dict, models: dict[int, SwapModel], index: tuple, wanted: str
     ) -> str | None:
-        """The base model a checkpoint replacing *wanted* should share (``_base_key``).
+        """The base model a checkpoint replacing *wanted* should share, as labelled.
 
-        The shelf's own for the file, where the shelf still holds it; else the
+        Compared through ``_base_key``. The shelf's own for the file, where the shelf still holds it; else the
         one base model the graph's LoRAs and ControlNets agree on, since they
         are what a replacement of another base model would not match, when the
         graph loads only this one base model. None when neither says, or they
@@ -9797,18 +10981,21 @@ def create_router(server) -> APIRouter:
             None,
         )
         if _base_key(own):
-            return _base_key(own)
+            return own.strip()
         if sum(slot.kind in BASE_MODEL_KINDS for slot in slots) > 1:
             # ponytail: which LoRAs feed which base model is the lane walk's
             # (`lora-chain`); a graph with two says nothing here instead.
             return None
+        # One spelling per base model, keyed as two spellings compare.
         adapters = {
-            _base_key(slot.model.base_model)
+            _base_key(slot.model.base_model): slot.model.base_model.strip()
             for slot in slots
-            if slot.kind in ("lora", "controlnet") and slot.model is not None
-        } - {None}
+            if slot.kind in ("lora", "controlnet")
+            and slot.model is not None
+            and _base_key(slot.model.base_model)
+        }
         if len(adapters) == 1:
-            return adapters.pop()
+            return next(iter(adapters.values()))
         if adapters:
             logger.info(
                 "Offering every checkpoint in place of %s: its LoRAs and "
@@ -9827,7 +11014,8 @@ def create_router(server) -> APIRouter:
         replacing: str,
         kind: str | None,
         cached: bool = False,
-    ) -> tuple[list[ModelFixCandidate], str | None, bool | None]:
+        grouped: bool = False,
+    ) -> tuple[list[ModelFixCandidate], str | None, bool | None, str | None]:
         """What the Workflow tab may offer in place of *replacing*.
 
         Read off the graph a run submits, with the owner's fixes applied, so a
@@ -9846,7 +11034,9 @@ def create_router(server) -> APIRouter:
           instead, as when nothing says which it was, and the answer says it
           is not narrowed. A missing checkpoint with nothing to pick is a
           dead end, and the base model of a file that is gone is often a
-          guess off its LoRAs that the owner cannot correct.
+          guess off its LoRAs that the owner cannot correct. With *grouped*
+          every loadable one is offered regardless, each with its
+          ``verdict``, for a picker that files them under headings.
         * **The loader can load it**: listed by every loader naming the file,
           by the rule the rewrite writes it with (:func:`listed_as`), when
           ComfyUI answers; of the same file type when it cannot be asked. A
@@ -9864,9 +11054,10 @@ def create_router(server) -> APIRouter:
         the pick the Workflow tab makes of it.
 
         Returns:
-            ``(candidates, reason, narrowed)``, *reason* set only when there
-            are none, *narrowed* whether a checkpoint's were held to a base
-            model (None for any other kind).
+            ``(candidates, reason, narrowed, base_model)``, *reason* set only
+            when there are none, *narrowed* whether a checkpoint's were held
+            to a base model (None for any other kind), *base_model* the label
+            a checkpoint's verdicts were read against.
 
         Raises:
             HTTPException: 409 when the graph loads *replacing* in no slot a
@@ -9932,10 +11123,15 @@ def create_router(server) -> APIRouter:
                 key=lambda m: (m.display_name or m.filename).lower(),
             )
             for m in shelf:
-                same = base_model is None or _base_key(m.base_model) == base_model
+                verdict = _checkpoint_verdict(m.base_model, base_model)
+                same = grouped or verdict in (None, "likely")
                 (candidates if same else wider).append(
                     ModelFixCandidate(
-                        id=m.id, filename=m.filename, display_name=m.display_name
+                        id=m.id,
+                        filename=m.filename,
+                        display_name=m.display_name,
+                        base_model=m.base_model,
+                        verdict=verdict,
                     )
                 )
         else:
@@ -9961,12 +11157,13 @@ def create_router(server) -> APIRouter:
                         filename=entry["filename"],
                         display_name=entry["display_name"],
                         via=entry["via"],
+                        verdict=_VIA_VERDICTS.get(entry["via"]),
                     )
                     for entry in propose_companions(_hub(), base.id, index)[kind]
                     if entry["id"] not in hidden
                 ]
             elif likely is None:
-                return [], "no_checkpoint", None
+                return [], "no_checkpoint", None, None
         if likely is not None:
             # First, whatever else says it goes with the workflow: the file
             # the graph asks for, renamed, is the likeliest of all.
@@ -9978,6 +11175,15 @@ def create_router(server) -> APIRouter:
                         id=likely.id,
                         filename=likely.filename,
                         display_name=likely.display_name,
+                        base_model=likely.base_model
+                        if kind == FILE_CHECKPOINT
+                        else None,
+                        # Named like the missing file: a companion's likeliest.
+                        verdict=(
+                            _checkpoint_verdict(likely.base_model, base_model)
+                            if kind == FILE_CHECKPOINT
+                            else "likely"
+                        ),
                     )
                 ).model_copy(update={"likely": True}),
                 *(c for c in candidates if c.id != likely.id),
@@ -9988,7 +11194,7 @@ def create_router(server) -> APIRouter:
         ]
         narrowed = base_model is not None if kind == FILE_CHECKPOINT else None
         if not candidates and not wider:
-            return [], "none_go_with_it", narrowed
+            return [], "none_go_with_it", narrowed, base_model
         if cached:
             # The inspector's ask, once per model row of every workflow it
             # selects: what each loader lists comes from the map already
@@ -10061,8 +11267,13 @@ def create_router(server) -> APIRouter:
             return candidates
 
         found = loadable(candidates, object_info)
+        if grouped and narrowed:
+            # Nothing was held back, so narrowed says whether it would be.
+            # The likely name match is offered ungrouped whatever its base
+            # model, so it counts here too.
+            narrowed = any(c.verdict == "likely" or c.likely for c in found)
         if found:
-            return found, None, narrowed
+            return found, None, narrowed, base_model
         if wider:
             logger.info(
                 "No loadable checkpoint of base model %s to replace %s with: "
@@ -10073,15 +11284,15 @@ def create_router(server) -> APIRouter:
             candidates, narrowed = wider, False
             found = loadable(candidates, object_info, log=False)
             if found:
-                return found, None, narrowed
+                return found, None, narrowed, base_model
         pack = [cls for cls, _widgets in run_service.PIXLSTASH_SWAP_LOADERS.values()]
         if object_info is not None and any(cls not in object_info for cls in pack):
             # Would installing ComfyUI-PixlStash make one loadable in EVERY
             # loader naming the file? Asked by the same filter, pack declared.
             with_pack = {**{cls: {} for cls in pack}, **object_info}
             if loadable(candidates, with_pack, log=False):
-                return [], "needs_pixlstash_nodes", narrowed
-        return [], "none_loadable", narrowed
+                return [], "needs_pixlstash_nodes", narrowed, base_model
+        return [], "none_loadable", narrowed, base_model
 
     @router.get(
         "/workflows/{workflow_id}/model-swap",
@@ -10114,6 +11325,15 @@ def create_router(server) -> APIRouter:
                 "With replacing: read what each loader lists from ComfyUI's "
                 "object_info as last read, up to a minute ago, instead of "
                 "reading it again. For a screen that asks on every selection."
+            ),
+        ),
+        grouped: bool = Query(
+            False,
+            description=(
+                "With replacing a checkpoint: offer every checkpoint the "
+                "loader can load, each with its `verdict`, rather than only "
+                "those of the missing one's base model. For a picker that "
+                "files them under headings."
             ),
         ),
     ):
@@ -10156,6 +11376,7 @@ def create_router(server) -> APIRouter:
                 options.replacements,
                 options.replacements_reason,
                 options.replacements_narrowed,
+                options.replacing_base_model,
             ) = _fix_replacements(
                 request,
                 card,
@@ -10165,6 +11386,7 @@ def create_router(server) -> APIRouter:
                 replacing,
                 slot_kind,
                 cached=cached,
+                grouped=grouped,
             )
             if slot_kind in OFFERED_KINDS and not any(
                 c.likely for c in options.replacements or []
@@ -10487,8 +11709,10 @@ def create_router(server) -> APIRouter:
             bases_found[0] if bases_found else None,
         )
         old_base = (
-            _replaced_base_model(
-                graph, models, index, normalized_filename(base.filename)
+            _base_key(
+                _replaced_base_model(
+                    graph, models, index, normalized_filename(base.filename)
+                )
             )
             if base is not None
             else None
@@ -11078,7 +12302,9 @@ def create_router(server) -> APIRouter:
             values=changes.values,
         )
 
-    def _keep_run_changes(asked: RunRequest, groups: list[RunGroup]) -> None:
+    def _keep_run_changes(
+        asked: RunRequest, groups: list[RunGroup], prompts: list[dict]
+    ) -> None:
         """Keep what a run of a workflow changed, so it can still be saved.
 
         Until the next run of that workflow, or a save: a run that changed
@@ -11104,6 +12330,10 @@ def create_router(server) -> APIRouter:
         workflow, not a set of changes to it: it keeps none, and it is still
         the next run of each workflow in *groups*, so what an earlier run
         kept for one goes.
+
+        The set names the batch of runs it was made with (``RAN_BY``, the
+        first of *prompts* of the workflow), so the Tasks tab's Finished row
+        of that batch is the one that offers it (#2050).
         """
         hub = _hub()
         if asked.workflow_id is None:
@@ -11221,6 +12451,14 @@ def create_router(server) -> APIRouter:
                     WAITED: seen.model_dump()
                     if seen is not None and not stale
                     else None,
+                    RAN_BY: next(
+                        (
+                            p["run_id"]
+                            for p in prompts
+                            if p["workflow_id"] == asked.workflow_id
+                        ),
+                        None,
+                    ),
                 }
                 if changes.count()
                 else None,
@@ -12114,6 +13352,65 @@ def create_router(server) -> APIRouter:
         _announce(request, [workflow_id], "changed")
         return _versions_of(hub, workflow_id)
 
+    @router.post(
+        "/workflows/{workflow_id}/versions/{version}/opening",
+        summary="Hold an earlier version of a workflow for ComfyUI to open",
+        description=(
+            "*Open in ComfyUI* on one version of this workflow, without going "
+            "back to it (#1792): that version's graph, built as `GET "
+            "…/graph?pixlstash_nodes=true` builds the current one, under the "
+            "default recipe the workflow had then and without the changes "
+            "waiting on it, held for a few minutes as `POST "
+            "/workflows/run/opening` holds a run's. `opening` is what `GET "
+            "…/graph?run=` answers it for. Nothing is stored. The "
+            "ComfyUI-PixlStash node sends what ComfyUI saves from a held "
+            "graph back as a new workflow (`PUT …/graph` with `as_new`), as "
+            "for a run's, so the workflow stays on the version it has."
+        ),
+        response_model=RunOpening,
+        responses={
+            404: {"description": "No such workflow, or it keeps no such version."},
+            409: {"description": "There is no graph for that version."},
+        },
+    )
+    def hold_version_opening(
+        request: Request,
+        workflow_id: str,
+        version: int = Path(ge=1, le=MAX_VERSION_NUMBER),
+    ):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        workflow, _ = _require_base(hub, workflow_id)
+        graph, source, card, _waiting, object_info = _opening_graph(
+            request, workflow, waiting=False, all_stages=False, version=version
+        )
+        _require_version_read(source, version)
+        own_nodes = deepcopy(graph)
+        _with_pack_nodes(
+            request, workflow.workflow_id, graph, source.bindings, object_info
+        )
+        opening = _hold_run_opening(
+            workflow.workflow_id,
+            WorkflowRunnableGraph(
+                name=f"{_file_stem(card, workflow.name)} (version {version})",
+                workflow=graph,
+                source=source.origin,
+                seedless=False,
+                forgotten=source.forgotten,
+                version=source.workflow_version,
+                editor=_layout_for(hub, workflow.workflow_id, graph, own_nodes),
+                people_loader=_people_loader_place(
+                    workflow.workflow_id, graph, object_info
+                ),
+            ),
+        )
+        logger.info(
+            "[workflows] Version %d of %s is held for ComfyUI to open.",
+            version,
+            workflow.workflow_id,
+        )
+        return RunOpening(opening=opening, workflow_id=workflow.workflow_id)
+
     # ── A whole graph saved over a workflow ─────────────────────────────────
 
     def _keep_stored_secrets(graph: dict, stored: dict) -> None:
@@ -12563,6 +13860,8 @@ def create_router(server) -> APIRouter:
         # Cached: only a bypass and the installed check ask it, and a save
         # from ComfyUI's own page arrives often.
         object_info = _owner_object_info()
+        if not payload.as_new and is_draft(hub, workflow_id):
+            return _finish_draft(request, workflow, payload, source, object_info)
         before = _card_source(card, workflow_id=workflow_id, object_info=object_info)
         recipe = _defaults(hub, workflow_id)
         # What waited, where the graph was read with it applied: its stages
@@ -12820,6 +14119,56 @@ def create_router(server) -> APIRouter:
                 for d, now in changed
             ],
             not_saved=not_saved,
+        )
+
+    def _finish_draft(
+        request: Request, workflow, payload, source: str, object_info
+    ) -> WorkflowGraphSaved:
+        """Store ComfyUI's graph of a draft as its next version (#2000).
+
+        A draft has no graph of its own, so nothing here compares with one:
+        no base model can be dropped (rule 2 is about a workflow that ran),
+        and no prompt, seed or parameter is held back. What a save always
+        does still holds: a person's LoRA is left out and the empty loader
+        for people comes off, and `editor` is kept as the layout. The version
+        this makes holds an API graph, which ends the draft.
+        """
+        hub = _hub()
+        workflow_id = workflow.workflow_id
+        graph = deepcopy(api_graph(payload.workflow))
+        left_out = _left_out_people(hub, graph, object_info)
+        run_service.take_out_empty_adapter_loaders(graph)
+        _document, current = manual_document_and_version(hub, workflow_id)
+
+        def also(conn, _made: int) -> None:
+            if payload.opening and source == workflow_versions.FROM_COMFYUI:
+                conn.execute(
+                    "UPDATE workflow_version SET opening = ? WHERE workflow_id = ? "
+                    "AND version = (SELECT MAX(version) FROM workflow_version "
+                    "WHERE workflow_id = ?)",
+                    (payload.opening, workflow_id, workflow_id),
+                )
+
+        version = _store_over(
+            hub,
+            workflow,
+            graph,
+            None,
+            source,
+            current,
+            original=graph,
+            also=also,
+            changed="This workflow got a newer version while the graph was being stored.",
+        )
+        logger.info(
+            "[workflows] Draft %s was saved from ComfyUI as version %s; it runs now.",
+            workflow_id,
+            version,
+        )
+        _announce(request, [workflow_id], "changed")
+        _keep_layout(workflow_id, payload.editor, graph, left_out)
+        return WorkflowGraphSaved(
+            workflow_id=workflow_id, version=version, left_out=left_out
         )
 
     # ── Who fits a workflow ─────────────────────────────────────────────────

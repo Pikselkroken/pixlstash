@@ -58,8 +58,12 @@ import { useFolderMappingStore } from "./useFolderMappingStore";
 import { useModelMovesStore } from "./useModelMovesStore";
 import { useMovesStore } from "./useMovesStore";
 import { useWorkflowsStore } from "./useWorkflowsStore";
+import { useWorkflowTemplatesStore } from "./useWorkflowTemplatesStore";
 import { useRunDialogStore } from "./useRunDialogStore";
 import { useFilterStore } from "./useFilterStore";
+import { useFavouritesStore } from "./useFavouritesStore";
+import { useUpscaleStore } from "./useUpscaleStore";
+import { useNewBatchStore } from "./useNewBatchStore";
 
 /**
  * The matrix. One row per store that holds server-sourced data: how to fill it
@@ -152,6 +156,24 @@ const STORES = [
       s.selectedKeys.length === 0,
   },
   {
+    // #2000, the Templates tab: what the owner's ComfyUI serves, its address,
+    // and which model files the owner's shelf holds. Owner-only, so none of
+    // it survives a credential change.
+    name: "useWorkflowTemplatesStore",
+    use: useWorkflowTemplatesStore,
+    seed: (s) => {
+      s.templates = [{ key: "default/x", files: [{ name: "a", present: true }] }];
+      s.comfyuiUrl = "http://127.0.0.1:8188";
+      s.loaded = true;
+      s.selectedKeys = ["default/x"];
+    },
+    isEmpty: (s) =>
+      s.templates.length === 0 &&
+      !s.loaded &&
+      s.comfyuiUrl === "" &&
+      s.selectedKeys.length === 0,
+  },
+  {
     // Filter form state otherwise, but it also carries the owner's ComfyUI
     // address, which a share token's session cannot re-read to overwrite.
     name: "useFilterStore",
@@ -172,6 +194,40 @@ const STORES = [
       s.context = { character_id: 3 };
     },
     isEmpty: (s) => !s.source && !s.makeMore && !s.context.character_id,
+  },
+  {
+    // Upscale… (#1868): the shelf's upscalers, and the pictures its dialog
+    // was opened on.
+    name: "useUpscaleStore",
+    use: useUpscaleStore,
+    seed: (s) => {
+      s.models = [{ sha256: "a".repeat(64), name: "4x-UltraSharp" }];
+      s.openFor([11, 12]);
+    },
+    isEmpty: (s) => s.models === null && s.pictureIds === null,
+  },
+  {
+    // The last run's pictures, marked New on the grid (#1868).
+    name: "useNewBatchStore",
+    use: useNewBatchStore,
+    seed: (s) => {
+      s.ids = new Set([11, 12]);
+    },
+    isEmpty: (s) => !s.isNew(11) && !s.isNew(12),
+  },
+  {
+    // Owner-only hub rows: the next credential may be a share token that
+    // must not learn which models and workflows the owner favours.
+    name: "useFavouritesStore",
+    use: useFavouritesStore,
+    seed: (s) => {
+      s.keys = { model: ["abc"], workflow: ["wf-1"], set: ["hand:2"] };
+      s.loaded = true;
+    },
+    isEmpty: (s) =>
+      !s.isFavourite("model", "abc") &&
+      !s.isFavourite("workflow", "wf-1") &&
+      s.loaded === false,
   },
   {
     name: "useLockedSetsStore",

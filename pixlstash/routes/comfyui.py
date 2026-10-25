@@ -3,6 +3,7 @@ import hashlib
 import json
 import math
 import os
+import sqlite3
 import threading
 import time
 import uuid
@@ -10,15 +11,21 @@ from collections import Counter
 from copy import deepcopy
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
+from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 from send2trash import TrashPermissionError, send2trash
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pixlstash.db_models import (
     Picture,
 )
-from pixlstash.hub import workflow_cards, workflow_origin, workflow_versions
+from pixlstash.hub import (
+    workflow_cards,
+    workflow_origin,
+    workflow_thumbnails,
+    workflow_versions,
+)
 from pixlstash.hub.workflow_card_reads import (
     find_workflow,
     manual_documents_holding,
@@ -121,7 +128,14 @@ from pixlstash.services.comfyui_service import (
     pixlstash_node_refusals,
     swap_pixlstash_savers,
 )
-from pixlstash.services import comfyui_link_service, comfyui_pack_service
+from pixlstash.services import (
+    comfyui_link_service,
+    comfyui_pack_service,
+    comfyui_templates,
+    node_pack_install_service,
+)
+from pixlstash.services.model_downloads import download_source
+from pixlstash.services.model_icons import IconRefused, store_icon
 from pixlstash.services.workflow_library_service import read_library_ids
 
 # Re-exported so existing call sites and tests that import these helpers from
@@ -152,18 +166,17 @@ PLACEHOLDER_CAPTION = "{{caption}}"
 DEFAULT_COMFYUI_URL = "http://127.0.0.1:8188/"
 
 
-def _workflow_builtin_dir() -> str:
-    return os.path.abspath(
-        os.path.join(
-            os.path.dirname(__file__), "..", "data", "comfyui-workflows", "built-in"
-        )
+WORKFLOW_BUILTIN_DIR = os.path.abspath(
+    os.path.join(
+        os.path.dirname(__file__), "..", "data", "comfyui-workflows", "built-in"
     )
+)
 
 
 def _workflow_dirs() -> list[tuple[str, str]]:
     return [
         ("user", workflow_user_dir()),
-        ("built-in", _workflow_builtin_dir()),
+        ("built-in", WORKFLOW_BUILTIN_DIR),
     ]
 
 
@@ -342,6 +355,29 @@ def store_manual_workflow(
         api_document=api_document,
         record=record,
     )
+
+
+def keep_template_thumbnail(
+    hub, comfyui_url: Optional[str], template, workflow_id: str
+) -> None:
+    """Make *template*'s picture the new workflow's thumbnail, unpinned.
+
+    Unpinned, so the workflow's own pictures replace it once there are any. A
+    template with no picture, or one the icon store will not take (a GIF, one
+    past its size cap), is stored without one: the workflow is what was asked
+    for, and its card falls back to the empty cover.
+    """
+    try:
+        content, _media_type = comfyui_templates.fetch_thumbnail(comfyui_url, template)
+        digest = store_icon(hub.path, content)
+        workflow_thumbnails.set_thumbnail(hub, workflow_id, digest, pinned=False)
+    except (LookupError, IconRefused, OSError, sqlite3.Error) as exc:
+        logger.info(
+            "Template %s is stored as workflow %s without a thumbnail: %s",
+            template.key,
+            workflow_id,
+            exc,
+        )
 
 
 def store_over_workflow(
@@ -632,6 +668,8 @@ def _builtin_path(name: str) -> str | None:
 # ponytail: one request submits its runs one after another, uploads included;
 # a queue of its own (and a higher cap) if large batches become routine.
 MAX_RUNS_PER_REQUEST = 200
+# Templates one Add stores at once: a selection, not the catalogue.
+MAX_TEMPLATES_PER_ADD = 50
 
 # What a LoRA slot may be given: an adapter, or a file the header reader could
 # not place, which on this shelf is usually an adapter in a format it has not
@@ -1778,6 +1816,22 @@ class ComfyUIPackInstallResponse(BaseModel):
     detail: Optional[str] = None
 
 
+class ComfyUINodePackInstallResponse(BaseModel):
+    """Which pack ComfyUI-Manager installed, and how ComfyUI restarts."""
+
+    pack: str
+    version: str
+    manager: str
+    restart: str
+    detail: Optional[str] = None
+
+
+class ComfyUINodePackResponse(BaseModel):
+    """Whether ComfyUI offers every node of a known pack."""
+
+    loaded: bool
+
+
 class ComfyUIAbortResponse(BaseModel):
     """Result of aborting the active ComfyUI run."""
 
@@ -1818,6 +1872,142 @@ class ComfyUIWorkflowConvertResponse(BaseModel):
     # in the document as sent and left out of every read of the workflow, so
     # Run, Open in ComfyUI and Export go without them; the node says so.
     left_out: list[dict] = Field(default_factory=list)
+
+
+class ComfyUITemplateFile(BaseModel):
+    """One file a template's loaders name (its graph's ``properties.models``)."""
+
+    name: str
+    directory: Optional[str] = Field(
+        None, description="ComfyUI's model folder for it: `vae`, `loras`, ..."
+    )
+    url: Optional[str] = Field(None, description="Where the template says to get it.")
+    present: bool = Field(
+        description=(
+            "The shelf holds a present copy of a file of this name (folded, "
+            "folders aside): templates carry no hashes, so a renamed copy "
+            "does not count."
+        )
+    )
+    downloadable: bool = Field(
+        False,
+        description=(
+            "`POST /model-downloads` can fetch it by this name: the committed "
+            "template list links a file of the name. A pack's own file may "
+            "have a `url` and still not be downloadable."
+        ),
+    )
+
+
+class ComfyUITemplate(BaseModel):
+    """One workflow template the owner's ComfyUI serves (#2000)."""
+
+    key: str = Field(description="`<module>/<name>`, unique in the list.")
+    module: str = Field(
+        description="`default` for ComfyUI's own, else the custom-node pack's folder."
+    )
+    name: str
+    source: Literal["builtin", "pack", "partner"] = Field(
+        description=(
+            "`builtin` is ComfyUI's own, `pack` a custom-node pack's, "
+            "`partner` one of ComfyUI's that runs on Comfy's paid API nodes "
+            "and downloads nothing."
+        )
+    )
+    pack_loaded: Optional[bool] = Field(
+        None,
+        description=(
+            "For a pack's template, whether ComfyUI loaded any node from that "
+            "pack. Null for the others, and when ComfyUI's node list could "
+            "not be read."
+        ),
+    )
+    title: str
+    description: Optional[str] = None
+    category: Optional[str] = None
+    categories: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Every category ComfyUI's `index.json` files it under, `category` "
+            "first; empty for a pack's template."
+        ),
+    )
+    media_type: Optional[str] = None
+    tags: list[str] = Field(default_factory=list)
+    model_names: list[str] = Field(
+        default_factory=list, description="The models it names, as ComfyUI lists them."
+    )
+    date: Optional[str] = None
+    usage: Optional[int] = Field(None, description="ComfyUI's own popularity count.")
+    providers: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Who a partner template's API nodes call (Google, Topaz, ...), as "
+            "ComfyUI's template logos name them."
+        ),
+    )
+    size: Optional[int] = Field(
+        None, description="What all its files download, in bytes, as ComfyUI says."
+    )
+    tutorial_url: Optional[str] = None
+    thumbnail: bool = Field(
+        description="Whether `GET /comfyui/templates/thumbnail` may have a picture."
+    )
+    files: list[ComfyUITemplateFile] = Field(default_factory=list)
+
+
+class ComfyUITemplateList(BaseModel):
+    """``GET /comfyui/templates``: what the owner's ComfyUI serves, or why not."""
+
+    comfyui_url: str = Field(description="The ComfyUI that was asked.")
+    reachable: bool
+    detail: Optional[str] = Field(None, description="Why it could not be read.")
+    templates: list[ComfyUITemplate] = Field(default_factory=list)
+
+
+class ComfyUITemplateRef(BaseModel):
+    """One template, as the list names it."""
+
+    module: str = Field(min_length=1, max_length=200)
+    name: str = Field(min_length=1, max_length=300)
+
+
+class ComfyUITemplatesAddRequest(BaseModel):
+    """``POST /comfyui/templates/add``."""
+
+    templates: list[ComfyUITemplateRef] = Field(
+        min_length=1, max_length=MAX_TEMPLATES_PER_ADD
+    )
+
+
+class ComfyUITemplateAdded(BaseModel):
+    """One template stored as a manual workflow."""
+
+    module: str
+    name: str
+    workflow_id: str
+    title: str
+    draft: bool = Field(
+        description=(
+            "PixlStash could not convert it, so it is a draft until it "
+            "converts on a run or open with ComfyUI answering, or is opened "
+            "in ComfyUI and saved there."
+        )
+    )
+    problems: list[str] = Field(
+        default_factory=list, description="Why it did not convert, for a draft."
+    )
+
+
+class ComfyUITemplateNotAdded(BaseModel):
+    module: str
+    name: str
+    detail: str
+
+
+class ComfyUITemplatesAddResponse(BaseModel):
+    added: list[ComfyUITemplateAdded] = Field(default_factory=list)
+    failed: list[ComfyUITemplateNotAdded] = Field(default_factory=list)
 
 
 class ComfyUIRecipeModelSlot(BaseModel):
@@ -2204,6 +2394,48 @@ def create_router(server) -> APIRouter:
         except comfyui_pack_service.PackInstallRefused as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
+    @router.post(
+        "/comfyui/node-packs/{pack_id}/install",
+        summary="Have ComfyUI-Manager install a node pack PixlStash knows",
+        description=(
+            "Asks the saved ComfyUI's ComfyUI-Manager to install one pack from "
+            "PixlStash's own short list, at the version pinned there, then "
+            "restarts ComfyUI if nothing is running or queued on it. Nothing "
+            "but the id comes from the caller. `restart` is `requested`, or "
+            "`manual` with `detail` saying why. 404 for a pack not on the list; "
+            "409 when Manager is missing, refuses, already lists the pack or "
+            "does not finish."
+        ),
+        response_model=ComfyUINodePackInstallResponse,
+    )
+    def install_node_pack(pack_id: str, request: Request):
+        user = server.auth.get_user_for_request(request)
+        saved = getattr(user, "comfyui_url", None) if user else None
+        try:
+            return node_pack_install_service.install(saved, pack_id)
+        except node_pack_install_service.UnknownPack as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except node_pack_install_service.PackInstallRefused as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @router.get(
+        "/comfyui/node-packs/{pack_id}",
+        summary="Whether ComfyUI offers a known node pack's nodes",
+        description=(
+            "`loaded` is true once the saved ComfyUI lists every node class of "
+            "the pack; false while it does not, or does not answer (as while it "
+            "restarts). 404 for a pack not on PixlStash's list."
+        ),
+        response_model=ComfyUINodePackResponse,
+    )
+    def get_node_pack(pack_id: str, request: Request):
+        user = server.auth.get_user_for_request(request)
+        saved = getattr(user, "comfyui_url", None) if user else None
+        try:
+            return {"loaded": node_pack_install_service.loaded(saved, pack_id)}
+        except node_pack_install_service.UnknownPack as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     @router.delete(
         "/comfyui/link",
         summary="Unlink ComfyUI and revoke its token",
@@ -2304,6 +2536,286 @@ def create_router(server) -> APIRouter:
                     origin_client_id=getattr(request.state, "origin_client_id", None),
                 )
         return {"name": name, "workflow_id": workflow_id}
+
+    # ── Templates from the owner's ComfyUI (#2000) ──────────────────────────
+
+    def _template_listing(request: Request, *, refresh: bool = False):
+        """``(comfyui_url, listing, detail)``.
+
+        With no ComfyUI answering, the listing is the copy PixlStash ships
+        and *detail* says why; otherwise *detail* is ``None``.
+        """
+        comfyui_url = _comfyui_url(server.auth.get_user_for_request(request))
+        # Only to say which packs loaded, so the minute-old map is enough.
+        object_info = _read_object_info(comfyui_url, cached=True)[0]
+        try:
+            # No map means ComfyUI may have stopped since its listing was
+            # kept, so it is asked again rather than trusted for ten minutes:
+            # a kept listing would send every graph and picture read to an
+            # address nothing answers on.
+            listing = comfyui_templates.read_listing(
+                comfyui_url, object_info, refresh=refresh or object_info is None
+            )
+        except comfyui_templates.TemplatesUnavailable as exc:
+            logger.info(
+                "[comfyui] No templates from ComfyUI at %s, so the shipped "
+                "ones are listed: %s",
+                comfyui_url,
+                exc,
+            )
+            return (
+                comfyui_url,
+                comfyui_templates.bundled_listing(),
+                f"Nothing is answering for templates at {comfyui_url}.",
+            )
+        return comfyui_url, listing, None
+
+    def _listed_template(request: Request, module: str, name: str):
+        """``(base_url, template)`` for one the list holds, else a 404.
+
+        *base_url* is ``None`` for the shipped copy. Only a listed template
+        is fetched, so a name is never a path the caller made up.
+        """
+        comfyui_url, listing, _detail = _template_listing(request)
+        template = listing.find(module, name)
+        if template is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Your ComfyUI does not list that template.",
+            )
+        return (None if listing.bundled else comfyui_url), template
+
+    @router.get(
+        "/comfyui/templates",
+        summary="The workflow templates the owner's ComfyUI serves",
+        description=(
+            "Every template the configured ComfyUI serves: its own "
+            "(`templates/index.json`) and those of its custom-node packs "
+            "(`/api/workflow_templates`), each with the files its loaders "
+            "name (`properties.models`, subgraphs included) and whether the "
+            "shelf holds each, matched by file name. Read live from ComfyUI "
+            "and kept for ten minutes per address; `refresh` reads it again. "
+            "Always 200. With no ComfyUI answering, `reachable` is false, "
+            "`detail` says why, and the list is the copy of ComfyUI's own "
+            "templates PixlStash ships (those that download files). Nothing "
+            "is stored."
+        ),
+        response_model=ComfyUITemplateList,
+    )
+    def list_comfyui_templates(
+        request: Request,
+        refresh: bool = Query(False, description="Read ComfyUI again now."),
+    ):
+        comfyui_url, listing, detail = _template_listing(request, refresh=refresh)
+        hub = getattr(server, "hub", None)
+        present = comfyui_templates.present_file_names(hub) if hub else set()
+        return {
+            "comfyui_url": comfyui_url,
+            "reachable": detail is None,
+            "detail": detail,
+            "templates": [
+                {
+                    "key": template.key,
+                    "module": template.module,
+                    "name": template.name,
+                    "source": template.source,
+                    "pack_loaded": template.pack_loaded,
+                    "title": template.title,
+                    "description": template.description,
+                    "category": template.category,
+                    "categories": template.categories,
+                    "media_type": template.media_type,
+                    "tags": template.tags,
+                    "model_names": template.model_names,
+                    "date": template.date,
+                    "usage": template.usage,
+                    "size": template.size,
+                    "tutorial_url": template.tutorial_url,
+                    "providers": template.providers,
+                    "thumbnail": template.module != comfyui_templates.BUILTIN_MODULE
+                    or template.thumbnail_ext is not None,
+                    "files": [
+                        {
+                            "name": item.name,
+                            "directory": item.directory,
+                            "url": item.url,
+                            "present": normalized_filename(item.name) in present,
+                            "downloadable": download_source(item.name) is not None,
+                        }
+                        for item in template.files
+                    ],
+                }
+                for template in listing.templates
+            ],
+        }
+
+    @router.get(
+        "/comfyui/templates/thumbnail",
+        summary="A template's picture, from the owner's ComfyUI",
+        description=(
+            "The picture ComfyUI serves for one template "
+            "`GET /comfyui/templates` lists, passed through so the app never "
+            "asks ComfyUI itself; for a shipped one, the picture ComfyUI's "
+            "template repository on GitHub serves. 404 when there is none."
+        ),
+        response_class=Response,
+        responses={
+            200: {"content": {"image/webp": {}, "image/png": {}, "image/jpeg": {}}},
+            404: {"description": "No such template, or it has no picture."},
+            503: {"description": "ComfyUI is not answering."},
+        },
+    )
+    def comfyui_template_thumbnail(
+        request: Request,
+        module: str = Query(..., min_length=1, max_length=200),
+        name: str = Query(..., min_length=1, max_length=300),
+    ):
+        comfyui_url, template = _listed_template(request, module, name)
+        try:
+            content, media_type = comfyui_templates.fetch_thumbnail(
+                comfyui_url, template
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return Response(
+            content=content,
+            media_type=media_type,
+            headers={
+                "Cache-Control": "private, max-age=3600",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    @router.post(
+        "/comfyui/templates/add",
+        summary="Make workflows of ComfyUI templates",
+        description=(
+            "Stores each template as a new manual workflow named after it, "
+            "read from the owner's ComfyUI now, or from the copy PixlStash "
+            "ships while none answers. Where PixlStash can convert its editor "
+            "graph against ComfyUI's node list it is stored with that "
+            "conversion and runs like any imported workflow. Where it cannot, "
+            "or ComfyUI did not list its nodes, it is a **draft** (`draft`, "
+            "with the converter's `problems`), converted the next time it is "
+            "run or opened with ComfyUI answering. A template that cannot be "
+            "read is named in `failed`; the rest are still stored."
+        ),
+        response_model=ComfyUITemplatesAddResponse,
+        responses={503: {"description": "No hub is attached. Nothing is stored."}},
+    )
+    def add_comfyui_templates(
+        request: Request, payload: ComfyUITemplatesAddRequest = Body(...)
+    ):
+        hub = require_hub(server, "The workflow library is not open.")
+        comfyui_url, listing, _detail = _template_listing(request)
+        base_url = None if listing.bundled else comfyui_url
+        # Fresh, not the minute-old map: whether it runs is decided here.
+        # Without it each is a draft, which converts the next time it is run
+        # or opened with ComfyUI answering (`converted_manual_document`).
+        object_info, error = _read_object_info(comfyui_url)
+        if object_info is None:
+            logger.info(
+                "[comfyui] ComfyUI at %s did not list its nodes, so templates "
+                "are added as drafts: %s",
+                comfyui_url,
+                error,
+            )
+        added, failed = [], []
+        for ref in payload.templates:
+            template = listing.find(ref.module, ref.name)
+            if template is None:
+                failed.append(
+                    {
+                        "module": ref.module,
+                        "name": ref.name,
+                        "detail": "Your ComfyUI does not list that template.",
+                    }
+                )
+                continue
+            try:
+                graph = comfyui_templates.fetch_graph(base_url, template)
+                if object_info is None:
+                    converted = None
+                    problems = [
+                        f"ComfyUI at {comfyui_url} was not answering, so it "
+                        "is a draft until it is opened with ComfyUI running."
+                    ]
+                else:
+                    converted, problems = convert_ui_graph_to_api(graph, object_info)
+                draft = converted is None
+                workflow_id = store_manual_workflow(
+                    hub,
+                    template.title,
+                    graph,
+                    "import",
+                    api_document=converted,
+                    # A draft is a draft by this row; a converted one is an
+                    # imported workflow like any other, and keeps nothing.
+                    record=(
+                        workflow_origin.TEMPLATE_ORIGIN,
+                        f"{template.key}/{uuid.uuid4().hex}",
+                        None,
+                        None,
+                    )
+                    if draft
+                    else None,
+                )
+            except comfyui_templates.TemplatesUnavailable as exc:
+                logger.info("Template %s will not read: %s", template.key, exc)
+                failed.append(
+                    {
+                        "module": ref.module,
+                        "name": ref.name,
+                        "detail": "Your ComfyUI did not hand over that template.",
+                    }
+                )
+                continue
+            except (NotAWorkflowError, WorkflowFileTooLarge) as exc:
+                logger.warning("Template %s cannot be stored: %s", template.key, exc)
+                failed.append(
+                    {
+                        "module": ref.module,
+                        "name": ref.name,
+                        "detail": f"PixlStash cannot store that template: {exc}",
+                    }
+                )
+                continue
+            except (RecursionError, sqlite3.Error) as exc:
+                # Internal errors: logged, not echoed to the caller.
+                logger.warning("Template %s cannot be stored: %s", template.key, exc)
+                failed.append(
+                    {
+                        "module": ref.module,
+                        "name": ref.name,
+                        "detail": "PixlStash cannot store that template.",
+                    }
+                )
+                continue
+            keep_template_thumbnail(hub, base_url, template, workflow_id)
+            logger.info(
+                "Stored template %s as %s workflow %s.",
+                template.key,
+                "draft" if draft else "runnable",
+                workflow_id,
+            )
+            added.append(
+                {
+                    "module": template.module,
+                    "name": template.name,
+                    "workflow_id": workflow_id,
+                    "title": template.title,
+                    "draft": draft,
+                    "problems": problems if draft else [],
+                }
+            )
+        if added:
+            announce_changed_workflows(
+                server,
+                [entry["workflow_id"] for entry in added],
+                "imported",
+                origin_client_id=getattr(request.state, "origin_client_id", None),
+            )
+        return {"added": added, "failed": failed}
 
     @router.post(
         "/comfyui/abort",

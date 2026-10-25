@@ -100,7 +100,7 @@ from pixlstash.services.model_shelf_service import (
     record_comfyui_history,
     fetch_workflow_sets,
 )
-from pixlstash.services.model_workflow_sets import create_set, delete_set
+from pixlstash.services.model_workflow_sets import create_set, delete_set, set_declines
 from pixlstash.services.workflow_library_service import (
     read_card_picture_ids,
     recipe_picture_counts,
@@ -1040,15 +1040,6 @@ WORKFLOW_WIPE_ORDER = (
     "workflow_topology",
     "workflow_picture_ghost",
 )
-
-
-@pytest.fixture
-def hub(tmp_path):
-    database = HubDatabase(str(tmp_path / "hub.db"))
-    try:
-        yield database
-    finally:
-        database.close()
 
 
 def test_the_workflow_tables_land_in_the_hub(hub):
@@ -2481,7 +2472,7 @@ def test_hub_rows_outlive_the_pictures_they_came_from(store):
 
 
 def test_two_pictures_share_an_instance_exactly_when_they_share_the_value(store):
-    """What "While matched" tests, asserted end to end through ingest.
+    """What "Partially" tests, asserted end to end through ingest.
 
     Same graph, different seed: one instance. Same graph, different prompt: two.
     """
@@ -3490,6 +3481,25 @@ def test_a_hand_made_set_proposes_its_members_ahead_of_the_evidence(
     assert (recipe["set_name"], recipe["prepick"]) == (None, True)
     # The recipe also names the grouped encoder: listed once, as grouped.
     assert proposed(result, "text_encoder") == [(ids["clip_shared"], "grouped")]
+
+
+def test_a_model_removed_from_a_set_is_not_proposed_as_grouped(companions_shelf):
+    """#1972: a removal wins over the member row, so Clone with new models does
+    not offer a VAE the owner took out of the set as one of its own."""
+    hub, ids = grouped_shelf(companions_shelf)
+    set_id = create_set(
+        hub,
+        "Night",
+        [{"model_id": ids["ckpt_a"]}, {"model_id": ids["vae_grouped"]}],
+    )
+    sha = hub.fetchone("SELECT sha256 FROM model WHERE id = ?", (ids["vae_grouped"],))[
+        "sha256"
+    ]
+    set_declines(hub, set_id, [sha])
+
+    result = propose_companions(hub, ids["ckpt_a"])
+
+    assert (ids["vae_grouped"], "grouped") not in proposed(result, "vae")
 
 
 def test_a_grouped_kind_is_prepicked_only_when_the_sets_agree_on_one_file(

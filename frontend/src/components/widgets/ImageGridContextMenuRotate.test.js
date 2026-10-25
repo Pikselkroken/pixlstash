@@ -25,6 +25,7 @@ vi.mock("../../utils/apiClient", async () => {
 import { isReadOnly } from "../../utils/apiClient";
 import ImageGridContextMenu from "./ImageGridContextMenu.vue";
 import { ROTATE_FORMAT_REASON } from "../../utils/rotate";
+import { COMPARE_PICK_REASON } from "../../utils/compare";
 
 beforeEach(() => {
   setActivePinia(createPinia());
@@ -147,5 +148,31 @@ describe("ImageGridContextMenu - rotate", () => {
     const wrapper = mountMenu({ selectedImageIds: [] });
     const { left } = rotateItems(wrapper);
     expect(left.attributes("disabled")).toBeDefined();
+  });
+});
+
+// Compare shares this file's menu environment: any two pictures, ComfyUI or not.
+describe("ImageGridContextMenu - compare", () => {
+  const compareItem = (wrapper) =>
+    wrapper
+      .findAll("button.ctx-item")
+      .find((b) => b.html().includes("mdi-compare-horizontal"));
+
+  it("is offered without ComfyUI, greyed with its reason short of two", () => {
+    const item = compareItem(
+      mountMenu({ comfyuiConfigured: false, compareBlockReason: COMPARE_PICK_REASON }),
+    );
+    expect(item.attributes("disabled")).toBeDefined();
+    expect(item.text()).toContain("Select two");
+    expect(tip(item)).toBe(COMPARE_PICK_REASON);
+  });
+
+  it("asks the grid to compare two pictures", async () => {
+    const wrapper = mountMenu({ comfyuiConfigured: false, compareBlockReason: null });
+    const item = compareItem(wrapper);
+    expect(item.attributes("disabled")).toBeUndefined();
+    await item.trigger("click");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(wrapper.emitted("compare-pictures")).toHaveLength(1);
   });
 });

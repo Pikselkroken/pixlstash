@@ -486,7 +486,7 @@ def test_text_routes_follow_the_token_scope(server, client, pictures):
 def test_a_failed_batch_is_deferred_but_a_cancelled_one_is_not(server, pictures):
 
     _set_files(server, {pictures["unread"]: "/home/me/unread.png"})
-    finder = MissingOcrFinder(server.vault.db, engine_getter=lambda: object())
+    finder = MissingOcrFinder(server.vault.db, engine_getter=object)
     task = SimpleNamespace(params={"picture_ids": [pictures["unread"]]})
 
     def candidate_ids():
@@ -503,7 +503,7 @@ def test_a_failed_batch_is_deferred_before_its_claims_are_released(server, pictu
     # The planner can run find_task the instant a claim is let go, on another
     # thread, so an id released before its deferral is handed straight back.
     _set_files(server, {pictures["unread"]: "/home/me/unread.png"})
-    finder = MissingOcrFinder(server.vault.db, engine_getter=lambda: object())
+    finder = MissingOcrFinder(server.vault.db, engine_getter=object)
     task = SimpleNamespace(params={"picture_ids": [pictures["unread"]]})
     eligible_at_release = []
 

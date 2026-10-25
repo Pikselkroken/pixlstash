@@ -7,7 +7,7 @@
 // checkpoint.
 
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
-import { mount } from "@vue/test-utils";
+import { flushPromises, mount } from "@vue/test-utils";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { setActivePinia, createPinia } from "pinia";
@@ -34,6 +34,15 @@ const setWorkflowSetsHidden = vi.fn();
 
 /** The set keys the active library hides, as the double's server holds them. */
 let hiddenOnServer = new Set();
+
+// The favourites are read on mount, and written by the heart and H. Doubled so
+// each test says what the hub holds and reads back what was asked to change.
+const listFavourites = vi.fn();
+const setFavourites = vi.fn();
+vi.mock("../../api/favourites", () => ({
+  listFavourites: (...args) => listFavourites(...args),
+  setFavourites: (...args) => setFavourites(...args),
+}));
 
 vi.mock("../../api/modelShelf", () => ({
   BASE_MODEL_UNASSIGNED: "UNASSIGNED",
@@ -388,6 +397,8 @@ beforeEach(() => {
     .mockResolvedValue({ released: 1, dissolved: false });
   listCharacters.mockReset().mockResolvedValue([]);
   listPictureSets.mockReset().mockResolvedValue([]);
+  listFavourites.mockReset().mockResolvedValue({ model: [], workflow: [], set: [] });
+  setFavourites.mockReset().mockResolvedValue({ model: [], workflow: [], set: [] });
 });
 
 describe("a row with nothing in its header", () => {
@@ -1555,6 +1566,8 @@ describe("the column headings", () => {
     await headOf(wrapper, "base").trigger("click");
     const headers = wrapper.findAll('[role="columnheader"]');
     expect(headers.map((h) => h.attributes("aria-sort"))).toEqual([
+      // The favourite column's heading carries no sort.
+      undefined,
       undefined,
       "none",
       undefined,
@@ -3110,6 +3123,27 @@ describe("dragging models onto a folder", () => {
     expect(wrapper.find(".shelf-group-btn--drop").exists()).toBe(true);
   });
 
+  it("names the folder a model file dragged in from outside lands in", async () => {
+    // The window's drop handler reads the attribute (useModelDropTarget); a
+    // source folder carries none, so a drop there goes to the default folder.
+    const wrapper = await shelfWithFolders([
+      adapter({ locations: present(1, "/models/loras") }),
+    ]);
+    const header = headerFor(wrapper, "/models/loras");
+    expect(header.attributes("data-model-drop-folder")).toBe("1");
+    expect(
+      headerFor(wrapper, "/runs").attributes("data-model-drop-folder"),
+    ).toBeUndefined();
+
+    header.element.dispatchEvent(
+      Object.assign(new Event("dragover", { cancelable: true }), {
+        dataTransfer: { types: ["Files"], items: [{ kind: "file", type: "" }] },
+      }),
+    );
+    await wrapper.vm.$nextTick();
+    expect(header.classes()).toContain("shelf-group-btn--drop");
+  });
+
   it("refuses a source folder, which is taken from and never written into", async () => {
     // `ModelMover.plan` refuses it too. Checking here as well is what stops the
     // pointer promising a drop the dialog would then have to take back.
@@ -3380,7 +3414,12 @@ describe("a run's disclosure", () => {
       .findAll(
         'button, a[href], input, select, textarea, [tabindex], [role="button"]',
       )
-      .filter((el) => el.attributes("data-testid") !== "kind-menu");
+      .filter(
+        (el) =>
+          el.attributes("data-testid") !== "kind-menu" &&
+          // The cover's heart (#1578) is a control of its own, on its own row.
+          el.attributes("data-testid") !== "favourite-heart",
+      );
     expect(controls).toHaveLength(1);
     expect(controls[0].classes()).toContain("shelf-stack-badge");
     // ...and it does not pick the row. The badge sits inside the one thing a
@@ -3534,7 +3573,7 @@ describe("a run's disclosure", () => {
     expect(heads).toHaveLength(2);
     expect(
       heads[0].findAll('[role="columnheader"]').map((cell) => cell.text()),
-    ).toEqual(["Model", "Name", "Kind", "Base", "Size", "Date added"]);
+    ).toEqual(["Favourite", "Model", "Name", "Kind", "Base", "Size", "Date added"]);
     expect(wrapper.findAll(".shelf-head")).toHaveLength(1);
     // And the widths reach a group's rows through the one root declaration, so
     // the columns cannot step sideways from one folder to the next.
@@ -6138,7 +6177,7 @@ describe("the set grid is what the shelf opens on", () => {
     expect(store.visibleRows).toHaveLength(2);
   });
 
-  /** The grid with two hand-made ("Grouped by you") sets beside card 1. */
+  /** The grid with two of the owner's sets beside card 1. */
   async function gridWithHandMade() {
     const { wrapper, store } = await shelfOnTheGrid();
     document.body.appendChild(wrapper.element);
@@ -6349,3 +6388,81 @@ describe("a row the owner has marked in a set", () => {
     ).toBe(false);
   });
 });
+
+describe("favourites (#1578)", () => {
+  const SHA_A = "a".repeat(64);
+  const SHA_B = "b".repeat(64);
+  const SHA_C = "c".repeat(64);
+
+  it("draws the heart on each row, pressed on a favourite and disabled on an unhashed one", async () => {
+    listFavourites.mockResolvedValue({ model: [SHA_A], workflow: [], set: [] });
+    const wrapper = await mountShelf([
+      adapter({ id: 1, sha256: SHA_A, display_name: "Alpha" }),
+      adapter({ id: 2, sha256: null, display_name: "Beta", filename: "b.safetensors" }),
+    ]);
+    const alpha = wrapper.find('[data-row-key="1"] [data-testid="favourite-heart"]');
+    expect(alpha.attributes("aria-pressed")).toBe("true");
+    const beta = wrapper.find('[data-row-key="2"] [data-testid="favourite-heart"]');
+    expect(beta.attributes("aria-disabled")).toBe("true");
+    expect(beta.attributes("aria-pressed")).toBe("false");
+  });
+
+  it("H favourites the focused row by its hash", async () => {
+    const wrapper = await mountShelf([adapter({ id: 1, sha256: SHA_A })]);
+    await wrapper.find('[data-row-key="1"]').trigger("focus");
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "h" }));
+    await flushPromises();
+    expect(setFavourites).toHaveBeenCalledWith("model", [SHA_A], true);
+  });
+
+  it("a run is favourited by its cover, and its open members show no heart", async () => {
+    listFavourites.mockResolvedValue({ model: [SHA_A], workflow: [], set: [] });
+    const wrapper = await mountShelf([
+      adapter({ id: 1, sha256: SHA_A, stack_id: 7, stack_position: 0 }),
+      adapter({ id: 2, sha256: SHA_B, stack_id: 7, stack_position: 1 }),
+    ]);
+    await wrapper.find(".shelf-row").trigger("keydown", { key: "ArrowRight" });
+    expect(wrapper.find(".shelf-row--member").exists()).toBe(true);
+    expect(
+      wrapper.find(".shelf-row--member [data-testid='favourite-heart']").exists(),
+    ).toBe(false);
+    const cover = wrapper.find('[data-row-key="1"] [data-testid="favourite-heart"]');
+    expect(cover.attributes("aria-pressed")).toBe("true");
+  });
+
+  it("leads a favourite inside its group, and stops when the view says so", async () => {
+    listFavourites.mockResolvedValue({ model: [SHA_C], workflow: [], set: [] });
+    await mountShelf([
+      adapter({ id: 1, sha256: SHA_A, display_name: "Alpha" }),
+      adapter({ id: 2, sha256: SHA_B, display_name: "Beta" }),
+      adapter({ id: 3, sha256: SHA_C, display_name: "Gamma" }),
+    ]);
+    const store = useModelShelfStore();
+    store.setView({ sortKey: "name", sortDirection: "asc" });
+    expect(store.groups[0].rows.map((r) => r.id)).toEqual([3, 1, 2]);
+    store.setView({ favouritesFirst: false });
+    expect(store.groups[0].rows.map((r) => r.id)).toEqual([1, 2, 3]);
+  });
+
+  it("Favourites only narrows to the favourites, counts them, and is a filter", async () => {
+    listFavourites.mockResolvedValue({ model: [SHA_C], workflow: [], set: [] });
+    await mountShelf([
+      adapter({ id: 1, sha256: SHA_A, display_name: "Alpha" }),
+      adapter({ id: 3, sha256: SHA_C, display_name: "Gamma" }),
+    ]);
+    const store = useModelShelfStore();
+    expect(store.favouriteModelCount).toBe(1);
+    store.setFilters({ favouritesOnly: true });
+    expect(store.visibleRows.map((r) => r.id)).toEqual([3]);
+    expect(store.activeCount).toBe(1);
+  });
+
+  it("names how many a group leads with, when it has any", async () => {
+    listFavourites.mockResolvedValue({ model: [SHA_A], workflow: [], set: [] });
+    const wrapper = await mountShelf([adapter({ id: 1, sha256: SHA_A })]);
+    useModelShelfStore().setView({ groupBy: "base_model" });
+    await flushPromises();
+    expect(textOf(wrapper)).toContain("1 favourite first");
+  });
+});
+

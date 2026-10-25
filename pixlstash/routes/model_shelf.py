@@ -101,6 +101,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_vali
 
 from pixlstash.db_models.adapter_attachment import ENTITY_CHARACTER, ENTITY_SET
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.comfyui_service import probe_comfyui
 from pixlstash.services.model_kind_suggestions import (
     REFILEABLE_KINDS,
     KindSuggestion,
@@ -145,13 +146,18 @@ from pixlstash.services.model_workflow_sets import (
     create_set,
     delete_set,
     hidden_set_keys,
+    mark_seen,
+    merge_sets,
     remove_members,
     rename_set,
     set_declines,
     set_sets_hidden,
 )
+from pixlstash.services.workflow_templates import (
+    attach_template_offers,
+    template_rows,
+)
 from pixlstash.services.workflow_set_verdicts import (
-    VerdictTargetError,
     fetch_model_marks,
     fetch_set_checks,
     write_member_verdict,
@@ -1105,8 +1111,21 @@ class HandMadeSetMember(BaseModel):
     file_size: Optional[int] = None
 
 
+class HandMadeSetEntry(HandMadeSetMember):
+    """A member of what a set holds (#1972), or a model the owner removed."""
+
+    recipes: int = Field(
+        default=0,
+        description="Recipes on the set's checkpoints, here, that used it.",
+    )
+    picture_count: int = Field(
+        default=0,
+        description="Kept pictures here, on the set's checkpoints, that used it.",
+    )
+
+
 class MergeOfferModel(BaseModel):
-    """A model the merge offer would add to a hand-made set (#1523)."""
+    """A model a template offer would add to a hand-made set (#1999)."""
 
     id: int = Field(description="Hub `model.id`; add it by this.")
     sha256: str = Field(description="What Keep separate records.")
@@ -1119,18 +1138,79 @@ class MergeOfferModel(BaseModel):
     recipes: int = Field(description="Recipes, in any library, that used it.")
 
 
-class MergeOffer(BaseModel):
-    """The pictures' set a hand-made set could take in by adding models (#1523)."""
+class TemplateRef(BaseModel):
+    """A ComfyUI template by name, as `GET /models/workflow-templates` lists it."""
 
-    head_id: int = Field(description="The file the pictures' set is named after.")
-    head_name: str
-    picture_count: int = Field(
-        description="Kept pictures in the active library that would join."
+    name: str
+    title: str
+
+
+class TemplateDownload(BaseModel):
+    """A template file the shelf lacks, offered with where to get it (#1999)."""
+
+    name: str = Field(description="The file name the template loads.")
+    url: str = Field(description="Its download page, as the template gives it.")
+    directory: str = Field(description="The ComfyUI folder it goes in.")
+    slot: WorkflowSetSlot = Field(description="The slot it would fill.")
+    sha256: str = Field(
+        description="What Keep separate records: the sha256 of its name, not bytes."
     )
-    recipes: int = Field(description="Recipes, in any library, that would join.")
+
+
+class MergeOffer(BaseModel):
+    """The rest of the ComfyUI template whose head a hand-made set holds (#1999).
+
+    The pictures' offer (#1523) is gone since #1972: what the pictures ran with
+    joins the set by itself. A template's files are not in any picture, so
+    they are still offered, and Keep separate puts them on ``declined``.
+    """
+
+    source: Literal["template"] = Field(
+        default="template",
+        description="`template`: a ComfyUI template built around the checkpoint loads them.",
+    )
+    template: Optional[TemplateRef] = Field(
+        default=None, description="With `template`: the template offered."
+    )
+    others: list[TemplateRef] = Field(
+        default_factory=list,
+        description="With `template`: the other templates sharing its head.",
+    )
+    downloads: list[TemplateDownload] = Field(
+        default_factory=list,
+        description="With `template`: its files the shelf lacks.",
+    )
+    head_id: int = Field(description="The template's head, the set's checkpoint.")
+    head_name: str
+    picture_count: int = Field(default=0, description="Zero: no picture is behind it.")
+    recipes: int = Field(default=0, description="Zero: no recipe is behind it.")
     covers: list[WorkflowSetCover] = Field(default_factory=list)
     models: list[MergeOfferModel] = Field(
         description="What the merge adds, by slot, most pictures first."
+    )
+
+
+class HandMadeSetHeld(HandMadeSetEntry):
+    """One model a set holds: its base or the owner's own addition."""
+
+    origin: Optional[Literal["pictures", "added"]] = Field(
+        default=None,
+        description=(
+            "`pictures` when the pictures on the set's checkpoints ran with it, "
+            "`added` when only the owner put it in. Null on a delete's or a "
+            "merge's snapshot, which reads no evidence."
+        ),
+    )
+    stored: bool = Field(
+        default=True,
+        description="A member row holds it, rather than the pictures alone.",
+    )
+    new: bool = Field(
+        default=False,
+        description=(
+            "The pictures brought it in and the owner has not seen it in this "
+            "set's tray yet (`PUT .../seen`)."
+        ),
     )
 
 
@@ -1145,7 +1225,11 @@ class HandMadeSet(BaseModel):
     updated_at: str
     cloned: bool = Field(
         default=False,
-        description="Copied from a set from pictures on purpose (see the create).",
+        description="Made from a set from pictures (see the create). Only stored.",
+    )
+    template: Optional[str] = Field(
+        default=None,
+        description="The ComfyUI template it was made from, by name (see the create).",
     )
     incomplete: bool = Field(description="The set has no checkpoint member.")
     checkpoint_ids: list[int] = Field(
@@ -1156,28 +1240,47 @@ class HandMadeSet(BaseModel):
         ),
     )
     picture_count: int = Field(
-        description="Kept pictures of the combinations this set covers."
+        description=(
+            "Kept pictures here of the combinations this set covers: every one "
+            "headed by one of its checkpoints."
+        )
     )
     recipes: int = Field(description="Recipes of the combinations this set covers.")
+    history_runs: int = Field(
+        default=0, description="Stored ComfyUI runs of those combinations."
+    )
     covers: list[WorkflowSetCover] = Field(default_factory=list)
-    members: list[HandMadeSetMember] = Field(
-        description="Checkpoint, text encoders, VAEs, LoRAs, others; by name within."
+    members: list[HandMadeSetHeld] = Field(
+        description=(
+            "What the set holds (#1972): every model the pictures on its "
+            "checkpoints ran with, plus the members the owner added, minus the "
+            "ones they removed. Checkpoint, text encoders, VAEs, LoRAs, others; "
+            "by name within, the set's own checkpoints first."
+        )
     )
     declined: list[str] = Field(
         default_factory=list,
-        description="Sha256s the owner kept out of the merge offer (#1523).",
+        description="Sha256s the owner removed; the pictures never bring them back.",
+    )
+    removed: list[HandMadeSetEntry] = Field(
+        default_factory=list,
+        description="The models the pictures would bring in that the owner removed.",
+    )
+    added: int = Field(default=0, description="How many members only the owner put in.")
+    automatic: bool = Field(
+        default=False,
+        description=(
+            "It has a checkpoint and the owner has added and removed nothing: "
+            "it holds exactly what the pictures ran with."
+        ),
     )
     offer: Optional[MergeOffer] = Field(
         default=None,
         description=(
-            "Models recipes used with this set's checkpoint that it lacks, and "
-            "the pictures that would join if they were added. Derived per "
-            "request; nothing joins without the owner adding them (#1523)."
+            "The rest of the ComfyUI template whose head the set holds (#1999): "
+            "its files the set lacks, the ones on the shelf to add and the rest "
+            "to download. Derived per request; nothing joins until added."
         ),
-    )
-    kept_separate: int = Field(
-        default=0,
-        description="Kept pictures here the offer leaves out because of `declined`.",
     )
 
 
@@ -1219,6 +1322,10 @@ class WorkflowSetMemberRequest(BaseModel):
         return self
 
 
+# A member's digest as the remove route takes it: exactly 64 characters.
+Digest = Annotated[str, StringConstraints(min_length=64, max_length=64)]
+
+
 class WorkflowSetCreateRequest(BaseModel):
     """Body of ``POST /models/workflow-sets``."""
 
@@ -1237,9 +1344,34 @@ class WorkflowSetCreateRequest(BaseModel):
     cloned: bool = Field(
         default=False,
         description=(
-            "The set is a copy of a set from pictures, made on purpose. Served "
-            "back on the set; the client never swaps such a set for the set "
-            "from pictures it matches."
+            "The set was made from a set from pictures. Stored and served back "
+            "on the set; nothing reads it since #1972."
+        ),
+    )
+    template: Optional[str] = Field(
+        default=None,
+        max_length=MAX_SET_NAME_LENGTH,
+        description=(
+            "The ComfyUI template (`GET /models/workflow-templates`) the set is "
+            "made from, by name. Stored as given and served back; the set then "
+            "covers that template in the picker whatever it holds."
+        ),
+    )
+    declined: list[Digest] = Field(
+        default_factory=list,
+        max_length=MAX_MODELS_PER_EDIT,
+        description=(
+            "Models removed from the set, by digest, written in the same "
+            "transaction: how an undo or a duplicate brings a set back with "
+            "what its owner had taken out of it (#1972)."
+        ),
+    )
+    seen: bool = Field(
+        default=False,
+        description=(
+            "Mark every model the pictures bring into the new set as seen, for "
+            "a set made from the card the owner is looking at. Off for an undo, "
+            "which keeps the models new."
         ),
     )
 
@@ -1263,10 +1395,6 @@ class WorkflowSetMembersRequest(BaseModel):
     members: list[WorkflowSetMemberRequest] = Field(
         min_length=1, max_length=MAX_MODELS_PER_EDIT
     )
-
-
-# A member's digest as the remove route takes it: exactly 64 characters.
-Digest = Annotated[str, StringConstraints(min_length=64, max_length=64)]
 
 
 class WorkflowSetRemoveRequest(BaseModel):
@@ -1294,7 +1422,7 @@ class WorkflowSetDeclinesRequest(BaseModel):
 
     sha256: list[Digest] = Field(
         max_length=MAX_MODELS_PER_EDIT,
-        description="The whole list; empty offers the merge again.",
+        description="The whole list; empty restores every removed model.",
     )
 
 
@@ -1381,10 +1509,18 @@ class RemovedWorkflowSetMember(BaseModel):
     label: Optional[str] = None
 
 
+class DeletedWorkflowSet(HandMadeSet):
+    """A deleted set as it was, for an undo to re-post."""
+
+    seen: list[str] = Field(
+        description="Models the owner had seen in its tray (`PUT .../seen`)."
+    )
+
+
 class WorkflowSetDeleteResponse(BaseModel):
     """Body of ``DELETE /models/workflow-sets/{set_id}``."""
 
-    deleted: HandMadeSet = Field(
+    deleted: DeletedWorkflowSet = Field(
         description="The set as it was, members included, for an undo to re-post."
     )
 
@@ -1396,6 +1532,63 @@ class WorkflowSetMembersResponse(BaseModel):
     added: list[str] = Field(
         description="The sha256s actually inserted; members already there are not."
     )
+    undeclined: list[str] = Field(
+        default_factory=list,
+        description=(
+            "The sha256s the add took off the removed list; putting them back "
+            "on it (with the declines PUT) is the rest of the undo."
+        ),
+    )
+
+
+class WorkflowSetMergeRequest(BaseModel):
+    """Body of ``POST /models/workflow-sets/{set_id}/merge``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    set_ids: list[int] = Field(
+        min_length=1,
+        max_length=MAX_MODELS_PER_EDIT,
+        description="The sets merged into this one and then deleted.",
+    )
+
+
+class MergedWorkflowSet(DeletedWorkflowSet):
+    """A set a merge deleted, as it was, for an undo to re-post."""
+
+    hidden: bool = Field(description="It was hidden in the active library.")
+
+
+class WorkflowSetMergeResponse(BaseModel):
+    """Body of ``POST /models/workflow-sets/{set_id}/merge``."""
+
+    set: HandMadeSet
+    added: list[str] = Field(description="Members the merge inserted into this set.")
+    previous_declined: list[str] = Field(
+        description="This set's removed list before; putting it back undoes it."
+    )
+    was_hidden: bool = Field(
+        description="This set was hidden here; the merge shows it unless all were."
+    )
+    merged: list[MergedWorkflowSet]
+
+
+class WorkflowSetSeenRequest(BaseModel):
+    """Body of ``PUT /models/workflow-sets/{set_id}/seen``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sha256: list[Digest] = Field(
+        min_length=1,
+        max_length=MAX_MODELS_PER_EDIT,
+        description="Models the owner has now seen in the set's tray.",
+    )
+
+
+class WorkflowSetSeenResponse(BaseModel):
+    """Body of ``PUT /models/workflow-sets/{set_id}/seen``."""
+
+    seen: list[str] = Field(description="The digests recorded, sorted.")
 
 
 class WorkflowSetRemoveResponse(BaseModel):
@@ -1546,6 +1739,104 @@ class WorkflowSetsResponse(BaseModel):
             "without reading the model lists first."
         ),
     )
+    templates_new_ready: int = Field(
+        default=0,
+        description=(
+            "How many template rows of `GET /models/workflow-templates` are "
+            "ready to make and new: every file on the shelf, no set covering "
+            "them, and the head arrived through the Downloads folder in the "
+            "last 24 hours. The New workflow set tile's line."
+        ),
+    )
+
+
+class WorkflowTemplateFile(BaseModel):
+    """One file a ComfyUI template loads, against the shelf."""
+
+    model_config = ConfigDict(extra="allow")
+
+    name: str = Field(description="The file name the template's loader names.")
+    url: str = Field(description="Where the template says to download it.")
+    directory: str = Field(description="Its ComfyUI models folder.")
+    slot: str = Field(description="The set slot it fills.")
+    on_shelf: bool
+    model_id: Optional[int] = Field(
+        default=None, description="The shelf model answering to it, if any."
+    )
+    shelf_filename: Optional[str] = None
+    other_quant: Optional[str] = Field(
+        default=None,
+        description=(
+            "Set when only another quant of the file is on the shelf: that "
+            "file's name. It still counts as on the shelf."
+        ),
+    )
+    file_size: Optional[int] = None
+
+
+class WorkflowTemplateVariant(BaseModel):
+    """One ComfyUI template, against the shelf and the sets."""
+
+    model_config = ConfigDict(extra="allow")
+
+    name: str
+    title: str
+    kind: str = Field(description="`image`, `edit`, `video`, `audio`, `3d`, `llm`.")
+    tags: list[str] = Field(default_factory=list)
+    models: list[str] = Field(
+        default_factory=list, description="The model names ComfyUI's list gives."
+    )
+    min_comfyui_version: Optional[str] = None
+    needs_comfyui: Optional[str] = Field(
+        default=None,
+        description=(
+            "The minimum version, set only when the configured ComfyUI "
+            "answered with an older one. A set is files, so it is a flag only."
+        ),
+    )
+    requires_custom_nodes: bool = Field(
+        default=False,
+        description="A node of it comes from a pack other than ComfyUI's own. A flag.",
+    )
+    size: int = 0
+    usage: int = 0
+    files: list[WorkflowTemplateFile]
+    on_shelf: int = Field(description="How many of `files` are on the shelf.")
+    complete: bool
+    covered_by: Optional[dict] = Field(
+        default=None,
+        description=(
+            "`{id, name}` of a hand-made set that covers it: made from it, or "
+            "holding every file of it the shelf has."
+        ),
+    )
+    head_arrived_at: Optional[str] = None
+    new: bool
+
+
+class WorkflowTemplateRow(BaseModel):
+    """The templates sharing one head file; the default first."""
+
+    model_config = ConfigDict(extra="allow")
+
+    key: str
+    variants: list[WorkflowTemplateVariant]
+
+
+class WorkflowTemplatesResponse(BaseModel):
+    """Body of ``GET /models/workflow-templates``."""
+
+    model_config = ConfigDict(extra="allow")
+
+    version: Optional[str] = Field(
+        description="The ComfyUI templates release the list was built from."
+    )
+    comfyui_version: Optional[str] = Field(
+        default=None,
+        description="The configured ComfyUI's version, when it answered.",
+    )
+    rows: list[WorkflowTemplateRow]
+    new_ready: int
 
 
 class ModelOpenLocationResponse(BaseModel):
@@ -1642,6 +1933,29 @@ def _cover_strip(covers) -> list[WorkflowSetCover]:
         )
         for cover in covers
     ]
+
+
+def _comfyui_version(url: Optional[str]) -> Optional[str]:
+    """The configured ComfyUI's version, or None: none set, down, or silent."""
+    if not url:
+        return None
+    try:
+        return probe_comfyui(url, timeout=1.0)["version"]
+    except ValueError as exc:
+        logger.info("Not asking ComfyUI for its version at %r: %s", url, exc)
+        return None
+
+
+def _version(text: str) -> tuple[int, ...]:
+    """``"0.11.0"`` as ``(0, 11)``; a part that is not a number reads 0.
+
+    Trailing zeros go, so ``"0.11"`` and ``"0.11.0"`` compare equal rather
+    than the shorter tuple reading as older.
+    """
+    parts = [int(part) if part.isdigit() else 0 for part in text.split(".")]
+    while len(parts) > 1 and parts[-1] == 0:
+        parts.pop()
+    return tuple(parts)
 
 
 def _hand_made_set(entry: dict) -> HandMadeSet:
@@ -2517,18 +2831,63 @@ def create_router(server) -> APIRouter:
             set_checks=[WorkflowSetCheck(**check) for check in checks],
             hidden_sets=hidden_set_keys(server.hub, server.vault.library_uuid),
             hidden_models=hidden_model_ids(server.hub, server.vault.library_uuid),
+            templates_new_ready=template_rows(server.hub, found["hand_made"])[
+                "new_ready"
+            ],
         )
+
+    @router.get(
+        "/models/workflow-templates",
+        summary="ComfyUI's workflow templates against the shelf",
+        description=(
+            "Every ComfyUI workflow template that downloads files, from the "
+            "list PixlStash ships (built from ComfyUI's templates package, "
+            "never fetched at runtime), with each file matched to the shelf by "
+            "name, another quant counting. One row per head file (the "
+            "checkpoint or diffusion model a set is built around), its "
+            "templates as variants with the default first. `covered_by` names "
+            "a hand-made set that already covers a template, by the merge "
+            "offer's rule or because it was made from it; `new` is a complete, "
+            "uncovered template whose head arrived through the Downloads "
+            "folder in the last 24 hours. Asks the configured ComfyUI for its "
+            "version (one second at most) to flag templates that need a newer "
+            "one. Changes nothing."
+        ),
+        tags=["model_shelf"],
+        response_model=WorkflowTemplatesResponse,
+    )
+    def list_workflow_templates(request: Request):
+        server.auth.ensure_secure_when_required(request)
+        found = template_rows(server.hub, _workflow_sets()["hand_made"])
+        user = server.auth.get_user_for_request(request)
+        comfyui_version = _comfyui_version(getattr(user, "comfyui_url", None))
+        if comfyui_version:
+            for row in found["rows"]:
+                for variant in row["variants"]:
+                    wanted = variant["min_comfyui_version"]
+                    if wanted and _version(wanted) > _version(comfyui_version):
+                        variant["needs_comfyui"] = wanted
+        return WorkflowTemplatesResponse(**found, comfyui_version=comfyui_version)
 
     def _workflow_sets() -> dict:
-        return attach_hand_made(
+        found = attach_hand_made(
             server.hub, fetch_workflow_sets(server.hub, server.vault)
         )
+        attach_template_offers(server.hub, found["hand_made"])
+        return found
 
-    def _one_set(set_id: int) -> HandMadeSet:
+    def _one_set(set_id: int, seen: bool = False) -> HandMadeSet:
         # ponytail: the whole evidence read for one set's counts; a mutation is
         # one click, so this is paid per gesture, never per row.
         for entry in _workflow_sets()["hand_made"]:
             if entry["id"] == set_id:
+                fresh = [m for m in entry["members"] if m["new"]]
+                if seen and fresh:
+                    # A set just made from a card has seen what it was made
+                    # from: nothing in it is new to the owner.
+                    mark_seen(server.hub, set_id, [m["sha256"] for m in fresh])
+                    for member in fresh:
+                        member["new"] = False
                 return _hand_made_set(entry)
         raise HTTPException(status_code=404, detail=f"No workflow set {set_id}.")
 
@@ -2566,12 +2925,14 @@ def create_router(server) -> APIRouter:
         status_code=201,
         summary="Make a workflow set by hand",
         description=(
-            "A set of shelf models the owner says work together: at most one "
-            "checkpoint, any number of text encoders, VAEs, LoRAs and others, "
-            "no order. May be empty or unnamed. A member named by `sha256` "
-            "need not be on the shelf, which is how an undo of a delete puts "
-            "a set back whole. An engine, a file still being hashed and a "
-            "second checkpoint are refused (409). Touches no file."
+            "A set of shelf models the owner says work together: any number "
+            "of checkpoints (a Wan 2.2 high/low pair loads two), text "
+            "encoders, VAEs, LoRAs and others, no order. May be empty or "
+            "unnamed. A member named by `sha256` need not be on the shelf, "
+            "which is how an undo of a delete puts a set back whole. An "
+            "engine, a file still being hashed, and a checkpoint slot for a "
+            "file of another kind are refused (409). `template` records the "
+            "ComfyUI template it was made from. Touches no file."
         ),
         tags=["model_shelf"],
         response_model=HandMadeSet,
@@ -2586,8 +2947,10 @@ def create_router(server) -> APIRouter:
                 payload.name,
                 [member.model_dump() for member in payload.members],
                 cloned=payload.cloned,
+                template=payload.template,
+                declined=payload.declined,
             )
-        return _one_set(set_id)
+        return _one_set(set_id, seen=payload.seen)
 
     @router.patch(
         "/models/workflow-sets/{set_id}",
@@ -2618,7 +2981,9 @@ def create_router(server) -> APIRouter:
         server.auth.ensure_secure_when_required(request)
         with _workflow_set_errors():
             snapshot = delete_set(server.hub, set_id)
-        return WorkflowSetDeleteResponse(deleted=_hand_made_set(snapshot))
+        return WorkflowSetDeleteResponse(
+            deleted=DeletedWorkflowSet(**_hand_made_set(snapshot).model_dump())
+        )
 
     @router.post(
         "/models/workflow-sets/{set_id}/members",
@@ -2635,17 +3000,22 @@ def create_router(server) -> APIRouter:
     ):
         server.auth.ensure_secure_when_required(request)
         with _workflow_set_errors():
-            added = add_members(
+            added, undeclined = add_members(
                 server.hub, set_id, [member.model_dump() for member in payload.members]
             )
-        return WorkflowSetMembersResponse(set=_one_set(set_id), added=added)
+        return WorkflowSetMembersResponse(
+            set=_one_set(set_id), added=added, undeclined=undeclined
+        )
 
     @router.post(
         "/models/workflow-sets/{set_id}/members/remove",
         summary="Take models out of a workflow set",
         description=(
-            "By sha256. An emptied set is kept. `removed` carries each slot "
-            "and label, so re-adding them by sha256 undoes the remove."
+            "By sha256. An emptied set is kept. A model the pictures on the "
+            "set's checkpoint ran with is also put on its removed list, or it "
+            "would come straight back. `removed` carries each slot and label "
+            "of the rows taken out, so re-adding them by sha256 undoes the "
+            "remove (the re-add takes them off the removed list)."
         ),
         tags=["model_shelf"],
         response_model=WorkflowSetRemoveResponse,
@@ -2656,6 +3026,30 @@ def create_router(server) -> APIRouter:
         server.auth.ensure_secure_when_required(request)
         with _workflow_set_errors():
             removed = remove_members(server.hub, set_id, payload.sha256)
+            # A model the pictures on the set's checkpoint ran with would come
+            # straight back from the base: removing it is keeping it out
+            # (#1972). An undo's re-add takes it off the list again.
+            entry = next(
+                (e for e in _workflow_sets()["hand_made"] if e["id"] == set_id),
+                None,
+            )
+            if entry is None:
+                # Deleted between the member write and this read.
+                raise HTTPException(
+                    status_code=404, detail=f"No workflow set {set_id}."
+                )
+            wanted = {sha.lower() for sha in payload.sha256}
+            still = {
+                m["sha256"].lower()
+                for m in entry["members"]
+                if m["origin"] == "pictures" and m["sha256"].lower() in wanted
+            }
+            if still:
+                set_declines(
+                    server.hub,
+                    set_id,
+                    sorted({d.lower() for d in entry["declined"]} | still),
+                )
         return WorkflowSetRemoveResponse(
             set=_one_set(set_id),
             removed=[RemovedWorkflowSetMember(**row) for row in removed],
@@ -2663,12 +3057,14 @@ def create_router(server) -> APIRouter:
 
     @router.put(
         "/models/workflow-sets/{set_id}/declines",
-        summary="Keep models out of a workflow set's merge offer",
+        summary="Set the models removed from a workflow set",
         description=(
-            "Replaces the list of models (by sha256) the set's merge offer "
-            "leaves out: Keep separate adds to it, Offer again empties it. "
-            "Returns the list as it was, so putting that back undoes the call. "
-            "Touches no member and no file."
+            "Replaces the list of models (by sha256) the owner removed from the "
+            "set: a model on it stays out however often the pictures on the "
+            "set's checkpoint use it. Remove adds to it, Restore takes one off, "
+            "Reset to automatic empties it. Returns the list as it was, so "
+            "putting that back undoes the call. Touches no member row and no "
+            "file."
         ),
         tags=["model_shelf"],
         response_model=WorkflowSetDeclinesResponse,
@@ -2681,6 +3077,61 @@ def create_router(server) -> APIRouter:
             previous = set_declines(server.hub, set_id, payload.sha256)
         return WorkflowSetDeclinesResponse(set=_one_set(set_id), previous=previous)
 
+    @router.post(
+        "/models/workflow-sets/{set_id}/merge",
+        summary="Merge workflow sets on the same checkpoint",
+        description=(
+            "Merges `set_ids` into this set and deletes them (#1972). Refused "
+            "(409) unless every set has the same checkpoint digests. This set "
+            "keeps its name and gains every member the others hold; a model "
+            "stays removed only if every set removed it; it stays hidden in "
+            "this library only if every set was. Returns the deleted sets' "
+            "snapshots and this set's previous state, which is the undo. No "
+            "file is touched."
+        ),
+        tags=["model_shelf"],
+        response_model=WorkflowSetMergeResponse,
+    )
+    def merge_workflow_sets(
+        set_id: int, request: Request, payload: WorkflowSetMergeRequest = Body(...)
+    ):
+        server.auth.ensure_secure_when_required(request)
+        with _workflow_set_errors():
+            result = merge_sets(
+                server.hub, server.vault.library_uuid, set_id, payload.set_ids
+            )
+        return WorkflowSetMergeResponse(
+            set=_one_set(set_id),
+            added=result["added"],
+            previous_declined=result["previous_declined"],
+            was_hidden=result["was_hidden"],
+            merged=[
+                MergedWorkflowSet(**_hand_made_set(entry).model_dump())
+                for entry in result["merged"]
+            ],
+        )
+
+    @router.put(
+        "/models/workflow-sets/{set_id}/seen",
+        summary="Mark models as seen in a workflow set",
+        description=(
+            "Records that the owner has seen these models in the set's tray, "
+            "so a model the pictures brought in is no longer served `new`. "
+            "Touches no member and no file."
+        ),
+        tags=["model_shelf"],
+        response_model=WorkflowSetSeenResponse,
+    )
+    def put_workflow_set_seen(
+        set_id: int, request: Request, payload: WorkflowSetSeenRequest = Body(...)
+    ):
+        server.auth.ensure_secure_when_required(request)
+        with _workflow_set_errors():
+            mark_seen(server.hub, set_id, payload.sha256)
+        return WorkflowSetSeenResponse(
+            seen=sorted({sha.lower() for sha in payload.sha256})
+        )
+
     @contextmanager
     def _verdict_errors():
         try:
@@ -2688,7 +3139,7 @@ def create_router(server) -> APIRouter:
         except ValueError as exc:
             logger.info("Workflow set verdict refused (422): %s", exc)
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        except VerdictTargetError as exc:
+        except WorkflowSetNotFoundError as exc:
             logger.info("Workflow set verdict answered 404: %s", exc)
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 

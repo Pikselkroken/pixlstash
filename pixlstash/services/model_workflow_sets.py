@@ -11,24 +11,27 @@ so it reconnects when a file with the same bytes comes back. That is also why a
 checkpoint still waiting for its hash cannot be added yet: it has no identity a
 set could hold.
 
-**Evidence is read, never written.** A recipe combination is *covered* by a set
-when every model in it is an on-shelf member of the set; the set then carries
-that combination's recipe and picture counts and its covers. The combinations
-come from :func:`~pixlstash.services.model_shelf_service.fetch_workflow_sets`
-unchanged, and :func:`attach_hand_made` layers the sets over them.
+**A set lives on its checkpoint (#1972).** What a set holds is not only its
+member rows: it is its *base*, every model the pictures made with one of its
+checkpoints ran with, plus the members the owner stored, minus the models the
+owner removed (``model_workflow_set_decline``). So a LoRA new pictures start
+using joins every set on that checkpoint by itself, and removing it keeps it
+out of that set for good. The set reads *automatic* while the owner has added
+and removed nothing, and *custom* otherwise. Every recipe combination headed by
+one of its checkpoints is *covered* by it and counts toward it, so the
+automatic card for a checkpoint is drawn only while no set is on it.
 
-**The merge offer is read too (#1523).** A set whose pictures' set is a near
-miss - recipes with one of its checkpoints that used models the set lacks - is
-offered those models. Nothing is stored for the offer but the models the owner
-kept out of it ("Keep separate"), so it survives restarts by being re-derived,
-and nothing joins a set until the owner adds the models.
+**Evidence is read, never written.** The combinations come from
+:func:`~pixlstash.services.model_shelf_service.fetch_workflow_sets` unchanged,
+and :func:`attach_hand_made` layers the sets over them. Nothing is stored for
+the base: it is re-derived on every read.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Optional
 
+from pixlstash.hub.db import now_iso
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.builtin_models import HASH_PENDING_SQL
 from pixlstash.services.model_shelf_service import SET_COVER_DEPTH, known_base_model
@@ -72,10 +75,6 @@ class WorkflowSetRefusedError(ValueError):
     """The request would break a set rule. Mapped to 409."""
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 def clean_name(name: Optional[str]) -> Optional[str]:
     """Trim a set name; blank means no name."""
     if name is None:
@@ -102,7 +101,9 @@ def fetch_sets(hub) -> list[dict]:
 
 # The two reads a set is made of, shared by `fetch_sets` (every set, through
 # the hub) and `delete_set` (one set, on the transaction that deletes it).
-_SETS_SQL = "SELECT id, name, created_at, updated_at, cloned FROM model_workflow_set"
+_SETS_SQL = (
+    "SELECT id, name, created_at, updated_at, cloned, template FROM model_workflow_set"
+)
 # `model.sha256` is UNIQUE, so the LEFT JOIN yields one row per member.
 _MEMBERS_SQL = (
     "SELECT m.set_id, m.sha256, m.slot, m.label, model.id, model.display_name, "
@@ -165,163 +166,210 @@ def _member_out(member: dict) -> dict:
 
 
 def attach_hand_made(hub, found: dict) -> dict:
-    """Layer the hand-made sets over a :func:`fetch_workflow_sets` answer.
+    """Layer the owner's sets over a :func:`fetch_workflow_sets` answer.
 
-    Mutates *found* in place and returns it: every combination gains
-    ``covered_by`` (the ids of the sets covering it; the combination itself is
-    kept, since the client's *Works with* reads all of them; one whose base
-    model is ``missing`` is covered by no set), ``no_set`` loses
-    the on-shelf members of any set, and ``hand_made`` is added, newest first.
-    Each set's ``covers`` are cover candidates, like a combination's, and each
-    set carries its merge ``offer`` (see :func:`_attach_offers`).
-    Combinations witnessed only by ComfyUI runs are covered like any other,
-    but the offer reads ``hub_combinations``, which holds recipe ones only.
+    Mutates *found* in place and returns it. Each set lives on its checkpoints
+    (#1972): its *base* is every model recipes or ComfyUI runs used with one of
+    them, and what it holds is that base plus its stored members, minus the
+    models the owner removed (``declined``). Every combination headed by one of
+    a set's checkpoints gains that set's id in ``covered_by`` and counts toward
+    it, so the automatic card for a checkpoint leaves the grid while any set
+    is on it; one whose base model is ``missing`` is covered by no set.
+    ``no_set`` loses every on-shelf member, and ``hand_made`` is added, newest
+    first, each set's ``covers`` cover candidates like a combination's.
+
+    The base reads every library's recipes (``hub_combinations``) and the runs
+    stored here: a set is a hub fact, so what it holds must be the same in
+    every library. Its counts and covers are this library's.
     """
+    rows = {int(row["id"]): row for row in hub.fetchall(_MODEL_ROWS_SQL)}
+    seen: dict[int, set[str]] = {}
+    for row in hub.fetchall("SELECT set_id, sha256 FROM model_workflow_set_seen"):
+        seen.setdefault(row["set_id"], set()).add(row["sha256"])
+    here = found["combinations"]
+    every = {c["key"]: c for c in found.get("hub_combinations", ())}
+    for combination in here:
+        every.setdefault(combination["key"], combination)
+    for combination in here:
+        combination["covered_by"] = []
+
     hand_made = []
     for entry in fetch_sets(hub):
         shaped = _shape(entry)
-        shaped["_on_shelf"] = {m["id"] for m in shaped["members"] if m["on_shelf"]}
-        hand_made.append(shaped)
-
-    for combination in found["combinations"]:
-        combination["covered_by"] = []
-        if combination.get("missing"):
-            # Its base model is off the shelf, so no set holding its support
-            # files is the set it ran in; it keeps its own card.
-            continue
-        for entry in hand_made:
-            # Every model of the combination on the set; the set may hold more.
-            # A combination is never empty, so an empty set covers nothing.
-            if not _lacks(combination, entry["_on_shelf"]):
-                combination["covered_by"].append(entry["id"])
-                entry["picture_count"] += combination["picture_count"]
-                entry["recipes"] += combination["recipes"]
-                entry["covers"].extend(combination["covers"])
-
-    grouped: set[int] = set()
-    for entry in hand_made:
-        grouped |= entry["_on_shelf"]
-        entry["covers"] = sorted(entry["covers"], key=cover_order, reverse=True)[
+        own = set(shaped["checkpoint_ids"])
+        stored_ids = {m["id"] for m in shaped["members"] if m["on_shelf"]}
+        base = _base(
+            [c for c in every.values() if _on_checkpoint(c, own)], stored_ids, rows
+        )
+        on_here = [c for c in here if _on_checkpoint(c, own)]
+        for combination in on_here:
+            combination["covered_by"].append(shaped["id"])
+            shaped["picture_count"] += combination["picture_count"]
+            shaped["recipes"] += combination["recipes"]
+            shaped["history_runs"] += combination["history_runs"]
+            shaped["covers"].extend(combination["covers"])
+        shaped["covers"] = sorted(shaped["covers"], key=cover_order, reverse=True)[
             :SET_COVER_DEPTH
         ]
+        _live(shaped, base, on_here, rows, seen.get(shaped["id"], set()))
+        hand_made.append(shaped)
+
+    grouped = {
+        m["id"] for entry in hand_made for m in entry["members"] if m["on_shelf"]
+    }
     found["no_set"] = [
         model_id for model_id in found["no_set"] if model_id not in grouped
     ]
-    _attach_offers(
-        hand_made,
-        found.get("hub_combinations", found["combinations"]),
-        {
-            int(row["id"]): row["sha256"]
-            for row in hub.fetchall("SELECT id, sha256 FROM model")
-        },
-    )
-    for entry in hand_made:
-        entry.pop("_on_shelf")
     found["hand_made"] = hand_made
     return found
 
 
-def _attach_offers(hand_made: list[dict], combinations, digests) -> None:
-    """Give each set its merge ``offer`` and ``kept_separate`` count (#1523).
+# The shelf rows a set's base is made of, read once per evidence pass.
+_MODEL_ROWS_SQL = (
+    "SELECT id, sha256, display_name, filename, file_kind, base_model, "
+    "base_model_canonical, base_model_source, file_size FROM model"
+)
 
-    A *pictures' set* is the combinations no hand-made set covers, grouped by
-    the file they are named after (their head), exactly as the grid groups its
-    evidence cards. A set is offered the pictures' set of each of its own
-    checkpoints; a set with no checkpoint only one whose models include all of
-    the set's,
-    or every incomplete set would be offered every card. Only combinations
-    whose missing models could all be added are counted: a file still hashing
-    or an engine cannot be a member, and a model the owner kept out of this set
-    stays out. Every combination is read, not only this library's: a set is a
-    hub fact, so its offer must be too.
 
-    One pictures' set is offered to one set at most, the one needing fewest
-    models added, so two sets sharing a checkpoint never both claim the same
-    pictures.
+def _on_checkpoint(combination: dict, own: set[int]) -> bool:
+    """Whether *combination* is headed by one of a set's checkpoints *own*.
 
-    Args:
-        hand_made: the shaped sets, each still holding its ``_on_shelf`` ids.
-        combinations: every combination, pictures in this library or not.
-        digests: ``model.id`` -> sha256 (None while hashing).
+    The head is the first member, as the grid names a card after it, and it
+    must be a base model. A head that is a namesake of the set's checkpoint
+    (one name reached both rows) is the set's own: which twin heads the
+    combination is an accident of id order.
     """
-    by_head: dict[int, list[tuple[dict, set[int]]]] = {}
+    if not own or combination.get("missing") or not combination["models"]:
+        return False
+    head = combination["models"][0]
+    if head["kind"] not in _CHECKPOINT_KINDS:
+        return False
+    return head["id"] in own or any(
+        head["id"] in names and own & set(names)
+        for names in combination.get("namesakes", ())
+    )
+
+
+def _base(combinations: list[dict], stored_ids: set[int], rows) -> set[int]:
+    """The model ids the pictures on a set's checkpoints ran with.
+
+    A recipe naming a file by basename reaches every shelf row answering to
+    it, so its combination holds them all though it ran with one: each such
+    group counts once, as the row the set already holds or else the first.
+    ponytail: "the first" is the lowest id, since a recipe that named a file
+    only by basename recorded no digest to choose by; the owner removes the
+    wrong twin by hand. The groups are the resolver's own (``namesakes``),
+    never re-derived from filenames. A file still hashing or an engine is left out, since a set
+    keeps its members by digest and no workflow loads an engine.
+    """
+    ids: set[int] = set()
+    groups: list[set[int]] = []
     for combination in combinations:
-        if combination.get("missing"):
-            # Named after a file the shelf lacks: no set's checkpoint is its
-            # head, and it may have no shelf member at all.
-            continue
-        ids = {model["id"] for model in combination["models"]}
-        if any(not _lacks(combination, entry["_on_shelf"]) for entry in hand_made):
-            continue
-        by_head.setdefault(combination["models"][0]["id"], []).append(
-            (combination, ids)
-        )
-
-    candidates = []
-    for entry in hand_made:
-        held = entry["_on_shelf"]
-        if not held:
-            continue
-        if entry["incomplete"]:
-            heads = [
-                head
-                for head, group in by_head.items()
-                if group[0][0]["models"][0]["kind"] in _CHECKPOINT_KINDS
-                and held <= set().union(*(ids for _, ids in group))
-            ]
-        else:
-            # A checkpoint off the shelf has no id, so it matches no head. A
-            # head that is a namesake of the set's checkpoint (one name reached
-            # both) is the set's own: the group is keyed on whichever came first.
-            own = set(entry["checkpoint_ids"])
-            heads = [
-                head
-                for head, group in by_head.items()
-                if head in own
-                or any(
-                    head in names and own & set(names)
-                    for combination, _ in group
-                    for names in combination.get("namesakes", ())
-                )
-            ]
-        declined = set(entry["declined"])
-        for head in heads:
-            group = by_head.get(head, [])
-            offered = _near_miss(group, held, declined, digests)
-            every = _near_miss(group, held, set(), digests)
-            kept = _pictures(every) - _pictures(offered)
-            # Heads hold disjoint combinations, so a set's counts add up.
-            entry["kept_separate"] += kept
-            if offered:
-                missing = set().union(*(extra for _, extra in offered))
-                candidates.append((len(missing), entry["id"], head, entry, offered))
-
-    taken_heads: set[int] = set()
-    for _, _, head, entry, offered in sorted(candidates, key=lambda c: c[:2]):
-        if head in taken_heads or entry["offer"] is not None:
-            continue
-        taken_heads.add(head)
-        entry["offer"] = _offer(head, offered, entry["incomplete"], digests)
+        ids.update(model["id"] for model in combination["models"])
+        groups.extend(set(names) for names in combination.get("namesakes", ()))
+    for group in groups:
+        ids -= group - (group & stored_ids or {min(group)})
+    return {
+        model_id
+        for model_id in ids
+        if model_id in rows
+        and rows[model_id]["sha256"]
+        and rows[model_id]["file_kind"] != FILE_ENGINE
+    }
 
 
-def _near_miss(group, held: set[int], declined: set[str], digests) -> list:
-    """The combinations of *group* the set could take: ``[(combination, extra)]``.
+def _live(shaped: dict, base: set[int], on_here, rows, seen: set[str]) -> None:
+    """Turn a set's stored members into what it holds (#1972), in place.
 
-    *extra* is the models it would have to add. A combination with one it
-    cannot add - no digest yet, an engine, a model kept separate - is left out.
+    ``members`` becomes the base plus the stored members, minus ``declined``,
+    each marked with its ``origin`` (``pictures`` when the base has it,
+    ``added`` when only the owner put it there), whether a member row
+    ``stored`` it, and ``new`` for a model the pictures brought in that the
+    owner has not seen in this set yet. ``removed`` is the base models the
+    owner took out. The set is ``automatic`` while it has a checkpoint and the
+    owner has neither added nor removed anything: the badge is a fact about
+    those two lists, so undoing the last change turns it back.
     """
-    found = []
-    for combination, _ids in group:
-        extra = _lacks(combination, held)
-        kinds = {model["id"]: model["kind"] for model in combination["models"]}
-        if extra and all(
-            digests.get(model_id)
-            and digests[model_id] not in declined
-            and kinds[model_id] != FILE_ENGINE
-            for model_id in extra
-        ):
-            found.append((combination, extra))
-    return found
+    declined = set(shaped["declined"])
+    stored = {m["sha256"]: m for m in shaped["members"]}
+    base_by_sha = {rows[model_id]["sha256"]: model_id for model_id in base}
+    evidence: dict[int, list[int]] = {}
+    for combination in on_here:
+        for model in combination["models"]:
+            counts = evidence.setdefault(model["id"], [0, 0])
+            counts[0] += combination["recipes"]
+            counts[1] += combination["picture_count"]
+
+    def counted(member: dict) -> dict:
+        recipes, pictures = evidence.get(member["id"], (0, 0))
+        return {**member, "recipes": recipes, "picture_count": pictures}
+
+    members = [
+        counted(
+            {
+                **member,
+                "stored": True,
+                # The set's own checkpoints are what it follows, never an
+                # addition: a set on a checkpoint no picture used yet is
+                # still exactly what its pictures ran with.
+                "origin": (
+                    "pictures"
+                    if sha in base_by_sha or member["slot"] == SLOT_CHECKPOINT
+                    else "added"
+                ),
+                "new": False,
+            }
+        )
+        for sha, member in stored.items()
+        if sha not in declined
+    ]
+    removed = []
+    for sha, model_id in base_by_sha.items():
+        row = rows[model_id]
+        if sha in declined:
+            slot = stored[sha]["slot"] if sha in stored else _base_slot(row)
+            removed.append(
+                counted(
+                    _member_out(
+                        {"sha256": sha, "slot": slot, "label": None, "model": row}
+                    )
+                )
+            )
+        elif sha not in stored:
+            members.append(
+                counted(
+                    {
+                        **_member_out(
+                            {
+                                "sha256": sha,
+                                "slot": _base_slot(row),
+                                "label": None,
+                                "model": row,
+                            }
+                        ),
+                        "stored": False,
+                        "origin": "pictures",
+                        "new": sha not in seen,
+                    }
+                )
+            )
+    # The set's own checkpoints lead their slot: the set is named after the
+    # first one, and a checkpoint the pictures brought in must not take that.
+    shaped["members"] = sorted(
+        members,
+        key=lambda m: (
+            SLOTS.index(m["slot"]),
+            m["slot"] == SLOT_CHECKPOINT and not m["stored"],
+            m["name"].lower(),
+            m["sha256"],
+        ),
+    )
+    shaped["removed"] = sorted(
+        removed, key=lambda m: (SLOTS.index(m["slot"]), m["name"].lower())
+    )
+    added = sum(1 for m in members if m["origin"] == "added")
+    shaped["added"] = added
+    shaped["automatic"] = not shaped["incomplete"] and not added and not removed
 
 
 def _lacks(combination: dict, held: set[int]) -> set[int]:
@@ -330,10 +378,10 @@ def _lacks(combination: dict, held: set[int]) -> set[int]:
     A recipe that names a file only by its basename (or a short digest) reaches
     every shelf row answering to it, so its combination holds them all though
     it ran with one. Holding one of them is holding the file it ran with, so
-    its namesakes are not missing: offering them put a second "qwen3vl 4b"
-    beside the one the set already has, and kept the recipe's pictures out of
-    it. The groups are the resolver's own (``namesakes``), never re-derived
-    from filenames: a row also answers to every copy's basename.
+    its namesakes are not missing. The groups are the resolver's own
+    (``namesakes``), never re-derived from filenames: a row also answers to
+    every copy's basename. Read by the template picker's coverage
+    (``services.workflow_templates``).
     """
     groups = [set(names) for names in combination.get("namesakes", ())]
     return {
@@ -344,56 +392,18 @@ def _lacks(combination: dict, held: set[int]) -> set[int]:
     }
 
 
-def _pictures(offered) -> int:
-    return sum(combination["picture_count"] for combination, _ in offered)
-
-
-def _offer(head: int, offered, incomplete: bool, digests) -> dict:
-    """The offer one set is shown: the pictures that would join, the models."""
-    models: dict[int, dict] = {}
-    for combination, extra in offered:
-        for model in combination["models"]:
-            if model["id"] not in extra:
-                continue
-            seen = models.setdefault(
-                model["id"],
-                {
-                    "id": model["id"],
-                    "sha256": digests[model["id"]],
-                    "name": model["name"],
-                    "kind": model["kind"],
-                    "slot": _merge_slot(model, head, incomplete),
-                    "picture_count": 0,
-                    "recipes": 0,
-                },
-            )
-            seen["picture_count"] += combination["picture_count"]
-            seen["recipes"] += combination["recipes"]
-    covers = [cover for combination, _ in offered for cover in combination["covers"]]
-    return {
-        "head_id": head,
-        "head_name": offered[0][0]["models"][0]["name"],
-        "picture_count": _pictures(offered),
-        "recipes": sum(combination["recipes"] for combination, _ in offered),
-        "covers": sorted(covers, key=cover_order, reverse=True)[:SET_COVER_DEPTH],
-        "models": sorted(
-            models.values(),
-            key=lambda m: (SLOTS.index(m["slot"]), -m["picture_count"], m["name"]),
-        ),
-    }
-
-
-def _merge_slot(model: dict, head: int, incomplete: bool) -> str:
-    """Where a merged model lands: the head fills an empty checkpoint slot, the
-    rest go by kind, so a second checkpoint (Wan 2.2's other expert, a refiner)
-    joins the checkpoints."""
-    if model["id"] == head and incomplete:
-        return SLOT_CHECKPOINT
-    return _DEFAULT_SLOT.get(model["kind"], "other")
+def _base_slot(row) -> str:
+    """Where a model the pictures brought in sits: by its kind, so a second
+    checkpoint (Wan 2.2's other expert, a refiner) joins the checkpoints."""
+    return _DEFAULT_SLOT.get(row["file_kind"], "other")
 
 
 def _shape(entry: dict) -> dict:
-    """One `fetch_sets` entry as the API serves a set, before any coverage."""
+    """One `fetch_sets` entry as the API serves a set, before any evidence.
+
+    ``members`` are the stored ones here; :func:`_live` turns them into what
+    the set holds.
+    """
     members = sorted(
         (_member_out(member) for member in entry["members"]),
         key=lambda m: (SLOTS.index(m["slot"]), m["name"].lower(), m["sha256"]),
@@ -405,15 +415,20 @@ def _shape(entry: dict) -> dict:
         "created_at": entry["created_at"],
         "updated_at": entry["updated_at"],
         "cloned": bool(entry["cloned"]),
+        "template": entry["template"],
         "incomplete": not checkpoints,
         "checkpoint_ids": [m["id"] for m in checkpoints if m["on_shelf"]],
         "picture_count": 0,
         "recipes": 0,
+        "history_runs": 0,
         "covers": [],
         "members": members,
         "declined": sorted(entry.get("declined", ())),
+        "removed": [],
+        "added": 0,
+        "automatic": False,
+        # The template offer (#1999), filled by `workflow_templates`.
         "offer": None,
-        "kept_separate": 0,
     }
 
 
@@ -493,24 +508,38 @@ def _insert_members(conn, set_id: int, members: list[dict], now: str) -> list[st
 
 
 def create_set(
-    hub, name: Optional[str], members: list[dict], cloned: bool = False
+    hub,
+    name: Optional[str],
+    members: list[dict],
+    cloned: bool = False,
+    template: Optional[str] = None,
+    declined: Optional[list[str]] = None,
 ) -> int:
     """Create a set, empty or with *members*, in one transaction; return its id.
 
-    *cloned* records that the owner copied it from a set from pictures. Nothing
-    here reads it: the client keeps such a set while it matches that set, where
-    a set built by hand into the same models gives way to it.
+    *cloned* records that the owner made it from a set from pictures; it is
+    only stored and served (#1972). *template* is the
+    ComfyUI template it was made from (``services.workflow_templates``), which
+    it then covers in the New workflow set picker. *declined* is its removed
+    list, written in the same transaction, so a set put back by an undo never
+    holds, even for a moment, what its owner had taken out.
     """
-    now = _now()
+    now = now_iso()
     with hub.transaction() as conn:
         set_id = int(
             conn.execute(
                 "INSERT INTO model_workflow_set "
-                "(name, created_at, updated_at, cloned) VALUES (?, ?, ?, ?)",
-                (clean_name(name), now, now, int(cloned)),
+                "(name, created_at, updated_at, cloned, template) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (clean_name(name), now, now, int(cloned), template),
             ).lastrowid
         )
         added = _insert_members(conn, set_id, members, now)
+        conn.executemany(
+            "INSERT INTO model_workflow_set_decline (set_id, sha256, declined_at) "
+            "VALUES (?, ?, ?)",
+            [(set_id, sha, now) for sha in sorted({d.lower() for d in declined or ()})],
+        )
     logger.info("Created workflow set %d with %d member(s).", set_id, len(added))
     return set_id
 
@@ -520,54 +549,94 @@ def rename_set(hub, set_id: int, name: Optional[str]) -> None:
         _require_set(conn, set_id)
         conn.execute(
             "UPDATE model_workflow_set SET name = ?, updated_at = ? WHERE id = ?",
-            (clean_name(name), _now(), set_id),
+            (clean_name(name), now_iso(), set_id),
         )
 
 
 def delete_set(hub, set_id: int) -> dict:
-    """Drop the set and its member rows. Never touches a file or a model row.
+    """Drop the set and its rows. Never touches a file or a model row.
 
     Returns the set as it was, read on the SAME transaction that deletes it:
     that snapshot is the undo, and read beforehand it could miss a member added
-    between the read and the delete - which the undo would then lose.
-    Coverage (pictures, covers) is not computed; an undo needs none of it.
+    between the read and the delete - which the undo would then lose. It
+    carries ``declined`` and ``seen`` too, since what the owner removed and
+    what they have seen are part of the set (#1972). Coverage (pictures,
+    covers) is not computed; an undo needs none.
     """
     with hub.transaction() as conn:
-        _require_set(conn, set_id)
-        (entry,) = _collect(
-            conn.execute(_SETS_SQL + " WHERE id = ?", (set_id,)).fetchall(),
-            conn.execute(_MEMBERS_SQL + " WHERE m.set_id = ?", (set_id,)).fetchall(),
-        )
-        # Members and declines first: the hub enforces foreign keys.
-        conn.execute(
-            "DELETE FROM model_workflow_set_member WHERE set_id = ?", (set_id,)
-        )
-        conn.execute(
-            "DELETE FROM model_workflow_set_decline WHERE set_id = ?", (set_id,)
-        )
-        conn.execute("DELETE FROM model_workflow_set WHERE id = ?", (set_id,))
-        # Every library's hide row for it, so the AUTOINCREMENT id it leaves
-        # behind is not a hidden row for nothing.
-        conn.execute(
-            "DELETE FROM workflow_set_hidden WHERE set_key = ?",
-            (f"hand:{set_id}",),
-        )
+        snapshot = _delete_in(conn, set_id)
     logger.info("Deleted workflow set %d.", set_id)
-    return _shape(entry)
+    return snapshot
 
 
-def add_members(hub, set_id: int, members: list[dict]) -> list[str]:
-    """Add *members*; one already in the set is a no-op. Returns what was added."""
-    now = _now()
+def _delete_in(conn, set_id: int) -> dict:
+    """Delete one set on *conn*; return it as it was, shaped, with ``seen``."""
+    _require_set(conn, set_id)
+    seen = [
+        row["sha256"]
+        for row in conn.execute(
+            "SELECT sha256 FROM model_workflow_set_seen WHERE set_id = ? "
+            "ORDER BY sha256",
+            (set_id,),
+        )
+    ]
+    (entry,) = _collect(
+        conn.execute(_SETS_SQL + " WHERE id = ?", (set_id,)).fetchall(),
+        conn.execute(_MEMBERS_SQL + " WHERE m.set_id = ?", (set_id,)).fetchall(),
+        conn.execute(
+            "SELECT set_id, sha256 FROM model_workflow_set_decline WHERE set_id = ?",
+            (set_id,),
+        ).fetchall(),
+    )
+    # Its child rows first: the hub enforces foreign keys.
+    for table in (
+        "model_workflow_set_member",
+        "model_workflow_set_decline",
+        "model_workflow_set_seen",
+    ):
+        conn.execute(f"DELETE FROM {table} WHERE set_id = ?", (set_id,))
+    conn.execute("DELETE FROM model_workflow_set WHERE id = ?", (set_id,))
+    # Every library's hide row for it, so the AUTOINCREMENT id it leaves
+    # behind is not a hidden row for nothing.
+    conn.execute(
+        "DELETE FROM workflow_set_hidden WHERE set_key = ?", (f"hand:{set_id}",)
+    )
+    return {**_shape(entry), "seen": seen}
+
+
+def add_members(hub, set_id: int, members: list[dict]) -> tuple[list[str], list[str]]:
+    """Add *members*; one already in the set is a no-op.
+
+    A model the owner had removed comes back: adding it is saying so, and a
+    removal would otherwise win over the member row (#1972).
+
+    Returns ``(added, undeclined)``: the sha256s inserted, and the ones taken
+    off the removed list, which an undo puts back on it.
+    """
+    now = now_iso()
     with hub.transaction() as conn:
         _require_set(conn, set_id)
         added = _insert_members(conn, set_id, members, now)
-        if added:
+        wanted = {_resolve(conn, member)[0] for member in members}
+        undeclined = [
+            row["sha256"]
+            for row in conn.execute(
+                "SELECT sha256 FROM model_workflow_set_decline WHERE set_id = ? "
+                "ORDER BY sha256",
+                (set_id,),
+            )
+            if row["sha256"] in wanted
+        ]
+        conn.executemany(
+            "DELETE FROM model_workflow_set_decline WHERE set_id = ? AND sha256 = ?",
+            [(set_id, sha) for sha in undeclined],
+        )
+        if added or undeclined:
             conn.execute(
                 "UPDATE model_workflow_set SET updated_at = ? WHERE id = ?",
                 (now, set_id),
             )
-    return added
+    return added, undeclined
 
 
 def remove_members(hub, set_id: int, sha256s: list[str]) -> list[dict]:
@@ -595,19 +664,21 @@ def remove_members(hub, set_id: int, sha256s: list[str]) -> list[dict]:
             )
             conn.execute(
                 "UPDATE model_workflow_set SET updated_at = ? WHERE id = ?",
-                (_now(), set_id),
+                (now_iso(), set_id),
             )
     return removed
 
 
 def set_declines(hub, set_id: int, sha256s: list[str]) -> list[str]:
-    """Replace the models kept out of this set's merge offer (#1523).
+    """Replace the models the owner removed from this set (#1972).
 
-    A whole-list write, so Keep separate, Offer again and each one's undo are
-    the same call. Returns the list as it was, sorted: that is the undo.
+    A removed model stays out of the set however often the pictures on its
+    checkpoint use it. A whole-list write, so Remove, Restore, Reset to
+    automatic and each one's undo are the same call. Returns the list as it
+    was, sorted: that is the undo.
     """
     wanted = sorted({sha.lower() for sha in sha256s})
-    now = _now()
+    now = now_iso()
     with hub.transaction() as conn:
         _require_set(conn, set_id)
         previous = [
@@ -627,12 +698,141 @@ def set_declines(hub, set_id: int, sha256s: list[str]) -> list[str]:
             [(set_id, sha, now) for sha in wanted],
         )
     logger.info(
-        "Workflow set %d keeps %d model(s) out of its merge offer (was %d).",
+        "Workflow set %d has %d model(s) removed (was %d).",
         set_id,
         len(wanted),
         len(previous),
     )
     return previous
+
+
+def merge_sets(
+    hub, library_uuid: Optional[str], set_id: int, other_ids: list[int]
+) -> dict:
+    """Merge *other_ids* into *set_id*, in one transaction (#1972).
+
+    Only sets on the same checkpoint merge: every set's checkpoint members
+    must be the same digests (the same pair, for a two-model workflow), or the
+    merge is refused. The survivor keeps its name and gains every member any
+    of the others stored; a model stays removed only if every set had removed
+    it, so a merge never drops a model one of them held. It stays hidden in
+    this library only if every set was. The others are deleted. No file is
+    touched.
+
+    Returns what an undo needs: ``added`` (the members inserted into the
+    survivor), ``previous_declined`` (its removed list before), ``was_hidden``,
+    and ``merged``, each deleted set's snapshot with its own ``hidden``.
+    """
+    others = sorted(set(other_ids) - {set_id})
+    if not others:
+        raise WorkflowSetRefusedError("Pick at least one other set to merge.")
+    with hub.transaction() as conn:
+        everyone = [set_id, *others]
+        for one in everyone:
+            _require_set(conn, one)
+        pairs = {
+            one: frozenset(
+                row["sha256"]
+                for row in conn.execute(
+                    "SELECT sha256 FROM model_workflow_set_member "
+                    "WHERE set_id = ? AND slot = ?",
+                    (one, SLOT_CHECKPOINT),
+                )
+            )
+            for one in everyone
+        }
+        if not pairs[set_id] or any(pairs[one] != pairs[set_id] for one in others):
+            raise WorkflowSetRefusedError("These sets use different checkpoints.")
+        hidden = {
+            one: library_uuid is not None
+            and conn.execute(
+                "SELECT 1 FROM workflow_set_hidden "
+                "WHERE library_uuid = ? AND set_key = ?",
+                (library_uuid, f"hand:{one}"),
+            ).fetchone()
+            is not None
+            for one in everyone
+        }
+        declines = {
+            one: {
+                row["sha256"]
+                for row in conn.execute(
+                    "SELECT sha256 FROM model_workflow_set_decline WHERE set_id = ?",
+                    (one,),
+                )
+            }
+            for one in everyone
+        }
+        now = now_iso()
+        added = _insert_members(
+            conn,
+            set_id,
+            [
+                dict(row)
+                for one in others
+                for row in conn.execute(
+                    "SELECT sha256, slot, label FROM model_workflow_set_member "
+                    "WHERE set_id = ?",
+                    (one,),
+                )
+                # A row its own set had removed is not a model that set held.
+                if row["sha256"] not in declines[one]
+            ],
+            now,
+        )
+        merged = []
+        for one in others:
+            merged.append({**_delete_in(conn, one), "hidden": hidden[one]})
+        kept_out = set.intersection(*declines.values())
+        conn.execute(
+            "DELETE FROM model_workflow_set_decline WHERE set_id = ?", (set_id,)
+        )
+        conn.executemany(
+            "INSERT INTO model_workflow_set_decline (set_id, sha256, declined_at) "
+            "VALUES (?, ?, ?)",
+            [(set_id, sha, now) for sha in sorted(kept_out)],
+        )
+        if hidden[set_id] and not all(hidden.values()):
+            conn.execute(
+                "DELETE FROM workflow_set_hidden "
+                "WHERE library_uuid = ? AND set_key = ?",
+                (library_uuid, f"hand:{set_id}"),
+            )
+        conn.execute(
+            "UPDATE model_workflow_set SET updated_at = ? WHERE id = ?",
+            (now, set_id),
+        )
+    logger.info(
+        "Merged workflow set(s) %s into %d: %d member(s) added, %d removed kept.",
+        others,
+        set_id,
+        len(added),
+        len(kept_out),
+    )
+    return {
+        "added": added,
+        "previous_declined": sorted(declines[set_id]),
+        "was_hidden": hidden[set_id],
+        "merged": merged,
+    }
+
+
+def mark_seen(hub, set_id: int, sha256s: list[str]) -> None:
+    """Record that the owner has seen these models in this set's tray.
+
+    A model the pictures bring into a set is marked new until then (#1972).
+    Rows for a model that later leaves the base are harmless: they are only
+    read against what the base holds.
+    """
+    wanted = sorted({sha.lower() for sha in sha256s})
+    now = now_iso()
+    with hub.transaction() as conn:
+        _require_set(conn, set_id)
+        conn.executemany(
+            "INSERT OR IGNORE INTO model_workflow_set_seen (set_id, sha256, seen_at) "
+            "VALUES (?, ?, ?)",
+            [(set_id, sha, now) for sha in wanted],
+        )
 
 
 def hidden_set_keys(hub, library_uuid: Optional[str]) -> list[str]:

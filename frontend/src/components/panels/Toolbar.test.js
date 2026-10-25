@@ -96,7 +96,6 @@ function mountToolbar(props = {}, stubs = {}) {
     props: {
       allPicturesId: "ALL",
       unassignedPicturesId: "UNASSIGNED",
-      backendUrl: "http://backend.test",
       ...props,
     },
   });

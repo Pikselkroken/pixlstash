@@ -60,7 +60,7 @@ export const CONFIDENCE_THRESHOLDS = [0.9, 0.8, 0.7, 0.6];
 // Doubtful asks for an unsure tagger, so its thresholds sit lower.
 export const DOUBTFUL_THRESHOLDS = [0.6, 0.5, 0.4, 0.3];
 
-export const SMART_SCORE_BUCKET_LABELS = {
+const SMART_SCORE_BUCKET_LABELS = {
   unscored: "unscored",
   "1-2": "1–2",
   "2-3": "2–3",
@@ -68,7 +68,7 @@ export const SMART_SCORE_BUCKET_LABELS = {
   "4-5": "4–5",
 };
 
-export const RESOLUTION_BUCKET_LABELS = {
+const RESOLUTION_BUCKET_LABELS = {
   unknown: "unknown",
   lt1mp: "under 1 MP",
   "1-4mp": "1–4 MP",
@@ -88,6 +88,11 @@ export function parseConfidenceEntry(entry) {
 
 export function confidenceEntry(tag, threshold) {
   return `${tag}:${threshold.toFixed(2)}`;
+}
+
+/** A filter row's count, localised; blank while it is still unknown. */
+export function formatCount(n) {
+  return n == null ? "" : Number(n).toLocaleString();
 }
 
 export function percent(threshold) {

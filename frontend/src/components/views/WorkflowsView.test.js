@@ -55,7 +55,10 @@ const patchWorkflowCard = vi.fn();
 const duplicateWorkflow = vi.fn();
 const deleteWorkflow = vi.fn();
 const exportWorkflow = vi.fn();
+const setWorkflowThumbnail = vi.fn();
+const preflightWorkflowRun = vi.fn();
 vi.mock("../../api/workflows", () => ({
+  preflightWorkflowRun: (...args) => preflightWorkflowRun(...args),
   listWorkflowCards: (...args) => listWorkflowCards(...args),
   getWorkflowCard: (...args) => getWorkflowCard(...args),
   // `WorkflowCard` renders its covers through this, so a mock without it
@@ -69,9 +72,28 @@ vi.mock("../../api/workflows", () => ({
   duplicateWorkflow: (...args) => duplicateWorkflow(...args),
   deleteWorkflow: (...args) => deleteWorkflow(...args),
   exportWorkflow: (...args) => exportWorkflow(...args),
+  setWorkflowThumbnail: (...args) => setWorkflowThumbnail(...args),
+}));
+const startModelDownload = vi.fn();
+vi.mock("../../api/modelDownloads", () => ({
+  startModelDownload: (...args) => startModelDownload(...args),
+  cancelModelDownload: vi.fn(),
 }));
 vi.mock("../../api/modelShelf", () => ({
   listAdapters: vi.fn(async () => []),
+}));
+// #1578: an in-memory server, so the store's first read sees what a test set.
+const server = { model: [], workflow: [], set: [] };
+const listFavourites = vi.fn(async () => ({ ...server }));
+const setFavourites = vi.fn(async (kind, keys, favourite) => {
+  const next = new Set(server[kind]);
+  for (const key of keys) favourite ? next.add(key) : next.delete(key);
+  server[kind] = [...next];
+  return { ...server };
+});
+vi.mock("../../api/favourites", () => ({
+  listFavourites: (...args) => listFavourites(...args),
+  setFavourites: (...args) => setFavourites(...args),
 }));
 const listImportFolders = vi.fn();
 vi.mock("../../api/folders", () => ({
@@ -92,9 +114,15 @@ vi.mock("../../api/recipes", () => ({
 }));
 const importWorkflow = vi.fn();
 const getPixlstashNode = vi.fn();
+const listTemplates = vi.fn();
+const addTemplates = vi.fn();
 vi.mock("../../api/comfyui", () => ({
   importWorkflow: (...args) => importWorkflow(...args),
   getPixlstashNode: (...args) => getPixlstashNode(...args),
+  // The Templates tab (#2000).
+  listTemplates: (...args) => listTemplates(...args),
+  addTemplates: (...args) => addTemplates(...args),
+  templateThumbnailUrl: ({ name }) => `/thumbs/${name}`,
 }));
 
 import WorkflowsView from "./WorkflowsView.vue";
@@ -219,6 +247,9 @@ beforeEach(() => {
   );
   listImportFolders.mockResolvedValue({ folders: [] });
   listUnfiledRecipes.mockResolvedValue([]);
+  listFavourites.mockClear();
+  setFavourites.mockClear();
+  Object.assign(server, { model: [], workflow: [], set: [] });
   patchWorkflowCard.mockReset();
   patchWorkflowCard.mockResolvedValue({ card: card("b") });
   // A FRESH array per call, as a real response is: the store assigns it to
@@ -771,6 +802,30 @@ describe("the closed inspector", () => {
     expect(sidebar.statsOpen).toBe(false);
   });
 
+  it("opens, and keeps open, on a card's double-click", async () => {
+    const wrapper = await closedGrid();
+    const sidebar = useSidebarStore();
+    await wrapper.findAll(".wfv-row")[0].trigger("dblclick");
+    await flush();
+    expect(sidebar.workflowInspectorOpen).toBe(true);
+    expect(sidebar.cardTabRequest).toBe(1);
+    expect(window.localStorage.getItem("pixlstash:workflowInspectorOpen")).toBe(
+      "true",
+    );
+
+    // Open already: the reader's tab is left alone.
+    await wrapper.findAll(".wfv-row")[2].trigger("dblclick");
+    await flush();
+    expect(sidebar.cardTabRequest).toBe(1);
+  });
+
+  it("leaves a double-click on a card's own button to the button", async () => {
+    const wrapper = await closedGrid();
+    await wrapper.findAll(".wfv-row")[0].find("button").trigger("dblclick");
+    await flush();
+    expect(useSidebarStore().workflowInspectorOpen).toBe(false);
+  });
+
   it("opens, without persisting, on a ?topology= hit", async () => {
     route.query = { topology: "topology-d" };
     window.localStorage.setItem("pixlstash:workflowInspectorOpen", "false");
@@ -1025,11 +1080,17 @@ describe("the app-wide toolbar tail", () => {
     const { readFileSync } = await import("node:fs");
     const app = readFileSync(`${process.cwd()}/src/App.vue`, "utf8");
     expect(app).not.toContain("WorkflowRunPanel");
-    const rail = app.indexOf("<WorkflowTab v-if");
+    // The Templates tab's inspector (#2000) is the one other branch, and only
+    // on this view while that tab is shown; the Workflow tab follows it.
+    const rail = app.indexOf("<TemplateInspector");
     expect(rail).toBeGreaterThan(-1);
-    expect(app.slice(rail, rail + 80)).toContain('v-if="isWorkflowsView"');
+    expect(app.slice(rail, rail + 120)).toContain(
+      'v-if="isWorkflowsView && workflowTemplatesStore.shown"',
+    );
+    const tab = app.indexOf('<WorkflowTab v-else-if="isWorkflowsView"');
+    expect(tab).toBeGreaterThan(rail);
     // The stats panel is still the fallback, not a second branch above it.
-    expect(app.slice(rail, rail + 200)).toContain("<StatsSidebar v-else");
+    expect(app.slice(tab, tab + 200)).toContain("<StatsSidebar v-else");
   });
 });
 
@@ -1401,6 +1462,43 @@ describe("the verbs the bar fires", () => {
     expect(useNoticeStore().notices.at(-1).text).toBe("Duplicated as a (2).");
   });
 
+  it("Choose thumbnail… uploads the picked image onto the one card", async () => {
+    const wrapper = await grid();
+    useWorkflowsStore().selectRange(["a"]);
+    setWorkflowThumbnail.mockReset();
+    setWorkflowThumbnail.mockResolvedValue({});
+    const input = wrapper.find('input[accept="image/png,image/jpeg,image/webp"]');
+    const opened = vi.spyOn(input.element, "click");
+
+    await bar(wrapper).vm.$emit("set-thumbnail");
+    expect(opened).toHaveBeenCalledTimes(1);
+    const file = new File(["x"], "cover.png", { type: "image/png" });
+    Object.defineProperty(input.element, "files", { value: [file] });
+    await input.trigger("change");
+    await flush();
+    expect(setWorkflowThumbnail).toHaveBeenCalledWith("a", file);
+    // Opened from code, so focus is handed back to the card, either way out.
+    expect(cursorKey(wrapper)).toBe("a");
+    expect(document.activeElement?.dataset.key).toBe("a");
+    document.activeElement.blur();
+    expect(document.activeElement).toBe(document.body);
+    await bar(wrapper).vm.$emit("set-thumbnail");
+    await input.trigger("cancel");
+    await flush();
+    expect(document.activeElement?.dataset.key).toBe("a");
+  });
+
+  it("the pin row's answer reaches the server as thumbnail_pinned", async () => {
+    const wrapper = await grid();
+    useWorkflowsStore().selectRange(["a"]);
+    patchWorkflowCard.mockResolvedValue({});
+    await bar(wrapper).vm.$emit("pin-thumbnail", false);
+    await flush();
+    expect(patchWorkflowCard).toHaveBeenLastCalledWith("a", {
+      thumbnail_pinned: false,
+    });
+  });
+
   it("Rename opens on the current name and writes only a changed one", async () => {
     const wrapper = await grid();
     const store = useWorkflowsStore();
@@ -1679,7 +1777,7 @@ describe("the card menu opens the picture you pointed at", () => {
   });
 });
 
-describe("Add… and Unfiled recipes", () => {
+describe("Add…, a dropped file, and Unfiled recipes", () => {
   it("imports each file as a new workflow and opens the last one", async () => {
     const wrapper = await grid();
     const store = useWorkflowsStore();
@@ -1730,6 +1828,82 @@ describe("Add… and Unfiled recipes", () => {
     expect(wrapper.find('[role="status"]').text()).toBe("Added 2 workflows");
   });
 
+  it("adds a .json dropped on the view the way Add… does, and leaves the rest", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    importWorkflow.mockReset();
+    importWorkflow.mockResolvedValue({ name: "flow", workflow_id: "d" });
+    const files = [
+      new File(['{"nodes": []}'], "flow.JSON", { type: "application/json" }),
+      new File(["x"], "holiday.jpg", { type: "image/jpeg" }),
+    ];
+    const dataTransfer = { files, types: ["Files"], dropEffect: "none" };
+    const card = wrapper.find(".wfv-row");
+    await card.trigger("dragenter", { dataTransfer });
+    expect(wrapper.find(".wfv").classes()).toContain("wfv--drop");
+    await card.trigger("drop", { dataTransfer });
+    await flush();
+    await flush();
+
+    expect(wrapper.find(".wfv").classes()).not.toContain("wfv--drop");
+    // The picture is the window-wide importer's, never posted as a workflow.
+    expect(importWorkflow).toHaveBeenCalledTimes(1);
+    expect(importWorkflow).toHaveBeenCalledWith({
+      name: "flow",
+      workflow: { nodes: [] },
+    });
+    expect(store.selectedKeys).toEqual(["d"]);
+    expect(wrapper.find('[role="status"]').text()).toBe("Added flow");
+  });
+
+  it("puts the wash out when the window importer claims the drop", async () => {
+    const wrapper = await grid();
+    const dataTransfer = { files: [], types: ["Files"] };
+    await wrapper.find(".wfv-row").trigger("dragenter", { dataTransfer });
+    expect(wrapper.find(".wfv").classes()).toContain("wfv--drop");
+    // A model-only drop: stopped at the window, the view never sees it.
+    const drop = new Event("drop");
+    window.addEventListener("drop", (e) => e.stopPropagation(), {
+      capture: true,
+      once: true,
+    });
+    window.dispatchEvent(drop);
+    await flush();
+    expect(wrapper.find(".wfv").classes()).not.toContain("wfv--drop");
+  });
+
+  it("says nothing about a picture dropped on the view", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    importWorkflow.mockReset();
+    const files = [new File(["x"], "holiday.jpg", { type: "image/jpeg" })];
+    await wrapper
+      .find(".wfv-row")
+      .trigger("drop", { dataTransfer: { files, types: ["Files"] } });
+    await flush();
+    // Not read as a workflow, so not reported as one that failed to add.
+    expect(store.error).toBe("");
+    expect(importWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("is not a drop target for an in-app picture drag the desktop fills with files", async () => {
+    const wrapper = await grid();
+    const dataTransfer = { files: [], types: ["Files", "application/json"] };
+    await wrapper.find(".wfv-row").trigger("dragenter", { dataTransfer });
+    expect(wrapper.find(".wfv").classes()).not.toContain("wfv--drop");
+  });
+
+  it("is not a drop target for a drag that carries no files", async () => {
+    const wrapper = await grid();
+    importWorkflow.mockReset();
+    const dataTransfer = { files: [], types: ["text/plain"] };
+    await wrapper.find(".wfv-row").trigger("dragenter", { dataTransfer });
+    expect(wrapper.find(".wfv").classes()).not.toContain("wfv--drop");
+    await wrapper.find(".wfv-row").trigger("drop", { dataTransfer });
+    await flush();
+    expect(importWorkflow).not.toHaveBeenCalled();
+  });
+
   it("lists the unfiled recipes below the grid, and nothing while there are none", async () => {
     const empty = await grid();
     expect(empty.find(".wfv-unfiled .wfrt-head").exists()).toBe(false);
@@ -1742,5 +1916,416 @@ describe("Add… and Unfiled recipes", () => {
       "Unfiled recipes",
     );
     expect(wrapper.find(".wfv-unfiled .wfrt-name").text()).toBe("Orphan");
+  });
+});
+
+it("names a card's shelf files for a model file dropped on it", async () => {
+  // The window's drop handler reads them to put the file beside the
+  // workflow's own models (useModelDropTarget). A slot the shelf does not hold
+  // has no hash and names nothing.
+  listWorkflowCards.mockResolvedValue({
+    cards: [
+      card("a", {
+        models: [{ sha256: "a".repeat(64) }],
+        loras: [{ sha256: "b".repeat(64) }, { sha256: null }],
+      }),
+    ],
+    one_offs: 0,
+    hidden: 0,
+  });
+  const wrapper = await grid(1008);
+  expect(
+    wrapper.find(".wfv-cell").attributes("data-model-drop-models"),
+  ).toBe(`${"a".repeat(64)} ${"b".repeat(64)}`);
+});
+
+// #2000: the Templates tab beside Mine. The grid, the toolbar's controls and
+// the right rail switch over; Mine is left exactly as it was.
+describe("Mine | Templates", () => {
+  const TEMPLATES = [
+    {
+      key: "default/ready",
+      module: "default",
+      name: "ready",
+      source: "builtin",
+      title: "Ready one",
+      files: [{ name: "ae.safetensors", directory: "vae", present: true }],
+    },
+    {
+      key: "default/api_x",
+      module: "default",
+      name: "api_x",
+      source: "partner",
+      title: "Partner one",
+      files: [],
+    },
+  ];
+
+  beforeEach(() => {
+    listTemplates.mockReset();
+    addTemplates.mockReset();
+  });
+
+  it("reads the templates only when the tab is first shown, and draws them", async () => {
+    listTemplates.mockResolvedValue({
+      comfyui_url: "http://127.0.0.1:8188",
+      reachable: true,
+      templates: TEMPLATES,
+    });
+    const wrapper = await grid();
+    expect(listTemplates).not.toHaveBeenCalled();
+    const tab = wrapper.find('[data-testid="wfv-tab-templates"]');
+    expect(tab.attributes("aria-selected")).toBe("false");
+
+    await tab.trigger("click");
+    await flush();
+
+    expect(listTemplates).toHaveBeenCalledTimes(1);
+    expect(tab.attributes("aria-selected")).toBe("true");
+    expect(wrapper.find(".wfv-grid").exists()).toBe(false);
+    // The partner template is hidden by default, and the strip says so.
+    const titles = wrapper
+      .findAll('[data-testid="template-card"]')
+      .map((card) => card.attributes("aria-label"));
+    expect(titles).toEqual(["Ready one, ComfyUI template, Ready to run"]);
+    expect(wrapper.text()).toContain("hidden (1)");
+    expect(wrapper.find('[data-testid="wtp-source"]').attributes("aria-label")).toContain(
+      "http://127.0.0.1:8188",
+    );
+
+    await wrapper.find('[data-testid="wfv-tab-mine"]').trigger("click");
+    expect(cardKeys(wrapper)).toEqual(["a", "b", "c", "d", "e", "f"]);
+  });
+
+  it("moves between the tabs with the arrow keys", async () => {
+    listTemplates.mockResolvedValue({ reachable: true, templates: [] });
+    const wrapper = await grid();
+    await wrapper.find('[data-testid="wfv-tab-mine"]').trigger("keydown", {
+      key: "ArrowRight",
+    });
+    expect(
+      wrapper.find('[data-testid="wfv-tab-templates"]').attributes("aria-selected"),
+    ).toBe("true");
+  });
+
+  it("shows Mine with the workflow a file dropped on Templates made", async () => {
+    listTemplates.mockResolvedValue({ reachable: true, templates: [] });
+    importWorkflow.mockReset();
+    importWorkflow.mockResolvedValue({ name: "flow", workflow_id: "d" });
+    const wrapper = await grid();
+    await wrapper.find('[data-testid="wfv-tab-templates"]').trigger("click");
+    await flush();
+    const files = [new File(['{"nodes": []}'], "flow.json", { type: "application/json" })];
+    await wrapper.find(".wfv").trigger("drop", { dataTransfer: { files, types: ["Files"] } });
+    await flush();
+    await flush();
+
+    expect(
+      wrapper.find('[data-testid="wfv-tab-mine"]').attributes("aria-selected"),
+    ).toBe("true");
+    expect(useWorkflowsStore().selectedKeys).toEqual(["d"]);
+    expect(cursorKey(wrapper)).toBe("d");
+  });
+
+  it("says where the list comes from when ComfyUI does not answer", async () => {
+    listTemplates.mockResolvedValue({
+      comfyui_url: "http://127.0.0.1:8188",
+      reachable: false,
+      detail: "Nothing is answering for templates at http://127.0.0.1:8188.",
+      templates: [],
+    });
+    const wrapper = await grid();
+    await wrapper.find('[data-testid="wfv-tab-templates"]').trigger("click");
+    await flush();
+    const empty = wrapper.find('[data-testid="wtp-unreachable"]');
+    expect(empty.text()).toContain("Templates come from your ComfyUI");
+    expect(empty.text()).toContain("Nothing is answering at http://127.0.0.1:8188");
+    await empty.find("button").trigger("click");
+    expect(wrapper.emitted("open-settings")).toEqual([["comfyui"]]);
+  });
+
+  it("lists the shipped templates when ComfyUI does not answer, and adds drafts", async () => {
+    listTemplates.mockResolvedValue({
+      comfyui_url: "http://127.0.0.1:8188",
+      reachable: false,
+      detail: "Nothing is answering for templates at http://127.0.0.1:8188.",
+      templates: TEMPLATES,
+    });
+    addTemplates.mockResolvedValue({
+      added: [{ module: "default", name: "ready", workflow_id: "c", draft: true }],
+      failed: [],
+    });
+    const wrapper = await grid();
+    await wrapper.find('[data-testid="wfv-tab-templates"]').trigger("click");
+    await flush();
+    expect(wrapper.find('[data-testid="wtp-unreachable"]').exists()).toBe(false);
+    // Partner templates are hidden by default, shipped or not.
+    expect(wrapper.findAll('[data-testid="template-card"]').length).toBe(
+      TEMPLATES.filter((t) => t.source !== "partner").length,
+    );
+    const source = wrapper.find('[data-testid="wtp-source"]');
+    expect(source.attributes("aria-label")).toContain("PixlStash ships");
+    expect(source.find(".wtp-link-off").text()).toContain("mdi-close-thick");
+    expect(source.find(".wtp-link-dot").exists()).toBe(false);
+
+    await wrapper.find('[data-testid="template-card"]').trigger("click");
+    await flush();
+    await wrapper.find('[data-testid="wtp-add"]').trigger("click");
+    await flush();
+    await flush();
+    const { useNoticeStore } = await import("../../stores/useNoticeStore");
+    expect(JSON.stringify(useNoticeStore().$state)).toContain(
+      "It is a draft: once ComfyUI runs, Finish in ComfyUI makes it runnable.",
+    );
+  });
+
+  it("words a shipped Add by its drafts only when every one is a draft", async () => {
+    listTemplates.mockResolvedValue({
+      comfyui_url: "http://127.0.0.1:8188",
+      reachable: false,
+      templates: TEMPLATES,
+    });
+    addTemplates.mockResolvedValue({
+      added: [
+        { module: "default", name: "ready", workflow_id: "c", draft: true },
+        { module: "default", name: "other", workflow_id: "d", draft: false },
+      ],
+      failed: [],
+    });
+    const wrapper = await grid();
+    await wrapper.find('[data-testid="wfv-tab-templates"]').trigger("click");
+    await flush();
+    await wrapper.find('[data-testid="template-card"]').trigger("click");
+    await flush();
+    await wrapper.find('[data-testid="wtp-add"]').trigger("click");
+    await flush();
+    await flush();
+    const { useNoticeStore } = await import("../../stores/useNoticeStore");
+    const said = JSON.stringify(useNoticeStore().$state);
+    expect(said).toContain("1 of them are drafts");
+    expect(said).not.toContain("They are drafts");
+  });
+
+  it("adds the selection, then lands on Mine with what was made selected", async () => {
+    listTemplates.mockResolvedValue({
+      comfyui_url: "http://127.0.0.1:8188",
+      reachable: true,
+      templates: TEMPLATES,
+    });
+    addTemplates.mockResolvedValue({
+      added: [{ module: "default", name: "ready", workflow_id: "c", draft: true }],
+      failed: [],
+    });
+    const wrapper = await grid();
+    await wrapper.find('[data-testid="wfv-tab-templates"]').trigger("click");
+    await flush();
+    await wrapper.find('[data-testid="template-card"]').trigger("click");
+    await flush();
+    await wrapper.find('[data-testid="wtp-add"]').trigger("click");
+    await flush();
+    await flush();
+
+    expect(addTemplates.mock.calls[0][0].map((t) => t.key)).toEqual([
+      "default/ready",
+    ]);
+    expect(
+      wrapper.find('[data-testid="wfv-tab-mine"]').attributes("aria-selected"),
+    ).toBe("true");
+    expect(useWorkflowsStore().selectedKeys).toEqual(["c"]);
+    const { useNoticeStore } = await import("../../stores/useNoticeStore");
+    expect(JSON.stringify(useNoticeStore().$state)).toContain(
+      "It is a draft: open it in ComfyUI and save it to finish it.",
+    );
+  });
+
+  it("keeps what did not go in picked on Templates, to try again", async () => {
+    listTemplates.mockResolvedValue({ reachable: true, templates: TEMPLATES });
+    addTemplates.mockResolvedValue({
+      added: [{ module: "default", name: "ready", workflow_id: "c", draft: false }],
+      failed: [{ module: "default", name: "api_x", detail: "gone" }],
+    });
+    const wrapper = await grid();
+    await wrapper.find('[data-testid="wfv-tab-templates"]').trigger("click");
+    await flush();
+    const { useWorkflowTemplatesStore } = await import(
+      "../../stores/useWorkflowTemplatesStore"
+    );
+    const templates = useWorkflowTemplatesStore();
+    templates.selectRange(["default/ready", "default/api_x"]);
+    await flush();
+    await wrapper.find('[data-testid="wtp-add"]').trigger("click");
+    await flush();
+    await flush();
+    expect(useWorkflowsStore().selectedKeys).toEqual(["c"]);
+    expect(templates.selectedKeys).toEqual(["default/api_x"]);
+  });
+
+  it("gives Mine no count until its list is read", async () => {
+    const wrapper = mountView();
+    const count = () =>
+      wrapper.find('[data-testid="wfv-tab-mine"] .wfv-viewseg-n').exists();
+    expect(count()).toBe(false);
+    await flush();
+    expect(count()).toBe(true);
+  });
+});
+
+describe("favourites (#1578)", () => {
+  it("reads the favourites when the grid mounts", async () => {
+    await grid();
+    expect(listFavourites).toHaveBeenCalled();
+  });
+
+  it("H favourites the focused card, and selects it first when it is not selected", async () => {
+    const wrapper = await grid();
+    await wrapper.find(".wfv-grid").trigger("keydown", { key: "h" });
+    await flush();
+    expect(setFavourites).toHaveBeenCalledWith("workflow", ["a"], true);
+    expect(useWorkflowsStore().selectedKeys).toEqual(["a"]);
+  });
+
+  it("H on a card inside the selection favourites the whole selection", async () => {
+    const wrapper = await grid();
+    await wrapper.find('[data-key="c"]').trigger("click");
+    await wrapper.find('[data-key="d"]').trigger("click", { ctrlKey: true });
+    await wrapper.find(".wfv-grid").trigger("keydown", { key: "h" });
+    await flush();
+    expect(setFavourites).toHaveBeenCalledWith("workflow", ["c", "d"], true);
+  });
+
+  it("a click on the heart favourites its card without selecting it", async () => {
+    const wrapper = await grid();
+    // The vuetify stubs do not draw a Tooltip's activator, so the heart's own
+    // button is not in this DOM; the card emits what the heart would, and the
+    // heart's click is covered in WorkflowCard.test.js.
+    wrapper
+      .findAllComponents({ name: "WorkflowCard" })
+      .find((card) => card.props("card").id === "b")
+      .vm.$emit("toggle-favourite");
+    await flush();
+    expect(setFavourites).toHaveBeenCalledWith("workflow", ["b"], true);
+    expect(useWorkflowsStore().selectedKeys).toEqual([]);
+  });
+
+  it("offers Favourites first in Sort on Mine only, since templates are not favourites", async () => {
+    listTemplates.mockResolvedValue({ reachable: true, templates: [] });
+    const wrapper = await grid();
+    const box = () =>
+      wrapper.findAll(".fm-check-label").filter((el) => el.text() === "Favourites first");
+    wrapper.vm.sortMenuOpen = true;
+    await flush();
+    expect(box()).toHaveLength(1);
+    await wrapper.find('[data-testid="wfv-tab-templates"]').trigger("click");
+    await flush();
+    wrapper.vm.sortMenuOpen = true;
+    await flush();
+    // The menu is open on Templates too: its own sort keys are drawn.
+    expect(wrapper.text()).toContain("Sort by");
+    expect(box()).toHaveLength(0);
+  });
+
+  it("Favourites only narrows the grid to the favourites, in the sort's order", async () => {
+    server.workflow = ["e", "b"];
+    const wrapper = await grid();
+    useWorkflowsStore().setFilters({ favouritesOnly: true });
+    await flush();
+    expect(cardKeys(wrapper)).toEqual(["b", "e"]);
+  });
+
+  it("under Favourites only, H on a selected favourite drops it from the selection", async () => {
+    server.workflow = ["c", "d"];
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    store.setFilters({ favouritesOnly: true });
+    await flush();
+    await wrapper.find('[data-key="c"]').trigger("click");
+    await wrapper.find('[data-key="d"]').trigger("click", { ctrlKey: true });
+    expect(store.selectedKeys).toEqual(["c", "d"]);
+    await wrapper.find(".wfv-grid").trigger("keydown", { key: "h" });
+    await flush();
+    expect(setFavourites).toHaveBeenCalledWith("workflow", ["c", "d"], false);
+    expect(store.selectedKeys).toEqual([]);
+  });
+});
+
+// Download missing models from the card menu: what each selected workflow's
+// pre-flight marks downloadable, once each, and a word for the ones unchecked.
+describe("Download missing models", () => {
+  const bar = (wrapper) =>
+    wrapper.findComponent({ name: "WorkflowSelectionBar" });
+  const answer = (...files) => ({
+    groups: [
+      {
+        reasons: [
+          {
+            code: "missing_models",
+            models: files.map((file) => ({ file, downloadable: true })),
+          },
+        ],
+      },
+    ],
+  });
+
+  beforeEach(() => {
+    preflightWorkflowRun.mockReset();
+    startModelDownload.mockReset();
+    startModelDownload.mockImplementation(async (file) => ({
+      id: file,
+      file,
+      status: "running",
+    }));
+  });
+
+  it("asks each selected workflow but a draft, and starts each file once", async () => {
+    listWorkflowCards.mockResolvedValue({
+      cards: [card("a"), card("c"), card("x", { manual: true, draft: true })],
+      one_offs: 0,
+      hidden: 0,
+    });
+    preflightWorkflowRun.mockImplementation(async ({ workflow_id }) =>
+      workflow_id === "a"
+        ? answer("vae.safetensors", "shared.safetensors")
+        : answer("shared.safetensors"),
+    );
+    const wrapper = await grid();
+    useWorkflowsStore().selectRange(["a", "c", "x"]);
+    await flush();
+    await bar(wrapper).vm.$emit("download-missing");
+    await flush();
+    expect(preflightWorkflowRun.mock.calls.map(([body]) => body.workflow_id)).toEqual([
+      "a",
+      "c",
+    ]);
+    expect(preflightWorkflowRun.mock.calls[0][1]).toEqual({ cached: true });
+    expect(startModelDownload.mock.calls.map(([file]) => file)).toEqual([
+      "vae.safetensors",
+      "shared.safetensors",
+    ]);
+  });
+
+  it("says how many it could not check, and one press runs once", async () => {
+    let release;
+    preflightWorkflowRun
+      .mockImplementationOnce(
+        () => new Promise((resolve) => (release = () => resolve(answer("m.safetensors")))),
+      )
+      .mockRejectedValueOnce(new Error("ComfyUI went away"));
+    const wrapper = await grid();
+    useWorkflowsStore().selectRange(["a", "c"]);
+    await flush();
+    await bar(wrapper).vm.$emit("download-missing");
+    // A second press while the first is still asking does nothing.
+    await bar(wrapper).vm.$emit("download-missing");
+    release();
+    await flush();
+    await flush();
+    expect(preflightWorkflowRun).toHaveBeenCalledTimes(2);
+    expect(startModelDownload.mock.calls.map(([file]) => file)).toEqual([
+      "m.safetensors",
+    ]);
+    const { useNoticeStore } = await import("../../stores/useNoticeStore");
+    expect(useNoticeStore().notices.map((n) => n.text)).toContain(
+      "Could not check what 1 of these 2 workflows are missing.",
+    );
   });
 });

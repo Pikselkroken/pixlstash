@@ -93,8 +93,13 @@
           :at="headVersion.at"
           :versions="shownVersions?.versions ?? null"
           :failed="versionsFailed"
+          :can-open-comfyui="
+            canOpenComfyui && !comfyuiLacksNode && !comfyuiOpensNoRuns
+          "
           @open="reopenVersions"
           @go-back="goBack"
+          @duplicate="duplicateVersion"
+          @open-comfyui="openVersionInComfyui"
         />
         <!-- The newest version is one ComfyUI saved (#1852): said, with the
              way back beside it, and nothing to answer. An inline button in a
@@ -274,8 +279,12 @@
           </span>
           <div class="wftab-col wftab-model">
             <template v-if="row.missing && !row.edited">
-              <p class="wftab-warn">
-                <v-icon size="16">mdi-alert-outline</v-icon>
+              <p class="wftab-warn" :class="{ 'wftab-coming': row.coming }">
+                <DownloadingMark
+                  v-if="row.coming"
+                  :percent="row.coming.percent"
+                />
+                <v-icon v-else size="16">mdi-alert-outline</v-icon>
                 {{ row.missingText }}
               </p>
               <p class="wftab-note wftab-quiet" data-testid="wftab-missing-file">
@@ -283,7 +292,48 @@
                   ><Tooltip :text="row.missing" activator="parent" />{{
                     modelLabel(fileName(row.missing))
                   }}</span
-                >{{ missingNote(row.missing) }}
+                >{{ missingNote(row.missing, row.kind) }}
+              </p>
+              <p
+                v-if="row.target"
+                class="wftab-note wftab-quiet"
+                data-testid="wftab-missing-base"
+              >
+                It is a <b class="wftab-strong">{{ row.target }}</b> checkpoint,
+                {{
+                  row.likelyCount === 0
+                    ? "and nothing on your shelf is."
+                    : row.likelyCount === 1
+                      ? "and so is 1 on your shelf."
+                      : `and so are ${row.likelyCount} on your shelf.`
+                }}
+              </p>
+              <!-- What to do about it, in as few words: the why of an
+                   unmatched list is the mark's tooltip. A stale file is
+                   never downloadable, so it reads as a pick. -->
+              <p
+                v-if="downloadableFiles.has(row.missing) || row.options.length"
+                class="wftab-note wftab-quiet"
+                data-testid="wftab-missing-action"
+              >
+                <template v-if="downloadableFiles.has(row.missing)"
+                  >Download it<ModelDownloadButton :file="row.missing" />{{
+                    row.options.length ? " or pick a replacement below." : ""
+                  }}</template
+                ><template v-else>Pick a replacement below.</template
+                ><span
+                  v-if="row.unmatched"
+                  class="wftab-info-mark"
+                  tabindex="0"
+                  aria-label="Why every checkpoint is listed"
+                  data-testid="wftab-replace-unmatched"
+                  :data-note="UNMATCHED_REPLACEMENTS_TEXT"
+                  ><Tooltip
+                    :text="UNMATCHED_REPLACEMENTS_TEXT"
+                    activator="parent" /><v-icon size="16" aria-hidden="true"
+                    >mdi-help-circle-outline</v-icon
+                  ></span
+                >
               </p>
               <p
                 v-if="isAdding(row.missing)"
@@ -294,15 +344,6 @@
                 <v-progress-circular indeterminate size="12" width="2" />
                 Found in your model folders. Adding it to your shelf…
               </p>
-              <!-- A pick is saved on the workflow, so an offer that is not of
-                   the missing one's base model says so before it. -->
-              <p
-                v-if="row.unmatched"
-                class="wftab-note wftab-quiet"
-                data-testid="wftab-replace-unmatched"
-              >
-                {{ UNMATCHED_REPLACEMENTS_TEXT }}
-              </p>
             </template>
             <AppSelect
               v-if="row.options.length"
@@ -310,15 +351,46 @@
               :label="row.name"
               hide-label
               :options="row.options"
+              :placeholder="row.grouped ? `${row.savedLabel} (missing)` : ''"
               :disabled="!canEdit"
               :data-testid="`wftab-pick-${row.kind}`"
               @update:model-value="(file) => pickModel(row, file)"
-            />
+            >
+              <template v-if="row.grouped" #head>
+                <span data-testid="wftab-replacing"
+                  >Replacing <b class="wftab-strong">{{ row.savedLabel }}</b
+                  >{{ row.target ? ` · ${row.target}` : "" }}</span
+                >
+                <span
+                  v-if="row.target && !row.likelyCount"
+                  class="wftab-none-likely"
+                  data-testid="wftab-none-likely"
+                  ><v-icon
+                    size="16"
+                    class="wftab-tone--info"
+                    aria-hidden="true"
+                    >mdi-information-outline</v-icon
+                  >Nothing on your shelf is {{ row.target }}.</span
+                >
+              </template>
+            </AppSelect>
             <span v-else class="wftab-value"
               ><Tooltip v-if="row.file" :text="row.file" activator="parent" />{{
                 row.savedLabel
               }}</span
             >
+            <p
+              v-if="row.verdictLine"
+              class="wftab-verdict"
+              data-testid="wftab-verdict"
+            >
+              <v-icon
+                size="14"
+                :class="`wftab-tone--${row.verdictTone}`"
+                aria-hidden="true"
+                >{{ `mdi-${row.verdictIcon}` }}</v-icon
+              ><span>{{ row.verdictLine }}</span>
+            </p>
             <!-- What the shelf files this loader's model as, where every
                  workflow loading it says it is this loader's kind (#1962): the
                  shelf's Kind menu, here too. It is the one note under the
@@ -486,12 +558,19 @@
                   ><Tooltip :text="missingCheckpointFile" activator="parent" />{{
                     modelLabel(fileName(missingCheckpointFile))
                   }}</span
-                >{{ missingNote(missingCheckpointFile) }}
+                >{{ missingNote(missingCheckpointFile, "checkpoint") }}
               </p>
               <p v-else class="wftab-note wftab-quiet">
                 No file name was kept for it anywhere.
               </p>
               <!-- After the v-else pair: between them it would take the else. -->
+              <p
+                v-if="downloadableFiles.has(missingCheckpointFile)"
+                class="wftab-note wftab-quiet"
+                data-testid="wftab-missing-action"
+              >
+                Download it<ModelDownloadButton :file="missingCheckpointFile" />
+              </p>
               <p
                 v-if="isAdding(missingCheckpointFile)"
                 class="wftab-note wftab-quiet wftab-adding"
@@ -669,7 +748,7 @@
             </span>
             <span v-else class="wftab-value wftab-lora-value">
               <v-icon
-                v-if="!lora.on_shelf"
+                v-if="!lora.on_shelf || lora.leftOut"
                 size="16"
                 class="wftab-chain-flag"
                 aria-hidden="true"
@@ -683,6 +762,14 @@
               <span v-if="!lora.on_shelf" class="visually-hidden"
                 >, not on your model shelf</span
               >
+              <span v-else-if="lora.leftOut" class="visually-hidden"
+                >, not in this ComfyUI</span
+              >
+              <ModelDownloadButton
+                v-if="lora.downloadable"
+                class="wftab-lora-download"
+                :file="lora.file"
+              />
               <!-- The strength is edited where it is read. Only a loader the
                    graph has, holding a LoRA the shelf knows, can be named in
                    a change; any other keeps its strength as text. A
@@ -800,6 +887,96 @@
             Could not read which LoRAs change between pictures just now.
           </p>
         </template>
+      </section>
+
+      <!-- GPU memory (VRAM orchestration) as two lines: the label beside a
+           sparkline of the newest peaks and the need, then what the need rests
+           on beside the run-alone switch. Read from the detail, so it waits
+           for it like the rest of the panel. -->
+      <section
+        v-if="gpu"
+        class="wftab-panel"
+        data-testid="wftab-gpu"
+      >
+        <div class="wftab-gpu-line">
+          <span class="section-label" role="heading" aria-level="3">GPU memory</span>
+          <span class="wftab-gpu-answer">
+            <span
+              v-if="gpuBars.length"
+              class="wftab-peaks"
+              role="list"
+              aria-label="Measured peaks, oldest to newest"
+              data-testid="wftab-gpu-peaks"
+            >
+              <span
+                v-for="(bar, index) in gpuBars"
+                :key="index"
+                role="listitem"
+                class="wftab-peak"
+                :class="{
+                  'wftab-peak--used': bar.used,
+                  'wftab-peak--oom': bar.outcome === 'oom',
+                }"
+                :style="{ height: `${bar.pct}%` }"
+                :aria-label="peakLabel(bar)"
+                ><Tooltip :text="peakLabel(bar)" activator="parent"
+              /></span>
+            </span>
+            <span
+              :class="gpu.need_mb == null ? 'wftab-note wftab-quiet' : 'wftab-gpu-need'"
+              data-testid="wftab-gpu-need"
+            >
+              {{ gpu.need_mb == null ? "Not measured yet" : formatGb(gpu.need_mb) }}
+            </span>
+          </span>
+        </div>
+        <div class="wftab-gpu-line">
+          <span class="wftab-gpu-answer">
+            <span class="wftab-note wftab-quiet" data-testid="wftab-gpu-basis">
+              {{ gpuBasis }}
+            </span>
+            <!-- Forgets the measured peaks: what a run on a picture far
+                 larger than usual leaves every later run waiting for. -->
+            <AppButton
+              v-if="gpu.peaks?.length"
+              size="sm"
+              variant="ghost"
+              tooltip="Forget the measured runs. The next run is measured again."
+              :loading="busy === 'gpu-reset'"
+              data-testid="wftab-gpu-reset"
+              @click="resetGpu"
+            >
+              Reset
+            </AppButton>
+          </span>
+          <!-- A label, so its text flips the switch too, and the tip opens on
+               the switch's focus as well as on hover. -->
+          <label class="wftab-gpu-alone">
+            <Tooltip :text="RUN_ALONE_TIP" activator="parent" />
+            <span class="wftab-gpu-tip">Run alone</span>
+            <button
+              type="button"
+              role="switch"
+              class="wftab-switch"
+              :aria-checked="String(Boolean(gpu.exclusive))"
+              :disabled="busy === 'exclusive'"
+              data-testid="wftab-gpu-exclusive"
+              @click="setExclusive(!gpu.exclusive)"
+            ></button>
+          </label>
+        </div>
+        <!-- Only while the backend has it on after running out of memory:
+             switching it off clears it, switching it on by hand never shows
+             it. Never wraps. -->
+        <p
+          v-if="gpu.exclusive && gpu.exclusive_source === 'oom' && gpu.exclusive_at"
+          class="wftab-gpu-warn"
+          data-testid="wftab-gpu-oom"
+        >
+          <Tooltip text="Its last 3 runs ran out of GPU memory." activator="parent" />
+          <v-icon size="12">mdi-alert-outline</v-icon>
+          <span>Switched on {{ dayMonth(gpu.exclusive_at) }} after running out of memory</span>
+        </p>
       </section>
 
       <!-- Each parameter is set each run (asked for by the Run form) or fixed
@@ -1070,7 +1247,7 @@
           variant="primary"
           icon-left="play"
           block
-          :aria-disabled="runTarget ? undefined : 'true'"
+          :aria-disabled="runTarget && !runTarget.draft ? undefined : 'true'"
           :aria-describedby="runDescribedBy"
           @click="run"
         >
@@ -1187,6 +1364,17 @@
         <p v-if="multiple" id="wftab-run-reason" class="wftab-note wftab-quiet">
           Run one workflow at a time
         </p>
+        <!-- A draft (#2000): made from a ComfyUI template, with no graph
+             PixlStash can run until ComfyUI has saved it. Open in ComfyUI
+             beside Run… is how it is finished. -->
+        <p
+          v-else-if="runTarget?.draft"
+          id="wftab-draft-reason"
+          class="wftab-note wftab-quiet"
+          data-testid="wftab-draft-reason"
+        >
+          Finish it in ComfyUI first: open it there and save it.
+        </p>
       </div>
     </template>
 
@@ -1247,6 +1435,7 @@ import {
   getWorkflowChanges,
   getWorkflowFormInputs,
   getWorkflowVersions,
+  openWorkflowVersion,
   patchWorkflowCard,
   preflightWorkflowRun,
   readModelSwap,
@@ -1260,10 +1449,11 @@ import {
   workflowCoverUrl,
 } from "../../api/workflows";
 import {
+  openHeldInComfyui,
   openWorkflowInComfyui,
   useComfyuiOpen,
 } from "../../composables/useComfyuiOpen";
-import { useModelPickUp } from "../../composables/useModelPickUp";
+import { pickUpKey, useModelPickUp } from "../../composables/useModelPickUp";
 import { useWorkflowPictures } from "../../composables/useWorkflowPictures";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
@@ -1282,12 +1472,14 @@ import {
 import { editModels } from "../../api/modelShelf";
 import { fileKindLabel, quantBadge } from "../../utils/modelShelf";
 import {
+  MODELS_DOWNLOADING,
   PACK_OUTDATED,
   PACK_OUTDATED_ACTION,
   PIXLSTASH_PACK_URL,
   STAGE_LABELS,
 } from "../../utils/runReasons";
 import { relativeDate } from "../../utils/snapshots";
+import { formatGb, peakBars } from "../../utils/gpuMemory";
 import {
   checkpointMissing,
   baseModels,
@@ -1297,6 +1489,9 @@ import {
   outputCount,
   replacementLabel,
   UNMATCHED_REPLACEMENTS_TEXT,
+  REPLACEMENT_VERDICTS,
+  verdictLine,
+  verdictOptions,
 } from "../../utils/workflowCard";
 import {
   choicesFor,
@@ -1327,6 +1522,8 @@ import BreakableTitle from "../widgets/BreakableTitle.vue";
 import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
 import EditLorasDialog from "../io/EditLorasDialog.vue";
 import KindMenu from "../widgets/KindMenu.vue";
+import DownloadingMark from "../widgets/DownloadingMark.vue";
+import ModelDownloadButton from "../widgets/ModelDownloadButton.vue";
 import ExposeParameterDialog from "../io/ExposeParameterDialog.vue";
 import TasksPanel, { tasksTabFor } from "./TasksPanel.vue";
 import Tooltip from "../widgets/Tooltip.vue";
@@ -1346,8 +1543,12 @@ const { showPictures, showLoraPictures, showValuePictures } =
   useWorkflowPictures();
 const sidebarStore = useSidebarStore();
 const notices = useNoticeStore();
-const { canOpenComfyui, comfyuiLacksNode, comfyuiOpensACopy } =
-  useComfyuiOpen();
+const {
+  canOpenComfyui,
+  comfyuiLacksNode,
+  comfyuiOpensACopy,
+  comfyuiOpensNoRuns,
+} = useComfyuiOpen();
 const runDialog = useRunDialogStore();
 const tasksStore = useTasksStore();
 
@@ -1362,6 +1563,13 @@ watch(
   () => sidebarStore.tasksTabRequest,
   () => {
     tab.value = "tasks";
+  },
+);
+// A double-click on a card that opened this rail (`showCardInInspector`).
+watch(
+  () => sidebarStore.cardTabRequest,
+  () => {
+    tab.value = "workflow";
   },
 );
 
@@ -1667,13 +1875,32 @@ const FORGOTTEN_MODEL = "(forgotten model)";
 const missingByKind = ref({});
 /** The missing files a restart of ComfyUI would load off the shelf (#1923). */
 const staleFiles = ref(new Set());
+/** The missing files the server can download (`downloadable`). */
+const downloadableFiles = ref(new Set());
+/**
+ * The LoRAs a run leaves out because this ComfyUI lacks them
+ * (`bypassed_loras`), by `pickUpKey`: `true` where the server can download one.
+ */
+const leftOutLoras = ref(new Map());
 const PACK_OUTDATED_TEXT = "Restart ComfyUI";
-/** What follows a missing file's name, once ComfyUI has answered. */
-function missingNote(file) {
+/**
+ * What follows a missing file's name, once ComfyUI has answered. A missing
+ * checkpoint is said to be off the shelf too, because a current
+ * ComfyUI-PixlStash would load a shelf one. Other kinds are not loaded off
+ * the shelf.
+ * ponytail: wrong where ComfyUI-PixlStash is not installed, or for an fp8
+ * diffusion loader the pack leaves alone; the pre-flight would have to say
+ * whether the shelf holds the file to tell those apart.
+ */
+function missingNote(file, kind) {
   if (!preflightAnswered.value) return "";
-  return staleFiles.value.has(file)
-    ? ` is on your model shelf, but the ComfyUI-PixlStash running in ComfyUI is out of date and cannot load it. ${PACK_OUTDATED_ACTION}`
-    : " is not installed in ComfyUI.";
+  if (tasksStore.runningDownload({ file, slot: kind }))
+    return " is still downloading. It runs once it has finished.";
+  if (staleFiles.value.has(file))
+    return ` is on your model shelf, but the ComfyUI-PixlStash running in ComfyUI is out of date and cannot load it. ${PACK_OUTDATED_ACTION}`;
+  return kind === "checkpoint"
+    ? " is not in ComfyUI or PixlStash."
+    : " is not in ComfyUI.";
 }
 const missingBaseFiles = computed(() => missingByKind.value.checkpoint ?? []);
 const preflightAnswered = ref(false);
@@ -1758,6 +1985,11 @@ function loadedFile(model) {
  */
 function settable(model) {
   return !String(model.address ?? "").endsWith("/checkpoint_id");
+}
+
+/** A candidate's name alone, for a row whose chips say the rest. */
+function shownName(model) {
+  return model.display_name || modelLabel(fileName(model.filename));
 }
 
 /** A candidate as a picker option names it: never a bare filename. */
@@ -1849,6 +2081,24 @@ const modelRows = computed(() => {
       (candidate) => !sameFile(candidate.filename, file),
     );
     const pick = canPick ? modelPick(waiting.value, model.address) : null;
+    const coming = comingOptions(spec, canPick ? file : null);
+    const extraPick =
+      pick &&
+      !candidates.some((candidate) => candidate.filename === pick) &&
+      !coming.some((option) => option.value === pick);
+    // The row's own file on its way: said so, not "missing".
+    // A row's kind is its set slot's id (checkpoint, vae, text_encoder).
+    const goneComing = gone
+      ? tasksStore.runningDownload({ file: gone, slot: model.kind })
+      : null;
+    // A missing file's candidates filed under how likely each is to run it,
+    // where the server gave them a verdict; the file itself is no option.
+    const grouped =
+      Boolean(gone) && candidates.some((candidate) => candidate.verdict);
+    const target = grouped ? answer?.replacing_base_model || "" : "";
+    const picked = pick
+      ? candidates.find((candidate) => candidate.filename === pick)
+      : null;
     const savedLabel =
       canPick && file !== model.filename
         ? modelLabel(fileName(file))
@@ -1872,15 +2122,32 @@ const modelRows = computed(() => {
       fix: autoFixOf(gone, pick, candidates),
       yours: model.provenance === "edited",
       missing: gone,
-      missingText: staleFiles.value.has(gone)
-        ? PACK_OUTDATED_TEXT
-        : spec.missingText,
+      coming: goneComing,
+      missingText: goneComing
+        ? `Downloading${goneComing.percent ? ` · ${Math.round(goneComing.percent)}%` : ""}`
+        : staleFiles.value.has(gone)
+          ? PACK_OUTDATED_TEXT
+          : spec.missingText,
       unmatched:
         model.kind === "checkpoint" &&
         candidates.length > 0 &&
+        !(grouped && target) &&
         answer?.replacements_narrowed === false,
-      options:
-        candidates.length || pick
+      grouped,
+      target,
+      likelyCount: candidates.filter((c) => c.verdict === "likely").length,
+      verdictLine: grouped ? verdictLine(picked, target) : "",
+      verdictTone: REPLACEMENT_VERDICTS[picked?.verdict]?.tone ?? "",
+      verdictIcon: REPLACEMENT_VERDICTS[picked?.verdict]?.icon ?? "",
+      options: grouped
+        ? [
+            ...verdictOptions(candidates, target, shownName),
+            ...(extraPick
+              ? [{ value: pick, label: modelLabel(fileName(pick)) }]
+              : []),
+            ...coming,
+          ]
+        : candidates.length || pick || coming.length
           ? [
               // A missing file is no choice: said, or it reads as picked.
               { value: "", label: gone ? `${savedLabel} (missing)` : savedLabel },
@@ -1888,10 +2155,10 @@ const modelRows = computed(() => {
                 value: candidate.filename,
                 label: candidateLabel(candidate),
               })),
-              ...(pick &&
-              !candidates.some((candidate) => candidate.filename === pick)
+              ...(extraPick
                 ? [{ value: pick, label: modelLabel(fileName(pick)) }]
                 : []),
+              ...coming,
             ]
           : [],
       noOptions: noReplacementText(model.kind, answer),
@@ -1901,6 +2168,30 @@ const modelRows = computed(() => {
     };
   });
 });
+
+/**
+ * The models on their way that a row's loader could take, as picker options:
+ * every running download for a folder of the row's kind, but the row's own
+ * file. Picked, it is an ordinary unsaved change; a run of it is refused,
+ * loudly, until it has landed (`models_downloading`).
+ *
+ * Under one "Downloading" heading wearing the animated mark, which each
+ * carries so the field keeps it beside a pick.
+ */
+function comingOptions(spec, file) {
+  if (file === null) return [];
+  return tasksStore.runningDownloads
+    .filter((d) => spec.folders.has(d.directory) && !sameFile(d.file, file))
+    .map((d) => ({
+      value: d.file,
+      label: `${modelLabel(d.file)} (downloading)`,
+      name: modelLabel(d.file),
+      group: "Downloading",
+      groupIcon: "download",
+      groupDownloading: true,
+      groupNote: "runs once it has landed",
+    }));
+}
 
 /**
  * The shelf's kind offer on a model row (#1962), or null.
@@ -1993,6 +2284,19 @@ async function fileOffered(row, changes) {
 }
 
 /**
+ * The `model-swap?replacing=` read for one row's file. A missing checkpoint's
+ * is `grouped`: every checkpoint its loader can load, each with a verdict.
+ */
+function swapAsk(kind, file, missing) {
+  return {
+    replacing: file,
+    slotKind: kind,
+    cached: true,
+    ...(kind === "checkpoint" && missing && { grouped: true }),
+  };
+}
+
+/**
  * Ask a missing row's offer again and, with *pick*, pick its likely match as
  * the tab does on selection. Answers with the file picked, or "".
  */
@@ -2000,11 +2304,10 @@ async function rereadCopy(key, row, pick) {
   const ask = `${row.kind}:${row.file}`;
   let answer;
   try {
-    answer = await readModelSwap(key, {
-      replacing: row.file,
-      slotKind: row.kind,
-      cached: true,
-    });
+    answer = await readModelSwap(
+      key,
+      swapAsk(row.kind, row.file, Boolean(row.missing)),
+    );
   } catch (err) {
     console.warn(`[workflows] could not read replacements for ${row.file}`, err);
     return "";
@@ -2564,6 +2867,9 @@ const loraRows = computed(() =>
       strengthEdited: waitingStrength !== null,
       savedStrengthText: formatStrength(row.savedStrength) || "—",
       canStrength: Boolean(slot?.sha256) && row.savedStrength !== null,
+      leftOut: Boolean(row.file) && leftOutLoras.value.has(pickUpKey(row.file)),
+      downloadable:
+        Boolean(row.file) && leftOutLoras.value.get(pickUpKey(row.file)) === true,
     };
   }),
 );
@@ -3855,6 +4161,35 @@ function goBack(row, key = selectedKey.value) {
   });
 }
 
+/**
+ * Duplicate one earlier version as a workflow of its own (#1792), without
+ * going back to it: the workflow stays on the version it has. A failure is
+ * the store's to say, as the grid's Duplicate is.
+ */
+async function duplicateVersion(row) {
+  const key = selectedKey.value;
+  if (!key) return;
+  const body = await store.duplicateCard(key, row.version);
+  if (!body) return;
+  notices.push({
+    level: "success",
+    text: `Duplicated version ${row.version} as ${body.name}.`,
+  });
+}
+
+/**
+ * Open one earlier version in ComfyUI without going back to it (#1792).
+ * What ComfyUI saves from it comes back as a new workflow.
+ */
+function openVersionInComfyui(row) {
+  const key = selectedKey.value;
+  if (!key) return;
+  void openHeldInComfyui(
+    () => openWorkflowVersion(key, row.version),
+    `Could not open version ${row.version} in ComfyUI.`,
+  );
+}
+
 /** Dismiss takes its own button away, so focus goes back to the version chip. */
 async function dismissVersionError() {
   versionError.value = "";
@@ -4158,6 +4493,85 @@ function togglePin(row) {
   });
 }
 
+/** This workflow's GPU memory from the detail read, or null before it lands. */
+const gpu = computed(() => detail.value?.card?.vram ?? null);
+/** The newest peaks as the sparkline's bars, oldest to newest, scaled to the
+ * tallest of them, so the ones the need is taken from end the line. */
+const gpuBars = computed(() =>
+  peakBars((gpu.value?.peaks ?? []).slice(0, SPARK_PEAKS)).reverse(),
+);
+/** What the need rests on: "5 of 20 runs · steady". */
+const gpuBasis = computed(() => {
+  const peaks = gpu.value?.peaks ?? [];
+  const runs = gpu.value?.measured_runs ?? 0;
+  const used = peaks.filter((peak) => peak.used).length;
+  if (!used || !runs) return peaks.length ? "No run finished yet" : "No runs yet";
+  const trend = gpu.value.trend ? ` · ${trendWord(gpu.value.trend)}` : "";
+  return `${used} of ${runs} ${runs === 1 ? "run" : "runs"}${trend}`;
+});
+
+const TREND_WORDS = { rising: "rising", falling: "falling", flat: "steady" };
+/** How many of the newest peaks the sparkline draws. */
+const SPARK_PEAKS = 16;
+const RUN_ALONE_TIP =
+  "While it runs, PixlStash moves its own work off the GPU. ComfyUI keeps its cache: the run reuses it.";
+
+function trendWord(trend) {
+  return TREND_WORDS[trend] ?? trend;
+}
+
+function dayMonth(iso) {
+  return new Date(iso).toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+  });
+}
+
+function peakLabel(bar) {
+  const outcome = {
+    completed: "completed",
+    failed: "failed",
+    oom: "ran out of GPU memory",
+    aborted: "stopped",
+  }[bar.outcome] ?? bar.outcome;
+  const size = bar.pixels ? `, ${(bar.pixels / 1e6).toFixed(1)} MP` : "";
+  return `${formatGb(bar.peak_mb)}${size}, ${outcome}${bar.used ? ", used for the need" : ""}`;
+}
+
+/** Forget the measured peaks: the GPU memory section's Reset. */
+function resetGpu() {
+  const key = selectedKey.value;
+  if (!key || !detail.value) return;
+  return queueWrite("gpu-reset", async () => {
+    try {
+      const body = await patchWorkflowCard(key, { forget_vram_peaks: true });
+      if (stillOn(key)) detail.value = body;
+      await store.refetch();
+    } catch (err) {
+      fail(err, "Could not reset the GPU memory.");
+    }
+  });
+}
+
+/** Run alone on the GPU: the switch in the GPU memory section. */
+function setExclusive(value) {
+  const key = selectedKey.value;
+  if (!key || !detail.value) return;
+  const next = Boolean(value);
+  return queueWrite("exclusive", async () => {
+    try {
+      const body = await patchWorkflowCard(key, { exclusive: next });
+      if (stillOn(key)) detail.value = body;
+      await store.refetch();
+    } catch (err) {
+      fail(
+        err,
+        next ? "Could not turn on running alone." : "Could not turn running alone off.",
+      );
+    }
+  });
+}
+
 function toggleHidden() {
   const key = selectedKey.value;
   if (!key || !detail.value) return;
@@ -4186,9 +4600,10 @@ function toggleHidden() {
 const runTarget = computed(() => (multiple.value ? null : card.value));
 
 /** Why Run… refuses, when it is a reason worth a sentence. */
-const runDescribedBy = computed(() =>
-  multiple.value ? "wftab-run-reason" : undefined,
-);
+const runDescribedBy = computed(() => {
+  if (multiple.value) return "wftab-run-reason";
+  return runTarget.value?.draft ? "wftab-draft-reason" : undefined;
+});
 
 /** What Open in ComfyUI is described by: why it refuses, or what it opens. */
 const openDescribedBy = computed(() => {
@@ -4210,7 +4625,7 @@ const openDescribedBy = computed(() => {
  */
 function run() {
   const target = runTarget.value;
-  if (!target) return;
+  if (!target || target.draft) return;
   runDialog.openRun({
     kind: "card",
     workflowId: target.id,
@@ -4286,12 +4701,40 @@ watch(
   (key) => checkInstalled(key),
   { immediate: true },
 );
+// A model just downloaded may be one these rows say is missing. A row still
+// holding the tab's automatic pick for it drops the pick, so the workflow
+// loads the file it asked for rather than keeping the stand-in (#2061).
+watch(
+  () => tasksStore.downloadsLanded,
+  () => {
+    if (!detail.value || !selectedKey.value) return;
+    const landed = new Set(
+      tasksStore.modelDownloads
+        .filter((download) => download.status === "done")
+        .map((download) => download.file),
+    );
+    const stale = modelRows.value.filter(
+      (row) => row.fix && landed.has(fileName(row.missing)),
+    );
+    if (stale.length && canEdit.value) {
+      edit((set) =>
+        stale.reduce(
+          (next, row) => withModel(next, row.address, "", row.file),
+          set,
+        ),
+      );
+    }
+    void checkInstalled(selectedKey.value, { quiet: true });
+  },
+);
 
 /**
  * Pick the shelf's likely match for each missing file (`likely`: the same
  * file under another name), as unsaved changes the owner saves or takes back.
  * Once per selection, when the offers are in and the changes can be edited:
- * a match taken back stays taken back until the card is selected again.
+ * a match taken back stays taken back until the card is selected again. Not
+ * for a file that can be downloaded or is downloading: the download is the
+ * owner's fix, and a renamed copy only a guess (#2061).
  */
 let prefilled = null;
 watch(
@@ -4302,7 +4745,14 @@ watch(
     if (!Object.keys(replacementsByFile.value).length) return;
     prefilled = key;
     const picks = modelRows.value
-      .filter((row) => row.settable && row.missing && !row.pick)
+      .filter(
+        (row) =>
+          row.settable &&
+          row.missing &&
+          !row.pick &&
+          !downloadableFiles.value.has(row.missing) &&
+          !tasksStore.runningDownloadFiles.has(fileName(row.missing)),
+      )
       .map((row) => [
         row,
         replacementsByFile.value[`${row.kind}:${row.file}`]?.replacements?.find(
@@ -4327,6 +4777,8 @@ async function checkInstalled(key, { quiet = false } = {}) {
   if (!quiet) {
     missingByKind.value = {};
     staleFiles.value = new Set();
+    downloadableFiles.value = new Set();
+    leftOutLoras.value = new Map();
     preflightAnswered.value = false;
     replacementsByFile.value = {};
   }
@@ -4348,7 +4800,25 @@ async function checkInstalled(key, { quiet = false } = {}) {
     // Still a row that needs something done, worded as a restart.
     const stale = modelsOf(PACK_OUTDATED);
     staleFiles.value = new Set(stale.map((model) => String(model.file)));
-    const missing = [...modelsOf("missing_models"), ...stale];
+    // On its way is still a row that cannot run: drawn with its download.
+    const missing = [
+      ...modelsOf("missing_models"),
+      ...stale,
+      ...modelsOf(MODELS_DOWNLOADING),
+    ];
+    downloadableFiles.value = new Set(
+      modelsOf("missing_models")
+        .filter((model) => model.downloadable)
+        .map((model) => String(model.file)),
+    );
+    // Not the owner's skips, nor a loader the default recipe leaves out: only
+    // a file this ComfyUI does not have, as the Run popup's notice reads it.
+    leftOutLoras.value = new Map(
+      (answer?.groups ?? [])
+        .flatMap((group) => group.bypassed_loras ?? [])
+        .filter((lora) => lora?.file && !lora.requested && !lora.recipe)
+        .map((lora) => [pickUpKey(lora.file), Boolean(lora.downloadable)]),
+    );
     missingByKind.value = Object.fromEntries(
       Object.entries(MODEL_ROWS).map(([kind, spec]) => [
         kind,
@@ -4381,12 +4851,15 @@ async function checkInstalled(key, { quiet = false } = {}) {
     ...new Map(
       modelRows.value
         .filter((row) => row.settable && row.file)
-        .map((row) => [`${row.kind}:${row.file}`, [row.kind, row.file]]),
+        .map((row) => [
+          `${row.kind}:${row.file}`,
+          [row.kind, row.file, Boolean(row.missing)],
+        ]),
     ).values(),
   ];
   const results = await Promise.allSettled(
-    asks.map(([kind, file]) =>
-      readModelSwap(key, { replacing: file, slotKind: kind, cached: true }),
+    asks.map(([kind, file, missing]) =>
+      readModelSwap(key, swapAsk(kind, file, missing)),
     ),
   );
   if (check !== installedCheck || !stillOn(key)) return;
@@ -4521,6 +4994,131 @@ async function checkInstalled(key, { quiet = false } = {}) {
   background: rgb(var(--v-theme-divider));
 }
 
+/* The GPU memory panel's two lines: a label or basis on the left, the
+   answer or the switch on the right. */
+.wftab-gpu-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: var(--control-h-sm);
+}
+
+.wftab-gpu-answer,
+.wftab-gpu-alone {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  white-space: nowrap;
+}
+
+.wftab-gpu-need {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+}
+
+.wftab-gpu-alone {
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.wftab-gpu-tip {
+  cursor: help;
+  border-radius: var(--radius-sm);
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  text-decoration-color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+/* The newest peaks, oldest to newest: a glyph, not a chart. The ones the need
+   is taken from are solid; an out-of-memory run is the error colour. */
+.wftab-peaks {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-1);
+  height: 14px;
+}
+
+/* Square: the smallest radius token is wider than the bar. */
+.wftab-peak {
+  width: 3px;
+  min-height: var(--space-1);
+  background: rgba(var(--v-theme-on-surface), 0.22);
+}
+
+.wftab-peak--used {
+  background: rgb(var(--v-theme-on-surface));
+}
+
+.wftab-peak--oom {
+  background: rgb(var(--v-theme-error));
+}
+
+/* The design system's Switch: olive track when on. */
+.wftab-switch {
+  position: relative;
+  flex-shrink: 0;
+  width: 30px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: rgb(var(--v-theme-input-background));
+  box-shadow: inset 0 0 0 1px rgb(var(--v-theme-border));
+  cursor: pointer;
+}
+
+.wftab-switch::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  transition: left var(--dur-1) var(--ease-standard);
+}
+
+.wftab-switch[aria-checked="true"] {
+  background: rgb(var(--v-theme-primary));
+  box-shadow: none;
+}
+
+.wftab-switch[aria-checked="true"]::after {
+  left: 15px;
+  background: rgb(var(--v-theme-on-primary));
+}
+
+.wftab-switch:disabled {
+  opacity: var(--opacity-disabled);
+  cursor: default;
+}
+
+/* Run alone switched on after running out of memory: a band across the
+   panel's bottom edge in the notice's status vocabulary, a step smaller so
+   the sentence stays on one line. */
+.wftab-gpu-warn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 calc(-1 * var(--space-4)) calc(-1 * var(--space-4));
+  padding: var(--space-2) var(--space-4);
+  white-space: nowrap;
+  border-top: 1px solid rgba(var(--v-theme-warning), 0.5);
+  border-radius: 0 0 calc(var(--radius-md) - 1px) calc(var(--radius-md) - 1px);
+  background: rgba(var(--v-theme-warning), 0.08);
+  font-size: var(--text-2xs);
+  overflow: hidden;
+}
+
+.wftab-gpu-warn > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .wftab-sublabel {
   margin: 0;
   font-size: var(--text-xs);
@@ -4611,6 +5209,15 @@ async function checkInstalled(key, { quiet = false } = {}) {
   display: inline-flex;
   vertical-align: text-bottom;
   margin-right: var(--space-2);
+  border-radius: var(--radius-sm);
+}
+
+/* Why a missing checkpoint's list is every checkpoint: the fix mark's shape,
+   trailing its sentence. */
+.wftab-info-mark {
+  display: inline-flex;
+  vertical-align: text-bottom;
+  margin-left: var(--space-2);
   border-radius: var(--radius-sm);
 }
 
@@ -4740,6 +5347,40 @@ async function checkInstalled(key, { quiet = false } = {}) {
   gap: var(--space-2);
 }
 
+.wftab-strong {
+  font-weight: var(--weight-medium);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+/* A picked candidate's verdict, in its group's words: the hue on the mark. */
+.wftab-verdict {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading-body);
+}
+.wftab-none-likely {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  font-size: var(--text-sm);
+}
+.wftab-tone--success {
+  color: rgb(var(--v-theme-surface-success));
+}
+.wftab-tone--warning {
+  color: rgb(var(--v-theme-surface-warning));
+}
+.wftab-tone--error {
+  color: rgb(var(--v-theme-surface-error));
+}
+.wftab-tone--info {
+  color: rgb(var(--v-theme-surface-info));
+}
+
 .wftab-warn {
   display: flex;
   align-items: center;
@@ -4747,6 +5388,11 @@ async function checkInstalled(key, { quiet = false } = {}) {
   margin: 0;
   font-size: var(--text-sm);
   color: rgb(var(--v-theme-surface-warning));
+}
+
+/* On its way is not a fault: ink, with the mark's own accent beside it. */
+.wftab-warn.wftab-coming {
+  color: rgb(var(--v-theme-on-surface));
 }
 
 .wftab-disclose > summary {
@@ -4899,6 +5545,11 @@ async function checkInstalled(key, { quiet = false } = {}) {
 .wftab-lora-value > .app-btn {
   flex-shrink: 0;
   margin-right: calc(-1 * var(--space-2));
+}
+
+/* Beside the name, not at the row's end: the row's gap is its spacing. */
+.wftab-lora-value > .wftab-lora-download {
+  margin: 0;
 }
 
 .wftab-checks {

@@ -722,8 +722,12 @@
 
         <!-- The workflow's optional stages (#1623), each ticked as its
              default recipe has it. One switched off is sent as `skip_stages`,
-             one switched on as `keep_stages`. -->
-        <fieldset v-if="stageRows.length" class="rund-f rund-f--4 rund-stages">
+             one switched on as `keep_stages`. A workflow with no upscale of
+             its own gets one added for this run (#1868), sent as `upscale`. -->
+        <fieldset
+          v-if="stageRows.length || addedUpscaleOffered"
+          class="rund-f rund-f--4 rund-stages"
+        >
           <legend class="rund-l">Stages</legend>
           <div
             v-for="stage in stageRows"
@@ -749,6 +753,35 @@
               :value="stageDefault(stage.name) ? 'on' : 'off'"
               :label="stage.label.toLowerCase()"
               @reset="setStage(stage.name, stageDefault(stage.name))"
+            />
+          </div>
+          <div
+            v-if="addedUpscaleOffered"
+            class="rund-f rund-check rund-added-upscale"
+          >
+            <input
+              :id="`${stageId}-added-upscale`"
+              class="rund-box"
+              type="checkbox"
+              data-testid="rund-added-upscale"
+              :checked="addedUpscale"
+              :disabled="submitting"
+              @change="setAddedUpscale($event.target.checked)"
+            />
+            <label :for="`${stageId}-added-upscale`"
+              >Upscale<span class="rund-quiet"> · added for this run</span></label
+            >
+            <RunResetChip
+              v-if="addedUpscale"
+              value="off"
+              label="upscale"
+              @reset="setAddedUpscale(false)"
+            />
+            <UpscaleChoice
+              v-if="addedUpscale"
+              class="rund-upscale-choice"
+              :size="outputSize"
+              :disabled="submitting"
             />
           </div>
         </fieldset>
@@ -1240,11 +1273,15 @@ import {
 } from "../../api/workflows";
 import { useModelPickUp } from "../../composables/useModelPickUp";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
+import { useFavouritesStore, favouritesFirst } from "../../stores/useFavouritesStore";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
+import { useUpscaleStore } from "../../stores/useUpscaleStore";
+import { useTasksStore } from "../../stores/useTasksStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
 import { comfyuiLink } from "../../utils/comfyuiLink";
+import { normalizeRunId } from "../../utils/gpuMemory";
 import { focusLater } from "../../utils/dom";
 import { editLorasRoute, loraBase, loraStem } from "../../utils/loraChain";
 import { fitPeople, fitWorkflows } from "../../utils/loraWorkflows";
@@ -1294,6 +1331,7 @@ import PicturePicker from "../widgets/PicturePicker.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import RunReasonNotice from "./RunReasonNotice.vue";
 import RunResetChip from "./RunResetChip.vue";
+import UpscaleChoice from "./UpscaleChoice.vue";
 
 const props = defineProps({
   /**
@@ -1355,6 +1393,9 @@ let readAsk = 0;
 const runDialog = useRunDialogStore();
 const entityLists = useEntityListsStore();
 const workflows = useWorkflowsStore();
+const favourites = useFavouritesStore();
+const tasksStore = useTasksStore();
+favourites.ensureLoaded();
 
 const loading = ref(false);
 const loadFailed = ref("");
@@ -1808,13 +1849,13 @@ const picksDestination = computed(
 );
 
 /**
- * "edit" is "Edit with ComfyUI…" (the grid's menus): the built-in image edit
- * card run over the selection, which fills its picture input. The pictures are
- * what is edited, not recipes to replay, so none of their recipes is read.
+ * "edit" is the lightbox Edit tab's card that needs another picture: the
+ * workflow run over the open picture, which fills its picture input. The
+ * picture is what is edited, not a recipe to replay, so its recipe is not read.
  */
 const isEdit = computed(() => kind.value === "edit");
 const title = computed(() => {
-  if (isEdit.value) return "Edit with ComfyUI";
+  if (isEdit.value) return "Edit";
   if (loraSource.value) return "Create with LoRA";
   return kind.value === "card" ? "Run workflow" : "Run recipe";
 });
@@ -2198,7 +2239,38 @@ async function setStage(name, on) {
 
 function clearStages() {
   for (const name of Object.keys(stageChoice)) delete stageChoice[name];
+  addedUpscale.value = false;
 }
+
+const upscale = useUpscaleStore();
+/**
+ * The upscale this run adds (#1868): offered on every workflow whose graph has
+ * no upscale of its own, which keeps its own row above, and never on an
+ * Upscaler, which already is the upscale, nor on a video, whose frames it does
+ * not upscale. Off by default, for this run only.
+ */
+const addedUpscaleOffered = computed(
+  () =>
+    Boolean(card.value) &&
+    !(card.value.specials || []).includes("upscale") &&
+    !["upscale", "video"].includes(card.value.type),
+);
+const addedUpscale = ref(false);
+
+async function setAddedUpscale(on) {
+  addedUpscale.value = on;
+  // The answer changes: the upscale model may be one this ComfyUI lacks.
+  await runPreflight();
+}
+
+/** What the run makes, before the upscale: the form's width and height. */
+const outputSize = computed(() => {
+  const [width, height] = SIZE_INPUTS.map((name) => {
+    const field = byInput.value[name];
+    return field ? Number(currentValue(field)) : NaN;
+  });
+  return width > 0 && height > 0 ? { width, height } : null;
+});
 
 /** The stages of a set of changes switched *on* or off, as a run names them. */
 function stagesSet(changes, on) {
@@ -2699,31 +2771,43 @@ function followLora(key) {
   if (free) row.sha256 = free.sha256;
 }
 
+/** A workflow option leads when its card is a favourite (`workflow` key). */
+const favouriteWorkflow = (option) =>
+  favourites.isFavourite("workflow", option.value);
+
 const workflowOptions = computed(() => {
   const fits = loraFits.value;
   if (fits) {
     // Matches first, then the workflows whose base model nobody has read,
     // said so: they may fit, and hiding them would hide every workflow on a
-    // model the shelf has not identified.
+    // model the shelf has not identified. A favourite leads inside each.
     const known = fits.loras.some((lora) => lora.base_model_family);
     return [
-      ...fits.match.map((entry) => ({ value: entry.card.id, label: entry.card.name })),
-      ...fits.unknown.map((entry) => ({
-        value: entry.card.id,
-        label:
-          known && !entry.checkpoint?.base_model_family
-            ? `${entry.card.name} (base model not known)`
-            : entry.card.name,
-      })),
+      ...favouritesFirst(
+        fits.match.map((entry) => ({ value: entry.card.id, label: entry.card.name })),
+        favouriteWorkflow,
+      ),
+      ...favouritesFirst(
+        fits.unknown.map((entry) => ({
+          value: entry.card.id,
+          label:
+            known && !entry.checkpoint?.base_model_family
+              ? `${entry.card.name} (base model not known)`
+              : entry.card.name,
+        })),
+        favouriteWorkflow,
+      ),
     ];
   }
-  const rows = card.value ? [{ value: card.value.id, label: card.value.name }] : [];
+  // The card being run stays first; the rest lead with their favourites.
+  const first = card.value ? [{ value: card.value.id, label: card.value.name }] : [];
+  const rest = [];
   for (const row of props.source?.pickWorkflow ? cards.value : []) {
-    if (!rows.some((option) => option.value === row.id)) {
-      rows.push({ value: row.id, label: row.name });
+    if (![...first, ...rest].some((option) => option.value === row.id)) {
+      rest.push({ value: row.id, label: row.name });
     }
   }
-  return rows;
+  return [...first, ...favouritesFirst(rest, favouriteWorkflow)];
 });
 
 /**
@@ -2732,18 +2816,27 @@ const workflowOptions = computed(() => {
  * (`optionsFor`).
  */
 const adapterOptions = computed(() =>
-  [
-    ...adapters.value,
-    // An attached LoRA the shelf classes `unknown` is not in `adapters`,
-    // which reads `file_kind=adapter` only.
-    ...attachedLoras.value.filter(
-      (row) => !adapters.value.some((adapter) => adapter.sha256 === row.sha256),
-    ),
-  ]
-    .filter((adapter) => adapter?.sha256 && !adapter.hidden)
-    .map(adapterOption)
-    .sort((a, b) => a.label.localeCompare(b.label)),
+  favouriteModelsFirst(
+    [
+      ...adapters.value,
+      // An attached LoRA the shelf classes `unknown` is not in `adapters`,
+      // which reads `file_kind=adapter` only.
+      ...attachedLoras.value.filter(
+        (row) => !adapters.value.some((adapter) => adapter.sha256 === row.sha256),
+      ),
+    ]
+      .filter((adapter) => adapter?.sha256 && !adapter.hidden)
+      .map(adapterOption)
+      .sort((a, b) => a.label.localeCompare(b.label)),
+  ),
 );
+
+/** A LoRA option leads when it is a favourite model; the rest keep their order. */
+function favouriteModelsFirst(options) {
+  return favouritesFirst(options, (option) =>
+    favourites.isFavourite("model", option.value),
+  );
+}
 
 function adapterOption(adapter) {
   return {
@@ -2875,7 +2968,9 @@ function personLoraOptions(row) {
       .filter((other) => other.person != null && other.key !== row.key)
       .map((other) => other.sha256),
   );
-  return own.filter((lora) => !taken.has(lora.sha256)).map(adapterOption);
+  return favouriteModelsFirst(
+    own.filter((lora) => !taken.has(lora.sha256)).map(adapterOption),
+  );
 }
 
 /**
@@ -4125,6 +4220,9 @@ function runBody() {
   const on = stagesSet(runChanges.value, true);
   if (off.length) body.skip_stages = off;
   if (on.length) body.keep_stages = on;
+  if (addedUpscale.value && addedUpscaleOffered.value) {
+    body.upscale = upscale.body();
+  }
   // The model rows, by the default recipe's loader address (#1623).
   if (runModels.value.length) body.models = runModels.value;
   if (choiceFixes.value.length) {
@@ -4141,6 +4239,11 @@ function runBody() {
   } else if (pictureIds.value.length) {
     body.picture_ids = pictureIds.value;
     body.target = activeKey.value;
+    // The Edit tab's selection rides along, on its one picture: the server
+    // puts it in that picture's alpha, the MASK its loader hands on.
+    if (props.source?.selection && pictureIds.value.length === 1) {
+      body.selection = props.source.selection;
+    }
     // A picture's own recipe again ("Run recipe", "Make more like these…" on
     // one): the picture is the run's output, so its picture input is what the
     // picture was made FROM, not the picture. An edit, a workflow the owner
@@ -4897,6 +5000,16 @@ async function runPreflight() {
   }
 }
 
+// A model just downloaded may be one the last answer says is missing or left
+// out, as the Workflow tab asks again for its rows. Not while a run is being
+// submitted: that run asks for itself.
+watch(
+  () => tasksStore.downloadsLanded,
+  () => {
+    if (!submitting.value) void runPreflight();
+  },
+);
+
 async function load() {
   const ask = ++readAsk;
   // The open's own writes of the form are a read's, like any other.
@@ -5218,7 +5331,12 @@ async function submit() {
             name: card.value?.name || "",
             count: band.value.count,
             text: band.value.text,
-            promptIds: prompts.map((entry) => String(entry?.prompt_id)),
+            // A run held at submit has no prompt id yet (null), so the record
+            // keeps both ids and matches on either; no "null" string here.
+            runIds: prompts.map((entry) => normalizeRunId(entry?.run_id)).filter(Boolean),
+            promptIds: prompts
+              .map((entry) => normalizeRunId(entry?.prompt_id))
+              .filter(Boolean),
           }
         : null,
     );
@@ -5623,6 +5741,15 @@ button.rund-in-tile.rund-in-tile--off {
 
 .rund-check label {
   cursor: pointer;
+}
+
+/* The added upscale's factor and model wrap onto a line of their own. */
+.rund-added-upscale {
+  flex-wrap: wrap;
+}
+
+.rund-upscale-choice {
+  flex-basis: 100%;
 }
 
 .rund-box {

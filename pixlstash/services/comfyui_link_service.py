@@ -347,18 +347,12 @@ def _write_settings(pinned_url: str, settings: dict) -> None:
 def _revoke(server, request: Request, public_id: str) -> None:
     """Revoke by ``public_id``, never by row id: SQLite reuses row ids, so a
     stored integer can come to name an unrelated token."""
-
-    def find(session):
-        return session.exec(
-            select(UserToken.id).where(UserToken.public_id == public_id)
-        ).first()
-
-    token_id = server.auth._db.run_task(find, priority=DBPriority.IMMEDIATE)
-    if token_id is None:
+    token = _token(server, public_id)
+    if token is None:
         logger.info("ComfyUI link token %s was already gone.", public_id)
         return
     try:
-        server.auth.delete_token(request, token_id)
+        server.auth.delete_token(request, token.id)
     except HTTPException as exc:
         if exc.status_code != 404:
             raise

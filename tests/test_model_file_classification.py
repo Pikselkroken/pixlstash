@@ -12,10 +12,17 @@ for the user to see why.
 """
 
 import json
+import os
+import re
 import struct
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+import pixlstash
+from pixlstash.routes.workflows import _likely_same_file
+from pixlstash.services.workflow_hash import normalized_filename
 from pixlstash.utils.adapter_header import (
     FILE_ADAPTER,
     FILE_CHECKPOINT,
@@ -38,6 +45,22 @@ from pixlstash.utils.model_utils import (
     derive_model_name,
     quant_from_filename,
 )
+
+
+_TEMPLATES = Path(pixlstash.__file__).parent / "data" / "workflow_templates.json"
+# A token that says a precision: `fp8`, `bf16`, `int8`, `fp8mixed`, `e4m3fn`.
+_STATES_PRECISION = re.compile(r"^(?:fp|bf|int|nvfp|mxfp|nf)\d+|^e[45]m[23]", re.I)
+
+
+def _strings(value):
+    """Every string anywhere in a parsed JSON document."""
+    if isinstance(value, dict):
+        value = list(value.values())
+    if isinstance(value, list):
+        for item in value:
+            yield from _strings(item)
+    elif isinstance(value, str):
+        yield value
 
 
 def _write_safetensors(path, tensors, metadata=None):
@@ -172,10 +195,29 @@ class TestFileClassification:
         assert info is not None
         assert info.file_kind == FILE_VAE
 
+    def test_a_wan_layout_vae_is_a_vae_in_any_folder(self, tmp_path):
+        # Wan's video VAE, and the Qwen Image ones built on it, name their
+        # first convolutions `conv1` (the Qwen Image 2.1 VAE's real shapes).
+        folder = tmp_path / "Downloads"
+        folder.mkdir()
+        path = _write_safetensors(
+            folder / "qwen_image_2.1_vae_bf16.safetensors",
+            {
+                "encoder.conv1.weight": _tensor([96, 3, 3, 3, 3]),
+                "decoder.conv1.weight": _tensor([384, 16, 3, 3, 3]),
+                "conv1.weight": _tensor([32, 32, 1, 1, 1]),
+            },
+        )
+        info = describe_adapter(path)
+        assert info is not None
+        assert info.file_kind == FILE_VAE
+
     @pytest.mark.parametrize(
         "names",
         [
             ["decoder.conv_in.weight"],  # one half only
+            ["decoder.conv1.weight", "conv1.weight"],  # one half, Wan's layout
+            ["encoder.conv_in.weight", "decoder.conv1.weight"],  # two layouts
             [
                 "first_stage_model.encoder.conv_in.weight",  # baked into a checkpoint
                 "first_stage_model.decoder.conv_in.weight",
@@ -532,6 +574,18 @@ QUANT_VOCABULARY = [
     # case-folding bug in the lookup would otherwise pass the whole suite.
     ("Flux1-Dev-FP8_E4M3FN.safetensors", "Flux1 Dev", "fp8_e4m3"),
     ("Clementine_BF16.safetensors", "Clementine", "bf16"),
+    # ComfyUI template spellings (#2061): a precision read as none was a
+    # different precision offered as the same file renamed.
+    ("Qwen_Image_Edit_2511_FP8Mixed.safetensors", "Qwen Image Edit 2511", "fp8"),
+    ("qwen_3_4b_fp8_mixed.safetensors", "qwen 3 4b", "fp8"),
+    ("gemma_3_12B_it_fp4_mixed.safetensors", "gemma 3 12B it", "fp4"),
+    ("z_image_int8_convrot.safetensors", "z image", "int8"),
+    ("Wan21-WanMove_fp8_scaled_e4m3fn_KJ.safetensors", "Wan21 WanMove", "fp8_e4m3"),
+    ("Wan_fp8_e4m3fn_scaled_KJ.safetensors", "Wan", "fp8_e4m3"),
+    ("qwen_pe_t2i.int8_convrot.safetensors", "qwen pe t2i", "int8"),
+    # A version after the precision stays in the name.
+    ("ltx-upscaler-x2-bf16-1.0.safetensors", "ltx upscaler x2 1.0", "bf16"),
+    ("qwen-360-int8-bf16-v2.safetensors", "qwen 360 v2", "bf16"),
 ]
 
 # Names that must come back untouched. `scaled`, `fast`, `m`, `l`, `1` and `0`
@@ -550,6 +604,8 @@ QUANT_NON_VOCABULARY = [
     # many of them.
     ("juggernaut_xl_v9.safetensors", "juggernaut xl v9"),
     ("Anything-XL.safetensors", "Anything XL"),
+    ("clementine_mixed.safetensors", "clementine mixed"),
+    ("clementine_kj.safetensors", "clementine kj"),
 ]
 
 
@@ -570,6 +626,32 @@ class TestQuantPostfix:
         # `some_model_scaled` silently becomes `some model`.
         assert derive_model_name(filename) == name
         assert quant_from_filename(filename) is None
+
+    def test_every_template_file_that_states_a_precision_is_read(self):
+        # Every name ComfyUI's template list ships, not a hand-picked few:
+        # one read as no precision is offered as a renamed copy of another
+        # precision (#2061).
+        names = {
+            os.path.basename(value)
+            for value in _strings(json.loads(_TEMPLATES.read_text("utf-8")))
+            if value.endswith((".safetensors", ".gguf"))
+        }
+        assert len(names) > 100
+        unread = sorted(
+            name
+            for name in names
+            if any(_STATES_PRECISION.match(t) for t in re.split(r"[_.\-]", name))
+            and quant_from_filename(name) is None
+        )
+        assert unread == []
+
+    def test_a_different_precision_is_not_the_same_file_renamed(self):
+        shelf = [SimpleNamespace(filename="qwen_image_edit_2511_bf16.safetensors")]
+        wanted = normalized_filename("Qwen_Image_Edit_2511_FP8Mixed.safetensors")
+        assert _likely_same_file(wanted, shelf) is None
+        # The same precision under its other spelling still is.
+        shelf = [SimpleNamespace(filename="Qwen_Image_Edit_2511_fp8_mixed.safetensors")]
+        assert _likely_same_file(wanted, shelf) is shelf[0]
 
     def test_a_name_that_is_only_a_quant_derives_to_empty(self):
         # The caller decides what to show; the shelf falls back to the
