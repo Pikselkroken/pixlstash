@@ -1088,9 +1088,20 @@ class Vault:
         cover = report.outcomes[0]
         cover_sha = None
         if cover.status == STATUS_IMPORTED and cover.model_id is not None:
-            cover_sha = hub.fetchone(
+            cover_row = hub.fetchone(
                 "SELECT sha256 FROM model WHERE id = ?", (cover.model_id,)
-            )["sha256"]
+            )
+            if cover_row is None:
+                # The files have landed, so do not fail the run for a row that
+                # vanished after the import: the cover just has no hash to attach.
+                logger.warning(
+                    "Cover model %s of %s landed but its row is gone; its hash is "
+                    "not attached to the job's character or set.",
+                    cover.model_id,
+                    report.run_name,
+                )
+            else:
+                cover_sha = cover_row["sha256"]
         else:
             logger.warning(
                 "The cover of %s (%s) did not import; no LoRA is attached to %s.",

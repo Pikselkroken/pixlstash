@@ -974,3 +974,34 @@ def test_a_source_on_another_drive_is_skipped_not_fatal(shelf, monkeypatch):
 
     assert result["imported"] == 3
     assert len(list(shelf["run_dir"].glob("*.safetensors"))) == 3
+
+
+def test_a_cover_whose_row_vanished_does_not_fail_the_run(shelf, monkeypatch):
+    """The files have landed by the time the cover's hash is read.
+
+    A row that is gone then must not turn a finished import into a failed job:
+    the run still lands and the cover simply has no hash to attach.
+    """
+    run_id = _a_training_run(shelf["hub"])
+    with shelf["hub"].transaction() as conn:
+        conn.execute(
+            "UPDATE model_folder SET is_download_target = 1 WHERE id = ?",
+            (shelf["destination_id"],),
+        )
+    real_fetchone = shelf["hub"].fetchone
+
+    def vanished(sql, *args):
+        if sql.startswith("SELECT sha256 FROM model WHERE id"):
+            return None
+        return real_fetchone(sql, *args)
+
+    monkeypatch.setattr(shelf["hub"], "fetchone", vanished)
+
+    result = Vault._import_training_run(
+        SimpleNamespace(_hub=shelf["hub"]),
+        str(shelf["run_dir"]),
+        {"id": run_id, "name": "Clementine", "set_id": None, "character_id": None},
+    )
+
+    assert result["imported"] == 3
+    assert result["cover_sha256"] is None
