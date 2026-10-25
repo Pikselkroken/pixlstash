@@ -830,9 +830,9 @@ def test_job_error_with_spaced_path_and_file_uri_is_redacted():
         _teardown(temp_dir, server)
 
 
-def test_patch_config_refuses_ai_toolkit_values_that_are_not_real():
+def test_put_config_refuses_ai_toolkit_values_that_are_not_real():
     """Each invalid repo or python value is a 422 with a message, and nothing is
-    stored. Clearing a value is accepted."""
+    stored. Both null (disconnect) is accepted."""
     temp_dir, owner, server, read_token = _setup()
     try:
         repo_no_run = os.path.join(temp_dir.name, "repo-without-run")
@@ -842,23 +842,47 @@ def test_patch_config_refuses_ai_toolkit_values_that_are_not_real():
             fh.write("#!/bin/sh\n")
         os.chmod(not_exec, 0o644)
         bad = [
-            {"ai_toolkit_repo_path": "relative/ai-toolkit"},
-            {"ai_toolkit_repo_path": os.path.join(temp_dir.name, "missing")},
-            {"ai_toolkit_repo_path": repo_no_run},
-            {"ai_toolkit_python": "python3"},
-            {"ai_toolkit_python": os.path.join(temp_dir.name, "missing-python")},
-            {"ai_toolkit_python": not_exec},
+            {"repo_path": "relative/ai-toolkit", "python": None},
+            {"repo_path": os.path.join(temp_dir.name, "missing"), "python": None},
+            {"repo_path": repo_no_run, "python": None},
+            {"repo_path": None, "python": "python3"},
+            {
+                "repo_path": None,
+                "python": os.path.join(temp_dir.name, "missing-python"),
+            },
+            {"repo_path": None, "python": not_exec},
         ]
-        for patch in bad:
-            r = owner.patch("/users/me/config", json=patch)
-            assert r.status_code == 422, (patch, r.text)
+        for body in bad:
+            r = owner.put("/training/ai-toolkit/config", json=body)
+            assert r.status_code == 422, (body, r.text)
             assert r.json()["detail"], r.text
         cfg = owner.get("/users/me/config").json()
         assert cfg["ai_toolkit_repo_path"] in (None, "")
         assert cfg["ai_toolkit_python"] in (None, "")
 
-        r = owner.patch("/users/me/config", json={"ai_toolkit_python": None})
+        r = owner.put(
+            "/training/ai-toolkit/config", json={"repo_path": None, "python": None}
+        )
         assert r.status_code == 200, r.text
+        assert r.json() == {"repo_path": None, "python": None}
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_patch_config_refuses_the_ai_toolkit_keys_and_names_the_route():
+    """PATCH /users/me/config no longer writes the ai-toolkit keys: each one is a
+    422 that names PUT /api/v1/training/ai-toolkit/config, and nothing is stored.
+    This holds from the owner's own machine too (review F2, F6)."""
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        for key in ("ai_toolkit_repo_path", "ai_toolkit_python", "ai_toolkit_commit"):
+            r = owner.patch("/users/me/config", json={key: sys.executable})
+            assert r.status_code == 422, (key, r.text)
+            assert "PUT /api/v1/training/ai-toolkit/config" in r.json()["detail"]
+        cfg = owner.get("/users/me/config").json()
+        assert cfg["ai_toolkit_repo_path"] in (None, "")
+        assert cfg["ai_toolkit_python"] in (None, "")
+        assert cfg["ai_toolkit_commit"] in (None, "")
     finally:
         _teardown(temp_dir, server)
 
@@ -880,10 +904,9 @@ def _fake_checkout(root, version="0.12.26"):
 
 def _save_checkout(owner, repo, python=None):
     """Save the owner's ai-toolkit paths the way the Settings dialog does."""
-    body = {"ai_toolkit_repo_path": repo}
-    if python is not None:
-        body["ai_toolkit_python"] = python
-    r = owner.patch("/users/me/config", json=body)
+    r = owner.put(
+        "/training/ai-toolkit/config", json={"repo_path": repo, "python": python}
+    )
     assert r.status_code == 200, r.text
 
 
@@ -1099,6 +1122,12 @@ def test_ai_toolkit_install_routes_refuse_a_read_token():
         assert scoped.get("/training/ai-toolkit/discover").status_code == 403
         assert scoped.get("/training/ai-toolkit/status").status_code == 403
         assert (
+            scoped.put(
+                "/training/ai-toolkit/config", json={"repo_path": None, "python": None}
+            ).status_code
+            == 403
+        )
+        assert (
             scoped.post(
                 "/training/ai-toolkit/check", json={"repo_path": "/x"}
             ).status_code
@@ -1148,8 +1177,8 @@ def test_the_server_binds_the_shelf_folder_registrar_at_start_up():
         gc.collect()
 
 
-def test_patch_config_disconnect_clears_both_ai_toolkit_paths():
-    """Disconnect is PATCHing both to null: accepted, and the saved values read
+def test_put_config_disconnect_clears_both_ai_toolkit_paths():
+    """Disconnect is PUTting both to null: accepted, and the saved values read
     back as null."""
     temp_dir, owner, server, read_token = _setup()
     try:
@@ -1157,9 +1186,8 @@ def test_patch_config_disconnect_clears_both_ai_toolkit_paths():
         _save_checkout(owner, repo, sys.executable)
         assert owner.get("/training/ai-toolkit/status").json()["configured"] is True
 
-        r = owner.patch(
-            "/users/me/config",
-            json={"ai_toolkit_repo_path": None, "ai_toolkit_python": None},
+        r = owner.put(
+            "/training/ai-toolkit/config", json={"repo_path": None, "python": None}
         )
         assert r.status_code == 200, r.text
         cfg = owner.get("/users/me/config").json()

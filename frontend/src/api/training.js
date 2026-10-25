@@ -52,6 +52,16 @@ export function checkAiToolkit({ repo_path, python }) {
   );
 }
 
+/**
+ * Save the checkout and the Python that runs its trainer; both null disconnects.
+ * Host-local: the server refuses a remote owner unless host operations are on.
+ */
+export function putAiToolkitConfig({ repo_path, python }) {
+  return unwrap(
+    apiClient.put("/training/ai-toolkit/config", { repo_path, python }),
+  );
+}
+
 /** The saved install's version, and its dataset and runs folders. */
 export function getAiToolkitStatus() {
   return unwrap(apiClient.get("/training/ai-toolkit/status"));

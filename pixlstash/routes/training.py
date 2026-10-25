@@ -26,6 +26,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from platformdirs import user_data_dir
 
+from pixlstash.database import DBPriority
+from pixlstash.db_models import User
 from pixlstash.hub import training_runs
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.model_folder_scanner import SOURCE_FOLDER_KIND
@@ -37,7 +39,10 @@ from pixlstash.training.config_render import (
 )
 from pixlstash.utils.aitoolkit_run import read_output_root
 from pixlstash.utils.path_utils import path_is_within, resolve_path_within
-from pixlstash.utils.service.user_settings_utils import validate_ai_toolkit_settings
+from pixlstash.utils.service.user_settings_utils import (
+    apply_user_config_patch,
+    validate_ai_toolkit_settings,
+)
 
 logger = get_logger(__name__)
 
@@ -963,6 +968,70 @@ def create_router(server) -> APIRouter:
             "python": python,
             "version": ai_toolkit_install.read_version(repo),
             **_ai_toolkit_folders(repo),
+        }
+
+    class AiToolkitConfigRequest(BaseModel):
+        """Body for saving the ai-toolkit install: its checkout and its Python.
+
+        Both keys are required. Both null disconnects the install.
+        """
+
+        model_config = ConfigDict(extra="forbid")
+
+        repo_path: Optional[str] = Field(
+            ..., description="The ai-toolkit checkout directory (absolute), or null."
+        )
+        python: Optional[str] = Field(
+            ...,
+            description=(
+                "The interpreter that runs the trainer (absolute), or null. It "
+                "must be an executable file."
+            ),
+        )
+
+    @router.put(
+        "/training/ai-toolkit/config",
+        summary="Save or disconnect the ai-toolkit install",
+        description=(
+            "Stores the ai-toolkit checkout and the Python that runs its trainer. "
+            "Each is checked on this host first: the checkout must hold run.py and "
+            "the Python must be an executable file. Both null disconnects the "
+            "install. The Python is the trainer's argv[0] and the checkout its "
+            "working directory, so this is a host operation: a remote owner is "
+            "refused unless allow_remote_host_ops is set."
+        ),
+    )
+    def put_ai_toolkit_config(payload: AiToolkitConfigRequest, request: Request):
+        _ensure_secure(request)
+        repo_path = (payload.repo_path or "").strip() or None
+        python = (payload.python or "").strip() or None
+        try:
+            validate_ai_toolkit_settings(repo_path, python)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        user_id = server.auth.require_user_id(request)
+
+        def save(session, user_id: int):
+            user = session.get(User, user_id)
+            if user is None:
+                raise HTTPException(status_code=404, detail="User not found")
+            apply_user_config_patch(
+                user,
+                {"ai_toolkit_repo_path": repo_path, "ai_toolkit_python": python},
+            )
+            session.add(user)
+            session.commit()
+            session.refresh(user)
+            return user
+
+        user = server.hub_engine.run_task(save, user_id, priority=DBPriority.IMMEDIATE)
+        # Keep the process-local owner cache coherent with the hub row, as the
+        # config PATCH does.
+        server.auth.user = user
+        server._user = user
+        return {
+            "repo_path": user.ai_toolkit_repo_path,
+            "python": user.ai_toolkit_python,
         }
 
     # ── Templates ─────────────────────────────────────────────────────────

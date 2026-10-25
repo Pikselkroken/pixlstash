@@ -9,8 +9,9 @@ import {
   getAiToolkitStatus,
   listTrainingJobs,
   listTrainingTemplates,
+  putAiToolkitConfig,
 } from "../api/training";
-import { getUserConfig, patchUserConfig } from "../api/config";
+import { getUserConfig } from "../api/config";
 import { DEFAULT_TIMEOUTS, useNoticeStore } from "./useNoticeStore";
 import { onSessionReset } from "../utils/apiClient";
 import { useSidebarStore } from "./useSidebarStore";
@@ -282,17 +283,14 @@ export const useTrainingStore = defineStore("training", () => {
    * caller shows the server's `detail`.
    */
   async function saveAiToolkitPaths(repoPath, python) {
-    await patchUserConfig({
-      ai_toolkit_repo_path: repoPath,
-      ai_toolkit_python: python,
-    });
+    await putAiToolkitConfig({ repo_path: repoPath, python });
     aiToolkitRepoPath.value = repoPath;
     aiToolkitPython.value = python;
   }
 
   /** Forget both paths; the install's check and status go with them. */
   async function disconnectAiToolkit() {
-    await patchUserConfig({ ai_toolkit_repo_path: null, ai_toolkit_python: null });
+    await putAiToolkitConfig({ repo_path: null, python: null });
     aiToolkitRepoPath.value = "";
     aiToolkitPython.value = "";
     aiToolkitCheck.value = null;

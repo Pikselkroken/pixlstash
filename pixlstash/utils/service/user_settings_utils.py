@@ -41,6 +41,17 @@ def validate_ai_toolkit_settings(repo_path: str | None, python: str | None) -> N
             raise ValueError("ai_toolkit_python must be an existing executable file.")
 
 
+# The ai-toolkit keys a PATCH to /users/me/config may not write. The checkout and
+# its Python are stored only by PUT /training/ai-toolkit/config, where the host
+# locality rule is declared on the route; the commit is read from the checkout
+# when a job starts.
+AI_TOOLKIT_CONFIG_KEYS = (
+    "ai_toolkit_repo_path",
+    "ai_toolkit_python",
+    "ai_toolkit_commit",
+)
+
+
 # Bounds (in pixels) for the draggable, non-docked sidebar width.
 SIDEBAR_WIDTH_MIN = 220
 SIDEBAR_WIDTH_MAX = 300

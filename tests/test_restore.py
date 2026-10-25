@@ -4635,12 +4635,16 @@ def test_full_restore_neither_reinstates_nor_clears_the_ai_toolkit_python(
     at_snapshot = _fake_interpreter(tmp_path / "python-at-snapshot")
     after_snapshot = _fake_interpreter(tmp_path / "python-after-snapshot")
 
-    r = client.patch("/api/v1/users/me/config", json={"ai_toolkit_python": at_snapshot})
+    r = client.put(
+        "/api/v1/training/ai-toolkit/config",
+        json={"repo_path": None, "python": at_snapshot},
+    )
     assert r.status_code == 200, r.text
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")
 
-    r = client.patch(
-        "/api/v1/users/me/config", json={"ai_toolkit_python": after_snapshot}
+    r = client.put(
+        "/api/v1/training/ai-toolkit/config",
+        json={"repo_path": None, "python": after_snapshot},
     )
     assert r.status_code == 200, r.text
 

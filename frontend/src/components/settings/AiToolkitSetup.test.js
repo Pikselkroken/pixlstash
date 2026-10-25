@@ -19,12 +19,12 @@ const training = vi.hoisted(() => ({
   deleteTrainingJob: vi.fn(),
   listTrainingJobs: vi.fn(),
   listTrainingTemplates: vi.fn(),
+  putAiToolkitConfig: vi.fn(),
 }));
 vi.mock("../../api/training", () => training);
 
 const config = vi.hoisted(() => ({
   getUserConfig: vi.fn(),
-  patchUserConfig: vi.fn(),
 }));
 vi.mock("../../api/config", () => config);
 
@@ -80,6 +80,9 @@ const SENTENCE_ONE_GPU =
 
 const NOT_CONNECTED = { ai_toolkit_repo_path: null, ai_toolkit_python: null };
 const CONNECTED = { ai_toolkit_repo_path: REPO, ai_toolkit_python: PY };
+// The PUT body: the checkout and its Python, or both null to disconnect.
+const SAVED = { repo_path: REPO, python: PY };
+const CLEARED = { repo_path: null, python: null };
 
 const wrappers = [];
 
@@ -117,7 +120,6 @@ beforeEach(() => {
   Object.values(training).forEach((fn) => fn.mockReset());
   Object.values(config).forEach((fn) => fn.mockReset());
   config.getUserConfig.mockResolvedValue(NOT_CONNECTED);
-  config.patchUserConfig.mockResolvedValue({});
   training.discoverAiToolkit.mockResolvedValue(FOUND);
   training.checkAiToolkit.mockResolvedValue(CHECK_OK);
   training.getAiToolkitStatus.mockResolvedValue(STATUS);
@@ -232,7 +234,7 @@ describe("the folders, before Connect", () => {
     expect(byTestId(w, "ait-folders").exists()).toBe(true);
     expect(byTestId(w, "ait-datasets-writable").text()).toBe("writable");
     expect(byTestId(w, "ait-runs-count").text()).toBe("3 runs");
-    expect(config.patchUserConfig).not.toHaveBeenCalled();
+    expect(training.putAiToolkitConfig).not.toHaveBeenCalled();
     expect(connectButton(w).exists()).toBe(true);
   });
 
@@ -259,7 +261,7 @@ describe("the python Connect saves", () => {
     await connectButton(w).trigger("click");
     await flushPromises();
 
-    expect(config.patchUserConfig).toHaveBeenCalledWith(CONNECTED);
+    expect(training.putAiToolkitConfig).toHaveBeenCalledWith(SAVED);
   });
 
   it("lets a hand-picked folder connect once the check resolves its python", async () => {
@@ -279,9 +281,9 @@ describe("the python Connect saves", () => {
     expect(connectButton(w).attributes("disabled")).toBeUndefined();
     await connectButton(w).trigger("click");
     await flushPromises();
-    expect(config.patchUserConfig).toHaveBeenCalledWith({
-      ai_toolkit_repo_path: "/srv/ai-toolkit",
-      ai_toolkit_python: "/srv/ai-toolkit/.venv/bin/python",
+    expect(training.putAiToolkitConfig).toHaveBeenCalledWith({
+      repo_path: "/srv/ai-toolkit",
+      python: "/srv/ai-toolkit/.venv/bin/python",
     });
   });
 
@@ -303,14 +305,14 @@ describe("connecting", () => {
     await connectButton(w).trigger("click");
     await flushPromises();
 
-    expect(config.patchUserConfig).toHaveBeenCalledTimes(1);
-    expect(config.patchUserConfig).toHaveBeenCalledWith(CONNECTED);
+    expect(training.putAiToolkitConfig).toHaveBeenCalledTimes(1);
+    expect(training.putAiToolkitConfig).toHaveBeenCalledWith(SAVED);
     expect(w.text()).toContain("Ready to train");
     expect(w.text()).toContain("AI-toolkit 0.13.34");
   });
 
   it("shows the server's detail when the save is refused with 403", async () => {
-    config.patchUserConfig.mockRejectedValue(
+    training.putAiToolkitConfig.mockRejectedValue(
       httpError(403, "Only the owner of this library can change AI-toolkit."),
     );
     const w = await mountSetup();
@@ -381,7 +383,7 @@ describe("when connected", () => {
     await byTestId(w, "ait-disconnect").trigger("click");
     await flushPromises();
 
-    expect(config.patchUserConfig).toHaveBeenCalledWith(NOT_CONNECTED);
+    expect(training.putAiToolkitConfig).toHaveBeenCalledWith(CLEARED);
     expect(training.discoverAiToolkit).toHaveBeenCalledTimes(1);
     expect(w.text()).not.toContain("Ready to train");
     expect(connectButton(w).exists()).toBe(true);

@@ -799,6 +799,7 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/telemetry/install-id                                                  | telemetry       | Get the anonymous install ID                                  |
 | POST   | /api/v1/telemetry/install-id/recreate                                         | telemetry       | Recreate the anonymous install ID                             |
 | POST   | /api/v1/training/ai-toolkit/check                                             |                 | Check that an ai-toolkit install can train                    |
+| PUT    | /api/v1/training/ai-toolkit/config                                            |                 | Save or disconnect the ai-toolkit install                     |
 | GET    | /api/v1/training/ai-toolkit/discover                                          |                 | Find an ai-toolkit checkout on this computer                  |
 | GET    | /api/v1/training/ai-toolkit/status                                            |                 | The configured ai-toolkit install and its folders             |
 | POST   | /api/v1/training/jobs                                                         |                 | Enqueue a training job                                        |

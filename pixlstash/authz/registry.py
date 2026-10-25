@@ -2212,6 +2212,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _LOCAL,
         justification="§16.3 discloses host paths: the configured checkout, its interpreter, its datasets folder and the run folder, with their run counts; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
+    ("PUT", "/api/v1/training/ai-toolkit/config"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 stores the host paths the trainer runs: the checkout (its working directory) and the Python that is argv[0] of the trainer process, both checked on this host; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
 }
 
 # Routes that exist only when a server-config flag is set. They are declared in
