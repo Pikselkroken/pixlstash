@@ -2,9 +2,10 @@
 
 PixlStash owns only a handful of fields in the trainer config (the
 ``{{PLACEHOLDER}}`` tokens in the template); everything else is passed through
-verbatim. This module loads the template, substitutes those placeholders
-(including inside ``sample.samples[].prompt``), then deep-merges any caller
-overrides on top for full passthrough of arbitrary config fields.
+verbatim. This module loads the template, deep-merges the run's tunable values
+and the recipe's locked keys (:mod:`pixlstash.training.presets`) on top, then
+substitutes those placeholders everywhere, including inside
+``sample.samples[].prompt``.
 
 Caller overrides are restricted to :data:`TUNABLE_KEYS`: training
 hyper-parameters only. A path, a process type, a device or a model source can
@@ -84,6 +85,7 @@ TUNABLE_KEYS: dict[str, _Rule] = {
     "train.content_or_style": _one_of("balanced", "content", "style"),
     "train.timestep_type": _one_of("linear", "sigmoid", "shift", "weighted"),
     "train.train_text_encoder": _flag(),
+    "train.cache_text_embeddings": _flag(),
     "network.linear": _ints(1, 512),
     "network.linear_alpha": _floats(0, 1024),
     "network.conv": _ints(0, 512),
@@ -174,7 +176,7 @@ def _format_path(path: tuple) -> str:
     return text
 
 
-def _check_value(rule: _Rule, name: str, value: Any) -> None:
+def check_value(rule: _Rule, name: str, value: Any) -> None:
     """Raise :class:`TunableOverrideError` if *value* breaks *rule*."""
     if rule.kind == "bool":
         ok = isinstance(value, bool)
@@ -253,7 +255,7 @@ def validate_tunables(overrides: dict | None) -> dict:
                     break
         if rule is None:
             raise TunableOverrideError(f"'{name}' is not a tunable training parameter.")
-        _check_value(rule, name, value)
+        check_value(rule, name, value)
     return copy.deepcopy(overrides)
 
 
@@ -362,11 +364,13 @@ def render_job_config(
     trigger_word: str,
     dataset_dir: str,
     overrides: dict | None = None,
+    locked: dict | None = None,
 ) -> dict:
     """Render the golden config template into a concrete job-config dict.
 
-    Loads the JSON template at *template_path*, substitutes the five PixlStash
-    placeholders, then deep-merges *overrides* on top for full passthrough.
+    Loads the JSON template at *template_path*, deep-merges *overrides* and then
+    *locked* on top, and substitutes the five PixlStash placeholders last, so a
+    placeholder in an override (a recipe's sample prompt) is filled too.
 
     The substituted placeholders are:
 
@@ -386,6 +390,9 @@ def render_job_config(
         overrides: Optional deep-merge patch applied after substitution. It is
             checked by :func:`validate_tunables` first, so only allow-listed
             training parameters can change.
+        locked: The recipe's locked keys as a patch (``to_patch`` shape),
+            merged last and not checked against the tunables: it comes from a
+            shipped preset, never from a caller.
 
     Returns:
         The rendered config as a plain dict, ready to serialise.
@@ -414,9 +421,9 @@ def render_job_config(
         "{{DATASET_FOLDER}}": dataset_dir,
     }
 
-    rendered = _substitute_placeholders(template, replacements)
-
     if overrides:
-        rendered = deep_merge(rendered, validate_tunables(overrides))
+        template = deep_merge(template, validate_tunables(overrides))
+    if locked:
+        template = deep_merge(template, locked)
 
-    return rendered
+    return _substitute_placeholders(template, replacements)

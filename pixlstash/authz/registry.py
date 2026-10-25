@@ -2187,7 +2187,7 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("GET", "/api/v1/training/jobs"): RoutePolicy(_OWNER),
     ("GET", "/api/v1/training/jobs/{job_id}"): RoutePolicy(_OWNER),
     ("GET", "/api/v1/training/jobs/{job_id}/status"): RoutePolicy(_OWNER),
-    ("GET", "/api/v1/training/templates"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/training/presets"): RoutePolicy(_OWNER),
     ("POST", "/api/v1/training/jobs"): RoutePolicy(
         _LOCAL,
         justification="§16.3 starts an ai-toolkit trainer process on the host and writes the job's dataset and output under the image root; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",

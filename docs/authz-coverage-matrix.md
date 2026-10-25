@@ -858,7 +858,7 @@ and the declarations themselves are pinned by
 | POST | `/api/v1/training/ai-toolkit/check` | **local_owner_only** |  | §16.3 starts the checkout's own Python on the host (a torch/CUDA probe and `run.py --help`) with an argument list and a timeout. POST is also refused to READ tokens by method. Owner + loopback/LAN/Tailscale, or remote owner iff `allow_remote_host_ops=true`. |
 | GET | `/api/v1/training/ai-toolkit/status` | **local_owner_only** |  | §16.3 discloses host paths: the configured checkout, interpreter, datasets folder and run folder, with run counts. Untemplated, so also on `READ_BLOCKED_GET_PATHS`. Owner + loopback/LAN/Tailscale, or remote owner iff `allow_remote_host_ops=true`. |
 | PUT | `/api/v1/training/ai-toolkit/config` | **local_owner_only** |  | §16.3 stores the checkout and the Python that is argv[0] of the trainer, both checked on this host (absolute, the checkout holds `run.py`, the Python is executable); both null disconnects. Owner + loopback/LAN/Tailscale, or remote owner iff `allow_remote_host_ops=true` (§16.3.1). Refused to READ tokens by method. |
-| GET | `/api/v1/training/templates` | owner_only |  | Lists job-config templates by name. Reads no picture data. |
+| GET | `/api/v1/training/presets` | owner_only |  | Lists the shipped training recipes and whether the saved checkout ships the model code each needs. Reads no picture data. |
 
 ---
 

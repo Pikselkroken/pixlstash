@@ -104,6 +104,17 @@ const checkSentence = computed(() => {
   return `Its venv has torch ${c.torch || "unknown"}${cuda} and sees ${gpuSentence.value}. A trial start loaded the trainer and exited without training.`;
 });
 
+// Which recipes the checked checkout can run: a recipe is offered only when
+// the checkout ships its model code.
+const recipesSentence = computed(() => {
+  const recipes = store.aiToolkitCheck?.presets || [];
+  if (!recipes.length) return "";
+  const offered = recipes.filter((r) => r.offered).map((r) => r.label);
+  if (offered.length) return `It can train ${offered.join(", ")}.`;
+  const needs = [...new Set(recipes.map((r) => r.requires_arch))].join(", ");
+  return `It has none of the model code PixlStash's recipes need (${needs}), so it cannot train any of them yet. Update the checkout.`;
+});
+
 const discovery = computed(() => store.aiToolkitDiscovery);
 const status = computed(() => store.aiToolkitStatus);
 
@@ -319,6 +330,13 @@ watch(
           >
             {{ checkSentence }}
           </p>
+          <p
+            v-if="checkSentence && recipesSentence"
+            class="ait-small ait-muted"
+            data-testid="ait-recipes-sentence"
+          >
+            {{ recipesSentence }}
+          </p>
         </div>
       </template>
 
@@ -385,6 +403,10 @@ watch(
               CUDA
             </span>
           </dd>
+          <template v-if="recipesSentence">
+            <dt>Models</dt>
+            <dd data-testid="ait-recipes-sentence">{{ recipesSentence }}</dd>
+          </template>
         </dl>
       </template>
 

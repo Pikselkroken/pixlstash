@@ -25,16 +25,44 @@
         </span>
     </div>
 
-    <!-- Base model / template -->
+    <!-- Base model: a training recipe -->
     <v-select
-      v-model="templateModel"
-      :items="templateItems"
+      v-model="store.selectedPreset"
+      :items="presetItems"
       item-title="title"
       item-value="value"
+      item-props="props"
       label="Base model"
       density="comfortable"
-      :loading="store.templatesLoading"
+      :loading="store.presetsLoading"
       hide-details="auto"
+    />
+
+    <!-- What it learns: asked only of a set; a character is a person -->
+    <v-select
+      v-if="store.scopeType !== 'character'"
+      v-model="store.subject"
+      :items="SUBJECT_ITEMS"
+      label="What is this set of?"
+      density="comfortable"
+      hide-details="auto"
+      :error-messages="subjectError ? [subjectError] : []"
+    />
+
+    <v-select
+      v-model="store.effort"
+      :items="EFFORT_ITEMS"
+      label="How hard to train"
+      density="comfortable"
+      hide-details
+    />
+
+    <v-select
+      v-model="store.fit"
+      :items="FIT_ITEMS"
+      label="Fit to this GPU"
+      density="comfortable"
+      hide-details
     />
 
     <!-- Trigger word -->
@@ -46,30 +74,30 @@
       :error-messages="triggerError ? [triggerError] : []"
     />
 
-    <!-- Steps -->
-    <v-text-field
-      v-model.number="stepsModel"
-      label="Steps"
-      type="number"
-      min="1"
-      density="comfortable"
-      hide-details="auto"
-      :error-messages="stepsError ? [stepsError] : []"
-    />
-
     <!-- Advanced -->
     <v-expansion-panels variant="accordion" class="tb-train-adv">
       <v-expansion-panel>
         <v-expansion-panel-title>Advanced settings</v-expansion-panel-title>
         <v-expansion-panel-text>
           <p class="tb-train-adv-note">
-            Leave a field blank to keep the template's default.
+            Leave a field blank to use the value the recipe works out from
+            your choices, the picture count and this GPU.
           </p>
           <div class="tb-train-adv-grid">
             <v-text-field
+              v-model.number="store.steps"
+              label="Steps"
+              placeholder="from the recipe"
+              type="number"
+              min="1"
+              density="compact"
+              hide-details="auto"
+              :error-messages="stepsError ? [stepsError] : []"
+            />
+            <v-text-field
               v-model.number="store.networkRank"
               label="Network rank (linear)"
-              placeholder="template default"
+              placeholder="from the recipe"
               type="number"
               min="1"
               density="compact"
@@ -78,7 +106,7 @@
             <v-text-field
               v-model.number="store.networkAlpha"
               label="Network alpha"
-              placeholder="template default"
+              placeholder="from the recipe"
               type="number"
               min="1"
               density="compact"
@@ -87,14 +115,14 @@
             <v-text-field
               v-model="store.learningRate"
               label="Learning rate"
-              placeholder="template default"
+              placeholder="from the recipe"
               density="compact"
               hide-details
             />
             <v-text-field
               v-model.number="store.batchSize"
               label="Batch size"
-              placeholder="template default"
+              placeholder="from the recipe"
               type="number"
               min="1"
               density="compact"
@@ -103,7 +131,7 @@
             <v-text-field
               v-model.number="store.saveEvery"
               label="Save every (steps)"
-              placeholder="template default"
+              placeholder="from the recipe"
               type="number"
               min="1"
               density="compact"
@@ -119,26 +147,6 @@
             hide-details
             class="mt-2"
           />
-        </v-expansion-panel-text>
-      </v-expansion-panel>
-      <v-expansion-panel>
-        <v-expansion-panel-title>Raw config (full passthrough)</v-expansion-panel-title>
-        <v-expansion-panel-text>
-          <v-textarea
-            v-model="store.rawConfig"
-            label="config_overrides JSON"
-            placeholder='{ "config": { "process": [ { "train": { "steps": 4000 } } ] } }'
-            rows="4"
-            auto-grow
-            density="compact"
-            hide-details="auto"
-            class="tb-train-raw"
-            :error-messages="rawError ? [rawError] : []"
-          />
-          <p class="tb-train-raw-hint">
-            Merged over the template config for this run. Overrides the fields
-            above.
-          </p>
         </v-expansion-panel-text>
       </v-expansion-panel>
     </v-expansion-panels>
@@ -175,53 +183,51 @@ const store = useTrainingStore();
 
 const triggerError = ref("");
 const stepsError = ref("");
-const rawError = ref("");
+const subjectError = ref("");
 
-// Fetch templates / VRAM / config the first time the menu opens.
+const SUBJECT_ITEMS = [
+  { title: "A person", value: "person" },
+  { title: "A style", value: "style" },
+  { title: "A thing", value: "thing" },
+];
+const EFFORT_ITEMS = [
+  { title: "Gentle", value: "gentle" },
+  { title: "Standard", value: "standard" },
+  { title: "Strong", value: "strong" },
+];
+const FIT_ITEMS = [
+  { title: "Auto", value: "auto" },
+  { title: "Save memory", value: "save_memory" },
+  { title: "Best quality", value: "best_quality" },
+];
+
+// Fetch recipes / config the first time the menu opens.
 watch(
   () => store.trainMenuOpen,
   (isOpen) => {
     if (!isOpen) return;
-    store.fetchTemplates();
+    store.fetchPresets();
     if (!store.configLoaded) store.fetchConfig();
     triggerError.value = "";
     stepsError.value = "";
-    rawError.value = "";
+    subjectError.value = "";
     store.submitError = "";
   },
 );
 
-const templateItems = computed(() =>
-  (store.templates || []).map((t) => ({
-    title: t.base_model
-      ? `${t.display_name} · ${shortModel(t.base_model)}`
-      : t.display_name,
-    value: t.name,
+// A recipe the checkout has no model code for is listed but cannot be picked.
+const presetItems = computed(() =>
+  (store.presets || []).map((p) => ({
+    title: p.offered ? p.label : `${p.label} (needs a newer ai-toolkit)`,
+    value: p.id,
+    props: { disabled: !p.offered },
   })),
 );
 
-function shortModel(name) {
-  // Show just the model name, not the full org/path.
-  const parts = String(name).split("/");
-  return parts[parts.length - 1] || name;
-}
-
-const templateModel = computed({
-  get: () => store.selectedTemplate,
-  set: (v) => {
-    store.selectedTemplate = v;
-  },
-});
 const triggerModel = computed({
   get: () => store.triggerWord,
   set: (v) => {
     store.triggerWord = v;
-  },
-});
-const stepsModel = computed({
-  get: () => store.steps,
-  set: (v) => {
-    store.steps = v;
   },
 });
 
@@ -235,25 +241,20 @@ const canStart = computed(
 function validate() {
   triggerError.value = "";
   stepsError.value = "";
-  rawError.value = "";
+  subjectError.value = "";
   let ok = true;
   if (!String(store.triggerWord || "").trim()) {
     triggerError.value = "Trigger word is required.";
     ok = false;
   }
-  if (!(Number(store.steps) > 0)) {
+  const steps = store.steps;
+  if (steps !== null && steps !== "" && !(Number(steps) > 0)) {
     stepsError.value = "Steps must be greater than 0.";
     ok = false;
   }
-  // Validate raw JSON early so the user sees the error inline, not after submit.
-  const raw = String(store.rawConfig || "").trim();
-  if (raw) {
-    try {
-      JSON.parse(raw);
-    } catch {
-      rawError.value = "Raw config is not valid JSON.";
-      ok = false;
-    }
+  if (!store.subject) {
+    subjectError.value = "Say what the LoRA should learn.";
+    ok = false;
   }
   return ok;
 }
@@ -261,10 +262,13 @@ function validate() {
 async function onStart() {
   if (!validate()) return;
   try {
-    await store.startTraining();
+    const job = await store.startTraining();
     store.trainMenuOpen = false;
+    const profile = job?.resolved_profile?.profile_label;
     store.showQueuedToast(
-      "Training queued. Watch progress in the Tasks tab.",
+      profile
+        ? `Training queued: ${profile}. Watch progress in the Tasks tab.`
+        : "Training queued. Watch progress in the Tasks tab.",
     );
     emit("started");
   } catch {
@@ -338,17 +342,6 @@ function goToSettings() {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: var(--space-3);
-}
-
-.tb-train-raw :deep(textarea) {
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-}
-
-.tb-train-raw-hint {
-  font-size: var(--text-2xs);
-  opacity: 0.6;
-  margin: var(--space-2) 0 0;
 }
 
 .tb-train-note {

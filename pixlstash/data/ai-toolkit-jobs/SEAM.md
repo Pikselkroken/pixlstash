@@ -24,10 +24,12 @@ version bump is a single-file change. Verified against the local clone
 job failure when `--recover` is absent. Spawn in **its own process group** so cancel can signal the
 group and a restart can reconcile by PID.
 
-## Config (golden template: `built-in/zimage-turbo-lora.json`)
+## Config (skeleton: `built-in/zimage-turbo-lora.json`, values: `../training-presets/`)
 
-One `JobConfig` tree (`ui/src/types.ts`). PixlStash owns ONLY these fields (placeholders in the
-template); everything else is passed through verbatim:
+One `JobConfig` tree (`ui/src/types.ts`). The template is the passthrough skeleton; the recipe in
+`pixlstash/data/training-presets/` supplies every value it owns (locked model keys, defaults, the
+choices' tables and the resolved memory profile, see `docs/backend_architecture.md` §25.15). The
+placeholders are substituted last, recipe prompts included:
 
 | Placeholder | Goes to | Notes |
 |---|---|---|
@@ -37,8 +39,9 @@ template); everything else is passed through verbatim:
 | `{{TRIGGER_WORD}}` | `process[0].trigger_word` + sample prompts | character/set name |
 | `{{DATASET_FOLDER}}` | `process[0].datasets[0].folder_path` | the exported image+`.txt` dataset |
 
-`type: "diffusion_trainer"`, `logging.use_ui_logger: true`. For a different base model, override
-`model.name_or_path` / `model.arch` / `model.assistant_lora_path` (see `options.ts`). Send
+`type: "diffusion_trainer"`, `logging.use_ui_logger: true`. A different base model is a new recipe
+with its own locked `model.name_or_path` / `model.arch` / `model.assistant_lora_path` (see
+`options.tsx`) and `requires_arch`, the `extensions_built_in/diffusion_models/<dir>` it needs. Send
 `arch` literally (e.g. `"zimage:turbo"`); the backend strips the `:turbo` tag. ai-toolkit validates
 the config: a bad config fails the run, so the adapter does not re-validate the full tree.
 

@@ -362,9 +362,9 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         "/api/v1/comfyui/templates",
         "/api/v1/comfyui/templates/thumbnail",
         # In-app LoRA training: the owner's jobs (rendered configs carry host
-        # paths) and the trainer templates.
+        # paths) and the training recipes.
         "/api/v1/training/jobs",
-        "/api/v1/training/templates",
+        "/api/v1/training/presets",
         # The ai-toolkit install: where the checkout, its Python and the run
         # folder are on this machine, and the discovery that finds them.
         "/api/v1/training/ai-toolkit/discover",

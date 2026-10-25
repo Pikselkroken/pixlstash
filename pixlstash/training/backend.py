@@ -47,9 +47,11 @@ class TrainingSpec:
         gpu_ids: Comma-separated CUDA device id(s) for ``CUDA_VISIBLE_DEVICES``.
         hf_token: Optional Hugging Face token, passed to the trainer process as
             ``HF_TOKEN`` if set. NEVER logged.
-        config_overrides: Optional deep-merge patch applied on top of the
-            rendered template, for full passthrough of any config field
-            (e.g. a different base model). ``None`` means no overrides.
+        config_overrides: The run's tunable values as a deep-merge patch over
+            the template (:func:`pixlstash.training.presets.to_patch`), checked
+            against the tunables at render. ``None`` means none.
+        locked: The recipe's locked keys as a patch, merged last. ``None``
+            means none.
         training_folder: The shelf's ai-toolkit folder the run is written
             into (the registered ``source`` folder). ``None`` keeps the run
             under the work dir's ``output/``.
@@ -64,6 +66,7 @@ class TrainingSpec:
     gpu_ids: str = "0"
     hf_token: str | None = None
     config_overrides: dict | None = None
+    locked: dict | None = None
     training_folder: str | None = None
 
 

@@ -93,9 +93,6 @@ logger = get_logger(__name__)
 #: How long making room waits, on the arbiter's thread, for the GPU batch in
 #: flight to end; past it the models are unloaded off that thread.
 YIELD_WAIT_S = 2.0
-#: What a LoRA training run asks the arbiter for: an estimate for the shipped
-#: template (Z-Image Turbo, quantized, low-VRAM), not a measurement.
-TRAINING_NEED_MB = 16 * 1024
 
 
 class Vault:
@@ -1102,28 +1099,32 @@ class Vault:
             "cover_sha256": cover_sha,
         }
 
-    def _request_training_gpu(self, label: str, job_uuid: str) -> Lease:
+    def _request_training_gpu(
+        self, label: str, job_uuid: str, vram_mb: int, ram_mb: int
+    ) -> Lease:
         """Ask the arbiter for a training run's card: the one PixlStash uses.
 
         Exclusive, so PixlStash yields its own GPU work first and an idle
-        ComfyUI frees its cache; the run's own process then has the card.
+        ComfyUI frees its cache; the run's own process then has the card. The
+        needs are those of the run's resolved memory profile.
         """
-        device = ledger().pixlstash_device()
-        reading = next((d for d in ledger().devices() if d.uuid == device), None)
-        need = TRAINING_NEED_MB
-        if reading is not None:
-            # ponytail: a fixed estimate capped at 60% of the card, so a small
-            # card running a low-VRAM config does not wait forever; the
-            # per-model presets replace it with each model's measured need.
-            need = min(need, int(reading.total_mb * 0.6))
         return self._arbiter.request(
             Tenant.AITOOLKIT,
             label,
-            need_mb=need,
+            need_mb=vram_mb,
+            ram_mb=ram_mb,
             kind=LeaseKind.EXCLUSIVE,
-            device=device,
+            device=ledger().pixlstash_device(),
             job_id=job_uuid,
         )
+
+    def training_room(self) -> dict:
+        """What a training run could be given now: ``{vram_mb, ram_mb}``.
+
+        On the card training leases (PixlStash's own); see
+        :meth:`ResourceArbiter.training_room`.
+        """
+        return self._arbiter.training_room(ledger().pixlstash_device())
 
     def set_max_vram_usage_gb(self, max_vram_gb: Optional[float]):
         """The most PixlStash's own GPU work may hold, and its batch sizing.

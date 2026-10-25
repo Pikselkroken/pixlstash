@@ -653,6 +653,7 @@ jobs:
           tests/training/test_ai_toolkit_install.py
           tests/training/test_config_render.py
           tests/training/test_local_ai_toolkit.py
+          tests/training/test_presets.py
           tests/training/test_training_service.py
 
   # ---------------------------------------------------------------------------

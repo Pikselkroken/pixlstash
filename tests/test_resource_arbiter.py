@@ -108,6 +108,19 @@ def test_margin_is_the_larger_of_one_gb_and_five_percent():
     assert safety_margin_mb(TOTAL) == int(TOTAL * 0.05)
 
 
+def test_training_room_counts_what_tenants_give_back_but_not_other_apps():
+    """PixlStash's own memory and an idle ComfyUI's cache are freed for an
+    exclusive run, so they are room; what other apps hold is not."""
+    arb, _fake, _ = make(used_mb=12000, pixl_usage=3000, thread=False)
+    arb.register_probe(Tenant.COMFYUI, FakeComfy(usage=7000))
+    room = arb.training_room(CARD)
+    # 12000 used = 3000 PixlStash + 7000 ComfyUI + 2000 other apps.
+    assert room == {"vram_mb": budget(TOTAL - 2000), "ram_mb": 32768}
+    assert arb.training_room("GPU-elsewhere")["vram_mb"] is None
+    unmeasured, _f, _u = make(measurable=False, thread=False)
+    assert unmeasured.training_room(CARD)["vram_mb"] is None
+
+
 def test_heavy_that_fits_is_granted_at_once_and_snapshot_counts_it():
     arb, _fake, _ = make(used_mb=4000)
     lease = arb.request(

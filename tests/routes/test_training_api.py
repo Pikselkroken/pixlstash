@@ -31,6 +31,11 @@ from pixlstash.server import Server
 # Harness
 # ---------------------------------------------------------------------------
 
+# What the arbiter gives a run on a 24 GB and a 16 GB card: the card less the
+# safety margin and a desktop's few hundred MB.
+_ROOM_24GB = {"vram_mb": 22_800, "ram_mb": 60_000}
+_ROOM_16GB = {"vram_mb": 14_900, "ram_mb": 60_000}
+
 
 class _FakeTrainingService:
     """Records enqueue/cancel calls so tests need no GPU/subprocess.
@@ -57,6 +62,9 @@ class _FakeTrainingService:
         trigger_word,
         template_path,
         config_overrides=None,
+        locked=None,
+        resolution=None,
+        pins=None,
     ):
         if (set_id is None) == (character_id is None):
             raise ValueError(
@@ -72,6 +80,9 @@ class _FakeTrainingService:
                 "trigger_word": trigger_word,
                 "template_path": template_path,
                 "config_overrides": config_overrides,
+                "locked": locked,
+                "resolution": resolution,
+                "pins": pins,
             }
         )
 
@@ -86,6 +97,9 @@ class _FakeTrainingService:
             character_id=character_id,
             base_model=base_model,
             trigger_word=trigger_word,
+            preset=resolution["preset"],
+            resolved_profile=json.dumps(resolution),
+            advanced_pins=json.dumps(pins or {}),
         )
         return training_runs.get_run(self._hub, self._library_uuid, run_id)
 
@@ -128,6 +142,8 @@ def _setup():
     server.vault.training_service = _FakeTrainingService(
         server.vault.hub, server.vault.library_uuid
     )
+    # A 24 GB card, as the arbiter would report it, unless a test says otherwise.
+    server.vault.training_room = lambda: dict(_ROOM_24GB)
 
     client = TestClient(server.api, raise_server_exceptions=True)
     resp = client.post("/login", json={"username": "owner", "password": "ownerpass1"})
@@ -233,30 +249,31 @@ def test_create_job_owner_works():
         assert body["status"] == "queued"
         assert body["character_id"] == char_id
         assert body["uuid"]
-        # base_model defaulted from the built-in template.
-        assert body["base_model"]
-        # The enqueue went through the (fake) service with a resolved template.
+        # The default recipe, resolved for this card: a character is a person.
+        assert body["resolved_profile"]["preset"] == "zimage-turbo@1"
+        assert body["resolved_profile"]["subject"] == "person"
+        assert body["resolved_profile"]["profile"] == "q8"
         call = server.vault.training_service.enqueue_calls[-1]
         assert call["trigger_word"] == "alice"
-        assert call["template_path"].endswith(".json")
+        assert call["template_path"].endswith("zimage-turbo-lora.json")
+        assert call["locked"]["config"]["process"][0]["model"]["arch"] == (
+            "zimage:turbo"
+        )
+        assert call["resolution"]["vram_mb"] == 16000
     finally:
         _teardown(temp_dir, server)
 
 
-def test_create_job_takes_base_model_from_the_template_and_refuses_a_client_one():
-    """The job's base model is what the trainer loads: the template's rendered
-    model name, read by the server. A client-sent base_model is refused (review
+def test_create_job_takes_base_model_from_the_recipe_and_refuses_a_client_one():
+    """The job's base model is what the trainer loads: the recipe's locked
+    model, read by the server. A client-sent base_model is refused (review
     F4), so the row cannot claim a model the run did not train."""
-    from pixlstash.routes.training import _template_builtin_dir
+    from pixlstash.training import presets
 
     temp_dir, owner, server, read_token = _setup()
     try:
         char_id = _make_character(owner)
-        with open(
-            os.path.join(_template_builtin_dir(), "zimage-turbo-lora.json"),
-            encoding="utf-8",
-        ) as fh:
-            expected = json.load(fh)["config"]["process"][0]["model"]["name_or_path"]
+        expected = presets.get_preset("zimage-turbo")["locked"]["model.name_or_path"]
         body = {"character_id": char_id, "name": "Alice", "trigger_word": "alice"}
         r = owner.post("/training/jobs", json=body)
         assert r.status_code == 200, r.text
@@ -313,7 +330,7 @@ def test_create_job_both_sources_is_400():
         _teardown(temp_dir, server)
 
 
-def test_create_job_unknown_template_is_404():
+def test_create_job_unknown_preset_is_404():
     temp_dir, owner, server, read_token = _setup()
     try:
         r = owner.post(
@@ -322,7 +339,7 @@ def test_create_job_unknown_template_is_404():
                 "character_id": 7,
                 "name": "x",
                 "trigger_word": "alice",
-                "template": "does-not-exist",
+                "preset": "does-not-exist",
             },
         )
         assert r.status_code == 404, r.text
@@ -584,33 +601,35 @@ def test_delete_job_scoped_token_forbidden():
 
 
 # ---------------------------------------------------------------------------
-# GET /training/templates
+# GET /training/presets
 # ---------------------------------------------------------------------------
 
 
-def test_list_templates_owner_works():
+def test_list_presets_offers_only_what_the_saved_checkout_can_run(tmp_path):
+    """No checkout: nothing is offered. One with the z_image model code: Z-Image
+    Turbo is. The recipe is listed either way, so the dialog can say why."""
     temp_dir, owner, server, read_token = _setup()
     try:
-        r = owner.get("/training/templates")
+        r = owner.get("/training/presets")
         assert r.status_code == 200, r.text
-        names = {item["display_name"] for item in r.json()}
-        # The shipped built-in template must be discoverable.
-        assert "zimage-turbo-lora" in names
-        entry = next(
-            item for item in r.json() if item["display_name"] == "zimage-turbo-lora"
-        )
-        assert entry["source"] == "built-in"
-        assert entry["base_model"]
-        assert entry["description"]
+        entry = next(item for item in r.json() if item["id"] == "zimage-turbo")
+        assert entry["base_model"] == "Tongyi-MAI/Z-Image-Turbo"
+        assert entry["offered"] is False
+
+        repo = _fake_checkout(str(tmp_path / "kit"))
+        _save_checkout(owner, repo, sys.executable)
+        r = owner.get("/training/presets")
+        entry = next(item for item in r.json() if item["id"] == "zimage-turbo")
+        assert entry["offered"] is True
     finally:
         _teardown(temp_dir, server)
 
 
-def test_list_templates_scoped_token_forbidden():
+def test_list_presets_scoped_token_forbidden():
     temp_dir, owner, server, read_token = _setup()
     try:
         scoped = _scoped_client(server, read_token)
-        r = scoped.get("/training/templates")
+        r = scoped.get("/training/presets")
         assert r.status_code == 403, r.text
     finally:
         _teardown(temp_dir, server)
@@ -701,18 +720,17 @@ def _walk_strings(value):
         yield value
 
 
-def test_create_job_refuses_path_overrides_before_enqueue():
-    """A config_overrides key outside the tunables is a 422 naming the key, and
-    nothing is queued."""
+def test_create_job_refuses_locked_and_untunable_pins_before_enqueue():
+    """A pin on a locked recipe key, or on a key outside the tunables, is a 422
+    naming the key, and nothing is queued. The raw config patch is gone."""
     temp_dir, owner, server, read_token = _setup()
     try:
         char_id = _make_character(owner)
-        for overrides, key in (
-            ({"config": {"process": [{"training_folder": "/etc"}]}}, "training_folder"),
-            (
-                {"config": {"process": [{"datasets": [{"folder_path": "/etc"}]}]}},
-                "folder_path",
-            ),
+        for pins, key in (
+            ({"model.name_or_path": "/evil"}, "model.name_or_path"),
+            ({"model.arch": "flux"}, "model.arch"),
+            ({"training_folder": "/etc"}, "training_folder"),
+            ({"datasets[*].folder_path": "/etc"}, "folder_path"),
         ):
             r = owner.post(
                 "/training/jobs",
@@ -720,34 +738,125 @@ def test_create_job_refuses_path_overrides_before_enqueue():
                     "character_id": char_id,
                     "name": "x",
                     "trigger_word": "tw",
-                    "config_overrides": overrides,
+                    "pins": pins,
                 },
             )
             assert r.status_code == 422, r.text
             assert key in r.text, r.text
-        assert server.vault.training_service.enqueue_calls == []
-    finally:
-        _teardown(temp_dir, server)
-
-
-def test_create_job_accepts_an_allowed_tunable_override():
-    temp_dir, owner, server, read_token = _setup()
-    try:
-        char_id = _make_character(owner)
-        overrides = {"config": {"process": [{"train": {"steps": 50, "lr": 0.0002}}]}}
+        assert (
+            "fixed by the Z-Image Turbo recipe"
+            in owner.post(
+                "/training/jobs",
+                json={
+                    "character_id": char_id,
+                    "name": "x",
+                    "trigger_word": "tw",
+                    "pins": {"model.arch": "flux"},
+                },
+            ).json()["detail"]
+        )
         r = owner.post(
             "/training/jobs",
             json={
                 "character_id": char_id,
                 "name": "x",
                 "trigger_word": "tw",
-                "config_overrides": overrides,
+                "config_overrides": {"config": {}},
+            },
+        )
+        assert r.status_code == 422, r.text
+        assert server.vault.training_service.enqueue_calls == []
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_create_job_pins_win_and_are_recorded():
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        char_id = _make_character(owner)
+        pins = {"train.steps": 50, "train.lr": 0.0002}
+        r = owner.post(
+            "/training/jobs",
+            json={
+                "character_id": char_id,
+                "name": "x",
+                "trigger_word": "tw",
+                "pins": pins,
             },
         )
         assert r.status_code == 200, r.text
-        assert server.vault.training_service.enqueue_calls[-1]["config_overrides"] == (
-            overrides
-        )
+        call = server.vault.training_service.enqueue_calls[-1]
+        assert call["pins"] == pins
+        train = call["config_overrides"]["config"]["process"][0]["train"]
+        assert train["steps"] == 50 and train["lr"] == 0.0002
+        values = r.json()["resolved_profile"]["values"]
+        assert values["train.steps"] == {"value": 50, "source": "pinned"}
+
+        detail = owner.get(f"/training/jobs/{r.json()['id']}").json()
+        assert detail["preset"] == "zimage-turbo@1"
+        assert detail["advanced_pins"] == pins
+        assert detail["resolved_profile"]["profile"] == "q8"
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_create_job_resolves_a_16gb_card_and_refuses_a_small_one():
+    """The fit is decided from the card: a 16 GB card trains with captions
+    encoded once; an 8 GB card is refused naming GPU memory, and nothing is
+    queued for it. Best quality on 16 GB is refused rather than shrunk."""
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        char_id = _make_character(owner)
+        body = {"character_id": char_id, "name": "x", "trigger_word": "tw"}
+        server.vault.training_room = lambda: dict(_ROOM_16GB)
+        r = owner.post("/training/jobs", json=body)
+        assert r.status_code == 200, r.text
+        assert r.json()["resolved_profile"]["profile"] == "q8_cached"
+
+        calls = len(server.vault.training_service.enqueue_calls)
+        r = owner.post("/training/jobs", json={**body, "fit": "best_quality"})
+        assert r.status_code == 422, r.text
+        assert r.json()["detail"]["budget"] == "vram"
+
+        server.vault.training_room = lambda: {"vram_mb": 7_000, "ram_mb": 60_000}
+        r = owner.post("/training/jobs", json=body)
+        assert r.status_code == 422, r.text
+        assert r.json()["detail"]["budget"] == "vram"
+        assert r.json()["detail"]["free_mb"] == 7_000
+
+        server.vault.training_room = lambda: {"vram_mb": None, "ram_mb": 60_000}
+        r = owner.post("/training/jobs", json=body)
+        assert r.status_code == 422, r.text
+        assert len(server.vault.training_service.enqueue_calls) == calls
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_create_job_on_a_set_needs_a_subject_and_a_capable_checkout(tmp_path):
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        set_id = _make_picture_set(owner)
+        body = {"set_id": set_id, "name": "x", "trigger_word": "tw"}
+        r = owner.post("/training/jobs", json=body)
+        assert r.status_code == 422, r.text
+        assert "person, style or thing" in r.text
+
+        r = owner.post("/training/jobs", json={**body, "subject": "style"})
+        assert r.status_code == 200, r.text
+        values = r.json()["resolved_profile"]["values"]
+        assert values["train.content_or_style"] == {
+            "value": "style",
+            "source": "subject",
+        }
+
+        # A saved checkout without the z_image model code cannot train it.
+        repo = _fake_checkout(str(tmp_path / "kit"), archs=("flux2",))
+        _save_checkout(owner, repo, sys.executable)
+        calls = len(server.vault.training_service.enqueue_calls)
+        r = owner.post("/training/jobs", json={**body, "subject": "style"})
+        assert r.status_code == 422, r.text
+        assert "z_image" in r.text
+        assert len(server.vault.training_service.enqueue_calls) == calls
     finally:
         _teardown(temp_dir, server)
 
@@ -892,9 +1001,15 @@ def test_patch_config_refuses_the_ai_toolkit_keys_and_names_the_route():
 # ---------------------------------------------------------------------------
 
 
-def _fake_checkout(root, version="0.12.26"):
-    """An ai-toolkit checkout as far as the install routes can tell."""
+def _fake_checkout(root, version="0.12.26", archs=("z_image",)):
+    """An ai-toolkit checkout as far as the install routes can tell, shipping
+    the model code of *archs*."""
     os.makedirs(os.path.join(root, "toolkit"), exist_ok=True)
+    for arch in archs:
+        os.makedirs(
+            os.path.join(root, "extensions_built_in", "diffusion_models", arch),
+            exist_ok=True,
+        )
     with open(os.path.join(root, "run.py"), "w", encoding="utf-8") as fh:
         fh.write("")
     with open(os.path.join(root, "version.py"), "w", encoding="utf-8") as fh:
@@ -1066,6 +1181,9 @@ def test_ai_toolkit_check_folders_match_status_for_the_same_checkout(monkeypatch
         assert check["python"] == sys.executable
         assert check["datasets"] == status["datasets"]
         assert check["runs"] == status["runs"]
+        # The checkout ships z_image, so the Z-Image Turbo recipe is offered.
+        recipe = next(p for p in check["presets"] if p["id"] == "zimage-turbo")
+        assert recipe["offered"] is True
     finally:
         _teardown(temp_dir, server)
 

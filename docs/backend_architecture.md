@@ -35,7 +35,7 @@
 22. [Tiered Duplicate Detection](#22-tiered-duplicate-detection)
 23. [Opt-in telemetry](#23-opt-in-telemetry-the-install-id-and-the-consent-flags)
 24. [Folder structure: read, commit, layout and moves](#24-folder-structure-read-commit-layout-and-moves) — incl. [24.1 The folder-structure read](#241-the-folder-structure-read), [24.2 The folder-structure commit](#242-the-folder-structure-commit), [24.3 The library layout](#243-the-library-layout), [24.4 The layout and the move engine](#244-the-layout-and-the-move-engine), [24.5 Reconciling moves made outside PixlStash](#245-reconciling-moves-made-outside-pixlstash)
-25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Picking up a model that landed after the scan (#1985)](#2513-picking-up-a-model-that-landed-after-the-scan-1985), [25.11 Training runs: the record a trained model names](#2511-training-runs-the-record-a-trained-model-names), [25.14 The ai-toolkit install: find, check, and where runs land](#2514-the-ai-toolkit-install-find-check-and-where-runs-land)
+25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Picking up a model that landed after the scan (#1985)](#2513-picking-up-a-model-that-landed-after-the-scan-1985), [25.11 Training runs: the record a trained model names](#2511-training-runs-the-record-a-trained-model-names), [25.14 The ai-toolkit install: find, check, and where runs land](#2514-the-ai-toolkit-install-find-check-and-where-runs-land), [25.15 Training recipes and the memory-profile resolver (#2116)](#2515-training-recipes-and-the-memory-profile-resolver-2116)
 26. [Prompt match](#26-prompt-match)
 
 ---
@@ -808,7 +808,7 @@ Public guest scoring and shared-link endpoints.
 | DELETE | /api/v1/training/jobs/{job_id}                                                |                 | Delete a training job, its work directory and its dataset     |
 | POST   | /api/v1/training/jobs/{job_id}/cancel                                         |                 | Cancel a training job                                         |
 | GET    | /api/v1/training/jobs/{job_id}/status                                         |                 | Poll training job status                                      |
-| GET    | /api/v1/training/templates                                                    |                 | List training templates                                       |
+| GET    | /api/v1/training/presets                                                      |                 | List training recipes                                         |
 | GET    | /api/v1/workflows                                                             | workflows       | The Workflows grid                                            |
 | POST   | /api/v1/workflows/run                                                         | workflows       | Run a workflow                                                |
 | POST   | /api/v1/workflows/run/opening                                                 | workflows       | Hold a run for ComfyUI to open                                |
@@ -11293,8 +11293,11 @@ v2 like the shelf tables, so an existing hub gains it on its next open. Each row
 names the library it belongs to (`library_uuid`, the immutable `library.uuid`)
 and holds what the worker needs: the set or character id (vault ids, meaningful
 only in that library), the base model, the rendered config, the dataset picture
-ids, steps, status, timings, the loss curve and the trainer's log tail. Like the
-other library-scoped hub tables it has no foreign keys.
+ids, steps, status, timings, the loss curve and the trainer's log tail. It also
+records how the run was resolved (§25.15), written once at enqueue: `preset`
+(`id@version`), `resolved_profile` (the resolver's JSON) and `advanced_pins` (the
+owner's Advanced values). Like the other library-scoped hub tables it has no
+foreign keys.
 
 Every model an import of a PixlStash run creates carries `model.training_run_id`
 pointing at that row. The id is written in the same `INSERT` as the model
@@ -11339,6 +11342,75 @@ It never removes a run folder in a shelf folder, and it refuses a dataset path
 that is not that name or that lies inside a shelf folder. A job created before
 this change keeps its work-dir `output/` save root, because only a
 `training_folder` that is not `<work>/output` is passed to the adapter.
+
+The check response also lists the training recipes (§25.15) with `offered`: a
+recipe is offered only when the checkout ships its model code,
+`extensions_built_in/diffusion_models/<requires_arch>/`
+(`presets.checkout_architectures`). `GET /training/presets` answers the same for
+the saved checkout, and `POST /training/jobs` refuses a recipe the saved
+checkout cannot run with a 422 naming the missing folder.
+
+### 25.15 Training recipes and the memory-profile resolver (#2116)
+
+A run's parameters come from a versioned recipe and this machine's memory, never
+from the owner reading an ai-toolkit config. A recipe is a JSON file in
+`pixlstash/data/training-presets/` (`zimage-turbo.json` is the first), loaded and
+schema-checked by `pixlstash/training/presets.py` (`validate_preset`; a broken
+file fails at load and in `tests/training/test_presets.py`). Its parts:
+
+- `locked`: compatibility keys (architecture, training and extras checkpoints,
+  the training adapter, LoRA exclusions, scheduler and sampler). None is on
+  `TUNABLE_KEYS`, and a pin naming one is refused with a 422 that names the key
+  as fixed by the recipe. `divisibility` and `inference_checkpoint` sit beside
+  them as facts, not config keys.
+- `defaults` and `preview[inference_target]`: what the model trains and samples
+  with. `template` names the passthrough skeleton in
+  `data/ai-toolkit-jobs/built-in/`, which no longer carries any key a recipe
+  owns.
+- The dialog's three tables (#2119): `subject` (person / style / thing: caption
+  dropout, `content_or_style`, sample prompts in pairs with and without the
+  trigger word), `effort` (gentle / standard / strong: steps per picture, min
+  and max steps, learning rate, rank; alpha = rank) and `fit` (auto / save
+  memory / best quality: an ordered list of hardware profiles, least offloading
+  first).
+- `hardware_profiles`: each with a label, `vram_mb`, `ram_mb`, `max_bucket`, the
+  settings it writes (every profile writes the same keys, so the one picked
+  fully decides quantisation, offloading and caption caching) and `evidence`:
+  `measured`, `reported`, `derived` or `none`. A `none` tier is never offered.
+- `sources`: where each value comes from, and `version`.
+
+Every key a table writes is on `TUNABLE_KEYS`. Keys are dotted paths relative to
+`config.process[0]`; `presets.to_patch` nests them into the patch the renderer
+merges, `[*]` writing the single dataset and the prompt list becoming
+`sample.samples`.
+
+`presets.resolve` takes the choices, the picture count and the room, and
+returns every value with its source (`model`, `subject`, `effort`, `pictures`,
+`gpu`, `pinned`) for the dialog's "Comes from" column. Steps are
+`steps_per_picture × pictures`, clamped. Pins win over every derived value;
+alpha follows a pinned rank unless pinned itself. The profile is the first one
+in the fit choice whose `max_bucket` covers the largest training size and whose
+VRAM and RAM needs fit. Resolution, rank and steps are never lowered to make a
+run fit: when nothing fits, `NoProfileFits` names the short budget (`vram`,
+`ram`, or `resolution` when no profile is known to train that large), and the
+route answers 422 with `{message, budget, need_mb, free_mb}`.
+
+The room is `ResourceArbiter.training_room(device)`, on the card PixlStash
+uses: the card less the safety margin and what other apps hold. PixlStash's own
+memory, ComfyUI's and a finished AI-toolkit run's are not subtracted, because an
+exclusive lease gets them back before it is granted. RAM is psutil's available
+physical memory; swap never counts. A card that cannot be measured is refused
+rather than guessed. The run's lease asks for the profile's `vram_mb` and
+`ram_mb` (`Vault._request_training_gpu`), replacing the fixed 16 GB estimate; a
+queued row without a profile (queued before recipes) ends in `error` rather than
+training on a guess.
+
+Resolution happens once, at `POST /training/jobs`, against the pictures the
+dataset would hold then (`ExportUtils.count_training_pictures`, the same
+selection the dataset builder writes). The rendered config is the template, the
+resolved values (checked by `validate_tunables`) and the locked keys merged
+last; placeholders are substituted after the merge, so a recipe's prompts get
+the trigger word.
 
 ## 26. Prompt match
 

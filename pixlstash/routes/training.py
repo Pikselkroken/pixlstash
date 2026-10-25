@@ -1,8 +1,8 @@
 """HTTP API for ai-toolkit LoRA training jobs.
 
 This router exposes the training feature under ``/api/v1``: enqueueing and
-cancelling training jobs, polling their progress, and listing the available
-config templates. A finished run is not served from here: it lands on the model
+cancelling training jobs, polling their progress, and listing the training
+recipes (:mod:`pixlstash.training.presets`). A finished run is not served from here: it lands on the model
 shelf, which is where a trained LoRA is listed, downloaded and deleted.
 
 Authorization is declared, not coded here: every endpoint is listed in
@@ -19,198 +19,27 @@ import os
 import re
 import shutil
 from datetime import datetime
-from typing import Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
-
-from platformdirs import user_data_dir
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models import User
 from pixlstash.hub import training_runs
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.model_folder_scanner import SOURCE_FOLDER_KIND
-from pixlstash.training import ai_toolkit_install
-from pixlstash.training.config_render import (
-    TunableOverrideError,
-    render_job_config,
-    validate_tunables,
-)
+from pixlstash.training import ai_toolkit_install, presets
+from pixlstash.training.config_render import TunableOverrideError
 from pixlstash.utils.aitoolkit_run import read_output_root
 from pixlstash.utils.path_utils import path_is_within, resolve_path_within
+from pixlstash.utils.service.export_utils import ExportUtils
 from pixlstash.utils.service.user_settings_utils import (
     apply_user_config_patch,
     validate_ai_toolkit_settings,
 )
 
 logger = get_logger(__name__)
-
-# Default training template (resolved by name, .json appended) when the caller
-# does not specify one. Matches the file shipped in the built-in templates dir.
-DEFAULT_TEMPLATE = "zimage-turbo-lora"
-
-
-# ---------------------------------------------------------------------------
-# Template directory resolution (mirrors comfyui's workflow dirs)
-# ---------------------------------------------------------------------------
-
-
-def _template_builtin_dir() -> str:
-    """Absolute path to the shipped built-in training templates directory."""
-    return os.path.abspath(
-        os.path.join(
-            os.path.dirname(__file__), "..", "data", "ai-toolkit-jobs", "built-in"
-        )
-    )
-
-
-def _template_user_dir() -> str:
-    """Absolute path to the user's training templates directory."""
-    return os.path.join(user_data_dir("pixlstash"), "ai-toolkit-jobs", "user")
-
-
-def _template_dirs() -> list[tuple[str, str]]:
-    """Return ``(source, directory)`` pairs, user dir taking precedence."""
-    return [
-        ("user", _template_user_dir()),
-        ("built-in", _template_builtin_dir()),
-    ]
-
-
-def _normalize_template_name(name: str) -> str:
-    """Strip to a bare filename and ensure a ``.json`` suffix.
-
-    Args:
-        name: The caller-supplied template name (with or without ``.json``).
-
-    Returns:
-        A safe ``basename`` ending in ``.json``, or ``""`` when blank.
-    """
-    safe = os.path.basename(name or "").strip()
-    if not safe:
-        return ""
-    if not safe.lower().endswith(".json"):
-        safe = f"{safe}.json"
-    return safe
-
-
-def _resolve_template_path(name: str) -> tuple[str | None, str | None]:
-    """Resolve a template name to an on-disk path, user dir first.
-
-    Path-safety: the normalized name is joined under each template root via
-    :func:`resolve_path_within`, so a name containing ``..`` or an absolute
-    component can never escape the template directories.
-
-    Args:
-        name: The template name.
-
-    Returns:
-        ``(absolute_path, source)`` if found, else ``(None, None)``.
-    """
-    normalized = _normalize_template_name(name)
-    if not normalized:
-        return None, None
-    for source, folder in _template_dirs():
-        try:
-            path = resolve_path_within(folder, normalized)
-        except ValueError:
-            return None, None
-        if os.path.isfile(path):
-            return path, source
-    return None, None
-
-
-def _trained_base_model(template_path: str, payload) -> str:
-    """The base model the trainer will load, read from the rendered config.
-
-    The model name is not tunable (the allow-list refuses ``model.*``), so an
-    override cannot change it; rendering with placeholder paths gives the value
-    the run will use. The job row records this, never a client's claim (review
-    F4).
-
-    Args:
-        template_path: Absolute path to the chosen template JSON.
-        payload: The validated create-job request (name, trigger word, overrides).
-
-    Returns:
-        The rendered ``config.process[0].model.name_or_path``.
-
-    Raises:
-        HTTPException: 422 when the template cannot be rendered or names no model.
-    """
-    try:
-        config = render_job_config(
-            template_path,
-            job_name=payload.name,
-            training_folder="",
-            sqlite_db_path="",
-            trigger_word=payload.trigger_word,
-            dataset_dir="",
-            overrides=payload.config_overrides,
-        )
-        return config["config"]["process"][0]["model"]["name_or_path"]
-    except (OSError, ValueError, KeyError, IndexError, TypeError) as exc:
-        logger.warning("No base model in template %s: %s", template_path, exc)
-        raise HTTPException(
-            status_code=422,
-            detail="The chosen template does not name a base model to train.",
-        ) from exc
-
-
-def _base_model_from_template(template_path: str) -> str | None:
-    """Read the base model name out of a rendered/golden template, if present.
-
-    Reads ``config.process[0].model.name_or_path``; returns ``None`` on any
-    structural mismatch or read error (the caller falls back to a default).
-
-    Args:
-        template_path: Absolute path to the template JSON.
-
-    Returns:
-        The base-model name, or ``None``.
-    """
-    try:
-        with open(template_path, encoding="utf-8") as fh:
-            payload = json.load(fh)
-        return payload["config"]["process"][0]["model"]["name_or_path"]
-    except (OSError, json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
-        logger.warning(
-            "Could not read base model from template %s: %s", template_path, exc
-        )
-        return None
-
-
-def _template_description(template_path: str) -> str | None:
-    """Build a short, secret-free description for a template listing entry.
-
-    Combines the base model and planned training steps when readable. Returns
-    ``None`` if neither can be derived.
-
-    Args:
-        template_path: Absolute path to the template JSON.
-
-    Returns:
-        A short human-readable description, or ``None``.
-    """
-    try:
-        with open(template_path, encoding="utf-8") as fh:
-            payload = json.load(fh)
-        process = payload["config"]["process"][0]
-        base_model = process.get("model", {}).get("name_or_path")
-        steps = process.get("train", {}).get("steps")
-        parts = []
-        if base_model:
-            parts.append(f"Base model {base_model}")
-        if steps:
-            parts.append(f"{int(steps)} steps")
-        return ", ".join(parts) or None
-    except (OSError, json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
-        logger.warning(
-            "Could not derive description for template %s: %s", template_path, exc
-        )
-        return None
-
 
 # ---------------------------------------------------------------------------
 # JSON parsing helpers for progress fields persisted as text columns
@@ -366,18 +195,29 @@ def create_router(server) -> APIRouter:
             min_length=1,
             description="Caption trigger word baked into the training dataset.",
         )
-        template: Optional[str] = Field(
+        preset: str = Field(
+            default=presets.DEFAULT_PRESET,
+            description="The training recipe's id (GET /training/presets).",
+        )
+        subject: Optional[Literal["person", "style", "thing"]] = Field(
             default=None,
             description=(
-                "Template name (with or without .json) resolved from the user "
-                f"then built-in template dirs. Defaults to '{DEFAULT_TEMPLATE}'."
+                "What the LoRA learns. Defaults to 'person' for a character, "
+                "and must be given for a set."
             ),
         )
-        config_overrides: Optional[dict] = Field(
+        effort: Literal["gentle", "standard", "strong"] = Field(
+            default="standard", description="How hard to train."
+        )
+        fit: Literal["auto", "save_memory", "best_quality"] = Field(
+            default="auto", description="How to fit the run to this GPU."
+        )
+        pins: Optional[dict[str, Any]] = Field(
             default=None,
             description=(
-                "Optional deep-merge patch applied over the template config "
-                "for this run."
+                "The owner's Advanced values, keyed by tunable setting "
+                "(e.g. 'train.steps'). Each wins over the derived value; a "
+                "locked recipe key is refused with 422 naming it."
             ),
         )
 
@@ -403,6 +243,13 @@ def create_router(server) -> APIRouter:
         )
         trigger_word: Optional[str] = Field(
             default=None, description="Caption trigger word for the run."
+        )
+        resolved_profile: Optional[dict] = Field(
+            default=None,
+            description=(
+                "The resolver's result: the recipe, the choices, the memory "
+                "profile and every value with where it came from."
+            ),
         )
         created_at: Optional[datetime] = Field(
             default=None, description="UTC creation timestamp."
@@ -548,23 +395,24 @@ def create_router(server) -> APIRouter:
         status: str = Field(..., description="'deleted' on success.")
         job_id: int = Field(..., description="Primary key of the deleted job.")
 
-    class TemplateItemResponse(BaseModel):
-        """One available training template (no secrets)."""
+    class PresetItemResponse(BaseModel):
+        """One training recipe and whether the saved checkout can run it."""
 
         model_config = ConfigDict(extra="allow")
 
-        name: str = Field(..., description="Template name including the .json suffix.")
-        display_name: str = Field(
-            ..., description="Template name without the .json suffix."
+        id: str = Field(..., description="The recipe's id.")
+        version: int = Field(..., description="The recipe's version.")
+        label: str = Field(..., description="The model family it trains.")
+        base_model: str = Field(..., description="The checkpoint it trains on.")
+        requires_arch: str = Field(
+            ..., description="The model code the ai-toolkit checkout must ship."
         )
-        source: str = Field(
-            ..., description="Where the template was found: 'user' or 'built-in'."
-        )
-        base_model: Optional[str] = Field(
-            default=None, description="Base model named in the template, if readable."
-        )
-        description: Optional[str] = Field(
-            default=None, description="Short, secret-free summary of the template."
+        offered: bool = Field(
+            ...,
+            description=(
+                "Whether the saved checkout ships that model code; a recipe "
+                "that is not offered cannot be queued."
+            ),
         )
 
     class AiToolkitDiscoverResponse(BaseModel):
@@ -634,6 +482,10 @@ def create_router(server) -> APIRouter:
         )
         datasets: Optional[AiToolkitDatasetsFolder] = None
         runs: Optional[AiToolkitRunsFolder] = None
+        presets: list[PresetItemResponse] = Field(
+            default_factory=list,
+            description="The recipes and whether this checkout can run each.",
+        )
 
     class AiToolkitStatusResponse(BaseModel):
         """The configured ai-toolkit install and its folders."""
@@ -656,6 +508,20 @@ def create_router(server) -> APIRouter:
         python: Optional[str] = Field(default=None, description="Its interpreter.")
 
     # ── Serialisation helpers ─────────────────────────────────────────────
+
+    def _preset_items(repo_path: str | None) -> list[dict]:
+        architectures = presets.checkout_architectures(repo_path)
+        return [
+            {
+                "id": preset["id"],
+                "version": preset["version"],
+                "label": preset["label"],
+                "base_model": preset["locked"]["model.name_or_path"],
+                "requires_arch": preset["requires_arch"],
+                "offered": presets.offered(preset, architectures),
+            }
+            for preset in presets.list_presets()
+        ]
 
     def _job_to_summary(job: dict) -> dict:
         return _redact_host_paths(
@@ -691,32 +557,92 @@ def create_router(server) -> APIRouter:
     def create_training_job(payload: CreateJobRequest, request: Request):
         _ensure_secure(request)
 
+        if (payload.set_id is None) == (payload.character_id is None):
+            raise HTTPException(
+                status_code=400,
+                detail="Exactly one of set_id / character_id must be provided.",
+            )
+        preset = presets.get_preset(payload.preset)
+        if preset is None:
+            raise HTTPException(
+                status_code=404, detail=f"No training recipe '{payload.preset}'."
+            )
+        user = server.auth.get_user()
+        repo_path = user.ai_toolkit_repo_path if user is not None else None
+        if repo_path and not presets.offered(
+            preset, presets.checkout_architectures(repo_path)
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"This ai-toolkit checkout has no {preset['requires_arch']} "
+                    f"model code, so it cannot train {preset['label']}. Update "
+                    "the checkout."
+                ),
+            )
+        subject = payload.subject
+        if subject is None:
+            if payload.character_id is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Say what the LoRA should learn: person, style or thing.",
+                )
+            subject = "person"
         try:
-            validate_tunables(payload.config_overrides)
+            pins = presets.validate_pins(preset, payload.pins)
         except TunableOverrideError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-        template_name = payload.template or DEFAULT_TEMPLATE
-        template_path, _source = _resolve_template_path(template_name)
-        if not template_path:
+        picture_count = ExportUtils.count_training_pictures(
+            server, set_id=payload.set_id, character_id=payload.character_id
+        )
+        room = server.vault.training_room()
+        if room["vram_mb"] is None:
             raise HTTPException(
-                status_code=404, detail=f"Template not found: {template_name}"
+                status_code=422,
+                detail=(
+                    "PixlStash cannot read this GPU's memory, so it cannot "
+                    "choose how to fit the run to it."
+                ),
             )
-
-        base_model = _trained_base_model(template_path, payload)
+        try:
+            resolution = presets.resolve(
+                preset,
+                subject=subject,
+                effort=payload.effort,
+                fit=payload.fit,
+                picture_count=picture_count,
+                vram_mb=room["vram_mb"],
+                ram_mb=room["ram_mb"],
+                pins=pins,
+            )
+        except presets.NoProfileFits as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": str(exc),
+                    "budget": exc.budget,
+                    "need_mb": exc.need_mb,
+                    "free_mb": exc.free_mb,
+                },
+            ) from exc
+        except (TunableOverrideError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
         try:
             job = server.vault.training_service.enqueue(
                 set_id=payload.set_id,
                 character_id=payload.character_id,
                 name=payload.name,
-                base_model=base_model,
+                base_model=preset["locked"]["model.name_or_path"],
                 trigger_word=payload.trigger_word,
-                template_path=template_path,
-                config_overrides=payload.config_overrides,
+                template_path=presets.template_path(preset),
+                config_overrides=presets.to_patch(presets.resolved_values(resolution)),
+                locked=presets.to_patch(preset["locked"]),
+                resolution=resolution,
+                pins=pins,
             )
         except ValueError as exc:
-            # Raised when not exactly one of set_id/character_id was provided.
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         return _redact_host_paths(
@@ -729,6 +655,7 @@ def create_router(server) -> APIRouter:
                 "character_id": job["character_id"],
                 "base_model": job["base_model"],
                 "trigger_word": job["trigger_word"],
+                "resolved_profile": resolution,
                 "created_at": job["created_at"],
             }
         )
@@ -796,6 +723,13 @@ def create_router(server) -> APIRouter:
                     job["dataset_picture_ids"], "dataset_picture_ids", job["uuid"]
                 ),
                 "ai_toolkit_commit": job["ai_toolkit_commit"],
+                "preset": job["preset"],
+                "resolved_profile": _parse_json_field(
+                    job["resolved_profile"], "resolved_profile", job["uuid"]
+                ),
+                "advanced_pins": _parse_json_field(
+                    job["advanced_pins"], "advanced_pins", job["uuid"]
+                ),
                 "error": job["error"],
                 "created_at": job["created_at"],
                 "started_at": job["started_at"],
@@ -1024,6 +958,7 @@ def create_router(server) -> APIRouter:
         result = ai_toolkit_install.check(payload.repo_path, python)
         result["python"] = python
         result.update(_ai_toolkit_folders(payload.repo_path))
+        result["presets"] = _preset_items(payload.repo_path)
         return result
 
     @router.get(
@@ -1126,44 +1061,22 @@ def create_router(server) -> APIRouter:
             "python": user.ai_toolkit_python,
         }
 
-    # ── Templates ─────────────────────────────────────────────────────────
+    # ── Recipes ───────────────────────────────────────────────────────────
 
     @router.get(
-        "/training/templates",
-        summary="List training templates",
-        response_model=list[TemplateItemResponse],
+        "/training/presets",
+        summary="List training recipes",
+        response_model=list[PresetItemResponse],
         description=(
-            "Lists available training config templates from the user and "
-            "built-in directories, each with its name, base model, and a short "
-            "description. No secrets are returned. Owner-only."
+            "Lists the shipped training recipes, each with the model it trains "
+            "and whether the saved ai-toolkit checkout ships the model code it "
+            "needs. Owner-only."
         ),
     )
-    def list_training_templates(request: Request):
+    def list_training_presets(request: Request):
         _ensure_secure(request)
-
-        templates: list[dict] = []
-        seen: set[str] = set()
-        for source, folder in _template_dirs():
-            if not os.path.isdir(folder):
-                continue
-            for entry in sorted(os.listdir(folder)):
-                if not entry.lower().endswith(".json"):
-                    continue
-                if entry in seen:
-                    continue
-                seen.add(entry)
-                path = os.path.join(folder, entry)
-                templates.append(
-                    {
-                        "name": entry,
-                        "display_name": os.path.splitext(entry)[0],
-                        "source": source,
-                        "base_model": _base_model_from_template(path),
-                        "description": _template_description(path),
-                    }
-                )
-        templates.sort(key=lambda item: item.get("name", ""))
-        return templates
+        user = server.auth.get_user()
+        return _preset_items(user.ai_toolkit_repo_path if user is not None else None)
 
     return router
 

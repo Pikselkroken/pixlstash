@@ -719,6 +719,10 @@ _V2_SUPERSEDED_SHELF_TABLES = ("adapter_file", "adapter", "checkpoint")
 # `status` is queued | running | stopping | stopped | completed | error. The
 # progress columns are rewritten while the trainer runs; the terminal ones are
 # written once. Timestamps are the ISO strings every other hub table stores.
+#
+# `preset` is the recipe as `id@version`, `resolved_profile` the resolver's JSON
+# (choices, memory profile, every value and its source) and `advanced_pins` the
+# owner's Advanced values as JSON; all three are written once, at enqueue.
 _V2_TRAINING_RUN = """
 CREATE TABLE IF NOT EXISTS training_run (
     id                     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -730,6 +734,9 @@ CREATE TABLE IF NOT EXISTS training_run (
     character_id          INTEGER,
     base_model             TEXT,
     trigger_word           TEXT,
+    preset                 TEXT,
+    resolved_profile       TEXT,
+    advanced_pins          TEXT,
     rendered_config        TEXT,
     dataset_snapshot_path  TEXT,
     dataset_picture_ids    TEXT,
@@ -2143,6 +2150,14 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     # open, so an existing hub picks it up without a version bump.
     for statement in (_V2_TRAINING_RUN, *_V2_TRAINING_RUN_INDEXES):
         conn.execute(statement)
+    # The recipe a run was resolved from (#2116), guarded the same way as the
+    # amendments below: a no-op on a fresh hub and on re-run.
+    run_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(training_run)").fetchall()
+    }
+    for column in ("preset", "resolved_profile", "advanced_pins"):
+        if column not in run_columns:
+            conn.execute(f"ALTER TABLE training_run ADD COLUMN {column} TEXT")
 
     for statement in _V2_WORKFLOW_TABLES:
         conn.execute(statement)
