@@ -723,6 +723,17 @@ class TrainingService:
         job_uuid = info["uuid"]
         status = progress.status
 
+        if self._stop.is_set() and status not in _TERMINAL_PROGRESS_STATUSES:
+            # Shutdown interrupted the poll while the trainer is still running.
+            # Leave the row as it is: reconcile_on_startup re-attaches to the
+            # live process, or finalizes it from disk once it has exited.
+            logger.info(
+                "Job %s is still %s at shutdown; leaving it for reconcile_on_startup.",
+                job_uuid,
+                status,
+            )
+            return
+
         if status == "completed" and progress.final_checkpoint:
             try:
                 # The final checkpoint sits in the run folder, which is the

@@ -31,6 +31,7 @@ from pixlstash.event_types import EventType
 from pixlstash.hub import training_runs
 from pixlstash.hub.db import now_iso
 from pixlstash.services.training_service import TrainingService
+from pixlstash.training.local_ai_toolkit import LocalAiToolkit
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _FAST_TEMPLATE_PATH = os.path.join(_THIS_DIR, "fast_template.json")
@@ -457,6 +458,60 @@ def test_cancel_midrun_ends_stopped_and_releases_lease(hub, repo_dir, monkeypatc
     assert final.step < 500
     # Lease released exactly as many times as acquired (no leak).
     assert lease.acquire_count == lease.release_count == 1
+
+
+def test_shutdown_mid_run_leaves_the_live_job_running(hub, repo_dir, monkeypatch):
+    """Stopping the service while a trainer runs must not mark it errored.
+
+    The trainer outlives the service; reconcile_on_startup re-attaches to it on
+    the next start. Finalizing it at shutdown would record a healthy run as an
+    error with a completed_at.
+    """
+    monkeypatch.setenv("FAKE_RUN_STEP_DELAY", "0.02")
+    lease = _StubLease(grant=True)
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=lease,
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    template = _write_template(repo_dir, steps=500, save_every=50)
+
+    service.start()
+    try:
+        job = service.enqueue(
+            set_id=_SET_ID,
+            name="shutdown",
+            base_model="m",
+            trigger_word="t",
+            template_path=template,
+        )
+        assert _poll_until(
+            lambda: (
+                _job_status(hub, job["uuid"]).status == "running"
+                and _job_status(hub, job["uuid"]).pid is not None
+            )
+        ), "job did not reach running with a pid"
+    finally:
+        service.stop()
+
+    final = _job_status(hub, job["uuid"])
+    assert final.status == "running", f"status={final.status!r}"
+    assert final.completed_at is None
+
+    # Stop the trainer the test left running, so nothing outlives the test.
+    cleanup = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    assert cleanup.cancel(job["id"]) is True
+    assert _poll_until(lambda: not LocalAiToolkit._pid_alive(final.pid)), (
+        f"trainer pid {final.pid} still alive after cancel"
+    )
 
 
 def test_zero_image_dataset_marks_error_no_lease_leak(hub, repo_dir):
