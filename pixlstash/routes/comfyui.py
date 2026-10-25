@@ -2771,18 +2771,24 @@ def create_router(server) -> APIRouter:
                     }
                 )
                 continue
-            except (
-                NotAWorkflowError,
-                WorkflowFileTooLarge,
-                RecursionError,
-                sqlite3.Error,
-            ) as exc:
+            except (NotAWorkflowError, WorkflowFileTooLarge) as exc:
                 logger.warning("Template %s cannot be stored: %s", template.key, exc)
                 failed.append(
                     {
                         "module": ref.module,
                         "name": ref.name,
                         "detail": f"PixlStash cannot store that template: {exc}",
+                    }
+                )
+                continue
+            except (RecursionError, sqlite3.Error) as exc:
+                # Internal errors: logged, not echoed to the caller.
+                logger.warning("Template %s cannot be stored: %s", template.key, exc)
+                failed.append(
+                    {
+                        "module": ref.module,
+                        "name": ref.name,
+                        "detail": "PixlStash cannot store that template.",
                     }
                 )
                 continue
