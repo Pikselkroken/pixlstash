@@ -484,3 +484,36 @@ def test_malicious_name_run_completes_and_handle_round_trips(tmp_path):
     rebuilt_progress = backend.progress(rebuilt)
     assert rebuilt_progress.status == "completed"
     assert rebuilt_progress.final_checkpoint == progress.final_checkpoint
+
+
+def test_pid_alive_never_signals_the_probed_process(monkeypatch):
+    """The liveness probe reads process state; it must never send a signal.
+
+    On Windows ``os.kill`` calls TerminateProcess, so the old probe killed the
+    trainer it was checking. A live pid answers True with no signal sent.
+    """
+
+    def no_signals(pid, sig):
+        raise AssertionError(f"liveness probe sent signal {sig} to {pid}")
+
+    monkeypatch.setattr(os, "kill", no_signals)
+    assert LocalAiToolkit._pid_alive(os.getpid()) is True
+
+
+def test_pid_alive_reports_a_reaped_child_as_dead():
+    """A child that has exited and been reaped is not alive."""
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    child.wait()
+    assert LocalAiToolkit._pid_alive(child.pid) is False
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="waitid is POSIX-only")
+def test_pid_alive_reports_an_unreaped_zombie_as_dead():
+    """A finished child that nobody has reaped is a zombie, not a running job."""
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    try:
+        # WNOWAIT leaves the child a zombie: it has exited but is not reaped.
+        os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOWAIT)
+        assert LocalAiToolkit._pid_alive(child.pid) is False
+    finally:
+        child.wait()

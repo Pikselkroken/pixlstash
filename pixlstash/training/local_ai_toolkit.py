@@ -23,6 +23,8 @@ import sqlite3
 import subprocess
 import time
 
+import psutil
+
 from pixlstash.pixl_logging import get_logger
 from pixlstash.training.backend import (
     TrainerBackend,
@@ -607,11 +609,12 @@ class LocalAiToolkit(TrainerBackend):
     def _pid_alive(pid: int) -> bool:
         """Return whether *pid* refers to a live, non-zombie process.
 
-        ``os.kill(pid, 0)`` alone reports a finished-but-unreaped child (a
-        zombie) as alive, which would wrongly keep a completed job "running" and
-        make cancel escalate to signals needlessly. On Linux this also inspects
-        ``/proc/<pid>/stat`` and treats state ``Z`` (zombie) / ``X`` (dead) as
-        not alive.
+        Asks psutil, never ``os.kill``: on Windows ``os.kill`` calls
+        TerminateProcess for any signal other than the console events, so a
+        ``os.kill(pid, 0)`` probe would kill the trainer it inspects. psutil only
+        reads process state, works without ``/proc`` (macOS, Windows), and
+        reports a finished-but-unreaped child as a zombie rather than alive, so
+        a completed job is not kept "running".
 
         Args:
             pid: Process id to probe.
@@ -620,30 +623,16 @@ class LocalAiToolkit(TrainerBackend):
             ``True`` if the process exists and is not a zombie, else ``False``.
         """
         try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
+            status = psutil.Process(pid).status()
+        except psutil.NoSuchProcess:
             return False
-        except PermissionError:
+        except psutil.AccessDenied:
             # Exists but owned by another user, still "alive".
             return True
-        except OSError as exc:
+        except psutil.Error as exc:
             logger.warning("Liveness probe failed for pid %d: %s", pid, exc)
             return False
-
-        # On Linux, distinguish a real process from a zombie via /proc.
-        proc_stat = f"/proc/{pid}/stat"
-        try:
-            with open(proc_stat, encoding="ascii") as fh:
-                fields = fh.read().rsplit(") ", 1)
-            if len(fields) == 2:
-                state = fields[1].split(" ", 1)[0]
-                if state in ("Z", "X", "x"):
-                    return False
-        except FileNotFoundError:
-            return False
-        except OSError as exc:
-            logger.debug("Could not read %s: %s", proc_stat, exc)
-        return True
+        return status not in (psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD)
 
     def _wait_for_exit(self, handle: TrainingHandle, timeout: float) -> bool:
         """Poll until the job's trainer stops running or *timeout* elapses.
