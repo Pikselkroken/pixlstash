@@ -1,7 +1,7 @@
 """add ai-toolkit training config columns to user
 
 Revision ID: 0135_add_ai_toolkit_user_config
-Revises: 0134_add_trained_lora
+Revises: 0133_add_training_job
 Create Date: 2026-06-16 00:00:02.000000
 """
 
@@ -12,7 +12,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "0135_add_ai_toolkit_user_config"
-down_revision: Union[str, None] = "0134_add_trained_lora"
+down_revision: Union[str, None] = "0133_add_training_job"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

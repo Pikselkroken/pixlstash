@@ -492,11 +492,12 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     has ComfyUI-Manager install third-party code (a pack from
     ``node_packs.KNOWN_PACKS`` at its pinned version) into the saved ComfyUI and
     restarts it, the host-shell class, so loopback only.
-    71 = 62 + 9 with in-app LoRA training: ``POST /training/jobs`` starts the
-    owner's configured trainer on this machine, ``POST
+    69 = 66 + 3 with in-app LoRA training: ``POST /training/jobs`` starts the
+    owner's configured trainer on this machine, and ``POST
     /training/jobs/{job_id}/cancel`` and ``DELETE /training/jobs/{job_id}`` stop
-    it and remove its host folders, ``DELETE /loras/{lora_id}`` removes a file,
-    and ``GET /loras/{lora_id}/file-path`` discloses a host path.
+    it and remove its host work folder. A finished run's LoRA is a model-shelf
+    row now, so the ``/loras`` routes that once removed and disclosed its file
+    are gone with the ``TrainedLora`` table.
 
     Arithmetic, not judgement."""
     loopback = {
@@ -511,7 +512,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 9, sorted(loopback)
-    assert len(local) == 62, sorted(local)
+    assert len(local) == 60, sorted(local)
 
 
 # ===========================================================================

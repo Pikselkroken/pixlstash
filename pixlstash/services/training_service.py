@@ -4,14 +4,13 @@ The :class:`TrainingService` is the layer between PixlStash's data model and the
 trainer adapter (:class:`~pixlstash.training.local_ai_toolkit.LocalAiToolkit`).
 It owns the job lifecycle: pick the oldest queued :class:`TrainingJob`, snapshot
 its dataset, wait for the VRAM arbiter's lease, drive the adapter (``prepare`` → ``submit`` →
-poll → finalize), and persist a :class:`TrainedLora` into the vault when the run
-completes. Exactly one job runs at a time because a single GPU is the binding
-constraint.
+poll → finalize), and hand the finished run to the model shelf when it completes.
+Exactly one job runs at a time because a single GPU is the binding constraint.
 
 It is built with **dependency injection** so the whole thing is testable without
 a GPU (or even a full Vault): every external collaborator is a callable handed
-to the constructor: the VRAM lease request, the event emitter, the owner-config reader,
-the dataset builder, and the trainer-backend factory. The default backend
+to the constructor: the VRAM lease request, the run importer, the event emitter,
+the owner-config reader, the dataset builder, and the trainer-backend factory. The default backend
 factory builds a real :class:`LocalAiToolkit`; tests pass one pointed at a CPU
 stub.
 
@@ -26,10 +25,8 @@ run is an explicit :meth:`cancel` (a user action).
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
-import shutil
 import threading
 import time
 import uuid
@@ -38,7 +35,6 @@ from typing import Callable
 
 from sqlmodel import Session, select
 
-from pixlstash.db_models.trained_lora import TrainedLora
 from pixlstash.db_models.training_job import TrainingJob
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
@@ -58,7 +54,7 @@ _LOG_TAIL_BYTES = 8192
 
 
 class TrainingService:
-    """Drive queued :class:`TrainingJob` rows to finished :class:`TrainedLora`.
+    """Drive queued :class:`TrainingJob` rows to finished runs on the shelf.
 
     One background thread runs at a time and processes queued jobs FIFO (oldest
     ``created_at`` first). See the module docstring for the dependency-injection
@@ -74,6 +70,7 @@ class TrainingService:
         image_root: str,
         *,
         request_gpu: Callable[[str, str], Lease],
+        import_run: Callable[[str, dict], dict],
         notify: Callable[[EventType, dict], None],
         config_provider: Callable[[], dict],
         dataset_builder: Callable[..., dict],
@@ -86,11 +83,15 @@ class TrainingService:
         Args:
             db: A ``VaultDatabase`` (provides ``run_task`` /
                 ``run_immediate_read_task``).
-            image_root: Vault root. LoRAs land in ``<image_root>/loras/`` and
-                per-job work dirs in ``<image_root>/training/<job_uuid>/``.
+            image_root: Vault root. Per-job work dirs live in
+                ``<image_root>/training/<job_uuid>/``.
             request_gpu: Asks the VRAM arbiter for a run's memory, called as
                 ``request_gpu(label, job_uuid)``; returns the arbiter's
                 :class:`~pixlstash.resources.arbiter.Lease`, granted or waiting.
+            import_run: Brings a completed run onto the model shelf, called as
+                ``import_run(run_dir, job_info)`` where ``run_dir`` is the
+                ai-toolkit run folder holding the checkpoints. Returns a dict
+                describing what landed. Raising marks the job ``error``.
             notify: Emits an event (``event_type, data``) to the UI/listeners.
             config_provider: Returns the owner's ai-toolkit config as
                 ``{"repo_path", "python", "commit"}``.
@@ -108,6 +109,7 @@ class TrainingService:
         self._db = db
         self._image_root = image_root
         self._request_gpu = request_gpu
+        self._import_run = import_run
         self._notify = notify
         self._config_provider = config_provider
         self._dataset_builder = dataset_builder
@@ -117,7 +119,6 @@ class TrainingService:
         self.poll_interval_s = poll_interval_s
         self._disable_background_workers = disable_background_workers
 
-        self._loras_dir = os.path.join(image_root, "loras")
         self._training_root = os.path.join(image_root, "training")
 
         # Per-job spec extras (template_path / config_overrides) that have no
@@ -392,7 +393,7 @@ class TrainingService:
         external trainer is still alive, re-attach: ask for its VRAM lease again and
         resume polling it on the worker thread (a restart must not kill an
         in-flight multi-hour run). If it is dead, finalize from its persisted
-        status / on-disk checkpoints (completed → :class:`TrainedLora`, else
+        status / on-disk checkpoints (completed → imported to the shelf, else
         ``error``).
         """
         if self._disable_background_workers:
@@ -744,7 +745,7 @@ class TrainingService:
     def _finalize(
         self, backend: TrainerBackend, handle, info: dict, progress: TrainingProgress
     ) -> None:
-        """Write the terminal job state and, on success, the TrainedLora.
+        """Write the terminal job state and, on success, bring the run to the shelf.
 
         Args:
             backend: The trainer backend (unused beyond context, kept for
@@ -758,10 +759,15 @@ class TrainingService:
 
         if status == "completed" and progress.final_checkpoint:
             try:
-                lora = self._import_lora(info, progress)
+                # The final checkpoint sits in the run folder, which is the
+                # ai-toolkit run the importer reads (``save_root``).
+                landed = self._import_run(
+                    os.path.dirname(progress.final_checkpoint), info
+                )
                 report = (
                     f"Trained {info['name']} to step {progress.step}; "
-                    f"LoRA {lora['uuid']} ({lora['file_size_bytes']} bytes)."
+                    f"{landed['imported']} file(s) on the shelf "
+                    f"(stack {landed['stack_id']})."
                 )
                 self._update_job(
                     job_uuid,
@@ -781,7 +787,7 @@ class TrainingService:
                 return
             except Exception:
                 logger.exception(
-                    "Job %s reached 'completed' but importing the LoRA failed",
+                    "Job %s reached 'completed' but importing the run to the shelf failed",
                     job_uuid,
                 )
                 self._update_job(
@@ -828,82 +834,6 @@ class TrainingService:
             message=progress.info or final_status,
         )
         logger.info("Job %s finalized as %s.", job_uuid, final_status)
-
-    def _import_lora(self, info: dict, progress: TrainingProgress) -> dict:
-        """Move the final checkpoint into the vault and create a TrainedLora row.
-
-        Copies samples under the vault too. Returns a small dict of the created
-        LoRA's fields.
-
-        Args:
-            info: Persisted job fields (uuid, name, set_id, character_id).
-            progress: The completed progress snapshot (has ``final_checkpoint``).
-
-        Returns:
-            ``{"uuid", "file_path", "file_sha", "file_size_bytes"}``.
-        """
-        os.makedirs(self._loras_dir, exist_ok=True)
-        lora_uuid = uuid.uuid4().hex
-        dest_abs = os.path.join(self._loras_dir, f"{lora_uuid}.safetensors")
-        rel_path = os.path.join("loras", f"{lora_uuid}.safetensors")
-
-        # Move the artifact into the vault (fall back to copy across devices).
-        shutil.move(progress.final_checkpoint, dest_abs)
-        file_size = os.path.getsize(dest_abs)
-        file_sha = self._sha256_file(dest_abs)
-
-        # Copy any sample previews under the vault next to the LoRA.
-        sample_rel_paths: list[str] = []
-        if progress.samples:
-            samples_dir_abs = os.path.join(self._loras_dir, f"{lora_uuid}_samples")
-            os.makedirs(samples_dir_abs, exist_ok=True)
-            for sample in progress.samples:
-                if not os.path.exists(sample):
-                    continue
-                base = os.path.basename(sample)
-                shutil.copyfile(sample, os.path.join(samples_dir_abs, base))
-                sample_rel_paths.append(
-                    os.path.join("loras", f"{lora_uuid}_samples", base)
-                )
-
-        def _create(session: Session) -> None:
-            job = session.exec(
-                select(TrainingJob).where(TrainingJob.uuid == info["uuid"])
-            ).first()
-            lora = TrainedLora(
-                uuid=lora_uuid,
-                job_id=job.id if job is not None else None,
-                set_id=info.get("set_id"),
-                character_id=info.get("character_id"),
-                name=info["name"],
-                file_path=rel_path,
-                file_size_bytes=file_size,
-                file_sha=file_sha,
-                step=progress.step,
-            )
-            session.add(lora)
-            if sample_rel_paths:
-                job_obj = job
-                if job_obj is not None:
-                    job_obj.sample_image_paths = json.dumps(sample_rel_paths)
-                    session.add(job_obj)
-            session.commit()
-
-        self._db.run_task(_create)
-        logger.info(
-            "Imported LoRA %s for job %s: %s (%d bytes, %d samples).",
-            lora_uuid,
-            info["uuid"],
-            rel_path,
-            file_size,
-            len(sample_rel_paths),
-        )
-        return {
-            "uuid": lora_uuid,
-            "file_path": rel_path,
-            "file_sha": file_sha,
-            "file_size_bytes": file_size,
-        }
 
     # ------------------------------------------------------------------
     # Persistence helpers
@@ -1168,15 +1098,6 @@ class TrainingService:
             return int(config["config"]["process"][0]["train"]["steps"])
         except (KeyError, IndexError, TypeError, ValueError):
             return None
-
-    @staticmethod
-    def _sha256_file(path: str) -> str:
-        """Compute the SHA-256 hex digest of a file's contents."""
-        hasher = hashlib.sha256()
-        with open(path, "rb") as fh:
-            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
-                hasher.update(chunk)
-        return hasher.hexdigest()
 
     @staticmethod
     def _read_log_tail(log_path: str) -> str | None:

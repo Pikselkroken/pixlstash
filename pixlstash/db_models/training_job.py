@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import Column, ForeignKey, Integer
 from sqlmodel import Field, Relationship, SQLModel, UTCDateTime
@@ -7,7 +7,6 @@ from sqlmodel import Field, Relationship, SQLModel, UTCDateTime
 if TYPE_CHECKING:
     from .character import Character
     from .picture_set import PictureSet
-    from .trained_lora import TrainedLora
 
 
 class TrainingJob(SQLModel, table=True):
@@ -51,7 +50,6 @@ class TrainingJob(SQLModel, table=True):
         completed_at: UTC timestamp when the run finished.
         picture_set: The picture set this job trains on (when set-scoped).
         character: The character this job trains on (when character-scoped).
-        loras: Trained LoRA artifacts produced by this job.
     """
 
     __tablename__ = "training_job"
@@ -110,8 +108,4 @@ class TrainingJob(SQLModel, table=True):
     character: Optional["Character"] = Relationship(
         back_populates="training_jobs",
         sa_relationship_kwargs={"foreign_keys": "[TrainingJob.character_id]"},
-    )
-    loras: List["TrainedLora"] = Relationship(
-        back_populates="job",
-        sa_relationship_kwargs={"foreign_keys": "[TrainedLora.job_id]"},
     )

@@ -293,6 +293,39 @@ def test_an_import_records_trained_provenance_and_the_config_base_model(shelf):
     assert row["file_kind"] == "adapter"
 
 
+def test_a_run_imported_into_a_subfolder_lands_under_it(shelf):
+    """With a ``subfolder`` the files, their ``model_file`` rows and their
+    previews all sit under it - the shape a LoRA download gives a file that
+    belongs in ``loras/``."""
+    subfolder = shelf["destination_dir"] / "loras"
+    subfolder.mkdir()
+    report = RunImporter(shelf["hub"]).import_run(
+        str(shelf["run_dir"]), shelf["destination_id"], subfolder="loras"
+    )
+    assert {outcome.status for outcome in report.outcomes} == {STATUS_IMPORTED}
+    assert (subfolder / "Clementine.safetensors").is_file()
+    assert not (shelf["destination_dir"] / "Clementine.safetensors").exists()
+    assert (
+        subfolder / "Clementine_000000250_samples" / "1712345678901__000000250_0.jpg"
+    ).is_file()
+    relpaths = sorted(
+        row["relpath"]
+        for row in shelf["hub"].fetchall(
+            "SELECT relpath FROM model_file WHERE model_folder_id = ?",
+            (shelf["destination_id"],),
+        )
+    )
+    assert relpaths == sorted(
+        f"loras/{name}"
+        for name in (
+            "Clementine_000000250.safetensors",
+            "Clementine_000000500.safetensors",
+            "Clementine.safetensors",
+        )
+    )
+    assert_no_dangling_rows(shelf["hub"])
+
+
 def test_the_configs_trigger_word_beats_the_headers_tag_table(shelf):
     """The config names the word the trainer was told to use. The header's
     frequency table is every tag in the captions, with the commonest first -

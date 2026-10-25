@@ -362,8 +362,7 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         "/api/v1/comfyui/templates",
         "/api/v1/comfyui/templates/thumbnail",
         # In-app LoRA training: the owner's jobs (rendered configs carry host
-        # paths), the LoRAs it produced and the trainer templates.
-        "/api/v1/loras",
+        # paths) and the trainer templates.
         "/api/v1/training/jobs",
         "/api/v1/training/templates",
     }
@@ -385,8 +384,6 @@ READ_BLOCKED_GET_PREFIXES: tuple[str, ...] = (
     # this server read the owner's ComfyUI.
     "/api/v1/comfyui/node-packs/",
     "/api/v1/dedup/",
-    # A trained LoRA's bytes, its host path, and a training job's detail.
-    "/api/v1/loras/",
     "/api/v1/model-folders/",
     "/api/v1/model-icons/",
     "/api/v1/models/",

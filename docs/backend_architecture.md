@@ -798,6 +798,13 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/tags                                                                  | tags            | List all tags                                                 |
 | GET    | /api/v1/telemetry/install-id                                                  | telemetry       | Get the anonymous install ID                                  |
 | POST   | /api/v1/telemetry/install-id/recreate                                         | telemetry       | Recreate the anonymous install ID                             |
+| POST   | /api/v1/training/jobs                                                         |                 | Enqueue a training job                                        |
+| GET    | /api/v1/training/jobs                                                         |                 | List training jobs                                            |
+| GET    | /api/v1/training/jobs/{job_id}                                                |                 | Get training job detail                                       |
+| DELETE | /api/v1/training/jobs/{job_id}                                                |                 | Delete a training job and its work directory                  |
+| POST   | /api/v1/training/jobs/{job_id}/cancel                                         |                 | Cancel a training job                                         |
+| GET    | /api/v1/training/jobs/{job_id}/status                                         |                 | Poll training job status                                      |
+| GET    | /api/v1/training/templates                                                    |                 | List training templates                                       |
 | GET    | /api/v1/workflows                                                             | workflows       | The Workflows grid                                            |
 | POST   | /api/v1/workflows/run                                                         | workflows       | Run a workflow                                                |
 | POST   | /api/v1/workflows/run/opening                                                 | workflows       | Hold a run for ComfyUI to open                                |

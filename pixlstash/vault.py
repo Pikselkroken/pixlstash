@@ -70,6 +70,14 @@ from pixlstash.services.workflow_ghost_service import DEFAULT_GHOST_RETENTION
 from pixlstash.services.snapshot_service import SnapshotService
 from pixlstash.utils.service.export_utils import ExportUtils
 from pixlstash.services.training_service import TrainingService
+from pixlstash.services.run_importer import STATUS_IMPORTED, RunImporter
+from pixlstash.services.model_mover import SHELF_IO_LOCK
+from pixlstash.services.managed_model_store import find_download_folder
+from pixlstash.services.model_shelf_service import (
+    fetch_attachments,
+    replace_attachments,
+)
+from pixlstash.db_models.adapter_attachment import ENTITY_CHARACTER, ENTITY_SET
 from pixlstash.services.restore import RestoreService
 from pixlstash.hub.registry import VAULT_FILENAME
 from pixlstash.trusted_sqlite import TrustedSQLiteLocation
@@ -969,6 +977,7 @@ class Vault:
             self.db,
             self.image_root,
             request_gpu=self._request_training_gpu,
+            import_run=self._import_training_run,
             notify=self.notify,
             config_provider=self._training_config_provider,
             dataset_builder=dataset_builder,
@@ -1000,6 +1009,83 @@ class Vault:
             "repo_path": user.ai_toolkit_repo_path,
             "python": user.ai_toolkit_python,
             "commit": user.ai_toolkit_commit,
+        }
+
+    def _import_training_run(self, run_dir: str, info: dict) -> dict:
+        """Bring a finished ai-toolkit run onto the model shelf as the job's LoRA.
+
+        The one path a trained LoRA takes onto the shelf: the run importer, into
+        the download folder's ``loras/`` subfolder when it has one (the rule a
+        LoRA download follows), with provenance ``trained``. The cover (stack
+        position 0) is then attached to the job's character or set.
+
+        Args:
+            run_dir: The ai-toolkit run folder holding the checkpoints.
+            info: The job's fields (``name``, ``set_id``, ``character_id``).
+
+        Returns:
+            ``{"stack_id", "imported", "cover_sha256"}``. ``cover_sha256`` is
+            ``None`` when the cover itself did not import.
+
+        Raises:
+            RuntimeError: No shelf or download folder to receive the run, or no
+                checkpoint of it imported.
+            MoveRefused: The importer refused the batch before writing anything.
+        """
+        hub = self._hub
+        if hub is None:
+            raise RuntimeError("No model shelf is open to receive the trained LoRA.")
+        folder = find_download_folder(hub)
+        if folder is None:
+            raise RuntimeError("No model folder is set up to receive the trained LoRA.")
+        subfolder = (
+            "loras" if os.path.isdir(os.path.join(folder["path"], "loras")) else None
+        )
+        # ponytail: the run's checkpoints stay in the work dir (delete_source off)
+        # because the shelf holds its own copy; step 3 will read the source
+        # folder's delete_after_import here instead.
+        with SHELF_IO_LOCK:
+            report = RunImporter(hub).import_run(
+                run_dir,
+                folder["id"],
+                subfolder=subfolder,
+                delete_source=False,
+            )
+        landed = [o for o in report.outcomes if o.status == STATUS_IMPORTED]
+        if not landed:
+            raise RuntimeError(f"No checkpoint of {report.run_name} could be imported.")
+
+        # Nothing is cancelled here, so outcomes[0] is the cover (position 0).
+        cover = report.outcomes[0]
+        cover_sha = None
+        if cover.status == STATUS_IMPORTED and cover.model_id is not None:
+            cover_sha = hub.fetchone(
+                "SELECT sha256 FROM model WHERE id = ?", (cover.model_id,)
+            )["sha256"]
+        else:
+            logger.warning(
+                "The cover of %s (%s) did not import; no LoRA is attached to %s.",
+                report.run_name,
+                cover.filename,
+                info.get("name"),
+            )
+
+        if cover_sha is not None:
+            wanted = []
+            if info.get("character_id") is not None:
+                wanted.append((ENTITY_CHARACTER, info["character_id"]))
+            elif info.get("set_id") is not None:
+                wanted.append((ENTITY_SET, info["set_id"]))
+            if wanted:
+                # A full replacement, so keep what the cover already carries.
+                held = fetch_attachments(self, sha256=cover_sha).get(cover_sha, [])
+                kept = [(a["entity_type"], a["entity_id"]) for a in held]
+                replace_attachments(self, cover_sha, kept + wanted)
+
+        return {
+            "stack_id": report.stack_id,
+            "imported": len(landed),
+            "cover_sha256": cover_sha,
         }
 
     def _request_training_gpu(self, label: str, job_uuid: str) -> Lease:

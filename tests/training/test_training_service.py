@@ -9,7 +9,9 @@ capturing ``notify``, a ``config_provider`` returning the temp repo + venv
 python, and a ``dataset_builder`` stub that writes fake image/caption pairs.
 
 No GPU, no torch, no long fixed sleeps: all waits are poll-with-timeout loops and
-``FAKE_RUN_STEP_DELAY=0`` so the suite runs fast.
+``FAKE_RUN_STEP_DELAY=0`` so the suite runs fast. A completed run is handed to
+an injected ``import_run`` callable (the vault's run importer in production), so
+the suite records that call instead of touching a shelf.
 """
 
 from __future__ import annotations
@@ -27,7 +29,6 @@ from sqlmodel import select
 from pixlstash.database import VaultDatabase
 from pixlstash.db_models.character import Character
 from pixlstash.db_models.picture_set import PictureSet
-from pixlstash.db_models.trained_lora import TrainedLora
 from pixlstash.db_models.training_job import TrainingJob
 from pixlstash.event_types import EventType
 from pixlstash.services.training_service import TrainingService
@@ -90,6 +91,24 @@ class _StubLease:
     def release(self) -> None:
         self.release_count += 1
         self.events.append("release")
+
+
+class _RecordingImport:
+    """Stands in for the vault's run importer: records each call, lands nothing.
+
+    ``error`` makes the call raise, which is how a failed shelf import reaches
+    the service.
+    """
+
+    def __init__(self, error: Exception | None = None):
+        self.calls: list[tuple[str, dict]] = []
+        self.error = error
+
+    def __call__(self, run_dir: str, info: dict) -> dict:
+        self.calls.append((run_dir, dict(info)))
+        if self.error is not None:
+            raise self.error
+        return {"stack_id": 7, "imported": 1, "cover_sha256": "a" * 64}
 
 
 class _CapturingNotify:
@@ -166,6 +185,7 @@ def _make_service(
     lease,
     notify,
     dataset_builder,
+    importer=None,
     poll_interval_s=0.05,
 ):
     """Build a TrainingService wired to the temp repo + injected deps."""
@@ -173,6 +193,7 @@ def _make_service(
         db,
         db.image_root,
         request_gpu=lease.request,
+        import_run=importer or _RecordingImport(),
         notify=notify,
         config_provider=lambda: {
             "repo_path": repo_dir,
@@ -268,15 +289,17 @@ def test_enqueue_validates_exactly_one_scope(db, repo_dir):
 
 
 def test_full_lifecycle_queued_to_completed_lora(db, repo_dir):
-    """enqueue → worker runs → running → completed → TrainedLora on disk."""
+    """enqueue → worker runs → running → completed → run handed to the shelf."""
     lease = _StubLease(grant=True)
     notify = _CapturingNotify()
+    importer = _RecordingImport()
     service = _make_service(
         db,
         repo_dir,
         lease=lease,
         notify=notify,
         dataset_builder=_make_dataset_builder(image_count=3),
+        importer=importer,
     )
     template = _write_template(repo_dir, steps=8, save_every=4)
     character_id = _make_character(db)
@@ -318,28 +341,22 @@ def test_full_lifecycle_queued_to_completed_lora(db, repo_dir):
     assert len(loss) == 8
     assert all("step" in p and "loss" in p for p in loss)
 
-    # A TrainedLora row with a real file under <image_root>/loras/.
-    lora = db.run_immediate_read_task(
-        lambda s: s.exec(
-            select(TrainedLora).where(TrainedLora.job_id == final.id)
-        ).first()
-    )
-    assert lora is not None
-    assert lora.character_id == character_id
-    assert lora.set_id is None
-    assert lora.step == 8
-    assert lora.file_path == f"loras/{lora.uuid}.safetensors"
-    lora_abs = os.path.join(db.image_root, lora.file_path)
-    assert os.path.exists(lora_abs)
-    assert lora.file_size_bytes == os.path.getsize(lora_abs)
-    assert lora.file_sha and len(lora.file_sha) == 64
+    # The finished run went to the shelf through the importer, once, with the
+    # ai-toolkit run folder and the job's scope.
+    assert len(importer.calls) == 1
+    run_dir, info = importer.calls[0]
+    assert os.path.isfile(os.path.join(run_dir, "charjob.safetensors"))
+    assert info["uuid"] == job.uuid
+    assert info["character_id"] == character_id
+    assert info["set_id"] is None
+    assert "1 file(s) on the shelf" in final.report
 
-    # Samples recorded on the job and present under the vault.
+    # Samples recorded on the job, still where the trainer wrote them.
     assert final.sample_image_paths
     samples = json.loads(final.sample_image_paths)
     assert samples
-    for rel in samples:
-        assert os.path.exists(os.path.join(db.image_root, rel))
+    for path in samples:
+        assert os.path.exists(path)
 
     # GPU lease acquired before submit and released after, in order.
     assert lease.events == ["acquire", "release"]
@@ -512,6 +529,84 @@ def test_cancel_queued_job_drops_the_lease_it_waits_on(db, repo_dir):
     assert lease.acquire_count == 1 and lease.release_count >= 1
 
 
+def _run_to_terminal(db, service, job, *, expect: str) -> None:
+    """Start the worker, wait for *job* to reach *expect*, then stop it."""
+    service.start()
+    try:
+        assert _poll_until(lambda: _job_status(db, job.uuid).status == expect), (
+            f"status={_job_status(db, job.uuid).status!r}, wanted {expect!r}"
+        )
+    finally:
+        service.stop()
+
+
+def test_completed_run_is_handed_to_the_importer_and_the_job_completes(db, repo_dir):
+    """A finished run calls the importer with its run folder; the job completes."""
+    importer = _RecordingImport()
+    lease = _StubLease(grant=True)
+    service = _make_service(
+        db,
+        repo_dir,
+        lease=lease,
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+        importer=importer,
+    )
+    template = _write_template(repo_dir, steps=4, save_every=2)
+    set_id = _make_set(db)
+    job = service.enqueue(
+        set_id=set_id,
+        name="shelfbound",
+        base_model="m",
+        trigger_word="t",
+        template_path=template,
+    )
+
+    _run_to_terminal(db, service, job, expect="completed")
+
+    assert len(importer.calls) == 1
+    run_dir, info = importer.calls[0]
+    # The run folder is the one holding the final checkpoint, not its parent.
+    assert os.path.isfile(os.path.join(run_dir, "shelfbound.safetensors"))
+    assert info["set_id"] == set_id and info["character_id"] is None
+    final = _job_status(db, job.uuid)
+    assert final.status == "completed"
+    assert final.report and "(stack 7)" in final.report
+    assert lease.acquire_count == lease.release_count == 1
+
+
+def test_an_importer_failure_marks_the_completed_job_error(db, repo_dir):
+    """The run finished but the shelf refused it: the job is an error, not done."""
+    importer = _RecordingImport(error=RuntimeError("no room on the shelf"))
+    lease = _StubLease(grant=True)
+    service = _make_service(
+        db,
+        repo_dir,
+        lease=lease,
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+        importer=importer,
+    )
+    template = _write_template(repo_dir, steps=4, save_every=2)
+    set_id = _make_set(db)
+    job = service.enqueue(
+        set_id=set_id,
+        name="refused",
+        base_model="m",
+        trigger_word="t",
+        template_path=template,
+    )
+
+    _run_to_terminal(db, service, job, expect="error")
+
+    assert len(importer.calls) == 1
+    final = _job_status(db, job.uuid)
+    assert final.status == "error"
+    assert final.error == ("Run completed but the LoRA artifact could not be imported")
+    assert final.report is None
+    assert lease.acquire_count == lease.release_count == 1
+
+
 def test_reconcile_on_startup_dead_running_job_finalizes(db, repo_dir):
     """A job left 'running' with a dead pid is finalized; lease not left held.
 
@@ -521,12 +616,14 @@ def test_reconcile_on_startup_dead_running_job_finalizes(db, repo_dir):
     """
     lease = _StubLease(grant=True)
     notify = _CapturingNotify()
+    importer = _RecordingImport()
     service = _make_service(
         db,
         repo_dir,
         lease=lease,
         notify=notify,
         dataset_builder=_make_dataset_builder(),
+        importer=importer,
     )
 
     job_uuid = "dead-job-uuid-0001"
@@ -586,13 +683,7 @@ def test_reconcile_on_startup_dead_running_job_finalizes(db, repo_dir):
 
     final = _job_status(db, job_uuid)
     assert final.status == "completed", f"got {final.status!r}"
-    lora = db.run_immediate_read_task(
-        lambda s: s.exec(
-            select(TrainedLora).where(TrainedLora.uuid != None)  # noqa: E711
-        ).first()
-    )
-    assert lora is not None
-    assert os.path.exists(os.path.join(db.image_root, lora.file_path))
+    assert [run_dir for run_dir, _ in importer.calls] == [save_root]
     # Dead-process reconcile must not have taken the GPU lease at all.
     assert lease.acquire_count == 0
     assert lease.release_count == 0

@@ -1,9 +1,10 @@
-"""Unit tests for the TrainingJob / TrainedLora models and the ai-toolkit
-config plumbing.
+"""Unit tests for the TrainingJob model and the ai-toolkit config plumbing.
 
 These run against a throwaway SQLite database (no Server needed): creating the
-two tables plus their picture-set/character parents from the registered
+job table plus its picture-set/character parents from the registered
 ``SQLModel.metadata`` is enough to exercise the relationships and table names.
+A finished run is a model-shelf row, not a training-table row, so there is no
+LoRA model to exercise here.
 The config round-trip tests poke the serialise/patch helpers directly.
 """
 
@@ -15,7 +16,6 @@ from sqlmodel import Session, SQLModel, create_engine
 from pixlstash.db_models import (  # noqa: F401
     Character,
     PictureSet,
-    TrainedLora,
     TrainingJob,
     User,
 )
@@ -39,10 +39,9 @@ def session(tmp_path):
 
 def test_table_names():
     assert TrainingJob.__tablename__ == "training_job"
-    assert TrainedLora.__tablename__ == "trained_lora"
 
 
-def test_create_set_scoped_job_with_lora(session):
+def test_create_set_scoped_job(session):
     picture_set = PictureSet(name="my-set")
     session.add(picture_set)
     session.commit()
@@ -58,26 +57,6 @@ def test_create_set_scoped_job_with_lora(session):
     assert job.step == 0
     assert job.created_at is not None
     assert job.character_id is None
-
-    lora = TrainedLora(
-        uuid="lora-1",
-        job_id=job.id,
-        set_id=picture_set.id,
-        name="my-lora",
-        file_path="loras/lora-1.safetensors",
-        file_size_bytes=1234,
-        file_sha="deadbeef",
-        step=1000,
-    )
-    session.add(lora)
-    session.commit()
-    session.refresh(lora)
-    session.refresh(job)
-
-    # Relationship both directions.
-    assert lora.job is not None
-    assert lora.job.id == job.id
-    assert [m.uuid for m in job.loras] == ["lora-1"]
 
     # Parent back-population on the picture set.
     session.refresh(picture_set)

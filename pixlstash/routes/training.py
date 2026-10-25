@@ -1,16 +1,17 @@
-"""HTTP API for ai-toolkit LoRA training jobs and trained-LoRA management.
+"""HTTP API for ai-toolkit LoRA training jobs.
 
 This router exposes the training feature under ``/api/v1``: enqueueing and
-cancelling training jobs, polling their progress, browsing and downloading the
-trained LoRA artifacts, and listing the available config templates.
+cancelling training jobs, polling their progress, and listing the available
+config templates. A finished run is not served from here: it lands on the model
+shelf, which is where a trained LoRA is listed, downloaded and deleted.
 
 Authorization is declared, not coded here: every endpoint is listed in
 ``pixlstash/authz/registry.py`` (``ROUTE_POLICIES``) and enforced by the central
-``AuthzGate``. Reads and LoRA downloads are ``owner_only`` (share tokens never
-reach them). Routes that start or signal a host trainer process, delete host
-files or disclose a host path are ``local_owner_only`` (§16.3): training is a
-privileged compute and filesystem operation, so a remote owner is refused unless
-``allow_remote_host_ops`` is set. Handlers carry no inline owner or scope checks.
+``AuthzGate``. Reads are ``owner_only`` (share tokens never reach them). Routes
+that start or signal a host trainer process are ``local_owner_only`` (§16.3):
+training is a privileged compute and filesystem operation, so a remote owner is
+refused unless ``allow_remote_host_ops`` is set. Handlers carry no inline owner
+or scope checks.
 """
 
 import json
@@ -21,17 +22,14 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlmodel import Session, select
 
 from platformdirs import user_data_dir
 
-from pixlstash.db_models.trained_lora import TrainedLora
 from pixlstash.db_models.training_job import TrainingJob
 from pixlstash.pixl_logging import get_logger
 from pixlstash.training.config_render import TunableOverrideError, validate_tunables
-from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.path_utils import resolve_path_within
 
 logger = get_logger(__name__)
@@ -202,7 +200,7 @@ def _redact_host_paths(value):
 
     Job responses go to the owner's browser and to any tool they run, so the
     host's install and library locations must not travel with them. Relative
-    vault paths (``loras/...``) pass through unchanged.
+    paths pass through unchanged.
 
     Args:
         value: A JSON-serialisable value (dict, list, str or scalar).
@@ -248,9 +246,6 @@ def create_router(server) -> APIRouter:
 
     def _image_root() -> str:
         return server.vault.image_root
-
-    def _loras_dir() -> str:
-        return os.path.join(_image_root(), "loras")
 
     def _training_root() -> str:
         return os.path.join(_image_root(), "training")
@@ -472,106 +467,6 @@ def create_router(server) -> APIRouter:
 
         status: str = Field(..., description="'deleted' on success.")
         job_id: int = Field(..., description="Primary key of the deleted job.")
-        deleted_lora_ids: list[int] = Field(
-            default_factory=list,
-            description="Primary keys of TrainedLora rows removed with the job.",
-        )
-
-    class LoraSummaryResponse(BaseModel):
-        """One row in the trained-LoRA listing."""
-
-        model_config = ConfigDict(extra="allow")
-
-        id: int = Field(..., description="Primary key of the LoRA.")
-        uuid: str = Field(..., description="Stable external identifier.")
-        name: str = Field(..., description="Human-readable LoRA name.")
-        job_id: Optional[int] = Field(
-            default=None, description="Primary key of the producing training job."
-        )
-        set_id: Optional[int] = Field(
-            default=None, description="Picture-set scope, denormalised from the job."
-        )
-        character_id: Optional[int] = Field(
-            default=None, description="Character scope, denormalised from the job."
-        )
-        step: Optional[int] = Field(
-            default=None, description="Training step the artifact was saved at."
-        )
-        file_size_bytes: Optional[int] = Field(
-            default=None, description="Size of the .safetensors artifact on disk."
-        )
-        created_at: Optional[datetime] = Field(
-            default=None, description="UTC creation timestamp."
-        )
-
-    class LoraDetailResponse(BaseModel):
-        """Full detail for a single trained LoRA, with reproducibility links."""
-
-        model_config = ConfigDict(extra="allow")
-
-        id: int = Field(..., description="Primary key of the LoRA.")
-        uuid: str = Field(..., description="Stable external identifier.")
-        name: str = Field(..., description="Human-readable LoRA name.")
-        job_id: Optional[int] = Field(
-            default=None, description="Primary key of the producing training job."
-        )
-        set_id: Optional[int] = Field(
-            default=None, description="Picture-set scope, denormalised from the job."
-        )
-        character_id: Optional[int] = Field(
-            default=None, description="Character scope, denormalised from the job."
-        )
-        step: Optional[int] = Field(
-            default=None, description="Training step the artifact was saved at."
-        )
-        file_path: Optional[str] = Field(
-            default=None,
-            description="Path relative to the vault image-root (loras/{uuid}.safetensors).",
-        )
-        file_size_bytes: Optional[int] = Field(
-            default=None, description="Size of the artifact on disk."
-        )
-        file_sha: Optional[str] = Field(
-            default=None, description="SHA-256 content hash of the artifact."
-        )
-        created_at: Optional[datetime] = Field(
-            default=None, description="UTC creation timestamp."
-        )
-        job_base_model: Optional[str] = Field(
-            default=None,
-            description="Base checkpoint of the producing job (reproducibility).",
-        )
-        job_trigger_word: Optional[str] = Field(
-            default=None,
-            description="Trigger word of the producing job (reproducibility).",
-        )
-        job_ai_toolkit_commit: Optional[str] = Field(
-            default=None,
-            description="ai-toolkit commit of the producing job (reproducibility).",
-        )
-
-    class LoraFilePathResponse(BaseModel):
-        """Resolved absolute local path of a LoRA, for same-machine loaders."""
-
-        model_config = ConfigDict(extra="allow")
-
-        id: int = Field(..., description="Primary key of the LoRA.")
-        uuid: str = Field(..., description="Stable external identifier.")
-        file_path: str = Field(
-            ...,
-            description=(
-                "Absolute local filesystem path to the .safetensors file, "
-                "validated to be within the vault image-root. Owner-only."
-            ),
-        )
-
-    class DeleteLoraResponse(BaseModel):
-        """Result of deleting a trained LoRA."""
-
-        model_config = ConfigDict(extra="allow")
-
-        status: str = Field(..., description="'deleted' on success.")
-        lora_id: int = Field(..., description="Primary key of the deleted LoRA.")
 
     class TemplateItemResponse(BaseModel):
         """One available training template (no secrets)."""
@@ -612,19 +507,6 @@ def create_router(server) -> APIRouter:
                 "completed_at": job.completed_at,
             }
         )
-
-    def _lora_to_summary(lora: TrainedLora) -> dict:
-        return {
-            "id": lora.id,
-            "uuid": lora.uuid,
-            "name": lora.name,
-            "job_id": lora.job_id,
-            "set_id": lora.set_id,
-            "character_id": lora.character_id,
-            "step": lora.step,
-            "file_size_bytes": lora.file_size_bytes,
-            "created_at": lora.created_at,
-        }
 
     # ── Training jobs ─────────────────────────────────────────────────────
 
@@ -845,18 +727,17 @@ def create_router(server) -> APIRouter:
 
     @router.delete(
         "/training/jobs/{job_id}",
-        summary="Delete a training job and its artifacts",
+        summary="Delete a training job and its work directory",
         response_model=DeleteJobResponse,
         description=(
-            "Deletes the job row, every TrainedLora it produced (rows + files + "
-            "sample dirs), and the job's on-disk work directory. Returns 404 if "
-            "the job is unknown. Owner-only."
+            "Deletes the job row and the job's on-disk work directory. Models the "
+            "job put on the model shelf are left alone: the shelf holds its own "
+            "copy. Returns 404 if the job is unknown. Owner-only."
         ),
     )
     def delete_training_job(job_id: int, request: Request):
         _ensure_secure(request)
 
-        loras_dir = _loras_dir()
         training_root = _training_root()
 
         def _delete(session: Session):
@@ -864,200 +745,19 @@ def create_router(server) -> APIRouter:
             if job is None:
                 return None
             job_uuid = job.uuid
-            loras = session.exec(
-                select(TrainedLora).where(TrainedLora.job_id == job_id)
-            ).all()
-            # Collect file paths to remove AFTER the DB rows are gone, so a file
-            # I/O error never leaves a dangling row pointing at a deleted file.
-            lora_file_paths: list[str] = []
-            lora_sample_dirs: list[str] = []
-            deleted_lora_ids: list[int] = []
-            for lora in loras:
-                deleted_lora_ids.append(lora.id)
-                if lora.file_path:
-                    lora_file_paths.append(lora.file_path)
-                    lora_sample_dirs.append(f"{lora.uuid}_samples")
-                session.delete(lora)
             session.delete(job)
             session.commit()
-            return job_uuid, deleted_lora_ids, lora_file_paths, lora_sample_dirs
+            return job_uuid
 
-        result = server.vault.db.run_task(_delete)
-        if result is None:
+        job_uuid = server.vault.db.run_task(_delete)
+        if job_uuid is None:
             raise HTTPException(status_code=404, detail="Training job not found")
-        job_uuid, deleted_lora_ids, lora_file_paths, lora_sample_dirs = result
 
-        # Remove LoRA artifacts (path-validated to stay within loras/).
-        for rel_path in lora_file_paths:
-            _safe_remove_file(loras_dir, _image_root(), rel_path)
-        for sample_dir_name in lora_sample_dirs:
-            _safe_remove_dir(loras_dir, sample_dir_name)
         # Remove the job's work dir (validated under training/).
         _safe_remove_dir(training_root, job_uuid)
 
-        logger.info(
-            "Deleted training job id=%s (uuid=%s); removed %d LoRA(s): %s",
-            job_id,
-            job_uuid,
-            len(deleted_lora_ids),
-            deleted_lora_ids,
-        )
-        return {
-            "status": "deleted",
-            "job_id": job_id,
-            "deleted_lora_ids": deleted_lora_ids,
-        }
-
-    # ── Trained LoRAs ─────────────────────────────────────────────────────
-
-    @router.get(
-        "/loras",
-        summary="List trained LoRAs",
-        response_model=list[LoraSummaryResponse],
-        description=(
-            "Lists trained LoRAs newest-first, optionally filtered by set_id or "
-            "character_id. Owner-only."
-        ),
-    )
-    def list_loras(
-        request: Request,
-        set_id: Optional[int] = None,
-        character_id: Optional[int] = None,
-    ):
-        _ensure_secure(request)
-
-        def _query(session: Session):
-            stmt = select(TrainedLora)
-            if set_id is not None:
-                stmt = stmt.where(TrainedLora.set_id == set_id)
-            if character_id is not None:
-                stmt = stmt.where(TrainedLora.character_id == character_id)
-            stmt = stmt.order_by(TrainedLora.created_at.desc(), TrainedLora.id.desc())
-            return [_lora_to_summary(lora) for lora in session.exec(stmt).all()]
-
-        return server.vault.db.run_immediate_read_task(_query)
-
-    @router.get(
-        "/loras/{lora_id}",
-        summary="Get trained LoRA detail",
-        response_model=LoraDetailResponse,
-        description=(
-            "Returns full detail for a LoRA, including a link back to its "
-            "producing job's reproducibility metadata (base model, trigger "
-            "word, ai-toolkit commit). Owner-only."
-        ),
-    )
-    def get_lora(lora_id: int, request: Request):
-        _ensure_secure(request)
-
-        def _query(session: Session):
-            lora = session.get(TrainedLora, lora_id)
-            if lora is None:
-                return None
-            job = (
-                session.get(TrainingJob, lora.job_id)
-                if lora.job_id is not None
-                else None
-            )
-            return {
-                "id": lora.id,
-                "uuid": lora.uuid,
-                "name": lora.name,
-                "job_id": lora.job_id,
-                "set_id": lora.set_id,
-                "character_id": lora.character_id,
-                "step": lora.step,
-                "file_path": lora.file_path,
-                "file_size_bytes": lora.file_size_bytes,
-                "file_sha": lora.file_sha,
-                "created_at": lora.created_at,
-                "job_base_model": job.base_model if job is not None else None,
-                "job_trigger_word": job.trigger_word if job is not None else None,
-                "job_ai_toolkit_commit": (
-                    job.ai_toolkit_commit if job is not None else None
-                ),
-            }
-
-        detail = server.vault.db.run_immediate_read_task(_query)
-        if detail is None:
-            raise HTTPException(status_code=404, detail="Trained LoRA not found")
-        return detail
-
-    @router.get(
-        "/loras/{lora_id}/download",
-        summary="Download a trained LoRA",
-        response_class=FileResponse,
-        responses={200: {"content": {"application/octet-stream": {}}}},
-        description=(
-            "Streams the .safetensors artifact as an attachment. The stored "
-            "relative path is resolved and validated to stay within the vault "
-            "image-root before any bytes are served. Owner-only."
-        ),
-    )
-    def download_lora(lora_id: int, request: Request):
-        _ensure_secure(request)
-
-        abs_path, lora = _resolve_lora_file_or_404(lora_id)
-        filename = f"{lora['name']}.safetensors"
-        return FileResponse(
-            abs_path,
-            media_type="application/octet-stream",
-            filename=filename,
-        )
-
-    @router.get(
-        "/loras/{lora_id}/file-path",
-        summary="Get a LoRA's absolute local path",
-        response_model=LoraFilePathResponse,
-        description=(
-            "Returns the resolved absolute local filesystem path of the LoRA "
-            "for same-machine ComfyUI loader nodes. The path is validated to be "
-            "within the vault image-root. Owner-only (this is the highest-risk "
-            "endpoint: it discloses a local server path)."
-        ),
-    )
-    def get_lora_file_path(lora_id: int, request: Request):
-        _ensure_secure(request)
-
-        abs_path, lora = _resolve_lora_file_or_404(lora_id)
-        return {"id": lora["id"], "uuid": lora["uuid"], "file_path": abs_path}
-
-    @router.delete(
-        "/loras/{lora_id}",
-        summary="Delete a trained LoRA",
-        response_model=DeleteLoraResponse,
-        description=(
-            "Deletes the LoRA row, its .safetensors file, and its sample "
-            "directory. Returns 404 if the LoRA is unknown. Owner-only."
-        ),
-    )
-    def delete_lora(lora_id: int, request: Request):
-        _ensure_secure(request)
-
-        loras_dir = _loras_dir()
-        image_root = _image_root()
-
-        def _delete(session: Session):
-            lora = session.get(TrainedLora, lora_id)
-            if lora is None:
-                return None
-            file_path = lora.file_path
-            sample_dir_name = f"{lora.uuid}_samples"
-            session.delete(lora)
-            session.commit()
-            return file_path, sample_dir_name
-
-        result = server.vault.db.run_task(_delete)
-        if result is None:
-            raise HTTPException(status_code=404, detail="Trained LoRA not found")
-        file_path, sample_dir_name = result
-
-        if file_path:
-            _safe_remove_file(loras_dir, image_root, file_path)
-        _safe_remove_dir(loras_dir, sample_dir_name)
-
-        logger.info("Deleted trained LoRA id=%s (file=%s).", lora_id, file_path)
-        return {"status": "deleted", "lora_id": lora_id}
+        logger.info("Deleted training job id=%s (uuid=%s).", job_id, job_uuid)
+        return {"status": "deleted", "job_id": job_id}
 
     # ── Templates ─────────────────────────────────────────────────────────
 
@@ -1098,68 +798,6 @@ def create_router(server) -> APIRouter:
         templates.sort(key=lambda item: item.get("name", ""))
         return templates
 
-    # ── Shared file-resolution + removal helpers (closure over server) ─────
-
-    def _resolve_lora_file_or_404(lora_id: int) -> tuple[str, dict]:
-        """Load a LoRA, resolve its file to an in-vault absolute path, or 404.
-
-        Args:
-            lora_id: Primary key of the LoRA.
-
-        Returns:
-            ``(absolute_path, {id, uuid, name, file_path})``.
-
-        Raises:
-            HTTPException: 404 if the row, the stored path, or the file is
-                missing, or if the resolved path would escape the image-root.
-        """
-
-        def _load(session: Session):
-            lora = session.get(TrainedLora, lora_id)
-            if lora is None:
-                return None
-            return {
-                "id": lora.id,
-                "uuid": lora.uuid,
-                "name": lora.name,
-                "file_path": lora.file_path,
-            }
-
-        lora = server.vault.db.run_immediate_read_task(_load)
-        if lora is None:
-            raise HTTPException(status_code=404, detail="Trained LoRA not found")
-        if not lora["file_path"]:
-            raise HTTPException(
-                status_code=404, detail="Trained LoRA has no file on record"
-            )
-
-        image_root = _image_root()
-        resolved = ImageUtils.resolve_picture_path(image_root, lora["file_path"])
-        if not resolved:
-            raise HTTPException(
-                status_code=404, detail="LoRA file path could not be resolved"
-            )
-        # Assert the resolved path stays within image_root. resolve_path_within
-        # raises ValueError on any escape (.. components, symlinks, abs paths
-        # outside the root); we relativise first so an absolute stored path is
-        # still re-validated against the root.
-        try:
-            rel = os.path.relpath(resolved, image_root)
-            safe_abs = resolve_path_within(image_root, rel)
-        except ValueError as exc:
-            logger.warning(
-                "LoRA id=%s file_path escapes image_root (%s): %s",
-                lora_id,
-                lora["file_path"],
-                exc,
-            )
-            raise HTTPException(
-                status_code=404, detail="LoRA file is outside the vault"
-            ) from exc
-        if not os.path.isfile(safe_abs):
-            raise HTTPException(status_code=404, detail="LoRA file is missing")
-        return safe_abs, lora
-
     return router
 
 
@@ -1168,49 +806,11 @@ def create_router(server) -> APIRouter:
 # ---------------------------------------------------------------------------
 
 
-def _safe_remove_file(base_dir: str, image_root: str, rel_or_abs_path: str) -> None:
-    """Remove a LoRA file, validated to be within *base_dir*.
-
-    Args:
-        base_dir: The loras directory the file must live under.
-        image_root: The vault image-root, used to resolve a relative path.
-        rel_or_abs_path: The stored ``file_path`` (relative to image_root, or
-            absolute).
-    """
-    resolved = ImageUtils.resolve_picture_path(image_root, rel_or_abs_path)
-    if not resolved:
-        logger.warning(
-            "Could not resolve LoRA file path for removal: %r", rel_or_abs_path
-        )
-        return
-    try:
-        # Re-validate under loras/ specifically: deletions must never reach
-        # outside the artifact directory even if a row was tampered with.
-        rel = os.path.relpath(resolved, base_dir)
-        safe_abs = resolve_path_within(base_dir, rel)
-    except ValueError as exc:
-        logger.warning(
-            "Refusing to remove LoRA file outside %s: %r (%s)",
-            base_dir,
-            rel_or_abs_path,
-            exc,
-        )
-        return
-    if not os.path.isfile(safe_abs):
-        logger.debug("LoRA file already gone, nothing to remove: %s", safe_abs)
-        return
-    try:
-        os.remove(safe_abs)
-        logger.info("Removed LoRA file: %s", safe_abs)
-    except OSError as exc:
-        logger.warning("Failed to remove LoRA file %s: %s", safe_abs, exc)
-
-
 def _safe_remove_dir(base_dir: str, dir_name: str) -> None:
     """Recursively remove *dir_name* under *base_dir*, validated to stay within it.
 
     Args:
-        base_dir: The permitted root (loras/ or training/).
+        base_dir: The permitted root (training/).
         dir_name: The directory name to remove (e.g. a job uuid or a
             ``{uuid}_samples`` dir).
     """

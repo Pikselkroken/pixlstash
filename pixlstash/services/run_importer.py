@@ -214,6 +214,7 @@ class RunImporter:
         *,
         steps: Optional[list[Optional[int]]] = None,
         delete_source: bool = False,
+        subfolder: Optional[str] = None,
         should_cancel: Optional[Callable[[], bool]] = None,
         on_progress: Optional[Callable[[ImportOutcome], None]] = None,
     ) -> ImportReport:
@@ -228,6 +229,9 @@ class RunImporter:
             delete_source: Whether to unlink each file after its row is durably
                 committed. Comes from the source folder's
                 ``delete_after_import``; the unlink is always last.
+            subfolder: A folder inside the destination to write into, e.g.
+                ``loras``, or ``None`` for the destination's root. The caller
+                decides it; containment is still checked against the root.
             should_cancel: Consulted between files. Nothing is rolled back.
             on_progress: Called with each :class:`ImportOutcome`.
 
@@ -256,7 +260,7 @@ class RunImporter:
         # place.
         samples = {c.path: run.samples_for(c) for c in wanted}
         targets = self._resolve_targets(
-            wanted, destination, destination_folder_id, samples
+            wanted, destination, destination_folder_id, samples, subfolder
         )
         require_space(
             destination,
@@ -275,10 +279,11 @@ class RunImporter:
                     )
                 )
                 continue
-            target, samples_target = targets[checkpoint.path]
+            target, relpath, samples_target = targets[checkpoint.path]
             outcome = self._import_one(
                 checkpoint,
                 target,
+                relpath=relpath,
                 samples=samples[checkpoint.path],
                 samples_target=samples_target,
                 run=run,
@@ -338,7 +343,8 @@ class RunImporter:
         destination: str,
         destination_folder_id: int,
         samples: dict[str, list[Sample]],
-    ) -> dict[str, tuple[str, Optional[str]]]:
+        subfolder: Optional[str] = None,
+    ) -> dict[str, tuple[str, str, Optional[str]]]:
         """Contain and collision-check every destination before the first byte.
 
         Same rule as the mover: refuse the batch rather than import half a run
@@ -349,13 +355,16 @@ class RunImporter:
         put there themselves.
 
         Returns:
-            ``{source checkpoint path: (file target, samples target or None)}``.
-            The samples target is ``None`` for a checkpoint with no previews -
-            nothing is written, so nothing is claimed.
+            ``{source checkpoint path: (file target, file relpath, samples target
+            or None)}``. The relpath is the one the shelf row records - the
+            basename, under ``subfolder`` when there is one. The samples target
+            is ``None`` for a checkpoint with no previews - nothing is written,
+            so nothing is claimed.
         """
-        targets: dict[str, tuple[str, Optional[str]]] = {}
+        targets: dict[str, tuple[str, str, Optional[str]]] = {}
         for checkpoint in checkpoints:
-            relpath = os.path.basename(checkpoint.filename)
+            name = os.path.basename(checkpoint.filename)
+            relpath = f"{subfolder}/{name}" if subfolder else name
             try:
                 # Containment (#776) on the write path, and **reachable**:
                 # ``basename`` flattens the name and ``aitoolkit_run`` only ever
@@ -371,7 +380,7 @@ class RunImporter:
                 raise MoveRefused(
                     f"{relpath!r} would be written outside the destination folder."
                 ) from exc
-            if any(target == planned for planned, _ in targets.values()):
+            if any(target == planned for planned, _, _ in targets.values()):
                 raise MoveRefused(
                     f"Two files in {os.path.dirname(checkpoint.path)} would both "
                     f"land on {relpath!r}."
@@ -391,6 +400,7 @@ class RunImporter:
                 )
             targets[checkpoint.path] = (
                 target,
+                relpath,
                 self._samples_target(destination, relpath, samples[checkpoint.path]),
             )
         return targets
@@ -446,6 +456,7 @@ class RunImporter:
         checkpoint: Checkpoint,
         target: str,
         *,
+        relpath: str,
         samples: list[Sample],
         samples_target: Optional[str],
         run,
@@ -489,6 +500,7 @@ class RunImporter:
             model_id = self._register(
                 target,
                 written,
+                relpath=relpath,
                 checkpoint=checkpoint,
                 run=run,
                 stack_id=stack_id,
@@ -537,6 +549,7 @@ class RunImporter:
         target: str,
         digest: str,
         *,
+        relpath: str,
         checkpoint: Checkpoint,
         run,
         stack_id: int,
@@ -617,7 +630,7 @@ class RunImporter:
                 (
                     model_id,
                     destination_folder_id,
-                    os.path.basename(target),
+                    relpath,
                     STATE_PRESENT,
                     now,
                     mtime,

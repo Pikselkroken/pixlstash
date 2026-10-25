@@ -8,8 +8,8 @@ Every endpoint is asserted in **both directions**:
 The :class:`~pixlstash.services.training_service.TrainingService` is stubbed
 with a fake on ``server.vault.training_service`` for the enqueue/cancel paths so
 no GPU subprocess is ever spawned; read/download/delete paths seed
-``TrainingJob`` / ``TrainedLora`` rows (and real artifact files) directly via the
-DB task runner.
+``TrainingJob`` rows (and real work-directory files) directly via the DB task
+runner.
 
 See the training rows of ``docs/authz-coverage-matrix.md`` for the coverage matrix
 this file backs.
@@ -22,7 +22,6 @@ import tempfile
 
 from fastapi.testclient import TestClient
 
-from pixlstash.db_models.trained_lora import TrainedLora
 from pixlstash.db_models.training_job import TrainingJob
 from pixlstash.server import Server
 
@@ -192,47 +191,6 @@ def _seed_job(server, **overrides):
         return job.id, job.uuid
 
     return server.vault.db.run_task(_create)
-
-
-def _seed_lora(
-    server, *, job_id=None, file_rel="loras/testlora.safetensors", **overrides
-):
-    """Insert a TrainedLora row and write a real artifact file under image_root.
-
-    Returns ``(lora_id, lora_uuid, abs_file_path)``.
-    """
-    import uuid as _uuid
-
-    lora_uuid = overrides.pop("uuid", _uuid.uuid4().hex)
-    image_root = server.vault.image_root
-    abs_path = os.path.join(image_root, file_rel) if file_rel else None
-    if abs_path:
-        os.makedirs(os.path.dirname(abs_path), exist_ok=True)
-        with open(abs_path, "wb") as fh:
-            fh.write(b"SAFETENSORS-FAKE-WEIGHTS")
-
-    fields = {
-        "uuid": lora_uuid,
-        "job_id": job_id,
-        "set_id": None,
-        "character_id": None,
-        "name": "my-lora",
-        "file_path": file_rel,
-        "file_size_bytes": len(b"SAFETENSORS-FAKE-WEIGHTS") if file_rel else None,
-        "file_sha": "abc123",
-        "step": 3000,
-    }
-    fields.update(overrides)
-
-    def _create(session):
-        lora = TrainedLora(**fields)
-        session.add(lora)
-        session.commit()
-        session.refresh(lora)
-        return lora.id
-
-    lora_id = server.vault.db.run_task(_create)
-    return lora_id, lora_uuid, abs_path
 
 
 def _make_picture_set(owner_client, name="Set"):
@@ -522,36 +480,25 @@ def test_cancel_job_scoped_token_forbidden():
 # ---------------------------------------------------------------------------
 
 
-def test_delete_job_owner_removes_rows_and_files():
+def test_delete_job_owner_removes_rows_and_work_dir_only():
     temp_dir, owner, server, read_token = _setup()
     try:
         job_id, job_uuid = _seed_job(server)
-        lora_id, lora_uuid, lora_abs = _seed_lora(
-            server, job_id=job_id, file_rel="loras/job_lora.safetensors"
-        )
-        # Create the job work dir + a lora sample dir so we can prove removal.
         work_dir = os.path.join(server.vault.image_root, "training", job_uuid)
         os.makedirs(work_dir, exist_ok=True)
-        sample_dir = os.path.join(
-            server.vault.image_root, "loras", f"{lora_uuid}_samples"
-        )
-        os.makedirs(sample_dir, exist_ok=True)
+        # A model already on the shelf is its own copy, not the job's: it stays.
+        shelf_file = os.path.join(server.vault.image_root, "loras", "shelf.safetensors")
+        os.makedirs(os.path.dirname(shelf_file), exist_ok=True)
+        with open(shelf_file, "wb") as fh:
+            fh.write(b"SHELF-WEIGHTS")
 
         r = owner.delete(f"/training/jobs/{job_id}")
         assert r.status_code == 200, r.text
-        body = r.json()
-        assert body["status"] == "deleted"
-        assert lora_id in body["deleted_lora_ids"]
+        assert r.json() == {"status": "deleted", "job_id": job_id}
 
-        # Rows gone.
-        r = owner.get(f"/training/jobs/{job_id}")
-        assert r.status_code == 404
-        r = owner.get(f"/loras/{lora_id}")
-        assert r.status_code == 404
-        # Files + dirs gone.
-        assert not os.path.exists(lora_abs)
+        assert owner.get(f"/training/jobs/{job_id}").status_code == 404
         assert not os.path.isdir(work_dir)
-        assert not os.path.isdir(sample_dir)
+        assert os.path.exists(shelf_file)
     finally:
         _teardown(temp_dir, server)
 
@@ -574,247 +521,6 @@ def test_delete_job_scoped_token_forbidden():
         assert r.status_code == 403, r.text
         # Row must survive a forbidden delete.
         r = owner.get(f"/training/jobs/{job_id}")
-        assert r.status_code == 200
-    finally:
-        _teardown(temp_dir, server)
-
-
-# ---------------------------------------------------------------------------
-# GET /loras (list)
-# ---------------------------------------------------------------------------
-
-
-def test_list_loras_owner_works_and_filters():
-    temp_dir, owner, server, read_token = _setup()
-    try:
-        set_id = _make_picture_set(owner)
-        char_id = _make_character(owner)
-        id_set, _, _ = _seed_lora(
-            server, set_id=set_id, file_rel="loras/set.safetensors", name="set-lora"
-        )
-        id_char, _, _ = _seed_lora(
-            server,
-            character_id=char_id,
-            file_rel="loras/char.safetensors",
-            name="char-lora",
-        )
-        r = owner.get("/loras")
-        assert r.status_code == 200, r.text
-        ids = {row["id"] for row in r.json()}
-        assert {id_set, id_char} <= ids
-
-        r = owner.get("/loras", params={"set_id": set_id})
-        assert {row["id"] for row in r.json()} == {id_set}
-        r = owner.get("/loras", params={"character_id": char_id})
-        assert {row["id"] for row in r.json()} == {id_char}
-    finally:
-        _teardown(temp_dir, server)
-
-
-def test_list_loras_scoped_token_forbidden():
-    temp_dir, owner, server, read_token = _setup()
-    try:
-        scoped = _scoped_client(server, read_token)
-        r = scoped.get("/loras")
-        assert r.status_code == 403, r.text
-    finally:
-        _teardown(temp_dir, server)
-
-
-# ---------------------------------------------------------------------------
-# GET /loras/{id} (detail)
-# ---------------------------------------------------------------------------
-
-
-def test_get_lora_detail_owner_works_with_job_link():
-    temp_dir, owner, server, read_token = _setup()
-    try:
-        job_id, _ = _seed_job(
-            server,
-            base_model="some/model",
-            trigger_word="zztrig",
-            ai_toolkit_commit="c0ffee",
-        )
-        lora_id, _, _ = _seed_lora(server, job_id=job_id)
-        r = owner.get(f"/loras/{lora_id}")
-        assert r.status_code == 200, r.text
-        body = r.json()
-        assert body["id"] == lora_id
-        assert body["job_id"] == job_id
-        # Reproducibility link back to the job.
-        assert body["job_base_model"] == "some/model"
-        assert body["job_trigger_word"] == "zztrig"
-        assert body["job_ai_toolkit_commit"] == "c0ffee"
-    finally:
-        _teardown(temp_dir, server)
-
-
-def test_get_lora_detail_missing_is_404():
-    temp_dir, owner, server, read_token = _setup()
-    try:
-        r = owner.get("/loras/999999")
-        assert r.status_code == 404, r.text
-    finally:
-        _teardown(temp_dir, server)
-
-
-def test_get_lora_detail_scoped_token_forbidden():
-    temp_dir, owner, server, read_token = _setup()
-    try:
-        lora_id, _, _ = _seed_lora(server)
-        scoped = _scoped_client(server, read_token)
-        r = scoped.get(f"/loras/{lora_id}")
-        assert r.status_code == 403, r.text
-    finally:
-        _teardown(temp_dir, server)
-
-
-# ---------------------------------------------------------------------------
-# GET /loras/{id}/download
-# ---------------------------------------------------------------------------
-
-
-def test_download_lora_owner_streams_bytes():
-    temp_dir, owner, server, read_token = _setup()
-    try:
-        lora_id, _, _ = _seed_lora(server, file_rel="loras/dl.safetensors")
-        r = owner.get(f"/loras/{lora_id}/download")
-        assert r.status_code == 200, r.text
-        assert r.content == b"SAFETENSORS-FAKE-WEIGHTS"
-        assert "attachment" in r.headers.get("content-disposition", "")
-    finally:
-        _teardown(temp_dir, server)
-
-
-def test_download_lora_scoped_token_forbidden():
-    temp_dir, owner, server, read_token = _setup()
-    try:
-        lora_id, _, _ = _seed_lora(server)
-        scoped = _scoped_client(server, read_token)
-        r = scoped.get(f"/loras/{lora_id}/download")
-        assert r.status_code == 403, r.text
-    finally:
-        _teardown(temp_dir, server)
-
-
-def test_download_lora_missing_file_is_404():
-    temp_dir, owner, server, read_token = _setup()
-    try:
-        # Seed a row, then delete the backing file so the file is missing.
-        lora_id, _, abs_path = _seed_lora(server, file_rel="loras/gone.safetensors")
-        os.remove(abs_path)
-        r = owner.get(f"/loras/{lora_id}/download")
-        assert r.status_code == 404, r.text
-    finally:
-        _teardown(temp_dir, server)
-
-
-def test_download_lora_path_escaping_image_root_is_404():
-    temp_dir, owner, server, read_token = _setup()
-    try:
-        # A tampered row pointing outside the vault must be rejected, not served.
-        outside = os.path.join(temp_dir.name, "outside_secret.safetensors")
-        with open(outside, "wb") as fh:
-            fh.write(b"SECRET-OUTSIDE-VAULT")
-        # Relative path that climbs out of image_root via ../.
-        lora_id, _, _ = _seed_lora(server, file_rel="../outside_secret.safetensors")
-        r = owner.get(f"/loras/{lora_id}/download")
-        assert r.status_code == 404, r.text
-        assert b"SECRET-OUTSIDE-VAULT" not in r.content
-    finally:
-        _teardown(temp_dir, server)
-
-
-# ---------------------------------------------------------------------------
-# GET /loras/{id}/file-path  (highest-risk: discloses a local path)
-# ---------------------------------------------------------------------------
-
-
-def test_file_path_owner_returns_in_vault_path():
-    temp_dir, owner, server, read_token = _setup()
-    try:
-        lora_id, _, abs_path = _seed_lora(server, file_rel="loras/fp.safetensors")
-        r = owner.get(f"/loras/{lora_id}/file-path")
-        assert r.status_code == 200, r.text
-        returned = r.json()["file_path"]
-        assert os.path.isabs(returned)
-        # Resolved path is within image_root and matches the real file.
-        assert os.path.realpath(returned) == os.path.realpath(abs_path)
-        assert os.path.realpath(server.vault.image_root) in os.path.realpath(returned)
-    finally:
-        _teardown(temp_dir, server)
-
-
-def test_file_path_scoped_token_forbidden():
-    temp_dir, owner, server, read_token = _setup()
-    try:
-        lora_id, _, _ = _seed_lora(server)
-        scoped = _scoped_client(server, read_token)
-        r = scoped.get(f"/loras/{lora_id}/file-path")
-        assert r.status_code == 403, r.text
-    finally:
-        _teardown(temp_dir, server)
-
-
-def test_file_path_escaping_image_root_is_404():
-    temp_dir, owner, server, read_token = _setup()
-    try:
-        outside = os.path.join(temp_dir.name, "outside2.safetensors")
-        with open(outside, "wb") as fh:
-            fh.write(b"x")
-        lora_id, _, _ = _seed_lora(server, file_rel="../outside2.safetensors")
-        r = owner.get(f"/loras/{lora_id}/file-path")
-        assert r.status_code == 404, r.text
-    finally:
-        _teardown(temp_dir, server)
-
-
-# ---------------------------------------------------------------------------
-# DELETE /loras/{id}
-# ---------------------------------------------------------------------------
-
-
-def test_delete_lora_owner_removes_row_and_file():
-    temp_dir, owner, server, read_token = _setup()
-    try:
-        lora_id, lora_uuid, abs_path = _seed_lora(
-            server, file_rel="loras/del.safetensors"
-        )
-        sample_dir = os.path.join(
-            server.vault.image_root, "loras", f"{lora_uuid}_samples"
-        )
-        os.makedirs(sample_dir, exist_ok=True)
-
-        r = owner.delete(f"/loras/{lora_id}")
-        assert r.status_code == 200, r.text
-        assert r.json()["status"] == "deleted"
-        assert not os.path.exists(abs_path)
-        assert not os.path.isdir(sample_dir)
-        r = owner.get(f"/loras/{lora_id}")
-        assert r.status_code == 404
-    finally:
-        _teardown(temp_dir, server)
-
-
-def test_delete_lora_missing_is_404():
-    temp_dir, owner, server, read_token = _setup()
-    try:
-        r = owner.delete("/loras/999999")
-        assert r.status_code == 404, r.text
-    finally:
-        _teardown(temp_dir, server)
-
-
-def test_delete_lora_scoped_token_forbidden():
-    temp_dir, owner, server, read_token = _setup()
-    try:
-        lora_id, _, abs_path = _seed_lora(server)
-        scoped = _scoped_client(server, read_token)
-        r = scoped.delete(f"/loras/{lora_id}")
-        assert r.status_code == 403, r.text
-        # Row + file must survive a forbidden delete.
-        assert os.path.exists(abs_path)
-        r = owner.get(f"/loras/{lora_id}")
         assert r.status_code == 200
     finally:
         _teardown(temp_dir, server)
@@ -907,18 +613,6 @@ def _all_resource_token(server) -> str:
 
     server.hub_engine.run_task(_insert)
     return token_value
-
-
-def test_list_loras_all_resource_token_forbidden():
-    temp_dir, owner, server, read_token = _setup()
-    try:
-        token = _all_resource_token(server)
-        client = TestClient(server.api, raise_server_exceptions=True)
-        client.headers.update({"Authorization": f"Bearer {token}"})
-        r = client.get("/loras")
-        assert r.status_code == 403, r.text
-    finally:
-        _teardown(temp_dir, server)
 
 
 def test_create_job_all_resource_token_forbidden():
