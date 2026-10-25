@@ -79,6 +79,8 @@ class _StubLease:
     """
 
     device = None
+    #: Set on a lease the arbiter has already granted to the worker.
+    held = False
 
     def __init__(self, grant: bool = True):
         self.events: list[str] = []
@@ -95,7 +97,9 @@ class _StubLease:
     def wait(self, cancel_event=None, timeout=None) -> bool:
         return self.grant
 
-    def release(self) -> None:
+    def release(self, *, only_waiting: bool = False) -> None:
+        if only_waiting and self.held:
+            return  # the arbiter's only_waiting: a granted lease stays put
         self.release_count += 1
         self.events.append("release")
 
@@ -591,6 +595,39 @@ def test_lease_cancelled_while_waiting_stops_the_job_unlaunched(hub, repo_dir):
     final = _job_status(hub, job["uuid"])
     assert final.pid is None and final.started_at is None
     assert lease.events == ["acquire", "release"]
+
+
+def test_cancel_queued_job_never_frees_a_lease_already_granted(hub, repo_dir):
+    """cancel() on a queued job leaves a lease the worker was just granted alone.
+
+    The worker is about to train on that card; freeing it would let the arbiter
+    hand the GPU to another tenant while the run is on it.
+    """
+    lease = _StubLease()
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=lease,
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    template = _write_template(repo_dir, steps=4, save_every=2)
+    # No worker is started, so the job stays queued and the test owns the state.
+    job = service.enqueue(
+        set_id=_SET_ID,
+        name="granted",
+        base_model="m",
+        trigger_word="t",
+        template_path=template,
+    )
+    granted = _StubLease()
+    granted.held = True
+    service._waiting = (job["uuid"], granted)
+
+    assert service.cancel(job["id"]) is True
+
+    assert granted.release_count == 0
+    assert _job_status(hub, job["uuid"]).status == "stopped"
 
 
 class _ShutdownLease(_StubLease):

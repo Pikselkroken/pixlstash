@@ -322,14 +322,17 @@ class TrainingService:
 
         if info["status"] == "queued":
             # Not started yet: mark it stopped so the worker skips it, and drop
-            # the lease it may be waiting on so the worker moves on.
+            # the lease it may be waiting on so the worker moves on. The stop is
+            # written under the lock the worker clears its wait under, and the
+            # lease is released only while still waiting: one granted meanwhile
+            # belongs to the worker, which releases it when it sees the stop.
             with self._active_lock:
                 waiting = self._waiting
+                self._update_job(
+                    info["uuid"], status="stopped", error="Cancelled before start"
+                )
             if waiting is not None and waiting[0] == info["uuid"]:
-                waiting[1].release()
-            self._update_job(
-                info["uuid"], status="stopped", error="Cancelled before start"
-            )
+                waiting[1].release(only_waiting=True)
             self._emit_progress(
                 info["uuid"], status="stopped", message="Cancelled before start"
             )
