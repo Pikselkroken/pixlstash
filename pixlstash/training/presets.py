@@ -164,6 +164,8 @@ def validate_preset(preset: dict) -> dict:
     if set(preset["fit"]) != set(FITS):
         raise PresetError(f"{pid}: fit must hold exactly {', '.join(FITS)}.")
     profiles = preset["hardware_profiles"]
+    if not profiles:
+        raise PresetError(f"{pid}: hardware_profiles must hold at least one profile.")
     setting_keys = None
     for name, profile in profiles.items():
         if profile.get("evidence") not in EVIDENCE:
@@ -287,7 +289,7 @@ def validate_pins(preset: dict, pins: dict | None) -> dict:
         TunableOverrideError: A locked key (named as the preset's), a key that
             is not tunable, or a value outside its rule.
     """
-    if not pins:
+    if pins is None:
         return {}
     if not isinstance(pins, dict):
         raise TunableOverrideError("pins must be an object of setting: value.")

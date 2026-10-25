@@ -80,6 +80,7 @@ def test_table_keys_are_tunable_and_locked_keys_are_not():
         ),
         (lambda p: p["locked"].pop("model.name_or_path"), "model.name_or_path"),
         (lambda p: p["hardware_profiles"]["q8"].pop("max_rank"), "max_rank"),
+        (lambda p: p["hardware_profiles"].clear(), "at least one profile"),
     ],
 )
 def test_a_broken_preset_is_refused(breakage, message):
@@ -225,6 +226,11 @@ def test_pins_refuse_locked_and_unknown_keys_by_name():
         presets.validate_pins(_ZIT, {"train.steps": -1})
     with pytest.raises(TunableOverrideError, match="prompts"):
         presets.validate_pins(_ZIT, {presets.PROMPTS_KEY: []})
+    for not_an_object in ([], "", 0):
+        with pytest.raises(TunableOverrideError, match="must be an object"):
+            presets.validate_pins(_ZIT, not_an_object)
+    assert presets.validate_pins(_ZIT, None) == {}
+    assert presets.validate_pins(_ZIT, {}) == {}
     assert presets.validate_pins(_ZIT, {"train.steps": 10}) == {"train.steps": 10}
 
 
