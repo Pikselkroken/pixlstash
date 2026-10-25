@@ -226,7 +226,7 @@ class ComfyUIProbe:
         # Two reads a moment apart: an identical card on another machine has
         # the same name and size, but not the same free memory twice over.
         for attempt in range(2):
-            row = first if attempt == 0 else self._device_row()
+            row = first if attempt == 0 else self._device_row(max_age_s=0.0)
             if row is None:
                 return _UNREAD
             free = int(row.get("vram_free") or 0) // _MB
@@ -242,7 +242,6 @@ class ComfyUIProbe:
                 return None
             if attempt == 0:
                 time.sleep(0.3)
-                self._stats = (0.0, None)
         logger.info(
             "ComfyUI at %s runs on this machine's %s (%s)",
             self._base_url,
