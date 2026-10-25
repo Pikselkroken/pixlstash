@@ -7468,6 +7468,23 @@ Both are covered in both directions by
 `tests/test_telemetry_install_id_authz.py` (out-of-scope 403 **and** in-scope
 200), per the §16 discipline.
 
+### 23.5 Sending the ping: one per UTC day
+
+`pixlstash/telemetry/sender.py` sends from the server process, never the
+browser: once at start-up if due, then from a loop that wakes hourly for as long
+as the server runs. `is_due` allows **one attempt per UTC calendar day**, recorded
+in `telemetry-state.json` beside the server config before the request opens, so
+a failed send is not retried until the next UTC day.
+
+The day is the UTC day because that is the unit the Worker counts installs in
+(`daily_active_installs`, read by pixlstash-metrics). It used to be a rolling 24
+hours, which drops a day whenever the app runs earlier than it did the day
+before: a desktop that pinged at 20:00 and is opened from 19:00 to 19:45 the
+next day was not due, so that day it was counted as not having run. Daily
+desktop users were undercounted on roughly a tenth to a third of their days.
+Do not go back to an interval: two pings minutes apart across UTC midnight are
+two days, and each is counted once.
+
 ---
 
 ## 24. Folder structure: read, commit, layout and moves
