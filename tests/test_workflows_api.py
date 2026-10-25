@@ -25888,6 +25888,21 @@ def test_a_template_that_converts_is_an_ordinary_workflow(
     )
 
 
+def test_a_template_that_cannot_be_stored_does_not_echo_the_database_error(
+    workflow_env, comfyui_templates_served, monkeypatch
+):
+    """Wrong if the sqlite3 message reaches the caller (CodeQL alert 136)."""
+
+    def refuse(*_args, **_kwargs):
+        raise sqlite3.OperationalError("secret-internal-detail")
+
+    monkeypatch.setattr(comfyui_module, "store_manual_workflow", refuse)
+    body = _add_templates(workflow_env.owner, ("default", "image_example"))
+    assert body["added"] == []
+    (failed,) = body["failed"]
+    assert failed["detail"] == "PixlStash cannot store that template."
+
+
 def test_a_template_that_does_not_convert_is_a_draft_until_comfyui_saves_it(
     workflow_env, comfyui_templates_served, monkeypatch
 ):

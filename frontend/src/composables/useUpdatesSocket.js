@@ -494,7 +494,7 @@ export function useUpdatesSocket({
                     timeout: 4000,
                   });
                 } catch (err) {
-                  console.warn(`Could not undo run-alone for ${workflowId}`, err);
+                  console.warn("Could not undo run-alone for", workflowId, err);
                   noticeStore.push({
                     level: "error",
                     text: "Could not turn off running alone for this workflow.",
