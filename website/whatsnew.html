@@ -770,16 +770,14 @@
         <div class="release-hero-inner">
           <div class="release-copy">
             <span class="release-kicker">PixlStash 1.13</span>
-            <h1>Mark what to change, and press Run</h1>
+            <h1>Draw what to change, and press Run</h1>
             <p>
               PixlStash 1.13 is about getting a workflow to run. The picture
               viewer's Edit tab has paint tools, so you can mark a part of a
-              picture and have an inpaint workflow change only that. Every
-              workflow template your ComfyUI serves is a card you can add, and
-              <strong
-                >a model a workflow is missing downloads from inside PixlStash,
-                into the folder you chose.</strong
-              >
+              picture and have an inpaint workflow change only that part. Every
+              workflow template your ComfyUI provides is now easily downloadable
+              and
+              <strong>PixlStash gets the models for you </strong>
               A workflow you add is wired to take its pictures, models and LoRAs
               from PixlStash and send its results back.
             </p>
@@ -790,8 +788,8 @@
                 the selection
               </li>
               <li>
-                Three inpaint workflows come with PixlStash, Qwen Image 2.1, Qwen
-                Image Edit 2511 and FLUX.2 Klein 9B, and your own inpaint
+                Three inpaint workflows come with PixlStash, Qwen Image 2.1,
+                Qwen Image Edit 2511 and FLUX.2 Klein 9B, and your own inpaint
                 workflows work too
               </li>
               <li>
@@ -946,9 +944,9 @@
             <p>
               When a workflow is missing a model and the ComfyUI template list
               knows where to get it, a download button sits beside its name: in
-              the Workflow tab, in the Run window, in the Edit tab, on a template
-              and in a workflow set. A LoRA a run would leave out gets the same
-              button.
+              the Workflow tab, in the Run window, in the Edit tab, on a
+              template and in a workflow set. A LoRA a run would leave out gets
+              the same button.
             </p>
             <p>
               There is no browser download to move afterwards and no models
@@ -974,8 +972,8 @@
             <h2>Runs wait for the GPU</h2>
             <p>
               A run that does not fit in GPU memory waits in the Tasks tab under
-              <strong>Waiting for the GPU</strong>, saying what it needs, what is
-              free and who holds the rest, and starts by itself once there is
+              <strong>Waiting for the GPU</strong>, saying what it needs, what
+              is free and who holds the rest, and starts by itself once there is
               room. Start it anyway or cancel it. PixlStash pauses its own GPU
               work and unloads its models when ComfyUI needs the room.
             </p>
@@ -1031,8 +1029,8 @@
               they come first in every list you pick from
             </li>
             <li>
-              Drop workflow <code>.json</code> files on the Workflows screen
-              to add them
+              Drop workflow <code>.json</code> files on the Workflows screen to
+              add them
             </li>
             <li>
               Pick your own picture for a workflow card with
@@ -1062,8 +1060,8 @@
             you already have pick up the models their checkpoint's pictures
             used, marked New. Update the ComfyUI-PixlStash nodes from Settings ›
             ComfyUI as well. The inpaint workflows that come with PixlStash also
-            need the ComfyUI-Inpaint-CropAndStitch nodes in your ComfyUI.
-            Back up the library folder first by copying it somewhere safe while
+            need the ComfyUI-Inpaint-CropAndStitch nodes in your ComfyUI. Back
+            up the library folder first by copying it somewhere safe while
             PixlStash is stopped. See the
             <a href="upgrade.html">upgrade guide</a> for the steps for your
             install type.
@@ -1101,11 +1099,11 @@
               <h1>Pick a person, type a prompt, press Run</h1>
               <p>
                 PixlStash 1.12 turns PixlStash into a ComfyUI orchestrator by
-                turning the ComfyUI workflows behind your pictures into a library
-                you can run. Every picture you made already says which workflow
-                made it, so PixlStash groups them into a handful of cards, each
-                covered with the best pictures it made. You can add new workflows
-                directly from ComfyUI.
+                turning the ComfyUI workflows behind your pictures into a
+                library you can run. Every picture you made already says which
+                workflow made it, so PixlStash groups them into a handful of
+                cards, each covered with the best pictures it made. You can add
+                new workflows directly from ComfyUI.
                 <strong
                   >Right-click a person, choose Create with LoRA, and type what
                   you want to see.</strong
@@ -1139,8 +1137,8 @@
                   and links the two apps, from Settings
                 </li>
                 <li>
-                  Open a workflow in ComfyUI, press Ctrl+S, and PixlStash keeps it
-                  as a new version
+                  Open a workflow in ComfyUI, press Ctrl+S, and PixlStash keeps
+                  it as a new version
                 </li>
                 <li>
                   A workflow with a missing model is fixed in place from your
@@ -1186,21 +1184,23 @@
                 >
                 Those nodes are how ComfyUI loads your pictures and models and
                 sends new pictures back, so this is the step that makes the rest
-                of 1.12 work. PixlStash finds a ComfyUI running on this computer,
-                installs the nodes (replacing an older copy), restarts ComfyUI
-                through <span style="white-space: nowrap">ComfyUI-Manager</span>,
-                gives the nodes a key of their own and checks that each app can
-                reach the other. There is no token to copy, and ComfyUI's models
+                of 1.12 work. PixlStash finds a ComfyUI running on this
+                computer, installs the nodes (replacing an older copy), restarts
+                ComfyUI through
+                <span style="white-space: nowrap">ComfyUI-Manager</span>, gives
+                the nodes a key of their own and checks that each app can reach
+                the other. There is no token to copy, and ComfyUI's models
                 folder joins your model shelf by itself. A ComfyUI on another
                 computer gets the nodes from
-                <span style="white-space: nowrap">ComfyUI-Manager</span> instead.
+                <span style="white-space: nowrap">ComfyUI-Manager</span>
+                instead.
               </p>
               <p>
                 Then right-click a person or a picture set and choose
                 <strong>Create with LoRA…</strong>. The Run window opens on the
-                workflows for that LoRA's base model, with the LoRA already added
-                and its trigger word offered for the prompt, and the new pictures
-                are filed back under that person or set.
+                workflows for that LoRA's base model, with the LoRA already
+                added and its trigger word offered for the prompt, and the new
+                pictures are filed back under that person or set.
               </p>
             </div>
           </article>
@@ -1222,9 +1222,9 @@
               <p>
                 Press Run… on a workflow and pick two people under
                 <strong>Person</strong>. Each brings their LoRA as a row of its
-                own, with its strength and trigger word, so describe them both in
-                the prompt and press Run. What comes back is one picture with both
-                of them in it.
+                own, with its strength and trigger word, so describe them both
+                in the prompt and press Run. What comes back is one picture with
+                both of them in it.
               </p>
             </div>
           </article>
@@ -1241,13 +1241,14 @@
             <div class="update-card-body">
               <h2>Your workflows as visual cards</h2>
               <p>
-                The Workflows screen lists every workflow your pictures were made
-                with, plus the files you add. The same graph run with another
-                checkpoint or character LoRA stays one workflow, so thousands of
-                pictures come down to a few dozen cards, and the ones you used
-                once are folded away until you ask for them. Each card shows the
-                pictures it made, its models and what kind of picture it makes.
-                Sort by your ratings, by what you used last or by picture count.
+                The Workflows screen lists every workflow your pictures were
+                made with, plus the files you add. The same graph run with
+                another checkpoint or character LoRA stays one workflow, so
+                thousands of pictures come down to a few dozen cards, and the
+                ones you used once are folded away until you ask for them. Each
+                card shows the pictures it made, its models and what kind of
+                picture it makes. Sort by your ratings, by what you used last or
+                by picture count.
               </p>
             </div>
           </article>
@@ -1265,13 +1266,13 @@
             <div class="update-card-body">
               <h2>From a workflow to its pictures and back</h2>
               <p>
-                <strong>Show all pictures using this workflow</strong> opens your
-                library on just those pictures, as a filter chip you can take off
-                again. Going the other way, the picture viewer has a
-                <strong>Recipe</strong> tab for anything made in ComfyUI, A1111 or
-                Forge: the workflow it came from, the prompt, each model with the
-                strength its LoRA ran at, and the seed. Videos made in ComfyUI get
-                one too.
+                <strong>Show all pictures using this workflow</strong> opens
+                your library on just those pictures, as a filter chip you can
+                take off again. Going the other way, the picture viewer has a
+                <strong>Recipe</strong> tab for anything made in ComfyUI, A1111
+                or Forge: the workflow it came from, the prompt, each model with
+                the strength its LoRA ran at, and the seed. Videos made in
+                ComfyUI get one too.
               </p>
             </div>
           </article>
@@ -1288,16 +1289,17 @@
             <div class="update-card-body">
               <h2>A simple Run window</h2>
               <p>
-                Press Run… on a workflow, <strong>Make more like this</strong> on
-                a picture or <strong>Run a workflow on these</strong> on a
-                selection, and the same window opens with every value filled in:
-                prompt, people, LoRAs, size, steps, CFG, seed and checkpoint, and
-                the rest under one disclosure. A field you change shows the value
-                it started at, so you can put it back.
-                <strong>Person</strong> takes several people, each with their LoRA
-                as a row of its own, and any trigger word the prompt is missing is
-                one click away. A run that cannot start says why, and names a
-                missing model along with the folder it belongs in.
+                Press Run… on a workflow,
+                <strong>Make more like this</strong> on a picture or
+                <strong>Run a workflow on these</strong> on a selection, and the
+                same window opens with every value filled in: prompt, people,
+                LoRAs, size, steps, CFG, seed and checkpoint, and the rest under
+                one disclosure. A field you change shows the value it started
+                at, so you can put it back. <strong>Person</strong> takes
+                several people, each with their LoRA as a row of its own, and
+                any trigger word the prompt is missing is one click away. A run
+                that cannot start says why, and names a missing model along with
+                the folder it belongs in.
               </p>
             </div>
           </article>
@@ -1344,14 +1346,14 @@
             <div class="update-card-body">
               <h2>Open in ComfyUI and save back with Ctrl+S</h2>
               <p>
-                <strong>Open in ComfyUI</strong> opens a workflow with PixlStash's
-                loaders and savers in it, so its models load straight off your
-                model shelf and what you queue comes back into your library. Press
-                Ctrl+S in ComfyUI and the workflow gets a new version in
-                PixlStash, with no file to name. The earlier versions are kept,
-                and the version menu takes you back to any of them.
-                <strong>Save as new workflow in PixlStash</strong> leaves the
-                original as it was.
+                <strong>Open in ComfyUI</strong> opens a workflow with
+                PixlStash's loaders and savers in it, so its models load
+                straight off your model shelf and what you queue comes back into
+                your library. Press Ctrl+S in ComfyUI and the workflow gets a
+                new version in PixlStash, with no file to name. The earlier
+                versions are kept, and the version menu takes you back to any of
+                them. <strong>Save as new workflow in PixlStash</strong> leaves
+                the original as it was.
               </p>
             </div>
           </article>
@@ -1370,9 +1372,10 @@
               <h2>Pin parameters or make new ones available</h2>
               <p>
                 Lock a parameter in the Workflow tab and the Run window stops
-                asking for it. The + beside Parameters exposes any setting of any
-                node in the graph under a name you choose, and a setting ComfyUI
-                offers a list for, such as the sampler, is picked from that list.
+                asking for it. The + beside Parameters exposes any setting of
+                any node in the graph under a name you choose, and a setting
+                ComfyUI offers a list for, such as the sampler, is picked from
+                that list.
               </p>
             </div>
           </article>
@@ -1402,19 +1405,19 @@
                 The Workflow inspector has two ways in.
                 <strong>Open in ComfyUI</strong>, the button beside Run…, opens
                 the workflow adapted for PixlStash. Its nodes talk to PixlStash:
-                Save Image and Save Video become the PixlStash savers, so what you
-                queue comes back into your library; loaders whose file is on your
-                model shelf load it from there; a Load Image holding a picture
-                from your library becomes the PixlStash Picture Loader on that
-                picture; and a PixlStash loader is added for trying the workflow
-                on your people. Ctrl+S saves it back as a new version.
+                Save Image and Save Video become the PixlStash savers, so what
+                you queue comes back into your library; loaders whose file is on
+                your model shelf load it from there; a Load Image holding a
+                picture from your library becomes the PixlStash Picture Loader
+                on that picture; and a PixlStash loader is added for trying the
+                workflow on your people. Ctrl+S saves it back as a new version.
               </p>
               <p>
                 <strong>Open original in ComfyUI</strong>, in the inspector's ⋯
                 menu, opens the workflow exactly as it was made in ComfyUI, with
                 its own nodes. It warns you when some of its models are only on
-                the PixlStash shelf and not in ComfyUI's model folders, and names
-                them. Both keep the layout you arranged in ComfyUI.
+                the PixlStash shelf and not in ComfyUI's model folders, and
+                names them. Both keep the layout you arranged in ComfyUI.
               </p>
             </div>
           </article>
@@ -1434,12 +1437,12 @@
             <div class="update-card-body">
               <h2>Repair workflows</h2>
               <p>
-                A workflow whose checkpoint, VAE or text encoder has gone missing
-                says so on its card. Pick another model of that kind from your
-                shelf and the workflow keeps its name, pictures and settings. A
-                missing LoRA, or a seed or text node from a pack your ComfyUI does
-                not have, no longer stops a run: PixlStash says what it is leaving
-                out and runs without it.
+                A workflow whose checkpoint, VAE or text encoder has gone
+                missing says so on its card. Pick another model of that kind
+                from your shelf and the workflow keeps its name, pictures and
+                settings. A missing LoRA, or a seed or text node from a pack
+                your ComfyUI does not have, no longer stops a run: PixlStash
+                says what it is leaving out and runs without it.
               </p>
             </div>
           </article>
@@ -1454,12 +1457,12 @@
             <div class="update-card-body">
               <h2>Workflow sets: define what fits together</h2>
               <p>
-                The model shelf opens on a card for each checkpoint your pictures
-                were made with. Open one and it lists every VAE, text encoder and
-                LoRA that has run beside it, with how many pictures back each, so
-                you can see what to pair with what instead of guessing. Make sets
-                of your own, fill them from your pictures, and use a set to swap a
-                workflow's models in one go.
+                The model shelf opens on a card for each checkpoint your
+                pictures were made with. Open one and it lists every VAE, text
+                encoder and LoRA that has run beside it, with how many pictures
+                back each, so you can see what to pair with what instead of
+                guessing. Make sets of your own, fill them from your pictures,
+                and use a set to swap a workflow's models in one go.
               </p>
             </div>
           </article>
@@ -1472,12 +1475,12 @@
               <p>
                 A recipe is a workflow plus the look: the prompt, the LoRAs with
                 their strengths and any setting you changed. A workflow's
-                <strong>Recipes</strong> tab lists every recipe your pictures were
-                made with, with how many pictures each accounts for.
-                <strong>Save as recipe</strong> keeps one, with the seed left out
-                unless you tick it, and Run… starts from it. Export a workflow to
-                share it and PixlStash takes out your prompt, seed and character
-                LoRAs, and tells you what it left out.
+                <strong>Recipes</strong> tab lists every recipe your pictures
+                were made with, with how many pictures each accounts for.
+                <strong>Save as recipe</strong> keeps one, with the seed left
+                out unless you tick it, and Run… starts from it. Export a
+                workflow to share it and PixlStash takes out your prompt, seed
+                and character LoRAs, and tells you what it left out.
               </p>
             </div>
           </article>
@@ -1491,22 +1494,22 @@
                   background, and every search matches it
                 </li>
                 <li>
-                  Apple Silicon Macs run tagging, search and face matching on the
-                  GPU, with the built-in tagger roughly twenty times faster
+                  Apple Silicon Macs run tagging, search and face matching on
+                  the GPU, with the built-in tagger roughly twenty times faster
                 </li>
                 <li>
                   An <strong>Edit</strong> tab in the picture viewer runs an
                   image-to-image or inpaint workflow without leaving it
                 </li>
                 <li>
-                  <code>pixlstash-mcp</code> lets an AI agent search your library
-                  and read recipes, with a token from
+                  <code>pixlstash-mcp</code> lets an AI agent search your
+                  library and read recipes, with a token from
                   <strong>Connect AI agent</strong>
                 </li>
                 <li>Move pictures and videos to another library</li>
                 <li>
-                  Models downloaded to your Downloads folder can be moved onto the
-                  model shelf by themselves
+                  Models downloaded to your Downloads folder can be moved onto
+                  the model shelf by themselves
                 </li>
                 <li>
                   Suggest more pictures for a picture set, as you already could
@@ -1521,16 +1524,16 @@
           <div class="update-card-body">
             <h2>Why 1.12, and not 2.0</h2>
             <p>
-              Workflows and recipes are the biggest change PixlStash has had, and
-              only two things keep this from being 2.0. They are new, and they
-              will get better as more people run them on their own libraries, so
-              treat them as a preview and
+              Workflows and recipes are the biggest change PixlStash has had,
+              and only two things keep this from being 2.0. They are new, and
+              they will get better as more people run them on their own
+              libraries, so treat them as a preview and
               <a href="https://github.com/pikselkroken/pixlstash/issues"
                 >tell us what breaks</a
-              >. And one piece is still to come: 2.0 trains LoRAs with ai-toolkit
-              from the people and sets in your library, so the whole loop from
-              your pictures to a LoRA to new pictures of that person happens
-              inside PixlStash.
+              >. And one piece is still to come: 2.0 trains LoRAs with
+              ai-toolkit from the people and sets in your library, so the whole
+              loop from your pictures to a LoRA to new pictures of that person
+              happens inside PixlStash.
             </p>
           </div>
         </article>
@@ -1543,12 +1546,12 @@
               start carries your workflows' names, notes, settings and saved
               recipes over to the new Workflows screen. Pictures and videos
               already in your library are read once more in the background, so
-              their recipes show. Settings › Workflows is gone: add a workflow by
-              dropping its file on the Workflows screen or into the watched
+              their recipes show. Settings › Workflows is gone: add a workflow
+              by dropping its file on the Workflows screen or into the watched
               <code>workflows</code> folder. Several features use the
-              ComfyUI-PixlStash nodes that come with this version, and Settings ›
-              ComfyUI installs them for you. Back up the library folder first by
-              copying it somewhere safe while PixlStash is stopped. See the
+              ComfyUI-PixlStash nodes that come with this version, and Settings
+              › ComfyUI installs them for you. Back up the library folder first
+              by copying it somewhere safe while PixlStash is stopped. See the
               <a href="upgrade.html">upgrade guide</a> for the steps for your
               install type.
             </p>
@@ -1559,8 +1562,9 @@
           <div>
             <h3>Get PixlStash 1.12</h3>
             <p>
-              Download the desktop app for Windows, macOS, or Linux. Or keep using
-              pip, Docker, or the source build, and read the upgrade guide first.
+              Download the desktop app for Windows, macOS, or Linux. Or keep
+              using pip, Docker, or the source build, and read the upgrade guide
+              first.
             </p>
           </div>
           <div class="release-cta-actions">
