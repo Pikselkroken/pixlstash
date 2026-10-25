@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import subprocess
 import sys
 import time
 
@@ -240,6 +241,75 @@ def test_cancel_midrun_stops_job_and_kills_process(tmp_path, monkeypatch):
     )
     # It stopped before reaching the full step count.
     assert progress.step < 500
+
+
+def _job_status(handle) -> str:
+    """The Job row's status, read from the job's own database."""
+    conn = sqlite3.connect(handle.sqlite_db_path)
+    try:
+        return conn.execute(
+            "SELECT status FROM Job WHERE id=?", (handle.job_id,)
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+
+def test_cancel_never_signals_a_pid_that_is_not_the_trainer(tmp_path):
+    """A pid persisted across a restart may now belong to another process.
+
+    Review F3: the number is read from the database, and after pid reuse cancel
+    must not kill that unrelated process group. The sleeper below is that
+    process: its cmdline names neither the run script nor the job's config. It
+    must survive, and the job is marked stopped.
+    """
+    backend = _make_backend()
+    spec = _make_spec(tmp_path)
+    handle = backend.prepare(spec)
+    LocalAiToolkit._set_job_status(handle.sqlite_db_path, handle.job_id, "running")
+    sleeper = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True
+    )
+    try:
+        handle.pid = sleeper.pid
+        backend.cancel(handle)
+        assert sleeper.poll() is None, "cancel signalled a process that is not ours"
+        assert _job_status(handle) == "stopped"
+        assert not backend.is_alive(handle)
+    finally:
+        sleeper.kill()
+        sleeper.wait()
+
+
+def test_cancel_still_signals_an_inherited_trainer_it_can_verify(tmp_path, monkeypatch):
+    """The positive control for the check above: after a restart, a process whose
+    cmdline names this backend's run script and the job's config is our trainer,
+    so cancel escalates to SIGTERM and stops it."""
+    monkeypatch.setattr(
+        "pixlstash.training.local_ai_toolkit._CANCEL_GRACE_SECONDS", 0.2
+    )
+    backend = _make_backend()
+    spec = _make_spec(tmp_path)
+    handle = backend.prepare(spec)
+    LocalAiToolkit._set_job_status(handle.sqlite_db_path, handle.job_id, "running")
+    trainer = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import time; time.sleep(60)",
+            backend.run_script,
+            handle.config_path,
+        ],
+        start_new_session=True,
+    )
+    try:
+        handle.pid = trainer.pid
+        assert backend.is_alive(handle)
+        backend.cancel(handle)
+        assert trainer.wait(timeout=10) == -15, "SIGTERM did not reach the trainer"
+    finally:
+        if trainer.poll() is None:
+            trainer.kill()
+            trainer.wait()
 
 
 def test_hf_token_never_written_to_log(tmp_path):

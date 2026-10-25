@@ -400,7 +400,26 @@ class LocalAiToolkit(TrainerBackend):
             )
             return
 
-        if self._wait_for_exit(handle.pid, _CANCEL_GRACE_SECONDS):
+        if not self._is_this_jobs_trainer(handle):
+            # A pid persisted across a restart. Our trainer is gone and the number
+            # now belongs to another process: never signal it. Stop the job here.
+            if self._pid_alive(handle.pid):
+                logger.warning(
+                    "Job %s: pid %d is not this job's trainer (its cmdline does not "
+                    "name %s and %s); not signalling it. Marking the job stopped.",
+                    handle.job_id,
+                    handle.pid,
+                    self.run_script,
+                    handle.config_path,
+                )
+                self._set_job_status(handle.sqlite_db_path, handle.job_id, "stopped")
+            else:
+                logger.info(
+                    "Job %s: trainer pid %d already exited", handle.job_id, handle.pid
+                )
+            return
+
+        if self._wait_for_exit(handle, _CANCEL_GRACE_SECONDS):
             logger.info("Job %s stopped cooperatively", handle.job_id)
             return
 
@@ -409,9 +428,9 @@ class LocalAiToolkit(TrainerBackend):
             handle.job_id,
             _CANCEL_GRACE_SECONDS,
         )
-        self._signal_process_group(handle.pid, signal.SIGTERM)
+        self._signal_trainer(handle, signal.SIGTERM)
 
-        if self._wait_for_exit(handle.pid, _SIGTERM_GRACE_SECONDS):
+        if self._wait_for_exit(handle, _SIGTERM_GRACE_SECONDS):
             logger.info("Job %s terminated after SIGTERM", handle.job_id)
             return
 
@@ -419,7 +438,7 @@ class LocalAiToolkit(TrainerBackend):
             "Job %s still alive after SIGTERM; sending SIGKILL to process group",
             handle.job_id,
         )
-        self._signal_process_group(handle.pid, signal.SIGKILL)
+        self._signal_trainer(handle, signal.SIGKILL)
 
     def reconcile(self, handle: TrainingHandle) -> TrainingProgress:
         """Re-derive a job's state after a restart.
@@ -466,7 +485,7 @@ class LocalAiToolkit(TrainerBackend):
         """
         if handle.pid is None:
             return False
-        return self._pid_running(handle.pid)
+        return self._pid_running(handle)
 
     # ------------------------------------------------------------------
     # Private helpers: process / filesystem
@@ -505,25 +524,68 @@ class LocalAiToolkit(TrainerBackend):
         except OSError as exc:
             logger.warning("Failed to write pid file %s: %s", pid_path, exc)
 
-    def _pid_running(self, pid: int) -> bool:
-        """Return whether *pid* is genuinely running (zombies count as dead).
+    def _pid_running(self, handle: TrainingHandle) -> bool:
+        """Return whether the trainer recorded on *handle* is genuinely running.
 
-        Prefers the owned ``Popen`` (``poll()`` reaps a finished child); falls
-        back to a zombie-aware OS probe for an inherited PID.
+        Zombies count as dead. Prefers the owned ``Popen`` (``poll()`` reaps a
+        finished child). For an inherited PID the process must also be this
+        job's trainer: a pid reused by an unrelated process is not the trainer.
 
         Args:
-            pid: Process id to probe.
+            handle: The job handle; its ``pid`` is probed.
 
         Returns:
-            ``True`` if the process is running, else ``False``.
+            ``True`` if the trainer is running, else ``False``.
         """
-        process = self._processes.get(pid)
+        process = self._processes.get(handle.pid)
         if process is not None:
             if process.poll() is None:
                 return True
-            self._processes.pop(pid, None)
+            self._processes.pop(handle.pid, None)
             return False
-        return self._pid_alive(pid)
+        return self._pid_alive(handle.pid) and self._is_our_trainer(handle)
+
+    def _is_this_jobs_trainer(self, handle: TrainingHandle) -> bool:
+        """Return whether the recorded pid is a trainer this backend started.
+
+        A ``Popen`` we hold proves it. Otherwise the pid must still be the
+        trainer: its cmdline names this backend's run script and the job's
+        config. Refuses on any platform without ``/proc``, which is logged.
+
+        Args:
+            handle: The job handle.
+
+        Returns:
+            ``True`` if the pid is this job's trainer, else ``False``.
+        """
+        return handle.pid in self._processes or self._is_our_trainer(handle)
+
+    def _is_our_trainer(self, handle: TrainingHandle) -> bool:
+        """Check ``/proc/<pid>/cmdline`` for this job's trainer launch.
+
+        Args:
+            handle: The job handle; its ``pid`` and ``config_path`` are compared.
+
+        Returns:
+            ``True`` if the cmdline holds the run script and the job's config
+            path as arguments; ``False`` if it does not, or cannot be read.
+        """
+        cmdline = f"/proc/{handle.pid}/cmdline"
+        try:
+            with open(cmdline, "rb") as fh:
+                argv = fh.read().split(b"\0")
+        except OSError as exc:
+            logger.warning(
+                "Cannot verify pid %s is job %s's trainer (%s); treating it as not ours",
+                handle.pid,
+                handle.job_id,
+                exc,
+            )
+            return False
+        return (
+            os.fsencode(self.run_script) in argv
+            and os.fsencode(handle.config_path) in argv
+        )
 
     @staticmethod
     def _pid_alive(pid: int) -> bool:
@@ -567,22 +629,42 @@ class LocalAiToolkit(TrainerBackend):
             logger.debug("Could not read %s: %s", proc_stat, exc)
         return True
 
-    def _wait_for_exit(self, pid: int, timeout: float) -> bool:
-        """Poll until *pid* stops running or *timeout* elapses.
+    def _wait_for_exit(self, handle: TrainingHandle, timeout: float) -> bool:
+        """Poll until the job's trainer stops running or *timeout* elapses.
 
         Args:
-            pid: Process id to wait on.
+            handle: The job handle whose trainer is waited on.
             timeout: Maximum seconds to wait.
 
         Returns:
-            ``True`` if the process stopped within the timeout, else ``False``.
+            ``True`` if the trainer stopped within the timeout, else ``False``.
         """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if not self._pid_running(pid):
+            if not self._pid_running(handle):
                 return True
             time.sleep(0.05)
-        return not self._pid_running(pid)
+        return not self._pid_running(handle)
+
+    def _signal_trainer(self, handle: TrainingHandle, sig: int) -> None:
+        """Signal the job's trainer group, after checking it still is the trainer.
+
+        The check runs immediately before the signal, so a pid reused during the
+        grace period is never signalled.
+
+        Args:
+            handle: The job handle.
+            sig: Signal number to send (``SIGTERM`` / ``SIGKILL``).
+        """
+        if not self._is_this_jobs_trainer(handle):
+            logger.warning(
+                "Job %s: pid %d is no longer this job's trainer; not sending signal %s",
+                handle.job_id,
+                handle.pid,
+                sig,
+            )
+            return
+        self._signal_process_group(handle.pid, sig)
 
     @staticmethod
     def _signal_process_group(pid: int, sig: int) -> None:
