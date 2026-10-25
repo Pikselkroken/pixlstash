@@ -11361,8 +11361,8 @@ file fails at load and in `tests/training/test_presets.py`). Its parts:
 - `locked`: compatibility keys (architecture, training and extras checkpoints,
   the training adapter, LoRA exclusions, scheduler and sampler). None is on
   `TUNABLE_KEYS`, and a pin naming one is refused with a 422 that names the key
-  as fixed by the recipe. `divisibility` and `inference_checkpoint` sit beside
-  them as facts, not config keys.
+  as fixed by the recipe. `divisibility` sits beside
+  them as a fact, not a config key.
 - `defaults` and `preview[inference_target]`: what the model trains and samples
   with. `template` names the passthrough skeleton in
   `data/ai-toolkit-jobs/built-in/`, which no longer carries any key a recipe
@@ -11377,7 +11377,8 @@ file fails at load and in `tests/training/test_presets.py`). Its parts:
   settings it writes (every profile writes the same keys, so the one picked
   fully decides quantisation, offloading and caption caching) and `evidence`:
   `measured`, `reported`, `derived` or `none`. A `none` tier is never offered.
-- `sources`: where each value comes from, and `version`.
+  `max_bucket`, `max_rank` and `max_batch` say what the figures hold for.
+- `sources`: where each value comes from. `version` sits at the top level.
 
 Every key a table writes is on `TUNABLE_KEYS`. Keys are dotted paths relative to
 `config.process[0]`; `presets.to_patch` nests them into the patch the renderer
@@ -11389,11 +11390,17 @@ returns every value with its source (`model`, `subject`, `effort`, `pictures`,
 `gpu`, `pinned`) for the dialog's "Comes from" column. Steps are
 `steps_per_picture × pictures`, clamped. Pins win over every derived value;
 alpha follows a pinned rank unless pinned itself. The profile is the first one
-in the fit choice whose `max_bucket` covers the largest training size and whose
-VRAM and RAM needs fit. Resolution, rank and steps are never lowered to make a
-run fit: when nothing fits, `NoProfileFits` names the short budget (`vram`,
-`ram`, or `resolution` when no profile is known to train that large), and the
-route answers 422 with `{message, budget, need_mb, free_mb}`.
+in the fit choice whose `max_bucket`, `max_rank` and `max_batch` cover the run
+and whose VRAM and RAM needs fit. A pinned memory setting (say 8-bit off)
+widens the search to every profile and keeps only those with that setting, so
+the lease is always sized for a profile the run actually is. Resolution, rank
+and steps are never lowered to make a run fit: when nothing fits,
+`NoProfileFits` names the short budget (`vram`, `ram`, or `profile` when no
+profile with evidence covers the size, rank, batch or pinned settings), and the
+route answers 422 with `{message, budget, need_mb, free_mb}`. A profile that
+encodes captions once reports caption dropout as 0 from `gpu`, because
+ai-toolkit drops no caption it has cached. A set with no pictures is refused at
+enqueue.
 
 The room is `ResourceArbiter.training_room(device)`, on the card PixlStash
 uses: the card less the safety margin and what other apps hold. PixlStash's own

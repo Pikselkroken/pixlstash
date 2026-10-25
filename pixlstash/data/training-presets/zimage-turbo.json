@@ -5,7 +5,6 @@
   "requires_arch": "z_image",
   "template": "zimage-turbo-lora",
   "divisibility": 16,
-  "inference_checkpoint": "Tongyi-MAI/Z-Image-Turbo",
   "locked": {
     "model.arch": "zimage:turbo",
     "model.name_or_path": "Tongyi-MAI/Z-Image-Turbo",
@@ -98,6 +97,8 @@
       "vram_mb": 16000,
       "ram_mb": 16000,
       "max_bucket": 1024,
+      "max_rank": 32,
+      "max_batch": 1,
       "evidence": "derived",
       "settings": {
         "model.quantize": true,
@@ -113,9 +114,11 @@
     },
     "q8_cached": {
       "label": "8-bit model · captions encoded once",
-      "vram_mb": 12000,
+      "vram_mb": 12500,
       "ram_mb": 16000,
       "max_bucket": 1024,
+      "max_rank": 32,
+      "max_batch": 1,
       "evidence": "reported",
       "settings": {
         "model.quantize": true,
@@ -134,7 +137,9 @@
       "vram_mb": 10800,
       "ram_mb": 17000,
       "max_bucket": 1024,
-      "evidence": "reported",
+      "max_rank": 32,
+      "max_batch": 1,
+      "evidence": "derived",
       "settings": {
         "model.quantize": true,
         "model.quantize_te": true,
@@ -152,6 +157,8 @@
       "vram_mb": 24000,
       "ram_mb": 16000,
       "max_bucket": 1024,
+      "max_rank": 32,
+      "max_batch": 1,
       "evidence": "derived",
       "settings": {
         "model.quantize": false,
@@ -170,6 +177,8 @@
       "vram_mb": 16000,
       "ram_mb": 16000,
       "max_bucket": 1024,
+      "max_rank": 32,
+      "max_batch": 1,
       "evidence": "derived",
       "settings": {
         "model.quantize": false,
@@ -191,11 +200,12 @@
     "preview.turbo": "Tongyi-MAI/Z-Image-Turbo model card: 9 steps (8 DiT forwards), guidance 0, which ai-toolkit spells guidance_scale 1",
     "subject": "heuristic: ai-toolkit's own caption dropout default is 0.0; content_or_style per jobs/process/BaseSDTrainProcess.py (style favours low-noise timesteps)",
     "effort": "heuristic anchored on ostris/ai-toolkit#550: 1200-3000 steps at lr 1e-4 to 2e-4 for 6-46 pictures; no source gives a steps-per-picture rule",
-    "hardware_profiles.q8_cached.vram_mb": "reported, ostris/ai-toolkit#550: 1024px, float8 transformer, cached text and latents, 11.5-11.7 GB on a 12 GB card, briefly above",
+    "hardware_profiles.q8_cached.vram_mb": "reported, ostris/ai-toolkit#550: 1024px, float8 transformer, cached text and latents, 11.5-11.7 GB on a 12 GB card and briefly above 12 GB; the figure is set past that peak",
     "hardware_profiles.q8_offload.vram_mb": "reported fit on a 12 GB card at 15% transformer offload (ostris/ai-toolkit#550); figure derived: 11.7 GB less 15% of the 6.15 GB float8 transformer",
     "hardware_profiles.q8.vram_mb": "derived: the q8_cached report plus the 4.0 GB qfloat8 Qwen3-4B text encoder kept resident",
     "hardware_profiles.bf16_cached.vram_mb": "derived: 12.3 GB bf16 transformer + 0.2 GB VAE + 0.85 GB LoRA, grads and 8-bit Adam at rank 32 + 2.5 GB activations at 1024",
     "hardware_profiles.bf16.vram_mb": "derived: bf16_cached plus the 8.0 GB bf16 text encoder kept resident",
+    "hardware_profiles.*.max_rank, max_batch": "the rank and batch size the VRAM figures were reported or derived at",
     "hardware_profiles.*.ram_mb": "derived: the 12.3 GB bf16 transformer is loaded in RAM before it is quantised or moved, plus loader overhead; q8_offload adds the 0.9 GB of layers parked in pinned RAM"
   }
 }

@@ -78,6 +78,8 @@ def test_table_keys_are_tunable_and_locked_keys_are_not():
             lambda p: p["effort"]["gentle"].update({"min_steps": 9_000}),
             "above max_steps",
         ),
+        (lambda p: p["locked"].pop("model.name_or_path"), "model.name_or_path"),
+        (lambda p: p["hardware_profiles"]["q8"].pop("max_rank"), "max_rank"),
     ],
 )
 def test_a_broken_preset_is_refused(breakage, message):
@@ -138,12 +140,17 @@ def test_a_tier_without_evidence_is_never_offered():
     assert _resolve(preset, vram_mb=_24GB)["profile"] == "q8_cached"
 
 
-def test_resolution_is_never_lowered_to_fit():
-    """A pinned size past every profile's bucket is refused, not shrunk."""
-    pins = {"datasets[*].resolution": [1024, 1536]}
-    with pytest.raises(presets.NoProfileFits) as exc:
-        _resolve(vram_mb=80_000, pins=pins)
-    assert exc.value.budget == "resolution"
+def test_resolution_rank_and_batch_are_never_lowered_to_fit():
+    """A pinned size, rank or batch past every profile's figures is refused,
+    not shrunk, however much memory there is."""
+    for pins in (
+        {"datasets[*].resolution": [1024, 1536]},
+        {"network.linear": 64},
+        {"train.batch_size": 4},
+    ):
+        with pytest.raises(presets.NoProfileFits) as exc:
+            _resolve(vram_mb=80_000, pins=pins)
+        assert exc.value.budget == "profile", pins
     with pytest.raises(TunableOverrideError, match="multiple of 16"):
         _resolve(pins={"datasets[*].resolution": [1000]})
 
@@ -172,18 +179,41 @@ def test_rank_sets_alpha_and_each_value_names_its_source():
 
 
 def test_pins_win_over_every_derived_value():
-    values = _resolve(
-        pins={
-            "network.linear": 64,
-            "train.steps": 777,
-            "model.quantize": False,
-        }
-    )["values"]
+    values = _resolve(pins={"network.linear": 8, "train.steps": 777})["values"]
     assert values["train.steps"] == {"value": 777, "source": "pinned"}
-    assert values["network.linear"] == {"value": 64, "source": "pinned"}
+    assert values["network.linear"] == {"value": 8, "source": "pinned"}
     # Alpha follows a pinned rank unless it is pinned itself.
-    assert values["network.linear_alpha"]["value"] == 64
-    assert values["model.quantize"] == {"value": False, "source": "pinned"}
+    assert values["network.linear_alpha"]["value"] == 8
+
+
+def test_a_pinned_memory_setting_picks_a_profile_that_has_it():
+    """Turning 8-bit off under Auto leases for a full-precision profile, never
+    for the 8-bit one Auto would have picked."""
+    result = _resolve(vram_mb=_24GB, pins={"model.quantize": False})
+    assert result["profile"] == "bf16_cached"
+    assert result["vram_mb"] == 16_000
+    assert result["values"]["model.quantize"] == {"value": False, "source": "pinned"}
+    with pytest.raises(presets.NoProfileFits) as exc:
+        _resolve(vram_mb=_16GB, pins={"model.quantize": False})
+    assert exc.value.budget == "vram"
+    # An offload share no profile was sized for has no known need.
+    with pytest.raises(presets.NoProfileFits) as exc:
+        _resolve(pins={"model.layer_offloading_transformer_percent": 0.4})
+    assert exc.value.budget == "profile"
+
+
+def test_captions_encoded_once_report_no_caption_dropout():
+    """ai-toolkit drops no caption it has cached, so the record says 0."""
+    cached = _resolve(vram_mb=_16GB)["values"]
+    assert cached["datasets[*].caption_dropout_rate"] == {
+        "value": 0.0,
+        "source": "gpu",
+    }
+    resident = _resolve(vram_mb=_24GB)["values"]
+    assert resident["datasets[*].caption_dropout_rate"] == {
+        "value": 0.05,
+        "source": "subject",
+    }
 
 
 def test_pins_refuse_locked_and_unknown_keys_by_name():

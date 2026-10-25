@@ -25,6 +25,7 @@ from fastapi.testclient import TestClient
 from pixlstash.hub import training_runs
 from pixlstash.routes.training import _redact_host_paths
 from pixlstash.server import Server
+from pixlstash.utils.service.export_utils import ExportUtils
 
 
 # ---------------------------------------------------------------------------
@@ -35,6 +36,8 @@ from pixlstash.server import Server
 # safety margin and a desktop's few hundred MB.
 _ROOM_24GB = {"vram_mb": 22_800, "ram_mb": 60_000}
 _ROOM_16GB = {"vram_mb": 14_900, "ram_mb": 60_000}
+_PICTURES = {"count": 24}
+_COUNT_TRAINING_PICTURES = ExportUtils.count_training_pictures
 
 
 class _FakeTrainingService:
@@ -144,6 +147,12 @@ def _setup():
     )
     # A 24 GB card, as the arbiter would report it, unless a test says otherwise.
     server.vault.training_room = lambda: dict(_ROOM_24GB)
+    # The sets and characters here hold no picture files; a test sets the
+    # count the dataset would have. Restored in _teardown.
+    _PICTURES["count"] = 24
+    ExportUtils.count_training_pictures = staticmethod(
+        lambda server, **kwargs: _PICTURES["count"]
+    )
 
     client = TestClient(server.api, raise_server_exceptions=True)
     resp = client.post("/login", json={"username": "owner", "password": "ownerpass1"})
@@ -158,6 +167,7 @@ def _setup():
 
 
 def _teardown(temp_dir, server):
+    ExportUtils.count_training_pictures = staticmethod(_COUNT_TRAINING_PICTURES)
     server.close()
     temp_dir.cleanup()
     gc.collect()
@@ -828,6 +838,27 @@ def test_create_job_resolves_a_16gb_card_and_refuses_a_small_one():
         r = owner.post("/training/jobs", json=body)
         assert r.status_code == 422, r.text
         assert len(server.vault.training_service.enqueue_calls) == calls
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_create_job_refuses_a_set_with_no_pictures():
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        set_id = _make_picture_set(owner)
+        _PICTURES["count"] = 0
+        r = owner.post(
+            "/training/jobs",
+            json={
+                "set_id": set_id,
+                "name": "x",
+                "trigger_word": "tw",
+                "subject": "thing",
+            },
+        )
+        assert r.status_code == 422, r.text
+        assert "no pictures" in r.text
+        assert server.vault.training_service.enqueue_calls == []
     finally:
         _teardown(temp_dir, server)
 

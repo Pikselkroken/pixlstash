@@ -596,7 +596,19 @@ def create_router(server) -> APIRouter:
         picture_count = ExportUtils.count_training_pictures(
             server, set_id=payload.set_id, character_id=payload.character_id
         )
+        if picture_count == 0:
+            raise HTTPException(
+                status_code=422,
+                detail="There are no pictures to train on.",
+            )
         room = server.vault.training_room()
+        if room["ram_mb"] is None:
+            logger.warning(
+                "RAM could not be read; resolving %s for job %r without a RAM "
+                "check, so a profile that streams from RAM may not fit.",
+                preset["id"],
+                payload.name,
+            )
         if room["vram_mb"] is None:
             raise HTTPException(
                 status_code=422,

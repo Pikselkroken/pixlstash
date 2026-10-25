@@ -13,8 +13,9 @@ reads an ai-toolkit config:
   strong) and ``fit`` (auto / save memory / best quality): the dialog's three
   choices.
 - ``hardware_profiles``: memory tiers, each with a VRAM and RAM need, the
-  largest bucket the need holds for, the settings it writes and the evidence
-  behind its figures. A tier with evidence ``none`` is never offered.
+  largest bucket, rank and batch the need holds for, the settings it writes and
+  the evidence behind its figures. A tier with evidence ``none`` is never
+  offered.
 
 :func:`resolve` turns the choices, the picture count and the memory the card and
 RAM can give a run into one value per tunable key, each with where it came from.
@@ -66,7 +67,8 @@ class NoProfileFits(ValueError):
     """No hardware profile of the fit choice fits this machine.
 
     Attributes:
-        budget: ``"vram"``, ``"ram"`` or ``"resolution"``: what is short.
+        budget: ``"vram"``, ``"ram"``, or ``"profile"`` when no profile with
+            evidence covers the size, rank, batch or pinned memory settings.
         need_mb: What the closest profile needs.
         free_mb: What this machine can give it.
     """
@@ -132,6 +134,8 @@ def validate_preset(preset: dict) -> dict:
     ):
         if field not in preset:
             raise PresetError(f"{pid}: missing '{field}'.")
+    if "model.name_or_path" not in preset["locked"]:
+        raise PresetError(f"{pid}: locked must name 'model.name_or_path'.")
     for key in preset["locked"]:
         if key in TUNABLE_KEYS:
             raise PresetError(f"{pid}: locked key '{key}' is on the tunable list.")
@@ -164,7 +168,15 @@ def validate_preset(preset: dict) -> dict:
     for name, profile in profiles.items():
         if profile.get("evidence") not in EVIDENCE:
             raise PresetError(f"{pid}: profile {name} has no valid evidence level.")
-        for field in ("label", "vram_mb", "ram_mb", "max_bucket", "settings"):
+        for field in (
+            "label",
+            "vram_mb",
+            "ram_mb",
+            "max_bucket",
+            "max_rank",
+            "max_batch",
+            "settings",
+        ):
             if field not in profile:
                 raise PresetError(f"{pid}: profile {name} is missing '{field}'.")
         _check_table(pid, f"hardware_profiles.{name}", profile["settings"])
@@ -316,8 +328,9 @@ def resolve(
         ram_mb: Available physical RAM (swap never counts); None when unknown,
             which skips the RAM check.
         pins: The owner's Advanced values, already checked by
-            :func:`validate_pins`. They win over every derived value, and the
-            profile is still chosen for the sizes they ask for.
+            :func:`validate_pins`. They win over every derived value. The
+            profile is chosen for the size, rank and batch they ask for, and a
+            pinned memory setting limits it to profiles with that setting.
 
     Returns:
         ``{"preset", "subject", "effort", "fit", "picture_count", "profile",
@@ -365,19 +378,37 @@ def resolve(
                 f"'datasets[*].resolution' {size} is not a multiple of "
                 f"{preset['divisibility']}, which {preset['label']} needs."
             )
+    rank = values.get("network.linear", {}).get("value") or 0
+    batch = values.get("train.batch_size", {}).get("value") or 1
     profiles = preset["hardware_profiles"]
+    # A pinned memory setting decides the profile instead of the fit choice:
+    # only a profile with that setting has a need the lease can ask for.
+    setting_keys = set(next(iter(profiles.values()))["settings"])
+    pinned_settings = {k: v for k, v in pins.items() if k in setting_keys}
+    names = list(preset["fit"][fit])
+    if pinned_settings:
+        names += [name for name in profiles if name not in names]
     candidates = [
         (name, profiles[name])
-        for name in preset["fit"][fit]
+        for name in names
         if profiles[name]["evidence"] != "none"
+        and all(profiles[name]["settings"][k] == v for k, v in pinned_settings.items())
     ]
-    sized = [(n, p) for n, p in candidates if p["max_bucket"] >= bucket]
+    sized = [
+        (n, p)
+        for n, p in candidates
+        if p["max_bucket"] >= bucket
+        and p["max_rank"] >= rank
+        and p["max_batch"] >= batch
+    ]
     if not sized:
         raise NoProfileFits(
-            f"No {preset['label']} memory profile is known to train at {bucket}px.",
-            "resolution",
-            bucket,
-            max((p["max_bucket"] for _, p in candidates), default=0),
+            f"No {preset['label']} memory profile is known for {bucket}px, rank "
+            f"{rank} and batch size {batch}"
+            + (" with the Advanced memory settings." if pinned_settings else "."),
+            "profile",
+            0,
+            0,
         )
     picked = next(
         (
@@ -410,6 +441,12 @@ def resolve(
     for key, value in profile["settings"].items():
         if key not in pins:
             values[key] = {"value": value, "source": "gpu"}
+    # ai-toolkit drops no captions it has encoded once, so say what will run.
+    dropout = "datasets[*].caption_dropout_rate"
+    if values.get("train.cache_text_embeddings", {}).get("value") and (
+        dropout in values and dropout not in pins
+    ):
+        values[dropout] = {"value": 0.0, "source": "gpu"}
     return {
         "preset": preset_ref(preset),
         "subject": subject,

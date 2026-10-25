@@ -202,8 +202,10 @@ def test_build_training_dataset_skips_videos():
                 trigger_word="mychar",
             )
 
-            # Video is skipped: only the single image is written.
+            # Video is skipped: only the single image is written, and the count
+            # a job is resolved against at enqueue skips it the same way.
             assert manifest["image_count"] == 1
+            assert ExportUtils.count_training_pictures(server, set_id=set_id) == 1
             assert manifest["picture_ids"] == [img_id]
             assert video_pic_id not in manifest["picture_ids"]
 
