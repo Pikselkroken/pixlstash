@@ -199,7 +199,9 @@ export const useTrainingStore = defineStore("training", () => {
 
     const train = {};
     const lr = String(learningRate.value ?? "").trim();
-    if (lr) train.lr = lr;
+    // The API tunables take a number. A typed value that is not one is sent as
+    // typed, so the server refuses it with its own message.
+    if (lr) train.lr = Number.isFinite(Number(lr)) ? Number(lr) : lr;
     if (isFilledNumber(batchSize.value))
       train.batch_size = Number(batchSize.value);
     if (isFilledNumber(steps.value)) train.steps = Number(steps.value);

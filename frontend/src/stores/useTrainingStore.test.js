@@ -19,6 +19,24 @@ describe("useTrainingStore.buildConfigOverrides steps", () => {
     expect(overrides.config.process[0].train.steps).toBe(1200);
   });
 
+  it("sends a typed learning rate as a number, so the tunables accept it", () => {
+    const store = useTrainingStore();
+    store.learningRate = "1e-4";
+
+    const overrides = store.buildConfigOverrides();
+
+    expect(overrides.config.process[0].train.lr).toBe(0.0001);
+  });
+
+  it("sends a learning rate that is not a number as typed, for the server to refuse", () => {
+    const store = useTrainingStore();
+    store.learningRate = "fast";
+
+    const overrides = store.buildConfigOverrides();
+
+    expect(overrides.config.process[0].train.lr).toBe("fast");
+  });
+
   it("omits steps when the field is cleared, instead of sending 0", () => {
     const store = useTrainingStore();
     store.steps = "";
