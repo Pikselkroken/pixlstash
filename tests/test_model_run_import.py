@@ -29,13 +29,16 @@ import hashlib
 import json
 import os
 import struct
+from types import SimpleNamespace
 
 import pytest
 
+from pixlstash.hub import training_runs
 from pixlstash.services import model_mover as mover_module
 from pixlstash.services import run_importer as importer_module
 from pixlstash.services.model_mover import MoveRefused
 from pixlstash.services.stack_detector import set_cover
+from pixlstash.vault import Vault
 from pixlstash.services.run_importer import (
     PROVENANCE_TRAINED,
     STATUS_CANCELLED,
@@ -789,3 +792,60 @@ def test_listing_runs_hashes_nothing_and_writes_nothing(shelf, monkeypatch):
     assert runs[0].base_model == "black-forest-labs/FLUX.1-dev"
     assert models(shelf["hub"]) == {}
     assert os.listdir(shelf["destination_dir"]) == []
+
+
+def _a_training_run(hub, run_uuid="run-clementine"):
+    """The hub row a PixlStash training run writes before it starts."""
+    return training_runs.create_run(
+        hub,
+        library_uuid="library-under-test",
+        uuid=run_uuid,
+        name="Clementine",
+        set_id=None,
+        character_id=None,
+        base_model="black-forest-labs/FLUX.1-dev",
+        trigger_word="clemntn",
+    )
+
+
+def test_every_model_an_import_creates_names_the_run_that_made_it(shelf):
+    run_id = _a_training_run(shelf["hub"])
+
+    RunImporter(shelf["hub"]).import_run(
+        str(shelf["run_dir"]), shelf["destination_id"], training_run_id=run_id
+    )
+
+    rows = models(shelf["hub"])
+    assert len(rows) == 3
+    assert {row["training_run_id"] for row in rows.values()} == {run_id}
+
+
+def test_a_run_trained_elsewhere_names_no_run(shelf):
+    RunImporter(shelf["hub"]).import_run(str(shelf["run_dir"]), shelf["destination_id"])
+
+    assert {row["training_run_id"] for row in models(shelf["hub"]).values()} == {None}
+
+
+def test_the_vault_hands_the_finished_runs_id_to_the_importer(shelf):
+    """The vault's hook is the one call site that knows the run's id.
+
+    ``_import_training_run`` reads only the hub, so it runs unbound on a
+    stand-in: the shelf's download folder receives the run, and every model it
+    lands names the run.
+    """
+    run_id = _a_training_run(shelf["hub"])
+    with shelf["hub"].transaction() as conn:
+        conn.execute(
+            "UPDATE model_folder SET is_download_target = 1 WHERE id = ?",
+            (shelf["destination_id"],),
+        )
+
+    stand_in = SimpleNamespace(_hub=shelf["hub"])
+    result = Vault._import_training_run(
+        stand_in,
+        str(shelf["run_dir"]),
+        {"id": run_id, "name": "Clementine", "set_id": None, "character_id": None},
+    )
+
+    assert result["imported"] == 3
+    assert {row["training_run_id"] for row in models(shelf["hub"]).values()} == {run_id}

@@ -2,7 +2,7 @@
 
 The :class:`TrainingService` is the layer between PixlStash's data model and the
 trainer adapter (:class:`~pixlstash.training.local_ai_toolkit.LocalAiToolkit`).
-It owns the job lifecycle: pick the oldest queued :class:`TrainingJob`, snapshot
+It owns the job lifecycle: pick the oldest queued training run, snapshot
 its dataset, wait for the VRAM arbiter's lease, drive the adapter (``prepare`` → ``submit`` →
 poll → finalize), and hand the finished run to the model shelf when it completes.
 Exactly one job runs at a time because a single GPU is the binding constraint.
@@ -30,13 +30,11 @@ import os
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
 from typing import Callable
 
-from sqlmodel import Session, select
-
-from pixlstash.db_models.training_job import TrainingJob
 from pixlstash.event_types import EventType
+from pixlstash.hub import training_runs
+from pixlstash.hub.db import HubDatabase, now_iso
 from pixlstash.pixl_logging import get_logger
 from pixlstash.resources.arbiter import Lease
 from pixlstash.training.backend import TrainerBackend, TrainingProgress, TrainingSpec
@@ -54,7 +52,7 @@ _LOG_TAIL_BYTES = 8192
 
 
 class TrainingService:
-    """Drive queued :class:`TrainingJob` rows to finished runs on the shelf.
+    """Drive queued training runs to finished LoRAs on the shelf.
 
     One background thread runs at a time and processes queued jobs FIFO (oldest
     ``created_at`` first). See the module docstring for the dependency-injection
@@ -66,7 +64,8 @@ class TrainingService:
 
     def __init__(
         self,
-        db,
+        hub: HubDatabase | None,
+        library_uuid: str | None,
         image_root: str,
         *,
         request_gpu: Callable[[str, str], Lease],
@@ -81,8 +80,12 @@ class TrainingService:
         """Initialise the service.
 
         Args:
-            db: A ``VaultDatabase`` (provides ``run_task`` /
-                ``run_immediate_read_task``).
+            hub: The open hub, which holds the ``training_run`` rows. None when
+                no hub is open: the service then never starts and refuses new
+                runs.
+            library_uuid: The library this service trains for. Every run it
+                reads or writes is scoped to it, so another library's queue is
+                never claimed here.
             image_root: Vault root. Per-job work dirs live in
                 ``<image_root>/training/<job_uuid>/``.
             request_gpu: Asks the VRAM arbiter for a run's memory, called as
@@ -106,7 +109,8 @@ class TrainingService:
             disable_background_workers: When True, :meth:`start` is a no-op
                 (mirrors the Vault flag for read-only deployments).
         """
-        self._db = db
+        self._hub = hub
+        self._library_uuid = library_uuid
         self._image_root = image_root
         self._request_gpu = request_gpu
         self._import_run = import_run
@@ -153,6 +157,11 @@ class TrainingService:
         if self._disable_background_workers:
             logger.info("TrainingService: background workers disabled; not starting.")
             return
+        if self._hub is None or not self._library_uuid:
+            logger.warning(
+                "TrainingService: no hub or library open; training is unavailable."
+            )
+            return
         if self._thread is not None and self._thread.is_alive():
             return
         self._stop.clear()
@@ -198,8 +207,8 @@ class TrainingService:
         trigger_word: str,
         template_path: str,
         config_overrides: dict | None = None,
-    ) -> TrainingJob:
-        """Create a queued :class:`TrainingJob` and wake the worker.
+    ) -> dict:
+        """Create a queued training run and wake the worker.
 
         Exactly one of ``set_id`` / ``character_id`` must be given (the
         set/character invariant). The job is persisted with a fresh uuid and
@@ -218,39 +227,32 @@ class TrainingService:
                 job for the run; not persisted as a column).
 
         Returns:
-            The persisted :class:`TrainingJob`.
+            The persisted run, as the hub row (a dict of its columns).
 
         Raises:
             ValueError: If not exactly one of ``set_id`` / ``character_id`` is
                 provided.
+            RuntimeError: No hub or library is open to hold the run.
         """
         if (set_id is None) == (character_id is None):
             raise ValueError(
                 "Exactly one of set_id / character_id must be provided "
                 f"(got set_id={set_id!r}, character_id={character_id!r})."
             )
+        hub, library_uuid = self._store()
 
         job_uuid = uuid.uuid4().hex
-
-        def _create(session: Session) -> TrainingJob:
-            job = TrainingJob(
-                uuid=job_uuid,
-                name=name,
-                status="queued",
-                set_id=set_id,
-                character_id=character_id,
-                base_model=base_model,
-                trigger_word=trigger_word,
-            )
-            session.add(job)
-            session.commit()
-            session.refresh(job)
-            # Detach a plain copy of the fields the caller/worker need so no
-            # lazy load happens on a closed session.
-            session.expunge(job)
-            return job
-
-        job = self._db.run_task(_create)
+        run_id = training_runs.create_run(
+            hub,
+            library_uuid=library_uuid,
+            uuid=job_uuid,
+            name=name,
+            set_id=set_id,
+            character_id=character_id,
+            base_model=base_model,
+            trigger_word=trigger_word,
+        )
+        job = training_runs.get_run(hub, library_uuid, run_id)
         # The template path + config overrides have no dedicated column. Keep
         # them in memory for the common (no-restart) case and also persist a
         # sidecar so a restart can recover a still-queued job's spec.
@@ -278,26 +280,15 @@ class TrainingService:
         it is marked ``stopped`` directly.
 
         Args:
-            job_id: Primary key of the :class:`TrainingJob` to cancel.
+            job_id: Primary key of the ``training_run`` row to cancel.
 
         Returns:
             ``True`` if a job was found and a cancel was actioned, else
             ``False``.
         """
 
-        def _load(session: Session) -> dict | None:
-            job = session.get(TrainingJob, job_id)
-            if job is None:
-                return None
-            return {
-                "uuid": job.uuid,
-                "name": job.name,
-                "status": job.status,
-                "pid": job.pid,
-                "training_folder": job.training_folder,
-            }
-
-        info = self._db.run_immediate_read_task(_load)
+        hub, library_uuid = self._store()
+        info = training_runs.get_run(hub, library_uuid, job_id)
         if info is None:
             logger.warning("cancel: no training job with id=%s", job_id)
             return False
@@ -396,30 +387,11 @@ class TrainingService:
         status / on-disk checkpoints (completed → imported to the shelf, else
         ``error``).
         """
-        if self._disable_background_workers:
+        if self._disable_background_workers or self._hub is None:
             return
 
-        def _load_unfinished(session: Session) -> list[dict]:
-            jobs = session.exec(
-                select(TrainingJob).where(
-                    TrainingJob.status.in_(["running", "stopping"])
-                )
-            ).all()
-            return [
-                {
-                    "uuid": j.uuid,
-                    "name": j.name,
-                    "status": j.status,
-                    "pid": j.pid,
-                    "training_folder": j.training_folder,
-                    "set_id": j.set_id,
-                    "character_id": j.character_id,
-                }
-                for j in jobs
-            ]
-
         try:
-            unfinished = self._db.run_immediate_read_task(_load_unfinished)
+            unfinished = training_runs.unfinished_runs(self._hub, self._library_uuid)
         except Exception:
             logger.exception("reconcile_on_startup: failed to load unfinished jobs")
             return
@@ -543,25 +515,9 @@ class TrainingService:
             immediately), ``False`` if there was no queued work.
         """
 
-        def _claim(session: Session) -> dict | None:
-            job = session.exec(
-                select(TrainingJob)
-                .where(TrainingJob.status == "queued")
-                .order_by(TrainingJob.created_at, TrainingJob.id)
-            ).first()
-            if job is None:
-                return None
-            return {
-                "uuid": job.uuid,
-                "name": job.name,
-                "set_id": job.set_id,
-                "character_id": job.character_id,
-                "trigger_word": job.trigger_word,
-                "base_model": job.base_model,
-                "rendered_config": job.rendered_config,
-            }
-
-        info = self._db.run_immediate_read_task(_claim)
+        if self._hub is None:
+            return False
+        info = training_runs.next_queued_run(self._hub, self._library_uuid)
         if info is None:
             return False
 
@@ -687,7 +643,7 @@ class TrainingService:
             rendered_config=json.dumps(config) if config is not None else None,
             ai_toolkit_commit=cfg.get("commit"),
             total_steps=total_steps,
-            started_at=datetime.now(timezone.utc),
+            started_at=now_iso(),
         )
         self._emit_progress(
             job_uuid, status="running", current=0, total=total_steps, message="Started"
@@ -774,7 +730,7 @@ class TrainingService:
                     status="completed",
                     step=progress.step,
                     report=report,
-                    completed_at=datetime.now(timezone.utc),
+                    completed_at=now_iso(),
                 )
                 self._emit_progress(
                     job_uuid,
@@ -794,7 +750,7 @@ class TrainingService:
                     job_uuid,
                     status="error",
                     error="Run completed but the LoRA artifact could not be imported",
-                    completed_at=datetime.now(timezone.utc),
+                    completed_at=now_iso(),
                 )
                 self._emit_progress(
                     job_uuid, status="error", message="LoRA import failed"
@@ -808,7 +764,7 @@ class TrainingService:
                 job_uuid,
                 status="error",
                 error=msg,
-                completed_at=datetime.now(timezone.utc),
+                completed_at=now_iso(),
             )
             self._emit_progress(job_uuid, status="error", message=msg)
             return
@@ -824,7 +780,7 @@ class TrainingService:
             step=progress.step,
             error=error_msg,
             report=progress.info or None,
-            completed_at=datetime.now(timezone.utc),
+            completed_at=now_iso(),
         )
         self._emit_progress(
             job_uuid,
@@ -844,39 +800,33 @@ class TrainingService:
         """The name a job's lease carries in the Tasks tab."""
         return f"LoRA training '{info.get('name') or info['uuid'][:8]}'"
 
+    def _store(self) -> tuple[HubDatabase, str]:
+        """The hub and library the runs live in, or raise if none is open.
+
+        Raises:
+            RuntimeError: The service was built without a hub or library.
+        """
+        if self._hub is None or not self._library_uuid:
+            raise RuntimeError(
+                "No hub or library is open, so training runs cannot be stored."
+            )
+        return self._hub, self._library_uuid
+
     def _job_status(self, job_uuid: str) -> str | None:
         """A job's persisted status, or None when it is gone."""
-
-        def _read(session: Session) -> str | None:
-            job = session.exec(
-                select(TrainingJob).where(TrainingJob.uuid == job_uuid)
-            ).first()
-            return job.status if job is not None else None
-
-        return self._db.run_immediate_read_task(_read)
+        run = training_runs.get_run_by_uuid(self._hub, job_uuid)
+        return run["status"] if run is not None else None
 
     def _update_job(self, job_uuid: str, **fields) -> None:
-        """Update columns on a :class:`TrainingJob` by uuid.
+        """Update columns on a training run by uuid.
 
         Args:
             job_uuid: The job uuid.
             **fields: Column names → values to set.
         """
-
-        def _do(session: Session) -> None:
-            job = session.exec(
-                select(TrainingJob).where(TrainingJob.uuid == job_uuid)
-            ).first()
-            if job is None:
-                logger.warning("_update_job: no job with uuid=%s", job_uuid)
-                return
-            for key, value in fields.items():
-                setattr(job, key, value)
-            session.add(job)
-            session.commit()
-
         try:
-            self._db.run_task(_do)
+            if not training_runs.update_run(self._hub, job_uuid, **fields):
+                logger.warning("_update_job: no job with uuid=%s", job_uuid)
         except Exception:
             logger.exception("Failed to update job %s with %s", job_uuid, list(fields))
 

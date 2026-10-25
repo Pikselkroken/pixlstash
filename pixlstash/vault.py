@@ -206,7 +206,6 @@ class Vault:
 
         self.snapshot_service = SnapshotService(self)
         self.restore_service = RestoreService(self)
-        self.training_service = self._build_training_service(disable_background_workers)
         # The server's AuthService, attached by ``Server.__init__`` once it has
         # been constructed (it takes ``self.db``, so it cannot exist yet here).
         # The restore path needs it: a full restore replaces the database file,
@@ -251,6 +250,9 @@ class Vault:
         # (§B4).
         self._hub = registered_hub
         self._library_uuid: Optional[str] = getattr(registered_library, "uuid", None)
+        # Built after the hub and library are known: training runs live in the
+        # hub, scoped to this library.
+        self.training_service = self._build_training_service(disable_background_workers)
         self._ghost_retention: str = ghost_retention
 
         self._planner_watchers = {}
@@ -974,7 +976,8 @@ class Vault:
             return ExportUtils.build_training_dataset(shim, **kwargs)
 
         return TrainingService(
-            self.db,
+            self._hub,
+            self._library_uuid,
             self.image_root,
             request_gpu=self._request_training_gpu,
             import_run=self._import_training_run,
@@ -1021,7 +1024,9 @@ class Vault:
 
         Args:
             run_dir: The ai-toolkit run folder holding the checkpoints.
-            info: The job's fields (``name``, ``set_id``, ``character_id``).
+            info: The run's fields (``id``, ``name``, ``set_id``,
+                ``character_id``). ``id`` is the hub ``training_run`` row every
+                imported model is stamped with.
 
         Returns:
             ``{"stack_id", "imported", "cover_sha256"}``. ``cover_sha256`` is
@@ -1050,6 +1055,7 @@ class Vault:
                 folder["id"],
                 subfolder=subfolder,
                 delete_source=False,
+                training_run_id=info["id"],
             )
         landed = [o for o in report.outcomes if o.status == STATUS_IMPORTED]
         if not landed:

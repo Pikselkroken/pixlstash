@@ -916,7 +916,7 @@ class ExportUtils:
 
         The caller owns ``dest_dir``'s lifecycle (cleanup); this creates it if
         absent and returns a manifest whose ``picture_ids`` feed the
-        TrainingJob reproducibility record.
+        training run reproducibility record (the hub ``training_run`` row).
 
         Args:
             server: The server instance (provides ``vault.db`` / ``image_root``).

@@ -7,7 +7,6 @@ if TYPE_CHECKING:
     from pixlstash.db_models.character import Character
     from pixlstash.db_models.picture import Picture
     from pixlstash.db_models.project import Project
-    from pixlstash.db_models.training_job import TrainingJob
 
 
 class PictureSetMember(SQLModel, table=True):
@@ -63,4 +62,3 @@ class PictureSet(SQLModel, table=True):
         back_populates="reference_picture_set"
     )
     project: Optional["Project"] = Relationship(back_populates="picture_sets")
-    training_jobs: List["TrainingJob"] = Relationship(back_populates="picture_set")

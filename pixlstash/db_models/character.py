@@ -7,7 +7,6 @@ if TYPE_CHECKING:
     from .picture import Picture
     from .picture_set import PictureSet
     from .project import Project
-    from .training_job import TrainingJob
 
 
 class Character(SQLModel, table=True):
@@ -50,7 +49,6 @@ class Character(SQLModel, table=True):
         back_populates="reference_character"
     )
     project: Optional["Project"] = Relationship(back_populates="characters")
-    training_jobs: List["TrainingJob"] = Relationship(back_populates="character")
 
     @classmethod
     def find(

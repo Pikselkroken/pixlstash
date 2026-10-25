@@ -1,94 +1,16 @@
-"""Unit tests for the TrainingJob model and the ai-toolkit config plumbing.
+"""Unit tests for the ai-toolkit config plumbing on the owner's user row.
 
-These run against a throwaway SQLite database (no Server needed): creating the
-job table plus its picture-set/character parents from the registered
-``SQLModel.metadata`` is enough to exercise the relationships and table names.
-A finished run is a model-shelf row, not a training-table row, so there is no
-LoRA model to exercise here.
-The config round-trip tests poke the serialise/patch helpers directly.
+The training run table lives in the hub and is tested with the hub schema
+(``tests/test_hub_model_shelf_schema.py``). What is left here is the config
+round-trip: the three ai-toolkit paths and commit serialise, patch and clear
+through the shared user-settings helpers.
 """
 
-import pytest
-from sqlalchemy.pool import NullPool
-from sqlmodel import Session, SQLModel, create_engine
-
-# Importing the models registers them on SQLModel.metadata.
-from pixlstash.db_models import (  # noqa: F401
-    Character,
-    PictureSet,
-    TrainingJob,
-    User,
-)
+from pixlstash.db_models import User
 from pixlstash.utils.service.user_settings_utils import (
     apply_user_config_patch,
     serialize_user_config,
 )
-
-
-@pytest.fixture
-def session(tmp_path):
-    engine = create_engine(
-        f"sqlite:///{tmp_path / 'training.db'}",
-        echo=False,
-        poolclass=NullPool,
-    )
-    SQLModel.metadata.create_all(engine)
-    with Session(engine) as s:
-        yield s
-
-
-def test_table_names():
-    assert TrainingJob.__tablename__ == "training_job"
-
-
-def test_create_set_scoped_job(session):
-    picture_set = PictureSet(name="my-set")
-    session.add(picture_set)
-    session.commit()
-    session.refresh(picture_set)
-
-    job = TrainingJob(uuid="job-set-1", name="set job", set_id=picture_set.id)
-    session.add(job)
-    session.commit()
-    session.refresh(job)
-
-    assert job.id is not None
-    assert job.status == "queued"
-    assert job.step == 0
-    assert job.created_at is not None
-    assert job.character_id is None
-
-    # Parent back-population on the picture set.
-    session.refresh(picture_set)
-    assert [j.uuid for j in picture_set.training_jobs] == ["job-set-1"]
-    assert job.picture_set is not None
-    assert job.picture_set.id == picture_set.id
-
-
-def test_create_character_scoped_job(session):
-    character = Character(name="hero")
-    session.add(character)
-    session.commit()
-    session.refresh(character)
-
-    job = TrainingJob(uuid="job-char-1", name="char job", character_id=character.id)
-    session.add(job)
-    session.commit()
-    session.refresh(job)
-    session.refresh(character)
-
-    assert job.set_id is None
-    assert job.character is not None
-    assert job.character.id == character.id
-    assert [j.uuid for j in character.training_jobs] == ["job-char-1"]
-
-
-def test_uuid_is_unique(session):
-    session.add(TrainingJob(uuid="dup", name="a"))
-    session.commit()
-    session.add(TrainingJob(uuid="dup", name="b"))
-    with pytest.raises(Exception):
-        session.commit()
 
 
 _AI_TOOLKIT_KEYS = {

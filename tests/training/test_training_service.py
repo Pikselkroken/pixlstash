@@ -3,7 +3,7 @@
 These drive the real :class:`~pixlstash.services.training_service.TrainingService`
 end to end against the CPU stub trainer (``fake_run.py``, symlinked as ``run.py``
 into a temp "repo", exactly as ``test_local_ai_toolkit.py`` sets it up) and a
-real temp-SQLite :class:`~pixlstash.database.VaultDatabase`. Every external
+real temp hub (:class:`~pixlstash.hub.db.HubDatabase`). Every external
 dependency is injected: a stub VRAM lease (recording request/release order), a
 capturing ``notify``, a ``config_provider`` returning the temp repo + venv
 python, and a ``dataset_builder`` stub that writes fake image/caption pairs.
@@ -22,19 +22,22 @@ import shutil
 import sqlite3
 import sys
 import time
+from types import SimpleNamespace
 
 import pytest
-from sqlmodel import select
 
-from pixlstash.database import VaultDatabase
-from pixlstash.db_models.character import Character
-from pixlstash.db_models.picture_set import PictureSet
-from pixlstash.db_models.training_job import TrainingJob
 from pixlstash.event_types import EventType
+from pixlstash.hub import training_runs
 from pixlstash.services.training_service import TrainingService
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _FAST_TEMPLATE_PATH = os.path.join(_THIS_DIR, "fast_template.json")
+# The library every run in this module belongs to, and the vault ids the
+# runs name. Sets and characters are vault rows, but a run only stores their
+# ids, so none of them need to exist for the service to train.
+_LIBRARY_UUID = "library-under-test"
+_SET_ID = 11
+_CHARACTER_ID = 22
 
 
 # ---------------------------------------------------------------------------
@@ -142,18 +145,6 @@ def repo_dir(tmp_path):
     return str(repo)
 
 
-@pytest.fixture
-def db(tmp_path):
-    """A real temp-SQLite VaultDatabase (migrations auto-run on construct)."""
-    image_root = tmp_path / "vault"
-    image_root.mkdir()
-    database = VaultDatabase(str(image_root / "vault.db"))
-    try:
-        yield database
-    finally:
-        database.close()
-
-
 def _make_dataset_builder(image_count: int = 2):
     """A dataset_builder stub: write fake image+txt pairs, return a manifest."""
 
@@ -179,7 +170,7 @@ def _make_dataset_builder(image_count: int = 2):
 
 
 def _make_service(
-    db,
+    hub,
     repo_dir,
     *,
     lease,
@@ -190,8 +181,9 @@ def _make_service(
 ):
     """Build a TrainingService wired to the temp repo + injected deps."""
     return TrainingService(
-        db,
-        db.image_root,
+        hub,
+        _LIBRARY_UUID,
+        os.path.dirname(hub.path),
         request_gpu=lease.request,
         import_run=importer or _RecordingImport(),
         notify=notify,
@@ -206,38 +198,10 @@ def _make_service(
     )
 
 
-def _job_status(db, job_uuid):
-    return db.run_immediate_read_task(
-        lambda s: s.exec(
-            select(TrainingJob).where(TrainingJob.uuid == job_uuid)
-        ).first()
-    )
-
-
-def _make_character(db, name="Test Character") -> int:
-    """Create a Character row (FK target for character-scoped jobs)."""
-
-    def _insert(session):
-        char = Character(name=name)
-        session.add(char)
-        session.commit()
-        session.refresh(char)
-        return char.id
-
-    return db.run_task(_insert)
-
-
-def _make_set(db, name="Test Set") -> int:
-    """Create a PictureSet row (FK target for set-scoped jobs)."""
-
-    def _insert(session):
-        pset = PictureSet(name=name)
-        session.add(pset)
-        session.commit()
-        session.refresh(pset)
-        return pset.id
-
-    return db.run_task(_insert)
+def _job_status(hub, job_uuid):
+    """The run row by uuid, as attributes, or None."""
+    row = training_runs.get_run_by_uuid(hub, job_uuid)
+    return SimpleNamespace(**row) if row is not None else None
 
 
 @pytest.fixture(autouse=True)
@@ -251,10 +215,10 @@ def _fast_step_delay(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_enqueue_validates_exactly_one_scope(db, repo_dir):
+def test_enqueue_validates_exactly_one_scope(hub, repo_dir):
     lease, notify = _StubLease(), _CapturingNotify()
     service = _make_service(
-        db,
+        hub,
         repo_dir,
         lease=lease,
         notify=notify,
@@ -276,7 +240,7 @@ def test_enqueue_validates_exactly_one_scope(db, repo_dir):
             template_path=template,
         )
 
-    set_id = _make_set(db)
+    set_id = _SET_ID
     job = service.enqueue(
         set_id=set_id,
         name="ok",
@@ -284,17 +248,17 @@ def test_enqueue_validates_exactly_one_scope(db, repo_dir):
         trigger_word="t",
         template_path=template,
     )
-    assert job.status == "queued"
-    assert job.uuid
+    assert job["status"] == "queued"
+    assert job["uuid"]
 
 
-def test_full_lifecycle_queued_to_completed_lora(db, repo_dir):
+def test_full_lifecycle_queued_to_completed_lora(hub, repo_dir):
     """enqueue → worker runs → running → completed → run handed to the shelf."""
     lease = _StubLease(grant=True)
     notify = _CapturingNotify()
     importer = _RecordingImport()
     service = _make_service(
-        db,
+        hub,
         repo_dir,
         lease=lease,
         notify=notify,
@@ -302,7 +266,7 @@ def test_full_lifecycle_queued_to_completed_lora(db, repo_dir):
         importer=importer,
     )
     template = _write_template(repo_dir, steps=8, save_every=4)
-    character_id = _make_character(db)
+    character_id = _CHARACTER_ID
 
     service.start()
     try:
@@ -315,18 +279,18 @@ def test_full_lifecycle_queued_to_completed_lora(db, repo_dir):
         )
 
         # It progresses to running with a real step.
-        assert _poll_until(lambda: _job_status(db, job.uuid).status == "running"), (
+        assert _poll_until(lambda: _job_status(hub, job["uuid"]).status == "running"), (
             "never reached running"
         )
 
         # ... then to completed.
-        assert _poll_until(lambda: _job_status(db, job.uuid).status == "completed"), (
-            f"final status was {_job_status(db, job.uuid).status!r}"
-        )
+        assert _poll_until(
+            lambda: _job_status(hub, job["uuid"]).status == "completed"
+        ), f"final status was {_job_status(hub, job['uuid']).status!r}"
     finally:
         service.stop()
 
-    final = _job_status(db, job.uuid)
+    final = _job_status(hub, job["uuid"])
     assert final.status == "completed"
     assert final.step == 8
     assert final.total_steps == 8
@@ -346,7 +310,7 @@ def test_full_lifecycle_queued_to_completed_lora(db, repo_dir):
     assert len(importer.calls) == 1
     run_dir, info = importer.calls[0]
     assert os.path.isfile(os.path.join(run_dir, "charjob.safetensors"))
-    assert info["uuid"] == job.uuid
+    assert info["uuid"] == job["uuid"]
     assert info["character_id"] == character_id
     assert info["set_id"] is None
     assert "1 file(s) on the shelf" in final.report
@@ -361,28 +325,28 @@ def test_full_lifecycle_queued_to_completed_lora(db, repo_dir):
     # GPU lease acquired before submit and released after, in order.
     assert lease.events == ["acquire", "release"]
 
-    # PLUGIN_PROGRESS events emitted with run_id == job.uuid and a completed one.
+    # PLUGIN_PROGRESS events emitted with run_id == job["uuid"] and a completed one.
     progress = notify.plugin_progress()
     assert progress, "no PLUGIN_PROGRESS events emitted"
-    assert all(p["run_id"] == job.uuid for p in progress)
+    assert all(p["run_id"] == job["uuid"] for p in progress)
     assert all(p["plugin"] == "ai-toolkit" for p in progress)
     assert any(p["status"] == "completed" for p in progress)
 
 
-def test_cancel_midrun_ends_stopped_and_releases_lease(db, repo_dir, monkeypatch):
+def test_cancel_midrun_ends_stopped_and_releases_lease(hub, repo_dir, monkeypatch):
     """cancel() mid-run leaves the job 'stopped' and releases the GPU lease."""
     monkeypatch.setenv("FAKE_RUN_STEP_DELAY", "0.02")
     lease = _StubLease(grant=True)
     notify = _CapturingNotify()
     service = _make_service(
-        db,
+        hub,
         repo_dir,
         lease=lease,
         notify=notify,
         dataset_builder=_make_dataset_builder(),
     )
     template = _write_template(repo_dir, steps=500, save_every=50)
-    set_id = _make_set(db)
+    set_id = _SET_ID
 
     service.start()
     try:
@@ -396,39 +360,39 @@ def test_cancel_midrun_ends_stopped_and_releases_lease(db, repo_dir, monkeypatch
         # Wait until it is genuinely running with a recorded pid.
         assert _poll_until(
             lambda: (
-                _job_status(db, job.uuid).status == "running"
-                and _job_status(db, job.uuid).pid is not None
+                _job_status(hub, job["uuid"]).status == "running"
+                and _job_status(hub, job["uuid"]).pid is not None
             )
         ), "job did not reach running with a pid"
 
-        assert service.cancel(job.id) is True
+        assert service.cancel(job["id"]) is True
 
         assert _poll_until(
-            lambda: _job_status(db, job.uuid).status in {"stopped", "error"}
-        ), f"job did not finalize, status={_job_status(db, job.uuid).status!r}"
+            lambda: _job_status(hub, job["uuid"]).status in {"stopped", "error"}
+        ), f"job did not finalize, status={_job_status(hub, job['uuid']).status!r}"
     finally:
         service.stop()
 
-    final = _job_status(db, job.uuid)
+    final = _job_status(hub, job["uuid"])
     assert final.status == "stopped", f"expected stopped, got {final.status!r}"
     assert final.step < 500
     # Lease released exactly as many times as acquired (no leak).
     assert lease.acquire_count == lease.release_count == 1
 
 
-def test_zero_image_dataset_marks_error_no_lease_leak(db, repo_dir):
+def test_zero_image_dataset_marks_error_no_lease_leak(hub, repo_dir):
     """A zero-image dataset marks the job error and never touches the GPU lease."""
     lease = _StubLease(grant=True)
     notify = _CapturingNotify()
     service = _make_service(
-        db,
+        hub,
         repo_dir,
         lease=lease,
         notify=notify,
         dataset_builder=_make_dataset_builder(image_count=0),
     )
     template = _write_template(repo_dir, steps=4, save_every=2)
-    set_id = _make_set(db)
+    set_id = _SET_ID
 
     service.start()
     try:
@@ -439,13 +403,13 @@ def test_zero_image_dataset_marks_error_no_lease_leak(db, repo_dir):
             trigger_word="t",
             template_path=template,
         )
-        assert _poll_until(lambda: _job_status(db, job.uuid).status == "error"), (
-            f"status={_job_status(db, job.uuid).status!r}"
+        assert _poll_until(lambda: _job_status(hub, job["uuid"]).status == "error"), (
+            f"status={_job_status(hub, job['uuid']).status!r}"
         )
     finally:
         service.stop()
 
-    final = _job_status(db, job.uuid)
+    final = _job_status(hub, job["uuid"])
     assert final.status == "error"
     assert final.error and "empty" in final.error.lower()
     # The lease was never taken (we bailed before acquire) → no leak.
@@ -462,18 +426,18 @@ class _WaitingLease(_StubLease):
         return False
 
 
-def test_lease_cancelled_while_waiting_stops_the_job_unlaunched(db, repo_dir):
+def test_lease_cancelled_while_waiting_stops_the_job_unlaunched(hub, repo_dir):
     """A waiting lease cancelled from the Tasks tab ends the job, never trained."""
     lease = _StubLease(grant=False)
     service = _make_service(
-        db,
+        hub,
         repo_dir,
         lease=lease,
         notify=_CapturingNotify(),
         dataset_builder=_make_dataset_builder(),
     )
     template = _write_template(repo_dir, steps=4, save_every=2)
-    set_id = _make_set(db)
+    set_id = _SET_ID
 
     service.start()
     try:
@@ -484,29 +448,29 @@ def test_lease_cancelled_while_waiting_stops_the_job_unlaunched(db, repo_dir):
             trigger_word="t",
             template_path=template,
         )
-        assert _poll_until(lambda: _job_status(db, job.uuid).status == "stopped"), (
-            f"status={_job_status(db, job.uuid).status!r}"
+        assert _poll_until(lambda: _job_status(hub, job["uuid"]).status == "stopped"), (
+            f"status={_job_status(hub, job['uuid']).status!r}"
         )
     finally:
         service.stop()
 
-    final = _job_status(db, job.uuid)
+    final = _job_status(hub, job["uuid"])
     assert final.pid is None and final.started_at is None
     assert lease.events == ["acquire", "release"]
 
 
-def test_cancel_queued_job_drops_the_lease_it_waits_on(db, repo_dir):
+def test_cancel_queued_job_drops_the_lease_it_waits_on(hub, repo_dir):
     """Cancelling a job that waits for the GPU releases its lease, never trains."""
     lease = _WaitingLease()
     service = _make_service(
-        db,
+        hub,
         repo_dir,
         lease=lease,
         notify=_CapturingNotify(),
         dataset_builder=_make_dataset_builder(),
     )
     template = _write_template(repo_dir, steps=4, save_every=2)
-    set_id = _make_set(db)
+    set_id = _SET_ID
 
     service.start()
     try:
@@ -518,34 +482,34 @@ def test_cancel_queued_job_drops_the_lease_it_waits_on(db, repo_dir):
             template_path=template,
         )
         assert _poll_until(lambda: service._waiting is not None)
-        assert service.cancel(_job_status(db, job.uuid).id)
+        assert service.cancel(_job_status(hub, job["uuid"]).id)
         assert _poll_until(lambda: service._waiting is None)
     finally:
         service.stop()
 
-    final = _job_status(db, job.uuid)
+    final = _job_status(hub, job["uuid"])
     assert final.status == "stopped"
     assert final.pid is None and final.started_at is None
     assert lease.acquire_count == 1 and lease.release_count >= 1
 
 
-def _run_to_terminal(db, service, job, *, expect: str) -> None:
+def _run_to_terminal(hub, service, job, *, expect: str) -> None:
     """Start the worker, wait for *job* to reach *expect*, then stop it."""
     service.start()
     try:
-        assert _poll_until(lambda: _job_status(db, job.uuid).status == expect), (
-            f"status={_job_status(db, job.uuid).status!r}, wanted {expect!r}"
+        assert _poll_until(lambda: _job_status(hub, job["uuid"]).status == expect), (
+            f"status={_job_status(hub, job['uuid']).status!r}, wanted {expect!r}"
         )
     finally:
         service.stop()
 
 
-def test_completed_run_is_handed_to_the_importer_and_the_job_completes(db, repo_dir):
+def test_completed_run_is_handed_to_the_importer_and_the_job_completes(hub, repo_dir):
     """A finished run calls the importer with its run folder; the job completes."""
     importer = _RecordingImport()
     lease = _StubLease(grant=True)
     service = _make_service(
-        db,
+        hub,
         repo_dir,
         lease=lease,
         notify=_CapturingNotify(),
@@ -553,7 +517,7 @@ def test_completed_run_is_handed_to_the_importer_and_the_job_completes(db, repo_
         importer=importer,
     )
     template = _write_template(repo_dir, steps=4, save_every=2)
-    set_id = _make_set(db)
+    set_id = _SET_ID
     job = service.enqueue(
         set_id=set_id,
         name="shelfbound",
@@ -562,25 +526,27 @@ def test_completed_run_is_handed_to_the_importer_and_the_job_completes(db, repo_
         template_path=template,
     )
 
-    _run_to_terminal(db, service, job, expect="completed")
+    _run_to_terminal(hub, service, job, expect="completed")
 
     assert len(importer.calls) == 1
     run_dir, info = importer.calls[0]
     # The run folder is the one holding the final checkpoint, not its parent.
     assert os.path.isfile(os.path.join(run_dir, "shelfbound.safetensors"))
     assert info["set_id"] == set_id and info["character_id"] is None
-    final = _job_status(db, job.uuid)
+    # The importer is told which hub run made the model, so it can stamp it.
+    assert info["id"] == job["id"]
+    final = _job_status(hub, job["uuid"])
     assert final.status == "completed"
     assert final.report and "(stack 7)" in final.report
     assert lease.acquire_count == lease.release_count == 1
 
 
-def test_an_importer_failure_marks_the_completed_job_error(db, repo_dir):
+def test_an_importer_failure_marks_the_completed_job_error(hub, repo_dir):
     """The run finished but the shelf refused it: the job is an error, not done."""
     importer = _RecordingImport(error=RuntimeError("no room on the shelf"))
     lease = _StubLease(grant=True)
     service = _make_service(
-        db,
+        hub,
         repo_dir,
         lease=lease,
         notify=_CapturingNotify(),
@@ -588,7 +554,7 @@ def test_an_importer_failure_marks_the_completed_job_error(db, repo_dir):
         importer=importer,
     )
     template = _write_template(repo_dir, steps=4, save_every=2)
-    set_id = _make_set(db)
+    set_id = _SET_ID
     job = service.enqueue(
         set_id=set_id,
         name="refused",
@@ -597,17 +563,17 @@ def test_an_importer_failure_marks_the_completed_job_error(db, repo_dir):
         template_path=template,
     )
 
-    _run_to_terminal(db, service, job, expect="error")
+    _run_to_terminal(hub, service, job, expect="error")
 
     assert len(importer.calls) == 1
-    final = _job_status(db, job.uuid)
+    final = _job_status(hub, job["uuid"])
     assert final.status == "error"
     assert final.error == ("Run completed but the LoRA artifact could not be imported")
     assert final.report is None
     assert lease.acquire_count == lease.release_count == 1
 
 
-def test_reconcile_on_startup_dead_running_job_finalizes(db, repo_dir):
+def test_reconcile_on_startup_dead_running_job_finalizes(hub, repo_dir):
     """A job left 'running' with a dead pid is finalized; lease not left held.
 
     We pre-stage a job row as 'running' with a dead pid and a save_root that
@@ -618,7 +584,7 @@ def test_reconcile_on_startup_dead_running_job_finalizes(db, repo_dir):
     notify = _CapturingNotify()
     importer = _RecordingImport()
     service = _make_service(
-        db,
+        hub,
         repo_dir,
         lease=lease,
         notify=notify,
@@ -627,7 +593,7 @@ def test_reconcile_on_startup_dead_running_job_finalizes(db, repo_dir):
     )
 
     job_uuid = "dead-job-uuid-0001"
-    work_dir = os.path.join(db.image_root, "training", job_uuid)
+    work_dir = os.path.join(os.path.dirname(hub.path), "training", job_uuid)
     training_folder = os.path.join(work_dir, "output")
     save_root = os.path.join(training_folder, "deadjob")
     os.makedirs(save_root, exist_ok=True)
@@ -656,32 +622,30 @@ def test_reconcile_on_startup_dead_running_job_finalizes(db, repo_dir):
     finally:
         conn.close()
 
-    character_id = _make_character(db)
-
-    # Insert the TrainingJob row as 'running' with a dead pid.
-    def _insert(session):
-        job = TrainingJob(
-            uuid=job_uuid,
-            name="deadjob",
-            status="running",
-            character_id=character_id,
-            base_model="m",
-            trigger_word="t",
-            pid=999_999_999,
-            training_folder=training_folder,
-            total_steps=4,
-            step=4,
-        )
-        session.add(job)
-        session.commit()
-        session.refresh(job)
-        return job.id
-
-    db.run_task(_insert)
+    # Stage the run as 'running' with a dead pid, as a crashed worker left it.
+    training_runs.create_run(
+        hub,
+        library_uuid=_LIBRARY_UUID,
+        uuid=job_uuid,
+        name="deadjob",
+        set_id=None,
+        character_id=_CHARACTER_ID,
+        base_model="m",
+        trigger_word="t",
+    )
+    training_runs.update_run(
+        hub,
+        job_uuid,
+        status="running",
+        pid=999_999_999,
+        training_folder=training_folder,
+        total_steps=4,
+        step=4,
+    )
 
     service.reconcile_on_startup()
 
-    final = _job_status(db, job_uuid)
+    final = _job_status(hub, job_uuid)
     assert final.status == "completed", f"got {final.status!r}"
     assert [run_dir for run_dir, _ in importer.calls] == [save_root]
     # Dead-process reconcile must not have taken the GPU lease at all.
@@ -689,13 +653,13 @@ def test_reconcile_on_startup_dead_running_job_finalizes(db, repo_dir):
     assert lease.release_count == 0
 
 
-def test_current_worker_snapshot_idle_and_running(db, repo_dir):
+def test_current_worker_snapshot_idle_and_running(hub, repo_dir):
     """The /workers/progress snapshot is None when idle, populated when running."""
     from pixlstash.training.backend import TrainingProgress
 
     lease, notify = _StubLease(), _CapturingNotify()
     service = _make_service(
-        db,
+        hub,
         repo_dir,
         lease=lease,
         notify=notify,
@@ -741,3 +705,49 @@ def test_current_worker_snapshot_idle_and_running(db, repo_dir):
         final_checkpoint="x.safetensors",
     )
     assert service.current_worker_snapshot() is None
+
+
+def test_the_worker_leaves_another_librarys_runs_alone(hub, repo_dir):
+    """Claim and reconcile are scoped to the service's own library.
+
+    A queued or unfinished run belonging to another library is not this
+    service's to train or finalize: its set and character ids are vault ids of
+    that library, and a second worker would run them against the wrong vault.
+    """
+    lease, notify = _StubLease(), _CapturingNotify()
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=lease,
+        notify=notify,
+        dataset_builder=_make_dataset_builder(),
+    )
+    training_runs.create_run(
+        hub,
+        library_uuid="other-library",
+        uuid="other-queued",
+        name="elsewhere",
+        set_id=_SET_ID,
+        character_id=None,
+        base_model="m",
+        trigger_word="t",
+    )
+    training_runs.create_run(
+        hub,
+        library_uuid="other-library",
+        uuid="other-running",
+        name="elsewhere-too",
+        set_id=_SET_ID,
+        character_id=None,
+        base_model="m",
+        trigger_word="t",
+    )
+    training_runs.update_run(hub, "other-running", status="running", pid=999_999_999)
+
+    # The worker's claim, run once: nothing of ours is queued, so nothing runs.
+    assert service._process_next_queued_job() is False
+    service.reconcile_on_startup()
+
+    assert _job_status(hub, "other-queued").status == "queued"
+    assert _job_status(hub, "other-running").status == "running"
+    assert lease.acquire_count == 0

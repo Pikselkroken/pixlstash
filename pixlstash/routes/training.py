@@ -23,11 +23,10 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
-from sqlmodel import Session, select
 
 from platformdirs import user_data_dir
 
-from pixlstash.db_models.training_job import TrainingJob
+from pixlstash.hub import training_runs
 from pixlstash.pixl_logging import get_logger
 from pixlstash.training.config_render import TunableOverrideError, validate_tunables
 from pixlstash.utils.path_utils import resolve_path_within
@@ -246,6 +245,18 @@ def create_router(server) -> APIRouter:
 
     def _image_root() -> str:
         return server.vault.image_root
+
+    def _store():
+        """The hub and library the training runs are read from and written to.
+
+        Every run is scoped to the library open now: another library's runs are
+        neither listed nor addressable, so their vault ids mean nothing here.
+        """
+        hub = server.vault.hub
+        library_uuid = server.vault.library_uuid
+        if hub is None or not library_uuid:
+            raise HTTPException(status_code=503, detail="No library is open.")
+        return hub, library_uuid
 
     def _training_root() -> str:
         return os.path.join(_image_root(), "training")
@@ -489,22 +500,22 @@ def create_router(server) -> APIRouter:
 
     # ── Serialisation helpers ─────────────────────────────────────────────
 
-    def _job_to_summary(job: TrainingJob) -> dict:
+    def _job_to_summary(job: dict) -> dict:
         return _redact_host_paths(
             {
-                "id": job.id,
-                "uuid": job.uuid,
-                "name": job.name,
-                "status": job.status,
-                "set_id": job.set_id,
-                "character_id": job.character_id,
-                "base_model": job.base_model,
-                "trigger_word": job.trigger_word,
-                "step": job.step,
-                "total_steps": job.total_steps,
-                "created_at": job.created_at,
-                "started_at": job.started_at,
-                "completed_at": job.completed_at,
+                "id": job["id"],
+                "uuid": job["uuid"],
+                "name": job["name"],
+                "status": job["status"],
+                "set_id": job["set_id"],
+                "character_id": job["character_id"],
+                "base_model": job["base_model"],
+                "trigger_word": job["trigger_word"],
+                "step": job["step"],
+                "total_steps": job["total_steps"],
+                "created_at": job["created_at"],
+                "started_at": job["started_at"],
+                "completed_at": job["completed_at"],
             }
         )
 
@@ -557,15 +568,15 @@ def create_router(server) -> APIRouter:
 
         return _redact_host_paths(
             {
-                "id": job.id,
-                "uuid": job.uuid,
-                "name": job.name,
-                "status": job.status,
-                "set_id": job.set_id,
-                "character_id": job.character_id,
-                "base_model": job.base_model,
-                "trigger_word": job.trigger_word,
-                "created_at": job.created_at,
+                "id": job["id"],
+                "uuid": job["uuid"],
+                "name": job["name"],
+                "status": job["status"],
+                "set_id": job["set_id"],
+                "character_id": job["character_id"],
+                "base_model": job["base_model"],
+                "trigger_word": job["trigger_word"],
+                "created_at": job["created_at"],
             }
         )
 
@@ -584,17 +595,11 @@ def create_router(server) -> APIRouter:
         character_id: Optional[int] = None,
     ):
         _ensure_secure(request)
-
-        def _query(session: Session):
-            stmt = select(TrainingJob)
-            if set_id is not None:
-                stmt = stmt.where(TrainingJob.set_id == set_id)
-            if character_id is not None:
-                stmt = stmt.where(TrainingJob.character_id == character_id)
-            stmt = stmt.order_by(TrainingJob.created_at.desc(), TrainingJob.id.desc())
-            return [_job_to_summary(job) for job in session.exec(stmt).all()]
-
-        return server.vault.db.run_immediate_read_task(_query)
+        hub, library_uuid = _store()
+        runs = training_runs.list_runs(
+            hub, library_uuid, set_id=set_id, character_id=character_id
+        )
+        return [_job_to_summary(run) for run in runs]
 
     @router.get(
         "/training/jobs/{job_id}",
@@ -608,48 +613,42 @@ def create_router(server) -> APIRouter:
     )
     def get_training_job(job_id: int, request: Request):
         _ensure_secure(request)
-
-        def _query(session: Session):
-            job = session.get(TrainingJob, job_id)
-            if job is None:
-                return None
-            return _redact_host_paths(
-                {
-                    "id": job.id,
-                    "uuid": job.uuid,
-                    "name": job.name,
-                    "status": job.status,
-                    "set_id": job.set_id,
-                    "character_id": job.character_id,
-                    "base_model": job.base_model,
-                    "trigger_word": job.trigger_word,
-                    "step": job.step,
-                    "total_steps": job.total_steps,
-                    "loss_curve": _parse_json_field(
-                        job.loss_curve, "loss_curve", job.uuid
-                    ),
-                    "rendered_config": _parse_json_field(
-                        job.rendered_config, "rendered_config", job.uuid
-                    ),
-                    "report": job.report,
-                    "sample_image_paths": _parse_json_field(
-                        job.sample_image_paths, "sample_image_paths", job.uuid
-                    ),
-                    "dataset_picture_ids": _parse_json_field(
-                        job.dataset_picture_ids, "dataset_picture_ids", job.uuid
-                    ),
-                    "ai_toolkit_commit": job.ai_toolkit_commit,
-                    "error": job.error,
-                    "created_at": job.created_at,
-                    "started_at": job.started_at,
-                    "completed_at": job.completed_at,
-                }
-            )
-
-        detail = server.vault.db.run_immediate_read_task(_query)
-        if detail is None:
+        hub, library_uuid = _store()
+        job = training_runs.get_run(hub, library_uuid, job_id)
+        if job is None:
             raise HTTPException(status_code=404, detail="Training job not found")
-        return detail
+        return _redact_host_paths(
+            {
+                "id": job["id"],
+                "uuid": job["uuid"],
+                "name": job["name"],
+                "status": job["status"],
+                "set_id": job["set_id"],
+                "character_id": job["character_id"],
+                "base_model": job["base_model"],
+                "trigger_word": job["trigger_word"],
+                "step": job["step"],
+                "total_steps": job["total_steps"],
+                "loss_curve": _parse_json_field(
+                    job["loss_curve"], "loss_curve", job["uuid"]
+                ),
+                "rendered_config": _parse_json_field(
+                    job["rendered_config"], "rendered_config", job["uuid"]
+                ),
+                "report": job["report"],
+                "sample_image_paths": _parse_json_field(
+                    job["sample_image_paths"], "sample_image_paths", job["uuid"]
+                ),
+                "dataset_picture_ids": _parse_json_field(
+                    job["dataset_picture_ids"], "dataset_picture_ids", job["uuid"]
+                ),
+                "ai_toolkit_commit": job["ai_toolkit_commit"],
+                "error": job["error"],
+                "created_at": job["created_at"],
+                "started_at": job["started_at"],
+                "completed_at": job["completed_at"],
+            }
+        )
 
     @router.get(
         "/training/jobs/{job_id}/status",
@@ -663,31 +662,25 @@ def create_router(server) -> APIRouter:
     )
     def get_training_job_status(job_id: int, request: Request):
         _ensure_secure(request)
-
-        def _query(session: Session):
-            job = session.get(TrainingJob, job_id)
-            if job is None:
-                return None
-            loss_curve = _parse_json_field(job.loss_curve, "loss_curve", job.uuid)
-            total = job.total_steps or 0
-            progress = (job.step / total) if total > 0 else 0.0
-            return _redact_host_paths(
-                {
-                    "id": job.id,
-                    "uuid": job.uuid,
-                    "status": job.status,
-                    "step": job.step,
-                    "total_steps": job.total_steps,
-                    "latest_loss": _latest_loss(loss_curve),
-                    "progress": progress,
-                    "info": job.report or job.error,
-                }
-            )
-
-        status = server.vault.db.run_immediate_read_task(_query)
-        if status is None:
+        hub, library_uuid = _store()
+        job = training_runs.get_run(hub, library_uuid, job_id)
+        if job is None:
             raise HTTPException(status_code=404, detail="Training job not found")
-        return status
+        loss_curve = _parse_json_field(job["loss_curve"], "loss_curve", job["uuid"])
+        total = job["total_steps"] or 0
+        progress = (job["step"] / total) if total > 0 else 0.0
+        return _redact_host_paths(
+            {
+                "id": job["id"],
+                "uuid": job["uuid"],
+                "status": job["status"],
+                "step": job["step"],
+                "total_steps": job["total_steps"],
+                "latest_loss": _latest_loss(loss_curve),
+                "progress": progress,
+                "info": job["report"] or job["error"],
+            }
+        )
 
     @router.post(
         "/training/jobs/{job_id}/cancel",
@@ -704,15 +697,11 @@ def create_router(server) -> APIRouter:
         # First distinguish "unknown job" (404) from "already terminal" (409):
         # training_service.cancel returns False for both, so check existence and
         # terminal state directly before acting.
-        def _load_status(session: Session):
-            job = session.get(TrainingJob, job_id)
-            if job is None:
-                return None
-            return job.status
-
-        current_status = server.vault.db.run_immediate_read_task(_load_status)
-        if current_status is None:
+        hub, library_uuid = _store()
+        job = training_runs.get_run(hub, library_uuid, job_id)
+        if job is None:
             raise HTTPException(status_code=404, detail="Training job not found")
+        current_status = job["status"]
 
         cancelled = server.vault.training_service.cancel(job_id)
         if not cancelled:
@@ -739,17 +728,9 @@ def create_router(server) -> APIRouter:
         _ensure_secure(request)
 
         training_root = _training_root()
+        hub, library_uuid = _store()
 
-        def _delete(session: Session):
-            job = session.get(TrainingJob, job_id)
-            if job is None:
-                return None
-            job_uuid = job.uuid
-            session.delete(job)
-            session.commit()
-            return job_uuid
-
-        job_uuid = server.vault.db.run_task(_delete)
+        job_uuid = training_runs.delete_run(hub, library_uuid, job_id)
         if job_uuid is None:
             raise HTTPException(status_code=404, detail="Training job not found")
 

@@ -706,6 +706,56 @@ _V2_MODEL_SHELF_TABLES = (
 # three tables and gain the new two, with the scanner writing to neither.
 _V2_SUPERSEDED_SHELF_TABLES = ("adapter_file", "adapter", "checkpoint")
 
+# One ai-toolkit LoRA training run: the record `model.training_run_id` points at.
+#
+# It lives in the hub, not the vault, because the shelf it feeds is hub-wide and
+# a trained model is a hub row. Ids and set/character references are vault ids,
+# so every row names the library that owns them (`library_uuid`, the immutable
+# `library.uuid`, never the recycled integer id). No foreign key: `library` rows
+# are never purged while a run may still point at them, and `model.id` /
+# `training_run.id` are AUTOINCREMENT, so a stale reference names nothing rather
+# than a different run.
+#
+# `status` is queued | running | stopping | stopped | completed | error. The
+# progress columns are rewritten while the trainer runs; the terminal ones are
+# written once. Timestamps are the ISO strings every other hub table stores.
+_V2_TRAINING_RUN = """
+CREATE TABLE IF NOT EXISTS training_run (
+    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    uuid                   TEXT NOT NULL UNIQUE,
+    library_uuid           TEXT NOT NULL,
+    name                   TEXT NOT NULL,
+    status                 TEXT NOT NULL DEFAULT 'queued',
+    set_id                 INTEGER,
+    character_id          INTEGER,
+    base_model             TEXT,
+    trigger_word           TEXT,
+    rendered_config        TEXT,
+    dataset_snapshot_path  TEXT,
+    dataset_picture_ids    TEXT,
+    ai_toolkit_commit      TEXT,
+    training_folder        TEXT,
+    pid                    INTEGER,
+    step                   INTEGER NOT NULL DEFAULT 0,
+    total_steps            INTEGER,
+    loss_curve             TEXT,
+    sample_image_paths     TEXT,
+    log_tail               TEXT,
+    report                 TEXT,
+    error                  TEXT,
+    created_at             TEXT NOT NULL,
+    started_at             TEXT,
+    completed_at           TEXT
+)
+"""
+
+# The worker's claim and the startup reconcile both read a library's runs by
+# status, so one index covers both.
+_V2_TRAINING_RUN_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS ix_training_run_library_status "
+    "ON training_run(library_uuid, status)",
+)
+
 
 # ---------------------------------------------------------------------------
 # The workflow library (v1.11, workflow library plan §4)
@@ -2087,6 +2137,12 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
             "created_at FROM workflow_picture_ghost_old"
         )
         conn.execute("DROP TABLE workflow_picture_ghost_old")
+
+    # The training run (the keystone of the training feature). Amended into v2
+    # for the same reason as the shelf: CREATE IF NOT EXISTS, re-run on every
+    # open, so an existing hub picks it up without a version bump.
+    for statement in (_V2_TRAINING_RUN, *_V2_TRAINING_RUN_INDEXES):
+        conn.execute(statement)
 
     for statement in _V2_WORKFLOW_TABLES:
         conn.execute(statement)

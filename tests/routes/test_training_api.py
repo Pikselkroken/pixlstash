@@ -8,8 +8,7 @@ Every endpoint is asserted in **both directions**:
 The :class:`~pixlstash.services.training_service.TrainingService` is stubbed
 with a fake on ``server.vault.training_service`` for the enqueue/cancel paths so
 no GPU subprocess is ever spawned; read/download/delete paths seed
-``TrainingJob`` rows (and real work-directory files) directly via the DB task
-runner.
+training-run rows (and real work-directory files) directly in the hub.
 
 See the training rows of ``docs/authz-coverage-matrix.md`` for the coverage matrix
 this file backs.
@@ -22,7 +21,7 @@ import tempfile
 
 from fastapi.testclient import TestClient
 
-from pixlstash.db_models.training_job import TrainingJob
+from pixlstash.hub import training_runs
 from pixlstash.server import Server
 
 
@@ -35,12 +34,13 @@ class _FakeTrainingService:
     """Records enqueue/cancel calls so tests need no GPU/subprocess.
 
     ``enqueue`` mirrors the real service's set/character invariant (raises
-    ``ValueError`` unless exactly one is given) and persists a real
-    ``TrainingJob`` row so the create response is realistic.
+    ``ValueError`` unless exactly one is given) and writes a real hub
+    ``training_run`` row so the create response is realistic.
     """
 
-    def __init__(self, db):
-        self._db = db
+    def __init__(self, hub, library_uuid):
+        self._hub = hub
+        self._library_uuid = library_uuid
         self.enqueue_calls = []
         self.cancel_calls = []
         self.cancel_result = True
@@ -75,25 +75,17 @@ class _FakeTrainingService:
 
         import uuid as _uuid
 
-        job_uuid = _uuid.uuid4().hex
-
-        def _create(session):
-            job = TrainingJob(
-                uuid=job_uuid,
-                name=name,
-                status="queued",
-                set_id=set_id,
-                character_id=character_id,
-                base_model=base_model,
-                trigger_word=trigger_word,
-            )
-            session.add(job)
-            session.commit()
-            session.refresh(job)
-            session.expunge(job)
-            return job
-
-        return self._db.run_task(_create)
+        run_id = training_runs.create_run(
+            self._hub,
+            library_uuid=self._library_uuid,
+            uuid=_uuid.uuid4().hex,
+            name=name,
+            set_id=set_id,
+            character_id=character_id,
+            base_model=base_model,
+            trigger_word=trigger_word,
+        )
+        return training_runs.get_run(self._hub, self._library_uuid, run_id)
 
     def cancel(self, job_id):
         self.cancel_calls.append(job_id)
@@ -131,7 +123,9 @@ def _setup():
 
     # Replace the real training service with a fake so enqueue/cancel never
     # touch a GPU or spawn a subprocess.
-    server.vault.training_service = _FakeTrainingService(server.vault.db)
+    server.vault.training_service = _FakeTrainingService(
+        server.vault.hub, server.vault.library_uuid
+    )
 
     client = TestClient(server.api, raise_server_exceptions=True)
     resp = client.post("/login", json={"username": "owner", "password": "ownerpass1"})
@@ -159,12 +153,23 @@ def _scoped_client(server, read_token):
 
 
 def _seed_job(server, **overrides):
-    """Insert a TrainingJob row directly and return its id+uuid."""
+    """Insert a training run directly in the hub; return its id and uuid.
+
+    ``library_uuid`` may be overridden to seed another library's run.
+    """
     import uuid as _uuid
 
+    creating = {
+        "library_uuid",
+        "name",
+        "set_id",
+        "character_id",
+        "base_model",
+        "trigger_word",
+    }
     fields = {
-        "uuid": _uuid.uuid4().hex,
         "name": "seeded-job",
+        "library_uuid": server.vault.library_uuid,
         "status": "completed",
         "set_id": None,
         "character_id": None,
@@ -182,15 +187,12 @@ def _seed_job(server, **overrides):
         "ai_toolkit_commit": "deadbeef",
     }
     fields.update(overrides)
-
-    def _create(session):
-        job = TrainingJob(**fields)
-        session.add(job)
-        session.commit()
-        session.refresh(job)
-        return job.id, job.uuid
-
-    return server.vault.db.run_task(_create)
+    created = {key: fields.pop(key) for key in list(fields) if key in creating}
+    job_uuid = _uuid.uuid4().hex
+    hub = server.vault.hub
+    run_id = training_runs.create_run(hub, uuid=job_uuid, **created)
+    training_runs.update_run(hub, job_uuid, **fields)
+    return run_id, job_uuid
 
 
 def _make_picture_set(owner_client, name="Set"):
@@ -325,6 +327,31 @@ def test_list_jobs_owner_works_and_filters():
         assert r.status_code == 200, r.text
         ids = {row["id"] for row in r.json()}
         assert ids == {id_char}
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_list_jobs_hides_another_librarys_runs():
+    """A run of another library is neither listed nor addressable by id.
+
+    Its set and character ids are that library's vault ids, so here they would
+    name the wrong pictures. It answers as a run that does not exist.
+    """
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        mine, _ = _seed_job(server, name="mine")
+        theirs, _ = _seed_job(server, name="theirs", library_uuid="another-library")
+
+        r = owner.get("/training/jobs")
+        assert r.status_code == 200, r.text
+        ids = {row["id"] for row in r.json()}
+        assert mine in ids
+        assert theirs not in ids
+
+        assert owner.get(f"/training/jobs/{theirs}").status_code == 404
+        assert owner.get(f"/training/jobs/{theirs}/status").status_code == 404
+        assert owner.post(f"/training/jobs/{theirs}/cancel").status_code == 404
+        assert owner.delete(f"/training/jobs/{theirs}").status_code == 404
     finally:
         _teardown(temp_dir, server)
 

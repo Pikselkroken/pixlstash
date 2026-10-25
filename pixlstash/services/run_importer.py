@@ -217,6 +217,7 @@ class RunImporter:
         subfolder: Optional[str] = None,
         should_cancel: Optional[Callable[[], bool]] = None,
         on_progress: Optional[Callable[[ImportOutcome], None]] = None,
+        training_run_id: Optional[int] = None,
     ) -> ImportReport:
         """Import the selected checkpoints of one run.
 
@@ -234,6 +235,10 @@ class RunImporter:
                 decides it; containment is still checked against the root.
             should_cancel: Consulted between files. Nothing is rolled back.
             on_progress: Called with each :class:`ImportOutcome`.
+            training_run_id: The hub ``training_run`` row that made the run, when
+                PixlStash trained it. Written into each new ``model`` row, so a
+                trained model names the run it came from. None for a run
+                trained elsewhere.
 
         Returns:
             An :class:`ImportReport`, with the stack the run landed in.
@@ -291,6 +296,7 @@ class RunImporter:
                 position=position,
                 destination_folder_id=destination_folder_id,
                 delete_source=delete_source,
+                training_run_id=training_run_id,
             )
             report.outcomes.append(outcome)
             if on_progress is not None:
@@ -464,6 +470,7 @@ class RunImporter:
         position: int,
         destination_folder_id: int,
         delete_source: bool,
+        training_run_id: Optional[int] = None,
     ) -> ImportOutcome:
         """copy → verify → register and commit → then unlink. No other order."""
         partial = target + PARTIAL_SUFFIX
@@ -506,6 +513,7 @@ class RunImporter:
                 stack_id=stack_id,
                 position=position,
                 destination_folder_id=destination_folder_id,
+                training_run_id=training_run_id,
             )
         except sqlite3.IntegrityError as exc:
             # The destination key was registered between ``_resolve_targets``
@@ -555,6 +563,7 @@ class RunImporter:
         stack_id: int,
         position: int,
         destination_folder_id: int,
+        training_run_id: Optional[int] = None,
     ) -> int:
         """Write the content row and the location row in one transaction.
 
@@ -562,7 +571,8 @@ class RunImporter:
         row will name. ``ON CONFLICT(sha256)`` because a run imported twice, or a
         file already on the shelf from somewhere else, is one model with two
         locations - the shelf's whole content/location split. On that path the
-        curation already on the row is kept and only the run facts are filled in.
+        curation already on the row is kept and only the run facts are filled in,
+        ``training_run_id`` included: the first run to make the file keeps it.
 
         The run's own config supplies what the header often does not: 37 % of
         real adapters record no base model at all, and ai-toolkit's
@@ -582,7 +592,8 @@ class RunImporter:
                 "INSERT INTO model (file_kind, kind, sha256, display_name, "
                 "filename, base_model, trigger_words, provenance, training_step, "
                 "param_count, file_size, stack_id, stack_position, run_key, "
-                "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "training_run_id, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(sha256) DO UPDATE SET "
                 "display_name = COALESCE(model.display_name, excluded.display_name), "
                 "base_model = COALESCE(model.base_model, excluded.base_model), "
@@ -591,6 +602,7 @@ class RunImporter:
                 "stack_id = COALESCE(model.stack_id, excluded.stack_id), "
                 "stack_position = COALESCE(model.stack_position, excluded.stack_position), "
                 "run_key = COALESCE(model.run_key, excluded.run_key), "
+                "training_run_id = COALESCE(model.training_run_id, excluded.training_run_id), "
                 "file_size = excluded.file_size",
                 (
                     # An adapter, always: a training run's output is what it
@@ -609,6 +621,7 @@ class RunImporter:
                     stack_id,
                     position,
                     run.name,
+                    training_run_id,
                     now,
                 ),
             )

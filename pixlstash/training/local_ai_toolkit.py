@@ -104,7 +104,7 @@ def safe_job_stem(name: str, job_id: str) -> str:
       empty, all-whitespace, or all-disallowed). The uuid is itself a safe stem.
 
     Args:
-        name: The user-supplied display name (``TrainingJob.name``).
+        name: The user-supplied display name (``training_run.name``).
         job_id: The job uuid, used as the safe fallback stem.
 
     Returns:
