@@ -16,8 +16,9 @@ vi.mock("../../api/pictures", () => ({
   listPicturesByIds: vi.fn(async () => []),
   pictureThumbnailUrl: (id) => `/thumbs/${id}.webp`,
 }));
+const bulkFetchTags = vi.fn(async () => []);
 vi.mock("../../api/tags", () => ({
-  bulkFetchTags: vi.fn(async () => []),
+  bulkFetchTags: (...args) => bulkFetchTags(...args),
   listTagPredictions: vi.fn(async () => ({ tag_predictions: [], meta: {} })),
   addPictureTag: vi.fn(),
   removePictureTag: vi.fn(),
@@ -30,6 +31,7 @@ import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
 import { SCRAPHEAP_PICTURES_ID } from "../../stores/useViewStore";
+import { useSelectionTags } from "../../composables/useSelectionTags";
 
 enableAutoUnmount(afterEach);
 
@@ -289,5 +291,41 @@ describe("keys for chips selected in the rail", () => {
     press("Delete");
     expect(panel.removeSelection).not.toHaveBeenCalled();
     expect(grid).toHaveBeenCalledOnce();
+  });
+});
+
+describe("the Tasks deep link over a selection", () => {
+  it("shows the Tasks tab until the selection next changes", async () => {
+    const wrapper = mountRail();
+    await select(wrapper, [7]);
+    expect(wrapper.find(".rail-picture").exists()).toBe(true);
+
+    useSidebarStore().showTasksTab();
+    await flush();
+    expect(wrapper.find(".rail-picture").exists()).toBe(false);
+    expect(wrapper.find("button.inspector-tab--active").text()).toBe("Tasks");
+
+    await select(wrapper, [8]);
+    expect(wrapper.find(".rail-picture").exists()).toBe(true);
+  });
+});
+
+describe("the selection's tag reads", () => {
+  it("drop an answer for a selection that has since changed", async () => {
+    const answers = [];
+    bulkFetchTags.mockImplementation(
+      () => new Promise((resolve) => answers.push(resolve)),
+    );
+    let ids = [1, 2];
+    const tags = useSelectionTags(() => ids);
+    const first = tags.fetchSelectedImageTags();
+    ids = [3, 4];
+    const second = tags.fetchSelectedImageTags();
+    answers[1]([{ id: 3, tags: [{ id: 9, tag: "new" }] }, { id: 4, tags: [] }]);
+    await second;
+    answers[0]([{ id: 1, tags: [{ id: 8, tag: "old" }] }, { id: 2, tags: [] }]);
+    await first;
+    expect(tags.fetchedTagData.value.map((row) => row.id)).toEqual([3, 4]);
+    bulkFetchTags.mockReset().mockResolvedValue([]);
   });
 });

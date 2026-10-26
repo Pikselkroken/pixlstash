@@ -97,9 +97,16 @@ const emit = defineEmits([
 // Nothing selected, the rail describes the view; one picture, that picture;
 // several, what they share.
 const selectedIds = computed(() => selectionStore.selectedImageIds);
+// A deep link to the Tasks tab (`showTasksTab`) shows the view's tabs over a
+// selection until the selection next changes; the tabs exist only there.
+const tasksOverSelection = ref(false);
+watch(selectedIds, () => {
+  tasksOverSelection.value = false;
+});
 const railMode = computed(() => {
   const n = selectedIds.value.length;
-  return n === 0 ? "none" : n === 1 ? "one" : "many";
+  if (n === 0 || tasksOverSelection.value) return "none";
+  return n === 1 ? "one" : "many";
 });
 const oneId = computed(() =>
   railMode.value === "one" ? selectedIds.value[0] : null,
@@ -1048,6 +1055,7 @@ watch(
   () => sidebarStore.tasksTabRequest,
   () => {
     activeTab.value = "tasks";
+    if (selectedIds.value.length) tasksOverSelection.value = true;
   },
 );
 </script>

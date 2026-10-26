@@ -243,17 +243,19 @@ const thumbCards = computed(() => props.cards.slice(0, MAX_THUMBS));
 
 // ── Size and models: not on a grid card, so read for the selection ─────────
 const fileRows = ref([]);
+let fileRead = 0;
 
 async function fetchFileRows() {
   const ids = props.ids.slice(0, MAX_TAG_FETCH);
+  const mine = (fileRead += 1);
   try {
     const rows = await listPicturesByIds(ids, {
       fields: "id,size_bytes,comfyui_models",
     });
-    fileRows.value = Array.isArray(rows) ? rows : [];
+    if (mine === fileRead) fileRows.value = Array.isArray(rows) ? rows : [];
   } catch (e) {
     console.warn("Couldn't read the selected pictures' sizes and models", e);
-    fileRows.value = [];
+    if (mine === fileRead) fileRows.value = [];
   }
 }
 
@@ -381,7 +383,7 @@ async function pasteClipboard() {
   flex-wrap: wrap;
   align-content: flex-start;
   gap: var(--space-2);
-  min-height: 26px;
+  min-height: var(--control-h-sm);
   padding: var(--space-2);
   border: 1px dashed rgba(var(--v-theme-on-surface), 0.2);
   border-radius: var(--radius-md);

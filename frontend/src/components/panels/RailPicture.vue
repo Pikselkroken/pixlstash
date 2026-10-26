@@ -157,7 +157,7 @@ function personName(characterId) {
   return namesStore.characterNames[characterId] || `Person ${characterId}`;
 }
 
-const FACE_CROP = 32;
+const FACE_CROP = 32; // px, the crop's box: --control-h-bar
 
 // The face, cut from the thumbnail: it keeps the picture's aspect, so the
 // detector's full-size box scales onto it.
@@ -233,7 +233,8 @@ function onChipKeydown(e) {
     return;
   }
   // The lightbox or a dialog over the grid owns the keys while it is open.
-  if (document.querySelector(".image-overlay, .v-overlay--active .v-overlay__scrim")) {
+  // A menu has no scrim but owns Escape too, so any active overlay counts.
+  if (document.querySelector(".image-overlay, .v-overlay--active")) {
     return;
   }
   const command = e.ctrlKey || e.metaKey;
@@ -395,8 +396,8 @@ const properties = computed(() => {
 
 .rail-faces__crop {
   flex: none;
-  width: 32px;
-  height: 32px;
+  width: var(--control-h-bar);
+  height: var(--control-h-bar);
   border-radius: var(--radius-sm);
   background-color: rgba(var(--v-theme-on-surface), 0.06);
   background-repeat: no-repeat;

@@ -41,6 +41,10 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
   const labelThresholds = ref({});
   const tagActionLoading = ref([]);
   const tagError = ref("");
+  // The newest read of each kind wins: an answer for a selection the user has
+  // since changed is dropped rather than shown under the new one.
+  let tagRead = 0;
+  let predictionRead = 0;
 
   function pictureIds() {
     return (Array.isArray(selectedIds()) ? selectedIds() : [])
@@ -53,24 +57,28 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
     tagDataCapped.value = ids.length > MAX_TAG_FETCH;
     const toFetch = ids.slice(0, MAX_TAG_FETCH);
     if (!toFetch.length) {
+      tagRead += 1;
       fetchedTagData.value = [];
       return;
     }
+    const mine = (tagRead += 1);
     if (!fetchedTagData.value.length) tagDataLoading.value = true;
     try {
       const rows = await bulkFetchTags(toFetch);
+      if (mine !== tagRead) return;
       fetchedTagData.value = Array.isArray(rows) ? rows : [];
     } catch (e) {
       console.warn("Couldn't read the selected pictures' tags", e);
-      fetchedTagData.value = [];
+      if (mine === tagRead) fetchedTagData.value = [];
     } finally {
-      tagDataLoading.value = false;
+      if (mine === tagRead) tagDataLoading.value = false;
     }
   }
 
   async function fetchSelectedImagePredictions() {
     const ids = pictureIds()
       .slice(0, MAX_TAG_FETCH);
+    const mine = (predictionRead += 1);
     if (!ids.length) {
       fetchedPredictionData.value = [];
       return;
@@ -101,12 +109,13 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
             }),
         ),
       );
+      if (mine !== predictionRead) return;
       fetchedPredictionData.value = results;
     } catch (e) {
       console.warn("Couldn't read the selected pictures' rejected tags", e);
-      fetchedPredictionData.value = [];
+      if (mine === predictionRead) fetchedPredictionData.value = [];
     } finally {
-      predictionLoading.value = false;
+      if (mine === predictionRead) predictionLoading.value = false;
     }
   }
 
