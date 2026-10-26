@@ -89,6 +89,14 @@ describe("OverlayFilmstrip scrolling", () => {
     );
   });
 
+  it("drops a thumb that scrolls out of the window at once", async () => {
+    // A leaving thumb kept in flow for a frame pushed every thumb under it a
+    // slot down, so the strip jumped on each step of a scroll down.
+    const { strip } = mountScrolling();
+    await strip.setProps({ items: ITEMS.slice(1), start: 5 });
+    expect(strip.findAll(".filmstrip-thumb")).toHaveLength(ITEMS.length - 1);
+  });
+
   it("reports the first thumb in view as it scrolls", async () => {
     const { strip, el } = mountScrolling();
     el.scrollTop = 350;

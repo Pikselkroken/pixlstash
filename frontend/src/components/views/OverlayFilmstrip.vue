@@ -7,9 +7,14 @@
       @keydown="onViewportKeydown"
     >
       <div class="filmstrip-sizer" :style="sizerStyle">
+        <!-- No enter/leave transitions: Vue keeps a leaving thumb in flow
+             for two frames even with no CSS, and the top one leaving on every
+             scroll step down pushed the strip a slot down and back. Moves
+             (stack reorder) still animate. -->
         <transition-group
           name="filmstrip-slide"
           tag="div"
+          :css="false"
           class="filmstrip-list"
           :style="listStyle"
         >
