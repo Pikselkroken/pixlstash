@@ -2537,6 +2537,18 @@ def _ml_modules_loaded_by(target: str) -> list[str]:
     return json.loads(proc.stdout.strip().splitlines()[-1])
 
 
+@pytest.mark.parametrize(
+    "target",
+    ["pixlstash.services.dedup_tier_service", "pixlstash.utils.service.export_utils"],
+)
+def test_dedup_and_export_utils_import_first_in_a_fresh_interpreter(target):
+    """Either module imported first must load: the dedup service reaches
+    ``pixlstash.utils.service`` through the set-lock service, so a module-level
+    import of the dedup service in ``export_utils`` is a cycle that only shows
+    when the dedup service is imported first (the e2e dedup seeder does)."""
+    _ml_modules_loaded_by(target)
+
+
 def test_server_import_pulls_no_ml_libraries():
     """Importing the server must not drag in torch/onnxruntime/etc."""
     loaded = _ml_modules_loaded_by("pixlstash.server")

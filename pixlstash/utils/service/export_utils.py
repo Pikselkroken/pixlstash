@@ -15,11 +15,6 @@ from PIL import Image, PngImagePlugin
 from pixlstash.db_models.face import Face
 from pixlstash.db_models.picture import Picture, PictureSet
 from pixlstash.db_models.picture_set import PictureSetMember
-from pixlstash.services.dedup_tier_service import (
-    DEFAULT_THRESHOLD,
-    NearBucket,
-    near_pairs_in_bucket,
-)
 from pixlstash.utils.host_open import open_in_file_manager
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
@@ -978,6 +973,15 @@ class ExportUtils:
             how many have a near copy in the dataset, and how many show a face
             named as somebody other than *character_id* (0 without one).
         """
+        # Local import to break a cycle: dedup_tier_service imports
+        # set_lock_service → stack_membership → pixlstash.utils.service, whose
+        # __init__ imports this module.
+        from pixlstash.services.dedup_tier_service import (
+            DEFAULT_THRESHOLD,
+            NearBucket,
+            near_pairs_in_bucket,
+        )
+
         pics = ExportUtils._training_rows(server, set_id, character_id)
         _, tags = ExportUtils._captions_and_tags(pics)
         ids = [pic.id for pic in pics]
