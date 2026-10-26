@@ -17,18 +17,31 @@
       v-if="open || lightbox"
       v-show="open"
       class="inspector-content"
-      :class="{ 'inspector-content--footed': $slots.footer }"
+      :class="{ 'inspector-content--footed': $slots.footer || $slots.head }"
     >
-      <!-- The tab band is pinned to the toolbar height, so the sidebar tabs,
-           the toolbar and this band share one bottom rule across the window.
-           Tabs name the SUBJECT of the pane, never the view. -->
+      <!-- A pane that names its subject (the grid's rail, #2161) has a head
+           row instead: pinned to the toolbar height, so the toolbar and this
+           row share one bottom rule across the window. Its tabs then sit
+           under it, after the `lead` slot, one level down. -->
+      <div v-if="$slots.head" class="inspector-head">
+        <slot name="head" />
+      </div>
+      <div v-if="$slots.lead" class="inspector-lead">
+        <slot name="lead" />
+      </div>
+      <!-- Without a head the tab band is the pane's top row, at the toolbar
+           height for the same shared rule. Tabs name the SUBJECT of the pane,
+           never the view. -->
       <!-- `tabs-end` rides the band's right edge (the lightbox's stars and
            heart, #2163). With it the tabs size to their labels instead of
            sharing the width, and the band is drawn even with no tabs. -->
       <div
         v-if="tabs.length || $slots['tabs-end']"
         class="inspector-tabs"
-        :class="{ 'inspector-tabs--with-end': $slots['tabs-end'] }"
+        :class="{
+          'inspector-tabs--under-head': $slots.head,
+          'inspector-tabs--with-end': $slots['tabs-end'],
+        }"
       >
         <button
           v-for="tab in tabs"
@@ -152,8 +165,8 @@ const emit = defineEmits(["update:modelValue"]);
   flex-direction: column;
 }
 
-/* With a footer the body scrolls instead of the whole pane, so the footer
-   below it stays put. */
+/* With a footer or a head the body scrolls instead of the whole pane, so the
+   footer below it and the head, lead and tabs above it stay put. */
 .inspector-content--footed {
   overflow: hidden;
 }
@@ -197,6 +210,26 @@ const emit = defineEmits(["update:modelValue"]);
   height: var(--toolbar-height);
   flex-shrink: 0;
   border-bottom: 1px solid rgb(var(--v-theme-divider));
+}
+
+.inspector-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  height: var(--toolbar-height);
+  flex-shrink: 0;
+  padding: 0 var(--space-2) 0 var(--space-3);
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
+}
+
+.inspector-lead {
+  flex-shrink: 0;
+  padding: var(--space-4) var(--space-3) var(--space-3);
+}
+
+.inspector-tabs--under-head {
+  height: var(--control-h-bar);
+  margin: 0 var(--space-3);
 }
 
 /* An inspector tab speaks the section label's voice. Olive marks, words stay

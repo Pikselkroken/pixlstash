@@ -3,12 +3,13 @@
     class="sidebar-section sidebar-section--tags"
     :class="{ 'sidebar-section--collapsed': tagsCollapsed }"
   >
-    <div
-      class="section-header section-header--collapsible section-label section-label--on-dark"
-      @click="tagsCollapsed = !tagsCollapsed"
+    <SectionHeader
+      v-model:collapsed="tagsCollapsed"
+      label="Tags"
+      :count="allImageTags.length || null"
+      on-dark
     >
-      <span>Tags</span>
-      <span class="section-meta-group">
+      <template #actions>
         <button
           v-if="props.image && !readOnly && clipboardCount"
           class="tag-paste-btn"
@@ -118,11 +119,8 @@
           <Tooltip text="Add tag (T)" activator="parent" :describe="false" />
           <v-icon size="16">mdi-plus</v-icon>
         </button>
-        <v-icon size="16" style="opacity: 0.6">{{
-          tagsCollapsed ? "mdi-chevron-right" : "mdi-chevron-down"
-        }}</v-icon>
-      </span>
-    </div>
+      </template>
+    </SectionHeader>
     <template v-if="!tagsCollapsed">
       <div class="tag-list" ref="tagListRef">
         <div
@@ -240,17 +238,12 @@
     v-if="nearMissPredictions.length"
     class="sidebar-section sidebar-section--rejected-tags"
   >
-    <div
-      class="section-header section-header--collapsible section-label section-label--on-dark"
-      @click="nearMissesCollapsed = !nearMissesCollapsed"
-    >
-      <span>Rejected Tags</span>
-      <span class="section-meta-group">
-        <v-icon size="16" style="opacity: 0.6">{{
-          !nearMissesCollapsed ? "mdi-chevron-right" : "mdi-chevron-down"
-        }}</v-icon>
-      </span>
-    </div>
+    <SectionHeader
+      v-model:collapsed="nearMissesCollapsed"
+      label="Rejected tags"
+      :count="nearMissPredictions.length"
+      on-dark
+    />
     <div
       v-show="!nearMissesCollapsed"
       class="tag-drop-zone tag-drop-zone--predictions"
@@ -370,6 +363,8 @@ import { listTaggers } from "../../api/taggers";
 import { getUserConfig } from "../../api/config";
 import { getPenalisedTags } from "../../api/users";
 import Tooltip from "../widgets/Tooltip.vue";
+import SectionHeader from "../widgets/SectionHeader.vue";
+import { useSectionCollapse } from "../../composables/useSectionCollapse";
 import { useTagClipboardStore } from "../../stores/useTagClipboardStore";
 import {
   dedupeTagList,
@@ -404,7 +399,7 @@ const emit = defineEmits([
 
 // ── Tag UI state ───────────────────────────────────────────────────────────
 
-const tagsCollapsed = ref(false);
+const tagsCollapsed = useSectionCollapse("tags");
 const isTagsRefreshing = ref(false);
 const addingTag = ref(false);
 const newTag = ref("");
@@ -436,30 +431,7 @@ const tagPredictions = ref([]);
 const predictionAcceptanceThreshold = ref(0.95);
 const labelThresholds = ref({});
 
-// ── Rejected-tags collapsed state (persisted to sessionStorage) ────────────
-
-function loadOverlayRejectedTagsCollapsed() {
-  if (typeof window === "undefined") return false;
-  const raw = window.sessionStorage?.getItem(
-    "pixlstash:imageOverlay:rejectedTagsCollapsed",
-  );
-  if (raw == null) return false;
-  return raw === "1";
-}
-
-function persistOverlayRejectedTagsCollapsed(value) {
-  if (typeof window === "undefined") return;
-  window.sessionStorage?.setItem(
-    "pixlstash:imageOverlay:rejectedTagsCollapsed",
-    value ? "1" : "0",
-  );
-}
-
-const nearMissesCollapsed = ref(loadOverlayRejectedTagsCollapsed());
-
-watch(nearMissesCollapsed, (value) => {
-  persistOverlayRejectedTagsCollapsed(Boolean(value));
-});
+const nearMissesCollapsed = useSectionCollapse("rejectedTags");
 
 // ── Penalised tags ─────────────────────────────────────────────────────────
 
@@ -1238,30 +1210,6 @@ defineExpose({
   display: flex;
   flex-direction: column;
   flex: 0 0 auto;
-}
-
-.section-header--collapsible {
-  cursor: pointer;
-  user-select: none;
-}
-
-.section-header--collapsible:hover {
-  color: rgb(var(--v-theme-on-dark-surface));
-}
-
-/* Type and ink come from the shared `.section-label`; this is layout only. */
-.section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--space-2);
-  padding: var(--space-1) 0;
-}
-
-.section-meta-group {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-3);
 }
 
 .section-meta-btn {

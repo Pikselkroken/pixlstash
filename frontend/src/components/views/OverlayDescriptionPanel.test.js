@@ -105,7 +105,7 @@ describe("OverlayDescriptionPanel - Description and Text tabs (#1197)", () => {
   it("no text: today's Description header, no tablist", () => {
     const w = mountPanel({ textState: "none" });
     expect(w.find('[role="tablist"]').exists()).toBe(false);
-    expect(w.find(".section-header").text()).toContain("Description");
+    expect(w.find(".section-head").text()).toContain("Description");
   });
 
   it("read with no words: still no tablist", () => {
@@ -143,7 +143,7 @@ describe("OverlayDescriptionPanel - Description and Text tabs (#1197)", () => {
     expect(words[0].attributes("aria-pressed")).toBe("true");
     expect(w.find(".picture-text-selection").text()).toContain("BAKERY");
     // The header count is the whole text, lines joined by a newline.
-    expect(w.find(".section-meta").text()).toBe("18");
+    expect(w.find(".section-head__count").text()).toBe("18");
 
     await words[1].trigger("click", { shiftKey: true });
     expect(w.emitted("select-word")).toEqual([[1, true]]);

@@ -1,10 +1,30 @@
 <script setup>
-import { ref, watch, computed, nextTick, onMounted, onUnmounted } from "vue";
+import {
+  ref,
+  watch,
+  computed,
+  nextTick,
+  onMounted,
+  onUnmounted,
+  provide,
+} from "vue";
 import AppInspector from "../widgets/AppInspector.vue";
+import AppButton from "../widgets/AppButton.vue";
+import SectionHeader from "../widgets/SectionHeader.vue";
 import TasksPanel, { tasksTabFor } from "./TasksPanel.vue";
+import RailPicture from "./RailPicture.vue";
+import RailPictures from "./RailPictures.vue";
 import StatsHistogram from "../widgets/StatsHistogram.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import { getPictureStats } from "../../api/pictures";
+import { isReadOnly } from "../../utils/apiClient";
+import { formatUserDate } from "../../utils/utils.js";
+import {
+  SECTION_SCOPE,
+  useSectionCollapse,
+} from "../../composables/useSectionCollapse";
+import { pictureTitle, useRailPicture } from "../../composables/useRailPicture";
+import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useSelectionStore } from "../../stores/useSelectionStore";
@@ -53,10 +73,95 @@ const PIL_IMAGE_EXTENSIONS = [
 ];
 const VIDEO_EXTENSIONS = ["mp4", "webm", "mov", "avi", "mkv", "m4v"];
 
-// Section collapse state
-const topTagsOpen = ref(true);
-const coocOpen = ref(false);
-const confHistOpen = ref(false);
+const props = defineProps({
+  /** The view the grid shows: the head's title while nothing is selected. */
+  viewName: { type: String, default: "" },
+  /** The grid's cards for the selection, where loaded (App.vue). */
+  pictures: { type: Array, default: () => [] },
+  /** The rating a tile shows for a card (a guest's own, when read-only). */
+  scoreOf: { type: Function, default: (card) => card?.score || 0 },
+});
+
+// What the rail does to a picture goes through the grid's own paths (App.vue
+// hands each to the grid), so the rail and the tile cannot disagree.
+const emit = defineEmits([
+  "set-score",
+  "toggle-favourite",
+  "add-tag",
+  "update-description",
+  "overlay-change",
+  "tags-applied",
+]);
+
+// ─── The selection (#2161) ────────────────────────────────────────────────────
+// Nothing selected, the rail describes the view; one picture, that picture;
+// several, what they share.
+const selectedIds = computed(() => selectionStore.selectedImageIds);
+const railMode = computed(() => {
+  const n = selectedIds.value.length;
+  return n === 0 ? "none" : n === 1 ? "one" : "many";
+});
+const oneId = computed(() =>
+  railMode.value === "one" ? selectedIds.value[0] : null,
+);
+const oneCard = computed(
+  () =>
+    props.pictures.find((card) => String(card.id) === String(oneId.value)) ??
+    null,
+);
+const {
+  image: oneImage,
+  faces: oneFaces,
+  refresh: refreshOne,
+} = useRailPicture(() => oneId.value);
+const isScrapheapView = computed(
+  () => selectionStore.selectedCharacter === String(SCRAPHEAP_PICTURES_ID),
+);
+
+const namesStore = useEntityNamesStore();
+
+// The head's text. A picture is named by what it shows, never by its file
+// name while there is anything better: files mostly have random names.
+const head = computed(() => {
+  if (railMode.value === "none") {
+    return { title: props.viewName, full: props.viewName };
+  }
+  if (railMode.value === "many") {
+    const text = `${selectedIds.value.length.toLocaleString()} pictures`;
+    return { title: text, full: text };
+  }
+  const people = [
+    ...new Set(
+      oneFaces.value
+        .map((face) => namesStore.characterNames[face.character_id])
+        .filter(Boolean),
+    ),
+  ];
+  return pictureTitle(oneImage.value, people, (date) =>
+    formatUserDate(date, userPrefsStore.dateFormat),
+  );
+});
+
+// The sections in this rail keep their own collapsed state, apart from the
+// same sections in the lightbox.
+provide(SECTION_SCOPE, "rail");
+const RAIL = { scope: "rail" };
+const topTagsCollapsed = useSectionCollapse("topTags", RAIL);
+const coocCollapsed = useSectionCollapse("cooccurrences", {
+  ...RAIL,
+  defaultCollapsed: true,
+});
+const confHistCollapsed = useSectionCollapse("tagConfidence", {
+  ...RAIL,
+  defaultCollapsed: true,
+});
+const taggedCollapsed = useSectionCollapse("taggedPictures", RAIL);
+const scoreCollapsed = useSectionCollapse("score", RAIL);
+const smartCollapsed = useSectionCollapse("smartScore", RAIL);
+const agreementCollapsed = useSectionCollapse("agreement", RAIL);
+const resolutionCollapsed = useSectionCollapse("resolution", RAIL);
+const coocOpen = computed(() => !coocCollapsed.value);
+const confHistOpen = computed(() => !confHistCollapsed.value);
 
 // Tab state
 const activeTab = ref("tags");
@@ -391,6 +496,20 @@ watch(
 onUnmounted(() => {
   clearTimeout(_wsTagUpdateTimer);
 });
+
+// The one picture's tags or description changed elsewhere (a tagger run, the
+// lightbox, another window): read its details again, keeping them on screen.
+watch(
+  () => [wsStore.wsTagUpdate, wsStore.wsDescriptionUpdate],
+  (updates) => {
+    if (oneId.value == null) return;
+    const id = String(oneId.value);
+    const touched = updates.some((u) =>
+      (u?.pictureIds || []).some((p) => String(p) === id),
+    );
+    if (touched) refreshOne();
+  },
+);
 
 // ─── Donut chart ──────────────────────────────────────────────────────────────
 const DONUT_R = 40;
@@ -939,8 +1058,75 @@ watch(
     class="stats-sidebar"
     label="Stats"
     :open="sidebarStore.statsOpen"
-    :tabs="tabs"
+    :tabs="railMode === 'none' ? tabs : []"
   >
+    <!-- One head row on the toolbar's line (#2161): what the rail is about -
+         the view, the one picture, or how many - and Clear while anything is
+         selected. -->
+    <template #head>
+      <h2 class="rail-title" data-testid="rail-title">
+        <Tooltip
+          v-if="head.full && head.full !== head.title"
+          :text="head.full"
+          activator="parent"
+        />
+        {{ head.title }}
+      </h2>
+      <AppButton
+        v-if="railMode !== 'none'"
+        class="rail-clear"
+        variant="ghost"
+        size="sm"
+        tooltip="Clear the selection"
+        @click="selectionStore.selectedImageIds = []"
+        >Clear</AppButton
+      >
+    </template>
+    <template v-if="railMode === 'none' && stats" #lead>
+      <div class="stats-tiles">
+        <div class="stats-tile">
+          <span class="stats-tile-value">{{
+            stats.total.toLocaleString()
+          }}</span>
+          <span class="stats-tile-label">Pictures</span>
+        </div>
+        <div class="stats-tile">
+          <span class="stats-tile-value">{{
+            (stats.total_tags ?? 0).toLocaleString()
+          }}</span>
+          <span class="stats-tile-label">Tags</span>
+        </div>
+        <div class="stats-tile">
+          <span class="stats-tile-value">{{
+            stats.avg_tags_per_image.toFixed(1)
+          }}</span>
+          <span class="stats-tile-label">Tags / picture</span>
+        </div>
+      </div>
+    </template>
+
+    <RailPicture
+      v-if="railMode === 'one'"
+      v-model:image="oneImage"
+      v-model:faces="oneFaces"
+      :picture-id="oneId"
+      :card="oneCard"
+      :score="oneCard ? scoreOf(oneCard) : 0"
+      :favouritable="!isReadOnly && !isScrapheapView"
+      @set-score="(n) => oneCard && emit('set-score', oneCard, n)"
+      @toggle-favourite="emit('toggle-favourite', [oneId])"
+      @add-tag="(id, tag) => emit('add-tag', id, tag)"
+      @update-description="(id, text) => emit('update-description', id, text)"
+      @overlay-change="emit('overlay-change', $event)"
+      @refresh="refreshOne"
+    />
+    <RailPictures
+      v-else-if="railMode === 'many'"
+      :ids="selectedIds"
+      :cards="pictures"
+      @tags-applied="emit('tags-applied', $event)"
+    />
+    <template v-else>
     <div v-if="loading && !stats" class="stats-loading">
       <v-progress-circular indeterminate size="24" width="2" color="primary" />
     </div>
@@ -950,29 +1136,12 @@ watch(
     <template v-else-if="stats && activeTab === 'tags'">
       <!-- Overview section -->
       <div class="inspector-section">
-        <!-- Stat tiles -->
-        <div class="stats-tiles">
-          <div class="stats-tile">
-            <span class="stats-tile-value">{{
-              stats.total_tags != null
-                ? stats.total_tags.toLocaleString()
-                : stats.total.toLocaleString()
-            }}</span>
-            <span class="stats-tile-label">Total tags</span>
-          </div>
-          <div class="stats-tile">
-            <span class="stats-tile-value">{{
-              stats.avg_tags_per_image.toFixed(1)
-            }}</span>
-            <span class="stats-tile-label">Avg tags / pic</span>
-          </div>
-        </div>
-
         <!-- Donut chart -->
-        <div class="stats-section-header">
-          <span class="section-label">Tagged pictures</span>
-        </div>
-        <div class="stats-donut-wrap">
+        <SectionHeader
+          v-model:collapsed="taggedCollapsed"
+          label="Tagged pictures"
+        />
+        <div v-if="!taggedCollapsed" class="stats-donut-wrap">
           <svg
             :width="DONUT_CX * 2"
             :height="DONUT_CY * 2"
@@ -1044,19 +1213,10 @@ watch(
         v-if="stats.top_tags.length || penalisedOnlyTags"
         class="inspector-section"
       >
-        <div class="stats-section-header">
+        <SectionHeader v-model:collapsed="topTagsCollapsed" label="Top tags">
+          <template #actions>
           <button
-            class="stats-section-toggle"
-            type="button"
-            @click="topTagsOpen = !topTagsOpen"
-          >
-            <v-icon size="13">{{
-              topTagsOpen ? "mdi-chevron-down" : "mdi-chevron-right"
-            }}</v-icon>
-            <span class="section-label" style="margin-left: var(--space-1)">Top Tags</span>
-          </button>
-          <button
-            v-if="hasPenalisedTags && topTagsOpen"
+            v-if="hasPenalisedTags && !topTagsCollapsed"
             class="penalised-toggle"
             :class="{ active: penalisedOnlyTags }"
             type="button"
@@ -1067,7 +1227,7 @@ watch(
             penalised
           </button>
           <button
-            v-if="topTagsOpen && activeTagsInTopTags().length > 0"
+            v-if="!topTagsCollapsed && activeTagsInTopTags().length > 0"
             class="stats-clear-btn"
             type="button"
             aria-label="Clear top-tag filters"
@@ -1080,8 +1240,9 @@ watch(
             />
             <v-icon size="11">mdi-close</v-icon>
           </button>
-        </div>
-        <div v-if="topTagsOpen" class="stats-bars">
+          </template>
+        </SectionHeader>
+        <div v-if="!topTagsCollapsed" class="stats-bars">
           <svg
             :width="260"
             :height="displayedTags.length * 18 + 4"
@@ -1139,19 +1300,11 @@ watch(
 
       <!-- Co-occurrence section -->
       <div v-if="stats.total > 0" class="inspector-section">
-        <div class="stats-section-header">
-          <button
-            class="stats-section-toggle"
-            type="button"
-            @click="coocOpen = !coocOpen"
-          >
-            <v-icon size="13">{{
-              coocOpen ? "mdi-chevron-down" : "mdi-chevron-right"
-            }}</v-icon>
-            <span class="section-label" style="margin-left: var(--space-1)"
-              >Co-occurrences</span
-            >
-          </button>
+        <SectionHeader
+          v-model:collapsed="coocCollapsed"
+          label="Co-occurrences"
+        >
+          <template #actions>
           <button
             v-if="hasPenalisedTags && coocOpen"
             class="penalised-toggle"
@@ -1186,7 +1339,8 @@ watch(
             />
             <v-icon size="11">mdi-close</v-icon>
           </button>
-        </div>
+          </template>
+        </SectionHeader>
         <div v-if="coocOpen" class="stats-cooc-list">
           <div
             v-for="(item, i) in displayedCooc"
@@ -1221,19 +1375,11 @@ watch(
 
       <!-- Confidence distribution section -->
       <div v-if="stats.total > 0" class="inspector-section">
-        <div class="stats-section-header">
-          <button
-            class="stats-section-toggle"
-            type="button"
-            @click="confHistOpen = !confHistOpen"
-          >
-            <v-icon size="13">{{
-              confHistOpen ? "mdi-chevron-down" : "mdi-chevron-right"
-            }}</v-icon>
-            <span class="section-label" style="margin-left: var(--space-1)"
-              >Tag Confidence</span
-            >
-          </button>
+        <SectionHeader
+          v-model:collapsed="confHistCollapsed"
+          label="Tag confidence"
+        >
+          <template #actions>
           <div class="conf-tag-selector">
             <v-progress-circular
               v-if="confTagLoading"
@@ -1291,7 +1437,8 @@ watch(
               <v-icon size="11">mdi-close</v-icon>
             </button>
           </div>
-        </div>
+          </template>
+        </SectionHeader>
         <div v-if="confHistOpen" class="stats-hist">
           <StatsHistogram
             :buckets="confHistBuckets"
@@ -1319,22 +1466,10 @@ watch(
         />
       </div>
       <template v-else-if="picStats">
-        <!-- Total tile -->
-        <div class="inspector-section">
-          <div class="stats-tiles">
-            <div class="stats-tile">
-              <span class="stats-tile-value">{{
-                picStats.total.toLocaleString()
-              }}</span>
-              <span class="stats-tile-label">Total</span>
-            </div>
-          </div>
-        </div>
-
         <!-- Manual score distribution -->
         <div class="inspector-section">
-          <div class="stats-section-header">
-            <span class="section-label">Score</span>
+          <SectionHeader v-model:collapsed="scoreCollapsed" label="Score">
+            <template #actions>
             <button
               v-if="
                 filterStore.minScoreFilter != null ||
@@ -1357,8 +1492,9 @@ watch(
               />
               <v-icon size="11">mdi-close</v-icon>
             </button>
-          </div>
-          <div class="stats-hist">
+            </template>
+          </SectionHeader>
+          <div v-if="!scoreCollapsed" class="stats-hist">
             <StatsHistogram
               :buckets="picStats.score_distribution"
               aria-label="Manual score distribution"
@@ -1371,8 +1507,8 @@ watch(
 
         <!-- Smart score distribution -->
         <div class="inspector-section">
-          <div class="stats-section-header">
-            <span class="section-label">Smart Score</span>
+          <SectionHeader v-model:collapsed="smartCollapsed" label="Smart score">
+            <template #actions>
             <button
               v-if="filterStore.smartScoreBucketFilter != null"
               class="stats-clear-btn"
@@ -1387,8 +1523,9 @@ watch(
               />
               <v-icon size="11">mdi-close</v-icon>
             </button>
-          </div>
-          <div class="stats-hist">
+            </template>
+          </SectionHeader>
+          <div v-if="!smartCollapsed" class="stats-hist">
             <StatsHistogram
               :buckets="picStats.smart_score_distribution"
               aria-label="Smart score distribution"
@@ -1401,8 +1538,11 @@ watch(
 
         <!-- Smart score vs your rating (agreement matrix) -->
         <div v-if="agreement" class="inspector-section">
-          <div class="stats-section-header">
-            <span class="section-label">Agreement</span>
+          <SectionHeader
+            v-model:collapsed="agreementCollapsed"
+            label="Agreement"
+          >
+            <template #actions>
             <span
               class="stats-info-dot"
               tabindex="0"
@@ -1430,7 +1570,9 @@ watch(
               />
               <v-icon size="11">mdi-close</v-icon>
             </button>
-          </div>
+            </template>
+          </SectionHeader>
+          <template v-if="!agreementCollapsed">
           <div v-if="agreement.pairs > 0" class="stats-hist">
             <svg
               :width="260"
@@ -1559,12 +1701,13 @@ watch(
             </span>
             <span class="agreement-coverage">{{ agreementCoverage }}</span>
           </div>
+          </template>
         </div>
 
         <!-- Resolution distribution -->
         <div class="inspector-section">
-          <div class="stats-section-header">
-            <span class="section-label">Resolution</span>
+          <SectionHeader v-model:collapsed="resolutionCollapsed" label="Resolution">
+            <template #actions>
             <button
               v-if="filterStore.resolutionBucketFilter != null"
               class="stats-clear-btn"
@@ -1579,8 +1722,9 @@ watch(
               />
               <v-icon size="11">mdi-close</v-icon>
             </button>
-          </div>
-          <div class="stats-hist">
+            </template>
+          </SectionHeader>
+          <div v-if="!resolutionCollapsed" class="stats-hist">
             <StatsHistogram
               :buckets="picStats.resolution_distribution"
               aria-label="Resolution distribution"
@@ -1595,6 +1739,7 @@ watch(
 
     <!-- ── Tasks tab ─────────────────────────────────────────────────── -->
     <TasksPanel v-if="activeTab === 'tasks'" />
+    </template>
   </AppInspector>
 </template>
 
@@ -1612,21 +1757,15 @@ watch(
   padding: var(--space-3) 0;
 }
 
-.stats-section-toggle {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  padding: 0;
-  color: inherit;
-}
-
+/* Three tiles across the rail (#2161): pictures, tags, tags per picture. */
 .stats-tiles {
-  display: flex;
-  gap: var(--space-3);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
 }
 
 .stats-tile {
-  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1645,9 +1784,24 @@ watch(
 .stats-tile-label {
   font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-label);
   margin-top: var(--space-1);
+  text-align: center;
+}
+
+/* The head's title: one line, ellipsised; the whole of it is in the tip. */
+.rail-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+}
+
+.rail-clear {
+  flex: none;
 }
 
 .stats-donut-wrap {
@@ -1709,13 +1863,6 @@ watch(
 .legend-text {
   font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), 0.65);
-}
-
-.stats-section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
 }
 
 .penalised-toggle {
