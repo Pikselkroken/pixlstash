@@ -295,11 +295,8 @@ class PictureImportTask(BaseTask):
                 pic.imported_at = datetime.now(timezone.utc)
                 if original_file_name:
                     pic.original_file_name = original_file_name
-                metadata = entry.get("metadata") or {}
-                if metadata.get("score"):
-                    pic.score = metadata["score"]
                 new_pictures.append(pic)
-                new_metadata.append(metadata)
+                new_metadata.append(entry.get("metadata") or {})
                 seen_fingerprints.add(intra_batch_key)
             except Exception as exc:
                 logger.warning(
@@ -322,6 +319,8 @@ class PictureImportTask(BaseTask):
                 session.flush()
                 ids_by_set_name: dict[str, list[int]] = defaultdict(list)
                 for pic, metadata in zip(pictures, new_metadata):
+                    if metadata.get("score"):
+                        pic.score = metadata["score"]
                     # Carried-in tags first, then sidecar caption tags matched
                     # by basename stem; otherwise seed the pending sentinel so
                     # the tagger picks it up (mirrors WatchFolderImportTask).
