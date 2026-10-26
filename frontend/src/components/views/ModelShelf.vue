@@ -3435,7 +3435,10 @@ const isShelfTab = computed(() => route.name !== "models-runs");
 
 /** A training run's own page is open on the runs tab (#2118). */
 const runOpen = computed(
-  () => !isShelfTab.value && typeof route.query.run === "string",
+  () =>
+    !isShelfTab.value &&
+    typeof route.query.run === "string" &&
+    route.query.run !== "",
 );
 
 /** An AI Toolkit run holds the card or waits for it: the tab's amber dot. */

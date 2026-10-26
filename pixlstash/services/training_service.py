@@ -73,8 +73,8 @@ def handle_for_run(training_root: str, info: dict, backend=None):
     work_dir = os.path.join(training_root, info["uuid"])
     stored = info.get("training_folder")
     shared = None
-    if stored and os.path.abspath(stored) != os.path.join(
-        os.path.abspath(work_dir), "output"
+    if stored and os.path.normcase(os.path.abspath(stored)) != os.path.normcase(
+        os.path.join(os.path.abspath(work_dir), "output")
     ):
         shared = stored
     handle_for = getattr(backend, "handle_for", None)

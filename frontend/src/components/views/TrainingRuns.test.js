@@ -798,4 +798,12 @@ describe("the runs PixlStash trains (#2118)", () => {
     expect(wrapper.find(".live-stub").exists()).toBe(false);
     expect(wrapper.text()).toContain("That training run is not in this library.");
   });
+
+  it("does not call a run missing when the job list could not be read", async () => {
+    listTrainingJobs.mockRejectedValue(new Error("offline"));
+    nav.route.query = { run: "abcd1234ef" };
+    const wrapper = await openWith([]);
+    expect(wrapper.text()).toContain("Could not read the training runs.");
+    expect(wrapper.text()).not.toContain("not in this library");
+  });
 });

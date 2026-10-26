@@ -674,6 +674,15 @@ def test_live_view_draws_a_run_from_its_folder_and_its_logs():
             owner.put("/training/jobs/999999/cover", json={"step": 0}).status_code
             == 404
         )
+
+        # A failure moving the shelf puts the recorded step back.
+        def broken(job, step):
+            raise RuntimeError("the vault went away")
+
+        server.vault.choose_training_cover = broken
+        r = owner.put(f"/training/jobs/{job_id}/cover", json={"step": 1000})
+        assert r.status_code == 500, r.text
+        assert owner.get(f"/training/jobs/{job_id}/live").json()["cover_step"] == 750
     finally:
         _teardown(temp_dir, server)
 
@@ -697,6 +706,17 @@ def test_live_view_of_a_run_that_finished_while_pixlstash_was_closed():
         assert body["telemetry"]["ram"]["total_mb"] is None
         # Cells the run passed without a picture are missing, not waiting.
         assert body["rows"][1]["cells"][4]["state"] == "missing"
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_run_that_ended_without_a_finish_time_has_no_growing_last_phase():
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        job_id, _, _, _ = _live_run(server, temp_dir, status="error")
+        phases = owner.get(f"/training/jobs/{job_id}/live").json()["phases"]
+        assert phases[-1] == {"phase": "training", "seconds": None}
+        assert phases[1]["seconds"] == 155.0
     finally:
         _teardown(temp_dir, server)
 

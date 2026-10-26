@@ -911,7 +911,12 @@ def create_router(server) -> APIRouter:
             pace["remaining_low_s"] = pace["remaining_high_s"] = None
 
         log = live_view.parse_phase_log(job.get("phase_log"))
-        until = job["completed_at"] or now_iso()
+        # A run that ended without a completed_at (an error before launch, a
+        # queued run cancelled) has no end to its last phase: unknown, rather
+        # than a duration that grows on every read.
+        until = job["completed_at"] or (
+            now_iso() if live or job["status"] == "completed" else None
+        )
         unwatched = bool(job.get("finished_unwatched")) and job["status"] == "completed"
         return {
             "id": job["id"],
@@ -1277,6 +1282,19 @@ def create_router(server) -> APIRouter:
         except LookupError as exc:
             training_runs.update_run(hub, job["uuid"], cover_step=previous)
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except Exception as exc:
+            # The stack cover lives in the hub and the attachment in the vault,
+            # so a failure between them cannot be rolled back as one; the
+            # recorded step goes back and the failure is logged in full.
+            training_runs.update_run(hub, job["uuid"], cover_step=previous)
+            logger.exception(
+                "Training job id=%s: step %s could not be made the cover.",
+                job_id,
+                payload.step,
+            )
+            raise HTTPException(
+                status_code=500, detail="Could not make that step the cover."
+            ) from exc
         logger.info(
             "Training job id=%s: step %s chosen as the cover (applied=%s).",
             job_id,

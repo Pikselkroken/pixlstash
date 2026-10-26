@@ -124,8 +124,10 @@ def _seconds_between(start: str, end: str) -> float | None:
         return None
 
 
-def phase_durations(log: list[dict], until: str) -> list[dict]:
+def phase_durations(log: list[dict], until: str | None) -> list[dict]:
     """Each logged phase with how long it lasted, the last one up to *until*.
+
+    *until* None leaves the last phase's duration unknown.
 
     Returns:
         ``[{phase, seconds}]`` in log order; ``seconds`` is None when a stamp

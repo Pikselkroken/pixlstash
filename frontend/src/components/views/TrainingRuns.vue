@@ -4,7 +4,11 @@
        amber dot lead to it through `?run=<uuid>`. -->
   <TrainingRunLive v-if="openJob" :job-id="openJob.id" @close="closeRun" />
   <p v-else-if="openUuid" class="tr-note tr-note--pad" role="status">
-    <template v-if="jobsLoaded">
+    <template v-if="jobsFailed">
+      Could not read the training runs.
+      <AppButton size="sm" variant="secondary" @click="closeRun">All runs</AppButton>
+    </template>
+    <template v-else-if="jobsLoaded">
       That training run is not in this library.
       <AppButton size="sm" variant="secondary" @click="closeRun">All runs</AppButton>
     </template>
@@ -428,6 +432,8 @@ const LIVE_STATUSES = ["queued", "running", "stopping"];
 const openUuid = computed(() =>
   typeof route.query.run === "string" ? route.query.run : "",
 );
+/** The job list could not be read, so "not in this library" is not known. */
+const jobsFailed = ref(false);
 const openJob = computed(
   () => jobs.value.find((job) => job.uuid === openUuid.value) ?? null,
 );
@@ -479,10 +485,12 @@ function closeRun() {
 async function loadJobs() {
   try {
     jobs.value = await listTrainingJobs();
+    jobsFailed.value = false;
   } catch (err) {
     // The grid still lists the folder's runs; only the live pages are lost.
     console.warn("Could not list the training jobs:", err);
     jobs.value = [];
+    jobsFailed.value = true;
   } finally {
     jobsLoaded.value = true;
   }

@@ -278,4 +278,27 @@ describe("TrainingRunLive", () => {
     );
     expect(wrapper.find(".trl-statusbar").text()).toMatch(/GPU\s*Unknown/);
   });
+
+  it("says so when a run it is showing stops answering, and does not ask again", async () => {
+    vi.useFakeTimers();
+    try {
+      const wrapper = await open(payload());
+      getTrainingJobLive.mockRejectedValue(
+        Object.assign(new Error("Training job not found"), {
+          response: { status: 404 },
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(2_000);
+      await flushPromises();
+      expect(wrapper.find(".trl-notice--err").text()).toContain("This run is gone.");
+      // The last board stays up under the notice.
+      expect(wrapper.find(".trl-board").exists()).toBe(true);
+      getTrainingJobLive.mockClear();
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(getTrainingJobLive).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

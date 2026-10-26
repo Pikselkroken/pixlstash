@@ -617,6 +617,16 @@ const subline = computed(() => {
 const notice = computed(() => {
   const run = live.value;
   if (!run) return null;
+  // A read that failed after the page drew: say so, or the board sits on
+  // stale figures looking current.
+  if (error.value) {
+    return {
+      kind: "err",
+      icon: "mdi-alert",
+      title: notFound ? "This run is gone." : "The run stopped updating.",
+      text: error.value,
+    };
+  }
   if (run.waiting?.code === "ram") {
     return {
       kind: "err",
@@ -820,8 +830,8 @@ function schedule() {
 }
 
 function onVisible() {
-  if (document.visibilityState === "visible") load().then(schedule);
-  else clearTimeout(timer);
+  if (document.visibilityState !== "visible") clearTimeout(timer);
+  else if (!notFound) load().then(schedule);
 }
 
 watch(
