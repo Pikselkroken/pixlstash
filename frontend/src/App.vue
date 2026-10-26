@@ -847,6 +847,8 @@ defineExpose({
             @select-duplicates="handleSelectDuplicates"
             @select-set="handleSelectSet"
             @select-folder="handleSelectFolder"
+            @open-import="openImportDialog"
+            @open-tag-review="reviewSessionsStore.overlayOpen = true"
             @train-lora="handleTrainLora"
             @images-assigned-to-character="handleImagesAssignedToCharacter"
             @images-moved="handleImagesMoved"

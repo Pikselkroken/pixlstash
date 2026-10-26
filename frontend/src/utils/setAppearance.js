@@ -261,3 +261,18 @@ export function nextSetAppearance(allSets, siblingSets = allSets) {
     ),
   };
 }
+
+/**
+ * A project's colour (#2159). Projects store none, so each takes one from the
+ * set palette by id: stable across reloads and renames, and the first few
+ * projects get the palette's most distinct hues.
+ *
+ * @param {number|string|null} projectId
+ * @returns {string|null} a palette hex, or null for no project
+ */
+export function projectColor(projectId) {
+  const id = Number(projectId);
+  if (projectId == null || !Number.isFinite(id)) return null;
+  const n = COLOR_VALUES.length;
+  return COLOR_VALUES[(((id - 1) % n) + n) % n];
+}

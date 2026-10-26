@@ -217,19 +217,24 @@ describe("the sidebar's project reads", () => {
     wrapper.unmount();
   });
 
-  it("never asks for the unassigned-project summary", async () => {
-    // `GET /projects/UNASSIGNED/summary` had no consumer: the tree's only count
-    // binding is `projectCounts[p.id]` over real project rows.
+  it("asks for the not-in-a-project count once, for the scope menu", async () => {
+    // The header slot's "Not in a project" row (#2159) is the number's one
+    // consumer; it lands in the scope counts, not in the per-project map.
+    apiGet.mockImplementation((url) =>
+      Promise.resolve(
+        String(url).includes("/projects/UNASSIGNED/summary")
+          ? { data: { image_count: 9 } }
+          : respond(url),
+      ),
+    );
     const wrapper = mountSidebar();
     await refreshAndSettle(wrapper);
 
     const unassignedSummaries = projectRequests().filter((u) =>
       u.includes("UNASSIGNED"),
     );
-    expect(
-      unassignedSummaries,
-      `the sidebar still requested: ${JSON.stringify(projectRequests())}`,
-    ).toEqual([]);
+    expect(unassignedSummaries).toHaveLength(1);
+    expect(wrapper.vm.scopeCounts.none).toBe(9);
 
     wrapper.unmount();
   });
@@ -257,6 +262,66 @@ describe("the sidebar's project reads", () => {
       projectRequests(),
       "a character-scoped token would be 403'd by every one of these",
     ).toEqual([]);
+
+    wrapper.unmount();
+  });
+});
+
+describe("the project scope in the header slot (#2159)", () => {
+  it("navigates to All media in the project chosen", async () => {
+    const wrapper = mountSidebar();
+    await refreshAndSettle(wrapper);
+
+    wrapper.vm.chooseScope(3);
+    const [payload] = wrapper.emitted("select-character").at(-1);
+    expect(payload.id).toBe("ALL");
+    expect(payload.projectContext).toEqual({ mode: "project", projectId: 3 });
+    expect(wrapper.vm.scopeCounts.current).toBe(118);
+
+    wrapper.unmount();
+  });
+
+  it("scopes to the pictures in no project, and back to any", async () => {
+    const wrapper = mountSidebar();
+    await refreshAndSettle(wrapper);
+
+    wrapper.vm.chooseScope("none");
+    expect(wrapper.emitted("select-character").at(-1)[0].projectContext).toEqual(
+      { mode: "project", projectId: null },
+    );
+
+    wrapper.vm.chooseScope("any");
+    expect(wrapper.emitted("select-character").at(-1)[0].projectContext).toEqual(
+      { mode: "global", projectId: null },
+    );
+
+    wrapper.unmount();
+  });
+
+  it("opens a person inside the scope, not the person's own project", async () => {
+    // Ada's own project_id is unset; seen from project 4 she must stay in 4.
+    const wrapper = mountSidebar();
+    await refreshAndSettle(wrapper);
+    wrapper.vm.chooseScope(4);
+
+    wrapper.vm.selectCharacter(1, "Ada");
+    expect(wrapper.emitted("select-character").at(-1)[0].projectContext).toEqual(
+      { mode: "project", projectId: 4 },
+    );
+
+    wrapper.unmount();
+  });
+
+  it("asks for the favourites count in the current scope", async () => {
+    const wrapper = mountSidebar();
+    await refreshAndSettle(wrapper);
+    wrapper.vm.chooseScope(3);
+    await refreshAndSettle(wrapper);
+
+    const counts = apiGet.mock.calls
+      .map(([url]) => String(url))
+      .filter((u) => u.startsWith("/pictures/count"));
+    expect(counts.at(-1)).toBe("/pictures/count?favourite=1&project_id=3");
 
     wrapper.unmount();
   });

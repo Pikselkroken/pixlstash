@@ -173,7 +173,7 @@ frontend/src/
 ### Key Design Principles
 
 - **Pinia for cross-component state.** All state shared across more than one component lives in a Pinia store in `src/stores/`. `App.vue` owns only layout-shell state (sidebar/stats visibility, pending import counts) that is not consumed anywhere else.
-- **Sidebar tabs are stateless; the route is the single source of truth for the grid view.** Switching a sidebar tab/category (People / Sets / Projects / Folders, and the Global ↔ Project mode) is a *pure sidebar-display* operation: it only changes which list of entries the sidebar renders. It must **not** call `router.push()`, must **not** emit any `select-*` / navigation event, and must **not** write to the filter / selection / sort / grid stores. The grid keeps showing whatever the current route resolves to. Only an explicit **entry click** (a specific character / set / project) navigates, via `router.push()`. This decoupling is what lets a user stay on a global view, switch to the Projects tab purely to reveal its entries as **drop targets**, and drag the current selection onto a project or one of its characters without losing the view they found the pictures in. See [§5 → SideBar.vue](#sidebarvue-6989-lines).
+- **The route is the single source of truth for the grid view; the sidebar navigates only on a deliberate choice.** An entry click (a place, a person, a set, a folder) and the header slot's **project scope** navigate, via `router.push()`. Anything that only changes what the sidebar *shows* (the docked rail's Projects / Folders flyouts, opening a section) must **not** push a route, emit a `select-*` event or write the filter / selection / sort / grid stores. The scope is a navigation by design (#2159): choosing a project narrows the grid, the counts and the People and Sets lists together, so the slot always names the scope the grid is in. See [§5 → SideBar.vue](#sidebarvue-6989-lines).
 - **Composables for reusable logic.** Complex logic extracted from mega-components lives in `src/composables/` as `useX()` functions. Composables accept dependencies as parameters and are independently unit-testable.
 - **Flat component structure.** All components sit directly in `src/components/` with sub-directories by domain (`views/`, `panels/`, `editors/`, `settings/`, `io/`, `widgets/`). Shared presentational sub-components (e.g. `StarRatingOverlay`, `ProgressOverlay`) live in `widgets/`.
 - **Utilities are pure functions.** Every file in `src/utils/` exports only plain functions and constants; none hold reactive state themselves (except `apiClient.js`, which holds `isAuthenticated`, `sessionContext`, and `isReadOnly`).
@@ -358,7 +358,7 @@ than a sticky preference.
 
 This exists because a share link inherits whatever pathname the owner minted it from — Settings is a dialog, not a route, so `AccountSection.shareUrl` builds `/project/5?token=…` from `window.location.pathname` (issue #717). Without the narrowing the recipient's grid sends `project_id=5`, which the AuthzGate refuses for a character/set token (empty visible-project set), and the grid comes back empty with nothing said to the owner. It lives **here rather than in `App.vue`'s mount-time scoped-session block** for two reasons: this store is the single writer of the grid's project scope, and a mount-time write loses to the next route tick (Back onto the shared link would re-break it). `App.vue`'s block keeps normalising what is *selected*. Both directions are covered in `stores/scopedSessionProjectScope.test.js`, which asserts the query string on the wire and pins the mount ordering the defect depended on.
 
-The Phase 0 pin specs `route-as-truth.spec.js` and `stateless-tabs.spec.js` characterise the user-visible half of this contract.
+The pin specs `route-as-truth.spec.js` and `project-scope.spec.js` characterise the user-visible half of this contract.
 
 ### 4.6 Auth-context transitions — the session-reset chokepoint
 
@@ -626,40 +626,36 @@ Two things the fix must not undo, both asserted: a card the server reports **no*
 Every path still emits `refresh-sidebar` (the counts changed) and, under an open overlay, defers its grid work to `pendingOverlayGridRefresh` rather than restructuring the frozen filmstrip (§9.1), but only when a refetch was warranted in the first place, so a deferred redundant reload is not queued either. Regression coverage: `ImageGridProjectAssignRefresh.test.js` (both directions: no refetch in the global view, refetch still fires in the project view).
 
 #### `SideBar.vue` (6989 lines)
-Left navigation panel. Responsibilities:
-- Tabs: People, Sets, Projects, Folders.
-- Character list with face thumbnails, drag-drop assignment, inline create/edit.
-- Set list with thumbnail stacks, drag-drop assignment.
-- Project tree with expandable nodes (people + sets per project); project rows are drop targets — dropping grid pictures assigns them to that project (like character/set rows).
-- Folder browser (import and reference folders).
+The Media workspace's sidebar. Expanded, it is a fixed frame (#2159): the 40px **header slot** (`--sidebar-slot-h`) holds the project scope, one list scrolls under it, and the 52px **footer band** (`--sidebar-band-h`) holds the one amber action, **Import**. Every workspace's sidebar uses the same two tokens, so the frame keeps its shape on a switch. Responsibilities:
+- **Project scope** (`SidebarScopeSlot.vue`): the project's colour tile, name and up/down chevrons over a "Limit view to" menu: Any project, each project with its count, Not in a project, then *New project…* and *Edit "name"…*. Right-click on the slot or a project row opens that project's context menu (share, export, edit, delete). Projects store no colour; `utils/setAppearance.projectColor` cycles the set palette by id, and a chosen project tints the slot (22 %) and the list (6 %) with it.
+- **One list in every scope, every row 32px** (`--control-h-bar`): places (All media, Favourites, Scrapheap), a **Review** group (Duplicates, Tags to review, and Moves while its queue holds anything), then **People**, **Sets**, the scoped project's **Project files** and **Folders** (reference and import folders, owner only). Section heads are uppercase labels with a `+` at the right edge. People wear a 20px round avatar, sets a 16px glyph; the thumbnail-size setting now sizes only the docked rail.
+- **Favourites** is All media with the `favourite=1` filter on (#2155), not a container: the two rows split All media's highlight on `filterStore.favouriteOnlyFilter`, and the filter chip still shows it. Its count is a `/pictures/count?favourite=1` in the current scope, refreshed when a heart changes (`useGridScoring.setFavourite` emits `refresh-sidebar`).
+- Inside a project the People and Sets `+` open the add-or-remove menus (make a new one in the project, or tick existing ones in and out); elsewhere they create one.
+- Character, set and folder rows are drop targets for grid pictures (and faces, on people). Projects no longer are: the project rows went with the tree; assign from the grid's selection instead.
 - Settings dialog trigger, sort selector.
-- Expansion state (People / Sets headers, the Folders-tab headers, per-project nodes and their People/Sets sub-sections, the reference-folder tree) is owned by `composables/useSidebarExpansion.js` and persisted client-side — see §10.1.
+- Expansion state (the folder section bands and the reference-folder tree) is owned by `composables/useSidebarExpansion.js` and persisted client-side — see §10.1.
 - Embeds: `ImageImporter`, `CharacterEditor`, `PictureSetEditor`, `ProjectEditor`, `FolderEditor`, `UserSettingsDialog`.
 - Exposes: `refreshSidebar()`, `openSettingsDialog()`, `startLocalImport()`, `currentProjectId`, `openCurrentSelectionEditor()`
+- Emits `open-import` (the footer's Import: App opens `PhotosImportDialog` with `currentProjectId` as its default project, and the button's tooltip names that destination, "Import into Library 1 › Nordvik") and `open-tag-review` (App opens the tag-review board).
 - Emits: 30+ events including `select-character`, `select-set`, `select-folder`, `update:public-url`, `update:theme-mode`, `update:sort-options`, `update:hidden-tags`, `toggle-dock`, `update:project-view-mode`, etc.
 
-##### Sidebar tabs & drag-to-assign (stateless tabs)
+##### The project scope, and what stays display-only
 
-The tab/category switch is **stateless** (see Key Design Principles). Concretely:
+The header slot's project scope is a **navigation**, unlike the Global / Projects / Folders tabs it replaced (#2159):
 
-- **Tab state is sidebar-local display state only.** `sidebarPrimaryTab`
-  (`'library' | 'folders'`) and `projectViewMode` (`'global' | 'project'`)
-  select *which list the sidebar renders*. Switching them must not
-  `router.push()`, must not emit a `select-*` event, and must not mutate the
-  filter / selection / sort / grid stores. Folder-status polling is the only
-  permitted side effect of a tab switch (it loads the data the tab displays).
-- **Entry clicks are the only navigation.** Clicking a specific character /
-  set / project emits the corresponding `select-*` event → `App.vue` calls
-  `router.push()` → the route (the single source of truth) drives the grid.
-  The grid is otherwise unaffected by tab switches.
-- **Every entry is also a drop target.** Each character and set row (and the
-  project entries) accepts a drop of the current grid selection
-  (`application/json` payload via `dataTransfer`) to assign those pictures —
-  `handleDragOverCharacter` / `dragOverSet` and siblings. Because switching a
-  tab no longer disturbs the grid, the intended flow works end-to-end: find
-  pictures on a global view → switch to the Projects/People/Sets tab → drag the
-  selection onto a project or character to add them, with the global view still
-  intact underneath.
+- **Choosing a scope lands on All media in it**, keeping the Favourites filter. `chooseScope` sets the sidebar's `projectViewMode` / `selectedProjectId` and goes through `selectCharacter(ALL_PICTURES_ID)`, so the route, the grid and the counts all follow. A person or set clicked afterwards opens **inside the scope** (`currentScopeContext()`), never in the entity's own `project_id`: someone in two projects, seen from the second, must not jump the view to the first.
+- **The slot names the scope the grid is in.** A watcher mirrors `projectStore.projectViewMode` / `selectedProjectId` back into the sidebar, so Back, a deep link or a library-wide route (the Scrapheap, Duplicates) moves the slot with the grid; those last read as Any project.
+- **Not in a project has a URL.** It has no route of its own, so it rides as `?project=none` on All media, a person or a set (`useAppNavigation.pushRouteForCurrentSelection` writes it, `useViewStore.parseRouteView` reads it). Without it a reload widened the grid to the whole library while the menu still said otherwise.
+- **The docked rail stays display-only.** Its Global / Projects / Folders flyout (`sidebarPrimaryTab`) only changes which list the rail shows; entry clicks inside it navigate as above.
+- **Anti-pattern (do not reintroduce):** a display switch (a rail mode, a section toggle) that pushes a route or resets a filter. Only an entry click and the scope navigate.
+
+Drag-to-assign:
+
+- **Every person, set and folder row is a drop target.** It accepts a drop of
+  the current grid selection (`application/json` payload via `dataTransfer`)
+  to assign those pictures — `handleDragOverCharacter` / `dragOverSetItem` and
+  siblings. People, Sets and Folders are all in the one list, so a selection
+  found anywhere can be dropped without leaving the view it was found in.
 - **A drop target judges the payload KIND during dragover, from `types` alone.**
   The JSON body is protected while a drag is in flight (`getData()` returns `""`
   in Chrome and Firefox), so the kind travels as the *key*: every internal drag
@@ -682,11 +678,6 @@ The tab/category switch is **stateless** (see Key Design Principles). Concretely
   A refused row shows the `.not-droppable` state (hatch + `mdi-cancel` glyph +
   `--opacity-disabled`, never colour alone), so rejection is visible during the
   drag instead of arriving as a toast afterwards.
-- **Anti-pattern (do not reintroduce):** a tab/mode `watch` that emits
-  `select-*`, pushes a route, or resets a filter. That recouples the sidebar to
-  the view and breaks the drag-to-assign flow. Keep navigation in entry-click
-  handlers only.
-
 #### `ImageOverlay.vue` (4413 lines)
 The lightbox. Responsibilities:
 - **It opens inside the frame (#2163)**, not over it: the root teleports into App.vue's `#lightbox-host` (see `App.vue`) and fills `.workspace-body`, the centre column plus the right rail, so opening and closing a picture moves nothing outside the centre column. It is drawn in place when there is no host (a component test mounting it alone): `lightboxHost` is looked up in `onMounted`, once App's tree is in the document. Inside, `.overlay-shell` is a row: the centre column (`.overlay-column`: toolbar, stage, filmstrip) and the inspector.
@@ -4044,7 +4035,7 @@ All persisted keys are prefixed `pixlstash:` to avoid collisions:
 
 ### 10.1 Sidebar expansion state (`composables/useSidebarExpansion.js`)
 
-Which sidebar sections are open is a per-browser view preference, so it stays on the client: one versioned JSON blob under `pixlstash:sidebar:expansion`, read once when `SideBar` sets up and rewritten by a single watcher on change. Nothing is sent to the server, and a blob whose `v` does not match the current schema is discarded rather than half-applied.
+Which sidebar folder sections and folders are open is a per-browser view preference, so it stays on the client: one versioned JSON blob under `pixlstash:sidebar:expansion`, read once when `SideBar` sets up and rewritten by a single watcher on change. Nothing is sent to the server, and a blob whose `v` does not match the current schema is discarded rather than half-applied.
 
 Two rules keep the restored state honest:
 
@@ -4052,6 +4043,8 @@ Two rules keep the restored state honest:
 - **Re-browse what was restored.** `folderBrowseCache` is per-session, so a restored subfolder would render with no children. `fetchReferenceFolders()` calls `browseExpandedFolderPaths()` to fetch a listing for each persisted path, and `browseExpandedFolders()` does the same after the cache is dropped (folder relocate, drag-drop move).
 
 localStorage failures (private mode, disabled storage, quota) warn once per sidebar and fall back to defaults; the sections still toggle for the session.
+
+Since #2159 the sidebar reads only the folder half: People and Sets no longer collapse and the project tree is gone, so the composable's section and project-node state is kept for the blob's schema but has no consumer.
 
 ### 10.2 Submitting a form (`composables/useSubmitGuard.js`)
 

@@ -302,6 +302,14 @@
      --control-h-bar. */
   --toolbar-height: 36px;
 
+  /* A workspace sidebar's frame (#2159): the header slot at the top (project
+     scope, ComfyUI connection or model folder) and the footer band holding its
+     one amber action. Every workspace uses both, so the frame keeps its shape
+     on a switch. The slot is the toolbar's 40px line in the redesign; the
+     toolbar itself moves onto it in #2160. */
+  --sidebar-slot-h: 40px;
+  --sidebar-band-h: 52px;
+
   /* Notice surface (see notice-surface.md §11). `--notice-max-w` matches the
      de-facto width already used by LockedDeleteNoticeDialog and
      .plugin-menu-panel, so the surface does not introduce a fifth floating-card

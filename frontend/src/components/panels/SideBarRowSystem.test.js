@@ -90,8 +90,6 @@ describe("the row system is defined once, unscoped", () => {
 describe("every row starts at one left edge", () => {
   const ROW_TYPES = [
     ".sidebar-list-item",
-    ".sidebar-project-tree-row",
-    ".sidebar-project-tree-subheader",
     ".sidebar-folder-row",
     ".sidebar-folder-section-header",
     ".sidebar-section-header",
@@ -103,7 +101,7 @@ describe("every row starts at one left edge", () => {
     expect(body).toContain("var(--depth, 0) * var(--indent-step)");
   });
 
-  it("covers all six row types in that rule", () => {
+  it("covers every row type in that rule", () => {
     const shared = code(globalCss)
       .split("}")
       .find((r) => r.includes("var(--depth, 0) * var(--indent-step)"));
@@ -173,59 +171,21 @@ describe("optional glyphs keep their box", () => {
     expect(body).toContain("width: var(--gutter-glyph)");
   });
 
-  it("an empty caption goes inert but keeps its add action operable", () => {
-    // The way out of an empty group is its `+`. Fading or disabling the whole
-    // row would take that with it and strand the user.
-    const body = ruleBody(
-      scopedCss,
-      ".sidebar-project-tree-subheader--empty .sidebar-project-tree-subheader-label",
-    );
-    expect(body, "the label, not the row, carries the fade").toContain(
-      "opacity: var(--opacity-disabled",
-    );
-
-    const sideBar = read("./SideBar.vue");
-    // The chevron's visibility and the row's inert state read the SAME helper,
-    // so they cannot disagree.
-    for (const group of ["projectHasPeople", "projectHasSets"]) {
-      expect(sideBar).toContain(`'sidebar-row-glyph--empty': !${group}(p.id)`);
-      expect(sideBar).toContain(
-        `:aria-disabled="!${group}(p.id) || undefined"`,
-      );
-    }
-  });
-
-  it("rank is carried by type, not indent alone", () => {
-    // A project and the captions nested under it must differ in type. When they
-    // did not, indent had to signal rank as well as depth, which is what forced
-    // a 24px step and pushed names to 91px in a 240px rail.
-    const project = ruleBody(scopedCss, ".sidebar-project-tree-label");
-    const caption = ruleBody(
-      scopedCss,
-      ".sidebar-project-tree-subheader-label",
-    );
-    expect(project).toContain("font-size: var(--text-sm)");
-    expect(caption).toContain("font-size: var(--text-2xs)");
-  });
-
-  it("no structural label or caret in the project tree is dimmed", () => {
-    // Three separate defects came out of dimming things in this column:
-    //   - caption at 0.7 became quieter than the names it heads, inverting the
-    //     hierarchy;
-    //   - its caret was not dimmed with it, so the caret outshone its label,
-    //     while the project's caret at 0.5 was far dimmer than its own;
-    //   - a caret at 0.7 of a 0.7 label measures 2.95:1 in light, under the
-    //     3:1 a disclosure glyph owes as a graphical object (WCAG 1.4.11).
-    // Rank is size, weight, tracking and indent. Not opacity.
+  it("no section head in the media list is dimmed", () => {
+    // Dimming a caption to 0.7 once made it the quietest thing in the column,
+    // between full-strength rows above and below, which inverts the hierarchy.
+    // Rank is size, weight and tracking. Not opacity, and not a faded colour.
     for (const sel of [
-      ".sidebar-project-tree-label",
-      ".sidebar-project-tree-chevron",
-      ".sidebar-project-tree-subheader-label",
-      ".sidebar-project-tree-sub-chevron",
+      ".sidebar-section-header",
+      ".sidebar-section-title",
+      ".sidebar-media-list .sidebar-section-header",
     ]) {
       for (const body of ruleBodies(scopedCss, sel)) {
         expect(body, `${sel} must not carry its own opacity`).not.toMatch(
           /opacity\s*:/,
+        );
+        expect(body, `${sel} must not fade its ink`).not.toMatch(
+          /color\s*:\s*rgba\([^)]*opacity/,
         );
       }
     }

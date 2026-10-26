@@ -121,16 +121,6 @@ function rowByTitle(wrapper, prefix, selector = ".sidebar-list-item") {
   return row;
 }
 
-/** Switch sidebar tabs, which is where the other drop targets live. */
-async function openTab(wrapper, label) {
-  const tab = wrapper
-    .findAll("button.sidebar-view-tab")
-    .find((el) => el.text().includes(label));
-  if (!tab) throw new Error(`no ${label} tab`);
-  await tab.trigger("click");
-  for (let i = 0; i < 5; i += 1) await flushPromises();
-}
-
 /** A dataTransfer whose `types` is all a dragover handler may read. */
 function transfer(payload) {
   const json = JSON.stringify(payload);
@@ -222,30 +212,9 @@ describe("sidebar rows judge the drag payload during dragover", () => {
     wrapper.unmount();
   });
 
-  it("takes pictures but not faces on a project row", async () => {
-    const wrapper = await mountSidebar();
-    await openTab(wrapper, "Projects");
-    const row = rowByTitle(
-      wrapper,
-      `${PROJECT.name} (`,
-      ".sidebar-project-tree-row",
-    );
-
-    const accepted = await fire(row, "dragover", transfer(PICTURES));
-    expect(accepted.defaultPrevented).toBe(true);
-    expect(row.classes()).toContain("droppable");
-
-    await fire(row, "dragleave", transfer(PICTURES));
-    const refused = await fire(row, "dragover", transfer(FACES));
-    expect(refused.defaultPrevented).toBe(false);
-    expect(row.classes()).toContain("not-droppable");
-
-    wrapper.unmount();
-  });
-
   it("takes pictures but not faces on a reference-folder row", async () => {
+    // Folders are a section of the one list now (#2159), not a tab.
     const wrapper = await mountSidebar();
-    await openTab(wrapper, "Folders");
     const row = rowByTitle(
       wrapper,
       REF_FOLDER.folder,

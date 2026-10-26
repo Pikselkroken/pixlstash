@@ -782,6 +782,8 @@ export function useGridScoring({
     if (!on && filterStore.favouriteOnlyFilter && removeImagesById) {
       removeImagesById([...keys]);
     }
+    // The sidebar's Favourites row carries a count, as a score's rows do.
+    emit("refresh-sidebar");
     return true;
   }
 
