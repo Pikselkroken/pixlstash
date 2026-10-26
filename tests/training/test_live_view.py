@@ -188,3 +188,9 @@ def test_the_trainer_info_line_is_read_from_its_job_row(tmp_path):
     assert live_view.read_trainer_info(path, "job-1") == "Generating images - 2/4"
     assert live_view.read_trainer_info(path, "job-2") == ""
     assert live_view.read_trainer_info(str(tmp_path / "none.db"), "job-1") == ""
+
+
+def test_a_malformed_step_time_is_skipped_not_fatal(tmp_path):
+    path = str(tmp_path / "loss_log.db")
+    _loss_db(path, [(1, 10.0), (2, "not a time"), (3, 14.0)])
+    assert live_view.read_step_times(path) == [(1, 10.0), (3, 14.0)]

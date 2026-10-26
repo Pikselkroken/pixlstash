@@ -263,7 +263,18 @@ def read_step_times(loss_db_path: str) -> list[tuple[int, float]]:
         return []
     finally:
         conn.close()
-    return [(int(step), float(wall)) for step, wall in rows if wall is not None]
+    times = []
+    for step, wall in rows:
+        if wall is None:
+            continue
+        try:
+            times.append((int(step), float(wall)))
+        except (TypeError, ValueError) as exc:
+            # One bad row is skipped, so the rest of the speed still reads.
+            logger.warning(
+                "Skipping an unreadable step time in %s: %s", loss_db_path, exc
+            )
+    return times
 
 
 def speed(step_times: list[tuple[int, float]], total_steps: int | None) -> dict:

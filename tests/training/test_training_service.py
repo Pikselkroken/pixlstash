@@ -31,6 +31,7 @@ from pixlstash.event_types import EventType
 from pixlstash.hub import training_runs
 from pixlstash.hub.db import now_iso
 from pixlstash.services.training_service import TrainingService
+from pixlstash.training.backend import TrainingProgress
 from pixlstash.training.local_ai_toolkit import LocalAiToolkit
 from pixlstash.vault import Vault
 
@@ -1202,3 +1203,44 @@ def test_vault_reconciles_a_surviving_trainer_before_the_worker_starts():
     Vault.start(stand_in)
 
     assert order == ["reconcile", "start"]
+
+
+def test_a_poll_does_not_undo_a_cancel_the_trainer_has_not_seen_yet(hub, repo_dir):
+    """The trainer reports running for a while after a cancel; "stopping"
+    stands until it reaches an end state."""
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(grant=True),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    training_runs.create_run(
+        hub,
+        library_uuid=_LIBRARY_UUID,
+        uuid="cancelled-job",
+        name="cancelled",
+        set_id=None,
+        character_id=_CHARACTER_ID,
+        base_model="m",
+        trigger_word="t",
+    )
+    handle = SimpleNamespace(log_path="")
+    running = TrainingProgress(
+        status="running", info="Training", step=40, total_steps=100, speed=""
+    )
+
+    training_runs.update_run(hub, "cancelled-job", status="stopping")
+    service._persist_progress("cancelled-job", running, handle)
+    assert _job_status(hub, "cancelled-job").status == "stopping"
+
+    stopped = TrainingProgress(
+        status="stopped", info="Job stopped", step=41, total_steps=100, speed=""
+    )
+    service._persist_progress("cancelled-job", stopped, handle)
+    assert _job_status(hub, "cancelled-job").status == "stopped"
+
+    # A run nobody cancelled still reads as running.
+    training_runs.update_run(hub, "cancelled-job", status="running")
+    service._persist_progress("cancelled-job", running, handle)
+    assert _job_status(hub, "cancelled-job").status == "running"

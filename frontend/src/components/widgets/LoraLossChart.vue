@@ -193,11 +193,14 @@ function draw() {
   // The cover's step on the curve: an olive diamond, the selected-item mark.
   const cover = props.markers.find((m) => m.kind === "cover");
   if (cover && cover.step >= minStep && cover.step <= maxStep) {
-    const nearest = pts.reduce((best, p) =>
-      Math.abs(p.step - cover.step) < Math.abs(best.step - cover.step) ? p : best,
-    );
+    // On the drawn line at the cover's step: interpolated between the two
+    // points around it, so the diamond stays on its column's rule.
+    const after = Math.max(1, pts.findIndex((p) => p.step >= cover.step));
+    const a = pts[after - 1];
+    const b = pts[after];
+    const t = b.step === a.step ? 0 : (cover.step - a.step) / (b.step - a.step);
     const x = xOf(cover.step);
-    const y = yOf(values[pts.indexOf(nearest)]);
+    const y = yOf(values[after - 1] + t * (values[after] - values[after - 1]));
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(Math.PI / 4);

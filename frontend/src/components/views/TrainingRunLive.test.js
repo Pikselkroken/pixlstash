@@ -301,4 +301,53 @@ describe("TrainingRunLive", () => {
       vi.useRealTimers();
     }
   });
+
+  it("keeps one poll going when it is pointed at another run", async () => {
+    vi.useFakeTimers();
+    try {
+      const wrapper = await open(payload());
+      getTrainingJobLive.mockResolvedValue(payload({ id: 8 }));
+      await vi.advanceTimersByTimeAsync(1_000);
+      await wrapper.setProps({ jobId: 8 });
+      await flushPromises();
+      getTrainingJobLive.mockClear();
+      await vi.advanceTimersByTimeAsync(10_000);
+      // One read every 2 s: five, not the ten two chains would make.
+      expect(getTrainingJobLive).toHaveBeenCalledTimes(5);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("puts prompts it could not read under their own heading", async () => {
+    const base = payload();
+    const wrapper = await open(
+      payload({
+        rows: base.rows.map((row) => ({ ...row, prompt: "", with_trigger: null })),
+      }),
+    );
+    const groups = wrapper.findAll(".trl-gline").map((g) => g.text());
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toContain("Previews");
+    expect(groups[0]).not.toContain("With the trigger word");
+  });
+
+  it("does not print NaN for RAM it is short of when its use is unknown", async () => {
+    const wrapper = await open(
+      payload({
+        status: "queued",
+        phase: "waiting_gpu",
+        waiting: { code: "ram", text: "Needs 52.0 GB of RAM." },
+        telemetry: {
+          gpu: { total_mb: 24576, used_mb: 1500, ours_mb: null },
+          ram: { total_mb: 65536, used_mb: null, ours_mb: null },
+          need: { vram_mb: 16000, ram_mb: 53248 },
+          paging: false,
+        },
+      }),
+    );
+    const bar = wrapper.find(".trl-statusbar").text();
+    expect(bar).not.toContain("NaN");
+    expect(bar).toMatch(/RAM\s*Unknown/);
+  });
 });

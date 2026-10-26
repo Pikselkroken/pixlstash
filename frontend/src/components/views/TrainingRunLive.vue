@@ -513,8 +513,10 @@ const markers = computed(() =>
 
 const groups = computed(() => {
   const rows = live.value?.rows ?? [];
-  const withWord = rows.filter((row) => row.with_trigger !== false);
+  const withWord = rows.filter((row) => row.with_trigger === true);
   const without = rows.filter((row) => row.with_trigger === false);
+  // Rows whose prompt the run's config did not give: no claim either way.
+  const unknown = rows.filter((row) => row.with_trigger == null);
   // Grid rows: 1 timeline, 2 loss, then each group's heading and its prompts.
   const out = [];
   let next = 3;
@@ -534,6 +536,16 @@ const groups = computed(() => {
       title: "Without it",
       hint: "should not change from step 0",
       rows: without,
+      row: next,
+    });
+    next += 1 + without.length;
+  }
+  if (unknown.length) {
+    out.push({
+      key: "unknown",
+      title: "Previews",
+      hint: "the run's prompts could not be read",
+      rows: unknown,
       row: next,
     });
   }
@@ -673,12 +685,14 @@ const ram = computed(() => live.value?.telemetry.ram ?? {});
 const ramShortMb = computed(() => {
   const run = live.value;
   const need = run?.telemetry.need.ram_mb;
-  if (run?.waiting?.code !== "ram" || !need || !ram.value.total_mb) return 0;
+  if (run?.waiting?.code !== "ram" || !need || !ram.value.total_mb || ram.value.used_mb == null) {
+    return 0;
+  }
   return Math.max(0, need - (ram.value.total_mb - ram.value.used_mb));
 });
 
 const ramText = computed(() => {
-  if (ramShortMb.value) {
+  if (ramShortMb.value && ram.value.used_mb != null) {
     const free = ram.value.total_mb - ram.value.used_mb;
     return `needs ${gb(live.value.telemetry.need.ram_mb)}, ${gb(free)} free`;
   }
@@ -837,6 +851,10 @@ function onVisible() {
 watch(
   () => props.jobId,
   () => {
+    // The old run's timer and any read in flight are dropped, or two poll
+    // chains would run from here on.
+    generation += 1;
+    clearTimeout(timer);
     live.value = null;
     error.value = "";
     notFound = false;

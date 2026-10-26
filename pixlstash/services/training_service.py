@@ -964,6 +964,10 @@ class TrainingService:
             handle: The job handle (for reading the log tail).
         """
         status = progress.status if progress.status != "unknown" else "running"
+        # The trainer reports running for a while after a cancel; the row's
+        # "stopping" stands until the trainer reaches an end state.
+        if status == "running" and self._job_status(job_uuid) == "stopping":
+            status = "stopping"
         self._update_job(
             job_uuid,
             status=status,
