@@ -34,6 +34,22 @@ vi.mock("../../api/modelImports", () => ({
     `/api/v1/model-folders/${folderId}/runs/${runName}/samples/${filename}`,
 }));
 
+const listTrainingJobs = vi.fn();
+vi.mock("../../api/training", () => ({
+  listTrainingJobs: (...args) => listTrainingJobs(...args),
+}));
+
+// The route the tab is on: `?run=<uuid>` opens a run's page.
+const nav = vi.hoisted(() => ({ route: null, push: vi.fn() }));
+vi.mock("vue-router", async () => {
+  const { reactive } = await import("vue");
+  nav.route = reactive({ name: "models-runs", query: {} });
+  return {
+    useRoute: () => nav.route,
+    useRouter: () => ({ push: (...args) => nav.push(...args) }),
+  };
+});
+
 import TrainingRuns from "./TrainingRuns.vue";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
@@ -44,6 +60,10 @@ const globalOpts = {
     stubs: {
       "v-icon": true,
       AiToolkitIcon: true,
+      TrainingRunLive: {
+        props: ["jobId"],
+        template: "<div class='live-stub'>{{ jobId }}</div>",
+      },
       // Renders the activator AND the panel inline. The real one teleports, so
       // nothing inside a menu would be findable.
       "v-menu": {
@@ -123,6 +143,10 @@ beforeEach(() => {
   setActivePinia(createPinia());
   listRuns.mockReset();
   importRun.mockReset();
+  listTrainingJobs.mockReset();
+  listTrainingJobs.mockResolvedValue([]);
+  nav.push.mockReset();
+  nav.route.query = {};
   useModelShelfStore().fetchRows = vi.fn();
 });
 
@@ -707,5 +731,71 @@ describe("staying current without moving the ground", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(listRuns).not.toHaveBeenCalled();
+  });
+});
+
+describe("the runs PixlStash trains (#2118)", () => {
+  const job = (overrides = {}) => ({
+    id: 7,
+    uuid: "abcd1234ef",
+    name: "Clementine",
+    status: "running",
+    step: 1000,
+    total_steps: 1500,
+    base_model: "Z-Image",
+    run_name: "Clementine_abcd1234",
+    ...overrides,
+  });
+
+  it("opens a trained run's page from its card, and still ticks it from the disc", async () => {
+    listTrainingJobs.mockResolvedValue([job()]);
+    const wrapper = await openWith([run("Clementine_abcd1234"), run("Foxglove")]);
+    const card = wrapper
+      .findAll(".tr-card")
+      .find((c) => c.find(".tr-card-name").text() === "Clementine_abcd1234");
+    expect(card.find(".tr-card-live").text()).toBe("Training 1,000 / 1,500");
+
+    await card.trigger("click");
+    expect(nav.push).toHaveBeenCalledWith({
+      name: "models-runs",
+      query: { run: "abcd1234ef" },
+    });
+    expect(card.attributes("aria-selected")).toBe("false");
+
+    await card.find(".tr-card-check").trigger("click");
+    expect(card.attributes("aria-selected")).toBe("true");
+    // A run trained elsewhere still ticks from anywhere on its card.
+    nav.push.mockClear();
+    await tick(wrapper, "Foxglove");
+    expect(nav.push).not.toHaveBeenCalled();
+  });
+
+  it("gives a queued run a card before it has a folder", async () => {
+    listTrainingJobs.mockResolvedValue([
+      job({ status: "queued", step: 0, run_name: null }),
+      job({ uuid: "old", status: "completed", run_name: null }),
+    ]);
+    const wrapper = await openWith([]);
+    const cards = wrapper.findAll(".tr-card--job");
+    expect(cards).toHaveLength(1);
+    expect(cards[0].text()).toContain("Waiting for the GPU");
+    await cards[0].trigger("click");
+    expect(nav.push).toHaveBeenCalledWith({
+      name: "models-runs",
+      query: { run: "abcd1234ef" },
+    });
+  });
+
+  it("draws the run's page for ?run=, and says so when it is not here", async () => {
+    listTrainingJobs.mockResolvedValue([job()]);
+    nav.route.query = { run: "abcd1234ef" };
+    const wrapper = await openWith([run("Clementine_abcd1234")]);
+    expect(wrapper.find(".live-stub").text()).toBe("7");
+    expect(wrapper.find(".tr-grid").exists()).toBe(false);
+
+    nav.route.query = { run: "somebody-elses" };
+    await settle(wrapper);
+    expect(wrapper.find(".live-stub").exists()).toBe(false);
+    expect(wrapper.text()).toContain("That training run is not in this library.");
   });
 });

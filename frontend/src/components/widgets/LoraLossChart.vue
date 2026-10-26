@@ -8,12 +8,32 @@
  *
  * Props:
  *   curve: Array<{ step:number, loss:number }>  the loss curve from a job.
+ *   xScale: (step) => fraction in [0, 1] of the plot width. Injected by the
+ *     Training runs view (#2118) so the curve shares the sample grid's step
+ *     axis; omitted, the steps are spread linearly over the width.
+ *   markers: Array<{ step:number, kind:"checkpoint"|"cover" }>  vertical
+ *     rules at checkpoint steps; the cover's is olive with a diamond on the
+ *     curve.
+ *   smooth: draw the raw points faint and a smoothed line over them.
+ *   height: the plot's height in px.
+ *   compact: the caption is read out but not shown, and there is no table
+ *     toggle, for a chart laid into a grid whose rows must stay aligned.
+ *
+ * Drawn in teal, the chart hue, in the shelf's run band and the live view alike.
  */
 import { computed, onMounted, onUnmounted, ref, watch, nextTick } from "vue";
 
 const props = defineProps({
   curve: { type: Array, default: () => [] },
+  xScale: { type: Function, default: null },
+  markers: { type: Array, default: () => [] },
+  smooth: { type: Boolean, default: false },
+  height: { type: Number, default: 80 },
+  compact: { type: Boolean, default: false },
 });
+
+// The weight of each new point in the smoothed line: a 20-point EMA.
+const SMOOTHING = 2 / 21;
 
 const canvasRef = ref(null);
 const showTable = ref(false);
@@ -53,6 +73,27 @@ function themeRgb(name, fallback) {
   );
 }
 
+/** The exponential moving average of the losses, one value per point. */
+function smoothed(pts) {
+  let value = null;
+  return pts.map((p) => {
+    value = value === null ? p.loss : value + SMOOTHING * (p.loss - value);
+    return value;
+  });
+}
+
+/** The latest smoothed loss, for a caller's headline figure. */
+const latestSmoothed = computed(() => {
+  const values = smoothed(points.value);
+  return values.length ? values[values.length - 1] : null;
+});
+
+defineExpose({ latestSmoothed });
+
+function cssColor(canvas, name, fallback) {
+  return getComputedStyle(canvas).getPropertyValue(name).trim() || fallback;
+}
+
 function draw() {
   const canvas = canvasRef.value;
   if (!canvas) return;
@@ -76,7 +117,10 @@ function draw() {
   if (pts.length < 2) return;
 
   const pad = 4;
-  const plotW = width - pad * 2;
+  // An injected scale owns the whole width: its fractions are column centres,
+  // which must land under the columns, so there is no side padding to add.
+  const padX = props.xScale ? 0 : pad;
+  const plotW = width - padX * 2;
   const plotH = height - pad * 2;
   const steps = pts.map((p) => p.step);
   const losses = pts.map((p) => p.loss);
@@ -87,31 +131,83 @@ function draw() {
   const stepRange = maxStep - minStep || 1;
   const lossRange = maxLoss - minLoss || 1;
 
-  const xOf = (step) => pad + ((step - minStep) / stepRange) * plotW;
+  const fraction = props.xScale || ((step) => (step - minStep) / stepRange);
+  const xOf = (step) => padX + fraction(step) * plotW;
   // Invert y: lower loss is higher on the chart.
   const yOf = (loss) => pad + (1 - (loss - minLoss) / lossRange) * plotH;
 
-  const accent = themeRgb("primary", "142,166,4");
+  const line = themeRgb("surface-tertiary", "143,188,198");
+  const dot = themeRgb("tertiary", "70,112,122");
+  const ink = themeRgb("on-surface", "242,229,218");
+
+  for (const marker of props.markers) {
+    const x = xOf(marker.step);
+    ctx.beginPath();
+    ctx.moveTo(x, pad);
+    ctx.lineTo(x, pad + plotH);
+    if (marker.kind === "cover") {
+      ctx.setLineDash([]);
+      ctx.strokeStyle = cssColor(canvas, "--active-bar", `rgb(${ink})`);
+    } else {
+      ctx.setLineDash([2, 3]);
+      ctx.strokeStyle = `rgba(${ink}, 0.16)`;
+    }
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+
+  const values = props.smooth ? smoothed(pts) : losses;
+  if (props.smooth) {
+    ctx.fillStyle = `rgba(${dot}, 0.55)`;
+    for (const p of pts) {
+      ctx.beginPath();
+      ctx.arc(xOf(p.step), yOf(p.loss), 1.3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
 
   // Line
   ctx.beginPath();
   pts.forEach((p, i) => {
     const x = xOf(p.step);
-    const y = yOf(p.loss);
+    const y = yOf(values[i]);
     if (i === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   });
-  ctx.strokeStyle = `rgba(${accent}, 0.9)`;
-  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = `rgba(${line}, 0.95)`;
+  ctx.lineWidth = props.smooth ? 2 : 1.5;
+  ctx.lineJoin = "round";
   ctx.stroke();
 
-  // Soft fill under the line
-  const last = pts[pts.length - 1];
-  ctx.lineTo(xOf(last.step), pad + plotH);
-  ctx.lineTo(pad, pad + plotH);
-  ctx.closePath();
-  ctx.fillStyle = `rgba(${accent}, 0.14)`;
-  ctx.fill();
+  if (!props.smooth) {
+    // Soft fill under the line
+    const last = pts[pts.length - 1];
+    ctx.lineTo(xOf(last.step), pad + plotH);
+    ctx.lineTo(xOf(pts[0].step), pad + plotH);
+    ctx.closePath();
+    ctx.fillStyle = `rgba(${dot}, 0.18)`;
+    ctx.fill();
+  }
+
+  // The cover's step on the curve: an olive diamond, the selected-item mark.
+  const cover = props.markers.find((m) => m.kind === "cover");
+  if (cover && cover.step >= minStep && cover.step <= maxStep) {
+    const nearest = pts.reduce((best, p) =>
+      Math.abs(p.step - cover.step) < Math.abs(best.step - cover.step) ? p : best,
+    );
+    const x = xOf(cover.step);
+    const y = yOf(values[pts.indexOf(nearest)]);
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(Math.PI / 4);
+    ctx.fillStyle = `rgb(${themeRgb("primary", "86,115,9")})`;
+    ctx.strokeStyle = cssColor(canvas, "--active-bar", `rgb(${ink})`);
+    ctx.lineWidth = 2;
+    ctx.fillRect(-5, -5, 10, 10);
+    ctx.strokeRect(-5, -5, 10, 10);
+    ctx.restore();
+  }
 }
 
 function scheduleDraw() {
@@ -133,7 +229,11 @@ onUnmounted(() => {
   }
 });
 
-watch(() => props.curve, scheduleDraw, { deep: true });
+watch(
+  () => [props.curve, props.markers, props.xScale, props.smooth],
+  scheduleDraw,
+  { deep: true },
+);
 </script>
 
 <template>
@@ -143,16 +243,22 @@ watch(() => props.curve, scheduleDraw, { deep: true });
         v-show="hasData"
         ref="canvasRef"
         class="lora-loss-canvas"
+        :style="{ height: `${height}px` }"
         aria-hidden="true"
       ></canvas>
       <p v-if="!hasData" class="lora-loss-empty">
         Not enough loss data to chart.
       </p>
-      <figcaption class="lora-loss-caption">{{ summary }}</figcaption>
+      <figcaption
+        class="lora-loss-caption"
+        :class="{ 'visually-hidden': compact }"
+      >
+        {{ summary }}
+      </figcaption>
     </figure>
 
     <button
-      v-if="points.length"
+      v-if="points.length && !compact"
       type="button"
       class="lora-loss-table-toggle"
       :aria-expanded="showTable ? 'true' : 'false'"

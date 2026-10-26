@@ -419,6 +419,12 @@ def test_full_lifecycle_queued_to_completed_lora(hub, repo_dir):
     assert final.started_at is not None
     assert final.completed_at is not None
     assert final.ai_toolkit_commit == head
+    # The live view's phase log: queued, launched, and imported last.
+    phases = [entry["phase"] for entry in json.loads(final.phase_log)]
+    assert phases[:2] == ["waiting_gpu", "loading"]
+    assert phases[-1] == "importing"
+    assert len(phases) == len(set(phases)), phases
+    assert final.finished_unwatched == 0
     assert final.dataset_picture_ids
     assert json.loads(final.dataset_picture_ids) == [1, 2, 3]
     # Loss curve populated.
@@ -915,6 +921,8 @@ def test_reconcile_on_startup_dead_running_job_finalizes(hub, repo_dir):
     final = _job_status(hub, job_uuid)
     assert final.status == "completed", f"got {final.status!r}"
     assert [run_dir for run_dir, _ in importer.calls] == [save_root]
+    # Nobody watched it end, and the live view says so.
+    assert final.finished_unwatched == 1
     # Dead-process reconcile must not have taken the GPU lease at all.
     assert lease.acquire_count == 0
     assert lease.release_count == 0

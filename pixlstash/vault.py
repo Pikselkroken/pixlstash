@@ -70,6 +70,8 @@ from pixlstash.services.workflow_ghost_service import DEFAULT_GHOST_RETENTION
 from pixlstash.services.snapshot_service import SnapshotService
 from pixlstash.utils.service.export_utils import ExportUtils
 from pixlstash.services.training_service import TrainingService
+from pixlstash.services.stack_detector import set_cover
+from pixlstash.hub import training_runs
 from pixlstash.services.run_importer import STATUS_IMPORTED, RunImporter
 from pixlstash.services.model_mover import SHELF_IO_LOCK
 from pixlstash.services.managed_model_store import find_download_folder
@@ -93,6 +95,32 @@ logger = get_logger(__name__)
 #: How long making room waits, on the arbiter's thread, for the GPU batch in
 #: flight to end; past it the models are unloaded off that thread.
 YIELD_WAIT_S = 2.0
+
+
+def _move_trained_attachment(
+    vault, run: dict, old_sha: Optional[str], new_sha: str
+) -> None:
+    """Attach *new_sha* to the run's set or character, and *old_sha* no more.
+
+    Every other attachment either model carries is kept: each write is a full
+    replacement, so it is built from what the model holds now. A run of neither
+    a set nor a character attaches nothing.
+    """
+    if run.get("character_id") is not None:
+        entity = (ENTITY_CHARACTER, run["character_id"])
+    elif run.get("set_id") is not None:
+        entity = (ENTITY_SET, run["set_id"])
+    else:
+        return
+    if old_sha:
+        held = fetch_attachments(vault, sha256=old_sha).get(old_sha, [])
+        kept = [(a["entity_type"], a["entity_id"]) for a in held]
+        if entity in kept:
+            replace_attachments(vault, old_sha, [e for e in kept if e != entity])
+    held = fetch_attachments(vault, sha256=new_sha).get(new_sha, [])
+    kept = [(a["entity_type"], a["entity_id"]) for a in held]
+    if entity not in kept:
+        replace_attachments(vault, new_sha, kept + [entity])
 
 
 class Vault:
@@ -1081,8 +1109,38 @@ class Vault:
         if not landed:
             raise RuntimeError(f"No checkpoint of {report.run_name} could be imported.")
 
-        # Nothing is cancelled here, so outcomes[0] is the cover (position 0).
+        # Nothing is cancelled here, so outcomes[0] is the cover (position 0),
+        # unless the owner chose a step in the live view while it trained. The
+        # row is read again: the one the worker claimed predates that choice.
         cover = report.outcomes[0]
+        run = (
+            training_runs.get_run_by_uuid(hub, info["uuid"])
+            if info.get("uuid")
+            else None
+        )
+        chosen = run.get("cover_step") if run else None
+        if chosen is not None:
+            final_step = run.get("total_steps")
+            picked = next(
+                (
+                    o
+                    for o in report.outcomes
+                    if o.status == STATUS_IMPORTED
+                    and o.model_id is not None
+                    and (o.step == chosen or (o.step is None and chosen == final_step))
+                ),
+                None,
+            )
+            if picked is None:
+                logger.warning(
+                    "Step %s chosen as the cover of %s has no imported checkpoint "
+                    "(pruned by the trainer?); the final stays the cover.",
+                    chosen,
+                    report.run_name,
+                )
+            elif picked is not cover:
+                set_cover(hub, report.stack_id, picked.model_id)
+                cover = picked
         cover_sha = None
         if cover.status == STATUS_IMPORTED and cover.model_id is not None:
             cover_row = hub.fetchone(
@@ -1108,22 +1166,70 @@ class Vault:
             )
 
         if cover_sha is not None:
-            wanted = []
-            if info.get("character_id") is not None:
-                wanted.append((ENTITY_CHARACTER, info["character_id"]))
-            elif info.get("set_id") is not None:
-                wanted.append((ENTITY_SET, info["set_id"]))
-            if wanted:
-                # A full replacement, so keep what the cover already carries.
-                held = fetch_attachments(self, sha256=cover_sha).get(cover_sha, [])
-                kept = [(a["entity_type"], a["entity_id"]) for a in held]
-                replace_attachments(self, cover_sha, kept + wanted)
+            _move_trained_attachment(self, info, None, cover_sha)
 
         return {
             "stack_id": report.stack_id,
             "imported": len(landed),
             "cover_sha256": cover_sha,
         }
+
+    def choose_training_cover(self, run: dict, step: int) -> bool:
+        """Make the checkpoint at *step* the cover of a trained run on the shelf.
+
+        The stack's cover moves (``stack_detector.set_cover``) and the LoRA
+        attached to the run's set or character moves with it, so the set uses
+        the step the owner chose rather than the last one. A run not on the
+        shelf yet is left to its import, which reads ``cover_step``.
+
+        Args:
+            run: The ``training_run`` row (``id``, ``total_steps``, ``set_id``,
+                ``character_id``).
+            step: The step chosen; the run's last step names its bare final.
+
+        Returns:
+            True when the shelf was changed, False when the run has no models
+            on it yet.
+
+        Raises:
+            LookupError: The run is on the shelf but kept no checkpoint at
+                *step*.
+        """
+        hub = self._hub
+        if hub is None:
+            return False
+        rows = hub.fetchall(
+            "SELECT id, sha256, stack_id, stack_position, training_step FROM model "
+            "WHERE training_run_id = ? ORDER BY stack_position IS NULL, "
+            "stack_position, id",
+            (run["id"],),
+        )
+        if not rows:
+            return False
+        target = next(
+            (
+                row
+                for row in rows
+                if row["training_step"] == step
+                or (row["training_step"] is None and step == run.get("total_steps"))
+            ),
+            None,
+        )
+        if target is None or target["stack_id"] is None:
+            raise LookupError(f"No checkpoint of this run was kept at step {step}.")
+        current = next(
+            (
+                row
+                for row in rows
+                if row["stack_id"] == target["stack_id"] and row["stack_position"] == 0
+            ),
+            None,
+        )
+        set_cover(hub, target["stack_id"], target["id"])
+        old_sha = current["sha256"] if current is not None else None
+        if target["sha256"] and target["sha256"] != old_sha:
+            _move_trained_attachment(self, run, old_sha, target["sha256"])
+        return True
 
     def _request_training_gpu(
         self, label: str, job_uuid: str, vram_mb: int, ram_mb: int

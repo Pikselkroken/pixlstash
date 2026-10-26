@@ -27,6 +27,22 @@ export function getTrainingJob(jobId) {
   return unwrap(apiClient.get(`/training/jobs/${jobId}`));
 }
 
+/**
+ * What the Training runs view draws for one job: phase, checkpoint columns,
+ * prompt rows with the sample in each cell, loss, cover, speed and memory.
+ */
+export function getTrainingJobLive(jobId) {
+  return unwrap(apiClient.get(`/training/jobs/${jobId}/live`));
+}
+
+/**
+ * Make the checkpoint at `step` the run's stack cover (and so its set's LoRA).
+ * Before the run is on the shelf the step is kept and applied at its import.
+ */
+export function setTrainingJobCover(jobId, step) {
+  return unwrap(apiClient.put(`/training/jobs/${jobId}/cover`, { step }));
+}
+
 /** Request a stop; the job finishes its current step and reports `stopped`. */
 export function cancelTrainingJob(jobId) {
   return unwrap(apiClient.post(`/training/jobs/${jobId}/cancel`, {}));

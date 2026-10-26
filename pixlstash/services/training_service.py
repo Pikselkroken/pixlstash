@@ -37,7 +37,7 @@ from pixlstash.hub.db import HubDatabase, now_iso
 from pixlstash.pixl_logging import get_logger
 from pixlstash.resources.arbiter import Lease
 from pixlstash.services.model_folder_scanner import SOURCE_FOLDER_KIND
-from pixlstash.training import ai_toolkit_install
+from pixlstash.training import ai_toolkit_install, live_view
 from pixlstash.training.backend import TrainerBackend, TrainingProgress, TrainingSpec
 from pixlstash.training.local_ai_toolkit import LocalAiToolkit
 
@@ -50,6 +50,43 @@ _TERMINAL_JOB_STATUSES = frozenset({"completed", "stopped", "error"})
 _TERMINAL_PROGRESS_STATUSES = frozenset({"completed", "stopped", "error"})
 # Cap on the trainer log tail we persist onto the job row.
 _LOG_TAIL_BYTES = 8192
+
+
+def handle_for_run(training_root: str, info: dict, backend=None):
+    """Reconstruct a run's :class:`TrainingHandle` from its persisted fields.
+
+    The work dir is ``<training_root>/<uuid>``. The persisted
+    ``training_folder`` is the shelf source folder for a run started since the
+    shelf took runs, or the legacy ``<work_dir>/output`` for an older one; only
+    the former is passed on, so an older run keeps the save root it was started
+    with. The adapter's ``handle_for`` is the source of truth for the paths.
+
+    Args:
+        training_root: ``<image_root>/training``.
+        info: Persisted job fields (uuid, name, pid, training_folder).
+        backend: A backend whose ``handle_for`` to use; None uses
+            :class:`LocalAiToolkit`'s.
+
+    Returns:
+        A reconstructed :class:`TrainingHandle`.
+    """
+    work_dir = os.path.join(training_root, info["uuid"])
+    stored = info.get("training_folder")
+    shared = None
+    if stored and os.path.abspath(stored) != os.path.join(
+        os.path.abspath(work_dir), "output"
+    ):
+        shared = stored
+    handle_for = getattr(backend, "handle_for", None)
+    if not callable(handle_for):
+        handle_for = LocalAiToolkit.handle_for
+    return handle_for(
+        work_dir,
+        info["uuid"],
+        info["name"],
+        info.get("pid"),
+        training_folder=shared,
+    )
 
 
 class TrainingService:
@@ -157,6 +194,10 @@ class TrainingService:
         # The lease a claimed job is still waiting on, so cancel() can drop it.
         self._waiting: tuple[str, Lease] | None = None
         self._active_lock = threading.Lock()
+        # Each run's phase log as last written, so a poll that stays in one
+        # phase writes nothing; loaded from the row the first time it is needed.
+        self._phase_logs: dict[str, list[dict]] = {}
+        self._phase_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -274,6 +315,7 @@ class TrainingService:
             resolved_profile=json.dumps(resolution) if resolution else None,
             advanced_pins=json.dumps(pins or {}),
         )
+        self._note_phase(job_uuid, "waiting_gpu")
         job = training_runs.get_run(hub, library_uuid, run_id)
         # The template path and the config patches have no column. Keep them
         # in memory for the common (no-restart) case and also persist a sidecar
@@ -459,8 +501,10 @@ class TrainingService:
             return
 
         # Dead process: trust the adapter's reconcile to derive the terminal
-        # state, then finalize from it.
+        # state, then finalize from it. Nobody watched it end, which the live
+        # view says.
         logger.info("reconcile: job %s is dead; finalizing from disk.", info["uuid"])
+        self._update_job(info["uuid"], finished_unwatched=1)
         progress = backend.reconcile(handle)
         self._finalize(backend, handle, info, progress)
 
@@ -669,6 +713,7 @@ class TrainingService:
         )
         handle = backend.prepare(spec)
         backend.submit(handle, spec)
+        self._note_phase(job_uuid, "loading")
 
         with self._active_lock:
             self._active_backend = backend
@@ -760,6 +805,10 @@ class TrainingService:
         """
         job_uuid = info["uuid"]
         status = progress.status
+
+        if status in _TERMINAL_PROGRESS_STATUSES:
+            with self._phase_lock:
+                self._phase_logs.pop(job_uuid, None)
 
         if self._stop.is_set() and status not in _TERMINAL_PROGRESS_STATUSES:
             # Shutdown interrupted the poll while the trainer is still running.
@@ -914,9 +963,10 @@ class TrainingService:
             progress: The latest progress snapshot.
             handle: The job handle (for reading the log tail).
         """
+        status = progress.status if progress.status != "unknown" else "running"
         self._update_job(
             job_uuid,
-            status=progress.status if progress.status != "unknown" else "running",
+            status=status,
             step=progress.step,
             total_steps=progress.total_steps,
             loss_curve=json.dumps(progress.loss_curve) if progress.loss_curve else None,
@@ -925,6 +975,32 @@ class TrainingService:
             ),
             log_tail=self._read_log_tail(handle.log_path),
         )
+        # A completed trainer is imported next: `_finalize` writes completed_at.
+        self._note_phase(
+            job_uuid, live_view.phase_of(status, progress.info, progress.step, None)
+        )
+
+    def _note_phase(self, job_uuid: str, phase: str | None) -> None:
+        """Append *phase* to the run's phase log when it is a new one.
+
+        Args:
+            job_uuid: The job uuid.
+            phase: One of :data:`pixlstash.training.live_view.PHASES`, or None
+                (nothing is written).
+        """
+        if phase is None:
+            return
+        with self._phase_lock:
+            log = self._phase_logs.get(job_uuid)
+            if log is None:
+                run = training_runs.get_run_by_uuid(self._hub, job_uuid)
+                log = live_view.parse_phase_log(run.get("phase_log") if run else None)
+                self._phase_logs[job_uuid] = log
+            if not live_view.append_phase(log, phase, now_iso()):
+                return
+            # Written under the lock, so two threads cannot store their
+            # snapshots out of order.
+            self._update_job(job_uuid, phase_log=json.dumps(log))
 
     def _emit_progress(
         self,
@@ -1077,43 +1153,10 @@ class TrainingService:
     def _handle_for_job(self, backend: TrainerBackend, info: dict):
         """Reconstruct a :class:`TrainingHandle` from persisted job fields.
 
-        The work dir is ``<training_root>/<uuid>``. The persisted
-        ``training_folder`` is the shelf source folder for a run started since
-        the shelf took runs, or the legacy ``<work_dir>/output`` for an older
-        one; only the former is passed on, so an older run keeps the save root
-        it was started with. The adapter's ``handle_for`` is the source of truth
-        for the paths.
-
-        Args:
-            backend: The backend (for its ``handle_for`` if present).
-            info: Persisted job fields (uuid, name, pid, training_folder).
-
-        Returns:
-            A reconstructed :class:`TrainingHandle`.
+        See :func:`handle_for_run`; *backend*'s ``handle_for`` is used when it
+        has one.
         """
-        work_dir = os.path.join(self._training_root, info["uuid"])
-        stored = info.get("training_folder")
-        shared = None
-        if stored and os.path.abspath(stored) != os.path.join(
-            os.path.abspath(work_dir), "output"
-        ):
-            shared = stored
-        handle_for = getattr(backend, "handle_for", None)
-        if callable(handle_for):
-            return handle_for(
-                work_dir,
-                info["uuid"],
-                info["name"],
-                info.get("pid"),
-                training_folder=shared,
-            )
-        return LocalAiToolkit.handle_for(
-            work_dir,
-            info["uuid"],
-            info["name"],
-            info.get("pid"),
-            training_folder=shared,
-        )
+        return handle_for_run(self._training_root, info, backend)
 
     # ------------------------------------------------------------------
     # Pending-spec sidecar (template_path / config_overrides without columns)

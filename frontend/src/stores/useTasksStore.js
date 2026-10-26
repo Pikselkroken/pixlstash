@@ -407,6 +407,8 @@ export const useTasksStore = defineStore("tasks", () => {
         label: lease.label || "AI Toolkit",
         figureMb: lease.held_mb ?? null,
         progress: lease.progress ?? null,
+        // The training run's uuid: its page is `/models/runs?run=<uuid>`.
+        jobId: lease.job_id ?? null,
       })),
   );
 

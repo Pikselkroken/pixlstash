@@ -6489,6 +6489,45 @@ already global, so half the family lived in each place. `Toolbar.vue` keeps only
 its own overrides (the container-query fold, the icon-trigger accent) and
 `TbGlobalActions.vue`'s byte-identical second copy is gone.
 
+#### Watching a run train (#2118)
+
+A run PixlStash trains opens **its own page inside the Training runs tab**:
+`views/TrainingRunLive.vue`, reached at `/models/runs?run=<job uuid>`. The query
+string, not a new route, because it is a modifier on the runs view and
+`MODEL_SHELF_ROUTES` stays the one list the shelf answers to. Three doors lead
+there: a folder card whose run a job trained (matched on the job summary's
+`run_name`; clicking such a card opens the page, and its check disc or Space
+still ticks it for import), a card for a live job that has no folder yet, and
+the **Watch** button on the Tasks tab's AI Toolkit row (the lease's `job_id`).
+The tab wears the amber attention dot while any AI Toolkit lease is held or
+waiting, read from `useTasksStore().resources`, the poll that already runs; the
+listing itself is still not polled.
+
+**One step axis.** The page is the "step axis" design: a CSS grid of a 224 px
+label column and one fixed 124 px pitch per checkpoint column. The timeline is
+the column header (step, tick, and "before training" / Cover / Use this step /
+"previews n of m"), `LoraLossChart` spans the columns with an injected `xScale`
+that puts each column's step at its centre (piecewise-linear between columns,
+so a last step off the preview pitch still lands under its column), and each
+prompt row's 104 × 76 cells hang under it. Long runs scroll sideways rather than
+shrinking the cells. The cover column is the olive selected-item frame; the
+hovered one takes `--hover-wash`; "Use this step" is hidden by opacity until the
+column is hovered or the button focused.
+
+**Run status is in the shelf's toolbar.** The page teleports its back arrow,
+run name, progress and Stop into `#shelf-run-bar`, a slot `ModelShelf` renders
+while a run is open (hiding Add, Model folders and the count). The teleport is
+`disabled` where that slot is absent and is never toggled after mount: Vue
+cannot move a teleport to a target it did not find when it mounted.
+
+**Every figure is labelled and none is invented.** The status bar's GPU and RAM
+meters (teal for the run's own share, grey for everything else, hatched red for
+a RAM shortfall), seconds per update and the time-left range each carry a
+Measured / Estimated / Not measured mark drawn by shape; a figure the server
+sent as null reads "Unknown" over a dashed track, never 0. The page polls
+`GET /training/jobs/{id}/live` every 2 s while the run is live and the tab is
+visible, and stops once it has ended.
+
 #### Registering the folders the shelf reads
 
 The registry is **Settings › Models** (`settings/ModelFoldersSection.vue`); the

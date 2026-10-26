@@ -723,6 +723,11 @@ _V2_SUPERSEDED_SHELF_TABLES = ("adapter_file", "adapter", "checkpoint")
 # `preset` is the recipe as `id@version`, `resolved_profile` the resolver's JSON
 # (choices, memory profile, every value and its source) and `advanced_pins` the
 # owner's Advanced values as JSON; all three are written once, at enqueue.
+#
+# The live view's three (#2118): `phase_log` is the JSON list of
+# `{phase, at}` the worker appends whenever the run enters a phase,
+# `cover_step` the step the owner chose as the stack cover (NULL: the final),
+# and `finished_unwatched` is 1 when the run ended while PixlStash was closed.
 _V2_TRAINING_RUN = """
 CREATE TABLE IF NOT EXISTS training_run (
     id                     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -752,7 +757,10 @@ CREATE TABLE IF NOT EXISTS training_run (
     error                  TEXT,
     created_at             TEXT NOT NULL,
     started_at             TEXT,
-    completed_at           TEXT
+    completed_at           TEXT,
+    phase_log              TEXT,
+    cover_step             INTEGER,
+    finished_unwatched     INTEGER NOT NULL DEFAULT 0
 )
 """
 
@@ -2158,6 +2166,14 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     for column in ("preset", "resolved_profile", "advanced_pins"):
         if column not in run_columns:
             conn.execute(f"ALTER TABLE training_run ADD COLUMN {column} TEXT")
+    # The live view's columns (#2118), the same way.
+    for column, ddl in (
+        ("phase_log", "TEXT"),
+        ("cover_step", "INTEGER"),
+        ("finished_unwatched", "INTEGER NOT NULL DEFAULT 0"),
+    ):
+        if column not in run_columns:
+            conn.execute(f"ALTER TABLE training_run ADD COLUMN {column} {ddl}")
 
     for statement in _V2_WORKFLOW_TABLES:
         conn.execute(statement)

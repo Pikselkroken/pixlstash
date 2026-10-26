@@ -1005,3 +1005,94 @@ def test_a_cover_whose_row_vanished_does_not_fail_the_run(shelf, monkeypatch):
 
     assert result["imported"] == 3
     assert result["cover_sha256"] is None
+
+
+def _cover_of(hub, run_id):
+    """The step of the run's stack cover; None names the bare final."""
+    row = hub.fetchone(
+        "SELECT training_step FROM model WHERE training_run_id = ? "
+        "AND stack_position = 0",
+        (run_id,),
+    )
+    return row["training_step"] if row is not None else "no cover"
+
+
+def _download_target(shelf):
+    with shelf["hub"].transaction() as conn:
+        conn.execute(
+            "UPDATE model_folder SET is_download_target = 1 WHERE id = ?",
+            (shelf["destination_id"],),
+        )
+
+
+def test_a_step_chosen_while_training_is_the_cover_when_the_run_lands(shelf):
+    """The live view's "Use this step", made before the run was on the shelf."""
+    run_id = _a_training_run(shelf["hub"])
+    training_runs.update_run(shelf["hub"], "run-clementine", cover_step=250)
+    _download_target(shelf)
+
+    Vault._import_training_run(
+        SimpleNamespace(_hub=shelf["hub"]),
+        str(shelf["run_dir"]),
+        {"id": run_id, "uuid": "run-clementine", "name": "Clementine"},
+    )
+
+    assert _cover_of(shelf["hub"], run_id) == 250
+
+
+def test_a_chosen_step_the_trainer_pruned_leaves_the_final_the_cover(shelf):
+    run_id = _a_training_run(shelf["hub"])
+    training_runs.update_run(shelf["hub"], "run-clementine", cover_step=125)
+    _download_target(shelf)
+
+    Vault._import_training_run(
+        SimpleNamespace(_hub=shelf["hub"]),
+        str(shelf["run_dir"]),
+        {"id": run_id, "uuid": "run-clementine", "name": "Clementine"},
+    )
+
+    assert _cover_of(shelf["hub"], run_id) is None
+
+
+def test_choosing_a_step_after_the_import_moves_the_cover_and_the_sets_lora(
+    shelf, monkeypatch
+):
+    """The set's attached LoRA is the step chosen, not the last one."""
+    import pixlstash.vault as vault_module
+
+    run_id = _a_training_run(shelf["hub"])
+    _download_target(shelf)
+    held: dict[str, list] = {}
+
+    def fetch(vault, *, sha256=None):
+        return {
+            sha256: [
+                {"entity_type": t, "entity_id": i} for t, i in held.get(sha256, [])
+            ]
+        }
+
+    def replace(vault, sha256, wanted):
+        held[sha256] = list(wanted)
+        return []
+
+    monkeypatch.setattr(vault_module, "fetch_attachments", fetch)
+    monkeypatch.setattr(vault_module, "replace_attachments", replace)
+    stand_in = SimpleNamespace(_hub=shelf["hub"])
+    run = {"id": run_id, "uuid": "run-clementine", "name": "Clementine", "set_id": 7}
+    Vault._import_training_run(stand_in, str(shelf["run_dir"]), run)
+    shas = {
+        row["training_step"]: row["sha256"]
+        for row in shelf["hub"].fetchall(
+            "SELECT training_step, sha256 FROM model WHERE training_run_id = ?",
+            (run_id,),
+        )
+    }
+    assert held == {shas[None]: [("set", 7)]}
+
+    assert Vault.choose_training_cover(stand_in, {**run, "total_steps": 750}, 500)
+
+    assert _cover_of(shelf["hub"], run_id) == 500
+    assert held[shas[None]] == []
+    assert held[shas[500]] == [("set", 7)]
+    with pytest.raises(LookupError):
+        Vault.choose_training_cover(stand_in, {**run, "total_steps": 750}, 125)

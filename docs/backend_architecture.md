@@ -35,7 +35,7 @@
 22. [Tiered Duplicate Detection](#22-tiered-duplicate-detection)
 23. [Opt-in telemetry](#23-opt-in-telemetry-the-install-id-and-the-consent-flags)
 24. [Folder structure: read, commit, layout and moves](#24-folder-structure-read-commit-layout-and-moves) — incl. [24.1 The folder-structure read](#241-the-folder-structure-read), [24.2 The folder-structure commit](#242-the-folder-structure-commit), [24.3 The library layout](#243-the-library-layout), [24.4 The layout and the move engine](#244-the-layout-and-the-move-engine), [24.5 Reconciling moves made outside PixlStash](#245-reconciling-moves-made-outside-pixlstash)
-25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Picking up a model that landed after the scan (#1985)](#2513-picking-up-a-model-that-landed-after-the-scan-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116), [25.17 Sample prompts written from the dataset (#2117)](#2517-sample-prompts-written-from-the-dataset-2117)
+25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Picking up a model that landed after the scan (#1985)](#2513-picking-up-a-model-that-landed-after-the-scan-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116), [25.17 Sample prompts written from the dataset (#2117)](#2517-sample-prompts-written-from-the-dataset-2117), [25.18 Watching a run live (#2118)](#2518-watching-a-run-live-2118)
 26. [Prompt match](#26-prompt-match)
 
 ---
@@ -807,6 +807,8 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/training/jobs/{job_id}                                                |                 | Get training job detail                                       |
 | DELETE | /api/v1/training/jobs/{job_id}                                                |                 | Delete a training job, its work directory and its dataset     |
 | POST   | /api/v1/training/jobs/{job_id}/cancel                                         |                 | Cancel a training job                                         |
+| PUT    | /api/v1/training/jobs/{job_id}/cover                                          |                 | Choose the step that covers a training job                    |
+| GET    | /api/v1/training/jobs/{job_id}/live                                           |                 | Watch a training job                                          |
 | GET    | /api/v1/training/jobs/{job_id}/status                                         |                 | Poll training job status                                      |
 | GET    | /api/v1/training/presets                                                      |                 | List training recipes                                         |
 | GET    | /api/v1/training/sample-prompts                                               |                 | Default sample prompts for a training run                     |
@@ -11464,6 +11466,47 @@ rendered config.
 `skip_first_sample` is off, so ai-toolkit samples once before the first step:
 the "before" column. Steps, guidance and size come from the recipe's preview
 settings.
+
+### 25.18 Watching a run live (#2118)
+
+`GET /training/jobs/{id}/live` is everything the Training runs view's run page
+draws, read fresh on each call by `pixlstash/training/live_view.py` (pure
+functions) over what the run already leaves behind. Nothing is cached between
+calls except each run's last swap counters.
+
+- **Phase.** `live_view.phase_of` maps the row's status and ai-toolkit's own
+  info line (the per-job `Job` table, read read-only: "Loading model",
+  "Loading dataset", "Training", "Generating images - n/m", "Saving model") to
+  one of eight phases. A `completed` row with no `completed_at` is
+  `importing`, because the worker writes `completed_at` once the import is
+  done. "Checking memory and speed" is reserved for the probe (#2120).
+- **Phase log.** `training_run.phase_log` is the JSON list of `{phase, at}` the
+  worker appends when the run enters a new phase (`TrainingService._note_phase`:
+  at enqueue, at launch, and on each poll), so setup folds to "Set up in 2:35"
+  with each phase's time. `finished_unwatched` is set by the startup reconcile
+  when it finalizes a run whose trainer had already exited.
+- **The grid.** Columns are step 0, every `sample.sample_every` and the last
+  step, plus any step a sample on disk names. Rows are the rendered config's
+  `sample.samples` in index order, marked `with_trigger` by a whole-word match;
+  each cell is `sample` (with its filename, served by the existing
+  `/model-folders/{id}/runs/{name}/samples/{file}`), `drawing`, `queued`,
+  `deferred`, `future` or `missing`.
+- **Speed.** Seconds per update is the median gap between consecutive steps in
+  `loss_log.db`'s `steps` table over the last 50, so a preview pause is not a
+  slow step; the time left ranges from that median to the run's own average so
+  far, which includes the pauses still to come.
+- **Memory.** While the run waits or trains: the card's used and total (NVML)
+  and the machine's RAM, and the trainer's own share from its process tree
+  (NVML's per-process figure, resident memory) where the platform reports one,
+  else null. Paging is more than 32 MB through swap between two reads.
+
+**The cover.** `PUT /training/jobs/{id}/cover {step}` is "Use this step". Before
+the run is on the shelf it records `training_run.cover_step`, and
+`Vault._import_training_run` makes that step's checkpoint the stack cover
+(`stack_detector.set_cover`) before attaching the cover to the set or character.
+On the shelf, `Vault.choose_training_cover` moves the cover and the attachment
+at once. Either way a step must be one the run kept a checkpoint for (the
+trainer prunes old ones; the last step names the bare final), or it is a 409.
 
 ## 26. Prompt match
 

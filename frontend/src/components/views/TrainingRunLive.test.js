@@ -1,0 +1,235 @@
+// One training run's page (#2118): the step axis, the cells filling in, the
+// cover, and the figures that say where they came from.
+
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
+import { flushPromises, mount } from "@vue/test-utils";
+import { setActivePinia, createPinia } from "pinia";
+
+vi.mock("vuetify/components", async (importOriginal) => ({
+  ...(await importOriginal()),
+  VTooltip: {
+    name: "VTooltip",
+    setup:
+      (_p, { slots }) =>
+      () =>
+        slots.activator?.({ props: {} }),
+  },
+}));
+
+const getTrainingJobLive = vi.fn();
+const setTrainingJobCover = vi.fn();
+const cancelTrainingJob = vi.fn();
+vi.mock("../../api/training", () => ({
+  getTrainingJobLive: (...args) => getTrainingJobLive(...args),
+  setTrainingJobCover: (...args) => setTrainingJobCover(...args),
+  cancelTrainingJob: (...args) => cancelTrainingJob(...args),
+}));
+vi.mock("../../api/modelImports", () => ({
+  runSampleUrl: (folderId, runName, filename) =>
+    `/samples/${folderId}/${runName}/${filename}`,
+}));
+
+import TrainingRunLive from "./TrainingRunLive.vue";
+
+const stubs = {
+  "v-icon": true,
+  LoraLossChart: { template: "<div class='chart-stub' />" },
+  AppBarButton: {
+    props: ["ariaLabel"],
+    template: "<button :aria-label='ariaLabel'><slot /></button>",
+  },
+  AppButton: {
+    props: ["disabled", "loading"],
+    template: "<button class='app-btn' :disabled='disabled'><slot /></button>",
+  },
+};
+
+const cells = (states) =>
+  states.map((state, i) => ({
+    state,
+    filename: state === "sample" ? `s_${i}.jpg` : null,
+  }));
+
+function payload(overrides = {}) {
+  return {
+    id: 7,
+    uuid: "abcd",
+    name: "ohwx-portrait-v2",
+    status: "running",
+    phase: "previews",
+    previews: { drawing: 2, total: 2 },
+    previews_deferred: false,
+    step: 1000,
+    total_steps: 1500,
+    set_id: null,
+    character_id: null,
+    trigger_word: "ohwx",
+    phases: [
+      { phase: "waiting_gpu", seconds: 30 },
+      { phase: "loading", seconds: 125 },
+      { phase: "training", seconds: 600 },
+    ],
+    columns: [0, 250, 500, 750, 1000, 1250, 1500],
+    rows: [
+      {
+        index: 0,
+        prompt: "photo of ohwx woman",
+        with_trigger: true,
+        cells: cells(["sample", "sample", "sample", "sample", "sample", "future", "future"]),
+      },
+      {
+        index: 1,
+        prompt: "photo of a woman",
+        with_trigger: false,
+        cells: cells(["sample", "sample", "sample", "sample", "drawing", "future", "future"]),
+      },
+    ],
+    run_folder: { folder_id: 3, run_name: "ohwx_abcd" },
+    imported: false,
+    coverable: [750, 1000, 1500],
+    cover_step: 750,
+    loss_curve: [],
+    dataset_picture_ids: [1, 2, 3],
+    streamed: null,
+    speed: { seconds_per_step: 1.9, remaining_low_s: 960, remaining_high_s: 1260 },
+    telemetry: {
+      gpu: { total_mb: 24576, used_mb: 21811, ours_mb: null },
+      ram: { total_mb: null, used_mb: null, ours_mb: null },
+      need: { vram_mb: 16000, ram_mb: 16000 },
+      paging: false,
+    },
+    waiting: null,
+    finished_while_closed: null,
+    error: null,
+    created_at: "2026-10-26T01:00:00+00:00",
+    started_at: "2026-10-26T01:00:30+00:00",
+    completed_at: null,
+    ...overrides,
+  };
+}
+
+const mounted = [];
+async function open(body) {
+  getTrainingJobLive.mockResolvedValue(body);
+  const wrapper = mount(TrainingRunLive, {
+    props: { jobId: 7 },
+    global: { stubs },
+  });
+  mounted.push(wrapper);
+  await flushPromises();
+  return wrapper;
+}
+
+beforeEach(() => {
+  setActivePinia(createPinia());
+  getTrainingJobLive.mockReset();
+  setTrainingJobCover.mockReset();
+  cancelTrainingJob.mockReset();
+});
+
+afterEach(() => {
+  while (mounted.length) mounted.pop().unmount();
+});
+
+describe("TrainingRunLive", () => {
+  it("draws the run on one step axis as it trains", async () => {
+    const wrapper = await open(payload());
+    expect(getTrainingJobLive).toHaveBeenCalledWith(7);
+    expect(wrapper.find(".trl-status").text()).toContain("Training 1,000 / 1,500");
+    expect(wrapper.find(".trl-status").text()).toContain("Generating previews 2 of 2");
+    expect(wrapper.find(".trl-setup").text()).toContain("Set up in 2:35");
+    expect(wrapper.findAll(".trl-stepn").map((n) => n.text())).toEqual([
+      "Step 0", "250", "500", "750", "1,000", "1,250", "1,500",
+    ]);
+    // The groups, the trigger word drawn as a token.
+    const groups = wrapper.findAll(".trl-gline").map((g) => g.text());
+    expect(groups[0]).toContain("With the trigger word");
+    expect(groups[1]).toContain("Without it");
+    expect(groups[1]).toContain("should not change from step 0");
+    expect(wrapper.find(".trl-trig").text()).toBe("ohwx");
+    // Samples point at the run folder; the one being drawn spins.
+    const img = wrapper.find("img.trl-cell");
+    expect(img.attributes("src")).toBe("/samples/3/ohwx_abcd/s_0.jpg");
+    expect(wrapper.find(".trl-cell--gen").text()).toContain("2 of 2");
+    expect(wrapper.findAll(".trl-cell--future")).toHaveLength(4);
+    // The cover is the chosen column; a kept checkpoint offers itself, except
+    // the one whose previews are being drawn, which says so instead.
+    expect(wrapper.findAll(".trl-step")[3].text()).toContain("Cover");
+    expect(wrapper.findAll(".trl-use").map((b) => b.text())).toEqual([
+      "Use this step",
+    ]);
+  });
+
+  it("labels every figure, and an unreadable one is Unknown, never 0", async () => {
+    const wrapper = await open(payload());
+    const bar = wrapper.find(".trl-statusbar").text();
+    expect(bar).toContain("21.3 / 24.0 GB");
+    expect(bar).toContain("1.9 s");
+    expect(bar).toContain("16–21 min");
+    expect(bar).toMatch(/RAM\s*Unknown\s*Not measured/);
+    expect(bar).not.toMatch(/(^|[^\d.])0(\.0)? GB/);
+    expect(wrapper.findAll(".trl-prov--estimated")).toHaveLength(1);
+  });
+
+  it("makes a column the cover", async () => {
+    setTrainingJobCover.mockResolvedValue({ cover_step: 1500, applied: false });
+    const wrapper = await open(payload());
+    getTrainingJobLive.mockResolvedValue(payload({ cover_step: 1500 }));
+    await wrapper.find(".trl-use").trigger("click");
+    await flushPromises();
+    expect(setTrainingJobCover).toHaveBeenCalledWith(7, 1500);
+    expect(wrapper.findAll(".trl-step")[6].text()).toContain("Cover");
+    expect(wrapper.findAll(".trl-step")[3].text()).not.toContain("Cover");
+  });
+
+  it("says when the machine is short of RAM to start", async () => {
+    const wrapper = await open(
+      payload({
+        status: "queued",
+        phase: "waiting_gpu",
+        step: 0,
+        phases: [{ phase: "waiting_gpu", seconds: 12 }],
+        waiting: { code: "ram", text: "Needs 15.6 GB of RAM; 9.8 GB is free." },
+        telemetry: {
+          gpu: { total_mb: 24576, used_mb: 1500, ours_mb: null },
+          ram: { total_mb: 65536, used_mb: 55500, ours_mb: null },
+          need: { vram_mb: 16000, ram_mb: 16000 },
+          paging: false,
+        },
+      }),
+    );
+    expect(wrapper.find(".trl-notice--err").text()).toContain(
+      "Not enough system RAM to start.",
+    );
+    expect(wrapper.find(".trl-statusbar").text()).toContain("needs 15.6 GB, 9.8 GB free");
+    expect(wrapper.find(".trl-status").text()).toContain("Waiting for the GPU");
+    expect(wrapper.find(".app-btn").text()).toBe("Stop training");
+  });
+
+  it("says a run finished while PixlStash was closed, and stops asking", async () => {
+    vi.useFakeTimers();
+    try {
+      const wrapper = await open(
+        payload({
+          status: "completed",
+          phase: null,
+          previews: null,
+          step: 1500,
+          imported: true,
+          completed_at: "2026-10-26T09:00:00+00:00",
+          finished_while_closed: { at: "2026-10-26T03:12:00+00:00" },
+          speed: { seconds_per_step: 1.9, remaining_low_s: null, remaining_high_s: null },
+        }),
+      );
+      expect(wrapper.find(".trl-notice--ok").text()).toContain(
+        "Finished while PixlStash was closed",
+      );
+      expect(wrapper.find(".app-btn").exists()).toBe(false);
+      getTrainingJobLive.mockClear();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(getTrainingJobLive).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

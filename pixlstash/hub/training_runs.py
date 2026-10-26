@@ -37,6 +37,9 @@ _MUTABLE_COLUMNS = frozenset(
         "error",
         "started_at",
         "completed_at",
+        "phase_log",
+        "cover_step",
+        "finished_unwatched",
     }
 )
 

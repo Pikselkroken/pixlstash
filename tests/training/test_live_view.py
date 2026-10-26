@@ -1,0 +1,190 @@
+"""The live view's reading of a run (#2118): phases, columns, cells and speed."""
+
+import sqlite3
+
+import pytest
+
+from pixlstash.training import live_view
+
+
+@pytest.mark.parametrize(
+    "status, info, step, completed_at, phase",
+    [
+        ("queued", "", 0, None, "waiting_gpu"),
+        ("running", "Starting", 0, None, "loading"),
+        ("running", "Loading model", 0, None, "loading"),
+        ("running", "Quantizing transformer", 0, None, "loading"),
+        ("running", "Loading dataset", 0, None, "caching"),
+        ("running", "Caching latents", 0, None, "caching"),
+        ("running", "Training", 0, None, "training"),
+        ("running", "Generating images - 3/6", 0, None, "previews"),
+        ("running", "Generating images - 3/6", 750, None, "previews"),
+        ("running", "Saving model", 750, None, "saving"),
+        ("running", "Quantizing transformer", 40, None, "training"),
+        ("stopping", "Training", 40, None, "training"),
+        ("completed", "Training completed", 1500, None, "importing"),
+        ("completed", "Training completed", 1500, "2026-10-26T03:12:00+00:00", None),
+        ("stopped", "Job stopped", 40, "2026-10-26T03:12:00+00:00", None),
+        ("error", "CUDA out of memory", 40, "2026-10-26T03:12:00+00:00", None),
+    ],
+)
+def test_the_phase_follows_the_status_and_the_trainers_info_line(
+    status, info, step, completed_at, phase
+):
+    assert live_view.phase_of(status, info, step, completed_at) == phase
+
+
+def test_preview_progress_reads_the_sample_being_drawn():
+    assert live_view.preview_progress("Generating images - 5/6") == {
+        "drawing": 5,
+        "total": 6,
+    }
+    assert live_view.preview_progress("Training") is None
+
+
+def test_the_phase_log_appends_only_a_new_phase():
+    log = []
+    assert live_view.append_phase(log, "loading", "2026-10-26T00:00:00+00:00")
+    assert not live_view.append_phase(log, "loading", "2026-10-26T00:00:05+00:00")
+    assert not live_view.append_phase(log, None, "2026-10-26T00:00:06+00:00")
+    assert live_view.append_phase(log, "training", "2026-10-26T00:02:35+00:00")
+    assert [entry["phase"] for entry in log] == ["loading", "training"]
+    durations = live_view.phase_durations(log, "2026-10-26T00:03:35+00:00")
+    assert durations == [
+        {"phase": "loading", "seconds": 155.0},
+        {"phase": "training", "seconds": 60.0},
+    ]
+
+
+def test_an_unreadable_phase_log_reads_as_empty():
+    assert live_view.parse_phase_log("{not json") == []
+    assert live_view.parse_phase_log(None) == []
+
+
+def test_columns_are_step_zero_every_preview_step_and_the_last():
+    assert live_view.checkpoint_columns(1500, 250, []) == [
+        0,
+        250,
+        500,
+        750,
+        1000,
+        1250,
+        1500,
+    ]
+    # A last step off the preview pitch still gets its column.
+    assert live_view.checkpoint_columns(600, 250, []) == [0, 250, 500, 600]
+    # Without a config, the columns are the steps the samples name.
+    assert live_view.checkpoint_columns(None, None, [0, 40, 80]) == [0, 40, 80]
+
+
+def test_prompt_rows_mark_the_trigger_word_as_a_whole_word():
+    rows = live_view.prompt_rows(
+        ["photo of ohwx woman", "a woman in a raincoat", "ohwxy on a beach"], "ohwx"
+    )
+    assert [row["with_trigger"] for row in rows] == [True, False, False]
+    assert [row["index"] for row in rows] == [0, 1, 2]
+
+
+def test_sample_settings_read_the_rendered_config():
+    config = {
+        "config": {
+            "process": [
+                {
+                    "sample": {
+                        "sample_every": 250,
+                        "samples": [{"prompt": "a"}, {"prompt": "b"}],
+                    },
+                    "save": {"save_every": 250},
+                    "model": {
+                        "layer_offloading": True,
+                        "layer_offloading_transformer_percent": 0.15,
+                    },
+                }
+            ]
+        }
+    }
+    settings = live_view.sample_settings(config)
+    assert settings == {
+        "sample_every": 250,
+        "save_every": 250,
+        "prompts": ["a", "b"],
+        "layer_offloading": True,
+        "offload_percent": 0.15,
+    }
+    assert live_view.sample_settings(None)["prompts"] == []
+
+
+def _cell(**overrides):
+    args = {
+        "column": 1000,
+        "index": 0,
+        "has_sample": False,
+        "phase": "previews",
+        "step": 1000,
+        "drawing_column": 1000,
+        "previews": {"drawing": 5, "total": 6},
+        "previews_deferred": False,
+    }
+    args.update(overrides)
+    return live_view.cell_state(**args)
+
+
+def test_a_cell_is_drawn_queued_drawing_future_or_missing():
+    assert _cell(has_sample=True) == "sample"
+    assert _cell(index=4) == "drawing"
+    assert _cell(index=5) == "queued"
+    # A cell earlier in the round without its picture never reads as queued.
+    assert _cell(index=2) == "missing"
+    assert _cell(column=1250, phase="training", previews=None) == "future"
+    assert _cell(column=750, phase="training", previews=None) == "missing"
+    assert _cell(column=1250, phase=None, previews=None) == "missing"
+    assert _cell(column=1250, previews_deferred=True, previews=None) == "deferred"
+    # Step 0 is the before picture, drawn before training whatever the policy.
+    assert _cell(column=0, step=0, previews_deferred=True, previews=None) != "deferred"
+
+
+def _loss_db(path, rows):
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE steps (step INTEGER PRIMARY KEY, wall_time REAL)")
+    conn.executemany("INSERT INTO steps VALUES (?, ?)", rows)
+    conn.commit()
+    conn.close()
+
+
+def test_speed_is_the_median_step_and_the_range_includes_the_pauses(tmp_path):
+    # Steps 1..11 two seconds apart, with a 30 s preview between 5 and 6.
+    rows = []
+    wall = 1000.0
+    for step in range(1, 12):
+        rows.append((step, wall))
+        wall += 32.0 if step == 5 else 2.0
+    path = str(tmp_path / "loss_log.db")
+    _loss_db(path, rows)
+
+    times = live_view.read_step_times(path)
+    assert times[0] == (1, 1000.0)
+    pace = live_view.speed(times, 21)
+
+    assert pace["seconds_per_step"] == 2.0
+    # Ten steps to go: 20 s at the median, 50 s at the run's own average (5 s).
+    assert pace["remaining_low_s"] == 20.0
+    assert pace["remaining_high_s"] == 50.0
+    assert pace["last_step_at"] == rows[-1][1]
+
+
+def test_speed_is_unknown_before_two_steps_and_without_a_log(tmp_path):
+    assert live_view.speed([], 100)["seconds_per_step"] is None
+    assert live_view.speed([(1, 5.0)], 100)["remaining_low_s"] is None
+    assert live_view.read_step_times(str(tmp_path / "missing.db")) == []
+
+
+def test_the_trainer_info_line_is_read_from_its_job_row(tmp_path):
+    path = str(tmp_path / "job.db")
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE Job (id TEXT PRIMARY KEY, info TEXT)")
+    conn.execute("INSERT INTO Job VALUES ('job-1', 'Generating images - 2/4')")
+    conn.commit()
+    conn.close()
+    assert live_view.read_trainer_info(path, "job-1") == "Generating images - 2/4"
+    assert live_view.read_trainer_info(path, "job-2") == ""
+    assert live_view.read_trainer_info(str(tmp_path / "none.db"), "job-1") == ""
