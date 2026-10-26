@@ -220,6 +220,32 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
   const predActionLoading = ref([]);
 
   /**
+   * Run one request per picture and keep going past a failure.
+   *
+   * Every gesture here is a fan-out, and with `Promise.all` one refused
+   * picture skipped the notice and the re-read for the others that did
+   * change, leaving the panel showing tags that were no longer true.
+   *
+   * @param {Array<number>} ids
+   * @param {(id: number) => Promise} call
+   * @returns {Promise<Array<number>>} the ids whose request succeeded;
+   *   `tagError` says how many did not, and why.
+   */
+  async function fanOut(ids, call) {
+    const results = await Promise.allSettled(ids.map((id) => call(id)));
+    const done = ids.filter((_, i) => results[i].status === "fulfilled");
+    const failed = results.filter((r) => r.status === "rejected");
+    if (failed.length) {
+      const reason = failed[0].reason;
+      console.warn(`${failed.length} of ${ids.length} tag changes failed`, reason);
+      tagError.value = `${failed.length} of ${ids.length} pictures were not changed: ${
+        errorDetail(reason) || reason?.message || String(reason)
+      }`;
+    }
+    return done;
+  }
+
+  /**
    * Confirm one predicted tag on every picture that carries the prediction.
    *
    * The fan-out records one operation per picture; they share a gesture batch id
@@ -239,24 +265,16 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
     predActionLoading.value = [...predActionLoading.value, predEntry.tag];
     tagError.value = "";
     try {
-      await Promise.all(
-        predEntry.ids.map((id) =>
-          confirmTagPrediction(id, predEntry.tag, {
-            batchId,
-          }),
-        ),
+      const done = await fanOut(predEntry.ids, (id) =>
+        confirmTagPrediction(id, predEntry.tag, { batchId }),
       );
-      onApplied({
-        tag: predEntry.tag,
-        pictureIds: predEntry.ids,
-        action: "add",
-      });
+      if (done.length) {
+        onApplied({ tag: predEntry.tag, pictureIds: done, action: "add" });
+      }
       await Promise.all([
         fetchSelectedImageTags(),
         fetchSelectedImagePredictions(),
       ]);
-    } catch (err) {
-      tagError.value = errorDetail(err) || err?.message || String(err);
     } finally {
       predActionLoading.value = predActionLoading.value.filter(
         (n) => n !== predEntry.tag,
@@ -290,24 +308,17 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
     if (tagActionLoading.value.includes(tagEntry.name)) return;
     tagActionLoading.value = [...tagActionLoading.value, tagEntry.name];
     tagError.value = "";
+    const tagIdOf = new Map(
+      [...tagEntry.tagsByImageId.entries()].filter(([, tagId]) => tagId != null),
+    );
     try {
-      await Promise.all(
-        [...tagEntry.tagsByImageId.entries()]
-          .filter(([, tagId]) => tagId != null)
-          .map(([imgId, tagId]) =>
-            removePictureTag(imgId, tagId, {
-              batchId,
-            }),
-          ),
+      const done = await fanOut([...tagIdOf.keys()], (imgId) =>
+        removePictureTag(imgId, tagIdOf.get(imgId), { batchId }),
       );
-      onApplied({
-        tag: tagEntry.name,
-        pictureIds: [...tagEntry.tagsByImageId.keys()],
-        action: "remove",
-      });
+      if (done.length) {
+        onApplied({ tag: tagEntry.name, pictureIds: done, action: "remove" });
+      }
       await fetchSelectedImageTags();
-    } catch (err) {
-      tagError.value = errorDetail(err) || err?.message || String(err);
     } finally {
       tagActionLoading.value = tagActionLoading.value.filter(
         (n) => n !== tagEntry.name,
@@ -329,19 +340,13 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
       (id) => !tagEntry.tagsByImageId.has(id),
     );
     try {
-      await Promise.all(
-        missingIds.map((id) =>
-          addPictureTag(id, tagEntry.name),
-        ),
+      const done = await fanOut(missingIds, (id) =>
+        addPictureTag(id, tagEntry.name),
       );
-      onApplied({
-        tag: tagEntry.name,
-        pictureIds: missingIds,
-        action: "add",
-      });
+      if (done.length) {
+        onApplied({ tag: tagEntry.name, pictureIds: done, action: "add" });
+      }
       await fetchSelectedImageTags();
-    } catch (err) {
-      tagError.value = errorDetail(err) || err?.message || String(err);
     } finally {
       tagActionLoading.value = tagActionLoading.value.filter(
         (n) => n !== tagEntry.name,
@@ -359,18 +364,21 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
    */
   async function rejectTagOnAll(tagEntry, { batchId } = {}) {
     const imageIds = [...tagEntry.tagsByImageId.keys()];
-    if (!imageIds.length) return;
+    // A second drop of the same tag while the first is still out would
+    // record every NEG twice.
+    if (!imageIds.length || tagActionLoading.value.includes(tagEntry.name)) {
+      return;
+    }
+    tagActionLoading.value = [...tagActionLoading.value, tagEntry.name];
     try {
-      await Promise.all(
-        imageIds.map((id) =>
-          rejectTagPrediction(id, tagEntry.name, {
-            batchId,
-          }),
-        ),
+      await fanOut(imageIds, (id) =>
+        rejectTagPrediction(id, tagEntry.name, { batchId }),
       );
       await fetchSelectedImagePredictions();
-    } catch (err) {
-      tagError.value = errorDetail(err) || err?.message || String(err);
+    } finally {
+      tagActionLoading.value = tagActionLoading.value.filter(
+        (n) => n !== tagEntry.name,
+      );
     }
   }
 
@@ -378,23 +386,19 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
    * Add these tags to every selected picture.
    *
    * @param {Array<string>} tags
-   * @returns {Promise<boolean>} whether they were added; `tagError` says why not.
+   * @returns {Promise<boolean>} whether they were added to every picture;
+   *   `tagError` says why not.
    */
   async function addTagsToAll(tags) {
     const ids = pictureIds();
     if (!ids.length || !tags.length) return false;
     tagError.value = "";
-    try {
-      await Promise.all(
-        ids.flatMap((id) => tags.map((tag) => addPictureTag(id, tag))),
-      );
-      onApplied({ tag: tags.join(", "), pictureIds: ids });
-      await fetchSelectedImageTags();
-      return true;
-    } catch (err) {
-      tagError.value = errorDetail(err) || err?.message || String(err);
-      return false;
-    }
+    const done = await fanOut(ids, (id) =>
+      Promise.all(tags.map((tag) => addPictureTag(id, tag))),
+    );
+    if (done.length) onApplied({ tag: tags.join(", "), pictureIds: done });
+    await fetchSelectedImageTags();
+    return done.length === ids.length;
   }
 
   return {

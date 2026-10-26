@@ -32,7 +32,7 @@ import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
 import { SCRAPHEAP_PICTURES_ID } from "../../stores/useViewStore";
 import { useSelectionTags } from "../../composables/useSelectionTags";
-import { addPictureTag } from "../../api/tags";
+import { addPictureTag, confirmTagPrediction } from "../../api/tags";
 
 enableAutoUnmount(afterEach);
 
@@ -286,6 +286,21 @@ describe("keys for chips selected in the rail", () => {
     expect(grid).not.toHaveBeenCalled();
   });
 
+  it("still takes them while a tooltip is showing", async () => {
+    const { wrapper, panel } = mountWithChips(true);
+    await select(wrapper, [7]);
+    const tip = document.createElement("div");
+    tip.className = "v-overlay v-tooltip v-overlay--active";
+    document.body.appendChild(tip);
+    try {
+      press("Delete");
+      expect(panel.removeSelection).toHaveBeenCalledOnce();
+      expect(grid).not.toHaveBeenCalled();
+    } finally {
+      tip.remove();
+    }
+  });
+
   it("leaves the keys to the grid while no chip is selected", async () => {
     const { wrapper, panel } = mountWithChips(false);
     await select(wrapper, [7]);
@@ -342,6 +357,29 @@ describe("the selection's tag reads", () => {
     bulkFetchTags.mockReset().mockResolvedValue([]);
   });
 
+  it("report a partial failure and still refresh for what changed", async () => {
+    bulkFetchTags.mockResolvedValue([
+      { id: 1, tags: [] },
+      { id: 2, tags: [] },
+    ]);
+    confirmTagPrediction
+      .mockReset()
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce(new Error("refused"));
+    const applied = vi.fn();
+    const tags = useSelectionTags(() => [1, 2], { onApplied: applied });
+    bulkFetchTags.mockClear();
+    await tags.confirmPredictionOnAll({ tag: "rain", ids: [1, 2] });
+    expect(applied).toHaveBeenCalledWith({
+      tag: "rain",
+      pictureIds: [1],
+      action: "add",
+    });
+    expect(bulkFetchTags).toHaveBeenCalled();
+    expect(tags.tagError.value).toMatch(/^1 of 2 pictures were not changed/);
+    bulkFetchTags.mockReset().mockResolvedValue([]);
+  });
+
   it("add a tag to the rest past the read cap too", async () => {
     const ids = Array.from({ length: 105 }, (_, i) => i + 1);
     bulkFetchTags.mockResolvedValue(
@@ -359,5 +397,21 @@ describe("the selection's tag reads", () => {
     expect(tagged).toContain(105);
     expect(tagged).not.toContain(1);
     bulkFetchTags.mockReset().mockResolvedValue([]);
+  });
+});
+
+describe("the face crop", () => {
+  it("fills its square from a wide face box", async () => {
+    listPictureFaces.mockResolvedValue([
+      // 200 wide, 100 tall, in an 800 x 600 picture.
+      { id: 1, frame_index: 0, bbox: [100, 100, 300, 200], character_id: null },
+    ]);
+    const wrapper = mountRail();
+    await select(wrapper, [7]);
+    const style = wrapper.find(".rail-faces__crop").attributes("style");
+    // Scaled by the shorter side (32 / 100): the picture is 256 x 192 px and
+    // the face's 64 px width is centred in the 32 px box.
+    expect(style).toContain("background-size: 256px 192px");
+    expect(style).toContain("background-position: -48px -32px");
   });
 });

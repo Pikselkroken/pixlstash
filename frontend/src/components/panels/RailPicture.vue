@@ -174,11 +174,17 @@ function faceCropStyle(face) {
     clampX(face.bbox[2]),
     clampY(face.bbox[3]),
   ];
-  const scale = FACE_CROP / Math.max(1, x2 - x1, y2 - y1);
+  // The face covers the square box: scaled by its shorter side and centred,
+  // so the longer side is trimmed rather than the box left part-empty.
+  const faceW = Math.max(1, x2 - x1);
+  const faceH = Math.max(1, y2 - y1);
+  const scale = FACE_CROP / Math.min(faceW, faceH);
+  const left = x1 * scale - (FACE_CROP - faceW * scale) / 2;
+  const top = y1 * scale - (FACE_CROP - faceH * scale) / 2;
   return {
     backgroundImage: `url(${thumbnailUrl.value})`,
     backgroundSize: `${Math.round(width * scale)}px ${Math.round(height * scale)}px`,
-    backgroundPosition: `${Math.round(-x1 * scale)}px ${Math.round(-y1 * scale)}px`,
+    backgroundPosition: `${Math.round(-left)}px ${Math.round(-top)}px`,
   };
 }
 
@@ -241,8 +247,13 @@ function onChipKeydown(e) {
     return;
   }
   // The lightbox or a dialog over the grid owns the keys while it is open.
-  // A menu has no scrim but owns Escape too, so any active overlay counts.
-  if (document.querySelector(".image-overlay, .v-overlay--active")) {
+  // A menu has no scrim but owns Escape too, so any active overlay counts,
+  // except a tooltip, which is an overlay as well and owns no keys.
+  if (
+    document.querySelector(
+      ".image-overlay, .v-overlay--active:not(.v-tooltip)",
+    )
+  ) {
     return;
   }
   const command = e.ctrlKey || e.metaKey;
