@@ -77,7 +77,7 @@
           "samples": [],
           "neg": "",
           "seed": 42,
-          "walk_seed": true,
+          "walk_seed": false,
           "num_frames": 1,
           "fps": 1
         }

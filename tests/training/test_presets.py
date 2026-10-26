@@ -176,8 +176,20 @@ def test_rank_sets_alpha_and_each_value_names_its_source():
     assert values["datasets[*].caption_dropout_rate"]["source"] == "subject"
     assert values["datasets[*].resolution"]["source"] == "model"
     assert values["sample.sample_steps"] == {"value": 9, "source": "model"}
-    prompts = values[presets.PROMPTS_KEY]["value"]
-    assert sum("{{TRIGGER_WORD}}" in p for p in prompts) == 2
+    assert presets.PROMPTS_KEY not in values
+
+
+def test_prompts_written_from_the_captions_come_from_captions_unless_pinned():
+    written = ["{{TRIGGER_WORD}} at a cafe", "an old man at a cafe"]
+    values = _resolve(prompts=written)["values"]
+    assert values[presets.PROMPTS_KEY] == {"value": written, "source": "captions"}
+    with pytest.raises(TunableOverrideError, match="prompt"):
+        _resolve(prompts=["x" * 2001])
+    pinned = _resolve(prompts=written, pins={presets.PROMPTS_KEY: ["only this"]})
+    assert pinned["values"][presets.PROMPTS_KEY] == {
+        "value": ["only this"],
+        "source": "pinned",
+    }
 
 
 def test_pins_win_over_every_derived_value():

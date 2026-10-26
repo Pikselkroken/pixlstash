@@ -34,33 +34,15 @@
   "subject": {
     "person": {
       "datasets[*].caption_dropout_rate": 0.05,
-      "train.content_or_style": "balanced",
-      "sample.samples[*].prompt": [
-        "photo of {{TRIGGER_WORD}} smiling, outdoors in soft daylight",
-        "photo of a person smiling, outdoors in soft daylight",
-        "{{TRIGGER_WORD}} sitting at a cafe table, holding a coffee cup",
-        "a person sitting at a cafe table, holding a coffee cup"
-      ]
+      "train.content_or_style": "balanced"
     },
     "style": {
       "datasets[*].caption_dropout_rate": 0.05,
-      "train.content_or_style": "style",
-      "sample.samples[*].prompt": [
-        "{{TRIGGER_WORD}}, a lighthouse on a rocky coast at dusk",
-        "a lighthouse on a rocky coast at dusk",
-        "{{TRIGGER_WORD}}, portrait of an old fisherman",
-        "portrait of an old fisherman"
-      ]
+      "train.content_or_style": "style"
     },
     "thing": {
       "datasets[*].caption_dropout_rate": 0.05,
-      "train.content_or_style": "balanced",
-      "sample.samples[*].prompt": [
-        "photo of {{TRIGGER_WORD}} on a wooden table, studio lighting",
-        "photo of an object on a wooden table, studio lighting",
-        "{{TRIGGER_WORD}} in a busy city street",
-        "a busy city street"
-      ]
+      "train.content_or_style": "balanced"
     }
   },
   "effort": {

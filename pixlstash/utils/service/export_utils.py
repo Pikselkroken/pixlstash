@@ -928,6 +928,32 @@ class ExportUtils:
         return len(ExportUtils._training_pictures(server, set_id, character_id, params))
 
     @staticmethod
+    def training_captions(
+        server, *, set_id=None, character_id=None
+    ) -> tuple[list[str], list[list[str]]]:
+        """The captions and tags of the pictures a training dataset holds.
+
+        Returns:
+            ``(captions, tags)``, one entry per picture in id order; a picture
+            with no caption has ``""``.
+        """
+        # ponytail: reads every picture's row and stats its file on each call,
+        # like count_training_pictures; cache per set if large sets make the
+        # Train dialog slow to open.
+        params = {
+            "only_deleted": False,
+            "picture_ids": [],
+            "select_fields": Picture.metadata_fields() | {"tags"},
+        }
+        pics = sorted(
+            ExportUtils._training_pictures(server, set_id, character_id, params),
+            key=lambda pic: pic.id,
+        )
+        captions = [pic.description or "" for pic in pics]
+        tags = [CaptionUtils.build_tag_caption(pic).split(", ") for pic in pics]
+        return captions, [[t for t in row if t] for row in tags]
+
+    @staticmethod
     def build_training_dataset(
         server,
         *,
