@@ -3484,10 +3484,14 @@ function wheelBrowse(event) {
   if (now - wheelBrowseLastTs > ZOOM_EXIT_GESTURE_GAP_MS) wheelBrowseAcc = 0;
   wheelBrowseLastTs = now;
   // Chromium delivers Shift+wheel as a horizontal deltaX with deltaY 0.
-  wheelBrowseAcc += normalizeWheelDelta({
+  const delta = normalizeWheelDelta({
     deltaMode: event.deltaMode,
     deltaY: event.deltaY || event.deltaX,
   });
+  // A line- or page-mode event (Firefox's wheel) is one notch whatever its
+  // size, so it is one step rather than a fraction of 100px.
+  wheelBrowseAcc +=
+    event.deltaMode === 0 ? delta : Math.sign(delta) * WHEEL_BROWSE_STEP_PX;
   if (Math.abs(wheelBrowseAcc) < WHEEL_BROWSE_STEP_PX) return;
   // Down or right is next. Same path as the arrow keys, so it inherits their
   // guards (the frozen sequence, stacks, the ends of the sequence).

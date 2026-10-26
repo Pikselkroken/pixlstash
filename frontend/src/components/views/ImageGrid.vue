@@ -7961,12 +7961,13 @@ function handleThumbnailClick(img, idx, event) {
 }
 
 function handleThumbnailDblClick(img, event) {
-  // In single-click mode the first click already opened the overlay.
-  if (userPrefsStore.gridOpenGesture === "single") return;
-  if (!img?.id || isImageGhosted(img) || touchSelectMode.value) return;
-  if (event.ctrlKey || event.metaKey || event.shiftKey) return;
   // Whoever double-clicks already knows; no hint for them.
   clearTimeout(doubleClickHintTimer);
+  // In single-click mode the first click already opened the overlay, and so
+  // has a touch two-tap where the browser synthesises a dblclick after it.
+  if (userPrefsStore.gridOpenGesture === "single" || overlayOpen.value) return;
+  if (!img?.id || isImageGhosted(img) || touchSelectMode.value) return;
+  if (event.ctrlKey || event.metaKey || event.shiftKey) return;
   doubleClickHint.dismiss();
   openOverlay(img);
 }
@@ -7979,7 +7980,8 @@ function scheduleDoubleClickHint() {
   if (!doubleClickHint.visible.value) return;
   clearTimeout(doubleClickHintTimer);
   doubleClickHintTimer = setTimeout(() => {
-    if (!doubleClickHint.visible.value) return;
+    // Opened some other way meanwhile (Enter): not over the lightbox.
+    if (!doubleClickHint.visible.value || overlayOpen.value) return;
     doubleClickHint.dismiss();
     noticeStore.push({
       level: "info",

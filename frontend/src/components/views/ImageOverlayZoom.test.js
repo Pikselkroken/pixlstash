@@ -676,7 +676,14 @@ describe("ImageOverlay exits - dark area and middle click", () => {
   async function openLetterboxed({ rect } = {}) {
     const wrapper = await openMeasured();
     wrapper.find(".overlay-img").element.getBoundingClientRect = () =>
-      rect ?? { left: 100, top: 0, right: 700, bottom: 600, width: 600, height: 600 };
+      rect ?? {
+        left: 100,
+        top: 0,
+        right: 700,
+        bottom: 600,
+        width: 600,
+        height: 600,
+      };
     return wrapper;
   }
 
@@ -711,9 +718,7 @@ describe("ImageOverlay exits - dark area and middle click", () => {
     await clickAt(wrapper, { down: { x: 400, y: 300 } });
     vi.mocked(Date.now).mockRestore();
     expect(wrapper.emitted("close")).toBeUndefined();
-    expect(wrapper.find(".overlay-shell").classes()).toContain(
-      "chrome-hidden",
-    );
+    expect(wrapper.find(".overlay-shell").classes()).toContain("chrome-hidden");
   });
 
   it("closes from the letterbox with the chrome hidden too", async () => {
@@ -721,9 +726,7 @@ describe("ImageOverlay exits - dark area and middle click", () => {
     vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1000);
     await clickAt(wrapper, { down: { x: 400, y: 300 } });
     vi.mocked(Date.now).mockRestore();
-    expect(wrapper.find(".overlay-shell").classes()).toContain(
-      "chrome-hidden",
-    );
+    expect(wrapper.find(".overlay-shell").classes()).toContain("chrome-hidden");
     await clickAt(wrapper, { down: { x: 750, y: 300 } });
     expect(wrapper.emitted("close")).toHaveLength(1);
   });
@@ -759,7 +762,11 @@ describe("ImageOverlay exits - dark area and middle click", () => {
     media.dispatchEvent(down);
     expect(down.defaultPrevented).toBe(true);
     media.dispatchEvent(
-      new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 }),
+      new MouseEvent("auxclick", {
+        bubbles: true,
+        cancelable: true,
+        button: 1,
+      }),
     );
     expect(wrapper.emitted("close")).toHaveLength(1);
   });
@@ -775,7 +782,11 @@ describe("ImageOverlay exits - dark area and middle click", () => {
     });
     field.dispatchEvent(down);
     field.dispatchEvent(
-      new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 }),
+      new MouseEvent("auxclick", {
+        bubbles: true,
+        cancelable: true,
+        button: 1,
+      }),
     );
     expect(down.defaultPrevented).toBe(false);
     expect(wrapper.emitted("close")).toBeUndefined();
@@ -821,6 +832,13 @@ describe("ImageOverlay wheel - zoom or browse", () => {
     await wheel(wrapper, { deltaX: 100, deltaY: 0, shiftKey: true });
     expect(src(wrapper)).not.toBe(before);
     expect(zoomLabel(wrapper)).toBe("50%");
+  });
+
+  it("a line-mode notch (Firefox) is one whole step", async () => {
+    const wrapper = await openMeasured();
+    const before = src(wrapper);
+    await wheel(wrapper, { deltaY: 3, deltaMode: 1, shiftKey: true });
+    expect(src(wrapper)).not.toBe(before);
   });
 
   it("a step needs 100px of travel, summed within one gesture", async () => {

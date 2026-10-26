@@ -178,6 +178,26 @@ describe("grid open gesture", () => {
     expect(hints()).toHaveLength(0);
   });
 
+  it("a double-click while the lightbox is already up neither reopens it nor hints", () => {
+    const wrapper = mountGrid();
+    wrapper.vm.handleThumbnailClick(IMG, 0, click());
+    wrapper.vm.openOverlay(IMG);
+    wrapper.vm.overlayInitialExpandedStackIds = ["sentinel"];
+    wrapper.vm.handleThumbnailDblClick(IMG, click());
+    vi.advanceTimersByTime(600);
+    // openOverlay re-captures this; untouched means it did not run again.
+    expect(wrapper.vm.overlayInitialExpandedStackIds).toEqual(["sentinel"]);
+    expect(hints()).toHaveLength(0);
+  });
+
+  it("a modified double-click still cancels the pending hint", () => {
+    const wrapper = mountGrid();
+    wrapper.vm.handleThumbnailClick(IMG, 0, click());
+    wrapper.vm.handleThumbnailDblClick(IMG, click({ ctrlKey: true }));
+    vi.advanceTimersByTime(600);
+    expect(hints()).toHaveLength(0);
+  });
+
   it("a double-click never raises the hint", () => {
     const wrapper = mountGrid();
     wrapper.vm.handleThumbnailClick(IMG, 0, click());
