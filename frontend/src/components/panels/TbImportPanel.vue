@@ -135,6 +135,55 @@
       </ol>
     </div>
 
+    <!-- Eagle: the library folder is read in the browser (eagleLibrary.js) -->
+    <div
+      v-else-if="activeTab === 'eagle'"
+      :id="panelId('eagle')"
+      class="tbm-section tb-import-guidance"
+      role="tabpanel"
+      :aria-labelledby="tabId('eagle')"
+    >
+      <span class="tbm-label">Eagle library</span>
+      <p class="tb-import-note">
+        Brings your pictures over with their tags, star ratings and folders.
+        Each folder becomes a picture set.
+      </p>
+      <ol>
+        <li>Click <strong>Choose Eagle library</strong>.</li>
+        <li>
+          Pick your library folder, the one whose name ends in
+          <strong>.library</strong>.
+        </li>
+      </ol>
+      <p class="tb-import-note">
+        Pictures in Eagle's trash are left out. A picture already in PixlStash
+        keeps the tags it has.
+      </p>
+      <input
+        ref="eagleInputRef"
+        class="tb-import-file-input"
+        type="file"
+        webkitdirectory
+        @change="onEagleChange"
+      />
+      <div class="tb-import-actions">
+        <AppButton
+          icon-left="folder-open-outline"
+          :loading="eagleReading"
+          @click="openEaglePicker"
+        >
+          Choose Eagle library
+        </AppButton>
+      </div>
+      <p
+        v-if="eagleError"
+        class="tb-import-note tb-import-project-status--error"
+        role="alert"
+      >
+        {{ eagleError }}
+      </p>
+    </div>
+
     <!-- Cloud suppliers: manual-zip guidance (no live connection today) -->
     <div
       v-else
@@ -160,6 +209,7 @@ import {
   isSupportedImportFile,
   IMPORT_FILE_ACCEPT,
 } from "../../utils/media.js";
+import { eagleImportFiles } from "../../utils/eagleLibrary.js";
 import AppButton from "../widgets/AppButton.vue";
 
 const props = defineProps({
@@ -175,6 +225,7 @@ const IMPORT_TABS = [
   { id: "google", icon: "mdi-google", label: "Google" },
   { id: "icloud", icon: "mdi-apple-icloud", label: "iCloud" },
   { id: "flickr", icon: "mdi-flickr", label: "Flickr" },
+  { id: "eagle", icon: "mdi-tag-multiple-outline", label: "Eagle" },
 ];
 
 // Manual export/import guidance per cloud supplier - PixlStash does not connect
@@ -218,6 +269,9 @@ const projectStatusId = `${projectSelectId}-status`;
 const localInputRef = ref(null);
 const localFiles = ref([]);
 const dragActive = ref(false);
+const eagleInputRef = ref(null);
+const eagleReading = ref(false);
+const eagleError = ref("");
 const projects = ref([]);
 const projectsLoading = ref(false);
 const projectLoadError = ref(false);
@@ -330,6 +384,26 @@ async function onDrop(event) {
   if (files.length) triggerLocalImport(files);
 }
 
+function openEaglePicker() {
+  eagleError.value = "";
+  eagleInputRef.value?.click();
+}
+
+async function onEagleChange(event) {
+  const picked = Array.from(event?.target?.files || []);
+  if (eagleInputRef.value) eagleInputRef.value.value = "";
+  if (!picked.length) return;
+  eagleReading.value = true;
+  try {
+    triggerLocalImport(await eagleImportFiles(picked));
+  } catch (e) {
+    console.warn("Couldn't read the Eagle library", e);
+    eagleError.value = e?.message || "Couldn't read that Eagle library.";
+  } finally {
+    eagleReading.value = false;
+  }
+}
+
 function onDragEnter() {
   dragActive.value = true;
 }
@@ -409,7 +483,8 @@ function triggerLocalImport(files) {
 /* Tabs - an olive underline marks the active tab; its words stay ink. */
 .tb-import-tabs {
   display: flex;
-  gap: var(--space-6);
+  /* --space-5, not -6: six tabs must fit the 520px panel. */
+  gap: var(--space-5);
   padding: 0 var(--space-4);
   border-bottom: 1px solid rgb(var(--v-theme-divider));
 }

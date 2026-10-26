@@ -7,8 +7,7 @@ import {
 } from "../../utils/media.js";
 import { listProjects } from "../../api/projects.js";
 import { listImportFolders } from "../../api/folders.js";
-import { attachImportMetadata } from "../../api/pictureImport.js";
-import { readEagleLibrary } from "../../utils/eagleLibrary.js";
+import { eagleImportFiles } from "../../utils/eagleLibrary.js";
 import ProjectEditor from "../editors/ProjectEditor.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
@@ -181,19 +180,7 @@ async function handleEagleChange(event) {
   if (!picked.length) return;
   eagleReading.value = true;
   try {
-    const library = await readEagleLibrary(picked);
-    console.info(
-      `[IMPORT] Eagle library: ${library.files.length} to import, ` +
-        `${library.trashed} in Eagle's trash, ${library.unsupported} unsupported.`,
-    );
-    if (!library.files.length) {
-      eagleError.value = "That library has no pictures PixlStash can import.";
-      return;
-    }
-    library.files.forEach((file, i) =>
-      attachImportMetadata(file, library.metadata[i]),
-    );
-    triggerLocalImport(library.files);
+    triggerLocalImport(await eagleImportFiles(picked));
   } catch (e) {
     console.warn("Couldn't read the Eagle library", e);
     eagleError.value = e?.message || "Couldn't read that Eagle library.";

@@ -34,6 +34,52 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function fileAt(path, content = "x") {
+  const file = new File([content], path.split("/").pop());
+  Object.defineProperty(file, "webkitRelativePath", { value: path });
+  return file;
+}
+
+async function pickEagleFolder(wrapper, files) {
+  const tab = wrapper.findAll('[role="tab"]').find((t) => t.text() === "Eagle");
+  await tab.trigger("click");
+  const input = wrapper.get("input[webkitdirectory]");
+  Object.defineProperty(input.element, "files", { value: files });
+  await input.trigger("change");
+  await flushPromises();
+}
+
+describe("TbImportPanel Eagle tab", () => {
+  it("imports a picked library's originals", async () => {
+    const wrapper = mountPanel();
+    await flushPromises();
+    await pickEagleFolder(wrapper, [
+      fileAt("My.library/metadata.json", JSON.stringify({ folders: [] })),
+      fileAt(
+        "My.library/images/A.info/metadata.json",
+        JSON.stringify({ name: "cat", ext: "png", tags: ["cat"] }),
+      ),
+      fileAt("My.library/images/A.info/cat.png"),
+      fileAt("My.library/images/A.info/cat_thumbnail.png"),
+    ]);
+
+    const [[payload]] = wrapper.emitted("local-import");
+    expect(payload.files.map((f) => f.name)).toEqual(["cat.png"]);
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("says so when the folder is not a library, and imports nothing", async () => {
+    const wrapper = mountPanel();
+    await flushPromises();
+    await pickEagleFolder(wrapper, [fileAt("Pictures/cat.png")]);
+
+    expect(wrapper.emitted("local-import")).toBeUndefined();
+    expect(wrapper.get('[role="alert"]').text()).toMatch(/not an Eagle library/);
+    wrapper.unmount();
+  });
+});
+
 describe("TbImportPanel hardening", () => {
   it("offers the picker the shared import accept, not an undefined binding", async () => {
     // A `:accept` bound to a name the <script setup> never imported renders no
@@ -60,7 +106,7 @@ describe("TbImportPanel hardening", () => {
     );
 
     const tabs = wrapper.findAll('[role="tab"]');
-    expect(tabs).toHaveLength(5);
+    expect(tabs).toHaveLength(6);
     expect(tabs[0].attributes()).toMatchObject({
       "aria-selected": "true",
       tabindex: "0",

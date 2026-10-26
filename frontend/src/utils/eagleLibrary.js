@@ -1,3 +1,4 @@
+import { attachImportMetadata } from "../api/pictureImport.js";
 import { IMPORT_MEDIA_EXTENSIONS } from "./media.js";
 
 /**
@@ -87,4 +88,28 @@ export async function readEagleLibrary(fileList) {
     );
   }
   return result;
+}
+
+/**
+ * The files to hand the ordinary import for an Eagle library, each carrying
+ * its tags, rating and sets. Both import surfaces (the toolbar panel and the
+ * full dialog) go through here.
+ *
+ * @param {FileList|File[]} fileList Every file under the picked folder.
+ * @returns {Promise<File[]>}
+ * @throws {Error} With a message for the person when nothing can be imported.
+ */
+export async function eagleImportFiles(fileList) {
+  const library = await readEagleLibrary(fileList);
+  console.info(
+    `[IMPORT] Eagle library: ${library.files.length} to import, ` +
+      `${library.trashed} in Eagle's trash, ${library.unsupported} unsupported.`,
+  );
+  if (!library.files.length) {
+    throw new Error("That library has no pictures PixlStash can import.");
+  }
+  library.files.forEach((file, i) =>
+    attachImportMetadata(file, library.metadata[i]),
+  );
+  return library.files;
 }
