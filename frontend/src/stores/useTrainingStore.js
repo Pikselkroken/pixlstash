@@ -274,6 +274,17 @@ export const useTrainingStore = defineStore("training", () => {
     }
   }
 
+  /** The choices a plan answers, pins aside: a stale plan answers others. */
+  const choicesKey = computed(() =>
+    JSON.stringify([
+      selectedPreset.value,
+      effectiveSubject.value,
+      effort.value,
+      fit.value,
+      pictureCount.value,
+    ]),
+  );
+
   let planSeq = 0;
   /** Ask the server what the run would use now. */
   async function resolvePlan() {
@@ -283,6 +294,7 @@ export const useTrainingStore = defineStore("training", () => {
       return;
     }
     planLoading.value = true;
+    const key = choicesKey.value;
     try {
       const body = {
         subject: effectiveSubject.value,
@@ -293,7 +305,7 @@ export const useTrainingStore = defineStore("training", () => {
       if (selectedPreset.value) body.preset = selectedPreset.value;
       if (Object.keys(allPins.value).length) body.pins = allPins.value;
       const data = await resolveTraining(body);
-      if (seq === planSeq) plan.value = data;
+      if (seq === planSeq) plan.value = { ...data, choicesKey: key };
     } catch (err) {
       if (seq !== planSeq) return;
       const detail = err?.response?.data?.detail;
@@ -349,11 +361,14 @@ export const useTrainingStore = defineStore("training", () => {
 
   /**
    * Type over a derived value. Equal to what the choices give (or blank), it
-   * is no pin; anything else holds while the choices change.
+   * is no pin; anything else holds while the choices change. Only a plan for
+   * the current choices says what they give: until the debounced resolve
+   * answers a change, the value typed is kept as a pin.
    */
   function setPin(key, value) {
     const next = { ...pins.value };
-    const derived = plan.value?.derived?.[key];
+    const current = plan.value?.choicesKey === choicesKey.value;
+    const derived = current ? plan.value?.derived?.[key] : null;
     if (value === null || value === undefined || (derived && sameValue(value, derived.value))) {
       delete next[key];
     } else {
@@ -589,6 +604,7 @@ export const useTrainingStore = defineStore("training", () => {
     effort,
     fit,
     pins,
+    choicesKey,
     allPins,
     setPin,
     unpin,

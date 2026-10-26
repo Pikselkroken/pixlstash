@@ -1125,6 +1125,26 @@ def test_resolve_previews_the_run_and_every_recipes_fit():
         assert out["error"]["budget"] == "vram"
         assert out["presets"][0]["verdict"] == "no_gpu"
 
+        # Unreadable RAM resolves without the RAM check, as a job does
+        # (create_training_job warns and queues); only the GPU reading is
+        # required.
+        server.vault.training_room = lambda: {"vram_mb": 22_800, "ram_mb": None}
+        r = owner.post("/training/resolve", json=body)
+        assert r.status_code == 200, r.text
+        assert r.json()["error"] is None
+        assert r.json()["resolution"]["profile"] == "q8"
+        assert r.json()["presets"][0]["verdict"] == "fits"
+        r = owner.post(
+            "/training/jobs",
+            json={
+                "subject": "person",
+                "set_id": _make_picture_set(owner),
+                "name": "x",
+                "trigger_word": "tw",
+            },
+        )
+        assert r.status_code == 200, r.text
+
         # A locked key is named, not a 500.
         server.vault.training_room = lambda: dict(_ROOM_24GB)
         r = owner.post("/training/resolve", json={**body, "pins": {"model.arch": "x"}})

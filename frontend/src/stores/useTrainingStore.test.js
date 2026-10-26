@@ -100,13 +100,42 @@ describe("openForScope", () => {
 describe("pins", () => {
   it("drops a typed value equal to the derived one, keeps any other", () => {
     const store = useTrainingStore();
-    store.plan = { derived: { "train.steps": { value: 2400, source: "pictures" } } };
+    store.plan = {
+      derived: { "train.steps": { value: 2400, source: "pictures" } },
+      choicesKey: store.choicesKey,
+    };
     store.setPin("train.steps", 2000);
     expect(store.pins).toEqual({ "train.steps": 2000 });
     store.setPin("train.steps", 2400);
     expect(store.pins).toEqual({});
     store.setPin("train.steps", 1800);
     store.setPin("train.steps", null);
+    expect(store.pins).toEqual({});
+  });
+
+  it("keeps a typed value while the plan still answers the previous choices", async () => {
+    training.getTrainingDataset.mockResolvedValue(
+      dataset({ set_id: 40, character_id: 4, character: GRANDAD }),
+    );
+    training.resolveTraining.mockImplementation(async (body) => ({
+      derived: {
+        "train.steps": {
+          value: body.effort === "strong" ? 3600 : 2400,
+          source: "pictures",
+        },
+      },
+    }));
+    const store = useTrainingStore();
+    await store.openForScope({ type: "character", id: 4, name: "Grandad" });
+    await store.resolvePlan();
+    // Strong is picked, then 2400 typed before its plan arrives: 2400 is what
+    // Standard gave, not Strong, so it is a pin.
+    store.effort = "strong";
+    store.setPin("train.steps", 2400);
+    expect(store.pins).toEqual({ "train.steps": 2400 });
+    // Once the plan answers Strong, typing what Strong gives is no pin.
+    await store.resolvePlan();
+    store.setPin("train.steps", 3600);
     expect(store.pins).toEqual({});
   });
 
@@ -146,7 +175,10 @@ describe("startTraining", () => {
     const store = useTrainingStore();
     await store.openForScope({ type: "character", id: 4, name: "Grandad" });
     store.fit = "save_memory";
-    store.plan = { derived: { "train.steps": { value: 2400, source: "pictures" } } };
+    store.plan = {
+      derived: { "train.steps": { value: 2400, source: "pictures" } },
+      choicesKey: store.choicesKey,
+    };
     store.setPin("train.steps", 2000);
     await store.startTraining();
 
