@@ -312,6 +312,25 @@ describe("the project scope in the header slot (#2159)", () => {
     wrapper.unmount();
   });
 
+  it("blanks the favourites count until the new scope's arrives", async () => {
+    apiGet.mockImplementation((url) =>
+      Promise.resolve(
+        String(url).startsWith("/pictures/count")
+          ? { data: { count: 6 } }
+          : respond(url),
+      ),
+    );
+    const wrapper = mountSidebar();
+    await refreshAndSettle(wrapper);
+    expect(wrapper.vm.favouriteCount).toBe(6);
+
+    wrapper.vm.chooseScope(3);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm.favouriteCount).toBeNull();
+
+    wrapper.unmount();
+  });
+
   it("asks for the favourites count in the current scope", async () => {
     const wrapper = mountSidebar();
     await refreshAndSettle(wrapper);

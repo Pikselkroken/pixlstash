@@ -3297,6 +3297,12 @@ function selectAllMedia(favourites) {
 const notInProjectCount = ref(null);
 // The Favourites row's number, in the current scope.
 const favouriteCount = ref(null);
+// It belongs to the scope it was read for: blank it on a scope change, so a
+// read still on its way (or one that fails) shows nothing rather than the
+// last scope's number.
+watch([projectViewMode, selectedProjectId], () => {
+  favouriteCount.value = null;
+});
 
 const scopeCounts = computed(() => {
   const any = categoryCounts.value[ALL_PICTURES_ID];
