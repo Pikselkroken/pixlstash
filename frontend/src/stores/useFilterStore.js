@@ -12,6 +12,9 @@ export const useFilterStore = defineStore("filter", () => {
   // (the filter menu's Score sets it for a range from 0 stars), which the
   // backend ORs.
   const unscoredOnlyFilter = ref(false);
+  // "Favourites only" (`favourite=1`): the owner's hearted pictures, in
+  // whatever the grid is showing.
+  const favouriteOnlyFilter = ref(false);
   const smartScoreBucketFilter = ref(null);
   const resolutionBucketFilter = ref(null);
   const tagFilter = ref([]);
@@ -64,6 +67,7 @@ export const useFilterStore = defineStore("filter", () => {
     minScoreFilter.value = null;
     maxScoreFilter.value = null;
     unscoredOnlyFilter.value = false;
+    favouriteOnlyFilter.value = false;
     smartScoreBucketFilter.value = null;
     resolutionBucketFilter.value = null;
     tagFilter.value = [];
@@ -86,6 +90,7 @@ export const useFilterStore = defineStore("filter", () => {
     minScoreFilter,
     maxScoreFilter,
     unscoredOnlyFilter,
+    favouriteOnlyFilter,
     smartScoreBucketFilter,
     resolutionBucketFilter,
     tagFilter,

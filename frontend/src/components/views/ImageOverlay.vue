@@ -217,7 +217,10 @@
             :score="isReadOnly ? guestScore || 0 : image?.score || 0"
             :readonly="!isReadOnly && isCurrentLocked"
             icon-size="large"
+            :favouritable="!isReadOnly && favouritable"
+            :favourite="Boolean(image?.favourite)"
             @set-score="setScore"
+            @toggle-favourite="toggleFavourite"
           />
           <v-menu
             v-if="image && isMobile"
@@ -1218,6 +1221,7 @@ import OverlayActionReceipt from "../widgets/OverlayActionReceipt.vue";
 import OverlaySaveAsDialog from "../widgets/OverlaySaveAsDialog.vue";
 import PluginParametersUI from "../widgets/PluginParametersUI.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
+import { FAVOURITE_KEY } from "../../stores/useFavouritesStore";
 import Tooltip from "../widgets/Tooltip.vue";
 import {
   applyStackBackgroundAlpha,
@@ -1313,6 +1317,8 @@ const props = defineProps({
   dateFormat: { type: String, default: "locale" },
   showStacks: { type: Boolean, default: true },
   showProblemIcon: { type: Boolean, default: true },
+  // False from the Scrapheap, which shows no heart: click and H both go inert.
+  favouritable: { type: Boolean, default: true },
   availablePlugins: { type: Array, default: () => [] },
   comfyuiProgress: { type: Object, default: null },
   comfyuiProgressPercent: { type: Number, default: 0 },
@@ -1672,6 +1678,7 @@ function setOverlayImageById(nextId) {
     const existingDescription = image.value?.description;
     const existingSmartScore = image.value?.smartScore;
     const existingScore = image.value?.score;
+    const existingFavourite = image.value?.favourite;
     // Captured beside the three above rather than read inline below, which is
     // correct only while the whole literal is evaluated before the assignment:
     // split it - build `next` then patch it, hoist a branch - and an inline
@@ -1696,6 +1703,11 @@ function setOverlayImageById(nextId) {
       // for the same image would clobber an optimistic rating change (a 0 toggle is a
       // valid edit, hence the != null guard rather than a truthiness check).
       ...(isSameImage && existingScore != null ? { score: existingScore } : {}),
+      // The heart likewise: toggling it replaces the grid's array, which lands
+      // here with the snapshot's old value.
+      ...(isSameImage && existingFavourite != null
+        ? { favourite: existingFavourite }
+        : {}),
       // Preserve the file's bytes for the same reason. A rotate's metadata read
       // moved them, and `target` may be a row that read never reached (an
       // expanded stack member from the filmstrip); re-applying its old
@@ -1805,6 +1817,7 @@ function showRunResult(id, sourceId, stackId) {
 const emit = defineEmits([
   "close",
   "apply-score",
+  "apply-favourite",
   "set-guest-score",
   "add-tag",
   "update-description",
@@ -2714,6 +2727,13 @@ function setScore(n) {
   emit("apply-score", image.value, image.value.score);
 }
 
+// The owner's heart is not label data, so a locked picture can still take one.
+function toggleFavourite() {
+  if (!image.value || isReadOnly.value || !props.favouritable) return;
+  image.value.favourite = !image.value.favourite;
+  emit("apply-favourite", image.value, image.value.favourite);
+}
+
 function showPrevImage() {
   return navigateOverlayImage(-1);
 }
@@ -3030,6 +3050,13 @@ function handleKeydown(e) {
       const score = parseInt(e.key, 10);
       if (image.value) setScore(score);
     }
+  } else if (
+    e.key.toLowerCase() === FAVOURITE_KEY &&
+    !e.ctrlKey &&
+    !e.metaKey &&
+    !e.altKey
+  ) {
+    toggleFavourite();
   }
 }
 

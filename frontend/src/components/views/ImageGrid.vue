@@ -21,6 +21,7 @@
     :dateFormat="userPrefsStore.dateFormat"
     :showStacks="gridStore.showStacks"
     :showProblemIcon="gridStore.showProblemIcon"
+    :favouritable="!isScrapheapView"
     :availablePlugins="availablePlugins"
     :comfyuiProgress="comfyuiProgress"
     :comfyuiProgressPercent="comfyuiProgressPercent"
@@ -32,6 +33,7 @@
     :compareRequest="overlayCompareRequest"
     @close="closeOverlay()"
     @apply-score="applyScore"
+    @apply-favourite="applyOverlayFavourite"
     @set-guest-score="(img, n) => setGuestScore(img, n)"
     @add-tag="addTagToImage"
     @update-description="updateDescriptionForImage"
@@ -606,12 +608,14 @@
               @drop="handleStackReorderDrop(img, $event)"
               @dragleave="handleStackReorderDragLeave(img, $event)"
             >
-              <!-- Top-left permanent badges (top→bottom): problem, reference folder, lock, share -->
+              <!-- Top-left permanent badges (top→bottom): stack count, new run,
+                   stack place, problem, reference folder, lock, share -->
               <div
                 v-if="
                   isThumbnailReady(img.id) &&
                   img.thumbnail &&
-                  (getOpenStackPlace(img) ||
+                  (shouldShowStackBadge(img) ||
+                    getOpenStackPlace(img) ||
                     newBatch.isNew(img.id) ||
                     (gridStore.showProblemIcon && hasPenalisedTags(img)) ||
                     img.reference_folder_id ||
@@ -620,6 +624,16 @@
                 "
                 class="thumbnail-top-left-badges"
               >
+                <!-- The stack count leads: it is permanent, so leading means it
+                     never moves, and the top-right corner belongs to the score
+                     strip alone. -->
+                <StackBadge
+                  v-if="shouldShowStackBadge(img)"
+                  :count="getStackBadgeCount(img)"
+                  :tint="getStackBadgeTint(img)"
+                  @activate="toggleStackExpand(img)"
+                  @mouseenter.stop="prefetchStackMembers(img)"
+                />
                 <!-- Made by the last run (#1868), until the next one ends: the
                      batch to pick the keepers from. -->
                 <span
@@ -1007,34 +1021,16 @@
                 </button>
                 </div>
               </div>
-              <!-- Top-right badge column - the shared home for corner
-                   indicators (stack count in the corner, hover-only stars
-                   below it, right-aligned, 2px gap). The stack count is
-                   PERMANENT - how many pictures a tile stands for is a fact
-                   about the tile, and hiding it until hover is what made
-                   stacks invisible while browsing. The hover behaviour
-                   therefore lives on the container's other children, not the
-                   container.
-
-                   The permanent badge leads the column deliberately: below the
-                   stars its rest position was set by a strip that is
-                   `opacity: 0` but still in flow, so it hung a row off the
-                   corner and moved whenever the star size or `showStars`
-                   changed. Leading, it never moves; only what appears beneath
-                   it does. -->
+              <!-- Top-right: the score strip alone, ending in the favourite
+                   heart. Hover-only, except that a favourite at rest keeps the
+                   strip collapsed to its heart and the stars slide out to the
+                   left under the pointer (ImageGrid.css). -->
               <div
                 v-if="isThumbnailReady(img.id) && img.thumbnail"
                 class="thumbnail-top-right-badges"
               >
-                <StackBadge
-                  v-if="shouldShowStackBadge(img)"
-                  :count="getStackBadgeCount(img)"
-                  :tint="getStackBadgeTint(img)"
-                  @activate="toggleStackExpand(img)"
-                  @mouseenter.stop="prefetchStackMembers(img)"
-                />
                 <StarRatingOverlay
-                  v-if="gridStore.showStars"
+                  v-if="gridStore.showStars || (!isReadOnly && !isScrapheapView)"
                   :score="
                     isReadOnly
                       ? (guestScoreMap.get(img.id) ?? img.score ?? 0)
@@ -1042,7 +1038,12 @@
                   "
                   :icon-size="badgeIconSizes.star"
                   :compact="true"
+                  :stars="gridStore.showStars"
+                  :favouritable="!isReadOnly && !isScrapheapView"
+                  :favourite="Boolean(img.favourite)"
+                  :style="{ '--star-size': `${badgeIconSizes.star}px` }"
                   @set-score="setScore(img, $event)"
+                  @toggle-favourite="toggleFavourite([img.id])"
                 />
               </div>
             </div>
@@ -1196,6 +1197,7 @@
           :clearing-impossible="clearingImpossibleTags"
           @clear-impossible-tags="handleClearImpossibleTags"
           @clear-selection="clearSelection"
+          @favourite="toggleFavourite(selectedImageIds)"
           @added-to-set="handleOverlayAddedToSet"
           @remove-from-group="removeFromGroup"
           @keep-cover-only="openKeepCoverOnly"
@@ -5286,6 +5288,7 @@ const selectedExpandedCount = computed(() => {
     filterStore.minScoreFilter == null &&
     filterStore.maxScoreFilter == null &&
     !filterStore.unscoredOnlyFilter &&
+    !filterStore.favouriteOnlyFilter &&
     filterStore.smartScoreBucketFilter == null &&
     filterStore.resolutionBucketFilter == null;
 
@@ -6651,6 +6654,8 @@ watch(
 
 const {
   setScore,
+  setFavourite,
+  toggleFavourite,
   setGuestScore,
   handleGuestConsentAccepted,
   handleGuestConsentRejected,
@@ -6692,6 +6697,12 @@ const {
   removeImagesById,
 });
 
+// The overlay flips its own copy at once; a refused change puts it back there
+// as well as on the tiles.
+async function applyOverlayFavourite(img, on) {
+  if (!(await setFavourite([img.id], on))) img.favourite = !on;
+}
+
 // ============================================================
 // KEYBOARD NAVIGATION
 // (moved to useGridKeyboardNav composable)
@@ -6716,6 +6727,7 @@ const { onGlobalKeyPress, handleKeyDown } = useGridKeyboardNav(
     isJustifiedMode,
     justifiedLayout,
     isGhosted: isGridIndexGhosted,
+    isScrapheap: () => isScrapheapView.value,
   },
   props,
   emit,
@@ -6729,6 +6741,7 @@ const { onGlobalKeyPress, handleKeyDown } = useGridKeyboardNav(
     selectionBarRef,
     applyScoresForSelection,
     setScore,
+    toggleFavourite,
     moveStackMember,
     getOpenStackPlace,
   },
@@ -7115,6 +7128,7 @@ watch(
     () => filterStore.minScoreFilter,
     () => filterStore.maxScoreFilter,
     () => filterStore.unscoredOnlyFilter,
+    () => filterStore.favouriteOnlyFilter,
     () => filterStore.smartScoreBucketFilter,
     () => filterStore.resolutionBucketFilter,
     () => filterStore.tagFilter,

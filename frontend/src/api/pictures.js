@@ -729,6 +729,21 @@ export async function applyScores(
 }
 
 /**
+ * Mark or unmark pictures as the owner's favourites.
+ * @param {Array<number|string>} pictureIds
+ * @param {boolean} favourite - true marks, false unmarks.
+ * @returns {Promise<{updated_ids: number[]}>} the response body.
+ */
+export async function setPicturesFavourite(pictureIds, favourite) {
+  return unwrap(
+    apiClient.post(`/pictures/favourite`, {
+      picture_ids: pictureIds,
+      favourite,
+    }),
+  );
+}
+
+/**
  * Read the scores collected from this guest session.
  * @returns {Promise<Object>} the response body, whose `scores` maps picture id
  *   to score.

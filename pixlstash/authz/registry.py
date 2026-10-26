@@ -976,6 +976,8 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("POST", "/api/v1/pictures/plugins/{name}"): _LIST_AWARE,
     ("PATCH", "/api/v1/pictures/project"): _LIST_AWARE,
     ("POST", "/api/v1/pictures/apply-scores"): _LIST_AWARE,
+    # The owner's own heart on a picture: a share token never marks one.
+    ("POST", "/api/v1/pictures/favourite"): RoutePolicy(_OWNER),
     ("POST", "/api/v1/pictures/detect"): _LIST_AWARE,
     (
         "POST",

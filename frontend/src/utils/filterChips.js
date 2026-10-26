@@ -215,6 +215,14 @@ export function filterChips(store, { allPicturesView = true } = {}) {
   const push = (key, kind, value, remove) =>
     chips.push({ key, kind, value, remove });
 
+  // First, as it leads the menu: a grid narrowed to favourites without saying
+  // so looks like lost pictures.
+  if (store.favouriteOnlyFilter) {
+    push("favourites", "Show", "favourites only", () => {
+      store.favouriteOnlyFilter = false;
+    });
+  }
+
   if (allPicturesView && store.noCharacterFilter) {
     push("problem:no_character", "Problem", "no character", () => {
       store.noCharacterFilter = false;

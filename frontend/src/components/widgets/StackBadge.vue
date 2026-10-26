@@ -169,13 +169,12 @@ const title = computed(() => {
 /* Sits on top of an arbitrary photo, so the backing is the photo scrim and the
    glyph is `on-dark-surface`: the pair that stays legible over unknown content
    in both themes (visual-language.md §7, "Scrims"). Deliberately NOT
-   self-positioned: it flows inside the tile's top-right badge column
-   (`.thumbnail-top-right-badges`, the shared home for corner indicators: this
-   first, the hover-only stars below it), so it can never land on top of a
-   sibling badge. It leads the column because it is the column's only PERMANENT
-   member: put it second and its rest position is set by the height of an
+   self-positioned: it flows inside its host's corner badge column (the picture
+   grid's top-left column, which it leads; the duplicate deck's top-right one),
+   so it can never land on top of a sibling badge. It leads because it is
+   PERMANENT: put second, its rest position was set by the height of an
    invisible star strip, which is how it ended up floating off the corner.
-   `pointer-events` is explicit because that container is pointer-inert. */
+   `pointer-events` is explicit because a badge column can be pointer-inert. */
 .sbadge {
   pointer-events: auto;
   display: inline-flex;

@@ -52,7 +52,7 @@ from pixlstash.server import Server
 from pixlstash.services import operation_log_service, tag_prediction_service
 from pixlstash.tasks import TaskType
 from pixlstash.tasks.tag_task import TagTask
-from tests.utils import upload_pictures_and_wait
+from tests.utils import bearer_client, mint_read_token, upload_pictures_and_wait
 
 API = "/api/v1"
 
@@ -974,6 +974,129 @@ def test_undo_of_bulk_rating_reverts_every_target(client, server):
         None,
         None,
     ]
+
+
+def _favourite_ids(client, ids, **params):
+    """Which of *ids* the listing returns with "Favourites only" on."""
+    resp = client.get(
+        f"{API}/pictures", params={"limit": 500, "favourite": "1", **params}
+    )
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    pictures = payload["pictures"] if isinstance(payload, dict) else payload
+    return sorted({int(pic["id"]) for pic in pictures} & set(ids))
+
+
+def _favourite_count(client):
+    resp = client.get(f"{API}/pictures/count", params={"favourite": "1"})
+    assert resp.status_code == 200, resp.text
+    return resp.json()["count"]
+
+
+def test_favourite_narrows_the_listing_and_one_undo_reverts_it(client, server):
+    ids = [_upload(client) for _ in range(3)]
+    marked = ids[:2]
+    count_before = _favourite_count(client)
+    resp = client.post(
+        f"{API}/pictures/favourite", json={"picture_ids": marked, "favourite": True}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["updated_ids"] == sorted(marked)
+    assert _favourite_ids(client, ids) == sorted(marked)
+    # The grid's projection carries the mark, so a tile can draw its heart.
+    grid = client.get(f"{API}/pictures", params={"fields": "grid", "limit": 500})
+    grid_rows = grid.json()
+    grid_rows = grid_rows["pictures"] if isinstance(grid_rows, dict) else grid_rows
+    hearts = {int(p["id"]): p["favourite"] for p in grid_rows if int(p["id"]) in ids}
+    assert hearts == {pid: pid in marked for pid in ids}
+    # The count the filter panel shows runs the same predicate.
+    assert _favourite_count(client) == count_before + len(marked)
+    # So do search's and the stats sidebar's parsers (`from_query_params`).
+    stats = client.get(f"{API}/pictures/stats", params={"favourite": "1"})
+    assert stats.status_code == 200, stats.text
+    unfiltered = client.get(f"{API}/pictures/stats")
+    assert stats.json() != unfiltered.json()
+
+    # Marking again changes nothing and is not an operation of its own.
+    again = client.post(
+        f"{API}/pictures/favourite", json={"picture_ids": marked, "favourite": True}
+    )
+    assert again.json()["updated_ids"] == []
+    assert len(_operations(server, op_type="pictures.favourite")) == 1
+
+    assert client.post(f"{API}/operations/undo").status_code == 200
+    assert _favourite_ids(client, ids) == []
+    assert client.post(f"{API}/operations/redo").status_code == 200
+    assert _favourite_ids(client, ids) == sorted(marked)
+
+    unmark = client.post(
+        f"{API}/pictures/favourite", json={"picture_ids": ids, "favourite": False}
+    )
+    assert unmark.json()["updated_ids"] == sorted(marked)
+    assert _favourite_ids(client, ids) == []
+
+
+def test_favourites_only_shows_a_stack_by_its_favourite_member(client, server):
+    """The heart is often on a variant, not the cover: the stack must still show."""
+    cover, variant = _upload(client), _upload(client)
+    resp = client.post(f"{API}/stacks", json={"picture_ids": [cover, variant]})
+    assert resp.status_code == 200, resp.text
+
+    def positions(session):
+        return {
+            int(p.id): p.stack_position
+            for p in session.exec(
+                select(Picture).where(Picture.id.in_([cover, variant]))
+            ).all()
+        }
+
+    by_position = sorted(
+        server.vault.db.run_task(positions).items(), key=lambda kv: kv[1]
+    )
+    member = by_position[1][0]  # not the stack's cover
+    client.post(
+        f"{API}/pictures/favourite", json={"picture_ids": [member], "favourite": True}
+    )
+    shown = _favourite_ids(
+        client, [cover, variant], fields="grid", stack_leaders_only="true"
+    )
+    assert shown == [member]
+
+
+def test_favourite_refuses_a_malformed_body(client):
+    picture_id = _upload(client)
+    for body in (
+        {"picture_ids": [picture_id], "favourite": "yes"},
+        {"picture_ids": [], "favourite": True},
+        {"picture_ids": ["abc"], "favourite": True},
+        # int() would read each of these as picture 1.
+        {"picture_ids": [True], "favourite": True},
+        {"picture_ids": [1.9], "favourite": True},
+        {"picture_ids": [str(picture_id)], "favourite": True},
+    ):
+        r = client.post(f"{API}/pictures/favourite", json=body)
+        assert r.status_code == 400, (body, r.text)
+
+
+def test_a_share_token_cannot_favourite_a_picture(client, server):
+    """The negative direction with the owner's own write as its control."""
+    picture_id = _upload(client)
+    body = {"picture_ids": [picture_id], "favourite": True}
+    for token in (
+        mint_read_token(
+            client,
+            "favourite picture token",
+            resource_type="picture",
+            resource_id=picture_id,
+        ),
+        mint_read_token(client, "favourite global token"),
+    ):
+        share = bearer_client(server, token)
+        assert share.get(f"{API}/pictures").status_code == 200
+        assert share.post(f"{API}/pictures/favourite", json=body).status_code == 403
+    assert _favourite_ids(client, [picture_id]) == []
+    assert client.post(f"{API}/pictures/favourite", json=body).status_code == 200
+    assert _favourite_ids(client, [picture_id]) == [picture_id]
 
 
 def test_undo_is_last_in_first_out(client, server):

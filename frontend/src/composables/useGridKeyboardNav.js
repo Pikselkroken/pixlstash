@@ -8,6 +8,7 @@ import {
 } from "./useJustifiedLayout.js";
 import { useGridStore } from "../stores/useGridStore";
 import { useSearchStore } from "../stores/useSearchStore";
+import { FAVOURITE_KEY } from "../stores/useFavouritesStore";
 
 /**
  * Manages keyboard navigation and keyboard-driven actions for the image grid.
@@ -45,6 +46,8 @@ export function useGridKeyboardNav(
     isJustifiedMode,
     justifiedLayout,
     isGhosted = () => false,
+    // The Scrapheap shows no heart, so H marks nothing there either.
+    isScrapheap = () => false,
   },
   props,
   emit,
@@ -58,6 +61,7 @@ export function useGridKeyboardNav(
     selectionBarRef,
     applyScoresForSelection,
     setScore,
+    toggleFavourite = () => {},
     moveStackMember = () => false,
     getOpenStackPlace = () => null,
   },
@@ -473,6 +477,25 @@ export function useGridKeyboardNav(
     ) {
       event.preventDefault();
       selectionBarRef.value?.openTagInput();
+    } else if (
+      String(event.key).toLowerCase() === FAVOURITE_KEY &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
+      !overlayOpen.value &&
+      !isReadOnly.value &&
+      !isScrapheap()
+    ) {
+      // H favourites the selection, else the hovered picture, else the
+      // cursor's, as the digits score them.
+      const ids = selectedImageIds.value.length
+        ? selectedImageIds.value.slice()
+        : [
+            allGridImages.value[hoveredImageIdx.value ?? cursorIdx.value]?.id,
+          ].filter(Boolean);
+      if (!ids.length) return;
+      event.preventDefault();
+      toggleFavourite(ids);
     } else if (
       (hoveredImageIdx.value !== null || selectedImageIds.value.length > 0) &&
       !overlayOpen.value &&

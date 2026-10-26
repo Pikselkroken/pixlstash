@@ -1291,6 +1291,7 @@ def create_router(server) -> APIRouter:
         # remaining filters (format/scores/buckets) arrive as typed Query args above.
         _predicate_filter = PredicateFilter.from_query_params(request)
         unscored = _predicate_filter.unscored
+        favourite_only = _predicate_filter.favourite_only
         tags_filter = _predicate_filter.tags_filter
         tags_rejected_filter = _predicate_filter.tags_rejected_filter
         tags_confidence_above_filter = _predicate_filter.tags_confidence_above_filter
@@ -1478,6 +1479,7 @@ def create_router(server) -> APIRouter:
                 min_score=min_score,
                 max_score=max_score,
                 unscored=unscored,
+                favourite_only=favourite_only,
                 smart_score_bucket=smart_score_bucket,
                 resolution_bucket=resolution_bucket,
                 tags_filter=tags_filter,

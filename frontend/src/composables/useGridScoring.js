@@ -4,6 +4,7 @@ import {
   applyScores,
   getGuestScores,
   listPicturesByIds,
+  setPicturesFavourite,
   submitGuestScores,
 } from "../api/pictures";
 import { getPictureId } from "../utils/media.js";
@@ -733,10 +734,73 @@ export function useGridScoring({
     });
   }
 
+  // FAVOURITES
+  // ============================================================
+  // Drawn at once and put back with a notice if the server refuses. The WS
+  // echo is skipped like a score's: the change is already on the cards.
+  // Resolves false when nothing was stored, so a caller holding its own copy
+  // (the overlay) can put its heart back too.
+  async function setFavourite(imageIds, on) {
+    const keys = new Set(
+      (imageIds ?? []).map((id) => getPictureId(id)).filter((id) => id !== null),
+    );
+    if (!keys.size || isReadOnly.value) return false;
+    const before = new Map();
+    for (const img of allGridImages.value) {
+      const key = getPictureId(img?.id);
+      if (keys.has(key)) before.set(key, Boolean(img.favourite));
+    }
+    const mark = (valueOf) => {
+      const apply = (images) =>
+        images.map((img) => {
+          const key = getPictureId(img?.id);
+          return keys.has(key) ? { ...img, favourite: valueOf(key) } : img;
+        });
+      if (Array.isArray(lastFetchedGridImages.value)) {
+        lastFetchedGridImages.value = apply(lastFetchedGridImages.value);
+      }
+      allGridImages.value = apply(allGridImages.value);
+    };
+    mark(() => on);
+    skipNextWsRefresh.value = true;
+    try {
+      const body = await setPicturesFavourite([...keys].map(Number), on);
+      // Nothing changed (already so, or in the Scrapheap): no WS echo comes
+      // back to consume the skip, and it would eat the next real refresh.
+      if (!body?.updated_ids?.length) skipNextWsRefresh.value = false;
+    } catch (e) {
+      console.error("Failed to set favourite", [...keys], on, e);
+      skipNextWsRefresh.value = false;
+      mark((key) => before.get(key) ?? !on);
+      noticeStore.error(
+        `Couldn't ${on ? "favourite" : "unfavourite"} that. ${errorDetail(e)}`,
+        { key: "favourite-set" },
+      );
+      return false;
+    }
+    // "Favourites only" is the one view an unfavourite throws a picture out of.
+    if (!on && filterStore.favouriteOnlyFilter && removeImagesById) {
+      removeImagesById([...keys]);
+    }
+    return true;
+  }
+
+  /** Favourite a mixed selection, unfavourite one that is all favourites. */
+  function toggleFavourite(imageIds) {
+    const keys = new Set((imageIds ?? []).map((id) => getPictureId(id)));
+    const rows = allGridImages.value.filter((img) =>
+      keys.has(getPictureId(img?.id)),
+    );
+    const allFavourite = rows.length > 0 && rows.every((img) => img.favourite);
+    return setFavourite(imageIds, !allFavourite);
+  }
+
   // ============================================================
 
   return {
     setScore,
+    setFavourite,
+    toggleFavourite,
     setGuestScore,
     handleGuestConsentAccepted,
     handleGuestConsentRejected,

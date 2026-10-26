@@ -122,6 +122,13 @@ class ApplyScoresResponse(BaseModel):
     reset_triggered: bool
 
 
+class SetFavouriteResponse(BaseModel):
+    status: str
+    favourite: bool
+    updated_ids: list[int] = []
+    updated_count: int
+
+
 class PictureFullMetadataResponse(BaseModel):
     """Single picture's full metadata, tags, optional smart score, and any
     embedded file metadata. The picture model is large/dynamic so common
@@ -850,6 +857,80 @@ def register_routes(router, server):
             "missing_ids": missing_ids,
             "missing_count": len(missing_ids),
             "reset_triggered": bool(reset_triggered),
+        }
+
+    @router.post(
+        "/pictures/favourite",
+        summary="Mark or unmark favourite pictures",
+        description=(
+            "Sets `favourite` on every live picture named in `picture_ids`. "
+            "Recorded as one operation, so one undo reverts the batch."
+        ),
+        response_model=SetFavouriteResponse,
+    )
+    def set_favourite_pictures(request: Request, payload: dict = Body(...)):
+        raw_ids = payload.get("picture_ids")
+        favourite = payload.get("favourite")
+        if not isinstance(raw_ids, list) or not raw_ids:
+            raise HTTPException(
+                status_code=400, detail="picture_ids must be a non-empty list"
+            )
+        if not isinstance(favourite, bool):
+            raise HTTPException(status_code=400, detail="favourite must be a boolean")
+        # Strict: int() would read `true` and `1.9` as picture 1.
+        if not all(type(pid) is int for pid in raw_ids):
+            raise HTTPException(
+                status_code=400, detail="picture_ids must be integer picture ids"
+            )
+        picture_ids = sorted(set(raw_ids))
+
+        def _set_favourite(session: Session, ids: list[int], on: bool) -> list[int]:
+            scope = scope_id_subquery(session, ids, name="_pixlstash_favourite_ids")
+            changed = session.exec(
+                select(Picture.id).where(
+                    Picture.id.in_(scope),
+                    Picture.deleted.is_(False),
+                    Picture.favourite.is_not(on),
+                )
+            ).all()
+            if changed:
+                session.exec(
+                    update(Picture)
+                    .where(Picture.id.in_(scope_id_subquery(session, changed)))
+                    .values(favourite=on)
+                )
+                session.flush()
+            return sorted(int(pid) for pid in changed)
+
+        verb = "Favourited" if favourite else "Unfavourited"
+        updated_ids, _operation = operation_log_service.run_recorded_metadata_task(
+            server.vault,
+            _set_favourite,
+            picture_ids,
+            favourite,
+            op_type="pictures.favourite",
+            picture_ids=picture_ids,
+            summary=f"{verb} {len(picture_ids)} picture(s)",
+            **operation_log_service.request_context(request),
+        )
+
+        if updated_ids:
+            server.vault.notify(
+                EventType.CHANGED_PICTURES,
+                {
+                    "picture_ids": updated_ids,
+                    "origin_client_id": getattr(
+                        request.state, "origin_client_id", None
+                    ),
+                    "change_kind": "updated",
+                },
+            )
+
+        return {
+            "status": "success",
+            "favourite": favourite,
+            "updated_ids": updated_ids,
+            "updated_count": len(updated_ids),
         }
 
     @router.post(

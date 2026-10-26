@@ -31,6 +31,7 @@ function makeNav({
   searchQuery = "",
   moveStackMember = undefined,
   getOpenStackPlace = () => ({ position: 1, count: 3 }),
+  scrapheap = false,
 } = {}) {
   const selectedImageIds = ref(["a", "b"]);
   const deleteSelected = vi.fn();
@@ -55,11 +56,13 @@ function makeNav({
     isJustifiedMode: ref(justified !== null),
     justifiedLayout: ref(justified),
     isGhosted: (index) => ghostedIndexes.includes(index),
+    isScrapheap: () => scrapheap,
   };
 
   const openOverlay = vi.fn();
   const clearSearchQuery = vi.fn();
   const focusCursor = vi.fn();
+  const toggleFavourite = vi.fn();
   const callbacks = {
     clearFaceSelection: vi.fn(),
     clearSearchQuery,
@@ -70,6 +73,7 @@ function makeNav({
     selectionBarRef: ref({ openTagInput: vi.fn() }),
     applyScoresForSelection,
     setScore: vi.fn(),
+    toggleFavourite,
     ...(moveStackMember ? { moveStackMember, getOpenStackPlace } : {}),
   };
 
@@ -97,6 +101,7 @@ function makeNav({
     openOverlay,
     clearSearchQuery,
     focusCursor,
+    toggleFavourite,
   };
 }
 
@@ -479,5 +484,17 @@ describe("useGridKeyboardNav - reordering an open stack", () => {
     onGlobalKeyPress("Home", {});
     expect(move).not.toHaveBeenCalled();
     expect(wrapper.scrollTop).toBe(0);
+  });
+});
+
+describe("H favourites", () => {
+  it("toggles the selection, but marks nothing in the Scrapheap", () => {
+    const nav = makeNav();
+    nav.handleKeyDown(keyEvent({ key: "h" }));
+    expect(nav.toggleFavourite).toHaveBeenCalledWith(["a", "b"]);
+
+    const heap = makeNav({ scrapheap: true });
+    heap.handleKeyDown(keyEvent({ key: "h" }));
+    expect(heap.toggleFavourite).not.toHaveBeenCalled();
   });
 });

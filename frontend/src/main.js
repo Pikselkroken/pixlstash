@@ -100,6 +100,16 @@ const pixlStashLight = {
     // `surface-tertiary` is the light theme's wrong value there. 7.36:1 on
     // #242628, 8.37:1 on #181b20.
     "dark-surface-tertiary": "#8fbcc6",
+    // App-only, pending the design system and lead-designer sign-off: the red
+    // of an ON picture favourite (the heart ending the score strip). On a
+    // photo it sits on `--scrim-photo-strong`, where it measures 3.12:1 over a
+    // white photo and 6.39:1 over a black one; on the 55% scrim it falls to
+    // 1.36:1. Identical in both themes, like the family above. Only the state
+    // is red: the heart as a verb (the selection pill) stays ink.
+    "dark-surface-favourite": "#ff5a6e",
+    // The same red as a mark on this theme's own chrome (the filter menu's
+    // Favourites only row): deepened for a light ground, 4.70:1.
+    favourite: "#c8283f",
     // Olive as a FOREGROUND (a selected option's glyph or label) on this
     // theme's own surfaces - design system `--selected-ink`. A light ground
     // takes the deep olive; the dark theme lifts it.
@@ -234,6 +244,10 @@ const pixlStashDark = {
     // Identical in both themes too: teal as a mark on a dark chip (8.37:1 on
     // #181b20). See the light theme.
     "dark-surface-tertiary": "#8fbcc6",
+    // The favourite red, as in the light theme. On dark chrome the photo red
+    // already reads (4.90:1), so the two are one value here.
+    "dark-surface-favourite": "#ff5a6e",
+    favourite: "#ff5a6e",
     // The deep olive measures 2.72:1 on `surface`, so olive as a foreground
     // takes the lifted value here (5.37:1). See the light theme.
     "selected-ink": "#8EA604",

@@ -229,6 +229,7 @@ function buildQueryParams() {
   if (filterStore.maxScoreFilter != null)
     params.append("max_score", filterStore.maxScoreFilter);
   if (filterStore.unscoredOnlyFilter) params.append("unscored", "1");
+  if (filterStore.favouriteOnlyFilter) params.append("favourite", "1");
   if (filterStore.smartScoreBucketFilter != null)
     params.append("smart_score_bucket", filterStore.smartScoreBucketFilter);
   if (filterStore.resolutionBucketFilter != null)
