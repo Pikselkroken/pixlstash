@@ -45,6 +45,7 @@ from .tasks.quality_task import QualityTask
 from .tasks.smart_score_task import SmartScoreTask
 from .utils.likeness.likeness_parameter_utils import LikenessParameterUtils
 from .tasks.base_task import TaskStatus
+from .tasks.device_release_task import DeviceReleaseTask
 from .task_runner import TaskRunner
 from .resources.aitoolkit_tenant import AiToolkitProbe
 from .resources.arbiter import Lease, LeaseKind, Tenant, arbiter
@@ -94,7 +95,8 @@ from pixlstash.tasks.downloads_intake_finder import DownloadsIntakeFinder
 logger = get_logger(__name__)
 
 #: How long making room waits, on the arbiter's thread, for the GPU batch in
-#: flight to end; past it the models are unloaded off that thread.
+#: flight to end and the models to unload; past it they unload when the batch
+#: ends, without the arbiter waiting.
 YIELD_WAIT_S = 2.0
 
 
@@ -246,6 +248,8 @@ class Vault:
         self._fast_captions = fast_captions
         self._insightface_model_pack = insightface_model_pack
         self._last_aggressive_unload_at = 0.0
+        # Two progress polls can reach the sweep at once; one queues it.
+        self._aggressive_unload_lock = threading.Lock()
         self._keep_models_in_memory = True
         self._max_vram_gb = None
         self._wd14_tagger_enabled = False
@@ -851,11 +855,24 @@ class Vault:
                 self._work_planner.stop()
             if self._task_runner is not None:
                 self._task_runner.stop()
-        if not self._disable_background_workers:
+        # stop() gives up on a worker after 60 s. Releasing ends in a device-
+        # cache flush, and on Metal a flush beside a worker still running a
+        # model kills the process, so the models are left for the process exit.
+        worker_alive = (
+            self._task_runner is not None and self._task_runner.gpu_worker_alive()
+        )
+        if worker_alive:
+            logger.warning(
+                "The GPU worker is still running after the task runner stopped; "
+                "leaving the models loaded rather than flushing the device under "
+                "it. They stay resident until the process exits."
+            )
+        if not self._disable_background_workers and not worker_alive:
             FaceExtractionTask.release_detection_models()
             ImageEmbeddingTask.release_models()
         if self._engine:
-            self._engine.close()
+            if not worker_alive:
+                self._engine.close()
             del self._engine
             self._engine = None
         if self.db:
@@ -2511,56 +2528,98 @@ class Vault:
         return progress
 
     def _maybe_aggressive_unload(self, progress: dict):
+        """Queue an unload of every model when all the workers are idle.
+
+        Reached from the worker-progress poll (a request thread) and from
+        switching "keep models in memory" off (the event loop), so it only
+        queues the unload on the GPU worker (:meth:`_unload_models_on_worker`)
+        and never waits for it.
+        """
         if self._keep_models_in_memory:
             return
         if not self._engine:
             return
-        now = time.time()
-        if now - self._last_aggressive_unload_at < self.AGGRESSIVE_UNLOAD_INTERVAL:
-            return
+        with self._aggressive_unload_lock:
+            now = time.time()
+            if now - self._last_aggressive_unload_at < self.AGGRESSIVE_UNLOAD_INTERVAL:
+                return
+            for snapshot in progress.values():
+                status = snapshot.get("status")
+                running = bool(snapshot.get("running"))
+                if not running:
+                    continue
+                if status in ("idle", "stopped", "uninitialized"):
+                    continue
 
-        any_busy = False
-        for snapshot in progress.values():
-            status = snapshot.get("status")
-            running = bool(snapshot.get("running"))
-            if not running:
-                continue
-            if status in ("idle", "stopped", "uninitialized"):
-                continue
+                current = int(snapshot.get("current") or 0)
+                total = int(snapshot.get("total") or 0)
+                remaining = snapshot.get("remaining")
+                if remaining is None:
+                    remaining = max(0, total - current)
+                else:
+                    remaining = max(0, int(remaining))
 
-            current = int(snapshot.get("current") or 0)
-            total = int(snapshot.get("total") or 0)
-            remaining = snapshot.get("remaining")
-            if remaining is None:
-                remaining = max(0, total - current)
-            else:
-                remaining = max(0, int(remaining))
-
-            has_pending_work = remaining > 0 or (total > 0 and current < total)
-            if has_pending_work:
-                any_busy = True
-                break
-        if any_busy:
-            return
-        # The snapshot only sees planner in-flight counts. A task submitted
-        # straight to the runner (an interactive retag or redescribe) is
-        # invisible to it, and unloading the model under a running caption
-        # batch makes the captioner return nothing for every picture in it.
-        # GPU-queue tasks only: a dedup scan or an import holds no model.
-        if self._task_runner is not None and self._task_runner.has_active_gpu_tasks():
-            return
+                if remaining > 0 or (total > 0 and current < total):
+                    return
+            # The snapshot only sees planner in-flight counts. A task submitted
+            # straight to the runner (an interactive retag or redescribe) is
+            # invisible to it. The unload could not land under it - it waits
+            # for the running task on the worker - but it would cost the next
+            # batch a reload. GPU-queue tasks only: a dedup scan or an import
+            # holds no model.
+            if (
+                self._task_runner is not None
+                and self._task_runner.has_active_gpu_tasks()
+            ):
+                return
+            self._last_aggressive_unload_at = now
 
         logger.warning("All workers idle; aggressively unloading models.")
-        self.unload_models()
-        self._last_aggressive_unload_at = now
+        # The setting can be switched back on while the unload waits.
+        self._unload_models_on_worker(when=lambda: not self._keep_models_in_memory)
+
+    def _unload_models_on_worker(self, when=None) -> Optional[DeviceReleaseTask]:
+        """Queue :meth:`unload_models` on the GPU worker; inline if there is none.
+
+        It ends in a device-cache flush, and on Metal a flush on any other
+        thread while the worker runs a model kills the process
+        (``docs/apple-metal-thread-safety.md``, cause 3). Without a running
+        GPU worker nothing else is on the device, so it runs here.
+
+        Args:
+            when: Checked just before unloading; ``False`` skips it.
+
+        Returns:
+            The queued task, or ``None`` when it ran inline or could not be
+            queued.
+        """
+        runner = self._task_runner
+        if runner is None or not runner.gpu_worker_alive():
+            if when is None or when():
+                self.unload_models()
+            return None
+        task = DeviceReleaseTask("UnloadModels", self.unload_models, when=when)
+        try:
+            runner.submit(task)
+        except RuntimeError as exc:
+            # Stopping: Vault.stop() releases the models itself, unless the
+            # GPU worker outlives the stop.
+            logger.warning(
+                "Model unload not queued, the task runner is stopping; Vault.stop() "
+                "releases the models instead: %s",
+                exc,
+            )
+            return None
+        return task
 
     def unload_models(self) -> None:
         """Unload every model PixlStash holds, whatever ``keep_models_in_memory`` says.
 
         The engine's services, tagger plugins, face detection and the embedding
-        models, then a malloc_trim. Callers make sure no GPU task is running:
-        unloading under a running caption batch makes it return nothing for
-        every picture in it.
+        models, then a malloc_trim. Runs on the GPU worker, queued by
+        :meth:`_unload_models_on_worker`: unloading under a running caption
+        batch makes it return nothing for every picture in it, and on Metal
+        the flush at the end kills the process beside a running model.
         """
         if not self._engine:
             return
@@ -2621,38 +2680,23 @@ class Vault:
                 self._work_planner.release(lease.id)
                 return []
         stopped = self._task_runner.preempt_gpu(f"preempted by {lease.label}")
+        # The unload runs on the GPU worker once the batch in flight ends; the
+        # planner hold keeps new work off, so that batch is the last before
+        # the room is made. A lease granted meanwhile has its room, and
+        # unloading then would only cost the next batch a reload.
+        task = self._unload_models_on_worker(
+            when=lambda: lease.state.value == "waiting" and not self._closed
+        )
         # Briefly: this runs on the arbiter's one thread, which every other
-        # lease waits on. A batch that takes longer is waited for off it.
-        if not self._task_runner.wait_for_gpu_idle(timeout_s=YIELD_WAIT_S):
+        # lease waits on.
+        if task is not None and not task.wait(YIELD_WAIT_S):
             logger.info(
                 "The GPU worker is still finishing its batch; the models are "
                 "unloaded once it does, for %s (%s)",
                 lease.id,
                 lease.label,
             )
-            # Off the arbiter's thread: the planner hold keeps new work off,
-            # so the batch in flight is the last before the room is made.
-            threading.Thread(
-                target=self._unload_once_idle,
-                args=(lease, self._task_runner),
-                name=f"yield-{lease.id}",
-                daemon=True,
-            ).start()
-            return stopped
-        self.unload_models()
         return stopped
-
-    def _unload_once_idle(self, lease, runner) -> None:
-        """Unload the models when *runner*'s GPU work ends, if *lease* still waits."""
-        while lease.state.value == "waiting" and not self._closed:
-            if runner.wait_for_gpu_idle(timeout_s=5.0):
-                # Granted during the wait: the room is there, and unloading now
-                # would only cost the next batch a reload.
-                if lease.state.value == "waiting" and not self._closed:
-                    self.unload_models()
-                return
-            # A stopped runner answers at once; do not spin on it.
-            time.sleep(0.5)
 
     def _release_yield_hold(self, lease_id: str) -> None:
         if lease_id in self._yield_holds:

@@ -19,6 +19,7 @@ everything these paths touch (CLAUDE.md, "reuse the environment"), so the file
 costs milliseconds.
 """
 
+import threading
 import types
 
 import pytest
@@ -330,10 +331,15 @@ def test_the_vault_idle_sweep_is_the_caller(install_plugins):
         _last_aggressive_unload_at=0.0,
         AGGRESSIVE_UNLOAD_INTERVAL=Vault.AGGRESSIVE_UNLOAD_INTERVAL,
         _disable_background_workers=True,
+        _aggressive_unload_lock=threading.Lock(),
         _task_runner=types.SimpleNamespace(has_active_gpu_tasks=lambda: False),
     )
     # The sweep's unload is the vault's own, shared with making room on the GPU.
+    # With no worker running it is unloaded inline.
     fake_vault.unload_models = lambda: Vault.unload_models(fake_vault)
+    fake_vault._unload_models_on_worker = lambda when=None: (
+        Vault._unload_models_on_worker(fake_vault, when)
+    )
     busy = {"tagging": {"running": True, "status": "running", "remaining": 5}}
 
     Vault._maybe_aggressive_unload(fake_vault, busy)
@@ -346,7 +352,9 @@ def test_the_vault_idle_sweep_is_the_caller(install_plugins):
     Vault._maybe_aggressive_unload(fake_vault, {})
     assert captioner.unload_calls == 0, "a running task must not lose its model"
 
-    fake_vault._task_runner = types.SimpleNamespace(has_active_gpu_tasks=lambda: False)
+    fake_vault._task_runner = types.SimpleNamespace(
+        has_active_gpu_tasks=lambda: False, gpu_worker_alive=lambda: False
+    )
     Vault._maybe_aggressive_unload(fake_vault, {})
     assert captioner.unload_calls == 1
 

@@ -418,9 +418,9 @@ Terms used below:
   CPU for search queries (see "Searching").
 
 Two sources of a second Metal thread are closed at their source rather than
-synchronised: transformers' loader pool and search queries. A third, the
-anomaly-region route, is routed onto the GPU worker. The rest are listed under
-"Not covered".
+synchronised: transformers' loader pool and search queries. Two more, the
+anomaly-region route and the device-cache flushes that unload models, are
+routed onto the GPU worker. The rest are listed under "Not covered".
 
 ### Loading: one loader thread wherever Metal exists
 
@@ -525,6 +525,48 @@ host a tag batch on the worker beside it would have met fp32 weights (the CPU
 model is fp32 throughout, so only accelerators were affected). One worker
 thread closes both.
 
+### Device-cache flushes: on the GPU worker
+
+Unloading models ends in `empty_device_cache()`, which on Metal is
+`torch.mps.empty_cache()` (cause 3). Four paths used to run it on their own
+thread beside the GPU worker; each now queues a `DeviceReleaseTask`
+(`tasks/device_release_task.py`) on the GPU queue at `URGENT` priority, so the
+unload runs between tasks on the worker and never under one:
+
+- **The idle sweep.** With "keep models in memory" off,
+  `Vault._maybe_aggressive_unload` runs from the worker-progress poll (a request
+  thread) and from `PATCH /users/me/config` when the setting is switched off
+  (the event loop). With a GPU worker running it now only queues
+  `Vault.unload_models` and returns, so the event loop no longer waits for an
+  unload either. Its idle check and its timestamp are taken under one lock, so
+  two polls at once queue one unload, and the unload is skipped if the setting
+  was switched back on meanwhile. A batch already running when the unload
+  is queued finishes first; one queued but not started runs after it and
+  reloads its model.
+- **Making room for another tenant.** `Vault._yield_gpu`, on the arbiter's
+  thread, used to wait for the worker to be idle and then unload there, so an
+  interactive task taken in between met the flush. It queues the unload and
+  waits for it up to `YIELD_WAIT_S`; past that the unload still runs once the
+  batch ends, and is skipped if the lease was granted meanwhile.
+- **The face finder's end-of-work release.**
+  `MissingFaceExtractionFinder.on_all_tasks_complete` returns the release as a
+  task instead of running it on the planner's thread, and the planner queues
+  whatever a finder's `on_all_tasks_complete` returns.
+- **Stopping the vault.** `TaskRunner.stop()` gives a worker 60 s to finish.
+  If the GPU worker is still alive after that, `Vault.stop()` skips the
+  face-model and embedding-model release and `engine.close()` and logs a
+  warning, leaving the models for the process exit rather than flushing under
+  it.
+
+`URGENT` matters for the arbiter: a non-urgent GPU task is refused while
+another tenant's exclusive lease waits, which is exactly when making room has
+to unload. The task holds no memory and is never stopped to make room.
+
+With no running GPU worker (tests, the CLI tools) the unload runs inline,
+since nothing else is on the device. None of this was measured on Metal: the
+crash it removes is the one the anomaly route showed (5 of 5 runs, see
+"Measured in PixlStash"), but no run of the sweep race itself is recorded.
+
 ### Not covered
 
 These do, or may do, Metal work on a thread other than the GPU worker:
@@ -536,25 +578,12 @@ These do, or may do, Metal work on a thread other than the GPU worker:
   model built on the CPU, then `.to(mps)` and `.half()` over its 344 weights; a
   third-party tag plugin's `setup()` and `init()` run there too. Measured on
   2026-09-27 (see "What reproduces where"): it overlapped CLIP on the worker in
-  8 of 8 restarts with the CPU copies on, and nothing crashed.
-- **The idle sweep.** `Vault._maybe_aggressive_unload` runs `engine.close()`,
-  which flushes with `torch.mps.empty_cache()` (cause 3). It runs from the
-  worker-progress poll, on a request thread, and from `PATCH /users/me/config`
-  when "keep models in memory" is switched off, on the event loop. It runs only
-  with that setting off. Its idle check reads the planner's
-  progress and whether a GPU task is running at that instant, so a batch the
-  worker starts just after the check can meet the flush, and it does not see
-  the tagger preload. Nothing stops two polls sweeping at
-  once. Not measured.
-- **The face finder's end-of-work flush.** With "keep models in memory" off,
-  `MissingFaceExtractionFinder.on_all_tasks_complete` runs
-  `FaceExtractionTask.release_detection_models()` on the planner thread, which
-  ends in `empty_device_cache()`: another cause-3 flush, with no check on the
-  GPU worker. Not measured.
-- **Stopping the vault.** `TaskRunner.stop()` gives the GPU worker up to 60 s
-  to finish, then carries on. `Vault.stop()` then releases the face models and
-  runs `engine.close()`, flushing and freeing on the stopping thread, which a
-  worker that outlived the wait may still be using. Not measured.
+  8 of 8 restarts with the CPU copies on, and nothing crashed. The unloads
+  queued on the worker (see "Device-cache flushes") do not wait for it.
+- **CPU-queue tasks granted GPU memory.** The runner lets a CPU-queue task ask
+  for a GPU lease and flushes after it on its CPU worker; making room no longer
+  waits for one. No CPU-queue task asks for GPU memory today, and one that did
+  would be a second thread on the device whatever the flushes do.
 - **Image plugins.** They run on `asyncio.to_thread`
   (`services/plugin_service.py`), so a torch plugin that uses Metal is a second
   thread on it. No built-in image plugin imports torch.

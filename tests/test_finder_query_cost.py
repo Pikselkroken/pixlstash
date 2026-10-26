@@ -46,6 +46,7 @@ from sqlalchemy.orm.exc import DetachedInstanceError
 from sqlmodel import Session
 
 from pixlstash.db_models import Face, Picture
+from pixlstash.tasks.base_task import QueueType
 from pixlstash.tasks.image_embedding_task import ImageEmbeddingTask
 from pixlstash.tasks.missing_smart_score_finder import MissingSmartScoreFinder
 from pixlstash.tasks.missing_thumbnail_finder import MissingThumbnailFinder
@@ -521,13 +522,18 @@ def test_keeping_models_in_memory_survives_the_finder_running_dry(tmp_path):
             lambda cls: released.append(True)
         )
         try:
-            finder.on_all_tasks_complete()
+            assert finder.on_all_tasks_complete() is None
             assert released == [], "the owner asked for the models to stay resident"
 
             dropping = MissingFaceExtractionFinder(
                 vault.db, lambda: _StubEngine(keep_models_in_memory=False)
             )
-            dropping.on_all_tasks_complete()
+            release = dropping.on_all_tasks_complete()
+            # Handed to the planner for the GPU worker, not run on its thread:
+            # on Metal the flush at the end of the release crashes beside it.
+            assert released == [], "the release ran on the planner's thread"
+            assert release.queue_type == QueueType.GPU
+            release.run()
             assert released == [True], "and to be dropped when they did not"
         finally:
             FaceExtractionTask.release_detection_models = original

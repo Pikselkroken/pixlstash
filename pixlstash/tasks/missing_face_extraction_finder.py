@@ -7,6 +7,7 @@ from sqlalchemy.orm import selectinload
 from pixlstash.db_models import Picture
 
 from .base_task_finder import BaseTaskFinder
+from .device_release_task import DeviceReleaseTask
 from .face_extraction_task import FaceExtractionTask
 
 FACE_EXTRACTION_BATCH_LIMIT = 100
@@ -98,7 +99,7 @@ class MissingFaceExtractionFinder(BaseTaskFinder):
         for future in pending:
             future.add_done_callback(_one_landed)
 
-    def on_all_tasks_complete(self) -> None:
+    def on_all_tasks_complete(self) -> DeviceReleaseTask | None:
         """Release InsightFace ORT sessions and their CUDA arena once all face
         extraction work is done.
 
@@ -115,11 +116,17 @@ class MissingFaceExtractionFinder(BaseTaskFinder):
         finder counts, and the finder used to exhaust itself constantly (see
         `find_task`). A setting whose whole purpose is to stop that cannot be
         overridden by the one path that reloads most often.
+
+        Returned as a task for the planner to queue, not run here: the release
+        ends in a device-cache flush, and on Metal a flush on the planner's
+        thread beside the GPU worker kills the process.
         """
         engine = self._engine_getter()
         if engine is not None and getattr(engine, "keep_models_in_memory", False):
-            return
-        FaceExtractionTask.release_detection_models()
+            return None
+        return DeviceReleaseTask(
+            "ReleaseFaceModels", FaceExtractionTask.release_detection_models
+        )
 
     @staticmethod
     def _fetch_missing_features(session: Session, limit: int, suppressed_ids=None):
