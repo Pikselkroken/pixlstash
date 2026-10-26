@@ -50,6 +50,10 @@ const open = computed(() => props.modelValue);
           <td>Set star rating on hovered / selected image(s)</td>
         </tr>
         <tr :class="{ 'shortcut-disabled': isReadOnly }">
+          <td><kbd>H</kbd></td>
+          <td>Favourite or unfavourite hovered / selected image(s)</td>
+        </tr>
+        <tr :class="{ 'shortcut-disabled': isReadOnly }">
           <td><kbd>T</kbd></td>
           <td>Tag selected images</td>
         </tr>
@@ -147,6 +151,10 @@ const open = computed(() => props.modelValue);
         <tr :class="{ 'shortcut-disabled': isReadOnly }">
           <td><kbd>1</kbd> – <kbd>5</kbd></td>
           <td>Set star rating</td>
+        </tr>
+        <tr :class="{ 'shortcut-disabled': isReadOnly }">
+          <td><kbd>H</kbd></td>
+          <td>Favourite or unfavourite</td>
         </tr>
         <tr :class="{ 'shortcut-disabled': isReadOnly }">
           <td><kbd>T</kbd></td>

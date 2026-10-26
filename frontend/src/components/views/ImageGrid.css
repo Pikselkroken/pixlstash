@@ -531,8 +531,8 @@
 .touch-select-mode .image-card:hover .resolution-hover-overlay,
 .touch-select-mode .image-card:hover .thumbnail-id-overlay,
 .touch-select-mode .image-card:hover .thumbnail-top-right-badges > *,
-/* The permanent stack badge must also clear the corner for the ✓ that a
-   touch-selection stamps at top-right. */
+/* A favourite's strip, drawn at rest, must also clear the corner for the ✓
+   that a touch-selection stamps at top-right. */
 .touch-select-mode .image-card:has(.selection-overlay) .thumbnail-top-right-badges > * {
   opacity: 0 !important;
   pointer-events: none !important;
@@ -1028,7 +1028,7 @@
   pointer-events: auto;
 }
 
-/* Top-right hover badges column (stars, stack) */
+/* Top-right: the score strip, ending in the favourite heart */
 .thumbnail-top-right-badges {
   position: absolute;
   top: 2px;
@@ -1043,18 +1043,49 @@
   pointer-events: none;
 }
 
-/* Hover-only members of the badge column (the stars). The stack badge
-   (.sbadge) is exempt on purpose: the count is permanent. The opacity lives on
-   the CHILDREN, not the container, precisely so one column can hold both. */
-.thumbnail-top-right-badges > :not(.sbadge) {
+/* Hover-only, except a favourite's strip, which stays drawn at rest. The
+   opacity lives on the children, not the container, so one column can hold
+   both kinds. */
+.thumbnail-top-right-badges > * {
   opacity: 0;
-  transition: opacity 0.15s ease;
+  transition: opacity var(--dur-1) var(--ease-standard);
   pointer-events: none;
 }
 
-.image-card:hover .thumbnail-top-right-badges > :not(.sbadge) {
+.image-card:hover .thumbnail-top-right-badges > *,
+.thumbnail-top-right-badges > .star-overlay--fav-on {
   opacity: 1;
   pointer-events: auto;
+}
+
+/* The strip is a pill on the STRONG scrim: the red heart needs it (3.12:1 over
+   a white photo; 1.36:1 on the 55% one). */
+.thumbnail-top-right-badges > .star-overlay {
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--scrim-photo-strong);
+}
+
+/* A favourite at rest is the same strip collapsed to its heart: same pill,
+   padding, glyph and height. Under the pointer only the stars move, sliding
+   out to the left, so the heart never moves under the pointer. Reduced motion
+   snaps it open (design-tokens.css). `:deep` because the stars are inside
+   StarRatingOverlay, which this scoped sheet does not otherwise reach. */
+.thumbnail-top-right-badges > .star-overlay--fav-on :deep(.star-overlay__stars) {
+  max-width: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition:
+    max-width var(--dur-2) var(--ease-decelerate),
+    opacity var(--dur-2) var(--ease-standard);
+}
+
+.image-card:hover
+  .thumbnail-top-right-badges
+  > .star-overlay--fav-on
+  :deep(.star-overlay__stars) {
+  max-width: calc(var(--star-size, 22px) * 5 + var(--space-5));
+  opacity: 1;
 }
 
 .thumbnail-placeholder {

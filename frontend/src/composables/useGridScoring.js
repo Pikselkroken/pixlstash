@@ -4,6 +4,7 @@ import {
   applyScores,
   getGuestScores,
   listPicturesByIds,
+  setPicturesFavourite,
   submitGuestScores,
 } from "../api/pictures";
 import { getPictureId } from "../utils/media.js";
@@ -733,10 +734,67 @@ export function useGridScoring({
     });
   }
 
+  // FAVOURITES
+  // ============================================================
+  // Drawn at once and put back with a notice if the server refuses. The WS
+  // echo is skipped like a score's: the change is already on the cards.
+  async function setFavourite(imageIds, on) {
+    const keys = new Set(
+      (imageIds ?? []).map((id) => getPictureId(id)).filter((id) => id !== null),
+    );
+    if (!keys.size || isReadOnly.value) return;
+    const before = new Map();
+    for (const img of allGridImages.value) {
+      const key = getPictureId(img?.id);
+      if (keys.has(key)) before.set(key, Boolean(img.favourite));
+    }
+    const mark = (valueOf) => {
+      const apply = (images) =>
+        images.map((img) => {
+          const key = getPictureId(img?.id);
+          return keys.has(key) ? { ...img, favourite: valueOf(key) } : img;
+        });
+      if (Array.isArray(lastFetchedGridImages.value)) {
+        lastFetchedGridImages.value = apply(lastFetchedGridImages.value);
+      }
+      allGridImages.value = apply(allGridImages.value);
+    };
+    mark(() => on);
+    skipNextWsRefresh.value = true;
+    try {
+      await setPicturesFavourite([...keys].map(Number), on);
+    } catch (e) {
+      console.error("Failed to set favourite", [...keys], on, e);
+      skipNextWsRefresh.value = false;
+      mark((key) => before.get(key) ?? !on);
+      noticeStore.error(
+        `Couldn't ${on ? "favourite" : "unfavourite"} that. ${errorDetail(e)}`,
+        { key: "favourite-set" },
+      );
+      return;
+    }
+    // "Favourites only" is the one view an unfavourite throws a picture out of.
+    if (!on && filterStore.favouriteOnlyFilter && removeImagesById) {
+      removeImagesById([...keys]);
+    }
+  }
+
+  /** Favourite a mixed selection, unfavourite one that is all favourites. */
+  function toggleFavourite(imageIds) {
+    const keys = new Set((imageIds ?? []).map((id) => getPictureId(id)));
+    const rows = allGridImages.value.filter((img) =>
+      keys.has(getPictureId(img?.id)),
+    );
+    const allFavourite = rows.length > 0 && rows.every((img) => img.favourite);
+    return setFavourite(imageIds, !allFavourite);
+  }
+
   // ============================================================
 
   return {
     setScore,
+    setFavourite,
+    toggleFavourite,
     setGuestScore,
     handleGuestConsentAccepted,
     handleGuestConsentRejected,

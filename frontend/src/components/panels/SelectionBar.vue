@@ -164,6 +164,20 @@
             @move-to-library="$emit('move-to-library', $event)"
           />
         </v-menu>
+        <!-- Favourite leads the verbs (#1578's pill): the glyph says which
+             way it will go, filled when every selected picture already is
+             one. A verb, so it stays ink; red marks the state, on the tile. -->
+        <AppBarButton
+          v-if="selectedCount > 0 && !isScrapheapView && !isReadOnly"
+          shape="round"
+          :icon="favouriteOn ? 'heart' : 'heart-outline'"
+          data-verb="favourite"
+          :aria-label="favouriteLabel"
+          :aria-pressed="favouriteOn ? 'true' : 'false'"
+          aria-keyshortcuts="H"
+          :tooltip="`${favouriteLabel} (H)`"
+          @click="emit('favourite')"
+        />
         <div v-if="!isScrapheapView && !isReadOnly" class="plugin-run-controls">
           <v-menu
             v-model="tagMenuOpen"
@@ -262,6 +276,7 @@ import PluginParametersUI from "../widgets/PluginParametersUI.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
 import { isEditableElement } from "../../utils/dom.js";
+import { favouriteVerb } from "../../stores/useFavouritesStore";
 
 const props = defineProps({
   selectedCount: Number,
@@ -304,6 +319,7 @@ const props = defineProps({
 
 const emit = defineEmits([
   "clear-selection",
+  "favourite",
   "added-to-set",
   "remove-from-group",
   "keep-cover-only",
@@ -356,6 +372,17 @@ const isScrapheapView = computed(() => {
 const hasSelection = computed(
   () => props.selectedCount > 0 || props.selectedFaceCount > 0,
 );
+
+// Unfavourite only when every selected picture already is one; a mixed
+// selection reads Favourite and makes them all favourites.
+const favouriteOn = computed(() => {
+  const ids = new Set((props.selectedImageIds ?? []).map(String));
+  const rows = (props.allGridImages ?? []).filter(
+    (img) => img?.id != null && ids.has(String(img.id)),
+  );
+  return rows.length > 0 && rows.every((img) => img.favourite);
+});
+const favouriteLabel = computed(() => favouriteVerb(favouriteOn.value));
 
 // One number opens the half. Pictures and faces are different units, so when
 // both are live they are stated as two, never summed.

@@ -21,6 +21,22 @@ describe("filterChips", () => {
     expect(filterChips(useFilterStore())).toEqual([]);
   });
 
+  it("leads with Favourites only, and its x turns it off", () => {
+    const s = useFilterStore();
+    s.favouriteOnlyFilter = true;
+    s.sharedOnlyFilter = true;
+    const chips = filterChips(s);
+    expect(chips.map((c) => `${c.kind} ${c.value}`)).toEqual([
+      "Show favourites only",
+      "Sharing shared",
+    ]);
+    chips[0].remove();
+    expect(s.favouriteOnlyFilter).toBe(false);
+    s.favouriteOnlyFilter = true;
+    s.resetFilters();
+    expect(s.favouriteOnlyFilter).toBe(false);
+  });
+
   it("gives every active filter its own chip, one per tag or model", () => {
     const s = useFilterStore();
     s.noCharacterFilter = true;
