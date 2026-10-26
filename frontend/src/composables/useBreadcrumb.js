@@ -4,8 +4,7 @@ import { useEntityNamesStore } from "../stores/useEntityNamesStore";
 
 // Builds the current-view breadcrumb trail from the route plus the sidebar's
 // published id→name maps (useEntityNamesStore is the authoritative name source).
-// Shared by the in-grid overlay (browser) and the desktop title bar so the trail
-// logic lives in one place. The route is the single source of truth; crumbs
+// Rendered by the in-grid overlay, in both shells. The route is the single source of truth; crumbs
 // carry only IDs, so clickable ancestors navigate by ID, never by name (names
 // aren't unique).
 export function useBreadcrumb() {

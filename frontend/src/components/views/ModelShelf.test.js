@@ -4826,19 +4826,16 @@ describe("a long move, in the panel that is running it", () => {
 });
 
 // #938-follow-up: the shelf is a destination like Duplicates, so it carries the
-// app-wide tail - Settings and the stats toggle - rather than dropping both the
-// moment the grid unmounts. Undo is the exception: nothing on this screen writes
+// app-wide tail - the stats toggle - rather than dropping it the moment the
+// grid unmounts. Settings is the title bar's (#2158). Undo is the exception: nothing on this screen writes
 // to the operation log, so there is nothing here for it to take back.
 describe("the app-wide toolbar tail", () => {
-  it("asks App.vue for Settings and toggles the Models rail itself", async () => {
+  it("toggles the Models rail itself, and leaves Settings to the title bar", async () => {
     const wrapper = await mountShelf([adapter({ id: 1 })]);
     const sidebar = useSidebarStore();
-    const settings = wrapper.find(
-      ".shelf-toolbar button[aria-label='Settings']",
-    );
-
-    await settings.trigger("click");
-    expect(wrapper.emitted("open-settings")).toHaveLength(1);
+    expect(
+      wrapper.find(".shelf-toolbar button[aria-label='Settings']").exists(),
+    ).toBe(false);
 
     // Directional, not a flip: the rail opens on the first press and closes on
     // the second, from the shut state a fresh session starts in.
@@ -4863,8 +4860,8 @@ describe("the app-wide toolbar tail", () => {
     // chrome sits after the view controls, ruled off from them, at the end.
     const wrapper = await mountShelf([adapter({ id: 1 })]);
     const cluster = wrapper.find(".shelf-bar-cluster").element;
-    // TbGlobalActions is multi-root; its Settings button is a stable anchor.
-    const settings = wrapper.find("button[aria-label='Settings']").element;
+    // TbGlobalActions is multi-root; its rail toggle is a stable anchor.
+    const toggle = wrapper.find(".shelf-bar-cluster .tb-stats-btn").element;
     const separator = wrapper.find(".shelf-bar-cluster .bar-separator").element;
     // The Show menu - the LAST of this view's own controls, and the one the
     // tail has to come after. (Every bar button is `--boxed` now, the tail's
@@ -4876,7 +4873,7 @@ describe("the app-wide toolbar tail", () => {
     expect(follows(showBtn, separator)).toBe(true);
     // Adjacency, not merely order: the rule marks the boundary, so nothing may
     // slip between it and the chrome it rules off.
-    expect(separator.nextElementSibling).toBe(settings);
+    expect(separator.nextElementSibling).toBe(toggle);
     // Nothing of this view's own follows the app-wide chrome. TbGlobalActions
     // is multi-root, so its stats button IS the bar's last element.
     expect(cluster.lastElementChild.classList.contains("tb-stats-btn")).toBe(

@@ -230,17 +230,14 @@ describe("LibraryInsights - it only ever reads", () => {
 });
 
 // #1415: the screen replaces the grid and its toolbar, so without the app-wide
-// tail nothing here opens Settings or the right rail. Settings rides the same
-// `act` channel the findings' buttons use, which App.vue already routes.
+// tail nothing here opens the right rail. Settings is the title bar's (#2158).
 describe("LibraryInsights - the app-wide toolbar tail", () => {
-  it("asks for Settings on the act channel and toggles the rail itself", async () => {
+  it("toggles the rail itself, and leaves Settings to the title bar", async () => {
     const wrapper = await mountScreen(payload([TODO]));
     const sidebar = useSidebarStore();
-
-    await wrapper
-      .find(".ins-toolbar button[aria-label='Settings']")
-      .trigger("click");
-    expect(wrapper.emitted("act")).toEqual([[{ kind: "settings" }]]);
+    expect(
+      wrapper.find(".ins-toolbar button[aria-label='Settings']").exists(),
+    ).toBe(false);
 
     sidebar.statsOpen = false;
     await wrapper.find(".ins-toolbar .tb-stats-btn").trigger("click");
@@ -253,11 +250,9 @@ describe("LibraryInsights - the app-wide toolbar tail", () => {
     const wrapper = await mountScreen(payload([TODO]));
     const bar = wrapper.find(".ins-toolbar").element;
     const separator = wrapper.find(".ins-toolbar .bar-separator").element;
-    const settings = wrapper.find(
-      ".ins-toolbar button[aria-label='Settings']",
-    ).element;
+    const toggle = wrapper.find(".ins-toolbar .tb-stats-btn").element;
 
-    expect(separator.nextElementSibling).toBe(settings);
+    expect(separator.nextElementSibling).toBe(toggle);
     expect(
       bar.lastElementChild.lastElementChild.classList.contains("tb-stats-btn"),
     ).toBe(true);

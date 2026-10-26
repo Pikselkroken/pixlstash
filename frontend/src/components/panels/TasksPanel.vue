@@ -768,20 +768,21 @@ const root = ref(null);
 
 // A row goes when its run does, and takes a focused Stop or Cancel with it;
 // focus then falls to <body>: the ring is gone and a keyboard user is out of
-// the tab order with nothing saying so. Every host is an inspector whose band
-// holds this tab, so the keyboard goes back to that tab. Checked a tick
-// later, after any hand-off of the panel's own (a save's receipt line) has
-// had its turn.
+// the tab order with nothing saying so. In an inspector the keyboard goes back
+// to the band's Tasks tab; in the title bar's popover (#2158), which has no
+// band, to the popover itself. Checked a tick later, after any hand-off of the
+// panel's own (a save's receipt line) has had its turn.
 function onFocusOut(event) {
   const left = event.target;
   nextTick(() => {
     if (left.isConnected) return;
     const now = document.activeElement;
     if (now && now !== document.body) return;
-    root.value
-      ?.closest(".inspector")
-      ?.querySelector(".inspector-tab--active")
-      ?.focus();
+    const inspector = root.value?.closest(".inspector");
+    (inspector
+      ? inspector.querySelector(".inspector-tab--active")
+      : root.value?.closest('[role="dialog"]')
+    )?.focus();
   });
 }
 

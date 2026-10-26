@@ -1,18 +1,24 @@
 <script setup>
-// Custom window title bar for the Electron desktop shell, plus the compact
-// active-library identity strip used by browser owners. The desktop bar uses
-// the toolbar colour so it reads as one continuous strip
-// with the app toolbar below it, is a drag region for moving the (frameless)
-// window, and draws min/maximize/close controls on non-mac platforms (macOS
-// keeps its native traffic lights).
+// The app's title bar, in the browser and in the Electron desktop shell alike
+// (#2158): logo, the library picker, the workspace switch centred, then the
+// tasks pill, Settings and, on the desktop, the window controls. It is the
+// same strip in every workspace, so switching Media | Workflows | Models
+// changes which segment is lit and nothing else - no control here may size
+// itself from the route.
 //
-// In the desktop shell it also hosts the app branding: logo + version +
-// breadcrumb on the left and the "new version available" alert on the right.
-// The browser keeps those in the sidebar/grid instead (this component is empty
-// there), so the sidebar and in-grid copies are gated on !window.pixlstashDesktop.
+// The desktop shell is frameless, so here the strip is also the window's drag
+// region and draws min/maximize/close on non-mac platforms (macOS keeps its
+// native traffic lights). All desktop calls go through
+// `window.pixlstashDesktop?.…`, so they no-op in a browser.
 import { computed } from "vue";
-import { useBreadcrumb } from "../composables/useBreadcrumb";
+import { RouterLink, useRoute } from "vue-router";
 import { useVersionCheck } from "../composables/useVersionCheck";
+import { MODEL_SHELF_ROUTES, WORKFLOW_ROUTES } from "../router/routeNames";
+import { useModelShelfStore } from "../stores/useModelShelfStore";
+import { useUserPrefsStore } from "../stores/useUserPrefsStore";
+import { isReadOnly } from "../utils/apiClient";
+import TitleBarLibraryPicker from "./TitleBarLibraryPicker.vue";
+import TitleBarTasks from "./TitleBarTasks.vue";
 import WordmarkLogo from "./WordmarkLogo.vue";
 import AppBarButton from "./widgets/AppBarButton.vue";
 import Tooltip from "./widgets/Tooltip.vue";
@@ -20,10 +26,12 @@ import Tooltip from "./widgets/Tooltip.vue";
 const props = defineProps({
   installType: { type: String, default: "pip" },
   checkForUpdates: { type: Boolean, default: null },
+  // Empty for a share/read-only session, which gets neither the name nor the
+  // picker: the registry is owner-only.
   activeLibraryName: { type: String, default: "" },
 });
 
-const emit = defineEmits(["open-libraries"]);
+const emit = defineEmits(["open-settings"]);
 
 const desktop = typeof window !== "undefined" ? window.pixlstashDesktop : null;
 const isMac = /mac/i.test(
@@ -32,12 +40,60 @@ const isMac = /mac/i.test(
     "",
 );
 
-const appVersion = __APP_VERSION__;
+const route = useRoute();
+const modelShelfStore = useModelShelfStore();
+const userPrefsStore = useUserPrefsStore();
 
-const { breadcrumb, navigateBreadcrumb } = useBreadcrumb();
+// Every route outside the workflow library and the model shelf is Media: the
+// grid, a set, a person, the Scrapheap, Duplicates, Insights, Moves. The
+// paths are the ones these places already had, so a bookmark still lands. A
+// share session's credential lives in `?token=` and only boot reads it, so a
+// link without it would open a session that 401s on reload or in a new tab.
+const workspaces = computed(() => {
+  const token = route.query.token;
+  const at = (path) => (token ? { path, query: { token } } : path);
+  const current = WORKFLOW_ROUTES.includes(route.name)
+    ? "workflows"
+    : MODEL_SHELF_ROUTES.includes(route.name)
+      ? "models"
+      : "media";
+  return [
+    { id: "media", label: "Media", to: at("/") },
+    {
+      id: "workflows",
+      label: "Workflows",
+      to: at("/workflows"),
+      // Every /workflows route is owner-only. Shown and inert rather than
+      // hidden, as the sidebar row was: the demo site is a READ session, and
+      // hiding a workspace there advertises a smaller product (#1014).
+      locked: isReadOnly.value
+        ? "The workflow library is only available in your own library"
+        : "",
+    },
+    {
+      id: "models",
+      label: "Models",
+      to: at("/models"),
+      locked: isReadOnly.value
+        ? "The model shelf is only available in your own library"
+        : "",
+      // Models arrived from the Downloads folder while the shelf was not
+      // open. The sidebar clears it when the shelf opens.
+      news: modelShelfStore.unseenArrivals && !isReadOnly.value,
+    },
+  ].map((workspace) => ({ ...workspace, current: workspace.id === current }));
+});
 
-// The title bar owns the update check on the desktop; the sidebar owns it in
-// the browser. `enabled` (desktop only) keeps the fetch from running twice.
+/** The current segment stays put: it names where you are, it is not a reset. */
+function follow(workspace, navigate, event) {
+  if (workspace.current) {
+    event.preventDefault();
+    return;
+  }
+  navigate(event);
+}
+
+// The title bar owns the update check in both shells, so it runs once.
 const {
   latestVersion,
   latestVersionUrl,
@@ -50,7 +106,7 @@ const {
 } = useVersionCheck(
   () => props.installType,
   () => props.checkForUpdates,
-  Boolean(desktop),
+  true,
 );
 
 const securityUpdateClass = computed(() => {
@@ -60,14 +116,32 @@ const securityUpdateClass = computed(() => {
     : "titlebar-update-link titlebar-update-security";
 });
 
+const telemetryIndicatorTitle = computed(() => {
+  const active = [];
+  if (userPrefsStore.checkForUpdates) active.push("update checks");
+  if (userPrefsStore.telemetrySendInstallId)
+    active.push("an anonymous install ID");
+  if (userPrefsStore.telemetrySendFeatureUsage) active.push("feature usage");
+  if (userPrefsStore.telemetrySendErrorReports) active.push("error reports");
+  if (userPrefsStore.telemetrySendHardwareProfile)
+    active.push("a hardware profile");
+  if (!active.length) return "Telemetry is off";
+  if (active.length === 1) return `Sending ${active[0]}`;
+  const last = active.pop();
+  return `Sending ${active.join(", ")} and ${last}`;
+});
+
 const minimize = () => desktop?.windowMinimize?.();
 const toggleMaximize = () => desktop?.windowToggleMaximize?.();
 const close = () => desktop?.windowClose?.();
 </script>
 
 <template>
-  <div v-if="desktop" class="titlebar" :class="{ 'titlebar--mac': isMac }">
-    <div class="titlebar-brand">
+  <header
+    class="titlebar"
+    :class="{ 'titlebar--desktop': desktop, 'titlebar--mac': desktop && isMac }"
+  >
+    <div class="titlebar-start">
       <a
         href="https://pikselkroken.github.io/pixlstash/"
         target="_blank"
@@ -77,116 +151,165 @@ const close = () => desktop?.windowClose?.();
         <img src="/Logo.png" alt="PixlStash logo" class="titlebar-logo" />
       </a>
       <WordmarkLogo class="titlebar-name" />
-      <AppBarButton
-        v-if="activeLibraryName"
-        icon="bookshelf"
-        class="titlebar-library"
-        :tooltip="`Open Libraries settings. Active library: ${activeLibraryName}`"
-        @click="emit('open-libraries')"
+      <button
+        v-if="userPrefsStore.telemetryActive"
+        type="button"
+        class="titlebar-telemetry-dot"
+        :aria-label="`${telemetryIndicatorTitle}. Open privacy settings.`"
+        @click="emit('open-settings', 'privacy')"
       >
-        <span class="bar-btn-label">{{ activeLibraryName }}</span>
-      </AppBarButton>
-      <nav
-        v-if="breadcrumb.length"
-        class="titlebar-breadcrumb"
-        aria-label="Current view"
-      >
-        <span class="titlebar-bc-sep" aria-hidden="true">›</span>
-        <template v-for="(crumb, i) in breadcrumb" :key="i">
-          <span v-if="i > 0" class="titlebar-bc-sep" aria-hidden="true">›</span>
-          <button
-            v-if="crumb.to"
-            type="button"
-            class="titlebar-bc-crumb is-link"
-            @click="navigateBreadcrumb(crumb)"
+        <Tooltip
+          :text="telemetryIndicatorTitle"
+          activator="parent"
+          :describe="false"
+        />
+      </button>
+      <template v-if="activeLibraryName">
+        <span class="titlebar-divider" aria-hidden="true"></span>
+        <TitleBarLibraryPicker
+          :active-library-name="activeLibraryName"
+          @open-settings="(tab) => emit('open-settings', tab)"
+        />
+      </template>
+    </div>
+
+    <nav class="titlebar-workspaces" aria-label="Workspace">
+      <template v-for="workspace in workspaces" :key="workspace.id">
+        <!-- Locked: a button, so `aria-disabled` reaches the accessibility
+             tree as a disabled state and the segment stays tabbable for its
+             explanation. A link has no disabled state to carry it. -->
+        <button
+          v-if="workspace.locked"
+          type="button"
+          class="titlebar-ws titlebar-ws--locked"
+          aria-disabled="true"
+        >
+          <Tooltip :text="workspace.locked" activator="parent" />
+          {{ workspace.label }}
+        </button>
+        <RouterLink
+          v-else
+          v-slot="{ href, navigate }"
+          :to="workspace.to"
+          custom
+        >
+          <a
+            :href="href"
+            class="titlebar-ws"
+            :class="{ 'titlebar-ws--current': workspace.current }"
+            :aria-current="workspace.current ? 'page' : undefined"
+            :data-workspace="workspace.id"
+            @click="follow(workspace, navigate, $event)"
           >
-            <Tooltip :text="`Go to ${crumb.label}`" activator="parent" />
-            {{ crumb.label }}
-          </button>
-          <span v-else class="titlebar-bc-crumb" :title="crumb.label">{{
-            crumb.label
-          }}</span>
-        </template>
-      </nav>
-    </div>
-    <div class="titlebar-drag" @dblclick="toggleMaximize"></div>
-    <span class="titlebar-version">v{{ appVersion }}</span>
-    <div v-if="updateAvailable && !updateDismissed" class="titlebar-update">
-      <a
-        :href="latestVersionUrl"
-        target="_blank"
-        rel="noopener noreferrer"
-        :class="securityUpdateClass"
-        ><Tooltip :text="securityUpdateTitle || ''" activator="parent" />&#x2191; v{{ latestVersion
-        }}{{ latestSecurityLevel ? " security" : " available"
-        }}<span
-          v-if="latestSecurityLevel"
-          class="titlebar-update-warn"
-          aria-hidden="true"
-          >⚠️</span
-        ></a
-      >
-      <!-- no-drag is inherited from .titlebar-update. -->
+            {{ workspace.label }}
+            <span
+              v-if="workspace.news"
+              class="titlebar-ws-news"
+              aria-hidden="true"
+            ></span>
+            <span v-if="workspace.news" class="visually-hidden"
+              >, new models arrived</span
+            >
+          </a>
+        </RouterLink>
+      </template>
+    </nav>
+
+    <div class="titlebar-end">
+      <div class="titlebar-drag" @dblclick="toggleMaximize"></div>
+      <div v-if="updateAvailable && !updateDismissed" class="titlebar-update">
+        <a
+          :href="latestVersionUrl"
+          target="_blank"
+          rel="noopener noreferrer"
+          :class="securityUpdateClass"
+          ><Tooltip
+            :text="securityUpdateTitle || ''"
+            activator="parent"
+          />&#x2191; v{{ latestVersion
+          }}{{ latestSecurityLevel ? " security" : " available"
+          }}<span
+            v-if="latestSecurityLevel"
+            class="titlebar-update-warn"
+            aria-hidden="true"
+            >⚠️</span
+          ></a
+        >
+        <AppBarButton
+          icon="close"
+          aria-label="Dismiss update alert"
+          :tooltip="`Dismiss v${latestVersion} update alert`"
+          @click.prevent="dismissUpdateAlert"
+        />
+      </div>
+      <TitleBarTasks v-if="!isReadOnly" />
       <AppBarButton
-        icon="close"
-        aria-label="Dismiss update alert"
-        :tooltip="`Dismiss v${latestVersion} update alert`"
-        @click.prevent="dismissUpdateAlert"
+        class="titlebar-settings"
+        icon="cog-outline"
+        tooltip="Settings"
+        @click="emit('open-settings')"
       />
+      <div v-if="desktop && !isMac" class="titlebar-controls">
+        <button
+          class="tb-btn"
+          type="button"
+          aria-label="Minimize"
+          @click="minimize"
+        >
+          <svg width="10" height="10" viewBox="0 0 10 10">
+            <rect x="0" y="4.5" width="10" height="1" fill="currentColor" />
+          </svg>
+        </button>
+        <button
+          class="tb-btn"
+          type="button"
+          aria-label="Maximize"
+          @click="toggleMaximize"
+        >
+          <svg width="10" height="10" viewBox="0 0 10 10">
+            <rect
+              x="0.5"
+              y="0.5"
+              width="9"
+              height="9"
+              fill="none"
+              stroke="currentColor"
+            />
+          </svg>
+        </button>
+        <button
+          class="tb-btn tb-close"
+          type="button"
+          aria-label="Close"
+          @click="close"
+        >
+          <svg width="10" height="10" viewBox="0 0 10 10">
+            <path
+              d="M1,1 L9,9 M9,1 L1,9"
+              stroke="currentColor"
+              stroke-width="1.1"
+            />
+          </svg>
+        </button>
+      </div>
     </div>
-    <div v-if="!isMac" class="titlebar-controls">
-      <button
-        class="tb-btn"
-        type="button"
-        aria-label="Minimize"
-        @click="minimize"
-      >
-        <svg width="10" height="10" viewBox="0 0 10 10">
-          <rect x="0" y="4.5" width="10" height="1" fill="currentColor" />
-        </svg>
-      </button>
-      <button
-        class="tb-btn"
-        type="button"
-        aria-label="Maximize"
-        @click="toggleMaximize"
-      >
-        <svg width="10" height="10" viewBox="0 0 10 10">
-          <rect
-            x="0.5"
-            y="0.5"
-            width="9"
-            height="9"
-            fill="none"
-            stroke="currentColor"
-          />
-        </svg>
-      </button>
-      <button
-        class="tb-btn tb-close"
-        type="button"
-        aria-label="Close"
-        @click="close"
-      >
-        <svg width="10" height="10" viewBox="0 0 10 10">
-          <path
-            d="M1,1 L9,9 M9,1 L1,9"
-            stroke="currentColor"
-            stroke-width="1.1"
-          />
-        </svg>
-      </button>
-    </div>
-  </div>
+  </header>
 </template>
 
 <style scoped>
 .titlebar {
-  display: flex;
+  /* Three columns, the outer two equal: the switch sits at the true centre
+     whatever the library is called, so nothing it holds can move it. The end
+     column will not shrink below its content (the window controls must stay
+     on screen); the start column gives way first and the library name
+     truncates. */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(max-content, 1fr);
   align-items: center;
   /* MUST stay in sync with --titlebar-h in style.css (the reserved strip every
-     full-screen overlay anchors its top at). If you change this, change that. */
-  height: 34px;
+     full-screen overlay anchors its top at). If you change this, change that.
+     The switch's track is --control-h-bar, with --space-2 above and below. */
+  height: 40px;
   flex-shrink: 0;
   box-sizing: border-box;
   /* Positioned + the `--z-titlebar` rung so the title bar (and its drag region
@@ -210,22 +333,44 @@ const close = () => desktop?.windowClose?.();
      equal to or distinct from `background` (the grid canvas) and `sidebar`. */
   background: rgb(var(--v-theme-toolbar));
   color: rgb(var(--v-theme-on-background));
-  -webkit-app-region: drag;
   user-select: none;
 }
 
-.titlebar-brand {
+/* The frameless window moves by this strip; every control in it opts out. */
+.titlebar--desktop {
+  -webkit-app-region: drag;
+}
+
+.titlebar--desktop :is(a, button, nav) {
+  -webkit-app-region: no-drag;
+}
+
+.titlebar-start {
   display: flex;
   align-items: center;
   gap: var(--space-3);
   min-width: 0;
   padding: 0 var(--space-4);
-  font-size: var(--text-xs);
 }
 
 /* Leave room for the native traffic lights on macOS. */
-.titlebar--mac .titlebar-brand {
+.titlebar--mac .titlebar-start {
   padding-left: 78px;
+}
+
+.titlebar-end {
+  display: flex;
+  align-items: center;
+  align-self: stretch;
+  gap: var(--space-2);
+  min-width: 0;
+  padding-left: var(--space-4);
+}
+
+/* No window controls in a browser, so the last control keeps a margin. */
+.titlebar:not(.titlebar--desktop) .titlebar-end,
+.titlebar--mac .titlebar-end {
+  padding-right: var(--space-3);
 }
 
 .titlebar-logo-link {
@@ -233,15 +378,14 @@ const close = () => desktop?.windowClose?.();
   align-items: center;
   flex-shrink: 0;
   border-radius: var(--radius-sm);
-  -webkit-app-region: no-drag;
 }
 
 .titlebar-logo {
-  /* Sized to sit close to the wordmark/breadcrumb letter height rather than
-     towering over them. The icon is the largest element by a hair, as the brand
-     anchor, but reads as part of the same group. */
-  width: 16px;
-  height: 16px;
+  /* Sized to sit close to the wordmark's letter height rather than towering
+     over it. The icon is the largest element by a hair, as the brand anchor,
+     but reads as part of the same group. */
+  width: 20px;
+  height: 20px;
   object-fit: contain;
   transition:
     filter 0.2s ease,
@@ -254,103 +398,114 @@ const close = () => desktop?.windowClose?.();
 }
 
 .titlebar-name {
-  /* Tiny5 brand wordmark (WordmarkLogo.vue), sized by font-size. */
-  font-size: var(--text-md);
+  /* Tiny5 brand wordmark (WordmarkLogo.vue), sized by font-size. "Pixl"
+     tracks the title-bar text colour; "Stash" is the accent, the same two-tone
+     split the login screen and website use (DESIGN.md, "Wordmark amber"). */
+  font-size: var(--text-lg);
   flex-shrink: 0;
-  /* "Pixl" tracks the title-bar text colour; "Stash" is the accent, the same
-     two-tone split the sidebar, login screen, and website use (DESIGN.md,
-     "Wordmark amber"). This was a 55% blend with on-background, which washed
-     the amber out to a pale tan. */
   color: rgb(var(--v-theme-on-background));
   --wordmark-accent: rgb(var(--v-theme-accent));
 }
 
-.titlebar-version {
+/* Telemetry is on: an amber dot beside the wordmark that opens Privacy. */
+.titlebar-telemetry-dot {
+  width: var(--badge-size-dot);
+  height: var(--badge-size-dot);
+  border-radius: var(--radius-pill);
+  background: rgb(var(--v-theme-accent));
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.titlebar-divider {
+  width: 1px;
+  height: 20px;
+  flex-shrink: 0;
+  background: rgb(var(--v-theme-divider));
+}
+
+/* ── Workspace switch ─────────────────────────────────────────────────────
+   The Segmented track (widgets/Segmented.vue), but a nav of links: it goes
+   somewhere rather than setting a value. Every segment is one fixed width, so
+   the bold current label cannot widen its segment and nudge the others. The
+   current one is a selection, so it takes the olive wash with a hairline ring
+   (as the active sidebar row does), never the solid primary fill. */
+.titlebar-workspaces {
+  display: flex;
+  gap: var(--space-1);
+  box-sizing: border-box;
+  height: var(--control-h-bar);
+  padding: var(--space-2);
+  background: var(--track-trough);
+  /* Inset, so the track stays 32px. A 1px border would make it 34. */
+  box-shadow: inset 0 0 0 1px var(--track-ring);
+  border-radius: var(--radius-md);
+}
+
+.titlebar-ws {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  line-height: 1;
-  opacity: 0.55;
-  font-size: var(--text-2xs);
-  flex-shrink: 0;
-  padding: 0 var(--space-4);
-}
-
-/* Chrome in the strip (AppBarButton); only its reach and its no-drag are its own. */
-.titlebar-library {
-  min-width: 0;
-  max-width: 220px;
-  -webkit-app-region: no-drag;
-}
-
-.titlebar-library .bar-btn-label {
-  min-width: 0;
-  max-width: none;
-}
-
-/* Breadcrumb: current-view path, inline after the version. */
-.titlebar-breadcrumb {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  /* Sized so the sans cap-height lands close to the pixel wordmark's glyph
-     height (the two fonts render very differently at the same px), and weight
-     500 keeps it from out-shouting the brand. */
-  font-size: var(--text-base);
-  line-height: 1;
-  font-weight: var(--weight-medium);
-  /* Match the wordmark's downward nudge (relative positioning, not transform, so
-     the text isn't layerized and resampled) so the whole group sits on the icon's
-     optical centre rather than above it. */
-  position: relative;
-  top: 1px;
-}
-
-.titlebar-bc-sep {
-  flex: 0 0 auto;
-  opacity: 0.4;
-}
-
-.titlebar-bc-crumb {
-  margin: 0;
+  justify-content: center;
+  width: 96px;
+  height: var(--control-h-sm);
   padding: 0;
   border: none;
-  background: none;
-  font: inherit;
-  color: inherit;
-  max-width: 220px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: rgba(var(--v-theme-on-background), var(--opacity-text-secondary));
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-regular);
+  text-decoration: none;
   white-space: nowrap;
-  opacity: 0.85;
-}
-
-.titlebar-bc-crumb.is-link {
   cursor: pointer;
-  color: rgb(var(--v-theme-primary));
-  opacity: 1;
-  -webkit-app-region: no-drag;
+  transition:
+    background var(--dur-1) var(--ease-standard),
+    color var(--dur-1) var(--ease-standard);
 }
 
-.titlebar-bc-crumb.is-link:hover {
-  text-decoration: underline;
+.titlebar-ws:not(.titlebar-ws--current, .titlebar-ws--locked):hover {
+  background: var(--hover-wash);
+  color: rgb(var(--v-theme-on-background));
+}
+
+.titlebar-ws--current {
+  background: var(--active-wash);
+  box-shadow: inset 0 0 0 1px var(--active-bar);
+  color: var(--active-text);
+  font-weight: var(--weight-semibold);
+  cursor: default;
+}
+
+/* Visible and tabbable for its explanation, but offers no response. */
+.titlebar-ws--locked {
+  opacity: var(--opacity-disabled);
+  cursor: not-allowed;
+}
+
+/* "New models arrived": the attention dot, amber because it asks for a look. */
+.titlebar-ws-news {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-3);
+  width: var(--badge-size-dot);
+  height: var(--badge-size-dot);
+  border-radius: var(--radius-pill);
+  background: rgb(var(--v-theme-accent));
 }
 
 .titlebar-drag {
   flex: 1;
   align-self: stretch;
-  min-width: 24px;
+  min-width: var(--space-6);
 }
 
 .titlebar-update {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: 0 var(--space-3);
   white-space: nowrap;
-  -webkit-app-region: no-drag;
 }
 
 .titlebar-update-link {
@@ -364,7 +519,7 @@ const close = () => desktop?.windowClose?.();
 }
 
 /* Isolate the ⚠️ emoji in its own centered box so its tall glyph metrics don't
-   baseline-shift the update text (and knock it off-centre vs the version). */
+   baseline-shift the update text. */
 .titlebar-update-warn {
   display: inline-flex;
   align-items: center;
@@ -395,7 +550,6 @@ const close = () => desktop?.windowClose?.();
 .titlebar-controls {
   display: flex;
   align-self: stretch;
-  -webkit-app-region: no-drag;
 }
 
 .tb-btn {
@@ -419,16 +573,11 @@ const close = () => desktop?.windowClose?.();
   opacity: 1;
 }
 
-/* At the desktop floor the active library is safety-critical identity. The
-   current-view trail and update affordance yield before that name is squeezed
-   into an unreadable sliver. The document title still carries both pieces. */
+/* A narrow window: the wordmark and the update line yield before the switch
+   is pushed off centre or the library name is squeezed to a sliver. */
 @media (max-width: 1000px) {
-  .titlebar-breadcrumb {
+  .titlebar-name {
     display: none;
-  }
-
-  .titlebar-library {
-    min-width: 120px;
   }
 }
 

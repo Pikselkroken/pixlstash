@@ -314,7 +314,7 @@
              Auto-stack compresses to an icon form and the size slider hides
              at ≤1040, its value persisting in the store. -->
         <UndoControl />
-        <TbGlobalActions @open-settings="emit('open-settings')" />
+        <TbGlobalActions />
       </div>
     </div>
 
@@ -894,10 +894,6 @@ const EMPTY_IDS = Object.freeze([]);
 function mixedFlashKey(stackId) {
   return stackId === null || stackId === undefined ? "" : `mixed:${stackId}`;
 }
-
-// The settings dialog is App.vue's; the queue only asks for it, the same way
-// the grid's toolbar does.
-const emit = defineEmits(["open-settings"]);
 
 const route = useRoute();
 const router = useRouter();

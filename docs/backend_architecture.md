@@ -4831,6 +4831,17 @@ switch so the confirmation UI can warn how many resource-scoped links will go
 inactive. The switch response retains its top-level `active_share_links` count
 for the library just left.
 
+Every entry also carries `total_bytes` and `free_bytes`, the drive under the
+library's folder, for the title bar's fullness meter (#2158). They are a
+capacity rather than a path, so a remote owner gets them too, as
+`GET /model-folders/devices` gives its drives' sizes. An unreachable library is
+not measured and reports both as null; so does a reachable one whose
+`shutil.disk_usage` raises, with a warning. Measuring here rather than on a
+route of its own does not change the listing's cost in kind: `is_reachable`
+already stats each library's folder on every read. Library *size* is not
+reported: `picture.size_bytes` is recorded at import and has no backfill, so a
+sum would understate an older library.
+
 **Accepted risk — remote registry metadata.** An authenticated remote owner may
 list library names, active/reachable status, UUIDs, and share-link counts even
 when host paths are redacted. Risk: those labels and counts can reveal collection
@@ -11115,9 +11126,9 @@ and announces `models_arrived` with the model ids it registered.
   folder; across drives the copy is short and the writer finishes an unlinked
   original, so the tail is lost. Browser downloads are not exposed (they write
   under a temporary name until done), and neither is any `.safetensors`.
-- **The sidebar's `new` tag.** `models_arrived` (integration §8) sets
-  `useModelShelfStore().unseenArrivals`, which puts the `new` tag on the
-  sidebar's Models row until the shelf is opened, and re-reads a shelf already
+- **The `new` mark.** `models_arrived` (integration §8) sets
+  `useModelShelfStore().unseenArrivals`, which puts a dot on the title bar's
+  Models workspace segment until the shelf is opened, and re-reads a shelf already
   read with `markNew`, so the arrivals wear the row `New` badge. An unread shelf
   is not fetched: against no previous fetch every row would be new.
 - **The arrival is recorded** (#2001): a move stamps `model.arrived_at` (UTC

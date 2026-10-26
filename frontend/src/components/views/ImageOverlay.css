@@ -1,6 +1,8 @@
+/* Starts below the title bar instead of covering it, so the workspace switch
+   and, on the desktop, the window's drag region and controls stay usable. */
 .image-overlay {
   position: fixed;
-  inset: 0;
+  inset: var(--titlebar-h) 0 0 0;
   background: rgba(var(--v-theme-scrim), 0.92);
   z-index: var(--z-drawer);
 }

@@ -976,14 +976,12 @@ describe("the closed inspector", () => {
 // it reads the `<style>` block as text, so it stays green against a component
 // whose template no longer draws the tail at all.
 describe("the app-wide toolbar tail", () => {
-  it("asks App.vue for Settings and toggles the rail itself", async () => {
+  it("toggles the rail itself, and leaves Settings to the title bar", async () => {
     const wrapper = await grid();
     const sidebar = useSidebarStore();
-
-    await wrapper
-      .find(".wfv-toolbar button[aria-label='Settings']")
-      .trigger("click");
-    expect(wrapper.emitted("open-settings")).toHaveLength(1);
+    expect(
+      wrapper.find(".wfv-toolbar button[aria-label='Settings']").exists(),
+    ).toBe(false);
 
     // From the open state a fresh session starts in: the first press closes
     // the inspector, the second opens it again. Only the Workflows flag moves,
@@ -1012,10 +1010,8 @@ describe("the app-wide toolbar tail", () => {
     const wrapper = await grid();
     const bar = wrapper.find(".wfv-toolbar").element;
     const tail = wrapper.find(".wfv-bar-tail").element;
-    // TbGlobalActions is multi-root; its Settings button is a stable anchor.
-    const settings = wrapper.find(
-      ".wfv-toolbar button[aria-label='Settings']",
-    ).element;
+    // TbGlobalActions is multi-root; its rail toggle is a stable anchor.
+    const toggle = wrapper.find(".wfv-toolbar .tb-stats-btn").element;
     const separator = wrapper.find(".wfv-toolbar .bar-separator").element;
     // "Add…" is the last of this view's own controls.
     const add = wrapper
@@ -1027,7 +1023,7 @@ describe("the app-wide toolbar tail", () => {
     expect(follows(add, separator)).toBe(true);
     // Adjacency, not merely order: the rule marks the boundary, so nothing may
     // slip between it and the chrome it rules off.
-    expect(separator.nextElementSibling).toBe(settings);
+    expect(separator.nextElementSibling).toBe(toggle);
     // Nothing of this view's own follows the app-wide chrome. TbGlobalActions
     // is multi-root, so its stats button is the tail's last element.
     expect(bar.lastElementChild).toBe(tail);

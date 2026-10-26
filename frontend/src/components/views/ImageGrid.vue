@@ -66,7 +66,6 @@
       @expand-all-stacks="expandAllStacks"
       @collapse-all-stacks="collapseAllStacks"
       @open-duplicates="emit('open-duplicates')"
-      @open-settings="emit('open-settings')"
       @open-import="emit('open-import')"
       @local-import="emit('local-import', $event)"
       @confirm-export-zip="emit('confirm-export-zip')"
@@ -83,9 +82,9 @@
       }}</span>
     </transition>
     <!-- ── Breadcrumb: current-view path (bottom-left overlay) ──
-         Hidden on the desktop shell, where it lives in the title bar. -->
+         In both shells: the title bar holds the workspace switch (#2158). -->
     <nav
-      v-if="breadcrumb.length && !isDesktop"
+      v-if="breadcrumb.length"
       ref="breadcrumbEl"
       class="grid-breadcrumb"
       :class="{
@@ -3366,10 +3365,8 @@ function errorDetail(err, fallback = "Please try again.") {
 const reviewOverlayOpen = computed(() => reviewSessionsStore.overlayOpen);
 
 // ── Breadcrumb (current-view path) ──────────────────────────────────────
-// The trail logic lives in useBreadcrumb, shared with the desktop title bar.
-// In the desktop shell the breadcrumb renders in the title bar instead, so the
-// in-grid overlay below is gated on !isDesktop.
-const isDesktop = typeof window !== "undefined" && !!window.pixlstashDesktop;
+// The trail logic lives in useBreadcrumb. It renders here in both shells: the
+// title bar holds the workspace switch instead (#2158).
 const { breadcrumb, navigateBreadcrumb } = useBreadcrumb();
 
 // Below 600px the centred notice card widens over the bottom-left breadcrumb, so

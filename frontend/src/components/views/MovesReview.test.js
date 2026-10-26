@@ -231,16 +231,14 @@ describe("MovesReview - a failed fetch", () => {
 });
 
 // #1415: the screen replaces the grid and its toolbar, so without the app-wide
-// tail nothing here opens Settings or the right rail.
+// tail nothing here opens the right rail. Settings is the title bar's (#2158).
 describe("MovesReview - the app-wide toolbar tail", () => {
-  it("asks App.vue for Settings and toggles the rail itself", async () => {
+  it("toggles the rail itself, and leaves Settings to the title bar", async () => {
     const wrapper = await mountScreen(summary());
     const sidebar = useSidebarStore();
-
-    await wrapper
-      .find(".mv-toolbar button[aria-label='Settings']")
-      .trigger("click");
-    expect(wrapper.emitted("open-settings")).toHaveLength(1);
+    expect(
+      wrapper.find(".mv-toolbar button[aria-label='Settings']").exists(),
+    ).toBe(false);
 
     sidebar.statsOpen = false;
     await wrapper.find(".mv-toolbar .tb-stats-btn").trigger("click");
@@ -253,23 +251,11 @@ describe("MovesReview - the app-wide toolbar tail", () => {
     const wrapper = await mountScreen(summary());
     const bar = wrapper.find(".mv-toolbar").element;
     const separator = wrapper.find(".mv-toolbar .bar-separator").element;
-    const settings = wrapper.find(
-      ".mv-toolbar button[aria-label='Settings']",
-    ).element;
+    const toggle = wrapper.find(".mv-toolbar .tb-stats-btn").element;
 
-    expect(separator.nextElementSibling).toBe(settings);
+    expect(separator.nextElementSibling).toBe(toggle);
     expect(
       bar.lastElementChild.lastElementChild.classList.contains("tb-stats-btn"),
     ).toBe(true);
-  });
-
-  it("is listened to by App.vue, which owns the Settings dialog", async () => {
-    const { readFileSync } = await import("node:fs");
-    const app = readFileSync(`${process.cwd()}/src/App.vue`, "utf8");
-    const tag = app.slice(
-      app.indexOf("<MovesReview"),
-      app.indexOf(">", app.indexOf("<MovesReview")),
-    );
-    expect(tag).toContain('@open-settings="openSettingsDialog"');
   });
 });

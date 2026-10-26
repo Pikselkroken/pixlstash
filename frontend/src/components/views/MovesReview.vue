@@ -23,7 +23,7 @@
         <!-- The app-wide tail, minus undo: this view replaces the grid and its
              toolbar, so without it neither Settings nor the right rail has a
              control on the screen (#1415). -->
-        <TbGlobalActions separator @open-settings="emit('open-settings')" />
+        <TbGlobalActions separator />
       </div>
     </div>
 
@@ -240,9 +240,6 @@ import Tooltip from "../widgets/Tooltip.vue";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import { useMovesStore } from "../../stores/useMovesStore";
 import { errorDetail } from "../../utils/apiError";
-
-// Settings is App.vue's dialog; TbGlobalActions flips the sidebar store itself.
-const emit = defineEmits(["open-settings"]);
 
 const store = useMovesStore();
 const loading = computed(() => store.loading);

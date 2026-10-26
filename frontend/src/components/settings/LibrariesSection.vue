@@ -177,23 +177,7 @@ async function switchTo(library, event) {
   const trigger = invoker?.classList?.contains("ctx-item")
     ? (moreButtons[library.uuid] ?? null)
     : invoker;
-  const shareCount = Number(activeLibrary.value?.active_share_links ?? 0);
-  const ok = await confirm({
-    title: `Switch to ${library.name}?`,
-    message:
-      "PixlStash will reload. Work in progress finishes or is cancelled first.",
-    warning:
-      shareCount > 0
-        ? `${shareCount} share ${shareCount === 1 ? "link points" : "links point"} at ${activeLibrary.value?.name}. ${shareCount === 1 ? "It stops" : "They stop"} working until you switch back.`
-        : "",
-    confirmLabel: "Switch and reload",
-  });
-  if (!ok) return;
-  await switchStore.begin(
-    library,
-    activeLibrary.value,
-    trigger,
-  );
+  await switchStore.confirmAndBegin(library, activeLibrary.value, trigger);
 }
 
 async function startRename(library) {
