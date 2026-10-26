@@ -535,6 +535,14 @@ def test_keeping_models_in_memory_survives_the_finder_running_dry(tmp_path):
             assert release.queue_type == QueueType.GPU
             release.run()
             assert released == [True], "and to be dropped when they did not"
+
+            # Switched on while the release waited on the GPU queue.
+            engine = _StubEngine(keep_models_in_memory=False)
+            waiting = MissingFaceExtractionFinder(vault.db, lambda: engine)
+            release = waiting.on_all_tasks_complete()
+            engine.keep_models_in_memory = True
+            release.run()
+            assert released == [True], "the setting was switched on meanwhile"
         finally:
             FaceExtractionTask.release_detection_models = original
 

@@ -119,14 +119,20 @@ class MissingFaceExtractionFinder(BaseTaskFinder):
 
         Returned as a task for the planner to queue, not run here: the release
         ends in a device-cache flush, and on Metal a flush on the planner's
-        thread beside the GPU worker kills the process.
+        thread beside the GPU worker kills the process. The setting is read
+        again on the worker, since it can be switched on while the task waits.
         """
-        engine = self._engine_getter()
-        if engine is not None and getattr(engine, "keep_models_in_memory", False):
+        if self._keep_models_in_memory():
             return None
         return DeviceReleaseTask(
-            "ReleaseFaceModels", FaceExtractionTask.release_detection_models
+            "ReleaseFaceModels",
+            FaceExtractionTask.release_detection_models,
+            when=lambda: not self._keep_models_in_memory(),
         )
+
+    def _keep_models_in_memory(self) -> bool:
+        engine = self._engine_getter()
+        return engine is not None and getattr(engine, "keep_models_in_memory", False)
 
     @staticmethod
     def _fetch_missing_features(session: Session, limit: int, suppressed_ids=None):
