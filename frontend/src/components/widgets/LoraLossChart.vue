@@ -233,7 +233,7 @@ onUnmounted(() => {
 });
 
 watch(
-  () => [props.curve, props.markers, props.xScale, props.smooth],
+  () => [props.curve, props.markers, props.xScale, props.smooth, props.height],
   scheduleDraw,
   { deep: true },
 );

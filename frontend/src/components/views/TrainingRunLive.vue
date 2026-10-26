@@ -784,6 +784,7 @@ async function useStep(step) {
   try {
     await setTrainingJobCover(props.jobId, step);
     await load();
+    schedule();
   } catch (err) {
     useNoticeStore().push({
       level: "error",
@@ -799,6 +800,7 @@ async function stop() {
   try {
     await cancelTrainingJob(props.jobId);
     await load();
+    schedule();
   } catch (err) {
     useNoticeStore().push({
       level: "error",
@@ -823,6 +825,7 @@ async function load() {
     if (gen !== generation) return;
     live.value = body;
     error.value = "";
+    notFound = false;
   } catch (err) {
     if (gen !== generation) return;
     notFound = err?.response?.status === 404;

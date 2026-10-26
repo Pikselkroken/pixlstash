@@ -350,4 +350,30 @@ describe("TrainingRunLive", () => {
     expect(bar).not.toContain("NaN");
     expect(bar).toMatch(/RAM\s*Unknown/);
   });
+
+  it("polls again once a run it lost answers again", async () => {
+    vi.useFakeTimers();
+    try {
+      const wrapper = await open(payload());
+      getTrainingJobLive.mockRejectedValueOnce(
+        Object.assign(new Error("Training job not found"), {
+          response: { status: 404 },
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(2_000);
+      await flushPromises();
+      expect(wrapper.find(".trl-notice--err").exists()).toBe(true);
+
+      // Stop reads the run again, and it answers: polling resumes.
+      cancelTrainingJob.mockResolvedValue({});
+      await wrapper.find(".app-btn").trigger("click");
+      await flushPromises();
+      expect(wrapper.find(".trl-notice--err").exists()).toBe(false);
+      getTrainingJobLive.mockClear();
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(getTrainingJobLive).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
