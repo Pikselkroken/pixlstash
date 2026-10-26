@@ -350,9 +350,13 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
     }
 
     // "Not in a project": the global routes, marked so a reload or Back keeps
-    // the scope (useViewStore.parseRouteView reads it back).
+    // the scope (useViewStore.parseRouteView reads it back). A real project
+    // returned above on its own route; the id test keeps that true if the
+    // branches are ever reordered.
     const scopeQuery =
-      proj.projectViewMode === "project" ? { project: NOT_IN_PROJECT_QUERY } : {};
+      proj.projectViewMode === "project" && proj.selectedProjectId == null
+        ? { project: NOT_IN_PROJECT_QUERY }
+        : {};
 
     if (sel.selectedSetIds.length > 0) {
       const query = { ...scopeQuery };
