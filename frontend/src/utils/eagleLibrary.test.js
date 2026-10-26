@@ -110,6 +110,25 @@ describe("readEagleLibrary", () => {
     ]);
   });
 
+  it("finds the original by its type when ext or name is missing", async () => {
+    const files = [
+      json(`${LIB}/images/A.info/metadata.json`, { name: "a" }),
+      fileAt(`${LIB}/images/A.info/a_thumbnail.png`),
+      fileAt(`${LIB}/images/A.info/a.webp`),
+      json(`${LIB}/images/B.info/metadata.json`, { name: 7, ext: "png" }),
+      fileAt(`${LIB}/images/B.info/b_thumbnail.png`),
+      fileAt(`${LIB}/images/B.info/b.png`),
+      // A sanitised file name sends C to the fallback, where its own type
+      // must win over a stray preview: unsupported, not the preview.
+      json(`${LIB}/images/C.info/metadata.json`, { name: "c?", ext: "psd" }),
+      fileAt(`${LIB}/images/C.info/preview.png`),
+      fileAt(`${LIB}/images/C.info/c_.psd`),
+    ];
+    const library = await readEagleLibrary(files);
+    expect(library.files.map((f) => f.name)).toEqual(["a.webp", "b.png"]);
+    expect(library.unsupported).toBe(1);
+  });
+
   it("still imports the pictures when the folder tree will not parse", async () => {
     const files = libraryFiles();
     files[0] = fileAt(`${LIB}/metadata.json`, "{");

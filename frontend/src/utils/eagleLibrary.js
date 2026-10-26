@@ -39,7 +39,7 @@ export async function readEagleLibrary(fileList) {
   for (const file of Array.from(fileList || [])) {
     const path = file.webkitRelativePath || file.name;
     const slash = path.lastIndexOf("/");
-    const dir = path.slice(0, slash);
+    const dir = slash === -1 ? "" : path.slice(0, slash);
     if (!filesByDir.has(dir)) filesByDir.set(dir, new Map());
     filesByDir.get(dir).set(path.slice(slash + 1), file);
   }
@@ -87,17 +87,28 @@ export async function readEagleLibrary(fileList) {
       result.trashed += 1;
       continue;
     }
-    const ext = String(meta.ext || "").toLowerCase();
     // The original is `<name>.<ext>`; failing that (a name the file system
-    // would not take), the one file of that type that is not the thumbnail.
+    // would not take), the one file of type `ext` that is not the thumbnail.
+    // `ext` stays the authority when given, so an unsupported item (a PSD)
+    // never imports a stray preview; only without one does the type of a
+    // non-thumbnail file decide.
+    const ext = typeof meta.ext === "string" ? meta.ext.toLowerCase() : "";
+    const fileExt = (name) =>
+      name.slice(name.lastIndexOf(".") + 1).toLowerCase();
     const original =
       files.get(`${meta.name}.${meta.ext}`) ??
       [...files].find(
         ([name]) =>
-          name.toLowerCase().endsWith(`.${ext}`) &&
-          !name.endsWith("_thumbnail.png"),
+          name !== "metadata.json" &&
+          !name.endsWith("_thumbnail.png") &&
+          (ext
+            ? fileExt(name) === ext
+            : IMPORT_MEDIA_EXTENSIONS.includes(fileExt(name))),
       )?.[1];
-    if (!original || !IMPORT_MEDIA_EXTENSIONS.includes(ext)) {
+    if (
+      !original ||
+      !IMPORT_MEDIA_EXTENSIONS.includes(fileExt(original.name))
+    ) {
       result.unsupported += 1;
       continue;
     }
