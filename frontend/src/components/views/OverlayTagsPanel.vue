@@ -10,6 +10,27 @@
       <span>Tags</span>
       <span class="section-meta-group">
         <button
+          v-if="props.image && !readOnly && clipboardCount"
+          class="tag-paste-btn"
+          type="button"
+          :aria-label="`Paste ${clipboardCount} ${tagWord(clipboardCount)}`"
+          @click.stop="pasteClipboard"
+        >
+          <Tooltip :text="pasteTooltip" activator="parent" :describe="false" />
+          <v-icon size="14">mdi-clipboard-outline</v-icon>
+          Paste {{ clipboardCount }}
+        </button>
+        <button
+          v-if="props.image && allImageTags.length"
+          class="section-meta-btn"
+          type="button"
+          aria-label="Copy all tags"
+          @click.stop="copyLabels(allImageTags.map((t) => tagLabel(t)))"
+        >
+          <Tooltip text="Copy all tags" activator="parent" :describe="false" />
+          <v-icon size="16">mdi-content-copy</v-icon>
+        </button>
+        <button
           v-if="props.image && !readOnly"
           class="section-meta-btn"
           type="button"
@@ -130,6 +151,7 @@
             @dragenter.prevent="handleDragOver('unassigned', null)"
             @dragleave="handleDragLeave('unassigned', null)"
             @drop.prevent="handleDropOnAllTags"
+            @click.self="clearSelection"
           >
             <span
               v-for="tag in allImageTags"
@@ -138,6 +160,7 @@
                 'overlay-tag',
                 { 'overlay-tag--penalised': isPenalisedTag(tag) },
                 { 'overlay-tag--sentinel': isSentinelTag(tagLabel(tag)) },
+                { 'overlay-tag--selected': isSelected(tagLabel(tag)) },
                 predictionClassForTag(tagLabel(tag)),
               ]"
               :style="predictionStyleForTag(tagLabel(tag))"
@@ -146,6 +169,8 @@
                 startTagDrag(tagLabel(tag), 'unassigned', null, $event)
               "
               @dragend="clearTagDrag"
+              @click="onChipClick(tag, $event)"
+              @contextmenu="onChipContextMenu(tag, $event)"
             >
               <Tooltip
                 :text="predictionTitleForTag(tagLabel(tag)) || ''"
@@ -175,6 +200,44 @@
               class="tag-add-input"
               placeholder="New tag"
             />
+          </div>
+          <div
+            v-if="selectedLabels.length"
+            class="tag-selection-bar"
+            role="toolbar"
+            aria-label="Selected tags"
+          >
+            <span class="tag-selection-count" role="status"
+              >{{ selectedLabels.length }} selected</span
+            >
+            <button type="button" class="tag-selection-btn" @click="copySelection">
+              <Tooltip text="Copy (Ctrl+C)" activator="parent" :describe="false" />
+              <v-icon size="14">mdi-content-copy</v-icon>
+              Copy
+            </button>
+            <button
+              v-if="!readOnly"
+              type="button"
+              class="tag-selection-btn tag-selection-btn--danger"
+              @click="removeSelection"
+            >
+              <Tooltip
+                text="Remove from this picture (Del)"
+                activator="parent"
+                :describe="false"
+              />
+              <v-icon size="14">mdi-tag-remove-outline</v-icon>
+              Remove
+            </button>
+            <button
+              type="button"
+              class="tag-selection-btn tag-selection-btn--icon"
+              aria-label="Clear selection"
+              @click="clearSelection"
+            >
+              <Tooltip text="Clear selection (Esc)" activator="parent" :describe="false" />
+              <v-icon size="14">mdi-close</v-icon>
+            </button>
           </div>
         </div>
       </div>
@@ -272,6 +335,7 @@
       </button>
     </div>
   </Teleport>
+
 </template>
 
 <script setup>
@@ -308,12 +372,13 @@ import {
   confirmTagPrediction,
   rejectTagPrediction,
 } from "../../api/tags";
-import { resetPictureTags } from "../../api/pictures";
+import { getPictureMetadata, resetPictureTags } from "../../api/pictures";
 import { confirmRetag } from "../../composables/confirmRetag";
 import { listTaggers } from "../../api/taggers";
 import { getUserConfig } from "../../api/config";
 import { getPenalisedTags } from "../../api/users";
 import Tooltip from "../widgets/Tooltip.vue";
+import { useTagClipboardStore } from "../../stores/useTagClipboardStore";
 import {
   dedupeTagList,
   getTagLabel as tagLabel,
@@ -359,6 +424,16 @@ const tagListRef = ref(null);
 const tagPluginMenuOpen = ref(false);
 const tagPlugins = ref([]);
 const tagPluginsLoading = ref(false);
+
+// ── Tag copy and paste state (#2139) ────────────────────────────────────────
+// Chips selected by clicking them, labels in click order.
+const tagClipboard = useTagClipboardStore();
+const selectedLabels = ref([]);
+const clipboardCount = computed(() => tagClipboard.clipboardTags.length);
+const pasteTooltip = computed(
+  () => `Paste ${tagClipboard.clipboardTags.join(", ")} (Ctrl+V)`,
+);
+const hasSelection = computed(() => selectedLabels.value.length > 0);
 
 // ── Prediction state ───────────────────────────────────────────────────────
 
@@ -521,6 +596,7 @@ watch(
   (newId) => {
     userVisibleHiddenTagKeys.value = new Set();
     tagPredictions.value = [];
+    selectedLabels.value = [];
     if (newId) {
       isTagsRefreshing.value = true;
       fetchTagPredictions(newId);
@@ -869,44 +945,45 @@ async function handleDropOnRejectedTags() {
  * @param {string} [options.batchId] - an id from a caller that is already part
  *   of a larger gesture; a fresh one is minted otherwise.
  */
-async function removeAllTag(tag, { batchId = newOperationBatchId() } = {}) {
-  if (!tag) return;
-  const label = tagLabel(tag);
-  if (!label) return;
-  unpinUserVisibleHiddenTag(label);
-  let didUpdate = false;
+async function removeAllTag(tag, { batchId } = {}) {
+  await removeTagsFromPicture([tag], { batchId });
+}
+
+/**
+ * Remove several tags from this picture: one local update, one batch id, so a
+ * multi-chip removal is one undo step.
+ *
+ * @param {Array<Object|string>} tags - chips or bare labels.
+ * @param {Object} [options]
+ * @param {string} [options.batchId] - an id from a larger gesture; a fresh one
+ *   is minted otherwise.
+ */
+async function removeTagsFromPicture(tags, { batchId = newOperationBatchId() } = {}) {
+  const labels = [...new Set((tags || []).map((t) => tagLabel(t)).filter(Boolean))];
+  if (!labels.length) return;
+  labels.forEach((label) => unpinUserVisibleHiddenTag(label));
   const currentTags = getTagList(props.image?.tags);
-  const imageMatch = allImageTags.value.find((entry) => entry.tag === label);
-  let next = currentTags;
-
-  if (imageMatch && imageMatch.id != null) {
-    next = currentTags.filter((entry) => entry.tag !== label);
-    didUpdate = true;
-  } else {
-    const filtered = currentTags.filter((entry) => entry.tag !== label);
-    if (filtered.length !== currentTags.length) {
-      next = filtered;
-      didUpdate = true;
-    }
-  }
-
+  const next = currentTags.filter((entry) => !labels.includes(entry.tag));
+  const didUpdate = next.length !== currentTags.length;
   if (didUpdate) {
     emit("update-tags", next);
   }
 
   const capturedImageId = props.image?.id ?? null;
   if (capturedImageId && props.backendUrl) {
-    try {
-      await removeTagEverywhere(capturedImageId, label, {
-        batchId,
-      });
-    } catch (err) {
-      console.warn("Failed to remove tag everywhere:", err);
+    for (const label of labels) {
+      try {
+        await removeTagEverywhere(capturedImageId, label, { batchId });
+      } catch (err) {
+        console.warn("Failed to remove tag everywhere:", err);
+      }
     }
   }
 
   if (didUpdate && capturedImageId) {
-    await rejectPrediction(label, { batchId });
+    for (const label of labels) {
+      await rejectPrediction(label, { batchId });
+    }
     emit("overlay-change", {
       imageId: capturedImageId,
       fields: { tags: true, smartScore: true },
@@ -1033,6 +1110,80 @@ async function refreshPictureTags(model = null) {
   }
 }
 
+// ── Tag copy and paste: selection, copy, paste (#2139) ─────────────────────
+
+function tagWord(n) {
+  return n === 1 ? "tag" : "tags";
+}
+
+function isSelected(label) {
+  return selectedLabels.value.includes(label);
+}
+
+function clearSelection() {
+  selectedLabels.value = [];
+}
+
+function toggleSelected(label) {
+  selectedLabels.value = isSelected(label)
+    ? selectedLabels.value.filter((l) => l !== label)
+    : [...selectedLabels.value, label];
+}
+
+function copyLabels(labels) {
+  return tagClipboard.copyTags([...new Set(labels)]);
+}
+
+function copySelection() {
+  return copyLabels([...selectedLabels.value]);
+}
+
+/** A click selects or deselects a chip, with or without a modifier held. */
+function onChipClick(tag) {
+  const label = tagLabel(tag);
+  if (label) toggleSelected(label);
+}
+
+/** A right-click selects the chip, so the selection bar is right there. */
+function onChipContextMenu(tag, event) {
+  const label = tagLabel(tag);
+  if (!label) return;
+  event.preventDefault();
+  if (!isSelected(label)) selectedLabels.value = [...selectedLabels.value, label];
+}
+
+async function refreshTags() {
+  const id = props.image?.id;
+  if (!id) return;
+  try {
+    const data = await getPictureMetadata(id);
+    if (props.image?.id !== id || !Array.isArray(data?.tags)) return;
+    emit("update-tags", data.tags);
+    emit("overlay-change", {
+      imageId: id,
+      fields: { tags: true, smartScore: true },
+    });
+  } catch (err) {
+    console.warn("Failed to refresh the tags of picture", id, err);
+  }
+}
+
+/** Ctrl+V, or the Paste button: add the copied tags to this picture. */
+async function pasteClipboard() {
+  const id = props.image?.id;
+  if (!id || readOnly.value) return;
+  const result = await tagClipboard.pasteClipboard([id]);
+  if (result?.pictureIds.length) await refreshTags();
+}
+
+/** Remove, or Delete with chips selected: one batch for the whole selection. */
+async function removeSelection() {
+  if (readOnly.value || !selectedLabels.value.length) return;
+  const labels = [...selectedLabels.value];
+  clearSelection();
+  await removeTagsFromPicture(labels);
+}
+
 // ── Public API (exposed to parent via template ref) ─────────────────────────
 
 defineExpose({
@@ -1040,6 +1191,12 @@ defineExpose({
   beginAddTag,
   cancelAddTag,
   refetchPredictions: fetchTagPredictions,
+  hasSelection,
+  clearSelection,
+  copySelection,
+  removeSelection,
+  pasteClipboard,
+  refreshTags,
 });
 </script>
 
@@ -1175,7 +1332,8 @@ defineExpose({
   color: rgb(var(--v-theme-on-dark-surface));
   border-radius: 6px; /* no clean token: 6px is equidistant between --radius-sm(4px) and --radius-md(8px) */
   padding: 1px var(--space-1) 1px 6px; /* no clean token: 1px and 6px are optical nudges */
-  font-size: var(--text-2xs);
+  font-size: var(--tag-chip-font, var(--text-xs));
+  user-select: none;
   line-height: 1.2;
   justify-content: center;
   vertical-align: middle;
@@ -1188,7 +1346,7 @@ defineExpose({
 
 .overlay-tag--penalised {
   color: rgb(var(--v-theme-dark-surface-error));
-  font-size: var(--text-2xs);
+  font-size: var(--tag-chip-font, var(--text-xs));
   line-height: 1.2;
   border: 1px solid rgba(var(--v-theme-dark-surface-error), 0.6);
   background: rgba(var(--v-theme-dark-surface-error), 0.15);
@@ -1204,7 +1362,7 @@ defineExpose({
 
 .overlay-tag--predicted-anomaly {
   --ac: clamp(0.35, var(--pred-confidence, 0.6), 1);
-  font-size: var(--text-2xs);
+  font-size: var(--tag-chip-font, var(--text-xs));
   color: color-mix(
     in srgb,
     rgb(var(--v-theme-on-dark-surface)) calc((1 - var(--ac)) * 100%),
@@ -1310,6 +1468,78 @@ defineExpose({
 .tag-drop-placeholder {
   font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-dark-surface), 0.45);
+}
+
+/* A selected chip wears the selection colour: an outline and a wash of it. */
+.overlay-tag--selected {
+  outline: 1px solid var(--selected-ink);
+  background: color-mix(in srgb, var(--selected-ink) 28%, transparent);
+}
+
+.tag-selection-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3);
+  border: 1px solid var(--selected-ink);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--selected-ink) 16%, transparent);
+  font-size: var(--text-xs);
+  color: rgb(var(--v-theme-on-dark-surface));
+}
+
+.tag-selection-count {
+  margin-right: auto;
+  white-space: nowrap;
+  font-weight: var(--weight-medium);
+}
+
+.tag-selection-btn,
+.tag-paste-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 24px;
+  padding: 0 var(--space-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: rgb(var(--v-theme-on-dark-surface));
+  font: inherit;
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tag-selection-btn:hover,
+.tag-paste-btn:hover {
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
+}
+
+.tag-selection-btn:focus-visible,
+.tag-paste-btn:focus-visible {
+  outline: 2px solid rgb(var(--v-theme-on-dark-surface));
+  outline-offset: -2px;
+}
+
+.tag-selection-btn--danger {
+  color: rgb(var(--v-theme-dark-surface-error));
+}
+
+.tag-selection-btn--icon {
+  padding: 0 var(--space-1);
+}
+
+/* In the section header, on the icon buttons' row: the same 24px height and
+   the group's own gap, the label in the body weight rather than the header's
+   uppercase semibold. */
+.tag-paste-btn {
+  border: 1px solid var(--selected-ink);
+  line-height: 1;
+  font-weight: var(--weight-medium);
+  text-transform: none;
+  letter-spacing: normal;
 }
 
 .tag-delete-btn {

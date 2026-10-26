@@ -65,6 +65,7 @@ import { useFilterStore } from "./useFilterStore";
 import { useFavouritesStore } from "./useFavouritesStore";
 import { useUpscaleStore } from "./useUpscaleStore";
 import { useNewBatchStore } from "./useNewBatchStore";
+import { useTagClipboardStore } from "./useTagClipboardStore";
 
 /**
  * The matrix. One row per store that holds server-sourced data: how to fill it
@@ -229,6 +230,15 @@ const STORES = [
       !s.isFavourite("model", "abc") &&
       !s.isFavourite("workflow", "wf-1") &&
       s.loaded === false,
+  },
+  {
+    // The tags copied in one session.
+    name: "useTagClipboardStore",
+    use: useTagClipboardStore,
+    seed: (s) => {
+      s.clipboardTags = ["umbrella"];
+    },
+    isEmpty: (s) => s.clipboardTags.length === 0,
   },
   {
     name: "useLockedSetsStore",

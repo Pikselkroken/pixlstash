@@ -1199,6 +1199,7 @@ import {
   ZOOM_EXIT_GESTURE_GAP_MS,
 } from "../../utils/zoomMath";
 import { nextFreeCharacterName } from "../../utils/characterCreateFlow.js";
+import { bareDigit } from "../../utils/shortcutKeys";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
 import AppInspector from "../widgets/AppInspector.vue";
 import CharacterEditor from "../editors/CharacterEditor.vue";
@@ -1873,6 +1874,23 @@ const isCurrentLocked = computed(() =>
 const currentLockReason = computed(() =>
   lockedSetsStore.lockReason(image.value?.id),
 );
+
+// ── Tag copy and paste (#2139) ─────────────────────────────────────────────
+// Ctrl+V writes only where the picture is editable: the same test the
+// sidebar's own editing uses.
+const tagsEditable = computed(
+  () => !isReadOnly.value && !isCurrentLocked.value,
+);
+
+/**
+ * Ctrl+V anywhere in the lightbox: paste the copied tags onto the open
+ * picture. The Tags panel stays mounted while the sidebar is closed or on
+ * another tab, so this works whatever has focus.
+ */
+function pasteClipboardToImage() {
+  if (!tagsEditable.value) return;
+  void tagsPanelRef.value?.pasteClipboard();
+}
 
 // ── Rotate in place ────────────────────────────────────────────────────────
 // One click (or one `[` / `]`) is one 90° step, applied immediately.
@@ -2833,6 +2851,17 @@ function handleKeydown(e) {
       saveMedia(buildContextMenuImage());
       return;
     }
+    // Chips selected in the sidebar: Ctrl+C copies those tags, not the media.
+    if (
+      !e.shiftKey &&
+      commandKey === "c" &&
+      tagsPanelRef.value?.hasSelection &&
+      !hasNativeCopyContext(e.target)
+    ) {
+      e.preventDefault();
+      void tagsPanelRef.value.copySelection();
+      return;
+    }
     if (
       !e.shiftKey &&
       commandKey === "c" &&
@@ -2844,6 +2873,15 @@ function handleKeydown(e) {
       return;
     }
     if (isReadOnly.value) return;
+    if (commandKey === "v" && !e.shiftKey) {
+      // Ctrl+V pastes the copied tags onto the picture, wherever focus is;
+      // a text field keeps its own paste (the guard on this block).
+      if (tagsEditable.value) {
+        e.preventDefault();
+        pasteClipboardToImage();
+      }
+      return;
+    }
     if (commandKey === "z" && !e.shiftKey) {
       e.preventDefault();
       // The selection's own steps first, while there are any to take back.
@@ -2963,6 +3001,25 @@ function handleKeydown(e) {
     return;
   }
 
+  // Tag chips selected: Escape clears them, Delete removes them.
+  if (tagsPanelRef.value?.hasSelection) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      tagsPanelRef.value.clearSelection();
+      return;
+    }
+    if (
+      (e.key === "Delete" || e.key === "Backspace") &&
+      !e.ctrlKey &&
+      !e.metaKey &&
+      !e.altKey
+    ) {
+      e.preventDefault();
+      if (tagsEditable.value) void tagsPanelRef.value.removeSelection();
+      return;
+    }
+  }
+
   if (
     paintActive.value &&
     // Under a comparison the selection is out of sight: keys must not change it.
@@ -3045,10 +3102,10 @@ function handleKeydown(e) {
       sidebarTab.value = "info";
       tagsPanelRef.value?.beginAddTag();
     }
-  } else if (["1", "2", "3", "4", "5"].includes(e.key)) {
+  } else if ([1, 2, 3, 4, 5].includes(bareDigit(e))) {
+    // A bare digit only: Ctrl+2 is not two stars.
     if (!isReadOnly.value) {
-      const score = parseInt(e.key, 10);
-      if (image.value) setScore(score);
+      if (image.value) setScore(bareDigit(e));
     }
   } else if (
     e.key.toLowerCase() === FAVOURITE_KEY &&

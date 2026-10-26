@@ -6,6 +6,7 @@ import {
   nearestSizeLevelForColumns,
 } from "../utils/thumbnailSizes";
 import { useUserPrefsStore } from "../stores/useUserPrefsStore";
+import { useTagClipboardStore } from "../stores/useTagClipboardStore";
 import { useGridStore } from "../stores/useGridStore";
 import { useSortStore } from "../stores/useSortStore";
 import { useFilterStore } from "../stores/useFilterStore";
@@ -72,6 +73,7 @@ export function useAppConfig({
   onTelemetryConsentRequired,
 } = {}) {
   const userPrefsStore = useUserPrefsStore();
+  const tagClipboardStore = useTagClipboardStore();
   const gridStore = useGridStore();
   const sortStore = useSortStore();
   const filterStore = useFilterStore();
@@ -229,6 +231,7 @@ export function useAppConfig({
         userPrefsStore.hiddenTags = newHiddenTags;
       }
       userPrefsStore.applyTagFilter = Boolean(cfg.apply_tag_filter);
+      tagClipboardStore.hydrate(cfg);
       const rawPt = cfg.smart_score_penalised_tags;
       if (rawPt && typeof rawPt === "object" && !Array.isArray(rawPt)) {
         userPrefsStore.penalisedTagWeights = Object.fromEntries(
