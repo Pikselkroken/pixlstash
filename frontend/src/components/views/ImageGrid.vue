@@ -21,6 +21,7 @@
     :dateFormat="userPrefsStore.dateFormat"
     :showStacks="gridStore.showStacks"
     :showProblemIcon="gridStore.showProblemIcon"
+    :favouritable="!isScrapheapView"
     :availablePlugins="availablePlugins"
     :comfyuiProgress="comfyuiProgress"
     :comfyuiProgressPercent="comfyuiProgressPercent"

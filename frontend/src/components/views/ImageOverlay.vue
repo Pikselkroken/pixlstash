@@ -217,7 +217,7 @@
             :score="isReadOnly ? guestScore || 0 : image?.score || 0"
             :readonly="!isReadOnly && isCurrentLocked"
             icon-size="large"
-            :favouritable="!isReadOnly"
+            :favouritable="!isReadOnly && favouritable"
             :favourite="Boolean(image?.favourite)"
             @set-score="setScore"
             @toggle-favourite="toggleFavourite"
@@ -1317,6 +1317,8 @@ const props = defineProps({
   dateFormat: { type: String, default: "locale" },
   showStacks: { type: Boolean, default: true },
   showProblemIcon: { type: Boolean, default: true },
+  // False from the Scrapheap, which shows no heart: click and H both go inert.
+  favouritable: { type: Boolean, default: true },
   availablePlugins: { type: Array, default: () => [] },
   comfyuiProgress: { type: Object, default: null },
   comfyuiProgressPercent: { type: Number, default: 0 },
@@ -2727,7 +2729,7 @@ function setScore(n) {
 
 // The owner's heart is not label data, so a locked picture can still take one.
 function toggleFavourite() {
-  if (!image.value || isReadOnly.value) return;
+  if (!image.value || isReadOnly.value || !props.favouritable) return;
   image.value.favourite = !image.value.favourite;
   emit("apply-favourite", image.value, image.value.favourite);
 }
