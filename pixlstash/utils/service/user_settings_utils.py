@@ -123,6 +123,8 @@ def serialize_user_config(user) -> dict:
         "telemetry_send_hardware_profile",
         "telemetry_consent_prompted",
         "show_keyboard_hint",
+        "grid_open_gesture",
+        "viewer_wheel_action",
         "embed_watermark",
     }
 
@@ -250,6 +252,8 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "telemetry_send_hardware_profile",
         "telemetry_consent_prompted",
         "show_keyboard_hint",
+        "grid_open_gesture",
+        "viewer_wheel_action",
         "embed_watermark",
         "tagger_settings",
     }
@@ -277,6 +281,10 @@ def apply_user_config_patch(user, patch_data) -> bool:
     }
     allowed_theme_modes = {"light", "dark"}
     allowed_thumbnail_modes = {"square", "justified"}
+    allowed_choices = {
+        "grid_open_gesture": {"double", "single"},
+        "viewer_wheel_action": {"zoom", "browse"},
+    }
 
     updated = False
     for key, value in patch_data.items():
@@ -472,6 +480,15 @@ def apply_user_config_patch(user, patch_data) -> bool:
             new_value = max(SIDEBAR_WIDTH_MIN, min(SIDEBAR_WIDTH_MAX, new_value))
             if user.sidebar_width != new_value:
                 user.sidebar_width = new_value
+                updated = True
+            continue
+        if key in allowed_choices:
+            # A blank patch resets to NULL, which reads back as the default.
+            new_value = None if value in ("", None, "null") else str(value)
+            if new_value is not None and new_value not in allowed_choices[key]:
+                raise ValueError(f"{key} must be one of {sorted(allowed_choices[key])}")
+            if getattr(user, key, None) != new_value:
+                setattr(user, key, new_value)
                 updated = True
             continue
         if key == "thumbnail_mode":

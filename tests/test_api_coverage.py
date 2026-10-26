@@ -122,6 +122,29 @@ def test_patch_user_config():
         resp = client.get("/users/me/config")
         assert resp.status_code == 200
         assert resp.json().get("theme_mode") == "dark"
+
+        # Mouse preferences (#2138): defaults, a round trip, a refusal, and a
+        # blank (stored NULL) reading back as the default.
+        assert resp.json()["grid_open_gesture"] == "double"
+        assert resp.json()["viewer_wheel_action"] == "zoom"
+        resp = client.patch(
+            "/users/me/config",
+            json={"grid_open_gesture": "single", "viewer_wheel_action": "browse"},
+        )
+        assert resp.status_code == 200
+        cfg = client.get("/users/me/config").json()
+        assert cfg["grid_open_gesture"] == "single"
+        assert cfg["viewer_wheel_action"] == "browse"
+        for bad in ({"grid_open_gesture": "triple"}, {"viewer_wheel_action": "pan"}):
+            assert client.patch("/users/me/config", json=bad).status_code == 400
+        resp = client.patch(
+            "/users/me/config",
+            json={"grid_open_gesture": "", "viewer_wheel_action": ""},
+        )
+        assert resp.status_code == 200
+        cfg = client.get("/users/me/config").json()
+        assert cfg["grid_open_gesture"] == "double"
+        assert cfg["viewer_wheel_action"] == "zoom"
     finally:
         server.close()
         temp_dir.cleanup()

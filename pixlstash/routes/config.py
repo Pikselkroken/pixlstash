@@ -251,6 +251,8 @@ def create_router(server) -> APIRouter:
             ),
         )
         show_keyboard_hint: Optional[bool] = None
+        grid_open_gesture: Optional[str] = None
+        viewer_wheel_action: Optional[str] = None
         embed_watermark: Optional[bool] = None
         smart_score_penalised_tags: Optional[dict] = None
         hidden_tags: Optional[list] = None

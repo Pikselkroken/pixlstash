@@ -1435,6 +1435,48 @@ def test_0127_adds_run_workflow_version_once_on_a_fresh_and_a_populated_vault():
         assert again.returncode == 0, again.stderr
 
 
+def test_0133_adds_mouse_preferences_on_a_fresh_and_a_populated_vault():
+    """Both columns arrive either way, an existing user reads NULL (the model
+    default: double-click, wheel zooms), and a re-run is a no-op."""
+    columns = ("grid_open_gesture", "viewer_wheel_action")
+
+    def has_columns(conn):
+        present = {row[1] for row in conn.execute("PRAGMA table_info(user)")}
+        return set(columns) <= present
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        db_url = f"sqlite:///{db_path}"
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert has_columns(conn), "the baseline's create_all()"
+
+        down = _run_alembic(
+            ["downgrade", "0132_add_picture_pending_person"], db_url, _MIGRATIONS_DIR
+        )
+        assert down.returncode == 0, down.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert not has_columns(conn)
+            _insert_minimal_row(conn, "user", username="owner")
+            conn.commit()
+
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert has_columns(conn), "migration 0133"
+            assert conn.execute(
+                "SELECT username, grid_open_gesture, viewer_wheel_action FROM user"
+            ).fetchall() == [("owner", None, None)]
+            conn.execute(
+                "UPDATE alembic_version SET version_num = ?",
+                ("0132_add_picture_pending_person",),
+            )
+            conn.commit()
+        again = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert again.returncode == 0, again.stderr
+
+
 def test_0128_adds_prompt_match_once_on_a_fresh_and_a_populated_vault():
     """Column and probe index arrive either way, existing pictures read NULL
     (not scored), and a second upgrade over a vault that has both is a no-op."""

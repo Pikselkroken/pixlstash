@@ -2,8 +2,10 @@
   <div
     v-if="open"
     class="image-overlay"
-    @pointerdown.capture="pressCarriedIn = false"
+    @pointerdown.capture="noteRootPointerDown"
     @mousedown.capture="notePressOrigin"
+    @mousedown="preventMiddleAutoscroll"
+    @auxclick="handleMiddleClick"
     @click.self="handleBackdropClick"
   >
     <div
@@ -523,7 +525,7 @@
           @touchmove="onTouchMove"
           @touchend="onTouchEnd"
           @dblclick="onCanvasDblClick"
-          @wheel.prevent="onWheelZoom"
+          @wheel.prevent="onCanvasWheel"
           @contextmenu="handleMediaContextMenu"
         >
           <div
@@ -1185,6 +1187,11 @@ import { useProjectStore } from "../../stores/useProjectStore";
 import { useSearchStore } from "../../stores/useSearchStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useTasksStore } from "../../stores/useTasksStore";
+import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
+import {
+  normalizeWheelDelta,
+  ZOOM_EXIT_GESTURE_GAP_MS,
+} from "../../utils/zoomMath";
 import { nextFreeCharacterName } from "../../utils/characterCreateFlow.js";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
 import AppInspector from "../widgets/AppInspector.vue";
@@ -1843,6 +1850,7 @@ const overlayPluginParameters = ref({});
 // Lock state for the currently displayed picture: drives the toolbar chip, the
 // score/tags/description gating, and the panel lock notes.
 const lockedSetsStore = useLockedSetsStore();
+const userPrefsStore = useUserPrefsStore();
 const isCurrentLocked = computed(() =>
   lockedSetsStore.isLocked(image.value?.id),
 );
@@ -3111,6 +3119,28 @@ function showSwipeHint() {
   }, 3000);
 }
 
+// Where the last press started, so a click that ended a pan or a drag-out is
+// never read as a click on the dark area.
+let pressStart = null;
+const PRESS_MOVE_TOLERANCE_PX = 5;
+
+function noteRootPointerDown(event) {
+  pressCarriedIn = false;
+  pressStart = {
+    x: event.clientX,
+    y: event.clientY,
+    touch: event.pointerType === "touch",
+  };
+}
+
+function pressMoved(event) {
+  if (!pressStart) return false;
+  return (
+    Math.hypot(event.clientX - pressStart.x, event.clientY - pressStart.y) >
+    PRESS_MOVE_TOLERANCE_PX
+  );
+}
+
 function notePressOrigin(event) {
   pressCarriedIn = !pressSeenSinceOpen && event.detail > 1;
   pressSeenSinceOpen = true;
@@ -3126,6 +3156,31 @@ function handleBackdropClick() {
     menuWasOpenOnPointerDown = false;
     return;
   }
+  emit("close");
+}
+
+// Middle click anywhere closes, except where it means something else: Linux
+// pastes into a text field with it, and a link opens in a new tab.
+function middleClickKept(event) {
+  const target = event?.target;
+  return (
+    event.button !== 1 ||
+    !(target instanceof Element) ||
+    isEditableElement(target) ||
+    !!target.closest("a[href]")
+  );
+}
+
+/** Chromium starts autoscroll on the middle press; the close needs it not to. */
+function preventMiddleAutoscroll(event) {
+  if (middleClickKept(event)) return;
+  event.preventDefault();
+}
+
+function handleMiddleClick(event) {
+  if (middleClickKept(event)) return;
+  if (menuWasOpenOnPointerDown) return;
+  event.preventDefault();
   emit("close");
 }
 
@@ -3208,6 +3263,39 @@ function handleOverlayPointerDown(event) {
   }
 }
 
+const OVERLAY_INTERACTIVE_SELECTOR =
+  "button, a, input, select, textarea, label, summary, details";
+const OVERLAY_INTERACTIVE_CONTAINER_SELECTOR =
+  ".overlay-sidebar, .overlay-rail, .overlay-nav, .paint-toolbox, .paint-options";
+
+/** A still mouse click on the canvas outside the picture's on-screen bounds.
+ * Never true on a mis-measured rect: no media element, or one with no size
+ * yet (still loading, a video before its metadata), is not a dark area. */
+function isDarkAreaClick(event, target) {
+  if (menuWasOpenOnPointerDown || paintActive.value || drawMode.value) {
+    return false;
+  }
+  // Touch keeps tap-to-toggle-chrome: on a phone the letterbox is most of
+  // the screen.
+  if (pressStart?.touch || pressMoved(event)) return false;
+  if (!target.closest(".overlay-canvas")) return false;
+  if (
+    target.closest(OVERLAY_INTERACTIVE_SELECTOR) ||
+    target.closest(OVERLAY_INTERACTIVE_CONTAINER_SELECTOR)
+  ) {
+    return false;
+  }
+  const media = mediaInnerRef.value?.querySelector("img, video");
+  const rect = media?.getBoundingClientRect?.();
+  if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+  return (
+    event.clientX < rect.left ||
+    event.clientX > rect.right ||
+    event.clientY < rect.top ||
+    event.clientY > rect.bottom
+  );
+}
+
 function handleOverlayClick(event) {
   if (pressCarriedIn) return;
   if (touchTapConsumed) {
@@ -3222,6 +3310,12 @@ function handleOverlayClick(event) {
     handleUserActivity();
     return;
   }
+  // Ahead of the chrome branches: the dark area closes whether the chrome is
+  // shown or hidden.
+  if (isDarkAreaClick(event, target)) {
+    emit("close");
+    return;
+  }
   if (chromeHidden.value) {
     handleUserActivity();
     return;
@@ -3233,13 +3327,9 @@ function handleOverlayClick(event) {
     menuWasOpenOnPointerDown = false;
     return;
   }
-  const interactiveSelector =
-    "button, a, input, select, textarea, label, summary, details";
-  const interactiveContainerSelector =
-    ".overlay-sidebar, .overlay-rail, .overlay-nav, .paint-toolbox, .paint-options";
   if (
-    target.closest(interactiveSelector) ||
-    target.closest(interactiveContainerSelector)
+    target.closest(OVERLAY_INTERACTIVE_SELECTOR) ||
+    target.closest(OVERLAY_INTERACTIVE_CONTAINER_SELECTOR)
   ) {
     handleUserActivity();
     return;
@@ -3362,13 +3452,48 @@ function handleMediaDragStart(event) {
   }
 }
 
-/** Continuous cursor-anchored wheel zoom (the shared model): every step is
- * exponential in the normalized delta, the image point under the pointer
- * stays stationary, and wheel-out clamps hard at fit - no exit. */
-function onWheelZoom(event) {
+/** The canvas wheel. Ctrl/Meta+wheel always zooms (a trackpad pinch arrives
+ * as Ctrl+wheel), Shift+wheel always browses, painting always zooms, and the
+ * plain wheel follows the user's "Mouse wheel in the viewer" setting. Zoom is
+ * the shared continuous cursor-anchored model: exponential in the normalized
+ * delta, the point under the pointer stays put, wheel-out clamps at fit. */
+function onCanvasWheel(event) {
   if (!open.value) return;
   handleUserActivity();
+  const browse =
+    !event.ctrlKey &&
+    !event.metaKey &&
+    (event.shiftKey ||
+      (!paintActive.value && userPrefsStore.viewerWheelAction === "browse"));
+  if (browse) {
+    wheelBrowse(event);
+    return;
+  }
   zoom.wheelZoom(event, canvasCursorFromEvent(event));
+}
+
+// One mouse notch (~100px) is one picture; a trackpad swipe adds up instead of
+// racing through twenty. The pause that ends a zoom gesture ends this one too.
+// ponytail: fixed 100px threshold, tune if trackpads feel sluggish
+const WHEEL_BROWSE_STEP_PX = 100;
+let wheelBrowseAcc = 0;
+let wheelBrowseLastTs = 0;
+
+function wheelBrowse(event) {
+  const now = Date.now();
+  if (now - wheelBrowseLastTs > ZOOM_EXIT_GESTURE_GAP_MS) wheelBrowseAcc = 0;
+  wheelBrowseLastTs = now;
+  // Chromium delivers Shift+wheel as a horizontal deltaX with deltaY 0.
+  wheelBrowseAcc += normalizeWheelDelta({
+    deltaMode: event.deltaMode,
+    deltaY: event.deltaY || event.deltaX,
+  });
+  if (Math.abs(wheelBrowseAcc) < WHEEL_BROWSE_STEP_PX) return;
+  // Down or right is next. Same path as the arrow keys, so it inherits their
+  // guards (the frozen sequence, stacks, the ends of the sequence).
+  if (wheelBrowseAcc > 0) showNextImage();
+  else showPrevImage();
+  wheelBrowseAcc = 0;
 }
 
 // The transform transport (translate+scale) is load-bearing for the

@@ -4,6 +4,7 @@ import { isReadOnly } from "../../utils/apiClient";
 import { clearGuestScoreSession } from "../../api/pictures";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useTasksStore } from "../../stores/useTasksStore";
+import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { VSwitch } from "vuetify/components";
 import AppSelect from "../widgets/AppSelect.vue";
 import AppButton from "../widgets/AppButton.vue";
@@ -12,6 +13,9 @@ import SettingsSection from "./SettingsSection.vue";
 import SettingsSliderRow from "./SettingsSliderRow.vue";
 
 const sidebarStore = useSidebarStore();
+// The Mouse settings bind straight to the store, like Sidebar Width does to
+// the sidebar store; useAppConfig watches both and persists them.
+const userPrefs = useUserPrefsStore();
 
 const props = defineProps({
   sidebarThumbnailSize: { type: Number, default: 32 },
@@ -61,6 +65,15 @@ const thumbnailModeOptions = computed(() => [
   { id: "square", label: "Square" },
   { id: "justified", label: "Justified", disabled: justifiedDisabled.value },
 ]);
+
+const OPEN_GESTURE_OPTIONS = [
+  { id: "double", label: "Double click" },
+  { id: "single", label: "Single click" },
+];
+const WHEEL_ACTION_OPTIONS = [
+  { id: "zoom", label: "Zoom" },
+  { id: "browse", label: "Browse pictures" },
+];
 
 const SIDEBAR_WIDTH_OPTIONS = [
   { id: "full", label: "Full" },
@@ -267,6 +280,36 @@ async function clearGuestSession() {
         label="Show keyboard shortcut indicator"
       />
     </div>
+
+    <SettingsSection title="Mouse" class="pair-section">
+      <div class="pair-set">
+        <div class="pair-title">Open pictures</div>
+        <div class="pair-desc">With double click, a single click selects.</div>
+        <div class="pair-body">
+          <Segmented
+            class="pair-seg"
+            full
+            :model-value="userPrefs.gridOpenGesture"
+            :options="OPEN_GESTURE_OPTIONS"
+            aria-label="Open pictures"
+            @update:model-value="(id) => (userPrefs.gridOpenGesture = id)"
+          />
+        </div>
+
+        <div class="pair-title">Mouse wheel in the viewer</div>
+        <div class="pair-desc">Ctrl+wheel always zooms, Shift+wheel browses.</div>
+        <div class="pair-body">
+          <Segmented
+            class="pair-seg"
+            full
+            :model-value="userPrefs.viewerWheelAction"
+            :options="WHEEL_ACTION_OPTIONS"
+            aria-label="Mouse wheel in the viewer"
+            @update:model-value="(id) => (userPrefs.viewerWheelAction = id)"
+          />
+        </div>
+      </div>
+    </SettingsSection>
 
     <SettingsSection
       v-if="isReadOnly"

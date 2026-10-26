@@ -81,7 +81,8 @@ export class ImageOverlay {
     // out. Retry the click until the overlay is actually up, rather than
     // asserting once on a click that may never have registered.
     await expect(async () => {
-      await target.click()
+      // A click selects; a double-click opens (the default open gesture).
+      await target.dblclick()
       await expect(this.root).toBeVisible({ timeout: 2_000 })
     }).toPass({ timeout: 30_000 })
   }

@@ -9,6 +9,7 @@ import { enableAutoUnmount, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { anchorZoomOffset } from "../../utils/zoomMath";
 import { ZOOM_SETTLE_MS } from "../../composables/useWheelZoom";
+import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 
 // Imported statically, not lazily inside the tests. `vi.mock` is hoisted
 // above every import, so a lazy import buys no mock ordering. It only moves
@@ -665,5 +666,181 @@ describe("ImageOverlay zoom - what the wheel does NOT do", () => {
     expect(wrapper.findComponent({ name: "OverlayFilmstrip" }).exists()).toBe(
       true,
     );
+  });
+});
+
+// #2138: the fast ways out, and the wheel's browse mode.
+describe("ImageOverlay exits - dark area and middle click", () => {
+  /** A 600×600 picture centred in the 800×600 canvas: x < 100 or x > 700 is
+   * letterbox. */
+  async function openLetterboxed({ rect } = {}) {
+    const wrapper = await openMeasured();
+    wrapper.find(".overlay-img").element.getBoundingClientRect = () =>
+      rect ?? { left: 100, top: 0, right: 700, bottom: 600, width: 600, height: 600 };
+    return wrapper;
+  }
+
+  async function clickAt(wrapper, { down, up = down, pointerType = "mouse" }) {
+    const target = wrapper.find(".overlay-media-inner").element;
+    const pd = new MouseEvent("pointerdown", {
+      bubbles: true,
+      clientX: down.x,
+      clientY: down.y,
+    });
+    Object.defineProperty(pd, "pointerType", { value: pointerType });
+    target.dispatchEvent(pd);
+    target.dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true, detail: 1 }),
+    );
+    target.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, clientX: up.x, clientY: up.y }),
+    );
+    await wrapper.vm.$nextTick();
+  }
+
+  it("a still click on the letterbox closes", async () => {
+    const wrapper = await openLetterboxed();
+    await clickAt(wrapper, { down: { x: 50, y: 300 } });
+    expect(wrapper.emitted("close")).toHaveLength(1);
+  });
+
+  it("a click on the picture hides the chrome and does not close", async () => {
+    const wrapper = await openLetterboxed();
+    // Past the 500 ms reveal guard that follows opening.
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1000);
+    await clickAt(wrapper, { down: { x: 400, y: 300 } });
+    vi.mocked(Date.now).mockRestore();
+    expect(wrapper.emitted("close")).toBeUndefined();
+    expect(wrapper.find(".overlay-shell").classes()).toContain(
+      "chrome-hidden",
+    );
+  });
+
+  it("closes from the letterbox with the chrome hidden too", async () => {
+    const wrapper = await openLetterboxed();
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1000);
+    await clickAt(wrapper, { down: { x: 400, y: 300 } });
+    vi.mocked(Date.now).mockRestore();
+    expect(wrapper.find(".overlay-shell").classes()).toContain(
+      "chrome-hidden",
+    );
+    await clickAt(wrapper, { down: { x: 750, y: 300 } });
+    expect(wrapper.emitted("close")).toHaveLength(1);
+  });
+
+  it("a press that moved (a pan or a drag) never closes", async () => {
+    const wrapper = await openLetterboxed();
+    await clickAt(wrapper, { down: { x: 400, y: 300 }, up: { x: 50, y: 300 } });
+    expect(wrapper.emitted("close")).toBeUndefined();
+  });
+
+  it("a touch tap on the letterbox does not close", async () => {
+    const wrapper = await openLetterboxed();
+    await clickAt(wrapper, { down: { x: 50, y: 300 }, pointerType: "touch" });
+    expect(wrapper.emitted("close")).toBeUndefined();
+  });
+
+  it("an unmeasured (zero-size) picture is never a dark area", async () => {
+    const wrapper = await openLetterboxed({
+      rect: { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 },
+    });
+    await clickAt(wrapper, { down: { x: 50, y: 300 } });
+    expect(wrapper.emitted("close")).toBeUndefined();
+  });
+
+  it("middle click closes, and its press cannot start autoscroll", async () => {
+    const wrapper = await openMeasured();
+    const media = wrapper.find(".overlay-media").element;
+    const down = new MouseEvent("mousedown", {
+      bubbles: true,
+      cancelable: true,
+      button: 1,
+    });
+    media.dispatchEvent(down);
+    expect(down.defaultPrevented).toBe(true);
+    media.dispatchEvent(
+      new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 }),
+    );
+    expect(wrapper.emitted("close")).toHaveLength(1);
+  });
+
+  it("middle click in a text field pastes instead of closing", async () => {
+    const wrapper = await openMeasured();
+    const field = document.createElement("textarea");
+    wrapper.find(".overlay-shell").element.appendChild(field);
+    const down = new MouseEvent("mousedown", {
+      bubbles: true,
+      cancelable: true,
+      button: 1,
+    });
+    field.dispatchEvent(down);
+    field.dispatchEvent(
+      new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 }),
+    );
+    expect(down.defaultPrevented).toBe(false);
+    expect(wrapper.emitted("close")).toBeUndefined();
+  });
+});
+
+describe("ImageOverlay wheel - zoom or browse", () => {
+  async function wheel(wrapper, init) {
+    const ev = new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      deltaMode: 0,
+      clientX: 400,
+      clientY: 300,
+      ...init,
+    });
+    wrapper.find(".overlay-canvas").element.dispatchEvent(ev);
+    await flush();
+  }
+  const src = (wrapper) => wrapper.find(".overlay-img").attributes("src");
+
+  it("Browse mode: a plain notch steps to the next picture", async () => {
+    useUserPrefsStore().viewerWheelAction = "browse";
+    const wrapper = await openMeasured();
+    const before = src(wrapper);
+    await wheel(wrapper, { deltaY: 100 });
+    expect(src(wrapper)).not.toBe(before);
+    expect(zoomLabel(wrapper)).toBe("50%");
+  });
+
+  it("Browse mode: Ctrl+wheel still zooms and stays on the picture", async () => {
+    useUserPrefsStore().viewerWheelAction = "browse";
+    const wrapper = await openMeasured();
+    const before = src(wrapper);
+    await wheel(wrapper, { deltaY: -100, ctrlKey: true });
+    expect(src(wrapper)).toBe(before);
+    expect(zoomLabel(wrapper)).not.toBe("50%");
+  });
+
+  it("Zoom mode: Shift+wheel browses, including Chromium's deltaX-only form", async () => {
+    const wrapper = await openMeasured();
+    const before = src(wrapper);
+    await wheel(wrapper, { deltaX: 100, deltaY: 0, shiftKey: true });
+    expect(src(wrapper)).not.toBe(before);
+    expect(zoomLabel(wrapper)).toBe("50%");
+  });
+
+  it("a step needs 100px of travel, summed within one gesture", async () => {
+    const wrapper = await openMeasured();
+    const before = src(wrapper);
+    await wheel(wrapper, { deltaY: 60, shiftKey: true });
+    expect(src(wrapper)).toBe(before);
+    await wheel(wrapper, { deltaY: 60, shiftKey: true });
+    expect(src(wrapper)).not.toBe(before);
+  });
+
+  it("a pause ends the gesture and resets the sum", async () => {
+    const wrapper = await openMeasured();
+    const before = src(wrapper);
+    const t0 = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(t0);
+    await wheel(wrapper, { deltaY: 60, shiftKey: true });
+    now.mockReturnValue(t0 + 5000);
+    await wheel(wrapper, { deltaY: 60, shiftKey: true });
+    now.mockRestore();
+    expect(src(wrapper)).toBe(before);
   });
 });

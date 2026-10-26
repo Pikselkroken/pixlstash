@@ -154,10 +154,10 @@ async function readyGrid(grid) {
 async function openOverlay({ grid, overlay, page }) {
   const card = grid.thumbnails.first()
   await card.scrollIntoViewIfNeeded()
-  await card.click()
+  await card.dblclick()
   if (await overlay.root.isVisible().catch(() => false)) return
   await page.waitForTimeout(400)
-  await grid.thumbnailImages.first().click({ force: true }).catch(() => {})
+  await grid.thumbnailImages.first().dblclick({ force: true }).catch(() => {})
   await expect(overlay.root).toBeVisible()
 }
 

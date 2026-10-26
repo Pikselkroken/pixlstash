@@ -7,7 +7,10 @@ import {
   selectAllKeyHint,
   undoKeyHint,
 } from "../../utils/shortcutHints";
+import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import AppDialog from "./AppDialog.vue";
+
+const userPrefs = useUserPrefsStore();
 
 // The undo/redo chords differ per platform, so the table renders whatever the
 // hint helper reports rather than hard-coding Ctrl. Select-all differs the same
@@ -57,6 +60,14 @@ const open = computed(() => props.modelValue);
             >
           </td>
           <td>Select all images</td>
+        </tr>
+        <tr>
+          <td>
+            {{
+              userPrefs.gridOpenGesture === "single" ? "Click" : "Double-click"
+            }}
+          </td>
+          <td>Open image (change in Settings › Appearance › Mouse)</td>
         </tr>
         <tr :class="{ 'shortcut-disabled': isReadOnly }">
           <td>
@@ -154,7 +165,23 @@ const open = computed(() => props.modelValue);
           <td>Toggle info panel</td>
         </tr>
         <tr>
+          <td><kbd>{{ stackModKey }}</kbd>+Wheel</td>
+          <td>Zoom</td>
+        </tr>
+        <tr>
+          <td><kbd>Shift</kbd>+Wheel</td>
+          <td>Previous / next image</td>
+        </tr>
+        <tr>
           <td><kbd>Esc</kbd></td>
+          <td>Close overlay</td>
+        </tr>
+        <tr>
+          <td>Middle click</td>
+          <td>Close overlay</td>
+        </tr>
+        <tr>
+          <td>Click outside the picture</td>
           <td>Close overlay</td>
         </tr>
         <tr>

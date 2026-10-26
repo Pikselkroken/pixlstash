@@ -3,6 +3,7 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { mount } from "@vue/test-utils";
+import { createPinia } from "pinia";
 
 vi.mock("../../utils/apiClient", async () => {
   const { ref } = await import("vue");
@@ -17,7 +18,7 @@ function stackRows(agent) {
   vi.stubGlobal("navigator", { userAgent: agent });
   const wrapper = mount(ShortcutsDialog, {
     props: { modelValue: true },
-    global: { stubs: { AppDialog: AppDialogStub } },
+    global: { plugins: [createPinia()], stubs: { AppDialog: AppDialogStub } },
   });
   return wrapper
     .findAll("tr")
