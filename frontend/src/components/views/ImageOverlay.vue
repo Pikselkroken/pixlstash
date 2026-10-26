@@ -892,7 +892,7 @@
           @context-menu="onFilmstripContextMenu"
           @toggle-expand="toggleFilmstripStackExpand"
           @prefetch="prefetchFilmstripStackMembers"
-          @navigate="onFilmstripNavigate"
+          @scroll-by="onFilmstripScroll"
           @stack-move="(item, where) => moveStackMember(item.id, where)"
         />
         <!-- Right-click on a filmstrip thumb: Compare, greyed with its reason
@@ -2715,23 +2715,13 @@ function showPrevImage() {
   return navigateOverlayImage(-1);
 }
 
-function navigateOverlayImage(direction, options = {}) {
+function navigateOverlayImage(direction) {
   const sorted = filmstripImages.value;
-  const allowWrap = options?.wrap !== false;
   if (!image.value || !sorted.length) return;
   const idx = filmstripIndexById.value.get(String(image.value.id)) ?? -1;
   if (idx === -1) return;
-  let nextIdx = idx + direction;
-  if (allowWrap) {
-    nextIdx = (nextIdx + sorted.length) % sorted.length;
-  } else {
-    nextIdx = Math.min(sorted.length - 1, Math.max(0, nextIdx));
-    if (nextIdx === idx) {
-      return false;
-    }
-  }
+  const nextIdx = (idx + direction + sorted.length) % sorted.length;
   setOverlayImageById(sorted[nextIdx]?.id ?? null);
-  return true;
 }
 
 function selectImageByIndex(idx) {
@@ -2740,15 +2730,6 @@ function selectImageByIndex(idx) {
   const target = list[idx];
   if (target) {
     setOverlayImageById(target.id ?? null);
-  }
-}
-
-function onFilmstripNavigate(direction) {
-  if (isMobile.value) return;
-  handleUserActivity();
-  const moved = navigateOverlayImage(direction, { wrap: false });
-  if (moved === false) {
-    filmstripRef.value?.resetWheel?.();
   }
 }
 
@@ -3527,33 +3508,72 @@ const zoomButtonTitle = computed(() => {
     : `Zoom ${pct} - click to fit (Z)`;
 });
 
+// The filmstrip scrolls on its own: the wheel moves it, and clicking a thumb
+// leaves it where it is, so the second thumb stays second. It follows the
+// picture on screen only when that picture would leave view: one slot when
+// stepping past an edge, centred on a longer jump. `null` until placed, so
+// every open starts centred, even on the picture it was closed on.
+const filmstripTop = ref(null);
+
+watch(open, (value) => {
+  if (!value) return;
+  filmstripTop.value = null;
+  revealInFilmstrip(filmstripCurrentIndex.value);
+});
+
+const filmstripVisibleCount = computed(() =>
+  Math.min(
+    isMobile.value ? 5 : FILMSTRIP_VISIBLE_COUNT,
+    filmstripImages.value.length,
+  ),
+);
+
+const filmstripCurrentIndex = computed(() =>
+  image.value ? filmstripIndexById.value.get(String(image.value.id)) : undefined,
+);
+
+function clampFilmstripTop(top) {
+  const last = filmstripImages.value.length - filmstripVisibleCount.value;
+  return Math.min(Math.max(0, top), Math.max(0, last));
+}
+
+function revealInFilmstrip(idx) {
+  const count = filmstripVisibleCount.value;
+  if (!(idx >= 0) || !count) return;
+  const placed = filmstripTop.value !== null;
+  const top = clampFilmstripTop(filmstripTop.value);
+  if (placed && idx >= top && idx < top + count) return;
+  if (placed && idx === top - 1) filmstripTop.value = idx;
+  else if (placed && idx === top + count) filmstripTop.value = idx - count + 1;
+  else filmstripTop.value = clampFilmstripTop(idx - Math.floor(count / 2));
+}
+
+watch(
+  [filmstripCurrentIndex, filmstripVisibleCount],
+  ([idx]) => revealInFilmstrip(idx),
+  { immediate: true },
+);
+
+function onFilmstripScroll(direction) {
+  if (isMobile.value) return;
+  handleUserActivity();
+  const from = clampFilmstripTop(filmstripTop.value);
+  filmstripTop.value = clampFilmstripTop(from + direction);
+  if (filmstripTop.value === from) {
+    filmstripRef.value?.resetWheel?.();
+  }
+}
+
 const filmstripCanvasData = computed(() => {
   const images = filmstripImages.value;
-  if (!images.length || !image.value) {
-    return { items: [], topBufferSlots: 0 };
-  }
-  const currentIndex = filmstripIndexById.value.get(String(image.value.id));
-  const safeCurrentIndex =
-    Number.isFinite(currentIndex) && currentIndex >= 0 ? currentIndex : -1;
-  if (safeCurrentIndex === -1) {
+  const safeCurrentIndex = filmstripCurrentIndex.value ?? -1;
+  if (!images.length || safeCurrentIndex === -1) {
     return { items: [], topBufferSlots: 0 };
   }
 
-  const visibleCount = Math.min(
-    isMobile.value ? 5 : FILMSTRIP_VISIBLE_COUNT,
-    images.length,
-  );
-  let visibleStart = safeCurrentIndex - Math.floor(visibleCount / 2);
-  let visibleEnd = visibleStart + visibleCount - 1;
-  if (visibleStart < 0) {
-    visibleEnd += Math.abs(visibleStart);
-    visibleStart = 0;
-  }
-  if (visibleEnd >= images.length) {
-    const overshoot = visibleEnd - (images.length - 1);
-    visibleStart = Math.max(0, visibleStart - overshoot);
-    visibleEnd = images.length - 1;
-  }
+  const visibleCount = filmstripVisibleCount.value;
+  const visibleStart = clampFilmstripTop(filmstripTop.value);
+  const visibleEnd = visibleStart + visibleCount - 1;
 
   const bufferCount = isMobile.value ? 0 : FILMSTRIP_BUFFER_COUNT;
   const canvasCount = Math.min(visibleCount + bufferCount * 2, images.length);

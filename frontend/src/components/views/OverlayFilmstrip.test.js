@@ -58,3 +58,19 @@ describe("OverlayFilmstrip picks", () => {
     expect(thumbs[2].attributes("aria-pressed")).toBe("false");
   });
 });
+
+describe("OverlayFilmstrip wheel", () => {
+  it("scrolls the strip, one thumb per notch, without choosing a picture", async () => {
+    const strip = mountStrip();
+    const viewport = strip.find(".filmstrip-viewport");
+    await viewport.trigger("wheel", { deltaY: 100 });
+    expect(strip.emitted("scroll-by")).toEqual([[1]]);
+    expect(strip.emitted("select")).toBeUndefined();
+  });
+
+  it("scrolls back up on a wheel turned the other way", async () => {
+    const strip = mountStrip();
+    await strip.find(".filmstrip-viewport").trigger("wheel", { deltaY: -100 });
+    expect(strip.emitted("scroll-by")).toEqual([[-1]]);
+  });
+});

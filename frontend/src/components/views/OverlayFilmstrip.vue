@@ -189,7 +189,7 @@ const emit = defineEmits([
   "select",
   "toggle-expand",
   "prefetch",
-  "navigate",
+  "scroll-by",
   "stack-move",
   "pick",
   "context-menu",
@@ -198,7 +198,9 @@ const emit = defineEmits([
 const railRef = ref(null);
 defineExpose({ railEl: railRef, resetWheel });
 
-const FILMSTRIP_WHEEL_THRESHOLD = 60;
+// A Chromium wheel notch (100px) scrolls the strip by one thumb; Firefox's
+// three-line notch takes two, and a trackpad is capped by the cooldown.
+const FILMSTRIP_WHEEL_THRESHOLD = 20;
 const WHEEL_LINE_HEIGHT_PX = 16;
 const FILMSTRIP_WHEEL_SENSITIVITY = 0.2;
 const FILMSTRIP_WHEEL_STEP_COOLDOWN_MS = 30;
@@ -239,7 +241,7 @@ function onFilmstripWheel(event) {
   const direction = Math.sign(filmstripWheelAccumulator);
   filmstripWheelAccumulator -= direction * FILMSTRIP_WHEEL_THRESHOLD;
   filmstripWheelLastStepTs = now;
-  emit("navigate", direction);
+  emit("scroll-by", direction);
 }
 </script>
 
