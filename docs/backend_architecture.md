@@ -338,7 +338,7 @@ Key endpoints (see the auto-generated index below for the full set):
 | POST | `/pictures/import` | Upload images → create Pictures (one-shot) |
 | GET | `/pictures/import/status?task_id=…` | Import progress |
 | POST | `/pictures/import/staging` | Open an async streaming-import session (#459) |
-| POST | `/pictures/import/staging/{staging_id}/files` | Stream files into a staging session (unsafe window) |
+| POST | `/pictures/import/staging/{staging_id}/files` | Stream files into a staging session (unsafe window); optional `file_metadata` JSON gives each file `{tags, score, sets}`, applied by `PictureImportTask` to the new picture (Eagle import, #2137; sets matched by name in the import's project, else created) |
 | POST | `/pictures/import/staging/{staging_id}/commit` | Safe handoff → background `PictureImportTask` |
 | DELETE | `/pictures/import/staging/{staging_id}` | Cancel an uncommitted staging session |
 | GET | `/pictures/import/staging/{staging_id}/status` | Staging + background-import progress |

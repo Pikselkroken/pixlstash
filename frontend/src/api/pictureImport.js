@@ -48,6 +48,8 @@ import { apiClient } from "../utils/apiClient";
  * ENDPOINTS (final, all under /api/v1, mutating routes OWNER_ONLY):
  *   POST   {backendUrl}/pictures/import/staging                   → { staging_id, safe_threshold }
  *   POST   {backendUrl}/pictures/import/staging/{id}/files         multipart `file` (repeatable)
+ *                                                                 + optional `file_metadata` JSON,
+ *                                                                   one {tags,score,sets}|null per file
  *                                                                 → { staging_id, staged, received[], skipped[] }
  *   POST   {backendUrl}/pictures/import/staging/{id}/commit        → { staging_id, task_id, staged_count }
  *                                                                   400 empty/face-worker-down, 409 committed, 507 disk
@@ -126,6 +128,21 @@ export async function openStagingSession({
   };
 }
 
+// Labels a file brings from another library (an Eagle import), keyed by the
+// File itself so they ride through the generic import path untouched.
+const importMetadataByFile = new WeakMap();
+
+/**
+ * Attach `{tags, score, sets}` to a file; `stageFiles` sends it alongside the
+ * bytes and the server applies it to the picture the file becomes.
+ *
+ * @param {File} file
+ * @param {{tags: string[], score: number|null, sets: string[]}} metadata
+ */
+export function attachImportMetadata(file, metadata) {
+  importMetadataByFile.set(file, metadata);
+}
+
 /**
  * @typedef {Object} StagedBatch
  * @property {number} staged     Total files staged in this session so far.
@@ -157,6 +174,10 @@ export async function stageFiles({
 }) {
   const formData = new FormData();
   files.forEach((file) => formData.append("file", file));
+  const metadata = files.map((file) => importMetadataByFile.get(file) ?? null);
+  if (metadata.some(Boolean)) {
+    formData.append("file_metadata", JSON.stringify(metadata));
+  }
   const res = await apiClient.post(
     IMPORT_ENDPOINTS.stageFiles(backendUrl, stagingId),
     formData,

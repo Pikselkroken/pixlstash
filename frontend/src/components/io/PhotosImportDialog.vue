@@ -7,6 +7,8 @@ import {
 } from "../../utils/media.js";
 import { listProjects } from "../../api/projects.js";
 import { listImportFolders } from "../../api/folders.js";
+import { attachImportMetadata } from "../../api/pictureImport.js";
+import { readEagleLibrary } from "../../utils/eagleLibrary.js";
 import ProjectEditor from "../editors/ProjectEditor.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
@@ -33,6 +35,9 @@ const importFolders = ref([]);
 const importFoldersLoading = ref(false);
 const importFoldersError = ref("");
 const importFoldersLoaded = ref(false);
+const eagleInputRef = ref(null);
+const eagleReading = ref(false);
+const eagleError = ref("");
 
 const projects = ref([]);
 const selectedProjectId = ref(null);
@@ -165,6 +170,38 @@ async function handleLocalDrop(event) {
   triggerLocalImport(files);
 }
 
+function openEaglePicker() {
+  eagleError.value = "";
+  eagleInputRef.value?.click();
+}
+
+async function handleEagleChange(event) {
+  const picked = Array.from(event?.target?.files || []);
+  if (eagleInputRef.value) eagleInputRef.value.value = "";
+  if (!picked.length) return;
+  eagleReading.value = true;
+  try {
+    const library = await readEagleLibrary(picked);
+    console.info(
+      `[IMPORT] Eagle library: ${library.files.length} to import, ` +
+        `${library.trashed} in Eagle's trash, ${library.unsupported} unsupported.`,
+    );
+    if (!library.files.length) {
+      eagleError.value = "That library has no pictures PixlStash can import.";
+      return;
+    }
+    library.files.forEach((file, i) =>
+      attachImportMetadata(file, library.metadata[i]),
+    );
+    triggerLocalImport(library.files);
+  } catch (e) {
+    console.warn("Couldn't read the Eagle library", e);
+    eagleError.value = e?.message || "Couldn't read that Eagle library.";
+  } finally {
+    eagleReading.value = false;
+  }
+}
+
 async function fetchWatchFolders({ force = false } = {}) {
   if (importFoldersLoading.value) return;
   if (importFoldersLoaded.value && !force) return;
@@ -236,6 +273,7 @@ watch(dialogOpen, (isOpen) => {
       <v-tab value="google">Google Photos</v-tab>
       <v-tab value="icloud">iCloud Photos</v-tab>
       <v-tab value="flickr">Flickr</v-tab>
+      <v-tab value="eagle">Eagle</v-tab>
     </v-tabs>
     <v-window v-model="activeTab" class="photo-import-window">
       <v-window-item value="local">
@@ -373,6 +411,41 @@ watch(dialogOpen, (isOpen) => {
           </div>
         </div>
       </v-window-item>
+      <v-window-item value="eagle">
+        <div class="google-photos-instructions">
+          <div class="google-photos-section-title">Eagle library</div>
+          <p class="google-photos-note">
+            Brings your pictures over with their tags, star ratings and
+            folders. Each folder becomes a picture set.
+          </p>
+          <ol>
+            <li>Click <strong>Choose Eagle library</strong>.</li>
+            <li>
+              Pick your library folder, the one whose name ends in
+              <strong>.library</strong>.
+            </li>
+          </ol>
+          <div class="google-photos-note">
+            Pictures in Eagle's trash are left out. A picture already in
+            PixlStash keeps the tags it has.
+          </div>
+          <div class="local-import-controls">
+            <input
+              ref="eagleInputRef"
+              class="local-import-input"
+              type="file"
+              webkitdirectory
+              @change="handleEagleChange"
+            />
+            <AppButton :loading="eagleReading" @click="openEaglePicker">
+              Choose Eagle library
+            </AppButton>
+          </div>
+          <p v-if="eagleError" class="eagle-import-error" role="alert">
+            {{ eagleError }}
+          </p>
+        </div>
+      </v-window-item>
     </v-window>
   </AppDialog>
 </template>
@@ -464,6 +537,12 @@ watch(dialogOpen, (isOpen) => {
   margin: 0;
   font-size: var(--text-base);
   color: rgba(var(--v-theme-on-surface), 0.7);
+}
+
+.eagle-import-error {
+  margin: 0;
+  font-size: var(--text-base);
+  color: rgb(var(--v-theme-surface-error));
 }
 
 .local-import-controls {

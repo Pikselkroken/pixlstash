@@ -12,6 +12,7 @@ the owner would be its own regression.
 """
 
 import io
+import json
 import os
 import tempfile
 import time
@@ -23,6 +24,7 @@ from PIL import Image
 from sqlmodel import select
 
 from pixlstash.db_models import Character, Picture, PictureSet, PictureSetMember, Tag
+from pixlstash.db_models.tag import TAG_PENDING_SENTINEL
 from pixlstash.server import Server
 from tests.authz_guard import no_spa_fallback  # noqa: F401
 
@@ -466,6 +468,90 @@ def test_staging_txt_sidecar_sets_tags(owner_server):
     pic_id = _only_picture_id(srv)
     tags = _tags_for(srv, pic_id)
     assert {"cat", "cute", "fluffy"} <= tags, f"Sidecar tags missing: {tags}"
+
+
+def test_staging_file_metadata_applies_tags_score_and_sets(owner_server):
+    """An Eagle import carries each file's tags, rating and folders along."""
+    srv, client = owner_server
+    existing_set_id = _make_set(srv, name="travel")
+    locked_set_id = _make_set(srv, name="Locked")
+    srv.vault.db.run_task(
+        lambda s: (
+            setattr(s.get(PictureSet, locked_set_id), "locked", True),
+            s.commit(),
+        )
+    )
+    staging_id = client.post(f"{API}/pictures/import/staging", json={}).json()[
+        "staging_id"
+    ]
+    metadata = [
+        {
+            "tags": ["Blue_Sky", "Sunset", "sunset", " "],
+            "score": 4,
+            "sets": ["Travel", "Travel / Norway", "Locked", " "],
+        },
+        None,
+    ]
+    r = client.post(
+        f"{API}/pictures/import/staging/{staging_id}/files",
+        files=[
+            ("file", ("eagle.png", _png_bytes((1, 2, 3)), "image/png")),
+            ("file", ("plain.png", _png_bytes((4, 5, 6)), "image/png")),
+        ],
+        data={"file_metadata": json.dumps(metadata)},
+    )
+    assert r.status_code == 200, r.text
+    client.post(f"{API}/pictures/import/staging/{staging_id}/commit")
+    status = _wait_for_stage(client, staging_id, target=("completed",))
+    assert status["imported_count"] == 2, status
+
+    def pictures_by_name(session):
+        return {
+            p.original_file_name: (p.id, p.score)
+            for p in session.exec(select(Picture)).all()
+        }
+
+    by_name = srv.vault.db.run_task(pictures_by_name)
+    eagle_id, eagle_score = by_name["eagle.png"]
+    plain_id, plain_score = by_name["plain.png"]
+    assert eagle_score == 4
+    assert plain_score is None
+    assert _tags_for(srv, eagle_id) == {"blue sky", "sunset"}
+    assert _tags_for(srv, plain_id) == {TAG_PENDING_SENTINEL}
+
+    # "Travel" reuses the existing set case-insensitively; the nested folder
+    # becomes a new set; the locked set is left alone.
+    assert _set_member_ids(srv, existing_set_id) == {eagle_id}
+    assert _set_member_ids(srv, locked_set_id) == set()
+    norway = srv.vault.db.run_task(
+        lambda s: s.exec(
+            select(PictureSet).where(PictureSet.name == "Travel / Norway")
+        ).all()
+    )
+    assert len(norway) == 1
+    assert _set_member_ids(srv, norway[0].id) == {eagle_id}
+
+
+@pytest.mark.parametrize(
+    "file_metadata",
+    [
+        json.dumps([None, None]),
+        json.dumps([{"score": 9}]),
+        json.dumps([{"stars": 3}]),
+        "not json",
+    ],
+)
+def test_staging_file_metadata_rejects_bad_input(owner_server, file_metadata):
+    _srv, client = owner_server
+    staging_id = client.post(f"{API}/pictures/import/staging", json={}).json()[
+        "staging_id"
+    ]
+    r = client.post(
+        f"{API}/pictures/import/staging/{staging_id}/files",
+        files=[("file", ("a.png", _png_bytes(), "image/png"))],
+        data={"file_metadata": file_metadata},
+    )
+    assert r.status_code == 400, r.text
 
 
 def test_staging_orphan_sidecar_is_skipped_gracefully(owner_server):

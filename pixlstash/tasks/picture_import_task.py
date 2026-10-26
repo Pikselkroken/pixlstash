@@ -1,10 +1,11 @@
 import os
 import shutil
 import threading
+from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlmodel import Session, select
+from sqlmodel import Session, func, select
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models.character import Character
@@ -19,6 +20,7 @@ from pixlstash.services.project_membership_service import (
     character_project_ids,
     picture_set_project_ids,
     reconcile_entity_projects_change,
+    set_picture_set_projects,
 )
 from pixlstash.tasks.base_task import BaseTask, TaskPriority
 from pixlstash.utils.image_processing.image_utils import ImageUtils
@@ -65,7 +67,8 @@ class PictureImportTask(BaseTask):
     Attributes:
         _db: The application ``VaultDatabase``.
         _staged_files: List of ``{"file_path", "original_file_name"}`` staged
-            entries to ingest.
+            entries to ingest, each optionally carrying ``"metadata"``
+            (``{"tags", "score", "sets"}``) brought in from another library.
         _project_id: Optional project the imported pictures are added to.
         _staging_id: The staging-session id (carried into the result/logs).
         _staging_dir: Absolute path of the staging directory to remove when done.
@@ -91,7 +94,10 @@ class PictureImportTask(BaseTask):
         Args:
             database: The application ``VaultDatabase`` instance.
             staged_files: Sequence of ``{"file_path", "original_file_name"}``
-                dicts for each staged media file on disk.
+                dicts for each staged media file on disk. An entry's optional
+                ``"metadata"`` (``{"tags", "score", "sets"}``) is applied to
+                the picture it becomes: its tags win over a caption sidecar,
+                and each named set is found or created in the import's project.
             project_id: Optional project id to add every imported picture to.
             set_id: Optional picture-set id every imported picture is added to
                 (a drop-to-set target).
@@ -144,6 +150,8 @@ class PictureImportTask(BaseTask):
 
     def _run_task(self):
         new_pictures: list[Picture] = []
+        # Parallel to new_pictures: the staged entry's carried-in labels.
+        new_metadata: list[dict] = []
         duplicate_count = 0
         scrapheaped_count = 0
         failed_count = 0
@@ -287,7 +295,11 @@ class PictureImportTask(BaseTask):
                 pic.imported_at = datetime.now(timezone.utc)
                 if original_file_name:
                     pic.original_file_name = original_file_name
+                metadata = entry.get("metadata") or {}
+                if metadata.get("score"):
+                    pic.score = metadata["score"]
                 new_pictures.append(pic)
+                new_metadata.append(metadata)
                 seen_fingerprints.add(intra_batch_key)
             except Exception as exc:
                 logger.warning(
@@ -308,11 +320,12 @@ class PictureImportTask(BaseTask):
             def insert_pictures(session: Session, pictures: list[Picture]):
                 session.add_all(pictures)
                 session.flush()
-                for pic in pictures:
-                    # Apply sidecar caption tags when the picture matches one by
-                    # basename stem; otherwise seed the pending sentinel so the
-                    # tagger picks it up (mirrors WatchFolderImportTask).
-                    tags = sidecar_tags_by_stem.get(
+                ids_by_set_name: dict[str, list[int]] = defaultdict(list)
+                for pic, metadata in zip(pictures, new_metadata):
+                    # Carried-in tags first, then sidecar caption tags matched
+                    # by basename stem; otherwise seed the pending sentinel so
+                    # the tagger picks it up (mirrors WatchFolderImportTask).
+                    tags = metadata.get("tags") or sidecar_tags_by_stem.get(
                         _sidecar_stem(pic.original_file_name or "")
                     )
                     if tags:
@@ -320,12 +333,17 @@ class PictureImportTask(BaseTask):
                             session.add(Tag(picture_id=pic.id, tag=tag_str))
                     else:
                         session.add(Tag(picture_id=pic.id, tag=TAG_PENDING_SENTINEL))
+                    for set_name in metadata.get("sets") or []:
+                        ids_by_set_name[set_name].append(pic.id)
                 session.commit()
                 for pic in pictures:
                     session.refresh(pic)
-                return [pic.id for pic in pictures if pic.id is not None]
+                return (
+                    [pic.id for pic in pictures if pic.id is not None],
+                    dict(ids_by_set_name),
+                )
 
-            imported_ids = self._db.run_task(
+            imported_ids, ids_by_set_name = self._db.run_task(
                 insert_pictures,
                 new_pictures,
                 priority=DBPriority.IMMEDIATE,
@@ -334,6 +352,7 @@ class PictureImportTask(BaseTask):
             if imported_ids:
                 self._apply_project(imported_ids)
                 self._apply_set(imported_ids)
+                self._apply_named_sets(ids_by_set_name)
                 self._apply_character(imported_ids)
 
         self._cleanup_staging_dir()
@@ -469,6 +488,76 @@ class PictureImportTask(BaseTask):
             apply_set,
             imported_ids,
             self._set_id,
+            priority=DBPriority.IMMEDIATE,
+        )
+
+    def _apply_named_sets(self, ids_by_set_name: dict[str, list[int]]) -> None:
+        """Add imported pictures to the sets their carried-in metadata names.
+
+        A set is matched by name, case-insensitively, within the import's
+        project (or among sets with no project), so importing the same library
+        twice fills the same sets instead of minting ``Name (2)``. A missing
+        one is created in that project. A locked set is left alone.
+        """
+        if not ids_by_set_name:
+            return
+
+        def apply_named_sets(
+            session: Session, mapping: dict[str, list[int]], project_id: Optional[int]
+        ):
+            for name, ids in mapping.items():
+                query = select(PictureSet).where(
+                    func.lower(PictureSet.name) == name.lower()
+                )
+                if project_id is None:
+                    query = query.where(PictureSet.project_id.is_(None))
+                else:
+                    query = query.where(PictureSet.project_id == project_id)
+                picture_set = session.exec(query).first()
+                if picture_set is None:
+                    picture_set = PictureSet(name=name)
+                    session.add(picture_set)
+                    session.flush()
+                    if project_id is not None:
+                        set_picture_set_projects(session, picture_set, [project_id])
+                elif picture_set.locked:
+                    logger.warning(
+                        "PictureImportTask: set %r (id %s) is locked; not adding "
+                        "%d imported picture(s) to it (staging_id=%s)",
+                        name,
+                        picture_set.id,
+                        len(ids),
+                        self._staging_id,
+                    )
+                    continue
+                # The drop-target set may be this one too (_apply_set).
+                already = set(
+                    session.exec(
+                        select(PictureSetMember.picture_id).where(
+                            PictureSetMember.set_id == picture_set.id,
+                            PictureSetMember.picture_id.in_(ids),
+                        )
+                    ).all()
+                )
+                for picture_id in ids:
+                    if picture_id not in already:
+                        session.add(
+                            PictureSetMember(
+                                set_id=picture_set.id, picture_id=picture_id
+                            )
+                        )
+                reconcile_entity_projects_change(
+                    session,
+                    picture_ids=ids,
+                    ensure_project_ids=picture_set_project_ids(session, picture_set.id),
+                    remove_project_ids=[],
+                )
+            session.commit()
+
+        self._db.run_task(
+            apply_named_sets,
+            ids_by_set_name,
+            self._project_id,
             priority=DBPriority.IMMEDIATE,
         )
 

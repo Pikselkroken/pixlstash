@@ -19,7 +19,7 @@ from fastapi import (
 from sqlalchemy import (
     delete,
 )
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from sqlmodel import select, Session
 from typing import Optional
 
@@ -50,6 +50,7 @@ from pixlstash.utils.media_files import SUPPORTED_MEDIA_EXTS
 from ._helpers import (
     _create_picture_imports,
     _normalise_sidecar_stem,
+    _normalise_vocab_token,
     _parse_sidecar_tags,
 )
 
@@ -161,6 +162,38 @@ class StagingOpenResponse(BaseModel):
     safe_threshold: int
     """The declared file count at which the client may hand off to the safe
     (background) window; ``0`` when the client did not declare a total."""
+
+
+class StagedFileMetadata(BaseModel):
+    """Labels one streamed file brings with it from another library (Eagle).
+
+    Applied by ``PictureImportTask`` to the picture the file becomes; a file
+    that turns out to be a duplicate keeps the labels it already has.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    tags: list[str] = Field(default_factory=list)
+    """Tags to give the picture instead of queueing it for the tagger."""
+
+    score: Optional[int] = Field(default=None, ge=1, le=5)
+    """Star rating, or ``None`` for unrated."""
+
+    sets: list[str] = Field(default_factory=list)
+    """Names of the picture sets to add it to, created when missing."""
+
+
+_FILE_METADATA_ADAPTER = TypeAdapter(list[Optional[StagedFileMetadata]])
+
+
+def _clean_file_metadata(meta: StagedFileMetadata) -> dict:
+    """Normalise tags the way caption sidecars are, and drop blank set names."""
+    tags = (_normalise_vocab_token(tag) for tag in meta.tags)
+    return {
+        "tags": [t for t in dict.fromkeys(tags) if t],
+        "score": meta.score,
+        "sets": [n for n in dict.fromkeys(n.strip() for n in meta.sets) if n],
+    }
 
 
 class StagingFilesResponse(BaseModel):
@@ -1168,7 +1201,10 @@ def register_routes(router, server):
         description=(
             "Streams one batch of media files into an open staging session. "
             "May be called repeatedly during the unsafe (tab-open) window. "
-            "Unsupported or empty files are skipped and reported."
+            "Unsupported or empty files are skipped and reported. The optional "
+            "file_metadata form field is a JSON array parallel to the files, "
+            "each entry null or {tags, score, sets} to apply to that file's "
+            "picture (an Eagle library import)."
         ),
         response_model=StagingFilesResponse,
     )
@@ -1176,6 +1212,7 @@ def register_routes(router, server):
         request: Request,
         staging_id: str,
         file: list[UploadFile] = File(None),
+        file_metadata: Optional[str] = Form(None),
     ):
         session = _get_session_or_404(request, staging_id)
         if session["stage"] != "staging":
@@ -1188,6 +1225,22 @@ def register_routes(router, server):
             )
         if not file:
             raise HTTPException(status_code=400, detail="No files provided")
+        metadata_by_index: list[Optional[StagedFileMetadata]] = [None] * len(file)
+        if file_metadata:
+            try:
+                metadata_by_index = _FILE_METADATA_ADAPTER.validate_json(file_metadata)
+            except ValidationError as exc:
+                raise HTTPException(
+                    status_code=400, detail=f"Invalid file_metadata: {exc}"
+                ) from exc
+            if len(metadata_by_index) != len(file):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"file_metadata has {len(metadata_by_index)} entries "
+                        f"for {len(file)} files"
+                    ),
+                )
 
         staging_dir = session["staging_dir"]
         staged_files: list[dict] = session["staged_files"]
@@ -1227,7 +1280,7 @@ def register_routes(router, server):
             )
             return True
 
-        for upload in file:
+        for upload, metadata in zip(file, metadata_by_index):
             if not upload.filename:
                 continue
             ext = os.path.splitext(upload.filename)[1].lower()
@@ -1418,12 +1471,13 @@ def register_routes(router, server):
                             exc,
                         )
                 continue
-            staged_files.append(
-                {
-                    "file_path": dest_path,
-                    "original_file_name": os.path.basename(upload.filename),
-                }
-            )
+            entry = {
+                "file_path": dest_path,
+                "original_file_name": os.path.basename(upload.filename),
+            }
+            if metadata is not None:
+                entry["metadata"] = _clean_file_metadata(metadata)
+            staged_files.append(entry)
             received.append(upload.filename)
 
         session["last_update_epoch_ms"] = int(time.time() * 1000)
