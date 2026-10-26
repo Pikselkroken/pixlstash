@@ -22,16 +22,20 @@ import { IMPORT_MEDIA_EXTENSIONS } from "./media.js";
  *   `{tags, score, sets}` for `files[i]`.
  * @throws {Error} When the folder holds no Eagle library.
  */
+// The JSON object in `file`, or null when it will not parse or is not an
+// object (`[]`, `5`): either way the file is damaged, not an empty item.
 async function readJson(file) {
+  const where = file.webkitRelativePath || file.name;
   try {
-    return JSON.parse(await file.text());
+    const value = JSON.parse(await file.text());
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      return value;
+    }
+    console.warn(`[IMPORT] Eagle: skipping ${where}, not a JSON object`);
   } catch (e) {
-    console.warn(
-      `[IMPORT] Eagle: skipping unreadable ${file.webkitRelativePath || file.name}`,
-      e,
-    );
-    return null;
+    console.warn(`[IMPORT] Eagle: skipping unreadable ${where}`, e);
   }
+  return null;
 }
 
 export async function readEagleLibrary(fileList) {
