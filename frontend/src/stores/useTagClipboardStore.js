@@ -55,8 +55,22 @@ export function splitTagText(text) {
 // POST /pictures/tags/bulk_fetch answers for at most this many ids.
 const BULK_FETCH_LIMIT = 200;
 
+/**
+ * Copied tags as they are, trimmed and de-duplicated case-insensitively. Not
+ * through splitTagText: that is for free text, and a real tag may hold a comma
+ * or end in a bracket ("pikachu (pokemon)").
+ */
 function uniqueTags(tags) {
-  return splitTagText((tags || []).join("\n"));
+  const seen = new Set();
+  const out = [];
+  for (const raw of tags || []) {
+    const tag = String(raw ?? "").trim();
+    const key = tag.toLowerCase();
+    if (!tag || seen.has(key)) continue;
+    seen.add(key);
+    out.push(tag);
+  }
+  return out;
 }
 
 function plural(n, word) {
@@ -174,11 +188,13 @@ export const useTagClipboardStore = defineStore("tagClipboard", () => {
       );
       const batchId = newOperationBatchId();
       const writes = [];
+      const written = [];
       const touched = new Set();
       for (const id of ids) {
         for (const tag of tags) {
           if (has.get(id)?.has(tag.toLowerCase())) continue;
           touched.add(id);
+          written.push(tag);
           writes.push(addPictureTag(id, tag, { batchId }));
         }
       }
@@ -195,9 +211,14 @@ export const useTagClipboardStore = defineStore("tagClipboard", () => {
           failed.map((r) => r.reason),
         );
       }
+      // The tags that reached at least one picture, not every tag copied: a
+      // picture that already had some of them got only the rest.
+      const added = new Set(
+        written.filter((_, i) => results[i].status === "fulfilled"),
+      ).size;
       const where = ids.length === 1 ? "" : ` to ${plural(touched.size, "picture")}`;
       let text = touched.size
-        ? `Added ${plural(tags.length, "tag")}${where}`
+        ? `Added ${plural(added, "tag")}${where}`
         : `Already ${ids.length === 1 ? "has" : "have"} ${tags.length === 1 ? "that tag" : "those tags"}`;
       if (failed.length) {
         text += ` (${failed.length} refused, e.g. a locked set's pictures)`;

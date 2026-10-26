@@ -161,6 +161,10 @@
                 { 'overlay-tag--penalised': isPenalisedTag(tag) },
                 { 'overlay-tag--sentinel': isSentinelTag(tagLabel(tag)) },
                 { 'overlay-tag--selected': isSelected(tagLabel(tag)) },
+                {
+                  'overlay-tag--remove-hot':
+                    removeHot && isSelected(tagLabel(tag)),
+                },
                 predictionClassForTag(tagLabel(tag)),
               ]"
               :style="predictionStyleForTag(tagLabel(tag))"
@@ -180,10 +184,12 @@
               <button
                 v-if="!readOnly"
                 class="tag-delete-btn"
-                @click.stop="removeAllTag(tag)"
-                aria-label="Remove tag"
+                :aria-label="removeLabel(tag)"
+                @click.stop="onRemoveClick(tag)"
+                @mouseenter="removeHot = isSelected(tagLabel(tag))"
+                @mouseleave="removeHot = false"
               >
-                <Tooltip text="Remove tag" activator="parent" :describe="false" />
+                <Tooltip :text="removeLabel(tag)" activator="parent" :describe="false" />
                 <v-icon size="12">mdi-close</v-icon>
               </button>
             </span>
@@ -201,45 +207,31 @@
               placeholder="New tag"
             />
           </div>
-          <div
-            v-if="selectedLabels.length"
-            class="tag-selection-bar"
-            role="toolbar"
-            aria-label="Selected tags"
-          >
-            <span class="tag-selection-count" role="status"
-              >{{ selectedLabels.length }} selected</span
-            >
-            <button type="button" class="tag-selection-btn" @click="copySelection">
-              <Tooltip text="Copy (Ctrl+C)" activator="parent" :describe="false" />
-              <v-icon size="14">mdi-content-copy</v-icon>
-              Copy
-            </button>
-            <button
-              v-if="!readOnly"
-              type="button"
-              class="tag-selection-btn tag-selection-btn--danger"
-              @click="removeSelection"
-            >
-              <Tooltip
-                text="Remove from this picture (Del)"
-                activator="parent"
-                :describe="false"
-              />
-              <v-icon size="14">mdi-tag-remove-outline</v-icon>
-              Remove
-            </button>
-            <button
-              type="button"
-              class="tag-selection-btn tag-selection-btn--icon"
-              aria-label="Clear selection"
-              @click="clearSelection"
-            >
-              <Tooltip text="Clear selection (Esc)" activator="parent" :describe="false" />
-              <v-icon size="14">mdi-close</v-icon>
-            </button>
-          </div>
         </div>
+      </div>
+      <div
+        v-if="selectedLabels.length"
+        class="tag-selection-bar"
+        role="toolbar"
+        aria-label="Selected tags"
+      >
+        <span class="tag-selection-count" role="status"
+          >{{ selectedLabels.length }} selected</span
+        >
+        <button type="button" class="tag-selection-btn" @click="copySelection">
+          <Tooltip text="Copy (Ctrl+C)" activator="parent" :describe="false" />
+          <v-icon size="14">mdi-content-copy</v-icon>
+          Copy
+        </button>
+        <button
+          type="button"
+          class="tag-selection-btn tag-selection-btn--icon"
+          aria-label="Clear selection"
+          @click="clearSelection"
+        >
+          <Tooltip text="Clear selection (Esc)" activator="parent" :describe="false" />
+          <v-icon size="14">mdi-selection-off</v-icon>
+        </button>
       </div>
     </template>
   </div>
@@ -434,6 +426,9 @@ const pasteTooltip = computed(
   () => `Paste ${tagClipboard.clipboardTags.join(", ")} (Ctrl+V)`,
 );
 const hasSelection = computed(() => selectedLabels.value.length > 0);
+// The pointer is on the x of a selected chip: every selected chip's x lights
+// up, because that click removes the whole selection.
+const removeHot = ref(false);
 
 // ── Prediction state ───────────────────────────────────────────────────────
 
@@ -1122,6 +1117,7 @@ function isSelected(label) {
 
 function clearSelection() {
   selectedLabels.value = [];
+  removeHot.value = false;
 }
 
 function toggleSelected(label) {
@@ -1176,7 +1172,20 @@ async function pasteClipboard() {
   if (result?.pictureIds.length) await refreshTags();
 }
 
-/** Remove, or Delete with chips selected: one batch for the whole selection. */
+/** "Remove tag", or for a selected chip, what its x removes: the selection. */
+function removeLabel(tag) {
+  const n = selectedLabels.value.length;
+  if (n > 1 && isSelected(tagLabel(tag))) return `Remove ${n} selected tags (Del)`;
+  return "Remove tag";
+}
+
+/** The x on a chip: the whole selection when the chip is in it, else the chip. */
+function onRemoveClick(tag) {
+  if (isSelected(tagLabel(tag))) void removeSelection();
+  else void removeAllTag(tag);
+}
+
+/** A selected chip's x, or Delete with chips selected: one batch for all. */
 async function removeSelection() {
   if (readOnly.value || !selectedLabels.value.length) return;
   const labels = [...selectedLabels.value];
@@ -1523,8 +1532,12 @@ defineExpose({
   outline-offset: -2px;
 }
 
-.tag-selection-btn--danger {
+/* The x of every selected chip while the pointer is on one of them. */
+.overlay-tag--remove-hot .tag-delete-btn,
+.overlay-tag--remove-hot .tag-delete-btn:hover {
+  border-radius: var(--radius-sm);
   color: rgb(var(--v-theme-dark-surface-error));
+  background: rgba(var(--v-theme-dark-surface-error), 0.2);
 }
 
 .tag-selection-btn--icon {

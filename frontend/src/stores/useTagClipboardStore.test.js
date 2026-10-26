@@ -51,6 +51,9 @@ describe("copy", () => {
     await store.copyTags(["rain", "umbrella", "Rain"]);
     expect(store.clipboardTags).toEqual(["rain", "umbrella"]);
     expect(writeText).toHaveBeenCalledWith("rain, umbrella");
+    // A real tag keeps its brackets and commas; only free text is split.
+    await store.copyTags(["pikachu (pokemon)", "red, white"]);
+    expect(store.clipboardTags).toEqual(["pikachu (pokemon)", "red, white"]);
     expect(patchUserConfig).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
   });
@@ -72,6 +75,16 @@ describe("paste", () => {
     ]);
     expect(result).toEqual({ pictureIds: [1, 2], failed: 0 });
     expect(lastNotice()).toBe("Added 2 tags to 2 pictures");
+  });
+
+  it("counts only the tags it added in the notice", async () => {
+    const store = useTagClipboardStore();
+    store.clipboardTags = ["rain", "umbrella", "hood"];
+    bulkFetchTags.mockResolvedValue([
+      { id: 1, tags: [{ id: 10, tag: "rain" }, { id: 11, tag: "hood" }] },
+    ]);
+    await store.pasteClipboard([1]);
+    expect(lastNotice()).toBe("Added 1 tag");
   });
 
   it("fetches tags in chunks the bulk endpoint accepts", async () => {

@@ -28,6 +28,11 @@ test.describe('tag copy and paste', () => {
     const bar = page.locator('.tag-selection-bar')
     await expect(bar).toContainText('2 selected')
     await shot('1-selected')
+    // The x of one selected chip lights the x of every selected chip.
+    await overlay.tag(TAGS[0]).locator('.tag-delete-btn').hover()
+    await expect(page.locator('.overlay-tag--remove-hot')).toHaveCount(2)
+    await shot('1b-remove-hot')
+    await bar.hover()
     await bar.getByRole('button', { name: 'Copy' }).click()
     await expect(bar.getByRole('button', { name: 'Clear selection' })).toBeVisible()
     await page.keyboard.press('Escape')

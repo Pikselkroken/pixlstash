@@ -138,6 +138,39 @@ describe("OverlayTagsPanel - selecting, copying and pasting tags", () => {
     expect(wrapper.find(".tag-selection-bar").exists()).toBe(false);
   });
 
+  it("the x on a selected chip removes the whole selection, and hovering it lights every selected x", async () => {
+    const { removeTagEverywhere } = await import("../../api/tags");
+    removeTagEverywhere.mockClear();
+    const wrapper = mountPanel();
+    const [rain, umbrella, raincoat] = chips(wrapper);
+    await rain.trigger("click");
+    await raincoat.trigger("click");
+    const x = raincoat.find(".tag-delete-btn");
+    await x.trigger("mouseenter");
+    const hot = wrapper
+      .findAll(".overlay-tag--remove-hot")
+      .map((chip) => chip.text().trim());
+    expect(hot).toEqual(["rain", "yellow raincoat"]);
+    expect(umbrella.classes()).not.toContain("overlay-tag--remove-hot");
+    expect(x.attributes("aria-label")).toBe("Remove 2 selected tags (Del)");
+    await x.trigger("click");
+    await vi.waitFor(() =>
+      expect(removeTagEverywhere.mock.calls.map((c) => c[1])).toEqual([
+        "rain",
+        "yellow raincoat",
+      ]),
+    );
+    expect(wrapper.find(".tag-selection-bar").exists()).toBe(false);
+  });
+
+  it("hovering the x of a chip outside the selection lights nothing", async () => {
+    const wrapper = mountPanel();
+    const [rain, umbrella] = chips(wrapper);
+    await rain.trigger("click");
+    await umbrella.find(".tag-delete-btn").trigger("mouseenter");
+    expect(wrapper.findAll(".overlay-tag--remove-hot")).toHaveLength(0);
+  });
+
   it("drops the selection when the picture changes", async () => {
     const wrapper = mountPanel();
     await chips(wrapper)[0].trigger("click");
