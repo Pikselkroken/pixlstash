@@ -1359,10 +1359,13 @@ class TrainingService:
             completed and unimported, and the next start's reconcile imports
             it. True to import now.
         """
-        if self._stop.is_set() or progress.status != "completed":
+        if progress.status != "completed":
             return True
         resolution = self._resolution(info["uuid"])
+        # Recorded even on shutdown: only the preview passes wait for a start.
         self._record_run(info["uuid"], handle, progress, lease, watch, resolution)
+        if self._stop.is_set():
+            return True
         if resolution.get("previews_deferred") and progress.final_checkpoint:
             try:
                 return self._sample_after_training(

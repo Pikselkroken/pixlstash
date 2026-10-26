@@ -1500,6 +1500,12 @@ def test_deferred_previews_are_drawn_from_each_checkpoint_after_training(
     assert not os.listdir(os.path.join(work_dir, "after"))
     phases = [entry["phase"] for entry in json.loads(row.phase_log)]
     assert phases[-2:] == ["previews", "importing"]
+    # The run's own record keeps the previews peak the deferral came from
+    # (peaks merge by maximum), so the next run of the setup defers too.
+    measured = measurements.read(hub, resolution["fingerprint"])
+    assert measured["source"] == "run"
+    assert measured["phase_peaks"]["previews"]["vram_mb"] == 30000
+    assert _resolve_small(hub)["previews_deferred"] is True
 
 
 def test_the_lease_shrinks_to_the_peak_once_the_first_checkpoint_is_saved(
@@ -1725,3 +1731,27 @@ def test_a_lease_adopted_for_a_run_reconcile_cannot_take_is_released(
     service.reconcile_on_startup()
 
     assert adopted.release_count == 1 and service._adopted == {}
+
+
+def test_a_run_finishing_at_shutdown_still_records_its_measurement(hub, repo_dir):
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    resolution = _resolve_small(hub)
+    job = _enqueue_resolved(service, resolution, "unused.json")
+    watch = training_service_module._Watch()
+    measurements.note_peak(watch.peaks, "training", 9000, 12000)
+    done = TrainingProgress(
+        status="completed", info="", step=4, total_steps=4, speed="", samples=[]
+    )
+    handle = SimpleNamespace(loss_db_path=os.path.join(repo_dir, "missing.db"))
+    service._stop.set()
+
+    service._after_training(None, handle, job, done, _StubLease(), watch)
+
+    measured = measurements.read(hub, resolution["fingerprint"])
+    assert measured["phase_peaks"]["training"]["vram_mb"] == 9000
