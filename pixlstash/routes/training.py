@@ -15,6 +15,7 @@ or scope checks.
 """
 
 import json
+import math
 import os
 import re
 import shutil
@@ -285,15 +286,16 @@ def create_router(server) -> APIRouter:
         set_id: Optional[int] = Field(
             default=None,
             description=(
-                "Picture-set id to train on. Mutually exclusive with "
-                "character_id; provide exactly one."
+                "Picture-set id to train on. With character_id it must be "
+                "that character's reference set; alone, a reference set is "
+                "filed under its character."
             ),
         )
         character_id: Optional[int] = Field(
             default=None,
             description=(
-                "Character id to train on. Mutually exclusive with set_id; "
-                "provide exactly one."
+                "Character id to train on, or to file a reference-set run "
+                "under. Give set_id, character_id or both."
             ),
         )
         name: str = Field(
@@ -710,9 +712,19 @@ def create_router(server) -> APIRouter:
             default_factory=dict,
             description="Each listed key's type and range: { kind, lo, hi, count, choices }.",
         )
+        steps_clamp: Optional[str] = Field(
+            default=None,
+            description=(
+                "cap or floor when the effort's step range held the "
+                "picture-scaled steps (no pins), else null."
+            ),
+        )
         steps_rule: dict = Field(
             ...,
-            description="The effort's steps_per_picture, min_steps and max_steps.",
+            description=(
+                "The effort's steps_per_picture, min_steps and max_steps, and "
+                "fits: { lo, hi }, the picture counts it covers unclamped."
+            ),
         )
         room: dict = Field(
             ..., description="The GPU and RAM a run could be given now (MiB)."
@@ -1105,7 +1117,7 @@ def create_router(server) -> APIRouter:
         if set_id is None and character_id is None:
             raise HTTPException(
                 status_code=400,
-                detail="Exactly one of set_id / character_id must be provided.",
+                detail="Give a set_id, a character_id, or both for a reference set.",
             )
         if set_id is None:
             return None, character_id
@@ -1120,8 +1132,8 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "Exactly one of set_id / character_id must be provided, "
-                    "unless the set is that character's reference set."
+                    "A set_id and a character_id together must name that "
+                    "character's reference set."
                 ),
             )
         return set_id, owner
@@ -1157,8 +1169,9 @@ def create_router(server) -> APIRouter:
         summary="Enqueue a training job",
         response_model=CreateJobResponse,
         description=(
-            "Creates a queued LoRA training job for exactly one of a picture "
-            "set or a character. The background trainer picks it up FIFO. "
+            "Creates a queued LoRA training job for a picture set, a character "
+            "or a character's reference set (filed under the character). The "
+            "background trainer picks it up FIFO. "
             "Owner-only."
         ),
     )
@@ -1910,10 +1923,13 @@ def create_router(server) -> APIRouter:
             )
         row = preset["effort"][payload.effort]
         room = server.vault.training_room()
-        out = {
-            "steps_rule": {k: row[k] for k in presets.EFFORT_STEP_KEYS},
-            "room": room,
+        rule = {k: row[k] for k in presets.EFFORT_STEP_KEYS}
+        # The picture counts the effort's step range covers without clamping.
+        rule["fits"] = {
+            "lo": math.ceil(row["min_steps"] / row["steps_per_picture"]),
+            "hi": math.floor(row["max_steps"] / row["steps_per_picture"]),
         }
+        out = {"steps_rule": rule, "room": room}
         if room["vram_mb"] is None:
             out["error"] = {
                 "message": (
@@ -1947,6 +1963,7 @@ def create_router(server) -> APIRouter:
         try:
             derived = presets.resolve(preset, **choices)
             out["derived"] = derived["values"]
+            out["steps_clamp"] = derived["steps_clamp"]
             keys |= set(out["derived"])
         except presets.NoProfileFits as exc:
             logger.info("No pin-free %s profile fits: %s", preset["id"], exc)

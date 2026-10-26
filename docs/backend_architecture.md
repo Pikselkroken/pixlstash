@@ -11529,7 +11529,10 @@ reads that change nothing:
 - **`POST /training/resolve`**, per choice: `presets.resolve` for the choices,
   the client's picture count and `training_room()` exactly as
   `POST /training/jobs` runs it, plus `derived` (the same with no pins, what a
-  reset returns to), each value's `TUNABLE_KEYS` rule, the effort's step rule,
+  reset returns to), `steps_clamp` (`cap` / `floor` when the effort's step
+  range held the picture-scaled count, which `resolve` now reports), each
+  value's `TUNABLE_KEYS` rule, the effort's step rule with `fits` (the picture
+  counts it covers unclamped),
   and a verdict per recipe for the same choices (`fits`, `streams` when the
   profile offloads layers to RAM, `needs_ram`, `no_gpu`, `needs_checkout`). A
   run that cannot be resolved answers 200 with `error`, so the dialog keeps the

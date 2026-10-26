@@ -206,7 +206,12 @@
           >{{ pinnedCount }} pinned by you</span
         >
       </button>
-      <div v-if="advancedOpen" :id="advancedId" class="tld-more__body">
+      <div
+        v-if="advancedOpen"
+        :id="advancedId"
+        class="tld-more__body"
+        @keydown.enter="keepEnterInField"
+      >
         <p v-if="!values" class="tld-hint">
           {{
             planError
@@ -584,7 +589,7 @@ const fitOptions = computed(() => {
 const effortLine = computed(() =>
   effortReadout({
     values: values.value,
-    rule: plan.value?.steps_rule,
+    clamp: plan.value?.steps_clamp,
     effort: store.effort,
     pictureCount: store.pictureCount,
   }),
@@ -592,9 +597,9 @@ const effortLine = computed(() =>
 const effortHintText = computed(() =>
   effortHint({
     rule: plan.value?.steps_rule,
+    clamp: plan.value?.steps_clamp,
     effort: store.effort,
     subject: store.effectiveSubject,
-    pictureCount: store.pictureCount,
   }),
 );
 const fitLine = computed(() => fitReadout(resolution.value));
@@ -605,7 +610,7 @@ const sourceCtx = computed(() => ({
   subject: store.effectiveSubject,
   character: character.value,
   pictureCount: store.pictureCount,
-  rule: plan.value?.steps_rule,
+  clamp: plan.value?.steps_clamp,
   presetLabel: presetLabel.value,
   room: plan.value?.room,
 }));
@@ -771,9 +776,24 @@ async function onStart() {
         : "Training queued. Watch progress in the Tasks tab.",
     );
     emit("started");
-  } catch {
-    // store.submitError is already set and shown in the footer.
+  } catch (err) {
+    // store.submitError is already shown in the footer; keep the cause too.
+    console.warn(
+      "Training was not queued:",
+      store.scopePayload,
+      store.selectedPreset,
+      err,
+    );
   }
+}
+
+/**
+ * Enter in an Advanced field finishes the edit; it never starts a run. The
+ * dialog's Enter-accepts contract skips an event already handled, so this
+ * marks it. Buttons in the table keep Enter for themselves.
+ */
+function keepEnterInField(event) {
+  if (event.target instanceof HTMLInputElement) event.preventDefault();
 }
 
 function goToSettings() {
@@ -798,7 +818,6 @@ function goToSettings() {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  min-height: 18px;
 }
 
 .tld-label-row :deep(.field-label) {
@@ -1109,8 +1128,7 @@ function goToSettings() {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  height: 18px;
-  padding: 0 var(--space-2);
+  padding: var(--space-1) var(--space-2);
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;

@@ -3,7 +3,6 @@
 import { describe, it, expect } from "vitest";
 import {
   TRIGGER_TOKEN,
-  effortFits,
   effortHint,
   effortReadout,
   fitReadout,
@@ -17,7 +16,12 @@ import {
   triggerFromName,
 } from "./trainingPlan";
 
-const STANDARD = { steps_per_picture: 100, min_steps: 1200, max_steps: 3000 };
+const STANDARD = {
+  steps_per_picture: 100,
+  min_steps: 1200,
+  max_steps: 3000,
+  fits: { lo: 12, hi: 30 },
+};
 
 describe("triggerFromName", () => {
   it("lowercases and drops what is not a letter or digit", () => {
@@ -38,7 +42,7 @@ describe("effort read-out", () => {
     expect(
       effortReadout({
         values: values(2400),
-        rule: STANDARD,
+        clamp: null,
         effort: "standard",
         pictureCount: 24,
       }),
@@ -49,7 +53,7 @@ describe("effort read-out", () => {
     expect(
       effortReadout({
         values: values(3000),
-        rule: STANDARD,
+        clamp: "cap",
         effort: "standard",
         pictureCount: 112,
       }),
@@ -57,7 +61,7 @@ describe("effort read-out", () => {
     expect(
       effortReadout({
         values: values(1200),
-        rule: STANDARD,
+        clamp: "floor",
         effort: "standard",
         pictureCount: 8,
       }),
@@ -68,20 +72,24 @@ describe("effort read-out", () => {
     expect(
       effortReadout({
         values: values(2000, "pinned"),
-        rule: STANDARD,
+        clamp: null,
         effort: "standard",
         pictureCount: 24,
       }),
     ).toMatch(/^2,000 steps \(pinned\)/);
   });
 
-  it("derives the picture range from the step rule", () => {
-    expect(effortFits(STANDARD)).toEqual({ lo: 12, hi: 30 });
+  it("says the picture range the server gives, and the cap when held", () => {
     expect(
-      effortHint({ rule: STANDARD, effort: "standard", subject: "person", pictureCount: 24 }),
+      effortHint({ rule: STANDARD, clamp: null, effort: "standard", subject: "person" }),
     ).toBe("Standard suits 12 to 30 pictures.");
     expect(
-      effortHint({ rule: STANDARD, effort: "strong", subject: "person", pictureCount: 24 }),
+      effortHint({ rule: STANDARD, clamp: "cap", effort: "standard", subject: "person" }),
+    ).toBe(
+      "Standard suits 12 to 30 pictures and stops at 3,000 steps for bigger sets.",
+    );
+    expect(
+      effortHint({ rule: STANDARD, clamp: null, effort: "strong", subject: "person" }),
     ).toMatch(/learns the face sooner/);
   });
 });
@@ -93,7 +101,7 @@ describe("sources", () => {
     subject: "style",
     character: null,
     pictureCount: 24,
-    rule: STANDARD,
+    clamp: null,
     presetLabel: "Z-Image Turbo",
     room: { vram_mb: 20 * 1024 },
   };
@@ -108,7 +116,7 @@ describe("sources", () => {
     expect(sourceLabel({ source: "gpu" }, ctx)).toBe("Auto, 20 GB free");
     expect(sourceLabel({ source: "model" }, ctx)).toBe("Z-Image Turbo");
     expect(sourceLabel({ source: "pinned" }, ctx)).toBe("Typed by you, so it stays put");
-    expect(sourceLabel({ source: "pictures" }, { ...ctx, pictureCount: 112 })).toBe(
+    expect(sourceLabel({ source: "pictures" }, { ...ctx, clamp: "cap" })).toBe(
       "Standard, capped",
     );
   });

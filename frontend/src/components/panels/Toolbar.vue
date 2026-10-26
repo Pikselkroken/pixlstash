@@ -726,9 +726,9 @@ const trainingStore = useTrainingStore();
 const entityNames = useEntityNamesStore();
 
 // ── Train LoRA: single-set / single-character scope gating ───────────────────
-// Training v1 accepts exactly one set OR one character (the API takes set_id
-// XOR character_id). Enable the button only when the current view is exactly
-// that; otherwise disable with a teaching tooltip.
+// A run trains on one set or one character (a character's reference set is
+// chosen inside the dialog). Enable the button only when the current view is
+// exactly that; otherwise disable with a teaching tooltip.
 const TRAIN_SPECIAL_CHARACTER_IDS = new Set([
   ALL_PICTURES_ID,
   UNASSIGNED_PICTURES_ID,

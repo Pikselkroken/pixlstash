@@ -131,29 +131,12 @@ export function gb(mb) {
   return Math.round((Number(mb) || 0) / 1024);
 }
 
-/** The picture range an effort's step rule suits: {lo, hi}. */
-export function effortFits(rule) {
-  if (!rule?.steps_per_picture) return null;
-  return {
-    lo: Math.ceil(rule.min_steps / rule.steps_per_picture),
-    hi: Math.floor(rule.max_steps / rule.steps_per_picture),
-  };
-}
-
-/** Whether the step count was held at the effort's cap or floor. */
-export function stepsClamp(rule, pictureCount) {
-  if (!rule?.steps_per_picture) return null;
-  const raw = Math.ceil(rule.steps_per_picture * pictureCount);
-  if (raw > rule.max_steps) return "cap";
-  if (raw < rule.min_steps) return "floor";
-  return null;
-}
-
 /**
  * The mono line under "How hard to train": what the effort set.
- * `values` is the resolution's {key: {value, source}}.
+ * `values` is the resolution's {key: {value, source}}; `clamp` is the
+ * server's `steps_clamp` ("cap", "floor" or null).
  */
-export function effortReadout({ values, rule, effort, pictureCount }) {
+export function effortReadout({ values, clamp, effort, pictureCount }) {
   const steps = values?.["train.steps"];
   if (!steps) return "";
   const name = EFFORT_LABELS[effort] || effort;
@@ -161,7 +144,6 @@ export function effortReadout({ values, rule, effort, pictureCount }) {
   if (steps.source === "pinned") {
     stepsText += " (pinned)";
   } else {
-    const clamp = stepsClamp(rule, pictureCount);
     if (clamp === "cap") {
       stepsText += ` (${name}'s cap; ${formatCount(pictureCount)} pictures)`;
     } else if (clamp === "floor") {
@@ -177,14 +159,17 @@ export function effortReadout({ values, rule, effort, pictureCount }) {
   return parts.join(" · ");
 }
 
-/** The hint under the effort read-out. */
-export function effortHint({ rule, effort, subject, pictureCount }) {
-  const fits = effortFits(rule);
+/**
+ * The hint under the effort read-out. `rule` is the server's `steps_rule`,
+ * whose `fits` is the picture range the effort covers unclamped.
+ */
+export function effortHint({ rule, clamp, effort, subject }) {
+  const fits = rule?.fits;
   const name = EFFORT_LABELS[effort] || effort;
   const parts = [];
   if (fits) {
     parts.push(
-      stepsClamp(rule, pictureCount) === "cap"
+      clamp === "cap"
         ? `${name} suits ${fits.lo} to ${fits.hi} pictures and stops at ${formatCount(rule.max_steps)} steps for bigger sets.`
         : `${name} suits ${fits.lo} to ${fits.hi} pictures.`,
     );
@@ -211,7 +196,7 @@ export function fitReadout(resolution) {
  * Where a value comes from, in the "Comes from" column's words.
  *
  * @param {{value, source}} entry The resolved value.
- * @param {object} ctx `{effort, fit, subject, character, pictureCount, rule,
+ * @param {object} ctx `{effort, fit, subject, character, pictureCount, clamp,
  *   presetLabel, room}`.
  */
 export function sourceLabel(entry, ctx) {
@@ -220,12 +205,10 @@ export function sourceLabel(entry, ctx) {
   switch (entry.source) {
     case "pinned":
       return "Typed by you, so it stays put";
-    case "pictures": {
-      const clamp = stepsClamp(ctx.rule, ctx.pictureCount);
-      if (clamp === "cap") return `${effort}, capped`;
-      if (clamp === "floor") return `${effort}'s minimum`;
+    case "pictures":
+      if (ctx.clamp === "cap") return `${effort}, capped`;
+      if (ctx.clamp === "floor") return `${effort}'s minimum`;
       return `${effort} × ${formatCount(ctx.pictureCount)} pictures`;
-    }
     case "effort":
       return effort;
     case "subject":

@@ -344,7 +344,9 @@ def resolve(
 
     Returns:
         ``{"preset", "subject", "effort", "fit", "picture_count", "profile",
-        "profile_label", "evidence", "vram_mb", "ram_mb", "room", "values"}``;
+        "profile_label", "evidence", "vram_mb", "ram_mb", "room",
+        "steps_clamp", "values"}``; ``steps_clamp`` is ``cap`` or ``floor``
+        when the effort's step range held the picture-scaled count, else None;
         ``values`` maps each key to ``{"value", "source"}``, the source being
         ``model``, ``subject``, ``effort``, ``pictures``, ``captions``, ``gpu``
         or ``pinned``.
@@ -380,6 +382,13 @@ def resolve(
         "value": int(min(max(steps, row["min_steps"]), row["max_steps"])),
         "source": "pictures",
     }
+    clamp = (
+        "cap"
+        if steps > row["max_steps"]
+        else "floor"
+        if steps < row["min_steps"]
+        else None
+    )
     put("pinned", pins)
     if "network.linear_alpha" not in pins and "network.linear" in values:
         values["network.linear_alpha"] = dict(values["network.linear"])
@@ -473,6 +482,7 @@ def resolve(
         "vram_mb": profile["vram_mb"],
         "ram_mb": profile["ram_mb"],
         "room": {"vram_mb": vram_mb, "ram_mb": ram_mb},
+        "steps_clamp": clamp,
         "values": values,
     }
 

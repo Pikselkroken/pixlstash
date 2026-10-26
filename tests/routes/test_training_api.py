@@ -326,7 +326,7 @@ def test_create_job_neither_source_is_400():
     try:
         r = owner.post("/training/jobs", json={"name": "x", "trigger_word": "alice"})
         assert r.status_code == 400, r.text
-        assert "exactly one" in r.json()["detail"].lower()
+        assert "set_id" in r.json()["detail"]
     finally:
         _teardown(temp_dir, server)
 
@@ -1057,6 +1057,8 @@ def test_resolve_previews_the_run_and_every_recipes_fit():
     """The preview resolves exactly as a job would, gives the pin-free value
     a reset returns to, each value's rule, and a fit verdict per recipe; it
     queues nothing and a run that fits nowhere answers 200 with the reason."""
+    from pixlstash.training import presets
+
     temp_dir, owner, server, read_token = _setup()
     try:
         body = {"subject": "person", "picture_count": 24}
@@ -1070,7 +1072,9 @@ def test_resolve_previews_the_run_and_every_recipes_fit():
             "steps_per_picture": 100,
             "min_steps": 1200,
             "max_steps": 3000,
+            "fits": {"lo": 12, "hi": 30},
         }
+        assert out["steps_clamp"] is None
         assert out["rules"]["train.steps"]["kind"] == "int"
         assert out["rules"]["model.quantize"]["kind"] == "bool"
         assert "adamw8bit" in out["rules"]["train.optimizer"]["choices"]
@@ -1092,6 +1096,23 @@ def test_resolve_previews_the_run_and_every_recipes_fit():
         out = r.json()
         assert out["resolution"]["values"]["train.steps"]["source"] == "pinned"
         assert out["derived"]["train.steps"] == {"value": 2400, "source": "pictures"}
+
+        # A big set is held at the effort's cap, a small one at its floor.
+        r = owner.post("/training/resolve", json={**body, "picture_count": 112})
+        assert r.json()["steps_clamp"] == "cap"
+        assert r.json()["resolution"]["values"]["train.steps"]["value"] == 3000
+        r = owner.post("/training/resolve", json={**body, "picture_count": 8})
+        assert r.json()["steps_clamp"] == "floor"
+
+        # A checkout without the model code cannot train the recipe.
+        archs = presets.checkout_architectures
+        presets.checkout_architectures = lambda repo: []
+        try:
+            r = owner.post("/training/resolve", json=body)
+        finally:
+            presets.checkout_architectures = archs
+        assert r.json()["presets"][0]["verdict"] == "needs_checkout"
+        assert r.json()["presets"][0]["offered"] is False
 
         # Save memory streams layers from RAM; a small card fits nowhere.
         r = owner.post("/training/resolve", json={**body, "fit": "save_memory"})
@@ -1155,6 +1176,10 @@ def test_dataset_counts_and_checks_and_knows_a_reference_set():
         assert out["character"]["all_count"] == 3
         assert out["character"]["reference_count"] == _PICTURES["count"]
 
+        # A character that does not exist is a 404, not a 500.
+        r = owner.get("/training/dataset", params={"character_id": 9999})
+        assert r.status_code == 404, r.text
+
         # Another set with the character is refused.
         r = owner.get(
             "/training/dataset", params={"set_id": set_id, "character_id": char_id}
@@ -1183,6 +1208,10 @@ def test_create_job_on_a_reference_set_is_filed_under_its_character():
             assert r.json()["resolved_profile"]["subject"] == "person"
         call = server.vault.training_service.enqueue_calls[-1]
         assert (call["set_id"], call["character_id"]) == (ref_id, char_id)
+        # Its default prompts are a person's too, without being told.
+        r = owner.get("/training/sample-prompts", params={"set_id": ref_id})
+        assert r.status_code == 200, r.text
+        assert r.json()["subject"] == "person"
     finally:
         _teardown(temp_dir, server)
 

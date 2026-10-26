@@ -272,8 +272,9 @@ def test_training_facts_count_untagged_near_copies_and_other_people(env):
     word alone, two pictures with the same perceptual hash are near copies,
     and a face named as somebody else is another person in the dataset.
 
-    Last in the module, after the captions test took the finders out, so it
-    places its pictures as rows rather than uploading them.
+    It takes the finders out itself, so nothing rewrites the rows it places,
+    and it places its pictures as rows rather than uploading them, so it works
+    whichever test ran before it on this module's server.
     """
     client, server = env
     quiesce_background_work(server)

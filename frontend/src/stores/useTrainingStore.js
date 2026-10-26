@@ -161,7 +161,9 @@ export const useTrainingStore = defineStore("training", () => {
    * trigger word starts from the name ("Pub nights" → "pubnights"). Then the
    * dataset is read; a character with a reference set trains on it.
    */
+  let openSeq = 0;
   async function openForScope({ type, id, name }) {
+    const seq = ++openSeq;
     scopeType.value = type;
     scopeId.value = id != null ? Number(id) : null;
     scopeName.value = name || "";
@@ -183,6 +185,8 @@ export const useTrainingStore = defineStore("training", () => {
     const entry =
       type === "character" ? { character_id: scopeId.value } : { set_id: scopeId.value };
     await loadDataset(entry);
+    // Closed or reopened on something else while the read was out.
+    if (seq !== openSeq || !trainDialogOpen.value) return;
     const ch = character.value;
     if (!ch) return;
     // Opened from a reference set, or from a person: the trigger word is
@@ -198,6 +202,9 @@ export const useTrainingStore = defineStore("training", () => {
 
   function closeDialog() {
     trainDialogOpen.value = false;
+    openSeq += 1;
+    resolveSoon.cancel();
+    promptsSoon.cancel();
   }
 
   let datasetSeq = 0;
@@ -305,10 +312,12 @@ export const useTrainingStore = defineStore("training", () => {
 
   function debounced(fn, ms) {
     let timer = null;
-    return () => {
+    const run = () => {
       clearTimeout(timer);
       timer = setTimeout(fn, ms);
     };
+    run.cancel = () => clearTimeout(timer);
+    return run;
   }
   const resolveSoon = debounced(resolvePlan, RESOLVE_DEBOUNCE_MS);
   const promptsSoon = debounced(loadPrompts, PROMPTS_DEBOUNCE_MS);
@@ -538,7 +547,11 @@ export const useTrainingStore = defineStore("training", () => {
     aiToolkitDiscovery.value = null;
     aiToolkitCheck.value = null;
     aiToolkitStatus.value = null;
-    trainDialogOpen.value = false;
+    closeDialog();
+    scopeType.value = null;
+    scopeId.value = null;
+    scopeName.value = "";
+    trainOn.value = "all";
     dataset.value = null;
     plan.value = null;
     pins.value = {};

@@ -243,6 +243,23 @@ describe("TrainLoraDialog", () => {
     expect(startButton(wrapper).attributes("disabled")).toBeDefined();
   });
 
+  it("never starts a run from Enter in an Advanced field", async () => {
+    const { wrapper } = await openDialog(
+      { type: "character", id: 4, name: "Grandad" },
+      dataset(),
+    );
+    await wrapper.find('[data-testid="tld-advanced"]').trigger("click");
+    const enter = () =>
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    // AppDialog's Enter-accepts skips an event already handled.
+    const inField = enter();
+    wrapper.find('input[aria-label="Steps"]').element.dispatchEvent(inField);
+    expect(inField.defaultPrevented).toBe(true);
+    const inTrigger = enter();
+    wrapper.find('input[aria-label="Trigger word"]').element.dispatchEvent(inTrigger);
+    expect(inTrigger.defaultPrevented).toBe(false);
+  });
+
   it("edits the sample prompts and keeps at least one", async () => {
     const { wrapper, store } = await openDialog(
       { type: "character", id: 4, name: "Grandad" },
