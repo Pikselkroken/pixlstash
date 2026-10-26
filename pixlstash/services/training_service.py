@@ -264,15 +264,16 @@ class TrainingService:
     ) -> dict:
         """Create a queued training run and wake the worker.
 
-        Exactly one of ``set_id`` / ``character_id`` must be given (the
-        set/character invariant). The job is persisted with a fresh uuid and
-        ``status="queued"``; the worker picks it up FIFO.
+        At least one of ``set_id`` / ``character_id`` must be given. Both
+        mean a character's reference set: the pictures come from the set and
+        the run is filed under the character (the route checks the pairing).
+        The job is persisted with a fresh uuid and ``status="queued"``; the
+        worker picks it up FIFO.
 
         Args:
-            set_id: Picture-set to train on (mutually exclusive with
-                ``character_id``).
-            character_id: Character to train on (mutually exclusive with
-                ``set_id``).
+            set_id: Picture-set to train on.
+            character_id: Character to train on, or to file a reference-set
+                run under.
             name: Human-readable job name.
             base_model: Base checkpoint the LoRA trains against.
             trigger_word: Caption trigger word baked into the dataset.
@@ -290,15 +291,11 @@ class TrainingService:
             The persisted run, as the hub row (a dict of its columns).
 
         Raises:
-            ValueError: If not exactly one of ``set_id`` / ``character_id`` is
-                provided.
+            ValueError: If neither ``set_id`` nor ``character_id`` is given.
             RuntimeError: No hub or library is open to hold the run.
         """
-        if (set_id is None) == (character_id is None):
-            raise ValueError(
-                "Exactly one of set_id / character_id must be provided "
-                f"(got set_id={set_id!r}, character_id={character_id!r})."
-            )
+        if set_id is None and character_id is None:
+            raise ValueError("A training run needs a set_id or a character_id.")
         hub, library_uuid = self._store()
 
         job_uuid = uuid.uuid4().hex

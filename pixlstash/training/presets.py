@@ -56,7 +56,7 @@ EVIDENCE = ("measured", "reported", "derived", "none")
 
 PROMPTS_KEY = "sample.samples[*].prompt"
 _MAX_PROMPTS = 16
-_EFFORT_STEPS = ("steps_per_picture", "min_steps", "max_steps")
+EFFORT_STEP_KEYS = ("steps_per_picture", "min_steps", "max_steps")
 
 
 class PresetError(ValueError):
@@ -151,15 +151,17 @@ def validate_preset(preset: dict) -> dict:
     if set(preset["effort"]) != set(EFFORTS):
         raise PresetError(f"{pid}: effort must hold exactly {', '.join(EFFORTS)}.")
     for name, row in preset["effort"].items():
-        steps = [row.get(k) for k in _EFFORT_STEPS]
+        steps = [row.get(k) for k in EFFORT_STEP_KEYS]
         if not all(isinstance(v, (int, float)) and v > 0 for v in steps):
-            raise PresetError(f"{pid}: effort.{name} needs {', '.join(_EFFORT_STEPS)}.")
+            raise PresetError(
+                f"{pid}: effort.{name} needs {', '.join(EFFORT_STEP_KEYS)}."
+            )
         if row["min_steps"] > row["max_steps"]:
             raise PresetError(f"{pid}: effort.{name} min_steps is above max_steps.")
         _check_table(
             pid,
             f"effort.{name}",
-            {k: v for k, v in row.items() if k not in _EFFORT_STEPS},
+            {k: v for k, v in row.items() if k not in EFFORT_STEP_KEYS},
         )
     if set(preset["fit"]) != set(FITS):
         raise PresetError(f"{pid}: fit must hold exactly {', '.join(FITS)}.")
@@ -372,7 +374,7 @@ def resolve(
         check_tunable(PROMPTS_KEY, list(prompts))
         put("captions", {PROMPTS_KEY: list(prompts)})
     row = preset["effort"][effort]
-    put("effort", {k: v for k, v in row.items() if k not in _EFFORT_STEPS})
+    put("effort", {k: v for k, v in row.items() if k not in EFFORT_STEP_KEYS})
     steps = math.ceil(row["steps_per_picture"] * max(0, picture_count))
     values["train.steps"] = {
         "value": int(min(max(steps, row["min_steps"]), row["max_steps"])),

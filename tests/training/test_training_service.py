@@ -303,7 +303,7 @@ def test_a_run_without_a_memory_profile_errors_instead_of_training(hub, repo_dir
     assert lease.acquire_count == 0
 
 
-def test_enqueue_validates_exactly_one_scope(hub, repo_dir):
+def test_enqueue_needs_a_scope(hub, repo_dir):
     lease, notify = _StubLease(), _CapturingNotify()
     service = _make_service(
         hub,
@@ -318,16 +318,18 @@ def test_enqueue_validates_exactly_one_scope(hub, repo_dir):
         service.enqueue(
             name="bad", base_model="m", trigger_word="t", template_path=template
         )
-    with pytest.raises(ValueError):
-        service.enqueue(
-            set_id=1,
-            character_id=2,
-            name="bad",
-            base_model="m",
-            trigger_word="t",
-            template_path=template,
-            resolution=_RESOLUTION,
-        )
+    # Both is a character's reference set, filed under the character; the
+    # route checks the pairing.
+    both = service.enqueue(
+        set_id=_SET_ID,
+        character_id=2,
+        name="reference",
+        base_model="m",
+        trigger_word="t",
+        template_path=template,
+        resolution=_RESOLUTION,
+    )
+    assert (both["set_id"], both["character_id"]) == (_SET_ID, 2)
 
     set_id = _SET_ID
     job = service.enqueue(

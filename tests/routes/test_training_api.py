@@ -47,7 +47,7 @@ class _FakeTrainingService:
     """Records enqueue/cancel calls so tests need no GPU/subprocess.
 
     ``enqueue`` mirrors the real service's set/character invariant (raises
-    ``ValueError`` unless exactly one is given) and writes a real hub
+    ``ValueError`` when neither is given) and writes a real hub
     ``training_run`` row so the create response is realistic.
     """
 
@@ -72,11 +72,8 @@ class _FakeTrainingService:
         resolution=None,
         pins=None,
     ):
-        if (set_id is None) == (character_id is None):
-            raise ValueError(
-                "Exactly one of set_id / character_id must be provided "
-                f"(got set_id={set_id!r}, character_id={character_id!r})."
-            )
+        if set_id is None and character_id is None:
+            raise ValueError("A training run needs a set_id or a character_id.")
         self.enqueue_calls.append(
             {
                 "set_id": set_id,
@@ -1039,6 +1036,153 @@ def test_sample_prompts_scoped_token_forbidden():
         # In-scope control: the same request as the owner resolves the route.
         r = owner.get("/training/sample-prompts", params={"character_id": char_id})
         assert r.status_code == 200, r.text
+    finally:
+        _teardown(temp_dir, server)
+
+
+# ---------------------------------------------------------------------------
+# POST /training/resolve and GET /training/dataset (the Train dialog's preview)
+# ---------------------------------------------------------------------------
+
+
+def _reference_set_of(server, char_id):
+    from pixlstash.db_models import Character
+
+    return server.vault.db.run_task(
+        lambda session: session.get(Character, char_id).reference_picture_set_id
+    )
+
+
+def test_resolve_previews_the_run_and_every_recipes_fit():
+    """The preview resolves exactly as a job would, gives the pin-free value
+    a reset returns to, each value's rule, and a fit verdict per recipe; it
+    queues nothing and a run that fits nowhere answers 200 with the reason."""
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        body = {"subject": "person", "picture_count": 24}
+        r = owner.post("/training/resolve", json=body)
+        assert r.status_code == 200, r.text
+        out = r.json()
+        steps = out["resolution"]["values"]["train.steps"]
+        assert steps == {"value": 2400, "source": "pictures"}
+        assert out["derived"]["train.steps"] == {"value": 2400, "source": "pictures"}
+        assert out["steps_rule"] == {
+            "steps_per_picture": 100,
+            "min_steps": 1200,
+            "max_steps": 3000,
+        }
+        assert out["rules"]["train.steps"]["kind"] == "int"
+        assert out["rules"]["model.quantize"]["kind"] == "bool"
+        assert "adamw8bit" in out["rules"]["train.optimizer"]["choices"]
+        assert out["room"] == _ROOM_24GB
+        assert out["presets"] == [
+            {
+                "id": "zimage-turbo",
+                "label": "Z-Image Turbo",
+                "offered": True,
+                "verdict": "fits",
+            }
+        ]
+        assert server.vault.training_service.enqueue_calls == []
+
+        # A pin wins in the resolution; the derived value stays the choice's.
+        r = owner.post(
+            "/training/resolve", json={**body, "pins": {"train.steps": 2000}}
+        )
+        out = r.json()
+        assert out["resolution"]["values"]["train.steps"]["source"] == "pinned"
+        assert out["derived"]["train.steps"] == {"value": 2400, "source": "pictures"}
+
+        # Save memory streams layers from RAM; a small card fits nowhere.
+        r = owner.post("/training/resolve", json={**body, "fit": "save_memory"})
+        assert r.json()["presets"][0]["verdict"] == "streams"
+        server.vault.training_room = lambda: {"vram_mb": 7_000, "ram_mb": 60_000}
+        r = owner.post("/training/resolve", json=body)
+        assert r.status_code == 200, r.text
+        out = r.json()
+        assert out["resolution"] is None
+        assert out["error"]["budget"] == "vram"
+        assert out["presets"][0]["verdict"] == "no_gpu"
+
+        # A locked key is named, not a 500.
+        server.vault.training_room = lambda: dict(_ROOM_24GB)
+        r = owner.post("/training/resolve", json={**body, "pins": {"model.arch": "x"}})
+        assert r.status_code == 200, r.text
+        assert "model.arch" in r.json()["error"]["message"]
+
+        scoped = _scoped_client(server, read_token)
+        assert scoped.post("/training/resolve", json=body).status_code == 403
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_dataset_counts_and_checks_and_knows_a_reference_set():
+    temp_dir, owner, server, read_token = _setup()
+    facts = ExportUtils.training_facts
+    ExportUtils.training_facts = staticmethod(
+        lambda server, **scope: {
+            "count": 3,
+            "untagged": 1,
+            "near_duplicates": 2,
+            "other_people": 0,
+        }
+    )
+    try:
+        set_id = _make_picture_set(owner)
+        r = owner.get("/training/dataset", params={"set_id": set_id})
+        assert r.status_code == 200, r.text
+        out = r.json()
+        assert (out["set_id"], out["character_id"]) == (set_id, None)
+        assert (out["count"], out["untagged"], out["near_duplicates"]) == (3, 1, 2)
+        assert out["min_pictures"] == 6
+        assert out["character"] is None
+
+        char_id = _make_character(owner, "Grandad")
+        ref_id = _reference_set_of(server, char_id)
+        assert ref_id is not None
+        # A reference set alone is the character's.
+        r = owner.get("/training/dataset", params={"set_id": ref_id})
+        out = r.json()
+        assert out["character_id"] == char_id
+        assert out["character"]["name"] == "Grandad"
+        assert out["character"]["reference_set_id"] == ref_id
+        assert out["character"]["reference_count"] == 3
+        assert out["character"]["all_count"] == _PICTURES["count"]
+
+        r = owner.get("/training/dataset", params={"character_id": char_id})
+        out = r.json()
+        assert out["set_id"] is None
+        assert out["character"]["all_count"] == 3
+        assert out["character"]["reference_count"] == _PICTURES["count"]
+
+        # Another set with the character is refused.
+        r = owner.get(
+            "/training/dataset", params={"set_id": set_id, "character_id": char_id}
+        )
+        assert r.status_code == 400, r.text
+
+        scoped = _scoped_client(server, read_token)
+        r = scoped.get("/training/dataset", params={"set_id": set_id})
+        assert r.status_code == 403, r.text
+    finally:
+        ExportUtils.training_facts = staticmethod(facts)
+        _teardown(temp_dir, server)
+
+
+def test_create_job_on_a_reference_set_is_filed_under_its_character():
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        char_id = _make_character(owner, "Grandad")
+        ref_id = _reference_set_of(server, char_id)
+        body = {"name": "x", "trigger_word": "grandad"}
+        for scope in ({"set_id": ref_id}, {"set_id": ref_id, "character_id": char_id}):
+            r = owner.post("/training/jobs", json={**body, **scope})
+            assert r.status_code == 200, r.text
+            assert (r.json()["set_id"], r.json()["character_id"]) == (ref_id, char_id)
+            # A reference set is a person, as a character is.
+            assert r.json()["resolved_profile"]["subject"] == "person"
+        call = server.vault.training_service.enqueue_calls[-1]
+        assert (call["set_id"], call["character_id"]) == (ref_id, char_id)
     finally:
         _teardown(temp_dir, server)
 

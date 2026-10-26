@@ -15,6 +15,11 @@ from PIL import Image, PngImagePlugin
 from pixlstash.db_models.face import Face
 from pixlstash.db_models.picture import Picture, PictureSet
 from pixlstash.db_models.picture_set import PictureSetMember
+from pixlstash.services.dedup_tier_service import (
+    DEFAULT_THRESHOLD,
+    NearBucket,
+    near_pairs_in_bucket,
+)
 from pixlstash.utils.host_open import open_in_file_manager
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
@@ -940,18 +945,72 @@ class ExportUtils:
         # ponytail: reads every picture's row and stats its file on each call,
         # like count_training_pictures; cache per set if large sets make the
         # Train dialog slow to open.
+        pics = ExportUtils._training_rows(server, set_id, character_id)
+        return ExportUtils._captions_and_tags(pics)
+
+    @staticmethod
+    def _training_rows(server, set_id, character_id) -> list:
+        """The dataset's pictures with their tags, in id order."""
         params = {
             "only_deleted": False,
             "picture_ids": [],
             "select_fields": Picture.metadata_fields() | {"tags"},
         }
-        pics = sorted(
+        return sorted(
             ExportUtils._training_pictures(server, set_id, character_id, params),
             key=lambda pic: pic.id,
         )
+
+    @staticmethod
+    def _captions_and_tags(pics) -> tuple[list[str], list[list[str]]]:
         captions = [pic.description or "" for pic in pics]
         tags = [CaptionUtils.build_tag_caption(pic).split(", ") for pic in pics]
         return captions, [[t for t in row if t] for row in tags]
+
+    @staticmethod
+    def training_facts(server, *, set_id=None, character_id=None) -> dict:
+        """What the Train dialog checks before a run of the set or character.
+
+        Returns:
+            ``{"count", "untagged", "near_duplicates", "other_people"}``: the
+            picture count, how many pictures have no tags (the dataset's
+            captions are the tags, so those train on the trigger word alone),
+            how many have a near copy in the dataset, and how many show a face
+            named as somebody other than *character_id* (0 without one).
+        """
+        pics = ExportUtils._training_rows(server, set_id, character_id)
+        _, tags = ExportUtils._captions_and_tags(pics)
+        ids = [pic.id for pic in pics]
+
+        def near_and_others(session):
+            pairs = near_pairs_in_bucket(
+                session,
+                NearBucket("training", "dataset", tuple(ids)),
+                DEFAULT_THRESHOLD,
+            )
+            near = {pid for pair in pairs for pid in pair[:2]}
+            others = 0
+            if character_id is not None and ids:
+                others = len(
+                    set(
+                        session.exec(
+                            select(Face.picture_id).where(
+                                Face.picture_id.in_(ids),
+                                Face.character_id.is_not(None),
+                                Face.character_id != int(character_id),
+                            )
+                        ).all()
+                    )
+                )
+            return len(near), others
+
+        near, others = server.vault.db.run_task(near_and_others)
+        return {
+            "count": len(ids),
+            "untagged": sum(1 for row in tags if not row),
+            "near_duplicates": near,
+            "other_people": others,
+        }
 
     @staticmethod
     def build_training_dataset(
