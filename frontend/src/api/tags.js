@@ -25,13 +25,16 @@ export async function listTags({ params } = {}) {
  * Add a tag to one picture.
  * @param {number|string} pictureId
  * @param {string} tag
+ * @param {Object} [options]
+ * @param {string} [options.batchId] - gesture batch id; a tag set pasted on
+ *   several pictures shares one so the paste is one undo step.
  * @returns {Promise<Object>} the response body, whose `tags` is the picture's
  *   full tag list after the edit.
  */
-export async function addPictureTag(pictureId, tag) {
+export async function addPictureTag(pictureId, tag, { batchId } = {}) {
   return unwrap(apiClient.post(`/pictures/${pictureId}/tags`, {
     tag,
-  }));
+  }, operationBatchHeaders(batchId)));
 }
 
 /**

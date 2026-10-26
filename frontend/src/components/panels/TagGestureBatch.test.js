@@ -15,6 +15,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
+import { createPinia, setActivePinia } from "pinia";
 
 const tagsApi = vi.hoisted(() => ({
   listTags: vi.fn(async () => []),
@@ -55,6 +56,8 @@ function batchIdsOf(...mocks) {
 }
 
 beforeEach(() => {
+  // TbTagPanel reads the tag clipboard store, which needs an active Pinia.
+  setActivePinia(createPinia());
   Object.values(tagsApi).forEach((mock) => mock.mockClear());
 });
 

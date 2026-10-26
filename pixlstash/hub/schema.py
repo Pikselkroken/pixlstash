@@ -1774,6 +1774,15 @@ CREATE TABLE IF NOT EXISTS user_vram_preference (
 )
 """
 
+# The owner's tag chip size (#2139); see ``services/tag_preferences.py``.
+# No row means the default size.
+_V2_USER_TAG_PREFERENCE = """
+CREATE TABLE IF NOT EXISTS user_tag_preference (
+    user_id    INTEGER PRIMARY KEY,
+    chip_size  TEXT
+)
+"""
+
 # The runs that ended, for the Tasks tab's Finished group (#2050): one row per
 # run PixlStash queued (``run_id``, ``run-<hex>``), grouped into the batch one
 # ``POST /workflows/run`` made of one workflow (``batch_id``, its first run's
@@ -1894,6 +1903,8 @@ _V2_WORKFLOW_TABLES = (
     _V2_WORKFLOW_VRAM_POLICY,
     _V2_USER_VRAM_PREFERENCE,
     _V2_WORKFLOW_RUN_LOG,
+    # Tag chip size (#2139).
+    _V2_USER_TAG_PREFERENCE,
     *_V2_WORKFLOW_INDEXES,
 )
 

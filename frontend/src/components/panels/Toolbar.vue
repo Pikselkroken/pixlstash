@@ -370,19 +370,10 @@
               <span class="tbm-title">Search</span>
             </div>
             <div class="gb-search-field">
-              <div class="tbm-input-wrap">
-                <v-icon size="16" class="tbm-input-icon">mdi-magnify</v-icon>
-                <input
-                  ref="searchInputRef"
-                  v-model="searchStore.searchInput"
-                  class="tbm-input tbm-input--with-icon"
-                  type="text"
-                  placeholder="Search your library…"
-                  autocomplete="off"
-                  @keydown.enter.prevent="onSearchEnter"
-                  @keydown.escape.prevent="onSearchEscape"
-                />
-              </div>
+              <SearchTokenField
+                ref="searchInputRef"
+                @close="gbSearchMenuOpen = false"
+              />
             </div>
             <div
               v-if="gbSearchHistoryItems.length"
@@ -637,6 +628,7 @@ import {
   sizeLabelForLevel,
 } from "../../utils/thumbnailSizes";
 import FilterMenu from "./FilterMenu.vue";
+import SearchTokenField from "./SearchTokenField.vue";
 import { filterChips } from "../../utils/filterChips";
 import TbGlobalActions from "./TbGlobalActions.vue";
 import TbExportPanel from "./TbExportPanel.vue";
@@ -845,13 +837,6 @@ const gbSearchMenuOpen = ref(false);
 // Full history when the field is empty; prefix-filtered while typing.
 const gbSearchHistoryItems = computed(() => searchStore.filteredSearchHistory);
 
-function onSearchEnter() {
-  searchStore.commitSearch();
-  gbSearchMenuOpen.value = false;
-}
-function onSearchEscape() {
-  gbSearchMenuOpen.value = false;
-}
 function gbApplySearchHistory(item) {
   searchStore.searchInput = item;
   searchStore.commitSearch();

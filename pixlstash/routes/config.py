@@ -35,7 +35,7 @@ from pixlstash.services import (
     scrapheap_service,
     workflow_ghost_service,
 )
-from pixlstash.services import run_log, vram_history
+from pixlstash.services import run_log, tag_preferences, vram_history
 from pixlstash.services.comfyui_service import live_runs
 from pixlstash.services.model_downloads import live_downloads
 from pixlstash.resources.arbiter import arbiter
@@ -90,6 +90,10 @@ def create_router(server) -> APIRouter:
         )
         # A table of its own in the hub (no new columns on ``user``).
         payload["auto_exclusive_after_oom"] = vram_history.auto_exclusive_after_oom(
+            server.hub, getattr(user, "id", None)
+        )
+        # A table of its own in the hub too.
+        payload["tag_chip_size"] = tag_preferences.read(
             server.hub, getattr(user, "id", None)
         )
         return payload
@@ -257,6 +261,9 @@ def create_router(server) -> APIRouter:
         smart_score_penalised_tags: Optional[dict] = None
         hidden_tags: Optional[list] = None
         tagger_settings: Optional[dict] = None
+        tag_chip_size: Optional[str] = Field(
+            default=None, description="`compact`, `comfortable` or `large`."
+        )
 
     class PenalisedTagsResponse(BaseModel):
         model_config = ConfigDict(extra="allow")
@@ -593,6 +600,18 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=400, detail="auto_exclusive_after_oom must be true or false"
             )
+        chip_size = None
+        if isinstance(patch_data, dict) and tag_preferences.CONFIG_KEY in patch_data:
+            # Its own hub table, not the user row. Checked here, before any
+            # write, and stored only once the user row has been saved, so a
+            # PATCH refused for any value saves none of them.
+            require_hub(server, "No hub is attached to keep the chip size in.")
+            try:
+                chip_size = tag_preferences.validate(
+                    patch_data.pop(tag_preferences.CONFIG_KEY)
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         def preview_patch(session: Session, user_id: int):
             """Validate the patch and work out which tag weights would change.
@@ -715,6 +734,8 @@ def create_router(server) -> APIRouter:
         user, updated = server.hub_engine.run_task(
             update_user, user_id, priority=DBPriority.IMMEDIATE
         )
+        if chip_size is not None:
+            tag_preferences.write(server.hub, user_id, chip_size)
         # Keep the process-local owner cache coherent with its new hub home.
         # Background work (notably smart scoring) has no request from which to
         # reload these settings.
@@ -807,6 +828,7 @@ def create_router(server) -> APIRouter:
                     server.hub, user_id, auto_exclusive
                 )
                 updated = True
+        updated = updated or chip_size is not None
         elapsed = time.time() - start_time
         logger.debug(
             f"[TIMING] PATCH /users/me/config completed in {elapsed:.3f} seconds"

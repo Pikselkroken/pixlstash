@@ -5,6 +5,7 @@ import { clearGuestScoreSession } from "../../api/pictures";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
+import { useTagClipboardStore } from "../../stores/useTagClipboardStore";
 import { VSwitch } from "vuetify/components";
 import AppSelect from "../widgets/AppSelect.vue";
 import AppButton from "../widgets/AppButton.vue";
@@ -73,6 +74,15 @@ const OPEN_GESTURE_OPTIONS = [
 const WHEEL_ACTION_OPTIONS = [
   { id: "zoom", label: "Zoom" },
   { id: "browse", label: "Browse pictures" },
+];
+
+// Tag chip size (#2139): one CSS variable on the root, set by the store. The
+// three steps are the type ramp's 11, 12 and 13px.
+const tagClipboard = useTagClipboardStore();
+const CHIP_SIZE_OPTIONS = [
+  { id: "compact", label: "Compact" },
+  { id: "comfortable", label: "Comfortable" },
+  { id: "large", label: "Large" },
 ];
 
 const SIDEBAR_WIDTH_OPTIONS = [
@@ -309,6 +319,19 @@ async function clearGuestSession() {
           />
         </div>
       </div>
+    </SettingsSection>
+
+    <SettingsSection
+      title="Chip size"
+      desc="How large tag chips read in the picture overlay and the tag dialog."
+    >
+      <Segmented
+        full
+        :model-value="tagClipboard.chipSize"
+        :options="CHIP_SIZE_OPTIONS"
+        aria-label="Chip size"
+        @update:model-value="(id) => tagClipboard.setChipSize(id)"
+      />
     </SettingsSection>
 
     <SettingsSection

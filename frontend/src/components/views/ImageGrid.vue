@@ -1941,6 +1941,11 @@ function handleTagsApplied(payload) {
   debouncedFetchAllGridImages({ force: true });
 }
 
+/** Refresh the grid after Ctrl+V pasted copied tags onto the selection (#2139). */
+function handlePasteResult() {
+  handleTagsApplied({ action: "add" });
+}
+
 async function handleAutoTag({ model } = {}) {
   const ids = selectedPictureIds();
   if (!ids.length || !props.backendUrl) return;
@@ -6744,6 +6749,7 @@ const { onGlobalKeyPress, handleKeyDown } = useGridKeyboardNav(
     toggleFavourite,
     moveStackMember,
     getOpenStackPlace,
+    onPasteResult: handlePasteResult,
   },
 );
 
