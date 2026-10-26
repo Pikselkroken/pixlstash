@@ -35,7 +35,7 @@
 22. [Tiered Duplicate Detection](#22-tiered-duplicate-detection)
 23. [Opt-in telemetry](#23-opt-in-telemetry-the-install-id-and-the-consent-flags)
 24. [Folder structure: read, commit, layout and moves](#24-folder-structure-read-commit-layout-and-moves) — incl. [24.1 The folder-structure read](#241-the-folder-structure-read), [24.2 The folder-structure commit](#242-the-folder-structure-commit), [24.3 The library layout](#243-the-library-layout), [24.4 The layout and the move engine](#244-the-layout-and-the-move-engine), [24.5 Reconciling moves made outside PixlStash](#245-reconciling-moves-made-outside-pixlstash)
-25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Picking up a model that landed after the scan (#1985)](#2513-picking-up-a-model-that-landed-after-the-scan-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116), [25.17 Sample prompts written from the dataset (#2117)](#2517-sample-prompts-written-from-the-dataset-2117), [25.18 Watching a run live (#2118)](#2518-watching-a-run-live-2118)
+25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Picking up a model that landed after the scan (#1985)](#2513-picking-up-a-model-that-landed-after-the-scan-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116), [25.17 Sample prompts written from the dataset (#2117)](#2517-sample-prompts-written-from-the-dataset-2117), [25.18 Watching a run live (#2118)](#2518-watching-a-run-live-2118), [25.19 The Train dialog's preview: dataset checks and resolve (#2119)](#2519-the-train-dialogs-preview-dataset-checks-and-resolve-2119)
 26. [Prompt match](#26-prompt-match)
 
 ---
@@ -802,6 +802,7 @@ Public guest scoring and shared-link endpoints.
 | PUT    | /api/v1/training/ai-toolkit/config                                            |                 | Save or disconnect the ai-toolkit install                     |
 | GET    | /api/v1/training/ai-toolkit/discover                                          |                 | Find an ai-toolkit checkout on this computer                  |
 | GET    | /api/v1/training/ai-toolkit/status                                            |                 | The configured ai-toolkit install and its folders             |
+| GET    | /api/v1/training/dataset                                                      |                 | What a training run of a set or character would hold          |
 | POST   | /api/v1/training/jobs                                                         |                 | Enqueue a training job                                        |
 | GET    | /api/v1/training/jobs                                                         |                 | List training jobs                                            |
 | GET    | /api/v1/training/jobs/{job_id}                                                |                 | Get training job detail                                       |
@@ -811,6 +812,7 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/training/jobs/{job_id}/live                                           |                 | Watch a training job                                          |
 | GET    | /api/v1/training/jobs/{job_id}/status                                         |                 | Poll training job status                                      |
 | GET    | /api/v1/training/presets                                                      |                 | List training recipes                                         |
+| POST   | /api/v1/training/resolve                                                      |                 | Preview what a training run would use                         |
 | GET    | /api/v1/training/sample-prompts                                               |                 | Default sample prompts for a training run                     |
 | GET    | /api/v1/workflows                                                             | workflows       | The Workflows grid                                            |
 | POST   | /api/v1/workflows/run                                                         | workflows       | Run a workflow                                                |
@@ -11507,6 +11509,41 @@ the run is on the shelf it records `training_run.cover_step`, and
 On the shelf, `Vault.choose_training_cover` moves the cover and the attachment
 at once. Either way a step must be one the run kept a checkpoint for (the
 trainer prunes old ones; the last step names the bare final), or it is a 409.
+
+### 25.19 The Train dialog's preview: dataset checks and resolve (#2119)
+
+The Train dialog shows every value a run will use before it is queued, from two
+reads that change nothing:
+
+- **`GET /training/dataset?set_id|character_id`**, once per scope:
+  `ExportUtils.training_facts` counts the pictures the dataset would hold (the
+  builder's own selection) and the checks the dialog warns on: pictures with no
+  tags (the captions are the tags, so they train on the trigger word alone),
+  pictures with a near copy (`near_pairs_in_bucket` at the dedup default
+  threshold over the dataset's perceptual hashes; stacked duplicates are
+  already collapsed), and, for a character, pictures with a face named as
+  somebody else. `min_pictures` (6, the smallest set the effort sources report)
+  is where the dialog warns about too few. For a character, or a set that is a
+  character's reference set, `character` names it and gives both picture
+  counts ("Reference set" and "Every picture").
+- **`POST /training/resolve`**, per choice: `presets.resolve` for the choices,
+  the client's picture count and `training_room()` exactly as
+  `POST /training/jobs` runs it, plus `derived` (the same with no pins, what a
+  reset returns to), `steps_clamp` (`cap` / `floor` when the effort's step
+  range held the picture-scaled count, which `resolve` now reports), each
+  value's `TUNABLE_KEYS` rule, the effort's step rule with `fits` (the picture
+  counts it covers unclamped),
+  and a verdict per recipe for the same choices (`fits`, `streams` when the
+  profile offloads layers to RAM, `needs_ram`, `no_gpu`, `needs_checkout`). A
+  run that cannot be resolved answers 200 with `error`, so the dialog keeps the
+  rest of the preview.
+
+**A character's reference set.** `set_id` and `character_id` together are
+accepted only when the set is that character's reference set, and a reference
+set given alone is resolved to its character (`_scope`). The run is then filed
+under the character (`training_run.character_id`) while the builder reads the
+set's pictures (`_gather_export_pictures` takes the set first), and its subject
+defaults to a person. `TrainingService.enqueue` needs at least one of the two.
 
 ## 26. Prompt match
 

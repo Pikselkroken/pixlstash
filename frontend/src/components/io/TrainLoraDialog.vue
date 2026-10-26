@@ -1,0 +1,1240 @@
+<template>
+  <AppDialog
+    :open="store.trainDialogOpen"
+    title="Train a LoRA"
+    :subtitle="subtitle"
+    size="lg"
+    :persistent="store.submitting"
+    @close="store.closeDialog()"
+    @accept="onStart"
+  >
+    <!-- ai-toolkit not configured: Start is blocked, the way out is Settings. -->
+    <div
+      v-if="store.configLoaded && !store.aiToolkitConfigured"
+      class="tld-notice tld-notice--warn"
+      role="status"
+    >
+      <v-icon size="16">mdi-alert-outline</v-icon>
+      <span>
+        AI-toolkit isn't set up yet.
+        <button type="button" class="tld-link" @click="goToSettings">
+          Set up AI-toolkit first
+        </button>
+      </span>
+    </div>
+    <p v-if="store.datasetError" class="tld-notice tld-notice--bad" role="alert">
+      <v-icon size="16">mdi-alert-circle-outline</v-icon>
+      <span>{{ store.datasetError }}</span>
+    </p>
+
+    <!-- A person (or a person's reference set): the subject is the lead, not
+         a question. -->
+    <div v-if="character" class="tld-lead" data-testid="tld-lead">
+      <img
+        class="tld-lead__img"
+        :src="characterThumbnailUrl(character.id)"
+        alt=""
+      />
+      <div class="tld-lead__text">
+        <b>Character LoRA of {{ character.name }}</b>
+        <small>Learns this person's face and likeness.</small>
+      </div>
+      <div class="tld-lead__src">
+        <span class="tld-inline-label">Train on</span>
+        <Segmented
+          full
+          aria-label="Train on"
+          :options="trainOnOptions"
+          :model-value="store.trainOn"
+          @update:model-value="store.setTrainOn"
+        />
+      </div>
+    </div>
+
+    <!-- An ordinary set could hold anything, so it is asked. -->
+    <div v-else-if="store.dataset" class="tld-field">
+      <div class="tld-label-row">
+        <FieldLabel :id="subjectLabelId">What is this set of?</FieldLabel>
+        <PinnedChip :keys="pinnedBy.subject" @unpin="store.unpin" />
+      </div>
+      <div
+        role="radiogroup"
+        class="tld-opts"
+        :aria-labelledby="subjectLabelId"
+        @keydown="onSubjectKey"
+      >
+        <button
+          v-for="o in SUBJECT_OPTIONS"
+          :key="o.id"
+          type="button"
+          role="radio"
+          class="tld-opt"
+          :class="{ 'tld-opt--on': o.id === store.subject }"
+          :aria-checked="o.id === store.subject ? 'true' : 'false'"
+          :tabindex="o.id === subjectTabStop ? 0 : -1"
+          :data-testid="`tld-subject-${o.id}`"
+          @click="store.subject = o.id"
+        >
+          <v-icon size="20" class="tld-opt__icon">{{ o.icon }}</v-icon>
+          <span>
+            <b>{{ o.label }}</b>
+            <small>{{ o.detail }}</small>
+          </span>
+        </button>
+      </div>
+    </div>
+
+    <div class="tld-g2">
+      <div class="tld-field">
+        <FieldLabel>Trigger word</FieldLabel>
+        <AppInput
+          v-model="store.triggerWord"
+          mono
+          aria-label="Trigger word"
+          :error="triggerError"
+          data-testid="tld-trigger"
+        />
+        <span class="tld-hint">{{ triggerHint }}</span>
+      </div>
+      <div class="tld-field">
+        <div class="tld-label-row">
+          <FieldLabel>Base model</FieldLabel>
+          <PinnedChip :keys="pinnedBy.model" @unpin="store.unpin" />
+        </div>
+        <AppSelect
+          v-model="store.selectedPreset"
+          label="Base model"
+          hide-label
+          :options="presetOptions"
+          :disabled="store.presetsLoading && !presetOptions.length"
+        />
+        <span v-if="presetVerdict && presetVerdict !== 'fits'" class="tld-hint">
+          {{ VERDICT_LABELS[presetVerdict] }}
+        </span>
+      </div>
+    </div>
+
+    <div class="tld-field">
+      <div class="tld-label-row">
+        <FieldLabel :id="effortLabelId">How hard to train</FieldLabel>
+        <PinnedChip :keys="pinnedBy.effort" @unpin="store.unpin" />
+      </div>
+      <Segmented
+        v-model="store.effort"
+        full
+        :options="EFFORT_OPTIONS"
+        aria-label="How hard to train"
+      />
+      <span class="tld-hint">
+        <span v-if="effortLine" class="tld-readout" data-testid="tld-effort-readout">{{
+          effortLine
+        }}</span>
+        <span v-else-if="!store.effectiveSubject" class="tld-readout tld-readout--quiet"
+          >Say what the set is of to see what this sets.</span
+        >
+        {{ effortHintText }}
+      </span>
+    </div>
+
+    <div class="tld-field">
+      <div class="tld-label-row">
+        <FieldLabel>Fit to this GPU</FieldLabel>
+        <PinnedChip :keys="pinnedBy.fit" @unpin="store.unpin" />
+      </div>
+      <Segmented
+        v-model="store.fit"
+        full
+        variant="icon-label"
+        :options="fitOptions"
+        aria-label="Fit to this GPU"
+      />
+      <span class="tld-hint">
+        <span v-if="fitLine" class="tld-readout" data-testid="tld-fit-readout">{{
+          fitLine
+        }}</span>
+        <template v-if="store.fit === 'best_quality'">
+          Keeps the model's weights at full precision. It needs more memory and
+          can run slower; it does not promise a better LoRA.
+        </template>
+      </span>
+    </div>
+
+    <p
+      v-if="planError"
+      class="tld-notice tld-notice--bad"
+      role="alert"
+      data-testid="tld-plan-error"
+    >
+      <v-icon size="16">mdi-alert-circle-outline</v-icon>
+      <span>{{ planError }}</span>
+    </p>
+
+    <!-- Checks before Start: warnings, never a block (but an empty set). -->
+    <ul v-if="checks.length" class="tld-checks" data-testid="tld-checks">
+      <li
+        v-for="c in checks"
+        :key="c.id"
+        class="tld-notice"
+        :class="c.bad ? 'tld-notice--bad' : 'tld-notice--warn'"
+      >
+        <v-icon size="16">{{
+          c.bad ? "mdi-alert-circle-outline" : "mdi-alert-outline"
+        }}</v-icon>
+        <span>{{ c.text }}</span>
+      </li>
+    </ul>
+
+    <!-- Tier 2: every value the run will use, and where it came from. -->
+    <section class="tld-more">
+      <button
+        type="button"
+        class="tld-more__toggle"
+        :aria-expanded="advancedOpen ? 'true' : 'false'"
+        :aria-controls="advancedId"
+        data-testid="tld-advanced"
+        @click="advancedOpen = !advancedOpen"
+      >
+        <v-icon
+          size="16"
+          class="tld-more__caret"
+          :class="{ 'tld-more__caret--open': advancedOpen }"
+          >mdi-chevron-right</v-icon
+        >
+        <span>Advanced</span>
+        <span class="tld-sp" />
+        <span v-if="pinnedCount" class="tld-more__note"
+          >{{ pinnedCount }} pinned by you</span
+        >
+      </button>
+      <div
+        v-if="advancedOpen"
+        :id="advancedId"
+        class="tld-more__body"
+        @keydown.enter="keepEnterInField"
+      >
+        <p v-if="!values" class="tld-hint">
+          {{
+            planError
+              ? "The settings show once the run fits."
+              : "Say what the set is of to see every setting."
+          }}
+        </p>
+        <table v-else class="tld-table">
+          <thead>
+            <tr>
+              <th scope="col">Setting</th>
+              <th scope="col">Value</th>
+              <th scope="col">Comes from</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template v-for="row in visibleRows" :key="row.label">
+              <tr
+                :class="{ 'tld-row--pinned': rowPinned(row) }"
+                :data-testid="`tld-row-${row.keys[0]}`"
+              >
+                <th scope="row">{{ row.label }}</th>
+                <td>
+                  <span v-if="row.prompts" class="tld-quiet">{{
+                    promptsSummary
+                  }}</span>
+                  <span
+                    v-else
+                    class="tld-cell"
+                    :class="{ 'tld-cell--pair': row.keys.length > 1 }"
+                  >
+                    <template v-for="key in row.keys" :key="key">
+                      <span v-if="!values[key]" class="tld-quiet">—</span>
+                      <v-switch
+                        v-else-if="rules[key]?.kind === 'bool'"
+                        :model-value="values[key].value"
+                        color="primary"
+                        density="compact"
+                        hide-details
+                        :aria-label="keyLabel(key)"
+                        @update:model-value="(v) => store.setPin(key, !!v)"
+                      />
+                      <AppSelect
+                        v-else-if="rules[key]?.kind === 'enum'"
+                        compact
+                        hide-label
+                        :label="keyLabel(key)"
+                        :model-value="values[key].value"
+                        :options="rules[key].choices"
+                        @update:model-value="(v) => store.setPin(key, v)"
+                      />
+                      <span
+                        v-else-if="rules[key]?.kind === 'int_list'"
+                        class="tld-sizes"
+                        role="group"
+                        :aria-label="keyLabel(key)"
+                      >
+                        <button
+                          v-for="size in sizeChoices(values[key].value)"
+                          :key="size"
+                          type="button"
+                          class="tld-chip"
+                          :class="{
+                            'tld-chip--on': values[key].value.includes(size),
+                          }"
+                          :aria-pressed="
+                            values[key].value.includes(size) ? 'true' : 'false'
+                          "
+                          @click="toggleSize(key, size)"
+                        >
+                          {{ size }}
+                        </button>
+                      </span>
+                      <AppInput
+                        v-else
+                        mono
+                        :aria-label="keyLabel(key)"
+                        :model-value="fieldText(key)"
+                        :error="fieldErrors[key] || false"
+                        @focusin="onFieldFocus(key)"
+                        @update:model-value="(v) => onFieldInput(key, v)"
+                        @blur="onFieldBlur(key)"
+                      />
+                    </template>
+                  </span>
+                </td>
+                <td class="tld-from">
+                  <span class="tld-from__inner">
+                    <span>{{ rowSource(row) }}</span>
+                    <button
+                      v-if="rowPinned(row)"
+                      type="button"
+                      class="tld-reset"
+                      :aria-label="`Back to the derived ${row.label.toLowerCase()}`"
+                      @click="store.unpin(row.keys)"
+                    >
+                      <v-icon size="12">mdi-restore</v-icon>
+                      <span>{{ resetLabel(row) }}</span>
+                    </button>
+                  </span>
+                </td>
+              </tr>
+              <tr v-if="row.prompts" class="tld-prompts-row">
+                <td colspan="3">
+                  <div
+                    v-for="(line, i) in store.prompts"
+                    :key="i"
+                    class="tld-prompt"
+                    data-testid="tld-prompt"
+                  >
+                    <button
+                      type="button"
+                      class="tld-chip tld-chip--word"
+                      :class="{ 'tld-chip--on': hasTrigger(line) }"
+                      :aria-pressed="hasTrigger(line) ? 'true' : 'false'"
+                      :aria-label="
+                        hasTrigger(line)
+                          ? `Leave ${triggerShown} out of this prompt`
+                          : `Add ${triggerShown} to this prompt`
+                      "
+                      @click="store.togglePromptTrigger(i)"
+                    >
+                      <v-icon v-if="hasTrigger(line)" size="12">mdi-check</v-icon>
+                      <span>{{ triggerShown }}</span>
+                    </button>
+                    <AppInput
+                      :aria-label="`Sample prompt ${i + 1}`"
+                      :model-value="store.promptDisplay(line)"
+                      @update:model-value="(v) => store.setPromptText(i, v)"
+                    />
+                    <button
+                      type="button"
+                      class="tld-remove"
+                      :aria-label="`Remove sample prompt ${i + 1}`"
+                      :disabled="store.prompts.length <= 1"
+                      @click="store.removePrompt(i)"
+                    >
+                      <v-icon size="16">mdi-close</v-icon>
+                    </button>
+                  </div>
+                  <AppButton
+                    size="sm"
+                    variant="ghost"
+                    icon-left="plus"
+                    data-testid="tld-add-prompt"
+                    @click="store.addPrompt()"
+                    >Add a prompt</AppButton
+                  >
+                  <span class="tld-hint tld-prompts-note">
+                    Prompts without
+                    <span class="tld-mono">{{ triggerShown }}</span> show whether
+                    the LoRA changes pictures it wasn't asked for. Click the word
+                    on a prompt to add or leave it out.
+                  </span>
+                </td>
+              </tr>
+            </template>
+            <tr v-if="extraRows.length">
+              <td colspan="3" class="tld-more-rows">
+                <AppButton size="sm" variant="ghost" @click="showAll = !showAll">
+                  {{ showAll ? "Show fewer" : `Show ${extraRows.length} more` }}
+                </AppButton>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <template #footer>
+      <span class="tld-foot" :class="{ 'tld-foot--bad': footError }" role="status">
+        <v-icon size="16">{{
+          footError ? "mdi-alert-circle-outline" : "mdi-information-outline"
+        }}</v-icon>
+        <span>{{ footError || "Other GPU work pauses while it runs." }}</span>
+      </span>
+      <AppButton key-hint="esc" :disabled="store.submitting" @click="store.closeDialog()"
+        >Cancel</AppButton
+      >
+      <AppButton
+        variant="primary"
+        key-hint="enter"
+        :loading="store.submitting"
+        :disabled="!canStart"
+        data-testid="tld-start"
+        @click="onStart"
+        >Start training</AppButton
+      >
+    </template>
+  </AppDialog>
+</template>
+
+<script setup>
+import { computed, reactive, ref, useId, watch } from "vue";
+import { VIcon, VSwitch } from "vuetify/components";
+import AppDialog from "../widgets/AppDialog.vue";
+import AppButton from "../widgets/AppButton.vue";
+import AppInput from "../widgets/AppInput.vue";
+import AppSelect from "../widgets/AppSelect.vue";
+import FieldLabel from "../widgets/FieldLabel.vue";
+import Segmented from "../widgets/Segmented.vue";
+import PinnedChip from "./TrainLoraPinnedChip.vue";
+import { characterThumbnailUrl } from "../../api/characters";
+import { useTrainingStore } from "../../stores/useTrainingStore";
+import { arrowStep, tabStopId } from "../../utils/radioGroup.js";
+import {
+  EFFORT_LABELS,
+  FIT_LABELS,
+  PRIMARY_ROWS,
+  PROMPTS_KEY,
+  SIZE_CHOICES,
+  VERDICT_LABELS,
+  choiceOfSource,
+  effortHint,
+  effortReadout,
+  fitReadout,
+  formatCount,
+  formatValue,
+  gb,
+  hasTrigger,
+  keyLabel,
+  moreRows,
+  parseTyped,
+  sourceLabel,
+} from "../../utils/trainingPlan";
+
+const emit = defineEmits(["started"]);
+
+const store = useTrainingStore();
+
+const subjectLabelId = useId();
+const effortLabelId = useId();
+const advancedId = useId();
+
+const SUBJECT_OPTIONS = [
+  {
+    id: "person",
+    label: "A person",
+    icon: "mdi-account-outline",
+    detail: "Face and likeness. Backgrounds and clothes stay free.",
+  },
+  {
+    id: "style",
+    label: "A style",
+    icon: "mdi-palette-outline",
+    detail: "Light, palette and finish, whatever the subject.",
+  },
+  {
+    id: "thing",
+    label: "A thing",
+    icon: "mdi-cube-outline",
+    detail: "An object, outfit or place, kept recognisable.",
+  },
+];
+const EFFORT_OPTIONS = Object.entries(EFFORT_LABELS).map(([id, label]) => ({
+  id,
+  label,
+}));
+
+const advancedOpen = ref(false);
+const showAll = ref(false);
+// Each typed field keeps its text only while it has focus; otherwise it
+// shows the resolved value.
+const drafts = reactive({});
+const fieldErrors = reactive({});
+
+// A fresh dialog starts folded, with no stale field text.
+watch(
+  () => store.trainDialogOpen,
+  (open) => {
+    if (!open) return;
+    advancedOpen.value = false;
+    showAll.value = false;
+    for (const key of Object.keys(drafts)) delete drafts[key];
+    for (const key of Object.keys(fieldErrors)) delete fieldErrors[key];
+  },
+);
+
+const character = computed(() => store.character);
+const plan = computed(() => store.plan);
+const resolution = computed(() => plan.value?.resolution || null);
+const values = computed(() => resolution.value?.values || null);
+const rules = computed(() => plan.value?.rules || {});
+const derived = computed(() => plan.value?.derived || {});
+const planError = computed(() => plan.value?.error?.message || "");
+
+const subtitle = computed(() => {
+  if (!store.dataset) return store.scopeName;
+  const n = store.pictureCount;
+  return `${store.displayName} · ${formatCount(n)} picture${n === 1 ? "" : "s"}`;
+});
+
+const trainOnOptions = computed(() => {
+  const ch = character.value;
+  if (!ch) return [];
+  return [
+    {
+      id: "reference",
+      label: `Reference set · ${formatCount(ch.reference_count)}`,
+      disabled: ch.reference_set_id == null || ch.reference_count === 0,
+    },
+    {
+      id: "all",
+      label: `Every picture of ${ch.name} · ${formatCount(ch.all_count)}`,
+    },
+  ];
+});
+
+const subjectTabStop = computed(() =>
+  tabStopId(SUBJECT_OPTIONS, store.subject),
+);
+function onSubjectKey(event) {
+  const id = arrowStep(event, SUBJECT_OPTIONS, store.subject);
+  if (id !== undefined) store.subject = id;
+}
+
+const triggerShown = computed(() => store.triggerWord.trim() || "the trigger word");
+const triggerError = computed(() =>
+  store.triggerWord.trim() ? false : "Give the LoRA a trigger word.",
+);
+const withTrigger = computed(() => store.prompts.filter(hasTrigger).length);
+const triggerHint = computed(() => {
+  const from = character.value
+    ? "From the character's name. "
+    : store.scopeType === "set"
+      ? "From the set's name. "
+      : "";
+  const total = store.prompts.length;
+  if (!total) return from.trim();
+  return `${from}Goes into ${withTrigger.value} of the ${total} sample prompt${total === 1 ? "" : "s"}.`;
+});
+const promptsSummary = computed(
+  () =>
+    `${store.prompts.length} · ${withTrigger.value} with the trigger word`,
+);
+
+const presetOptions = computed(() => {
+  const verdicts = Object.fromEntries(
+    (plan.value?.presets || []).map((p) => [p.id, p.verdict]),
+  );
+  return (store.presets || []).map((p) => {
+    const verdict = verdicts[p.id] || (p.offered ? null : "needs_checkout");
+    return {
+      label: p.label,
+      value: p.id,
+      name: p.label,
+      chips: verdict ? [VERDICT_LABELS[verdict]] : [],
+    };
+  });
+});
+const presetVerdict = computed(
+  () =>
+    (plan.value?.presets || []).find((p) => p.id === store.selectedPreset)
+      ?.verdict || null,
+);
+const presetLabel = computed(
+  () =>
+    (store.presets || []).find((p) => p.id === store.selectedPreset)?.label ||
+    "",
+);
+
+const fitOptions = computed(() => {
+  const free = plan.value?.room?.vram_mb;
+  return [
+    {
+      id: "auto",
+      icon: "chip",
+      label: free != null ? `Auto · ${gb(free)} GB free` : "Auto",
+    },
+    { id: "save_memory", label: FIT_LABELS.save_memory },
+    { id: "best_quality", label: FIT_LABELS.best_quality },
+  ];
+});
+
+const effortLine = computed(() =>
+  effortReadout({
+    values: values.value,
+    clamp: plan.value?.steps_clamp,
+    effort: store.effort,
+    pictureCount: store.pictureCount,
+  }),
+);
+const effortHintText = computed(() =>
+  effortHint({
+    rule: plan.value?.steps_rule,
+    clamp: plan.value?.steps_clamp,
+    effort: store.effort,
+    subject: store.effectiveSubject,
+  }),
+);
+const fitLine = computed(() => fitReadout(resolution.value));
+
+const sourceCtx = computed(() => ({
+  effort: store.effort,
+  fit: store.fit,
+  subject: store.effectiveSubject,
+  character: character.value,
+  pictureCount: store.pictureCount,
+  clamp: plan.value?.steps_clamp,
+  presetLabel: presetLabel.value,
+  room: plan.value?.room,
+}));
+
+/** Which pinned keys each choice set: its "N pinned · unpin". */
+const pinnedBy = computed(() => {
+  const out = { subject: [], effort: [], fit: [], model: [] };
+  for (const key of Object.keys(store.allPins)) {
+    const source =
+      key === PROMPTS_KEY ? "subject" : derived.value[key]?.source || "model";
+    const choice = choiceOfSource(source);
+    if (choice) out[choice].push(key);
+  }
+  return out;
+});
+const pinnedCount = computed(() => Object.keys(store.allPins).length);
+
+const extraRows = computed(() => moreRows(values.value));
+const visibleRows = computed(() =>
+  showAll.value ? [...PRIMARY_ROWS, ...extraRows.value] : PRIMARY_ROWS,
+);
+
+function rowPinned(row) {
+  return row.keys.some((key) => key in store.allPins);
+}
+
+function rowSource(row) {
+  if (row.prompts) {
+    return store.promptsPinned
+      ? "Typed by you, so it stays put"
+      : sourceLabel({ source: "subject" }, sourceCtx.value);
+  }
+  if (rowPinned(row)) return "Typed by you, so it stays put";
+  return sourceLabel(values.value?.[row.keys[0]], sourceCtx.value);
+}
+
+function resetLabel(row) {
+  if (row.prompts) return "Written";
+  return row.keys
+    .filter((key) => key in store.allPins)
+    .map((key) => {
+      const v = derived.value[key]?.value;
+      return typeof v === "number" ? formatCount(v) : formatValue(v);
+    })
+    .join(" / ");
+}
+
+function fieldText(key) {
+  if (key in drafts) return drafts[key];
+  return formatValue(values.value?.[key]?.value);
+}
+
+function onFieldFocus(key) {
+  drafts[key] = formatValue(values.value?.[key]?.value);
+}
+
+function onFieldInput(key, text) {
+  drafts[key] = text;
+  const parsed = parseTyped(rules.value[key], text);
+  if (parsed.error) {
+    fieldErrors[key] = parsed.error;
+    return;
+  }
+  delete fieldErrors[key];
+  // Blank goes back to the derived value.
+  store.setPin(key, parsed.value);
+}
+
+function onFieldBlur(key) {
+  delete drafts[key];
+  // A field left invalid is not a pin; it shows the run's value again.
+  delete fieldErrors[key];
+}
+
+function sizeChoices(current) {
+  return [...new Set([...SIZE_CHOICES, ...(current || [])])].sort(
+    (a, b) => a - b,
+  );
+}
+
+function toggleSize(key, size) {
+  const current = values.value?.[key]?.value || [];
+  const next = current.includes(size)
+    ? current.filter((s) => s !== size)
+    : [...current, size].sort((a, b) => a - b);
+  // A run trains at one size at least.
+  if (next.length) store.setPin(key, next);
+}
+
+const checks = computed(() => {
+  const d = store.dataset;
+  if (!d) return [];
+  const out = [];
+  if (d.count === 0) {
+    out.push({ id: "none", bad: true, text: "There are no pictures to train on." });
+    return out;
+  }
+  if (d.count < d.min_pictures) {
+    out.push({
+      id: "few",
+      text: `Only ${d.count} picture${d.count === 1 ? "" : "s"}. A LoRA usually needs ${d.min_pictures} or more, and with fewer it tends to copy them rather than learn from them.`,
+    });
+  }
+  if (d.untagged > 0) {
+    out.push({
+      id: "untagged",
+      text: `${d.untagged} picture${d.untagged === 1 ? " has" : "s have"} no tags yet, so ${d.untagged === 1 ? "it trains" : "they train"} on the trigger word alone.`,
+    });
+  }
+  if (d.near_duplicates > 0) {
+    out.push({
+      id: "near",
+      text: `${d.near_duplicates} pictures are near copies of each other. Copies count twice, so the LoRA leans towards them.`,
+    });
+  }
+  if (d.other_people > 0) {
+    out.push({
+      id: "people",
+      text: `${d.other_people} picture${d.other_people === 1 ? " shows" : "s show"} somebody else's face too, which the LoRA may learn as well.`,
+    });
+  }
+  return out;
+});
+
+/** The first reason Start is unavailable, said in the footer. */
+const blocker = computed(() => {
+  if (store.configLoaded && !store.aiToolkitConfigured)
+    return "Set up AI-toolkit to train.";
+  if (!store.dataset) return store.datasetLoading ? "" : "Nothing to train on.";
+  if (store.pictureCount === 0) return "There are no pictures to train on.";
+  if (!store.effectiveSubject) return "Say what the set is of.";
+  if (!store.triggerWord.trim()) return "Give the LoRA a trigger word.";
+  if (presetVerdict.value === "needs_checkout")
+    return "This AI-toolkit checkout cannot train this model. Update it first.";
+  if (store.prompts.length && !store.prompts.some((l) => l.text.trim()))
+    return "Keep at least one sample prompt.";
+  if (Object.keys(fieldErrors).length) return "Fix the Advanced value marked in red.";
+  if (planError.value) return planError.value;
+  if (!resolution.value) return "";
+  return "";
+});
+
+const footError = computed(() => store.submitError || blocker.value);
+
+const canStart = computed(
+  () =>
+    !blocker.value &&
+    !!resolution.value &&
+    !store.planLoading &&
+    !store.submitting,
+);
+
+async function onStart() {
+  if (!canStart.value) return;
+  try {
+    const job = await store.startTraining();
+    store.closeDialog();
+    // The create response carries the resolver's result as an object.
+    const profile = job?.resolved_profile?.profile_label;
+    store.showQueuedToast(
+      profile
+        ? `Training queued: ${profile}. Watch progress in the Tasks tab.`
+        : "Training queued. Watch progress in the Tasks tab.",
+    );
+    emit("started");
+  } catch (err) {
+    // store.submitError is already shown in the footer; keep the cause too.
+    console.warn(
+      "Training was not queued:",
+      store.scopePayload,
+      store.selectedPreset,
+      err,
+    );
+  }
+}
+
+/**
+ * Enter in an Advanced field finishes the edit; it never starts a run. The
+ * dialog's Enter-accepts contract skips an event already handled, so this
+ * marks it. Buttons in the table keep Enter for themselves.
+ */
+function keepEnterInField(event) {
+  if (event.target instanceof HTMLInputElement) event.preventDefault();
+}
+
+function goToSettings() {
+  store.closeDialog();
+  // Bump the deep-link request. App.vue opens the settings dialog and
+  // UserSettingsDialog selects the Training tab (both watch this counter).
+  store.requestTrainingSettings();
+}
+</script>
+
+<style scoped>
+.tld-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* FieldLabel carries its own bottom margin; in a row with a chip the row
+   owns the spacing instead. */
+.tld-label-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.tld-label-row :deep(.field-label) {
+  margin-bottom: 0;
+  flex: 1;
+}
+
+.tld-g2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-5) var(--space-4);
+}
+
+.tld-hint {
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.tld-readout {
+  display: block;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.tld-readout--quiet {
+  color: inherit;
+}
+
+.tld-mono {
+  font-family: var(--font-mono);
+}
+
+.tld-sp {
+  flex: 1;
+}
+
+/* The character lead: what the entry point already said. */
+.tld-lead {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: var(--space-2) var(--space-4);
+  align-items: center;
+  padding: var(--space-4);
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-md);
+  background: rgb(var(--v-theme-input-background));
+}
+
+.tld-lead__img {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-md);
+  object-fit: cover;
+  object-position: top center;
+}
+
+.tld-lead__text b {
+  display: block;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+}
+
+.tld-lead__text small,
+.tld-opt small {
+  display: block;
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.tld-lead__src {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-top: var(--space-2);
+}
+
+.tld-lead__src > :last-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.tld-inline-label {
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+/* Subject cards: a radiogroup of three outcomes, chosen by meaning. */
+.tld-opts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.tld-opt {
+  position: relative;
+  display: flex;
+  gap: var(--space-4);
+  align-items: flex-start;
+  padding: var(--space-4);
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: rgb(var(--v-theme-on-surface));
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease-standard);
+}
+
+.tld-opt:not(.tld-opt--on):hover {
+  background: var(--hover-wash);
+}
+
+.tld-opt b {
+  display: block;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+}
+
+.tld-opt__icon {
+  margin-top: var(--space-1);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.tld-opt--on {
+  border-color: transparent;
+  background: var(--active-wash);
+}
+
+/* The ring is drawn on an overlay: App.css's
+   `button:focus:not(:focus-visible) { box-shadow: none !important }` would
+   drop it from the card itself the moment it is clicked. */
+.tld-opt--on::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 2px var(--active-bar);
+  pointer-events: none;
+}
+
+.tld-opt--on .tld-opt__icon {
+  color: var(--selected-ink);
+}
+
+/* Notices: a status glyph and text, never color alone. */
+.tld-notice {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  border: 1px solid rgb(var(--v-theme-border));
+  background: rgb(var(--v-theme-input-background));
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
+}
+
+.tld-notice--warn .v-icon {
+  color: rgb(var(--v-theme-surface-warning));
+}
+
+.tld-notice--bad .v-icon {
+  color: rgb(var(--v-theme-surface-error));
+}
+
+.tld-checks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.tld-link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+}
+
+/* Tier 2 */
+.tld-more {
+  border-top: 1px solid rgb(var(--v-theme-divider));
+  padding-top: var(--space-4);
+}
+
+.tld-more__toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: var(--control-h);
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: rgb(var(--v-theme-on-surface));
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+}
+
+.tld-more__caret {
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  transition: transform var(--dur-1) var(--ease-standard);
+}
+
+.tld-more__caret--open {
+  transform: rotate(90deg);
+}
+
+.tld-more__note {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-regular);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.tld-more__body {
+  padding-top: var(--space-4);
+}
+
+.tld-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.tld-table thead th {
+  text-align: left;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
+}
+
+.tld-table tbody th,
+.tld-table td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
+  vertical-align: middle;
+  text-align: left;
+  font-weight: var(--weight-regular);
+}
+
+.tld-table thead th:nth-child(2),
+.tld-table td:nth-child(2) {
+  width: 240px;
+}
+
+.tld-table tr:has(+ .tld-prompts-row) > * {
+  border-bottom: 0;
+}
+
+.tld-row--pinned > * {
+  background: var(--active-wash);
+}
+
+.tld-row--pinned > th {
+  box-shadow: inset 3px 0 0 var(--active-bar);
+}
+
+.tld-from {
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.tld-from__inner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.tld-cell {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.tld-cell--pair > * {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.tld-quiet {
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.tld-reset {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: rgb(var(--v-theme-on-surface));
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  cursor: pointer;
+}
+
+.tld-reset:hover {
+  background: var(--hover-wash);
+}
+
+.tld-sizes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.tld-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgb(var(--v-theme-border));
+  background: transparent;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tld-chip:hover {
+  background: var(--hover-wash);
+}
+
+.tld-chip--on {
+  background: var(--active-wash);
+  border-color: var(--active-bar);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.tld-chip--word {
+  font-family: var(--font-mono);
+}
+
+.tld-chip--word:not(.tld-chip--on) span {
+  text-decoration: line-through;
+}
+
+.tld-prompts-row td {
+  padding-top: 0;
+}
+
+.tld-prompt {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr) var(--control-h);
+  gap: var(--space-3);
+  align-items: center;
+  margin-bottom: var(--space-2);
+}
+
+.tld-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-h);
+  height: var(--control-h);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  cursor: pointer;
+}
+
+.tld-remove:hover:not(:disabled) {
+  background: var(--hover-wash);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.tld-remove:disabled {
+  cursor: default;
+}
+
+.tld-prompts-note {
+  display: block;
+  padding-top: var(--space-2);
+}
+
+.tld-more-rows {
+  padding-left: 0;
+}
+
+.tld-foot {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.tld-foot--bad .v-icon {
+  color: rgb(var(--v-theme-surface-error));
+}
+</style>

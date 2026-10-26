@@ -1,5 +1,5 @@
-// The train panel's request: the recipe, the three choices and the Advanced
-// fields as flat pins (#2116). The raw config patch is gone.
+// The Train a LoRA dialog's state (#2119): what it trains on, the pins it
+// holds, and that Start sends exactly what the preview resolved.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { setActivePinia, createPinia } from "pinia";
@@ -11,88 +11,204 @@ vi.mock("../api/training", () => ({
   deleteTrainingJob: vi.fn(),
   discoverAiToolkit: vi.fn(),
   getAiToolkitStatus: vi.fn(),
+  getTrainingDataset: vi.fn(),
+  getTrainingSamplePrompts: vi.fn(),
   listTrainingJobs: vi.fn(),
   listTrainingPresets: vi.fn(),
   putAiToolkitConfig: vi.fn(),
+  resolveTraining: vi.fn(),
 }));
+vi.mock("../api/config", () => ({ getUserConfig: vi.fn() }));
 
 import * as training from "../api/training";
 import { useTrainingStore } from "./useTrainingStore";
+
+const T = "{{TRIGGER_WORD}}";
+const GRANDAD = {
+  id: 4,
+  name: "Grandad",
+  reference_set_id: 40,
+  reference_count: 24,
+  all_count: 140,
+};
+
+function dataset(over = {}) {
+  return {
+    set_id: null,
+    character_id: null,
+    count: 24,
+    min_pictures: 6,
+    untagged: 0,
+    near_duplicates: 0,
+    other_people: 0,
+    character: null,
+    ...over,
+  };
+}
 
 beforeEach(() => {
   setActivePinia(createPinia());
   vi.clearAllMocks();
   training.createTrainingJob.mockResolvedValue({ id: 1 });
+  training.listTrainingPresets.mockResolvedValue([
+    { id: "zimage-turbo", label: "Z-Image Turbo", offered: true },
+  ]);
+  training.resolveTraining.mockResolvedValue({ derived: {} });
+  training.getTrainingSamplePrompts.mockResolvedValue({
+    prompts: [
+      { prompt: `${T} by the sea`, with_trigger: `${T} by the sea`, without_trigger: "a man by the sea" },
+      { prompt: "a man by the sea", with_trigger: `${T} by the sea`, without_trigger: "a man by the sea" },
+    ],
+  });
+});
+
+describe("openForScope", () => {
+  it("trains a person on their reference set, filed under them", async () => {
+    training.getTrainingDataset.mockImplementation(async (params) =>
+      params.set_id === 40
+        ? dataset({ set_id: 40, character_id: 4, character: GRANDAD })
+        : dataset({ character_id: 4, count: 140, character: GRANDAD }),
+    );
+    const store = useTrainingStore();
+    await store.openForScope({ type: "character", id: 4, name: "Grandad" });
+
+    expect(training.getTrainingDataset).toHaveBeenNthCalledWith(1, { character_id: 4 });
+    expect(training.getTrainingDataset).toHaveBeenLastCalledWith({
+      set_id: 40,
+      character_id: 4,
+    });
+    expect(store.trainOn).toBe("reference");
+    expect(store.triggerWord).toBe("grandad");
+    expect(store.effectiveSubject).toBe("person");
+    expect(store.pictureCount).toBe(24);
+
+    await store.setTrainOn("all");
+    expect(training.getTrainingDataset).toHaveBeenLastCalledWith({ character_id: 4 });
+    expect(store.pictureCount).toBe(140);
+  });
+
+  it("asks a set what it is of, and takes the trigger word from its name", async () => {
+    training.getTrainingDataset.mockResolvedValue(dataset({ set_id: 9, count: 112 }));
+    const store = useTrainingStore();
+    await store.openForScope({ type: "set", id: 9, name: "Pub nights" });
+    expect(store.character).toBe(null);
+    expect(store.effectiveSubject).toBe(null);
+    expect(store.triggerWord).toBe("pubnights");
+  });
+});
+
+describe("pins", () => {
+  it("drops a typed value equal to the derived one, keeps any other", () => {
+    const store = useTrainingStore();
+    store.plan = {
+      derived: { "train.steps": { value: 2400, source: "pictures" } },
+      choicesKey: store.choicesKey,
+    };
+    store.setPin("train.steps", 2000);
+    expect(store.pins).toEqual({ "train.steps": 2000 });
+    store.setPin("train.steps", 2400);
+    expect(store.pins).toEqual({});
+    store.setPin("train.steps", 1800);
+    store.setPin("train.steps", null);
+    expect(store.pins).toEqual({});
+  });
+
+  it("keeps a typed value while the plan still answers the previous choices", async () => {
+    training.getTrainingDataset.mockResolvedValue(
+      dataset({ set_id: 40, character_id: 4, character: GRANDAD }),
+    );
+    training.resolveTraining.mockImplementation(async (body) => ({
+      derived: {
+        "train.steps": {
+          value: body.effort === "strong" ? 3600 : 2400,
+          source: "pictures",
+        },
+      },
+    }));
+    const store = useTrainingStore();
+    await store.openForScope({ type: "character", id: 4, name: "Grandad" });
+    await store.resolvePlan();
+    // Strong is picked, then 2400 typed before its plan arrives: 2400 is what
+    // Standard gave, not Strong, so it is a pin.
+    store.effort = "strong";
+    store.setPin("train.steps", 2400);
+    expect(store.pins).toEqual({ "train.steps": 2400 });
+    // Once the plan answers Strong, typing what Strong gives is no pin.
+    await store.resolvePlan();
+    store.setPin("train.steps", 3600);
+    expect(store.pins).toEqual({});
+  });
+
+  it("sends an edited prompt set as a pin, and the written one as none", async () => {
+    training.getTrainingDataset.mockResolvedValue(
+      dataset({ set_id: 40, character_id: 4, character: GRANDAD }),
+    );
+    const store = useTrainingStore();
+    await store.openForScope({ type: "set", id: 40, name: "Grandad reference" });
+    await store.loadPrompts();
+    expect(store.prompts).toHaveLength(2);
+    expect(store.promptsPinned).toBe(false);
+    expect(store.allPins).toEqual({});
+
+    store.removePrompt(1);
+    store.addPrompt();
+    store.setPromptText(1, "grandad reading, warm light");
+    expect(store.promptsPinned).toBe(true);
+    expect(store.allPins).toEqual({
+      "sample.samples[*].prompt": [`${T} by the sea`, `${T} reading, warm light`],
+    });
+
+    // A fresh set of written prompts does not replace edited lines.
+    await store.loadPrompts();
+    expect(store.prompts[1].text).toBe(`${T} reading, warm light`);
+
+    store.unpin(["sample.samples[*].prompt"]);
+    expect(store.promptsPinned).toBe(false);
+  });
 });
 
 describe("startTraining", () => {
-  it("sends the choices and no pins when Advanced is untouched", async () => {
+  it("sends the scope, the choices and every pin", async () => {
+    training.getTrainingDataset.mockResolvedValue(
+      dataset({ set_id: 40, character_id: 4, character: GRANDAD }),
+    );
     const store = useTrainingStore();
-    store.setScope({ type: "character", id: 4, name: "Grandad" });
-    store.selectedPreset = "zimage-turbo";
+    await store.openForScope({ type: "character", id: 4, name: "Grandad" });
+    store.fit = "save_memory";
+    store.plan = {
+      derived: { "train.steps": { value: 2400, source: "pictures" } },
+      choicesKey: store.choicesKey,
+    };
+    store.setPin("train.steps", 2000);
     await store.startTraining();
 
     expect(training.createTrainingJob).toHaveBeenCalledWith({
+      set_id: 40,
       character_id: 4,
-      name: "Grandad (Grandad)",
-      trigger_word: "Grandad",
+      name: "Grandad (grandad)",
+      trigger_word: "grandad",
       preset: "zimage-turbo",
       subject: "person",
       effort: "standard",
-      fit: "auto",
+      fit: "save_memory",
+      pins: { "train.steps": 2000 },
     });
   });
 
-  it("sends only the filled Advanced fields, keyed by setting", async () => {
+  it("sends no pins when nothing was typed over", async () => {
+    training.getTrainingDataset.mockResolvedValue(dataset({ set_id: 9 }));
     const store = useTrainingStore();
-    store.setScope({ type: "set", id: 9, name: "Pub nights" });
-    expect(store.subject).toBe(null);
+    await store.openForScope({ type: "set", id: 9, name: "Pub nights" });
     store.subject = "style";
-    store.fit = "save_memory";
-    store.steps = 1800;
-    store.networkRank = 16;
-    store.learningRate = "0.0002";
-    store.samplePrompts = "{{TRIGGER_WORD}}, a harbour\n\n a harbour ";
     await store.startTraining();
-
     const body = training.createTrainingJob.mock.calls[0][0];
     expect(body.set_id).toBe(9);
     expect(body.subject).toBe("style");
-    expect(body.fit).toBe("save_memory");
-    expect(body.pins).toEqual({
-      "train.steps": 1800,
-      "network.linear": 16,
-      "train.lr": 0.0002,
-      "sample.samples[*].prompt": ["{{TRIGGER_WORD}}, a harbour", "a harbour"],
-    });
-    expect(body).not.toHaveProperty("config_overrides");
-  });
-
-  it("sends a learning rate that is not a number as typed, for the server to refuse", async () => {
-    const store = useTrainingStore();
-    store.setScope({ type: "character", id: 4, name: "Grandad" });
-    store.learningRate = "fast";
-    store.steps = "";
-    await store.startTraining();
-
-    const body = training.createTrainingJob.mock.calls[0][0];
-    expect(body.pins).toEqual({ "train.lr": "fast" });
-  });
-
-  it("sends a typed exponent learning rate as a number", async () => {
-    const store = useTrainingStore();
-    store.setScope({ type: "character", id: 4, name: "Grandad" });
-    store.learningRate = "1e-4";
-    await store.startTraining();
-
-    expect(training.createTrainingJob.mock.calls[0][0].pins).toEqual({
-      "train.lr": 0.0001,
-    });
+    expect(body).not.toHaveProperty("pins");
   });
 
   it("shows the message of a run that fits nowhere", async () => {
     const store = useTrainingStore();
-    store.setScope({ type: "character", id: 4, name: "Grandad" });
     training.createTrainingJob.mockRejectedValue({
       response: {
         data: {

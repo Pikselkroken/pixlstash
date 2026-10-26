@@ -67,6 +67,7 @@ import NoticeHost from "./components/widgets/NoticeHost.vue";
 import ShortcutsDialog from "./components/widgets/ShortcutsDialog.vue";
 import ConfirmDialog from "./components/widgets/ConfirmDialog.vue";
 import ModelDropFolderDialog from "./components/dialogs/ModelDropFolderDialog.vue";
+import TrainLoraDialog from "./components/io/TrainLoraDialog.vue";
 import LibrarySwitchOverlay from "./components/settings/LibrarySwitchOverlay.vue";
 import Tooltip from "./components/widgets/Tooltip.vue";
 import { useFloatingBottomInset } from "./composables/useBottomAnchor";
@@ -515,7 +516,7 @@ function openSettingsDialog(tab = "") {
 }
 
 // SideBar context-menu "Train LoRA": navigate to the set/character so the view
-// scope matches, then open the train panel pre-scoped to it.
+// scope matches, then open the Train a LoRA dialog on it.
 async function handleTrainLora(scope) {
   if (!scope || scope.id == null) return;
   if (scope.type === "character") {
@@ -530,17 +531,6 @@ async function handleTrainLora(scope) {
     id: scope.id,
     name: scope.name,
   });
-  // The grid refetches after navigation; refresh the header count shortly after.
-  await nextTick();
-  refreshTrainCount();
-}
-
-// The train panel's header shows the picture count of the current view. Reuse
-// the grid's export count (totalCount = loaded grid images) for the header hint.
-function refreshTrainCount() {
-  const counts = gridContainer.value?.getExportCount?.();
-  if (!counts) return;
-  trainingStore.scopePictureCount = Number(counts.totalCount) || 0;
 }
 
 /** The empty library's "Choose a folder…" / "Import them…".
@@ -981,7 +971,6 @@ defineExpose({
                 @library-empty="offerLoosePictures"
                 @library-loaded="onLibraryLoaded"
                 @confirm-export-zip="confirmExportZip"
-                @train-menu-open="refreshTrainCount"
                 @confirm-export-folder="confirmExportFolder"
               />
             </div>
@@ -1061,6 +1050,7 @@ defineExpose({
     <ShortcutsDialog v-model="shortcutsDialogOpen" />
     <ConfirmDialog />
     <ModelDropFolderDialog />
+    <TrainLoraDialog />
     <LibrarySwitchOverlay />
   </v-app>
 </template>

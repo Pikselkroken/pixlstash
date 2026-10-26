@@ -1,4 +1,4 @@
-import { computed, onScopeDispose, ref } from "vue";
+import { computed, onScopeDispose, ref, watch } from "vue";
 import { defineStore } from "pinia";
 import {
   cancelTrainingJob,
@@ -7,39 +7,63 @@ import {
   deleteTrainingJob,
   discoverAiToolkit,
   getAiToolkitStatus,
+  getTrainingDataset,
+  getTrainingSamplePrompts,
   listTrainingJobs,
   listTrainingPresets,
   putAiToolkitConfig,
+  resolveTraining,
 } from "../api/training";
 import { getUserConfig } from "../api/config";
 import { DEFAULT_TIMEOUTS, useNoticeStore } from "./useNoticeStore";
 import { onSessionReset } from "../utils/apiClient";
 import { useSidebarStore } from "./useSidebarStore";
+import {
+  PROMPTS_KEY,
+  displayPrompt,
+  promptFromDisplay,
+  promptLines,
+  promptTexts,
+  promptsEdited,
+  sameValue,
+  toggleTrigger,
+  triggerFromName,
+} from "../utils/trainingPlan";
+
+// How long the dialog waits after a change before it asks the server again.
+const RESOLVE_DEBOUNCE_MS = 150;
+const PROMPTS_DEBOUNCE_MS = 400;
 
 /**
- * Cross-component state for the LoRA training feature: the train-config panel
- * (TbTrainPanel), the training registry settings section (TrainingSection), and
- * the entry points in the Toolbar / SideBar.
+ * Cross-component state for the LoRA training feature: the Train a LoRA dialog
+ * (TrainLoraDialog), the training registry settings section (TrainingSection),
+ * and the entry points in the Toolbar / SideBar.
  *
- * Mirrors useExportStore (panel-bound config) + useSnapshotsStore (resource
- * data + actions). Every HTTP call goes through api/training.js or api/config.js;
- * the registry actions surface the API `detail` to the caller for inline error
- * display. All training endpoints are owner-only on the backend.
+ * The dialog holds the owner's choices and typed values; the server resolves
+ * them (POST /training/resolve) into every value the run will use, and the
+ * same choices and pins are what Start sends. Every HTTP call goes through
+ * api/training.js or api/config.js; the registry actions surface the API
+ * `detail` to the caller for inline error display. All training endpoints are
+ * owner-only on the backend.
  */
 export const useTrainingStore = defineStore("training", () => {
   const noticeStore = useNoticeStore();
   const sidebarStore = useSidebarStore();
 
-  // ── Panel: scope (set XOR character the run trains on) ──────────────────────
-  // Set by the Toolbar/SideBar entry points before the panel opens. Exactly one
-  // of setId / characterId is non-null; the API enforces the XOR.
-  const trainMenuOpen = ref(false);
-  const scopeType = ref(null); // "set" | "character" | null
+  // ── Dialog: what it trains on ──────────────────────────────────────────────
+  // The entry point (Toolbar / SideBar) names a set or a character. The
+  // dataset read says whether a set is a character's reference set, and for a
+  // character which of its two picture choices the run takes.
+  const trainDialogOpen = ref(false);
+  const scopeType = ref(null); // the entry: "set" | "character" | null
   const scopeId = ref(null); // numeric set_id or character_id
-  const scopeName = ref(""); // display name for the panel header
-  const scopePictureCount = ref(0); // pictures currently in view (header hint)
+  const scopeName = ref(""); // the entry's display name
+  const dataset = ref(null); // GET /training/dataset
+  const datasetLoading = ref(false);
+  const datasetError = ref("");
+  const trainOn = ref("all"); // a character's pictures: "reference" | "all"
 
-  // ── Panel: config form (the recipe and the three choices it resolves) ──────
+  // ── Dialog: the choices, and what they resolve to ──────────────────────────
   const presets = ref([]); // GET /training/presets: { id, label, offered, … }
   const presetsLoading = ref(false);
   const selectedPreset = ref(null); // recipe id
@@ -48,16 +72,15 @@ export const useTrainingStore = defineStore("training", () => {
   const subject = ref(null); // "person" | "style" | "thing"
   const effort = ref("standard"); // "gentle" | "standard" | "strong"
   const fit = ref("auto"); // "auto" | "save_memory" | "best_quality"
-  // Advanced settings. Left blank by default so an untouched panel sends NO
-  // pin and the recipe's derived values apply. A field is only sent as a pin
-  // when the user actually fills it in.
-  const steps = ref(null);
-  const networkRank = ref(null);
-  const networkAlpha = ref(null);
-  const learningRate = ref("");
-  const batchSize = ref(null);
-  const saveEvery = ref(null);
-  const samplePrompts = ref(""); // newline-separated
+  // Typed Advanced values, keyed by tunable setting. A pin holds while the
+  // choices change; one equal to the derived value is no pin at all.
+  const pins = ref({});
+  // Sample prompts as editable lines ({ text, alt }); the written ones are
+  // kept so an edited set is a pin and a reset can go back.
+  const defaultPrompts = ref([]);
+  const prompts = ref([]);
+  const plan = ref(null); // POST /training/resolve
+  const planLoading = ref(false);
 
   const submitting = ref(false);
   const submitError = ref("");
@@ -92,37 +115,122 @@ export const useTrainingStore = defineStore("training", () => {
     jobs.value.some((j) => !isTerminalStatus(j.status)),
   );
 
-  /** The set_id / character_id payload for POST /training/jobs (XOR). */
+  /** The character the run is filed under, or null for an ordinary set. */
+  const character = computed(() => dataset.value?.character || null);
+  const pictureCount = computed(() => dataset.value?.count ?? 0);
+  const displayName = computed(
+    () => character.value?.name || scopeName.value || "",
+  );
+  /** A character, or a character's reference set, always learns a person. */
+  const effectiveSubject = computed(() =>
+    character.value ? "person" : subject.value,
+  );
+
+  /** Where the pictures come from, as every training route takes it. */
   const scopePayload = computed(() => {
+    const ch = character.value;
+    if (ch) {
+      if (trainOn.value === "reference" && ch.reference_set_id != null) {
+        return { set_id: ch.reference_set_id, character_id: ch.id };
+      }
+      return { character_id: ch.id };
+    }
     if (scopeType.value === "set") return { set_id: scopeId.value };
-    if (scopeType.value === "character")
-      return { character_id: scopeId.value };
+    if (scopeType.value === "character") return { character_id: scopeId.value };
     return {};
   });
 
-  // ── Panel actions ────────────────────────────────────────────────────────────
+  /** Whether the owner's prompt lines differ from the written ones. */
+  const promptsPinned = computed(
+    () =>
+      defaultPrompts.value.length > 0 &&
+      promptsEdited(prompts.value, defaultPrompts.value),
+  );
+
+  /** Every pin Start and the preview send: typed values and edited prompts. */
+  const allPins = computed(() => {
+    const out = { ...pins.value };
+    if (promptsPinned.value) out[PROMPTS_KEY] = promptTexts(prompts.value);
+    return out;
+  });
+
+  // ── Dialog actions ───────────────────────────────────────────────────────────
 
   /**
-   * Seed the panel's scope (set XOR character) without touching the open flag:
-   * the Toolbar's v-menu owns open/close. Defaults the trigger word to the
-   * scope name. Picture count is optional and may be filled in later by the
-   * App-level count refresh.
+   * Seed the dialog for a fresh run on the given entry and open it. The
+   * trigger word starts from the name ("Pub nights" → "pubnights"). Then the
+   * dataset is read; a character with a reference set trains on it.
    */
-  function setScope({ type, id, name, pictureCount }) {
+  let openSeq = 0;
+  async function openForScope({ type, id, name }) {
+    const seq = ++openSeq;
     scopeType.value = type;
     scopeId.value = id != null ? Number(id) : null;
     scopeName.value = name || "";
-    if (pictureCount != null) scopePictureCount.value = Number(pictureCount) || 0;
-    // Default the trigger word to the scope name (normalised lazily by backend).
-    triggerWord.value = (name || "").trim();
+    triggerWord.value = triggerFromName(name);
     subject.value = type === "character" ? "person" : null;
+    effort.value = "standard";
+    fit.value = "auto";
+    trainOn.value = "all";
+    pins.value = {};
+    defaultPrompts.value = [];
+    prompts.value = [];
+    dataset.value = null;
+    plan.value = null;
     submitError.value = "";
+    trainDialogOpen.value = true;
+
+    fetchPresets();
+    if (!configLoaded.value) fetchConfig();
+    const entry =
+      type === "character" ? { character_id: scopeId.value } : { set_id: scopeId.value };
+    await loadDataset(entry);
+    // Closed or reopened on something else while the read was out.
+    if (seq !== openSeq || !trainDialogOpen.value) return;
+    const ch = character.value;
+    if (!ch) return;
+    // Opened from a reference set, or from a person: the trigger word is
+    // the person's name either way.
+    triggerWord.value = triggerFromName(ch.name);
+    if (dataset.value.set_id != null) {
+      trainOn.value = "reference";
+    } else if (ch.reference_count > 0) {
+      trainOn.value = "reference";
+      await loadDataset(scopePayload.value);
+    }
   }
 
-  /** Seed the panel for a fresh run on the given scope, then open the menu. */
-  function openForScope(opts) {
-    setScope(opts);
-    trainMenuOpen.value = true;
+  function closeDialog() {
+    trainDialogOpen.value = false;
+    openSeq += 1;
+    resolveSoon.cancel();
+    promptsSoon.cancel();
+  }
+
+  let datasetSeq = 0;
+  async function loadDataset(params) {
+    const seq = ++datasetSeq;
+    datasetLoading.value = true;
+    datasetError.value = "";
+    try {
+      const data = await getTrainingDataset(params);
+      if (seq === datasetSeq) dataset.value = data;
+    } catch (err) {
+      if (seq !== datasetSeq) return;
+      datasetError.value =
+        err?.response?.data?.detail ||
+        err?.message ||
+        "Could not read the pictures to train on.";
+    } finally {
+      if (seq === datasetSeq) datasetLoading.value = false;
+    }
+  }
+
+  /** Switch a character's run between its reference set and every picture. */
+  async function setTrainOn(value) {
+    if (trainOn.value === value) return;
+    trainOn.value = value;
+    await loadDataset(scopePayload.value);
   }
 
   async function fetchPresets() {
@@ -136,36 +244,201 @@ export const useTrainingStore = defineStore("training", () => {
         selectedPreset.value = (usable || presets.value[0]).id;
       }
     } catch (err) {
-      // Non-fatal for the panel; submit still works against the server default.
+      // Non-fatal for the dialog; the preview still resolves the default.
       console.warn("Failed to load training recipes:", err);
     } finally {
       presetsLoading.value = false;
     }
   }
 
+  let promptsSeq = 0;
   /**
-   * Submit POST /training/jobs from the current panel state. Returns the created
-   * job on success; throws (with API detail in submitError) on failure.
+   * Write the default sample prompts for the scope, subject and trigger
+   * word. Lines the owner has not edited follow them; an edited set stays.
+   */
+  async function loadPrompts() {
+    const seq = ++promptsSeq;
+    if (!effectiveSubject.value || !dataset.value) return;
+    try {
+      const data = await getTrainingSamplePrompts({
+        ...scopePayload.value,
+        subject: effectiveSubject.value,
+        trigger_word: triggerWord.value.trim() || undefined,
+      });
+      if (seq !== promptsSeq) return;
+      const edited = promptsPinned.value;
+      defaultPrompts.value = promptLines(data?.prompts);
+      if (!edited) prompts.value = defaultPrompts.value.map((l) => ({ ...l }));
+    } catch (err) {
+      console.warn("Failed to write the sample prompts:", err);
+    }
+  }
+
+  /** The choices a plan answers, pins aside: a stale plan answers others. */
+  const choicesKey = computed(() =>
+    JSON.stringify([
+      selectedPreset.value,
+      effectiveSubject.value,
+      effort.value,
+      fit.value,
+      pictureCount.value,
+    ]),
+  );
+
+  let planSeq = 0;
+  /** Ask the server what the run would use now. */
+  async function resolvePlan() {
+    const seq = ++planSeq;
+    if (!effectiveSubject.value || !dataset.value) {
+      plan.value = null;
+      return;
+    }
+    planLoading.value = true;
+    const key = choicesKey.value;
+    try {
+      const body = {
+        subject: effectiveSubject.value,
+        effort: effort.value,
+        fit: fit.value,
+        picture_count: pictureCount.value,
+      };
+      if (selectedPreset.value) body.preset = selectedPreset.value;
+      if (Object.keys(allPins.value).length) body.pins = allPins.value;
+      const data = await resolveTraining(body);
+      if (seq === planSeq) plan.value = { ...data, choicesKey: key };
+    } catch (err) {
+      if (seq !== planSeq) return;
+      const detail = err?.response?.data?.detail;
+      plan.value = {
+        error: {
+          message:
+            (typeof detail === "string" ? detail : "") ||
+            err?.message ||
+            "Could not work out the run's settings.",
+        },
+      };
+    } finally {
+      if (seq === planSeq) planLoading.value = false;
+    }
+  }
+
+  function debounced(fn, ms) {
+    let timer = null;
+    const run = () => {
+      clearTimeout(timer);
+      timer = setTimeout(fn, ms);
+    };
+    run.cancel = () => clearTimeout(timer);
+    return run;
+  }
+  const resolveSoon = debounced(resolvePlan, RESOLVE_DEBOUNCE_MS);
+  const promptsSoon = debounced(loadPrompts, PROMPTS_DEBOUNCE_MS);
+
+  watch(
+    () => [
+      trainDialogOpen.value,
+      selectedPreset.value,
+      effectiveSubject.value,
+      effort.value,
+      fit.value,
+      pictureCount.value,
+      dataset.value,
+      JSON.stringify(allPins.value),
+    ],
+    () => {
+      if (trainDialogOpen.value) resolveSoon();
+    },
+  );
+  watch(
+    () => [trainDialogOpen.value, effectiveSubject.value, dataset.value],
+    () => {
+      if (trainDialogOpen.value) loadPrompts();
+    },
+  );
+  watch(triggerWord, () => {
+    if (trainDialogOpen.value) promptsSoon();
+  });
+
+  /**
+   * Type over a derived value. Equal to what the choices give (or blank), it
+   * is no pin; anything else holds while the choices change. Only a plan for
+   * the current choices says what they give: until the debounced resolve
+   * answers a change, the value typed is kept as a pin.
+   */
+  function setPin(key, value) {
+    const next = { ...pins.value };
+    const current = plan.value?.choicesKey === choicesKey.value;
+    const derived = current ? plan.value?.derived?.[key] : null;
+    if (value === null || value === undefined || (derived && sameValue(value, derived.value))) {
+      delete next[key];
+    } else {
+      next[key] = value;
+    }
+    pins.value = next;
+  }
+
+  /** Let pinned values follow their choices again. */
+  function unpin(keys) {
+    const next = { ...pins.value };
+    let dropPrompts = false;
+    for (const key of keys) {
+      if (key === PROMPTS_KEY) dropPrompts = true;
+      delete next[key];
+    }
+    pins.value = next;
+    if (dropPrompts) resetPrompts();
+  }
+
+  function resetPrompts() {
+    prompts.value = defaultPrompts.value.map((l) => ({ ...l }));
+  }
+
+  function setPromptText(index, display) {
+    const next = [...prompts.value];
+    next[index] = { text: promptFromDisplay(display, triggerWord.value), alt: null };
+    prompts.value = next;
+  }
+
+  function togglePromptTrigger(index) {
+    const next = [...prompts.value];
+    next[index] = toggleTrigger(next[index]);
+    prompts.value = next;
+  }
+
+  function removePrompt(index) {
+    prompts.value = prompts.value.filter((_, i) => i !== index);
+  }
+
+  function addPrompt() {
+    prompts.value = [...prompts.value, { text: "", alt: null }];
+  }
+
+  function promptDisplay(line) {
+    return displayPrompt(line.text, triggerWord.value.trim());
+  }
+
+  /**
+   * Submit POST /training/jobs from the dialog: the scope, the recipe, the
+   * choices and every pin, exactly what the preview resolved. Returns the
+   * created job; throws (with the API detail in submitError) on failure.
    */
   async function startTraining() {
     submitting.value = true;
     submitError.value = "";
     try {
       // CreateJobRequest forbids extra fields. The base model is the
-      // recipe's, read by the server, and the advanced fields go in `pins`.
+      // recipe's, read by the server.
+      const trigger = triggerWord.value.trim();
       const body = {
         ...scopePayload.value,
-        name: `${scopeName.value || "LoRA"} (${triggerWord.value})`.trim(),
-        trigger_word: triggerWord.value.trim(),
+        name: `${displayName.value || "LoRA"} (${trigger})`.trim(),
+        trigger_word: trigger,
         effort: effort.value,
         fit: fit.value,
       };
       if (selectedPreset.value) body.preset = selectedPreset.value;
-      if (subject.value) body.subject = subject.value;
-
-      const pins = buildPins();
-      if (Object.keys(pins).length) body.pins = pins;
-
+      if (effectiveSubject.value) body.subject = effectiveSubject.value;
+      if (Object.keys(allPins.value).length) body.pins = allPins.value;
       return await createTrainingJob(body);
     } catch (err) {
       // A run that fits nowhere answers { message, budget, need_mb, free_mb }.
@@ -179,34 +452,6 @@ export const useTrainingStore = defineStore("training", () => {
     } finally {
       submitting.value = false;
     }
-  }
-
-  /**
-   * The owner's Advanced values as pins, keyed by the server's tunable names.
-   * Only filled-in fields are sent; the rest come from the recipe.
-   */
-  function buildPins() {
-    const pins = {};
-    if (isFilledNumber(steps.value)) pins["train.steps"] = Number(steps.value);
-    if (isFilledNumber(networkRank.value))
-      pins["network.linear"] = Number(networkRank.value);
-    if (isFilledNumber(networkAlpha.value))
-      pins["network.linear_alpha"] = Number(networkAlpha.value);
-    // A typed value that is not a number is sent as typed, so the server
-    // refuses it with its own message instead of the field being dropped.
-    const lr = String(learningRate.value ?? "").trim();
-    if (lr) pins["train.lr"] = Number.isFinite(Number(lr)) ? Number(lr) : lr;
-    if (isFilledNumber(batchSize.value))
-      pins["train.batch_size"] = Number(batchSize.value);
-    if (isFilledNumber(saveEvery.value))
-      pins["save.save_every"] = Number(saveEvery.value);
-    const prompts = samplePrompts.value
-      .split("\n")
-      .map((p) => p.trim())
-      .filter(Boolean);
-    // {{TRIGGER_WORD}} in a prompt is filled in by the server.
-    if (prompts.length) pins["sample.samples[*].prompt"] = prompts;
-    return pins;
   }
 
   // ── Registry / jobs actions ───────────────────────────────────────────────────
@@ -317,42 +562,69 @@ export const useTrainingStore = defineStore("training", () => {
     aiToolkitDiscovery.value = null;
     aiToolkitCheck.value = null;
     aiToolkitStatus.value = null;
-    trainMenuOpen.value = false;
+    closeDialog();
+    scopeType.value = null;
+    scopeId.value = null;
+    scopeName.value = "";
+    trainOn.value = "all";
+    dataset.value = null;
+    plan.value = null;
+    pins.value = {};
+    prompts.value = [];
+    defaultPrompts.value = [];
   }
 
   const unsubscribeSessionReset = onSessionReset(resetForSession);
   onScopeDispose(() => unsubscribeSessionReset());
 
   return {
-    // panel scope
-    trainMenuOpen,
+    // dialog: scope
+    trainDialogOpen,
     scopeType,
     scopeId,
     scopeName,
-    scopePictureCount,
+    dataset,
+    datasetLoading,
+    datasetError,
+    trainOn,
+    character,
+    pictureCount,
+    displayName,
     scopePayload,
-    setScope,
     openForScope,
-    // panel config
+    closeDialog,
+    setTrainOn,
+    // dialog: choices
     presets,
     presetsLoading,
     selectedPreset,
     triggerWord,
     subject,
+    effectiveSubject,
     effort,
     fit,
-    steps,
-    networkRank,
-    networkAlpha,
-    learningRate,
-    batchSize,
-    saveEvery,
-    samplePrompts,
+    pins,
+    choicesKey,
+    allPins,
+    setPin,
+    unpin,
+    plan,
+    planLoading,
+    defaultPrompts,
+    prompts,
+    promptsPinned,
+    resetPrompts,
+    setPromptText,
+    togglePromptTrigger,
+    removePrompt,
+    addPrompt,
+    promptDisplay,
     submitting,
     submitError,
     fetchPresets,
+    resolvePlan,
+    loadPrompts,
     startTraining,
-    buildPins,
     // jobs
     jobs,
     jobsLoading,
@@ -382,9 +654,3 @@ export const useTrainingStore = defineStore("training", () => {
     requestTrainingSettings,
   };
 });
-
-/** True when a value is a non-blank, finite number (an empty field is skipped). */
-function isFilledNumber(value) {
-  if (value === null || value === undefined || value === "") return false;
-  return Number.isFinite(Number(value));
-}

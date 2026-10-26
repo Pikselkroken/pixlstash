@@ -431,34 +431,21 @@
           />
         </v-menu>
         <!-- ── Toolbar: Train LoRA (scope = the one set or character in view).
-             Owner-only, so it is absent from a read-only session like Import. -->
-        <v-menu
+             Owner-only, so it is absent from a read-only session like Import.
+             It opens the Train a LoRA dialog (TrainLoraDialog, in App.vue). -->
+        <AppBarButton
           v-if="!isReadOnly"
-          v-model="trainingStore.trainMenuOpen"
-          :close-on-content-click="false"
-          location="bottom end"
-          origin="top end"
-          :offset="8"
-          transition="scale-transition"
+          class="tb-train-btn tb-fold-700"
+          icon="school-outline"
           :disabled="!canTrain"
-        >
-          <template #activator="{ props: menuProps }">
-            <AppBarButton
-              v-bind="menuProps"
-              class="tb-train-btn tb-fold-700"
-              icon="school-outline"
-              :disabled="!canTrain"
-              :open="trainingStore.trainMenuOpen"
-              :tooltip="
-                canTrain
-                  ? 'Train a LoRA on this set or character'
-                  : 'Open a set or character to train a LoRA on it.'
-              "
-              @click="canTrain && seedTrainScope()"
-            />
-          </template>
-          <TbTrainPanel />
-        </v-menu>
+          :open="trainingStore.trainDialogOpen"
+          :tooltip="
+            canTrain
+              ? 'Train a LoRA on this set or character'
+              : 'Open a set or character to train a LoRA on it.'
+          "
+          @click="openTrainDialog()"
+        />
         <!-- ── Toolbar: Import (icon trigger → import menu popover) ────── -->
         <v-menu
           v-if="!isReadOnly"
@@ -565,8 +552,7 @@
               class="ctx-item tb-row-700"
               @click="
                 close();
-                seedTrainScope();
-                trainingStore.trainMenuOpen = true;
+                openTrainDialog();
               "
             >
               <v-icon class="ctx-icon">mdi-school-outline</v-icon>
@@ -656,7 +642,6 @@ import TbGlobalActions from "./TbGlobalActions.vue";
 import TbExportPanel from "./TbExportPanel.vue";
 import TbImportPanel from "./TbImportPanel.vue";
 import TbOverflowMenu from "./TbOverflowMenu.vue";
-import TbTrainPanel from "./TbTrainPanel.vue";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import UndoControl from "./UndoControl.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
@@ -683,7 +668,6 @@ const emit = defineEmits([
   "local-import",
   "open-settings",
   "open-duplicates",
-  "train-menu-open",
 ]);
 
 const runDialog = useRunDialogStore();
@@ -742,9 +726,9 @@ const trainingStore = useTrainingStore();
 const entityNames = useEntityNamesStore();
 
 // ── Train LoRA: single-set / single-character scope gating ───────────────────
-// Training v1 accepts exactly one set OR one character (the API takes set_id
-// XOR character_id). Enable the button only when the current view is exactly
-// that; otherwise disable with a teaching tooltip.
+// A run trains on one set or one character (a character's reference set is
+// chosen inside the dialog). Enable the button only when the current view is
+// exactly that; otherwise disable with a teaching tooltip.
 const TRAIN_SPECIAL_CHARACTER_IDS = new Set([
   ALL_PICTURES_ID,
   UNASSIGNED_PICTURES_ID,
@@ -793,14 +777,11 @@ const trainScope = computed(() => {
 
 const canTrain = computed(() => trainScope.value != null && !isReadOnly.value);
 
-// Seed the panel's scope from the current view. The v-menu's own v-model
-// (trainingStore.trainMenuOpen, driven by the activator) handles open/close, so
-// we only set the scope here, never the open flag, to avoid fighting the menu.
-function seedTrainScope() {
+// Open the Train a LoRA dialog on the set or character in view.
+function openTrainDialog() {
   const scope = trainScope.value;
   if (!scope) return;
-  emit("train-menu-open");
-  trainingStore.setScope({
+  trainingStore.openForScope({
     type: scope.type,
     id: scope.id,
     name: scope.name,

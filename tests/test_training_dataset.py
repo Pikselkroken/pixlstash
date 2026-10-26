@@ -9,6 +9,7 @@ import gc
 import glob
 import json
 import os
+import shutil
 import tempfile
 
 from datetime import datetime, timezone
@@ -264,3 +265,71 @@ def test_training_captions_reads_each_pictures_caption_and_tags(env):
     assert captions == ["An elderly man reading in a garden.", ""]
     assert tags[0] == []
     assert sorted(tags[1]) == ["beard", "old man"]
+
+
+def test_training_facts_count_untagged_near_copies_and_other_people(env):
+    """The Train dialog's checks: a picture with no tags trains on the trigger
+    word alone, two pictures with the same perceptual hash are near copies,
+    and a face named as somebody else is another person in the dataset.
+
+    It takes the finders out itself, so nothing rewrites the rows it places,
+    and it places its pictures as rows rather than uploading them, so it works
+    whichever test ran before it on this module's server.
+    """
+    client, server = env
+    quiesce_background_work(server)
+    set_id = _create_set(client, "FactsSet")
+
+    def insert(session):
+        made = []
+        for n, source in enumerate(("Bad1.png", "Bad2.png", "Reference1.png")):
+            rel = f"facts_{n}.png"
+            shutil.copy(
+                os.path.join(PICTURES_DIR, source),
+                os.path.join(server.vault.image_root, rel),
+            )
+            pic = Picture(file_path=rel, imported_at=datetime.now(timezone.utc))
+            session.add(pic)
+            session.commit()
+            session.refresh(pic)
+            made.append(pic.id)
+        return made
+
+    *pic_ids, third = server.vault.db.run_task(insert)
+    for pid in [*pic_ids, third]:
+        _add_to_set(client, set_id, pid)
+    ids = []
+    for name in ("FactsGrandad", "FactsNan"):
+        resp = client.post("/characters", json={"name": name})
+        assert resp.status_code == 200, resp.text
+        ids.append(int(resp.json()["character"]["id"]))
+    grandad, nan = ids
+
+    def place(session):
+        for tag in session.exec(
+            select(Tag).where(Tag.picture_id.in_([*pic_ids, third]))
+        ):
+            session.delete(tag)
+        session.add(Tag(picture_id=pic_ids[1], tag="beard"))
+        session.add(Tag(picture_id=third, tag="garden"))
+        for pid in pic_ids:
+            session.get(Picture, pid).perceptual_hash = "00ff00ff00ff00ff"
+        session.get(Picture, third).perceptual_hash = "ff00ff00ff00ff00"
+        for face in session.exec(select(Face).where(Face.picture_id == third)):
+            face.character_id = None
+        session.add(
+            Face(picture_id=third, face_index=98, bbox=[1, 2, 3, 4], character_id=nan)
+        )
+        session.commit()
+
+    server.vault.db.run_task(place)
+
+    facts = ExportUtils.training_facts(server, set_id=set_id, character_id=grandad)
+    assert facts == {
+        "count": 3,
+        "untagged": 1,
+        "near_duplicates": 2,
+        "other_people": 1,
+    }
+    # Without a character nobody is "somebody else".
+    assert ExportUtils.training_facts(server, set_id=set_id)["other_people"] == 0

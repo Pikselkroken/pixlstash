@@ -15,6 +15,7 @@ or scope checks.
 """
 
 import json
+import math
 import os
 import re
 import shutil
@@ -24,9 +25,10 @@ from typing import Any, Literal, Optional
 import psutil
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
+from sqlmodel import select
 
 from pixlstash.database import DBPriority
-from pixlstash.db_models import User
+from pixlstash.db_models import Character, User
 from pixlstash.hub import training_runs
 from pixlstash.hub.db import now_iso
 from pixlstash.pixl_logging import get_logger
@@ -36,7 +38,7 @@ from pixlstash.resources.ledger import ram as read_ram
 from pixlstash.services.model_folder_scanner import SOURCE_FOLDER_KIND
 from pixlstash.services.training_service import handle_for_run
 from pixlstash.training import ai_toolkit_install, live_view, presets, sample_prompts
-from pixlstash.training.config_render import TunableOverrideError
+from pixlstash.training.config_render import TUNABLE_KEYS, TunableOverrideError
 from pixlstash.utils.aitoolkit_run import read_output_root, read_run
 from pixlstash.utils.path_utils import path_is_within, resolve_path_within
 from pixlstash.utils.service.export_utils import ExportUtils
@@ -46,6 +48,10 @@ from pixlstash.utils.service.user_settings_utils import (
 )
 
 logger = get_logger(__name__)
+
+# The smallest set the effort tables' source reports a working LoRA from
+# (ostris/ai-toolkit#550: 6 to 46 pictures); the dialog warns below it.
+MIN_PICTURES = 6
 
 # ---------------------------------------------------------------------------
 # JSON parsing helpers for progress fields persisted as text columns
@@ -280,15 +286,16 @@ def create_router(server) -> APIRouter:
         set_id: Optional[int] = Field(
             default=None,
             description=(
-                "Picture-set id to train on. Mutually exclusive with "
-                "character_id; provide exactly one."
+                "Picture-set id to train on. With character_id it must be "
+                "that character's reference set; alone, a reference set is "
+                "filed under its character."
             ),
         )
         character_id: Optional[int] = Field(
             default=None,
             description=(
-                "Character id to train on. Mutually exclusive with set_id; "
-                "provide exactly one."
+                "Character id to train on, or to file a reference-set run "
+                "under. Give set_id, character_id or both."
             ),
         )
         name: str = Field(
@@ -323,6 +330,34 @@ def create_router(server) -> APIRouter:
                 "(e.g. 'train.steps'). Each wins over the derived value; a "
                 "locked recipe key is refused with 422 naming it."
             ),
+        )
+
+    class ResolveRequest(BaseModel):
+        """Body for previewing what a run would use, without queueing it."""
+
+        model_config = ConfigDict(extra="forbid")
+
+        preset: str = Field(
+            default=presets.DEFAULT_PRESET,
+            description="The training recipe's id (GET /training/presets).",
+        )
+        subject: Literal["person", "style", "thing"] = Field(
+            ..., description="What the LoRA learns."
+        )
+        effort: Literal["gentle", "standard", "strong"] = Field(
+            default="standard", description="How hard to train."
+        )
+        fit: Literal["auto", "save_memory", "best_quality"] = Field(
+            default="auto", description="How to fit the run to this GPU."
+        )
+        picture_count: int = Field(
+            ...,
+            ge=0,
+            description="Pictures in the dataset (GET /training/dataset).",
+        )
+        pins: Optional[dict[str, Any]] = Field(
+            default=None,
+            description="The owner's Advanced values, as POST /training/jobs takes.",
         )
 
     # ── Response models ───────────────────────────────────────────────────
@@ -599,6 +634,107 @@ def create_router(server) -> APIRouter:
         description_source: Optional[str] = Field(
             default=None,
             description="captions, tags or generic; None for a style.",
+        )
+
+    class DatasetCharacter(BaseModel):
+        """The character a dataset belongs to, and its two picture choices."""
+
+        id: int = Field(..., description="The character's id.")
+        name: str = Field(..., description="The character's name.")
+        reference_set_id: Optional[int] = Field(
+            default=None, description="Its reference set, if it has one."
+        )
+        reference_count: int = Field(
+            0, description="Pictures a run of the reference set would hold."
+        )
+        all_count: int = Field(
+            ..., description="Pictures a run of every picture of it would hold."
+        )
+
+    class DatasetResponse(BaseModel):
+        """What a run of the set or character would train on, and its checks."""
+
+        model_config = ConfigDict(extra="allow")
+
+        set_id: Optional[int] = Field(
+            default=None, description="The set the pictures come from, if any."
+        )
+        character_id: Optional[int] = Field(
+            default=None,
+            description=(
+                "The character the run is filed under: the one asked for, or "
+                "the one whose reference set set_id is."
+            ),
+        )
+        count: int = Field(..., description="Pictures the dataset would hold.")
+        min_pictures: int = Field(
+            ..., description="Below this many pictures the dialog warns."
+        )
+        untagged: int = Field(
+            ...,
+            description=(
+                "Pictures with no tags; their caption is the trigger word alone."
+            ),
+        )
+        near_duplicates: int = Field(
+            ..., description="Pictures with a near copy in the dataset."
+        )
+        other_people: int = Field(
+            ...,
+            description="Pictures showing a face named as another character.",
+        )
+        character: Optional[DatasetCharacter] = None
+
+    class ResolveResponse(BaseModel):
+        """What a run would use on this machine, before it is queued."""
+
+        model_config = ConfigDict(extra="allow")
+
+        resolution: Optional[dict] = Field(
+            default=None,
+            description="The resolver's result, as POST /training/jobs records it.",
+        )
+        derived: Optional[dict] = Field(
+            default=None,
+            description=(
+                "Each value the choices give with no pins, as { value, source }: "
+                "what a reset returns to."
+            ),
+        )
+        error: Optional[dict] = Field(
+            default=None,
+            description=(
+                "Why the run cannot be resolved: { message } and, when no "
+                "memory profile fits, budget / need_mb / free_mb."
+            ),
+        )
+        rules: dict = Field(
+            default_factory=dict,
+            description="Each listed key's type and range: { kind, lo, hi, count, choices }.",
+        )
+        steps_clamp: Optional[str] = Field(
+            default=None,
+            description=(
+                "cap or floor when the effort's step range held the "
+                "picture-scaled steps (no pins), else null."
+            ),
+        )
+        steps_rule: dict = Field(
+            ...,
+            description=(
+                "The effort's steps_per_picture, min_steps and max_steps, and "
+                "fits: { lo, hi }, the picture counts it covers unclamped."
+            ),
+        )
+        room: dict = Field(
+            ..., description="The GPU and RAM a run could be given now (MiB)."
+        )
+        presets: list[dict] = Field(
+            default_factory=list,
+            description=(
+                "Each recipe with a verdict for these choices: fits, streams, "
+                "needs_ram, no_gpu or needs_checkout."
+            ),
         )
 
     class AiToolkitDiscoverResponse(BaseModel):
@@ -971,6 +1107,61 @@ def create_router(server) -> APIRouter:
             "completed_at": job["completed_at"],
         }
 
+    def _scope(set_id, character_id) -> tuple[Optional[int], Optional[int]]:
+        """The set the pictures come from and the character the run is filed under.
+
+        A set, a character, or a character with its own reference set. A
+        reference set given alone is filed under its character, so the LoRA
+        shows up there.
+        """
+        if set_id is None and character_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Give a set_id, a character_id, or both for a reference set.",
+            )
+        if set_id is None:
+            return None, character_id
+
+        def owner_of(session):
+            return session.exec(
+                select(Character.id).where(Character.reference_picture_set_id == set_id)
+            ).first()
+
+        owner = server.vault.db.run_task(owner_of)
+        if character_id is not None and owner != character_id:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "A set_id and a character_id together must name that "
+                    "character's reference set."
+                ),
+            )
+        return set_id, owner
+
+    def _verdict(preset, architectures, **choices) -> str:
+        """How *preset* would fit this machine with *choices* and no pins."""
+        if not presets.offered(preset, architectures):
+            return "needs_checkout"
+        try:
+            resolution = presets.resolve(preset, **choices)
+        except presets.NoProfileFits as exc:
+            return "needs_ram" if exc.budget == "ram" else "no_gpu"
+        values = resolution["values"]
+        streams = any(
+            values.get(key, {}).get("value")
+            for key in ("model.layer_offloading", "model.low_vram")
+        )
+        return "streams" if streams else "fits"
+
+    def _rule(rule) -> dict:
+        return {
+            "kind": rule.kind,
+            "lo": rule.lo,
+            "hi": rule.hi,
+            "count": rule.count,
+            "choices": sorted(rule.choices),
+        }
+
     # ── Training jobs ─────────────────────────────────────────────────────
 
     @router.post(
@@ -978,19 +1169,16 @@ def create_router(server) -> APIRouter:
         summary="Enqueue a training job",
         response_model=CreateJobResponse,
         description=(
-            "Creates a queued LoRA training job for exactly one of a picture "
-            "set or a character. The background trainer picks it up FIFO. "
+            "Creates a queued LoRA training job for a picture set, a character "
+            "or a character's reference set (filed under the character). The "
+            "background trainer picks it up FIFO. "
             "Owner-only."
         ),
     )
     def create_training_job(payload: CreateJobRequest, request: Request):
         _ensure_secure(request)
 
-        if (payload.set_id is None) == (payload.character_id is None):
-            raise HTTPException(
-                status_code=400,
-                detail="Exactly one of set_id / character_id must be provided.",
-            )
+        set_id, character_id = _scope(payload.set_id, payload.character_id)
         preset = presets.get_preset(payload.preset)
         if preset is None:
             raise HTTPException(
@@ -1015,14 +1203,14 @@ def create_router(server) -> APIRouter:
                     "the checkout."
                 ),
             )
-        subject = _subject_for(payload.subject, payload.character_id)
+        subject = _subject_for(payload.subject, character_id)
         try:
             pins = presets.validate_pins(preset, payload.pins)
         except TunableOverrideError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
         picture_count = ExportUtils.count_training_pictures(
-            server, set_id=payload.set_id, character_id=payload.character_id
+            server, set_id=set_id, character_id=character_id
         )
         if picture_count == 0:
             raise HTTPException(
@@ -1032,9 +1220,7 @@ def create_router(server) -> APIRouter:
         prompts = None
         if presets.PROMPTS_KEY not in pins:
             prompts = sample_prompts.prompt_texts(
-                _default_prompts(
-                    payload.set_id, payload.character_id, subject, payload.trigger_word
-                )
+                _default_prompts(set_id, character_id, subject, payload.trigger_word)
             )
         room = server.vault.training_room()
         if room["ram_mb"] is None:
@@ -1079,8 +1265,8 @@ def create_router(server) -> APIRouter:
 
         try:
             job = server.vault.training_service.enqueue(
-                set_id=payload.set_id,
-                character_id=payload.character_id,
+                set_id=set_id,
+                character_id=character_id,
                 name=payload.name,
                 base_model=preset["locked"]["model.name_or_path"],
                 trigger_word=payload.trigger_word,
@@ -1647,16 +1833,157 @@ def create_router(server) -> APIRouter:
         trigger_word: Optional[str] = None,
     ):
         _ensure_secure(request)
-        if (set_id is None) == (character_id is None):
-            raise HTTPException(
-                status_code=400,
-                detail="Exactly one of set_id / character_id must be provided.",
-            )
+        set_id, character_id = _scope(set_id, character_id)
         subject = _subject_for(subject, character_id)
         return {
             "subject": subject,
             **_default_prompts(set_id, character_id, subject, trigger_word),
         }
+
+    @router.get(
+        "/training/dataset",
+        summary="What a training run of a set or character would hold",
+        response_model=DatasetResponse,
+        description=(
+            "Counts the pictures a run of the set or character would train on "
+            "and what the Train dialog checks before it starts: pictures "
+            "without tags, near copies, and faces named as somebody else. For "
+            "a character, or a set that is a character's reference set, it "
+            "also gives the character and both picture counts. A set and a "
+            "character together mean that character's reference set. "
+            "Owner-only."
+        ),
+    )
+    def get_training_dataset(
+        request: Request,
+        set_id: Optional[int] = None,
+        character_id: Optional[int] = None,
+    ):
+        _ensure_secure(request)
+        set_id, character_id = _scope(set_id, character_id)
+        facts = ExportUtils.training_facts(
+            server, set_id=set_id, character_id=character_id
+        )
+        character = None
+        if character_id is not None:
+            row = server.vault.db.run_task(
+                lambda session: session.get(Character, character_id)
+            )
+            if row is None:
+                raise HTTPException(
+                    status_code=404, detail=f"No character {character_id}."
+                )
+            ref = row.reference_picture_set_id
+
+            def count(**scope):
+                return ExportUtils.count_training_pictures(server, **scope)
+
+            character = {
+                "id": row.id,
+                "name": row.name,
+                "reference_set_id": ref,
+                "reference_count": (
+                    facts["count"]
+                    if set_id is not None
+                    else (count(set_id=ref) if ref is not None else 0)
+                ),
+                "all_count": (
+                    facts["count"]
+                    if set_id is None
+                    else count(character_id=character_id)
+                ),
+            }
+        return {
+            "set_id": set_id,
+            "character_id": character_id,
+            "min_pictures": MIN_PICTURES,
+            "character": character,
+            **facts,
+        }
+
+    @router.post(
+        "/training/resolve",
+        summary="Preview what a training run would use",
+        response_model=ResolveResponse,
+        description=(
+            "Resolves the recipe for the choices, the picture count and the "
+            "GPU and RAM a run could be given now, exactly as POST "
+            "/training/jobs would, without queueing anything. Also gives the "
+            "values the choices give with no pins, the type and range of each "
+            "value, and how every recipe would fit. A run that cannot be "
+            "resolved answers 200 with `error`. Owner-only."
+        ),
+    )
+    def resolve_training_run(payload: ResolveRequest, request: Request):
+        _ensure_secure(request)
+        preset = presets.get_preset(payload.preset)
+        if preset is None:
+            raise HTTPException(
+                status_code=404, detail=f"No training recipe '{payload.preset}'."
+            )
+        row = preset["effort"][payload.effort]
+        room = server.vault.training_room()
+        rule = {k: row[k] for k in presets.EFFORT_STEP_KEYS}
+        # The picture counts the effort's step range covers without clamping.
+        rule["fits"] = {
+            "lo": math.ceil(row["min_steps"] / row["steps_per_picture"]),
+            "hi": math.floor(row["max_steps"] / row["steps_per_picture"]),
+        }
+        out = {"steps_rule": rule, "room": room}
+        if room["vram_mb"] is None:
+            out["error"] = {
+                "message": (
+                    "PixlStash cannot read this GPU's memory, so it cannot "
+                    "choose how to fit the run to it."
+                )
+            }
+            return out
+        choices = {
+            "subject": payload.subject,
+            "effort": payload.effort,
+            "fit": payload.fit,
+            "picture_count": payload.picture_count,
+            "vram_mb": room["vram_mb"],
+            "ram_mb": room["ram_mb"],
+        }
+        user = server.auth.get_user()
+        architectures = presets.checkout_architectures(
+            user.ai_toolkit_repo_path if user is not None else None
+        )
+        out["presets"] = [
+            {
+                "id": p["id"],
+                "label": p["label"],
+                "offered": presets.offered(p, architectures),
+                "verdict": _verdict(p, architectures, **choices),
+            }
+            for p in presets.list_presets()
+        ]
+        keys = set()
+        try:
+            derived = presets.resolve(preset, **choices)
+            out["derived"] = derived["values"]
+            out["steps_clamp"] = derived["steps_clamp"]
+            keys |= set(out["derived"])
+        except presets.NoProfileFits as exc:
+            logger.info("No pin-free %s profile fits: %s", preset["id"], exc)
+        try:
+            pins = presets.validate_pins(preset, payload.pins)
+            out["resolution"] = presets.resolve(preset, pins=pins, **choices)
+            keys |= set(out["resolution"]["values"])
+        except presets.NoProfileFits as exc:
+            out["error"] = {
+                "message": str(exc),
+                "budget": exc.budget,
+                "need_mb": exc.need_mb,
+                "free_mb": exc.free_mb,
+            }
+        except (TunableOverrideError, ValueError) as exc:
+            out["error"] = {"message": str(exc)}
+        out["rules"] = {
+            key: _rule(TUNABLE_KEYS[key]) for key in sorted(keys) if key in TUNABLE_KEYS
+        }
+        return out
 
     return router
 

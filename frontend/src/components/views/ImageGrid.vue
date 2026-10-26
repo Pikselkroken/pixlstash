@@ -69,7 +69,6 @@
       @local-import="emit('local-import', $event)"
       @confirm-export-zip="emit('confirm-export-zip')"
       @confirm-export-folder="emit('confirm-export-folder', $event)"
-      @train-menu-open="emit('train-menu-open')"
     />
     <FilterStrip
       :count-base-query="filterCountBaseQuery"
@@ -1501,7 +1500,6 @@ const emit = defineEmits([
   "local-import",
   "confirm-export-zip",
   "confirm-export-folder",
-  "train-menu-open",
   // The empty library's folder route. The reference-folder editor is the
   // sidebar's, and App.vue already holds the ref that reaches it.
   "choose-folder",
