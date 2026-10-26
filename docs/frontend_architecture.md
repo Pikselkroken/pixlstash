@@ -4409,8 +4409,8 @@ is looking at.
 
 **And like Duplicates its bar carries the shell chrome.** Replacing the grid
 also replaces the grid's toolbar, so `.shelf-toolbar` ends in
-`[separator] [TbGlobalActions]`, with `TbGlobalActions` emitting `open-settings`
-up to `App.vue`. **`UndoControl` is the documented exception to the canonical
+`[separator] [TbGlobalActions]`, the rail toggle (Settings is the title bar's,
+#2158). **`UndoControl` is the documented exception to the canonical
 tail** (`docs/design/toolbar-responsive-decisions.md`): nothing the shelf does
 is an operation-log entry, so every step its History popover listed belonged to
 a screen the reader was not on, and the pair sat permanently at "Nothing to
@@ -6842,8 +6842,8 @@ what reaches in from outside it.
 
 **Like the model shelf, its bar carries the shell chrome.** Replacing the grid
 replaces the grid's toolbar, so `.wfv-toolbar` ends in
-`[separator] [TbGlobalActions]`, with `TbGlobalActions` emitting `open-settings`
-up to `App.vue`. **Nothing contends for the rail any more**: running became a
+`[separator] [TbGlobalActions]`, the rail toggle (Settings is the title bar's,
+#2158). **Nothing contends for the rail any more**: running became a
 popup in F5, so the inspector is the rail's only occupant here and `App.vue`
 mounts it on `isWorkflowsView` alone. It used to be the `v-else-if` behind
 `WorkflowRunPanel`, because starting a run force-opened the rail and the

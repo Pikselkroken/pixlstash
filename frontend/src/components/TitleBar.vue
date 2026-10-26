@@ -46,19 +46,23 @@ const userPrefsStore = useUserPrefsStore();
 
 // Every route outside the workflow library and the model shelf is Media: the
 // grid, a set, a person, the Scrapheap, Duplicates, Insights, Moves. The
-// paths are the ones these places already had, so a bookmark still lands.
+// paths are the ones these places already had, so a bookmark still lands. A
+// share session's credential lives in `?token=` and only boot reads it, so a
+// link without it would open a session that 401s on reload or in a new tab.
 const workspaces = computed(() => {
+  const token = route.query.token;
+  const at = (path) => (token ? { path, query: { token } } : path);
   const current = WORKFLOW_ROUTES.includes(route.name)
     ? "workflows"
     : MODEL_SHELF_ROUTES.includes(route.name)
       ? "models"
       : "media";
   return [
-    { id: "media", label: "Media", to: "/" },
+    { id: "media", label: "Media", to: at("/") },
     {
       id: "workflows",
       label: "Workflows",
-      to: "/workflows",
+      to: at("/workflows"),
       // Every /workflows route is owner-only. Shown and inert rather than
       // hidden, as the sidebar row was: the demo site is a READ session, and
       // hiding a workspace there advertises a smaller product (#1014).
@@ -69,7 +73,7 @@ const workspaces = computed(() => {
     {
       id: "models",
       label: "Models",
-      to: "/models",
+      to: at("/models"),
       locked: isReadOnly.value
         ? "The model shelf is only available in your own library"
         : "",

@@ -82,7 +82,7 @@
       }}</span>
     </transition>
     <!-- ── Breadcrumb: current-view path (bottom-left overlay) ──
-         Hidden on the desktop shell, where it lives in the title bar. -->
+         In both shells: the title bar holds the workspace switch (#2158). -->
     <nav
       v-if="breadcrumb.length"
       ref="breadcrumbEl"

@@ -49,6 +49,7 @@
         :data-uuid="row.library.uuid"
         @click="pick(row)"
       >
+        <Tooltip v-if="row.reason" :text="row.reason" activator="parent" />
         <v-icon v-if="row.library.is_active" class="ctx-icon" aria-hidden="true"
           >mdi-check</v-icon
         >
@@ -104,6 +105,7 @@ import { onMenuKeydown } from "../utils/menuKeyboard.js";
 import { withRef } from "../utils/withRef.js";
 import { formatModelSize } from "../utils/modelShelf";
 import AppBarButton from "./widgets/AppBarButton.vue";
+import Tooltip from "./widgets/Tooltip.vue";
 
 defineProps({
   // From App.vue rather than the store: it also names a library still on its
@@ -161,6 +163,13 @@ const rows = computed(() =>
       library,
       drive,
       unavailable,
+      // Why an inert row is inert, said where the row is rather than only in
+      // Settings.
+      reason: !unavailable
+        ? ""
+        : !library.is_reachable
+          ? "Its drive is not connected"
+          : "Switching library is only available on the machine running PixlStash, or over your local network or Tailscale",
       label: [library.name, state].filter(Boolean).join(", "),
     };
   }),
@@ -170,11 +179,14 @@ async function pick(row) {
   if (row.unavailable) return;
   open.value = false;
   if (row.library.is_active) return;
-  await switchStore.confirmAndBegin(
+  const asked = await switchStore.confirmAndBegin(
     row.library,
     librariesStore.activeLibrary,
     trigger?.el ?? null,
   );
+  // Declined: the menu row that held focus left with the menu, so give the
+  // keyboard back to the picker rather than to <body>.
+  if (!asked) trigger?.focus?.();
 }
 
 function addLibrary() {
@@ -199,7 +211,7 @@ function manageLibraries() {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 3px;
+  gap: var(--space-1);
   min-width: 76px;
   overflow: hidden;
   text-align: left;

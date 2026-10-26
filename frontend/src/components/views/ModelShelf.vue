@@ -5263,7 +5263,7 @@ watch(
   box-sizing: border-box;
   /* Split inset, same as the queue's and for the same reason. RIGHT is
      --space-3, the grid bar's inset: the app-wide tail ([separator]
-     [TbGlobalActions]) is a stable anchor only if Settings and Stats land at
+     [TbGlobalActions]) is a stable anchor only if its Stats toggle lands at
      the identical distance from the edge in every view - a uniform --space-5
      here put them 8px further left than the grid's, so the pair jumped
      sideways on every view switch. LEFT stays --space-5, the shelf's own

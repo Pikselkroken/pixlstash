@@ -397,8 +397,9 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
   // Same reasoning for the model shelf: it lists files on this machine, not
   // pictures in the library, so it is a route rather than a selection.
   // Both of the shelf's views. `/models/runs` is the ai-toolkit runs waiting to
-  // be imported - the same destination, a second tab - so the sidebar's Models
-  // entry stays the current page across both and no second destination lights.
+  // be imported - the same destination, a second tab - so the title bar's
+  // Models workspace stays the current page across both and no second
+  // destination lights.
   // A READ session is never showing it: the shelf lists the owner's machine and
   // every route behind it is owner-only, so mounting it would only fire requests
   // the credential can never satisfy (issue #1014). Gating the predicate rather

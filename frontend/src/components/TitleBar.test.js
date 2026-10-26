@@ -123,10 +123,11 @@ function makeRouter() {
 let router;
 let originalDesktop;
 
-async function mountBar(path = "/", props = {}) {
+async function mountBar(path = "/", props = {}, options = {}) {
   await router.push(path);
   await router.isReady();
   const wrapper = mount(TitleBar, {
+    ...options,
     props: { activeLibraryName: "Family Photos", ...props },
     global: {
       plugins: [router],
@@ -145,10 +146,14 @@ function segment(wrapper, label) {
   return segments(wrapper).find((el) => el.text().includes(label));
 }
 
+/** Markup with the per-mount tooltip ids numbered out. */
+function markup(wrapper) {
+  return wrapper.html().replace(/app-tooltip-desc-\d+/g, "app-tooltip-desc");
+}
+
 /** The bar's markup with the switch's lit state taken out. */
 function chromeWithoutLitSegment(wrapper) {
-  return wrapper
-    .html()
+  return markup(wrapper)
     .replace(/ aria-current="page"/g, "")
     .replace(/ titlebar-ws--current/g, "");
 }
@@ -301,6 +306,25 @@ describe("a read-only session", () => {
     expect(wrapper.find('button[aria-label="Settings"]').exists()).toBe(true);
   });
 
+  it("keeps its share token on every segment's link", async () => {
+    // Only boot reads `?token=`, so a link without it opens a session that
+    // 401s on reload or in a new tab.
+    isReadOnly.value = true;
+    const wrapper = await mountBar("/set/3?token=example-share", {
+      activeLibraryName: "",
+    });
+    expect(segment(wrapper, "Media").attributes("href")).toBe(
+      "/?token=example-share",
+    );
+    isReadOnly.value = false;
+    const owner = await mountBar("/set/3?token=example-share");
+    expect(segments(owner).map((el) => el.attributes("href"))).toEqual([
+      "/?token=example-share",
+      "/workflows?token=example-share",
+      "/models?token=example-share",
+    ]);
+  });
+
   it("is the only session the switch refuses", async () => {
     // The positive control: an owner's Workflows and Models are links.
     const wrapper = await mountBar("/");
@@ -351,7 +375,7 @@ describe("the library picker", () => {
     const menus = [];
     for (const path of ["/", "/workflows", "/models"]) {
       const wrapper = await mountBar(path);
-      menus.push(wrapper.find('[data-testid="titlebar-library-menu"]').html());
+      menus.push(markup(wrapper.find('[data-testid="titlebar-library-menu"]')));
       wrapper.unmount();
     }
     expect(menus[1]).toBe(menus[0]);
@@ -377,6 +401,31 @@ describe("the library picker", () => {
     await flushPromises();
     expect(confirmMock).toHaveBeenCalledTimes(1);
     expect(setActiveLibrary).not.toHaveBeenCalled();
+  });
+
+  it("gives the keyboard back to the picker when the switch is declined", async () => {
+    await loadLibraries();
+    confirmMock.mockResolvedValue(false);
+    const wrapper = await mountBar("/", {}, { attachTo: document.body });
+    const row = wrapper.find('[data-uuid="b"]');
+    row.element.focus();
+    await row.trigger("click");
+    await flushPromises();
+    expect(document.activeElement).toBe(
+      wrapper.find('[data-testid="titlebar-library"]').element,
+    );
+    wrapper.unmount();
+  });
+
+  it("says why a row cannot be chosen", async () => {
+    await loadLibraries(false);
+    const wrapper = await mountBar("/");
+    const tip = (uuid) =>
+      wrapper.find(`[data-uuid="${uuid}"]`).findComponent(Tooltip);
+    expect(tip("c").props("text")).toBe("Its drive is not connected");
+    expect(tip("b").props("text")).toContain("only available on the machine");
+    // The open library is not refused, so it explains nothing.
+    expect(tip("a").exists()).toBe(false);
   });
 
   it("offers a remote owner no switch and no Add, but still Manage", async () => {

@@ -1,9 +1,8 @@
 import { ref, computed, watch, onMounted, onUnmounted, toValue } from "vue";
 
-// "New version available" check, shared by the sidebar brand (browser) and the
-// desktop title bar. Only one of those is the active owner at a time - the
-// `enabled` flag no-ops the fetch/interval for the inactive one so the check
-// never runs twice. `installType` and `checkForUpdates` may be refs or getters.
+// "New version available" check, run by the title bar in both shells (#2158).
+// The `enabled` flag no-ops the fetch/interval for a caller that should not
+// own it, so the check never runs twice. `installType` and `checkForUpdates` may be refs or getters.
 
 const appVersion = __APP_VERSION__;
 
