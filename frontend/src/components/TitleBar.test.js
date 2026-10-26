@@ -176,6 +176,7 @@ beforeEach(() => {
 
 afterEach(() => {
   window.pixlstashDesktop = originalDesktop;
+  vi.restoreAllMocks();
 });
 
 async function loadLibraries(canManage = true) {
@@ -496,11 +497,23 @@ describe("the rest of the strip", () => {
     expect(wrapper.find('button[aria-label="Close"]').exists()).toBe(false);
   });
 
+  // The platform is pinned rather than read off the host, so each case runs
+  // the same on every machine instead of skipping on the one it describes.
   it("draws the window controls in the desktop shell", async () => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("Linux x86_64");
     window.pixlstashDesktop = { windowClose: vi.fn() };
     const wrapper = await mountBar("/");
-    if (/mac/i.test(navigator.platform || navigator.userAgent)) return;
     await wrapper.find('button[aria-label="Close"]').trigger("click");
     expect(window.pixlstashDesktop.windowClose).toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it("leaves the window controls to macOS's own traffic lights", async () => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    window.pixlstashDesktop = { windowClose: vi.fn() };
+    const wrapper = await mountBar("/");
+    expect(wrapper.find('button[aria-label="Close"]').exists()).toBe(false);
+    expect(wrapper.find(".titlebar--mac").exists()).toBe(true);
+    wrapper.unmount();
   });
 });
