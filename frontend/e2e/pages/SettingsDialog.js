@@ -2,7 +2,7 @@ import { expect } from '@playwright/test'
 
 /**
  * The user settings dialog (UserSettingsDialog.vue / AccountSection.vue).
- * Opened from the toolbar gear (mdi-cog-outline). The restyle moved the dialog
+ * Opened from the title bar's gear (mdi-cog-outline). The restyle moved the dialog
  * onto AppDialog (.app-dialog) with a left nav rail (.settings-nav /
  * .settings-nav-item) instead of Vuetify tabs, a header "Log out" AppButton,
  * and a table-based token list whose create form now lives in its own

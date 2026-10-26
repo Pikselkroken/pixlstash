@@ -417,13 +417,8 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
     () => !isReadOnly.value && WORKFLOW_ROUTES.includes(route.name),
   );
 
-  /** Open the workflow library. */
-  function handleSelectWorkflows() {
-    pushAppRoute({ name: "workflows" });
-  }
-
   // …and a pasted /models URL is bounced to the library rather than left on a
-  // route that renders the grid under a Models heading. The sidebar row cannot
+  // route that renders the grid under a Models heading. The title bar's segment cannot
   // reach this: it is inert for a READ session, so the only way in is an
   // address bar.
   //
@@ -458,11 +453,6 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
     },
     { immediate: true },
   );
-
-  /** Open the model shelf. */
-  function handleSelectModels() {
-    pushAppRoute({ name: "models" });
-  }
 
   // "About your library" is a destination for the same reason Duplicates is: it
   // shows findings rather than pictures, so it has no selection to express.
@@ -565,10 +555,8 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
     isInsightsView,
     isMovesView,
     isWorkflowsView,
-    handleSelectModels,
     handleSelectInsights,
     handleSelectMoves,
-    handleSelectWorkflows,
     handleInsightAction,
     handleSelectCharacter,
     handleSelectSet,

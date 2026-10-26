@@ -37,6 +37,7 @@ pinned, because none of them has to answer mid-swap.
 """
 
 import os
+import shutil
 from datetime import datetime, timezone
 from typing import Literal, Optional
 
@@ -100,6 +101,20 @@ class LibraryResponse(BaseModel):
             "caller; omitted for any other owner session so a remote client "
             "learns no host filesystem layout."
         ),
+    )
+    total_bytes: Optional[int] = Field(
+        default=None,
+        description=(
+            "Size of the drive the library's folder sits on, for the title "
+            "bar's fullness meter. Null when the folder cannot be measured "
+            "(an unplugged drive). A capacity, not a path, so it is returned "
+            "to local and remote owners alike, as GET /model-folders/devices "
+            "returns its drives' sizes."
+        ),
+    )
+    free_bytes: Optional[int] = Field(
+        default=None,
+        description="Free space on that drive. Null exactly when total_bytes is.",
     )
 
 
@@ -299,7 +314,29 @@ def create_router(server) -> APIRouter:
         )
         return int(row[0]) if row else 0
 
+    def _drive_usage(library) -> tuple[Optional[int], Optional[int]]:
+        """``(total, free)`` bytes of the drive under *library*, or ``(None, None)``.
+
+        An unreachable library is not measured: its drive is gone, which the
+        listing already says through ``is_reachable``, and a warning on every
+        listing would only repeat it.
+        """
+        if not library.is_reachable:
+            return None, None
+        try:
+            usage = shutil.disk_usage(library.path)
+        except OSError as exc:
+            logger.warning(
+                "Cannot measure the drive under library %r (%s); its fullness "
+                "meter will be left out.",
+                library.name,
+                exc,
+            )
+            return None, None
+        return int(usage.total), int(usage.free)
+
     def _to_response(library, include_path: bool) -> LibraryResponse:
+        total_bytes, free_bytes = _drive_usage(library)
         return LibraryResponse(
             uuid=library.uuid,
             name=library.name,
@@ -307,6 +344,8 @@ def create_router(server) -> APIRouter:
             is_reachable=library.is_reachable,
             active_share_links=_count_share_links(library.uuid),
             path=library.path if include_path else None,
+            total_bytes=total_bytes,
+            free_bytes=free_bytes,
         )
 
     @router.get(

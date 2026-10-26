@@ -603,10 +603,7 @@
              queue, which is why they live in their own component). Never
              folds (amendment #2); the activity light stays first-class on the
              Stats button at every width. -->
-        <TbGlobalActions
-          rail-name="Stats and tasks"
-          @open-settings="emit('open-settings')"
-        />
+        <TbGlobalActions rail-name="Stats and tasks" />
       </div>
     </div>
   </div>
@@ -666,7 +663,6 @@ const emit = defineEmits([
   "confirm-export-folder",
   "open-import",
   "local-import",
-  "open-settings",
   "open-duplicates",
 ]);
 

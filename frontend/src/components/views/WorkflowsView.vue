@@ -222,7 +222,6 @@
           separator
           rail="workflows"
           rail-name="Inspector"
-          @open-settings="emit('open-settings')"
         />
       </span>
     </div>

@@ -447,7 +447,6 @@
         <TbGlobalActions
           rail="models"
           rail-name="Models and tasks"
-          @open-settings="emit('open-settings')"
         />
       </div>
     </div>

@@ -1,11 +1,7 @@
 <template>
   <span v-if="separator" class="bar-separator" aria-hidden="true"></span>
-  <!-- ── Settings ──────────────────────────────────────────────────────── -->
-  <AppBarButton
-    icon="cog-outline"
-    tooltip="Settings"
-    @click="emit('open-settings')"
-  />
+  <!-- Settings lives in the title bar (#2158): one control, the same place in
+       every workspace. -->
   <!-- ── Right-rail toggle ─────────────────────────────────────────────── -->
   <!-- One glyph on every screen, `dock-right`: it says where something will
        appear, not what is in it, because the rail holds stats on the Library,
@@ -33,15 +29,16 @@
 </template>
 
 <script setup>
-// The app-wide chrome that must survive a change of destination: Settings and
-// the right-rail toggle. The grid's toolbar and the duplicates queue both
-// mount this SAME component, which is what keeps the pair pixel-identical in
-// every view - the styles live here, not in either host.
+// The app-wide chrome that must survive a change of destination: the
+// right-rail toggle (Settings moved to the title bar, #2158). The grid's
+// toolbar and the duplicates queue both mount this SAME component, which is
+// what keeps it pixel-identical in every view - the styles live here, not in
+// either host.
 //
-// Both buttons act on global state (the settings dialog lives in App.vue, the
-// stats rail in the sidebar store), so the component takes no data props. The
-// two it does take are about the HOST: an optional separator for a bar that
-// does not already draw one, and what the rail is called on that screen.
+// It acts on global state (the stats rail in the sidebar store), so the
+// component takes no data props. The ones it does take are about the HOST: an
+// optional separator for a bar that does not already draw one, and what the
+// rail is called on that screen.
 
 import { computed, ref, watch } from "vue";
 import { useSidebarStore } from "../../stores/useSidebarStore";
@@ -68,8 +65,6 @@ const props = defineProps({
     validator: (value) => ["stats", "workflows", "models"].includes(value),
   },
 });
-
-const emit = defineEmits(["open-settings"]);
 
 const sidebarStore = useSidebarStore();
 const tasksStore = useTasksStore();

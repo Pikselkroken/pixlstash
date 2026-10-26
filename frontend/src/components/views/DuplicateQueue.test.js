@@ -960,35 +960,18 @@ describe("DuplicateQueue - the toolbar hands the keyboard back", () => {
     expect(document.activeElement).toBe(decided);
     wrapper.unmount();
   });
-
-  // Settings opens a dialog, and the dialog owns focus per the a11y rules:
-  // nothing may steal it to the queue.
-  it("opening Settings leaves focus with the dialog flow", async () => {
-    const { wrapper } = await mountQueue([group("g1")]);
-    const btn = wrapper.find('button[aria-label="Settings"]');
-    btn.element.focus();
-    await btn.trigger("click");
-    expect(document.activeElement).toBe(btn.element);
-    wrapper.unmount();
-  });
 });
 
 describe("DuplicateQueue - the shell chrome", () => {
   // Duplicates replaces the grid, and with it the grid's toolbar; the
-  // app-wide chrome (Settings, the stats rail toggle, undo/redo) is not the
-  // grid's and must not vanish with it.
-  it("carries Settings, the stats toggle and undo/redo like every other view", async () => {
+  // app-wide chrome (the stats rail toggle, undo/redo) is not the grid's and
+  // must not vanish with it. Settings is the title bar's (#2158), so no
+  // toolbar carries a second one.
+  it("carries the stats toggle and undo/redo like every other view", async () => {
     const { wrapper } = await mountQueue([group("g1")]);
-    expect(wrapper.find('button[aria-label="Settings"]').exists()).toBe(true);
     expect(wrapper.find(".tb-stats-btn").exists()).toBe(true);
     expect(wrapper.findComponent({ name: "UndoControl" }).exists()).toBe(true);
-    wrapper.unmount();
-  });
-
-  it("asks App.vue for the settings dialog, like the grid toolbar does", async () => {
-    const { wrapper } = await mountQueue([group("g1")]);
-    await wrapper.find('button[aria-label="Settings"]').trigger("click");
-    expect(wrapper.emitted("open-settings")).toHaveLength(1);
+    expect(wrapper.find('button[aria-label="Settings"]').exists()).toBe(false);
     wrapper.unmount();
   });
 
@@ -1000,8 +983,8 @@ describe("DuplicateQueue - the shell chrome", () => {
   it("orders the tail separator → UndoControl → TbGlobalActions, ⋯ elsewhere", async () => {
     const { wrapper } = await mountQueue([group("g1")]);
     const undo = wrapper.findComponent({ name: "UndoControl" }).element;
-    // TbGlobalActions is multi-root; its Settings button is a stable anchor.
-    const globalActions = wrapper.find('button[aria-label="Settings"]').element;
+    // TbGlobalActions is multi-root; its rail toggle is a stable anchor.
+    const globalActions = wrapper.find(".tb-stats-btn").element;
     const follows = (a, b) =>
       Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
 
@@ -1184,11 +1167,10 @@ describe("DuplicateQueue - the shell chrome", () => {
   // Undo is owner-only on the server, but the control stays mounted and inert
   // in a read-only session so the feature is still visible; UndoControl owns
   // the disabled state.
-  it("keeps undo/redo and Settings in a read-only session", async () => {
+  it("keeps undo/redo in a read-only session", async () => {
     readOnlyRef.value = true;
     const { wrapper } = await mountQueue([group("g1")]);
     expect(wrapper.findComponent({ name: "UndoControl" }).exists()).toBe(true);
-    expect(wrapper.find('button[aria-label="Settings"]').exists()).toBe(true);
     wrapper.unmount();
   });
 });

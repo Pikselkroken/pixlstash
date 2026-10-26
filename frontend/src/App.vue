@@ -226,10 +226,8 @@ const {
   isInsightsView,
   isMovesView,
   isWorkflowsView,
-  handleSelectModels,
   handleSelectInsights,
   handleSelectMoves,
-  handleSelectWorkflows,
   handleInsightAction,
   handleSelectCharacter,
   handleSelectSet,
@@ -778,7 +776,7 @@ defineExpose({
         :install-type="installType"
         :check-for-updates="userPrefsStore.checkForUpdates"
         :active-library-name="activeLibraryName"
-        @open-libraries="openSettingsDialog('libraries')"
+        @open-settings="openSettingsDialog"
       />
       <div
         class="file-manager"
@@ -838,8 +836,6 @@ defineExpose({
             @select-insights="handleSelectInsights"
             @select-moves="handleSelectMoves"
             @select-duplicates="handleSelectDuplicates"
-            @select-models="handleSelectModels"
-            @select-workflows="handleSelectWorkflows"
             @select-set="handleSelectSet"
             @select-folder="handleSelectFolder"
             @train-lora="handleTrainLora"
@@ -893,10 +889,7 @@ defineExpose({
                    the grid rather than floating over it. The grid stays
                    unmounted while the queue is open, which is also what keeps
                    its fetches and its WebSocket reconciliation quiet. -->
-              <DuplicateQueue
-                v-if="isDuplicatesView"
-                @open-settings="openSettingsDialog"
-              />
+              <DuplicateQueue v-if="isDuplicatesView" />
               <!-- The model shelf lists files on this machine rather than
                    pictures in the library, so like Duplicates it replaces the
                    grid instead of floating over it, and the grid stays
@@ -923,10 +916,7 @@ defineExpose({
               <!-- Moves is a destination for the same reason Insights is: it
                    reports on the queue rather than showing the library, so it
                    replaces the grid instead of floating over it. -->
-              <MovesReview
-                v-else-if="isMovesView"
-                @open-settings="openSettingsDialog"
-              />
+              <MovesReview v-else-if="isMovesView" />
               <!-- The Workflows grid lists graphs the hub knows about rather
                    than pictures in this library, so like the shelf it replaces
                    the grid instead of floating over it, and the grid stays
