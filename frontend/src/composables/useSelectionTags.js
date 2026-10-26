@@ -396,7 +396,9 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
     const done = await fanOut(ids, (id) =>
       Promise.all(tags.map((tag) => addPictureTag(id, tag))),
     );
-    if (done.length) onApplied({ tag: tags.join(", "), pictureIds: done });
+    if (done.length) {
+      onApplied({ tag: tags.join(", "), pictureIds: done, action: "add" });
+    }
     await fetchSelectedImageTags();
     return done.length === ids.length;
   }

@@ -415,3 +415,21 @@ describe("the face crop", () => {
     expect(style).toContain("background-position: -48px -32px");
   });
 });
+
+describe("adding a tag to several", () => {
+  it("sends it once for a double Enter, as an add", async () => {
+    const wrapper = mountRail();
+    await select(wrapper, [7, 8, 9]);
+    await wrapper.find('[aria-label="Add a tag to all 3"]').trigger("click");
+    const input = wrapper.find(".rail-pictures__input");
+    await input.setValue("rain");
+    addPictureTag.mockClear();
+    input.trigger("keydown", { key: "Enter" });
+    input.trigger("keydown", { key: "Enter" });
+    await flush();
+    expect(addPictureTag).toHaveBeenCalledTimes(3);
+    expect(wrapper.emitted("tags-applied")).toEqual([
+      [{ tag: "rain", pictureIds: [7, 8, 9], action: "add" }],
+    ]);
+  });
+});
