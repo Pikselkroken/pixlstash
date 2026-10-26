@@ -347,6 +347,23 @@ describe("the project scope in the header slot (#2159)", () => {
 });
 
 describe("a project's move menus", () => {
+  it("close on Escape and hand the keyboard back to their +", () => {
+    const wrapper = mountSidebar();
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+
+    wrapper.vm.openSetMoveMenu({ currentTarget: trigger });
+    expect(wrapper.vm.setMoveMenuOpen).toBe(true);
+    const event = new KeyboardEvent("keydown", { key: "Escape" });
+    wrapper.vm.onMoveMenuKeydown(event);
+
+    expect(wrapper.vm.setMoveMenuOpen).toBe(false);
+    expect(document.activeElement).toBe(trigger);
+
+    trigger.remove();
+    wrapper.unmount();
+  });
+
   it("open one at a time, so focus goes to the one just opened", () => {
     // Both are `.sidebar-move-menu`; left open together, `_focusMoveMenu`
     // focuses whichever teleported first rather than the one just opened.

@@ -442,8 +442,12 @@ async function _focusMoveMenu() {
   document.querySelector(".sidebar-move-menu")?.focus();
 }
 
+// The "+" that opened a move menu, so Escape can hand the keyboard back to it.
+let moveMenuTrigger = null;
+
 function openCharacterMoveMenu(event) {
   const el = event?.currentTarget ?? event?.target;
+  moveMenuTrigger = el ?? null;
   if (el) {
     characterMenuPos.value = _moveMenuPos(el.getBoundingClientRect());
   }
@@ -457,12 +461,27 @@ function openCharacterMoveMenu(event) {
 
 function openSetMoveMenu(event) {
   const el = event?.currentTarget ?? event?.target;
+  moveMenuTrigger = el ?? null;
   if (el) {
     setMenuPos.value = _moveMenuPos(el.getBoundingClientRect());
   }
   characterMoveMenuOpen.value = false;
   setMoveMenuOpen.value = !setMoveMenuOpen.value;
   if (setMoveMenuOpen.value) _focusMoveMenu();
+}
+
+// Arrow keys move through the rows; Escape closes the menu and returns the
+// keyboard to its "+", which a programmatic overlay never does on its own.
+function onMoveMenuKeydown(event) {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    characterMoveMenuOpen.value = false;
+    setMoveMenuOpen.value = false;
+    moveMenuTrigger?.focus?.();
+    return;
+  }
+  onMenuKeydown(event);
 }
 
 // --- Character Editor State ---
@@ -6775,7 +6794,7 @@ defineExpose({
               role="menu"
               tabindex="-1"
               :style="characterMenuPos"
-              @keydown="onMenuKeydown"
+              @keydown="onMoveMenuKeydown"
             >
               <button
                 type="button"
@@ -6847,7 +6866,7 @@ defineExpose({
               role="menu"
               tabindex="-1"
               :style="setMenuPos"
-              @keydown="onMenuKeydown"
+              @keydown="onMoveMenuKeydown"
             >
               <button
                 type="button"
