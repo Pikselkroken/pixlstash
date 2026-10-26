@@ -1069,6 +1069,10 @@ def test_favourite_refuses_a_malformed_body(client):
         {"picture_ids": [picture_id], "favourite": "yes"},
         {"picture_ids": [], "favourite": True},
         {"picture_ids": ["abc"], "favourite": True},
+        # int() would read each of these as picture 1.
+        {"picture_ids": [True], "favourite": True},
+        {"picture_ids": [1.9], "favourite": True},
+        {"picture_ids": [str(picture_id)], "favourite": True},
     ):
         r = client.post(f"{API}/pictures/favourite", json=body)
         assert r.status_code == 400, (body, r.text)

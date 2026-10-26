@@ -877,12 +877,12 @@ def register_routes(router, server):
             )
         if not isinstance(favourite, bool):
             raise HTTPException(status_code=400, detail="favourite must be a boolean")
-        try:
-            picture_ids = sorted({int(pid) for pid in raw_ids})
-        except (TypeError, ValueError) as exc:
+        # Strict: int() would read `true` and `1.9` as picture 1.
+        if not all(type(pid) is int for pid in raw_ids):
             raise HTTPException(
                 status_code=400, detail="picture_ids must be integer picture ids"
-            ) from exc
+            )
+        picture_ids = sorted(set(raw_ids))
 
         def _set_favourite(session: Session, ids: list[int], on: bool) -> list[int]:
             scope = scope_id_subquery(session, ids, name="_pixlstash_favourite_ids")
