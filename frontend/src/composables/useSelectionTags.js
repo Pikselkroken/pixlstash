@@ -59,6 +59,7 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
     if (!toFetch.length) {
       tagRead += 1;
       fetchedTagData.value = [];
+      tagDataLoading.value = false;
       return;
     }
     const mine = (tagRead += 1);
@@ -81,6 +82,7 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
     const mine = (predictionRead += 1);
     if (!ids.length) {
       fetchedPredictionData.value = [];
+      predictionLoading.value = false;
       return;
     }
     predictionLoading.value = true;
@@ -97,10 +99,16 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
                   ? payload.tag_predictions
                   : [];
               const threshold = Number(payload?.meta?.acceptance_threshold);
-              if (Number.isFinite(threshold) && threshold > 0 && threshold <= 1) {
-                predictionAcceptanceThreshold.value = threshold;
+              if (mine === predictionRead) {
+                if (
+                  Number.isFinite(threshold) &&
+                  threshold > 0 &&
+                  threshold <= 1
+                ) {
+                  predictionAcceptanceThreshold.value = threshold;
+                }
+                labelThresholds.value = payload?.meta?.label_thresholds || {};
               }
-              labelThresholds.value = payload?.meta?.label_thresholds || {};
               return { id, predictions };
             })
             .catch((e) => {
@@ -311,9 +319,15 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
     if (tagActionLoading.value.includes(tagEntry.name)) return;
     tagActionLoading.value = [...tagActionLoading.value, tagEntry.name];
     tagError.value = "";
-    const missingIds = fetchedTagData.value
-      .filter((img) => !tagEntry.tagsByImageId.has(Number(img.id)))
-      .map((img) => Number(img.id));
+    // Past the read cap the tags of the rest are unknown, so "the rest" is
+    // every selected picture not known to have it; adding a tag a picture
+    // already has changes nothing.
+    const candidates = tagDataCapped.value
+      ? pictureIds()
+      : fetchedTagData.value.map((img) => Number(img.id));
+    const missingIds = candidates.filter(
+      (id) => !tagEntry.tagsByImageId.has(id),
+    );
     try {
       await Promise.all(
         missingIds.map((id) =>

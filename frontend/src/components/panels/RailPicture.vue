@@ -164,8 +164,16 @@ const FACE_CROP = 32; // px, the crop's box: --control-h-bar
 function faceCropStyle(face) {
   const width = Number(props.image?.width || props.card?.width || 0);
   const height = Number(props.image?.height || props.card?.height || 0);
-  const [x1, y1, x2, y2] = face.bbox;
   if (!width || !height || !thumbnailUrl.value) return {};
+  // Clamped to the picture first: a detector box can run past its edges.
+  const clampX = (v) => Math.max(0, Math.min(Number(v) || 0, width));
+  const clampY = (v) => Math.max(0, Math.min(Number(v) || 0, height));
+  const [x1, y1, x2, y2] = [
+    clampX(face.bbox[0]),
+    clampY(face.bbox[1]),
+    clampX(face.bbox[2]),
+    clampY(face.bbox[3]),
+  ];
   const scale = FACE_CROP / Math.max(1, x2 - x1, y2 - y1);
   return {
     backgroundImage: `url(${thumbnailUrl.value})`,

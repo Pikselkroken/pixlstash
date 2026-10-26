@@ -32,6 +32,7 @@ import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
 import { SCRAPHEAP_PICTURES_ID } from "../../stores/useViewStore";
 import { useSelectionTags } from "../../composables/useSelectionTags";
+import { addPictureTag } from "../../api/tags";
 
 enableAutoUnmount(afterEach);
 
@@ -326,6 +327,37 @@ describe("the selection's tag reads", () => {
     answers[0]([{ id: 1, tags: [{ id: 8, tag: "old" }] }, { id: 2, tags: [] }]);
     await first;
     expect(tags.fetchedTagData.value.map((row) => row.id)).toEqual([3, 4]);
+    bulkFetchTags.mockReset().mockResolvedValue([]);
+  });
+
+  it("do not stay loading when the selection empties mid-read", async () => {
+    bulkFetchTags.mockImplementation(() => new Promise(() => {}));
+    let ids = [1, 2];
+    const tags = useSelectionTags(() => ids);
+    void tags.fetchSelectedImageTags();
+    expect(tags.tagDataLoading.value).toBe(true);
+    ids = [];
+    await tags.fetchSelectedImageTags();
+    expect(tags.tagDataLoading.value).toBe(false);
+    bulkFetchTags.mockReset().mockResolvedValue([]);
+  });
+
+  it("add a tag to the rest past the read cap too", async () => {
+    const ids = Array.from({ length: 105 }, (_, i) => i + 1);
+    bulkFetchTags.mockResolvedValue(
+      ids.slice(0, 100).map((id) => ({
+        id,
+        tags: id === 1 ? [{ id: 900, tag: "rain" }] : [],
+      })),
+    );
+    const tags = useSelectionTags(() => ids);
+    await tags.fetchSelectedImageTags();
+    addPictureTag.mockClear();
+    await tags.addTagToRemaining(tags.tagsOnSome.value[0]);
+    const tagged = addPictureTag.mock.calls.map(([id]) => id);
+    expect(tagged).toHaveLength(104);
+    expect(tagged).toContain(105);
+    expect(tagged).not.toContain(1);
     bulkFetchTags.mockReset().mockResolvedValue([]);
   });
 });

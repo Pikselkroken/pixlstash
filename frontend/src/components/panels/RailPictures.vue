@@ -178,6 +178,12 @@
           <dd>{{ models }}</dd>
         </template>
       </dl>
+      <p
+        v-if="!propertiesCollapsed && ids.length > MAX_TAG_FETCH"
+        class="rail-pictures__hint"
+      >
+        Size and models of the first {{ MAX_TAG_FETCH }}.
+      </p>
     </section>
   </div>
 </template>
