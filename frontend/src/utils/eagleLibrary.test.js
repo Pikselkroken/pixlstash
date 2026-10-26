@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("./apiClient", () => ({
   API_BASE_URL: "/api/v1",
@@ -8,6 +8,10 @@ vi.mock("./apiClient", () => ({
 import { apiClient } from "./apiClient";
 import { attachImportMetadata, stageFiles } from "../api/pictureImport.js";
 import { readEagleLibrary } from "./eagleLibrary.js";
+
+beforeEach(() => {
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+});
 
 function fileAt(path, content = "x") {
   const file = new File([content], path.split("/").pop());
@@ -34,7 +38,7 @@ const libraryFiles = () => [
   json(`${LIB}/images/A.info/metadata.json`, {
     name: "fjord",
     ext: "jpg",
-    tags: ["sea", "Blue Sky"],
+    tags: ["sea", null, "Blue Sky", 7],
     folders: ["F2", "gone"],
     star: 4,
     isDeleted: false,
@@ -62,6 +66,8 @@ const libraryFiles = () => [
   }),
   fileAt(`${LIB}/images/D.info/a_b_thumbnail.png`),
   fileAt(`${LIB}/images/D.info/a_b.png`),
+  fileAt(`${LIB}/images/E.info/metadata.json`, ""),
+  fileAt(`${LIB}/images/E.info/half-synced.png`),
 ];
 
 describe("readEagleLibrary", () => {
@@ -74,6 +80,15 @@ describe("readEagleLibrary", () => {
     ]);
     expect(library.trashed).toBe(1);
     expect(library.unsupported).toBe(1);
+    expect(library.unreadable).toBe(1);
+  });
+
+  it("still imports the pictures when the folder tree will not parse", async () => {
+    const files = libraryFiles();
+    files[0] = fileAt(`${LIB}/metadata.json`, "{");
+    const library = await readEagleLibrary(files);
+    expect(library.files.map((f) => f.name)).toEqual(["fjord.jpg", "a_b.png"]);
+    expect(library.metadata.map((m) => m.sets)).toEqual([[], []]);
   });
 
   it("refuses a folder that is not an Eagle library", async () => {

@@ -12,14 +12,28 @@ import { IMPORT_MEDIA_EXTENSIONS } from "./media.js";
  * ordinary upload: only the originals travel, each with the labels it carries.
  *
  * Folders become picture sets, nested ones named by their path
- * ("Travel / Norway"). Items in Eagle's trash and file types PixlStash does not
- * import are left out and counted.
+ * ("Travel / Norway"). Items in Eagle's trash, file types PixlStash does not
+ * import and items whose `metadata.json` will not parse (a half-synced library)
+ * are left out and counted; the rest still import.
  *
  * @param {FileList|File[]} fileList Every file under the picked folder.
  * @returns {Promise<{files: File[], metadata: Object[], trashed: number,
- *   unsupported: number}>} `metadata[i]` is `{tags, score, sets}` for `files[i]`.
+ *   unsupported: number, unreadable: number}>} `metadata[i]` is
+ *   `{tags, score, sets}` for `files[i]`.
  * @throws {Error} When the folder holds no Eagle library.
  */
+async function readJson(file) {
+  try {
+    return JSON.parse(await file.text());
+  } catch (e) {
+    console.warn(
+      `[IMPORT] Eagle: skipping unreadable ${file.webkitRelativePath || file.name}`,
+      e,
+    );
+    return null;
+  }
+}
+
 export async function readEagleLibrary(fileList) {
   const filesByDir = new Map();
   for (const file of Array.from(fileList || [])) {
@@ -42,20 +56,31 @@ export async function readEagleLibrary(fileList) {
           walk(folder.children, path);
         }
       };
-      if (libraryMeta) walk(JSON.parse(await libraryMeta.text()).folders, "");
+      // Unreadable, the folder tree is lost but the pictures still import.
+      if (libraryMeta) walk((await readJson(libraryMeta))?.folders, "");
       folderPathsByRoot.set(root, paths);
     }
     return folderPathsByRoot.get(root);
   }
 
-  const result = { files: [], metadata: [], trashed: 0, unsupported: 0 };
+  const result = {
+    files: [],
+    metadata: [],
+    trashed: 0,
+    unsupported: 0,
+    unreadable: 0,
+  };
   let items = 0;
   for (const [dir, files] of filesByDir) {
     const match = dir.match(/^(?:(.*)\/)?images\/[^/]+\.info$/);
     const metaFile = files.get("metadata.json");
     if (!match || !metaFile) continue;
     items += 1;
-    const meta = JSON.parse(await metaFile.text());
+    const meta = await readJson(metaFile);
+    if (!meta) {
+      result.unreadable += 1;
+      continue;
+    }
     if (meta.isDeleted) {
       result.trashed += 1;
       continue;
@@ -77,7 +102,10 @@ export async function readEagleLibrary(fileList) {
     const paths = await folderPaths(match[1] ?? "");
     result.files.push(original);
     result.metadata.push({
-      tags: Array.isArray(meta.tags) ? meta.tags : [],
+      // Strings only: the server refuses the whole batch over one bad entry.
+      tags: Array.isArray(meta.tags)
+        ? meta.tags.filter((t) => typeof t === "string")
+        : [],
       score: meta.star >= 1 && meta.star <= 5 ? meta.star : null,
       sets: (meta.folders || []).map((id) => paths.get(id)).filter(Boolean),
     });
@@ -103,7 +131,8 @@ export async function eagleImportFiles(fileList) {
   const library = await readEagleLibrary(fileList);
   console.info(
     `[IMPORT] Eagle library: ${library.files.length} to import, ` +
-      `${library.trashed} in Eagle's trash, ${library.unsupported} unsupported.`,
+      `${library.trashed} in Eagle's trash, ${library.unsupported} unsupported, ` +
+      `${library.unreadable} unreadable.`,
   );
   if (!library.files.length) {
     throw new Error("That library has no pictures PixlStash can import.");

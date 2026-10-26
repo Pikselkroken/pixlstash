@@ -157,7 +157,7 @@
       </ol>
       <p class="tb-import-note">
         Pictures in Eagle's trash are left out. A picture already in PixlStash
-        keeps the tags it has.
+        keeps its own tags, rating and sets.
       </p>
       <input
         ref="eagleInputRef"

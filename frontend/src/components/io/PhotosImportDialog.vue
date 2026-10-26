@@ -414,7 +414,7 @@ watch(dialogOpen, (isOpen) => {
           </ol>
           <div class="google-photos-note">
             Pictures in Eagle's trash are left out. A picture already in
-            PixlStash keeps the tags it has.
+            PixlStash keeps its own tags, rating and sets.
           </div>
           <div class="local-import-controls">
             <input

@@ -5,7 +5,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlmodel import Session, func, select
+from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models.character import Character
@@ -494,7 +494,8 @@ class PictureImportTask(BaseTask):
     def _apply_named_sets(self, ids_by_set_name: dict[str, list[int]]) -> None:
         """Add imported pictures to the sets their carried-in metadata names.
 
-        A set is matched by name, case-insensitively, within the import's
+        A set is matched by name, case-insensitively (Unicode casefold, which
+        SQLite's ASCII-only ``lower()`` is not), within the import's
         project (or among sets with no project), so importing the same library
         twice fills the same sets instead of minting ``Name (2)``. A missing
         one is created in that project. A locked set is left alone.
@@ -505,21 +506,23 @@ class PictureImportTask(BaseTask):
         def apply_named_sets(
             session: Session, mapping: dict[str, list[int]], project_id: Optional[int]
         ):
+            query = select(PictureSet)
+            if project_id is None:
+                query = query.where(PictureSet.project_id.is_(None))
+            else:
+                query = query.where(PictureSet.project_id == project_id)
+            sets_by_name: dict[str, PictureSet] = {}
+            for existing in session.exec(query).all():
+                sets_by_name.setdefault(existing.name.casefold(), existing)
             for name, ids in mapping.items():
-                query = select(PictureSet).where(
-                    func.lower(PictureSet.name) == name.lower()
-                )
-                if project_id is None:
-                    query = query.where(PictureSet.project_id.is_(None))
-                else:
-                    query = query.where(PictureSet.project_id == project_id)
-                picture_set = session.exec(query).first()
+                picture_set = sets_by_name.get(name.casefold())
                 if picture_set is None:
                     picture_set = PictureSet(name=name)
                     session.add(picture_set)
                     session.flush()
                     if project_id is not None:
                         set_picture_set_projects(session, picture_set, [project_id])
+                    sets_by_name[name.casefold()] = picture_set
                 elif picture_set.locked:
                     logger.warning(
                         "PictureImportTask: set %r (id %s) is locked; not adding "

@@ -552,6 +552,44 @@ def test_staging_file_metadata_rejects_bad_input(owner_server, file_metadata):
         data={"file_metadata": file_metadata},
     )
     assert r.status_code == 400, r.text
+    assert "file_metadata" in r.json()["detail"]
+
+
+def test_staging_file_metadata_sets_live_in_the_import_project(owner_server):
+    """In a project, an Eagle folder fills that project's set of the same name
+    (matched with Unicode case folding) and a new one is created there."""
+    srv, client = owner_server
+    project_id = srv.vault.db.run_task(lambda s: _make_project(s))
+
+    def make_project_set(session):
+        picture_set = PictureSet(name="Ålesund", project_id=project_id)
+        session.add(picture_set)
+        session.commit()
+        session.refresh(picture_set)
+        return picture_set.id
+
+    project_set_id = srv.vault.db.run_task(make_project_set)
+    library_set_id = _make_set(srv, name="ålesund")  # no project: not this one
+    staging_id = client.post(
+        f"{API}/pictures/import/staging", json={"project_id": project_id}
+    ).json()["staging_id"]
+    r = client.post(
+        f"{API}/pictures/import/staging/{staging_id}/files",
+        files=[("file", ("a.png", _png_bytes(), "image/png"))],
+        data={"file_metadata": json.dumps([{"sets": ["ålesund", "Bergen"]}])},
+    )
+    assert r.status_code == 200, r.text
+    client.post(f"{API}/pictures/import/staging/{staging_id}/commit")
+    _wait_for_stage(client, staging_id, target=("completed",))
+    pic_id = _only_picture_id(srv)
+
+    assert _set_member_ids(srv, project_set_id) == {pic_id}
+    assert _set_member_ids(srv, library_set_id) == set()
+    bergen = srv.vault.db.run_task(
+        lambda s: s.exec(select(PictureSet).where(PictureSet.name == "Bergen")).one()
+    )
+    assert bergen.project_id == project_id
+    assert _set_member_ids(srv, bergen.id) == {pic_id}
 
 
 def test_staging_orphan_sidecar_is_skipped_gracefully(owner_server):
