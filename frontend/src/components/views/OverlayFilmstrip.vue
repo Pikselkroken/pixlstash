@@ -127,7 +127,7 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import Tooltip from "../widgets/Tooltip.vue";
 
 const props = defineProps({
@@ -247,6 +247,17 @@ function onViewportScroll() {
     last: indexAt(el.scrollLeft + el.clientWidth),
   });
 }
+
+// The strip widens when the rail shuts or the window grows, with no scroll to
+// say so: report the range again, or the far end is drawn blank. Observing
+// also reports once on mount.
+let viewportObserver = null;
+onMounted(() => {
+  if (typeof ResizeObserver === "undefined" || !viewportRef.value) return;
+  viewportObserver = new ResizeObserver(() => onViewportScroll());
+  viewportObserver.observe(viewportRef.value);
+});
+onUnmounted(() => viewportObserver?.disconnect());
 
 // A mouse wheel turns vertically; across a horizontal strip it should move
 // the strip. A trackpad's own sideways swipe is left alone.

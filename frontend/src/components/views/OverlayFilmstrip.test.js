@@ -76,7 +76,7 @@ describe("OverlayFilmstrip scrolling", () => {
       global: { stubs: { "v-icon": true, "transition-group": false } },
     });
     const el = strip.find(".filmstrip-viewport").element;
-    Object.defineProperty(el, "clientWidth", { value: 700 });
+    Object.defineProperty(el, "clientWidth", { value: 700, configurable: true });
     el.scrollLeft = scrollLeft;
     el.scrollTo = vi.fn();
     return { strip, el };
@@ -130,6 +130,29 @@ describe("OverlayFilmstrip scrolling", () => {
     el.scrollLeft = 350;
     await strip.find(".filmstrip-viewport").trigger("scroll");
     expect(strip.emitted("visible-range")).toEqual([[{ first: 3, last: 10 }]]);
+  });
+
+  it("reports the thumbs in view again when the strip widens", () => {
+    // Shutting the rail widens the strip with no scroll to say so.
+    let resized = null;
+    const Original = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      constructor(callback) {
+        resized = callback;
+      }
+      observe() {}
+      disconnect() {}
+    };
+    try {
+      const { strip, el } = mountScrolling(0);
+      Object.defineProperty(el, "clientWidth", { value: 1000 });
+      resized();
+      expect(strip.emitted("visible-range").at(-1)).toEqual([
+        { first: 0, last: 10 },
+      ]);
+    } finally {
+      globalThis.ResizeObserver = Original;
+    }
   });
 
   it("turns a mouse wheel into a sideways scroll", async () => {

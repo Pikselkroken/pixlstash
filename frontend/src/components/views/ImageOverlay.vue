@@ -3240,13 +3240,12 @@ function handleOverlayClick(event) {
 
 /** T: the tag field, on Info, in a pane opened for it if the rail was shut.
  * A reader sitting on Recipe is brought back to Info rather than given an
- * invisible cursor. */
+ * invisible cursor. `beginAddTag` focuses after the next render, by which the
+ * pane and the Info group are shown. */
 function beginTagEntry() {
-  const wasOpen = sidebarOpen.value;
   openSidebar();
   sidebarTab.value = "info";
-  if (wasOpen) tagsPanelRef.value?.beginAddTag();
-  else nextTick(() => tagsPanelRef.value?.beginAddTag());
+  tagsPanelRef.value?.beginAddTag();
 }
 
 // S: the reader's own toggle, kept like the toolbar's.
