@@ -100,7 +100,7 @@ const props = defineProps({
   projects: { type: Array, default: () => [] },
   // "global" (Any project) | "project" (a project, or none when projectId is null).
   mode: { type: String, default: "global" },
-  projectId: { type: [Number, String], default: null },
+  projectId: { type: Number, default: null },
   // { any, none, byId: { [projectId]: n } }; a missing number shows blank.
   counts: { type: Object, default: () => ({}) },
   readOnly: { type: Boolean, default: false },
