@@ -1,133 +1,153 @@
 <template>
   <div ref="railRef" class="overlay-rail" :class="{ hidden: hidden }">
-    <div class="filmstrip-viewport" @wheel.prevent.stop="onFilmstripWheel">
-      <transition-group
-        name="filmstrip-slide"
-        tag="div"
-        class="filmstrip-list"
-        :style="canvasStyle"
-      >
-        <button
-          v-for="item in items"
-          :key="item.id ? `filmstrip-${item.id}` : `filmstrip-${item.index}`"
-          :class="[
-            'filmstrip-thumb',
-            {
-              'filmstrip-thumb-stack-joined': item.isStackJoined,
-              'filmstrip-thumb--picked': isPicked(item),
-            },
-          ]"
-          :aria-pressed="pickedIds.length ? String(isPicked(item)) : undefined"
-          @click.stop="onThumbClick(item, $event)"
-          @contextmenu.prevent.stop="emit('context-menu', item, $event)"
+    <div
+      ref="viewportRef"
+      class="filmstrip-viewport"
+      @scroll.passive="onViewportScroll"
+      @keydown="onViewportKeydown"
+    >
+      <div class="filmstrip-sizer" :style="sizerStyle">
+        <!-- No enter/leave transitions: Vue keeps a leaving thumb in flow
+             for two frames even with no CSS, and the top one leaving on every
+             scroll step down pushed the strip a slot down and back. Moves
+             (stack reorder) still animate. -->
+        <transition-group
+          name="filmstrip-slide"
+          tag="div"
+          :css="false"
+          class="filmstrip-list"
+          :style="listStyle"
         >
-          <Tooltip
-            :text="item.description || 'Image'"
-            activator="parent"
-            :describe="false"
-          />
-          <div class="filmstrip-thumb-tile" :style="item.stackTileStyle">
-            <img
-              v-if="item.thumbSrc && !isThumbBroken(item)"
-              :class="[
-                'filmstrip-thumb-image',
-                { 'filmstrip-thumb-image-active': item.isActive },
-              ]"
-              :src="item.thumbSrc"
-              :alt="item.description || 'Thumbnail'"
-              loading="lazy"
-              draggable="false"
-              @error="onThumbError(item)"
-            />
-            <div
-              v-else
-              :class="[
-                'filmstrip-thumb-placeholder',
-                { 'filmstrip-thumb-image-active': item.isActive },
-              ]"
-            >
-              <v-icon :size="isThumbBroken(item) ? 28 : 22">
-                {{
-                  isThumbBroken(item)
-                    ? "mdi-image-broken-variant"
-                    : item.isVideo
-                      ? "mdi-video"
-                      : "mdi-image"
-                }}
-              </v-icon>
-            </div>
-          </div>
-          <div
-            v-if="isPicked(item)"
-            class="filmstrip-badge filmstrip-badge--pick"
-            aria-hidden="true"
-          >
-            {{ pickLetter(item) }}
-          </div>
-          <div
-            v-if="item.stackBadgeVisible && item.thumbSrc && item.isStackLead"
-            class="filmstrip-badge filmstrip-badge--top-left"
-            @click.stop="emit('toggle-expand', item)"
-            @mouseenter.stop="emit('prefetch', item)"
-          >
-            <Tooltip :text="item.stackBadgeTitle" activator="parent" />
-            <v-icon size="14" :style="item.stackIconStyle">mdi-layers</v-icon>
-          </div>
-          <div
-            v-if="item.problemBadgeVisible"
+          <button
+            v-for="item in items"
+            :key="item.id ? `filmstrip-${item.id}` : `filmstrip-${item.index}`"
             :class="[
-              'filmstrip-badge',
-              item.stackBadgeVisible
-                ? 'filmstrip-badge--top-left-stack'
-                : 'filmstrip-badge--top-left',
+              'filmstrip-thumb',
+              {
+                'filmstrip-thumb-stack-joined': item.isStackJoined,
+                'filmstrip-thumb--picked': isPicked(item),
+              },
             ]"
+            :aria-pressed="
+              pickedIds.length ? String(isPicked(item)) : undefined
+            "
+            @click.stop="onThumbClick(item, $event)"
+            @contextmenu.prevent.stop="emit('context-menu', item, $event)"
           >
-            <Tooltip :text="item.problemTitle" activator="parent" />
-            <v-icon size="14" color="dark-surface-error"
-              >mdi-emoticon-sad-outline</v-icon
+            <Tooltip
+              :text="item.description || 'Image'"
+              activator="parent"
+              :describe="false"
+            />
+            <div class="filmstrip-thumb-tile" :style="item.stackTileStyle">
+              <img
+                v-if="item.thumbSrc && !isThumbBroken(item)"
+                :class="[
+                  'filmstrip-thumb-image',
+                  { 'filmstrip-thumb-image-active': item.isActive },
+                ]"
+                :src="item.thumbSrc"
+                :alt="item.description || 'Thumbnail'"
+                decoding="async"
+                draggable="false"
+                @error="onThumbError(item)"
+              />
+              <div
+                v-else
+                :class="[
+                  'filmstrip-thumb-placeholder',
+                  { 'filmstrip-thumb-image-active': item.isActive },
+                ]"
+              >
+                <v-icon :size="isThumbBroken(item) ? 28 : 22">
+                  {{
+                    isThumbBroken(item)
+                      ? "mdi-image-broken-variant"
+                      : item.isVideo
+                        ? "mdi-video"
+                        : "mdi-image"
+                  }}
+                </v-icon>
+              </div>
+            </div>
+            <div
+              v-if="isPicked(item)"
+              class="filmstrip-badge filmstrip-badge--pick"
+              aria-hidden="true"
             >
-          </div>
-          <!-- Move earlier / Make cover / Move later on a picture of a stack
-               opened here, stacked like the rail. Spans, not buttons: the
-               thumb is itself a button. -->
-          <div
-            v-if="item.stackPlace && !readOnly"
-            class="filmstrip-stack-bar"
-            role="group"
-            aria-label="Stack order"
-          >
-            <span
-              v-for="handle in stackHandles(item.stackPlace)"
-              :key="handle.where"
-              class="filmstrip-stack-btn"
-              :class="{
-                'filmstrip-stack-btn--cover': handle.where === 'cover',
-                'filmstrip-stack-btn--disabled': handle.disabled,
-              }"
-              role="button"
-              :aria-label="handle.label"
-              :aria-disabled="handle.disabled ? 'true' : undefined"
-              @click.stop="
-                !handle.disabled && emit('stack-move', item, handle.where)
-              "
+              {{ pickLetter(item) }}
+            </div>
+            <div
+              v-if="item.stackBadgeVisible && item.thumbSrc && item.isStackLead"
+              class="filmstrip-badge filmstrip-badge--top-left"
+              @click.stop="emit('toggle-expand', item)"
+              @mouseenter.stop="emit('prefetch', item)"
             >
-              <Tooltip :text="handle.label" activator="parent" />
-              <v-icon size="14">{{ handle.icon }}</v-icon>
-            </span>
-          </div>
-        </button>
-      </transition-group>
+              <Tooltip :text="item.stackBadgeTitle" activator="parent" />
+              <v-icon size="14" :style="item.stackIconStyle">mdi-layers</v-icon>
+            </div>
+            <div
+              v-if="item.problemBadgeVisible"
+              :class="[
+                'filmstrip-badge',
+                item.stackBadgeVisible
+                  ? 'filmstrip-badge--top-left-stack'
+                  : 'filmstrip-badge--top-left',
+              ]"
+            >
+              <Tooltip :text="item.problemTitle" activator="parent" />
+              <v-icon size="14" color="dark-surface-error"
+                >mdi-emoticon-sad-outline</v-icon
+              >
+            </div>
+            <!-- Move earlier / Make cover / Move later on a picture of a stack
+                 opened here, stacked like the rail. Spans, not buttons: the
+                 thumb is itself a button. -->
+            <div
+              v-if="item.stackPlace && !readOnly"
+              class="filmstrip-stack-bar"
+              role="group"
+              aria-label="Stack order"
+            >
+              <span
+                v-for="handle in stackHandles(item.stackPlace)"
+                :key="handle.where"
+                class="filmstrip-stack-btn"
+                :class="{
+                  'filmstrip-stack-btn--cover': handle.where === 'cover',
+                  'filmstrip-stack-btn--disabled': handle.disabled,
+                }"
+                role="button"
+                :aria-label="handle.label"
+                :aria-disabled="handle.disabled ? 'true' : undefined"
+                @click.stop="
+                  !handle.disabled && emit('stack-move', item, handle.where)
+                "
+              >
+                <Tooltip :text="handle.label" activator="parent" />
+                <v-icon size="14">{{ handle.icon }}</v-icon>
+              </span>
+            </div>
+          </button>
+        </transition-group>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { reactive, ref } from "vue";
+import { computed, reactive, ref } from "vue";
 import Tooltip from "../widgets/Tooltip.vue";
 
 const props = defineProps({
+  // The thumbs to draw: a window of the strip, each carrying its `index`.
   items: { type: Array, default: () => [] },
-  canvasStyle: { type: Object, default: () => ({}) },
+  // Native scrolling over a spacer as tall as all `total` thumbs, the window
+  // placed at `start`; off on the narrow layout, which draws `items` as is.
+  virtual: { type: Boolean, default: false },
+  total: { type: Number, default: 0 },
+  start: { type: Number, default: 0 },
+  slotSize: { type: Number, default: 0 },
   hidden: { type: Boolean, default: false },
   readOnly: { type: Boolean, default: false },
   // Ids Ctrl/Cmd-clicked for Compare, in the order picked.
@@ -165,7 +185,12 @@ function stackHandles(place) {
       icon: "mdi-star-outline",
       disabled: place.position === 0,
     },
-    { where: "later", label: "Move later", icon: "mdi-arrow-down", disabled: last },
+    {
+      where: "later",
+      label: "Move later",
+      icon: "mdi-arrow-down",
+      disabled: last,
+    },
   ];
 }
 
@@ -189,57 +214,74 @@ const emit = defineEmits([
   "select",
   "toggle-expand",
   "prefetch",
-  "navigate",
+  "first-visible",
   "stack-move",
   "pick",
   "context-menu",
 ]);
 
 const railRef = ref(null);
-defineExpose({ railEl: railRef, resetWheel });
+const viewportRef = ref(null);
+defineExpose({ railEl: railRef, reveal });
 
-const FILMSTRIP_WHEEL_THRESHOLD = 60;
-const WHEEL_LINE_HEIGHT_PX = 16;
-const FILMSTRIP_WHEEL_SENSITIVITY = 0.2;
-const FILMSTRIP_WHEEL_STEP_COOLDOWN_MS = 30;
+// Scrolled natively, as the grid is: the wheel and a trackpad move it by the
+// pixel, and the parent renders the thumbs around `first-visible`.
+const sizerStyle = computed(() =>
+  props.virtual ? { height: `${props.total * props.slotSize}px` } : {},
+);
+const listStyle = computed(() =>
+  props.virtual
+    ? { transform: `translateY(${props.start * props.slotSize}px)` }
+    : {},
+);
 
-let filmstripWheelAccumulator = 0;
-let filmstripWheelLastStepTs = 0;
-
-function resetWheel() {
-  filmstripWheelAccumulator = 0;
-  filmstripWheelLastStepTs = 0;
+function onViewportScroll() {
+  const el = viewportRef.value;
+  if (!el || !props.slotSize) return;
+  emit("first-visible", Math.floor(el.scrollTop / props.slotSize));
 }
 
-function normalizeWheelDelta(event) {
-  if (!event) return 0;
-  const raw = Number(event.deltaY ?? 0);
-  if (!Number.isFinite(raw) || raw === 0) return 0;
-  const scaled = raw * FILMSTRIP_WHEEL_SENSITIVITY;
-  if (event.deltaMode === 1) {
-    return scaled * WHEEL_LINE_HEIGHT_PX;
-  }
-  if (event.deltaMode === 2) {
-    return scaled * (window.innerHeight || 800);
-  }
-  return scaled;
+// The arrow keys step the lightbox's picture (its window listener still gets
+// them); with a thumb focused they must not also scroll the strip natively,
+// or it drifts away from the picture they step to.
+const STEP_KEYS = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];
+
+function onViewportKeydown(event) {
+  if (STEP_KEYS.includes(event.key)) event.preventDefault();
 }
 
-function onFilmstripWheel(event) {
-  const now = Date.now();
-  if (now - filmstripWheelLastStepTs < FILMSTRIP_WHEEL_STEP_COOLDOWN_MS) {
-    return;
+function scrollViewportTo(top, smooth) {
+  const el = viewportRef.value;
+  const max = Math.max(0, props.total * props.slotSize - el.clientHeight);
+  const target = Math.min(Math.max(0, top), max);
+  if (smooth && typeof el.scrollTo === "function") {
+    el.scrollTo({ top: target, behavior: "smooth" });
+  } else {
+    el.scrollTop = target;
+    // Report at once, so the window is drawn in the same frame as the jump.
+    onViewportScroll();
   }
-  const deltaY = normalizeWheelDelta(event);
-  if (!Number.isFinite(deltaY) || deltaY === 0) return;
-  filmstripWheelAccumulator += deltaY;
-  if (Math.abs(filmstripWheelAccumulator) < FILMSTRIP_WHEEL_THRESHOLD) {
-    return;
+}
+
+/**
+ * Bring thumb `index` into view. In view, nothing moves; a thumb at or just
+ * past an edge scrolls smoothly by the least that shows it whole; anything
+ * further, or `centre`, jumps to centre it.
+ */
+function reveal(index, { centre = false } = {}) {
+  const el = viewportRef.value;
+  const slot = props.slotSize;
+  if (!props.virtual || !el || !slot || !(index >= 0)) return;
+  const top = index * slot;
+  const bottom = top + slot;
+  const viewTop = el.scrollTop;
+  const viewBottom = viewTop + el.clientHeight;
+  if (!centre && top >= viewTop && bottom <= viewBottom) return;
+  if (!centre && top >= viewTop - slot && bottom <= viewBottom + slot) {
+    scrollViewportTo(top < viewTop ? top : bottom - el.clientHeight, true);
+  } else {
+    scrollViewportTo(top - (el.clientHeight - slot) / 2, false);
   }
-  const direction = Math.sign(filmstripWheelAccumulator);
-  filmstripWheelAccumulator -= direction * FILMSTRIP_WHEEL_THRESHOLD;
-  filmstripWheelLastStepTs = now;
-  emit("navigate", direction);
 }
 </script>
 
@@ -270,8 +312,20 @@ function onFilmstripWheel(event) {
 .filmstrip-viewport {
   width: var(--filmstrip-thumb-size, 100%);
   height: 100%;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
   align-self: center;
+}
+
+.filmstrip-viewport::-webkit-scrollbar {
+  display: none;
+}
+
+.filmstrip-sizer {
+  position: relative;
+  width: 100%;
 }
 
 .filmstrip-list {
@@ -285,8 +339,6 @@ function onFilmstripWheel(event) {
   align-self: center;
   padding-right: 0;
   box-sizing: border-box;
-  min-height: 100%;
-  transition: transform 0.34s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .filmstrip-thumb {
@@ -302,16 +354,6 @@ function onFilmstripWheel(event) {
 
 .filmstrip-slide-move {
   transition: transform 0.34s cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.filmstrip-slide-enter-active,
-.filmstrip-slide-leave-active {
-  transition: opacity 0.2s ease-out;
-}
-
-.filmstrip-slide-enter-from,
-.filmstrip-slide-leave-to {
-  opacity: 0;
 }
 
 .filmstrip-thumb-tile {
@@ -465,6 +507,10 @@ function onFilmstripWheel(event) {
 
   .overlay-rail.open {
     width: 100%;
+  }
+
+  .filmstrip-sizer {
+    height: 100%;
   }
 
   .filmstrip-list {
