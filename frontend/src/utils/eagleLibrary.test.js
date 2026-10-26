@@ -83,6 +83,33 @@ describe("readEagleLibrary", () => {
     expect(library.unreadable).toBe(1);
   });
 
+  it("drops values of the wrong type instead of failing", async () => {
+    const files = [
+      json(`${LIB}/metadata.json`, {
+        folders: [null, { id: "F0" }, { id: "F1", name: "Ok", children: {} }],
+      }),
+      json(`${LIB}/images/A.info/metadata.json`, {
+        name: "a",
+        ext: "png",
+        star: 4.5,
+        folders: ["F0", "F1"],
+      }),
+      fileAt(`${LIB}/images/A.info/a.png`),
+      json(`${LIB}/images/B.info/metadata.json`, {
+        name: "b",
+        ext: "png",
+        star: "4",
+        folders: {},
+      }),
+      fileAt(`${LIB}/images/B.info/b.png`),
+    ];
+    const library = await readEagleLibrary(files);
+    expect(library.metadata).toEqual([
+      { tags: [], score: null, sets: ["Ok"] },
+      { tags: [], score: null, sets: [] },
+    ]);
+  });
+
   it("still imports the pictures when the folder tree will not parse", async () => {
     const files = libraryFiles();
     files[0] = fileAt(`${LIB}/metadata.json`, "{");

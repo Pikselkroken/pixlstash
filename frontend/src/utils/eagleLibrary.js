@@ -49,8 +49,10 @@ export async function readEagleLibrary(fileList) {
     if (!folderPathsByRoot.has(root)) {
       const paths = new Map();
       const libraryMeta = filesByDir.get(root)?.get("metadata.json");
+      // Shape-checked like the items: one odd entry must not end the read.
       const walk = (folders, parent) => {
-        for (const folder of folders || []) {
+        for (const folder of Array.isArray(folders) ? folders : []) {
+          if (typeof folder?.name !== "string") continue;
           const path = parent ? `${parent} / ${folder.name}` : folder.name;
           paths.set(folder.id, path);
           walk(folder.children, path);
@@ -102,12 +104,18 @@ export async function readEagleLibrary(fileList) {
     const paths = await folderPaths(match[1] ?? "");
     result.files.push(original);
     result.metadata.push({
-      // Strings only: the server refuses the whole batch over one bad entry.
+      // Checked types only: the server refuses the whole batch over one bad
+      // entry (tags are strings, the score an integer 1-5).
       tags: Array.isArray(meta.tags)
         ? meta.tags.filter((t) => typeof t === "string")
         : [],
-      score: meta.star >= 1 && meta.star <= 5 ? meta.star : null,
-      sets: (meta.folders || []).map((id) => paths.get(id)).filter(Boolean),
+      score:
+        Number.isInteger(meta.star) && meta.star >= 1 && meta.star <= 5
+          ? meta.star
+          : null,
+      sets: (Array.isArray(meta.folders) ? meta.folders : [])
+        .map((id) => paths.get(id))
+        .filter(Boolean),
     });
   }
   if (!items) {
