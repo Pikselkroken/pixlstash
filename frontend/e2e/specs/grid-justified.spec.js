@@ -58,12 +58,17 @@ async function expectFullRowsFlush(page) {
 }
 
 test.describe('justified grid', () => {
+  let previousMode
+
   test.beforeEach(async ({ apiContext }) => {
+    const res = await apiContext.get('/api/v1/users/me/config')
+    expect(res.ok()).toBe(true)
+    previousMode = (await res.json()).thumbnail_mode ?? 'square'
     await setThumbnailMode(apiContext, 'justified')
   })
 
   test.afterEach(async ({ apiContext }) => {
-    await setThumbnailMode(apiContext, 'square')
+    await setThumbnailMode(apiContext, previousMode)
   })
 
   test('full rows end flush with the column, rail open and closed', async ({

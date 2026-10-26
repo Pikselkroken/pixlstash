@@ -128,6 +128,22 @@ describe("useVirtualScroll justified layout", () => {
     // would wrap its last card.
     expect(width).toBe(CONTAINER_W - 2 * JUSTIFIED_ROW_GAP);
   });
+
+  it("scrolls a cursor row below the fold fully into view, ring included", async () => {
+    const { vs, aspectRatios, scrollWrapper } = makeHarness();
+    vs.updateRowHeightFromGrid();
+    aspectRatios.value = Array.from({ length: 120 }, () => 1.5);
+    await nextTick();
+
+    const layout = vs.justifiedLayout.value;
+    const row = 5;
+    vs.scrollCursorIntoView(layout.rowStarts[row]);
+    // The row paints one edge gutter below its offset and its ring reaches one
+    // more past the card, so both must end inside the viewport.
+    const ringBottom =
+      layout.rowOffsets[row] + layout.rowHeights[row] + 2 * JUSTIFIED_ROW_GAP;
+    expect(scrollWrapper.value.scrollTop + VIEWPORT_H).toBe(ringBottom);
+  });
 });
 
 // The grid geometry now comes from the store rather than from props, and the

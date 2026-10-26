@@ -454,7 +454,9 @@
 }
 
 /* A tile sits flush against its neighbours (a 2px seam, or none in compact
-   mode), so the gapped global outline would land on them. The ring is the inset
+   mode), so the gapped global outline (2px stroke plus a 2px gap) would land
+   on them. The justified selection ring further down fits because it has no
+   gap: its stroke is exactly the seam. The ring is the inset
    form, on the container's overlay layer (the hover glow's `::after`),
    because in justified and compact modes the image covers the whole card. */
 .image-card:focus-visible {
