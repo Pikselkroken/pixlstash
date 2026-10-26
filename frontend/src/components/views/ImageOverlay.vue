@@ -2662,10 +2662,14 @@ function handleKeydown(e) {
   // A menu over the lightbox takes its own Escape: the title bar's, which sits
   // beside the lightbox now (#2163), or one of the lightbox's own. Vuetify
   // listens on `window` only once a menu opens, after this listener, so the
-  // stop below would otherwise close the picture under an open menu.
+  // stop below would otherwise close the picture under an open menu. Menus
+  // and dialogs only: a snackbar is persistent and ignores Escape, and the
+  // read-only guest banner is one that stays up.
   if (
     e.key === "Escape" &&
-    document.querySelector(".v-overlay--active:not(.v-tooltip)")
+    document.querySelector(
+      ".v-overlay--active.v-menu, .v-overlay--active.v-dialog",
+    )
   ) {
     return;
   }

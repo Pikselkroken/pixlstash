@@ -429,7 +429,7 @@ describe("the lightbox rail", () => {
   it("leaves Escape to a menu open beside it, such as the title bar's", async () => {
     const wrapper = await openOn(7);
     const menu = document.createElement("div");
-    menu.className = "v-overlay v-overlay--active";
+    menu.className = "v-overlay v-overlay--active v-menu";
     document.body.appendChild(menu);
     try {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
@@ -439,6 +439,20 @@ describe("the lightbox rail", () => {
     }
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     expect(wrapper.emitted("close")).toHaveLength(1);
+  });
+
+  it("still closes on Escape under a snackbar, which ignores the key", async () => {
+    // The read-only guest banner is a snackbar that stays up.
+    const wrapper = await openOn(7);
+    const banner = document.createElement("div");
+    banner.className = "v-overlay v-overlay--active v-snackbar";
+    document.body.appendChild(banner);
+    try {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+      expect(wrapper.emitted("close")).toHaveLength(1);
+    } finally {
+      banner.remove();
+    }
   });
 
   it("opens for T, which needs the tag field, without keeping it open", async () => {
