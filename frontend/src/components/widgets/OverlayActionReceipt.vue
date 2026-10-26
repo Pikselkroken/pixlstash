@@ -38,15 +38,6 @@ import { computed, ref } from "vue";
 
 import { useActionReceipt } from "../../composables/useActionReceipt";
 
-defineProps({
-  /**
-   * The overlay's chrome-hidden state. The rail and the sidebar are only
-   * opacity-hidden and keep their width, so the band has to collapse to the
-   * whole canvas or the pill sits off-centre against a rail nobody can see.
-   */
-  chromeHidden: { type: Boolean, default: false },
-});
-
 // `announce: false`: the grid's receipt owns the single app-wide live region.
 const {
   store,
@@ -118,7 +109,6 @@ defineExpose({
   <div
     ref="rootEl"
     class="overlay-receipt-slot"
-    :class="{ 'chrome-hidden': chromeHidden }"
     data-testid="overlay-action-receipt-slot"
   >
     <transition name="receipt">
@@ -170,10 +160,8 @@ defineExpose({
 </template>
 
 <style scoped>
-/* The lightbox's transient-status lane. Centred on the VISIBLE image, not on
-   the viewport, so the pill never drifts under the filmstrip rail or the
-   sidebar. `--filmstrip-rail-width` is declared on `.overlay-main`
-   (filmstripStyleVars), `--sidebar-width` on `.overlay-shell`.
+/* The lightbox's transient-status lane, centred on the stage: the toolbar,
+   filmstrip and rail are outside the box it is placed against (#2163).
 
    64px: the line `.overlay-progress--comfyui` already establishes, and one
    --space-8 of clearance above the 16px hint lane whose tallest occupant is
@@ -188,25 +176,12 @@ defineExpose({
 .overlay-receipt-slot {
   position: absolute;
   bottom: calc(var(--space-5) + var(--space-8));
-  left: var(--filmstrip-rail-width, 0px);
-  right: var(--sidebar-width, 0px);
+  left: 0;
+  right: 0;
   z-index: var(--z-floating);
   display: flex;
   justify-content: center;
   pointer-events: none;
-  /* `--sidebar-width` flips instantly (0 to the pane's width) while
-     `.overlay-sidebar` slides its width. Without this the pill jumps. */
-  transition:
-    left var(--dur-2) var(--ease-standard),
-    right var(--dur-2) var(--ease-standard);
-}
-
-/* Chrome hidden: the rail and the sidebar are opacity-hidden but keep their
-   width, so the band has to collapse to the whole canvas or the pill sits
-   visibly off-centre against a rail nobody can see. */
-.overlay-receipt-slot.chrome-hidden {
-  left: 0;
-  right: 0;
 }
 
 /* The grid pill's recipe in this surface's material. Capped, unlike the grid

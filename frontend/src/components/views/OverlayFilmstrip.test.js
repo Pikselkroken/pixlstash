@@ -59,55 +59,111 @@ describe("OverlayFilmstrip picks", () => {
   });
 });
 
-// Scrolled natively over a spacer: 30 thumbs of 100px in a 700px viewport.
+// Scrolled natively over a spacer: 30 thumbs of 100px in a 700px viewport,
+// side by side.
 describe("OverlayFilmstrip scrolling", () => {
-  function mountScrolling(scrollTop = 0) {
+  const OFFSETS = Array.from({ length: 30 }, (_, i) => i * 100);
+  const WIDTHS = OFFSETS.map(() => 100);
+
+  function mountScrolling(scrollLeft = 0, props = {}) {
     const strip = mount(OverlayFilmstrip, {
       props: {
-        items: ITEMS,
-        virtual: true,
-        total: 30,
-        start: 4,
-        slotSize: 100,
+        items: ITEMS.map((item, i) => ({ ...item, index: i + 4 })),
+        offsets: OFFSETS,
+        widths: WIDTHS,
+        ...props,
       },
       global: { stubs: { "v-icon": true, "transition-group": false } },
     });
     const el = strip.find(".filmstrip-viewport").element;
-    Object.defineProperty(el, "clientHeight", { value: 700 });
-    el.scrollTop = scrollTop;
+    Object.defineProperty(el, "clientWidth", { value: 700 });
+    el.scrollLeft = scrollLeft;
     el.scrollTo = vi.fn();
     return { strip, el };
   }
 
-  it("is as tall as every thumb, with the drawn ones placed where they belong", () => {
+  it("is as wide as every thumb, with the drawn ones placed where they belong", () => {
     const { strip } = mountScrolling();
     expect(strip.find(".filmstrip-sizer").attributes("style")).toContain(
-      "height: 3000px",
+      "width: 3000px",
     );
-    expect(strip.find(".filmstrip-list").attributes("style")).toContain(
-      "translateY(400px)",
+    const style = strip.findAll(".filmstrip-thumb")[0].attributes("style");
+    expect(style).toContain("left: 400px");
+    expect(style).toContain("width: 100px");
+  });
+
+  it("draws each thumb at the width it is given", () => {
+    // The lightbox sizes each thumb to its picture's shape.
+    const { strip } = mountScrolling(0, {
+      offsets: [0, 58, 100],
+      widths: [56, 40, 75],
+      items: ITEMS,
+    });
+    const thumbs = strip.findAll(".filmstrip-thumb");
+    expect(thumbs[1].attributes("style")).toContain("left: 58px");
+    expect(thumbs[1].attributes("style")).toContain("width: 40px");
+    expect(strip.find(".filmstrip-sizer").attributes("style")).toContain(
+      "width: 175px",
     );
+  });
+
+  it("marks the picture on screen", () => {
+    const { strip } = mountScrolling(0, {
+      items: ITEMS.map((item, i) => ({ ...item, index: i, isActive: i === 1 })),
+    });
+    const thumbs = strip.findAll(".filmstrip-thumb");
+    expect(thumbs[1].classes()).toContain("filmstrip-thumb--active");
+    expect(thumbs[1].attributes("aria-current")).toBe("true");
+    expect(thumbs[0].classes()).not.toContain("filmstrip-thumb--active");
   });
 
   it("drops a thumb that scrolls out of the window at once", async () => {
-    // A leaving thumb kept in flow for a frame pushed every thumb under it a
-    // slot down, so the strip jumped on each step of a scroll down.
+    // A leaving thumb kept in the DOM for a frame shifted the strip on each
+    // step of a scroll.
     const { strip } = mountScrolling();
-    await strip.setProps({ items: ITEMS.slice(1), start: 5 });
+    await strip.setProps({ items: ITEMS.slice(1) });
     expect(strip.findAll(".filmstrip-thumb")).toHaveLength(ITEMS.length - 1);
   });
 
-  it("reports the first thumb in view as it scrolls", async () => {
+  it("reports the thumbs in view as it scrolls", async () => {
     const { strip, el } = mountScrolling();
-    el.scrollTop = 350;
+    el.scrollLeft = 350;
     await strip.find(".filmstrip-viewport").trigger("scroll");
-    expect(strip.emitted("first-visible")).toEqual([[3]]);
+    expect(strip.emitted("visible-range")).toEqual([[{ first: 3, last: 10 }]]);
+  });
+
+  it("turns a mouse wheel into a sideways scroll", async () => {
+    const { strip, el } = mountScrolling(100);
+    const wheel = new WheelEvent("wheel", {
+      deltaY: 120,
+      bubbles: true,
+      cancelable: true,
+    });
+    el.dispatchEvent(wheel);
+    expect(el.scrollLeft).toBe(220);
+    expect(wheel.defaultPrevented).toBe(true);
+    // A trackpad's own sideways swipe is left to the browser.
+    const swipe = new WheelEvent("wheel", {
+      deltaX: 80,
+      deltaY: 10,
+      bubbles: true,
+      cancelable: true,
+    });
+    el.dispatchEvent(swipe);
+    expect(swipe.defaultPrevented).toBe(false);
+    expect(el.scrollLeft).toBe(220);
+    // A wheel that counts lines (Firefox) moves by more than a pixel a line.
+    el.dispatchEvent(
+      new WheelEvent("wheel", { deltaY: 3, deltaMode: 1, cancelable: true }),
+    );
+    expect(el.scrollLeft).toBe(340);
+    strip.unmount();
   });
 
   it("leaves a thumb that is in view where it is", () => {
     const { strip, el } = mountScrolling(0);
     strip.vm.reveal(6);
-    expect(el.scrollTop).toBe(0);
+    expect(el.scrollLeft).toBe(0);
     expect(el.scrollTo).not.toHaveBeenCalled();
   });
 
@@ -115,12 +171,12 @@ describe("OverlayFilmstrip scrolling", () => {
     const { strip, el } = mountScrolling(500);
     strip.vm.reveal(12);
     expect(el.scrollTo).toHaveBeenLastCalledWith({
-      top: 600,
+      left: 600,
       behavior: "smooth",
     });
     strip.vm.reveal(4);
     expect(el.scrollTo).toHaveBeenLastCalledWith({
-      top: 400,
+      left: 400,
       behavior: "smooth",
     });
   });
@@ -129,18 +185,18 @@ describe("OverlayFilmstrip scrolling", () => {
     const { strip, el } = mountScrolling(0);
     strip.vm.reveal(20);
     expect(el.scrollTo).not.toHaveBeenCalled();
-    expect(el.scrollTop).toBe(1700);
-    expect(strip.emitted("first-visible")).toEqual([[17]]);
+    expect(el.scrollLeft).toBe(1700);
+    expect(strip.emitted("visible-range")).toEqual([[{ first: 17, last: 24 }]]);
   });
 
   it("centres when asked, and stops at the ends", () => {
     const { strip, el } = mountScrolling(0);
     strip.vm.reveal(5, { centre: true });
-    expect(el.scrollTop).toBe(200);
+    expect(el.scrollLeft).toBe(200);
     strip.vm.reveal(29, { centre: true });
-    expect(el.scrollTop).toBe(2300);
+    expect(el.scrollLeft).toBe(2300);
     strip.vm.reveal(1, { centre: true });
-    expect(el.scrollTop).toBe(0);
+    expect(el.scrollLeft).toBe(0);
   });
 
   it("leaves the arrow keys to the lightbox instead of scrolling", () => {

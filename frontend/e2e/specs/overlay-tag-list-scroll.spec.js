@@ -72,6 +72,8 @@ test.describe('overlay sidebar tag lists stay scrollable', () => {
 
       await page.goto(`/?overlay=${pictureId}`)
       await expect(overlay.root).toBeVisible({ timeout: 15_000 })
+      // The pane is the right rail, shut unless the reader opened it.
+      await overlay.openRail()
       await expect(overlay.tags.first()).toBeVisible()
 
       const section = page.locator('.sidebar-section--tags')
@@ -154,6 +156,7 @@ test.describe('overlay sidebar tag lists stay scrollable', () => {
 
     await page.goto(`/?overlay=${found.pictureId}`)
     await expect(overlay.root).toBeVisible({ timeout: 15_000 })
+    await overlay.openRail()
     await expect(overlay.tag(found.tag)).toBeVisible()
 
     await overlay.removeTag(found.tag)

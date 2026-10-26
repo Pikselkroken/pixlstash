@@ -58,8 +58,8 @@ const STUBS = {
   ProgressOverlay: true,
   OverlayFilmstrip: {
     name: "OverlayFilmstrip",
-    props: ["items", "start", "total", "virtual"],
-    emits: ["select", "first-visible"],
+    props: ["items", "offsets", "widths"],
+    emits: ["select", "visible-range"],
     methods: { reveal: (...args) => reveal(...args) },
     template: "<div></div>",
   },
@@ -72,14 +72,14 @@ const PICTURES = Array.from({ length: 60 }, (_, i) => ({
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-async function openOverlayOn(id) {
+async function openOverlayOn(id, allImages = PICTURES) {
   setActivePinia(createPinia());
   reveal.mockClear();
   const wrapper = mount(ImageOverlay, {
     props: {
       open: false,
       initialImageId: id,
-      allImages: PICTURES,
+      allImages,
       backendUrl: "http://test",
       tagUpdate: { key: 0, pictureIds: [] },
       descriptionUpdate: { key: 0, pictureIds: [] },
@@ -106,9 +106,58 @@ const activeId = (wrapper) =>
 describe("ImageOverlay filmstrip scrolls independently", () => {
   it("opens centred on the picture", async () => {
     const wrapper = await openOverlayOn(16);
-    expect(strip(wrapper).props("virtual")).toBe(true);
-    expect(strip(wrapper).props("total")).toBe(60);
+    expect(strip(wrapper).props("offsets")).toHaveLength(60);
     expect(reveal).toHaveBeenLastCalledWith(15, { centre: true });
+  });
+
+  it("says where the picture sits in the view's order", async () => {
+    const wrapper = await openOverlayOn(16);
+    expect(wrapper.find(".overlay-position").text()).toBe("16 of 60");
+    strip(wrapper).vm.$emit("select", 59);
+    await flush();
+    expect(wrapper.find(".overlay-position").text()).toBe("60 of 60");
+  });
+
+  it("sizes each thumb to its picture's shape, 2px apart", async () => {
+    const wrapper = await openOverlayOn(1, [
+      { id: 1, tags: [], width: 1600, height: 900 },
+      // Not yet probed: a square.
+      { id: 2, tags: [] },
+      // Turned a quarter: drawn as it shows, taller than wide.
+      { id: 3, tags: [], width: 1600, height: 900, orientation: 6 },
+      // A sliver is clamped so it can still be hit, a panorama so it does not
+      // take the strip.
+      { id: 4, tags: [], width: 100, height: 1000 },
+      { id: 5, tags: [], width: 4000, height: 500 },
+    ]);
+    expect(strip(wrapper).props("widths")).toEqual([100, 56, 32, 24, 140]);
+    expect(strip(wrapper).props("offsets")).toEqual([0, 102, 160, 194, 220]);
+  });
+
+  it("lays the members of a stack opened here flush, so the run reads as one", async () => {
+    setActivePinia(createPinia());
+    const stack = [
+      { id: 1, tags: [] },
+      { id: 2, tags: [], stack_id: 5, stack_position: 0, stack_count: 2 },
+      { id: 3, tags: [], stack_id: 5, stack_position: 1, stack_count: 2 },
+      { id: 4, tags: [] },
+    ];
+    const wrapper = mount(ImageOverlay, {
+      props: {
+        open: false,
+        initialImageId: 2,
+        initialExpandedStackIds: [5],
+        allImages: stack,
+        backendUrl: "http://test",
+      },
+      global: { stubs: STUBS },
+    });
+    await wrapper.setProps({ open: true });
+    await flush();
+    await flush();
+    expect(drawn(wrapper)).toEqual([0, 1, 2, 3]);
+    // 2px between pictures, none inside the stack.
+    expect(strip(wrapper).props("offsets")).toEqual([0, 58, 114, 172]);
   });
 
   it("only asks the strip to keep a clicked thumb in view", async () => {
@@ -121,18 +170,17 @@ describe("ImageOverlay filmstrip scrolls independently", () => {
 
   it("draws the thumbs round where the strip is scrolled, not the picture", async () => {
     const wrapper = await openOverlayOn(16);
-    strip(wrapper).vm.$emit("first-visible", 30);
+    strip(wrapper).vm.$emit("visible-range", { first: 30, last: 36 });
     await flush();
-    // 7 in view from 30, and 20 either side.
-    expect(strip(wrapper).props("start")).toBe(10);
+    // 30 to 36 in view, and 20 either side.
     expect(drawn(wrapper)[0]).toBe(10);
     expect(drawn(wrapper).at(-1)).toBe(56);
     expect(reveal).toHaveBeenCalledTimes(1);
 
-    strip(wrapper).vm.$emit("first-visible", 59);
+    strip(wrapper).vm.$emit("visible-range", { first: 55, last: 59 });
     await flush();
     expect(drawn(wrapper).at(-1)).toBe(59);
-    expect(drawn(wrapper)[0]).toBe(33);
+    expect(drawn(wrapper)[0]).toBe(35);
   });
 
   it("starts centred again on the next open", async () => {

@@ -1,22 +1,25 @@
 <template>
-  <div ref="railRef" class="overlay-rail" :class="{ hidden: hidden }">
+  <!-- A band under the stage (#2163): the neighbouring pictures at their own
+       aspect ratios, the one on screen ringed in olive and the rest dimmed. -->
+  <div class="overlay-rail" :class="{ hidden: hidden }">
     <div
       ref="viewportRef"
       class="filmstrip-viewport"
+      role="group"
+      aria-label="Filmstrip"
       @scroll.passive="onViewportScroll"
+      @wheel="onViewportWheel"
       @keydown="onViewportKeydown"
     >
-      <div class="filmstrip-sizer" :style="sizerStyle">
-        <!-- No enter/leave transitions: Vue keeps a leaving thumb in flow
-             for two frames even with no CSS, and the top one leaving on every
-             scroll step down pushed the strip a slot down and back. Moves
-             (stack reorder) still animate. -->
+      <div class="filmstrip-sizer" :style="{ width: `${totalWidth}px` }">
+        <!-- No enter/leave transitions: Vue keeps a leaving thumb in the DOM
+             for two frames even with no CSS. Moves (stack reorder) still
+             animate. -->
         <transition-group
           name="filmstrip-slide"
           tag="div"
           :css="false"
           class="filmstrip-list"
-          :style="listStyle"
         >
           <button
             v-for="item in items"
@@ -24,10 +27,12 @@
             :class="[
               'filmstrip-thumb',
               {
-                'filmstrip-thumb-stack-joined': item.isStackJoined,
+                'filmstrip-thumb--active': item.isActive,
                 'filmstrip-thumb--picked': isPicked(item),
               },
             ]"
+            :style="slotStyle(item.index)"
+            :aria-current="item.isActive ? 'true' : undefined"
             :aria-pressed="
               pickedIds.length ? String(isPicked(item)) : undefined
             "
@@ -42,24 +47,15 @@
             <div class="filmstrip-thumb-tile" :style="item.stackTileStyle">
               <img
                 v-if="item.thumbSrc && !isThumbBroken(item)"
-                :class="[
-                  'filmstrip-thumb-image',
-                  { 'filmstrip-thumb-image-active': item.isActive },
-                ]"
+                class="filmstrip-thumb-image"
                 :src="item.thumbSrc"
                 :alt="item.description || 'Thumbnail'"
                 decoding="async"
                 draggable="false"
                 @error="onThumbError(item)"
               />
-              <div
-                v-else
-                :class="[
-                  'filmstrip-thumb-placeholder',
-                  { 'filmstrip-thumb-image-active': item.isActive },
-                ]"
-              >
-                <v-icon :size="isThumbBroken(item) ? 28 : 22">
+              <div v-else class="filmstrip-thumb-placeholder">
+                <v-icon :size="isThumbBroken(item) ? 22 : 18">
                   {{
                     isThumbBroken(item)
                       ? "mdi-image-broken-variant"
@@ -84,25 +80,20 @@
               @mouseenter.stop="emit('prefetch', item)"
             >
               <Tooltip :text="item.stackBadgeTitle" activator="parent" />
-              <v-icon size="14" :style="item.stackIconStyle">mdi-layers</v-icon>
+              <v-icon size="12" :style="item.stackIconStyle">mdi-layers</v-icon>
             </div>
             <div
               v-if="item.problemBadgeVisible"
-              :class="[
-                'filmstrip-badge',
-                item.stackBadgeVisible
-                  ? 'filmstrip-badge--top-left-stack'
-                  : 'filmstrip-badge--top-left',
-              ]"
+              class="filmstrip-badge filmstrip-badge--top-right"
             >
               <Tooltip :text="item.problemTitle" activator="parent" />
-              <v-icon size="14" color="dark-surface-error"
+              <v-icon size="12" color="dark-surface-error"
                 >mdi-emoticon-sad-outline</v-icon
               >
             </div>
             <!-- Move earlier / Make cover / Move later on a picture of a stack
-                 opened here, stacked like the rail. Spans, not buttons: the
-                 thumb is itself a button. -->
+                 opened here. Spans, not buttons: the thumb is itself a
+                 button. -->
             <div
               v-if="item.stackPlace && !readOnly"
               class="filmstrip-stack-bar"
@@ -142,17 +133,25 @@ import Tooltip from "../widgets/Tooltip.vue";
 const props = defineProps({
   // The thumbs to draw: a window of the strip, each carrying its `index`.
   items: { type: Array, default: () => [] },
-  // Native scrolling over a spacer as tall as all `total` thumbs, the window
-  // placed at `start`; off on the narrow layout, which draws `items` as is.
-  virtual: { type: Boolean, default: false },
-  total: { type: Number, default: 0 },
-  start: { type: Number, default: 0 },
-  slotSize: { type: Number, default: 0 },
+  // Every thumb's left edge and width in px, for the whole strip and not just
+  // the window, so the strip scrolls natively over its full length.
+  offsets: { type: Array, default: () => [] },
+  widths: { type: Array, default: () => [] },
   hidden: { type: Boolean, default: false },
   readOnly: { type: Boolean, default: false },
   // Ids Ctrl/Cmd-clicked for Compare, in the order picked.
   pickedIds: { type: Array, default: () => [] },
 });
+
+const emit = defineEmits([
+  "select",
+  "toggle-expand",
+  "prefetch",
+  "visible-range",
+  "stack-move",
+  "pick",
+  "context-menu",
+]);
 
 function isPicked(item) {
   return item.id != null && props.pickedIds.includes(String(item.id));
@@ -176,7 +175,7 @@ function stackHandles(place) {
     {
       where: "earlier",
       label: "Move earlier",
-      icon: "mdi-arrow-up",
+      icon: "mdi-arrow-left",
       disabled: place.position === 0,
     },
     {
@@ -188,7 +187,7 @@ function stackHandles(place) {
     {
       where: "later",
       label: "Move later",
-      icon: "mdi-arrow-down",
+      icon: "mdi-arrow-right",
       disabled: last,
     },
   ];
@@ -210,35 +209,56 @@ function isThumbBroken(item) {
   return failedThumbKeys.has(thumbKey(item));
 }
 
-const emit = defineEmits([
-  "select",
-  "toggle-expand",
-  "prefetch",
-  "first-visible",
-  "stack-move",
-  "pick",
-  "context-menu",
-]);
-
-const railRef = ref(null);
 const viewportRef = ref(null);
-defineExpose({ railEl: railRef, reveal });
+defineExpose({ reveal });
 
-// Scrolled natively, as the grid is: the wheel and a trackpad move it by the
-// pixel, and the parent renders the thumbs around `first-visible`.
-const sizerStyle = computed(() =>
-  props.virtual ? { height: `${props.total * props.slotSize}px` } : {},
-);
-const listStyle = computed(() =>
-  props.virtual
-    ? { transform: `translateY(${props.start * props.slotSize}px)` }
-    : {},
-);
+const totalWidth = computed(() => {
+  const n = props.offsets.length;
+  return n ? props.offsets[n - 1] + (props.widths[n - 1] || 0) : 0;
+});
 
+function slotStyle(index) {
+  return {
+    left: `${props.offsets[index] ?? 0}px`,
+    width: `${props.widths[index] ?? 0}px`,
+  };
+}
+
+/** The last thumb whose left edge is at or before `x`. */
+function indexAt(x) {
+  const offsets = props.offsets;
+  let lo = 0;
+  let hi = offsets.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (offsets[mid] <= x) lo = mid;
+    else hi = mid - 1;
+  }
+  return Math.max(0, lo);
+}
+
+// Scrolled natively, as the grid is: the parent draws the thumbs around the
+// range reported here.
 function onViewportScroll() {
   const el = viewportRef.value;
-  if (!el || !props.slotSize) return;
-  emit("first-visible", Math.floor(el.scrollTop / props.slotSize));
+  if (!el || !props.offsets.length) return;
+  emit("visible-range", {
+    first: indexAt(el.scrollLeft),
+    last: indexAt(el.scrollLeft + el.clientWidth),
+  });
+}
+
+// A mouse wheel turns vertically; across a horizontal strip it should move
+// the strip. A trackpad's own sideways swipe is left alone.
+const WHEEL_LINE_PX = 40;
+function onViewportWheel(event) {
+  const el = viewportRef.value;
+  if (!el || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+  event.preventDefault();
+  // Lines (Firefox's wheel) and pages are not pixels.
+  const unit =
+    event.deltaMode === 1 ? WHEEL_LINE_PX : event.deltaMode === 2 ? el.clientWidth : 1;
+  el.scrollLeft += event.deltaY * unit;
 }
 
 // The arrow keys step the lightbox's picture (its window listener still gets
@@ -250,14 +270,14 @@ function onViewportKeydown(event) {
   if (STEP_KEYS.includes(event.key)) event.preventDefault();
 }
 
-function scrollViewportTo(top, smooth) {
+function scrollViewportTo(left, smooth) {
   const el = viewportRef.value;
-  const max = Math.max(0, props.total * props.slotSize - el.clientHeight);
-  const target = Math.min(Math.max(0, top), max);
+  const max = Math.max(0, totalWidth.value - el.clientWidth);
+  const target = Math.min(Math.max(0, left), max);
   if (smooth && typeof el.scrollTo === "function") {
-    el.scrollTo({ top: target, behavior: "smooth" });
+    el.scrollTo({ left: target, behavior: "smooth" });
   } else {
-    el.scrollTop = target;
+    el.scrollLeft = target;
     // Report at once, so the window is drawn in the same frame as the jump.
     onViewportScroll();
   }
@@ -270,38 +290,33 @@ function scrollViewportTo(top, smooth) {
  */
 function reveal(index, { centre = false } = {}) {
   const el = viewportRef.value;
-  const slot = props.slotSize;
-  if (!props.virtual || !el || !slot || !(index >= 0)) return;
-  const top = index * slot;
-  const bottom = top + slot;
-  const viewTop = el.scrollTop;
-  const viewBottom = viewTop + el.clientHeight;
-  if (!centre && top >= viewTop && bottom <= viewBottom) return;
-  if (!centre && top >= viewTop - slot && bottom <= viewBottom + slot) {
-    scrollViewportTo(top < viewTop ? top : bottom - el.clientHeight, true);
+  if (!el || !(index >= 0) || index >= props.offsets.length) return;
+  const left = props.offsets[index];
+  const width = props.widths[index] || 0;
+  const right = left + width;
+  const viewLeft = el.scrollLeft;
+  const viewRight = viewLeft + el.clientWidth;
+  if (!centre && left >= viewLeft && right <= viewRight) return;
+  if (!centre && left >= viewLeft - width && right <= viewRight + width) {
+    scrollViewportTo(left < viewLeft ? left : right - el.clientWidth, true);
   } else {
-    scrollViewportTo(top - (el.clientHeight - slot) / 2, false);
+    scrollViewportTo(left - (el.clientWidth - width) / 2, false);
   }
 }
 </script>
 
 <style scoped>
+/* The band's height and its thumbs' are the design's layout fixtures
+   (#2163): 56px pictures with 8px of band either side. */
 .overlay-rail {
-  position: absolute;
-  top: var(--topbar-height);
-  left: 0;
-  bottom: 0;
-  width: var(--filmstrip-rail-width, var(--rail-open-width));
-  background: rgba(var(--v-theme-dark-surface), 0.9);
-  border-left: 1px solid rgba(var(--v-theme-on-dark-surface), 0.08);
+  --filmstrip-thumb-h: 56px;
+
+  flex: 0 0 72px;
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: var(--filmstrip-padding, var(--space-3)) 6px;
-  transition: opacity 0.2s ease;
-  overflow: hidden;
-  height: calc(100% - var(--topbar-height));
-  z-index: var(--z-raised);
+  min-width: 0;
+  background: rgb(var(--v-theme-dark-surface));
+  border-top: 1px solid rgba(var(--v-theme-on-dark-surface), 0.12);
+  transition: opacity var(--dur-2) var(--ease-standard);
 }
 
 .overlay-rail.hidden {
@@ -310,88 +325,95 @@ function reveal(index, { centre = false } = {}) {
 }
 
 .filmstrip-viewport {
-  width: var(--filmstrip-thumb-size, 100%);
-  height: 100%;
-  overflow-x: hidden;
-  overflow-y: auto;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
   overscroll-behavior: contain;
   scrollbar-width: none;
-  align-self: center;
 }
 
 .filmstrip-viewport::-webkit-scrollbar {
   display: none;
 }
 
+/* Short strips sit in the middle of the band; a long one starts at its
+   left edge and scrolls. No padding on the viewport: `reveal` measures the
+   thumbs from the scroll origin. */
 .filmstrip-sizer {
   position: relative;
-  width: 100%;
+  height: 100%;
+  margin: 0 auto;
 }
 
 .filmstrip-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--filmstrip-gap, var(--space-3));
-  overflow-y: visible;
-  width: var(--filmstrip-thumb-size, 100%);
-  align-items: center;
-  overflow-x: visible;
-  align-self: center;
-  padding-right: 0;
-  box-sizing: border-box;
+  position: relative;
+  height: 100%;
 }
 
 .filmstrip-thumb {
+  position: absolute;
+  top: 0;
+  bottom: 0;
   padding: 0;
   border-radius: 0;
-  overflow: visible;
-  width: var(--filmstrip-thumb-size, 100%);
-  height: var(--filmstrip-thumb-size, auto);
-  max-width: 100%;
-  aspect-ratio: 1 / 1;
-  position: relative;
 }
 
 .filmstrip-slide-move {
   transition: transform 0.34s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
+/* A stack opened here wears its colour behind its members, which sit with no
+   gap between them, so the run reads as one object. */
 .filmstrip-thumb-tile {
-  width: 100%;
   height: 100%;
+  display: flex;
+  align-items: center;
   background: var(--filmstrip-stack-bg, transparent);
-  padding: 6px;
-  box-sizing: border-box;
-  border-radius: 0;
-  overflow: visible;
 }
 
-.filmstrip-thumb-stack-joined {
-  margin-top: calc(-1 * var(--filmstrip-gap, var(--space-3)));
+.filmstrip-thumb-image,
+.filmstrip-thumb-placeholder {
+  width: 100%;
+  height: var(--filmstrip-thumb-h);
+  display: block;
+  opacity: var(--opacity-text-secondary);
+  transition: opacity var(--dur-1) var(--ease-standard);
 }
 
 .filmstrip-thumb-image {
-  width: 100%;
-  height: 100%;
   object-fit: cover;
-  display: block;
-  border-radius: var(--radius-md);
-}
-
-.filmstrip-thumb-image-active {
-  box-shadow: 0 0 0 4px rgb(var(--v-theme-dark-surface-primary));
-  z-index: var(--z-raised);
 }
 
 .filmstrip-thumb-placeholder {
-  width: 100%;
-  height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
   background: rgba(var(--v-theme-on-dark-surface), 0.08);
   color: rgba(var(--v-theme-on-dark-surface), 0.85);
-  border-radius: var(--radius-md);
+}
+
+.filmstrip-thumb:hover .filmstrip-thumb-image,
+.filmstrip-thumb:hover .filmstrip-thumb-placeholder,
+.filmstrip-thumb--active .filmstrip-thumb-image,
+.filmstrip-thumb--active .filmstrip-thumb-placeholder {
+  opacity: 1;
+}
+
+/* The picture on screen: the selection's olive, as a ring. */
+.filmstrip-thumb--active .filmstrip-thumb-image,
+.filmstrip-thumb--active .filmstrip-thumb-placeholder {
+  outline: var(--focus-width) solid rgb(var(--v-theme-dark-surface-primary));
+  outline-offset: calc(-1 * var(--focus-width));
+}
+
+/* Picked for Compare: the comparison's teal, so it never reads as the olive
+   of the picture on screen. */
+.filmstrip-thumb--picked .filmstrip-thumb-image,
+.filmstrip-thumb--picked .filmstrip-thumb-placeholder {
+  opacity: 1;
+  box-shadow: inset 0 0 0 var(--focus-width)
+    rgb(var(--v-theme-dark-surface-tertiary));
 }
 
 .filmstrip-badge {
@@ -399,58 +421,41 @@ function reveal(index, { centre = false } = {}) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: rgba(var(--v-theme-dark-surface), 0.7);
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.35);
-  border-radius: 6px;
-  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1);
+  background: var(--scrim-photo-strong);
   color: rgb(var(--v-theme-on-dark-surface));
-  box-shadow: 0 2px 6px rgba(var(--v-theme-shadow), 0.3);
   z-index: var(--z-raised);
 }
 
 .filmstrip-badge--top-left {
-  top: 8px;
-  left: 8px;
+  top: calc(var(--space-3) + var(--space-1));
+  left: var(--space-1);
 }
 
-/* Picked for Compare: the comparison's teal, so it never reads as the olive
-   of the picture on screen. */
-.filmstrip-thumb--picked .filmstrip-thumb-image,
-.filmstrip-thumb--picked .filmstrip-thumb-placeholder {
-  box-shadow: 0 0 0 3px rgb(var(--v-theme-dark-surface-tertiary));
-}
-
-.filmstrip-thumb--picked .filmstrip-thumb-image-active {
-  box-shadow:
-    0 0 0 4px rgb(var(--v-theme-dark-surface-primary)),
-    0 0 0 7px rgb(var(--v-theme-dark-surface-tertiary));
+.filmstrip-badge--top-right {
+  top: calc(var(--space-3) + var(--space-1));
+  right: var(--space-1);
 }
 
 .filmstrip-badge--pick {
-  bottom: var(--space-3);
-  right: var(--space-3);
-  min-width: 20px;
+  bottom: calc(var(--space-3) + var(--space-1));
+  right: var(--space-1);
+  min-width: 16px;
   padding: 0 var(--space-2);
-  border: none;
-  border-radius: var(--radius-sm);
   background: rgb(var(--v-theme-tertiary));
   color: rgb(var(--v-theme-on-tertiary));
   font-size: var(--text-2xs);
   font-weight: var(--weight-medium);
 }
 
-.filmstrip-badge--top-left-stack {
-  top: 28px;
-  left: 8px;
-}
-
+/* Wider than a narrow thumb, so it lies over its neighbours while shown. */
 .filmstrip-stack-bar {
   position: absolute;
-  right: var(--space-2);
-  top: 50%;
-  transform: translateY(-50%);
+  bottom: var(--space-1);
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
-  flex-direction: column;
   gap: var(--space-1);
   padding: var(--space-1);
   border-radius: var(--radius-pill);
@@ -489,57 +494,5 @@ function reveal(index, { centre = false } = {}) {
 .filmstrip-stack-btn--disabled {
   opacity: var(--opacity-disabled);
   cursor: default;
-}
-
-@media (max-width: 720px) {
-  .overlay-rail {
-    position: absolute;
-    top: auto;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    width: 100%;
-    height: 100px;
-    flex-direction: row;
-    justify-content: flex-start;
-    padding: 6px 10px;
-  }
-
-  .overlay-rail.open {
-    width: 100%;
-  }
-
-  .filmstrip-sizer {
-    height: 100%;
-  }
-
-  .filmstrip-list {
-    min-height: 0;
-    flex-direction: row;
-    overflow: visible;
-    width: 100%;
-    transform: none !important;
-    transition: none;
-  }
-
-  .filmstrip-viewport {
-    width: 100%;
-    height: 100%;
-    overflow-x: auto;
-    overflow-y: hidden;
-  }
-
-  .filmstrip-thumb {
-    flex: 1 1 0;
-    min-width: 0;
-    width: auto;
-    height: 100%;
-    aspect-ratio: unset;
-  }
-
-  .filmstrip-thumb img {
-    height: 100%;
-    width: 100%;
-  }
 }
 </style>

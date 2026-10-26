@@ -1,10 +1,5 @@
 <template>
-  <div
-    ref="root"
-    class="tm"
-    :class="{ 'tm--lightbox': lightbox }"
-    @focusout="onFocusOut"
-  >
+  <div ref="root" class="tm" @focusout="onFocusOut">
     <!-- One root, but no box of its own in a rail (`display: contents`): the
          rows stay the inspector body's own flex children, exactly as they were
          when they lived in `StatsSidebar`, so the body's gap spaces them. It also
@@ -13,8 +8,7 @@
          height, and a real pin to the bottom on `/workflows`, where the
          inspector's footer slot makes the body `flex: 1`
          (`.inspector-content--footed`). That difference is pre-existing and
-         left alone. The lightbox variant is a box: its own scrolling column, on
-         the lightbox's dark ground (`.tm--lightbox` below). -->
+         left alone. -->
     <!-- A finished run is not an active task, and the panel is not empty with
          one in it either: the idle line gives way. -->
     <div
@@ -578,7 +572,6 @@
                 />
                 <div class="tm-offer-acts">
                   <AppButton
-                    :on-dark="lightbox"
                     variant="ghost"
                     size="sm"
                     :disabled="Boolean(busy)"
@@ -587,7 +580,6 @@
                     Back
                   </AppButton>
                   <AppButton
-                    :on-dark="lightbox"
                     size="sm"
                     :loading="busy === `new:${run.offer.workflowId}`"
                     :disabled="Boolean(busy)"
@@ -601,7 +593,6 @@
               </template>
               <div v-else class="tm-offer-acts">
                 <AppButton
-                  :on-dark="lightbox"
                   data-as-new
                   size="sm"
                   :disabled="Boolean(busy)"
@@ -612,7 +603,6 @@
                 <!-- `aria-disabled`, not `disabled`: a closed Save stays
                      reachable, with the server's reason as its description. -->
                 <AppButton
-                  :on-dark="lightbox"
                   size="sm"
                   icon-left="content-save-outline"
                   :loading="busy === `save:${run.offer.workflowId}`"
@@ -709,9 +699,8 @@ export function tasksTabFor(tasksStore) {
 // It started inside StatsSidebar and is a component of its own because the
 // Workflows view's inspector offers the same tab: somebody browsing
 // workflows or recipes has to be able to watch the work their last run started
-// without leaving the screen to do it. The image overlay offers it too (#2056),
-// as the `lightbox` variant: a run started from its Edit tab can be queued,
-// stopped or read back there without leaving the picture.
+// without leaving the screen to do it. The lightbox has none: there the task
+// list is the title bar's pill (#2163), which mounts this panel too.
 //
 // The data (worker snapshots, rate series, active-state, ComfyUI runs) lives in
 // the shared tasks store, which is the single poller of /workers/progress. This
@@ -759,11 +748,6 @@ import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import RunAnywayDialog from "./RunAnywayDialog.vue";
 
-defineProps({
-  // The lightbox's inspector: dark in both themes, so the panel takes the
-  // dark-surface inks rather than the theme's (`.tm--lightbox`).
-  lightbox: { type: Boolean, default: false },
-});
 const root = ref(null);
 
 // A row goes when its run does, and takes a focused Stop or Cancel with it;
@@ -1347,8 +1331,8 @@ function tmRegisterCanvas(key, el) {
   );
 }
 
-// Read off the canvas, not the document: the lightbox variant restates the
-// theme's colours on the panel, and a canvas only sees what it is told.
+// Read off the canvas, not the document: a host may restate the theme's
+// colours on the panel, and a canvas only sees what it is told.
 function tmGetThemeRgb(el, name) {
   if (typeof window === "undefined") return null;
   return (
@@ -1563,52 +1547,6 @@ const tmSystemItems = computed(() => {
 /* No box in a rail: the rows are the inspector body's own flex children. */
 .tm {
   display: contents;
-}
-
-/* The lightbox variant (#2056). Its pane is dark in both themes, so every ink
-   the rows read is restated as the dark-surface one (visual-language.md,
-   "Status hue anywhere inside a dark-surface"): with the theme's, light mode
-   would paint near-black words and deepened status hues on a dark ground.
-   A custom property holding var() resolves where it is declared, so the
-   aliases built on :root (`--state-*`, `--tenant-pixlstash`, the hover wash,
-   the hatch) are restated here rather than inherited. The deep olive and teal
-   are one value in both themes but under 3:1 on this ground, so the progress
-   bars, the ComfyUI segment and the sparkline take their dark-surface values
-   too. AI Toolkit's violet has no dark-surface token and stays as it is, as
-   does the error tint (a wash, not a mark). */
-.tm--lightbox {
-  --v-theme-on-surface: var(--v-theme-on-dark-surface);
-  --v-theme-surface-error: var(--v-theme-dark-surface-error);
-  --v-theme-surface-warning: var(--v-theme-dark-surface-warning);
-  --v-theme-accent: var(--v-theme-dark-surface-accent);
-  --v-theme-primary: var(--v-theme-dark-surface-primary);
-  --v-theme-tertiary: var(--v-theme-dark-surface-tertiary);
-  --state-running: var(--v-theme-dark-surface-primary);
-  --state-waiting: var(--v-theme-dark-surface-accent);
-  --tenant-pixlstash: var(--v-theme-dark-surface-accent);
-  --tenant-comfyui: var(--v-theme-dark-surface-tertiary);
-  --hover-wash: rgba(var(--v-theme-on-dark-surface), 0.16);
-  --hatch-not-ours: repeating-linear-gradient(
-    -45deg,
-    rgba(var(--v-theme-on-dark-surface), 0.35) 0 2px,
-    transparent 2px 5px
-  );
-  /* The lightbox's body clips (it is a fixed-height pane), so the panel is
-     its own scroll region, with the bar its other regions use. */
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(var(--v-theme-on-dark-surface), 0.4) transparent;
-}
-
-/* The name field of Save as new…, as the Edit tab's instruction box. */
-.tm--lightbox :deep(.app-input__wrap) {
-  background: rgba(var(--v-theme-shadow), 0.35);
-  border-color: rgba(var(--v-theme-on-dark-surface), 0.2);
 }
 
 .tm-idle-msg {

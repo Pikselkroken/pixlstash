@@ -97,3 +97,9 @@ export function useRefocusAfterLoading(loading, el) {
     nextTick(() => el.value?.focus());
   });
 }
+
+/**
+ * The element App.vue draws over the centre column and the right rail, which
+ * ImageOverlay teleports into so a picture opens inside the frame (#2163).
+ */
+export const LIGHTBOX_HOST_ID = "lightbox-host";

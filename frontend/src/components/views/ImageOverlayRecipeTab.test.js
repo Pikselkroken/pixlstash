@@ -33,7 +33,6 @@ import ImageOverlay from "./ImageOverlay.vue";
 import { isReadOnly } from "../../utils/apiClient";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
-import { useTasksStore } from "../../stores/useTasksStore";
 
 enableAutoUnmount(afterEach);
 
@@ -180,6 +179,8 @@ async function openOn(
 
 beforeEach(() => {
   setActivePinia(createPinia());
+  // The pane is the right rail, open here unless a test says otherwise.
+  useSidebarStore().statsOpen = true;
   picturesWithARecipe = new Set([7]);
   pendingRecipe = null;
   recipeRefusal = null;
@@ -195,25 +196,20 @@ const recipePanel = (wrapper) =>
 describe("the lightbox Recipe tab follows the picture", () => {
   it("is offered for a picture that has a recipe", async () => {
     const wrapper = await openOn(7);
-    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe", "Tasks"]);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe"]);
   });
 
-  it("takes the whole tab band away for a picture that has none", async () => {
-    // Read-only, the one session with no Tasks tab to keep the band up.
-    isReadOnly.value = true;
+  it("takes every tab away for a picture that has none, and keeps the band for the rating", async () => {
     picturesWithARecipe = new Set();
     const wrapper = await openOn(7);
     // The regression this replaces: a tab whose whole content was "nothing
     // here was made in ComfyUI". And NOT a lone Info button either - a tab
     // band with one tab is a control with nothing to switch to.
     expect(tabLabels(wrapper)).toEqual([]);
-    expect(wrapper.find(".inspector-tabs").exists()).toBe(false);
-  });
-
-  it("leaves Info and Tasks for a picture that has none", async () => {
-    picturesWithARecipe = new Set();
-    const wrapper = await openOn(7);
-    expect(tabLabels(wrapper)).toEqual(["Info", "Tasks"]);
+    // The band stays: the stars and the heart end it (#2163).
+    expect(
+      wrapper.find(".inspector-tabs .overlay-rail-rating").exists(),
+    ).toBe(true);
   });
 
   it("goes away when the reader steps onto a picture without one", async () => {
@@ -221,14 +217,14 @@ describe("the lightbox Recipe tab follows the picture", () => {
       { id: 7, tags: [] },
       { id: 8, tags: [] },
     ]);
-    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe", "Tasks"]);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe"]);
     await wrapper.findAll(".inspector-tab")[1].trigger("click");
     expect(activeTab(wrapper)).toBe("Recipe");
 
     await wrapper.setProps({ initialImageId: 8 });
     await flush();
     await flush();
-    expect(tabLabels(wrapper)).toEqual(["Info", "Tasks"]);
+    expect(tabLabels(wrapper)).toEqual([]);
     // And the reader is looking at the Info panel rather than at a pane whose
     // tab has gone.
     expect(wrapper.find(".overlay-sidebar-group").isVisible()).toBe(true);
@@ -246,7 +242,7 @@ describe("the lightbox Recipe tab follows the picture", () => {
     await wrapper.setProps({ initialImageId: 8 });
     await flush();
     await flush();
-    expect(tabLabels(wrapper)).toEqual(["Info", "Tasks"]);
+    expect(tabLabels(wrapper)).toEqual([]);
 
     await wrapper.setProps({ initialImageId: 9 });
     await flush();
@@ -254,7 +250,7 @@ describe("the lightbox Recipe tab follows the picture", () => {
     // Not "Info": somebody reading recipes wants the next picture's recipe,
     // and having to re-pick the tab after every photo would make the walk
     // useless.
-    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe", "Tasks"]);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe"]);
     expect(activeTab(wrapper)).toBe("Recipe");
   });
 
@@ -271,7 +267,7 @@ describe("the lightbox Recipe tab follows the picture", () => {
       conversion_problems: ["this ComfyUI has no node class 'SomePackNode'"],
     };
     const wrapper = await openOn(7);
-    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe", "Tasks"]);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe"]);
   });
 
   it("hands the panel the reasons the rebuild failed", async () => {
@@ -322,7 +318,7 @@ describe("the lightbox Recipe tab follows the picture", () => {
     await wrapper.setProps({ initialImageId: 8 });
     await flush();
     await flush();
-    expect(tabLabels(wrapper)).toEqual(["Info", "Tasks"]);
+    expect(tabLabels(wrapper)).toEqual([]);
     expect(document.activeElement).not.toBe(document.body);
     expect(document.activeElement).toBe(
       wrapper.find(".overlay-canvas").element,
@@ -336,12 +332,12 @@ describe("the lightbox Recipe tab follows the picture", () => {
       { id: 7, tags: [] },
       { id: 8, tags: [] },
     ]);
-    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe", "Tasks"]);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe"]);
     recipeThrows = true;
     await wrapper.setProps({ initialImageId: 8 });
     await flush();
     await flush();
-    expect(tabLabels(wrapper)).toEqual(["Info", "Tasks"]);
+    expect(tabLabels(wrapper)).toEqual([]);
   });
 
   it("does not blink out while the next picture's recipe is being read", async () => {
@@ -349,108 +345,129 @@ describe("the lightbox Recipe tab follows the picture", () => {
       { id: 7, tags: [] },
       { id: 8, tags: [] },
     ]);
-    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe", "Tasks"]);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe"]);
 
     // Hold the next read open: this is the window in which the overlay knows
     // nothing about picture 8's recipe.
     pendingRecipe = {};
     await wrapper.setProps({ initialImageId: 8 });
     await flush();
-    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe", "Tasks"]);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe"]);
 
     pendingRecipe.release();
     pendingRecipe = null;
     await flush();
     await flush();
-    expect(tabLabels(wrapper)).toEqual(["Info", "Tasks"]);
+    expect(tabLabels(wrapper)).toEqual([]);
   });
 });
 
-// The Tasks tab (#2056): the rail's task manager, so a run started from Edit is
-// followed from inside the lightbox. It hangs off the session alone.
-describe("the lightbox Tasks tab", () => {
-  const tasksPanel = (wrapper) => wrapper.findComponent({ name: "TasksPanel" });
-
-  it("sits last, and shows the task manager in its dark variant", async () => {
+// No Tasks tab (#2163): the task list is the title bar's pill, so the rail's
+// tabs are Info | Recipe | Edit.
+describe("the lightbox and the task list", () => {
+  it("offers no Tasks tab", async () => {
     const wrapper = await openOn(7, undefined, { comfyuiConfigured: true });
-    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe", "Edit", "Tasks"]);
-    expect(tasksPanel(wrapper).exists()).toBe(false);
-
-    await wrapper.findAll(".inspector-tab")[3].trigger("click");
-    expect(activeTab(wrapper)).toBe("Tasks");
-    expect(tasksPanel(wrapper).props("lightbox")).toBe(true);
-    expect(wrapper.text()).toContain("No active tasks");
-    // Info is `v-show`: kept, out of sight.
-    expect(wrapper.find(".overlay-sidebar-group").isVisible()).toBe(false);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe", "Edit"]);
+    expect(wrapper.findComponent({ name: "TasksPanel" }).exists()).toBe(false);
   });
 
-  it("is absent in a read-only session, and a chosen Tasks falls back to Info", async () => {
+  it("hands a deep link to the Tasks tab to the title bar's pill", async () => {
     const wrapper = await openOn(7);
-    await wrapper.findAll(".inspector-tab")[2].trigger("click");
-    expect(activeTab(wrapper)).toBe("Tasks");
-
-    isReadOnly.value = true;
+    const sidebar = useSidebarStore();
+    sidebar.showTasksTab();
     await flush();
-    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe"]);
-    expect(activeTab(wrapper)).toBe("Info");
-    expect(tasksPanel(wrapper).exists()).toBe(false);
+    expect(sidebar.tasksPillRequest).toBe(1);
+    wrapper.unmount();
   });
 
-  it("holds the fast poll only while the pane is open on it", async () => {
-    const wrapper = await openOn(7);
-    const tasks = useTasksStore();
-    await wrapper.findAll(".inspector-tab")[2].trigger("click");
-    expect(tasks.tasksTabOpen).toBe(true);
-
-    // The lightbox keeps a collapsed pane mounted; the panel must not be.
-    await wrapper.find(".overlay-topbar-sidebar-toggle").trigger("click");
-    expect(tasksPanel(wrapper).exists()).toBe(false);
-    expect(tasks.tasksTabOpen).toBe(false);
-  });
-
-  it("puts focus back on the tab when a row takes it away", async () => {
-    const wrapper = await openOn(7, undefined, { attach: true });
-    await wrapper.findAll(".inspector-tab")[2].trigger("click");
-    const tasks = useTasksStore();
-    tasks.comfyuiRuns = [
-      { prompt_id: "p-1", label: "Night market", status: "running", percent: 40 },
-    ];
+  it("asks nothing of the pill while it is closed", async () => {
+    mount(ImageOverlay, {
+      props: { open: false, initialImageId: 7, allImages: [{ id: 7, tags: [] }] },
+      global: { stubs: STUBS },
+    });
+    const sidebar = useSidebarStore();
+    sidebar.showTasksTab();
     await flush();
-    const stop = wrapper.find('button[aria-label="Stop ComfyUI"]').element;
-    stop.focus();
-
-    tasks.comfyuiRuns = [];
-    // Chromium fires this as the button goes; jsdom does not.
-    stop.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
-    await flush();
-    expect(stop.isConnected).toBe(false);
-    expect(document.activeElement).toBe(
-      wrapper.find(".inspector-tab--active").element,
-    );
+    expect(sidebar.tasksPillRequest).toBe(0);
   });
 
   // Space was the chrome toggle's even on a focused button, so no button in
   // the pane could be pressed with it.
   it("leaves Space to a keyboard-focused button in the pane", async () => {
     const wrapper = await openOn(7, undefined, { attach: true });
-    const tab = wrapper.findAll(".inspector-tab")[2];
+    const tab = wrapper.findAll(".inspector-tab")[1];
     tab.element.focus({ focusVisible: true });
     const press = new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true });
     tab.element.dispatchEvent(press);
     await flush();
     expect(press.defaultPrevented).toBe(false);
-    expect(wrapper.find(".overlay-sidebar").classes()).not.toContain("hidden");
+  });
+});
+
+// The pane is the right rail (#2163): one open flag with the grid's, so
+// opening a picture neither opens nor shuts it.
+describe("the lightbox rail", () => {
+  it("opens and shuts with the grid's rail", async () => {
+    const sidebar = useSidebarStore();
+    sidebar.statsOpen = false;
+    const wrapper = await openOn(7);
+    const pane = () => wrapper.find(".overlay-sidebar");
+    expect(pane().classes()).toContain("inspector--collapsed");
+
+    await wrapper
+      .find(".overlay-topbar-sidebar-toggle .tb-stats-btn")
+      .trigger("click");
+    expect(sidebar.statsOpen).toBe(true);
+    expect(pane().classes()).not.toContain("inspector--collapsed");
+
+    // S is the same toggle.
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "s" }));
+    await flush();
+    expect(sidebar.statsOpen).toBe(false);
   });
 
-  it("answers a deep link to the Tasks tab, opening the pane", async () => {
+  it("leaves Escape to a menu open beside it, such as the title bar's", async () => {
     const wrapper = await openOn(7);
-    await wrapper.find(".overlay-topbar-sidebar-toggle").trigger("click");
-    expect(tasksPanel(wrapper).exists()).toBe(false);
+    const menu = document.createElement("div");
+    menu.className = "v-overlay v-overlay--active";
+    document.body.appendChild(menu);
+    try {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+      expect(wrapper.emitted("close")).toBeUndefined();
+    } finally {
+      menu.remove();
+    }
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    expect(wrapper.emitted("close")).toHaveLength(1);
+  });
 
-    useSidebarStore().showTasksTab();
+  it("opens for T, which needs the tag field, without keeping it open", async () => {
+    const sidebar = useSidebarStore();
+    sidebar.statsOpen = false;
+    const beginAddTag = vi.fn();
+    const wrapper = mount(ImageOverlay, {
+      props: { open: true, initialImageId: 7, allImages: [{ id: 7, tags: [] }] },
+      global: {
+        stubs: {
+          ...STUBS,
+          OverlayTagsPanel: {
+            template: "<div></div>",
+            methods: { beginAddTag },
+          },
+        },
+      },
+    });
     await flush();
-    expect(activeTab(wrapper)).toBe("Tasks");
-    expect(tasksPanel(wrapper).exists()).toBe(true);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "t" }));
+    await flush();
+    expect(sidebar.statsOpen).toBe(true);
+    expect(beginAddTag).toHaveBeenCalledTimes(1);
+    expect(wrapper.find(".overlay-sidebar").classes()).not.toContain(
+      "inspector--collapsed",
+    );
+    expect(window.localStorage.getItem("pixlstash:statsSidebarOpen")).not.toBe(
+      "true",
+    );
   });
 });
 
@@ -462,18 +479,18 @@ describe("the lightbox Edit tab", () => {
 
   it("sits after Recipe when ComfyUI is configured", async () => {
     const wrapper = await openOn(7, undefined, configured);
-    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe", "Edit", "Tasks"]);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe", "Edit"]);
   });
 
   it("is offered on a picture with no recipe", async () => {
     picturesWithARecipe = new Set();
     const wrapper = await openOn(7, undefined, configured);
-    expect(tabLabels(wrapper)).toEqual(["Info", "Edit", "Tasks"]);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Edit"]);
   });
 
   it("is absent without ComfyUI", async () => {
     const wrapper = await openOn(7);
-    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe", "Tasks"]);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe"]);
     expect(wrapper.find(".edit-stub").exists()).toBe(false);
   });
 
@@ -746,10 +763,7 @@ describe("the lightbox Edit tab", () => {
       { id: 7, tags: [], format: "png" },
       { id: 5, tags: [], format: "png" },
     ]);
-    const compareButton = () =>
-      wrapper
-        .findAll(".overlay-icon-btn")
-        .find((b) => b.find("v-icon").text() === "mdi-compare-horizontal");
+    const compareButton = () => wrapper.find(".overlay-compare-btn");
     // Shown, and greyed with how to pick, before there are two.
     expect(compareButton().attributes("aria-disabled")).toBe("true");
     expect(compareButton().attributes("aria-label")).toContain("Ctrl-click");
