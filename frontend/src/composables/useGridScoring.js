@@ -762,7 +762,10 @@ export function useGridScoring({
     mark(() => on);
     skipNextWsRefresh.value = true;
     try {
-      await setPicturesFavourite([...keys].map(Number), on);
+      const body = await setPicturesFavourite([...keys].map(Number), on);
+      // Nothing changed (already so, or in the Scrapheap): no WS echo comes
+      // back to consume the skip, and it would eat the next real refresh.
+      if (!body?.updated_ids?.length) skipNextWsRefresh.value = false;
     } catch (e) {
       console.error("Failed to set favourite", [...keys], on, e);
       skipNextWsRefresh.value = false;

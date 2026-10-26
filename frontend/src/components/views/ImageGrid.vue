@@ -1029,7 +1029,7 @@
                 class="thumbnail-top-right-badges"
               >
                 <StarRatingOverlay
-                  v-if="gridStore.showStars || !isReadOnly"
+                  v-if="gridStore.showStars || (!isReadOnly && !isScrapheapView)"
                   :score="
                     isReadOnly
                       ? (guestScoreMap.get(img.id) ?? img.score ?? 0)
@@ -1038,7 +1038,7 @@
                   :icon-size="badgeIconSizes.star"
                   :compact="true"
                   :stars="gridStore.showStars"
-                  :favouritable="!isReadOnly"
+                  :favouritable="!isReadOnly && !isScrapheapView"
                   :favourite="Boolean(img.favourite)"
                   :style="{ '--star-size': `${badgeIconSizes.star}px` }"
                   @set-score="setScore(img, $event)"

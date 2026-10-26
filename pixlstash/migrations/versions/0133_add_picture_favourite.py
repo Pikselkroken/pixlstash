@@ -38,7 +38,7 @@ def upgrade() -> None:
             "ix_picture_favourite",
             "picture",
             ["favourite", "id"],
-            sqlite_where=sa.text("favourite = 1"),
+            sqlite_where=sa.text("favourite IS 1"),
         )
 
 

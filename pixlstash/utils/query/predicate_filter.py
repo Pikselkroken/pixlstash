@@ -386,6 +386,14 @@ class PredicateFilter(BaseModel):
             return [text(f"NOT {_HAS_REAL_FACE_SQL}")]
         return []
 
+    def favourite_predicates(self) -> list[ColumnElement]:
+        """The "Favourites only" clause.
+
+        Public for the stack-leader collapse, like :meth:`face_predicates`: the
+        heart is often on a stack member that is not its global cover.
+        """
+        return [Picture.favourite.is_(True)] if self.favourite_only else []
+
     def predicates(self) -> list[ColumnElement]:
         """Compile this filter to a list of SQLAlchemy WHERE clauses.
 
@@ -426,8 +434,7 @@ class PredicateFilter(BaseModel):
         else:
             preds.extend(score_range)
 
-        if self.favourite_only:
-            preds.append(Picture.favourite.is_(True))
+        preds.extend(self.favourite_predicates())
 
         preds.extend(self._smart_score_bucket_predicates())
         preds.extend(self._resolution_bucket_predicates())

@@ -987,9 +987,16 @@ def _favourite_ids(client, ids, **params):
     return sorted({int(pic["id"]) for pic in pictures} & set(ids))
 
 
+def _favourite_count(client):
+    resp = client.get(f"{API}/pictures/count", params={"favourite": "1"})
+    assert resp.status_code == 200, resp.text
+    return resp.json()["count"]
+
+
 def test_favourite_narrows_the_listing_and_one_undo_reverts_it(client, server):
     ids = [_upload(client) for _ in range(3)]
     marked = ids[:2]
+    count_before = _favourite_count(client)
     resp = client.post(
         f"{API}/pictures/favourite", json={"picture_ids": marked, "favourite": True}
     )
@@ -1003,9 +1010,12 @@ def test_favourite_narrows_the_listing_and_one_undo_reverts_it(client, server):
     hearts = {int(p["id"]): p["favourite"] for p in grid_rows if int(p["id"]) in ids}
     assert hearts == {pid: pid in marked for pid in ids}
     # The count the filter panel shows runs the same predicate.
-    count = client.get(f"{API}/pictures/count", params={"favourite": "1"})
-    assert count.status_code == 200, count.text
-    assert count.json()["count"] >= len(marked)
+    assert _favourite_count(client) == count_before + len(marked)
+    # So do search's and the stats sidebar's parsers (`from_query_params`).
+    stats = client.get(f"{API}/pictures/stats", params={"favourite": "1"})
+    assert stats.status_code == 200, stats.text
+    unfiltered = client.get(f"{API}/pictures/stats")
+    assert stats.json() != unfiltered.json()
 
     # Marking again changes nothing and is not an operation of its own.
     again = client.post(
@@ -1024,6 +1034,33 @@ def test_favourite_narrows_the_listing_and_one_undo_reverts_it(client, server):
     )
     assert unmark.json()["updated_ids"] == sorted(marked)
     assert _favourite_ids(client, ids) == []
+
+
+def test_favourites_only_shows_a_stack_by_its_favourite_member(client, server):
+    """The heart is often on a variant, not the cover: the stack must still show."""
+    cover, variant = _upload(client), _upload(client)
+    resp = client.post(f"{API}/stacks", json={"picture_ids": [cover, variant]})
+    assert resp.status_code == 200, resp.text
+
+    def positions(session):
+        return {
+            int(p.id): p.stack_position
+            for p in session.exec(
+                select(Picture).where(Picture.id.in_([cover, variant]))
+            ).all()
+        }
+
+    by_position = sorted(
+        server.vault.db.run_task(positions).items(), key=lambda kv: kv[1]
+    )
+    member = by_position[1][0]  # not the stack's cover
+    client.post(
+        f"{API}/pictures/favourite", json={"picture_ids": [member], "favourite": True}
+    )
+    shown = _favourite_ids(
+        client, [cover, variant], fields="grid", stack_leaders_only="true"
+    )
+    assert shown == [member]
 
 
 def test_favourite_refuses_a_malformed_body(client):

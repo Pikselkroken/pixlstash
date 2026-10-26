@@ -171,7 +171,10 @@ class ExportType(Enum):
 
 
 def _scope_predicates_for_leaders(
-    *, file_path_prefix: Optional[str] = None, face_filter: Optional[str] = None
+    *,
+    file_path_prefix: Optional[str] = None,
+    face_filter: Optional[str] = None,
+    favourite_only: bool = False,
 ) -> list:
     """The intrinsic narrowings a stack-leader collapse has to know about.
 
@@ -185,7 +188,9 @@ def _scope_predicates_for_leaders(
     out deliberately, because both are already applied to every member and a
     stack whose every member fails them has no row to show either way. A FOLDER
     and a FACE facet are different: they are *where the picture is* and *what is
-    in it*, and a stack routinely straddles both.
+    in it*, and a stack routinely straddles both. "Favourites only" is the same
+    kind: the heart is often on a variant, not the cover, and that stack must
+    still show, represented by its favourite.
     """
     from pixlstash.utils.query.predicate_filter import PredicateFilter
 
@@ -196,6 +201,8 @@ def _scope_predicates_for_leaders(
         ).file_path_prefix_predicates()
     if face_filter in ("with_face", "without_face"):
         predicates += PredicateFilter(face_filter=face_filter).face_predicates()
+    if favourite_only:
+        predicates += PredicateFilter(favourite_only=True).favourite_predicates()
     return predicates
 
 
@@ -677,7 +684,9 @@ class Picture(SQLModel, table=True):
             "ix_picture_favourite",
             "favourite",
             "id",
-            sqlite_where=text("favourite = 1"),
+            # ``IS 1``, the form the filter compiles to: SQLite only uses a
+            # partial index whose WHERE matches the query's term.
+            sqlite_where=text("favourite IS 1"),
         ),
     )
 
@@ -1209,7 +1218,9 @@ class Picture(SQLModel, table=True):
                     )
                 )
             leader_scope += _scope_predicates_for_leaders(
-                file_path_prefix=file_path_prefix, face_filter=face_filter
+                file_path_prefix=file_path_prefix,
+                face_filter=face_filter,
+                favourite_only=favourite_only,
             )
 
             if not leader_scope:
@@ -1506,7 +1517,9 @@ class Picture(SQLModel, table=True):
                     )
                 )
             leader_scope += _scope_predicates_for_leaders(
-                file_path_prefix=file_path_prefix, face_filter=face_filter
+                file_path_prefix=file_path_prefix,
+                face_filter=face_filter,
+                favourite_only=favourite_only,
             )
 
             if not leader_scope:
