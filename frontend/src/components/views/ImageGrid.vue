@@ -6726,6 +6726,7 @@ const { onGlobalKeyPress, handleKeyDown } = useGridKeyboardNav(
     isJustifiedMode,
     justifiedLayout,
     isGhosted: isGridIndexGhosted,
+    isScrapheap: () => isScrapheapView.value,
   },
   props,
   emit,

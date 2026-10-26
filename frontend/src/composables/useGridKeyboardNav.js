@@ -46,6 +46,8 @@ export function useGridKeyboardNav(
     isJustifiedMode,
     justifiedLayout,
     isGhosted = () => false,
+    // The Scrapheap shows no heart, so H marks nothing there either.
+    isScrapheap = () => false,
   },
   props,
   emit,
@@ -481,7 +483,8 @@ export function useGridKeyboardNav(
       !event.metaKey &&
       !event.altKey &&
       !overlayOpen.value &&
-      !isReadOnly.value
+      !isReadOnly.value &&
+      !isScrapheap()
     ) {
       // H favourites the selection, else the hovered picture, else the
       // cursor's, as the digits score them.
