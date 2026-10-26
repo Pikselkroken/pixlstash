@@ -106,6 +106,9 @@ class GridPicture(BaseModel):
     height: int | None = Field(None, description="Image height in pixels.")
     format: str | None = Field(None, description="File format, e.g. PNG, JPEG, MP4.")
     score: int | None = Field(None, description="Manual star rating (0-5).")
+    favourite: bool | None = Field(
+        None, description="The owner has hearted this picture."
+    )
     smart_score: float | None = Field(
         None, description="Model-predicted aesthetic score."
     )
@@ -305,6 +308,9 @@ class PictureListFilters:
                 "intersected with it, so a range spanning every rating "
                 "(min_score=0 or max_score=5) plus unscored is every picture."
             ),
+        ),
+        favourite: bool = Query(
+            False, description="Only the owner's favourite pictures."
         ),
         smart_score_bucket: str | None = Query(
             None, description="unscored | 1-2 | 2-3 | 3-4 | 4-5"
@@ -715,6 +721,7 @@ def select_pictures_for_listing(
     # ``Picture.find(**search)``, whose ``hasattr`` fallthrough silently drops any
     # key that is not a Picture column, so the filter would do nothing at all.
     unscored = is_truthy_flag(query_params.pop("unscored", None))
+    favourite_only = is_truthy_flag(query_params.pop("favourite", None))
     smart_score_bucket = query_params.pop("smart_score_bucket", None) or None
     resolution_bucket = query_params.pop("resolution_bucket", None) or None
     project_id_raw = query_params.pop("project_id", None)
@@ -880,6 +887,7 @@ def select_pictures_for_listing(
         min_score_value: int | None = None,
         max_score_value: int | None = None,
         unscored_value: bool = False,
+        favourite_only_value: bool = False,
         smart_score_bucket_value: str | None = None,
         resolution_bucket_value: str | None = None,
         tags_filter_value: list[str] | None = None,
@@ -928,6 +936,7 @@ def select_pictures_for_listing(
                 and min_score_value is None
                 and max_score_value is None
                 and not unscored_value
+                and not favourite_only_value
                 and smart_score_bucket_value is None
                 and resolution_bucket_value is None
                 and not tags_filter_value
@@ -982,6 +991,7 @@ def select_pictures_for_listing(
             min_score=min_score_value,
             max_score=max_score_value,
             unscored=unscored_value,
+            favourite_only=favourite_only_value,
             smart_score_bucket=smart_score_bucket_value,
             resolution_bucket=resolution_bucket_value,
             tags_filter=tags_filter_value,
@@ -1020,6 +1030,7 @@ def select_pictures_for_listing(
             min_score_value=min_score,
             max_score_value=max_score,
             unscored_value=unscored,
+            favourite_only_value=favourite_only,
             smart_score_bucket_value=smart_score_bucket,
             resolution_bucket_value=resolution_bucket,
             tags_filter_value=query_params.get("tags_filter"),
@@ -1139,6 +1150,7 @@ def select_pictures_for_listing(
                 min_score=min_score,
                 max_score=max_score,
                 unscored=unscored,
+                favourite_only=favourite_only,
                 smart_score_bucket=smart_score_bucket,
                 resolution_bucket=resolution_bucket,
                 face_filter=face_filter,
@@ -1176,6 +1188,7 @@ def select_pictures_for_listing(
             min_score=min_score,
             max_score=max_score,
             unscored=unscored,
+            favourite_only=favourite_only,
             smart_score_bucket=smart_score_bucket,
             resolution_bucket=resolution_bucket,
             project_id=unassigned_project_id,
@@ -1220,6 +1233,7 @@ def select_pictures_for_listing(
                 min_score=min_score,
                 max_score=max_score,
                 unscored=unscored,
+                favourite_only=favourite_only,
                 smart_score_bucket=smart_score_bucket,
                 resolution_bucket=resolution_bucket,
                 face_filter=face_filter,
@@ -1243,6 +1257,7 @@ def select_pictures_for_listing(
             min_score=min_score,
             max_score=max_score,
             unscored=unscored,
+            favourite_only=favourite_only,
             smart_score_bucket=smart_score_bucket,
             resolution_bucket=resolution_bucket,
             face_filter=face_filter,
@@ -1502,6 +1517,7 @@ def select_pictures_for_listing(
                 min_score=min_score,
                 max_score=max_score,
                 unscored=unscored,
+                favourite_only=favourite_only,
                 smart_score_bucket=smart_score_bucket,
                 resolution_bucket=resolution_bucket,
                 file_path_prefix=file_path_prefix,
@@ -1523,6 +1539,7 @@ def select_pictures_for_listing(
             min_score=min_score,
             max_score=max_score,
             unscored=unscored,
+            favourite_only=favourite_only,
             smart_score_bucket=smart_score_bucket,
             resolution_bucket=resolution_bucket,
             file_path_prefix=file_path_prefix,

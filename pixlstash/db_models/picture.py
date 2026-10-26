@@ -265,6 +265,13 @@ class Picture(SQLModel, table=True):
     square_crop_y: Optional[int] = Field(default=None)
     square_crop_side: Optional[int] = Field(default=None)
     score: Optional[int] = None
+    # The owner's heart beside the score. Stored with the picture rather than
+    # in the hub's ``favourite`` table (models and workflows) because the grid
+    # is paged by the server: "Favourites only" has to run in this query.
+    favourite: bool = Field(
+        default=False,
+        sa_column=Column("favourite", Boolean, nullable=False, server_default="0"),
+    )
     aesthetic_score: Optional[float] = None
     smart_score: Optional[float] = Field(default=None, index=True)
     text_score: Optional[float] = Field(default=None, index=True)
@@ -664,6 +671,14 @@ class Picture(SQLModel, table=True):
                 "prompt_match IS NULL AND comfyui_positive_prompt IS NOT NULL"
             ),
         ),
+        # "Favourites only": a few hundred rows out of tens of thousands, so
+        # only the favourites are in the index.
+        Index(
+            "ix_picture_favourite",
+            "favourite",
+            "id",
+            sqlite_where=text("favourite = 1"),
+        ),
     )
 
     class Config:
@@ -739,6 +754,7 @@ class Picture(SQLModel, table=True):
         min_score: Optional[int] = None,
         max_score: Optional[int] = None,
         unscored: bool = False,
+        favourite_only: bool = False,
         smart_score_bucket: Optional[str] = None,
         resolution_bucket: Optional[str] = None,
         comfyui_models_filter: Optional[List[str]] = None,
@@ -901,6 +917,7 @@ class Picture(SQLModel, table=True):
             min_score=min_score,
             max_score=max_score,
             unscored=unscored,
+            favourite_only=favourite_only,
             smart_score_bucket=smart_score_bucket,
             resolution_bucket=resolution_bucket,
             comfyui_models_filter=comfyui_models_filter,
@@ -1044,6 +1061,7 @@ class Picture(SQLModel, table=True):
         min_score: Optional[int] = None,
         max_score: Optional[int] = None,
         unscored: bool = False,
+        favourite_only: bool = False,
         smart_score_bucket: Optional[str] = None,
         resolution_bucket: Optional[str] = None,
         file_path_prefix: Optional[str] = None,
@@ -1129,6 +1147,7 @@ class Picture(SQLModel, table=True):
             min_score=min_score,
             max_score=max_score,
             unscored=unscored,
+            favourite_only=favourite_only,
             smart_score_bucket=smart_score_bucket,
             resolution_bucket=resolution_bucket,
             tags_filter=tags_filter,
@@ -1290,6 +1309,7 @@ class Picture(SQLModel, table=True):
             "height",
             "format",
             "score",
+            "favourite",
             "smart_score",
             "created_at",
             "imported_at",
@@ -1376,6 +1396,7 @@ class Picture(SQLModel, table=True):
         min_score: Optional[int] = None,
         max_score: Optional[int] = None,
         unscored: bool = False,
+        favourite_only: bool = False,
         smart_score_bucket: Optional[str] = None,
         resolution_bucket: Optional[str] = None,
         project_id: Optional[int] = None,
@@ -1446,6 +1467,7 @@ class Picture(SQLModel, table=True):
             min_score=min_score,
             max_score=max_score,
             unscored=unscored,
+            favourite_only=favourite_only,
             smart_score_bucket=smart_score_bucket,
             resolution_bucket=resolution_bucket,
             tags_filter=tags_filter,

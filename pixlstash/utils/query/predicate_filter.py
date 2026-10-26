@@ -256,6 +256,8 @@ class PredicateFilter(BaseModel):
     # the same thing, so the predicate covers both. Given with a score range it
     # widens the range to take the unrated in too.
     unscored: bool = False
+    # "Favourites only": the owner's hearted pictures (``picture.favourite``).
+    favourite_only: bool = False
     smart_score_bucket: Optional[str] = None
     resolution_bucket: Optional[str] = None
     comfyui_models_filter: Optional[List[str]] = None
@@ -423,6 +425,9 @@ class PredicateFilter(BaseModel):
             preds.append(or_(and_(*score_range), unrated) if score_range else unrated)
         else:
             preds.extend(score_range)
+
+        if self.favourite_only:
+            preds.append(Picture.favourite.is_(True))
 
         preds.extend(self._smart_score_bucket_predicates())
         preds.extend(self._resolution_bucket_predicates())
@@ -649,6 +654,7 @@ class PredicateFilter(BaseModel):
             min_score=_int_or_none("min_score"),
             max_score=_int_or_none("max_score"),
             unscored=is_truthy_flag(qp.get("unscored")),
+            favourite_only=is_truthy_flag(qp.get("favourite")),
             smart_score_bucket=qp.get("smart_score_bucket") or None,
             resolution_bucket=qp.get("resolution_bucket") or None,
             comfyui_models_filter=qp.getlist("comfyui_model") or None,

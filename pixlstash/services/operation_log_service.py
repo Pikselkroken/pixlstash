@@ -117,6 +117,8 @@ FACET_TAGS = "tags"
 FACET_TAG_PREDICTIONS = "tag_predictions"
 FACET_DESCRIPTION = "description"
 FACET_SCORE = "score"
+# The owner's heart (``Picture.favourite``), beside the score.
+FACET_FAVOURITE = "favourite"
 FACET_SETS = "sets"
 FACET_PROJECTS = "projects"
 FACET_PROJECT_ID = "project_id"
@@ -142,6 +144,7 @@ FACETS = (
     FACET_TAG_PREDICTIONS,
     FACET_DESCRIPTION,
     FACET_SCORE,
+    FACET_FAVOURITE,
     FACET_SETS,
     FACET_PROJECTS,
     FACET_PROJECT_ID,
@@ -195,6 +198,7 @@ _FACET_EVENTS = {
     FACET_TAG_PREDICTIONS: (EventType.CHANGED_TAGS, EventType.CHANGED_PICTURES),
     FACET_DESCRIPTION: (EventType.CHANGED_DESCRIPTIONS, EventType.CHANGED_PICTURES),
     FACET_SCORE: (EventType.CHANGED_PICTURES,),
+    FACET_FAVOURITE: (EventType.CHANGED_PICTURES,),
     FACET_SETS: (EventType.CHANGED_PICTURES,),
     FACET_PROJECTS: (EventType.CHANGED_PICTURES,),
     FACET_PROJECT_ID: (EventType.CHANGED_PICTURES,),
@@ -300,6 +304,7 @@ def capture_state_in_session(session: Session, picture_ids) -> dict[str, dict]:
         state[str(int(picture.id))] = {
             FACET_DESCRIPTION: picture.description,
             FACET_SCORE: picture.score,
+            FACET_FAVOURITE: bool(picture.favourite),
             FACET_PROJECT_ID: picture.project_id,
             FACET_PENDING_CHARACTER_ID: picture.pending_character_id,
             # Read from the COLUMN, never from the file. This capture runs twice
@@ -1567,6 +1572,9 @@ def apply_state_in_session(
                     session.add(picture)
                 elif facet == FACET_SCORE:
                     picture.score = int(value) if value is not None else None
+                    session.add(picture)
+                elif facet == FACET_FAVOURITE:
+                    picture.favourite = bool(value)
                     session.add(picture)
                 elif facet == FACET_PROJECT_ID:
                     picture.project_id = int(value) if value is not None else None

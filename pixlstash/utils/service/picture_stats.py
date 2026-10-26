@@ -68,6 +68,7 @@ class PictureStatsParams:
     penalised_tag_set: set[str] | None
     penalised_cooc_both: bool
     scoped_picture_ids: list[int] | None = None
+    favourite_only: bool = False
 
 
 def _empty_stats() -> dict:
@@ -212,6 +213,7 @@ def _build_filtered_picture_subquery(session: Session, params: PictureStatsParam
         min_score=params.min_score,
         max_score=params.max_score,
         unscored=params.unscored,
+        favourite_only=params.favourite_only,
         smart_score_bucket=params.smart_score_bucket,
         resolution_bucket=params.resolution_bucket,
         file_path_prefix=params.file_path_prefix or None,

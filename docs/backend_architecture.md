@@ -351,6 +351,7 @@ Key endpoints (see the auto-generated index below for the full set):
 | POST | `/pictures/{id}/plugin/{name}` | Run image plugin |
 | PATCH | `/pictures/project` | Bulk assign to project |
 | POST | `/pictures/scores` | Bulk apply user ratings |
+| POST | `/pictures/favourite` | Mark or unmark the owner's favourite pictures (see below) |
 | POST | `/pictures/{id}/face` | Create face record |
 | DELETE | `/pictures/{id}/face/{index}` | Delete face |
 | POST | `/pictures/detect` | Queue object detection (Segment) for a batch; optional `prompt` for open-vocab grounding |
@@ -359,6 +360,8 @@ Key endpoints (see the auto-generated index below for the full set):
 | POST | `/pictures/face-search` | Face-likeness search (see below) |
 | POST | `/pictures/scrapheap/delete-preview` | What a delete-forever would destroy + the `confirm_token` the delete requires |
 | DELETE | `/pictures/scrapheap` | **The one irreversible endpoint.** Requires `confirm_token` |
+
+**A picture favourite lives with the picture, not in the hub (`picture.favourite`).** Models and workflows keep their favourites in the hub's `favourite` table and rank them in the browser, which holds every row. The picture grid is paged by the server, so "Favourites only" has to run in the picture query: `favourite=1` on `GET /pictures`, `/pictures/count`, `/pictures/search`, `/pictures/stats` and `/pictures/likeness-groups` sets `PredicateFilter.favourite_only`, which every listing branch passes through like `unscored`. A partial index (`ix_picture_favourite`, `WHERE favourite = 1`) holds only the favourites. `POST /pictures/favourite` (`{picture_ids, favourite}`, `owner_only`) writes the column as one recorded operation (`pictures.favourite`; the operation log's `favourite` facet, so `Ctrl+Z` reverts the batch), and because it is a vault column, snapshots and restores keep it. The column rides `grid_fields()` so a tile can draw its heart. A share token sees it as it sees `score`, but cannot write it.
 
 **Delete-forever needs a server-side confirmation (`confirm_token`).** The type-to-confirm dialog is a *client* control and proves nothing to the server: `DELETE /pictures/scrapheap` with an empty body used to destroy the entire scrapheap and its files with no server-side intent check at all. There is no CSRF token anywhere, and CORS admits **any** `localhost`/LAN-IP *port* with credentials (§6 of `integration_architecture.md`), so a page served on another local port could drive the owner's own session straight into it.
 
@@ -685,6 +688,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/pictures/export/folder                                                | pictures        | Start picture export-to-folder job                            |
 | GET    | /api/v1/pictures/export/status                                                | pictures        | Get export job status                                         |
 | POST   | /api/v1/pictures/face-search                                                  | pictures        | Search by face likeness                                       |
+| POST   | /api/v1/pictures/favourite                                                    | pictures        | Mark or unmark favourite pictures                             |
 | POST   | /api/v1/pictures/import                                                       | pictures        | Import media files                                            |
 | POST   | /api/v1/pictures/import/staging                                               | pictures        | Open an async import staging session                          |
 | DELETE | /api/v1/pictures/import/staging/{staging_id}                                  | pictures        | Cancel a staging session                                      |
