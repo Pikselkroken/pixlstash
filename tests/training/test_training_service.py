@@ -31,6 +31,7 @@ from pixlstash.event_types import EventType
 from pixlstash.hub import training_runs
 from pixlstash.hub.db import now_iso
 from pixlstash.services.training_service import TrainingService
+from pixlstash.training.backend import TrainingProgress
 from pixlstash.training.local_ai_toolkit import LocalAiToolkit
 from pixlstash.vault import Vault
 
@@ -419,6 +420,12 @@ def test_full_lifecycle_queued_to_completed_lora(hub, repo_dir):
     assert final.started_at is not None
     assert final.completed_at is not None
     assert final.ai_toolkit_commit == head
+    # The live view's phase log: queued, launched, and imported last.
+    phases = [entry["phase"] for entry in json.loads(final.phase_log)]
+    assert phases[:2] == ["waiting_gpu", "loading"]
+    assert phases[-1] == "importing"
+    assert len(phases) == len(set(phases)), phases
+    assert final.finished_unwatched == 0
     assert final.dataset_picture_ids
     assert json.loads(final.dataset_picture_ids) == [1, 2, 3]
     # Loss curve populated.
@@ -915,6 +922,8 @@ def test_reconcile_on_startup_dead_running_job_finalizes(hub, repo_dir):
     final = _job_status(hub, job_uuid)
     assert final.status == "completed", f"got {final.status!r}"
     assert [run_dir for run_dir, _ in importer.calls] == [save_root]
+    # Nobody watched it end, and the live view says so.
+    assert final.finished_unwatched == 1
     # Dead-process reconcile must not have taken the GPU lease at all.
     assert lease.acquire_count == 0
     assert lease.release_count == 0
@@ -1194,3 +1203,44 @@ def test_vault_reconciles_a_surviving_trainer_before_the_worker_starts():
     Vault.start(stand_in)
 
     assert order == ["reconcile", "start"]
+
+
+def test_a_poll_does_not_undo_a_cancel_the_trainer_has_not_seen_yet(hub, repo_dir):
+    """The trainer reports running for a while after a cancel; "stopping"
+    stands until it reaches an end state."""
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(grant=True),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    training_runs.create_run(
+        hub,
+        library_uuid=_LIBRARY_UUID,
+        uuid="cancelled-job",
+        name="cancelled",
+        set_id=None,
+        character_id=_CHARACTER_ID,
+        base_model="m",
+        trigger_word="t",
+    )
+    handle = SimpleNamespace(log_path="")
+    running = TrainingProgress(
+        status="running", info="Training", step=40, total_steps=100, speed=""
+    )
+
+    training_runs.update_run(hub, "cancelled-job", status="stopping")
+    service._persist_progress("cancelled-job", running, handle)
+    assert _job_status(hub, "cancelled-job").status == "stopping"
+
+    stopped = TrainingProgress(
+        status="stopped", info="Job stopped", step=41, total_steps=100, speed=""
+    )
+    service._persist_progress("cancelled-job", stopped, handle)
+    assert _job_status(hub, "cancelled-job").status == "stopped"
+
+    # A run nobody cancelled still reads as running.
+    training_runs.update_run(hub, "cancelled-job", status="running")
+    service._persist_progress("cancelled-job", running, handle)
+    assert _job_status(hub, "cancelled-job").status == "running"

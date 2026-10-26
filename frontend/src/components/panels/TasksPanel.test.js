@@ -1579,6 +1579,17 @@ describe("the AI Toolkit run in the task manager", () => {
     expect(row.find(".tm-mark").classes("tm-mark--running")).toBe(true);
   });
 
+  it("opens the run's page in the shelf's Training runs tab", async () => {
+    nav.push = vi.fn();
+    setGpu(gpuAnswer({ leases: [trainingLease()] }));
+    const wrapper = mount(TasksPanel, globalOpts);
+    await wrapper.find('[data-testid="tm-aitoolkit-watch"]').trigger("click");
+    expect(nav.push).toHaveBeenCalledWith({
+      name: "models-runs",
+      query: { run: "job-1" },
+    });
+  });
+
   it("shows no step until the run reports a total", () => {
     setGpu(gpuAnswer({ leases: [trainingLease({ progress: null })] }));
     const wrapper = mount(TasksPanel, globalOpts);

@@ -136,6 +136,19 @@
             </span>
             <span class="tm-figure">
               <span class="tm-fig-text">{{ formatGb(entry.figureMb) }}</span>
+              <!-- The run's own page, in the shelf's Training runs tab. -->
+              <span v-if="entry.jobId" class="tm-acts">
+                <button
+                  class="tm-act"
+                  type="button"
+                  data-testid="tm-aitoolkit-watch"
+                  :aria-label="`Watch ${entry.label} in Training runs`"
+                  @click="watchTraining(entry)"
+                >
+                  <Tooltip text="Watch in Training runs" activator="parent" :describe="false" />
+                  <v-icon size="16">mdi-chart-line</v-icon>
+                </button>
+              </span>
             </span>
           </div>
           <!-- PixlStash's own background work: one folded row with its count
@@ -814,6 +827,11 @@ function togglePixl() {
       err,
     );
   }
+}
+
+/** Open an AI Toolkit run's page in the shelf's Training runs tab (#2118). */
+function watchTraining(entry) {
+  router.push({ name: "models-runs", query: { run: entry.jobId } });
 }
 
 /**

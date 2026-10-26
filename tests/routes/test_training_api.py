@@ -18,6 +18,7 @@ import gc
 import json
 import os
 import shutil
+import sqlite3
 import sys
 import tempfile
 
@@ -523,6 +524,215 @@ def test_job_status_scoped_token_forbidden():
         scoped = _scoped_client(server, read_token)
         r = scoped.get(f"/training/jobs/{job_id}/status")
         assert r.status_code == 403, r.text
+    finally:
+        _teardown(temp_dir, server)
+
+
+# ---------------------------------------------------------------------------
+# GET /training/jobs/{id}/live and PUT /training/jobs/{id}/cover (#2118)
+# ---------------------------------------------------------------------------
+
+
+def _live_run(server, temp_dir, **overrides):
+    """A run training in a registered source folder, halfway through a preview.
+
+    1,000 of 1,500 steps, previews every 250 at two prompts (one with the
+    trigger word), the second sample of step 1000 being drawn, and a checkpoint
+    kept at 750 and 1000 only (the trainer pruned 250 and 500).
+    """
+    from pixlstash.routes.model_folders import register_model_folder
+    from pixlstash.services.training_service import handle_for_run
+
+    output = os.path.join(temp_dir.name, "aitk-output")
+    os.makedirs(output, exist_ok=True)
+    register_model_folder(server, output, "source")
+    folder = server.vault.hub.fetchone(
+        "SELECT id, path FROM model_folder WHERE kind = 'source'"
+    )
+    config = {
+        "config": {
+            "process": [
+                {
+                    "train": {"steps": 1500},
+                    "sample": {
+                        "sample_every": 250,
+                        "samples": [
+                            {"prompt": "photo of myperson / raincoat, rain"},
+                            {"prompt": "photo of a woman in a raincoat"},
+                        ],
+                    },
+                    "model": {"layer_offloading": False},
+                }
+            ]
+        }
+    }
+    fields = {
+        "status": "running",
+        "step": 1000,
+        "total_steps": 1500,
+        "training_folder": folder["path"],
+        "rendered_config": json.dumps(config),
+        "completed_at": None,
+        "phase_log": json.dumps(
+            [
+                {"phase": "waiting_gpu", "at": "2026-10-26T01:00:00+00:00"},
+                {"phase": "loading", "at": "2026-10-26T01:00:30+00:00"},
+                {"phase": "training", "at": "2026-10-26T01:03:05+00:00"},
+            ]
+        ),
+    }
+    fields.update(overrides)
+    job_id, job_uuid = _seed_job(server, **fields)
+    job = training_runs.get_run(server.vault.hub, server.vault.library_uuid, job_id)
+    handle = handle_for_run(os.path.join(server.vault.image_root, "training"), job)
+    samples = os.path.join(handle.save_root, "samples")
+    os.makedirs(samples)
+    for step in (0, 250, 500, 750):
+        for index in (0, 1):
+            open(
+                os.path.join(samples, f"1700000000000__{step:09d}_{index}.jpg"), "wb"
+            ).close()
+    open(os.path.join(samples, "1700000000000__000001000_0.jpg"), "wb").close()
+    stem = os.path.basename(handle.save_root)
+    for step in (750, 1000):
+        open(
+            os.path.join(handle.save_root, f"{stem}_{step:09d}.safetensors"), "wb"
+        ).close()
+    os.makedirs(os.path.dirname(handle.sqlite_db_path), exist_ok=True)
+    conn = sqlite3.connect(handle.sqlite_db_path)
+    conn.execute("CREATE TABLE Job (id TEXT PRIMARY KEY, info TEXT)")
+    conn.execute("INSERT INTO Job VALUES (?, 'Generating images - 2/2')", (job_uuid,))
+    conn.commit()
+    conn.close()
+    conn = sqlite3.connect(handle.loss_db_path)
+    conn.execute("CREATE TABLE steps (step INTEGER PRIMARY KEY, wall_time REAL)")
+    conn.executemany(
+        "INSERT INTO steps VALUES (?, ?)",
+        [(step, 1_700_000_000.0 + 2.0 * step) for step in range(1, 1001)],
+    )
+    conn.commit()
+    conn.close()
+    return job_id, job_uuid, folder["id"], stem
+
+
+def test_live_view_draws_a_run_from_its_folder_and_its_logs():
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        job_id, _, folder_id, stem = _live_run(server, temp_dir)
+        r = owner.get(f"/training/jobs/{job_id}/live")
+        assert r.status_code == 200, r.text
+        body = r.json()
+
+        assert body["phase"] == "previews"
+        assert body["previews"] == {"drawing": 2, "total": 2}
+        assert body["columns"] == [0, 250, 500, 750, 1000, 1250, 1500]
+        assert body["run_folder"] == {"folder_id": folder_id, "run_name": stem}
+        with_word, without = body["rows"]
+        assert (with_word["with_trigger"], without["with_trigger"]) == (True, False)
+        # A slash in a prompt is not a host path: the prompt comes back whole.
+        assert with_word["prompt"] == "photo of myperson / raincoat, rain"
+        assert [c["state"] for c in with_word["cells"]] == [
+            "sample",
+            "sample",
+            "sample",
+            "sample",
+            "sample",
+            "future",
+            "future",
+        ]
+        assert [c["state"] for c in without["cells"]][4:] == [
+            "drawing",
+            "future",
+            "future",
+        ]
+        assert with_word["cells"][0]["filename"] == "1700000000000__000000000_0.jpg"
+        # Pruned checkpoints cannot cover the run; the last step is its final.
+        assert body["coverable"] == [750, 1000, 1500]
+        assert body["imported"] is False and body["cover_step"] is None
+        assert body["speed"]["seconds_per_step"] == 2.0
+        assert body["speed"]["remaining_low_s"] == 1000.0
+        assert [p["phase"] for p in body["phases"]] == [
+            "waiting_gpu",
+            "loading",
+            "training",
+        ]
+        assert body["phases"][1]["seconds"] == 155.0
+        # Nothing could be measured of the trainer itself: unknown, never 0.
+        assert body["telemetry"]["gpu"]["ours_mb"] is None
+        assert body["telemetry"]["need"] == {"vram_mb": None, "ram_mb": None}
+
+        # Use this step: a kept checkpoint is recorded for the import.
+        r = owner.put(f"/training/jobs/{job_id}/cover", json={"step": 750})
+        assert r.status_code == 200, r.text
+        assert r.json() == {"job_id": job_id, "cover_step": 750, "applied": False}
+        assert owner.get(f"/training/jobs/{job_id}/live").json()["cover_step"] == 750
+        # A pruned one is refused and changes nothing.
+        r = owner.put(f"/training/jobs/{job_id}/cover", json={"step": 250})
+        assert r.status_code == 409, r.text
+        assert owner.get(f"/training/jobs/{job_id}/live").json()["cover_step"] == 750
+        assert (
+            owner.put("/training/jobs/999999/cover", json={"step": 0}).status_code
+            == 404
+        )
+
+        # A failure moving the shelf puts the recorded step back.
+        def broken(job, step):
+            raise RuntimeError("the vault went away")
+
+        server.vault.choose_training_cover = broken
+        r = owner.put(f"/training/jobs/{job_id}/cover", json={"step": 1000})
+        assert r.status_code == 500, r.text
+        assert owner.get(f"/training/jobs/{job_id}/live").json()["cover_step"] == 750
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_live_view_of_a_run_that_finished_while_pixlstash_was_closed():
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        job_id, _, _, _ = _live_run(
+            server,
+            temp_dir,
+            status="completed",
+            step=1500,
+            completed_at="2026-10-26T09:00:00+00:00",
+            finished_unwatched=1,
+        )
+        body = owner.get(f"/training/jobs/{job_id}/live").json()
+        assert body["phase"] is None
+        # The trainer's last logged step, not the moment PixlStash noticed.
+        assert body["finished_while_closed"] == {"at": "2023-11-14T22:46:40+00:00"}
+        assert body["speed"]["remaining_low_s"] is None
+        assert body["telemetry"]["ram"]["total_mb"] is None
+        # Cells the run passed without a picture are missing, not waiting.
+        assert body["rows"][1]["cells"][4]["state"] == "missing"
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_run_that_ended_without_a_finish_time_has_no_growing_last_phase():
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        job_id, _, _, _ = _live_run(server, temp_dir, status="error")
+        phases = owner.get(f"/training/jobs/{job_id}/live").json()["phases"]
+        assert phases[-1] == {"phase": "training", "seconds": None}
+        assert phases[1]["seconds"] == 155.0
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_live_and_cover_refuse_a_read_token():
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        job_id, _ = _seed_job(server)
+        scoped = _scoped_client(server, read_token)
+        assert scoped.get(f"/training/jobs/{job_id}/live").status_code == 403
+        r = scoped.put(f"/training/jobs/{job_id}/cover", json={"step": 3000})
+        assert r.status_code == 403, r.text
+        # The positive control beside each negative: the owner gets through.
+        assert owner.get(f"/training/jobs/{job_id}/live").status_code == 200
+        r = owner.put(f"/training/jobs/{job_id}/cover", json={"step": 3000})
+        assert r.status_code == 200, r.text
     finally:
         _teardown(temp_dir, server)
 

@@ -90,8 +90,20 @@
           @keydown="onTabKeydown"
         >
           Training runs
+          <!-- The attention dot while a run trains or waits for the GPU. -->
+          <span
+            v-if="trainingNow"
+            class="shelf-live-dot"
+            data-testid="shelf-runs-live-dot"
+            aria-hidden="true"
+          ></span>
+          <span v-if="trainingNow" class="visually-hidden">, training now</span>
         </button>
       </div>
+
+      <!-- An open run's status, Stop and back arrow (TrainingRunLive teleports
+           them here): the design puts run status in the shelf's own bar. -->
+      <div v-if="runOpen" id="shelf-run-bar" class="shelf-run-bar"></div>
 
       <!-- The one accented, labelled button in the bar, because it is the only
            thing here with a result behind it. Three ways in, one menu: a
@@ -110,6 +122,7 @@
                the menu's other rows (Add folder, ai-toolkit) stay usable while
                a file copies; only Add file refuses. -->
           <AppBarButton
+            v-show="!runOpen"
             v-bind="withRef(menuProps, (el) => (addBtnRef = el))"
             class="bar-btn--accent shelf-fold-680"
             :icon="adding ? '' : 'plus'"
@@ -188,6 +201,7 @@
            focus moves into the dialog rather than into anything the button
            owns. -->
       <AppBarButton
+        v-show="!runOpen"
         ref="foldersBtnRef"
         class="shelf-fold-680"
         icon="folder-multiple-outline"
@@ -206,7 +220,12 @@
            `align="start"` because the trigger sits near the LEFT edge, and the
            rows are the same `.ctx-item` rows the Add menu already draws - one
            recipe, so the folded form is the unfolded one moved. -->
-      <TbOverflowMenu ref="overflowRef" class="shelf-overflow" align="start">
+      <TbOverflowMenu
+        v-show="!runOpen"
+        ref="overflowRef"
+        class="shelf-overflow"
+        align="start"
+      >
         <template #default="{ close }">
           <button
             class="ctx-item"
@@ -268,11 +287,13 @@
            "8 runs"), so anywhere to their left it shoves Add and Model
            folders sideways every time the tab changes. Here the spacer
            absorbs the difference and nothing moves. -->
-      <span class="shelf-sub shelf-sub--ingap shelf-fold-1262">{{
-        isShelfTab ? countLabel : runsCountLabel
-      }}</span>
+      <span
+        v-if="!runOpen"
+        class="shelf-sub shelf-sub--ingap shelf-fold-1262"
+        >{{ isShelfTab ? countLabel : runsCountLabel }}</span
+      >
 
-      <span class="shelf-spacer"></span>
+      <span v-if="!runOpen" class="shelf-spacer"></span>
 
       <!-- The bar's own cluster gap. `.shelf-toolbar` separates the title from
            its controls at --space-4; the controls separate from each other at
@@ -1827,6 +1848,7 @@ import { useOperationStore } from "../../stores/useOperationStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useSearchStore } from "../../stores/useSearchStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
+import { useTasksStore } from "../../stores/useTasksStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { errorDetail } from "../../utils/apiError";
 import { formatUserDate, formatUserDay } from "../../utils/utils";
@@ -3410,6 +3432,20 @@ const route = useRoute();
 const router = useRouter();
 
 const isShelfTab = computed(() => route.name !== "models-runs");
+
+/** A training run's own page is open on the runs tab (#2118). */
+const runOpen = computed(
+  () =>
+    !isShelfTab.value &&
+    typeof route.query.run === "string" &&
+    route.query.run !== "",
+);
+
+/** An AI Toolkit run holds the card or waits for it: the tab's amber dot. */
+const tasksStore = useTasksStore();
+const trainingNow = computed(() =>
+  (tasksStore.resources?.leases ?? []).some((lease) => lease.tenant === "aitoolkit"),
+);
 
 // Set receipts exist only while this tab shows them: their Undo means nothing
 // on the runs tab or another screen, and a write landing after the reader left
@@ -5481,6 +5517,26 @@ watch(
 
 .shelf-viewseg--on {
   box-shadow: var(--elevation-1);
+}
+
+/* Amber is the attention dot: a run is training or waiting for the GPU. */
+.shelf-live-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-left: var(--space-2);
+  border-radius: var(--radius-pill);
+  background: rgb(var(--v-theme-accent));
+  vertical-align: middle;
+}
+
+/* TrainingRunLive's back arrow, run name, status and Stop. */
+.shelf-run-bar {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-left: var(--space-3);
 }
 
 /* The gap the count sits in is the bar's cluster gap, not a hair. */

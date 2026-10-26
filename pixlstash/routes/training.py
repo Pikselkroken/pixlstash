@@ -18,20 +18,26 @@ import json
 import os
 import re
 import shutil
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
+import psutil
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models import User
 from pixlstash.hub import training_runs
+from pixlstash.hub.db import now_iso
 from pixlstash.pixl_logging import get_logger
+from pixlstash.resources.arbiter import arbiter
+from pixlstash.resources.ledger import ledger
+from pixlstash.resources.ledger import ram as read_ram
 from pixlstash.services.model_folder_scanner import SOURCE_FOLDER_KIND
-from pixlstash.training import ai_toolkit_install, presets, sample_prompts
+from pixlstash.services.training_service import handle_for_run
+from pixlstash.training import ai_toolkit_install, live_view, presets, sample_prompts
 from pixlstash.training.config_render import TunableOverrideError
-from pixlstash.utils.aitoolkit_run import read_output_root
+from pixlstash.utils.aitoolkit_run import read_output_root, read_run
 from pixlstash.utils.path_utils import path_is_within, resolve_path_within
 from pixlstash.utils.service.export_utils import ExportUtils
 from pixlstash.utils.service.user_settings_utils import (
@@ -111,6 +117,104 @@ def _latest_loss(loss_curve) -> float | None:
         except (TypeError, ValueError):
             return None
     return None
+
+
+# Swap traffic between two polls of the live view above this reads as the
+# machine paging to disk.
+_PAGING_BYTES = 32 * 1024 * 1024
+_MB = 1024 * 1024
+# The swap counters (bytes in + out) each run's live view saw last, by job id.
+_swap_seen: dict[int, int] = {}
+
+
+def _process_tree(pid: int | None) -> list:
+    """The trainer process and every child of it, or [] when it is not running."""
+    if not pid:
+        return []
+    try:
+        root = psutil.Process(pid)
+        return [root, *root.children(recursive=True)]
+    except psutil.Error as exc:
+        logger.debug("Trainer process %s cannot be read: %s", pid, exc)
+        return []
+
+
+def _rss_mb(processes: list) -> int | None:
+    """The resident memory of *processes* together, in MB; None if none could be read."""
+    total = 0
+    read = False
+    for process in processes:
+        try:
+            total += process.memory_info().rss
+            read = True
+        except psutil.Error as exc:
+            logger.debug("No memory reading for pid %s: %s", process.pid, exc)
+    return total // _MB if read else None
+
+
+def _paging(job_id: int) -> bool:
+    """Whether the machine moved more than :data:`_PAGING_BYTES` through swap
+    since the last time this run's live view was read."""
+    try:
+        swap = psutil.swap_memory()
+    except Exception as exc:
+        logger.debug("Swap counters cannot be read: %s", exc)
+        return False
+    moved = int(getattr(swap, "sin", 0) or 0) + int(getattr(swap, "sout", 0) or 0)
+    last = _swap_seen.get(job_id)
+    _swap_seen[job_id] = moved
+    return last is not None and moved - last > _PAGING_BYTES
+
+
+def _telemetry(job: dict, lease: dict | None, resolution: dict) -> dict:
+    """The GPU and RAM figures of a run that is waiting or training.
+
+    The card and the machine's RAM are measured as a whole; the run's own share
+    is measured from its process tree (NVML's per-process figure, resident
+    memory) where the platform reports one, and is None where it does not.
+    """
+    gpu = {"total_mb": None, "used_mb": None, "ours_mb": None}
+    ram = {"total_mb": None, "used_mb": None, "ours_mb": None}
+    paging = False
+    if job["status"] in ("queued", "running", "stopping"):
+        tree = (
+            _process_tree(job.get("pid"))
+            if job["status"] in ("running", "stopping")
+            else []
+        )
+        pids = {process.pid for process in tree}
+        device_uuid = (lease or {}).get("device") or ledger().pixlstash_device()
+        reading = ledger().device(device_uuid)
+        if reading is not None and reading.measurable:
+            gpu.update(total_mb=reading.total_mb, used_mb=reading.used_mb)
+            processes = ledger().processes(device_uuid) if pids else {}
+            if processes:
+                gpu["ours_mb"] = sum(processes.get(pid, 0) for pid in pids)
+        memory = read_ram()
+        if memory.get("total_mb"):
+            ram.update(
+                total_mb=memory["total_mb"],
+                used_mb=memory["total_mb"] - memory["available_mb"],
+                ours_mb=_rss_mb(tree),
+            )
+        paging = _paging(job["id"])
+    else:
+        _swap_seen.pop(job["id"], None)
+    return {
+        "gpu": gpu,
+        "ram": ram,
+        "need": {
+            "vram_mb": resolution.get("vram_mb"),
+            "ram_mb": resolution.get("ram_mb"),
+        },
+        "paging": paging,
+    }
+
+
+def _epoch_iso(seconds: float | None) -> str | None:
+    if seconds is None:
+        return None
+    return datetime.fromtimestamp(seconds, tz=timezone.utc).isoformat()
 
 
 def create_router(server) -> APIRouter:
@@ -379,6 +483,52 @@ def create_router(server) -> APIRouter:
             description="Short status/info string (e.g. the final report).",
         )
 
+    class LiveJobResponse(BaseModel):
+        """Everything the Training runs view draws for one run (#2118)."""
+
+        model_config = ConfigDict(extra="allow")
+
+        id: int = Field(..., description="Primary key of the job.")
+        status: str = Field(..., description="Lifecycle status.")
+        phase: Optional[str] = Field(
+            default=None,
+            description=(
+                "waiting_gpu | checking | loading | caching | training | "
+                "previews | saving | importing; null once the run has ended."
+            ),
+        )
+        columns: list[int] = Field(
+            default_factory=list,
+            description="The checkpoint steps, step 0 first, one column each.",
+        )
+        rows: list[dict] = Field(
+            default_factory=list,
+            description=(
+                "One per sample prompt: {index, prompt, with_trigger, cells}, "
+                "each cell {state, filename} in column order."
+            ),
+        )
+
+    class CoverStepRequest(BaseModel):
+        """Body for choosing the step that covers a run."""
+
+        model_config = ConfigDict(extra="forbid")
+
+        step: int = Field(..., ge=0, description="A checkpoint step of the run.")
+
+    class CoverStepResponse(BaseModel):
+        """The step chosen, and whether the shelf already changed."""
+
+        job_id: int = Field(..., description="Primary key of the job.")
+        cover_step: int = Field(..., description="The step that is the cover.")
+        applied: bool = Field(
+            ...,
+            description=(
+                "True when the run is on the shelf and its stack cover and set "
+                "LoRA moved now; false when they move at its import."
+            ),
+        )
+
     class CancelJobResponse(BaseModel):
         """Result of cancelling a job."""
 
@@ -575,8 +725,22 @@ def create_router(server) -> APIRouter:
                 "created_at": job["created_at"],
                 "started_at": job["started_at"],
                 "completed_at": job["completed_at"],
+                "run_name": _run_name(job),
             }
         )
+
+    def _run_name(job: dict) -> str | None:
+        """The run's folder name in the shelf's ai-toolkit folder, or None.
+
+        None before the run has a folder there, and for a run from before the
+        shelf took runs, whose folder is under its work dir.
+        """
+        if not job["training_folder"]:
+            return None
+        handle = handle_for_run(_training_root(), job)
+        if handle.training_folder != job["training_folder"]:
+            return None
+        return os.path.basename(handle.save_root)
 
     def _subject_for(subject, character_id) -> str:
         """The subject asked for; a character's defaults to a person."""
@@ -594,6 +758,218 @@ def create_router(server) -> APIRouter:
             server, set_id=set_id, character_id=character_id
         )
         return sample_prompts.generate(subject, captions, tags, trigger_word)
+
+    def _cover_state(job: dict, run_dir_info) -> dict:
+        """Which steps can cover the run, and which one does.
+
+        On the shelf, the run's own models decide: a stepped model is its step
+        and the bare final the run's last step, and the cover is the stack's
+        position 0. Before that, a stepped checkpoint still on disk can be
+        chosen (the trainer prunes old ones), and so can the last step, which
+        is the final file once it is written.
+        """
+        total = job["total_steps"]
+        models = server.vault.hub.fetchall(
+            "SELECT training_step, stack_position FROM model WHERE training_run_id = ?",
+            (job["id"],),
+        )
+        if models:
+            steps = [
+                row["training_step"] if row["training_step"] is not None else total
+                for row in models
+            ]
+            cover = next(
+                (
+                    step
+                    for row, step in zip(models, steps)
+                    if row["stack_position"] == 0
+                ),
+                None,
+            )
+            return {
+                "imported": True,
+                "coverable": sorted({step for step in steps if step is not None}),
+                "cover_step": cover,
+            }
+        stepped = set()
+        has_final = False
+        if run_dir_info is not None:
+            stepped = {c.step for c in run_dir_info.checkpoints if c.step is not None}
+            has_final = any(c.is_final for c in run_dir_info.checkpoints)
+        alive = job["status"] in ("queued", "running", "stopping", "completed")
+        if total and (has_final or alive):
+            stepped.add(total)
+        chosen = job.get("cover_step")
+        return {
+            "imported": False,
+            "coverable": sorted(stepped),
+            "cover_step": chosen
+            if chosen is not None
+            else (total if has_final else None),
+        }
+
+    def _run_dir(job: dict):
+        """The run's paths, and its folder as read from disk (None before it exists)."""
+        handle = handle_for_run(_training_root(), job)
+        on_disk = None
+        if os.path.isdir(handle.save_root):
+            try:
+                on_disk = read_run(handle.save_root)
+            except OSError as exc:
+                logger.warning(
+                    "Could not read the run folder of job %s: %s", job["uuid"], exc
+                )
+        return handle, on_disk
+
+    def _live_payload(job: dict) -> dict:
+        hub = server.vault.hub
+        config = _parse_json_field(
+            job["rendered_config"], "rendered_config", job["uuid"]
+        )
+        resolution = (
+            _parse_json_field(job["resolved_profile"], "resolved_profile", job["uuid"])
+            or {}
+        )
+        settings = live_view.sample_settings(config)
+        handle, on_disk = _run_dir(job)
+        samples = on_disk.samples if on_disk is not None else []
+        live = job["status"] in ("queued", "running", "stopping")
+        info = (
+            live_view.read_trainer_info(handle.sqlite_db_path, job["uuid"])
+            if live and os.path.exists(handle.sqlite_db_path)
+            else ""
+        )
+        step = int(job["step"] or 0)
+        total = job["total_steps"]
+        phase = live_view.phase_of(job["status"], info, step, job["completed_at"])
+        previews = live_view.preview_progress(info) if phase == "previews" else None
+        deferred = bool(resolution.get("previews_deferred"))
+
+        columns = live_view.checkpoint_columns(
+            total, settings["sample_every"], [s.step for s in samples]
+        )
+        drawing_column = max((c for c in columns if c <= step), default=0)
+        by_cell = {}
+        for sample in sorted(samples, key=lambda s: s.timestamp):
+            by_cell[(sample.step, sample.index)] = sample.filename
+        rows = live_view.prompt_rows(settings["prompts"], job["trigger_word"])
+        if not rows:
+            rows = [
+                {"index": index, "prompt": "", "with_trigger": None}
+                for index in sorted({s.index for s in samples})
+            ]
+        for row in rows:
+            row["cells"] = [
+                {
+                    "state": live_view.cell_state(
+                        column=column,
+                        index=row["index"],
+                        has_sample=(column, row["index"]) in by_cell,
+                        phase=phase,
+                        step=step,
+                        drawing_column=drawing_column,
+                        previews=previews,
+                        previews_deferred=deferred,
+                    ),
+                    "filename": by_cell.get((column, row["index"])),
+                }
+                for column in columns
+            ]
+
+        folder_id = None
+        if job["training_folder"] and handle.training_folder == job["training_folder"]:
+            folder = hub.fetchone(
+                "SELECT id FROM model_folder WHERE kind = ? AND path = ?",
+                (SOURCE_FOLDER_KIND, job["training_folder"]),
+            )
+            folder_id = folder["id"] if folder is not None else None
+
+        lease = None
+        try:
+            lease = next(
+                (
+                    row
+                    for row in arbiter().snapshot()["leases"]
+                    if row.get("job_id") == job["uuid"]
+                ),
+                None,
+            )
+        except Exception as exc:
+            logger.warning("Could not read the leases for job %s: %s", job["uuid"], exc)
+        waiting = None
+        if lease is not None and lease.get("state") == "waiting":
+            reason = lease.get("waiting_reason") or {}
+            waiting = {"code": reason.get("code"), "text": reason.get("text")}
+
+        step_times = (
+            live_view.read_step_times(handle.loss_db_path)
+            if os.path.exists(handle.loss_db_path)
+            else []
+        )
+        pace = live_view.speed(step_times, total)
+        if not live:
+            pace["remaining_low_s"] = pace["remaining_high_s"] = None
+
+        log = live_view.parse_phase_log(job.get("phase_log"))
+        # A run that ended without a completed_at (an error before launch, a
+        # queued run cancelled) has no end to its last phase: unknown, rather
+        # than a duration that grows on every read.
+        until = job["completed_at"] or (
+            now_iso() if live or job["status"] == "completed" else None
+        )
+        unwatched = bool(job.get("finished_unwatched")) and job["status"] == "completed"
+        return {
+            "id": job["id"],
+            "uuid": job["uuid"],
+            "name": job["name"],
+            "status": job["status"],
+            "phase": phase,
+            "previews": previews,
+            "previews_deferred": deferred,
+            "step": step,
+            "total_steps": total,
+            "set_id": job["set_id"],
+            "character_id": job["character_id"],
+            "trigger_word": job["trigger_word"],
+            "phases": live_view.phase_durations(log, until),
+            "columns": columns,
+            "rows": rows,
+            "run_folder": (
+                {"folder_id": folder_id, "run_name": _run_name(job)}
+                if folder_id is not None
+                else None
+            ),
+            **_cover_state(job, on_disk),
+            "loss_curve": _parse_json_field(
+                job["loss_curve"], "loss_curve", job["uuid"]
+            )
+            or [],
+            "dataset_picture_ids": _parse_json_field(
+                job["dataset_picture_ids"], "dataset_picture_ids", job["uuid"]
+            )
+            or [],
+            "streamed": (
+                {"percent": settings["offload_percent"]}
+                if settings["layer_offloading"]
+                else None
+            ),
+            "speed": {
+                "seconds_per_step": pace["seconds_per_step"],
+                "remaining_low_s": pace["remaining_low_s"],
+                "remaining_high_s": pace["remaining_high_s"],
+            },
+            "telemetry": _telemetry(job, lease, resolution),
+            "waiting": waiting,
+            "finished_while_closed": (
+                {"at": _epoch_iso(pace["last_step_at"]) or job["completed_at"]}
+                if unwatched
+                else None
+            ),
+            "error": job["error"],
+            "created_at": job["created_at"],
+            "started_at": job["started_at"],
+            "completed_at": job["completed_at"],
+        }
 
     # ── Training jobs ─────────────────────────────────────────────────────
 
@@ -841,6 +1217,91 @@ def create_router(server) -> APIRouter:
                 "info": job["report"] or job["error"],
             }
         )
+
+    @router.get(
+        "/training/jobs/{job_id}/live",
+        summary="Watch a training job",
+        response_model=LiveJobResponse,
+        description=(
+            "Everything the Training runs view draws for one job, read fresh on "
+            "every call: its phase, its checkpoint columns and sample prompts "
+            "with the preview that fills each cell, the loss curve, the "
+            "steps that can cover it and the one that does, seconds per update "
+            "and the time left from the trainer's own step log, and the GPU and "
+            "RAM figures while it waits or trains. A figure that cannot be "
+            "read is null, never 0. Owner-only."
+        ),
+    )
+    def get_training_job_live(job_id: int, request: Request):
+        _ensure_secure(request)
+        hub, library_uuid = _store()
+        job = training_runs.get_run(hub, library_uuid, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Training job not found")
+        payload = _live_payload(job)
+        # The prompts are the owner's own text, and the path pattern reads
+        # "sunset / beach" as a path; they carry no host path, so they pass
+        # through as written.
+        rows = payload.pop("rows")
+        return {**_redact_host_paths(payload), "rows": rows}
+
+    @router.put(
+        "/training/jobs/{job_id}/cover",
+        summary="Choose the step that covers a training job",
+        response_model=CoverStepResponse,
+        description=(
+            "Makes one checkpoint the run's stack cover, so the LoRA attached "
+            "to its set or character is that step rather than the last. On a "
+            "run already on the shelf the stack and the attachment move now; "
+            "before that the step is recorded and applied when the run lands. "
+            "Returns 404 for an unknown job and 409 for a step the run kept no "
+            "checkpoint at. Owner-only."
+        ),
+    )
+    def set_training_job_cover(
+        job_id: int, payload: CoverStepRequest, request: Request
+    ):
+        _ensure_secure(request)
+        hub, library_uuid = _store()
+        job = training_runs.get_run(hub, library_uuid, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Training job not found")
+        _, on_disk = _run_dir(job)
+        if payload.step not in _cover_state(job, on_disk)["coverable"]:
+            raise HTTPException(
+                status_code=409,
+                detail=f"No checkpoint of this run is kept at step {payload.step}.",
+            )
+        # Recorded before the shelf is looked at: an import that reads the row
+        # after this applies it, and one that read it earlier has already
+        # committed its models, which the call below then finds and moves.
+        previous = job.get("cover_step")
+        training_runs.update_run(hub, job["uuid"], cover_step=payload.step)
+        try:
+            applied = server.vault.choose_training_cover(job, payload.step)
+        except LookupError as exc:
+            training_runs.update_run(hub, job["uuid"], cover_step=previous)
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except Exception as exc:
+            # The stack cover lives in the hub and the attachment in the vault,
+            # so a failure between them cannot be rolled back as one; the
+            # recorded step goes back and the failure is logged in full.
+            training_runs.update_run(hub, job["uuid"], cover_step=previous)
+            logger.exception(
+                "Training job id=%s: step %s could not be made the cover.",
+                job_id,
+                payload.step,
+            )
+            raise HTTPException(
+                status_code=500, detail="Could not make that step the cover."
+            ) from exc
+        logger.info(
+            "Training job id=%s: step %s chosen as the cover (applied=%s).",
+            job_id,
+            payload.step,
+            applied,
+        )
+        return {"job_id": job_id, "cover_step": payload.step, "applied": applied}
 
     @router.post(
         "/training/jobs/{job_id}/cancel",

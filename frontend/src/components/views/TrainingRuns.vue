@@ -1,5 +1,20 @@
 <template>
-  <div class="tr">
+  <!-- A run PixlStash trains opens its own page inside the tab; the toolbar's
+       back arrow returns here. The Tasks tab's AI Toolkit row and the tab's
+       amber dot lead to it through `?run=<uuid>`. -->
+  <TrainingRunLive v-if="openJob" :job-id="openJob.id" @close="closeRun" />
+  <p v-else-if="openUuid" class="tr-note tr-note--pad" role="status">
+    <template v-if="jobsFailed">
+      Could not read the training runs.
+      <AppButton size="sm" variant="secondary" @click="closeRun">All runs</AppButton>
+    </template>
+    <template v-else-if="jobsLoaded">
+      That training run is not in this library.
+      <AppButton size="sm" variant="secondary" @click="closeRun">All runs</AppButton>
+    </template>
+    <template v-else>Reading the run…</template>
+  </p>
+  <div v-else class="tr">
     <!-- No title, no subtitle, no brand mark. This is the shelf's second view
          and the shelf's toolbar already names it; a second heading here made
          two headers, two type scales for one rank, and put a vendor logo on one
@@ -23,6 +38,28 @@
         aria-label="Reload the training runs"
         @click="reload"
       />
+    </div>
+
+    <!-- Runs PixlStash is training that have no folder yet (queued, setting
+         up): a card each, so a run is on this tab from the moment it is asked
+         for. Opening one is the only thing to do with it. -->
+    <div v-if="pendingJobs.length" class="tr-grid tr-grid--jobs" aria-label="Training now">
+      <button
+        v-for="job in pendingJobs"
+        :key="job.uuid"
+        type="button"
+        class="tr-card tr-card--job"
+        @click="openRun(job)"
+      >
+        <div class="tr-card-preview tr-card-preview--none">
+          <v-icon size="18" class="mdi-spin">mdi-loading</v-icon>
+          <span>{{ jobStatus(job) }}</span>
+        </div>
+        <div class="tr-card-body">
+          <span class="tr-card-name">{{ job.name }}</span>
+          <span class="tr-card-meta"><span>{{ job.base_model }}</span></span>
+        </div>
+      </button>
     </div>
 
     <p v-if="!source" class="tr-note" role="status">
@@ -73,9 +110,9 @@
         :aria-selected="isChosen(run)"
         :tabindex="index === cursor ? 0 : -1"
         :data-run-index="index"
-        @click="toggle(run)"
+        @click="jobOf(run) ? openRun(jobOf(run)) : toggle(run)"
         @focus="cursor = index"
-        @keydown.enter.prevent="toggle(run)"
+        @keydown.enter.prevent="jobOf(run) ? openRun(jobOf(run)) : toggle(run)"
         @keydown.space.prevent="toggle(run)"
       >
         <div class="tr-card-shot">
@@ -99,13 +136,27 @@
                is in"; a disc per card is what makes "seven of them are in"
                readable at a glance. Hidden by opacity and never by `v-if`, so
                the target does not pop into existence under the pointer. -->
-          <span class="tr-card-check" aria-hidden="true">
+          <!-- A run PixlStash trained opens on a click, so its disc is the
+               way to tick it (Space does it too); elsewhere the whole card
+               ticks and the disc only shows it. -->
+          <span
+            class="tr-card-check"
+            :aria-hidden="jobOf(run) ? undefined : 'true'"
+            :role="jobOf(run) ? 'checkbox' : undefined"
+            :aria-checked="jobOf(run) ? isChosen(run) : undefined"
+            :aria-label="jobOf(run) ? `Select ${run.name}` : undefined"
+            @click="jobOf(run) && ($event.stopPropagation(), toggle(run))"
+          >
             <v-icon v-if="isChosen(run)" size="16">mdi-check</v-icon>
           </span>
         </div>
 
         <div class="tr-card-body">
           <span class="tr-card-name">{{ run.name }}</span>
+          <span v-if="jobOf(run)" class="tr-card-live">
+            <span v-if="isTraining(jobOf(run))" class="tr-live-dot" aria-hidden="true"></span>
+            {{ jobStatus(jobOf(run)) }}
+          </span>
           <span class="tr-card-meta">
             <span>{{ stepCount(run) }}</span>
             <span>{{ run.base_model || "Base model not recorded" }}</span>
@@ -335,11 +386,15 @@ import {
 } from "vue";
 import { VIcon, VMenu } from "vuetify/components";
 
+import { useRoute, useRouter } from "vue-router";
+
 import AiToolkitIcon from "../widgets/AiToolkitIcon.vue";
+import TrainingRunLive from "./TrainingRunLive.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import { importRun, listRuns, runSampleUrl } from "../../api/modelImports";
+import { listTrainingJobs } from "../../api/training";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
@@ -365,6 +420,81 @@ const error = ref("");
 const countMenuOpen = ref(false);
 const stepMenuOpen = ref(false);
 const destMenuOpen = ref(false);
+
+// ── The runs PixlStash trains ───────────────────────────────────────────────
+
+const route = useRoute();
+const router = useRouter();
+const jobs = ref([]);
+const jobsLoaded = ref(false);
+const LIVE_STATUSES = ["queued", "running", "stopping"];
+
+const openUuid = computed(() =>
+  typeof route.query.run === "string" ? route.query.run : "",
+);
+/** The job list could not be read, so "not in this library" is not known. */
+const jobsFailed = ref(false);
+const openJob = computed(
+  () => jobs.value.find((job) => job.uuid === openUuid.value) ?? null,
+);
+
+/** The job that trained a folder run, matched on the folder's name. */
+function jobOf(run) {
+  return jobs.value.find((job) => job.run_name && job.run_name === run.name) ?? null;
+}
+
+/** Live jobs with no folder card yet. */
+const pendingJobs = computed(() => {
+  const names = new Set(runs.value.map((run) => run.name));
+  return jobs.value.filter(
+    (job) => LIVE_STATUSES.includes(job.status) && !names.has(job.run_name),
+  );
+});
+
+function isTraining(job) {
+  return LIVE_STATUSES.includes(job.status);
+}
+
+function jobStatus(job) {
+  switch (job.status) {
+    case "queued":
+      return "Waiting for the GPU";
+    case "running":
+      return job.total_steps
+        ? `Training ${job.step.toLocaleString()} / ${job.total_steps.toLocaleString()}`
+        : "Setting up";
+    case "stopping":
+      return "Stopping";
+    case "stopped":
+      return `Stopped at step ${job.step.toLocaleString()}`;
+    case "error":
+      return "Failed";
+    default:
+      return "Trained by PixlStash";
+  }
+}
+
+function openRun(job) {
+  router.push({ name: "models-runs", query: { run: job.uuid } });
+}
+
+function closeRun() {
+  router.push({ name: "models-runs" });
+}
+
+async function loadJobs() {
+  try {
+    jobs.value = await listTrainingJobs();
+    jobsFailed.value = false;
+  } catch (err) {
+    // The grid still lists the folder's runs; only the live pages are lost.
+    console.warn("Could not list the training jobs:", err);
+    jobs.value = [];
+    jobsFailed.value = true;
+  } finally {
+    jobsLoaded.value = true;
+  }
+}
 
 /** The registered ai-toolkit output root. One, by the store's own rule. */
 const source = computed(() => folders.sourceFolder);
@@ -620,6 +750,7 @@ async function loadRuns() {
 /** The button, and the auto-reload, are the same act. */
 function reload() {
   loadRuns();
+  loadJobs();
 }
 
 /**
@@ -664,7 +795,7 @@ watch(
  * not promise.
  */
 function onVisible() {
-  if (document.visibilityState === "visible") loadRuns();
+  if (document.visibilityState === "visible") reload();
 }
 
 /**
@@ -695,9 +826,15 @@ watch(
   { immediate: true },
 );
 
+// Back from a run page: what it trained may have landed meanwhile.
+watch(openUuid, (uuid) => {
+  if (!uuid) reload();
+});
+
 onMounted(() => {
   if (!folders.loaded) folders.refresh();
   loadRuns();
+  loadJobs();
   document.addEventListener("visibilitychange", onVisible);
   window.addEventListener("focus", onVisible);
 });
@@ -801,6 +938,41 @@ function batchReceipt(imported, failed) {
   min-height: 0;
   padding: var(--space-3) var(--space-3) 56px;
   gap: var(--space-3);
+}
+
+.tr-note--pad {
+  padding: var(--space-5);
+}
+
+.tr-grid--jobs {
+  flex: none;
+  overflow: visible;
+}
+
+/* A queued run's card: a button, because opening it is all it does. */
+.tr-card--job {
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.tr-card-live {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: rgb(var(--v-theme-on-background));
+}
+
+/* The attention dot: amber, while the run trains. */
+.tr-live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: rgb(var(--v-theme-accent));
 }
 
 .tr-meta {
