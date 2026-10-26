@@ -46,7 +46,7 @@ from pixlstash.resources.ledger import ram as read_ram
 from pixlstash.services.model_folder_scanner import SOURCE_FOLDER_KIND
 from pixlstash.training import ai_toolkit_install, live_view, measurements, presets
 from pixlstash.training.backend import TrainerBackend, TrainingProgress, TrainingSpec
-from pixlstash.training.config_render import TunableOverrideError, deep_merge
+from pixlstash.training.config_render import deep_merge
 from pixlstash.training.local_ai_toolkit import LocalAiToolkit
 
 logger = get_logger(__name__)
@@ -245,6 +245,8 @@ class TrainingService:
         # Leases granted at start-up to runs that outlived the restart, by job
         # uuid, until reconcile_on_startup resumes watching them.
         self._adopted: dict[str, Lease] = {}
+        # Runs whose remaining after-training previews were cancelled.
+        self._skip_previews: set[str] = set()
 
         # Per-job work dirs (job.db, the rendered config, the pending sidecar).
         # The run itself lives in the shelf's source folder, the dataset under
@@ -444,6 +446,15 @@ class TrainingService:
             logger.warning("cancel: no training job with id=%s", job_id)
             return False
 
+        with self._active_lock:
+            drawing = self._active_job_uuid == info["uuid"]
+        if info["status"] == "completed" and not info["completed_at"] and drawing:
+            # Trained, and drawing its deferred previews: stop those and
+            # import the run as it is.
+            self._skip_previews.add(info["uuid"])
+            logger.info("cancel: job %s skips its remaining previews.", info["uuid"])
+            return True
+
         if info["status"] in _TERMINAL_JOB_STATUSES:
             logger.info(
                 "cancel: job %s already terminal (%s); nothing to do.",
@@ -559,6 +570,16 @@ class TrainingService:
                 logger.exception(
                     "reconcile_on_startup: failed to reconcile job %s", info["uuid"]
                 )
+        # A lease adopted for a run the reconcile could not take over would keep
+        # the card exclusive until the next restart.
+        for job_uuid, lease in list(self._adopted.items()):
+            logger.warning(
+                "reconcile_on_startup: releasing the lease adopted for job %s, "
+                "which could not be re-attached.",
+                job_uuid,
+            )
+            lease.release()
+        self._adopted.clear()
 
     def _reconcile_one(self, info: dict) -> None:
         """Reconcile a single unfinished job (alive → re-attach, dead → finish).
@@ -619,7 +640,9 @@ class TrainingService:
         if adopted is not None:
             adopted.release()
         logger.info("reconcile: job %s is dead; finalizing from disk.", info["uuid"])
-        self._update_job(info["uuid"], finished_unwatched=1)
+        if info["status"] != "completed":
+            # A completed run left unimported was watched to its end.
+            self._update_job(info["uuid"], finished_unwatched=1)
         progress = backend.reconcile(handle)
         self._finalize(backend, handle, info, progress)
 
@@ -642,8 +665,8 @@ class TrainingService:
             progress = self._poll_until_done(
                 backend, handle, info["uuid"], lease, watch
             )
-            self._after_training(backend, handle, info, progress, lease, watch)
-            self._finalize(backend, handle, info, progress)
+            if self._after_training(backend, handle, info, progress, lease, watch):
+                self._finalize(backend, handle, info, progress)
         except Exception:
             logger.exception("Re-attached job %s failed during polling", info["uuid"])
             self._update_job(
@@ -770,8 +793,8 @@ class TrainingService:
                 training_folder=training_folder,
                 watch=watch,
             )
-            self._after_training(backend, handle, info, progress, lease, watch)
-            self._finalize(backend, handle, info, progress)
+            if self._after_training(backend, handle, info, progress, lease, watch):
+                self._finalize(backend, handle, info, progress)
         except Exception:
             logger.exception("Job %s failed during training", job_uuid)
             self._update_job(job_uuid, status="error", error="Training run failed")
@@ -1058,8 +1081,8 @@ class TrainingService:
         """
         job_uuid = info["uuid"]
         resolution = self._resolution(job_uuid)
-        if not resolution.get("probe"):
-            return True
+        if "probe" not in resolution:
+            return True  # resolved without measurements
         preset_id = str(resolution.get("preset") or "").split("@")[0]
         preset = presets.get_preset(preset_id)
         if preset is None:
@@ -1078,13 +1101,15 @@ class TrainingService:
         lookup = measurements.make_lookup(
             self._hub, preset, commit=commit, device=self._device_name(lease.device)
         )
-        self._note_phase(job_uuid, "checking")
+        # Resolved again at launch even when it was measured at enqueue: the
+        # checkout or the card may have changed since, which is a new setup.
         names = [resolution["profile"], *(resolution.get("fallbacks") or [])]
         reason = None
         for name in names[:MAX_PROBES]:
             try:
                 settled = self._reresolve(info, resolution, preset, lookup, name)
                 if settled["probe"]:
+                    self._note_phase(job_uuid, "checking")
                     outcome, reason = self._probe_once(
                         backend, info, work_dir, manifest, lease, settled
                     )
@@ -1107,8 +1132,8 @@ class TrainingService:
             return True
         self._fail(
             job_uuid,
-            "Not enough GPU memory: checking memory and speed ran out of memory "
-            "with every way this recipe has of fitting the GPU"
+            "Not enough GPU memory: none of this recipe's ways of fitting the GPU "
+            "held while checking memory and speed"
             + (f" ({reason})" if reason else "")
             + ".",
         )
@@ -1143,7 +1168,9 @@ class TrainingService:
                 lookup=lookup,
                 profile=profile,
             )
-        except (KeyError, TypeError, TunableOverrideError) as exc:
+        except presets.NoProfileFits:
+            raise
+        except (KeyError, TypeError, ValueError) as exc:
             raise presets.NoProfileFits(
                 f"the run could not be resolved again: {exc}", "profile", 0, 0
             ) from exc
@@ -1321,18 +1348,29 @@ class TrainingService:
         progress: TrainingProgress,
         lease: Lease,
         watch: _Watch,
-    ) -> None:
+    ) -> bool:
         """What a finished run leaves before it is imported.
 
         Its measurement is recorded for the next run of the same setup, and
         a run whose previews were deferred has each kept checkpoint sampled.
+
+        Returns:
+            False when a shutdown stopped the previews: the run is left
+            completed and unimported, and the next start's reconcile imports
+            it. True to import now.
         """
         if self._stop.is_set() or progress.status != "completed":
-            return
+            return True
         resolution = self._resolution(info["uuid"])
         self._record_run(info["uuid"], handle, progress, lease, watch, resolution)
         if resolution.get("previews_deferred") and progress.final_checkpoint:
-            self._sample_after_training(backend, handle, info, progress, lease)
+            try:
+                return self._sample_after_training(
+                    backend, handle, info, progress, lease
+                )
+            finally:
+                self._skip_previews.discard(info["uuid"])
+        return True
 
     def _record_run(
         self,
@@ -1380,22 +1418,38 @@ class TrainingService:
         info: dict,
         progress: TrainingProgress,
         lease: Lease,
-    ) -> None:
+    ) -> bool:
         """Draw the previews of a run that trained without them.
 
         Each kept checkpoint is loaded on its own (ai-toolkit samples a
         pretrained LoRA at a given step without training), and the pictures
         are moved into the run's ``samples/`` under that step. A pass that
-        fails is logged and skipped: the run itself is done.
+        fails is logged and skipped: the run itself is done. A cancel stops the
+        passes and the run is imported as it is.
+
+        Returns:
+            False when a shutdown stopped them, else True.
         """
         job_uuid = info["uuid"]
         pending = self._load_pending_spec(job_uuid)
         run = training_runs.get_run_by_uuid(self._hub, job_uuid) or {}
         self._note_phase(job_uuid, "previews")
+
+        def stop() -> str | None:
+            if self._stop.is_set():
+                return "shutdown"
+            return "cancelled" if job_uuid in self._skip_previews else None
+
         checkpoints = [*progress.checkpoints, progress.final_checkpoint]
+        drawn: set[int] = set()
         for path in checkpoints:
             match = _CHECKPOINT_STEP_RE.search(os.path.basename(path))
             step = int(match.group(1)) if match else int(progress.step)
+            if step in drawn:
+                continue  # the final can share its step with the last save
+            drawn.add(step)
+            if stop() is not None:
+                break
             pass_dir = os.path.join(handle.work_dir, "after", str(step))
             self._remove_tree(pass_dir)
             process = {
@@ -1424,16 +1478,11 @@ class TrainingService:
             try:
                 pass_handle = backend.prepare(spec)
                 backend.submit(pass_handle, spec)
-                ended, stop = self._watch_pass(
-                    backend,
-                    pass_handle,
-                    lease,
-                    _Watch(),
-                    "previews",
-                    lambda: "shutdown" if self._stop.is_set() else None,
+                ended, stopped = self._watch_pass(
+                    backend, pass_handle, lease, _Watch(), "previews", stop
                 )
-                if stop is not None:
-                    return
+                if stopped is not None:
+                    break
                 if ended.status != "completed":
                     logger.warning(
                         "Job %s: previews of step %s failed: %s",
@@ -1449,7 +1498,15 @@ class TrainingService:
                 )
             finally:
                 self._remove_tree(pass_dir)
+        if stop() == "shutdown":
+            logger.info(
+                "Job %s: previews stopped by shutdown; it is imported on the next "
+                "start.",
+                job_uuid,
+            )
+            return False
         self._note_phase(job_uuid, "importing")
+        return True
 
     @staticmethod
     def _move_samples(from_root: str, to_root: str) -> None:

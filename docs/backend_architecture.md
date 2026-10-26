@@ -11559,9 +11559,10 @@ estimate.
 **The fingerprint** (`training/measurements.py`, `fingerprint`) names a setup:
 the recipe's locked keys (model and adapter revisions), the ai-toolkit commit,
 the card's name, the quantizer (`model.quantize`, `qtype`, the text encoder's),
-the offload settings and fractions, the largest bucket, the rank, the effective
-batch (batch size times gradient accumulation), caption caching and the preview
-policy (size and sampler steps). Nothing that does not move the peak or the
+the offload settings and fractions, the largest bucket, the rank (and conv rank),
+the optimizer, whether the text encoder trains, the effective batch (batch size
+times gradient accumulation), caption caching and the preview policy (size and
+sampler steps). Nothing that does not move the peak or the
 speed is in it (learning rate, steps, trigger word), and nor is whether previews
 are deferred, which is decided *from* the measurement.
 
@@ -11580,7 +11581,8 @@ need is its highest peak outside previews ×1.1 (`NEED_MARGIN`, as for a learned
 ComfyUI need), and its evidence becomes `measured`; previews are admitted
 apart, on the previews phase's peak. A profile whose training fits but whose
 previews do not is picked with `previews_deferred` and
-`train.disable_sampling` (source `gpu`). The result also carries `fingerprint`,
+`train.disable_sampling` (source `gpu`); a pinned `train.disable_sampling`
+decides either way. The result also carries `fingerprint`,
 `probe` (the picked profile was never measured), `fallbacks` (the profiles after
 it in the fit choice, each offloading more) and `estimate` (`{seconds, basis}`:
 setup, steps at the warm speed and every preview picture, plus a model load per
@@ -11588,8 +11590,11 @@ checkpoint when previews are deferred; basis `measured`, or `none` with no
 seconds). `POST /training/resolve` and `POST /training/jobs` both pass the
 lookup, tied to the saved checkout's commit and PixlStash's card.
 
-**The probe.** A queued run whose resolution says `probe` is checked once its
-lease is granted, before it trains (`TrainingService._check_memory_and_speed`),
+**The probe.** Once its lease is granted, a run resolved with measurements is
+resolved again on its profile at launch, against the checkout and card it now
+has (`TrainingService._check_memory_and_speed`): a setup measured since it was
+queued is not probed, and a changed commit or card is a new setup. One that
+has not been measured is checked before it trains,
 and stays `queued` meanwhile: the live view shows "Checking memory and speed"
 from the lease, and a cancel or a shutdown simply stops the probe. The probe is
 the run's own config with `PROBE_STEPS` (6) updates at the largest bucket only,
@@ -11598,7 +11603,9 @@ no "before" sample, one save and one round of previews at the end, written under
 falls below `RAM_GUARD_MB` (1 GB), which fails the run as "Not enough system
 RAM to start". **The search is bounded** (`MAX_PROBES`, 3): running out of
 memory (ai-toolkit's `out of memory`, `OutOfMemoryError` or its `OOM during
-training step`) steps to the next fallback; any other failure (a loader error,
+training step`, which it prints when it skips a batch and carries on, so a probe
+that completed with a skipped batch counts as out of memory too) steps to the
+next fallback; any other failure (a loader error,
 a Triton error) fails the run without trying more; a fallback that does not fit
 the room the run was resolved against is skipped. A probe that completes is
 recorded (`source` `probe`), the run is resolved again on that profile alone
@@ -11620,8 +11627,13 @@ own, before the import: the run's config with
 `network.pretrained_lora_path` at the checkpoint and `train.start_step` =
 `train.steps` = its step, so ai-toolkit loads the LoRA, trains nothing and
 samples once at that step. The pictures move into the run's `samples/`, where
-the live view and the importer read them. A pass that fails is logged and
-skipped. `ponytail:` each pass loads the model again; one pass that swaps
+the live view and the importer read them, and a step is sampled once (the
+final shares its step with the last save). A pass that fails is logged and
+skipped. Cancel stops the passes and imports the run as it is. A shutdown stops
+them and leaves the run completed with no `completed_at`, which
+`training_runs.unfinished_runs` returns, so the next start's reconcile imports
+it (without the previews still to draw); the same covers a restart during any
+import. `ponytail:` each pass loads the model again; one pass that swaps
 LoRAs would need ai-toolkit's generate job, if the time matters.
 
 **The AI-toolkit tenant.** `resources/aitoolkit_tenant.py` is the arbiter's

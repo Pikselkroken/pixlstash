@@ -163,11 +163,17 @@ def next_queued_run(hub: HubDatabase, library_uuid: str) -> Optional[dict]:
 
 
 def unfinished_runs(hub: HubDatabase, library_uuid: str) -> list[dict]:
-    """The library's runs left running or stopping, for the startup reconcile."""
+    """The library's runs left running or stopping, for the startup reconcile.
+
+    A run that completed but was never imported (``completed_at`` unset: the
+    restart came while its previews were drawn or it was imported) is one too,
+    so the reconcile imports it.
+    """
     marks = ", ".join("?" for _ in UNFINISHED_STATUSES)
     rows = hub.fetchall(
         "SELECT * FROM training_run WHERE library_uuid = ? "
-        f"AND status IN ({marks}) ORDER BY created_at, id",
+        f"AND (status IN ({marks}) OR (status = 'completed' "
+        "AND completed_at IS NULL)) ORDER BY created_at, id",
         (library_uuid, *UNFINISHED_STATUSES),
     )
     return [dict(row) for row in rows]

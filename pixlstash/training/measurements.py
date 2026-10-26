@@ -8,7 +8,8 @@ memory a run peaks at or the time an update takes, and nothing that does not
 
 - :func:`fingerprint` hashes the model and adapter revisions (the recipe's
   locked keys), the ai-toolkit commit, the card, the quantizer, the offload
-  fractions, the largest bucket, the rank, the effective batch, caption caching
+  fractions, the largest bucket, the rank, the optimizer, whether the text
+  encoder trains, the effective batch, caption caching
   and the preview policy (its size and sampler steps; whether previews are
   deferred is a decision made *from* the measurement, so it is not part of it).
 - :func:`note_peak` keeps the highest GPU and RAM figure seen per phase while a
@@ -49,6 +50,9 @@ FINGERPRINT_KEYS = (
     "model.layer_offloading_transformer_percent",
     "model.layer_offloading_text_encoder_percent",
     "network.linear",
+    "network.conv",
+    "train.optimizer",
+    "train.train_text_encoder",
     "train.batch_size",
     "train.gradient_accumulation",
     "train.cache_text_embeddings",
@@ -287,14 +291,14 @@ def process_tree(pid: int | None) -> list:
 def rss_mb(processes: list) -> int | None:
     """The resident memory of *processes* together; None if none could be read."""
     total = 0
-    read = False
+    any_read = False
     for process in processes:
         try:
             total += process.memory_info().rss
-            read = True
+            any_read = True
         except psutil.Error as exc:
             logger.debug("No memory reading for pid %s: %s", process.pid, exc)
-    return total // _MB if read else None
+    return total // _MB if any_read else None
 
 
 def gpu_mb(pids: set[int], device: str | None) -> int | None:

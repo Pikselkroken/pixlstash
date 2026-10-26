@@ -76,6 +76,7 @@ const KEY_LABELS = {
   "train.timestep_type": "Timestep type",
   "train.content_or_style": "Content or style",
   "train.cache_text_embeddings": "Encode captions once",
+  "train.disable_sampling": "Previews after training",
   "train.gradient_accumulation": "Gradient accumulation",
   "train.train_text_encoder": "Train the text encoder",
   "model.qtype": "Model quantisation",

@@ -1488,8 +1488,9 @@ def test_deferred_previews_are_drawn_from_each_checkpoint_after_training(
     row = _run_to_end(hub, service, job)
 
     assert row.status == "completed", row.error
-    # The run, then one pass per checkpoint: steps 2 and 4 and the final.
-    assert watched() == ["steps=4", "steps=2", "steps=4", "steps=4"]
+    # The run, then one pass per checkpoint step: 2, and 4 once (the final
+    # shares its step with the last save).
+    assert watched() == ["steps=4", "steps=2", "steps=4"]
     run_dir = importer.calls[0][0]
     assert sorted(os.listdir(os.path.join(run_dir, "samples"))) == [
         "sample_000000002_0.jpg",
@@ -1637,3 +1638,90 @@ def test_a_live_run_is_adopted_at_start_up_and_reconciled_on_that_lease(hub, rep
     assert _poll_until(lambda: _job_status(hub, job["uuid"]).status == "stopped")
     assert asked.acquire_count == 0
     assert _poll_until(lambda: adopted.release_count == 1)
+
+
+def test_a_run_trained_but_not_imported_before_a_restart_is_imported(hub, repo_dir):
+    """A restart while a finished run draws its previews (or is imported) leaves
+    it completed with no completed_at; the next start's reconcile imports it."""
+    final = os.path.join(repo_dir, "output", "run", "run.safetensors")
+    importer = _RecordingImport()
+
+    class _Backend:
+        def handle_for(self, work_dir, job_id, name, pid, training_folder=None):
+            return LocalAiToolkit.handle_for(
+                work_dir, job_id, name, pid, training_folder=training_folder
+            )
+
+        def is_alive(self, handle):
+            return False
+
+        def reconcile(self, handle):
+            return TrainingProgress(
+                status="completed",
+                info="Training completed",
+                step=4,
+                total_steps=4,
+                speed="",
+                final_checkpoint=final,
+            )
+
+    service = TrainingService(
+        hub,
+        _LIBRARY_UUID,
+        os.path.dirname(hub.path),
+        request_gpu=_StubLease().request,
+        import_run=importer,
+        notify=_CapturingNotify(),
+        config_provider=lambda: {"repo_path": repo_dir, "python": sys.executable},
+        dataset_builder=_make_dataset_builder(),
+        backend_factory=lambda repo_path, python: _Backend(),
+    )
+    job = service.enqueue(
+        set_id=_SET_ID,
+        name="trained",
+        base_model="m",
+        trigger_word="t",
+        template_path="unused.json",
+        resolution=_RESOLUTION,
+    )
+    training_runs.update_run(
+        hub,
+        job["uuid"],
+        status="completed",
+        training_folder=os.path.join(repo_dir, "output"),
+    )
+
+    service.reconcile_on_startup()
+
+    row = _job_status(hub, job["uuid"])
+    assert row.status == "completed" and row.completed_at
+    assert [call[0] for call in importer.calls] == [os.path.dirname(final)]
+    assert row.finished_unwatched == 0
+
+
+def test_a_lease_adopted_for_a_run_reconcile_cannot_take_is_released(
+    hub, repo_dir, monkeypatch
+):
+    adopted = _StubLease()
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    service._adopted["gone"] = adopted
+
+    def broken(info):
+        raise RuntimeError("cannot read the run")
+
+    monkeypatch.setattr(
+        training_runs,
+        "unfinished_runs",
+        lambda hub, library_uuid: [{"uuid": "gone"}],
+    )
+    monkeypatch.setattr(service, "_reconcile_one", broken)
+
+    service.reconcile_on_startup()
+
+    assert adopted.release_count == 1 and service._adopted == {}

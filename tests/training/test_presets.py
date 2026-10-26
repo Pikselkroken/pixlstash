@@ -357,6 +357,16 @@ def test_previews_that_do_not_fit_wait_until_training_is_done():
     )
     assert fits["previews_deferred"] is False
     assert "train.disable_sampling" not in fits["values"]
+    # The owner's pin stands either way: previews kept in training, or put off.
+    kept = _resolve(
+        vram_mb=_16GB,
+        pins={"train.disable_sampling": False},
+        lookup=_lookup({"q8": _measurement(12_000, previews_mb=16_000)}),
+    )
+    assert kept["previews_deferred"] is False
+    assert kept["values"]["train.disable_sampling"]["source"] == "pinned"
+    put_off = _resolve(pins={"train.disable_sampling": True}, lookup=_lookup({}))
+    assert put_off["previews_deferred"] is True
 
 
 def test_a_forced_profile_is_resolved_alone():

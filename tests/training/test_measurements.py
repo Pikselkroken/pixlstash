@@ -40,6 +40,9 @@ def test_fingerprint_follows_what_moves_memory_and_speed_only():
     assert _key(_values(**{"train.disable_sampling": True})) == base
     for changed in (
         _key(_values(**{"network.linear": 16})),
+        _key(_values(**{"train.optimizer": "adamw"})),
+        _key(_values(**{"train.train_text_encoder": True})),
+        _key(_values(**{"network.conv": 8})),
         _key(_values(**{"model.quantize": False})),
         _key(_values(**{"model.layer_offloading_transformer_percent": 0.5})),
         _key(_values(**{"datasets[*].resolution": [512, 768]})),

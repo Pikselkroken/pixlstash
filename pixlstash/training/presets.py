@@ -532,10 +532,11 @@ def resolve(
         and picked["preview_ram_mb"] > ram_mb
     )
     sampling = "train.disable_sampling"
-    if deferred and sampling not in pins:
+    if sampling in pins:
+        # The owner's word on previews stands, either way.
+        deferred = bool(pins[sampling])
+    elif deferred:
         values[sampling] = {"value": True, "source": "gpu"}
-    elif values.get(sampling, {}).get("value"):
-        deferred = True
     seconds = None
     if picked["measurement"] is not None:
         seconds = measurements.estimate_seconds(
