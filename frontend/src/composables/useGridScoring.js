@@ -738,11 +738,13 @@ export function useGridScoring({
   // ============================================================
   // Drawn at once and put back with a notice if the server refuses. The WS
   // echo is skipped like a score's: the change is already on the cards.
+  // Resolves false when nothing was stored, so a caller holding its own copy
+  // (the overlay) can put its heart back too.
   async function setFavourite(imageIds, on) {
     const keys = new Set(
       (imageIds ?? []).map((id) => getPictureId(id)).filter((id) => id !== null),
     );
-    if (!keys.size || isReadOnly.value) return;
+    if (!keys.size || isReadOnly.value) return false;
     const before = new Map();
     for (const img of allGridImages.value) {
       const key = getPictureId(img?.id);
@@ -774,12 +776,13 @@ export function useGridScoring({
         `Couldn't ${on ? "favourite" : "unfavourite"} that. ${errorDetail(e)}`,
         { key: "favourite-set" },
       );
-      return;
+      return false;
     }
     // "Favourites only" is the one view an unfavourite throws a picture out of.
     if (!on && filterStore.favouriteOnlyFilter && removeImagesById) {
       removeImagesById([...keys]);
     }
+    return true;
   }
 
   /** Favourite a mixed selection, unfavourite one that is all favourites. */

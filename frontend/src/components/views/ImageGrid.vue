@@ -32,7 +32,7 @@
     :compareRequest="overlayCompareRequest"
     @close="closeOverlay()"
     @apply-score="applyScore"
-    @apply-favourite="(img, on) => setFavourite([img.id], on)"
+    @apply-favourite="applyOverlayFavourite"
     @set-guest-score="(img, n) => setGuestScore(img, n)"
     @add-tag="addTagToImage"
     @update-description="updateDescriptionForImage"
@@ -6695,6 +6695,12 @@ const {
   updateVisibleThumbnails,
   removeImagesById,
 });
+
+// The overlay flips its own copy at once; a refused change puts it back there
+// as well as on the tiles.
+async function applyOverlayFavourite(img, on) {
+  if (!(await setFavourite([img.id], on))) img.favourite = !on;
+}
 
 // ============================================================
 // KEYBOARD NAVIGATION

@@ -83,6 +83,14 @@ describe("favouriting from the grid", () => {
     expect(h.hearts()).toEqual([true, false, true]);
   });
 
+  // The overlay holds its own copy of the heart and reverts it on false.
+  it("says whether the change was stored", async () => {
+    const h = makeHarness();
+    expect(await h.scoring.setFavourite([2], true)).toBe(true);
+    setPicturesFavourite.mockRejectedValueOnce(new Error("refused"));
+    expect(await h.scoring.setFavourite([2], false)).toBe(false);
+  });
+
   it("drops an unfavourited picture only while Favourites only is on", async () => {
     const h = makeHarness();
     await h.scoring.setFavourite([1], false);
