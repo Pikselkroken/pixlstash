@@ -171,8 +171,11 @@ export function useVirtualScroll(
   // the NEW layout - the user keeps looking at the same picture.
   function remeasureJustifiedWidth() {
     const rect = gridContainer.value?.getBoundingClientRect?.();
+    // The container carries a JUSTIFIED_ROW_GAP edge gutter on each side
+    // (ImageGrid's gridContainerStyle); rows pack inside it.
     const measured = Math.floor(
-      rect?.width ?? scrollWrapper.value?.clientWidth ?? 0,
+      (rect?.width ?? scrollWrapper.value?.clientWidth ?? 0) -
+        2 * JUSTIFIED_ROW_GAP,
     );
     if (!(measured > 0) || measured === justifiedContainerWidth.value) return;
 

@@ -811,6 +811,26 @@
   border-radius: 0;
 }
 
+/* Justified selection (#2162): an olive outline drawn OUTSIDE the tile, in the
+   JUSTIFIED_ROW_GAP gutter it exactly fills, and nothing on the photo. A wash
+   or an inset edge sits on the picture, so five selected tiles in a row read as
+   one olive block; a ring in the gutter keeps every selected tile its own
+   shape, and since the gutter is the ring's width it never lands on a
+   neighbour. The grid's edge padding is the same gutter, so the outermost
+   tiles are not clipped. */
+.image-grid--justified .selection-overlay {
+  background: none;
+  box-shadow: none;
+  outline: var(--space-1) solid var(--active-bar);
+}
+
+/* The keyboard cursor's inset olive ring would read as a selection beside the
+   ring above, on a tile Ctrl+Arrow left unselected. The focus ring (ink) still
+   marks the cursor, since the cursor is the focused card. */
+.image-grid--justified .image-card-cursor .thumbnail-img {
+  outline: none;
+}
+
 .thumbnail-card-new {
   animation: gridNewPulse 2.2s ease-out;
   box-shadow: 0 0 0 rgba(var(--v-theme-accent), 0);

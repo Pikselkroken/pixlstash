@@ -114,6 +114,20 @@ describe("packJustifiedRows", () => {
     expect(lastStart).toBe(3);
     expect(layout.itemScaledWidths[3]).toBe(Math.floor(0.8 * 240));
     expect(layout.rowHeights[rows - 1]).toBe(base.targetRowHeight);
+    // ImageGrid grows every card of a full row to the column's real width and
+    // leaves this one alone, keyed on the flag.
+    expect(layout.lastRowPartial).toBe(true);
+  });
+
+  it("does not flag the last row when it closed full", () => {
+    // Three wides fill the row exactly as above, with nothing left over.
+    const layout = packJustifiedRows({
+      ...base,
+      aspectRatios: [1.5, 1.5, 1.5],
+    });
+    expect(rowCount(layout)).toBe(1);
+    expect(rowPixelWidth(layout, 0, base.gap)).toBe(base.containerWidth);
+    expect(layout.lastRowPartial).toBe(false);
   });
 
   it("falls back to square (aspect 1) for missing or zero dimensions", () => {

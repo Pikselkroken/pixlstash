@@ -3,6 +3,7 @@ import { ref, reactive, computed, nextTick } from "vue";
 import { setActivePinia, createPinia } from "pinia";
 import { useGridStore } from "../stores/useGridStore.js";
 import { useVirtualScroll } from "./useVirtualScroll.js";
+import { JUSTIFIED_ROW_GAP } from "./useJustifiedLayout.js";
 
 // The composable reads the grid geometry (columns, size level, thumbnail mode
 // and size, compact mode) from the grid store.
@@ -109,6 +110,23 @@ describe("useVirtualScroll justified layout", () => {
       vs.visibleEnd.value,
     );
     expect(autoEnd).not.toBe(squareEnd);
+  });
+
+  it("packs full rows inside the edge gutter on both sides", async () => {
+    const { vs, aspectRatios } = makeHarness();
+    vs.updateRowHeightFromGrid();
+    aspectRatios.value = Array.from({ length: 40 }, () => 1.5);
+    await nextTick();
+
+    const layout = vs.justifiedLayout.value;
+    let width = JUSTIFIED_ROW_GAP * (layout.rowStarts[1] - 1);
+    for (let i = 0; i < layout.rowStarts[1]; i++) {
+      width += layout.itemScaledWidths[i];
+    }
+    // The container's padding is one gap each side, which is where the
+    // outermost tiles' selection ring is drawn; a row packed to the full box
+    // would wrap its last card.
+    expect(width).toBe(CONTAINER_W - 2 * JUSTIFIED_ROW_GAP);
   });
 });
 
