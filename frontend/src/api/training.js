@@ -12,7 +12,28 @@ export function listTrainingPresets() {
   return unwrap(apiClient.get("/training/presets"));
 }
 
-/** Queue a training job (XOR set_id / character_id in the body). */
+/**
+ * What a run of a set or character would hold, and the checks before Start.
+ * `set_id` with `character_id` means that character's reference set.
+ */
+export function getTrainingDataset(params) {
+  return unwrap(apiClient.get("/training/dataset", { params }));
+}
+
+/** The sample prompts written from the set's or character's captions. */
+export function getTrainingSamplePrompts(params) {
+  return unwrap(apiClient.get("/training/sample-prompts", { params }));
+}
+
+/** Preview what a run would use on this machine, without queueing it. */
+export function resolveTraining(body) {
+  return unwrap(apiClient.post("/training/resolve", body));
+}
+
+/**
+ * Queue a training job: set_id or character_id, or both for a character's
+ * reference set.
+ */
 export function createTrainingJob(body) {
   return unwrap(apiClient.post("/training/jobs", body));
 }
