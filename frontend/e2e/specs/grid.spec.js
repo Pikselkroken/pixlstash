@@ -27,7 +27,7 @@ test.describe('image grid', () => {
     // which is unrelated to importing `test` from the shared fixtures file
     // above — that import is only for the production-network block.
     await expect(async () => {
-      await page.locator('.thumbnail-card').first().click()
+      await page.locator('.thumbnail-card').first().dblclick()
       await expect(overlay).toBeVisible({ timeout: 2_000 })
     }).toPass({ timeout: 30_000 })
 

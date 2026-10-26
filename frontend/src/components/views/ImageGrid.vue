@@ -587,6 +587,7 @@
             ]"
             :role="img.id && !isImageGhosted(img) ? 'gridcell' : 'presentation'"
             @click.stop="handleThumbnailClick(img, img.idx, $event)"
+            @dblclick="handleThumbnailDblClick(img, $event)"
           >
             <div
               :class="[
@@ -1282,6 +1283,7 @@ import { FLOATING_BOTTOM_GAP_PX } from "../../utils/floatingBottom";
 import { overlayCloseTarget } from "../../utils/overlayRoute";
 import { markEnd, markStart } from "../../utils/perfMarks";
 import { useScopedNotice } from "../../composables/useScopedNotice";
+import { useOneTimeNotice } from "../../composables/useOneTimeNotice";
 import { buildPurgeBadge } from "../../utils/retention.js";
 import { buildLockedDeleteMessage } from "../../utils/lockedDelete.js";
 import { buildLibraryMoveMessage } from "../../utils/libraryMove.js";
@@ -2626,6 +2628,7 @@ watch(
 );
 
 onUnmounted(() => {
+  clearTimeout(doubleClickHintTimer);
   window.removeEventListener("resize", triggerFaceOverlayRedraw);
   window.removeEventListener("drop", clearGridDragOverlay, true);
   window.removeEventListener("dragend", clearGridDragOverlay, true);
@@ -7944,9 +7947,52 @@ function handleThumbnailClick(img, idx, event) {
     event.stopPropagation();
     return;
   }
-  // Desktop: open overlay directly
+  // Desktop, double-click mode (the default): a click selects, and
+  // handleThumbnailDblClick opens.
+  if (userPrefsStore.gridOpenGesture !== "single") {
+    handleImageCardClick(img, idx, event);
+    event.stopPropagation();
+    scheduleDoubleClickHint();
+    return;
+  }
+  // Desktop, single-click mode: open overlay directly
   openOverlay(img);
   event.stopPropagation();
+}
+
+function handleThumbnailDblClick(img, event) {
+  // Whoever double-clicks already knows; no hint for them.
+  clearTimeout(doubleClickHintTimer);
+  // In single-click mode the first click already opened the overlay, and so
+  // has a touch two-tap where the browser synthesises a dblclick after it.
+  if (userPrefsStore.gridOpenGesture === "single" || overlayOpen.value) return;
+  if (!img?.id || isImageGhosted(img) || touchSelectMode.value) return;
+  if (event.ctrlKey || event.metaKey || event.shiftKey) return;
+  doubleClickHint.dismiss();
+  openOverlay(img);
+}
+
+// Tell an upgrading user, once, why a click no longer opens the picture.
+// Deferred past the double-click window so a double-click never raises it.
+const doubleClickHint = useOneTimeNotice("grid-double-click-to-open");
+let doubleClickHintTimer = null;
+function scheduleDoubleClickHint() {
+  if (!doubleClickHint.visible.value) return;
+  clearTimeout(doubleClickHintTimer);
+  doubleClickHintTimer = setTimeout(() => {
+    // Opened some other way meanwhile (Enter): not over the lightbox.
+    if (!doubleClickHint.visible.value || overlayOpen.value) return;
+    doubleClickHint.dismiss();
+    noticeStore.push({
+      level: "info",
+      text: "Double-click a picture to open it.",
+      key: "grid-double-click-to-open",
+      action: {
+        label: "Settings",
+        handler: () => emit("open-settings", "appearance"),
+      },
+    });
+  }, 500);
 }
 
 // Clear selection when clicking grid background

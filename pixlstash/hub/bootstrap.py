@@ -227,6 +227,8 @@ _USER_COLUMNS_TO_COPY = (
     "show_problem_icon",
     "show_stacks",
     "show_keyboard_hint",
+    "grid_open_gesture",
+    "viewer_wheel_action",
     "hide_purge_snapshot_warning",
     "comfyui_url",
     "ai_toolkit_repo_path",

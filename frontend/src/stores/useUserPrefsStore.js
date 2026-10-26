@@ -7,6 +7,11 @@ export const useUserPrefsStore = defineStore("userPrefs", () => {
   const dateFormat = ref("locale");
   const themeMode = ref("dark");
   const showKeyboardHint = ref(true);
+  // Mouse (#2138): "double" opens a grid picture on double-click (a single
+  // click selects), "single" opens on one click. "zoom" makes the plain wheel
+  // zoom the viewer, "browse" steps pictures. Ctrl/Shift override either way.
+  const gridOpenGesture = ref("double");
+  const viewerWheelAction = ref("zoom");
   const hiddenTags = ref([]);
   const applyTagFilter = ref(false);
   const penalisedTagWeights = ref({});
@@ -156,6 +161,8 @@ export const useUserPrefsStore = defineStore("userPrefs", () => {
     dateFormat,
     themeMode,
     showKeyboardHint,
+    gridOpenGesture,
+    viewerWheelAction,
     hiddenTags,
     applyTagFilter,
     penalisedTagWeights,

@@ -79,6 +79,11 @@ class User(SQLModel, table=True):
     telemetry_send_hardware_profile: bool = Field(default=False)
     telemetry_consent_prompted: bool = Field(default=False)
     show_keyboard_hint: bool = Field(default=True)
+    # Mouse preferences (#2138). NULL on an existing row reads as the default:
+    # "double" opens a grid picture on double-click, "single" on one click;
+    # "zoom" makes the plain wheel zoom the viewer, "browse" step pictures.
+    grid_open_gesture: Optional[str] = Field(default="double")
+    viewer_wheel_action: Optional[str] = Field(default="zoom")
     embed_watermark: bool = Field(default=True)
     watermark_image: Optional[bytes] = Field(
         default=None,

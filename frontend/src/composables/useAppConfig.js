@@ -11,6 +11,9 @@ import { useSortStore } from "../stores/useSortStore";
 import { useFilterStore } from "../stores/useFilterStore";
 import { useSidebarStore } from "../stores/useSidebarStore";
 
+const GRID_OPEN_GESTURES = ["double", "single"];
+const VIEWER_WHEEL_ACTIONS = ["zoom", "browse"];
+
 /**
  * The user's server-side config: load it once on start, and write UI options
  * back whenever one of them changes.
@@ -115,6 +118,10 @@ export function useAppConfig({
       }
       if (typeof cfg.show_keyboard_hint === "boolean")
         userPrefsStore.showKeyboardHint = cfg.show_keyboard_hint;
+      if (GRID_OPEN_GESTURES.includes(cfg.grid_open_gesture))
+        userPrefsStore.gridOpenGesture = cfg.grid_open_gesture;
+      if (VIEWER_WHEEL_ACTIONS.includes(cfg.viewer_wheel_action))
+        userPrefsStore.viewerWheelAction = cfg.viewer_wheel_action;
       if (typeof cfg.show_face_bboxes === "boolean") {
         gridStore.showFaceBboxes = cfg.show_face_bboxes;
       }
@@ -254,6 +261,8 @@ export function useAppConfig({
             ? userPrefsStore.sidebarThumbnailSize
             : null,
         show_keyboard_hint: userPrefsStore.showKeyboardHint,
+        grid_open_gesture: userPrefsStore.gridOpenGesture,
+        viewer_wheel_action: userPrefsStore.viewerWheelAction,
         show_face_bboxes: gridStore.showFaceBboxes,
         show_problem_icon: gridStore.showProblemIcon,
         expand_all_stacks: gridStore.showStacks,
@@ -320,6 +329,10 @@ export function useAppConfig({
     }
     if (typeof userPrefsStore.showKeyboardHint === "boolean")
       patch.show_keyboard_hint = userPrefsStore.showKeyboardHint;
+    if (GRID_OPEN_GESTURES.includes(userPrefsStore.gridOpenGesture))
+      patch.grid_open_gesture = userPrefsStore.gridOpenGesture;
+    if (VIEWER_WHEEL_ACTIONS.includes(userPrefsStore.viewerWheelAction))
+      patch.viewer_wheel_action = userPrefsStore.viewerWheelAction;
     if (typeof gridStore.showFaceBboxes === "boolean") {
       patch.show_face_bboxes = gridStore.showFaceBboxes;
     }
@@ -408,6 +421,8 @@ export function useAppConfig({
   );
   watch(() => userPrefsStore.themeMode, persist);
   watch(() => userPrefsStore.showKeyboardHint, persist);
+  watch(() => userPrefsStore.gridOpenGesture, persist);
+  watch(() => userPrefsStore.viewerWheelAction, persist);
   watch(
     [
       () => gridStore.showFaceBboxes,

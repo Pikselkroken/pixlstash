@@ -143,6 +143,8 @@ CREATE TABLE IF NOT EXISTS user (
     show_problem_icon           INTEGER,
     show_stacks                 INTEGER,
     show_keyboard_hint          INTEGER,
+    grid_open_gesture           TEXT,
+    viewer_wheel_action         TEXT,
     hide_purge_snapshot_warning INTEGER,
 
     -- machine / deployment settings (owner-level, not library-level)
@@ -2033,6 +2035,10 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     # ai-toolkit training paths and the pinned trainer commit are owner-level
     # machine settings, so they live on the hub's user row like comfyui_url.
     for column in ("ai_toolkit_repo_path", "ai_toolkit_python", "ai_toolkit_commit"):
+        if column not in user_columns:
+            conn.execute(f"ALTER TABLE user ADD COLUMN {column} TEXT")
+    # Mouse preferences (#2138): NULL reads as the model default.
+    for column in ("grid_open_gesture", "viewer_wheel_action"):
         if column not in user_columns:
             conn.execute(f"ALTER TABLE user ADD COLUMN {column} TEXT")
     # A hub an earlier build opened also has ``user.pull_comfyui_workflows``
