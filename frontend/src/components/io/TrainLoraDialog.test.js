@@ -178,6 +178,9 @@ describe("TrainLoraDialog", () => {
     expect(wrapper.find('[data-testid="tld-fit-readout"]').text()).toBe(
       "8-bit model · text encoder on the GPU · peaks near 16 GB",
     );
+    expect(wrapper.find('[data-testid="tld-foot-text"]').text()).toBe(
+      "Other GPU work pauses while it runs.",
+    );
     expect(wrapper.text()).toContain("Auto · 20 GB free");
     expect(wrapper.text()).toContain(
       "From the character's name. Goes into 1 of the 2 sample prompts.",
@@ -309,5 +312,51 @@ describe("TrainLoraDialog", () => {
       "needs 10.5 GB",
     );
     expect(startButton(wrapper).attributes("disabled")).toBeDefined();
+  });
+});
+
+describe("memory and speed measured on this machine (#2120)", () => {
+  it("gives the time and the measured peak once the setup is measured", async () => {
+    training.resolveTraining.mockImplementation(async () => {
+      const measured = plan();
+      measured.resolution = {
+        ...measured.resolution,
+        evidence: "measured",
+        vram_mb: 12288,
+        previews_deferred: true,
+        estimate: { seconds: 3000, basis: "measured" },
+      };
+      return measured;
+    });
+    const { wrapper } = await openDialog(
+      { type: "character", id: 4, name: "Grandad" },
+      dataset(),
+    );
+    expect(wrapper.find('[data-testid="tld-fit-readout"]').text()).toBe(
+      "8-bit model · text encoder on the GPU · peaks at 12 GB, measured · previews after training",
+    );
+    expect(wrapper.find('[data-testid="tld-foot-text"]').text()).toBe(
+      "About 50 min. Other GPU work pauses while it runs.",
+    );
+  });
+
+  it("says a first run checks memory and speed before the time is known", async () => {
+    training.resolveTraining.mockImplementation(async () => {
+      const unmeasured = plan();
+      unmeasured.resolution = {
+        ...unmeasured.resolution,
+        probe: true,
+        estimate: { seconds: null, basis: "none" },
+      };
+      return unmeasured;
+    });
+    const { wrapper } = await openDialog(
+      { type: "character", id: 4, name: "Grandad" },
+      dataset(),
+    );
+    expect(wrapper.find('[data-testid="tld-foot-text"]').text()).toBe(
+      "It checks memory and speed first, so the time is not known yet. " +
+        "Other GPU work pauses while it runs.",
+    );
   });
 });

@@ -773,6 +773,28 @@ _V2_TRAINING_RUN_INDEXES = (
     "ON training_run(library_uuid, status)",
 )
 
+# What this machine measured a training setup to need (#2120), one row per
+# setup. `fingerprint` hashes everything that moves the peak or the speed
+# (`training/measurements.py`); `phase_peaks` is JSON `{phase: {vram_mb,
+# ram_mb}}`, the trainer's own highest figures per phase; the three timings are
+# a warm update, loading plus caching once, and one preview image. `source` is
+# `probe` or `run`, whichever wrote last. Machine-wide like the shelf, so no
+# `library_uuid`.
+_V2_TRAINING_PROFILE_MEASUREMENT = """
+CREATE TABLE IF NOT EXISTS training_profile_measurement (
+    fingerprint          TEXT PRIMARY KEY,
+    preset               TEXT NOT NULL,
+    profile              TEXT NOT NULL,
+    device_name          TEXT,
+    phase_peaks          TEXT NOT NULL,
+    seconds_per_update   REAL,
+    setup_seconds        REAL,
+    seconds_per_preview  REAL,
+    source               TEXT NOT NULL,
+    measured_at          TEXT NOT NULL
+)
+"""
+
 
 # ---------------------------------------------------------------------------
 # The workflow library (v1.11, workflow library plan §4)
@@ -2162,7 +2184,11 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     # The training run (the keystone of the training feature). Amended into v2
     # for the same reason as the shelf: CREATE IF NOT EXISTS, re-run on every
     # open, so an existing hub picks it up without a version bump.
-    for statement in (_V2_TRAINING_RUN, *_V2_TRAINING_RUN_INDEXES):
+    for statement in (
+        _V2_TRAINING_RUN,
+        *_V2_TRAINING_RUN_INDEXES,
+        _V2_TRAINING_PROFILE_MEASUREMENT,
+    ):
         conn.execute(statement)
     # The recipe a run was resolved from (#2116), guarded the same way as the
     # amendments below: a no-op on a fresh hub and on re-run.

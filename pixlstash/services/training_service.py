@@ -27,18 +27,26 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shutil
 import threading
+import time
 import uuid
+from dataclasses import dataclass, field
 from typing import Callable
 
 from pixlstash.event_types import EventType
 from pixlstash.hub import training_runs
 from pixlstash.hub.db import HubDatabase, now_iso
 from pixlstash.pixl_logging import get_logger
+from pixlstash.resources.aitoolkit_tenant import AiToolkitProbe
 from pixlstash.resources.arbiter import Lease
+from pixlstash.resources.ledger import ledger
+from pixlstash.resources.ledger import ram as read_ram
 from pixlstash.services.model_folder_scanner import SOURCE_FOLDER_KIND
-from pixlstash.training import ai_toolkit_install, live_view
+from pixlstash.training import ai_toolkit_install, live_view, measurements, presets
 from pixlstash.training.backend import TrainerBackend, TrainingProgress, TrainingSpec
+from pixlstash.training.config_render import deep_merge
 from pixlstash.training.local_ai_toolkit import LocalAiToolkit
 
 logger = get_logger(__name__)
@@ -50,6 +58,59 @@ _TERMINAL_JOB_STATUSES = frozenset({"completed", "stopped", "error"})
 _TERMINAL_PROGRESS_STATUSES = frozenset({"completed", "stopped", "error"})
 # Cap on the trainer log tail we persist onto the job row.
 _LOG_TAIL_BYTES = 8192
+
+#: How long a run adopted at start-up keeps its lease exclusive and unshrunk:
+#: PixlStash has not watched it reach its peak since the restart.
+ADOPT_QUIET_S = 120.0
+#: Updates a probe trains: enough for a warm speed after the first.
+PROBE_STEPS = 6
+#: The most memory profiles one probe search tries.
+MAX_PROBES = 3
+#: A probe is stopped when the machine's available RAM falls below this.
+RAM_GUARD_MB = 1024
+#: How long a dead trainer's processes get to give their GPU memory back.
+RELEASE_GRACE_S = 10.0
+# How often a probe or an after-training preview pass is polled.
+_SHORT_POLL_S = 1.0
+# ai-toolkit's out-of-memory errors, from torch and from its own messages.
+_OOM_RE = re.compile(r"out of memory|outofmemoryerror|\bOOM\b", re.I)
+# A checkpoint's step: ``<stem>_<step:09d>.safetensors``.
+_CHECKPOINT_STEP_RE = re.compile(r"_(\d{4,})\.safetensors$")
+
+
+@dataclass
+class _Watch:
+    """What one poll loop has seen of a trainer.
+
+    Attributes:
+        peaks: ``{phase: {vram_mb, ram_mb}}``, the highest figures per phase.
+        seconds: Seconds spent per phase, between polls.
+        pids: Every process of the trainer's tree seen, so the ones left
+            holding memory after it exits can be found.
+        from_start: Whether the loop saw the trainer start (a run re-attached
+            after a restart did not, so its setup time is unknown).
+        shrunk: Whether the run's lease has been lowered to its peak.
+    """
+
+    peaks: dict = field(default_factory=dict)
+    seconds: dict = field(default_factory=dict)
+    pids: set = field(default_factory=set)
+    from_start: bool = True
+    shrunk: bool = False
+    _last: tuple | None = None
+
+    def see(self, phase: str | None, usage: dict, now: float) -> None:
+        if self._last is not None and self._last[0] is not None:
+            self.seconds[self._last[0]] = self.seconds.get(self._last[0], 0.0) + (
+                now - self._last[1]
+            )
+        self._last = (phase, now)
+        self.pids |= usage["pids"]
+        measurements.note_peak(self.peaks, phase, usage["vram_mb"], usage["ram_mb"])
+
+    def peak_vram_mb(self) -> int | None:
+        figures = [e["vram_mb"] for e in self.peaks.values() if e["vram_mb"]]
+        return max(figures) if figures else None
 
 
 def handle_for_run(training_root: str, info: dict, backend=None):
@@ -115,6 +176,8 @@ class TrainingService:
         poll_interval_s: float = 5.0,
         disable_background_workers: bool = False,
         register_source_folder: Callable[[str], None] | None = None,
+        adopt_gpu: Callable[[str, str, int, int], Lease] | None = None,
+        tenant: AiToolkitProbe | None = None,
     ) -> None:
         """Initialise the service.
 
@@ -155,6 +218,13 @@ class TrainingService:
                 registration the folder routes use. Called at most once, when a
                 job starts and the shelf has no source folder yet. ``None``
                 means a job that needs one fails with a clear error.
+            adopt_gpu: Grants a live run found at start-up its memory at once,
+                called like ``request_gpu``
+                (:meth:`~pixlstash.resources.arbiter.ResourceArbiter.adopt`).
+                None asks with ``request_gpu`` instead.
+            tenant: The arbiter's AI-toolkit probe, told which processes are
+                the trainer and which held memory after it exited. None tells
+                nobody.
         """
         self._hub = hub
         self._library_uuid = library_uuid
@@ -170,6 +240,13 @@ class TrainingService:
         self.poll_interval_s = poll_interval_s
         self._disable_background_workers = disable_background_workers
         self._register_source_folder = register_source_folder
+        self._adopt_gpu = adopt_gpu
+        self._tenant = tenant
+        # Leases granted at start-up to runs that outlived the restart, by job
+        # uuid, until reconcile_on_startup resumes watching them.
+        self._adopted: dict[str, Lease] = {}
+        # Runs whose remaining after-training previews were cancelled.
+        self._skip_previews: set[str] = set()
 
         # Per-job work dirs (job.db, the rendered config, the pending sidecar).
         # The run itself lives in the shelf's source folder, the dataset under
@@ -369,6 +446,15 @@ class TrainingService:
             logger.warning("cancel: no training job with id=%s", job_id)
             return False
 
+        with self._active_lock:
+            drawing = self._active_job_uuid == info["uuid"]
+        if info["status"] == "completed" and not info["completed_at"] and drawing:
+            # Trained, and drawing its deferred previews: stop those and
+            # import the run as it is.
+            self._skip_previews.add(info["uuid"])
+            logger.info("cancel: job %s skips its remaining previews.", info["uuid"])
+            return True
+
         if info["status"] in _TERMINAL_JOB_STATUSES:
             logger.info(
                 "cancel: job %s already terminal (%s); nothing to do.",
@@ -419,6 +505,45 @@ class TrainingService:
 
         return True
 
+    def adopt_live_runs(self) -> None:
+        """Give every run whose trainer outlived the restart its lease at once.
+
+        Called before PixlStash's own GPU workers start, so none of them loads
+        a model onto a card a live trainer is using. The lease is granted
+        without waiting and stays exclusive for :data:`ADOPT_QUIET_S`;
+        :meth:`reconcile_on_startup` then resumes watching the run with it.
+        """
+        if self._disable_background_workers or self._hub is None:
+            return
+        try:
+            unfinished = training_runs.unfinished_runs(self._hub, self._library_uuid)
+        except Exception:
+            logger.exception("adopt_live_runs: failed to load unfinished jobs")
+            return
+        for info in unfinished:
+            if not info.get("training_folder"):
+                continue
+            try:
+                backend = self._make_backend()
+                if not backend.is_alive(self._handle_for_job(backend, info)):
+                    continue
+                vram_mb, ram_mb = self._lease_need(info) or (0, 0)
+                adopt = self._adopt_gpu or self._request_gpu
+                self._adopted[info["uuid"]] = adopt(
+                    self._lease_label(info), info["uuid"], vram_mb, ram_mb
+                )
+                logger.info(
+                    "Adopted the live training run %s (pid %s) at start-up.",
+                    info["uuid"],
+                    info.get("pid"),
+                )
+            except Exception:
+                logger.exception(
+                    "adopt_live_runs: could not adopt job %s; reconcile asks for "
+                    "its lease instead",
+                    info["uuid"],
+                )
+
     def reconcile_on_startup(self) -> None:
         """Resolve jobs left ``running`` / ``stopping`` across a restart.
 
@@ -445,6 +570,16 @@ class TrainingService:
                 logger.exception(
                     "reconcile_on_startup: failed to reconcile job %s", info["uuid"]
                 )
+        # A lease adopted for a run the reconcile could not take over would keep
+        # the card exclusive until the next restart.
+        for job_uuid, lease in list(self._adopted.items()):
+            logger.warning(
+                "reconcile_on_startup: releasing the lease adopted for job %s, "
+                "which could not be re-attached.",
+                job_uuid,
+            )
+            lease.release()
+        self._adopted.clear()
 
     def _reconcile_one(self, info: dict) -> None:
         """Reconcile a single unfinished job (alive → re-attach, dead → finish).
@@ -474,16 +609,17 @@ class TrainingService:
                 info["uuid"],
                 info["pid"],
             )
-            # ponytail: asked for, not adopted. The run already holds the card,
-            # so the lease is granted once PixlStash has yielded; the plan's
-            # adopt() would grant it at once, with a boot quiet period. A live
-            # run without a profile (started before recipes) still takes the
-            # exclusive lease at 0 MB: it keeps other GPU work off the card
-            # under the running trainer, and is released when the run ends.
-            vram_mb, ram_mb = self._lease_need(info) or (0, 0)
-            lease = self._request_gpu(
-                self._lease_label(info), info["uuid"], vram_mb, ram_mb
-            )
+            # Adopted at start-up (adopt_live_runs) when it could be; else asked
+            # for, granted once PixlStash has yielded. A live run without a
+            # profile (started before recipes) still takes the exclusive lease
+            # at 0 MB: it keeps other GPU work off the card under the running
+            # trainer, and is released when the run ends.
+            lease = self._adopted.pop(info["uuid"], None)
+            if lease is None:
+                vram_mb, ram_mb = self._lease_need(info) or (0, 0)
+                lease = self._request_gpu(
+                    self._lease_label(info), info["uuid"], vram_mb, ram_mb
+                )
             # Resume polling on the worker thread, owning the lease until the
             # run ends. We deliberately hand off to a fresh thread so startup is
             # not blocked by a multi-hour run.
@@ -497,11 +633,16 @@ class TrainingService:
             reattach.start()
             return
 
-        # Dead process: trust the adapter's reconcile to derive the terminal
-        # state, then finalize from it. Nobody watched it end, which the live
-        # view says.
+        # Dead process (it may have exited since it was adopted): trust the
+        # adapter's reconcile to derive the terminal state, then finalize from
+        # it. Nobody watched it end, which the live view says.
+        adopted = self._adopted.pop(info["uuid"], None)
+        if adopted is not None:
+            adopted.release()
         logger.info("reconcile: job %s is dead; finalizing from disk.", info["uuid"])
-        self._update_job(info["uuid"], finished_unwatched=1)
+        if info["status"] != "completed":
+            # A completed run left unimported was watched to its end.
+            self._update_job(info["uuid"], finished_unwatched=1)
         progress = backend.reconcile(handle)
         self._finalize(backend, handle, info, progress)
 
@@ -519,9 +660,13 @@ class TrainingService:
         with self._active_lock:
             self._active_backend = backend
             self._active_job_uuid = info["uuid"]
+        watch = _Watch(from_start=False)
         try:
-            progress = self._poll_until_done(backend, handle, info["uuid"], lease)
-            self._finalize(backend, handle, info, progress)
+            progress = self._poll_until_done(
+                backend, handle, info["uuid"], lease, watch
+            )
+            if self._after_training(backend, handle, info, progress, lease, watch):
+                self._finalize(backend, handle, info, progress)
         except Exception:
             logger.exception("Re-attached job %s failed during polling", info["uuid"])
             self._update_job(
@@ -531,6 +676,7 @@ class TrainingService:
             with self._active_lock:
                 self._active_backend = None
                 self._active_job_uuid = None
+            self._check_released(info["uuid"], lease, watch)
             lease.release()
 
     # ------------------------------------------------------------------
@@ -616,6 +762,7 @@ class TrainingService:
         # 2. Wait for the arbiter: PixlStash yields the card, an idle ComfyUI
         # frees it, and the Tasks tab shows the job waiting until then.
         lease = self._request_gpu(self._lease_label(info), job_uuid, *need)
+        watch = _Watch()
         try:
             with self._active_lock:
                 self._waiting = (job_uuid, lease)
@@ -632,6 +779,10 @@ class TrainingService:
                     self._emit_progress(job_uuid, status="stopped", message=msg)
                 return  # on shutdown it stays queued for the next start
             backend = self._make_backend()
+            if not self._check_memory_and_speed(
+                backend, info, work_dir, manifest, lease
+            ):
+                return  # stopped, failed or shut down; the row says which
             handle, progress = self._train_under_lease(
                 backend,
                 info,
@@ -640,8 +791,10 @@ class TrainingService:
                 lease,
                 gpu_ids=lease.device or "0",
                 training_folder=training_folder,
+                watch=watch,
             )
-            self._finalize(backend, handle, info, progress)
+            if self._after_training(backend, handle, info, progress, lease, watch):
+                self._finalize(backend, handle, info, progress)
         except Exception:
             logger.exception("Job %s failed during training", job_uuid)
             self._update_job(job_uuid, status="error", error="Training run failed")
@@ -651,6 +804,7 @@ class TrainingService:
                 self._active_backend = None
                 self._active_job_uuid = None
                 self._waiting = None
+            self._check_released(job_uuid, lease, watch)
             lease.release()
             # A job still queued at shutdown runs on the next start, and needs
             # its spec then, so only drop it once the job has left the queue.
@@ -668,6 +822,7 @@ class TrainingService:
         lease: Lease,
         gpu_ids: str = "0",
         training_folder: str | None = None,
+        watch: _Watch | None = None,
     ) -> tuple[object, TrainingProgress]:
         """Prepare + submit + poll a run while the GPU lease is held.
 
@@ -680,6 +835,7 @@ class TrainingService:
             gpu_ids: ``CUDA_VISIBLE_DEVICES`` for the trainer: the leased
                 card's UUID, so it trains on the card the arbiter cleared.
             training_folder: The shelf source folder the run is written into.
+            watch: Collects the run's phase peaks and times.
 
         Returns:
             A ``(handle, progress)`` tuple: the launched handle and the terminal
@@ -732,37 +888,45 @@ class TrainingService:
             job_uuid, status="running", current=0, total=total_steps, message="Started"
         )
 
-        progress = self._poll_until_done(backend, handle, job_uuid, lease)
+        progress = self._poll_until_done(backend, handle, job_uuid, lease, watch)
         return handle, progress
 
     def _poll_until_done(
-        self, backend: TrainerBackend, handle, job_uuid: str, lease: Lease
+        self,
+        backend: TrainerBackend,
+        handle,
+        job_uuid: str,
+        lease: Lease,
+        watch: _Watch | None = None,
     ) -> TrainingProgress:
         """Poll progress until the process is dead AND status is terminal.
 
         Persists step / loss curve / samples / log tail and emits a
-        PLUGIN_PROGRESS event each cycle.
+        PLUGIN_PROGRESS event each cycle. Each cycle also reads what the
+        trainer holds into *watch* and onto the lease, and lowers the lease to
+        the run's measured peak once its first checkpoint is saved.
 
         Args:
             backend: The trainer backend.
             handle: The job handle.
             job_uuid: The job uuid (used as the event ``run_id``).
             lease: The run's lease; the Tasks tab's AI Toolkit row reads its
-                step, total and latest loss from it.
+                step, total, latest loss, phase and memory from it.
+            watch: Collects the phase peaks and times; None keeps a private one.
 
         Returns:
             The final :class:`TrainingProgress` snapshot.
         """
+        watch = watch if watch is not None else _Watch()
+        deferred = bool(self._resolution(job_uuid).get("previews_deferred"))
         progress = backend.progress(handle)
         while not self._stop.is_set():
             self._persist_progress(job_uuid, progress, handle)
-            lease.set_progress(
-                step=progress.step,
-                total=progress.total_steps,
-                loss=progress.loss_curve[-1].get("loss")
-                if progress.loss_curve
-                else None,
+            phase = live_view.phase_of(
+                progress.status, progress.info, progress.step, None
             )
+            self._observe(handle, progress, lease, watch, phase)
+            self._maybe_shrink(job_uuid, lease, watch, progress, deferred)
             self._emit_progress(
                 job_uuid,
                 status=progress.status,
@@ -783,6 +947,602 @@ class TrainingService:
             self._stop.wait(self.poll_interval_s)
             progress = backend.progress(handle)
         return progress
+
+    # ------------------------------------------------------------------
+    # Memory and speed (#2120)
+    # ------------------------------------------------------------------
+
+    def _resolution(self, job_uuid: str) -> dict:
+        """The run's recorded resolution; {} when it has none or it is unreadable."""
+        run = training_runs.get_run_by_uuid(self._hub, job_uuid)
+        try:
+            resolution = json.loads((run or {}).get("resolved_profile") or "null")
+        except ValueError as exc:
+            logger.warning("Job %s has an unreadable resolution: %s", job_uuid, exc)
+            return {}
+        return resolution if isinstance(resolution, dict) else {}
+
+    def _observe(
+        self,
+        handle,
+        progress: TrainingProgress,
+        lease: Lease,
+        watch: _Watch,
+        phase: str | None,
+        **extra,
+    ) -> None:
+        """Read what the trainer holds into *watch* and onto the lease.
+
+        The lease's progress is the worker's phase telemetry: the Tasks tab
+        and the live view read the phase and the trainer's memory from it.
+        """
+        usage = measurements.trainer_usage(handle.pid, lease.device)
+        watch.see(phase, usage, time.monotonic())
+        if self._tenant is not None:
+            self._tenant.track(usage["pids"])
+        lease.set_progress(
+            step=progress.step,
+            total=progress.total_steps,
+            loss=progress.loss_curve[-1].get("loss") if progress.loss_curve else None,
+            phase=phase,
+            vram_mb=usage["vram_mb"],
+            ram_mb=usage["ram_mb"],
+            **extra,
+        )
+
+    def _maybe_shrink(
+        self,
+        job_uuid: str,
+        lease: Lease,
+        watch: _Watch,
+        progress: TrainingProgress,
+        deferred: bool,
+    ) -> None:
+        """Lower the lease to the run's peak once its first checkpoint is saved.
+
+        By then it has loaded, cached, trained, saved and (unless its previews
+        are deferred) drawn a round of previews, so its peak has been seen.
+        The lease stops being exclusive, and other GPU work may use what the
+        run does not. An adopted lease refuses while it is quiet; the next
+        poll tries again.
+        """
+        if watch.shrunk or not (progress.checkpoints or progress.final_checkpoint):
+            return
+        if "training" not in watch.peaks:
+            return
+        if not deferred and "previews" not in watch.peaks:
+            return
+        peak = watch.peak_vram_mb()
+        if peak is None:
+            return
+        need = measurements.with_margin(peak)
+        if lease.shrink(need):
+            watch.shrunk = True
+            logger.info(
+                "Job %s: first checkpoint saved; its lease now asks for %s MB "
+                "(peak %s MB).",
+                job_uuid,
+                need,
+                peak,
+            )
+
+    def _check_released(self, job_uuid: str, lease: Lease, watch: _Watch) -> None:
+        """Warn when a trainer that exited left its GPU memory held.
+
+        Its processes get :data:`RELEASE_GRACE_S` to let go. Whatever they
+        still hold is announced on the lease and named "memory not released"
+        in the Tasks tab rather than counted as other apps'.
+        """
+        if not watch.pids or lease.device is None or self._stop.is_set():
+            return
+        deadline = time.monotonic() + RELEASE_GRACE_S
+        held = measurements.gpu_mb(watch.pids, lease.device)
+        while held and time.monotonic() < deadline and not self._stop.is_set():
+            self._stop.wait(1.0)
+            held = measurements.gpu_mb(watch.pids, lease.device)
+        if not held:
+            if self._tenant is not None:
+                self._tenant.ended(set())
+            return
+        leftover = {
+            pid for pid in ledger().processes(lease.device) if pid in watch.pids
+        }
+        text = (
+            f"AI-toolkit exited but {held / 1024:.1f} GB of GPU memory was not "
+            f"released (process {', '.join(str(p) for p in sorted(leftover))}). "
+            "Other GPU work counts it as used until those processes end."
+        )
+        logger.warning("Job %s: %s", job_uuid, text)
+        lease.warn("aitoolkit_memory_not_released", text)
+        if self._tenant is not None:
+            self._tenant.ended(leftover)
+
+    def _check_memory_and_speed(
+        self,
+        backend: TrainerBackend,
+        info: dict,
+        work_dir: str,
+        manifest: dict,
+        lease: Lease,
+    ) -> bool:
+        """Probe a run whose setup this machine has not measured yet.
+
+        The probe trains a few updates at the largest bucket, draws one round
+        of previews and saves once, under a RAM guard, and records what each
+        phase peaked at. Running out of GPU memory steps to the next profile
+        of the fit choice (more offloading); a loader error, a Triton error or
+        the RAM guard ends the search. The run then trains with the profile
+        that held, re-resolved on its measurement, so previews that do not fit
+        are deferred.
+
+        Returns:
+            True to train. False when the run was stopped, failed (the row says
+            why) or PixlStash is shutting down (it stays queued).
+        """
+        job_uuid = info["uuid"]
+        resolution = self._resolution(job_uuid)
+        if "probe" not in resolution:
+            return True  # resolved without measurements
+        preset_id = str(resolution.get("preset") or "").split("@")[0]
+        preset = presets.get_preset(preset_id)
+        if preset is None:
+            logger.warning(
+                "Job %s: recipe %s is gone; training without checking memory.",
+                job_uuid,
+                resolution.get("preset"),
+            )
+            return True
+        cfg = self._config_provider() or {}
+        commit = (
+            ai_toolkit_install.read_commit(cfg["repo_path"])
+            if cfg.get("repo_path")
+            else None
+        )
+        lookup = measurements.make_lookup(
+            self._hub, preset, commit=commit, device=self._device_name(lease.device)
+        )
+        # Resolved again at launch even when it was measured at enqueue: the
+        # checkout or the card may have changed since, which is a new setup.
+        names = [resolution["profile"], *(resolution.get("fallbacks") or [])]
+        reason = None
+        for name in names[:MAX_PROBES]:
+            try:
+                settled = self._reresolve(info, resolution, preset, lookup, name)
+                if settled["probe"]:
+                    self._note_phase(job_uuid, "checking")
+                    outcome, reason = self._probe_once(
+                        backend, info, work_dir, manifest, lease, settled
+                    )
+                    if outcome == "oom":
+                        logger.info(
+                            "Job %s: %s ran out of GPU memory; trying the next "
+                            "profile.",
+                            job_uuid,
+                            name,
+                        )
+                        continue
+                    if outcome != "ok":
+                        return False
+                    settled = self._reresolve(info, resolution, preset, lookup, name)
+            except presets.NoProfileFits as exc:
+                reason = str(exc)
+                logger.info("Job %s: %s does not fit: %s", job_uuid, name, exc)
+                continue
+            self._settle(job_uuid, settled)
+            return True
+        self._fail(
+            job_uuid,
+            "Not enough GPU memory: none of this recipe's ways of fitting the GPU "
+            "held while checking memory and speed"
+            + (f" ({reason})" if reason else "")
+            + ".",
+        )
+        return False
+
+    def _reresolve(
+        self, info: dict, resolution: dict, preset: dict, lookup, profile: str
+    ) -> dict:
+        """The run resolved again on *profile* alone, measurements included.
+
+        The same choices, pictures, room, pins and prompts as at enqueue.
+        """
+        try:
+            pins = json.loads(info.get("advanced_pins") or "{}")
+        except ValueError as exc:
+            logger.warning("Job %s has unreadable pins: %s", info["uuid"], exc)
+            pins = {}
+        entry = (resolution.get("values") or {}).get(presets.PROMPTS_KEY) or {}
+        prompts = entry.get("value") if entry.get("source") == "captions" else None
+        room = resolution.get("room") or {}
+        try:
+            return presets.resolve(
+                preset,
+                subject=resolution["subject"],
+                effort=resolution["effort"],
+                fit=resolution["fit"],
+                picture_count=int(resolution["picture_count"]),
+                vram_mb=int(room["vram_mb"]),
+                ram_mb=room.get("ram_mb"),
+                pins=pins,
+                prompts=prompts,
+                lookup=lookup,
+                profile=profile,
+            )
+        except presets.NoProfileFits:
+            raise
+        except (KeyError, TypeError, ValueError) as exc:
+            raise presets.NoProfileFits(
+                f"the run could not be resolved again: {exc}", "profile", 0, 0
+            ) from exc
+
+    def _settle(self, job_uuid: str, settled: dict) -> None:
+        """Make *settled* the run's resolution and what it renders."""
+        pending = dict(self._load_pending_spec(job_uuid))
+        pending["config_overrides"] = presets.to_patch(presets.resolved_values(settled))
+        with self._pending_specs_lock:
+            self._pending_specs[job_uuid] = pending
+        self._write_pending_sidecar(job_uuid, pending)
+        self._update_job(job_uuid, resolved_profile=json.dumps(settled))
+        logger.info(
+            "Job %s trains with %s (%s; previews %s).",
+            job_uuid,
+            settled["profile"],
+            settled["evidence"],
+            "deferred" if settled["previews_deferred"] else "while training",
+        )
+
+    def _probe_once(
+        self,
+        backend: TrainerBackend,
+        info: dict,
+        work_dir: str,
+        manifest: dict,
+        lease: Lease,
+        settled: dict,
+    ) -> tuple[str, str | None]:
+        """Run one probe of *settled*'s profile and record what it measured.
+
+        Returns:
+            ``(outcome, reason)``: ``ok`` (measured and recorded), ``oom`` (try
+            more offloading) or ``stopped`` (the run was cancelled, failed or
+            PixlStash is shutting down; the row already says which).
+        """
+        job_uuid = info["uuid"]
+        pending = self._load_pending_spec(job_uuid)
+        values = presets.resolved_values(settled)
+        process: dict = {
+            "train": {
+                "steps": PROBE_STEPS,
+                "skip_first_sample": True,
+                "disable_sampling": False,
+            },
+            "save": {"save_every": PROBE_STEPS},
+            "sample": {"sample_every": PROBE_STEPS},
+        }
+        sizes = values.get("datasets[*].resolution") or []
+        if sizes:
+            # The worst bucket only, so the peak is the largest a step makes.
+            process["datasets"] = [{"resolution": [max(sizes)]}]
+        probe_dir = os.path.join(work_dir, "probe")
+        self._remove_tree(probe_dir)
+        spec = TrainingSpec(
+            job_id=job_uuid,
+            job_name=info["name"],
+            template_path=pending.get("template_path"),
+            dataset_dir=manifest["dest_dir"],
+            trigger_word=info.get("trigger_word") or "",
+            work_dir=probe_dir,
+            hf_token=os.environ.get("HF_TOKEN") or None,
+            config_overrides=presets.to_patch(values),
+            locked=deep_merge(
+                pending.get("locked") or {}, {"config": {"process": [process]}}
+            ),
+            gpu_ids=lease.device or "0",
+        )
+        handle = backend.prepare(spec)
+        backend.submit(handle, spec)
+        started = time.time()
+        watch = _Watch()
+
+        def stop_probe() -> str | None:
+            if self._job_status(job_uuid) != "queued":
+                return "stopped"
+            available = read_ram().get("available_mb")
+            if available and available < RAM_GUARD_MB:
+                return "ram"
+            return "shutdown" if self._stop.is_set() else None
+
+        progress, guard = self._watch_pass(
+            backend, handle, lease, watch, "checking", stop_probe
+        )
+        self._check_released(job_uuid, lease, watch)
+        if guard == "stopped":
+            return "stopped", None
+        if guard == "shutdown":
+            logger.info("Job %s: probe stopped by shutdown; stays queued.", job_uuid)
+            return "stopped", None
+        if guard == "ram":
+            self._fail(
+                job_uuid,
+                "Not enough system RAM to start: less than "
+                f"{RAM_GUARD_MB // 1024} GB was free while checking memory and "
+                "speed, so the check was stopped. Close other programs or choose "
+                "a fit that offloads less.",
+            )
+            return "stopped", None
+        text = f"{progress.info or ''}\n{self._read_log_tail(handle.log_path) or ''}"
+        if _OOM_RE.search(text):
+            return "oom", settled["profile_label"]
+        if progress.status != "completed" or not progress.final_checkpoint:
+            self._fail(
+                job_uuid,
+                "Checking memory and speed failed: "
+                + (progress.info or "the trainer stopped with an error").rstrip(".")
+                + ". See the trainer log.",
+            )
+            return "stopped", None
+        step_times = live_view.read_step_times(handle.loss_db_path)
+        images = len(progress.samples)
+        try:
+            measurements.record(
+                self._hub,
+                settled["fingerprint"],
+                preset=settled["preset"],
+                profile=settled["profile"],
+                device=self._device_name(lease.device),
+                phase_peaks=watch.peaks,
+                seconds_per_update=live_view.speed(step_times, None)[
+                    "seconds_per_step"
+                ],
+                setup_seconds=(step_times[0][1] - started) if step_times else None,
+                seconds_per_preview=(
+                    watch.seconds["previews"] / images
+                    if images and watch.seconds.get("previews")
+                    else None
+                ),
+                source="probe",
+            )
+        except Exception:
+            logger.exception("Job %s: could not record the probe", job_uuid)
+            self._fail(job_uuid, "Checking memory and speed could not be recorded.")
+            return "stopped", None
+        self._remove_tree(handle.save_root)
+        return "ok", None
+
+    def _watch_pass(
+        self,
+        backend: TrainerBackend,
+        handle,
+        lease: Lease,
+        watch: _Watch,
+        shown_as: str,
+        should_stop: Callable[[], str | None],
+    ) -> tuple[TrainingProgress, str | None]:
+        """Poll a short trainer pass (a probe, an after-training preview) to its end.
+
+        The lease shows *shown_as* as the phase, since the trainer's own info
+        line cannot tell these passes from training. *should_stop* is asked
+        each poll; what it answers stops the pass and is returned with it.
+        """
+        while True:
+            progress = backend.progress(handle)
+            phase = live_view.phase_of(
+                progress.status, progress.info, progress.step, None
+            )
+            self._observe(handle, progress, lease, watch, phase, shown_as=shown_as)
+            stop = should_stop()
+            if stop is not None:
+                backend.cancel(handle)
+                return backend.progress(handle), stop
+            if not backend.is_alive(handle):
+                if progress.status not in _TERMINAL_PROGRESS_STATUSES:
+                    progress = backend.reconcile(handle)
+                return progress, None
+            self._stop.wait(_SHORT_POLL_S)
+
+    def _after_training(
+        self,
+        backend: TrainerBackend,
+        handle,
+        info: dict,
+        progress: TrainingProgress,
+        lease: Lease,
+        watch: _Watch,
+    ) -> bool:
+        """What a finished run leaves before it is imported.
+
+        Its measurement is recorded for the next run of the same setup, and
+        a run whose previews were deferred has each kept checkpoint sampled.
+
+        Returns:
+            False when a shutdown stopped the previews: the run is left
+            completed and unimported, and the next start's reconcile imports
+            it. True to import now.
+        """
+        if progress.status != "completed":
+            return True
+        resolution = self._resolution(info["uuid"])
+        # Recorded even on shutdown: only the preview passes wait for a start.
+        self._record_run(info["uuid"], handle, progress, lease, watch, resolution)
+        if self._stop.is_set():
+            return True
+        if resolution.get("previews_deferred") and progress.final_checkpoint:
+            try:
+                return self._sample_after_training(
+                    backend, handle, info, progress, lease
+                )
+            finally:
+                self._skip_previews.discard(info["uuid"])
+        return True
+
+    def _record_run(
+        self,
+        job_uuid: str,
+        handle,
+        progress: TrainingProgress,
+        lease: Lease,
+        watch: _Watch,
+        resolution: dict,
+    ) -> None:
+        """Store what a finished run measured under its setup's fingerprint."""
+        key = resolution.get("fingerprint")
+        if not key or not watch.peaks:
+            return
+        step_times = live_view.read_step_times(handle.loss_db_path)
+        setup = None
+        if watch.from_start and "loading" in watch.seconds:
+            setup = watch.seconds["loading"] + watch.seconds.get("caching", 0.0)
+        previews = watch.seconds.get("previews")
+        images = len(progress.samples)
+        try:
+            measurements.record(
+                self._hub,
+                key,
+                preset=resolution["preset"],
+                profile=resolution["profile"],
+                device=self._device_name(lease.device),
+                phase_peaks=watch.peaks,
+                seconds_per_update=live_view.speed(step_times, None)[
+                    "seconds_per_step"
+                ],
+                setup_seconds=setup,
+                seconds_per_preview=previews / images
+                if previews and images and watch.from_start
+                else None,
+                source="run",
+            )
+        except Exception:
+            logger.exception("Job %s: could not record its measurement", job_uuid)
+
+    def _sample_after_training(
+        self,
+        backend: TrainerBackend,
+        handle,
+        info: dict,
+        progress: TrainingProgress,
+        lease: Lease,
+    ) -> bool:
+        """Draw the previews of a run that trained without them.
+
+        Each kept checkpoint is loaded on its own (ai-toolkit samples a
+        pretrained LoRA at a given step without training), and the pictures
+        are moved into the run's ``samples/`` under that step. A pass that
+        fails is logged and skipped: the run itself is done. A cancel stops the
+        passes and the run is imported as it is.
+
+        Returns:
+            False when a shutdown stopped them, else True.
+        """
+        job_uuid = info["uuid"]
+        pending = self._load_pending_spec(job_uuid)
+        run = training_runs.get_run_by_uuid(self._hub, job_uuid) or {}
+        self._note_phase(job_uuid, "previews")
+
+        def stop() -> str | None:
+            if self._stop.is_set():
+                return "shutdown"
+            return "cancelled" if job_uuid in self._skip_previews else None
+
+        checkpoints = [*progress.checkpoints, progress.final_checkpoint]
+        drawn: set[int] = set()
+        for path in checkpoints:
+            match = _CHECKPOINT_STEP_RE.search(os.path.basename(path))
+            step = int(match.group(1)) if match else int(progress.step)
+            if step in drawn:
+                continue  # the final can share its step with the last save
+            drawn.add(step)
+            if stop() is not None:
+                break
+            pass_dir = os.path.join(handle.work_dir, "after", str(step))
+            self._remove_tree(pass_dir)
+            process = {
+                "train": {
+                    "steps": step,
+                    "start_step": step,
+                    "skip_first_sample": True,
+                    "disable_sampling": False,
+                },
+                "network": {"pretrained_lora_path": path},
+            }
+            spec = TrainingSpec(
+                job_id=job_uuid,
+                job_name=info["name"],
+                template_path=pending.get("template_path"),
+                dataset_dir=run.get("dataset_snapshot_path") or "",
+                trigger_word=info.get("trigger_word") or "",
+                work_dir=pass_dir,
+                hf_token=os.environ.get("HF_TOKEN") or None,
+                config_overrides=pending.get("config_overrides"),
+                locked=deep_merge(
+                    pending.get("locked") or {}, {"config": {"process": [process]}}
+                ),
+                gpu_ids=lease.device or "0",
+            )
+            try:
+                pass_handle = backend.prepare(spec)
+                backend.submit(pass_handle, spec)
+                ended, stopped = self._watch_pass(
+                    backend, pass_handle, lease, _Watch(), "previews", stop
+                )
+                if stopped is not None:
+                    break
+                if ended.status != "completed":
+                    logger.warning(
+                        "Job %s: previews of step %s failed: %s",
+                        job_uuid,
+                        step,
+                        ended.info,
+                    )
+                    continue
+                self._move_samples(pass_handle.save_root, handle.save_root)
+            except Exception:
+                logger.exception(
+                    "Job %s: could not draw the previews of step %s", job_uuid, step
+                )
+            finally:
+                self._remove_tree(pass_dir)
+        if stop() == "shutdown":
+            logger.info(
+                "Job %s: previews stopped by shutdown; it is imported on the next "
+                "start.",
+                job_uuid,
+            )
+            return False
+        self._note_phase(job_uuid, "importing")
+        return True
+
+    @staticmethod
+    def _move_samples(from_root: str, to_root: str) -> None:
+        """Move the pictures in ``<from_root>/samples`` into ``<to_root>/samples``."""
+        source = os.path.join(from_root, "samples")
+        if not os.path.isdir(source):
+            return
+        target = os.path.join(to_root, "samples")
+        os.makedirs(target, exist_ok=True)
+        for name in os.listdir(source):
+            shutil.move(os.path.join(source, name), os.path.join(target, name))
+
+    @staticmethod
+    def _remove_tree(path: str) -> None:
+        """Remove a probe or preview pass's own folder, if it is there."""
+        if not os.path.isdir(path):
+            return
+        try:
+            shutil.rmtree(path)
+        except OSError as exc:
+            logger.warning("Could not remove %s: %s", path, exc)
+
+    @staticmethod
+    def _device_name(device: str | None) -> str | None:
+        """The card's name, which a measurement is tied to; None when unknown."""
+        reading = ledger().device(device) if device else None
+        return reading.name if reading is not None else None
+
+    def _fail(self, job_uuid: str, message: str) -> None:
+        """End a run that never trained as ``error`` with *message*."""
+        logger.warning("Job %s: %s", job_uuid, message)
+        self._update_job(job_uuid, status="error", error=message)
+        self._emit_progress(job_uuid, status="error", message=message)
 
     # ------------------------------------------------------------------
     # Finalization

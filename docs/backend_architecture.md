@@ -35,7 +35,7 @@
 22. [Tiered Duplicate Detection](#22-tiered-duplicate-detection)
 23. [Opt-in telemetry](#23-opt-in-telemetry-the-install-id-and-the-consent-flags)
 24. [Folder structure: read, commit, layout and moves](#24-folder-structure-read-commit-layout-and-moves) — incl. [24.1 The folder-structure read](#241-the-folder-structure-read), [24.2 The folder-structure commit](#242-the-folder-structure-commit), [24.3 The library layout](#243-the-library-layout), [24.4 The layout and the move engine](#244-the-layout-and-the-move-engine), [24.5 Reconciling moves made outside PixlStash](#245-reconciling-moves-made-outside-pixlstash)
-25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Picking up a model that landed after the scan (#1985)](#2513-picking-up-a-model-that-landed-after-the-scan-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116), [25.17 Sample prompts written from the dataset (#2117)](#2517-sample-prompts-written-from-the-dataset-2117), [25.18 Watching a run live (#2118)](#2518-watching-a-run-live-2118), [25.19 The Train dialog's preview: dataset checks and resolve (#2119)](#2519-the-train-dialogs-preview-dataset-checks-and-resolve-2119)
+25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Picking up a model that landed after the scan (#1985)](#2513-picking-up-a-model-that-landed-after-the-scan-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116), [25.17 Sample prompts written from the dataset (#2117)](#2517-sample-prompts-written-from-the-dataset-2117), [25.18 Watching a run live (#2118)](#2518-watching-a-run-live-2118), [25.19 The Train dialog's preview: dataset checks and resolve (#2119)](#2519-the-train-dialogs-preview-dataset-checks-and-resolve-2119), [25.20 Checking memory and speed, and learning from runs (#2120)](#2520-checking-memory-and-speed-and-learning-from-runs-2120)
 26. [Prompt match](#26-prompt-match)
 
 ---
@@ -1129,6 +1129,7 @@ PixlStash, a ComfyUI on the same machine and (later) AI-toolkit do not fit in on
 | `resources/ledger.py` | `Ledger`: one long-lived `nvmlInit`, a `DeviceReading` per card keyed by NVML **UUID** (never index: NVML's order and CUDA's differ), `pixlstash_device()`, `other_processes()` for the OOM notice. `HardwareMonitor` reads NVML through it instead of initialising and shutting NVML down per poll. With no NVML but an accelerator in use, one unmeasurable device `local`. |
 | `resources/arbiter.py` | `ResourceArbiter` (one per process, `arbiter()`; it outlives library switches), `Lease`, `LeaseKind`, `Tenant`, the rollback constant `VRAM_ORCHESTRATION_ENFORCING`. |
 | `resources/comfyui_tenant.py` | `ComfyUIProbe` (the arbiter's `TenantProbe` for ComfyUI) and `PeakSampler`. |
+| `resources/aitoolkit_tenant.py` | `AiToolkitProbe`, the `TenantProbe` for a local ai-toolkit trainer (§25.20). |
 | `services/vram_history.py` | Learned peaks, the "runs alone" policy and the owner's `auto_exclusive_after_oom`, in the hub. |
 | `gpu_select.py` | Which GPU PixlStash itself runs on, applied before torch loads. |
 
@@ -1165,7 +1166,7 @@ A device with no NVML (`measurable: false`: Metal, ROCm) runs heavy work one at 
 
 **Rollback:** `VRAM_ORCHESTRATION_ENFORCING = False` in `resources/arbiter.py` grants every request at once; decisions are still computed and logged.
 
-**Not measured yet (needs hardware):** the VRAM ComfyUI keeps resident after `/free`, and whether `torch_vram_total` is populated under ComfyUI's `cudaMallocAsync` allocator. If it is not, ComfyUI's runs are taken as unmeasured. **Scaffolding for AI-toolkit** is in the arbiter (`Tenant.AITOOLKIT`, `ram_mb`, `owner_pid`, `Lease.shrink`, the ComfyUI rung of the ladder); its tenant module, the `training_run` table, adoption at boot and the pid sweeper come with the training feature.
+**Not measured yet (needs hardware):** the VRAM ComfyUI keeps resident after `/free`, and whether `torch_vram_total` is populated under ComfyUI's `cudaMallocAsync` allocator. If it is not, ComfyUI's runs are taken as unmeasured. **AI-toolkit as a tenant** (#2120, §25.20): `resources/aitoolkit_tenant.py` reports the trainer's processes' memory, `ResourceArbiter.adopt` grants a trainer that outlived a restart its exclusive lease at once with a quiet period, a run's lease shrinks to its measured peak after its first checkpoint, and memory a dead trainer kept is named "memory not released". A probe may name its holder row (`holder_label()`). The pid sweeper is still to come.
 
 ### Multi-frame sampling: videos and animated GIFs
 
@@ -11416,7 +11417,8 @@ physical memory; swap never counts. A card that cannot be measured is refused
 rather than guessed. The run's lease asks for the profile's `vram_mb` and
 `ram_mb` (`Vault._request_training_gpu`), replacing the fixed 16 GB estimate; a
 queued row without a profile (queued before recipes) ends in `error` rather than
-training on a guess.
+training on a guess. A profile this machine has measured is admitted on its
+measurement instead of the seed (§25.20).
 
 Resolution happens once, at `POST /training/jobs`, against the pictures the
 dataset would hold then (`ExportUtils.count_training_pictures`, the same
@@ -11481,7 +11483,10 @@ calls except each run's last swap counters.
   "Loading dataset", "Training", "Generating images - n/m", "Saving model") to
   one of eight phases. A `completed` row with no `completed_at` is
   `importing`, because the worker writes `completed_at` once the import is
-  done. "Checking memory and speed" is reserved for the probe (#2120).
+  done. "Checking memory and speed" (`checking`) and the previews drawn
+  after training are named by the worker's phase telemetry on the run's lease
+  (`progress.shown_as`, §25.20), since the trainer's info line cannot tell
+  those passes from training.
 - **Phase log.** `training_run.phase_log` is the JSON list of `{phase, at}` the
   worker appends when the run enters a new phase (`TrainingService._note_phase`:
   at enqueue, at launch, and on each poll), so setup folds to "Set up in 2:35"
@@ -11544,6 +11549,119 @@ set given alone is resolved to its character (`_scope`). The run is then filed
 under the character (`training_run.character_id`) while the builder reads the
 set's pictures (`_gather_export_pictures` takes the set first), and its subject
 defaults to a person. `TrainingService.enqueue` needs at least one of the two.
+
+### 25.20 Checking memory and speed, and learning from runs (#2120)
+
+A recipe's `vram_mb` / `ram_mb` are research seeds. Once a setup has run on this
+machine, what it measured replaces them for admission and for the dialog's time
+estimate.
+
+**The fingerprint** (`training/measurements.py`, `fingerprint`) names a setup:
+the recipe's locked keys (model and adapter revisions), the ai-toolkit commit,
+the card's name, the quantizer (`model.quantize`, `qtype`, the text encoder's),
+the offload settings and fractions, the largest bucket, the rank (and conv rank),
+the optimizer, whether the text encoder trains, the effective batch (batch size
+times gradient accumulation), caption caching and the preview policy (size and
+sampler steps). Nothing that does not move the peak or the
+speed is in it (learning rate, steps, trigger word), and nor is whether previews
+are deferred, which is decided *from* the measurement.
+
+**The store.** The hub's `training_profile_measurement`, one row per
+fingerprint, machine-wide (no `library_uuid`): `phase_peaks` (JSON `{phase:
+{vram_mb, ram_mb}}`, the trainer's own highest figures, NVML's per-process
+memory for its process tree and its resident memory), `seconds_per_update` (the
+warm median, `live_view.speed`), `setup_seconds` (loading plus caching, once),
+`seconds_per_preview` (one picture) and `source` (`probe` or `run`). A setup
+measured again keeps the higher of each phase peak, because a poll can miss a
+short peak but never invents one, and the newer timings where it has them.
+
+**Admission.** `presets.resolve(lookup=...)` asks `measurements.make_lookup`
+for each candidate profile's fingerprint and measurement. A measured profile's
+need is its highest peak outside previews ×1.1 (`NEED_MARGIN`, as for a learned
+ComfyUI need), and its evidence becomes `measured`; previews are admitted
+apart, on the previews phase's peak. A profile whose training fits but whose
+previews do not is picked with `previews_deferred` and
+`train.disable_sampling` (source `gpu`); a pinned `train.disable_sampling`
+decides either way. The result also carries `fingerprint`,
+`probe` (the picked profile was never measured), `fallbacks` (the profiles after
+it in the fit choice, each offloading more) and `estimate` (`{seconds, basis}`:
+setup, steps at the warm speed and every preview picture, plus a model load per
+checkpoint when previews are deferred; basis `measured`, or `none` with no
+seconds). `POST /training/resolve` and `POST /training/jobs` both pass the
+lookup, tied to the saved checkout's commit and PixlStash's card.
+
+**The probe.** Once its lease is granted, a run resolved with measurements is
+resolved again on its profile at launch, against the checkout and card it now
+has (`TrainingService._check_memory_and_speed`): a setup measured since it was
+queued is not probed, and a changed commit or card is a new setup. One that
+has not been measured is checked before it trains,
+and stays `queued` meanwhile: the live view shows "Checking memory and speed"
+from the lease, and a cancel or a shutdown simply stops the probe. The probe is
+the run's own config with `PROBE_STEPS` (6) updates at the largest bucket only,
+no "before" sample, one save and one round of previews at the end, written under
+`<work dir>/probe` and polled every second. It is stopped when available RAM
+falls below `RAM_GUARD_MB` (1 GB), which fails the run as "Not enough system
+RAM to start". **The search is bounded** (`MAX_PROBES`, 3): running out of
+memory (ai-toolkit's `out of memory`, `OutOfMemoryError` or its `OOM during
+training step`, which it prints when it skips a batch and carries on, so a probe
+that completed with a skipped batch counts as out of memory too) steps to the
+next fallback; any other failure (a loader error,
+a Triton error) fails the run without trying more; a fallback that does not fit
+the room the run was resolved against is skipped. A probe that completes is
+recorded (`source` `probe`), the run is resolved again on that profile alone
+(`resolve(profile=...)`) with the measurement in, and that resolution becomes
+the row's `resolved_profile` and the config it renders. A setup measured since
+the run was queued (an earlier run of it) is not probed again.
+
+**Learning from runs.** Every poll of a run reads what its trainer holds
+(`measurements.trainer_usage`) into the run's phase peaks and onto its lease
+(`progress`: `phase`, `vram_mb`, `ram_mb`, alongside step, total and loss), the
+worker's phase telemetry. A run that completes records its peaks and timings
+under its fingerprint (`source` `run`) before it is imported; one re-attached
+after a restart records its peaks and speed but not its setup time, which it
+did not see.
+
+**Deferred previews.** A run with `previews_deferred` trains without them; once
+it completes, each kept checkpoint (and the final) is sampled in a pass of its
+own, before the import: the run's config with
+`network.pretrained_lora_path` at the checkpoint and `train.start_step` =
+`train.steps` = its step, so ai-toolkit loads the LoRA, trains nothing and
+samples once at that step. The pictures move into the run's `samples/`, where
+the live view and the importer read them, and a step is sampled once (the
+final shares its step with the last save). A pass that fails is logged and
+skipped. Cancel stops the passes and imports the run as it is. A shutdown stops
+them and leaves the run completed with no `completed_at`, which
+`training_runs.unfinished_runs` returns, so the next start's reconcile imports
+it (without the previews still to draw); the same covers a restart during any
+import. `ponytail:` each pass loads the model again; one pass that swaps
+LoRAs would need ai-toolkit's generate job, if the time matters.
+
+**The AI-toolkit tenant.** `resources/aitoolkit_tenant.py` is the arbiter's
+probe for the trainer: the worker tells it the trainer's processes each poll,
+so what the trainer holds is AI Toolkit's to the arbiter and a reservation is
+not counted on top of it. **Shrink after the first checkpoint**: once a
+checkpoint is saved and the run has been seen training (and drawing previews,
+unless they are deferred), its lease is lowered to its highest peak ×1.1 and
+stops being exclusive (`Lease.shrink`), so PixlStash's own work can use the
+rest. **Adoption at boot**: `Vault.start` calls
+`TrainingService.adopt_live_runs` before the task runner starts, and a run whose
+trainer outlived the restart gets `ResourceArbiter.adopt`: an exclusive lease
+granted at once (nothing to wait for or free: the trainer already holds its
+memory, which counts as the lease's own, baseline 0), quiet for
+`ADOPT_QUIET_S` (120 s), during which it refuses to shrink because PixlStash has
+not watched the run peak since the restart. `reconcile_on_startup` resumes
+watching it on that lease. **Memory not released**: when a trainer exits, its
+processes get `RELEASE_GRACE_S` (10 s) to give back their GPU memory; what they
+still hold is announced on the lease (`aitoolkit_memory_not_released`) and named
+"AI Toolkit · memory not released" in the Tasks tab instead of other apps'.
+
+**Ceilings.** Peaks are polled (every 5 s for a run, 1 s for a probe or a
+preview pass), so a peak shorter than that is missed; the margin and the
+max-merge carry it. Where NVML cannot attribute memory per process (Windows
+WDDM, Docker) no GPU peak is measured, the seed stays the need and the lease
+keeps its whole reservation. Not verified on hardware in this change: an
+ai-toolkit probe end to end, and the after-training pass's
+`pretrained_lora_path` + `start_step` behaviour.
 
 ## 26. Prompt match
 

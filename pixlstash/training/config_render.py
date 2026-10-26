@@ -87,6 +87,7 @@ TUNABLE_KEYS: dict[str, _Rule] = {
     "train.timestep_type": _one_of("linear", "sigmoid", "shift", "weighted"),
     "train.train_text_encoder": _flag(),
     "train.cache_text_embeddings": _flag(),
+    "train.disable_sampling": _flag(),
     "network.linear": _ints(1, 512),
     "network.linear_alpha": _floats(0, 1024),
     "network.conv": _ints(0, 512),

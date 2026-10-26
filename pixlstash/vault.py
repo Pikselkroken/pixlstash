@@ -46,6 +46,7 @@ from .tasks.smart_score_task import SmartScoreTask
 from .utils.likeness.likeness_parameter_utils import LikenessParameterUtils
 from .tasks.base_task import TaskStatus
 from .task_runner import TaskRunner
+from .resources.aitoolkit_tenant import AiToolkitProbe
 from .resources.arbiter import Lease, LeaseKind, Tenant, arbiter
 from .resources.ledger import ledger
 from .work_planner import WorkPlanner
@@ -69,7 +70,7 @@ from pixlstash.services.scrapheap_service import DEFAULT_RETENTION_DAYS
 from pixlstash.services.workflow_ghost_service import DEFAULT_GHOST_RETENTION
 from pixlstash.services.snapshot_service import SnapshotService
 from pixlstash.utils.service.export_utils import ExportUtils
-from pixlstash.services.training_service import TrainingService
+from pixlstash.services.training_service import ADOPT_QUIET_S, TrainingService
 from pixlstash.services.stack_detector import set_cover
 from pixlstash.hub import training_runs
 from pixlstash.services.run_importer import STATUS_IMPORTED, RunImporter
@@ -482,6 +483,9 @@ class Vault:
         """
         if self._disable_background_workers or self._started:
             return
+        # A trainer that outlived the restart gets its card before PixlStash's
+        # own GPU workers start, so none of them loads a model under it.
+        self.training_service.adopt_live_runs()
         self._task_runner.start()
         self._work_planner.start()
         self._arbiter.add_yielder(self._yield_gpu)
@@ -1001,6 +1005,14 @@ class Vault:
         def dataset_builder(**kwargs):
             return ExportUtils.build_training_dataset(shim, **kwargs)
 
+        # What the trainer holds is AI Toolkit's to the arbiter, not other
+        # apps', so a lease shrunk to a run's peak is not counted twice.
+        tenant = None
+        if not disable_background_workers:
+            tenant = AiToolkitProbe()
+            # The process's arbiter: self._arbiter is bound after this runs.
+            arbiter().register_probe(Tenant.AITOOLKIT, tenant)
+
         return TrainingService(
             self._hub,
             self._library_uuid,
@@ -1011,6 +1023,8 @@ class Vault:
             config_provider=self._training_config_provider,
             dataset_builder=dataset_builder,
             disable_background_workers=disable_background_workers,
+            adopt_gpu=self._adopt_training_gpu,
+            tenant=tenant,
         )
 
     def _training_config_provider(self) -> dict:
@@ -1247,6 +1261,24 @@ class Vault:
             ram_mb=ram_mb,
             kind=LeaseKind.EXCLUSIVE,
             device=ledger().pixlstash_device(),
+            job_id=job_uuid,
+        )
+
+    def _adopt_training_gpu(
+        self, label: str, job_uuid: str, vram_mb: int, ram_mb: int
+    ) -> Lease:
+        """Grant a trainer that outlived the restart its card at once.
+
+        See :meth:`ResourceArbiter.adopt`: exclusive and unshrinkable for
+        ``ADOPT_QUIET_S``, so PixlStash's own work keeps off the card.
+        """
+        return self._arbiter.adopt(
+            Tenant.AITOOLKIT,
+            label,
+            vram_mb,
+            ledger().pixlstash_device(),
+            quiet_s=ADOPT_QUIET_S,
+            ram_mb=ram_mb,
             job_id=job_uuid,
         )
 

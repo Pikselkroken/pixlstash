@@ -31,8 +31,10 @@ import json
 import math
 import os
 from functools import lru_cache
+from typing import Callable
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.training import measurements
 from pixlstash.training.config_render import (
     TUNABLE_KEYS,
     TunableOverrideError,
@@ -322,6 +324,8 @@ def resolve(
     ram_mb: int | None,
     pins: dict | None = None,
     prompts: list[str] | None = None,
+    lookup: Callable[[dict], tuple[str, dict | None]] | None = None,
+    profile: str | None = None,
 ) -> dict:
     """Every value a run of *preset* uses on this machine, and where it came from.
 
@@ -341,15 +345,26 @@ def resolve(
         prompts: The sample prompts written from the dataset's captions
             (:func:`pixlstash.training.sample_prompts.generate`), checked
             like a pin; pinned prompts win over them.
+        lookup: Answers ``(fingerprint, measurement or None)`` for a profile's
+            full ``{key: value}`` (:func:`measurements.make_lookup`). A
+            measured profile is admitted on its measured peaks instead of the
+            seeds, and its previews apart. None skips measurements altogether
+            (and never asks for a probe).
+        profile: Consider this hardware profile alone, whatever the fit
+            choice: the worker re-resolves with the profile a probe settled on.
 
     Returns:
         ``{"preset", "subject", "effort", "fit", "picture_count", "profile",
-        "profile_label", "evidence", "vram_mb", "ram_mb", "room",
-        "steps_clamp", "values"}``; ``steps_clamp`` is ``cap`` or ``floor``
-        when the effort's step range held the picture-scaled count, else None;
-        ``values`` maps each key to ``{"value", "source"}``, the source being
-        ``model``, ``subject``, ``effort``, ``pictures``, ``captions``, ``gpu``
-        or ``pinned``.
+        "profile_label", "evidence", "vram_mb", "ram_mb", "preview_vram_mb",
+        "room", "steps_clamp", "fingerprint", "probe", "fallbacks",
+        "previews_deferred", "estimate", "values"}``; ``steps_clamp`` is
+        ``cap`` or ``floor`` when the effort's step range held the
+        picture-scaled count, else None; ``probe`` is True when the profile's
+        setup has never been measured here; ``fallbacks`` are the profiles a
+        probe that runs out of memory steps to; ``estimate`` is ``{seconds,
+        basis}``, basis ``measured`` or ``none``; ``values`` maps each key to
+        ``{"value", "source"}``, the source being ``model``, ``subject``,
+        ``effort``, ``pictures``, ``captions``, ``gpu`` or ``pinned``.
 
     Raises:
         ValueError: An unknown choice.
@@ -411,6 +426,10 @@ def resolve(
     names = list(preset["fit"][fit])
     if pinned_settings:
         names += [name for name in profiles if name not in names]
+    if profile is not None:
+        if profile not in profiles:
+            raise ValueError(f"{preset['label']} has no memory profile {profile}.")
+        names = [profile]
     candidates = [
         (name, profiles[name])
         for name in names
@@ -433,18 +452,49 @@ def resolve(
             0,
             0,
         )
-    picked = next(
-        (
-            (n, p)
-            for n, p in sized
-            if p["vram_mb"] <= vram_mb and (ram_mb is None or p["ram_mb"] <= ram_mb)
-        ),
-        None,
-    )
-    if picked is None:
-        vram_ok = [p for _, p in sized if p["vram_mb"] <= vram_mb]
+    flat = {key: entry["value"] for key, entry in values.items()}
+
+    def judged(name: str, profile: dict) -> dict:
+        """The profile's needs, measured on this machine where they were."""
+        settings = {k: v for k, v in profile["settings"].items() if k not in pins}
+        entry = {
+            "name": name,
+            "profile": profile,
+            "vram_mb": profile["vram_mb"],
+            "ram_mb": profile["ram_mb"],
+            "evidence": profile["evidence"],
+            "fingerprint": None,
+            "measurement": None,
+            "preview_vram_mb": None,
+            "preview_ram_mb": None,
+        }
+        if lookup is None:
+            return entry
+        key, measurement = lookup({**flat, **settings})
+        entry["fingerprint"] = key
+        if measurement is None:
+            return entry
+        measured = measurements.needs(measurement)
+        entry["measurement"] = measurement
+        if measured["vram_mb"] is not None:
+            entry["vram_mb"] = measured["vram_mb"]
+            entry["evidence"] = "measured"
+        if measured["ram_mb"] is not None:
+            entry["ram_mb"] = measured["ram_mb"]
+        entry["preview_vram_mb"] = measured["preview_vram_mb"]
+        entry["preview_ram_mb"] = measured["preview_ram_mb"]
+        return entry
+
+    judgedall = [judged(n, p) for n, p in sized]
+    fitting = [
+        e
+        for e in judgedall
+        if e["vram_mb"] <= vram_mb and (ram_mb is None or e["ram_mb"] <= ram_mb)
+    ]
+    if not fitting:
+        vram_ok = [e for e in judgedall if e["vram_mb"] <= vram_mb]
         if vram_ok:
-            need = min(p["ram_mb"] for p in vram_ok)
+            need = min(e["ram_mb"] for e in vram_ok)
             raise NoProfileFits(
                 f"{preset['label']} needs {_gb(need)} of RAM to hold what does "
                 f"not fit on the GPU; {_gb(ram_mb or 0)} is available.",
@@ -452,7 +502,7 @@ def resolve(
                 need,
                 ram_mb or 0,
             )
-        need = min(p["vram_mb"] for _, p in sized)
+        need = min(e["vram_mb"] for e in judgedall)
         raise NoProfileFits(
             f"{preset['label']} needs {_gb(need)} of GPU memory at least; "
             f"{_gb(vram_mb)} can be given to it on this GPU.",
@@ -460,7 +510,8 @@ def resolve(
             need,
             vram_mb,
         )
-    name, profile = picked
+    picked = fitting[0]
+    name, profile = picked["name"], picked["profile"]
     for key, value in profile["settings"].items():
         if key not in pins:
             values[key] = {"value": value, "source": "gpu"}
@@ -470,6 +521,34 @@ def resolve(
         dropout in values and dropout not in pins
     ):
         values[dropout] = {"value": 0.0, "source": "gpu"}
+    # Previews are admitted apart: a run whose training fits but whose
+    # previews do not trains without them, and its checkpoints are sampled
+    # once training is done.
+    deferred = (
+        picked["preview_vram_mb"] is not None and picked["preview_vram_mb"] > vram_mb
+    ) or (
+        picked["preview_ram_mb"] is not None
+        and ram_mb is not None
+        and picked["preview_ram_mb"] > ram_mb
+    )
+    sampling = "train.disable_sampling"
+    if sampling in pins:
+        # The owner's word on previews stands, either way.
+        deferred = bool(pins[sampling])
+    elif deferred:
+        values[sampling] = {"value": True, "source": "gpu"}
+    seconds = None
+    if picked["measurement"] is not None:
+        seconds = measurements.estimate_seconds(
+            picked["measurement"],
+            steps=values["train.steps"]["value"],
+            previews=_preview_images(values, deferred),
+        )
+        if deferred and seconds is not None:
+            # Each checkpoint sampled after training loads the model again.
+            seconds += _after_training_passes(values) * float(
+                picked["measurement"].get("setup_seconds") or 0
+            )
     return {
         "preset": preset_ref(preset),
         "subject": subject,
@@ -478,13 +557,47 @@ def resolve(
         "picture_count": picture_count,
         "profile": name,
         "profile_label": profile["label"],
-        "evidence": profile["evidence"],
-        "vram_mb": profile["vram_mb"],
-        "ram_mb": profile["ram_mb"],
+        "evidence": picked["evidence"],
+        "vram_mb": picked["vram_mb"],
+        "ram_mb": picked["ram_mb"],
+        "preview_vram_mb": picked["preview_vram_mb"],
         "room": {"vram_mb": vram_mb, "ram_mb": ram_mb},
         "steps_clamp": clamp,
+        "fingerprint": picked["fingerprint"],
+        "probe": lookup is not None and picked["measurement"] is None,
+        # The profiles a probe that runs out of memory steps to, in the fit
+        # choice's order: each offloads more than the one before.
+        "fallbacks": [e["name"] for e in judgedall[judgedall.index(picked) + 1 :]],
+        "previews_deferred": bool(deferred),
+        "estimate": {
+            "seconds": round(seconds) if seconds is not None else None,
+            "basis": "measured" if seconds is not None else "none",
+        },
         "values": values,
     }
+
+
+def _preview_images(values: dict, deferred: bool) -> int:
+    """How many preview pictures a run draws with these values."""
+    prompts = len((values.get(PROMPTS_KEY) or {}).get("value") or []) or 1
+    steps = int(values["train.steps"]["value"])
+    if deferred:
+        return prompts * _after_training_passes(values)
+    every = int((values.get("sample.sample_every") or {}).get("value") or 0)
+    if every <= 0:
+        return prompts * 2
+    # The "before" round at step 0, one every sample_every, and the last.
+    rounds = steps // every + 1 + (1 if steps % every else 0)
+    return prompts * rounds
+
+
+def _after_training_passes(values: dict) -> int:
+    """How many checkpoints a run with deferred previews samples afterwards."""
+    steps = int(values["train.steps"]["value"])
+    every = int((values.get("save.save_every") or {}).get("value") or 0)
+    keep = int((values.get("save.max_step_saves_to_keep") or {}).get("value") or 4)
+    saved = steps // every if every > 0 else 0
+    return min(saved, keep) + 1
 
 
 def resolved_values(resolution: dict) -> dict:

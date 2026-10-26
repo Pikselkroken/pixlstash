@@ -469,7 +469,15 @@ export function useUpdatesSocket({
         // The GPU's queue moved: the Tasks tab re-reads it from the poll rather
         // than patching rows from the event. `preempted` stays quiet.
         tasksStore.nudge();
-        if (
+        if (payload.change === "warning" && payload.code === "aitoolkit_memory_not_released") {
+          // A trainer exited without giving its GPU memory back (#2120); other
+          // GPU work counts it as used until those processes end.
+          noticeStore.push({
+            level: "warning",
+            text: payload.text || "AI-toolkit exited but its GPU memory was not released.",
+            key: `resource-lease-not-released-${payload.lease_id}`,
+          });
+        } else if (
           payload.change === "warning" &&
           payload.code === "vram_oom_exclusive" &&
           payload.workflow_id

@@ -1492,6 +1492,22 @@ class TestTrainingRunTable:
         assert read_schema_version(hub) == 2, "the amend must not bump to v3"
         assert "training_run" in table_names(hub)
 
+    def test_an_existing_v2_hub_gains_the_measurement_table(self, hub):
+        # What this machine measured a training setup to need (#2120), keyed
+        # by the setup's fingerprint, one row each.
+        apply_migrations(hub)
+        hub.execute("DROP TABLE training_profile_measurement")
+        apply_migrations(hub)
+        assert read_schema_version(hub) == 2
+        insert = (
+            "INSERT INTO training_profile_measurement (fingerprint, preset, "
+            "profile, phase_peaks, source, measured_at) VALUES ('fp', "
+            "'zimage-turbo@1', 'q8', '{}', 'probe', '2026-10-26T00:00:00+00:00')"
+        )
+        hub.execute(insert)
+        with pytest.raises(sqlite3.IntegrityError):
+            hub.execute(insert)
+
 
 @pytest.fixture
 def store(tmp_path):
