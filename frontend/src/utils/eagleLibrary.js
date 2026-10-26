@@ -13,8 +13,8 @@ import { IMPORT_MEDIA_EXTENSIONS } from "./media.js";
  *
  * Folders become picture sets, nested ones named by their path
  * ("Travel / Norway"). Items in Eagle's trash, file types PixlStash does not
- * import and items whose `metadata.json` will not parse (a half-synced library)
- * are left out and counted; the rest still import.
+ * import and items whose `metadata.json` is missing or will not parse (a
+ * half-synced library) are left out and counted; the rest still import.
  *
  * @param {FileList|File[]} fileList Every file under the picked folder.
  * @returns {Promise<{files: File[], metadata: Object[], trashed: number,
@@ -75,10 +75,11 @@ export async function readEagleLibrary(fileList) {
   let items = 0;
   for (const [dir, files] of filesByDir) {
     const match = dir.match(/^(?:(.*)\/)?images\/[^/]+\.info$/);
-    const metaFile = files.get("metadata.json");
-    if (!match || !metaFile) continue;
+    if (!match) continue;
     items += 1;
-    const meta = await readJson(metaFile);
+    // A missing metadata.json (half-synced) counts like an unparseable one.
+    const metaFile = files.get("metadata.json");
+    const meta = metaFile ? await readJson(metaFile) : null;
     if (!meta) {
       result.unreadable += 1;
       continue;

@@ -68,6 +68,7 @@ const libraryFiles = () => [
   fileAt(`${LIB}/images/D.info/a_b.png`),
   fileAt(`${LIB}/images/E.info/metadata.json`, ""),
   fileAt(`${LIB}/images/E.info/half-synced.png`),
+  fileAt(`${LIB}/images/F.info/no-metadata.png`),
 ];
 
 describe("readEagleLibrary", () => {
@@ -80,7 +81,7 @@ describe("readEagleLibrary", () => {
     ]);
     expect(library.trashed).toBe(1);
     expect(library.unsupported).toBe(1);
-    expect(library.unreadable).toBe(1);
+    expect(library.unreadable).toBe(2);
   });
 
   it("drops values of the wrong type instead of failing", async () => {
