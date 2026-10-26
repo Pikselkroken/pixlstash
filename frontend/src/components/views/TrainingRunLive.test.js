@@ -232,4 +232,50 @@ describe("TrainingRunLive", () => {
       vi.useRealTimers();
     }
   });
+
+  it("stops asking about a run this library does not hold", async () => {
+    vi.useFakeTimers();
+    try {
+      getTrainingJobLive.mockRejectedValue(
+        Object.assign(new Error("Training job not found"), {
+          response: { status: 404 },
+        }),
+      );
+      const wrapper = mount(TrainingRunLive, {
+        props: { jobId: 7 },
+        global: { stubs },
+      });
+      mounted.push(wrapper);
+      await flushPromises();
+      expect(wrapper.text()).toContain("That training run is not in this library.");
+      getTrainingJobLive.mockClear();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(getTrainingJobLive).not.toHaveBeenCalled();
+
+      // Another run: the old error is gone while it loads, and it is asked for.
+      let answer;
+      getTrainingJobLive.mockReturnValue(new Promise((r) => (answer = r)));
+      await wrapper.setProps({ jobId: 8 });
+      expect(wrapper.text()).not.toContain("not in this library");
+      expect(getTrainingJobLive).toHaveBeenCalledWith(8);
+      answer(payload({ id: 8 }));
+      await flushPromises();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reads Unknown when the card's total is known but its use is not", async () => {
+    const wrapper = await open(
+      payload({
+        telemetry: {
+          gpu: { total_mb: 24576, used_mb: null, ours_mb: null },
+          ram: { total_mb: null, used_mb: null, ours_mb: null },
+          need: { vram_mb: 16000, ram_mb: 16000 },
+          paging: false,
+        },
+      }),
+    );
+    expect(wrapper.find(".trl-statusbar").text()).toMatch(/GPU\s*Unknown/);
+  });
 });

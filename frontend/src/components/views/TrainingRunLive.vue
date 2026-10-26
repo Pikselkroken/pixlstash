@@ -697,7 +697,7 @@ function gb(mb) {
 }
 
 function figureText(figure) {
-  if (!figure.total_mb) return "Unknown";
+  if (!figure.total_mb || figure.used_mb == null) return "Unknown";
   return `${(figure.used_mb / 1024).toFixed(1)} / ${gb(figure.total_mb)}`;
 }
 
@@ -789,6 +789,8 @@ async function stop() {
 
 let timer = null;
 let generation = 0;
+// A run this library does not hold will not appear by asking again.
+let notFound = false;
 
 async function load() {
   const gen = ++generation;
@@ -799,8 +801,8 @@ async function load() {
     error.value = "";
   } catch (err) {
     if (gen !== generation) return;
-    error.value =
-      err?.response?.status === 404
+    notFound = err?.response?.status === 404;
+    error.value = notFound
         ? "That training run is not in this library."
         : errorDetail(err) || "Could not read the run.";
   }
@@ -809,7 +811,7 @@ async function load() {
 function schedule() {
   clearTimeout(timer);
   timer = null;
-  if (document.visibilityState !== "visible") return;
+  if (document.visibilityState !== "visible" || notFound) return;
   if (live.value && !isLive.value) return;
   timer = setTimeout(async () => {
     await load();
@@ -826,6 +828,8 @@ watch(
   () => props.jobId,
   () => {
     live.value = null;
+    error.value = "";
+    notFound = false;
     load().then(schedule);
   },
 );
@@ -1087,7 +1091,7 @@ onBeforeUnmount(() => {
 .trl-tick {
   width: 10px;
   height: 10px;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1178,7 +1182,7 @@ onBeforeUnmount(() => {
 .trl-ring {
   width: 9px;
   height: 9px;
-  border-radius: 50%;
+  border-radius: var(--radius-pill);
   border: 1.5px solid currentColor;
   display: inline-block;
 }
@@ -1234,7 +1238,7 @@ onBeforeUnmount(() => {
 .trl-trig {
   font-family: var(--font-mono);
   padding: 0 3px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background: rgb(var(--v-theme-surface));
   border: 1px solid rgb(var(--v-theme-border));
 }
@@ -1288,7 +1292,7 @@ img.trl-cell {
 .trl-spin {
   width: 16px;
   height: 16px;
-  border-radius: 50%;
+  border-radius: var(--radius-pill);
   border: 2px solid rgba(var(--v-theme-on-background), 0.25);
   border-top-color: rgb(var(--v-theme-on-background));
   animation: trl-spin 1s linear infinite;
@@ -1429,7 +1433,7 @@ img.trl-cell {
 :deep(.trl-prov--none)::before {
   width: 8px;
   height: 2px;
-  border-radius: 1px;
+  border-radius: var(--radius-pill);
   background: currentColor;
 }
 
