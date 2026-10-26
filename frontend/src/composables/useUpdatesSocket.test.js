@@ -808,6 +808,21 @@ describe("useUpdatesSocket: the GPU queue's resource_lease event", () => {
     expect(useNoticeStore().notices).toHaveLength(0);
   });
 
+  it("warns when a trainer exited without giving its GPU memory back", () => {
+    connect();
+    receive({
+      type: "resource_lease",
+      lease_id: "lease-9",
+      tenant: "aitoolkit",
+      change: "warning",
+      code: "aitoolkit_memory_not_released",
+      text: "AI-toolkit exited but 3.0 GB of GPU memory was not released (process 4242).",
+    });
+    const [notice] = useNoticeStore().notices;
+    expect(notice.level).toBe("warning");
+    expect(notice.text).toContain("was not released");
+  });
+
   it("does not warn for a warning with another code", () => {
     connect();
     receive({ type: "resource_lease", change: "warning", code: "something_else", workflow_id: "w", text: "x" });

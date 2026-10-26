@@ -1104,3 +1104,45 @@ def test_a_granted_lease_carries_its_live_progress_in_the_snapshot():
 
     lease.release()
     assert all(r["id"] != lease.id for r in arb.snapshot()["leases"])
+
+
+def test_adopt_grants_a_live_trainer_at_once_and_counts_its_memory_once():
+    """A trainer that outlived a restart already holds its memory: it is
+    granted without waiting, and what it holds is its reservation, not a
+    second helping on top of it."""
+    arb, fake, _ = make(used_mb=20000, thread=False)
+    trainer = FakeComfy(usage=18000)
+    arb.register_probe(Tenant.AITOOLKIT, trainer)
+    # Asked for the ordinary way, the same need waits: the card is full.
+    asked = arb.request(
+        Tenant.AITOOLKIT, "asked", device=CARD, need_mb=18000, kind=LeaseKind.EXCLUSIVE
+    )
+    assert asked.state is LeaseState.WAITING
+    asked.release()
+
+    adopted = arb.adopt(Tenant.AITOOLKIT, "train", 18000, CARD, quiet_s=60)
+    assert adopted.state is LeaseState.GRANTED
+    assert adopted.kind is LeaseKind.EXCLUSIVE
+    assert arb.snapshot()["devices"][0]["reserved_mb"] == 0
+    assert arb.try_light("Tagging", need_mb=0) is None
+
+    # Quiet: PixlStash has not watched it peak since the restart.
+    assert adopted.shrink(12000) is False
+    assert (adopted.kind, adopted.need_mb) == (LeaseKind.EXCLUSIVE, 18000)
+
+    adopted.quiet_until = time.monotonic() - 1
+    assert adopted.shrink(12000) is True
+    assert (adopted.kind, adopted.need_mb) == (LeaseKind.HEAVY, 12000)
+    light = arb.try_light("Tagging", need_mb=0)
+    assert light is not None and light.state is LeaseState.GRANTED
+    light.release()
+    adopted.release()
+
+
+def test_a_probe_can_name_the_memory_it_reports():
+    arb, _fake, _ = make(used_mb=3000, thread=False)
+    leftover = FakeComfy(usage=2000)
+    leftover.holder_label = lambda: "AI Toolkit · memory not released"
+    arb.register_probe(Tenant.AITOOLKIT, leftover)
+    labels = {row["label"] for row in arb.snapshot()["holders"]}
+    assert "AI Toolkit · memory not released" in labels

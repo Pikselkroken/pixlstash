@@ -274,3 +274,93 @@ def test_checkout_architectures_reads_the_model_code_folders(tmp_path):
     assert not presets.offered(_ZIT, ["flux2"])
     assert presets.checkout_architectures(str(tmp_path / "missing")) == []
     assert presets.checkout_architectures(None) == []
+
+
+# ---------------------------------------------------------------------------
+# Measured on this machine (#2120)
+# ---------------------------------------------------------------------------
+
+
+def _profile_of(values):
+    """The hardware profile whose settings *values* carry."""
+    return next(
+        name
+        for name, profile in _ZIT["hardware_profiles"].items()
+        if all(values.get(k) == v for k, v in profile["settings"].items())
+    )
+
+
+def _lookup(measured: dict):
+    """A lookup answering *measured*[profile] as that profile's measurement."""
+
+    def lookup(values):
+        name = _profile_of(values)
+        return f"fp-{name}", measured.get(name)
+
+    return lookup
+
+
+def _measurement(training_mb, previews_mb=None, per_update=None):
+    peaks = {"training": {"vram_mb": training_mb, "ram_mb": 10_000}}
+    if previews_mb is not None:
+        peaks["previews"] = {"vram_mb": previews_mb, "ram_mb": None}
+    return {
+        "phase_peaks": peaks,
+        "seconds_per_update": per_update,
+        "setup_seconds": 100.0,
+        "seconds_per_preview": 4.0,
+    }
+
+
+def test_a_measured_profile_is_admitted_on_what_it_measured():
+    """On a 16 GB card the 16 GB seed of q8 does not fit; measured at 12 GB, it
+    does, and says so."""
+    assert _resolve(vram_mb=_16GB, lookup=_lookup({}))["profile"] == "q8_cached"
+    out = _resolve(vram_mb=_16GB, lookup=_lookup({"q8": _measurement(12_000)}))
+    assert out["profile"] == "q8"
+    assert (out["evidence"], out["vram_mb"]) == ("measured", 13_200)
+    assert out["fingerprint"] == "fp-q8"
+    assert out["probe"] is False and out["previews_deferred"] is False
+
+
+def test_a_measured_peak_above_the_seed_moves_to_the_next_profile():
+    out = _resolve(lookup=_lookup({"q8": _measurement(21_000)}))
+    assert out["profile"] == "q8_cached"
+    # Never measured here: the run checks memory and speed first, and a probe
+    # that runs out of memory steps to the profiles after it.
+    assert out["probe"] is True
+    assert out["fallbacks"] == ["q8_offload"]
+    assert out["estimate"] == {"seconds": None, "basis": "none"}
+
+
+def test_without_measurements_nothing_is_probed():
+    out = _resolve()
+    assert (out["probe"], out["fingerprint"]) == (False, None)
+    assert out["fallbacks"] == ["q8_cached", "q8_offload"]
+
+
+def test_previews_that_do_not_fit_wait_until_training_is_done():
+    out = _resolve(
+        vram_mb=_16GB,
+        lookup=_lookup(
+            {"q8": _measurement(12_000, previews_mb=16_000, per_update=2.0)}
+        ),
+    )
+    assert out["profile"] == "q8" and out["previews_deferred"] is True
+    assert out["values"]["train.disable_sampling"] == {"value": True, "source": "gpu"}
+    assert out["preview_vram_mb"] == 17_600
+    steps = out["values"]["train.steps"]["value"]
+    assert out["estimate"]["basis"] == "measured"
+    assert out["estimate"]["seconds"] > 100 + steps * 2.0
+    fits = _resolve(
+        lookup=_lookup({"q8": _measurement(12_000, previews_mb=16_000, per_update=2.0)})
+    )
+    assert fits["previews_deferred"] is False
+    assert "train.disable_sampling" not in fits["values"]
+
+
+def test_a_forced_profile_is_resolved_alone():
+    out = _resolve(profile="q8_offload")
+    assert out["profile"] == "q8_offload" and out["fallbacks"] == []
+    with pytest.raises(ValueError):
+        _resolve(profile="no-such-profile")

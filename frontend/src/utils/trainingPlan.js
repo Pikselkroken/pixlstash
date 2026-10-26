@@ -186,10 +186,35 @@ export function effortHint({ rule, clamp, effort, subject }) {
   return parts.join(" ");
 }
 
-/** The mono line under "Fit to this GPU": the memory profile it picked. */
+/**
+ * The mono line under "Fit to this GPU": the memory profile it picked, its
+ * peak ("at" once this machine measured it, "near" for the recipe's seed), and
+ * whether previews wait until training is done (#2120).
+ */
 export function fitReadout(resolution) {
   if (!resolution?.profile_label) return "";
-  return `${resolution.profile_label} · peaks near ${gb(resolution.vram_mb)} GB`;
+  const measured = resolution.evidence === "measured";
+  const peak = measured
+    ? `peaks at ${gb(resolution.vram_mb)} GB, measured`
+    : `peaks near ${gb(resolution.vram_mb)} GB`;
+  const previews = resolution.previews_deferred ? " · previews after training" : "";
+  return `${resolution.profile_label} · ${peak}${previews}`;
+}
+
+/**
+ * The footer's time line: "About 50 min." from this machine's measurements,
+ * or a note that the first run of this setup checks memory and speed first.
+ */
+export function timeEstimate(resolution) {
+  const seconds = resolution?.estimate?.seconds;
+  if (resolution?.estimate?.basis === "measured" && seconds != null) {
+    const m = Math.max(1, Math.round(seconds / 60));
+    if (m < 60) return `About ${m} min.`;
+    const rest = m % 60;
+    return `About ${Math.floor(m / 60)} h${rest ? ` ${rest} min` : ""}.`;
+  }
+  if (resolution?.probe) return "It checks memory and speed first, so the time is not known yet.";
+  return "";
 }
 
 /**

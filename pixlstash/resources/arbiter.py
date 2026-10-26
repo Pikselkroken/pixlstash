@@ -83,7 +83,9 @@ class TenantProbe(Protocol):
     """What the arbiter asks of a tenant other than PixlStash's own tasks.
 
     Every method is called **outside** the arbiter's lock, from its refresh,
-    because each may be a network round trip.
+    because each may be a network round trip. A probe may also define
+    ``holder_label()``, the name its memory goes by in the Tasks tab when the
+    tenant's own name would not say enough (None keeps that name).
     """
 
     def device(self) -> str | None:
@@ -144,6 +146,9 @@ class Lease:
     progress: dict | None = None
     reclaimed: set = field(default_factory=set)
     announced: bool = False
+    #: ``time.monotonic()`` until which an adopted lease stays as it was
+    #: adopted: exclusive, never shrunk (see :meth:`ResourceArbiter.adopt`).
+    quiet_until: float | None = None
     _changed: threading.Event = field(default_factory=threading.Event)
     _arbiter: Optional["ResourceArbiter"] = None
 
@@ -181,14 +186,23 @@ class Lease:
         if self._arbiter is not None:
             self._arbiter.release(self, only_waiting=only_waiting)
 
-    def shrink(self, need_mb: int) -> None:
+    def shrink(self, need_mb: int) -> bool:
         """Lower the reservation to what the work is now known to need.
 
         Bookkeeping only: nothing is freed inside the work itself. AI-toolkit's
         lease shrinks this way once its real peak is known.
+
+        Returns:
+            False while an adopted lease is still quiet: nothing changed.
         """
         if self._arbiter is not None:
-            self._arbiter.shrink(self, need_mb)
+            return self._arbiter.shrink(self, need_mb)
+        return False
+
+    def warn(self, code: str, text: str, **payload) -> None:
+        """Attach a warning to this lease and announce it."""
+        if self._arbiter is not None:
+            self._arbiter.warn(self, code, text, **payload)
 
     def set_progress(self, **fields) -> None:
         """Replace the live figures the Tasks tab shows for this lease."""
@@ -408,6 +422,46 @@ class ResourceArbiter:
         lease._arbiter = self
         return self._admit_light(lease, "on the CPU")
 
+    def adopt(
+        self,
+        tenant: Tenant,
+        label: str,
+        need_mb: int,
+        device: str | None,
+        *,
+        quiet_s: float,
+        **fields,
+    ) -> Lease:
+        """Grant an exclusive lease at once to work already running on *device*.
+
+        A trainer that outlived a restart already holds its memory, so it is
+        not queued, nothing is asked to make room for it, and what its tenant
+        holds now counts as its own rather than as other apps'. For *quiet_s*
+        it stays exactly as adopted: exclusive, so PixlStash's own GPU work
+        keeps off the card, and refusing :meth:`shrink`, because PixlStash has
+        not yet watched the run reach its peak since the restart.
+        """
+        self._refresh()
+        lease = Lease(
+            tenant=tenant,
+            label=label,
+            kind=LeaseKind.EXCLUSIVE,
+            device=device,
+            need_mb=max(0, int(need_mb)),
+            **fields,
+        )
+        lease._arbiter = self
+        lease.quiet_until = time.monotonic() + max(0.0, quiet_s)
+        with self._lock:
+            lease.seq = next(self._seq)
+            self._leases[lease.id] = lease
+            changes = self._grant_locked(lease, "adopted at start-up")
+            if device is not None:
+                # Everything it holds was there before the grant.
+                self._baseline[(tenant, device)] = 0
+        self._announce(changes)
+        return lease
+
     def _admit_light(self, lease: Lease, why: str) -> Lease:
         with self._lock:
             lease.seq = next(self._seq)
@@ -448,13 +502,21 @@ class ResourceArbiter:
         self._announce(changes)
         return True
 
-    def shrink(self, lease: Lease, need_mb: int) -> None:
+    def shrink(self, lease: Lease, need_mb: int) -> bool:
+        if lease.quiet_until is not None and time.monotonic() < lease.quiet_until:
+            logger.info(
+                "Not shrinking %s (%s) yet: adopted at start-up and still quiet",
+                lease.id,
+                lease.label,
+            )
+            return False
         with self._lock:
             lease.need_mb = max(0, min(lease.need_mb, int(need_mb)))
             if lease.kind is LeaseKind.EXCLUSIVE:
                 lease.kind = LeaseKind.HEAVY
             changes = self._evaluate_locked()
         self._announce(changes)
+        return True
 
     def set_progress(self, lease: Lease, fields: dict) -> None:
         """Store a lease's live figures. The next snapshot carries them."""
@@ -660,7 +722,8 @@ class ResourceArbiter:
                 self._holder(
                     reading.uuid,
                     tenant.value,
-                    "ComfyUI" if tenant is Tenant.COMFYUI else "AI Toolkit",
+                    state.get("label")
+                    or ("ComfyUI" if tenant is Tenant.COMFYUI else "AI Toolkit"),
                     int(state["usage"]),
                     "torch_reserved",
                 )
@@ -726,11 +789,13 @@ class ResourceArbiter:
         states = {}
         for tenant, probe in tenant_probes.items():
             try:
+                label = getattr(probe, "holder_label", None)
                 states[tenant] = {
                     "device": probe.device(),
                     "usage": probe.usage_mb(),
                     "busy": probe.busy(),
                     "idle": probe.idle(),
+                    "label": label() if callable(label) else None,
                 }
             except Exception as exc:
                 logger.warning(

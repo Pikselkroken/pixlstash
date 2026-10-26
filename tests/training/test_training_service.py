@@ -30,7 +30,10 @@ import pytest
 from pixlstash.event_types import EventType
 from pixlstash.hub import training_runs
 from pixlstash.hub.db import now_iso
+from pixlstash.resources.aitoolkit_tenant import AiToolkitProbe
+from pixlstash.services import training_service as training_service_module
 from pixlstash.services.training_service import TrainingService
+from pixlstash.training import measurements, presets
 from pixlstash.training.backend import TrainingProgress
 from pixlstash.training.local_ai_toolkit import LocalAiToolkit
 from pixlstash.vault import Vault
@@ -112,6 +115,13 @@ class _StubLease:
 
     def set_progress(self, **fields) -> None:
         self.progress_calls.append(fields)
+
+    def shrink(self, need_mb: int) -> bool:
+        self.events.append(f"shrink {need_mb}")
+        return True
+
+    def warn(self, code: str, text: str, **payload) -> None:
+        self.events.append(f"warn {code}")
 
 
 class _RecordingImport:
@@ -983,13 +993,16 @@ def test_a_polling_run_keeps_its_lease_step_total_and_loss_live(hub, repo_dir):
         notify=_CapturingNotify(),
         dataset_builder=_make_dataset_builder(),
     )
-    handle = SimpleNamespace(log_path=os.path.join(repo_dir, "missing.log"))
+    handle = SimpleNamespace(log_path=os.path.join(repo_dir, "missing.log"), pid=None)
 
     service._poll_until_done(_Backend(), handle, "abc123", lease)
 
+    # The phase rides along (the worker's phase telemetry); a trainer with no
+    # process to read has no memory figures.
+    unread = {"vram_mb": None, "ram_mb": None}
     assert lease.progress_calls == [
-        {"step": 120, "total": 300, "loss": 0.42},
-        {"step": 300, "total": 300, "loss": None},
+        {"step": 120, "total": 300, "loss": 0.42, "phase": "training", **unread},
+        {"step": 300, "total": 300, "loss": None, "phase": "importing", **unread},
     ]
 
 
@@ -1179,7 +1192,8 @@ def test_vault_reconciles_a_surviving_trainer_before_the_worker_starts():
     """A trainer that survived a restart is handled before the worker takes a job.
 
     Otherwise the worker can claim a queued job and ask the arbiter for the card
-    while the surviving run still holds it.
+    while the surviving run still holds it. It is adopted before PixlStash's own
+    GPU workers start, so none of them loads a model under it.
     """
     order: list[str] = []
 
@@ -1189,7 +1203,7 @@ def test_vault_reconciles_a_surviving_trainer_before_the_worker_starts():
     stand_in = SimpleNamespace(
         _disable_background_workers=False,
         _started=False,
-        _task_runner=SimpleNamespace(start=noop),
+        _task_runner=SimpleNamespace(start=lambda: order.append("tasks")),
         _work_planner=SimpleNamespace(start=noop),
         _arbiter=SimpleNamespace(add_yielder=noop, add_listener=noop),
         _yield_gpu=noop,
@@ -1197,6 +1211,7 @@ def test_vault_reconciles_a_surviving_trainer_before_the_worker_starts():
         _ref_folder_watcher=SimpleNamespace(start=noop),
         _start_existing_folder_watches=noop,
         training_service=SimpleNamespace(
+            adopt_live_runs=lambda: order.append("adopt"),
             reconcile_on_startup=lambda: order.append("reconcile"),
             start=lambda: order.append("start"),
         ),
@@ -1204,7 +1219,7 @@ def test_vault_reconciles_a_surviving_trainer_before_the_worker_starts():
 
     Vault.start(stand_in)
 
-    assert order == ["reconcile", "start"]
+    assert order == ["adopt", "tasks", "reconcile", "start"]
 
 
 def test_a_poll_does_not_undo_a_cancel_the_trainer_has_not_seen_yet(hub, repo_dir):
@@ -1246,3 +1261,379 @@ def test_a_poll_does_not_undo_a_cancel_the_trainer_has_not_seen_yet(hub, repo_di
     training_runs.update_run(hub, "cancelled-job", status="running")
     service._persist_progress("cancelled-job", running, handle)
     assert _job_status(hub, "cancelled-job").status == "running"
+
+
+# ---------------------------------------------------------------------------
+# Checking memory and speed, and learning from runs (#2120)
+# ---------------------------------------------------------------------------
+
+_ZIT = presets.get_preset("zimage-turbo")
+# A run small enough for the stub: four updates, a checkpoint every two.
+_SMALL = {"train.steps": 4, "save.save_every": 2, "sample.sample_every": 2}
+# What the stub trainer is read as holding on the card, while it runs.
+_HOLDS_MB = 9000
+
+
+def _resolve_small(hub, *, vram_mb=22_800):
+    """The recipe resolved for a two-picture set, with this hub's measurements."""
+    return presets.resolve(
+        _ZIT,
+        subject="person",
+        effort="standard",
+        fit="auto",
+        picture_count=2,
+        vram_mb=vram_mb,
+        ram_mb=60_000,
+        pins=dict(_SMALL),
+        lookup=measurements.make_lookup(hub, _ZIT, commit=None, device=None),
+    )
+
+
+def _enqueue_resolved(service, resolution, template, name="probed"):
+    return service.enqueue(
+        set_id=_SET_ID,
+        name=name,
+        base_model="m",
+        trigger_word="t",
+        template_path=template,
+        config_overrides=presets.to_patch(presets.resolved_values(resolution)),
+        locked=presets.to_patch(_ZIT["locked"]),
+        resolution=resolution,
+        pins=dict(_SMALL),
+    )
+
+
+@pytest.fixture
+def watched(monkeypatch, tmp_path):
+    """A stub trainer slow enough to be seen in each phase, read as holding
+    :data:`_HOLDS_MB` on the card, with each launch counted."""
+    monkeypatch.setenv("FAKE_RUN_STEP_DELAY", "0.05")
+    launches = tmp_path / "launches.txt"
+    monkeypatch.setenv("FAKE_RUN_LAUNCHES", str(launches))
+    monkeypatch.setattr(training_service_module, "_SHORT_POLL_S", 0.02)
+    monkeypatch.setattr(
+        measurements, "gpu_mb", lambda pids, device: _HOLDS_MB if pids else None
+    )
+
+    def count():
+        return launches.read_text().splitlines() if launches.exists() else []
+
+    return count
+
+
+def _run_to_end(hub, service, job, timeout=60.0):
+    service.start()
+    try:
+        assert _poll_until(
+            lambda: (
+                _job_status(hub, job["uuid"]).status
+                in ("completed", "error", "stopped")
+            ),
+            timeout=timeout,
+        )
+        # completed_at is written once the import is done.
+        _poll_until(lambda: _job_status(hub, job["uuid"]).completed_at, timeout=10)
+    finally:
+        service.stop()
+    return _job_status(hub, job["uuid"])
+
+
+def test_an_unmeasured_setup_is_checked_then_learned_from(hub, repo_dir, watched):
+    """The first run of a setup probes it, trains on what the probe measured,
+    and leaves its own measurement for the next run."""
+    lease = _StubLease()
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=lease,
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    resolution = _resolve_small(hub)
+    assert resolution["probe"] is True and resolution["profile"] == "q8"
+    job = _enqueue_resolved(
+        service, resolution, _write_template(repo_dir, steps=4, save_every=2)
+    )
+
+    row = _run_to_end(hub, service, job)
+
+    assert row.status == "completed", row.error
+    # One probe of six updates, then the run itself.
+    assert watched() == [f"steps={training_service_module.PROBE_STEPS}", "steps=4"]
+    phases = [entry["phase"] for entry in json.loads(row.phase_log)]
+    assert phases.index("checking") < phases.index("training")
+    assert any(call.get("shown_as") == "checking" for call in lease.progress_calls)
+    settled = json.loads(row.resolved_profile)
+    assert (settled["profile"], settled["probe"]) == ("q8", False)
+    assert (settled["evidence"], settled["vram_mb"]) == ("measured", 9900)
+    measured = measurements.read(hub, settled["fingerprint"])
+    assert measured["source"] == "run"
+    assert measured["phase_peaks"]["training"]["vram_mb"] == _HOLDS_MB
+    assert measured["seconds_per_update"] is not None
+    # The next run of the same setup is admitted on it, with no probe.
+    again = _resolve_small(hub)
+    assert (again["probe"], again["evidence"]) == (False, "measured")
+    assert again["estimate"]["basis"] == "measured"
+
+
+def test_running_out_of_memory_steps_to_more_offloading(
+    hub, repo_dir, watched, monkeypatch
+):
+    monkeypatch.setenv("FAKE_RUN_OOM_UNLESS_OFFLOAD", "1")
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    resolution = _resolve_small(hub)
+    assert resolution["fallbacks"] == ["q8_cached", "q8_offload"]
+    job = _enqueue_resolved(
+        service, resolution, _write_template(repo_dir, steps=4, save_every=2)
+    )
+
+    row = _run_to_end(hub, service, job)
+
+    assert row.status == "completed", row.error
+    assert len(watched()) == 4  # q8 and q8_cached ran out, q8_offload held
+    assert json.loads(row.resolved_profile)["profile"] == "q8_offload"
+    model = json.loads(row.rendered_config)["config"]["process"][0]["model"]
+    assert model["layer_offloading"] is True
+    # A probe that ran out of memory measured nothing.
+    assert measurements.read(hub, resolution["fingerprint"]) is None
+
+
+def test_a_loader_error_stops_the_search(hub, repo_dir, watched, monkeypatch):
+    monkeypatch.setenv("FAKE_RUN_FAIL", "Error loading model: unexpected tensor")
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    job = _enqueue_resolved(
+        service, _resolve_small(hub), _write_template(repo_dir, steps=4, save_every=2)
+    )
+
+    row = _run_to_end(hub, service, job)
+
+    assert row.status == "error"
+    assert row.error.startswith("Checking memory and speed failed: Error loading model")
+    assert len(watched()) == 1
+
+
+def test_the_ram_guard_stops_a_probe(hub, repo_dir, watched, monkeypatch):
+    monkeypatch.setattr(
+        training_service_module,
+        "read_ram",
+        lambda: {"total_mb": 64_000, "available_mb": 500},
+    )
+    lease = _StubLease()
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=lease,
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    job = _enqueue_resolved(
+        service, _resolve_small(hub), _write_template(repo_dir, steps=4, save_every=2)
+    )
+
+    row = _run_to_end(hub, service, job)
+
+    assert row.status == "error"
+    assert row.error.startswith("Not enough system RAM to start")
+    assert lease.release_count == 1
+
+
+def test_deferred_previews_are_drawn_from_each_checkpoint_after_training(
+    hub, repo_dir, watched
+):
+    """Measured: training fits, previews do not. The run trains without them and
+    each kept checkpoint is sampled once training is done."""
+    first = _resolve_small(hub)
+    measurements.record(
+        hub,
+        first["fingerprint"],
+        preset=first["preset"],
+        profile="q8",
+        device=None,
+        phase_peaks={
+            "training": {"vram_mb": 9000, "ram_mb": 12000},
+            "previews": {"vram_mb": 30000, "ram_mb": 12000},
+        },
+        seconds_per_update=1.0,
+        setup_seconds=10.0,
+        seconds_per_preview=1.0,
+        source="probe",
+    )
+    resolution = _resolve_small(hub)
+    assert (resolution["probe"], resolution["previews_deferred"]) == (False, True)
+    importer = _RecordingImport()
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+        importer=importer,
+    )
+    job = _enqueue_resolved(
+        service, resolution, _write_template(repo_dir, steps=4, save_every=2)
+    )
+
+    row = _run_to_end(hub, service, job)
+
+    assert row.status == "completed", row.error
+    # The run, then one pass per checkpoint: steps 2 and 4 and the final.
+    assert watched() == ["steps=4", "steps=2", "steps=4", "steps=4"]
+    run_dir = importer.calls[0][0]
+    assert sorted(os.listdir(os.path.join(run_dir, "samples"))) == [
+        "sample_000000002_0.jpg",
+        "sample_000000004_0.jpg",
+    ]
+    work_dir = os.path.join(os.path.dirname(hub.path), "training", job["uuid"])
+    assert not os.listdir(os.path.join(work_dir, "after"))
+    phases = [entry["phase"] for entry in json.loads(row.phase_log)]
+    assert phases[-2:] == ["previews", "importing"]
+
+
+def test_the_lease_shrinks_to_the_peak_once_the_first_checkpoint_is_saved(
+    hub, repo_dir
+):
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    lease = _StubLease()
+    watch = training_service_module._Watch()
+    measurements.note_peak(watch.peaks, "training", 10_000, None)
+    saved = TrainingProgress(
+        status="running",
+        info="Training",
+        step=250,
+        total_steps=1000,
+        speed="",
+        checkpoints=["run_000000250.safetensors"],
+    )
+    before = TrainingProgress(
+        status="running", info="Training", step=200, total_steps=1000, speed=""
+    )
+    service._maybe_shrink("job", lease, watch, before, deferred=False)
+    service._maybe_shrink("job", lease, watch, saved, deferred=False)
+    assert lease.events == []  # its previews' peak has not been seen yet
+    measurements.note_peak(watch.peaks, "previews", 12_000, None)
+    service._maybe_shrink("job", lease, watch, saved, deferred=False)
+    service._maybe_shrink("job", lease, watch, saved, deferred=False)
+    assert lease.events == ["shrink 13200"]
+    deferred = training_service_module._Watch()
+    measurements.note_peak(deferred.peaks, "training", 10_000, None)
+    service._maybe_shrink("job", lease, deferred, saved, deferred=True)
+    assert lease.events == ["shrink 13200", "shrink 11000"]
+
+
+def test_memory_a_dead_trainer_kept_is_named_not_released(hub, repo_dir, monkeypatch):
+    monkeypatch.setattr(training_service_module, "RELEASE_GRACE_S", 0.05)
+    monkeypatch.setattr(measurements, "gpu_mb", lambda pids, device: 3072)
+    monkeypatch.setattr(
+        training_service_module,
+        "ledger",
+        lambda: SimpleNamespace(processes=lambda device: {4242: 3072, 77: 100}),
+    )
+    tenant = AiToolkitProbe()
+    service = TrainingService(
+        hub,
+        _LIBRARY_UUID,
+        os.path.dirname(hub.path),
+        request_gpu=_StubLease().request,
+        import_run=_RecordingImport(),
+        notify=_CapturingNotify(),
+        config_provider=lambda: {},
+        dataset_builder=_make_dataset_builder(),
+        tenant=tenant,
+    )
+    lease = _StubLease()
+    lease.device = "GPU-test"
+    watch = training_service_module._Watch(pids={4242, 4243})
+
+    service._check_released("job", lease, watch)
+
+    assert lease.events == ["warn aitoolkit_memory_not_released"]
+    assert tenant.holder_label() == "AI Toolkit · memory not released"
+    # Given back in time: nothing to say.
+    monkeypatch.setattr(measurements, "gpu_mb", lambda pids, device: None)
+    quiet = _StubLease()
+    quiet.device = "GPU-test"
+    service._check_released("job", quiet, watch)
+    assert quiet.events == []
+    assert tenant.holder_label() is None
+
+
+def test_a_live_run_is_adopted_at_start_up_and_reconciled_on_that_lease(hub, repo_dir):
+    """adopt_live_runs grants the surviving run its lease before anything else
+    starts; reconcile_on_startup resumes watching it on that lease instead of
+    asking again."""
+    adopted = _StubLease()
+    adopted.held = True
+    asked = _StubLease()
+    alive = {"value": True}
+
+    class _Backend:
+        def handle_for(self, work_dir, job_id, name, pid, training_folder=None):
+            return LocalAiToolkit.handle_for(
+                work_dir, job_id, name, pid, training_folder=training_folder
+            )
+
+        def is_alive(self, handle):
+            return alive["value"]
+
+        def progress(self, handle):
+            alive["value"] = False
+            return TrainingProgress(
+                status="stopped", info="Job stopped", step=3, total_steps=4, speed=""
+            )
+
+        def reconcile(self, handle):
+            return self.progress(handle)
+
+    service = TrainingService(
+        hub,
+        _LIBRARY_UUID,
+        os.path.dirname(hub.path),
+        request_gpu=asked.request,
+        adopt_gpu=adopted.request,
+        import_run=_RecordingImport(),
+        notify=_CapturingNotify(),
+        config_provider=lambda: {"repo_path": repo_dir, "python": sys.executable},
+        dataset_builder=_make_dataset_builder(),
+        backend_factory=lambda repo_path, python: _Backend(),
+        poll_interval_s=0.02,
+    )
+    job = service.enqueue(
+        set_id=_SET_ID,
+        name="survivor",
+        base_model="m",
+        trigger_word="t",
+        template_path="unused.json",
+        resolution=_RESOLUTION,
+    )
+    training_runs.update_run(
+        hub,
+        job["uuid"],
+        status="running",
+        pid=os.getpid(),
+        training_folder=os.path.join(repo_dir, "output"),
+    )
+
+    service.adopt_live_runs()
+    assert (adopted.acquire_count, adopted.need) == (1, (12000, 16000))
+    service.reconcile_on_startup()
+    assert _poll_until(lambda: _job_status(hub, job["uuid"]).status == "stopped")
+    assert asked.acquire_count == 0
+    assert _poll_until(lambda: adopted.release_count == 1)

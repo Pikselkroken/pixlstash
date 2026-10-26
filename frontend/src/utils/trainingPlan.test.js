@@ -7,6 +7,7 @@ import {
   effortReadout,
   fitReadout,
   moreRows,
+  timeEstimate,
   parseTyped,
   promptFromDisplay,
   promptLines,
@@ -125,6 +126,30 @@ describe("sources", () => {
     expect(
       fitReadout({ profile_label: "8-bit model · text encoder on the GPU", vram_mb: 16000 }),
     ).toBe("8-bit model · text encoder on the GPU · peaks near 16 GB");
+  });
+
+  it("says a measured peak is measured and when previews wait", () => {
+    expect(
+      fitReadout({
+        profile_label: "8-bit model",
+        vram_mb: 12288,
+        evidence: "measured",
+        previews_deferred: true,
+      }),
+    ).toBe("8-bit model · peaks at 12 GB, measured · previews after training");
+  });
+
+  it("gives the time only from a measurement", () => {
+    expect(timeEstimate({ estimate: { seconds: 3000, basis: "measured" } })).toBe(
+      "About 50 min.",
+    );
+    expect(timeEstimate({ estimate: { seconds: 5400, basis: "measured" } })).toBe(
+      "About 1 h 30 min.",
+    );
+    expect(timeEstimate({ estimate: { seconds: null, basis: "none" }, probe: true })).toBe(
+      "It checks memory and speed first, so the time is not known yet.",
+    );
+    expect(timeEstimate({ estimate: { seconds: null, basis: "none" } })).toBe("");
   });
 
   it("keeps every other resolved key for Show more, never a first-row key", () => {

@@ -37,7 +37,13 @@ from pixlstash.resources.ledger import ledger
 from pixlstash.resources.ledger import ram as read_ram
 from pixlstash.services.model_folder_scanner import SOURCE_FOLDER_KIND
 from pixlstash.services.training_service import handle_for_run
-from pixlstash.training import ai_toolkit_install, live_view, presets, sample_prompts
+from pixlstash.training import (
+    ai_toolkit_install,
+    live_view,
+    measurements,
+    presets,
+    sample_prompts,
+)
 from pixlstash.training.config_render import TUNABLE_KEYS, TunableOverrideError
 from pixlstash.utils.aitoolkit_run import read_output_root, read_run
 from pixlstash.utils.path_utils import path_is_within, resolve_path_within
@@ -128,34 +134,8 @@ def _latest_loss(loss_curve) -> float | None:
 # Swap traffic between two polls of the live view above this reads as the
 # machine paging to disk.
 _PAGING_BYTES = 32 * 1024 * 1024
-_MB = 1024 * 1024
 # The swap counters (bytes in + out) each run's live view saw last, by job id.
 _swap_seen: dict[int, int] = {}
-
-
-def _process_tree(pid: int | None) -> list:
-    """The trainer process and every child of it, or [] when it is not running."""
-    if not pid:
-        return []
-    try:
-        root = psutil.Process(pid)
-        return [root, *root.children(recursive=True)]
-    except psutil.Error as exc:
-        logger.debug("Trainer process %s cannot be read: %s", pid, exc)
-        return []
-
-
-def _rss_mb(processes: list) -> int | None:
-    """The resident memory of *processes* together, in MB; None if none could be read."""
-    total = 0
-    read = False
-    for process in processes:
-        try:
-            total += process.memory_info().rss
-            read = True
-        except psutil.Error as exc:
-            logger.debug("No memory reading for pid %s: %s", process.pid, exc)
-    return total // _MB if read else None
 
 
 def _paging(job_id: int) -> bool:
@@ -184,7 +164,7 @@ def _telemetry(job: dict, lease: dict | None, resolution: dict) -> dict:
     paging = False
     if job["status"] in ("queued", "running", "stopping"):
         tree = (
-            _process_tree(job.get("pid"))
+            measurements.process_tree(job.get("pid"))
             if job["status"] in ("running", "stopping")
             else []
         )
@@ -201,7 +181,7 @@ def _telemetry(job: dict, lease: dict | None, resolution: dict) -> dict:
             ram.update(
                 total_mb=memory["total_mb"],
                 used_mb=memory["total_mb"] - memory["available_mb"],
-                ours_mb=_rss_mb(tree),
+                ours_mb=measurements.rss_mb(tree),
             )
         paging = _paging(job["id"])
     else:
@@ -212,6 +192,10 @@ def _telemetry(job: dict, lease: dict | None, resolution: dict) -> dict:
         "need": {
             "vram_mb": resolution.get("vram_mb"),
             "ram_mb": resolution.get("ram_mb"),
+            # Measured on this machine, or the recipe's seed.
+            "basis": "measured"
+            if resolution.get("evidence") == "measured"
+            else "estimated",
         },
         "paging": paging,
     }
@@ -978,6 +962,30 @@ def create_router(server) -> APIRouter:
         step = int(job["step"] or 0)
         total = job["total_steps"]
         phase = live_view.phase_of(job["status"], info, step, job["completed_at"])
+        lease = None
+        try:
+            lease = next(
+                (
+                    row
+                    for row in arbiter().snapshot()["leases"]
+                    if row.get("job_id") == job["uuid"]
+                ),
+                None,
+            )
+        except Exception as exc:
+            logger.warning("Could not read the leases for job %s: %s", job["uuid"], exc)
+        # The worker's phase telemetry names what the trainer's own info line
+        # cannot: a probe ("checking", while the row is still queued) and the
+        # previews drawn after training (while it is completed, not imported).
+        shown = ((lease or {}).get("progress") or {}).get("shown_as")
+        if (
+            lease is not None
+            and lease.get("state") == "granted"
+            and shown in ("checking", "previews")
+            and job["status"] in ("queued", "completed")
+            and not job["completed_at"]
+        ):
+            phase = shown
         previews = live_view.preview_progress(info) if phase == "previews" else None
         deferred = bool(resolution.get("previews_deferred"))
 
@@ -1020,18 +1028,6 @@ def create_router(server) -> APIRouter:
             )
             folder_id = folder["id"] if folder is not None else None
 
-        lease = None
-        try:
-            lease = next(
-                (
-                    row
-                    for row in arbiter().snapshot()["leases"]
-                    if row.get("job_id") == job["uuid"]
-                ),
-                None,
-            )
-        except Exception as exc:
-            logger.warning("Could not read the leases for job %s: %s", job["uuid"], exc)
         waiting = None
         if lease is not None and lease.get("state") == "waiting":
             reason = lease.get("waiting_reason") or {}
@@ -1138,12 +1134,26 @@ def create_router(server) -> APIRouter:
             )
         return set_id, owner
 
-    def _verdict(preset, architectures, **choices) -> str:
+    def _measured(repo_path: str | None) -> dict:
+        """The checkout's commit and the card's name, which measurements are
+        tied to (§25.20)."""
+        reading = ledger().device(ledger().pixlstash_device())
+        return {
+            "commit": ai_toolkit_install.read_commit(repo_path) if repo_path else None,
+            "device": reading.name if reading is not None else None,
+        }
+
+    def _lookup(preset, context: dict):
+        return measurements.make_lookup(server.vault.hub, preset, **context)
+
+    def _verdict(preset, architectures, context, **choices) -> str:
         """How *preset* would fit this machine with *choices* and no pins."""
         if not presets.offered(preset, architectures):
             return "needs_checkout"
         try:
-            resolution = presets.resolve(preset, **choices)
+            resolution = presets.resolve(
+                preset, lookup=_lookup(preset, context), **choices
+            )
         except presets.NoProfileFits as exc:
             return "needs_ram" if exc.budget == "ram" else "no_gpu"
         values = resolution["values"]
@@ -1249,6 +1259,7 @@ def create_router(server) -> APIRouter:
                 ram_mb=room["ram_mb"],
                 pins=pins,
                 prompts=prompts,
+                lookup=_lookup(preset, _measured(repo_path)),
             )
         except presets.NoProfileFits as exc:
             raise HTTPException(
@@ -1947,18 +1958,19 @@ def create_router(server) -> APIRouter:
             "ram_mb": room["ram_mb"],
         }
         user = server.auth.get_user()
-        architectures = presets.checkout_architectures(
-            user.ai_toolkit_repo_path if user is not None else None
-        )
+        repo_path = user.ai_toolkit_repo_path if user is not None else None
+        architectures = presets.checkout_architectures(repo_path)
+        context = _measured(repo_path)
         out["presets"] = [
             {
                 "id": p["id"],
                 "label": p["label"],
                 "offered": presets.offered(p, architectures),
-                "verdict": _verdict(p, architectures, **choices),
+                "verdict": _verdict(p, architectures, context, **choices),
             }
             for p in presets.list_presets()
         ]
+        choices["lookup"] = _lookup(preset, context)
         keys = set()
         try:
             derived = presets.resolve(preset, **choices)

@@ -19,6 +19,13 @@ This reproduces, in miniature, exactly the on-disk side effects PixlStash's
 It runs entirely on CPU and in well under a second: the per-step delay defaults
 to ~1ms and is overridable via ``FAKE_RUN_STEP_DELAY`` (seconds).
 
+Two switches make it fail the way ai-toolkit does, for the memory probe's
+search: ``FAKE_RUN_OOM_UNLESS_OFFLOAD=1`` runs out of GPU memory unless the
+config offloads layers (``model.layer_offloading``), and ``FAKE_RUN_FAIL=<text>``
+fails every launch with that text, like a loader error. ``train.disable_sampling``
+skips the sample, as ai-toolkit does. ``FAKE_RUN_LAUNCHES=<file>`` appends one
+line per launch to that file, naming the config's step count.
+
 It does NOT import torch or anything heavy: ``.safetensors`` files are written
 as small placeholder byte blobs.
 """
@@ -225,6 +232,27 @@ def main(argv: list[str]) -> int:
             )
             log_handle.write(f"fake_run start name={name} env_keys={present_keys}\n")
 
+    launches = os.environ.get("FAKE_RUN_LAUNCHES")
+    if launches:
+        with open(launches, "a", encoding="utf-8") as launch_handle:
+            launch_handle.write(f"steps={total_steps}\n")
+
+    oom = os.environ.get("FAKE_RUN_OOM_UNLESS_OFFLOAD") and not (
+        process.get("model") or {}
+    ).get("layer_offloading")
+    failure = (
+        "torch.OutOfMemoryError: CUDA out of memory."
+        if oom
+        else os.environ.get("FAKE_RUN_FAIL")
+    )
+    if failure:
+        if args.log:
+            with open(args.log, "a", encoding="utf-8") as log_handle:
+                log_handle.write(f"{failure}\n")
+        if job_id:
+            _set_job_status(job_db_path, job_id, "error", failure)
+        return 1
+
     loss_con = _init_loss_db(os.path.join(save_root, "loss_log.db"))
     try:
         if job_id:
@@ -261,11 +289,12 @@ def main(argv: list[str]) -> int:
 
         # Final checkpoint + one sample, then mark completed.
         _write_safetensors(os.path.join(save_root, f"{name}.safetensors"))
-        samples_dir = os.path.join(save_root, "samples")
-        os.makedirs(samples_dir, exist_ok=True)
-        sample_path = os.path.join(samples_dir, f"sample_{total_steps:09d}_0.jpg")
-        with open(sample_path, "wb") as sample_handle:
-            sample_handle.write(b"FAKE_SAMPLE_JPEG")
+        if not (process.get("train") or {}).get("disable_sampling"):
+            samples_dir = os.path.join(save_root, "samples")
+            os.makedirs(samples_dir, exist_ok=True)
+            sample_path = os.path.join(samples_dir, f"sample_{total_steps:09d}_0.jpg")
+            with open(sample_path, "wb") as sample_handle:
+                sample_handle.write(b"FAKE_SAMPLE_JPEG")
 
         if job_id:
             _update_job(

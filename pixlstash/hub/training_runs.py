@@ -17,11 +17,14 @@ from pixlstash.hub.db import HubDatabase, now_iso
 
 # The columns the worker may change after a run is created. Identity and
 # ownership (``id``, ``uuid``, ``library_uuid``, ``created_at``) never change.
+# ``resolved_profile`` changes once, when checking memory and speed settles
+# the profile the run trains with (#2120).
 _MUTABLE_COLUMNS = frozenset(
     {
         "status",
         "base_model",
         "trigger_word",
+        "resolved_profile",
         "rendered_config",
         "dataset_snapshot_path",
         "dataset_picture_ids",

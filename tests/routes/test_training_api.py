@@ -26,6 +26,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from pixlstash.hub import training_runs
+from pixlstash.resources.arbiter import Tenant, arbiter
 from pixlstash.routes.training import _redact_host_paths
 from pixlstash.server import Server
 from pixlstash.utils.service.export_utils import ExportUtils
@@ -656,7 +657,11 @@ def test_live_view_draws_a_run_from_its_folder_and_its_logs():
         assert body["phases"][1]["seconds"] == 155.0
         # Nothing could be measured of the trainer itself: unknown, never 0.
         assert body["telemetry"]["gpu"]["ours_mb"] is None
-        assert body["telemetry"]["need"] == {"vram_mb": None, "ram_mb": None}
+        assert body["telemetry"]["need"] == {
+            "vram_mb": None,
+            "ram_mb": None,
+            "basis": "estimated",
+        }
 
         # Use this step: a kept checkpoint is recorded for the import.
         r = owner.put(f"/training/jobs/{job_id}/cover", json={"step": 750})
@@ -714,6 +719,24 @@ def test_a_run_that_ended_without_a_finish_time_has_no_growing_last_phase():
         phases = owner.get(f"/training/jobs/{job_id}/live").json()["phases"]
         assert phases[-1] == {"phase": "training", "seconds": None}
         assert phases[1]["seconds"] == 155.0
+
+        # A queued run whose lease is granted is being probed: the worker's
+        # phase telemetry on the lease says so, as the row cannot (#2120).
+        queued_id, queued_uuid = _seed_job(server, status="queued", step=0)
+        lease = arbiter().request(
+            Tenant.AITOOLKIT, "probe", need_mb=0, device=None, job_id=queued_uuid
+        )
+        try:
+            live = owner.get(f"/training/jobs/{queued_id}/live").json()
+            assert live["phase"] == "waiting_gpu"
+            lease.set_progress(step=0, total=6, phase="loading", shown_as="checking")
+            live = owner.get(f"/training/jobs/{queued_id}/live").json()
+            assert live["phase"] == "checking"
+        finally:
+            lease.release()
+        assert owner.get(f"/training/jobs/{queued_id}/live").json()["phase"] == (
+            "waiting_gpu"
+        )
     finally:
         _teardown(temp_dir, server)
 
@@ -1057,7 +1080,7 @@ def test_resolve_previews_the_run_and_every_recipes_fit():
     """The preview resolves exactly as a job would, gives the pin-free value
     a reset returns to, each value's rule, and a fit verdict per recipe; it
     queues nothing and a run that fits nowhere answers 200 with the reason."""
-    from pixlstash.training import presets
+    from pixlstash.training import measurements, presets
 
     temp_dir, owner, server, read_token = _setup()
     try:
@@ -1088,6 +1111,32 @@ def test_resolve_previews_the_run_and_every_recipes_fit():
             }
         ]
         assert server.vault.training_service.enqueue_calls == []
+
+        # Never measured on this machine: the run would check memory and speed
+        # first, and no time can be given. Once its setup is measured, it is
+        # admitted on the measurement and the time is known (#2120).
+        first = out["resolution"]
+        assert first["probe"] is True and first["fingerprint"]
+        assert first["estimate"] == {"seconds": None, "basis": "none"}
+        measurements.record(
+            server.vault.hub,
+            first["fingerprint"],
+            preset=first["preset"],
+            profile=first["profile"],
+            device=None,
+            phase_peaks={"training": {"vram_mb": 11_000, "ram_mb": 14_000}},
+            seconds_per_update=1.5,
+            setup_seconds=120.0,
+            seconds_per_preview=5.0,
+            source="run",
+        )
+        measured = owner.post("/training/resolve", json=body).json()["resolution"]
+        assert (measured["probe"], measured["evidence"]) == (False, "measured")
+        assert measured["vram_mb"] == 12_100
+        assert measured["estimate"]["basis"] == "measured"
+        assert measured["estimate"]["seconds"] > 2400 * 1.5
+        with server.vault.hub.transaction() as conn:
+            conn.execute("DELETE FROM training_profile_measurement")
 
         # A pin wins in the resolution; the derived value stays the choice's.
         r = owner.post(

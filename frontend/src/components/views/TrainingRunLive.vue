@@ -281,7 +281,15 @@
           <span class="trl-lab2">RAM</span>
           <Meter :figure="ram" :over-mb="ramShortMb" />
           <span class="trl-v">{{ ramText }}</span>
-          <Provenance :kind="ramShortMb ? 'estimated' : ram.total_mb ? 'measured' : 'none'" />
+          <Provenance
+            :kind="
+              ramShortMb
+                ? live.telemetry.need.basis || 'estimated'
+                : ram.total_mb
+                  ? 'measured'
+                  : 'none'
+            "
+          />
         </span>
         <span v-if="live.streamed" class="trl-it">
           <v-icon size="14">mdi-layers-outline</v-icon>

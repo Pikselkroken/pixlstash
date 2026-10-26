@@ -386,7 +386,7 @@
         <v-icon size="16">{{
           footError ? "mdi-alert-circle-outline" : "mdi-information-outline"
         }}</v-icon>
-        <span>{{ footError || "Other GPU work pauses while it runs." }}</span>
+        <span data-testid="tld-foot-text">{{ footError || footLine }}</span>
       </span>
       <AppButton key-hint="esc" :disabled="store.submitting" @click="store.closeDialog()"
         >Cancel</AppButton
@@ -436,6 +436,7 @@ import {
   moreRows,
   parseTyped,
   sourceLabel,
+  timeEstimate,
 } from "../../utils/trainingPlan";
 
 const emit = defineEmits(["started"]);
@@ -754,6 +755,13 @@ const blocker = computed(() => {
 });
 
 const footError = computed(() => store.submitError || blocker.value);
+
+/** "About 50 min. Other GPU work pauses while it runs." */
+const footLine = computed(() =>
+  [timeEstimate(resolution.value), "Other GPU work pauses while it runs."]
+    .filter(Boolean)
+    .join(" "),
+);
 
 const canStart = computed(
   () =>
