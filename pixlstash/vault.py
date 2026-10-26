@@ -2602,11 +2602,13 @@ class Vault:
         try:
             runner.submit(task)
         except RuntimeError as exc:
-            # Stopping: Vault.stop() releases the models itself, unless the
-            # GPU worker outlives the stop.
+            # The runner is closed. Vault.stop() releases the models once the
+            # GPU worker has exited; if the worker outlives the stop it skips
+            # the release rather than flush under it, and nothing unloads them.
             logger.warning(
-                "Model unload not queued, the task runner is stopping; Vault.stop() "
-                "releases the models instead: %s",
+                "Model unload not queued, the task runner is stopped. Vault.stop() "
+                "releases the models if the GPU worker exits; if it outlived the "
+                "stop they stay resident until the process exits: %s",
                 exc,
             )
             return None
