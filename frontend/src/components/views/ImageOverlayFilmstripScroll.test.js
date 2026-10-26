@@ -166,4 +166,17 @@ describe("ImageOverlay filmstrip scrolls independently", () => {
     expect(activeId(wrapper)).toBe(16);
     expect(firstVisible(wrapper)).toBe(12);
   });
+
+  it("ignores the wheel before the strip has a picture to place", async () => {
+    // 99 is in no list, so the strip draws nothing yet.
+    const wrapper = await openOverlayOn(99);
+    expect(strip(wrapper).props("items")).toEqual([]);
+    for (let i = 0; i < 13; i += 1) strip(wrapper).vm.$emit("scroll-by", 1);
+    await flush();
+
+    await wrapper.setProps({ initialImageId: 16 });
+    await flush();
+    expect(activeId(wrapper)).toBe(16);
+    expect(firstVisible(wrapper)).toBe(12);
+  });
 });

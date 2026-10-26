@@ -3555,7 +3555,8 @@ watch(
 );
 
 function onFilmstripScroll(direction) {
-  if (isMobile.value) return;
+  // Unplaced means no picture to centre on yet, so nothing is drawn to scroll.
+  if (isMobile.value || filmstripTop.value === null) return;
   handleUserActivity();
   const from = clampFilmstripTop(filmstripTop.value);
   filmstripTop.value = clampFilmstripTop(from + direction);
