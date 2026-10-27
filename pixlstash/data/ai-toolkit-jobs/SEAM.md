@@ -16,6 +16,7 @@ version bump is a single-file change. Verified against the local clone
            AITK_JOB_ID        = <our job uuid>        # enables soft UI mode (status/step/cancel)
            CUDA_VISIBLE_DEVICES = <gpu id(s)>
            CUDA_DEVICE_ORDER  = PCI_BUS_ID
+           PYTORCH_CUDA_ALLOC_CONF = expandable_segments:True  # unless the owner set it (or PYTORCH_ALLOC_CONF)
            HF_TOKEN           = <secret, only if set> # NEVER logged
          }
 ```
@@ -73,7 +74,8 @@ CREATE TABLE Job (
   speed_string    TEXT    NOT NULL DEFAULT '',    -- e.g. "2.31 iter/sec" → ETA
   stop            INTEGER NOT NULL DEFAULT 0,     -- set to 1 to request cooperative stop
   return_to_queue INTEGER NOT NULL DEFAULT 0,
-  save_now        INTEGER NOT NULL DEFAULT 0
+  save_now        INTEGER NOT NULL DEFAULT 0,
+  sample_now      INTEGER NOT NULL DEFAULT 0     -- read every step since 0.12 ("Sample Next Step")
 );
 INSERT INTO Job (id) VALUES ('<job uuid>');
 ```

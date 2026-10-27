@@ -129,9 +129,15 @@ def test_prepare_creates_db_row_and_config(tmp_path):
     conn = sqlite3.connect(handle.sqlite_db_path)
     try:
         rows = conn.execute("SELECT id, status FROM Job").fetchall()
+        # Each flag the trainer polls every step (DiffusionTrainer), all off: a
+        # missing column fails the run after its first step.
+        flags = conn.execute(
+            "SELECT stop, return_to_queue, save_now, sample_now FROM Job"
+        ).fetchall()
     finally:
         conn.close()
     assert rows == [("job-uuid-1234", "queued")]
+    assert flags == [(0, 0, 0, 0)]
 
 
 def test_config_written_ascii_only(tmp_path):
@@ -335,6 +341,50 @@ def test_cancel_still_signals_an_inherited_trainer_it_can_verify(tmp_path, monke
         if trainer.poll() is None:
             trainer.kill()
             trainer.wait()
+
+
+@pytest.mark.parametrize(
+    "owner_env, expected",
+    [
+        ({}, {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"}),
+        (
+            {"PYTORCH_ALLOC_CONF": "backend:cudaMallocAsync"},
+            {"PYTORCH_ALLOC_CONF": "backend:cudaMallocAsync"},
+        ),
+        (
+            {"PYTORCH_CUDA_ALLOC_CONF": "max_split_size_mb:512"},
+            {"PYTORCH_CUDA_ALLOC_CONF": "max_split_size_mb:512"},
+        ),
+    ],
+)
+def test_the_trainer_gets_expandable_segments_unless_the_owner_chose(
+    tmp_path, monkeypatch, owner_env, expected
+):
+    """A fragmented allocator fails a large VAE encode beside free memory."""
+    for name in ("PYTORCH_ALLOC_CONF", "PYTORCH_CUDA_ALLOC_CONF"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in owner_env.items():
+        monkeypatch.setenv(name, value)
+    launched = {}
+
+    class _Process:
+        pid = 4242
+
+    def fake_popen(cmd, **kwargs):
+        launched.update(kwargs["env"])
+        return _Process()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    backend = _make_backend()
+    spec = _make_spec(tmp_path)
+    backend.submit(backend.prepare(spec), spec)
+
+    got = {
+        name: launched[name]
+        for name in ("PYTORCH_ALLOC_CONF", "PYTORCH_CUDA_ALLOC_CONF")
+        if name in launched
+    }
+    assert got == expected
 
 
 def test_hf_token_never_written_to_log(tmp_path):
