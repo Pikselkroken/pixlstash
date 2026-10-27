@@ -528,7 +528,7 @@ export const scenes = [
     title: 'Project organisation',
     async setup({ grid, sidebar }) {
       await readyGrid(grid)
-      await sidebar.openProjectsTab()
+      await sidebar.openScopeMenu()
       return null
     },
   },
@@ -540,9 +540,7 @@ export const scenes = [
       await readyGrid(grid)
       // Navigate into a project, then a person inside it, so the breadcrumb is a
       // deep path (Projects › Project › Person), shown in the full app view.
-      await sidebar.openProjectsTab()
-      const project = sidebar.projectRows.first()
-      await project.click()
+      await sidebar.chooseFirstProject()
       await page.waitForTimeout(500)
       const personInProject = sidebar.characterItems.first()
       if (await personInProject.count()) {

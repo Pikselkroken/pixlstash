@@ -15,6 +15,7 @@ import CharacterEditor from "../editors/CharacterEditor.vue";
 import PictureSetEditor from "../editors/PictureSetEditor.vue";
 import ProjectEditor from "../editors/ProjectEditor.vue";
 import ProjectFiles from "./ProjectFiles.vue";
+import SidebarScopeSlot from "./SidebarScopeSlot.vue";
 import UserSettingsDialog from "../settings/UserSettingsDialog.vue";
 import FolderTreeNode from "../editors/FolderTreeNode.vue";
 import FolderEditor from "../editors/FolderEditor.vue";
@@ -49,7 +50,7 @@ import {
 } from "../../api/pictureSets";
 import { inspectLibraryPath } from "../../api/libraries";
 import { getFolderStructureCommitStatus } from "../../api/folderStructure";
-import { deleteProject } from "../../api/projects";
+import { deleteProject, getProjectSummary } from "../../api/projects";
 import {
   listReferenceFolders,
   listImportFolders,
@@ -60,7 +61,7 @@ import {
   relocateReferenceFolder as requestFolderRelocate,
   movePicturesToReferenceFolder,
 } from "../../api/folders";
-import { setPicturesProject } from "../../api/pictures";
+import { getPictureCount } from "../../api/pictures";
 import { getSharedResourceIds, revokeTokensByResource } from "../../api/users";
 import { listSortMechanisms } from "../../api/session";
 import { listAdapters } from "../../api/modelShelf";
@@ -87,6 +88,7 @@ import {
   SET_ICON_CATEGORIES,
   ICON_CARDS,
   nextSetAppearance,
+  projectColor,
 } from "../../utils/setAppearance.js";
 import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
@@ -227,6 +229,8 @@ const emit = defineEmits([
   "view-project",
   "update:check-for-updates",
   "select-folder",
+  "open-import",
+  "open-tag-review",
 ]);
 
 const imageImporterRef = ref(null);
@@ -237,28 +241,17 @@ const labelObservers = new Map();
 
 const dragOverSet = ref(null);
 
-// Which sections, projects and folders are open - hydrated from and written
-// back to localStorage by the composable, so the shape of the sidebar survives
-// a reload. Section state (People/Sets, the Folders-tab headers) defaults to
-// expanded; the folder tree defaults to collapsed.
+// Which folder sections and folders are open - hydrated from and written back
+// to localStorage by the composable, so the shape of the sidebar survives a
+// reload. The folder headers default to expanded; the folder tree to
+// collapsed. (People and Sets no longer collapse, #2159.)
 const {
-  peopleSectionCollapsed,
-  setsSectionCollapsed,
   referenceFoldersCollapsed,
   importFoldersCollapsed,
-  expandedProjectIds,
-  projectTreePeopleCollapsed, // project IDs where People is collapsed
-  projectTreeSetsCollapsed, // project IDs where Sets is collapsed
   expandedFolderIds, // reference-folder id (number) or subfolder path (string)
-  togglePeopleSection,
-  toggleSetsSection,
   toggleReferenceFoldersSection,
   toggleImportFoldersSection,
-  toggleProjectExpanded,
-  toggleProjectTreePeople,
-  toggleProjectTreeSets,
   toggleFolderExpanded,
-  syncProjectExpansion,
 } = useSidebarExpansion();
 
 function selectProjectNode(p) {
@@ -339,10 +332,8 @@ const projectEditorProject = ref(null);
 
 // --- Move-to-project menus ---
 const characterMoveMenuOpen = ref(false);
-const characterMoveMenuBtnRef = ref(null);
 const characterMenuPos = ref({ top: "0px", left: "0px" });
 const setMoveMenuOpen = ref(false);
-const setMoveMenuBtnRef = ref(null);
 const setMenuPos = ref({ top: "0px", left: "0px" });
 
 // --- Sidebar Context Menu ---
@@ -451,8 +442,12 @@ async function _focusMoveMenu() {
   document.querySelector(".sidebar-move-menu")?.focus();
 }
 
+// The "+" that opened a move menu, so Escape can hand the keyboard back to it.
+let moveMenuTrigger = null;
+
 function openCharacterMoveMenu(event) {
   const el = event?.currentTarget ?? event?.target;
+  moveMenuTrigger = el ?? null;
   if (el) {
     characterMenuPos.value = _moveMenuPos(el.getBoundingClientRect());
   }
@@ -466,12 +461,27 @@ function openCharacterMoveMenu(event) {
 
 function openSetMoveMenu(event) {
   const el = event?.currentTarget ?? event?.target;
+  moveMenuTrigger = el ?? null;
   if (el) {
     setMenuPos.value = _moveMenuPos(el.getBoundingClientRect());
   }
   characterMoveMenuOpen.value = false;
   setMoveMenuOpen.value = !setMoveMenuOpen.value;
   if (setMoveMenuOpen.value) _focusMoveMenu();
+}
+
+// Arrow keys move through the rows; Escape closes the menu and returns the
+// keyboard to its "+", which a programmatic overlay never does on its own.
+function onMoveMenuKeydown(event) {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    characterMoveMenuOpen.value = false;
+    setMoveMenuOpen.value = false;
+    moveMenuTrigger?.focus?.();
+    return;
+  }
+  onMenuKeydown(event);
 }
 
 // --- Character Editor State ---
@@ -485,7 +495,16 @@ const settingsDialogOpen = ref(false);
 // so a caller can deep-link (e.g. the scrapheap header's "change" link).
 const settingsDialogInitialTab = ref("");
 // --- Reference Folders (Folders tab) ---
+// The docked rail's mode. The expanded list shows folders as a section of
+// its own, so there it no longer switches anything (#2159).
 const sidebarPrimaryTab = ref("library"); // 'library' | 'folders'
+// Whether the folder rows are on screen: the expanded list's Folders section,
+// or the docked rail in its Folders mode. Owner only, in both.
+const foldersShown = computed(
+  () =>
+    !isReadOnly.value &&
+    (!sidebarStore.effectiveDocked || sidebarPrimaryTab.value === "folders"),
+);
 const referenceFolders = ref([]);
 const referenceFoldersLoading = ref(false);
 const importFolders = ref([]);
@@ -1269,7 +1288,7 @@ async function fetchReferenceFolders() {
       browseExpandedFolderPaths();
     }
     // If any folder is still pending, start polling for status updates.
-    if (sidebarPrimaryTab.value === "folders") {
+    if (foldersShown.value) {
       _startFolderStatusPoll();
     }
   } catch (e) {
@@ -1285,7 +1304,7 @@ async function fetchImportFolders() {
     const body = await listImportFolders();
     importFolders.value = body?.folders ?? [];
     entityNames.mergeImportFolderLabels(importFolders.value);
-    if (sidebarPrimaryTab.value === "folders") {
+    if (foldersShown.value) {
       _startFolderStatusPoll();
     }
   } catch (e) {
@@ -1361,22 +1380,7 @@ async function browseFolderPath(path, prefetchChildren = false) {
   }
 }
 
-/* Whether a project's People / Sets caption has anything under it.
-   One helper per caption rather than the test inlined twice, because the
-   chevron's visibility and the row's inert state must never disagree: a live
-   caption with no chevron, or a dimmed caption you can still collapse, are both
-   worse than either state on its own. */
-function projectHasPeople(projectId) {
-  return sortedCharacters.value.some((c) =>
-    entityBelongsToProject(c, projectId),
-  );
-}
 
-function projectHasSets(projectId) {
-  return nonReferenceSets.value.some((s) =>
-    entityBelongsToProject(s, projectId),
-  );
-}
 
 /* Whether a reference-folder row can disclose children, i.e. whether its
    chevron is drawn. The slot is reserved either way (`.sidebar-row-glyph`), so
@@ -1452,16 +1456,6 @@ async function handleFolderNodeToggle(path) {
   }
   toggleFolderExpanded(path);
 }
-
-watch(sidebarPrimaryTab, (tab) => {
-  if (tab === "folders") {
-    fetchReferenceFolders();
-    fetchImportFolders();
-    _startFolderStatusPoll();
-  } else {
-    _stopFolderStatusPoll();
-  }
-});
 
 // Poll for folder status updates while the Folders tab is open.
 // Keeps polling while any reference folder is transitioning/retrying
@@ -1550,6 +1544,21 @@ function _stopFolderStatusPoll() {
 }
 
 onBeforeUnmount(() => _stopFolderStatusPoll());
+
+// After the poll's timer is declared: `immediate` starts it during setup.
+watch(
+  foldersShown,
+  (shown) => {
+    if (shown) {
+      fetchReferenceFolders();
+      fetchImportFolders();
+      _startFolderStatusPoll();
+    } else {
+      _stopFolderStatusPoll();
+    }
+  },
+  { immediate: true },
+);
 
 function selectFoldersTab() {
   // Stateless tab switch: only change which list the sidebar shows. Do NOT
@@ -1979,16 +1988,6 @@ const sortedProjects = computed(() =>
   ),
 );
 
-// Auto-expand projects the first time they appear in the tree, except the ones
-// the user collapsed in an earlier session. This keeps projects open by default
-// without preventing a manual collapse - or undoing a remembered one - and
-// forgets projects that no longer exist.
-watch(
-  () => sortedProjects.value.map((p) => p.id),
-  (ids) => syncProjectExpansion(ids),
-  { immediate: true },
-);
-
 const sortedCharacters = computed(() => {
   return [...characters.value]
     .filter((c) => c && typeof c.name === "string" && c.name.trim() !== "")
@@ -2040,8 +2039,6 @@ const selectedSetIdSet = computed(
     ),
 );
 
-const hasSingleSelectedSet = computed(() => selectedSetIdSet.value.size === 1);
-
 const selectedCharacterIdSet = computed(
   () =>
     new Set(
@@ -2052,10 +2049,6 @@ const selectedCharacterIdSet = computed(
         .map((id) => Number(id))
         .filter((id) => Number.isFinite(id) && id > 0),
     ),
-);
-
-const hasSingleSelectedCharacter = computed(
-  () => selectedCharacterIdSet.value.size === 1,
 );
 
 const nonReferenceSets = computed(() =>
@@ -2231,10 +2224,6 @@ const showKeyboardHintModel = computed({
   get: () => userPrefsStore.showKeyboardHint ?? true,
   set: (value) => (userPrefsStore.showKeyboardHint = value ?? true),
 });
-
-const sidebarThumbnailSizeLarge = computed(
-  () => sidebarThumbnailSizeModel.value + 8,
-);
 
 // Scale sidebar text with the thumbnail size: full size at 40px-and-up thumbnails,
 // smaller below (≈0.8% per px under 40, floored at 0.85) so dense small-thumb
@@ -2428,6 +2417,13 @@ watch(settingsDialogOpen, (isOpen) => {
   });
 });
 
+/** The scope the header slot names, as a navigation's `projectContext`. */
+function currentScopeContext() {
+  return projectViewMode.value === "project"
+    ? { mode: "project", projectId: selectedProjectId.value ?? null }
+    : { mode: "global", projectId: null };
+}
+
 function selectCharacter(id, label = null, event = null) {
   clearCountNew(id);
   const isSpecial =
@@ -2458,16 +2454,10 @@ function selectCharacter(id, label = null, event = null) {
       // Scrapheap / Unassigned are always outside a project.
       projectContext = { mode: "global", projectId: null };
     } else {
-      const charProjectId = singleChar?.project_id ?? null;
-      // In the global tab, never push a project-scoped route even if the
-      // character belongs to a project.  Only the project tab should do that.
-      projectContext = {
-        mode:
-          projectViewMode.value === "project" && charProjectId != null
-            ? "project"
-            : "global",
-        projectId: projectViewMode.value === "project" ? charProjectId : null,
-      };
+      // A person opens inside the scope the header slot names, not the
+      // person's own project: someone in two projects, seen from the second,
+      // must not jump the view to the first (#2159).
+      projectContext = currentScopeContext();
     }
     emit("select-set", null);
     emit("select-character", {
@@ -2494,13 +2484,7 @@ function selectCharacter(id, label = null, event = null) {
       label,
       ids: [numericId],
       projectIds: singleChar0 ? { [numericId]: charProjectId0 } : {},
-      projectContext: {
-        mode:
-          projectViewMode.value === "project" && charProjectId0 != null
-            ? "project"
-            : "global",
-        projectId: projectViewMode.value === "project" ? charProjectId0 : null,
-      },
+      projectContext: currentScopeContext(),
     });
     return;
   }
@@ -2549,21 +2533,14 @@ function selectSet(setId, label = null, event = null) {
   if (!isMultiToggle) {
     const singleSet = pictureSets.value.find((s) => s.id === numericSetId);
     const setProjectId = singleSet?.project_id ?? null;
-    // In the global tab, never push a project-scoped route even if the
-    // set belongs to a project.  Only the project tab should do that.
+    // Opens inside the current scope, as a person does (see selectCharacter).
     emit("select-set", {
       id: numericSetId,
       label,
       ids: [numericSetId],
       names: { [numericSetId]: label || String(numericSetId) },
       projectIds: { [numericSetId]: setProjectId },
-      projectContext: {
-        mode:
-          projectViewMode.value === "project" && setProjectId != null
-            ? "project"
-            : "global",
-        projectId: projectViewMode.value === "project" ? setProjectId : null,
-      },
+      projectContext: currentScopeContext(),
     });
     return;
   }
@@ -2598,18 +2575,6 @@ function selectSet(setId, label = null, event = null) {
   });
 }
 
-async function deleteCharacter() {
-  if (!selectionStore.selectedCharacter) return;
-  if (!window.confirm("Delete this character?")) return;
-  try {
-    await apiDeleteCharacter(selectionStore.selectedCharacter);
-    // The list is shared state now: the server is asked again rather than the
-    // row being spliced out locally.
-    await fetchCharacters();
-  } catch (e) {
-    setError(e.message);
-  }
-}
 
 async function deleteCharactersByIds(ids) {
   if (!ids?.length) return;
@@ -2650,6 +2615,17 @@ async function deleteSetById(id) {
     });
   }
 }
+
+// The sets a set row's Delete acts on: the whole multi-selection when the
+// row is part of one (the Sets head's delete button used to offer that), else
+// just the row.
+const ctxSetDeleteIds = computed(() => {
+  const id = sidebarCtxSet.value?.id;
+  if (id == null) return [];
+  return selectedSetIdSet.value.size > 1 && selectedSetIdSet.value.has(id)
+    ? Array.from(selectedSetIdSet.value)
+    : [id];
+});
 
 async function deleteSetsByIds(ids) {
   if (!ids?.length) return;
@@ -3259,9 +3235,6 @@ function showNotice(
 }
 
 function dragOverSetItem(setId, event) {
-  // Suppress the image-drop highlight while an entity is being dragged between
-  // projects - that drag is not an image assignment.
-  if (draggingEntityKind.value) return;
   const verdict = acceptDrop(event, ["pictures", "files"]);
   if (verdict === "ignore") return;
   dropRejected.value = verdict === "reject";
@@ -3316,6 +3289,121 @@ const isScrapheapRowActive = computed(
 const allPicturesRowLabel = computed(() => {
   if (projectViewMode.value === "global") return "All Pictures";
   return "Project Pictures";
+});
+
+// --- Project scope and the places above People (#2159) ---
+
+// The project the view is limited to, or null for Any project and for Not in
+// a project.
+const scopedProjectObj = selectedProjectObj;
+
+// Favourites is All media with the `favourite=1` filter on, so the two rows
+// split the All Pictures highlight between them on that one switch.
+const isAllMediaRowActive = computed(
+  () => isAllPicturesRowActive.value && !filterStore.favouriteOnlyFilter,
+);
+const isFavouritesRowActive = computed(
+  () => isAllPicturesRowActive.value && filterStore.favouriteOnlyFilter,
+);
+
+function selectAllMedia(favourites) {
+  filterStore.favouriteOnlyFilter = favourites;
+  selectCharacter(ALL_PICTURES_ID, allPicturesRowLabel.value);
+}
+
+// Pictures in no project, for the scope menu's last row. Read only when that
+// menu can render: a share-token session has no project list to scope by.
+const notInProjectCount = ref(null);
+// The Favourites row's number, in the current scope.
+const favouriteCount = ref(null);
+// It belongs to the scope it was read for: blank it on a scope change, so a
+// read still on its way (or one that fails) shows nothing rather than the
+// last scope's number.
+watch([projectViewMode, selectedProjectId], () => {
+  favouriteCount.value = null;
+});
+
+const scopeCounts = computed(() => {
+  const any = categoryCounts.value[ALL_PICTURES_ID];
+  const none = notInProjectCount.value;
+  const byId = projectCounts.value;
+  const current =
+    projectViewMode.value !== "project"
+      ? any
+      : selectedProjectId.value == null
+        ? none
+        : byId[selectedProjectId.value];
+  return { any, none, byId, current };
+});
+
+// The scope's `project_id` query value, as the grid sends it.
+function scopeProjectParam() {
+  if (projectViewMode.value !== "project") return null;
+  return selectedProjectId.value != null
+    ? String(selectedProjectId.value)
+    : "UNASSIGNED";
+}
+
+// The list under a chosen project takes a faint wash of its colour; the
+// header slot carries the stronger tint (SidebarScopeSlot).
+const scopeWashStyle = computed(() => {
+  const color = scopedProjectObj.value
+    ? projectColor(scopedProjectObj.value.id)
+    : null;
+  return color
+    ? { background: `color-mix(in srgb, ${color} 6%, transparent)` }
+    : null;
+});
+
+/**
+ * Limit the view to a project. Unlike the tabs it replaced, this IS a
+ * navigation: the grid, the counts and the People and Sets lists all follow
+ * it. It lands on All media in the new scope, keeping the Favourites filter,
+ * so Favourites in one project becomes Favourites in the next.
+ *
+ * @param {"any"|"none"|number} scope
+ */
+function chooseScope(scope) {
+  if (scope === "any") {
+    projectViewMode.value = "global";
+    selectedProjectId.value = null;
+  } else {
+    projectViewMode.value = "project";
+    selectedProjectId.value = scope === "none" ? null : scope;
+  }
+  selectCharacter(ALL_PICTURES_ID, allPicturesRowLabel.value);
+}
+
+function sectionAddLabel(kind) {
+  if (scopedProjectObj.value) {
+    return kind === "people"
+      ? "Add people to this project"
+      : "Add sets to this project";
+  }
+  return kind === "people" ? "Add person" : "Create new set";
+}
+
+// A section's "+". Inside a project it opens the menu that makes a new one in
+// the project or ticks existing ones in and out, which the project tree's own
+// People and Sets rows used to carry; elsewhere it makes a new one.
+function addFromSectionHead(kind, event) {
+  if (scopedProjectObj.value) {
+    if (kind === "people") openCharacterMoveMenu(event);
+    else openSetMoveMenu(event);
+    return;
+  }
+  if (kind === "people") createCharacter();
+  else createSet();
+}
+
+// Where the footer's Import puts pictures: the open library, and the project
+// in scope, which App passes on as the import dialog's default project.
+const importTooltip = computed(() => {
+  const place = [
+    librariesStore.activeLibrary?.name,
+    scopedProjectObj.value?.name,
+  ].filter(Boolean);
+  return place.length ? `Import into ${place.join(" › ")}` : "Import pictures";
 });
 
 function isCountNew(id) {
@@ -3435,14 +3523,33 @@ async function fetchSidebarData() {
   } catch (e) {
     console.warn("Error fetching scrapheap images summary:", e);
   }
-  // There is deliberately no "pictures in no project" count fetched here.
-  // `GET /projects/UNASSIGNED/summary` used to run on every sidebar refresh and
-  // write `projectCounts[UNASSIGNED]`, which no template has ever rendered.
-  // The tree's only count binding is `projectCounts[p.id]` over real project
-  // rows. It cost the owner a round-trip per refresh for nothing, and for a
-  // token scoped to a character / picture / set it is a project route that
-  // 403s, so it logged a warning on every refresh for a number nobody could
-  // have seen. Reinstating it means adding the row that would display it.
+  // Pictures in no project: the scope menu's "Not in a project" row, and All
+  // media's number in that scope. Only where the scope slot renders, since for
+  // a token scoped to a character / picture / set this is a project route that
+  // 403s, and it once logged a warning on every refresh for a number no row
+  // showed.
+  if (!scopedResourceType.value) {
+    try {
+      const data = await getProjectSummary("UNASSIGNED");
+      if (isCurrentRequest()) notInProjectCount.value = data.image_count;
+    } catch (e) {
+      console.warn("Error fetching the not-in-a-project count:", e);
+    }
+  }
+  // Favourites in the current scope: the same `/pictures/count` query the
+  // grid's filter makes, so the row and the grid cannot disagree. Owner only,
+  // as the row is.
+  if (!isReadOnly.value) {
+    const projectParam = scopeProjectParam();
+    const query = new URLSearchParams({ favourite: "1" });
+    if (projectParam) query.set("project_id", projectParam);
+    try {
+      const data = await getPictureCount(query.toString());
+      if (isCurrentRequest()) favouriteCount.value = data.count;
+    } catch (e) {
+      console.warn("Error fetching the favourites count:", e);
+    }
+  }
   if (isCurrentRequest()) flashCountsNextFetch.value = false;
 }
 
@@ -3715,18 +3822,9 @@ function handleSetThumbnailError(setId) {
   setThumbnailRetryTimers.set(setId, timer);
 }
 
-async function handleDeleteSet() {
-  const ids = Array.from(selectedSetIdSet.value);
-  if (!ids.length) return;
-  await deleteSetsByIds(ids);
-}
 
 async function handleDropOnSet(setId, event) {
   dragOverSet.value = null;
-  // An entity (set/character) is being moved between projects - that drop is
-  // handled by the project header / sub-section zones, not by this image-drop
-  // handler. Bail out so we don't try to parse it as image-drag data.
-  if (draggingEntityKind.value) return;
   // If this is an internal grid drag (has application/json payload), skip the
   // file-import path - browsers also populate dataTransfer.files for <img> drags.
   const isInternalDrag =
@@ -3782,9 +3880,6 @@ async function handleDropOnSet(setId, event) {
 }
 
 function handleDragOverCharacter(id, event) {
-  // Suppress the image-drop highlight while an entity is being dragged between
-  // projects - that drag is not an image assignment.
-  if (draggingEntityKind.value) return;
   const verdict = acceptDrop(event, ["pictures", "faces", "files"]);
   if (verdict === "ignore") return;
   dropRejected.value = verdict === "reject";
@@ -3796,24 +3891,7 @@ function handleDragLeaveCharacter(event) {
   dragOverCharacter.value = null;
 }
 
-// --- Project drop target (assign dragged pictures to a specific project) ---
-const dragOverProjectId = ref(null);
 
-function handleDragOverProject(id, event) {
-  // Suppress the picture-drop highlight while an entity (character/set) is
-  // being dragged between projects - that drag is handled by the project
-  // header's entity-move zone (onProjectHeaderDrop), not by a picture assign.
-  if (draggingEntityKind.value) return;
-  const verdict = acceptDrop(event, ["pictures"]);
-  if (verdict === "ignore") return;
-  dropRejected.value = verdict === "reject";
-  dragOverProjectId.value = id;
-}
-
-function handleDragLeaveProject(event) {
-  if (event && !leftDropRow(event)) return;
-  dragOverProjectId.value = null;
-}
 
 function readDraggedImageIds(event) {
   try {
@@ -3871,7 +3949,6 @@ function leftDropRow(event) {
 }
 
 function handleReferenceFolderDragOver(folderId, scopePath, event) {
-  if (draggingEntityKind.value) return;
   const verdict = acceptDrop(event, ["pictures"]);
   if (verdict === "ignore") return;
   dropRejected.value = verdict === "reject";
@@ -3890,7 +3967,6 @@ function handleReferenceFolderDragLeave(folderId, scopePath, event) {
 
 async function handleReferenceFolderDrop(folderId, scopePath, event) {
   dragOverReferenceTargetKey.value = null;
-  if (draggingEntityKind.value) return;
   const imageIds = readDraggedImageIds(event);
   if (!imageIds.length) return;
   try {
@@ -3931,48 +4007,9 @@ function handleReferenceFolderNodeContext({ rfId, path, label, event }) {
   openSidebarCtxMenu("folder-path", { folder, path, label }, event);
 }
 
-async function onProjectDrop(projectId, event) {
-  dragOverProjectId.value = null;
-  // An entity (character/set) is being moved between projects - that drop is
-  // handled by onProjectHeaderDrop, not this picture-assign handler. Bail out
-  // so we don't try to parse it as image-drag data (and log a spurious error).
-  if (draggingEntityKind.value) return;
-  if (projectId == null) return;
-  // Internal grid drag carries the selected image ids as application/json.
-  const imageIds = readDraggedImageIds(event);
-  if (!imageIds.length) return;
-  try {
-    // Picture↔Project is many-to-many (PictureProjectMember); membership is
-    // created via the batch /pictures/project endpoint with mode "add".
-    // (Patching a picture's direct project_id column does NOT create the
-    // membership the project view queries - that returns 200 but shows nothing.)
-    await setPicturesProject(imageIds, projectId, {
-      mode: "add",
-    });
-    emit("images-moved", { imageIds });
-  } catch (e) {
-    console.error("Failed to assign pictures to project:", e);
-    if (Number(e?.response?.status) >= 500) {
-      noticeStore.error(
-        "The project assignment outcome is uncertain. Counts and the current view are reloading before you retry.",
-        { key: "images-project-uncertain" },
-      );
-      await fetchSidebarData();
-      emit("images-moved", { imageIds, uncertain: true });
-      return;
-    }
-    noticeStore.error(
-      `Couldn't assign those pictures to the project. ${noticeDetail(e)}`,
-      { key: "images-project-assign" },
-    );
-  }
-}
 
 async function onCharacterDrop(characterId, event) {
   dragOverCharacter.value = null;
-  // An entity (character/set) is being moved between projects - handled by the
-  // project header / sub-section drop zones, not by this image-drop handler.
-  if (draggingEntityKind.value) return;
   // If this is an internal grid drag (has application/json payload), skip the
   // file-import path - browsers also populate dataTransfer.files for <img> drags.
   const isInternalDrag =
@@ -4356,19 +4393,22 @@ watch(selectedProjectId, (v) => {
   void fetchSidebarData();
 });
 
-// Keep the sidebar's current-project in sync with the route (the single source
-// of truth). Navigating to a project via the breadcrumb / deep-link / browser
-// back-forward updates externalSelectedProjectId; without mirroring it here the
-// sidebar's project highlight + scope would stay on the last project that was
-// selected *in the sidebar*. The init block already seeds this once on mount;
-// this handles every subsequent route change. (Switching the Projects tab does
-// NOT change the prop, so the stateless browse-scope is preserved.)
+// Keep the sidebar's scope in sync with the route (the single source of
+// truth). Navigating via the breadcrumb, a deep link or back/forward moves the
+// project store; without mirroring it here the header slot would keep naming
+// the scope last chosen *in the sidebar* over a grid showing another. Both
+// halves follow, since the slot shows the scope the grid is in (#2159): a
+// route that is not project-scoped (the Scrapheap, Duplicates) reads as Any
+// project. The init block seeds this once on mount; this handles every later
+// route change.
 watch(
-  () => projectStore.selectedProjectId,
-  (v) => {
+  () => [projectStore.projectViewMode, projectStore.selectedProjectId],
+  ([mode, id]) => {
     if (_initializing) return;
-    const next = v ?? null;
-    if (next !== selectedProjectId.value) selectedProjectId.value = next;
+    const nextMode = mode === "project" ? "project" : "global";
+    const nextId = nextMode === "project" ? (id ?? null) : null;
+    if (nextMode !== projectViewMode.value) projectViewMode.value = nextMode;
+    if (nextId !== selectedProjectId.value) selectedProjectId.value = nextId;
   },
 );
 
@@ -4530,143 +4570,19 @@ async function toggleSetProjectMembership(setId) {
   }
 }
 
-// --- Drag-and-drop: move a character / picture set between projects ---
-// The dragged entity's kind+id are stashed in module refs (this is a
-// same-document drag, and dataTransfer is not readable during dragover in most
-// browsers), so the drop zones can react without reading dataTransfer.
-const draggingEntityKind = ref(null); // 'character' | 'set' | null
-const draggingEntityId = ref(null);
-const moveDragOverProjectId = ref(null); // project header highlight
-const moveDragOverPeopleId = ref(null); // People area highlight
-const moveDragOverSetsId = ref(null); // Sets area highlight
 
-function onEntityDragStart(kind, id, event) {
-  if (isReadOnly.value) return;
-  draggingEntityKind.value = kind;
-  draggingEntityId.value = id;
-  if (event.dataTransfer) {
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", `${kind}:${id}`);
-  }
-}
 
-function onEntityDragEnd() {
-  draggingEntityKind.value = null;
-  draggingEntityId.value = null;
-  moveDragOverProjectId.value = null;
-  moveDragOverPeopleId.value = null;
-  moveDragOverSetsId.value = null;
-}
 
-async function moveCharacterToProject(charId, projectId) {
-  const char = characters.value.find((c) => c.id === charId);
-  const currentProjectIds = getEntityProjectIds(char);
-  if (
-    !char ||
-    (currentProjectIds.length === 1 && currentProjectIds[0] === projectId)
-  )
-    return;
-  try {
-    await patchCharacter(charId, { project_id: projectId });
-    const idx = characters.value.findIndex((c) => c.id === charId);
-    if (idx !== -1) {
-      characters.value[idx] = withEntityProjectIds(characters.value[idx], [
-        projectId,
-      ]);
-    }
-    // Reassignment changes per-project and per-character image counts.
-    fetchSidebarData();
-  } catch (e) {
-    console.error(
-      `Failed to move character ${charId} to project ${projectId}:`,
-      e,
-    );
-  }
-}
 
-async function moveSetToProject(setId, projectId) {
-  const set = pictureSets.value.find((s) => s.id === setId);
-  const currentProjectIds = getEntityProjectIds(set);
-  if (
-    !set ||
-    (currentProjectIds.length === 1 && currentProjectIds[0] === projectId)
-  )
-    return;
-  try {
-    await patchPictureSet(setId, { project_id: projectId });
-    const idx = pictureSets.value.findIndex((s) => s.id === setId);
-    if (idx !== -1) {
-      pictureSets.value[idx] = withEntityProjectIds(pictureSets.value[idx], [
-        projectId,
-      ]);
-    }
-    // Reassignment changes per-project and per-set image counts.
-    fetchSidebarData();
-  } catch (e) {
-    console.error(`Failed to move set ${setId} to project ${projectId}:`, e);
-  }
-}
 
-// Project header - accepts both characters and sets.
-function onProjectHeaderDragOver(projectId, event) {
-  if (!draggingEntityKind.value) return;
-  event.preventDefault();
-  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
-  moveDragOverProjectId.value = projectId;
-}
 
-function onProjectHeaderDragLeave() {
-  moveDragOverProjectId.value = null;
-}
 
-function onProjectHeaderDrop(projectId) {
-  const kind = draggingEntityKind.value;
-  const id = draggingEntityId.value;
-  moveDragOverProjectId.value = null;
-  if (id == null) return;
-  if (kind === "character") moveCharacterToProject(id, projectId);
-  else if (kind === "set") moveSetToProject(id, projectId);
-}
 
-// People area - accepts only characters.
-function onProjectPeopleDragOver(projectId, event) {
-  if (draggingEntityKind.value !== "character") return;
-  event.preventDefault();
-  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
-  moveDragOverPeopleId.value = projectId;
-}
 
-function onProjectPeopleDragLeave() {
-  moveDragOverPeopleId.value = null;
-}
 
-function onProjectPeopleDrop(projectId) {
-  const id = draggingEntityId.value;
-  moveDragOverPeopleId.value = null;
-  if (draggingEntityKind.value === "character" && id != null) {
-    moveCharacterToProject(id, projectId);
-  }
-}
 
-// Sets area - accepts only picture sets.
-function onProjectSetsDragOver(projectId, event) {
-  if (draggingEntityKind.value !== "set") return;
-  event.preventDefault();
-  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
-  moveDragOverSetsId.value = projectId;
-}
 
-function onProjectSetsDragLeave() {
-  moveDragOverSetsId.value = null;
-}
 
-function onProjectSetsDrop(projectId) {
-  const id = draggingEntityId.value;
-  moveDragOverSetsId.value = null;
-  if (draggingEntityKind.value === "set" && id != null) {
-    moveSetToProject(id, projectId);
-  }
-}
 
 const currentProjectId = computed(() =>
   projectViewMode.value === "project" ? selectedProjectId.value : null,
@@ -5207,48 +5123,18 @@ defineExpose({
         </div>
       </Teleport>
     </div>
-    <div
+    <SidebarScopeSlot
       v-else-if="!scopedResourceType"
-      class="sidebar-view-header"
-      @contextmenu.prevent="openSidebarCtxMenu('empty', null, $event)"
-    >
-      <div class="sidebar-view-tabs-row">
-        <div class="sidebar-view-tabs">
-          <button
-            class="sidebar-view-tab"
-            :class="{
-              active:
-                sidebarPrimaryTab === 'library' && projectViewMode === 'global',
-            }"
-            @click="selectLibraryTab('global')"
-          >
-            <v-icon size="14">mdi-earth</v-icon>
-            <span class="sidebar-view-tab-label">Global</span>
-          </button>
-          <button
-            class="sidebar-view-tab"
-            :class="{
-              active:
-                sidebarPrimaryTab === 'library' &&
-                projectViewMode === 'project',
-            }"
-            @click="selectLibraryTab('project')"
-          >
-            <v-icon size="14">mdi-briefcase-outline</v-icon>
-            <span class="sidebar-view-tab-label">Projects</span>
-          </button>
-          <button
-            v-if="!isReadOnly"
-            class="sidebar-view-tab"
-            :class="{ active: sidebarPrimaryTab === 'folders' }"
-            @click="selectFoldersTab()"
-          >
-            <v-icon size="14">mdi-folder-outline</v-icon>
-            <span class="sidebar-view-tab-label">Folders</span>
-          </button>
-        </div>
-      </div>
-    </div>
+      :projects="sortedProjects"
+      :mode="projectViewMode"
+      :project-id="selectedProjectId"
+      :counts="scopeCounts"
+      :read-only="isReadOnly"
+      @choose="chooseScope"
+      @new-project="createProject"
+      @edit-project="openProjectEditor"
+      @project-menu="(p, e) => openSidebarCtxMenu('project', p, e)"
+    />
     <div
       class="sidebar-scroll"
       ref="dockedScrollRef"
@@ -6017,18 +5903,510 @@ defineExpose({
         </div>
       </template>
       <template v-else>
-        <!-- Folders tab panel -->
-        <div v-if="sidebarPrimaryTab === 'folders'" class="sidebar-tab-panel">
-          <!-- Add folder button matching New project style -->
-          <div
+        <!-- One list in every scope (#2159): places, then Review, then the
+             People / Sets / Folders sections, all on 32px rows. The project
+             scope in the header slot narrows the grid, the counts and the
+             People and Sets lists; it no longer swaps this list for a tree. -->
+        <div
+          class="sidebar-tab-panel sidebar-media-list"
+          :style="scopeWashStyle"
+        >
+          <template v-if="!scopedResourceType">
+            <!-- A destination is a real <button>: keyboard reach and
+                 Enter/Space activation come for free, and `aria-current`
+                 is what tells a screen reader which one you are in. -->
+            <button
+              type="button"
+              :class="['sidebar-list-item', { active: isAllMediaRowActive }]"
+              :aria-current="isAllMediaRowActive ? 'page' : undefined"
+              @click="selectAllMedia(false)"
+              @contextmenu.prevent="
+                openSidebarCtxMenu('all-pictures', null, $event)
+              "
+            >
+              <span class="sidebar-list-icon"
+                ><v-icon size="16">mdi-image-multiple-outline</v-icon></span
+              >
+              <span class="sidebar-list-label">All media</span>
+              <span class="sidebar-list-count">{{
+                scopeCounts.current ?? ""
+              }}</span>
+            </button>
+            <!-- Favourites is the `favourite=1` filter (#2155) on All media,
+                 not a container: the filter chip still says so, and the
+                 filter menu's box is the same switch. Owner only, as that box
+                 is: a share token's view of the hearts is not its own. -->
+            <button
+              v-if="!isReadOnly"
+              type="button"
+              :class="['sidebar-list-item', { active: isFavouritesRowActive }]"
+              :aria-current="isFavouritesRowActive ? 'page' : undefined"
+              @click="selectAllMedia(true)"
+            >
+              <span class="sidebar-list-icon"
+                ><v-icon size="16">mdi-heart-outline</v-icon></span
+              >
+              <span class="sidebar-list-label">Favourites</span>
+              <span class="sidebar-list-count">{{
+                favouriteCount ?? ""
+              }}</span>
+            </button>
+          </template>
+          <button
             v-if="!isReadOnly"
-            class="sidebar-project-tree-add"
-            @click="openAddFolderTypeDialog()"
+            type="button"
+            :class="['sidebar-list-item', { active: isScrapheapRowActive }]"
+            :aria-current="isScrapheapRowActive ? 'page' : undefined"
+            @click="selectCharacter(SCRAPHEAP_PICTURES_ID, 'Scrapheap')"
+            @contextmenu.prevent="openSidebarCtxMenu('scrapheap', null, $event)"
           >
-            <v-icon size="16">mdi-plus</v-icon>
-            Add folder
+            <span class="sidebar-list-icon"
+              ><v-icon size="16">mdi-trash-can-outline</v-icon></span
+            >
+            <span class="sidebar-list-label">Scrapheap</span>
+            <!-- `?? ""`, not `|| ""`: an empty Scrapheap has a count of 0,
+                 and 0 is an answer, so it renders. Only a count that has
+                 not arrived yet is blank. This is the same distinction
+                 `utils/sidebarCounts.js` is a module to protect, and every
+                 sibling badge here already reads this way. -->
+            <span class="sidebar-list-count">{{
+              categoryCounts[SCRAPHEAP_PICTURES_ID] ?? ""
+            }}</span>
+          </button>
+
+          <!-- Review: the queues whose number goes down as you work. -->
+          <div class="sidebar-section-header" role="presentation">
+            <span class="sidebar-section-title">Review</span>
+          </div>
+          <!-- `aria-disabled`, not `disabled`: a read-only session must still
+               be able to focus the row and read the title that explains why
+               it is inert. The click guard stays. -->
+          <button
+            type="button"
+            :class="[
+              'sidebar-list-item',
+              {
+                active: isDuplicatesView,
+                'sidebar-list-item--unavailable': isReadOnly,
+              },
+            ]"
+            :aria-current="isDuplicatesView ? 'page' : undefined"
+            :aria-disabled="isReadOnly || undefined"
+            @click="isReadOnly || emit('select-duplicates', {})"
+          >
+            <Tooltip
+              :text="isReadOnly ? READ_ONLY_DEDUP_HINT : ''"
+              activator="parent"
+            />
+            <span class="sidebar-list-icon"
+              ><v-icon size="16">mdi-content-duplicate</v-icon></span
+            >
+            <span class="sidebar-list-label">Duplicates</span>
+            <span v-if="dedupStore.isScanning" class="sidebar-dedup-scanning">
+              <Tooltip
+                text="Still looking for duplicates. Groups appear as they are found."
+                activator="parent"
+              />
+              <v-progress-circular indeterminate size="10" width="1.5" />
+            </span>
+            <!-- A presence DOT, not a count (owner call, 2026-07-29): the
+                 group count moves with the tier gate and the threshold, so it
+                 read as churn. The dot only says "there are duplicates to
+                 review"; the queue's own header carries the numbers. -->
+            <span v-if="dedupStore.hasDuplicates" class="sidebar-dedup-dot">
+              <Tooltip text="There are duplicates to review" activator="parent" />
+            </span>
+          </button>
+          <!-- The tag-review board, which the toolbar's Review button also
+               opens. An overlay, not a view, so it never lights as current. -->
+          <button
+            v-if="!isReadOnly"
+            type="button"
+            class="sidebar-list-item"
+            @click="emit('open-tag-review')"
+          >
+            <span class="sidebar-list-icon"
+              ><v-icon size="16">mdi-tag-check-outline</v-icon></span
+            >
+            <span class="sidebar-list-label">Tags to review</span>
+          </button>
+          <!-- Moves: a to-do queue, not a permanent destination, so it earns
+               its row while the queue holds anything at all - including an
+               off_layout-only backlog, which has nothing to decide but still
+               has to be reachable before its retention window expires it
+               unseen (see hasAnyPending's own comment). The count only ever
+               names what needs a DECISION; an off_layout-only queue shows the
+               row with no number, not a "0" that reads as empty. -->
+          <button
+            v-if="movesStore.hasAnyPending"
+            type="button"
+            :class="['sidebar-list-item', { active: isMovesView }]"
+            :aria-current="isMovesView ? 'page' : undefined"
+            @click="emit('select-moves')"
+          >
+            <span class="sidebar-list-icon"
+              ><v-icon size="16">mdi-folder-move-outline</v-icon></span
+            >
+            <span class="sidebar-list-label">Moves</span>
+            <span v-if="movesStore.hasPending" class="sidebar-list-count">{{
+              movesStore.pendingCount
+            }}</span>
+          </button>
+
+          <div
+            v-if="scopedResourceType !== 'picture_set'"
+            class="sidebar-section-block"
+          >
+            <div
+              class="sidebar-section-header"
+              @contextmenu.prevent.stop="
+                openSidebarCtxMenu('header', 'people', $event)
+              "
+            >
+              <span class="sidebar-section-title">People</span>
+              <span
+                v-if="!isReadOnly"
+                class="sidebar-header-actions sidebar-move-to-project-wrap"
+              >
+                <button
+                  type="button"
+                  class="sidebar-section-add"
+                  :aria-label="sectionAddLabel('people')"
+                  :aria-haspopup="scopedProjectObj ? 'menu' : undefined"
+                  :aria-expanded="scopedProjectObj ? characterMoveMenuOpen : undefined"
+                  @click.stop="addFromSectionHead('people', $event)"
+                >
+                  <Tooltip
+                    :text="sectionAddLabel('people')"
+                    activator="parent"
+                    :describe="false"
+                  />
+                  <v-icon size="16">mdi-plus</v-icon>
+                </button>
+              </span>
+            </div>
+            <div class="sidebar-section-scroll">
+              <div
+                v-if="sidebarError"
+                class="sidebar-error-bubble"
+                :style="
+                  sidebarErrorPosition
+                    ? {
+                        top: `${sidebarErrorPosition.top}px`,
+                        left: `${sidebarErrorPosition.left}px`,
+                      }
+                    : { top: '72px', left: '20px' }
+                "
+              >
+                {{ sidebarError }}
+              </div>
+              <div
+                v-if="visibleCharacters.length === 0"
+                class="sidebar-collections-help-row"
+              >
+                <span class="sidebar-collections-help"
+                  >Click the + button to add one.</span
+                >
+              </div>
+              <div
+                v-for="char in visibleCharacters"
+                :key="char.id"
+                class="sidebar-character-group"
+              >
+                <div
+                  :class="[
+                    'sidebar-list-item',
+                    {
+                      active:
+                        (selectedCharacterIdSet.size > 0
+                          ? selectedCharacterIdSet.has(char.id)
+                          : selectionStore.selectedCharacter === char.id) &&
+                        selectionOwnsHighlight,
+                      droppable:
+                        dragOverCharacter === char.id && !dropRejected,
+                      'not-droppable':
+                        dragOverCharacter === char.id && dropRejected,
+                    },
+                  ]"
+                  :ref="(el) => registerCharacterRef(char.id, el)"
+                  role="button"
+                  tabindex="0"
+                  :aria-pressed="
+                    (selectedCharacterIdSet.size > 0
+                      ? selectedCharacterIdSet.has(char.id)
+                      : selectionStore.selectedCharacter === char.id) &&
+                    selectionOwnsHighlight
+                      ? 'true'
+                      : 'false'
+                  "
+                  @click="
+                    selectCharacter(char.id, char.name || 'Character', $event)
+                  "
+                  @keydown="activateOnEnterOrSpace"
+                  @contextmenu.prevent="
+                    openSidebarCtxMenu('character', char, $event)
+                  "
+                  @dragover="handleDragOverCharacter(char.id, $event)"
+                  @dragleave="handleDragLeaveCharacter($event)"
+                  @drop.prevent="
+                    handleDropOnCharacter({
+                      characterId: char.id,
+                      event: $event,
+                    })
+                  "
+                >
+                  <Tooltip
+                    :text="`${char.name || 'Character'} (Ctrl/Cmd + click to multi-select)`"
+                    activator="parent"
+                  />
+                  <span class="sidebar-list-icon">
+                    <img
+                      :src="
+                        characterThumbnails[char.id]
+                          ? characterThumbnails[char.id]
+                          : unknownPerson
+                      "
+                      alt=""
+                      width="20"
+                      height="20"
+                      class="sidebar-character-thumb"
+                    />
+                  </span>
+                  <span class="sidebar-list-label">
+                    <Tooltip
+                      location="top"
+                      :disabled="!labelNeedsTooltip(`char-${char.id}`)"
+                      :describe="false"
+                    >
+                      <template #activator="{ props }">
+                        <span
+                          v-bind="
+                            withRef(props, (el) =>
+                              registerLabelRef(`char-${char.id}`, el),
+                            )
+                          "
+                          class="sidebar-list-label-text"
+                          >{{
+                            char.name.charAt(0).toUpperCase() +
+                            char.name.slice(1)
+                          }}</span
+                        >
+                      </template>
+                      <span>{{ char.name }}</span>
+                    </Tooltip>
+                  </span>
+                  <span class="sidebar-character-actions">
+                    <Tooltip
+                      v-if="sharedCharacterIds.has(char.id)"
+                      text="Has active share links"
+                    >
+                      <template #activator="{ props: tipProps }">
+                        <v-icon
+                          v-bind="tipProps"
+                          class="sidebar-shared-icon"
+                          size="11"
+                          >mdi-link-variant</v-icon
+                        >
+                      </template>
+                    </Tooltip>
+                    <span class="sidebar-list-count">
+                      <span v-if="isCountNew(char.id)" class="sidebar-new-tag"
+                        >new</span
+                      >
+                      <span>{{ categoryCounts[char.id] ?? "" }}</span>
+                    </span>
+                  </span>
+                </div>
+              </div>
+            </div>
           </div>
 
+          <div
+            v-if="scopedResourceType !== 'character'"
+            class="sidebar-section-block"
+          >
+            <div
+              class="sidebar-section-header"
+              @contextmenu.prevent.stop="
+                openSidebarCtxMenu('header', 'sets', $event)
+              "
+            >
+              <span class="sidebar-section-title">Sets</span>
+              <span
+                v-if="!isReadOnly"
+                class="sidebar-header-actions sidebar-move-to-project-wrap"
+              >
+                <button
+                  type="button"
+                  class="sidebar-section-add"
+                  :aria-label="sectionAddLabel('sets')"
+                  :aria-haspopup="scopedProjectObj ? 'menu' : undefined"
+                  :aria-expanded="scopedProjectObj ? setMoveMenuOpen : undefined"
+                  @click.stop="addFromSectionHead('sets', $event)"
+                >
+                  <Tooltip
+                    :text="sectionAddLabel('sets')"
+                    activator="parent"
+                    :describe="false"
+                  />
+                  <v-icon size="16">mdi-plus</v-icon>
+                </button>
+              </span>
+            </div>
+            <div class="sidebar-section-scroll">
+              <div
+                v-if="visibleSets.length === 0"
+                class="sidebar-collections-help-row"
+              >
+                <span class="sidebar-collections-help"
+                  >Click the + button to add one.</span
+                >
+              </div>
+              <template v-for="pset in visibleSets" :key="pset.id">
+                <div
+                  :class="[
+                    'sidebar-list-item',
+                    'sidebar-set-item',
+                    {
+                      active:
+                        selectedSetIdSet.has(pset.id) &&
+                        selectionOwnsHighlight,
+                      droppable: dragOverSet === pset.id && !dropRejected,
+                      'not-droppable':
+                        dragOverSet === pset.id && dropRejected,
+                    },
+                  ]"
+                  :ref="(el) => registerSetRef(pset.id, el)"
+                  role="button"
+                  tabindex="0"
+                  :aria-pressed="
+                    selectedSetIdSet.has(pset.id) && selectionOwnsHighlight
+                      ? 'true'
+                      : 'false'
+                  "
+                  @click="
+                    selectSet(pset.id, pset.name || 'Picture Set', $event)
+                  "
+                  @keydown="activateOnEnterOrSpace"
+                  @contextmenu.prevent="
+                    openSidebarCtxMenu('set', pset, $event)
+                  "
+                  @dragover="dragOverSetItem(pset.id, $event)"
+                  @dragleave="dragLeaveSetItem($event)"
+                  @drop.prevent="handleDropOnSet(pset.id, $event)"
+                >
+                  <Tooltip
+                    :text="`${pset.name || 'Picture Set'} (Ctrl/Cmd + click to multi-select)`"
+                    activator="parent"
+                  />
+                  <span class="sidebar-list-icon">
+                    <v-icon
+                      v-if="pset.set_icon && pset.set_icon !== ICON_CARDS"
+                      size="16"
+                      :color="pset.set_color || undefined"
+                      >{{ pset.set_icon }}</v-icon
+                    >
+                    <img
+                      v-else-if="hasSetThumbnail(pset)"
+                      :src="getSetThumbnail(pset.id)"
+                      alt=""
+                      class="sidebar-set-thumb-image sidebar-set-thumb-image--large"
+                      width="20"
+                      height="20"
+                      :style="
+                        pset.set_color
+                          ? {
+                              filter: `drop-shadow(0 0 3px ${pset.set_color}) drop-shadow(0 0 8px ${pset.set_color})`,
+                            }
+                          : {}
+                      "
+                      @load="handleSetThumbnailLoad(pset.id)"
+                      @error="handleSetThumbnailError(pset.id)"
+                    />
+                    <v-icon v-else size="16"
+                      >mdi-image-album</v-icon
+                    >
+                  </span>
+                  <span class="sidebar-list-label">
+                    <Tooltip
+                      location="top"
+                      :disabled="!labelNeedsTooltip(`set-${pset.id}`)"
+                      :describe="false"
+                    >
+                      <template #activator="{ props }">
+                        <span
+                          v-bind="
+                            withRef(props, (el) =>
+                              registerLabelRef(`set-${pset.id}`, el),
+                            )
+                          "
+                          class="sidebar-list-label-text"
+                          >{{ pset.name }}</span
+                        >
+                      </template>
+                      <span>{{ pset.name }}</span>
+                    </Tooltip>
+                  </span>
+                  <Tooltip v-if="pset.locked" :text="SET_LOCKED_ROW_TITLE">
+                    <template #activator="{ props: tipProps }">
+                      <v-icon
+                        v-bind="tipProps"
+                        class="sidebar-lock-icon"
+                        size="11"
+                        >mdi-lock-outline</v-icon
+                      >
+                    </template>
+                  </Tooltip>
+                  <Tooltip
+                    v-if="sharedSetIds.has(pset.id)"
+                    text="Has active share links"
+                  >
+                    <template #activator="{ props: tipProps }">
+                      <v-icon
+                        v-bind="tipProps"
+                        class="sidebar-shared-icon"
+                        size="11"
+                        >mdi-link-variant</v-icon
+                      >
+                    </template>
+                  </Tooltip>
+                  <span class="sidebar-list-count">{{
+                    pset.picture_count ?? 0
+                  }}</span>
+                </div>
+              </template>
+            </div>
+          </div>
+          <!-- The scoped project's attached files, which used to sit under
+               the project in the Projects tree. -->
+          <div
+            v-if="
+              scopedProjectObj &&
+              (!isReadOnly || sessionContext?.include_attachments)
+            "
+            class="sidebar-project-tree-files"
+          >
+            <ProjectFiles :projectId="scopedProjectObj.id" compact />
+          </div>
+
+          <!-- Folders were a tab beside Global and Projects. A folder is a
+               place too, so it is a section of the one list now. Owner only,
+               as the tab was. -->
+          <template v-if="!isReadOnly">
+          <div class="sidebar-section-header">
+            <span class="sidebar-section-title">Folders</span>
+            <span class="sidebar-header-actions">
+              <button
+                type="button"
+                class="sidebar-section-add"
+                aria-label="Add folder"
+                @click.stop="openAddFolderTypeDialog()"
+              >
+                <Tooltip text="Add folder" activator="parent" :describe="false" />
+                <v-icon size="16">mdi-plus</v-icon>
+              </button>
+            </span>
+          </div>
           <div
             v-if="referenceFoldersLoading || importFoldersLoading"
             class="sidebar-folders-loading"
@@ -6039,19 +6417,11 @@ defineExpose({
             v-else-if="
               referenceFolders.length === 0 && importFolders.length === 0
             "
-            class="sidebar-no-projects-empty"
+            class="sidebar-collections-help-row"
           >
-            <v-icon size="52" class="sidebar-no-projects-icon"
-              >mdi-folder-network-outline</v-icon
+            <span class="sidebar-collections-help"
+              >Click the + button to add one.</span
             >
-            <p class="sidebar-no-projects-text">No folders configured.</p>
-            <AppButton
-              variant="primary"
-              icon-left="plus"
-              @click="openAddFolderTypeDialog()"
-            >
-              Add folder
-            </AppButton>
           </div>
           <div
             v-else
@@ -6414,1258 +6784,173 @@ defineExpose({
               </div>
             </div>
           </div>
-        </div>
-
-        <!-- Library tab panel (Global / Projects) -->
-        <div v-else class="sidebar-tab-panel">
-          <!-- ══ GLOBAL tab content ══ -->
-          <template v-if="projectViewMode === 'global'">
-            <div v-if="!scopedResourceType" class="sidebar-all-pictures-row">
-              <!-- A destination is a real <button>: keyboard reach and
-                   Enter/Space activation come for free, and `aria-current`
-                   is what tells a screen reader which one you are in. -->
-              <button
-                type="button"
-                :class="[
-                  'sidebar-list-item',
-                  { active: isAllPicturesRowActive },
-                ]"
-                :aria-current="isAllPicturesRowActive ? 'page' : undefined"
-                @click="selectCharacter(ALL_PICTURES_ID, allPicturesRowLabel)"
-                @contextmenu.prevent="
-                  openSidebarCtxMenu('all-pictures', null, $event)
-                "
-              >
-                <span class="sidebar-list-icon sidebar-list-icon--toplevel"
-                  ><v-icon size="18">mdi-image-multiple</v-icon></span
-                >
-                <span class="sidebar-list-label">{{
-                  allPicturesRowLabel
-                }}</span>
-                <span class="sidebar-list-count">{{
-                  categoryCounts[ALL_PICTURES_ID] ?? ""
-                }}</span>
-              </button>
-            </div>
-
-            <!-- Duplicates earns a sidebar row because it is the one thing
-                 here with a to-do count: the number goes down as the user
-                 works, which is what a destination is for. Stacked and
-                 unstacked stay a filter. -->
-            <div class="sidebar-all-pictures-row">
-              <!-- `aria-disabled`, not `disabled`: a read-only session must
-                   still be able to focus the row and read the title that
-                   explains why it is inert. The click guard stays. -->
-              <button
-                type="button"
-                :class="[
-                  'sidebar-list-item',
-                  {
-                    active: isDuplicatesView,
-                    'sidebar-list-item--unavailable': isReadOnly,
-                  },
-                ]"
-                :aria-current="isDuplicatesView ? 'page' : undefined"
-                :aria-disabled="isReadOnly || undefined"
-                @click="isReadOnly || emit('select-duplicates', {})"
-              >
-                <Tooltip
-                  :text="isReadOnly ? READ_ONLY_DEDUP_HINT : ''"
-                  activator="parent"
-                />
-                <span class="sidebar-list-icon sidebar-list-icon--toplevel"
-                  ><v-icon size="18">mdi-content-duplicate</v-icon></span
-                >
-                <span class="sidebar-list-label">Duplicates</span>
-                <span
-                  v-if="dedupStore.isScanning"
-                  class="sidebar-dedup-scanning"
-                >
-                  <Tooltip
-                    text="Still looking for duplicates. Groups appear as they are found."
-                    activator="parent"
-                  />
-                  <v-progress-circular indeterminate size="10" width="1.5" />
-                </span>
-                <!-- A presence DOT, not a count (owner call, 2026-07-29): the
-                     group count moves with the tier gate and the threshold,
-                     so it read as churn. The dot only says "there are
-                     duplicates to review"; the queue's own header carries the
-                     numbers. -->
-                <span v-if="dedupStore.hasDuplicates" class="sidebar-dedup-dot">
-                  <Tooltip
-                    text="There are duplicates to review"
-                    activator="parent"
-                  />
-                </span>
-              </button>
-            </div>
-
-
-            <!-- Moves: a to-do queue, not a permanent destination, so it earns
-                 its row while the queue holds anything at all - including an
-                 off_layout-only backlog, which has nothing to decide but
-                 still has to be reachable before its retention window expires
-                 it unseen (see hasAnyPending's own comment). The count only
-                 ever names what needs a DECISION; an off_layout-only queue
-                 shows the row with no number, not a "0" that reads as empty. -->
+          </template>
+          <!-- In a project's scope the People and Sets "+" open these: make
+               a new one in the project, or tick existing ones in or out. -->
+          <Teleport to="body">
             <div
-              v-if="movesStore.hasAnyPending"
-              class="sidebar-all-pictures-row"
+              v-if="characterMoveMenuOpen"
+              class="ctx-menu sidebar-move-menu"
+              role="menu"
+              tabindex="-1"
+              :style="characterMenuPos"
+              @keydown="onMoveMenuKeydown"
             >
               <button
                 type="button"
-                :class="['sidebar-list-item', { active: isMovesView }]"
-                :aria-current="isMovesView ? 'page' : undefined"
-                @click="emit('select-moves')"
-              >
-                <span class="sidebar-list-icon sidebar-list-icon--toplevel"
-                  ><v-icon size="18">mdi-folder-move-outline</v-icon></span
-                >
-                <span class="sidebar-list-label">Moves</span>
-                <span v-if="movesStore.hasPending" class="sidebar-list-count">{{
-                  movesStore.pendingCount
-                }}</span>
-              </button>
-            </div>
-
-            <div v-if="!isReadOnly" class="sidebar-all-pictures-row">
-              <button
-                type="button"
-                :class="['sidebar-list-item', { active: isScrapheapRowActive }]"
-                :aria-current="isScrapheapRowActive ? 'page' : undefined"
-                @click="selectCharacter(SCRAPHEAP_PICTURES_ID, 'Scrapheap')"
-                @contextmenu.prevent="
-                  openSidebarCtxMenu('scrapheap', null, $event)
+                class="ctx-item"
+                role="menuitem"
+                @click.stop="
+                  createCharacter();
+                  characterMoveMenuOpen = false;
                 "
               >
-                <span class="sidebar-list-icon sidebar-list-icon--toplevel"
-                  ><v-icon size="18">mdi-trash-can-outline</v-icon></span
-                >
-                <span class="sidebar-list-label">Scrapheap</span>
-                <!-- `?? ""`, not `|| ""`: an empty Scrapheap has a count of 0,
-                     and 0 is an answer, so it renders. Only a count that has
-                     not arrived yet is blank. This is the same distinction
-                     `utils/sidebarCounts.js` is a module to protect, and every
-                     sibling badge here already reads this way. -->
-                <span class="sidebar-list-count">{{
-                  categoryCounts[SCRAPHEAP_PICTURES_ID] ?? ""
-                }}</span>
+                <v-icon class="ctx-icon"
+                  >mdi-plus-circle-outline</v-icon
+                >Create new
               </button>
-            </div>
-
-            <div class="sidebar-section-divider" />
-
-            <div
-              v-if="scopedResourceType !== 'picture_set'"
-              class="sidebar-section-block"
-            >
-              <div
-                class="sidebar-section-header sidebar-section-header--collapsible"
-                @contextmenu.prevent.stop="
-                  openSidebarCtxMenu('header', 'people', $event)
-                "
+              <div class="ctx-sep" role="separator"></div>
+              <template
+                v-for="group in projectMenuCharacterGroups"
+                :key="group.label"
               >
+                <div
+                  class="section-label ctx-label"
+                  :class="{
+                    'ctx-label--current':
+                      group.projectId === selectedProjectId,
+                  }"
+                  role="presentation"
+                >
+                  {{ group.label }}
+                </div>
                 <button
-                  type="button"
-                  class="sidebar-section-toggle"
-                  :aria-expanded="!peopleSectionCollapsed"
-                  @click.stop="togglePeopleSection()"
-                >
-                  <v-icon class="sidebar-section-chevron" size="16">{{
-                    peopleSectionCollapsed
-                      ? "mdi-chevron-right"
-                      : "mdi-chevron-down"
-                  }}</v-icon>
-                  <span>People</span>
-                </button>
-                <span class="sidebar-header-spacer"></span>
-                <div class="sidebar-header-actions" @click.stop>
-                  <button
-                    v-if="selectedCharacterIdSet.size > 1"
-                    type="button"
-                    class="clear-selection-inline"
-                    aria-label="Clear character selection"
-                    @click.stop="
-                      selectCharacter(ALL_PICTURES_ID, 'All Pictures')
-                    "
-                  >
-                    <Tooltip
-                      text="Clear character selection"
-                      activator="parent"
-                      :describe="false"
-                    />
-                    <v-icon size="16">mdi-selection-off</v-icon>
-                  </button>
-                  <button
-                    v-if="
-                      selectedCharacterObj &&
-                      hasSingleSelectedCharacter &&
-                      !isReadOnly
-                    "
-                    type="button"
-                    class="edit-character-inline"
-                    aria-label="Edit selected character"
-                    @click.stop="openCharacterEditor(selectedCharacterObj)"
-                  >
-                    <Tooltip
-                      text="Edit selected character"
-                      activator="parent"
-                      :describe="false"
-                    />
-                    <v-icon size="16">mdi-pencil</v-icon>
-                  </button>
-                  <button
-                    v-if="
-                      !isReadOnly &&
-                      selectionStore.selectedCharacter &&
-                      selectionStore.selectedCharacter !== ALL_PICTURES_ID &&
-                      selectionStore.selectedCharacter !==
-                        UNASSIGNED_PICTURES_ID &&
-                      selectionStore.selectedCharacter !== SCRAPHEAP_PICTURES_ID
-                    "
-                    type="button"
-                    class="delete-character-inline"
-                    aria-label="Delete selected character"
-                    @click.stop="deleteCharacter"
-                  >
-                    <Tooltip
-                      text="Delete selected character"
-                      activator="parent"
-                      :describe="false"
-                    />
-                    <v-icon size="16">mdi-trash-can-outline</v-icon>
-                  </button>
-                  <button
-                    v-if="!isReadOnly"
-                    type="button"
-                    class="add-character-inline"
-                    aria-label="Add character"
-                    @click.stop="createCharacter"
-                  >
-                    <Tooltip
-                      text="Add character"
-                      activator="parent"
-                      :describe="false"
-                    />
-                    <v-icon size="16">mdi-plus</v-icon>
-                  </button>
-                </div>
-              </div>
-              <div
-                v-if="!peopleSectionCollapsed"
-                class="sidebar-section-scroll"
-              >
-                <div
-                  v-if="sidebarError"
-                  class="sidebar-error-bubble"
-                  :style="
-                    sidebarErrorPosition
-                      ? {
-                          top: `${sidebarErrorPosition.top}px`,
-                          left: `${sidebarErrorPosition.left}px`,
-                        }
-                      : { top: '72px', left: '20px' }
-                  "
-                >
-                  {{ sidebarError }}
-                </div>
-                <div
-                  v-if="visibleCharacters.length === 0"
-                  class="sidebar-collections-help-row"
-                >
-                  <span class="sidebar-collections-help"
-                    >Click the + button to add one.</span
-                  >
-                </div>
-                <div
-                  v-for="char in visibleCharacters"
+                  v-for="char in group.items"
                   :key="char.id"
-                  class="sidebar-character-group"
+                  type="button"
+                  class="ctx-item"
+                  role="menuitemcheckbox"
+                  :aria-checked="
+                    entityBelongsToProject(
+                      char,
+                      selectedProjectId,
+                    )
+                      ? 'true'
+                      : 'false'
+                  "
+                  @click.stop="
+                    toggleCharacterProjectMembership(char.id)
+                  "
                 >
-                  <div
-                    :class="[
-                      'sidebar-list-item',
-                      {
-                        active:
-                          (selectedCharacterIdSet.size > 0
-                            ? selectedCharacterIdSet.has(char.id)
-                            : selectionStore.selectedCharacter === char.id) &&
-                          selectionOwnsHighlight,
-                        droppable:
-                          dragOverCharacter === char.id && !dropRejected,
-                        'not-droppable':
-                          dragOverCharacter === char.id && dropRejected,
-                      },
-                    ]"
-                    :ref="(el) => registerCharacterRef(char.id, el)"
-                    role="button"
-                    tabindex="0"
-                    :aria-pressed="
-                      (selectedCharacterIdSet.size > 0
-                        ? selectedCharacterIdSet.has(char.id)
-                        : selectionStore.selectedCharacter === char.id) &&
-                      selectionOwnsHighlight
-                        ? 'true'
-                        : 'false'
+                  <span class="ctx-label-text">{{
+                    char.name
+                  }}</span>
+                  <v-icon
+                    v-if="
+                      entityBelongsToProject(
+                        char,
+                        selectedProjectId,
+                      )
                     "
-                    @click="
-                      selectCharacter(char.id, char.name || 'Character', $event)
-                    "
-                    @keydown="activateOnEnterOrSpace"
-                    @contextmenu.prevent="
-                      openSidebarCtxMenu('character', char, $event)
-                    "
-                    @dragover="handleDragOverCharacter(char.id, $event)"
-                    @dragleave="handleDragLeaveCharacter($event)"
-                    @drop.prevent="
-                      handleDropOnCharacter({
-                        characterId: char.id,
-                        event: $event,
-                      })
-                    "
+                    class="ctx-check"
+                    >mdi-check</v-icon
                   >
-                    <Tooltip
-                      :text="`${char.name || 'Character'} (Ctrl/Cmd + click to multi-select)`"
-                      activator="parent"
-                    />
-                    <span class="sidebar-list-icon">
-                      <img
-                        :src="
-                          characterThumbnails[char.id]
-                            ? characterThumbnails[char.id]
-                            : unknownPerson
-                        "
-                        alt=""
-                        :width="sidebarThumbnailSizeModel"
-                        :height="sidebarThumbnailSizeModel"
-                        class="sidebar-character-thumb"
-                      />
-                    </span>
-                    <span class="sidebar-list-label">
-                      <Tooltip
-                        location="top"
-                        :disabled="!labelNeedsTooltip(`char-${char.id}`)"
-                        :describe="false"
-                      >
-                        <template #activator="{ props }">
-                          <span
-                            v-bind="
-                              withRef(props, (el) =>
-                                registerLabelRef(`char-${char.id}`, el),
-                              )
-                            "
-                            class="sidebar-list-label-text"
-                            >{{
-                              char.name.charAt(0).toUpperCase() +
-                              char.name.slice(1)
-                            }}</span
-                          >
-                        </template>
-                        <span>{{ char.name }}</span>
-                      </Tooltip>
-                    </span>
-                    <span class="sidebar-character-actions">
-                      <Tooltip
-                        v-if="sharedCharacterIds.has(char.id)"
-                        text="Has active share links"
-                      >
-                        <template #activator="{ props: tipProps }">
-                          <v-icon
-                            v-bind="tipProps"
-                            class="sidebar-shared-icon"
-                            size="11"
-                            >mdi-link-variant</v-icon
-                          >
-                        </template>
-                      </Tooltip>
-                      <span class="sidebar-list-count">
-                        <span v-if="isCountNew(char.id)" class="sidebar-new-tag"
-                          >new</span
-                        >
-                        <span>{{ categoryCounts[char.id] ?? "" }}</span>
-                      </span>
-                    </span>
-                  </div>
-                </div>
-              </div>
+                </button>
+              </template>
             </div>
-
-            <div class="sidebar-section-divider" style="margin-top: var(--space-3)" />
-
+          </Teleport>
+          <Teleport to="body">
             <div
-              v-if="scopedResourceType !== 'character'"
-              class="sidebar-section-block"
+              v-if="setMoveMenuOpen"
+              class="ctx-menu sidebar-move-menu"
+              role="menu"
+              tabindex="-1"
+              :style="setMenuPos"
+              @keydown="onMoveMenuKeydown"
             >
-              <div
-                class="sidebar-section-header sidebar-section-header--collapsible"
-                @contextmenu.prevent.stop="
-                  openSidebarCtxMenu('header', 'sets', $event)
+              <button
+                type="button"
+                class="ctx-item"
+                role="menuitem"
+                @click.stop="
+                  createSet();
+                  setMoveMenuOpen = false;
                 "
               >
+                <v-icon class="ctx-icon"
+                  >mdi-plus-circle-outline</v-icon
+                >Create new
+              </button>
+              <div class="ctx-sep" role="separator"></div>
+              <template
+                v-for="group in projectMenuSetGroups"
+                :key="group.label"
+              >
+                <div
+                  class="section-label ctx-label"
+                  :class="{
+                    'ctx-label--current':
+                      group.projectId === selectedProjectId,
+                  }"
+                  role="presentation"
+                >
+                  {{ group.label }}
+                </div>
                 <button
+                  v-for="pset in group.items"
+                  :key="pset.id"
                   type="button"
-                  class="sidebar-section-toggle"
-                  :aria-expanded="!setsSectionCollapsed"
-                  @click.stop="toggleSetsSection()"
-                >
-                  <v-icon class="sidebar-section-chevron" size="16">{{
-                    setsSectionCollapsed
-                      ? "mdi-chevron-right"
-                      : "mdi-chevron-down"
-                  }}</v-icon>
-                  <span>Sets</span>
-                </button>
-                <span class="sidebar-header-spacer"></span>
-                <div class="sidebar-header-actions">
-                  <button
-                    v-if="selectedSetIdSet.size > 1"
-                    type="button"
-                    class="clear-selection-inline"
-                    aria-label="Clear set selection"
-                    @click.stop="emit('select-set', null)"
-                  >
-                    <Tooltip
-                      text="Clear set selection"
-                      activator="parent"
-                      :describe="false"
-                    />
-                    <v-icon size="16">mdi-selection-off</v-icon>
-                  </button>
-                  <button
-                    v-if="selectedSetObj && hasSingleSelectedSet && !isReadOnly"
-                    type="button"
-                    class="edit-set-inline"
-                    aria-label="Edit selected set"
-                    @click.stop="openSetEditor(selectedSetObj)"
-                  >
-                    <Tooltip
-                      text="Edit selected set"
-                      activator="parent"
-                      :describe="false"
-                    />
-                    <v-icon size="16">mdi-pencil</v-icon>
-                  </button>
-                  <button
-                    v-if="!isReadOnly && selectedSetIdSet.size > 0"
-                    type="button"
-                    class="delete-character-inline"
-                    aria-label="Delete selected sets"
-                    @click.stop="handleDeleteSet"
-                  >
-                    <Tooltip
-                      :text="
-                        selectedSetIdSet.size > 1
-                          ? `Delete ${selectedSetIdSet.size} selected sets`
-                          : 'Delete selected set'
-                      "
-                      activator="parent"
-                    />
-                    <v-icon size="16">mdi-trash-can-outline</v-icon>
-                  </button>
-                  <button
-                    v-if="!isReadOnly"
-                    type="button"
-                    class="add-character-inline"
-                    aria-label="Create new set"
-                    @click.stop="createSet"
-                  >
-                    <Tooltip
-                      text="Create new set"
-                      activator="parent"
-                      :describe="false"
-                    />
-                    <v-icon size="16">mdi-plus</v-icon>
-                  </button>
-                </div>
-              </div>
-              <div v-if="!setsSectionCollapsed" class="sidebar-section-scroll">
-                <div
-                  v-if="visibleSets.length === 0"
-                  class="sidebar-collections-help-row"
-                >
-                  <span class="sidebar-collections-help"
-                    >Click the + button to add one.</span
-                  >
-                </div>
-                <template v-for="pset in visibleSets" :key="pset.id">
-                  <div
-                    :class="[
-                      'sidebar-list-item',
-                      'sidebar-set-item',
-                      {
-                        active:
-                          selectedSetIdSet.has(pset.id) &&
-                          selectionOwnsHighlight,
-                        droppable: dragOverSet === pset.id && !dropRejected,
-                        'not-droppable':
-                          dragOverSet === pset.id && dropRejected,
-                      },
-                    ]"
-                    :ref="(el) => registerSetRef(pset.id, el)"
-                    role="button"
-                    tabindex="0"
-                    :aria-pressed="
-                      selectedSetIdSet.has(pset.id) && selectionOwnsHighlight
-                        ? 'true'
-                        : 'false'
-                    "
-                    @click="
-                      selectSet(pset.id, pset.name || 'Picture Set', $event)
-                    "
-                    @keydown="activateOnEnterOrSpace"
-                    @contextmenu.prevent="
-                      openSidebarCtxMenu('set', pset, $event)
-                    "
-                    @dragover="dragOverSetItem(pset.id, $event)"
-                    @dragleave="dragLeaveSetItem($event)"
-                    @drop.prevent="handleDropOnSet(pset.id, $event)"
-                  >
-                    <Tooltip
-                      :text="`${pset.name || 'Picture Set'} (Ctrl/Cmd + click to multi-select)`"
-                      activator="parent"
-                    />
-                    <span class="sidebar-list-icon">
-                      <v-icon
-                        v-if="pset.set_icon && pset.set_icon !== ICON_CARDS"
-                        :size="sidebarThumbnailSizeLarge - 2"
-                        :color="pset.set_color || undefined"
-                        >{{ pset.set_icon }}</v-icon
-                      >
-                      <img
-                        v-else-if="hasSetThumbnail(pset)"
-                        :src="getSetThumbnail(pset.id)"
-                        alt=""
-                        class="sidebar-set-thumb-image sidebar-set-thumb-image--large"
-                        :width="sidebarThumbnailSizeLarge"
-                        :height="sidebarThumbnailSizeLarge"
-                        :style="
-                          pset.set_color
-                            ? {
-                                filter: `drop-shadow(0 0 3px ${pset.set_color}) drop-shadow(0 0 8px ${pset.set_color})`,
-                              }
-                            : {}
-                        "
-                        @load="handleSetThumbnailLoad(pset.id)"
-                        @error="handleSetThumbnailError(pset.id)"
-                      />
-                      <v-icon v-else :size="sidebarThumbnailSizeLarge - 2"
-                        >mdi-image-album</v-icon
-                      >
-                    </span>
-                    <span class="sidebar-list-label">
-                      <Tooltip
-                        location="top"
-                        :disabled="!labelNeedsTooltip(`set-${pset.id}`)"
-                        :describe="false"
-                      >
-                        <template #activator="{ props }">
-                          <span
-                            v-bind="
-                              withRef(props, (el) =>
-                                registerLabelRef(`set-${pset.id}`, el),
-                              )
-                            "
-                            class="sidebar-list-label-text"
-                            >{{ pset.name }}</span
-                          >
-                        </template>
-                        <span>{{ pset.name }}</span>
-                      </Tooltip>
-                    </span>
-                    <Tooltip v-if="pset.locked" :text="SET_LOCKED_ROW_TITLE">
-                      <template #activator="{ props: tipProps }">
-                        <v-icon
-                          v-bind="tipProps"
-                          class="sidebar-lock-icon"
-                          size="11"
-                          >mdi-lock-outline</v-icon
-                        >
-                      </template>
-                    </Tooltip>
-                    <Tooltip
-                      v-if="sharedSetIds.has(pset.id)"
-                      text="Has active share links"
-                    >
-                      <template #activator="{ props: tipProps }">
-                        <v-icon
-                          v-bind="tipProps"
-                          class="sidebar-shared-icon"
-                          size="11"
-                          >mdi-link-variant</v-icon
-                        >
-                      </template>
-                    </Tooltip>
-                    <span class="sidebar-list-count">{{
-                      pset.picture_count ?? 0
-                    }}</span>
-                  </div>
-                </template>
-              </div>
-            </div>
-          </template>
-
-          <!-- ══ PROJECTS tab content - flat tree ══ -->
-          <template v-if="projectViewMode === 'project'">
-            <div v-if="projects.length === 0" class="sidebar-no-projects-empty">
-              <v-icon size="52" class="sidebar-no-projects-icon"
-                >mdi-folder-plus-outline</v-icon
-              >
-              <p class="sidebar-no-projects-text">
-                Create a project to organise your library into separate
-                collections.
-              </p>
-              <AppButton
-                v-if="!isReadOnly"
-                variant="primary"
-                icon-left="plus"
-                @click="createProject"
-                >Create new project</AppButton
-              >
-            </div>
-
-            <template v-if="projects.length > 0">
-              <!-- Add project button -->
-              <div
-                v-if="!isReadOnly"
-                class="sidebar-project-tree-add"
-                @click="createProject"
-              >
-                <v-icon size="16">mdi-plus</v-icon>
-                New project
-              </div>
-
-              <!-- Project tree nodes -->
-              <div
-                v-for="p in sortedProjects"
-                :key="p.id"
-                class="sidebar-project-tree-node"
-              >
-                <!-- Project row -->
-                <div
-                  :class="[
-                    'sidebar-project-tree-row',
-                    {
-                      active:
-                        projectStore.projectViewMode === 'project' &&
-                        projectStore.selectedProjectId === p.id &&
-                        selectionStore.selectedCharacter === ALL_PICTURES_ID &&
-                        selectedSetIdSet.size === 0 &&
-                        selectionOwnsHighlight,
-                      droppable: dragOverProjectId === p.id && !dropRejected,
-                      'not-droppable':
-                        dragOverProjectId === p.id && dropRejected,
-                      'project-move-target': moveDragOverProjectId === p.id,
-                    },
-                  ]"
-                  @click="selectProjectNode(p)"
-                  @contextmenu.prevent="
-                    openSidebarCtxMenu('project', p, $event)
+                  class="ctx-item"
+                  role="menuitemcheckbox"
+                  :aria-checked="
+                    entityBelongsToProject(
+                      pset,
+                      selectedProjectId,
+                    )
+                      ? 'true'
+                      : 'false'
                   "
-                  @dragover="
-                    handleDragOverProject(p.id, $event);
-                    onProjectHeaderDragOver(p.id, $event);
-                  "
-                  @dragleave="
-                    handleDragLeaveProject($event);
-                    onProjectHeaderDragLeave();
-                  "
-                  @drop.prevent="
-                    onProjectHeaderDrop(p.id);
-                    onProjectDrop(p.id, $event);
+                  @click.stop="
+                    toggleSetProjectMembership(pset.id)
                   "
                 >
-                  <Tooltip
-                    :text="`${p.name} (drop pictures here to add them to this project)`"
-                    activator="parent"
-                  />
-                  <v-icon
-                    class="sidebar-row-glyph sidebar-project-tree-chevron"
-                    size="16"
-                    @click.stop="toggleProjectExpanded(p.id)"
-                    >{{
-                      expandedProjectIds.has(p.id)
-                        ? "mdi-chevron-down"
-                        : "mdi-chevron-right"
-                    }}</v-icon
-                  >
-                  <span class="sidebar-project-tree-name-group">
-                    <span class="sidebar-project-tree-label">{{ p.name }}</span>
-                  </span>
-                  <Tooltip
-                    v-if="sharedProjectIds.has(p.id)"
-                    text="Has active share links"
-                  >
-                    <template #activator="{ props: tipProps }">
-                      <v-icon
-                        v-bind="tipProps"
-                        size="11"
-                        class="sidebar-shared-icon"
-                        >mdi-link-variant</v-icon
-                      >
-                    </template>
-                  </Tooltip>
-                  <span class="sidebar-project-tree-actions" @click.stop>
-                    <Tooltip v-if="!isReadOnly" text="Edit project">
-                      <template #activator="{ props: tipProps }">
-                        <v-icon
-                          v-bind="tipProps"
-                          size="13"
-                          class="sidebar-project-tree-action-btn"
-                          @click.stop="openProjectEditor(p)"
-                          >mdi-pencil</v-icon
-                        >
-                      </template>
-                    </Tooltip>
-                    <Tooltip text="Export project as ZIP">
-                      <template #activator="{ props: tipProps }">
-                        <v-icon
-                          v-bind="tipProps"
-                          size="13"
-                          class="sidebar-project-tree-action-btn"
-                          @click.stop="exportProject(p)"
-                          >mdi-download-outline</v-icon
-                        >
-                      </template>
-                    </Tooltip>
-                    <Tooltip v-if="!isReadOnly" text="Delete project">
-                      <template #activator="{ props: tipProps }">
-                        <v-icon
-                          v-bind="tipProps"
-                          size="13"
-                          class="sidebar-project-tree-action-btn sidebar-project-tree-action-btn--danger"
-                          @click.stop="deleteProjectById(p)"
-                          >mdi-trash-can-outline</v-icon
-                        >
-                      </template>
-                    </Tooltip>
-                  </span>
-                  <span class="sidebar-list-count">{{
-                    projectCounts[p.id] ?? ""
+                  <span class="ctx-label-text">{{
+                    pset.name
                   }}</span>
-                </div>
-
-                <!-- Expanded content -->
-                <template v-if="expandedProjectIds.has(p.id)">
-                  <!-- People sub-section -->
-                  <div
-                    :class="[
-                      'sidebar-project-tree-subsection',
-                      { 'project-move-target': moveDragOverPeopleId === p.id },
-                    ]"
-                    @dragover="onProjectPeopleDragOver(p.id, $event)"
-                    @dragleave="onProjectPeopleDragLeave"
-                    @drop.prevent="onProjectPeopleDrop(p.id)"
+                  <v-icon
+                    v-if="
+                      entityBelongsToProject(
+                        pset,
+                        selectedProjectId,
+                      )
+                    "
+                    class="ctx-check"
+                    >mdi-check</v-icon
                   >
-                    <div
-                      class="sidebar-project-tree-subheader"
-                      :class="{
-                        'sidebar-project-tree-subheader--empty':
-                          !projectHasPeople(p.id),
-                      }"
-                      :aria-disabled="!projectHasPeople(p.id) || undefined"
-                      @click.stop="
-                        projectHasPeople(p.id) && toggleProjectTreePeople(p.id)
-                      "
-                    >
-                      <v-icon
-                        size="16"
-                        class="sidebar-row-glyph sidebar-project-tree-sub-chevron"
-                        :class="{
-                          'sidebar-row-glyph--empty': !projectHasPeople(p.id),
-                        }"
-                        >{{
-                          projectTreePeopleCollapsed.has(p.id)
-                            ? "mdi-chevron-right"
-                            : "mdi-chevron-down"
-                        }}</v-icon
-                      >
-                      <span class="sidebar-project-tree-subheader-label"
-                        >People</span
-                      >
-                      <span class="sidebar-header-spacer"></span>
-                      <div class="sidebar-header-actions" @click.stop>
-                        <span
-                          ref="characterMoveMenuBtnRef"
-                          class="sidebar-move-to-project-wrap"
-                          v-if="!isReadOnly"
-                          @click.stop
-                        >
-                          <Tooltip
-                            text="Add or remove people from this project"
-                          >
-                            <template #activator="{ props: tipProps }">
-                              <v-icon
-                                v-bind="tipProps"
-                                class="add-character-inline"
-                                @click.stop="
-                                  selectProject(p.id);
-                                  openCharacterMoveMenu($event);
-                                "
-                                >mdi-plus</v-icon
-                              >
-                            </template>
-                          </Tooltip>
-                          <Teleport to="body">
-                            <div
-                              v-if="
-                                characterMoveMenuOpen &&
-                                selectedProjectId === p.id
-                              "
-                              class="ctx-menu sidebar-move-menu"
-                              role="menu"
-                              tabindex="-1"
-                              :style="characterMenuPos"
-                              @keydown="onMenuKeydown"
-                            >
-                              <button
-                                type="button"
-                                class="ctx-item"
-                                role="menuitem"
-                                @click.stop="
-                                  createCharacter();
-                                  characterMoveMenuOpen = false;
-                                "
-                              >
-                                <v-icon class="ctx-icon"
-                                  >mdi-plus-circle-outline</v-icon
-                                >Create new
-                              </button>
-                              <div class="ctx-sep" role="separator"></div>
-                              <template
-                                v-for="group in projectMenuCharacterGroups"
-                                :key="group.label"
-                              >
-                                <div
-                                  class="section-label ctx-label"
-                                  :class="{
-                                    'ctx-label--current':
-                                      group.projectId === selectedProjectId,
-                                  }"
-                                  role="presentation"
-                                >
-                                  {{ group.label }}
-                                </div>
-                                <button
-                                  v-for="char in group.items"
-                                  :key="char.id"
-                                  type="button"
-                                  class="ctx-item"
-                                  role="menuitemcheckbox"
-                                  :aria-checked="
-                                    entityBelongsToProject(
-                                      char,
-                                      selectedProjectId,
-                                    )
-                                      ? 'true'
-                                      : 'false'
-                                  "
-                                  @click.stop="
-                                    toggleCharacterProjectMembership(char.id)
-                                  "
-                                >
-                                  <span class="ctx-label-text">{{
-                                    char.name
-                                  }}</span>
-                                  <v-icon
-                                    v-if="
-                                      entityBelongsToProject(
-                                        char,
-                                        selectedProjectId,
-                                      )
-                                    "
-                                    class="ctx-check"
-                                    >mdi-check</v-icon
-                                  >
-                                </button>
-                              </template>
-                            </div>
-                          </Teleport>
-                        </span>
-                      </div>
-                    </div>
-                    <template v-if="!projectTreePeopleCollapsed.has(p.id)">
-                      <div
-                        v-for="char in sortedCharacters.filter((c) =>
-                          entityBelongsToProject(c, p.id),
-                        )"
-                        :key="char.id"
-                        :class="[
-                          'sidebar-list-item',
-                          'sidebar-project-tree-child',
-                          {
-                            active:
-                              (selectedCharacterIdSet.size > 0
-                                ? selectedCharacterIdSet.has(char.id)
-                                : selectionStore.selectedCharacter ===
-                                  char.id) && selectionOwnsHighlight,
-                            droppable:
-                              dragOverCharacter === char.id && !dropRejected,
-                            'not-droppable':
-                              dragOverCharacter === char.id && dropRejected,
-                          },
-                        ]"
-                        :draggable="!isReadOnly"
-                        @dragstart="
-                          onEntityDragStart('character', char.id, $event)
-                        "
-                        @dragend="onEntityDragEnd"
-                        @click="
-                          selectCharacter(
-                            char.id,
-                            char.name || 'Character',
-                            $event,
-                          )
-                        "
-                        @contextmenu.prevent="
-                          openSidebarCtxMenu('character', char, $event)
-                        "
-                        @dragover="handleDragOverCharacter(char.id, $event)"
-                        @dragleave="handleDragLeaveCharacter($event)"
-                        @drop.prevent="
-                          handleDropOnCharacter({
-                            characterId: char.id,
-                            event: $event,
-                          })
-                        "
-                      >
-                        <Tooltip
-                          :text="`${char.name || 'Character'} (Ctrl/Cmd + click to multi-select)`"
-                          activator="parent"
-                        />
-                        <span class="sidebar-list-icon">
-                          <img
-                            :src="
-                              characterThumbnails[char.id]
-                                ? characterThumbnails[char.id]
-                                : unknownPerson
-                            "
-                            alt=""
-                            :width="sidebarThumbnailSizeModel"
-                            :height="sidebarThumbnailSizeModel"
-                            class="sidebar-character-thumb"
-                          />
-                        </span>
-                        <span class="sidebar-list-label">
-                          <Tooltip
-                            location="top"
-                            :disabled="!labelNeedsTooltip(`char-${char.id}`)"
-                            :describe="false"
-                          >
-                            <template #activator="{ props: tipProps }">
-                              <span
-                                v-bind="
-                                  withRef(tipProps, (el) =>
-                                    registerLabelRef(`char-${char.id}`, el),
-                                  )
-                                "
-                                class="sidebar-list-label-text"
-                                >{{
-                                  char.name.charAt(0).toUpperCase() +
-                                  char.name.slice(1)
-                                }}</span
-                              >
-                            </template>
-                            <span>{{ char.name }}</span>
-                          </Tooltip>
-                        </span>
-                        <span class="sidebar-character-actions">
-                          <Tooltip
-                            v-if="sharedCharacterIds.has(char.id)"
-                            text="Has active share links"
-                          >
-                            <template #activator="{ props: tipProps }">
-                              <v-icon
-                                v-bind="tipProps"
-                                class="sidebar-shared-icon"
-                                size="11"
-                                >mdi-link-variant</v-icon
-                              >
-                            </template>
-                          </Tooltip>
-                          <span class="sidebar-list-count">
-                            <span
-                              v-if="isCountNew(char.id)"
-                              class="sidebar-new-tag"
-                              >new</span
-                            >
-                            <span>{{ categoryCounts[char.id] ?? "" }}</span>
-                          </span>
-                        </span>
-                      </div>
-                    </template>
-                  </div>
-
-                  <!-- Sets sub-section -->
-                  <div
-                    :class="[
-                      'sidebar-project-tree-subsection',
-                      { 'project-move-target': moveDragOverSetsId === p.id },
-                    ]"
-                    @dragover="onProjectSetsDragOver(p.id, $event)"
-                    @dragleave="onProjectSetsDragLeave"
-                    @drop.prevent="onProjectSetsDrop(p.id)"
-                  >
-                    <div
-                      class="sidebar-project-tree-subheader"
-                      :class="{
-                        'sidebar-project-tree-subheader--empty':
-                          !projectHasSets(p.id),
-                      }"
-                      :aria-disabled="!projectHasSets(p.id) || undefined"
-                      @click.stop="
-                        projectHasSets(p.id) && toggleProjectTreeSets(p.id)
-                      "
-                    >
-                      <v-icon
-                        size="16"
-                        class="sidebar-row-glyph sidebar-project-tree-sub-chevron"
-                        :class="{
-                          'sidebar-row-glyph--empty': !projectHasSets(p.id),
-                        }"
-                        >{{
-                          projectTreeSetsCollapsed.has(p.id)
-                            ? "mdi-chevron-right"
-                            : "mdi-chevron-down"
-                        }}</v-icon
-                      >
-                      <span class="sidebar-project-tree-subheader-label"
-                        >Sets</span
-                      >
-                      <span class="sidebar-header-spacer"></span>
-                      <div class="sidebar-header-actions" @click.stop>
-                        <span
-                          ref="setMoveMenuBtnRef"
-                          class="sidebar-move-to-project-wrap"
-                          v-if="!isReadOnly"
-                          @click.stop
-                        >
-                          <Tooltip text="Add or remove sets from this project">
-                            <template #activator="{ props: tipProps }">
-                              <v-icon
-                                v-bind="tipProps"
-                                class="add-character-inline"
-                                @click.stop="
-                                  selectProject(p.id);
-                                  openSetMoveMenu($event);
-                                "
-                                >mdi-plus</v-icon
-                              >
-                            </template>
-                          </Tooltip>
-                          <Teleport to="body">
-                            <div
-                              v-if="
-                                setMoveMenuOpen && selectedProjectId === p.id
-                              "
-                              class="ctx-menu sidebar-move-menu"
-                              role="menu"
-                              tabindex="-1"
-                              :style="setMenuPos"
-                              @keydown="onMenuKeydown"
-                            >
-                              <button
-                                type="button"
-                                class="ctx-item"
-                                role="menuitem"
-                                @click.stop="
-                                  createSet();
-                                  setMoveMenuOpen = false;
-                                "
-                              >
-                                <v-icon class="ctx-icon"
-                                  >mdi-plus-circle-outline</v-icon
-                                >Create new
-                              </button>
-                              <div class="ctx-sep" role="separator"></div>
-                              <template
-                                v-for="group in projectMenuSetGroups"
-                                :key="group.label"
-                              >
-                                <div
-                                  class="section-label ctx-label"
-                                  :class="{
-                                    'ctx-label--current':
-                                      group.projectId === selectedProjectId,
-                                  }"
-                                  role="presentation"
-                                >
-                                  {{ group.label }}
-                                </div>
-                                <button
-                                  v-for="pset in group.items"
-                                  :key="pset.id"
-                                  type="button"
-                                  class="ctx-item"
-                                  role="menuitemcheckbox"
-                                  :aria-checked="
-                                    entityBelongsToProject(
-                                      pset,
-                                      selectedProjectId,
-                                    )
-                                      ? 'true'
-                                      : 'false'
-                                  "
-                                  @click.stop="
-                                    toggleSetProjectMembership(pset.id)
-                                  "
-                                >
-                                  <span class="ctx-label-text">{{
-                                    pset.name
-                                  }}</span>
-                                  <v-icon
-                                    v-if="
-                                      entityBelongsToProject(
-                                        pset,
-                                        selectedProjectId,
-                                      )
-                                    "
-                                    class="ctx-check"
-                                    >mdi-check</v-icon
-                                  >
-                                </button>
-                              </template>
-                            </div>
-                          </Teleport>
-                        </span>
-                      </div>
-                    </div>
-                    <template v-if="!projectTreeSetsCollapsed.has(p.id)">
-                      <div
-                        v-for="pset in nonReferenceSets.filter((s) =>
-                          entityBelongsToProject(s, p.id),
-                        )"
-                        :key="pset.id"
-                        :class="[
-                          'sidebar-list-item',
-                          'sidebar-set-item',
-                          'sidebar-project-tree-child',
-                          {
-                            active:
-                              selectedSetIdSet.has(pset.id) &&
-                              selectionOwnsHighlight,
-                            droppable: dragOverSet === pset.id && !dropRejected,
-                            'not-droppable':
-                              dragOverSet === pset.id && dropRejected,
-                          },
-                        ]"
-                        :draggable="!isReadOnly"
-                        @dragstart="onEntityDragStart('set', pset.id, $event)"
-                        @dragend="onEntityDragEnd"
-                        @click="
-                          selectSet(pset.id, pset.name || 'Picture Set', $event)
-                        "
-                        @contextmenu.prevent="
-                          openSidebarCtxMenu('set', pset, $event)
-                        "
-                        @dragover="dragOverSetItem(pset.id, $event)"
-                        @dragleave="dragLeaveSetItem($event)"
-                        @drop.prevent="handleDropOnSet(pset.id, $event)"
-                      >
-                        <Tooltip
-                          :text="`${pset.name || 'Picture Set'} (Ctrl/Cmd + click to multi-select)`"
-                          activator="parent"
-                        />
-                        <span class="sidebar-list-icon">
-                          <v-icon
-                            v-if="pset.set_icon && pset.set_icon !== ICON_CARDS"
-                            :size="sidebarThumbnailSizeLarge - 2"
-                            :color="pset.set_color || undefined"
-                            >{{ pset.set_icon }}</v-icon
-                          >
-                          <img
-                            v-else-if="hasSetThumbnail(pset)"
-                            :src="getSetThumbnail(pset.id)"
-                            alt=""
-                            class="sidebar-set-thumb-image sidebar-set-thumb-image--large"
-                            :width="sidebarThumbnailSizeLarge"
-                            :height="sidebarThumbnailSizeLarge"
-                            :style="
-                              pset.set_color
-                                ? {
-                                    filter: `drop-shadow(0 0 3px ${pset.set_color}) drop-shadow(0 0 8px ${pset.set_color})`,
-                                  }
-                                : {}
-                            "
-                            @load="handleSetThumbnailLoad(pset.id)"
-                            @error="handleSetThumbnailError(pset.id)"
-                          />
-                          <v-icon v-else :size="sidebarThumbnailSizeLarge - 2"
-                            >mdi-image-album</v-icon
-                          >
-                        </span>
-                        <span class="sidebar-list-label">
-                          <Tooltip
-                            location="top"
-                            :disabled="!labelNeedsTooltip(`set-${pset.id}`)"
-                            :describe="false"
-                          >
-                            <template #activator="{ props: tipProps }">
-                              <span
-                                v-bind="
-                                  withRef(tipProps, (el) =>
-                                    registerLabelRef(`set-${pset.id}`, el),
-                                  )
-                                "
-                                class="sidebar-list-label-text"
-                                >{{ pset.name }}</span
-                              >
-                            </template>
-                            <span>{{ pset.name }}</span>
-                          </Tooltip>
-                        </span>
-                        <Tooltip
-                          v-if="pset.locked"
-                          :text="SET_LOCKED_ROW_TITLE"
-                        >
-                          <template #activator="{ props: tipProps }">
-                            <v-icon
-                              v-bind="tipProps"
-                              class="sidebar-lock-icon"
-                              size="11"
-                              >mdi-lock-outline</v-icon
-                            >
-                          </template>
-                        </Tooltip>
-                        <Tooltip
-                          v-if="sharedSetIds.has(pset.id)"
-                          text="Has active share links"
-                        >
-                          <template #activator="{ props: tipProps }">
-                            <v-icon
-                              v-bind="tipProps"
-                              class="sidebar-shared-icon"
-                              size="11"
-                              >mdi-link-variant</v-icon
-                            >
-                          </template>
-                        </Tooltip>
-                        <span class="sidebar-list-count">{{
-                          pset.picture_count ?? 0
-                        }}</span>
-                      </div>
-                    </template>
-                  </div>
-
-                  <!-- Files sub-section -->
-                  <div
-                    v-if="!isReadOnly || sessionContext?.include_attachments"
-                    class="sidebar-project-tree-subsection sidebar-project-tree-files"
-                    :style="{
-                      '--sidebar-tree-icon-size':
-                        sidebarThumbnailSizeModel + 'px',
-                    }"
-                  >
-                    <ProjectFiles :projectId="p.id" compact />
-                  </div>
-                </template>
-              </div>
-            </template>
-          </template>
+                </button>
+              </template>
+            </div>
+          </Teleport>
         </div>
       </template>
     </div>
     <!-- end sidebar-scroll -->
+    <!-- The footer band (#2159): one amber Import that names where the
+         pictures will land. Owner only, and not on the docked rail. -->
+    <div
+      v-if="!sidebarStore.effectiveDocked && !isReadOnly"
+      class="sidebar-footer-band"
+    >
+      <AppButton
+        variant="primary"
+        block
+        icon-left="plus"
+        class="sidebar-import-btn"
+        :tooltip="importTooltip"
+        @click="emit('open-import')"
+        >Import</AppButton
+      >
+    </div>
     <div v-if="isReadOnly" class="sidebar-readonly-notice">
       <v-icon size="12">mdi-lock-outline</v-icon>
       <span class="sidebar-readonly-notice-label">Read-only view</span>
@@ -8187,7 +7472,9 @@ defineExpose({
           class="ctx-item ctx-item--danger"
           :disabled="isReadOnly || sidebarCtxSet.locked"
           @click="
-            deleteSetById(sidebarCtxSet.id);
+            ctxSetDeleteIds.length > 1
+              ? deleteSetsByIds(ctxSetDeleteIds)
+              : deleteSetById(sidebarCtxSet.id);
             closeSidebarCtxMenu();
           "
         >
@@ -8196,7 +7483,11 @@ defineExpose({
             activator="parent"
           />
           <v-icon class="ctx-icon">mdi-trash-can-outline</v-icon>
-          Delete
+          {{
+            ctxSetDeleteIds.length > 1
+              ? `Delete ${ctxSetDeleteIds.length} sets`
+              : "Delete"
+          }}
         </button>
       </template>
       <template v-if="sidebarCtxProject">

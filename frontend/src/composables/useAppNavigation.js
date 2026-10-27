@@ -10,6 +10,7 @@ import { useFilterStore } from "../stores/useFilterStore";
 import { useWsStore } from "../stores/useWsStore";
 import {
   ALL_PICTURES_ID,
+  NOT_IN_PROJECT_QUERY,
   SCRAPHEAP_PICTURES_ID,
   UNASSIGNED_PICTURES_ID,
 } from "../stores/useViewStore";
@@ -348,8 +349,17 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
       return;
     }
 
+    // "Not in a project": the global routes, marked so a reload or Back keeps
+    // the scope (useViewStore.parseRouteView reads it back). A real project
+    // returned above on its own route; the id test keeps that true if the
+    // branches are ever reordered.
+    const scopeQuery =
+      proj.projectViewMode === "project" && proj.selectedProjectId == null
+        ? { project: NOT_IN_PROJECT_QUERY }
+        : {};
+
     if (sel.selectedSetIds.length > 0) {
-      const query = {};
+      const query = { ...scopeQuery };
       if (sel.selectedSetIds.length > 1) {
         query.ids = sel.selectedSetIds.join(",");
         query.mode = sel.setMultiMode || "intersection";
@@ -374,11 +384,11 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
     }
 
     if (!sel.selectedCharacter || sel.selectedCharacter === ALL_PICTURES_ID) {
-      pushAppRoute({ name: "all-pictures" });
+      pushAppRoute({ name: "all-pictures", query: scopeQuery });
       return;
     }
 
-    const query = {};
+    const query = { ...scopeQuery };
     if (sel.selectedCharacterIds.length > 1) {
       query.ids = sel.selectedCharacterIds.join(",");
       query.mode = sel.characterMultiMode || "union";
