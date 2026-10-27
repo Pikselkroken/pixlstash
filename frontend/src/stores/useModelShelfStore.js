@@ -3573,6 +3573,36 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     cutCopies.value = null;
   }
 
+  /**
+   * The cut as it stands now: only the copies still `present` at the key they
+   * were cut at, on a model that was cut. A copy moved or deleted since drops
+   * out, and so does a different file that has since taken its path.
+   *
+   * @returns {{items: Array, totalBytes: number,
+   *   bytesByFolderId: Map<number, number>}|null}
+   */
+  function liveCut() {
+    const cut = cutCopies.value;
+    if (!cut) return null;
+    const key = (loc) => `${Number(loc.folder_id)}\u0000${loc.relpath}`;
+    const wanted = new Set(cut.items.map(key));
+    const items = [];
+    const bytesByFolderId = new Map();
+    let totalBytes = 0;
+    for (const row of rows.value) {
+      if (!cut.ids.has(row.id)) continue;
+      for (const loc of row.locations ?? []) {
+        if (loc?.state !== "present" || !wanted.delete(key(loc))) continue;
+        const bytes = Number(row.file_size) || 0;
+        const folderId = Number(loc.folder_id);
+        items.push({ folder_id: loc.folder_id, relpath: loc.relpath });
+        bytesByFolderId.set(folderId, (bytesByFolderId.get(folderId) || 0) + bytes);
+        totalBytes += bytes;
+      }
+    }
+    return { items, totalBytes, bytesByFolderId };
+  }
+
   /** Whether a model's row draws as cut. */
   function isCut(id) {
     return cutCopies.value?.ids.has(id) ?? false;
@@ -4946,6 +4976,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     movableSelection,
     cutSelection,
     clearCut,
+    liveCut,
     isCut,
     requestMove,
   };

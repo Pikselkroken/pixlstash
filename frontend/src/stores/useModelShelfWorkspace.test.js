@@ -244,6 +244,29 @@ describe("moving: cut, and the open folder's copy (#2204)", () => {
     expect(store.isCut(5)).toBe(false);
   });
 
+  it("pastes only what is still where it was cut (#2204 review)", () => {
+    store.setPlace("all");
+    store.selectedIds = new Set([5]);
+    store.cutSelection();
+    expect(store.liveCut().items).toHaveLength(2);
+    // One copy moved away since; another file now sits at its old path.
+    store.rows = [
+      ...ROWS,
+      {
+        ...TWICE,
+        locations: [
+          { folder_id: 1, relpath: "dup.safetensors", state: "present" },
+          { folder_id: 1, relpath: "Elsewhere/dup.safetensors", state: "present" },
+        ],
+      },
+      { id: 6, file_size: 1, locations: [{ folder_id: 1, relpath: "Lora\\dup.safetensors", state: "present" }] },
+    ];
+    expect(store.liveCut().items).toEqual([
+      { folder_id: 1, relpath: "dup.safetensors" },
+    ]);
+    expect(store.liveCut().totalBytes).toBe(300);
+  });
+
   it("cuts nothing when no selected copy can move", () => {
     store.rows = [
       { ...TWICE, locations: [{ folder_id: 1, relpath: "x", state: "missing" }] },

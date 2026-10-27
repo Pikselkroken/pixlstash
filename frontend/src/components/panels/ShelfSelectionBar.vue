@@ -642,9 +642,10 @@ const assignTitle = computed(() => {
  * NAS and another on this disk IS movable - its present copy is. What the
  * button acts on and what the tooltip counts are the same list, and the view
  * recomputes it for the dialog rather than this being handed up, because a drop
- * onto a folder header has to reach the same list without a selection.
+ * onto a folder header has to reach the same list without a selection. In a
+ * folder view, only the copy in the open folder counts (#2204), as in the
+ * dialog.
  */
-// In a folder view, only the copy in the open folder (#2204), as the dialog.
 const movable = computed(
   () => store.movableSelection(foldersById.value).items,
 );

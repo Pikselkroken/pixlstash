@@ -1883,7 +1883,7 @@ function subfolderDestination(dir) {
   return {
     folderId: store.folderScope.folderId,
     path: dir.path,
-    locked: false,
+    locked: Boolean(store.folderScope.locked),
   };
 }
 
@@ -1897,7 +1897,16 @@ function pasteCut() {
     });
     return;
   }
-  showMove(store.cutCopies, { folderId, path }, true);
+  const copies = store.liveCut();
+  if (!copies?.items.length) {
+    store.clearCut();
+    useNoticeStore().push({
+      level: "info",
+      text: "What you cut has moved or gone since, so there is nothing to paste.",
+    });
+    return;
+  }
+  showMove(copies, { folderId, path }, true);
 }
 
 async function closeMove() {

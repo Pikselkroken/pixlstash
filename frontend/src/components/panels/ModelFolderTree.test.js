@@ -216,11 +216,12 @@ describe("ModelFolderTree as a drop target (#2204)", () => {
 
   it("takes dragged model rows on a folder and refuses a drive, a locked folder and their own folder", async () => {
     const shelf = useModelShelfStore();
-    shelf.dragCopies = {
+    const copies = {
       items: [{ folder_id: 1, relpath: "alice.safetensors" }],
       totalBytes: 10,
       bytesByFolderId: new Map([[1, 10]]),
     };
+    shelf.dragCopies = copies;
     const wrapper = mountTree();
     await flushPromises();
     await item(wrapper, 1).find(".mft-twist").trigger("click");
@@ -240,6 +241,8 @@ describe("ModelFolderTree as a drop target (#2204)", () => {
       item(wrapper, 2),
       item(wrapper, 1),
     ]) {
+      // Each refused drop ends that drag; the next is a new one.
+      shelf.dragCopies = copies;
       const event = drag(refused, "dragover");
       await flushPromises();
       expect(event.defaultPrevented).toBe(false);
@@ -248,9 +251,11 @@ describe("ModelFolderTree as a drop target (#2204)", () => {
       expect(shelf.moveRequest).toBe(null);
     }
 
+    shelf.dragCopies = copies;
     drag(lora, "drop");
     expect(shelf.moveRequest.destination).toEqual({ folderId: 1, path: "Lora" });
-    expect(shelf.moveRequest.copies).toBe(shelf.dragCopies);
+    expect(shelf.moveRequest.copies).toBe(copies);
+    expect(shelf.dragCopies).toBe(null);
     wrapper.unmount();
   });
 

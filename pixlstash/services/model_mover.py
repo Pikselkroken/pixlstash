@@ -215,6 +215,8 @@ class MovePlan:
     a rename copies nothing."""
     destination_subpath: str = ""
     """POSIX, relative to the folder, ``""`` for its root."""
+    flatten: bool = True
+    """False for a relocation, which recreates its tree under the target."""
     skipped: list["MoveOutcome"] = field(default_factory=list)
     """Items already in the destination directory: nothing to do, but still
     *reported*. Dropping them silently left a caller unable to reconcile the
@@ -829,6 +831,21 @@ class ModelMover:
                 status_code=409,
             )
         segments = subpath_segments(destination_subpath)
+        for depth in range(1, len(segments) + 1):
+            # The folder listing never offers a link, a junction or a dot-name,
+            # and the scanner does not walk through a link, so a file moved
+            # through one would be registered at a path no rescan finds.
+            here = os.path.join(destination["path"], *segments[:depth])
+            is_junction = getattr(os.path, "isjunction", lambda _path: False)
+            if (
+                segments[depth - 1].startswith(".")
+                or os.path.islink(here)
+                or is_junction(here)
+            ):
+                raise MoveRefused(
+                    f"{destination_subpath!r} goes through a link or a hidden "
+                    "folder, which the shelf does not move into."
+                )
         if segments and relocating:
             # A relocation moves a whole folder to a new root; landing it inside
             # a subdirectory of the target would register paths the relocated
@@ -913,6 +930,7 @@ class ModelMover:
             destination_folder_id=destination_folder_id,
             destination_path=destination_path,
             destination_subpath=subpath,
+            flatten=flatten,
             moves=moves,
             bytes_to_copy=bytes_to_copy,
             skipped=skipped,
@@ -1196,8 +1214,11 @@ class ModelMover:
             )
         try:
             # ``flatten=False`` moves a tree, so the destination subdirectory
-            # may not exist yet. A no-op for the flattened case.
-            os.makedirs(os.path.dirname(move.destination_path), exist_ok=True)
+            # may not exist yet. A flattened move never makes one: a subfolder
+            # removed since the plan fails the file (the write finds no
+            # directory) rather than being quietly recreated.
+            if not plan.flatten:
+                os.makedirs(os.path.dirname(move.destination_path), exist_ok=True)
             if move.same_device and delete_source:
                 return self._rename(move, plan)
             return self._copy_verify_repoint_unlink(

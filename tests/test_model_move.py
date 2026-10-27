@@ -1340,7 +1340,18 @@ def test_an_existing_file_in_the_subfolder_is_never_overwritten(two_folders):
 
 @pytest.mark.parametrize(
     "subpath",
-    ["..", "../loras", "Lora/../..", "/etc", "Lora/", "./Lora", "Lora\\x", "out"],
+    [
+        "..",
+        "../loras",
+        "Lora/../..",
+        "/etc",
+        "Lora/",
+        "./Lora",
+        "Lora\\x",
+        "out",
+        "inner",
+        ".hidden",
+    ],
     ids=[
         "dotdot",
         "dotdot-sibling",
@@ -1350,15 +1361,22 @@ def test_an_existing_file_in_the_subfolder_is_never_overwritten(two_folders):
         "dot",
         "backslash",
         "symlink-out",
+        "symlink-inside",
+        "hidden",
     ],
 )
 def test_a_subpath_that_leaves_the_folder_is_refused(two_folders, subpath):
     """Every escape is a 400 before anything is written. ``out`` is a symlink
     inside the destination pointing at the source folder: plain by name, and
-    only ``resolve_path_within`` can see where it leads."""
+    only ``resolve_path_within`` can see where it leads. ``inner`` links to
+    ``Lora`` and ``.hidden`` is a dot-name: both stay inside, and both are
+    refused because the listing never offers them and a rescan would not find
+    a file moved through the link."""
     destination_dir = two_folders["destination_dir"]
     (destination_dir / "Lora").mkdir()
+    (destination_dir / ".hidden").mkdir()
     os.symlink(two_folders["source_dir"], destination_dir / "out")
+    os.symlink(destination_dir / "Lora", destination_dir / "inner")
 
     with pytest.raises(MoveRefused) as refused:
         ModelMover(two_folders["hub"]).plan(
@@ -1369,6 +1387,27 @@ def test_a_subpath_that_leaves_the_folder_is_refused(two_folders, subpath):
     assert refused.value.status_code == 400
     assert os.path.exists(two_folders["source_path"])
     assert sorted(os.listdir(destination_dir / "Lora")) == []
+
+
+def test_a_subfolder_removed_after_the_plan_is_not_recreated(two_folders):
+    """The plan saw ``Lora``; it is gone by the time the worker writes. The
+    file fails and stays where it was, and no ``Lora`` appears."""
+    lora = two_folders["destination_dir"] / "Lora"
+    lora.mkdir()
+    mover = ModelMover(two_folders["hub"])
+    plan = mover.plan(
+        [(two_folders["source_id"], "alice.safetensors")],
+        two_folders["destination_id"],
+        destination_subpath="Lora",
+    )
+    lora.rmdir()
+
+    report = mover.execute(plan)
+
+    assert [outcome.status for outcome in report.outcomes] == [STATUS_FAILED]
+    assert not lora.exists()
+    assert os.path.exists(two_folders["source_path"])
+    assert_no_dangling_rows(two_folders["hub"])
 
 
 def test_a_missing_subfolder_is_refused_not_created(two_folders):

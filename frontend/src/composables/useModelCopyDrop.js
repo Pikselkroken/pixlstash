@@ -114,6 +114,9 @@ export function useModelCopyDrop() {
     const ok = !refused(destination);
     overKey.value = null;
     store.dropTip = null;
+    // Cleared here as well as on `dragend`: a row refetched away mid-drag
+    // never fires its own.
+    store.dragCopies = null;
     if (!ok) return;
     event.preventDefault();
     event.stopPropagation();

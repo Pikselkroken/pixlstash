@@ -11877,6 +11877,12 @@ anything is written:
   symlink leading out of the folder is a 400 too.
 - **A missing directory is a 409**, never created. A move lands only in a
   folder the owner made, so a typo cannot put models where ComfyUI does not look.
+  One removed between the plan and the write fails that file rather than being
+  recreated: only a relocation, which keeps its tree, makes directories.
+- **A link, a junction or a dot-name on the way is a 400**, even one that stays
+  inside the folder. The listing never offers them, and the scanner does not
+  walk through a link, so a file moved through one would sit at a path no
+  rescan finds.
 - **A locked destination is a 409.** A folder whose `movable` is not `per_item`
   (the managed store, the HuggingFace cache, the InsightFace packs) takes no
   move in, as it already gave none out. Before #2204 the managed store was a
