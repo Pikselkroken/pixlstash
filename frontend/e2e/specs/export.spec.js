@@ -85,8 +85,19 @@ test.describe('export', () => {
       `${expected} selected`,
     )
 
+    // A selection that is the whole view exports the view's own query, not
+    // the cells the grid happened to hold: a collapsed stack's members and a
+    // tail still streaming are in the view and not in the selection.
+    const exportUrls = []
+    page.on('request', (req) => {
+      if (/\/api\/v1\/pictures\/export\?/.test(req.url())) exportUrls.push(req.url())
+    })
     const zip = zipEntryNames(await downloadExportZip(page, testInfo))
     const images = zip.filter((n) => IMAGE_EXT.test(n))
     expect(images).toHaveLength(expected)
+    expect(exportUrls).toHaveLength(1)
+    const sent = new URL(exportUrls[0]).searchParams
+    expect(sent.getAll('id')).toEqual([])
+    expect(sent.get('set_id')).toBeTruthy()
   })
 })

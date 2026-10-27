@@ -77,7 +77,8 @@
         rule, and Scrapheap and Clear (Esc).
 
         ⋯ opens SelectionMenu, which mirrors the right-click context menu for
-        every selection-scoped action, so a keyboard user reaches the same
+        every selection-scoped action (Export and Train LoRA are the pill's
+        own and in neither menu, as they were in neither before), so a keyboard user reaches the same
         actions as a right-click on the same selection. The context menu
         additionally offers three single-image actions (Share image, Find
         similar faces, Remove all shares) that are deliberately context-only:
@@ -645,20 +646,30 @@ function handleSelectionMenuHotkey(event) {
   }
   if (event.key !== "s" && event.key !== "S") return;
   if (!showTagControls.value || props.groupingLockReason) return;
-  // The lightbox owns its own S (its sidebar), and an open menu its own keys.
-  if (document.querySelector(".image-overlay")) return;
-  event.preventDefault();
-  openAddToSet();
+  // The lightbox owns its own S (its sidebar), and an open menu or dialog its
+  // own keys.
+  // (A tooltip is an overlay too, so only menus and dialogs count.)
+  if (
+    document.querySelector(
+      ".image-overlay, .v-menu.v-overlay--active, .v-dialog.v-overlay--active",
+    )
+  ) {
+    return;
+  }
+  if (openAddToSet()) event.preventDefault();
 }
 
 // S is Add to set (#2160). The picker opens from a real click on its own
-// trigger, the same way T opens the tag panel.
+// trigger, the same way T opens the tag panel. True when it opened.
 const addToSetRef = ref(null);
 function openAddToSet() {
   const root = addToSetRef.value?.$el ?? addToSetRef.value;
   const trigger = root?.querySelector?.(".ate-btn");
-  if (root?.classList?.contains("open") || !trigger) return;
+  if (root?.classList?.contains("open") || !trigger || trigger.disabled) {
+    return false;
+  }
   trigger.click();
+  return true;
 }
 
 onMounted(() => window.addEventListener("keydown", handleSelectionMenuHotkey));
@@ -667,8 +678,8 @@ onUnmounted(() => {
 });
 
 // The grid's Esc ladder stands aside while a surface opened from the pill is up,
-// so the Esc that closes it does not also clear the selection under it. Export
-// and Train LoRA joined the ⋯ menu here with #2160.
+// so the Esc that closes it does not also clear the selection under it. The
+// Export panel and the Train LoRA dialog joined the ⋯ menu in this with #2160.
 watch(
   () =>
     selectionMenuOpen.value ||

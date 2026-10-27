@@ -1290,6 +1290,11 @@ const gbCollapseAllStacksDisabled = computed(
     height: 46px;
   }
 
+  /* The search field matches the bar buttons beside it on touch. */
+  .tb-search-field {
+    height: 46px;
+  }
+
   .bar-split-toggle,
   .bar-separator,
   :deep(.bar-btn-chevron) {
