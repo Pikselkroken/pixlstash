@@ -74,6 +74,7 @@
       </template>
       <ul
         v-if="setsOpen"
+        ref="setsMenu"
         class="mrm-menu"
         role="menu"
         data-testid="mrm-set-menu"
@@ -130,7 +131,7 @@
  * with it. Its pictures are not offered as *Show all*: the shelf can filter by
  * a set or a workflow, not by one model.
  */
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
@@ -163,6 +164,25 @@ const userPrefs = useUserPrefsStore();
 /** Whether the *In sets* menu is open. */
 const setsOpen = ref(false);
 const setsTrigger = ref(null);
+const setsMenu = ref(null);
+
+// A press anywhere outside the menu and its button closes it, as every other
+// menu here does. Focus stays where that press put it.
+function onOutsidePress(event) {
+  const inside = [setsMenu.value, setsTrigger.value].some((el) =>
+    el?.contains(event.target),
+  );
+  if (!inside) setsOpen.value = false;
+}
+
+watch(setsOpen, (open) => {
+  if (open) document.addEventListener("pointerdown", onOutsidePress, true);
+  else document.removeEventListener("pointerdown", onOutsidePress, true);
+});
+
+onBeforeUnmount(() =>
+  document.removeEventListener("pointerdown", onOutsidePress, true),
+);
 
 // The sidebar's Type word; an engine or unclassified file keeps its own.
 const fileKind = computed(

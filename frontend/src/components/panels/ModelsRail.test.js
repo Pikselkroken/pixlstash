@@ -385,6 +385,25 @@ describe("the Add to set… menu", () => {
   });
 });
 
+describe("the Add to set… menu, pressed outside", () => {
+  it("closes on a press outside it, and stays open for one inside", async () => {
+    const { wrapper, store } = await mountRail({
+      handMade: [handSet(9, "Portraits", [member(1, "RealVisXL_v5", "checkpoint")])],
+      attach: true,
+    });
+    store.toggleSelected(3);
+    await wrapper.vm.$nextTick();
+    await wrapper.get('[data-testid="mrm-add-to-set"]').trigger("click");
+    const menu = wrapper.get('[data-testid="mrm-set-menu"]');
+    menu.element.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-testid="mrm-set-menu"]').exists()).toBe(true);
+    document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-testid="mrm-set-menu"]').exists()).toBe(false);
+  });
+});
+
 describe("several picked", () => {
   it("counts the disk and the base models of what is picked", async () => {
     const { wrapper, store } = await mountRail();
