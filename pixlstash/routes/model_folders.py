@@ -1336,8 +1336,8 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    "A move or an import is running. Rescan this folder once "
-                    "it has finished."
+                    "Another model move, import or rescan is holding the "
+                    "shelf. Rescan this folder once it has finished."
                 ),
             )
         try:
