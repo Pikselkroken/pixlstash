@@ -1754,8 +1754,10 @@ owner's and is kept, with a warning when transformers would read it as false.
 
 **Searching.** On Metal only, search queries are encoded on CPU copies of CLIP
 and SBERT (`inference/cpu_query_encoders.py`), loaded in
-`Vault._create_engine` before the engine is assigned to `Vault._engine` and kept
-resident (#1774). Every query encode goes through
+`Vault._create_engine` before the engine is assigned to `Vault._engine`. The
+idle sweep releases them once no search has used them for 180 s, and the next
+search reloads them inside `query_services()` (#1774). Every query encode goes
+through
 `InferenceEngine.query_services()`, which also lets one run at a time on every
 host. The full reasoning and its costs are in that document, under "Searching:
 the CPU copies".

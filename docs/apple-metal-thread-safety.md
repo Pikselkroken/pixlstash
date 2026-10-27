@@ -484,15 +484,31 @@ they took boot from 1.95 s to 9.11 s on a real library (2026-09-21), and the
 server does not listen until they are in. Part of that is import cost the first
 tagging or embedding load would otherwise pay a little later.
 
-The copies then stay resident for the life of the engine, even with "keep
-models in memory" off: `engine.close()` and the idle sweep leave them, and they
-go with the engine on a library switch or shutdown. On unified memory that is
-about 0.7 GB the owner cannot reclaim; unloading and reloading them safely is
-#1774. Nothing reloads them, so if either copy fails to load, every search
-answers 503 rather than fall back to the Metal services, because that fallback
-is the crash. The pair serves only when **both** loaded: the services call
-`ensure_ready()` outside their own `try`, so a copy with no model would load
-lazily on the search thread.
+After that the copies are released and reloaded like other models (#1774).
+They are about 0.7 GB of unified memory, so `engine.close()` (the idle sweep
+under "keep models in memory" off, and making room for another GPU tenant)
+releases them, with two guards: it only *tries* the query lock, so it never
+waits for or releases under a running encode, and it skips copies a search used
+in the last `IDLE_UNLOAD_S` (180 s), so a search session does not pay a reload
+each time the sweep comes round. The next search reloads them itself, inside
+`query_services()`, on its own thread and under the query lock: no waiters to
+wake and no timeout, and it never queues behind a GPU batch. A reload is safe
+off the GPU worker because the first load already did the imports that race,
+`MODEL_CONSTRUCTION_LOCK` serialises the construction against the worker's own
+loads, and a CPU load never touches Metal. That is reasoning, not a
+measurement: no reload beside a running worker has been recorded on an M-series
+Mac, and the weight copy and casts run outside `MODEL_CONSTRUCTION_LOCK`. Nor has
+how long a warm reload makes that first search wait. A reload that fails
+refuses that one search with a 503 and the next search tries again. The sweep
+runs only from the worker-progress poll and only while every worker is idle, so
+"180 s" is the earliest the copies go, not a promise that they do.
+
+The first load is different: if either copy fails it, nothing retries it and
+every search answers 503 until a restart, rather than fall back to the Metal
+services, because that fallback is the crash, and a retry on a search thread
+would redo the racy imports beside the worker. The pair serves only when
+**both** loaded: the services call `ensure_ready()` outside their own `try`, so
+a copy with no model would load lazily inside the encode.
 
 `query_services()` also lets one query encode run at a time, on every host. The
 encodes run on request threads and share one pair of service instances, which
@@ -610,7 +626,7 @@ does not do.
 | Boot, real app and real library, before the CPU copies existed | 2026-09-21 | 1.95 s (`create` builds the engine in 0.003 s) |
 | Boot with the copies loaded inline in `create` | 2026-09-21 | **9.11 s** — they became the first models in the process and paid every import; `create` alone took 7.3 s |
 | The load itself, in a harness on throwaway libraries | 2026-09-27 | 4.9–7.1 s, cold imports included |
-| Memory the CPU copies hold, Metal hosts only | 2026-09-28 | About 0.7 GB: 696 MB of fp32 weights by parameter count (CLIP 605 MB, SBERT 91 MB); the process grew by 610 MB loading them. Kept resident (#1774) |
+| Memory the CPU copies hold, Metal hosts only | 2026-09-28 | About 0.7 GB: 696 MB of fp32 weights by parameter count (CLIP 605 MB, SBERT 91 MB); the process grew by 610 MB loading them. Released by the idle sweep after 180 s unused, reloaded by the next search (#1774) |
 | The anomaly route in a real server, before and after #1775: a throwaway library of 12 pictures, one thread queueing `POST /pictures/{id}/reset_tags` every 0.7 s, another calling `GET /pictures/{id}/anomaly_region` with the region cache cleared, 60 s per run. M1, macOS 15.7.3, torch 2.13.0, transformers 5.17.0 | 2026-10-06 | Before: **5 of 5 runs aborted** with `Cannot form weak reference to instance … of class MPSGraph` (cause 3), the request thread in `_compute_gradcam` and the GPU worker in `empty_device_cache` after a task. After: 0 of 5, with 64–72 tag tasks and 2–16 region calls per run; median call 3.7 s, but 53 s and 32 s in the one run where a Florence-2 caption batch held the worker |
 | The anomaly route's work before and after #1775: the real PixlStash tagger on Metal, tag batches of 8 on one thread and Grad-CAM on another, 20 s per process. M1, macOS 15.7.3, torch 2.13.0, transformers 5.17.0 | 2026-10-06 | **10 of 10 failed**, all `SIGABRT`: 9 with `Destination NDArray and Accumulator NDArray cannot have different datatype in MPSNDArrayMatrixMultiplication` (a tag batch meeting the model mid-cast to fp32), 1 with `original module failed verification`. The same work interleaved on one thread, as the GPU worker now runs it: 0 of 10 |
 | Do fp32 CLIP query vectors rank differently from the fp16 ones they replace? (SBERT was fp32 on Metal already.) | 2026-09-23 | No. 20 queries over a real library of several thousand pictures: top-1 identical 20/20, top-10 identical 20/20, largest rank move 1 place, max per-dim delta 4.91e-04 |
