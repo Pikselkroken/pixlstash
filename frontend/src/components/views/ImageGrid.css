@@ -822,7 +822,7 @@
    edge padding is the same gutter, so the outermost tiles are not clipped. */
 .image-grid--justified .selection-overlay {
   background: none;
-  box-shadow: inset 0 0 var(--space-4) var(--space-1) var(--active-bar);
+  box-shadow: inset 0 0 var(--space-4) var(--space-2) var(--active-bar);
   outline: var(--space-1) solid var(--active-bar);
 }
 
