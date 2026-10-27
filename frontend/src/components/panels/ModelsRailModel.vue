@@ -64,6 +64,7 @@
           type="button"
           aria-haspopup="menu"
           :aria-expanded="setsOpen ? 'true' : 'false'"
+          ref="setsTrigger"
           data-testid="mrm-add-to-set"
           @click="setsOpen = !setsOpen"
         >
@@ -76,7 +77,7 @@
         class="mrm-menu"
         role="menu"
         data-testid="mrm-set-menu"
-        @keydown.esc="setsOpen = false"
+        @keydown.esc="closeSets"
       >
         <li v-for="set in store.shownHandMadeSets" :key="set.id" role="none">
           <button
@@ -161,6 +162,7 @@ const userPrefs = useUserPrefsStore();
 
 /** Whether the *In sets* menu is open. */
 const setsOpen = ref(false);
+const setsTrigger = ref(null);
 
 // The sidebar's Type word; an engine or unclassified file keeps its own.
 const fileKind = computed(
@@ -194,9 +196,18 @@ function refusal(set) {
   return store.setAddRefusal(set, [props.row]);
 }
 
+/**
+ * Close the set menu and hand focus back to *Add to set…*: the menu's rows
+ * leave the document with it, and focus would otherwise drop to <body>.
+ */
+function closeSets() {
+  setsOpen.value = false;
+  setsTrigger.value?.focus();
+}
+
 /** Add the model to a set, and close the menu: one write, its own receipt. */
 async function addToSet(set) {
-  setsOpen.value = false;
+  closeSets();
   const members = [{ model_id: props.row.id, slot: defaultSlot(props.row.file_kind) }];
   if (!(await store.confirmSecondCheckpoint(set, members))) return;
   await store.addToHandMadeSet(set, members);

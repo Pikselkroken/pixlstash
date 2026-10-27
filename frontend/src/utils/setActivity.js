@@ -41,8 +41,11 @@ export function activityOf(combinations) {
     for (const pic of combination?.latest ?? []) {
       if (pic?.picture_id != null) latest.set(pic.picture_id, pic);
     }
+    // Only a readable date can be the newest: an unreadable one taken first
+    // would beat every later date, since a comparison with NaN is false.
     const at = combination?.last_used_at;
-    if (at && (!lastUsedAt || Date.parse(at) > Date.parse(lastUsedAt))) {
+    const atMs = at ? Date.parse(at) : NaN;
+    if (Number.isFinite(atMs) && (!lastUsedAt || atMs > Date.parse(lastUsedAt))) {
       lastUsedAt = at;
     }
   }

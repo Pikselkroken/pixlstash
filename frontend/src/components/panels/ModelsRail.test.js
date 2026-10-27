@@ -137,7 +137,12 @@ const ROWS = [
 const mounted = [];
 
 /** Load the shelf and the sets, then mount the rail on the Models tab. */
-async function mountRail({ handMade = [], rows = ROWS, combinations = [] } = {}) {
+async function mountRail({
+  handMade = [],
+  rows = ROWS,
+  combinations = [],
+  attach = false,
+} = {}) {
   listAdapters.mockResolvedValue(rows);
   fetchWorkflowSets.mockResolvedValue({
     combinations,
@@ -150,7 +155,10 @@ async function mountRail({ handMade = [], rows = ROWS, combinations = [] } = {})
   await store.loadWorkflowSets();
   store.setPlace("all");
   useSidebarStore().setModelsRailOpen(true);
-  const wrapper = mount(ModelsRail, { global: { stubs } });
+  const wrapper = mount(ModelsRail, {
+    global: { stubs },
+    ...(attach ? { attachTo: document.body } : {}),
+  });
   mounted.push(wrapper);
   await new Promise((resolve) => setTimeout(resolve, 0));
   await wrapper.vm.$nextTick();
@@ -356,6 +364,24 @@ describe("one model", () => {
     expect(addWorkflowSetMembers).toHaveBeenCalledWith(9, [
       { model_id: 3, slot: "lora" },
     ]);
+  });
+});
+
+describe("the Add to set… menu", () => {
+  it("gives focus back to its button when Escape closes it", async () => {
+    const { wrapper, store } = await mountRail({
+      handMade: [handSet(9, "Portraits", [member(1, "RealVisXL_v5", "checkpoint")])],
+      attach: true,
+    });
+    store.toggleSelected(3);
+    await wrapper.vm.$nextTick();
+    const trigger = wrapper.get('[data-testid="mrm-add-to-set"]');
+    await trigger.trigger("click");
+    const item = wrapper.get('[data-testid="mrm-set-menu"] [role="menuitem"]');
+    item.element.focus();
+    await wrapper.get('[data-testid="mrm-set-menu"]').trigger("keydown", { key: "Escape" });
+    expect(wrapper.find('[data-testid="mrm-set-menu"]').exists()).toBe(false);
+    expect(document.activeElement).toBe(trigger.element);
   });
 });
 

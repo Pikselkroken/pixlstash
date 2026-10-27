@@ -47,6 +47,14 @@ describe("activityOf", () => {
     expect(got.latest.map((p) => p.picture_id)).toEqual([13, 11, 12]);
   });
 
+  it("never takes an unreadable last use over a readable one", () => {
+    const got = activityOf([
+      { last_used_at: "not a date" },
+      { last_used_at: "2026-10-01T00:00:00Z" },
+    ]);
+    expect(got.lastUsedAt).toBe("2026-10-01T00:00:00Z");
+  });
+
   it("puts a picture with an unreadable date last", () => {
     const got = activityOf([
       {
