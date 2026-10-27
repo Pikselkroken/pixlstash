@@ -395,11 +395,13 @@ function openRuns() {
   white-space: nowrap;
 }
 
+/* No top padding: the first row meets the slot's rule, as the Media list's
+   does. */
 .msb-scroll {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--space-2) 0;
+  padding: 0 0 var(--space-2);
   display: flex;
   flex-direction: column;
 }
