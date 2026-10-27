@@ -55,6 +55,7 @@ import { useAppEntityActions } from "./composables/useAppEntityActions";
 import { useSearchBarSync } from "./composables/useSearchBarSync";
 import { libraryDocumentTitle } from "./utils/libraryChrome";
 import { markEnd, markStart } from "./utils/perfMarks";
+import { LIGHTBOX_HOST_ID } from "./utils/dom";
 
 import SideBar from "./components/panels/SideBar.vue";
 import TitleBar from "./components/TitleBar.vue";
@@ -878,6 +879,10 @@ defineExpose({
           :resources="snapshotsStore.restoreDialogResources"
           @confirmed="onRestoreConfirmed"
         />
+        <!-- The centre column and the right rail: everything a picture opened
+             in the lightbox may cover (#2163). The title bar and the left
+             sidebar stay outside it, so opening a picture moves neither. -->
+        <div class="workspace-body">
         <main :class="['main-area']" ref="mainAreaRef">
           <div
             :class="[
@@ -994,6 +999,10 @@ defineExpose({
         <WorkflowTab v-else-if="isWorkflowsView" />
         <ModelsRail v-else-if="isModelsView" />
         <StatsSidebar v-else />
+        <!-- ImageOverlay teleports here: it lies over the centre column and
+             the rail, and draws its own inspector where the rail is. -->
+        <div :id="LIGHTBOX_HOST_ID" class="lightbox-host"></div>
+        </div>
       </div>
       <RunDialog
         v-if="runDialogStore.source"

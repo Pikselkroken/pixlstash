@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Callable, Optional
 from pixlstash.pixl_logging import get_logger
 
 if TYPE_CHECKING:
+    from pixlstash.tasks.base_task import BaseTask
     from pixlstash.tasks.task_type import TaskType
 
 logger = get_logger(__name__)
@@ -111,12 +112,15 @@ class BaseTaskFinder(ABC, metaclass=TaskFinderRegistry):
         """
         return []
 
-    def on_all_tasks_complete(self) -> None:
+    def on_all_tasks_complete(self) -> "BaseTask | None":
         """Called once when the finder is exhausted and all its in-flight tasks finish.
 
         Override to release GPU resources (e.g. ONNX session CUDA arenas) that
-        are no longer needed until the next work sweep.
+        are no longer needed until the next work sweep. A release that touches
+        the device is returned as a task rather than run here: this is called
+        on the planner's thread, and the planner queues what it returns.
         """
+        return None
 
     def on_task_complete(self, task, error) -> None:
         """Release any picture IDs that were claimed by *task*."""

@@ -133,7 +133,7 @@ function sameBox(box) {
   --focus-stroke: rgb(var(--v-theme-on-dark-surface));
 
   position: absolute;
-  top: calc(var(--topbar-height) + var(--space-3));
+  top: var(--space-3);
   left: 50%;
   transform: translateX(-50%);
   z-index: var(--z-floating);

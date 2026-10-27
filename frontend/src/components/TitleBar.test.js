@@ -72,6 +72,7 @@ import { listLibraries, setActiveLibrary } from "../api/libraries";
 import { useLibrariesStore } from "../stores/useLibrariesStore";
 import { useModelShelfStore } from "../stores/useModelShelfStore";
 import { useFolderMappingStore } from "../stores/useFolderMappingStore";
+import { useSidebarStore } from "../stores/useSidebarStore";
 import { isReadOnly } from "../utils/apiClient";
 import TitleBar from "./TitleBar.vue";
 import Tooltip from "./widgets/Tooltip.vue";
@@ -479,6 +480,17 @@ describe("the tasks pill", () => {
     const panel = wrapper.find('[data-testid="titlebar-tasks-panel"]');
     expect(panel.attributes("role")).toBe("dialog");
     expect(panel.find(".tasks-panel-stub").exists()).toBe(true);
+  });
+
+  it("opens when the lightbox hands it a deep link to the task list", async () => {
+    // The lightbox's rail has no Tasks tab (#2163), so a notice's *Show* goes
+    // here while a picture is open.
+    const wrapper = await mountBar("/");
+    const pill = () => wrapper.find('[data-testid="titlebar-tasks"]');
+    expect(pill().classes()).not.toContain("bar-btn--open");
+    useSidebarStore().tasksPillRequest += 1;
+    await flushPromises();
+    expect(pill().classes()).toContain("bar-btn--open");
   });
 });
 

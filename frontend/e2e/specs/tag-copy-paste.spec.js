@@ -40,11 +40,11 @@ test.describe('tag copy and paste', () => {
     await expect(page.locator('.tag-paste-btn')).toContainText('Paste 2')
     await shot('2-copied')
 
-    // Next picture, sidebar closed: Ctrl+V still pastes on it.
-    await page.getByRole('button', { name: 'Toggle sidebar (S)' }).click()
+    // Next picture, rail closed: Ctrl+V still pastes on it.
+    await overlay.toggleRail()
     await overlay.next.click()
     await page.keyboard.press('Control+v')
-    await page.getByRole('button', { name: 'Toggle sidebar (S)' }).click()
+    await overlay.toggleRail()
     for (const tag of TAGS) await expect(overlay.tag(tag)).toBeVisible()
     await shot('3-pasted')
 

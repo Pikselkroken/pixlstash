@@ -143,6 +143,9 @@ export const useSidebarStore = defineStore("sidebar", () => {
   // asked for. Both rails' flags, because the caller (a notice) does not know
   // which screen is showing, and only the one on screen is drawn.
   const tasksTabRequest = ref(0);
+  // The same "show me" while a picture is open: the lightbox's rail has no
+  // Tasks tab, so it asks the title bar's Tasks pill to open instead (#2163).
+  const tasksPillRequest = ref(0);
   function showTasksTab() {
     statsOpen.value = true;
     workflowInspectorOpen.value = true;
@@ -185,6 +188,7 @@ export const useSidebarStore = defineStore("sidebar", () => {
     modelsRailOpen,
     inspectorNudge,
     tasksTabRequest,
+    tasksPillRequest,
     cardTabRequest,
     sidebarForcedHidden,
     statsForcedHidden,

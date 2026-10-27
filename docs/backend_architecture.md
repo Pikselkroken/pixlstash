@@ -1077,7 +1077,7 @@ The write path has to tell the two apart. Blanking a description is how a pictur
 
 **A raising finder costs only its own turn.** The planner catches per finder, not per cycle, so one failing `find_task()` is logged and skipped while the rest of the sweep continues; only shutdown abandons a cycle.
 
-**`on_all_tasks_complete()` fires from either edge.** "Exhausted and idle" can be entered by the last task completing *or* by the finder reporting no more work, whichever happens second. `WorkPlanner._claim_drain` is armed on submit and claimed under `_lock` by whichever edge sees the condition first, so the drain (an InsightFace release for `MissingFaceExtractionFinder` when models are not kept in memory; `MissingTagFinder` no longer tears WD14 down on drain — its session is bounded by `gpu_mem_limit` and freed by `Vault._maybe_aggressive_unload`'s idle sweep) is announced exactly once per burst and is not announced over a task that has just been taken.
+**`on_all_tasks_complete()` fires from either edge.** "Exhausted and idle" can be entered by the last task completing *or* by the finder reporting no more work, whichever happens second. `WorkPlanner._claim_drain` is armed on submit and claimed under `_lock` by whichever edge sees the condition first, so the drain (an InsightFace release for `MissingFaceExtractionFinder` when models are not kept in memory, returned as a task the planner queues on the GPU worker; `MissingTagFinder` no longer tears WD14 down on drain — its session is bounded by `gpu_mem_limit` and freed by `Vault._maybe_aggressive_unload`'s idle sweep) is announced exactly once per burst and is not announced over a task that has just been taken.
 
 ### Registered tasks
 
@@ -1154,7 +1154,7 @@ PixlStash, a ComfyUI on the same machine and (later) AI-toolkit do not fit in on
 
 A device with no NVML (`measurable: false`: Metal, ROCm) runs heavy work one at a time (`unmeasurable`) and LIGHT freely.
 
-**The reclaim ladder** runs for the first lease short of memory, one rung per poll, re-reading the cards after each: (1) **PixlStash yields** (`Vault._yield_gpu`): the planner is held under the lease's id (`WorkPlanner.hold(owner, None)`), `TaskRunner.preempt_gpu` stops the running GPU task at a task boundary and cancels the queued GPU tasks (never URGENT or awaited ones, never the CPU queue), and once the worker is idle `Vault.unload_models()` unloads everything whatever `keep_models_in_memory` says. The hold ends when that lease is granted or released. An exclusive lease always has PixlStash yield before it is granted (Q27). (2) **ComfyUI frees** (`POST /free`, settled over two reads within 30 s), only if nothing at all is queued on it and the lease asking is not ComfyUI's own. (3) Otherwise it waits. **ComfyUI after ComfyUI never frees.**
+**The reclaim ladder** runs for the first lease short of memory, one rung per poll, re-reading the cards after each: (1) **PixlStash yields** (`Vault._yield_gpu`): the planner is held under the lease's id (`WorkPlanner.hold(owner, None)`), `TaskRunner.preempt_gpu` stops the running GPU task at a task boundary and cancels the queued GPU tasks (never URGENT or awaited ones, never the CPU queue), and `Vault.unload_models()`, queued on the GPU worker as a `DeviceReleaseTask` behind the batch in flight, unloads everything whatever `keep_models_in_memory` says (the arbiter's thread waits for it only `YIELD_WAIT_S`). The hold ends when that lease is granted or released. An exclusive lease always has PixlStash yield before it is granted (Q27). (2) **ComfyUI frees** (`POST /free`, settled over two reads within 30 s), only if nothing at all is queued on it and the lease asking is not ComfyUI's own. (3) Otherwise it waits. **ComfyUI after ComfyUI never frees.**
 
 **Preemption never looks like a failure.** A finder defers a batch for the session on any error other than `TaskCancelledError` (`MissingOcrFinder`, `MissingPromptMatchFinder`), so a task stopped to make room ends as exactly `TaskCancelledError` whatever it raised on the way out (`TaskRunner._run` rewrites it), and its unprocessed pictures, still `NULL`, are found again. `WorkPlanner.hold` is keyed by owner (`hold(owner, seconds | None)`, `release(owner)`) so the folder-structure read and a VRAM lease cannot end each other's hold.
 
@@ -1729,9 +1729,12 @@ third is unfixed. Details, and every measurement, are in
 `docs/apple-metal-thread-safety.md`.
 
 Two sources of a second thread on the accelerator are closed at their source
-rather than synchronised, and a third is routed onto the GPU worker. The rest —
-the tagger preload, the idle sweep's flush, the face finder's end-of-work flush, stopping the
-vault, image plugins, and a few allocator calls — are listed under "Not covered" in that document.
+rather than synchronised, and two more are routed onto the GPU worker: the
+anomaly-region route, and every model unload, whose device-cache flush is
+queued as a `DeviceReleaseTask` (the idle sweep, making room, the face finder's
+end-of-work release; `Vault.stop()` skips the flush if a worker outlived the
+stop). The rest — the tagger preload, image plugins, and a few allocator calls
+— are listed under "Not covered" in that document.
 
 **Loading.** transformers reads and casts weights on a pool of
 `min(4, cpu_count)` threads, so *merely loading a model* trips it — measured at

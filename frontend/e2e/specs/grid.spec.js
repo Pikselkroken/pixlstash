@@ -31,8 +31,8 @@ test.describe('image grid', () => {
       await expect(overlay).toBeVisible({ timeout: 2_000 })
     }).toPass({ timeout: 30_000 })
 
-    // Close via the dedicated button (Escape first reveals chrome).
-    await overlay.locator('.overlay-close').click()
+    // Close via the toolbar's way back to the grid.
+    await overlay.locator('.overlay-back').click()
     await expect(overlay).toBeHidden()
   })
 

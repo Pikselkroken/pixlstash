@@ -31,6 +31,7 @@
     :guestScore="overlayGuestScore"
     :editRequest="overlayEditRequest"
     :compareRequest="overlayCompareRequest"
+    :view-label="activeCategoryLabel"
     @close="closeOverlay()"
     @apply-score="applyScore"
     @apply-favourite="applyOverlayFavourite"
@@ -6995,6 +6996,9 @@ async function openOverlay(img) {
 // The default is the reader's own close (the X, Escape, the `close` emit, which
 // carries no payload), which is the one that goes back where it came from.
 function closeOverlay(returnToOrigin = true) {
+  // Read before the lightbox goes: the picture it ended on, not the one it
+  // was opened on.
+  const lastShown = imageOverlayRef.value?.currentPicture?.() ?? null;
   overlayOpen.value = false;
   overlayImageId.value = null;
   overlayInitialExpandedStackIds.value = [];
@@ -7051,6 +7055,28 @@ function closeOverlay(returnToOrigin = true) {
     preserveScrollOnNextFetch.value = true;
     debouncedFetchAllGridImages();
   }
+  if (returnToOrigin) selectAndRevealPicture(lastShown);
+}
+
+/**
+ * Back on the grid with the picture the lightbox ended on selected and in
+ * view (#2163): the reader walked to it, so it is where they are. A member of
+ * a stack folded here is shown by its stack's card.
+ */
+function selectAndRevealPicture(picture) {
+  if (picture?.id == null) return;
+  const list = allGridImages.value || [];
+  let idx = list.findIndex((img) => String(img?.id) === String(picture.id));
+  const stackId = getPictureStackId(picture);
+  if (idx < 0 && stackId) {
+    idx = list.findIndex((img) => getPictureStackId(img) === stackId);
+  }
+  const card = list[idx];
+  if (!card?.id || isImageGhosted(card)) return;
+  selectedImageIds.value = [card.id];
+  lastSelectedImageId.value = card.id;
+  cursorIdx.value = idx;
+  void nextTick(() => scrollCursorIntoView(idx));
 }
 
 // ============================================================

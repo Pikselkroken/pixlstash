@@ -74,7 +74,7 @@ vi.mock("vue-router", () => ({
 
 import ImageGrid from "./ImageGrid.vue";
 
-function mountGrid() {
+function mountGrid(stubs = {}) {
   const selectionStore = useSelectionStore();
   const projectStore = useProjectStore();
   const sortStore = useSortStore();
@@ -89,6 +89,7 @@ function mountGrid() {
   return mount(ImageGrid, {
     shallow: true,
     global: {
+      stubs,
       config: {
         compilerOptions: { isCustomElement: (tag) => tag.startsWith("v-") },
         // `isCustomElement` above is a COMPILER option, and this component's
@@ -189,5 +190,56 @@ describe("closing the lightbox opened from the workflow library", () => {
     wrapper.vm.closeOverlay();
 
     expect(replace).toHaveBeenCalledWith({ query: { review: "board" } });
+  });
+});
+
+// #2163: the lightbox opens inside the frame, and closing it lands on the
+// picture it ended on - selected, and scrolled into view.
+describe("closing the lightbox selects the picture it ended on", () => {
+  let shown = null;
+  const overlayStub = {
+    ImageOverlay: {
+      name: "ImageOverlay",
+      template: "<div></div>",
+      methods: { currentPicture: () => shown },
+    },
+  };
+  const ROWS = [
+    { id: 1, stack_id: null },
+    { id: 2, stack_id: 9 },
+    { id: 3, stack_id: null },
+  ];
+
+  function gridShowing(rows) {
+    const wrapper = mountGrid(overlayStub);
+    wrapper.vm.allGridImages = rows;
+    wrapper.vm.overlayOpen = true;
+    return wrapper;
+  }
+
+  it("selects the picture on screen, not the one it was opened on", () => {
+    const wrapper = gridShowing(ROWS);
+    shown = { id: 3, stack_id: null };
+    wrapper.vm.closeOverlay();
+    expect(wrapper.vm.selectedImageIds).toEqual([3]);
+    expect(wrapper.vm.cursorIdx).toBe(2);
+  });
+
+  it("selects a folded stack's card for one of its members", () => {
+    const wrapper = gridShowing(ROWS);
+    // Walked to in the filmstrip, where the stack was opened.
+    shown = { id: 22, stack_id: 9 };
+    wrapper.vm.closeOverlay();
+    expect(wrapper.vm.selectedImageIds).toEqual([2]);
+    expect(wrapper.vm.cursorIdx).toBe(1);
+  });
+
+  it("leaves the selection alone when the grid closes it for its own reasons", () => {
+    // A delete, a restore, a reverse search: the result is what to show.
+    const wrapper = gridShowing(ROWS);
+    wrapper.vm.selectedImageIds = [1];
+    shown = { id: 3, stack_id: null };
+    wrapper.vm.closeOverlay(false);
+    expect(wrapper.vm.selectedImageIds).toEqual([1]);
   });
 });
