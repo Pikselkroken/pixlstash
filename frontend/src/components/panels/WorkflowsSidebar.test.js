@@ -4,8 +4,8 @@
 // row writes: a place must clear the facets and leave Templates, and the pill
 // must count what was not seen, not what is listed.
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { flushPromises, mount } from "@vue/test-utils";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 
 const listWorkflowCards = vi.fn();
@@ -126,6 +126,10 @@ function row(wrapper, label) {
 function templatesRow(wrapper) {
   return wrapper.findAll("button").find((button) => button.text().startsWith("Templates"));
 }
+
+// Every rail a test mounts (attached to the document) is taken down after it,
+// so no test's rail, or its watchers, outlives it into the next.
+enableAutoUnmount(afterEach);
 
 beforeEach(() => {
   localStorage.clear();
