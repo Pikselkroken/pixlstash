@@ -686,6 +686,34 @@ describe("the folder verbs (#2206)", () => {
     wrapper.unmount();
   });
 
+  it("focuses a revealed folder once the listings above it have landed", async () => {
+    const wrapper = mountTree();
+    await flushPromises();
+    // Nothing under folder 1 is loaded yet; the listings answer late.
+    const late = [];
+    listModelFolderDirs.mockImplementation(
+      (id, path) =>
+        new Promise((resolve) =>
+          late.push(() =>
+            resolve({
+              folder_id: id,
+              path,
+              locked: false,
+              model_count: 1,
+              bytes: 0,
+              dirs: LISTINGS[`${id}:${path}`] ?? [],
+            }),
+          ),
+        ),
+    );
+    wrapper.vm.reveal(1, "Lora", "Lora/flux");
+    await flushPromises();
+    late.forEach((answer) => answer());
+    await flushPromises();
+    expect(document.activeElement).toBe(item(wrapper, 1, "Lora/flux").element);
+    wrapper.unmount();
+  });
+
   it("keeps a renamed folder open and focused once its job lands", async () => {
     const root = LISTINGS["1:"];
     try {

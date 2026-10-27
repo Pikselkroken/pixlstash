@@ -533,21 +533,29 @@ def _copy(
             exc,
         )
         return f"Moved, but the original could not be removed: {exc}"
+    # Only directories the copy has: an empty one made in the source during the
+    # move holds no file to compare, and is as much the owner's as a file is.
+    copied_dirs = {
+        os.path.relpath(root, plan.destination_path)
+        for root, _dirs, _names in os.walk(plan.destination_path)
+    }
     for root, _dirs, _names in os.walk(plan.source_path, topdown=False):
+        if os.path.relpath(root, plan.source_path) not in copied_dirs:
+            continue
         try:
             os.rmdir(root)
         except OSError as exc:
             logger.debug("Left %s in place: %s", root, exc)
     if os.path.lexists(plan.source_path):
         logger.error(
-            "Moved %s to %s, but files written into the original during the move "
-            "were left there; they are not in the copy.",
+            "Moved %s to %s, but files or folders made in the original during the "
+            "move were left there; they are not in the copy.",
             plan.source_path,
             plan.destination_path,
         )
         return (
-            "Moved, but files written into the original during the move were "
-            "left there."
+            "Moved, but files or folders made in the original during the move "
+            "were left there."
         )
     return ""
 

@@ -344,9 +344,10 @@ async function commitNewFolder() {
 }
 
 // The field belongs to the folder it was opened in: moving the open folder
-// closes it, rather than making a folder somewhere the reader is not looking.
+// closes it, and so does Training runs, which hides the open folder, rather
+// than making a folder somewhere the reader is not looking.
 watch(
-  () => store.folderScope,
+  () => openScope.value,
   () => {
     newFolder.value = null;
   },

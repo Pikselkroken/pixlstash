@@ -5,9 +5,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
+import { reactive } from "vue";
 
 const push = vi.fn();
-const route = { name: "models" };
+const route = reactive({ name: "models" });
 vi.mock("vue-router", () => ({
   useRoute: () => route,
   useRouter: () => ({ push }),
@@ -197,6 +198,19 @@ describe("ModelsSideBar", () => {
     await flushPromises();
     expect(wrapper.find('[data-testid="model-folder-name"]').exists()).toBe(false);
     expect(document.activeElement).toBe(add.element);
+    wrapper.unmount();
+  });
+
+  it("closes the Folders + field when Training runs hides the open folder", async () => {
+    useLibrariesStore().canManage = true;
+    const wrapper = mountBar();
+    await flushPromises();
+    await wrapper.find('[role="treeitem"][data-folder-id="2"]').trigger("click");
+    await wrapper.find('[data-testid="models-sidebar-new-folder"]').trigger("click");
+    expect(wrapper.find('[data-testid="model-folder-name"]').exists()).toBe(true);
+    route.name = "models-runs";
+    await flushPromises();
+    expect(wrapper.find('[data-testid="model-folder-name"]').exists()).toBe(false);
     wrapper.unmount();
   });
 

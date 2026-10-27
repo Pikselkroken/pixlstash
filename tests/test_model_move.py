@@ -1941,3 +1941,26 @@ def test_a_file_written_after_the_final_check_is_left_not_deleted(
     assert not (dir_tree["source_dir"] / "sdxl" / "alice.safetensors").exists()
     assert (dir_tree["destination_dir"] / "sdxl" / "alice.safetensors").is_file()
     assert_no_dangling_rows(dir_tree["hub"])
+
+
+def test_an_empty_folder_made_after_the_final_check_is_left_not_swept(
+    dir_tree, dir_cross_device, monkeypatch
+):
+    """An empty directory has no file to compare, so the sweep that tidies the
+    source after the move must not take one the copy does not have."""
+    listing = dir_mover_module._tree_listing
+    made = dir_tree["source_dir"] / "sdxl" / "portraits"
+
+    def list_then_a_folder_is_made(path):
+        found = listing(path)
+        if path.endswith(os.path.join("loras", "sdxl")):
+            made.mkdir(exist_ok=True)
+        return found
+
+    monkeypatch.setattr(dir_mover_module, "_tree_listing", list_then_a_folder_is_made)
+    _, outcome = _move_sdxl(dir_tree)
+    assert outcome.status == STATUS_MOVED
+    assert "left there" in outcome.detail
+    assert made.is_dir()
+    assert (dir_tree["destination_dir"] / "sdxl" / "alice.safetensors").is_file()
+    assert_no_dangling_rows(dir_tree["hub"])

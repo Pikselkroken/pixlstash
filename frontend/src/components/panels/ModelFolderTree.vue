@@ -724,7 +724,20 @@ function followRename(job) {
   expanded.value = next;
   if (!rename.focus) return;
   focusedKey.value = fresh;
-  pendingFocusKey.value = fresh;
+  focusWhenDrawn(fresh);
+}
+
+/**
+ * Focus a row now if it is drawn, else as soon as it is. A row under a folder
+ * whose listing is still loading only exists once that fetch lands.
+ */
+function focusWhenDrawn(key) {
+  pendingFocusKey.value = key;
+  nextTick(() => {
+    if (pendingFocusKey.value !== key || !rowEls.has(key)) return;
+    pendingFocusKey.value = null;
+    rowEls.get(key).focus();
+  });
 }
 
 watch(() => moves.job, followRename);
@@ -841,7 +854,7 @@ function reveal(folderId, parent, focusPath) {
   expanded.value = next;
   const key = nodeKey(id, focusPath);
   focusedKey.value = key;
-  nextTick(() => rowEls.get(key)?.focus());
+  focusWhenDrawn(key);
 }
 
 // ── Drops ───────────────────────────────────────────────────────────────────
