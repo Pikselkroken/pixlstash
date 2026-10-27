@@ -35,7 +35,12 @@ target_metadata = SQLModel.metadata
 logger = logging.getLogger("alembic.env")
 
 
-def _get_database_url() -> str:
+def _get_database_url():
+    # A URL object from pixlstash.utils.sqlite_uri.sqlite_url; a string would be
+    # re-parsed, and a path holding ``?`` or ``#`` would not survive (#2210).
+    supplied_url = config.attributes.get("sqlalchemy_url")
+    if supplied_url is not None:
+        return supplied_url
     env_url = os.getenv("PIXLSTASH_DB_URL")
     if env_url:
         return env_url

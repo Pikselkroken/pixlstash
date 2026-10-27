@@ -1,4 +1,4 @@
-"""Build SQLite connection strings from filesystem paths, percent-encoded.
+"""Build SQLite connection strings from filesystem paths without parsing them.
 
 A path pasted raw into a connection string is cut short by any character the
 string's grammar reserves. In a SQLite ``file:`` URI ``?`` starts the query and
@@ -13,6 +13,8 @@ Every SQLite open that goes through a URI or a SQLAlchemy URL builds it here.
 
 import os
 from urllib.parse import quote
+
+from sqlalchemy.engine import URL
 
 
 def sqlite_file_uri(path, *, read_only: bool = False) -> str:
@@ -40,20 +42,23 @@ def sqlite_file_uri(path, *, read_only: bool = False) -> str:
     return f"{uri}?mode=ro" if read_only else uri
 
 
-def sqlite_url(path) -> str:
-    """Return a SQLAlchemy URL for the SQLite database at *path*.
+def sqlite_url(path) -> URL:
+    """Return a SQLAlchemy URL object for the SQLite database at *path*.
 
-    Carries :func:`sqlite_file_uri` with ``uri=true``, so the path reaches
-    SQLite intact. The engine is otherwise what ``sqlite:///<path>`` gave: a
-    file database, so ``QueuePool`` and ``check_same_thread=False``.
+    An object, never a string: nothing parses it, so the path reaches
+    ``sqlite3.connect`` as a plain filename with no character reserved. A
+    string cannot be made safe across versions, because SQLAlchemy 2.1
+    percent-decodes the database part of a URL it parses and 2.0 does not.
+    The engine is otherwise what ``sqlite:///<path>`` gave: a file database,
+    so ``QueuePool`` and ``check_same_thread=False``.
 
-    Alembic reads its URL through ``ConfigParser`` interpolation, so a value
-    passed to ``Config.set_main_option`` must have its ``%`` doubled.
+    Alembic gets it through ``config.attributes["sqlalchemy_url"]``
+    (``migrations/env.py``), not ``set_main_option``, which takes a string.
 
     Args:
         path: Filesystem path to the database.
 
     Returns:
-        The URL string.
+        The URL.
     """
-    return f"sqlite:///{sqlite_file_uri(path)}?uri=true"
+    return URL.create("sqlite", database=os.path.abspath(os.fspath(path)))

@@ -963,8 +963,7 @@ def _run_migrations(connection, db_path: str, db_exists: bool) -> None:
 
     config = Config(str(alembic_ini))
     config.set_main_option("script_location", str(migrations_dir))
-    # ConfigParser interpolates ``%``; the percent-encoded URL must escape it.
-    config.set_main_option("sqlalchemy.url", sqlite_url(db_path).replace("%", "%%"))
+    config.attributes["sqlalchemy_url"] = sqlite_url(db_path)
     # The registered-library opener has already validated this exact
     # connection. Alembic must use it rather than reopening the path and giving
     # a replacement database migration authority.
