@@ -60,9 +60,9 @@ function op(overrides = {}) {
   };
 }
 
-function mountWith(operation, mode = "did", steps = 1, props = {}) {
+function mountWith(operation, mode = "did", steps = 1) {
   const store = useOperationStore();
-  const wrapper = mount(OverlayActionReceipt, { ...globalOpts, props });
+  const wrapper = mount(OverlayActionReceipt, globalOpts);
   store.showReceipt(store.buildReceipt(operation, mode, steps));
   return { store, wrapper };
 }
@@ -201,18 +201,6 @@ describe("OverlayActionReceipt - the receipt contract", () => {
     await w2.vm.$nextTick();
     await w2.find(".r-btn").trigger("click");
     expect(redo).toHaveBeenCalledTimes(1);
-  });
-
-  it("widens its band to the whole canvas while the chrome is hidden", async () => {
-    const { wrapper } = mountWith(op(), "did", 1, { chromeHidden: true });
-    await wrapper.vm.$nextTick();
-    // The rail and the sidebar keep their width while hidden, so the band has
-    // to collapse or the pill sits off-centre against a rail nobody can see.
-    expect(
-      wrapper
-        .find('[data-testid="overlay-action-receipt-slot"]')
-        .classes("chrome-hidden"),
-    ).toBe(true);
   });
 });
 

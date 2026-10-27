@@ -77,6 +77,7 @@ test.describe('tag predictions', () => {
     // Deep-link the overlay to the discovered picture (?overlay=<id>).
     await page.goto(`/?overlay=${pictureId}`)
     await expect(overlay.root).toBeVisible({ timeout: 15_000 })
+    await overlay.openRail()
     await expect(overlay.tag(tag)).toBeVisible()
 
     const predictionChip = page

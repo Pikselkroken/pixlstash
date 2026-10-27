@@ -107,6 +107,6 @@ checklist shrinks as coverage grows.
   spec mints an isolated session (`loginToFreshSession`) because the backend
   tracks sessions in-memory and logout would otherwise pop the shared session.
 - Stable selectors in use: `.thumbnail-card` (grid cell), `.image-overlay` /
-  `.overlay-close` (lightbox), `.search-overlay` (search), `.mdi-magnify`
+  `.overlay-back` (lightbox), `.search-overlay` (search), `.mdi-magnify`
   (toolbar search button).
 ```

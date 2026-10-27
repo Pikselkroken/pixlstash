@@ -52,14 +52,23 @@
 </template>
 
 <script setup>
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { VMenu } from "vuetify/components";
+import { useSidebarStore } from "../stores/useSidebarStore";
 import { useTasksStore } from "../stores/useTasksStore";
 import TasksPanel from "./panels/TasksPanel.vue";
 import AppBarButton from "./widgets/AppBarButton.vue";
 
 const tasksStore = useTasksStore();
+const sidebarStore = useSidebarStore();
 const open = ref(false);
+// A notice's *Show* while a picture is open: the lightbox hands it here.
+watch(
+  () => sidebarStore.tasksPillRequest,
+  () => {
+    open.value = true;
+  },
+);
 
 const text = computed(() => {
   const n = tasksStore.activeCount;

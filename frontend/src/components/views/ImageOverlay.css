@@ -1,17 +1,19 @@
-/* Starts below the title bar instead of covering it, so the workspace switch
-   and, on the desktop, the window's drag region and controls stay usable. */
+/* Fills App.vue's `.workspace-body`, the centre column plus the right rail
+   (#2163): the title bar and the left sidebar stay where they were. */
 .image-overlay {
-  position: fixed;
-  inset: var(--titlebar-h) 0 0 0;
-  background: rgba(var(--v-theme-scrim), 0.92);
+  position: absolute;
+  inset: 0;
+  background: rgb(var(--v-theme-dark-surface));
   z-index: var(--z-drawer);
 }
 
-/* The lightbox is dark in both themes, so the global focus outline takes the
-   dark-surface ink here: the per-theme stroke is near-black in light. The
-   ComfyUI panel is teleported out of `.image-overlay`, so it restates it (the
-   rating menu's rows take the on-dark ring from `.ctx-menu--on-dark`). */
-.image-overlay,
+/* The stage, the filmstrip and the rail are dark in both themes, so the
+   global focus outline takes the dark-surface ink there: the per-theme stroke
+   is near-black in light. The toolbar is the grid's, and keeps the theme's.
+   The Filters panel is teleported out of the lightbox, so it restates it. */
+.overlay-main,
+.overlay-rail,
+.overlay-sidebar,
 .overlay-comfy-panel {
   /* Amber on a dark panel keeps the bright amber in both themes (#1413). */
   --v-theme-accent: var(--v-theme-dark-surface-accent);
@@ -19,46 +21,74 @@
   --focus-ring-inset: inset 0 0 0 var(--focus-width) var(--focus-stroke);
 }
 
+/* The centre column beside the rail, which stands where the app's rail
+   stands. */
 .overlay-shell {
   width: 100%;
   height: 100%;
   display: flex;
-  flex-direction: column;
-  --rail-width: 52px;
-  --rail-open-width: 170px;
-  --sidebar-width: 0px;
-  --topbar-height: 40px;
+  flex-direction: row;
   position: relative;
 }
 
-.overlay-shell.sidebar-open {
-  --sidebar-width: var(--stats-panel-w);
+.overlay-column {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
 
+/* The grid toolbar's band (Toolbar.vue `.selection-bar-overlay` is the point
+   of truth for its box), its contents swapped. Scrolls sideways rather than
+   wrapping on a narrow window. */
 .overlay-topbar {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: var(--space-4);
-  padding: var(--space-2) 10px;
-  min-height: var(--topbar-height);
-  background: rgba(var(--v-theme-dark-surface), 0.9);
-  color: rgb(var(--v-theme-on-dark-surface));
-  transition: opacity 0.2s ease;
-  z-index: var(--z-sticky);
+  gap: var(--space-1);
+  height: var(--toolbar-height);
+  padding: 0 var(--space-3);
+  box-sizing: border-box;
+  background: rgba(var(--v-theme-toolbar), 0.95);
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
 }
 
-.overlay-topbar.hidden {
-  opacity: 0;
-  pointer-events: none;
+.overlay-topbar::-webkit-scrollbar {
+  display: none;
+}
+
+.overlay-topbar-spacer {
+  flex: 1;
+}
+
+.overlay-topbar-sidebar-toggle {
+  display: contents;
+}
+
+.overlay-kbd {
+  margin-left: var(--space-2);
+  padding: 0 var(--space-2);
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.overlay-position {
+  min-width: 9ch;
+  text-align: center;
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  white-space: nowrap;
 }
 
 .overlay-progress {
   position: absolute;
-  right: calc(16px + var(--sidebar-width));
+  right: var(--space-5);
   z-index: var(--z-floating);
   background: rgba(var(--v-theme-dark-surface), 0.75);
   color: rgb(var(--v-theme-on-dark-surface));
@@ -109,62 +139,18 @@
   opacity: 0.85;
 }
 
-.overlay-close {
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
-  padding: 6px 14px;
-  border-radius: var(--radius-sm);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  font-size: var(--text-base);
-  font-weight: var(--weight-semibold);
-}
-.overlay-close:hover {
-  background-image: var(--hover-shade);
-}
-
-.overlay-title {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  min-width: 0;
-  flex: 1;
-}
-
-.overlay-desc-teaser {
-  color: rgba(var(--v-theme-on-dark-surface), 0.7);
-  text-align: left;
-  font-size: var(--text-sm);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  padding: 0;
-}
-
-.overlay-desc-teaser:disabled {
-  cursor: default;
-  opacity: 0.5;
-}
-
-.overlay-top-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-/* Persistent translucent lock chip - signals the picture is frozen by a locked
-   set. Same warm-shadow translucency the overlay chrome uses elsewhere. */
+/* Lock chip - signals the picture is frozen by a locked set. */
 .overlay-lock-chip {
   display: inline-flex;
   align-items: center;
+  flex-shrink: 0;
   gap: var(--space-2);
-  height: var(--control-h-bar);
-  padding: var(--space-1) var(--space-3);
+  height: var(--control-h-sm);
+  margin-left: var(--space-2);
+  padding: 0 var(--space-3);
   border-radius: var(--radius-pill);
-  background: rgba(var(--v-theme-shadow), 0.4);
-  color: rgb(var(--v-theme-on-dark-surface));
+  background: var(--hover-wash);
+  color: rgb(var(--v-theme-on-surface));
   font-size: var(--text-2xs);
   line-height: var(--leading-snug);
 }
@@ -174,12 +160,14 @@
 .overlay-stack-chip {
   display: inline-flex;
   align-items: center;
+  flex-shrink: 0;
   gap: var(--space-2);
-  height: var(--control-h-bar);
-  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3);
+  height: var(--control-h-sm);
+  margin-left: var(--space-2);
+  padding: 0 var(--space-1) 0 var(--space-3);
   border-radius: var(--radius-pill);
-  background: rgba(var(--v-theme-shadow), 0.4);
-  color: rgb(var(--v-theme-on-dark-surface));
+  background: var(--hover-wash);
+  color: rgb(var(--v-theme-on-surface));
   font-size: var(--text-2xs);
   line-height: var(--leading-snug);
   white-space: nowrap;
@@ -189,54 +177,26 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  height: var(--control-h-sm);
+  height: calc(var(--control-h-sm) - 2 * var(--space-1));
   padding: 0 var(--space-3) 0 var(--space-2);
   border: 0;
   border-radius: var(--radius-pill);
-  background: rgba(var(--v-theme-dark-surface-accent), 0.22);
-  color: rgb(var(--v-theme-on-dark-surface));
+  background: rgba(var(--v-theme-accent), 0.22);
+  color: rgb(var(--v-theme-on-surface));
   font: inherit;
   cursor: pointer;
 }
 
 .overlay-stack-chip-btn:hover {
-  background: rgba(var(--v-theme-dark-surface-accent), 0.34);
+  background: rgba(var(--v-theme-accent), 0.34);
 }
 
-.overlay-top-actions .star-overlay {
-  position: static;
-  top: auto;
-  right: auto;
-  z-index: auto;
-  padding: 6px 14px;
-  height: var(--control-h-bar);
-  background: none;
-  border-radius: var(--radius-sm);
-}
-
-.star-overlay:hover {
-  background: rgba(var(--v-theme-on-dark-surface), 0.16);
-}
-
-.overlay-icon-btn {
-  color: rgb(var(--v-theme-on-dark-surface));
-  height: var(--control-h-bar);
-  padding: 6px 14px;
-  min-width: var(--control-h-bar);
-  border-radius: var(--radius-sm);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: var(--text-base);
-}
-.overlay-icon-btn:hover {
-  background: rgba(var(--v-theme-on-dark-surface), 0.16);
-}
-
-/* Olive marks, words stay text: an active toggle or open menu colours its glyph
-   only, in the dark-surface olive. */
-.overlay-icon-btn--active .v-icon {
-  color: rgb(var(--v-theme-dark-surface-primary));
+/* The rating and heart at the end of the rail's tab band. The pane is dark in
+   both themes, so the empty stars take its ink rather than the page's. On the
+   icons themselves: each carries the theme's class, which restates the
+   theme's variables. */
+.overlay-rail-rating :deep(.v-icon) {
+  --v-theme-on-background: var(--v-theme-on-dark-surface);
 }
 
 .overlay-star-mobile-btn {
@@ -248,7 +208,7 @@
 .overlay-star-mobile-label {
   font-size: var(--text-xs);
   font-weight: var(--weight-bold);
-  color: rgb(var(--v-theme-on-dark-surface));
+  color: rgb(var(--v-theme-on-surface));
   min-width: 10px;
 }
 
@@ -261,15 +221,6 @@
 .overlay-star-menu-stars {
   display: flex;
   gap: var(--space-1);
-}
-
-.overlay-comfy-activator {
-  gap: 6px;
-}
-
-.overlay-comfy-activator-label {
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
 }
 
 .overlay-comfy-panel {
@@ -363,18 +314,9 @@
   color: rgb(var(--v-theme-on-dark-surface));
 }
 
+/* Width reserved once (the 5ch label below): the toolbar never jumps. */
 .zoom-btn {
-  width: auto;
-  min-width: 84px;
-  padding: 6px 14px;
-  gap: var(--space-2);
-  justify-content: flex-start;
-  /* Width reserved once (the 5ch label below): the toolbar never jumps. */
   flex-shrink: 0;
-}
-
-.zoom-btn .v-icon {
-  flex: 0 0 18px;
 }
 
 .zoom-btn-label {
@@ -384,15 +326,22 @@
   text-align: center;
 }
 
+/* The stage: a shade darker than the filmstrip and the rail, so the picture
+   is the brightest thing in the column. */
 .overlay-main {
   flex: 1;
   display: grid;
   grid-template-columns: 1fr;
-  height: 100%;
   min-height: 0;
   position: relative;
+  background:
+    linear-gradient(var(--scrim-drawer), var(--scrim-drawer)),
+    rgb(var(--v-theme-dark-surface));
 }
 
+/* The picture is fitted with --space-6 of stage round it (`stagePadding`
+   takes the same off the zoom core's measurements). Zoomed in, it may fill
+   the margin: the clip is the padding box. */
 .overlay-canvas {
   position: relative;
   overflow: hidden;
@@ -401,6 +350,8 @@
   justify-content: center;
   height: 100%;
   min-height: 0;
+  box-sizing: border-box;
+  padding: var(--space-6);
   user-select: none;
 }
 
@@ -516,6 +467,8 @@
   background-image: var(--hover-shade);
 }
 
+/* Round arrows at the stage's edges, shown while the pointer is over the
+   stage (or the arrow has focus); a touch screen keeps them up. */
 .overlay-nav {
   position: absolute;
   top: 50%;
@@ -523,14 +476,25 @@
   width: 44px;
   height: 44px;
   border-radius: var(--radius-pill);
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.2);
-  background: rgba(var(--v-theme-shadow), 0.35);
+  background: var(--scrim-photo);
   color: rgb(var(--v-theme-on-dark-surface));
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: opacity 0.2s ease;
+  opacity: 0;
+  transition: opacity var(--dur-2) var(--ease-standard);
   z-index: var(--z-raised);
+}
+
+.overlay-canvas:hover .overlay-nav,
+.overlay-nav:focus-visible {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .overlay-nav {
+    opacity: 1;
+  }
 }
 
 .overlay-nav.hidden {
@@ -539,19 +503,18 @@
 }
 
 .overlay-nav-left {
-  left: calc(16px + var(--filmstrip-rail-width));
+  left: var(--space-4);
 }
 
 .overlay-nav-right {
-  right: calc(16px + var(--sidebar-width));
+  right: var(--space-4);
 }
 
-/* The Paint toolbox floats beside the filmstrip: the arrow steps past it
+/* The Paint toolbox floats at the stage's left edge: the arrow steps past it
    (34px tools, --space-2 padding each side, a 1px border each side). */
 .overlay-canvas--paint .overlay-nav-left {
   left: calc(
-    16px + var(--filmstrip-rail-width) + 34px + 2 * var(--space-2) + 2px +
-      var(--space-3)
+    var(--space-3) + 34px + 2 * var(--space-2) + 2px + var(--space-3)
   );
 }
 
@@ -590,24 +553,6 @@
   background: rgba(var(--v-theme-on-dark-surface), 0.15);
   border-radius: 3px;
   padding: 0 var(--space-2);
-}
-
-/* Width, collapse and surface come from AppInspector; this places it over the
-   canvas, under the top bar. Three selector parts once Vue stamps this file's
-   scope id on the last one, so it outranks AppInspector's own `.inspector`
-   rule (and its `height: 100%`) regardless of stylesheet order. */
-.overlay-main > .overlay-sidebar {
-  position: absolute;
-  top: var(--topbar-height);
-  right: 0;
-  bottom: 0;
-  height: calc(100% - var(--topbar-height));
-  z-index: var(--z-raised);
-}
-
-.overlay-sidebar.hidden {
-  opacity: 0;
-  pointer-events: none;
 }
 
 /* The Info tab's own column. The inspector's lightbox body is a fixed-height
@@ -665,7 +610,6 @@
   font-weight: 400;
   letter-spacing: 0.01em;
 }
-
 
 .face-assign-grid {
   display: grid;
@@ -774,7 +718,6 @@
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
   padding: var(--space-2) 6px;
 }
-
 
 .face-bbox-empty {
   position: absolute;
@@ -1095,6 +1038,8 @@
   background-image: var(--hover-shade);
 }
 
+/* Narrow: no rail (the rating comes back to the toolbar as a menu), and the
+   toolbar sheds its words. */
 @media (max-width: 900px) {
   .overlay-sidebar {
     display: none !important;
@@ -1104,30 +1049,13 @@
     display: none !important;
   }
 
-  .overlay-close span {
-    display: none;
-  }
-
-  .overlay-comfy-activator-label {
-    display: none;
-  }
-
-  .overlay-title {
-    display: none;
-  }
-
-  .overlay-character-names {
+  .overlay-back-label,
+  .overlay-kbd {
     display: none;
   }
 
   :deep(.add-to-set-label) {
     display: none;
-  }
-
-  .zoom-btn {
-    min-width: var(--control-h-bar);
-    width: var(--control-h-bar);
-    padding: 6px;
   }
 
   /* Touch is unchanged (swipe/tap, no pinch yet): the compact icon-only
@@ -1138,22 +1066,6 @@
 }
 
 @media (max-width: 720px) {
-  .overlay-shell.sidebar-open {
-    --sidebar-width: 78%;
-  }
-
-  .overlay-main {
-    grid-template-columns: 1fr;
-  }
-
-  /* Reads `--sidebar-width` so the pane and the receipt that tracks its edge
-     cannot drift apart. */
-  .overlay-main > .overlay-sidebar:not(.inspector--collapsed) {
-    width: var(--sidebar-width);
-    min-width: var(--sidebar-width);
-    max-width: var(--sidebar-width);
-  }
-
   .overlay-nav {
     display: none;
   }
