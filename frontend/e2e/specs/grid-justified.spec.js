@@ -61,6 +61,7 @@ test.describe('justified grid', () => {
   let previousMode
 
   test.beforeEach(async ({ apiContext }) => {
+    previousMode = undefined
     const res = await apiContext.get('/api/v1/users/me/config')
     expect(res.ok()).toBe(true)
     previousMode = (await res.json()).thumbnail_mode ?? 'square'
@@ -68,7 +69,8 @@ test.describe('justified grid', () => {
   })
 
   test.afterEach(async ({ apiContext }) => {
-    await setThumbnailMode(apiContext, previousMode)
+    // Unknown only when the read failed, before the mode was switched.
+    if (previousMode) await setThumbnailMode(apiContext, previousMode)
   })
 
   test('full rows end flush with the column, rail open and closed', async ({
