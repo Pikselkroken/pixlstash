@@ -812,6 +812,21 @@ describe("the runs PixlStash trains (#2118)", () => {
     expect(importBtn(wrapper).text()).toBe("Import 2 checkpoints");
   });
 
+  it("imports nothing while it cannot tell which runs are training", async () => {
+    // A run still training would read as finished, and a folder set to delete
+    // what it imports would then lose the run under the trainer.
+    listTrainingJobs.mockRejectedValue(new Error("offline"));
+    const wrapper = await openWith([run()]);
+    await tick(wrapper, "Clementine");
+    expect(importBtn(wrapper)).toBeUndefined();
+    expect(wrapper.text()).toContain("nothing can be imported until it can");
+
+    listTrainingJobs.mockResolvedValue([]);
+    await wrapper.findAll("button").find((b) => b.text() === "Retry").trigger("click");
+    await settle(wrapper);
+    expect(importBtn(wrapper)).toBeDefined();
+  });
+
   it("gives a queued run a card before it has a folder", async () => {
     listTrainingJobs.mockResolvedValue([
       job({ status: "queued", step: 0, run_name: null }),

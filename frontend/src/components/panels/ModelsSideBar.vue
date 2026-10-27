@@ -323,12 +323,13 @@ onMounted(() => {
 
 const onRuns = computed(() => route.name === "models-runs");
 
-const trainingNow = computed(
-  () =>
-    runsStore.liveCount > 0 ||
-    (tasksStore.resources?.leases ?? []).some(
-      (lease) => lease.tenant === "aitoolkit",
-    ),
+// The leases, not the runs store: the tasks poll runs on every screen, and the
+// store's job list is only re-read while the runs view is up, so it would keep
+// the dot lit after a run ended elsewhere.
+const trainingNow = computed(() =>
+  (tasksStore.resources?.leases ?? []).some(
+    (lease) => lease.tenant === "aitoolkit",
+  ),
 );
 
 // ── The folder slot ──────────────────────────────────────────────────────

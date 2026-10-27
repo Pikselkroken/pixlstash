@@ -541,6 +541,7 @@ describe("a picked training run (#2169)", () => {
     const runsStore = useTrainingRunsStore();
     runsStore.runs = runs;
     runsStore.jobs = jobs;
+    runsStore.jobsLoaded = true;
     runsStore.chosen = pick;
     const mountedRail = await mountRail();
     return { ...mountedRail, runsStore };
@@ -614,6 +615,40 @@ describe("a picked training run (#2169)", () => {
 
     await wrapper.get('[data-testid="mrr-stop"]').trigger("click");
     expect(cancelTrainingJob).toHaveBeenCalledWith(7);
+  });
+
+  it("offers no second Stop while the run is already stopping", async () => {
+    getTrainingJobLive.mockResolvedValue({ ...liveJob, status: "stopping", rows: [] });
+    const { wrapper } = await mountOnRuns({
+      jobs: [{ ...liveJob, status: "stopping" }],
+      pick: ["job:u7"],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(wrapper.find('[data-testid="mrr-stop"]').exists()).toBe(false);
+  });
+
+  it("leaves no poll behind when it goes while a read is out", async () => {
+    vi.useFakeTimers();
+    try {
+      let release;
+      getTrainingJobLive.mockImplementation(
+        () => new Promise((resolve) => (release = resolve)),
+      );
+      routeState.name = "models-runs";
+      const runsStore = useTrainingRunsStore();
+      runsStore.jobs = [liveJob];
+      runsStore.chosen = ["job:u7"];
+      const wrapper = mount(ModelsRail, { global: { stubs } });
+      await wrapper.vm.$nextTick();
+      expect(getTrainingJobLive).toHaveBeenCalledTimes(1);
+
+      wrapper.unmount();
+      release({ ...liveJob, rows: [] });
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(getTrainingJobLive).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("says the stacking rule for several runs, and Clear lets go of them", async () => {

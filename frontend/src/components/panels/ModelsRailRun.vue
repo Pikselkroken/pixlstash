@@ -178,7 +178,13 @@ const status = computed(() => {
   return "finished";
 });
 
-const canStop = computed(() => current.value.live && current.value.job);
+// Not while it is already stopping: a second cancel says nothing new.
+const canStop = computed(
+  () =>
+    current.value.live &&
+    current.value.job &&
+    current.value.job.status !== "stopping",
+);
 const percent = computed(() => progressOf(current.value));
 const steps = computed(() => stepsOf(current.value));
 const remaining = computed(() =>
@@ -248,6 +254,7 @@ function openRun() {
 }
 
 async function stop() {
+  if (stopping.value) return;
   stopping.value = true;
   try {
     await cancelTrainingJob(props.card.job.id);
@@ -266,6 +273,7 @@ async function stop() {
 
 let timer = null;
 let generation = 0;
+let disposed = false;
 
 async function load() {
   const job = props.card.job;
@@ -284,6 +292,8 @@ async function load() {
 function schedule() {
   clearTimeout(timer);
   timer = null;
+  // A read in flight at unmount must not re-arm a poll nobody owns.
+  if (disposed) return;
   if (!current.value.live || document.visibilityState !== "visible") return;
   timer = setTimeout(async () => {
     await load();
@@ -308,6 +318,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  disposed = true;
   generation += 1;
   clearTimeout(timer);
 });

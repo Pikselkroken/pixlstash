@@ -307,6 +307,12 @@ def _apply_config(run: TrainingRun) -> None:
         if isinstance(steps, int) and not isinstance(steps, bool) and steps > 0:
             run.total_steps = steps
         lr = train.get("lr")
+        # PyYAML reads `1e-4` (no decimal point) as a string, not a float.
+        if isinstance(lr, str):
+            try:
+                lr = float(lr)
+            except ValueError:
+                logger.debug("Ignoring unreadable `lr` %r in %s.", lr, path)
         if isinstance(lr, (int, float)) and not isinstance(lr, bool):
             run.learning_rate = float(lr)
 
@@ -323,10 +329,10 @@ def _sample_prompts(sample: object) -> list[str]:
         return []
     entries = sample.get("samples")
     if isinstance(entries, list):
+        # One per entry, malformed ones blank, so `index` still names a row.
         return [
-            str(entry.get("prompt") or "")
+            str(entry.get("prompt") or "") if isinstance(entry, dict) else ""
             for entry in entries
-            if isinstance(entry, dict)
         ]
     prompts = sample.get("prompts")
     if isinstance(prompts, list):

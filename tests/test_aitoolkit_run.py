@@ -253,6 +253,18 @@ class TestConfig:
         assert run.learning_rate == 0.0001
         assert run.sample_prompts == ["ohwx, portrait", "a red bicycle"]
 
+    def test_reads_a_rate_yaml_leaves_as_a_string(self, tmp_path):
+        run_dir = _run_folder(tmp_path)
+        (run_dir / "config.yaml").write_text("train:\n  lr: 1e-4\n", encoding="utf-8")
+        assert read_run(str(run_dir)).learning_rate == 0.0001
+
+    def test_a_malformed_sample_keeps_the_rows_in_step(self, tmp_path):
+        run_dir = _run_folder(tmp_path)
+        (run_dir / "config.yaml").write_text(
+            "sample:\n  samples:\n    - oops\n    - prompt: two\n", encoding="utf-8"
+        )
+        assert read_run(str(run_dir)).sample_prompts == ["", "two"]
+
     def test_reads_the_older_bare_prompt_list(self, tmp_path):
         run_dir = _run_folder(tmp_path)
         (run_dir / "config.yaml").write_text(

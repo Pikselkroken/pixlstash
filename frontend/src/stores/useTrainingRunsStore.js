@@ -58,9 +58,13 @@ export const useTrainingRunsStore = defineStore("trainingRuns", () => {
    * yet (queued, setting up). Live runs first, then the newest.
    */
   const cards = computed(() => {
-    const byRunName = new Map(
-      jobs.value.filter((job) => job.run_name).map((job) => [job.run_name, job]),
-    );
+    // Jobs arrive newest first; on a shared run name the newest one names it.
+    const byRunName = new Map();
+    for (const job of jobs.value) {
+      if (job.run_name && !byRunName.has(job.run_name)) {
+        byRunName.set(job.run_name, job);
+      }
+    }
     const names = new Set(runs.value.map((run) => run.name));
     const fromFolder = runs.value.map((run) => {
       const job = byRunName.get(run.name) ?? null;
@@ -103,9 +107,19 @@ export const useTrainingRunsStore = defineStore("trainingRuns", () => {
     cards.value.filter((card) => chosen.value.includes(card.key)),
   );
 
+  /**
+   * Whether every card's live state is known. Until the job list is read, or
+   * when it could not be, a run still training reads as finished, and
+   * importing it (with a folder set to delete what it imports) would take the
+   * folder out from under the trainer.
+   */
+  const liveKnown = computed(() => jobsLoaded.value && !jobsFailed.value);
+
   /** The picked runs an import can take: finished, with a folder. */
   const importable = computed(() =>
-    chosenCards.value.filter((card) => !card.live && card.run),
+    liveKnown.value
+      ? chosenCards.value.filter((card) => !card.live && card.run)
+      : [],
   );
 
   /** The one importable run, or null: what gates the per-step picker. */
@@ -293,6 +307,7 @@ export const useTrainingRunsStore = defineStore("trainingRuns", () => {
     source,
     cards,
     liveCount,
+    liveKnown,
     count,
     chosenCards,
     importable,

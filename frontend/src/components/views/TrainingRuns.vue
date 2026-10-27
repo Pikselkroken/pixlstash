@@ -68,6 +68,11 @@
     <p v-else-if="!cards.length" class="tr-note" role="status">
       Nothing in that folder looks like a training run yet.
     </p>
+    <p v-if="jobsFailed" class="tr-note" role="alert">
+      Could not read which runs are training, so nothing can be imported until
+      it can.
+      <AppButton size="sm" variant="secondary" @click="reload">Retry</AppButton>
+    </p>
 
     <div
       v-if="!(source && loading && !cards.length) && !error"
@@ -684,8 +689,10 @@ watch(openUuid, (uuid) => {
   if (!uuid) reload();
 });
 
-// While a run trains its card's bar and step count follow it. A run leaving
-// the live set has written its last checkpoint, so the folder is read again.
+// While a run trains its card follows it: the job's step for the bar, the
+// folder for its samples and checkpoints (the listing costs nothing). A run
+// leaving the live set has written its last checkpoint, so the folder is read
+// again.
 let liveTimer = null;
 watch(
   () => runsStore.liveCount,
@@ -694,7 +701,7 @@ watch(
     liveTimer = null;
     if (n > 0) {
       liveTimer = setInterval(() => {
-        if (document.visibilityState === "visible") runsStore.loadJobs();
+        if (document.visibilityState === "visible") reload();
       }, LIVE_POLL_MS);
     }
     if (before != null && n < before) loadRuns();

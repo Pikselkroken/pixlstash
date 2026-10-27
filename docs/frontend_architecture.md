@@ -4854,8 +4854,9 @@ neither edge moves on a workspace switch.
   owned, returning focus to `el`.
 - **Training**, last: a `+` at the head's right edge (*New training run…*,
   `trainingStore.openToPick()`) and the **Training runs** row, the
-  `models-runs` route, with the amber dot while a run trains (a live job in
-  `useTrainingRunsStore`, or an AI Toolkit lease) and the run count. The
+  `models-runs` route, with the amber dot while an AI Toolkit lease is held or
+  waiting (the tasks poll, which runs on every screen; the runs store's job
+  list is re-read only while the runs view is up) and the run count. The
   sidebar calls `runsStore.ensureLoaded()` on mount so the count is there on
   every place, not only after the runs view has been opened.
 
@@ -6177,8 +6178,10 @@ then newest (`modified_at`, else the job's `created_at`). The read guards
 (generation per read, ticks reconciled to what is still listed, the old root's
 rows dropped the moment the root changes) moved from the view into the store
 unchanged; the view keeps the scroll restore, the focus and visibility
-reloads, and a 5 s job poll while any run is live, re-reading the folder when a
-run leaves the live set. The store is reset on a session change
+reloads, and a 5 s reload of jobs and folder while any run is live. **Nothing
+is importable until the job list has been read**: until then, or when it
+fails, a run still training reads as finished, and importing it from a folder
+set to delete what it imports would remove the folder under the trainer. The store is reset on a session change
 (`stores/sessionReset.test.js`). The wording a card and the rail share (steps,
 progress, base, date, the samples grid) is `utils/trainingRuns.js`.
 
