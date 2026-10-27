@@ -1309,6 +1309,27 @@ describe("a checkpoint that will not load", () => {
   });
 
 
+  it("sends a file it cannot download to the set menu only where that menu can replace it", async () => {
+    const action = (wrapper) =>
+      wrapper
+        .find('[data-testid="wftab-row-checkpoint"]')
+        .find('[data-testid="wftab-missing-action"]');
+    preflightWorkflowRun.mockResolvedValue(missingFile("SDXL/realvisXL_v5.safetensors"));
+    getWorkflowCard.mockResolvedValue(detail({ card: named }));
+
+    let { wrapper } = await mountWith([KEY], [named]);
+    await settle(wrapper);
+    expect(action(wrapper).text()).toBe("Change the model set to replace it.");
+    wrapper.unmount();
+
+    // No graph: the set menu is off, so the row must not send anyone to it.
+    getLoraChain.mockRejectedValue({ response: { status: 409 } });
+    ({ wrapper } = await mountWith([KEY], [named]));
+    await settle(wrapper);
+    expect(textOf(wrapper)).toContain("Checkpoint missing");
+    expect(action(wrapper).exists()).toBe(false);
+  });
+
   it("picks up a file downloaded after the last scan and asks again", async () => {
     let added;
     pickUpModelFiles

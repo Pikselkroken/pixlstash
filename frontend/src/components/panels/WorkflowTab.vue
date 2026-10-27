@@ -288,8 +288,15 @@
                     }}</span
                   >{{ missingNote(row.missing, row.kind) }}
                 </p>
+                <!-- What to do about it: download it, or replace it through
+                     the set menu where that menu can (a graph, a row that takes
+                     a pick). Neither, and the row offers nothing it cannot do. -->
                 <p
-                  v-if="row.missing && !row.edited"
+                  v-if="
+                    row.missing &&
+                    !row.edited &&
+                    (downloadableFiles.has(row.missing) || setCanReplace(row))
+                  "
                   class="wftab-note wftab-quiet"
                   data-testid="wftab-missing-action"
                 >
@@ -1953,13 +1960,10 @@ function settable(model) {
 }
 
 /**
- * The model rows: one per loader the default recipe names, each a picker
- * where the shelf has something its loader can take.
+ * The model rows: one per loader the default recipe names, read-only (#2165).
  *
- * `pick` is the file waiting, unsaved, at that loader's address; the saved
- * file is the picker's first option, so choosing it takes the change back out
- * of the set. A pick the candidates do not list (one a model set filled in) is
- * listed too, or the field would read as saved while the row says Edited.
+ * `pick` is the file waiting, unsaved, at that loader's address: the likely
+ * match the tab picked itself, or what a model set filled in.
  */
 const rowModels = computed(() =>
   (recipeModels.value ?? []).filter(
@@ -2249,6 +2253,15 @@ function autoFixNote(fix) {
 /** Pick a file for a model row; the saved one ("") takes the change back. */
 function pickModel(row, file) {
   return edit((set) => withModel(set, row.address, file, row.file));
+}
+
+/**
+ * Whether *Change model set…* can replace this row's file: the card has a
+ * graph, and the row takes a pick (a shelf loader's does not). Not whether the
+ * rows are settled right now: that passes, and the note would flicker with it.
+ */
+function setCanReplace(row) {
+  return row.settable && !chainNoGraph.value;
 }
 
 /**
