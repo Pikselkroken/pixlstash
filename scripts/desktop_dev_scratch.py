@@ -10,20 +10,27 @@ Copied: every ``*.json`` beside ``server-config.json``, the ``training-presets``
 folder, a consistent snapshot of ``hub.db``, and every registered library. A
 library is copied into a hidden ``.<name>.pixlstash-dev-scratch`` folder beside
 it: its ``vault.db`` snapshotted, every other file hard-linked, which costs no
-disk space but needs the copy on the library's own filesystem. PixlStash
-rewrites a picture by writing a new file and renaming it over the old one, so a
-change in the copy never reaches the original. The copied hub's registrations
-are relocated onto the copies; a library that is unreachable or mid-import is
-forgotten in the copy rather than left pointing at the real folder.
+disk space but needs the copy on the library's own filesystem. A picture is
+rewritten by writing a new file and renaming it over the old one, so that never
+reaches the original; the few caches written in place instead (``tmp/`` and the
+``_watermarked``/``_oriented`` twins) are left out, and the dev run regenerates
+them. Symlinks are copied as symlinks. The copied hub's registrations are
+relocated onto the copies; a library that is unreachable, mid-import or inside
+another library is forgotten in the copy rather than left pointing at the real
+folder.
 
 A copied vault that a newer branch has already migrated past this checkout is
 migrated back down on the copy: the newer migration files are read from
 whichever branch in this repository has them, and their ``downgrade()`` runs.
 The hub has no downgrades, so a hub ahead of this checkout still refuses.
 
-Shared, not copied: model folders, reference folders and import folders. An
-import folder's delete-after-import is switched off in the copy, since it would
-delete real files into a library the next run throws away.
+Shared, not copied: model folders, reference folders and import folders.
+Delete-after-import is switched off on all of them in the copy (import folders
+in each vault, model folders in the hub), since it would delete real files into
+data the next run throws away. A dev run that deletes or downloads a model, or
+deletes a picture living in a reference folder, still changes the real file.
+
+Refuses to refresh while another dev run is using the copy.
 
 Usage:
     python scripts/desktop_dev_scratch.py [--keep]
@@ -64,6 +71,12 @@ COPY_SUFFIX = ".pixlstash-dev-scratch"
 # one to remove.
 COPIES_FILE = "library-copies.json"
 _SQLITE_SIDECARS = ("-wal", "-shm", "-journal")
+# Files the backend writes in place rather than by write-and-rename: through a
+# hard link that would rewrite the real file. All are caches.
+# ponytail: a list of today's writers; a new in-place writer into the library
+# writes through until it is added here.
+_IN_PLACE_CACHE_DIR = "tmp"  # set and face thumbnails
+_IN_PLACE_TWINS = ("_watermarked", "_oriented")  # routes/pictures/_serving.py
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MIGRATIONS_DIR = Path(pixlstash.__file__).resolve().parent / "migrations"
 _DOWN_REVISION = re.compile(
@@ -81,20 +94,38 @@ def _snapshot_sqlite(source: str, target: str) -> None:
     os.chmod(target, 0o600)
 
 
-def _link_library(source: str, target: str) -> None:
-    """Hard-link every file under *source* into *target*, except the vault."""
+def _link_library(source: str, target: str, other_libraries: set[str]) -> None:
+    """Hard-link the files under *source* into *target*.
+
+    Leaves out the vault, the caches written in place, and any folder that is
+    another library or a copy. Symlinks are never followed.
+    """
     skip = {VAULT_FILENAME + suffix for suffix in ("",) + _SQLITE_SIDECARS}
-    for folder, _dirs, files in os.walk(source):
+    for folder, dirs, files in os.walk(source):
         relative = os.path.relpath(folder, source)
         destination = os.path.normpath(os.path.join(target, relative))
         os.makedirs(destination, exist_ok=True)
         # makedirs applies the umask; the vault guard refuses a group-writable
         # library, so give each folder its original's mode instead.
         os.chmod(destination, os.stat(folder).st_mode & 0o7777)
+        for name in list(dirs):
+            path = os.path.join(folder, name)
+            if (
+                (relative == "." and name == _IN_PLACE_CACHE_DIR)
+                or name.endswith(COPY_SUFFIX)
+                or os.path.realpath(path) in other_libraries
+            ):
+                dirs.remove(name)
+            elif os.path.islink(path):
+                os.symlink(os.readlink(path), os.path.join(destination, name))
         for name in files:
+            path = os.path.join(folder, name)
             if relative == "." and name in skip:
                 continue
-            os.link(os.path.join(folder, name), os.path.join(destination, name))
+            if os.path.splitext(name)[0].endswith(_IN_PLACE_TWINS):
+                continue
+            # A symlink is linked as itself, never as its target outside.
+            os.link(path, os.path.join(destination, name), follow_symlinks=False)
 
 
 def _disarm_import_deletes(vault_path: str) -> None:
@@ -106,13 +137,28 @@ def _disarm_import_deletes(vault_path: str) -> None:
 
 
 def _migration_from_any_branch(revision: str) -> str:
-    """Return the source of *revision*'s migration from any ref in this repo.
+    """Return the source of *revision*'s migration from a branch of this repo.
 
-    Assumes the file is named for its revision id, as every one here is.
+    Local branches and origin's only: the file's downgrade() is run, so a
+    fetched pull request from a fork is not a source. Assumes the file is named
+    for its revision id, as every one here is.
     """
+    if not re.fullmatch(r"\w+", revision):
+        raise SystemExit(f"desktop-dev: {revision!r} is not a revision id.")
     path = f"pixlstash/migrations/versions/{revision}.py"
     commit = subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "log", "--all", "-1", "--format=%H", "--", path],
+        [
+            "git",
+            "-C",
+            str(REPO_ROOT),
+            "log",
+            "--branches",
+            "--remotes=origin",
+            "-1",
+            "--format=%H",
+            "--",
+            path,
+        ],
         capture_output=True,
         text=True,
         check=True,
@@ -179,13 +225,30 @@ def _downgrade_to_this_checkout(vault_path: str) -> None:
             engine.dispose()
 
 
+def _in_use(scratch_dir: str) -> bool:
+    """True while an Electron run holds the copy's single-instance lock."""
+    lock = os.path.join(scratch_dir, "SingletonLock")
+    if not os.path.islink(lock):
+        return False
+    pid = os.readlink(lock).rpartition("-")[2]  # "<hostname>-<pid>"
+    if not pid.isdigit():
+        return False
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False  # Left by a run that crashed.
+    except PermissionError:
+        return True  # Alive, owned by someone else.
+    return True
+
+
 def _remove_previous(scratch_dir: str) -> None:
     """Remove the last refresh: its library copies, then the scratch folder."""
-    try:
-        with open(os.path.join(scratch_dir, COPIES_FILE), encoding="utf-8") as handle:
+    copies_file = os.path.join(scratch_dir, COPIES_FILE)
+    copies = []
+    if os.path.isfile(copies_file):
+        with open(copies_file, encoding="utf-8") as handle:
             copies = json.load(handle)
-    except FileNotFoundError:
-        copies = []
     for copy in copies:
         # Only ever a folder this script named; never trust the list further.
         if os.path.basename(copy).endswith(COPY_SUFFIX) and os.path.isdir(copy):
@@ -196,6 +259,10 @@ def _remove_previous(scratch_dir: str) -> None:
 
 def refresh(real_dir: str, scratch_dir: str) -> None:
     """Replace *scratch_dir* with a fresh copy of *real_dir* and its libraries."""
+    if _in_use(scratch_dir):
+        raise SystemExit(
+            f"desktop-dev: another dev run is using {scratch_dir}; quit it first."
+        )
     _remove_previous(scratch_dir)
     os.makedirs(scratch_dir, mode=0o700)
     for path in glob.glob(os.path.join(real_dir, "*.json")):
@@ -213,16 +280,19 @@ def refresh(real_dir: str, scratch_dir: str) -> None:
     hub = HubDatabase(scratch_hub)
     try:
         registry = LibraryRegistry(hub)
-        for library in registry.list_libraries():
-            if library.pending_import_at or not library.is_reachable:
+        libraries = registry.list_libraries()
+        roots = {os.path.realpath(library.path) for library in libraries}
+        for library in libraries:
+            real = os.path.realpath(library.path)
+            nested = any(real.startswith(root + os.sep) for root in roots)
+            if library.pending_import_at or not library.is_reachable or nested:
                 print(
                     f'desktop-dev: leaving out "{library.name}" ({library.path}): '
-                    "unreachable or mid-import",
+                    "unreachable, mid-import or inside another library",
                     file=sys.stderr,
                 )
                 registry.forget(library.id, allow_active=True)
                 continue
-            real = os.path.realpath(library.path)
             copy = os.path.join(
                 os.path.dirname(real), f".{os.path.basename(real)}{COPY_SUFFIX}"
             )
@@ -235,12 +305,21 @@ def refresh(real_dir: str, scratch_dir: str) -> None:
                 json.dump(sorted(moved.values()), handle)
             if os.path.isdir(copy):
                 shutil.rmtree(copy)
-            _link_library(real, copy)
+            try:
+                _link_library(real, copy, roots - {real})
+            except OSError as exc:
+                raise SystemExit(
+                    f"desktop-dev: could not copy {real} into {copy} ({exc}). The "
+                    "copy hard-links pictures, so it must be on the library's own "
+                    "filesystem and its parent folder must be writable."
+                ) from exc
             vault = os.path.join(copy, VAULT_FILENAME)
             _snapshot_sqlite(library.vault_path, vault)
             _downgrade_to_this_checkout(vault)
             _disarm_import_deletes(vault)
             registry.relocate(library.id, copy, check_folder_overlap=False)
+        with hub.transaction() as conn:
+            conn.execute("UPDATE model_folder SET delete_after_import = 0")
     finally:
         hub.close()
 

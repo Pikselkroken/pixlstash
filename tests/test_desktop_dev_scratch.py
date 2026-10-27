@@ -6,6 +6,8 @@ import json
 import os
 import sqlite3
 
+import pytest
+
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.registry import LibraryRegistry
 
@@ -56,6 +58,25 @@ def test_refresh_copies_the_data_and_never_points_at_the_real_library(tmp_path):
             "VALUES ('/home/me/inbox', 'inbox', 1)"
         )
         conn.commit()
+    with contextlib.closing(sqlite3.connect(real_dir / "hub.db")) as conn:
+        conn.execute(
+            "INSERT INTO model_folder (path, kind, movable, delete_after_import) "
+            "VALUES ('/home/me/models', 'user', 'yes', 1)"
+        )
+        conn.commit()
+    hub = HubDatabase(str(real_dir / "hub.db"))
+    try:
+        LibraryRegistry(hub).create(
+            str(library_dir / "inner"), "Inner", check_folder_overlap=False
+        )
+    finally:
+        hub.close()
+    # Written in place by the backend, so a hard link would carry the write back.
+    (library_dir / "tmp" / "set_thumbnails").mkdir(parents=True)
+    (library_dir / "tmp" / "set_thumbnails" / "set_1.png").write_bytes(b"cache")
+    (library_dir / "a_watermarked.png").write_bytes(b"twin")
+    (tmp_path / "elsewhere.png").write_bytes(b"outside")
+    (library_dir / "linked.png").symlink_to(tmp_path / "elsewhere.png")
     (real_dir / "server-config.json").write_text(
         json.dumps({"image_root": str(library_dir)})
     )
@@ -64,8 +85,22 @@ def test_refresh_copies_the_data_and_never_points_at_the_real_library(tmp_path):
 
     copy = tmp_path / "pictures" / ".library.pixlstash-dev-scratch"
     assert _registered_paths(str(scratch_dir / "hub.db")) == [str(copy)]
-    assert _registered_paths(str(real_dir / "hub.db")) == [str(library_dir)]
+    assert sorted(_registered_paths(str(real_dir / "hub.db"))) == [
+        str(library_dir),
+        str(library_dir / "inner"),
+    ]
     assert os.path.samefile(copy / "a.png", library_dir / "a.png")
+    assert not (copy / "tmp").exists()
+    assert not (copy / "a_watermarked.png").exists()
+    assert not (copy / "inner").exists()
+    assert not (library_dir / ".inner.pixlstash-dev-scratch").exists()
+    assert os.readlink(copy / "linked.png") == str(tmp_path / "elsewhere.png")
+    for hub_path, flag in ((scratch_dir / "hub.db", 0), (real_dir / "hub.db", 1)):
+        with contextlib.closing(sqlite3.connect(hub_path)) as conn:
+            assert conn.execute(
+                "SELECT delete_after_import FROM model_folder "
+                "WHERE path = '/home/me/models'"
+            ).fetchall() == [(flag,)]
     assert not os.path.samefile(copy / "vault.db", real_vault)
     config = json.loads((scratch_dir / "server-config.json").read_text())
     assert config["image_root"] == str(copy)
@@ -147,3 +182,15 @@ def test_refresh_migrates_a_copy_from_a_newer_branch_back_down(tmp_path):
         assert conn.execute("SELECT version_num FROM alembic_version").fetchall() == [
             ("9999_from_a_newer_branch",)
         ]
+
+
+def test_refresh_refuses_while_a_dev_run_holds_the_copy(tmp_path):
+    scratch_mod = _load_module()
+    real_dir, _library_dir = _make_real_data(tmp_path)
+    scratch_dir = tmp_path / "scratch"
+    scratch_dir.mkdir()
+    (scratch_dir / "SingletonLock").symlink_to(f"example-host-{os.getpid()}")
+
+    with pytest.raises(SystemExit, match="another dev run"):
+        scratch_mod.refresh(str(real_dir), str(scratch_dir))
+    assert (scratch_dir / "SingletonLock").is_symlink()

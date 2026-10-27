@@ -60,14 +60,18 @@ even when the venv has another checkout installed editable.
 copy (`scripts/desktop_dev_scratch.py`): the app's settings and hub go to
 `~/.config/pixlstash-desktop-dev-scratch`, and every library is copied into a
 hidden `.<folder>.pixlstash-dev-scratch` beside it, its `vault.db` copied and its
-pictures hard-linked. A branch's migrations therefore only upgrade the copy, and
-the next run starts again from the real data at the revision the installed app
-reads. A copied library that another branch already migrated past this checkout
-is migrated back down on the copy, using that branch's migration files from git
-(the hub has no downgrades, so a hub ahead of the checkout still refuses).
+pictures hard-linked (the caches the backend writes in place, `tmp/` and the
+`_watermarked`/`_oriented` twins, are left out and regenerated). A branch's
+migrations therefore only upgrade the copy, and the next run starts again from
+the real data at the revision the installed app reads. A copied library that
+another branch already migrated past this checkout is migrated back down on the
+copy, using that branch's migration files from a local or `origin` branch (the
+hub has no downgrades, so a hub ahead of the checkout still refuses).
 `run --keep-data` reuses the last copy, to restart without losing a test's
-state. Model, reference and import folders are shared with the real app, not
-copied (delete-after-import is switched off in the copy).
+state; a refresh refuses while another dev run holds the copy. Model, reference
+and import folders are shared with the real app, not copied: delete-after-import
+is switched off for import and model folders in the copy, but deleting or
+downloading a model in a dev run changes the real folder.
 
 To exercise the **bundled** path locally (what `npm start` / installers use), first
 build the runtime into `electron/resources/` once, then run/package as usual:
