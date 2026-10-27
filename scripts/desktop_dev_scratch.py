@@ -126,11 +126,18 @@ def _link_library(source: str, target: str, other_libraries: set[str]) -> None:
                 dirs.remove(name)
             elif os.path.islink(path):
                 os.symlink(os.readlink(path), os.path.join(destination, name))
+        names = set(files)
         for name in files:
             path = os.path.join(folder, name)
             if relative == "." and name in skip:
                 continue
-            if os.path.splitext(name)[0].endswith(_IN_PLACE_TWINS):
+            # A twin sits beside its original, "a_oriented.png" by "a.png";
+            # a picture that merely ends in the suffix is the owner's own.
+            stem, ext = os.path.splitext(name)
+            if any(
+                stem.endswith(twin) and stem[: -len(twin)] + ext in names
+                for twin in _IN_PLACE_TWINS
+            ):
                 continue
             # A symlink is linked as itself, never as its target outside.
             os.link(path, os.path.join(destination, name), follow_symlinks=False)
@@ -276,8 +283,19 @@ def _in_use(scratch_dir: str) -> bool:
     except ProcessLookupError:
         return False  # Left by a run that crashed.
     except PermissionError:
-        return True  # Alive, owned by someone else.
-    return True
+        return False  # Another user's process: the pid was recycled.
+    # A crashed run's pid may since have been recycled. Where /proc shows the
+    # environment, only a process started for this copy counts; elsewhere a
+    # live pid is taken at its word.
+    environ = f"/proc/{pid}/environ"
+    if not os.path.exists(environ):
+        return True
+    marker = f"PIXLSTASH_DESKTOP_USER_DATA={scratch_dir}".encode()
+    try:
+        with open(environ, "rb") as handle:
+            return marker in handle.read().split(b"\0")
+    except FileNotFoundError:
+        return False  # Exited between the checks.
 
 
 def _remove_previous(scratch_dir: str) -> None:
