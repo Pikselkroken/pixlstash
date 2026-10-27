@@ -16,6 +16,7 @@ the suite records that call instead of touching a shelf.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -29,7 +30,7 @@ from types import SimpleNamespace
 import pytest
 
 from pixlstash.event_types import EventType
-from pixlstash.hub import training_runs
+from pixlstash.hub import dataset_snapshots, training_runs
 from pixlstash.hub.db import now_iso
 from pixlstash.resources.aitoolkit_tenant import AiToolkitProbe
 from pixlstash.services import training_service as training_service_module
@@ -180,19 +181,30 @@ def _make_dataset_builder(image_count: int = 2):
     def builder(*, dest_dir, set_id=None, character_id=None, trigger_word=None, **_):
         os.makedirs(dest_dir, exist_ok=True)
         picture_ids = []
+        items = []
         for i in range(1, image_count + 1):
             stem = os.path.join(dest_dir, f"img_{i:05d}")
+            caption = f"{trigger_word or 'trigger'}, a fake caption"
             with open(f"{stem}.png", "wb") as fh:
                 fh.write(b"FAKE_PNG")
             with open(f"{stem}.txt", "w", encoding="utf-8") as fh:
-                fh.write(f"{trigger_word or 'trigger'}, a fake caption\n")
+                fh.write(f"{caption}\n")
             picture_ids.append(i)
+            items.append(
+                {
+                    "picture_id": i,
+                    "file_name": f"img_{i:05d}.png",
+                    "sha256": hashlib.sha256(b"FAKE_PNG").hexdigest(),
+                    "caption": caption,
+                }
+            )
         return {
             "dest_dir": dest_dir,
             "image_count": image_count,
             "picture_ids": picture_ids,
             "caption_mode": "tags",
             "trigger_word": trigger_word,
+            "items": items,
         }
 
     return builder
@@ -441,6 +453,16 @@ def test_full_lifecycle_queued_to_completed_lora(hub, repo_dir):
     assert final.finished_unwatched == 0
     assert final.dataset_picture_ids
     assert json.loads(final.dataset_picture_ids) == [1, 2, 3]
+    # The dataset was frozen before training: the run names its snapshot.
+    snapshot = dataset_snapshots.get_snapshot(
+        hub, final.library_uuid, final.dataset_snapshot_id
+    )
+    assert [item["picture_id"] for item in snapshot["items"]] == [1, 2, 3]
+    assert snapshot["character_id"] == character_id
+    assert snapshot["trigger_word"] == "ohwx_person"
+    assert {item["caption"] for item in snapshot["items"]} == {
+        "ohwx_person, a fake caption"
+    }
     # Loss curve populated.
     assert final.loss_curve
     loss = json.loads(final.loss_curve)
@@ -616,6 +638,66 @@ def test_zero_image_dataset_marks_error_no_lease_leak(hub, repo_dir):
     # The lease was never taken (we bailed before acquire) → no leak.
     assert lease.acquire_count == 0
     assert lease.release_count == 0
+
+
+def test_a_rebuilt_dataset_starts_from_an_empty_folder(hub, repo_dir, tmp_path):
+    """A leftover from an earlier build would train without being recorded."""
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(grant=True),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(image_count=1),
+    )
+    dataset_dir = tmp_path / "pixlstash-rebuilt"
+    dataset_dir.mkdir()
+    (dataset_dir / "img_00002.png").write_bytes(b"FROM_THE_FIRST_BUILD")
+
+    manifest = service._build_dataset(
+        {"uuid": "rebuilt", "set_id": _SET_ID, "trigger_word": "t"},
+        str(dataset_dir),
+    )
+
+    assert len(manifest["items"]) == 1
+    assert sorted(os.listdir(dataset_dir)) == ["img_00001.png", "img_00001.txt"]
+
+
+def test_a_run_whose_snapshot_cannot_be_recorded_does_not_train(hub, repo_dir):
+    """Lineage is a record: a run that cannot freeze its dataset never starts."""
+    lease = _StubLease(grant=True)
+    build = _make_dataset_builder()
+
+    def builder(**kwargs):
+        manifest = build(**kwargs)
+        del manifest["items"][0]["sha256"]
+        return manifest
+
+    service = _make_service(
+        hub, repo_dir, lease=lease, notify=_CapturingNotify(), dataset_builder=builder
+    )
+    template = _write_template(repo_dir, steps=4, save_every=2)
+
+    service.start()
+    try:
+        job = service.enqueue(
+            set_id=_SET_ID,
+            name="unrecorded",
+            base_model="m",
+            trigger_word="t",
+            template_path=template,
+            resolution=_RESOLUTION,
+        )
+        assert _poll_until(lambda: _job_status(hub, job["uuid"]).status == "error"), (
+            f"status={_job_status(hub, job['uuid']).status!r}"
+        )
+    finally:
+        service.stop()
+
+    final = _job_status(hub, job["uuid"])
+    assert final.error == "Dataset snapshot could not be recorded"
+    assert final.dataset_snapshot_id is None
+    assert hub.fetchone("SELECT COUNT(*) FROM dataset_snapshot")[0] == 0
+    assert lease.acquire_count == 0
 
 
 class _WaitingLease(_StubLease):

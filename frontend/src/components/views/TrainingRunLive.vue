@@ -266,6 +266,19 @@
               +{{ (pictures.length - STRIP_SHOWN).toLocaleString() }}<br />more
             </span>
           </div>
+          <!-- The frozen dataset (#2123): what the LoRA was trained on,
+               whatever has happened to the pictures since. -->
+          <AppButton
+            v-if="live.dataset_snapshot_id != null"
+            class="trl-export"
+            size="sm"
+            variant="ghost"
+            icon-left="download"
+            :loading="exporting"
+            @click="exportDataset"
+          >
+            Export dataset
+          </AppButton>
         </aside>
       </div>
 
@@ -362,6 +375,7 @@ import LoraLossChart from "../widgets/LoraLossChart.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import {
   cancelTrainingJob,
+  exportTrainingSnapshot,
   getTrainingJobLive,
   setTrainingJobCover,
 } from "../../api/training";
@@ -370,6 +384,7 @@ import { pictureThumbnailUrl } from "../../api/pictures";
 import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { errorDetail } from "../../utils/apiError";
+import { saveFileAs } from "../../utils/downloadFile";
 
 const props = defineProps({
   jobId: { type: Number, required: true },
@@ -401,6 +416,7 @@ const hasBar = Boolean(document.getElementById("shelf-run-bar"));
 const hoverColumn = ref(null);
 const choosing = ref(false);
 const stopping = ref(false);
+const exporting = ref(false);
 const chartRef = ref(null);
 
 // ── The shape-coded provenance mark and the meter ────────────────────────────
@@ -816,6 +832,21 @@ async function stop() {
     });
   } finally {
     stopping.value = false;
+  }
+}
+
+async function exportDataset() {
+  exporting.value = true;
+  try {
+    const { blob, filename } = await exportTrainingSnapshot(props.jobId);
+    await saveFileAs(blob, filename);
+  } catch (err) {
+    useNoticeStore().push({
+      level: "error",
+      text: errorDetail(err) || "Could not export the dataset.",
+    });
+  } finally {
+    exporting.value = false;
   }
 }
 
@@ -1376,6 +1407,11 @@ img.trl-cell {
   display: grid;
   grid-template-columns: repeat(2, 66px);
   gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.trl-export {
+  align-self: flex-start;
   margin-top: var(--space-3);
 }
 

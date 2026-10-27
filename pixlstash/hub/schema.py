@@ -732,6 +732,9 @@ _V2_SUPERSEDED_SHELF_TABLES = ("adapter_file", "adapter", "checkpoint")
 # `{phase, at}` the worker appends whenever the run enters a phase,
 # `cover_step` the step the owner chose as the stack cover (NULL: the final),
 # and `finished_unwatched` is 1 when the run ended while PixlStash was closed.
+#
+# `dataset_snapshot_id` names the frozen record of what the run trained on
+# (#2123), written once the dataset is built.
 _V2_TRAINING_RUN = """
 CREATE TABLE IF NOT EXISTS training_run (
     id                     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -764,7 +767,8 @@ CREATE TABLE IF NOT EXISTS training_run (
     completed_at           TEXT,
     phase_log              TEXT,
     cover_step             INTEGER,
-    finished_unwatched     INTEGER NOT NULL DEFAULT 0
+    finished_unwatched     INTEGER NOT NULL DEFAULT 0,
+    dataset_snapshot_id    INTEGER
 )
 """
 
@@ -794,6 +798,39 @@ CREATE TABLE IF NOT EXISTS training_profile_measurement (
     seconds_per_preview  REAL,
     source               TEXT NOT NULL,
     measured_at          TEXT NOT NULL
+)
+"""
+
+# What a run trained on, frozen at Train (#2123), so a LoRA's lineage is a
+# record and not a claim. One item per picture the trainer was given: its file
+# name in the dataset, the sha256 of those exact bytes and the caption file as
+# written. Nothing here is re-read from the vault, so the record outlives later
+# tag edits and deletes; `picture_id` is the vault id it came from and may name
+# nothing by now. Library-scoped like `training_run`; items go with their
+# snapshot (the hub runs with foreign keys on).
+_V2_DATASET_SNAPSHOT = """
+CREATE TABLE IF NOT EXISTS dataset_snapshot (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    library_uuid  TEXT NOT NULL,
+    set_id        INTEGER,
+    character_id  INTEGER,
+    trigger_word  TEXT,
+    caption_mode  TEXT,
+    image_count   INTEGER NOT NULL,
+    created_at    TEXT NOT NULL
+)
+"""
+
+_V2_DATASET_SNAPSHOT_ITEM = """
+CREATE TABLE IF NOT EXISTS dataset_snapshot_item (
+    snapshot_id  INTEGER NOT NULL
+                 REFERENCES dataset_snapshot(id) ON DELETE CASCADE,
+    position     INTEGER NOT NULL,
+    picture_id   INTEGER,
+    file_name    TEXT NOT NULL,
+    sha256       TEXT NOT NULL,
+    caption      TEXT,
+    PRIMARY KEY (snapshot_id, position)
 )
 """
 
@@ -2204,6 +2241,8 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
         _V2_TRAINING_RUN,
         *_V2_TRAINING_RUN_INDEXES,
         _V2_TRAINING_PROFILE_MEASUREMENT,
+        _V2_DATASET_SNAPSHOT,
+        _V2_DATASET_SNAPSHOT_ITEM,
     ):
         conn.execute(statement)
     # The recipe a run was resolved from (#2116), guarded the same way as the
@@ -2219,6 +2258,8 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
         ("phase_log", "TEXT"),
         ("cover_step", "INTEGER"),
         ("finished_unwatched", "INTEGER NOT NULL DEFAULT 0"),
+        # The run's dataset snapshot (#2123), the same way.
+        ("dataset_snapshot_id", "INTEGER"),
     ):
         if column not in run_columns:
             conn.execute(f"ALTER TABLE training_run ADD COLUMN {column} {ddl}")

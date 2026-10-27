@@ -220,11 +220,12 @@ def delete_run(
 
     Models the run put on the shelf are not touched: they keep their
     ``training_run_id``, which then names nothing, the same as after any other
-    deleted run.
+    deleted run. The run's dataset snapshot goes with it.
     """
     with hub.transaction() as conn:
         row = conn.execute(
-            "SELECT uuid FROM training_run WHERE id = ? AND library_uuid = ?",
+            "SELECT uuid, dataset_snapshot_id FROM training_run "
+            "WHERE id = ? AND library_uuid = ?",
             (run_id, library_uuid),
         ).fetchone()
         if row is None:
@@ -235,8 +236,12 @@ def delete_run(
                 f"DELETE FROM training_run WHERE id = ? AND status IN ({marks})",
                 (run_id, *FINISHED_STATUSES),
             )
-            return str(row[0]) if deleted.rowcount else None
-        conn.execute("DELETE FROM training_run WHERE id = ?", (run_id,))
+            if not deleted.rowcount:
+                return None
+        else:
+            conn.execute("DELETE FROM training_run WHERE id = ?", (run_id,))
+        if row[1] is not None:
+            conn.execute("DELETE FROM dataset_snapshot WHERE id = ?", (row[1],))
         return str(row[0])
 
 

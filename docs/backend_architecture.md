@@ -35,7 +35,7 @@
 22. [Tiered Duplicate Detection](#22-tiered-duplicate-detection)
 23. [Opt-in telemetry](#23-opt-in-telemetry-the-install-id-and-the-consent-flags)
 24. [Folder structure: read, commit, layout and moves](#24-folder-structure-read-commit-layout-and-moves) — incl. [24.1 The folder-structure read](#241-the-folder-structure-read), [24.2 The folder-structure commit](#242-the-folder-structure-commit), [24.3 The library layout](#243-the-library-layout), [24.4 The layout and the move engine](#244-the-layout-and-the-move-engine), [24.5 Reconciling moves made outside PixlStash](#245-reconciling-moves-made-outside-pixlstash)
-25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Picking up a model that landed after the scan (#1985)](#2513-picking-up-a-model-that-landed-after-the-scan-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116), [25.17 Sample prompts written from the dataset (#2117)](#2517-sample-prompts-written-from-the-dataset-2117), [25.18 Watching a run live (#2118)](#2518-watching-a-run-live-2118), [25.19 The Train dialog's preview: dataset checks and resolve (#2119)](#2519-the-train-dialogs-preview-dataset-checks-and-resolve-2119), [25.20 Checking memory and speed, and learning from runs (#2120)](#2520-checking-memory-and-speed-and-learning-from-runs-2120), [25.21 Recipe updates from pixlstash.dev (#2122)](#2521-recipe-updates-from-pixlstashdev-2122)
+25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Picking up a model that landed after the scan (#1985)](#2513-picking-up-a-model-that-landed-after-the-scan-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116), [25.17 Sample prompts written from the dataset (#2117)](#2517-sample-prompts-written-from-the-dataset-2117), [25.18 Watching a run live (#2118)](#2518-watching-a-run-live-2118), [25.19 The Train dialog's preview: dataset checks and resolve (#2119)](#2519-the-train-dialogs-preview-dataset-checks-and-resolve-2119), [25.20 Checking memory and speed, and learning from runs (#2120)](#2520-checking-memory-and-speed-and-learning-from-runs-2120), [25.21 Recipe updates from pixlstash.dev (#2122)](#2521-recipe-updates-from-pixlstashdev-2122), [25.22 Dataset snapshots: what a LoRA was trained on (#2123)](#2522-dataset-snapshots-what-a-lora-was-trained-on-2123)
 26. [Prompt match](#26-prompt-match)
 
 ---
@@ -814,6 +814,8 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/training/jobs/{job_id}/cancel                                         |                 | Cancel a training job                                         |
 | PUT    | /api/v1/training/jobs/{job_id}/cover                                          |                 | Choose the step that covers a training job                    |
 | GET    | /api/v1/training/jobs/{job_id}/live                                           |                 | Watch a training job                                          |
+| GET    | /api/v1/training/jobs/{job_id}/snapshot                                       |                 | What a training job trained on                                |
+| GET    | /api/v1/training/jobs/{job_id}/snapshot/export                                |                 | Download what a training job trained on, as a zip             |
 | GET    | /api/v1/training/jobs/{job_id}/status                                         |                 | Poll training job status                                      |
 | GET    | /api/v1/training/presets                                                      |                 | List training recipes                                         |
 | POST   | /api/v1/training/presets/check                                                |                 | Check pixlstash.dev for newer training recipes                |
@@ -11761,6 +11763,35 @@ to the shipped recipe with a log line, at the next read (a restart, or a check
 that updated something). A run records `id@version` at enqueue; a probed run
 re-resolved at launch (§25.20) uses the version in use then and rewrites
 `preset` to say so.
+
+### 25.22 Dataset snapshots: what a LoRA was trained on (#2123)
+
+A run's lineage is a record, not a claim. When the worker has built a run's
+dataset (`ExportUtils.build_training_dataset`), it reads the files back and
+records one hub `dataset_snapshot` row with a `dataset_snapshot_item` per file
+the trainer was given: its `file_name`, the sha256 of those bytes and the
+caption file's text, plus the vault `picture_id` it came from. Nothing is
+re-read from the vault afterwards, so a later tag edit or picture delete does
+not change it; `picture_id` may then name nothing. The snapshot, its items and
+`training_run.dataset_snapshot_id` are written in one transaction
+(`hub/dataset_snapshots.record_snapshot`); a run whose dataset is built again
+(still queued at a restart) replaces the one it had, and is built into an
+emptied folder, since the trainer reads every file there. A run whose snapshot cannot
+be recorded is marked `error` and does not train. Deleting a run deletes its
+snapshot; items cascade from the snapshot.
+
+`GET /training/jobs/{id}/snapshot` returns the record and
+`GET /training/jobs/{id}/snapshot/export` zips it: each image from the run's
+dataset folder (`dataset_snapshot_path`) beside its frozen caption, and
+`snapshot.json` listing every item. An image whose file is gone or whose bytes
+no longer match the recorded sha256 is left out and marked
+`image_included: false`; its caption is still written. The images are not
+copied anywhere else, so the zip can only hold what the dataset folder still
+holds.
+
+The set links to its LoRAs through the runs: `GET /training/jobs?set_id=` lists
+each run with `model_ids`, the shelf models carrying its `training_run_id`, and
+`dataset_snapshot_id`.
 
 ## 26. Prompt match
 

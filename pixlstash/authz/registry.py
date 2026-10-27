@@ -2190,6 +2190,8 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("GET", "/api/v1/training/jobs/{job_id}"): RoutePolicy(_OWNER),
     ("GET", "/api/v1/training/jobs/{job_id}/status"): RoutePolicy(_OWNER),
     ("GET", "/api/v1/training/jobs/{job_id}/live"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/training/jobs/{job_id}/snapshot"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/training/jobs/{job_id}/snapshot/export"): RoutePolicy(_OWNER),
     ("PUT", "/api/v1/training/jobs/{job_id}/cover"): RoutePolicy(
         _OWNER,
         justification="Chooses which checkpoint covers one of the owner's own trained runs; renumbers stack_position in the hub and moves the set's or character's LoRA attachment in the vault, touching no file on disk; PUT blocked for READ tokens; owner only",
