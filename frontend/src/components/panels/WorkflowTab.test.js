@@ -1980,7 +1980,7 @@ describe("the DEFAULT RECIPE section (#1653)", () => {
     // In the rail's lead, not the body: the histogram is the head's own.
     const chart = wrapper.find("[data-testid='wftab-stars']");
     expect(chart.attributes("aria-label")).toBe(
-      "Pictures by rating: None 165, 1★ 0, 2★ 2, 3★ 5, 4★ 8, 5★ 4. " +
+      "Pictures by rating: Unrated 165, 1 star 0, 2 stars 2, 3 stars 5, 4 stars 8, 5 stars 4. " +
         "The defaults come from its pictures rated 4 stars or more.",
     );
     // Six bars, unrated first; the 4★+ two are the defaults' at full ink.
@@ -2004,7 +2004,7 @@ describe("the DEFAULT RECIPE section (#1653)", () => {
     const { wrapper } = await mountWith([KEY], [card({ rating_counts: [0, 0, 1, 2, 0] })]);
     const chart = wrapper.find("[data-testid='wftab-stars']");
     expect(chart.attributes("aria-label")).toBe(
-      "Pictures by rating: None 181, 1★ 0, 2★ 0, 3★ 1, 4★ 2, 5★ 0.",
+      "Pictures by rating: Unrated 181, 1 star 0, 2 stars 0, 3 stars 1, 4 stars 2, 5 stars 0.",
     );
     expect(chart.findAll(".wfstars-lo")).toHaveLength(0);
   });

@@ -67,9 +67,19 @@ const bars = computed(() => {
   });
 });
 
+/**
+ * Each bar as a reader hears it. The bars show ★, but a screen reader may say
+ * "black star" or nothing for it, so the words are spelled out here (as they
+ * were before #2165): "Unrated 165, 1 star 0, 2 stars 2…".
+ */
+function spoken(index) {
+  if (index === 0) return "Unrated";
+  return `${index} ${index === 1 ? "star" : "stars"}`;
+}
+
 const summary = computed(() => {
   const each = LABELS.map(
-    (label, index) => `${label} ${props.counts[index] || 0}`,
+    (_, index) => `${spoken(index)} ${props.counts[index] || 0}`,
   ).join(", ");
   if (!props.sampled) return `Pictures by rating: ${each}.`;
   const source = best.value
