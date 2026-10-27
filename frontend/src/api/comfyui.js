@@ -163,6 +163,29 @@ export async function probeComfyui(url) {
 }
 
 /**
+ * Every ComfyUI the owner can run on (#2167), each with what its newest probe
+ * said, and `current`, the id of the one at `comfyui_url`. Switching is a
+ * `comfyui_url` PATCH of the config.
+ *
+ * @returns {Promise<{connections: Array<{id: string, name: string, url: string,
+ *   status: ?("connected"|"offline"), gpu: ?string, vram_mb: ?number}>,
+ *   current: ?string}>}
+ */
+export async function listComfyuiConnections() {
+  return unwrap(apiClient.get(comfyUrl("/connections")));
+}
+
+/**
+ * Add a ComfyUI without switching to it; 400 for an address that is not
+ * http(s) with a host. Answers as `listComfyuiConnections`.
+ *
+ * @param {{url: string, name?: string}} connection
+ */
+export async function addComfyuiConnection({ url, name }) {
+  return unwrap(apiClient.post(comfyUrl("/connections"), { url, name }));
+}
+
+/**
  * Whether this PixlStash is linked to the saved ComfyUI. Owner-only.
  *
  * `bound_address` is the address the link's key works from (null for a link

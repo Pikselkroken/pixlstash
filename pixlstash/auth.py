@@ -353,6 +353,8 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         "/api/v1/comfyui/pixlstash-node",
         # Which ComfyUI holds a full-access token and the URL it calls.
         "/api/v1/comfyui/link",
+        # Every ComfyUI address the owner saved (#2167).
+        "/api/v1/comfyui/connections",
         # Every stored workflow file by name: the workflow library's listing
         # under another path, hidden workflows included.
         "/api/v1/comfyui/workflows",

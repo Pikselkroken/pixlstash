@@ -6597,12 +6597,20 @@ so `sidebarRef`, the importer and its drop targets stay alive.
   the default address even with none saved). With an address saved, the slot
   names it ("This PC" for loopback, else the host) over its status and card
   from `POST /comfyui/probe` ("Connected · RTX 4090 · 24 GB", "Offline", "Not
-  checked" when the probe itself failed). It is probed on mount, on an address
-  change and on each menu open, not polled. The menu is *Run on*: the one
-  instance row, then *New ComfyUI connection…* and *ComfyUI settings…*, both
-  opening Settings › ComfyUI until the backend holds more than one
-  `comfyui_url`. A new address re-reads the templates with `refresh` (not the
-  config's first read, which only names the address the mount read). A
+  checked" when the probe itself failed). It is probed on mount and on an
+  address change, not polled. The menu is *Run on*: one row per connection
+  from `GET /comfyui/connections` (#2167), the current one checked, each with
+  its address, card and status; opening the menu re-reads the list and probes
+  every row, a row showing its stored last status until its answer is in.
+  Picking a row PATCHes `comfyui_url` to its address, which is what switching
+  is: `filterStore.comfyuiUrl` follows, and with it the templates and where
+  Run… submits. *New ComfyUI connection…* opens `NewComfyuiConnectionDialog`
+  (address, optional name; `POST /comfyui/connections`), which adds without
+  switching; *ComfyUI settings…* opens Settings › ComfyUI, which edits the
+  current connection, and whose Disconnect removes it and shows the one that
+  takes over when another is saved. A new address re-reads the templates
+  with `refresh` (not the config's first read, which only names the address
+  the mount read). A
   READ session draws no slot and never the not-set-up state, since it cannot
   read the config.
 - **The footer band** is one amber *Add workflow* (`requestAdd()`, see

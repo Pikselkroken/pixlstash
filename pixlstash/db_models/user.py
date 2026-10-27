@@ -51,6 +51,10 @@ class User(SQLModel, table=True):
     # column default never rewrites a stored value.
     theme_mode: Optional[str] = Field(default="dark")
     comfyui_url: Optional[str] = Field(default=None)
+    # Every ComfyUI the owner can run on, as JSON (#2167); the current one is
+    # the entry at comfyui_url. NULL reads as the one saved address. See
+    # services/comfyui_connections.py.
+    comfyui_connections: Optional[str] = Field(default=None)
     # ai-toolkit training config (non-secret paths; HF_TOKEN is operator-env-provided).
     ai_toolkit_repo_path: Optional[str] = Field(default=None)
     ai_toolkit_python: Optional[str] = Field(default=None)

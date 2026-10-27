@@ -56,31 +56,37 @@
       @keydown="onMenuKeydown"
     >
       <span class="section-label wcs-menu-label" role="none">Run on</span>
-      <!-- One row while the backend keeps a single comfyui_url; the list is
-           the multi-instance issue's. -->
       <button
+        v-for="row in rows"
+        :key="row.id"
         type="button"
         class="ctx-item wcs-row"
         role="menuitemradio"
-        aria-checked="true"
-        @click="open = false"
+        :aria-checked="String(row.current)"
+        :data-testid="`workflows-comfyui-row-${row.id}`"
+        @click="pick(row)"
       >
-        <v-icon class="ctx-icon" aria-hidden="true">mdi-check</v-icon>
+        <v-icon class="ctx-icon" aria-hidden="true">{{
+          row.current ? "mdi-check" : ""
+        }}</v-icon>
         <span class="ctx-label-text wcs-row-id">
-          <span class="wcs-row-name">{{ instance.name }}</span>
+          <span class="wcs-row-name">{{ row.name }}</span>
           <span class="wcs-row-sub">{{
-            [instance.address, instance.gpu].filter(Boolean).join(" · ")
+            [row.address, row.gpu].filter(Boolean).join(" · ")
           }}</span>
         </span>
         <span class="ctx-meta wcs-row-status">
-          <span class="wcs-dot wcs-dot--inline" :data-state="state"></span>
-          {{ instance.status }}
+          <span class="wcs-dot wcs-dot--inline" :data-state="row.state"></span>
+          {{ STATUS[row.state] }}
         </span>
       </button>
       <div class="ctx-sep" role="separator"></div>
-      <!-- Settings holds the one address there is; a second connection is
-           the multi-instance issue's, so New opens the same place. -->
-      <button type="button" class="ctx-item" role="menuitem" @click="settings">
+      <button
+        type="button"
+        class="ctx-item"
+        role="menuitem"
+        @click="newConnection"
+      >
         <span class="ctx-icon" aria-hidden="true"></span>
         <span class="ctx-label-text">New ComfyUI connection…</span>
       </button>
@@ -90,13 +96,22 @@
       </button>
     </div>
   </v-menu>
+  <!-- Mounted only while open, so it starts empty each time. -->
+  <NewComfyuiConnectionDialog
+    v-if="adding"
+    open
+    @close="adding = false"
+    @added="added"
+  />
 </template>
 
 <script setup>
-import { computed, ref, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { VIcon, VMenu } from "vuetify/components";
 import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
-import { probeComfyui } from "../../api/comfyui";
+import NewComfyuiConnectionDialog from "./NewComfyuiConnectionDialog.vue";
+import { listComfyuiConnections, probeComfyui } from "../../api/comfyui";
+import { patchUserConfig } from "../../api/config";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 
@@ -104,9 +119,13 @@ const emit = defineEmits(["open-settings"]);
 
 const filterStore = useFilterStore();
 const open = ref(false);
-// The probe's answer for the saved address; null while it is out.
-const probe = ref(null);
-const failed = ref(false);
+const adding = ref(false);
+// `GET /comfyui/connections`; empty until read, when the slot names the
+// saved address the way the server would.
+const connections = ref([]);
+// This session's probe answers by address; `failed` when the probe itself did
+// not come back. An address with none reads its stored status meanwhile.
+const answers = reactive({});
 
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
 const STATUS = {
@@ -116,53 +135,80 @@ const STATUS = {
   unknown: "Not checked",
 };
 
-const state = computed(() => {
-  if (failed.value) return "unknown";
-  if (!probe.value) return "checking";
-  return probe.value.reachable ? "connected" : "offline";
-});
+// As the server matches them: case and a trailing slash aside.
+const urlKey = (url) => (url || "").replace(/\/+$/, "").toLowerCase();
+const sameUrl = (a, b) => urlKey(a) === urlKey(b);
 
-function gpuLabel(answer) {
-  if (!answer?.reachable || !answer.gpu) return "";
-  const name = answer.gpu.replace(/^NVIDIA (GeForce )?/, "");
-  return answer.vram_mb
-    ? `${name} · ${Math.round(answer.vram_mb / 1024)} GB`
-    : name;
+function parts(url) {
+  try {
+    const parsed = new URL(url);
+    return {
+      name: LOOPBACK.has(parsed.hostname) ? "This PC" : parsed.hostname,
+      address: parsed.host,
+    };
+  } catch (err) {
+    console.warn(`[workflows] the ComfyUI address ${url} does not parse`, err);
+    return { name: "ComfyUI", address: url };
+  }
 }
 
-const instance = computed(() => {
-  let host = "";
-  let address = filterStore.comfyuiUrl;
-  try {
-    const url = new URL(filterStore.comfyuiUrl);
-    host = url.hostname;
-    address = url.host;
-  } catch (err) {
-    console.warn(
-      `[workflows] the saved ComfyUI address ${filterStore.comfyuiUrl} does not parse`,
-      err,
-    );
+function gpuLabel(gpu, vramMb) {
+  if (!gpu) return "";
+  const name = gpu.replace(/^NVIDIA (GeForce )?/, "");
+  return vramMb ? `${name} · ${Math.round(vramMb / 1024)} GB` : name;
+}
+
+/** A connection as the menu draws it, its status the newest known. */
+function describe(entry) {
+  const answer = answers[entry.url];
+  let state = entry.status || "checking";
+  let gpu = gpuLabel(entry.gpu, entry.vram_mb);
+  if (answer === "failed") state = "unknown";
+  else if (answer) {
+    state = answer.reachable ? "connected" : "offline";
+    gpu = answer.reachable ? gpuLabel(answer.gpu, answer.vram_mb) : "";
   }
   return {
-    name: LOOPBACK.has(host) ? "This PC" : host || "ComfyUI",
-    address,
-    status: STATUS[state.value],
-    gpu: gpuLabel(probe.value),
+    id: entry.id,
+    url: entry.url,
+    name: entry.name || parts(entry.url).name,
+    address: parts(entry.url).address,
+    current: sameUrl(entry.url, filterStore.comfyuiUrl),
+    state,
+    gpu,
   };
+}
+
+const rows = computed(() => {
+  const listed = connections.value.map(describe);
+  // The list not read yet, or read before a change of address elsewhere.
+  if (!listed.some((row) => row.current) && filterStore.comfyuiUrl) {
+    listed.unshift(describe({ id: "saved", url: filterStore.comfyuiUrl }));
+  }
+  return listed;
 });
 
-/** Ask the server whether ComfyUI answers at the saved address. */
-async function check() {
-  const url = filterStore.comfyuiUrl;
-  if (!filterStore.comfyuiConfigured || !url) return;
+const instance = computed(() => {
+  const row = rows.value.find((r) => r.current) || { state: "checking" };
+  return { ...row, status: STATUS[row.state] };
+});
+const state = computed(() => instance.value.state);
+
+async function load() {
   try {
-    const answer = await probeComfyui(url);
-    if (url !== filterStore.comfyuiUrl) return;
-    probe.value = answer;
-    failed.value = false;
+    connections.value = (await listComfyuiConnections()).connections || [];
+  } catch (err) {
+    console.warn("[workflows] could not read the ComfyUI connections", err);
+  }
+}
+
+/** Ask the server whether ComfyUI answers at *url*. */
+async function check(url) {
+  try {
+    answers[url] = await probeComfyui(url);
   } catch (err) {
     console.warn(`[workflows] could not ask whether ComfyUI answers at ${url}`, err);
-    if (url === filterStore.comfyuiUrl) failed.value = true;
+    answers[url] = "failed";
   }
 }
 
@@ -170,17 +216,43 @@ async function check() {
 // polled; a ComfyUI that stops reads Connected until the menu is next opened.
 watch(
   () => filterStore.comfyuiUrl,
-  () => {
-    probe.value = null;
-    failed.value = false;
-    check();
+  (url) => {
+    if (!filterStore.comfyuiConfigured || !url) return;
+    delete answers[url];
+    check(url);
+    load();
   },
   { immediate: true },
 );
 
-watch(open, (on) => {
-  if (on) check();
+watch(open, async (on) => {
+  if (!on) return;
+  await load();
+  rows.value.forEach((row) => check(row.url));
 });
+
+/** Run on *row* from now on: what the config PATCH of `comfyui_url` does. */
+async function pick(row) {
+  open.value = false;
+  if (row.current) return;
+  try {
+    const body = await patchUserConfig({ comfyui_url: row.url });
+    filterStore.comfyuiUrl = body?.config?.comfyui_url || row.url;
+  } catch (err) {
+    console.warn(`[workflows] could not switch ComfyUI to ${row.url}`, err);
+  }
+}
+
+function newConnection() {
+  open.value = false;
+  adding.value = true;
+}
+
+function added(list) {
+  adding.value = false;
+  connections.value = list?.connections || connections.value;
+  open.value = true;
+}
 
 function settings() {
   open.value = false;

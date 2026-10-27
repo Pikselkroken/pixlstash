@@ -1612,6 +1612,14 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Makes this server fetch an address the owner names; the same reach comfyui_url already has; owner only",
     ),
+    ("GET", "/api/v1/comfyui/connections"): RoutePolicy(
+        _OWNER,
+        justification="Names every ComfyUI address the owner saved and what its card is; owner config like GET /users/me/config; owner only",
+    ),
+    ("POST", "/api/v1/comfyui/connections"): RoutePolicy(
+        _OWNER,
+        justification="Saves an address the owner names for this server to fetch once chosen; the same reach comfyui_url already has; owner only",
+    ),
     ("POST", "/api/v1/comfyui/abort"): RoutePolicy(
         _OWNER,
         justification="Abort generation; POST blocked for READ tokens; owner only",

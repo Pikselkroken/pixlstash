@@ -317,14 +317,20 @@ async function disconnect() {
     }
   }
   try {
-    await patchUserConfig({ comfyui_url: null });
+    const body = await patchUserConfig({ comfyui_url: null });
+    // With other connections saved, the next one is current now (#2167).
+    const next = body?.config?.comfyui_url || "";
     link.value = null;
     comfyuiUrl.value = "";
     savedProbe++;
     lastProbe.value = null;
-    useFilterStore().comfyuiUrl = "";
-    emit("update:comfyui-configured", false);
-    detectLocal();
+    useFilterStore().comfyuiUrl = next;
+    if (next) {
+      fetchComfyuiUrl();
+    } else {
+      emit("update:comfyui-configured", false);
+      detectLocal();
+    }
   } catch (e) {
     actionError.value = errorMessage(e, "Failed to clear ComfyUI URL.");
   } finally {

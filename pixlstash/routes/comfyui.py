@@ -124,11 +124,13 @@ from pixlstash.services.comfyui_service import (
     PIXLSTASH_CHECKPOINT_LOADER,
     comfyui_pixlstash_scripts,
     library_ids_named,
+    normalize_comfyui_url,
     probe_comfyui,
     pixlstash_node_refusals,
     swap_pixlstash_savers,
 )
 from pixlstash.services import (
+    comfyui_connections,
     comfyui_link_service,
     comfyui_pack_service,
     comfyui_templates,
@@ -1770,6 +1772,36 @@ class ComfyUIProbeResponse(BaseModel):
     vram_mb: Optional[int] = None
 
 
+class ComfyUIConnection(BaseModel):
+    """One ComfyUI the owner can run on, with what its newest probe said."""
+
+    id: str
+    name: str
+    url: str
+    status: Optional[Literal["connected", "offline"]] = Field(
+        None, description="The newest probe's answer; null when never asked."
+    )
+    gpu: Optional[str] = None
+    vram_mb: Optional[int] = None
+
+
+class ComfyUIConnectionList(BaseModel):
+    """``GET /comfyui/connections``: every connection, and which runs go to."""
+
+    connections: list[ComfyUIConnection]
+    current: Optional[str] = Field(
+        None,
+        description="The id of the connection at `comfyui_url`; null with none saved.",
+    )
+
+
+class ComfyUIConnectionCreate(BaseModel):
+    """A ComfyUI to add; the name defaults to "This PC" or the host."""
+
+    url: str = Field(min_length=1, max_length=2048)
+    name: Optional[str] = Field(None, max_length=120)
+
+
 class ComfyUILinkStatus(BaseModel):
     """The live ComfyUI link, if any."""
 
@@ -2466,9 +2498,77 @@ def create_router(server) -> APIRouter:
     ):
         server.auth.ensure_secure_when_required(request)
         try:
-            return probe_comfyui(payload.url)
+            answer = probe_comfyui(payload.url)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # A listed connection keeps its newest answer for the Run on menu.
+        if getattr(server, "hub_engine", None) is not None:
+            try:
+                comfyui_connections.save(
+                    server,
+                    server.auth.require_user_id(request),
+                    lambda user: comfyui_connections.record_probe(user, answer),
+                )
+            except Exception:
+                logger.exception(
+                    "ComfyUI at %s answered the probe (reachable=%s) but the "
+                    "answer could not be noted on its connection; the Run on "
+                    "menu shows the one before until the next probe.",
+                    answer["url"],
+                    answer["reachable"],
+                )
+        return answer
+
+    def _connection_list(user) -> dict:
+        return {
+            "connections": comfyui_connections.read(user),
+            "current": comfyui_connections.current_id(user),
+        }
+
+    @router.get(
+        "/comfyui/connections",
+        summary="List the ComfyUI connections",
+        description=(
+            "Every ComfyUI the owner can run on, with what its newest probe "
+            "said, and `current`, the one at `comfyui_url` that runs go to. "
+            "Switching is a `comfyui_url` PATCH of `/users/me/config`."
+        ),
+        response_model=ComfyUIConnectionList,
+    )
+    def list_comfyui_connections(request: Request):
+        server.auth.ensure_secure_when_required(request)
+        return _connection_list(server.auth.get_user_for_request(request))
+
+    @router.post(
+        "/comfyui/connections",
+        summary="Add a ComfyUI connection",
+        description=(
+            "Adds an address, normalised as `POST /comfyui/probe` does, without "
+            "switching to it; an address already listed is left as it is. "
+            "Nothing is asked of it. 400 for an address that is not http(s) "
+            "with a host."
+        ),
+        response_model=ComfyUIConnectionList,
+    )
+    def add_comfyui_connection(
+        request: Request, payload: ComfyUIConnectionCreate = Body(...)
+    ):
+        server.auth.ensure_secure_when_required(request)
+        try:
+            url = normalize_comfyui_url(payload.url)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        require_hub(server, "No hub is attached to keep ComfyUI connections in.")
+
+        def change(user) -> bool:
+            before = user.comfyui_connections
+            comfyui_connections.add(user, payload.name, url)
+            return user.comfyui_connections != before
+
+        user = comfyui_connections.save(
+            server, server.auth.require_user_id(request), change
+        )
+        return _connection_list(user)
 
     @router.post(
         "/comfyui/workflows/{workflow_name}/card",
