@@ -515,6 +515,10 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     registered folder is scanned in the background (``ModelFolderScanFinder``),
     so no route walks one on request. The routes that cited its authority walk
     what that scan walks.
+    67 = 65 + 2 with the folder verbs: ``POST /model-folders/{folder_id}/dirs``
+    makes a directory inside a registered folder and ``POST
+    /model-folders/{folder_id}/dirs/move`` moves or renames one, repointing the
+    rows under it, which is ``POST /model-moves``' authority.
 
     Arithmetic, not judgement."""
     loopback = {
@@ -529,7 +533,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 9, sorted(loopback)
-    assert len(local) == 65, sorted(local)
+    assert len(local) == 67, sorted(local)
 
 
 # ===========================================================================

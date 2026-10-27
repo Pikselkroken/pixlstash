@@ -55,7 +55,14 @@ both is what the owner names: ``payload.path`` is the InsightFace **root**, and
 the packs land in ``<path>/models``, because that subdirectory is the library's
 own layout rather than ours to choose.
 
-Authorization: `LOCAL_OWNER_ONLY` on all three, declared in
+**Moving or renaming a directory inside a folder lives here too** (#2206), at
+``POST /model-folders/{folder_id}/dirs/move``, for the same reason: it is a move,
+it takes the same slot and clients watch it on the same ``GET /model-moves``,
+where ``kind: "folder"`` tells it apart. The work is
+:mod:`pixlstash.services.model_dir_mover`; a rename is a move into the same
+parent under ``new_name``.
+
+Authorization: `LOCAL_OWNER_ONLY` on every route here, declared in
 ``pixlstash/authz/registry.py`` and never inline. See the §16.3 note on the
 tier in ``docs/backend_architecture.md``; the reasoning per route is in
 ``docs/authz-coverage-matrix.md``.
@@ -70,6 +77,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Body, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.pixl_logging import get_logger
@@ -82,6 +90,10 @@ from pixlstash.services.builtin_models import (
     set_builtin_model_dir,
 )
 from pixlstash.services.managed_model_store import relocatable_identity
+from pixlstash.services.model_dir_mover import (
+    execute_directory_move,
+    plan_directory_move,
+)
 from pixlstash.services.model_folder_scanner import STATE_PRESENT
 from pixlstash.services.model_mover import (
     SHELF_IO_LOCK,
@@ -195,6 +207,67 @@ class RelocateRequest(BaseModel):
     )
 
 
+class FolderMoveRequest(BaseModel):
+    """Body of ``POST /model-folders/{folder_id}/dirs/move``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(
+        description=(
+            "The directory to move, POSIX and relative to the folder "
+            "(`loras/sdxl`). Empty, the registered folder itself, is a 400."
+        )
+    )
+    destination_folder_id: int = Field(
+        description="The registered folder it moves into; the same one for a rename."
+    )
+    destination_path: str = Field(
+        default="",
+        description=(
+            "The directory it moves into, POSIX and relative, empty for the "
+            "folder's root. It must exist. For a rename, the current parent."
+        ),
+    )
+    new_name: Optional[str] = Field(
+        default=None,
+        description=(
+            "Its name at the destination; its current name when omitted. A name "
+            "the drive cannot hold is a 400 with the reason, never rewritten."
+        ),
+    )
+    dry_run: bool = Field(
+        default=False,
+        description=(
+            "Run every refusal and answer 200 with what the move would do - "
+            "same drive or not, models, other files and bytes - touching nothing."
+        ),
+    )
+
+
+class FolderMovePlanResponse(BaseModel):
+    """What a folder move would do: the answer to ``dry_run: true``."""
+
+    model_config = ConfigDict(extra="allow")
+
+    dry_run: bool = True
+    same_drive: bool = Field(
+        description="True when the move is a rename and nothing is copied."
+    )
+    models: int = Field(description="Distinct models with a present copy under it.")
+    files: int = Field(description="Regular files on disk under it, of every kind.")
+    other_files: int = Field(
+        description="Files the shelf does not list: previews, notes, sidecars."
+    )
+    bytes: int = Field(description="Bytes on disk under it; what another drive copies.")
+    folder_id: int
+    path: str
+    destination_folder_id: int
+    destination_path: str = Field(
+        description="The directory's POSIX path after the move, relative to its folder."
+    )
+    name: str
+
+
 class MoveItemResult(BaseModel):
     """What happened to one copy."""
 
@@ -226,6 +299,15 @@ class MoveStatusResponse(BaseModel):
 
     status: str = Field(
         description="`running`, `finished`, or `idle` when none has ever run."
+    )
+    kind: str = Field(
+        default="files",
+        description=(
+            "`files` for a move of model copies, `folder` for a directory moved "
+            "or renamed with `POST /model-folders/{folder_id}/dirs/move`. A "
+            "folder job has one item, the directory, and also carries `name` and "
+            "`files` (the catalogued copies it carried)."
+        ),
     )
     destination_folder_id: Optional[int] = None
     destination_subpath: str = Field(
@@ -267,7 +349,9 @@ def _snapshot(job: Optional[dict]) -> MoveStatusResponse:
     if job is None:
         return MoveStatusResponse(status="idle")
     return MoveStatusResponse(
+        **job.get("details", {}),
         status=job["status"],
+        kind=job.get("kind", "files"),
         destination_folder_id=job["destination_folder_id"],
         destination_subpath=job.get("destination_subpath", ""),
         total=job["total"],
@@ -326,6 +410,8 @@ def _start_job(
     bytes_to_copy: int,
     run,
     on_finished=None,
+    kind: str = "files",
+    details: Optional[dict] = None,
 ) -> dict:
     """Take the one job slot, run *run* on a thread, and return the job.
 
@@ -352,6 +438,8 @@ def _start_job(
         on_finished: Called with that report, on the worker thread, only when
             ``run`` returned without raising. A relocation uses it to flip the
             folder rows.
+        kind: ``files`` or ``folder``, echoed to the clients watching.
+        details: Extra fields for the status response, fixed for the job.
 
     Returns:
         The job dict, already running.
@@ -369,6 +457,8 @@ def _start_job(
     with _job_lock:
         job = {
             "status": STATUS_RUNNING,
+            "kind": kind,
+            "details": details or {},
             "destination_folder_id": destination_folder_id,
             "destination_subpath": destination_subpath,
             "total": total,
@@ -1059,5 +1149,82 @@ def create_router(server) -> APIRouter:
             )
 
         return _snapshot(_launch(mover, plan, on_finished=_promote))
+
+    @router.post(
+        "/model-folders/{folder_id}/dirs/move",
+        summary="Move or rename a directory inside a model folder",
+        description=(
+            "Moves a directory, with everything in it, into another directory of "
+            "the same or another registered folder; a rename is a move into the "
+            "same parent with `new_name`. Refused before anything is touched for "
+            "the registered folder itself or a target inside the source (400), a "
+            "locked folder, a taken name or a registered folder inside the source "
+            "(409), and a copy that would not fit (507). Folders are never merged. "
+            "On one drive it is a rename and one transaction repointing every row "
+            "under it, undone if the repoint fails. Across drives the tree is "
+            "copied under a partial name, every catalogued file is checked, and "
+            "only then is it published, repointed and the source removed; a cancel "
+            "removes the partial and repoints nothing. Runs on the one move slot "
+            "and reports through `GET /model-moves` with `kind: folder`. "
+            "`dry_run: true` answers 200 with what it would do instead."
+        ),
+        status_code=202,
+        tags=["model_shelf"],
+        response_model=MoveStatusResponse,
+        responses={200: {"model": FolderMovePlanResponse}},
+    )
+    def move_model_folder_dir(
+        folder_id: int, request: Request, payload: FolderMoveRequest = Body(...)
+    ):
+        server.auth.ensure_secure_when_required(request)
+        try:
+            plan = plan_directory_move(
+                server.hub,
+                folder_id,
+                payload.path,
+                payload.destination_folder_id,
+                payload.destination_path,
+                payload.new_name,
+            )
+        except MoveRefused as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+        if payload.dry_run:
+            return JSONResponse(
+                status_code=200,
+                content=FolderMovePlanResponse(
+                    same_drive=plan.same_drive,
+                    models=plan.models,
+                    files=plan.files,
+                    other_files=plan.other_files,
+                    bytes=plan.bytes,
+                    folder_id=plan.source_folder_id,
+                    path=plan.source_subpath,
+                    destination_folder_id=plan.destination_folder_id,
+                    destination_path=plan.destination_subpath,
+                    name=plan.name,
+                ).model_dump(),
+            )
+
+        def _run(job: dict) -> MoveReport:
+            outcome = execute_directory_move(
+                server.hub, plan, should_cancel=job["cancel"].is_set
+            )
+            _record_result(job, outcome)
+            return MoveReport(
+                outcomes=[outcome], cancelled=outcome.status == STATUS_CANCELLED
+            )
+
+        return _snapshot(
+            _start_job(
+                destination_folder_id=plan.destination_folder_id,
+                destination_subpath=plan.destination_subpath,
+                total=1,
+                bytes_to_copy=plan.bytes_to_copy,
+                run=_run,
+                kind="folder",
+                details={"name": plan.name, "files": len(plan.catalogued)},
+            )
+        )
 
     return router

@@ -275,6 +275,55 @@ def subpath_segments(subpath: str) -> list[str]:
     return segments
 
 
+def resolve_subfolder(
+    folder_path: str, subpath: str, where: str = "the folder"
+) -> tuple[str, str]:
+    """Resolve a POSIX subpath inside a registered folder, refusing what the tree hides.
+
+    Shared by a move's destination, the folder verbs' source and destination,
+    and creating a folder (#2206), so every route that names a directory inside
+    a folder accepts exactly what ``GET /model-folders/{id}/dirs`` offers.
+
+    The folder listing never offers a link, a junction or a dot-name, and the
+    scanner does not walk through a link, so a file moved through one would be
+    registered at a path no rescan finds. Whether the directory exists is the
+    caller's question: a missing destination and a missing source answer with
+    different statuses.
+
+    Returns:
+        ``(subpath, path)``: the normalised POSIX subpath (``""`` for the root)
+        and the resolved absolute path.
+
+    Raises:
+        MoveRefused: 400 for a malformed subpath, a link or hidden folder on the
+            way, or one that resolves outside the folder.
+    """
+    segments = subpath_segments(subpath)
+    is_junction = getattr(os.path, "isjunction", lambda _path: False)
+    for depth in range(1, len(segments) + 1):
+        here = os.path.join(folder_path, *segments[:depth])
+        if (
+            segments[depth - 1].startswith(".")
+            or os.path.islink(here)
+            or is_junction(here)
+        ):
+            raise MoveRefused(
+                f"{subpath!r} goes through a link or a hidden folder, which the "
+                "shelf does not move into."
+            )
+    try:
+        path = resolve_path_within(folder_path, *segments)
+    except ValueError as exc:
+        logger.error(
+            "Refusing %r under %s: it resolves outside the folder (%s).",
+            subpath,
+            folder_path,
+            exc,
+        )
+        raise MoveRefused(f"{subpath!r} is outside {where}.") from exc
+    return "/".join(segments), path
+
+
 def relpath_dir(relpath: str) -> str:
     """The POSIX directory of a stored ``relpath``, ``""`` at the folder root.
 
@@ -829,47 +878,21 @@ class ModelMover:
                 "directory right now, so nothing was moved.",
                 status_code=409,
             )
-        segments = subpath_segments(destination_subpath)
-        for depth in range(1, len(segments) + 1):
-            # The folder listing never offers a link, a junction or a dot-name,
-            # and the scanner does not walk through a link, so a file moved
-            # through one would be registered at a path no rescan finds.
-            here = os.path.join(destination["path"], *segments[:depth])
-            is_junction = getattr(os.path, "isjunction", lambda _path: False)
-            if (
-                segments[depth - 1].startswith(".")
-                or os.path.islink(here)
-                or is_junction(here)
-            ):
-                raise MoveRefused(
-                    f"{destination_subpath!r} goes through a link or a hidden "
-                    "folder, which the shelf does not move into."
-                )
-        if segments and relocating:
+        if destination_subpath and relocating:
             # A relocation moves a whole folder to a new root; landing it inside
             # a subdirectory of the target would register paths the relocated
             # folder never had.
+            subpath_segments(destination_subpath)
             raise MoveRefused("A relocation cannot target a subfolder.")
-        try:
-            destination_path = resolve_path_within(destination["path"], *segments)
-        except ValueError as exc:
-            logger.error(
-                "Refusing to move into %r under %s: it resolves outside the "
-                "folder (%s).",
-                destination_subpath,
-                destination["path"],
-                exc,
-            )
-            raise MoveRefused(
-                f"{destination_subpath!r} is outside the destination folder."
-            ) from exc
+        subpath, destination_path = resolve_subfolder(
+            destination["path"], destination_subpath, "the destination folder"
+        )
         if not os.path.isdir(destination_path):
             raise MoveRefused(
                 f"There is no folder {destination_subpath!r} in the destination. "
                 "Create it first; a move does not make folders.",
                 status_code=409,
             )
-        subpath = "/".join(segments)
 
         moves: list[PlannedMove] = []
         skipped: list[MoveOutcome] = []

@@ -30,7 +30,12 @@ import os
 import pytest
 
 from pixlstash.hub.db import HubDatabase
+from pixlstash.services import model_dir_mover as dir_mover_module
 from pixlstash.services import model_mover as mover_module
+from pixlstash.services.model_dir_mover import (
+    execute_directory_move,
+    plan_directory_move,
+)
 from pixlstash.services.model_mover import (
     PARTIAL_SUFFIX,
     STATUS_CANCELLED,
@@ -1671,3 +1676,242 @@ def test_a_root_only_folder_refuses_a_per_item_move(tmp_path):
         assert len(plan.moves) == 1, "a per_item source was wrongly refused"
     finally:
         hub.close()
+
+
+# ===========================================================================
+# Moving and renaming a directory inside a model folder (#2206)
+# ===========================================================================
+#
+# A directory moves whole: its models, their `<stem>_samples/` and the files the
+# shelf does not list. Every row under it is repointed in one transaction, and a
+# refusal touches nothing. The route half is in tests/test_model_shelf_api.py.
+
+
+@pytest.fixture
+def dir_tree(hub, tmp_path):
+    """``loras/sdxl`` with one catalogued model, its samples and a note, and an
+    empty ``archive`` folder, both registered."""
+    source_dir = tmp_path / "loras"
+    destination_dir = tmp_path / "archive"
+    source_dir.mkdir()
+    destination_dir.mkdir()
+    source_id = register_folder(hub, source_dir)
+    destination_id = register_folder(hub, destination_dir)
+    relpath = os.path.join("sdxl", "alice.safetensors")
+    model_id, _ = register_file(hub, source_id, source_dir, relpath)
+    samples = source_dir / "sdxl" / "alice_samples"
+    samples.mkdir()
+    (samples / "step_100.png").write_bytes(b"png")
+    (source_dir / "sdxl" / "notes.txt").write_text("trained on 40 pictures")
+    return {
+        "hub": hub,
+        "source_dir": source_dir,
+        "destination_dir": destination_dir,
+        "source_id": source_id,
+        "destination_id": destination_id,
+        "model_id": model_id,
+        "relpath": relpath,
+    }
+
+
+@pytest.fixture
+def dir_cross_device(monkeypatch):
+    """Force the directory mover's copy path; see ``cross_device``."""
+    monkeypatch.setattr(dir_mover_module, "same_device", lambda *_: False)
+
+
+def _move_sdxl(tree, **kwargs):
+    plan = plan_directory_move(
+        tree["hub"],
+        tree["source_id"],
+        "sdxl",
+        tree["destination_id"],
+        kwargs.pop("destination_subpath", ""),
+        kwargs.pop("new_name", None),
+    )
+    return plan, execute_directory_move(tree["hub"], plan, **kwargs)
+
+
+def _assert_moved_to(tree, folder_dir, folder_id, new_dir):
+    moved = folder_dir / new_dir
+    assert (moved / "alice.safetensors").is_file()
+    assert (moved / "alice_samples" / "step_100.png").read_bytes() == b"png"
+    assert (moved / "notes.txt").read_text() == "trained on 40 pictures"
+    assert not (tree["source_dir"] / "sdxl").exists()
+    assert set(locations(tree["hub"])) == {
+        (folder_id, os.path.join(new_dir, "alice.safetensors"))
+    }
+    row = locations(tree["hub"])[
+        (folder_id, os.path.join(new_dir, "alice.safetensors"))
+    ]
+    assert row["model_id"] == tree["model_id"], "the move lost the model's curation"
+    assert not list(folder_dir.glob("*" + PARTIAL_SUFFIX))
+    assert_no_dangling_rows(tree["hub"])
+
+
+def test_a_same_drive_directory_move_renames_and_repoints_every_row(dir_tree):
+    plan, outcome = _move_sdxl(dir_tree)
+    assert plan.same_drive is True
+    assert (plan.models, plan.files, plan.other_files) == (1, 3, 2)
+    assert outcome.status == STATUS_MOVED, outcome.detail
+    _assert_moved_to(
+        dir_tree, dir_tree["destination_dir"], dir_tree["destination_id"], "sdxl"
+    )
+
+
+def test_a_cross_drive_directory_move_copies_verifies_and_removes(
+    dir_tree, dir_cross_device
+):
+    plan, outcome = _move_sdxl(dir_tree)
+    assert plan.same_drive is False
+    assert plan.bytes_to_copy == plan.bytes > 0
+    assert outcome.status == STATUS_MOVED, outcome.detail
+    _assert_moved_to(
+        dir_tree, dir_tree["destination_dir"], dir_tree["destination_id"], "sdxl"
+    )
+
+
+def test_renaming_a_directory_is_a_move_into_its_own_parent(dir_tree):
+    plan = plan_directory_move(
+        dir_tree["hub"],
+        dir_tree["source_id"],
+        "sdxl",
+        dir_tree["source_id"],
+        "",
+        "sdxl-1.0",
+    )
+    outcome = execute_directory_move(dir_tree["hub"], plan)
+    assert outcome.status == STATUS_MOVED, outcome.detail
+    _assert_moved_to(
+        dir_tree, dir_tree["source_dir"], dir_tree["source_id"], "sdxl-1.0"
+    )
+
+
+def test_a_taken_name_is_refused_and_nothing_is_merged(dir_tree):
+    (dir_tree["destination_dir"] / "sdxl").mkdir()
+    (dir_tree["destination_dir"] / "sdxl" / "theirs.txt").write_text("keep")
+    before = locations(dir_tree["hub"])
+    with pytest.raises(MoveRefused) as refused:
+        _move_sdxl(dir_tree)
+    assert refused.value.status_code == 409
+    assert (dir_tree["source_dir"] / "sdxl" / "alice.safetensors").is_file()
+    assert sorted(p.name for p in (dir_tree["destination_dir"] / "sdxl").iterdir()) == [
+        "theirs.txt"
+    ]
+    assert locations(dir_tree["hub"]).keys() == before.keys()
+
+
+def test_a_directory_cannot_move_into_itself_or_below(dir_tree):
+    (dir_tree["source_dir"] / "sdxl" / "inner").mkdir()
+    for into in ("sdxl", "sdxl/inner"):
+        with pytest.raises(MoveRefused) as refused:
+            plan_directory_move(
+                dir_tree["hub"],
+                dir_tree["source_id"],
+                "sdxl",
+                dir_tree["source_id"],
+                into,
+            )
+        assert refused.value.status_code == 400, into
+    assert (dir_tree["source_dir"] / "sdxl" / "alice.safetensors").is_file()
+
+
+def test_the_registered_root_and_a_locked_folder_are_refused(dir_tree):
+    hub = dir_tree["hub"]
+    with pytest.raises(MoveRefused) as refused:
+        plan_directory_move(
+            hub, dir_tree["source_id"], "", dir_tree["destination_id"], ""
+        )
+    assert refused.value.status_code == 400
+    assert "registered folder itself" in str(refused.value)
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model_folder SET movable = 'root_only' WHERE id = ?",
+            (dir_tree["destination_id"],),
+        )
+    with pytest.raises(MoveRefused) as refused:
+        _move_sdxl(dir_tree)
+    assert refused.value.status_code == 409
+
+
+def test_a_directory_holding_a_registered_folder_is_refused(dir_tree):
+    nested = dir_tree["source_dir"] / "sdxl" / "watched"
+    nested.mkdir()
+    register_folder(dir_tree["hub"], nested)
+    with pytest.raises(MoveRefused) as refused:
+        _move_sdxl(dir_tree)
+    assert refused.value.status_code == 409
+    assert nested.is_dir()
+
+
+def test_a_cancelled_cross_drive_move_leaves_no_partial_and_repoints_nothing(
+    dir_tree, dir_cross_device
+):
+    before = locations(dir_tree["hub"])
+    _, outcome = _move_sdxl(dir_tree, should_cancel=lambda: True)
+    assert outcome.status == STATUS_CANCELLED
+    assert not list(dir_tree["destination_dir"].iterdir()), "the partial was left"
+    assert (dir_tree["source_dir"] / "sdxl" / "alice.safetensors").is_file()
+    assert locations(dir_tree["hub"]).keys() == before.keys()
+    assert_no_dangling_rows(dir_tree["hub"])
+
+
+def test_a_copy_that_does_not_verify_is_discarded_and_the_source_kept(
+    dir_tree, dir_cross_device, monkeypatch
+):
+    monkeypatch.setattr(dir_mover_module, "file_digest", lambda path: "0" * 64)
+    before = locations(dir_tree["hub"])
+    _, outcome = _move_sdxl(dir_tree)
+    assert outcome.status == STATUS_FAILED
+    assert "registered as" in outcome.detail
+    assert not list(dir_tree["destination_dir"].iterdir())
+    assert (dir_tree["source_dir"] / "sdxl" / "alice.safetensors").is_file()
+    assert locations(dir_tree["hub"]).keys() == before.keys()
+
+
+def test_a_failed_repoint_renames_the_directory_back(dir_tree, monkeypatch):
+    def lost(hub, plan):
+        raise mover_module.RepointLost("simulated: the rows went away")
+
+    monkeypatch.setattr(dir_mover_module, "_repoint", lost)
+    _, outcome = _move_sdxl(dir_tree)
+    assert outcome.status == STATUS_FAILED
+    assert (dir_tree["source_dir"] / "sdxl" / "alice.safetensors").is_file()
+    assert not (dir_tree["destination_dir"] / "sdxl").exists()
+    assert_no_dangling_rows(dir_tree["hub"])
+
+
+def test_a_row_added_after_the_plan_is_repointed_too(dir_tree):
+    """The rows are re-read inside the repoint: a rescan is not under the lock."""
+    plan = plan_directory_move(
+        dir_tree["hub"], dir_tree["source_id"], "sdxl", dir_tree["destination_id"], ""
+    )
+    register_file(
+        dir_tree["hub"],
+        dir_tree["source_id"],
+        dir_tree["source_dir"],
+        os.path.join("sdxl", "late.safetensors"),
+    )
+    assert execute_directory_move(dir_tree["hub"], plan).status == STATUS_MOVED
+    assert_no_dangling_rows(dir_tree["hub"])
+
+
+def test_a_file_written_into_the_source_during_the_copy_keeps_the_source(
+    dir_tree, dir_cross_device, monkeypatch
+):
+    """The verify only knows the catalogued files; the removal must not take a
+    preview a running job saved into the source after the copy began."""
+    verify = dir_mover_module._verify
+    late = dir_tree["source_dir"] / "sdxl" / "alice_samples" / "step_200.png"
+
+    def verify_then_a_job_writes(plan, copy_root):
+        verify(plan, copy_root)
+        late.write_bytes(b"written mid-move")
+
+    monkeypatch.setattr(dir_mover_module, "_verify", verify_then_a_job_writes)
+    _, outcome = _move_sdxl(dir_tree)
+    assert outcome.status == STATUS_MOVED
+    assert "original was kept" in outcome.detail
+    assert late.read_bytes() == b"written mid-move"
+    assert (dir_tree["destination_dir"] / "sdxl" / "alice.safetensors").is_file()
+    assert_no_dangling_rows(dir_tree["hub"])

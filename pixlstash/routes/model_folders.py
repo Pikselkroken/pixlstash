@@ -111,7 +111,7 @@ from pixlstash.services.model_folder_scanner import (
     TAKEN_FROM_KINDS,
     ModelFolderScanner,
 )
-from pixlstash.services.model_mover import SHELF_IO_LOCK
+from pixlstash.services.model_mover import SHELF_IO_LOCK, MoveRefused, resolve_subfolder
 from pixlstash.tasks.base_task import TaskPriority
 from pixlstash.tasks.model_folder_scan_finder import scanned_folders
 from pixlstash.tasks.model_folder_scan_task import (
@@ -121,6 +121,7 @@ from pixlstash.tasks.model_folder_scan_task import (
     scan_state,
 )
 from pixlstash.utils.adapter_header import FILE_ENGINE
+from pixlstash.utils.library_layout import refusal_for_folder_name
 from pixlstash.utils.host_path_utils import is_absolute_host_path, normalize_host_path
 from pixlstash.utils.path_utils import path_is_within, resolve_path_within
 from pixlstash.utils.reference_folder_validator import (
@@ -665,6 +666,38 @@ def _posix_relpath(path: str, base: str) -> str:
     """*path* under *base*, POSIX, ``""`` for *base* itself."""
     rel = os.path.relpath(path, base).replace(os.sep, "/")
     return "" if rel == "." else rel
+
+
+class ModelFolderDirCreateRequest(BaseModel):
+    """Body of ``POST /model-folders/{folder_id}/dirs``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(
+        default="",
+        description=(
+            "The directory to create it in, POSIX and relative to the folder, "
+            "empty for the folder's root. It must exist."
+        ),
+    )
+    name: str = Field(
+        description=(
+            "The new directory's name, one segment. A name the drive cannot hold "
+            "(a slash, a reserved Windows name such as `con`, a trailing dot) is "
+            "refused with the reason, never rewritten."
+        )
+    )
+
+
+class ModelFolderDirCreateResponse(BaseModel):
+    """Body of a created directory."""
+
+    model_config = ConfigDict(extra="allow")
+
+    folder_id: int
+    path: str = Field(
+        description="The new directory's POSIX path relative to the folder."
+    )
 
 
 _SAMPLES_SUFFIX = "_samples"
@@ -1454,6 +1487,71 @@ def create_router(server) -> APIRouter:
             model_count=len(totals.model_ids),
             bytes=totals.bytes,
             dirs=dirs,
+        )
+
+    @router.post(
+        "/model-folders/{folder_id}/dirs",
+        summary="Create a directory inside a model folder",
+        description=(
+            "Makes one new, empty directory inside a registered folder, so models "
+            "can be moved into it. 201 with its path; 409 when the name is taken "
+            "or the folder is locked; 400 with the reason for a name the drive "
+            "cannot hold; 404 when the parent does not exist. Refused in Docker, "
+            "as creating a host folder is."
+        ),
+        status_code=201,
+        tags=["model_shelf"],
+        response_model=ModelFolderDirCreateResponse,
+    )
+    def create_model_folder_dir(
+        folder_id: int,
+        request: Request,
+        payload: ModelFolderDirCreateRequest = Body(...),
+    ):
+        server.auth.ensure_secure_when_required(request)
+        if server.running_in_docker():
+            raise HTTPException(
+                status_code=403,
+                detail="Creating folders is not available in Docker mode.",
+            )
+        folder = _fetch_folder(folder_id)
+        if folder["movable"] != "per_item":
+            raise HTTPException(
+                status_code=409,
+                detail="This folder is locked; PixlStash does not create folders in it.",
+            )
+        reason = refusal_for_folder_name(payload.name)
+        if reason:
+            raise HTTPException(status_code=400, detail=reason)
+        try:
+            subpath, parent = resolve_subfolder(folder["path"], payload.path)
+        except MoveRefused as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        if not os.path.isdir(parent):
+            raise HTTPException(
+                status_code=404, detail="No such directory in this model folder."
+            )
+        # Joined, not resolved: the name is one plain segment by now, and a link
+        # already standing at it is a taken name, never a path to create through
+        # (``mkdir`` does not follow a final link; it answers EEXIST).
+        target = os.path.join(parent, payload.name)
+        try:
+            os.mkdir(target)
+        except FileExistsError as exc:
+            raise HTTPException(
+                status_code=409, detail=f"{payload.name!r} already exists there."
+            ) from exc
+        except OSError as exc:
+            logger.error(
+                "Could not create %s in model folder %s: %s", target, folder_id, exc
+            )
+            raise HTTPException(
+                status_code=409, detail=f"Could not create the folder: {exc.strerror}"
+            ) from exc
+        logger.info("Created %s in model folder %s.", target, folder_id)
+        return ModelFolderDirCreateResponse(
+            folder_id=folder_id,
+            path=f"{subpath}/{payload.name}" if subpath else payload.name,
         )
 
     @router.post(
