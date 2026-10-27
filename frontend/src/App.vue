@@ -58,6 +58,7 @@ import { markEnd, markStart } from "./utils/perfMarks";
 import { LIGHTBOX_HOST_ID } from "./utils/dom";
 
 import SideBar from "./components/panels/SideBar.vue";
+import WorkflowsSidebar from "./components/panels/WorkflowsSidebar.vue";
 import TitleBar from "./components/TitleBar.vue";
 import PhotosImportDialog from "./components/io/PhotosImportDialog.vue";
 import RestoreConfirmDialog from "./components/widgets/RestoreConfirmDialog.vue";
@@ -833,6 +834,12 @@ defineExpose({
             sidebarStore.sidebarOverlay && sidebarStore.hideAutoSidebar()
           "
         >
+          <WorkflowsSidebar v-if="isWorkflowsView" />
+          <!-- On /workflows SideBar stays mounted but not drawn: its refs
+               (settings, import, folder picks) and drop targets are the app's.
+               A wrapper, since SideBar has several roots and v-show would not
+               reach them. -->
+          <div v-show="!isWorkflowsView" style="display: contents">
           <SideBar
             ref="sidebarRef"
             :installType="installType"
@@ -855,6 +862,7 @@ defineExpose({
             @update:set-loading="loading = $event"
             @update:check-for-updates="handleUpdateCheckForUpdates"
           />
+          </div>
         </div>
 
         <TelemetryConsentDialog

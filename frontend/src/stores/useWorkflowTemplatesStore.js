@@ -177,6 +177,30 @@ export const LIST_FILTERS = ["category", "model", "useCase", "runsOn", "readines
 const VIEW_KEY = "pixlstash:workflowTemplatesView";
 const VIEW_SCHEMA_VERSION = 3;
 
+// The template keys this browser has seen, for the sidebar's "N new" pill. Kept
+// apart from the view above: it is a record of what was seen, not a preference.
+const SEEN_KEY = "pixlstash:workflowTemplatesSeen";
+
+/** The stored keys, or null when nothing is stored (or it cannot be read). */
+function readSeen() {
+  try {
+    const list = JSON.parse(window.localStorage?.getItem(SEEN_KEY) || "null");
+    if (!Array.isArray(list)) return null;
+    return list.filter((key) => typeof key === "string");
+  } catch (err) {
+    console.warn(`[templates] could not read ${SEEN_KEY}; counting every template as seen`, err);
+    return null;
+  }
+}
+
+function writeSeen(keys) {
+  try {
+    window.localStorage?.setItem(SEEN_KEY, JSON.stringify(keys));
+  } catch (err) {
+    console.warn(`[templates] could not remember ${SEEN_KEY} for next time`, err);
+  }
+}
+
 /**
  * The remembered sort and filters, each one dropped that this build would not
  * draw. A blob that cannot be read (private mode, a disabled store, a corrupt
@@ -275,6 +299,18 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
   // Bumped by the inspector's Add: the view carries it out, since it lands
   // on the Mine tab afterwards (the `requestUseSet` pattern).
   const addRequest = ref(0);
+  // What this browser has seen. Nothing stored yet means the first list read
+  // marks it all seen, so the whole of ComfyUI is not announced as "new".
+  const storedSeen = readSeen();
+  const seenKeys = ref(new Set(storedSeen ?? []));
+  const seenInitialised = ref(storedSeen !== null);
+
+  /** Mark *keys* seen, here and in what the browser remembers. */
+  function markSeen(keys) {
+    seenInitialised.value = true;
+    for (const key of keys) seenKeys.value.add(key);
+    writeSeen([...seenKeys.value]);
+  }
 
   let inflight = null;
   // Whether the read in flight asked ComfyUI again (`refresh`).
@@ -315,6 +351,15 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
         comfyuiUrl.value = body?.comfyui_url ?? "";
         detail.value = body?.detail ?? "";
         loaded.value = true;
+        // Seen while the place is on screen, or never seen at all yet. A
+        // first read that found nothing (ComfyUI down, or none served) does
+        // not count as having seen the catalogue, or the whole of it would
+        // read as new once ComfyUI answers.
+        const firstSight =
+          !seenInitialised.value && reachable.value && templates.value.length;
+        if (firstSight || shown.value) {
+          markSeen(templates.value.map((t) => t.key));
+        }
         const keys = new Set(templates.value.map((t) => t.key));
         selectedKeys.value = selectedKeys.value.filter((key) => keys.has(key));
       } catch (err) {
@@ -333,6 +378,18 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
     inflight = read;
     return read;
   }
+
+  // Opening the Templates place marks everything on screen as seen.
+  watch(shown, (on) => {
+    if (on && loaded.value) markSeen(templates.value.map((t) => t.key));
+  });
+
+  /** Templates read since the place was last opened: the sidebar's "N new". */
+  const newCount = computed(() =>
+    loaded.value && reachable.value
+      ? templates.value.filter((t) => !seenKeys.value.has(t.key)).length
+      : 0,
+  );
 
   /** Models reached the shelf: a list already read re-reads what is present. */
   function onModelsArrived() {
@@ -568,6 +625,7 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
   return {
     shown,
     templates,
+    newCount,
     loaded,
     loading,
     reachable,
