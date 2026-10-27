@@ -45,6 +45,26 @@ export async function listImportFolders() {
 }
 
 /**
+ * What import folders brought in that has not been looked at yet: `{total,
+ * folder_count, batches: [{import_source_folder, label, count,
+ * first_imported_at, last_imported_at}]}`, newest batch first.
+ * @returns {Promise<Object>}
+ */
+export async function getInbox() {
+  return unwrap(apiClient.get(`${FOLDER_URLS.import}/inbox`));
+}
+
+/**
+ * Take pictures out of the Inbox. They stay in the library.
+ * @param {Object} body - `{all: true}`, or `{picture_ids}`, or
+ *   `{import_source_folder, since?, until?}` for one folder or one batch.
+ * @returns {Promise<{marked: number}>}
+ */
+export async function markInboxSeen(body) {
+  return unwrap(apiClient.post(`${FOLDER_URLS.import}/inbox/seen`, body));
+}
+
+/**
  * Create a folder of the given kind.
  * @param {"reference"|"import"} kind
  * @param {Object} body - `{ folder }` plus the kind's options (label,

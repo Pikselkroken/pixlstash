@@ -23,6 +23,8 @@ export const useFilterStore = defineStore("filter", () => {
   const tagConfidenceBelowFilter = ref([]);
   const faceBboxFilter = ref(null);
   const sharedOnlyFilter = ref(false);
+  // "Imported from": an import folder's path, or null for any picture.
+  const importedFromFilter = ref(null);
   // "Problems" in All Pictures: no named person, and in no set. Independent;
   // both on is the old combined "unassigned" view.
   const noCharacterFilter = ref(false);
@@ -80,6 +82,7 @@ export const useFilterStore = defineStore("filter", () => {
     tagConfidenceBelowFilter.value = [];
     faceBboxFilter.value = null;
     sharedOnlyFilter.value = false;
+    importedFromFilter.value = null;
     noCharacterFilter.value = false;
     noSetFilter.value = false;
     comfyuiModelFilter.value = [];
@@ -103,6 +106,7 @@ export const useFilterStore = defineStore("filter", () => {
     tagConfidenceBelowFilter,
     faceBboxFilter,
     sharedOnlyFilter,
+    importedFromFilter,
     noCharacterFilter,
     noSetFilter,
     comfyuiModelFilter,

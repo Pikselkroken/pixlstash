@@ -59,6 +59,7 @@ import { useModelFoldersStore } from "./useModelFoldersStore";
 import { useFolderMappingStore } from "./useFolderMappingStore";
 import { useModelMovesStore } from "./useModelMovesStore";
 import { useMovesStore } from "./useMovesStore";
+import { useImportFoldersStore } from "./useImportFoldersStore";
 import { useWorkflowsStore } from "./useWorkflowsStore";
 import { useWorkflowTemplatesStore } from "./useWorkflowTemplatesStore";
 import { useRunDialogStore } from "./useRunDialogStore";
@@ -257,7 +258,6 @@ const STORES = [
       s.mergeSetNames([{ id: 2, name: "Holiday" }]);
       s.mergeProjectNames([{ id: 3, name: "Client work" }]);
       s.mergeRefFolderLabels([{ id: 4, label: "refs" }]);
-      s.mergeImportFolderLabels([{ id: 5, label: "inbox" }]);
     },
     isEmpty: (s) =>
       [
@@ -265,7 +265,6 @@ const STORES = [
         s.setNames,
         s.projectNames,
         s.refFolderLabels,
-        s.importFolderLabels,
       ].every((map) => Object.keys(map).length === 0),
   },
   {
@@ -422,6 +421,22 @@ const STORES = [
       s.unambiguous.length === 0 &&
       s.ambiguous.length === 0 &&
       s.offLayout.length === 0 &&
+      s.loaded === false,
+  },
+  {
+    // Import-folder roots on the previous credential's host, and the Inbox
+    // count of its library.
+    name: "useImportFoldersStore",
+    use: useImportFoldersStore,
+    seed: (s) => {
+      s.folders = [{ id: 1, folder: "/home/me/renders" }];
+      s.inbox = { total: 3, folder_count: 1, batches: [{ count: 3 }] };
+      s.loaded = true;
+    },
+    isEmpty: (s) =>
+      s.folders.length === 0 &&
+      s.inbox.total === 0 &&
+      s.inbox.batches.length === 0 &&
       s.loaded === false,
   },
 ];

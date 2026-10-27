@@ -3678,8 +3678,8 @@ cannot produce.
 
 ### `?path=` and `?face=` — the two facets a finding opens on
 
-A reference folder and an import folder each have a route of their own
-(`/ref-folder/:id`, `/import-folder/:id`). The folder an insight points at has
+A reference folder has a route of its own (`/ref-folder/:id`), and the Inbox
+narrows to an import folder with `/inbox?folder=`. The folder an insight points at has
 no id of any kind, so it travels as **`?path=<absolute folder>`** on any grid
 route (`useViewStore.parseFolderPath`), resolving to the same `{pathPrefix}`
 payload the sidebar emits and therefore to the listing API's existing

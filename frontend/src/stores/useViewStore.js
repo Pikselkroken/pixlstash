@@ -109,8 +109,8 @@ function parseStackState(raw) {
 /**
  * `?path=<absolute folder>`: the folder facet for folders that have no id.
  *
- * A reference folder and an import folder each have a route of their own
- * (`/ref-folder/:id`, `/import-folder/:id`) and the sidebar owns their payload.
+ * A reference folder has a route of its own (`/ref-folder/:id`) and the
+ * sidebar owns its payload.
  * A folder an "About your library" finding points at has no id of any kind,
  * which is why this param exists.
  *
@@ -284,13 +284,25 @@ export function parseRouteView(route) {
     return view;
   }
 
-  if (name === "ref-folder" || name === "import-folder") {
+  if (name === "ref-folder") {
     view.clearFolderFilter = false;
     view.characterLabel = "All Pictures";
-    if (params.id) {
-      view.folderKey =
-        name === "ref-folder" ? `rf-${params.id}` : `if-${params.id}`;
-    }
+    if (params.id) view.folderKey = `rf-${params.id}`;
+    return view;
+  }
+
+  // The Inbox: everything import folders brought in that has not been looked
+  // at, or `?folder=` one folder's. A facet of the grid like `?path=`, so the
+  // route owns it and no sidebar payload is waited for.
+  if (name === "inbox") {
+    const folder = Array.isArray(query.folder) ? query.folder[0] : query.folder;
+    view.characterLabel = "All Pictures";
+    view.clearFolderFilter = false;
+    view.folderFilter = {
+      inbox: true,
+      importSourceFolder: folder ? String(folder) : null,
+      label: "Inbox",
+    };
     return view;
   }
 
@@ -372,8 +384,14 @@ function applyView(view, selectionStore, projectStore, filterStore) {
     // this guard is load-bearing: `SideBar.routeSubfolderUnder` applies the
     // path WITH the folder's id once the folder listing is in.
     const current = selectionStore.selectedFolderFilter;
-    if (current?.pathPrefix !== view.folderFilter.pathPrefix) {
-      selectionStore.selectedFolderFilter = view.folderFilter;
+    const next = view.folderFilter;
+    if (
+      current?.pathPrefix !== next.pathPrefix ||
+      Boolean(current?.inbox) !== Boolean(next.inbox) ||
+      (current?.importSourceFolder ?? null) !==
+        (next.importSourceFolder ?? null)
+    ) {
+      selectionStore.selectedFolderFilter = next;
     }
   }
 
@@ -429,7 +447,7 @@ export const useViewStore = defineStore("view", () => {
   // The last parsed route. `null` for a route the grid is not driven from.
   const view = ref(null);
 
-  // Sidebar folder highlight key ('rf-{id}' / 'if-{id}') for the current route,
+  // Sidebar folder highlight key ('rf-{id}') for the current route,
   // so a deep link or a Back navigation lights the right folder row.
   const activeFolderKey = computed(() => view.value?.folderKey ?? null);
 

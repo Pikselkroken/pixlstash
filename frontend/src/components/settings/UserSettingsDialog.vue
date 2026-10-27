@@ -5,6 +5,7 @@ import AppDialog from "../widgets/AppDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AccountSection from "./AccountSection.vue";
 import LibrariesSection from "./LibrariesSection.vue";
+import ImportFoldersSection from "./ImportFoldersSection.vue";
 import AppearanceSection from "./AppearanceSection.vue";
 import BehaviourSection from "./BehaviourSection.vue";
 import ComfyuiHostSection from "./ComfyuiHostSection.vue";
@@ -108,6 +109,14 @@ const navItems = computed(() =>
       id: "libraries",
       icon: "bookshelf",
       label: "Libraries",
+      show: !isReadOnly.value,
+    },
+    {
+      // What flows into the open library, beside the library itself. The
+      // Inbox's "Manage import folders…" lands here.
+      id: "import-folders",
+      icon: "folder-download-outline",
+      label: "Import folders",
       show: !isReadOnly.value,
     },
     {
@@ -299,6 +308,18 @@ watch(
         aria-labelledby="settings-nav-libraries"
       >
         <LibrariesSection :open="dialogOpen && settingsTab === 'libraries'" />
+      </div>
+      <div
+        v-if="!isReadOnly"
+        v-show="settingsTab === 'import-folders'"
+        id="settings-pane-import-folders"
+        class="settings-pane"
+        role="region"
+        aria-labelledby="settings-nav-import-folders"
+      >
+        <ImportFoldersSection
+          :open="dialogOpen && settingsTab === 'import-folders'"
+        />
       </div>
       <div
         v-if="!isReadOnly"

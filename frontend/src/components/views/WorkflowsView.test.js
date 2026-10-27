@@ -511,10 +511,9 @@ describe("the empty state", () => {
       .findAll(".wfv-empty__actions button")
       .find((button) => button.text().includes("Open watched folder"));
     await open.trigger("click");
-    expect(push).toHaveBeenCalledWith({
-      name: "import-folder",
-      params: { id: "7" },
-    });
+    // Everything the folder brought in: the library, Imported from it.
+    expect(useFilterStore().importedFromFilter).toBe("/srv/incoming");
+    expect(push).toHaveBeenCalledWith({ name: "all-pictures" });
   });
 });
 

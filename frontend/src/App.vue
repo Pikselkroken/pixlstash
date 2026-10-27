@@ -234,6 +234,7 @@ const {
   isWorkflowsView,
   handleSelectInsights,
   handleSelectMoves,
+  handleSelectInbox,
   handleInsightAction,
   handleSelectCharacter,
   handleSelectSet,
@@ -361,7 +362,7 @@ watch(mainAreaRef, (mainArea) => {
 });
 
 // --- Computed ---
-// Maps the current route to a sidebar folder key ('rf-{id}' or 'if-{id}') so
+// Maps the current route to a sidebar folder key ('rf-{id}') so
 // the sidebar can highlight the correct folder on deep-link or back-navigation.
 // Parsed once, by useViewStore.
 
@@ -864,6 +865,7 @@ defineExpose({
             @select-character="handleSelectCharacter"
             @select-insights="handleSelectInsights"
             @select-moves="handleSelectMoves"
+            @select-inbox="handleSelectInbox()"
             @select-duplicates="handleSelectDuplicates"
             @select-set="handleSelectSet"
             @select-folder="handleSelectFolder"

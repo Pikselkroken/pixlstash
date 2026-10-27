@@ -37,6 +37,19 @@ describe("filterChips", () => {
     expect(s.favouriteOnlyFilter).toBe(false);
   });
 
+  it("names an Imported from folder by its last component, and clears it", () => {
+    const s = useFilterStore();
+    s.importedFromFilter = "/home/me/ComfyUI/output/";
+    const chips = filterChips(s);
+    expect(chips.map((c) => `${c.kind} ${c.value}`)).toEqual([
+      "Imported from output",
+    ]);
+    chips[0].remove();
+    expect(s.importedFromFilter).toBe(null);
+    s.importedFromFilter = "C:\\Users\\me\\Renders";
+    expect(filterChips(s)[0].value).toBe("Renders");
+  });
+
   it("gives every active filter its own chip, one per tag or model", () => {
     const s = useFilterStore();
     s.noCharacterFilter = true;

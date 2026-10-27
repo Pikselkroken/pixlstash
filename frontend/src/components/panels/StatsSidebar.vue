@@ -57,7 +57,13 @@ const filePathPrefixFilter = computed(
   () => selectionStore.selectedFolderFilter?.pathPrefix ?? null,
 );
 const importSourceFolderFilter = computed(
-  () => selectionStore.selectedFolderFilter?.importSourceFolder ?? null,
+  () =>
+    selectionStore.selectedFolderFilter?.importSourceFolder ??
+    filterStore.importedFromFilter ??
+    null,
+);
+const inboxFilter = computed(() =>
+  Boolean(selectionStore.selectedFolderFilter?.inbox),
 );
 
 // ─── PIL / Video extension lists ─────────────────────────────────────────────
@@ -355,6 +361,7 @@ function buildQueryParams() {
     params.append("file_path_prefix", filePathPrefixFilter.value);
   if (importSourceFolderFilter.value != null)
     params.append("import_source_folder", importSourceFolderFilter.value);
+  if (inboxFilter.value) params.append("unseen", "1");
   (filterStore.tagFilter || []).forEach((t) => params.append("tag", t));
   (filterStore.tagRejectedFilter || []).forEach((t) =>
     params.append("rejected_tag", t),

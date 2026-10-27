@@ -424,6 +424,14 @@ class Picture(SQLModel, table=True):
     # finder's only query is "anything due yet?" against a table where the
     # answer is almost always no.
     layout_check_due_at: Optional[float] = Field(default=None, index=True)
+    # In the Inbox: brought in by an import folder and not looked at yet. Set
+    # by ``WatchFolderImportTask`` and cleared by the first recorded edit of the
+    # picture (``operation_log_service``), by opening it, or by Mark seen. Never
+    # set by any other way in, so pictures imported by hand never queue up.
+    unseen: bool = Field(
+        default=False,
+        sa_column=Column("unseen", Boolean, nullable=False, server_default="0"),
+    )
     # Absolute path to the import-folder root that produced this picture.
     # NULL for pictures imported through other workflows.
     import_source_folder: Optional[str] = Field(
@@ -687,6 +695,14 @@ class Picture(SQLModel, table=True):
             # ``IS 1``, the form the filter compiles to: SQLite only uses a
             # partial index whose WHERE matches the query's term.
             sqlite_where=text("favourite IS 1"),
+        ),
+        # The Inbox: a queue the owner works down, so it is small next to the
+        # library and only its rows are indexed, like the favourites.
+        Index(
+            "ix_picture_unseen",
+            "unseen",
+            "id",
+            sqlite_where=text("unseen IS 1"),
         ),
     )
 
@@ -1422,6 +1438,8 @@ class Picture(SQLModel, table=True):
         stack_state: Optional[str] = None,
         impossible_sources: Optional[List[str]] = None,
         file_path_prefix: Optional[str] = None,
+        import_source_folder: Optional[str] = None,
+        unseen: bool = False,
         comfyui_models_filter: Optional[List[str]] = None,
         comfyui_loras_filter: Optional[List[str]] = None,
         workflow_structural_hashes: Optional[List[str]] = None,
@@ -1465,7 +1483,9 @@ class Picture(SQLModel, table=True):
         # Intrinsic-attribute predicates via the shared compiler.  The unassigned /
         # project / deleted scoping is applied above; stack-leader collapsing stays
         # below.  ComfyUI membership is applied after it, the same way `find`
-        # applies it. Import-source / import-excluded are not filtered here.
+        # applies it. Import-excluded is not filtered here; the import source
+        # and the Inbox are, so "No character" narrows them rather than
+        # replacing them.
         #
         # ``file_path_prefix`` IS honoured, on the same children-only semantics
         # ``find()`` uses, so "the unassigned pictures in one folder" is one
@@ -1490,6 +1510,8 @@ class Picture(SQLModel, table=True):
             stack_state=stack_state,
             impossible_sources=impossible_sources,
             file_path_prefix=file_path_prefix,
+            import_source_folder=import_source_folder,
+            unseen_only=unseen,
             workflow_structural_hashes=workflow_structural_hashes,
             apply_deleted_filter=False,
         ).apply(query)

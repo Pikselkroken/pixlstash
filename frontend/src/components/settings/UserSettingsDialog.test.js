@@ -30,6 +30,7 @@ vi.mock("./ComputeSection.vue", () => ({
   default: { template: '<div class="compute-stub" />' },
 }));
 vi.mock("./LibrariesSection.vue", () => ({ default: sectionStub }));
+vi.mock("./ImportFoldersSection.vue", () => ({ default: sectionStub }));
 vi.mock("./ModelFoldersSection.vue", () => ({ default: sectionStub }));
 vi.mock("./PrivacySection.vue", () => ({ default: sectionStub }));
 vi.mock("./ScrapheapSection.vue", () => ({ default: sectionStub }));
@@ -96,6 +97,8 @@ describe("UserSettingsDialog library navigation", () => {
       "settings-nav-behaviour",
       "settings-nav-smart-score",
       "settings-nav-libraries",
+      // What flows into the open library sits beside the library itself.
+      "settings-nav-import-folders",
       // No Library layout rail item: the layout is a property of whichever
       // library is *open*, so it is a dialog off the active library's overflow
       // menu rather than a tab beside the list that opens one.
@@ -164,6 +167,7 @@ describe("UserSettingsDialog library navigation", () => {
         "settings-nav-behaviour",
         "settings-nav-smart-score",
         "settings-nav-libraries",
+        "settings-nav-import-folders",
         "settings-nav-scrapheap",
         "settings-nav-snapshots",
         "settings-nav-privacy",

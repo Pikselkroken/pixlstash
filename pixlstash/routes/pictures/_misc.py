@@ -1000,6 +1000,7 @@ def register_routes(router, server):
             resolution_bucket=resolution_bucket,
             file_path_prefix=file_path_prefix,
             import_source_folder=import_source_folder,
+            unseen_only=_predicate_filter.unseen_only,
             tags_filter=tags_filter,
             rejected_tags=rejected_tags,
             face_filter=face_filter,

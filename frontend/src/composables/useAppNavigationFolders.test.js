@@ -114,21 +114,22 @@ describe("a reference-folder click", () => {
     wrapper.unmount();
   });
 
-  it("pushes no query when the payload carries no path at all", () => {
-    // The project menu's folder rows build the payload from the listing, and
-    // an import folder's has no `pathPrefix`. An empty query, not `path=`.
+  it("keeps the Inbox on its own route, narrowed to a folder or not", () => {
+    // The Inbox facet is a grid view of its own: a selection change made while
+    // it shows (or Back onto it) keeps `/inbox`, with `?folder=` only when it
+    // is narrowed to one import folder.
     const { wrapper, api } = mountNav();
 
-    api.handleSelectFolder({
-      importSourceFolder: "/home/me/inbox",
-      importFolderId: 7,
-      label: "inbox",
-    });
+    api.handleSelectFolder({ inbox: true, importSourceFolder: null });
+    expect(nav.push).toHaveBeenLastCalledWith({ name: "inbox", query: {} });
 
-    expect(nav.push).toHaveBeenCalledWith({
-      name: "import-folder",
-      params: { id: "7" },
-      query: {},
+    api.handleSelectFolder({
+      inbox: true,
+      importSourceFolder: "/home/me/renders",
+    });
+    expect(nav.push).toHaveBeenLastCalledWith({
+      name: "inbox",
+      query: { folder: "/home/me/renders" },
     });
 
     wrapper.unmount();

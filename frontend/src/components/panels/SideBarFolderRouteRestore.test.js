@@ -99,12 +99,7 @@ const FOLDER = {
 const WIN_FOLDER = { id: 6, folder: WIN_ROOT, label: "Win refs", active: true };
 const ODD_FOLDER = { id: 7, folder: ODD_ROOT, label: "Odd refs", active: true };
 
-const IMPORT_FOLDER = { id: 9, folder: "/home/me/inbox", label: "Inbox" };
-
 function respond(url) {
-  if (String(url).includes("/import-folders")) {
-    return { data: { folders: [IMPORT_FOLDER] } };
-  }
   if (String(url).includes("/reference-folders")) {
     return { data: { folders: [FOLDER, WIN_FOLDER, ODD_FOLDER], in_docker: true } };
   }
@@ -448,38 +443,6 @@ describe("restoring /ref-folder/:id", () => {
 
       wrapper.unmount();
     });
-  });
-
-  // `selectedFolderRouteKey` is the one crossing from the sidebar's row-key
-  // space into the route's. It reads `selectedFolderReferenceId`, which is
-  // `null` when no reference folder is selected - and `Number(null)` is `0`,
-  // which `Number.isFinite` accepts. So it used to answer `rf-0` for "nothing
-  // selected", which made the teardown believe a phantom folder was showing,
-  // and made the `if-` branch unreachable in exactly the case it exists for.
-  it("clears an import-folder selection when the route leaves it", async () => {
-    // An import folder is selected with `selectedFolderReferenceId` left null,
-    // and `Number(null)` is `0`, which `Number.isFinite` accepts - so the
-    // crossing into the route's key space answered `rf-0` for a selection that
-    // is really `if-9`. The teardown then compared `rf-0` against the `if-9`
-    // it was leaving, found no match, and left the import folder highlighted
-    // (and its scanning light on) after the app had navigated away.
-    const wrapper = await mountSidebar();
-    const sidebarStore = useSidebarStore();
-    useViewStore().view = { folderKey: "if-9", folderFilter: null };
-    await flushPromises();
-    expect(lastFolderPayload(wrapper)).toEqual({
-      importSourceFolder: IMPORT_FOLDER.folder,
-      importFolderId: 9,
-      label: "Inbox",
-    });
-    expect(sidebarStore.folderScanning).toBe(true);
-
-    useViewStore().view = null;
-    await flushPromises();
-
-    expect(sidebarStore.folderScanning).toBe(false);
-
-    wrapper.unmount();
   });
 
   it("does not read a slash-spelled URL as inside a POSIX folder named a\\b", async () => {
