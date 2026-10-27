@@ -6522,9 +6522,23 @@ so `sidebarRef`, the importer and its drop targets stay alive.
   `filters.type` / `filters.checkpoint`. Places are not chips (the lit row
   says which is on, and the Filter menu has no Favourites box any more);
   facets and the Filter menu's filters are.
+- **The header slot is the ComfyUI connection** (`WorkflowsComfyuiSlot.vue`,
+  #2166). With `filterStore.comfyuiConfigured` false it is an amber *Set up
+  ComfyUI* row that opens Settings › ComfyUI, the Templates count is "–" with
+  no "N new", and `WorkflowTemplatesPanel` shows *Templates come from
+  ComfyUI* with a Set up ComfyUI button instead of any list (the server reads
+  the default address even with none saved). With an address saved, the slot
+  names it ("This PC" for loopback, else the host) over its status and card
+  from `POST /comfyui/probe` ("Connected · RTX 4090 · 24 GB", "Offline", "Not
+  checked" when the probe itself failed). It is probed on mount, on an address
+  change and on each menu open, not polled. The menu is *Run on*: the one
+  instance row, then *New ComfyUI connection…* and *ComfyUI settings…*, both
+  opening Settings › ComfyUI until the backend holds more than one
+  `comfyui_url`. A new address re-reads the templates with `refresh`. A
+  READ session draws no slot and never the not-set-up state, since it cannot
+  read the config.
 - **The footer band** is one amber *Add workflow* (`requestAdd()`, see
-  `WorkflowsView`). There is no Hidden row (Show hidden stays in Filter) and
-  no header slot content yet (the ComfyUI selector is #2166).
+  `WorkflowsView`). There is no Hidden row (Show hidden stays in Filter).
 - **`store.viewName`** names the view for the rail head: "ComfyUI templates",
   else the lit facet's label, else the place's name.
 

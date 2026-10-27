@@ -1,8 +1,9 @@
 <script setup>
 /**
- * The Workflows workspace's own left rail (#2165): the three places the grid
- * can be narrowed to, the ComfyUI templates, the Type and Base model facets,
- * and the footer's Add workflow. App.vue mounts it in place of SideBar on
+ * The Workflows workspace's own left rail (#2165): the ComfyUI connection in
+ * the header slot (#2166), the three places the grid can be narrowed to, the
+ * ComfyUI templates, the Type and Base model facets, and the footer's Add
+ * workflow. App.vue mounts it in place of SideBar on
  * /workflows; SideBar stays mounted, hidden, because it owns the refs and
  * drop targets the rest of the app reaches through.
  *
@@ -10,13 +11,19 @@
  * `useWorkflowTemplatesStore().shown`, which the grid's view reads too. Picking
  * a place or a facet leaves the Templates place.
  */
-import { computed, onMounted } from "vue";
+import { computed, onMounted, watch } from "vue";
 import AppButton from "../widgets/AppButton.vue";
+import WorkflowsComfyuiSlot from "./WorkflowsComfyuiSlot.vue";
+import { useFilterStore } from "../../stores/useFilterStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { useWorkflowTemplatesStore } from "../../stores/useWorkflowTemplatesStore";
+import { isReadOnly } from "../../utils/apiClient";
+
+const emit = defineEmits(["open-settings"]);
 
 const store = useWorkflowsStore();
 const tpl = useWorkflowTemplatesStore();
+const filterStore = useFilterStore();
 
 // The list is read once per session and the server keeps its own copy of
 // ComfyUI's, so this is one cheap read, not a ComfyUI round trip per visit. It
@@ -25,6 +32,14 @@ const tpl = useWorkflowTemplatesStore();
 onMounted(() => {
   tpl.fetchTemplates();
 });
+
+// A new address is another ComfyUI: its list, not the one read before.
+watch(
+  () => filterStore.comfyuiUrl,
+  (url, was) => {
+    if (url && url !== was) tpl.fetchTemplates({ refresh: true });
+  },
+);
 
 const PLACES = [
   { id: "all", label: "All workflows", icon: "mdi-view-grid-outline" },
@@ -45,12 +60,21 @@ const placeRows = computed(() => {
   }));
 });
 
-// Blank until the list is read; "–" when ComfyUI did not answer, so an
-// unconnected owner reads a dash rather than a zero.
+// "–" with no ComfyUI set up, or when it did not answer, so an unconnected
+// owner reads a dash rather than a zero; blank until the list is read.
 const templatesCount = computed(() => {
+  if (!filterStore.comfyuiConfigured) return "–";
   if (!tpl.loaded) return "";
   return tpl.reachable ? String(tpl.templates.length) : "–";
 });
+
+const showNew = computed(
+  () =>
+    filterStore.comfyuiConfigured &&
+    tpl.loaded &&
+    tpl.reachable &&
+    tpl.newCount > 0,
+);
 
 const typeRows = computed(() =>
   store.filterOptions.types.map((option) => ({
@@ -84,6 +108,12 @@ function pickFacet(key, id) {
 
 <template>
   <div class="workflows-sidebar">
+    <!-- A shared view cannot read the owner's ComfyUI address, so it would
+         always read as not set up. -->
+    <WorkflowsComfyuiSlot
+      v-if="!isReadOnly"
+      @open-settings="(section) => emit('open-settings', section)"
+    />
     <nav
       class="workflows-sidebar__list sidebar-scroll"
       aria-label="Workflow navigation"
@@ -120,7 +150,7 @@ function pickFacet(key, id) {
           >mdi-shape-outline</v-icon
         >
         <span class="wfs-row__label">Templates</span>
-        <span v-if="tpl.loaded && tpl.reachable && tpl.newCount > 0" class="wfs-new"
+        <span v-if="showNew" class="wfs-new"
           >{{ tpl.newCount }} new</span
         >
         <span class="wfs-row__count">{{ templatesCount }}</span>

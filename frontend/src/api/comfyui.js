@@ -153,8 +153,10 @@ export async function getPixlstashNode() {
  *
  * @param {string} url - e.g. `"http://127.0.0.1:8188/"`.
  * @returns {Promise<{reachable: boolean, url: string, version: ?string,
- *   detail: ?string, listens_on_network: ?boolean}>} `listens_on_network`:
- *   whether ComfyUI's `--listen` lets other computers reach it, null unknown.
+ *   detail: ?string, listens_on_network: ?boolean, gpu: ?string,
+ *   vram_mb: ?number}>} `listens_on_network`: whether ComfyUI's `--listen`
+ *   lets other computers reach it, null unknown. `gpu` and `vram_mb`: the card
+ *   ComfyUI runs on (`"CPU"` and no size on the CPU), null unknown.
  */
 export async function probeComfyui(url) {
   return unwrap(apiClient.post(comfyUrl("/probe"), { url }));

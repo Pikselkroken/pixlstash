@@ -23,6 +23,7 @@ vi.mock("../../api/comfyui", () => ({
 }));
 
 import WorkflowsSidebar from "./WorkflowsSidebar.vue";
+import { useFilterStore } from "../../stores/useFilterStore";
 import { useWorkflowsStore, RECENT_DAYS } from "../../stores/useWorkflowsStore";
 import { useWorkflowTemplatesStore } from "../../stores/useWorkflowTemplatesStore";
 
@@ -99,19 +100,24 @@ function listing(names, extra = {}) {
 }
 
 const LABEL_KEY = "pixlstash:workflowTemplatesSeen";
+const STUBS = { "v-icon": true, WorkflowsComfyuiSlot: true };
 
-async function mountSidebar() {
+async function mountSidebar({ configured = true } = {}) {
   const pinia = createPinia();
   setActivePinia(pinia);
   const store = useWorkflowsStore();
   const templates = useWorkflowTemplatesStore();
+  const filterStore = useFilterStore();
+  filterStore.comfyuiConfigured = configured;
+  filterStore.comfyuiUrl = configured ? "http://127.0.0.1:8188/" : "";
   await store.fetchCards();
+  // The header slot has its own suite (WorkflowsComfyuiSlot.test.js).
   const wrapper = mount(WorkflowsSidebar, {
-    global: { plugins: [pinia], stubs: { "v-icon": true } },
+    global: { plugins: [pinia], stubs: STUBS },
     attachTo: document.body,
   });
   await flushPromises();
-  return { wrapper, store, templates };
+  return { wrapper, store, templates, filterStore };
 }
 
 /** The button whose label is `label` (the row's text, count excluded). */
@@ -250,13 +256,28 @@ describe("the Templates row", () => {
     expect(templatesRow(wrapper).find(".wfs-new").exists()).toBe(false);
   });
 
+  it("shows a dash and no new pill with no ComfyUI set up, whatever the default address serves", async () => {
+    const { wrapper } = await mountSidebar({ configured: false });
+    expect(templatesRow(wrapper).find(".wfs-row__count").text()).toBe("–");
+    expect(templatesRow(wrapper).find(".wfs-new").exists()).toBe(false);
+  });
+
+  it("reads the list again, past the server's keep, when the address changes", async () => {
+    const { filterStore } = await mountSidebar();
+    expect(listTemplates).toHaveBeenCalledTimes(1);
+    filterStore.comfyuiUrl = "http://192.0.2.20:8188/";
+    await flushPromises();
+    expect(listTemplates).toHaveBeenCalledTimes(2);
+    expect(listTemplates).toHaveBeenLastCalledWith({ refresh: true });
+  });
+
   it("reads the list once when the rail mounts, and not again on a later visit", async () => {
     const { wrapper } = await mountSidebar();
     expect(listTemplates).toHaveBeenCalledTimes(1);
     // App.vue mounts the rail with v-if, so each visit to /workflows is a new mount.
     const pinia = wrapper.vm.$pinia;
     wrapper.unmount();
-    mount(WorkflowsSidebar, { global: { plugins: [pinia], stubs: { "v-icon": true } } });
+    mount(WorkflowsSidebar, { global: { plugins: [pinia], stubs: STUBS } });
     await flushPromises();
     expect(listTemplates).toHaveBeenCalledTimes(1);
   });

@@ -63,10 +63,31 @@
       {{ store.error }}
     </p>
 
+    <!-- No ComfyUI set up (#2166): whatever the default address answers, the
+         grid says where templates come from and how to get them. -->
+    <div
+      v-if="notSetUp"
+      class="wtp-empty"
+      data-testid="wtp-not-set-up"
+    >
+      <ComfyuiIcon :size="40" class="wtp-empty__icon" />
+      <h2 class="wtp-empty__title">Templates come from ComfyUI</h2>
+      <p class="wtp-empty__lead">
+        Connect a ComfyUI and its ready-made workflows show up here, with the
+        models each one needs and a download for any you are missing.
+      </p>
+      <AppButton
+        size="sm"
+        variant="primary"
+        @click="emit('open-settings', 'comfyui')"
+        >Set up ComfyUI</AppButton
+      >
+    </div>
+
     <!-- No ComfyUI answering: the tab is still a tab, and says where its list
          would come from. Mine is unaffected. -->
     <div
-      v-if="store.loaded && !listed"
+      v-else-if="store.loaded && !listed"
       class="wtp-empty"
       data-testid="wtp-unreachable"
     >
@@ -240,6 +261,7 @@ import {
   downloadModels,
   modelBaseName,
 } from "../../composables/useModelDownloads";
+import { useFilterStore } from "../../stores/useFilterStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useWorkflowTemplatesStore } from "../../stores/useWorkflowTemplatesStore";
 import { isReadOnly } from "../../utils/apiClient";
@@ -261,9 +283,16 @@ const emit = defineEmits(["add", "open-settings"]);
 
 const store = useWorkflowTemplatesStore();
 const tasksStore = useTasksStore();
+const filterStore = useFilterStore();
+// A shared view cannot read the owner's config, so it never reads as unset.
+const notSetUp = computed(
+  () => !filterStore.comfyuiConfigured && !isReadOnly.value,
+);
 // With no ComfyUI answering the list is the copy PixlStash ships, shown the
 // same way; only an empty one is the unreachable state.
-const listed = computed(() => store.reachable || store.templates.length > 0);
+const listed = computed(
+  () => !notSetUp.value && (store.reachable || store.templates.length > 0),
+);
 const sourceLabel = computed(() =>
   store.reachable
     ? `Templates from your ComfyUI at ${store.comfyuiUrl}`
