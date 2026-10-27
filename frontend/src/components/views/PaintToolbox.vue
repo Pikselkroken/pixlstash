@@ -1,6 +1,7 @@
 <template>
   <!-- The design's one-column toolbox, floating beside the filmstrip while the
-       Edit tab is open. Each tool wears its key. -->
+       Edit tab is open. Each tool wears its key; pressing the one in hand puts
+       it down, as Esc does. -->
   <div class="paint-toolbox" role="toolbar" aria-label="Paint tools" aria-orientation="vertical">
     <button
       v-for="item in tools"
@@ -11,7 +12,7 @@
       :aria-pressed="paint.tool.value === item.id ? 'true' : 'false'"
       :aria-label="`${item.label} (${item.key})`"
       :aria-keyshortcuts="item.key"
-      @click="paint.setTool(item.id)"
+      @click="paint.setTool(paint.tool.value === item.id ? null : item.id)"
     >
       <Tooltip
         :text="item.label"

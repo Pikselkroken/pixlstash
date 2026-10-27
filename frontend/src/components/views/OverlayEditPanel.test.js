@@ -749,6 +749,7 @@ describe("the Edit tab", () => {
 function fakePaint(steps = []) {
   const stepsRef = ref(steps);
   return markRaw({
+    tool: ref(null),
     hasSelection: ref(steps.length > 0),
     selection: ref({ version: 1, steps, refine: { grow: 0, feather: 0, fill_holes: 0 } }),
     steps: stepsRef,
