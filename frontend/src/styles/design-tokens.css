@@ -305,9 +305,10 @@
   /* A workspace sidebar's frame (#2159): the header slot at the top (project
      scope, ComfyUI connection or model folder) and the footer band holding its
      one amber action. Every workspace uses both, so the frame keeps its shape
-     on a switch. The slot is the toolbar's 40px line in the redesign; the
-     toolbar itself moves onto it in #2160. */
-  --sidebar-slot-h: 40px;
+     on a switch. The slot IS the toolbar band, so the sidebar's top rule and
+     the toolbar's run as one line across the window; a 40px slot under a
+     36px toolbar put the sidebar's rule 4px low in every workspace. */
+  --sidebar-slot-h: var(--toolbar-height);
   --sidebar-band-h: 52px;
 
   /* Notice surface (see notice-surface.md §11). `--notice-max-w` matches the
