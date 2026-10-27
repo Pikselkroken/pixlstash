@@ -228,6 +228,20 @@ describe("rename and edit address, in place", () => {
     wrapper.unmount();
   });
 
+  it("Enter saves once, though it also submits the field's form", async () => {
+    comfyui.updateComfyuiConnection.mockReturnValue(new Promise(() => {}));
+    const wrapper = mountTable();
+    await menuItem(wrapper, "box", "rename").trigger("click");
+    const field = byTestId(wrapper, "comfyui-rename-field").find("input");
+    await field.setValue("Studio");
+    // What a browser does with Enter in a form's only text field.
+    await field.trigger("keydown", { key: "Enter" });
+    await field.element.form.dispatchEvent(new Event("submit", { cancelable: true }));
+    await flushPromises();
+    expect(comfyui.updateComfyuiConnection).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
   it("Escape leaves the name as it was and asks nothing", async () => {
     const wrapper = mountTable();
     await menuItem(wrapper, "box", "rename").trigger("click");

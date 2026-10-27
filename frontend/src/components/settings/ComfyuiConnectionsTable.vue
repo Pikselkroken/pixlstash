@@ -206,6 +206,8 @@ function cancelEdit() {
 }
 
 async function saveName(row) {
+  // Enter in a form's only field also submits it: one save, not two.
+  if (saving.value) return;
   const name = nameField.value.trim();
   if (!name) {
     editError.value = "A name cannot be empty.";
@@ -232,6 +234,7 @@ async function saveName(row) {
 
 // An address is saved only once a ComfyUI has answered there, as on Connect.
 async function saveAddress(row) {
+  if (saving.value) return;
   editError.value = "";
   const h = host.value.trim().replace(/^\[(.*)\]$/, "$1");
   const p = Number(String(port.value).trim());
