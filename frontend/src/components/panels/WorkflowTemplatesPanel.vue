@@ -284,12 +284,17 @@ const emit = defineEmits(["add", "open-settings"]);
 const store = useWorkflowTemplatesStore();
 const tasksStore = useTasksStore();
 const filterStore = useFilterStore();
-// A shared view cannot read the owner's config, so it never reads as unset.
+// No address saved, once the config says so. A shared view cannot read the
+// owner's config, so it never reads as unset.
 const notSetUp = computed(
-  () => !filterStore.comfyuiConfigured && !isReadOnly.value,
+  () =>
+    filterStore.comfyuiConfigRead &&
+    !filterStore.comfyuiConfigured &&
+    !isReadOnly.value,
 );
-// With no ComfyUI answering the list is the copy PixlStash ships, shown the
-// same way; only an empty one is the unreachable state.
+// With an address saved and nothing answering there, the list is the copy
+// PixlStash ships, shown the same way; only an empty one is the unreachable
+// state. With none saved, the not-set-up state stands in for any list.
 const listed = computed(
   () => !notSetUp.value && (store.reachable || store.templates.length > 0),
 );

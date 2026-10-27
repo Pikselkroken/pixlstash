@@ -3,8 +3,11 @@
        project scope: which ComfyUI the workspace runs on. With none set up it
        is an amber row into the ComfyUI settings, so a first-time owner meets
        it without opening Settings. -->
+  <!-- Nothing until the config is read: a saved address must not flash the
+       Set up row on every load. -->
+  <div v-if="!filterStore.comfyuiConfigRead" class="wcs-slot" aria-hidden="true"></div>
   <button
-    v-if="!filterStore.comfyuiConfigured"
+    v-else-if="!filterStore.comfyuiConfigured"
     type="button"
     class="wcs-slot wcs-slot--setup"
     data-testid="workflows-comfyui-setup"

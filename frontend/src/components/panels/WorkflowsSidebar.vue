@@ -33,11 +33,12 @@ onMounted(() => {
   tpl.fetchTemplates();
 });
 
-// A new address is another ComfyUI: its list, not the one read before.
+// A new address is another ComfyUI: its list, not the one read before. Not
+// the config's first read, which only says which address the mount read.
 watch(
-  () => filterStore.comfyuiUrl,
-  (url, was) => {
-    if (url && url !== was) tpl.fetchTemplates({ refresh: true });
+  () => [filterStore.comfyuiUrl, filterStore.comfyuiConfigRead],
+  ([url], [was, wasRead]) => {
+    if (wasRead && url && url !== was) tpl.fetchTemplates({ refresh: true });
   },
 );
 
@@ -63,8 +64,8 @@ const placeRows = computed(() => {
 // "–" with no ComfyUI set up, or when it did not answer, so an unconnected
 // owner reads a dash rather than a zero; blank until the list is read.
 const templatesCount = computed(() => {
+  if (!filterStore.comfyuiConfigRead || !tpl.loaded) return "";
   if (!filterStore.comfyuiConfigured) return "–";
-  if (!tpl.loaded) return "";
   return tpl.reachable ? String(tpl.templates.length) : "–";
 });
 

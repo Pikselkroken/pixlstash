@@ -30,6 +30,9 @@ export const useFilterStore = defineStore("filter", () => {
   const comfyuiModelFilter = ref([]);
   const comfyuiLoraFilter = ref([]);
   const comfyuiConfigured = ref(false);
+  // Whether the config has been read, so `comfyuiConfigured` false means none
+  // is saved rather than not known yet (the Workflows sidebar's Set up row).
+  const comfyuiConfigRead = ref(false);
   // The address itself, for the one control that sends the browser there
   // (the Workflow tab's Open in ComfyUI). Empty when none is configured.
   const comfyuiUrl = ref("");
@@ -39,6 +42,7 @@ export const useFilterStore = defineStore("filter", () => {
     onSessionReset(() => {
       comfyuiUrl.value = "";
       comfyuiConfigured.value = false;
+      comfyuiConfigRead.value = false;
     }),
   );
   // Impossible-tag grid filter: array of source keys ("no_face" / "no_humans"),
@@ -104,6 +108,7 @@ export const useFilterStore = defineStore("filter", () => {
     comfyuiModelFilter,
     comfyuiLoraFilter,
     comfyuiConfigured,
+    comfyuiConfigRead,
     comfyuiUrl,
     impossibleSources,
     stackStateFilter,

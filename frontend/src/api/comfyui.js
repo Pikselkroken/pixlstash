@@ -156,7 +156,7 @@ export async function getPixlstashNode() {
  *   detail: ?string, listens_on_network: ?boolean, gpu: ?string,
  *   vram_mb: ?number}>} `listens_on_network`: whether ComfyUI's `--listen`
  *   lets other computers reach it, null unknown. `gpu` and `vram_mb`: the card
- *   ComfyUI runs on (`"CPU"` and no size on the CPU), null unknown.
+ *   ComfyUI runs on (`"CPU"` or `"Apple silicon"` with no size), null unknown.
  */
 export async function probeComfyui(url) {
   return unwrap(apiClient.post(comfyUrl("/probe"), { url }));

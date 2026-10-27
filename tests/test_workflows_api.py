@@ -1631,7 +1631,19 @@ def test_the_probe_recognises_comfyui_and_normalises_the_address(
             "NVIDIA GeForce RTX 4090",
             24_564,
         ),
-        ({"name": "mps", "type": "mps", "vram_total": 0}, "mps", None),
+        ({"name": "mps", "type": "mps", "vram_total": 0}, "Apple silicon", None),
+        # JSON allows these; int() refuses them.
+        (
+            {"name": "cuda:0 X : a", "type": "cuda", "vram_total": float("nan")},
+            "X",
+            None,
+        ),
+        (
+            {"name": "cuda:0 X : a", "type": "cuda", "vram_total": float("inf")},
+            "X",
+            None,
+        ),
+        ({"name": None, "type": "cuda", "vram_total": "24"}, None, None),
         # vram_total is the machine's RAM on the CPU, not a card's memory.
         ({"name": "cpu", "type": "cpu", "vram_total": 68_719_476_736}, "CPU", None),
     ],

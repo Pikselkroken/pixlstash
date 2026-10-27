@@ -28,6 +28,7 @@ describe("WorkflowTemplatesPanel", () => {
     vi.useFakeTimers();
     setActivePinia(createPinia());
     useFilterStore().comfyuiConfigured = true;
+    useFilterStore().comfyuiConfigRead = true;
     listTemplates.mockReset();
   });
   afterEach(() => vi.useRealTimers());
@@ -62,6 +63,7 @@ describe("WorkflowTemplatesPanel", () => {
 describe("WorkflowTemplatesPanel with no ComfyUI set up", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
+    useFilterStore().comfyuiConfigRead = true;
     listTemplates.mockReset();
     listTemplates.mockResolvedValue({
       reachable: true,
@@ -94,6 +96,12 @@ describe("WorkflowTemplatesPanel with no ComfyUI set up", () => {
     await empty.find("button").trigger("click");
     expect(wrapper.emitted("open-settings")).toEqual([["comfyui"]]);
     expect(empty.find("button").text()).toBe("Set up ComfyUI");
+  });
+
+  it("does not claim none is set up before the config is read", async () => {
+    useFilterStore().comfyuiConfigRead = false;
+    const wrapper = await mounted();
+    expect(wrapper.find('[data-testid="wtp-not-set-up"]').exists()).toBe(false);
   });
 
   it("lists as before once one is set up", async () => {
@@ -191,6 +199,7 @@ describe("WorkflowTemplatesPanel card menu", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     useFilterStore().comfyuiConfigured = true;
+    useFilterStore().comfyuiConfigRead = true;
     listTemplates.mockReset();
     startModelDownload.mockReset();
   });

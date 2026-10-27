@@ -17,10 +17,11 @@ import { useFilterStore } from "../../stores/useFilterStore";
 
 const LOCAL = "http://127.0.0.1:8188/";
 
-async function mountSlot({ url = LOCAL } = {}) {
+async function mountSlot({ url = LOCAL, configRead = true } = {}) {
   const pinia = createPinia();
   setActivePinia(pinia);
   const filterStore = useFilterStore();
+  filterStore.comfyuiConfigRead = configRead;
   filterStore.comfyuiConfigured = Boolean(url);
   filterStore.comfyuiUrl = url;
   const wrapper = mount(WorkflowsComfyuiSlot, {
@@ -53,6 +54,15 @@ beforeEach(() => {
     gpu: "NVIDIA GeForce RTX 4090",
     vram_mb: 24_564,
   }));
+});
+
+describe("before the config is read", () => {
+  it("offers neither Set up nor a connection", async () => {
+    const { wrapper } = await mountSlot({ url: "", configRead: false });
+    expect(wrapper.find('[data-testid="workflows-comfyui-setup"]').exists()).toBe(false);
+    expect(slot(wrapper).exists()).toBe(false);
+    expect(wrapper.text()).toBe("");
+  });
 });
 
 describe("with no ComfyUI saved", () => {
@@ -97,14 +107,21 @@ describe("with one ComfyUI saved", () => {
     warn.mockRestore();
   });
 
-  it("checks again when the saved address changes, and drops the old answer", async () => {
+  it("checks again when the saved address changes, and drops the old answer at once", async () => {
     const { wrapper, filterStore } = await mountSlot();
-    probeComfyui.mockImplementation(async (url) => ({ reachable: false, url }));
+    expect(slot(wrapper).text()).toContain("RTX 4090");
+    let answer;
+    probeComfyui.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
     filterStore.comfyuiUrl = "http://192.0.2.20:8188/";
     await flushPromises();
+    // The new address is asked about; the old one's card and status are gone
+    // while the answer is out.
     expect(probeComfyui).toHaveBeenLastCalledWith("http://192.0.2.20:8188/");
-    expect(slot(wrapper).text()).toContain("Offline");
+    expect(slot(wrapper).text()).toContain("Checking…");
     expect(slot(wrapper).text()).not.toContain("RTX 4090");
+    answer({ reachable: false, url: "http://192.0.2.20:8188/" });
+    await flushPromises();
+    expect(slot(wrapper).text()).toContain("Offline");
   });
 
   it("opens the ComfyUI settings from both New connection and Settings", async () => {

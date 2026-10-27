@@ -6523,7 +6523,9 @@ so `sidebarRef`, the importer and its drop targets stay alive.
   says which is on, and the Filter menu has no Favourites box any more);
   facets and the Filter menu's filters are.
 - **The header slot is the ComfyUI connection** (`WorkflowsComfyuiSlot.vue`,
-  #2166). With `filterStore.comfyuiConfigured` false it is an amber *Set up
+  #2166). It stays empty until the config is read
+  (`filterStore.comfyuiConfigRead`), so a saved address never flashes the
+  not-set-up state. Then, with `filterStore.comfyuiConfigured` false, it is an amber *Set up
   ComfyUI* row that opens Settings › ComfyUI, the Templates count is "–" with
   no "N new", and `WorkflowTemplatesPanel` shows *Templates come from
   ComfyUI* with a Set up ComfyUI button instead of any list (the server reads
@@ -6534,7 +6536,8 @@ so `sidebarRef`, the importer and its drop targets stay alive.
   change and on each menu open, not polled. The menu is *Run on*: the one
   instance row, then *New ComfyUI connection…* and *ComfyUI settings…*, both
   opening Settings › ComfyUI until the backend holds more than one
-  `comfyui_url`. A new address re-reads the templates with `refresh`. A
+  `comfyui_url`. A new address re-reads the templates with `refresh` (not the
+  config's first read, which only names the address the mount read). A
   READ session draws no slot and never the not-set-up state, since it cannot
   read the config.
 - **The footer band** is one amber *Add workflow* (`requestAdd()`, see

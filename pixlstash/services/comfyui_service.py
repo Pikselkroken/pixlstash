@@ -13,6 +13,7 @@ function itself and in ``docs/backend_architecture.md`` §15. Preserve it exactl
 
 import ipaddress
 import json
+import math
 import mimetypes
 import ntpath
 import os
@@ -2701,6 +2702,7 @@ def probe_comfyui(url: str, timeout: float = 2.0) -> dict:
 
 # ComfyUI names a device "cuda:0 NVIDIA GeForce RTX 4090 : cudaMallocAsync":
 # the torch device first, the allocator last.
+_SHARED_MEMORY_DEVICES = {"cpu": "CPU", "mps": "Apple silicon"}
 _DEVICE_NAME_RE = re.compile(r"^(?:\w+:\d+\s+)?(.*?)(?:\s+:\s+\S+)?$")
 
 
@@ -2708,17 +2710,20 @@ def _comfyui_device(devices) -> tuple[str | None, int | None]:
     """The card ComfyUI runs on, from ``/system_stats`` ``devices``.
 
     ``(name, vram_mb)`` of the first device, the name without the torch device
-    and the allocator; ``("CPU", None)`` for a ComfyUI on the CPU, whose
+    and the allocator; no size for a ComfyUI on the CPU or Apple silicon, whose
     ``vram_total`` is the machine's RAM; ``(None, None)`` when not listed.
     """
     first = devices[0] if isinstance(devices, list) and devices else None
     if not isinstance(first, dict):
         return None, None
-    if first.get("type") == "cpu":
-        return "CPU", None
+    # Both report the machine's RAM as vram_total.
+    if first.get("type") in _SHARED_MEMORY_DEVICES:
+        return _SHARED_MEMORY_DEVICES[first["type"]], None
     name = _DEVICE_NAME_RE.match(str(first.get("name") or "").strip()).group(1)
     total = first.get("vram_total")
-    vram_mb = int(total) // (1024 * 1024) if isinstance(total, (int, float)) else None
+    # JSON allows NaN and Infinity, which int() refuses.
+    finite = isinstance(total, (int, float)) and math.isfinite(total)
+    vram_mb = int(total) // (1024 * 1024) if finite else None
     return name or None, vram_mb or None
 
 

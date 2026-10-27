@@ -245,6 +245,7 @@ beforeEach(() => {
   setActivePinia(createPinia());
   // The Templates place lists only with a ComfyUI set up (#2166).
   useFilterStore().comfyuiConfigured = true;
+  useFilterStore().comfyuiConfigRead = true;
   // Both rails' open flags are persisted; a test that closes the inspector
   // must not hand the next one a closed inspector.
   window.localStorage.clear();
