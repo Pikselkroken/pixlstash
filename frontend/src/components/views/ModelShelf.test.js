@@ -84,6 +84,7 @@ vi.mock("../../api/modelShelf", () => ({
 // assertion read the default view back.
 const listModelFolderDevices = vi.fn();
 const listModelFolders = vi.fn();
+const listModelFolderDirs = vi.fn();
 // `onMounted` calls `moves.adopt()`, which reads the move job so a move
 // started before a reload is picked up. Left unmocked it reaches the network,
 // fails, and `console.warn`s from a promise nothing in the test awaits - which
@@ -153,6 +154,7 @@ vi.mock("../../api/modelFolders", async (importOriginal) => ({
   ...(await importOriginal()),
   createModelFolder: (...args) => createModelFolder(...args),
   listModelFolderDevices: (...args) => listModelFolderDevices(...args),
+  listModelFolderDirs: (...args) => listModelFolderDirs(...args),
   listModelFolders: (...args) => listModelFolders(...args),
 }));
 
@@ -210,6 +212,7 @@ vi.mock("../../api/modelIcons", async (importOriginal) => ({
 import ModelShelf from "./ModelShelf.vue";
 import KindMenu from "../widgets/KindMenu.vue";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
+import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
@@ -380,6 +383,15 @@ beforeEach(() => {
   setModelIcon.mockReset();
   listModelFolders.mockReset();
   listModelFolders.mockResolvedValue([]);
+  listModelFolderDirs.mockReset();
+  listModelFolderDirs.mockImplementation(async (id, path) => ({
+    folder_id: id,
+    path,
+    locked: false,
+    model_count: 0,
+    bytes: 0,
+    dirs: [],
+  }));
   nav.route.name = "models";
   nav.push.mockClear();
   createModelFolder.mockReset();
@@ -4445,40 +4457,126 @@ describe("a row the owner has marked in a set", () => {
 });
 
 
-describe("the toolbar's filter chips (#2168)", () => {
-  it("draws a chip for the sidebar's Type filter, and its × clears it", async () => {
-    const wrapper = await mountShelf([adapter({ id: 1 })]);
-    const store = useModelShelfStore();
-    store.setSidebarFilter("type", "lora");
-    await wrapper.vm.$nextTick();
-    const chip = wrapper.find('[data-testid="shelf-chip-sidebar"]');
-    expect(chip.exists()).toBe(true);
-    expect(chip.text()).toContain("LoRA");
+describe("the open folder and All models' strip (#2203)", () => {
+  const FOLDER = {
+    id: 1,
+    path: "/home/me/StabilityMatrix/Models",
+    kind: "user",
+    movable: "per_item",
+    deletable: true,
+  };
+  const at = (relpath) => [
+    { state: "present", folder_id: 1, folder_path: FOLDER.path, relpath },
+  ];
 
-    await chip.find("button").trigger("click");
-    expect(store.sidebarFilter).toBe(null);
-    expect(wrapper.find('[data-testid="shelf-chip-sidebar"]').exists()).toBe(
-      false,
-    );
+  async function openFolder(path = "") {
+    listModelFolders.mockResolvedValue([FOLDER]);
+    listModelFolderDevices.mockResolvedValue([
+      {
+        device_id: "d1",
+        mount_point: "/",
+        label: "System drive",
+        total_bytes: 1000 * 1024 ** 3,
+        free_bytes: 50 * 1024 ** 3,
+        folder_ids: [1],
+      },
+    ]);
+    listModelFolderDirs.mockImplementation(async (id, at) => ({
+      folder_id: id,
+      path: at,
+      locked: false,
+      model_count: 2,
+      bytes: 0,
+      dirs:
+        at === ""
+          ? [
+              { name: "Lora", path: "Lora", model_count: 1, bytes: 2e8, has_dirs: false },
+              { name: "VAE", path: "VAE", model_count: 0, bytes: 0, has_dirs: false },
+            ]
+          : [],
+    }));
+    const wrapper = await mountShelf([
+      adapter({ id: 1, locations: at("loose.safetensors") }),
+      adapter({ id: 2, sha256: "b".repeat(64), locations: at("Lora/x.safetensors") }),
+    ]);
+    const store = useModelShelfStore();
+    await useModelFoldersStore().refreshDevices();
+    store.setFolderScope({ folderId: 1, path });
+    await flushPromises();
+    return { wrapper, store };
+  }
+
+  it("lists the open folder's subfolders first, with a folders and models count", async () => {
+    const { wrapper } = await openFolder();
+    const rows = wrapper.findAll("[data-testid='shelf-folders'] .shelf-folder");
+    expect(rows.map((one) => one.attributes("data-path"))).toEqual(["Lora", "VAE"]);
+    expect(textOf(rows[0])).toContain("1 model");
+    expect(textOf(wrapper.find(".shelf-sub"))).toBe("2 folders · 1 model");
+    expect(wrapper.findAll(".shelf-row").length).toBe(1);
     wrapper.unmount();
   });
 
-  it("draws a chip for the folder scope, and its × takes the scope off", async () => {
-    listModelFolders.mockResolvedValue([
-      { id: 1, path: "/m", kind: "user", movable: "per_item", deletable: true },
-    ]);
-    const wrapper = await mountShelf([adapter({ id: 1 })]);
-    const store = useModelShelfStore();
-    store.setFolderScope(1);
-    await wrapper.vm.$nextTick();
-    const chip = wrapper.find('[data-testid="shelf-chip-folder"]');
-    expect(chip.exists()).toBe(true);
+  it("opens a subfolder from its row, one level at a time", async () => {
+    const { wrapper, store } = await openFolder();
+    await wrapper.find(".shelf-folder[data-path='Lora']").trigger("click");
+    await flushPromises();
+    expect(store.folderScope.path).toBe("Lora");
+    expect(store.visibleRows.map((row) => row.id)).toEqual([2]);
+    wrapper.unmount();
+  });
 
-    await chip.find("button").trigger("click");
+  it("draws the breadcrumb: All folders, the drive as text, then the folders", async () => {
+    const { wrapper, store } = await openFolder("Lora");
+    const crumbs = wrapper.find("[data-testid='shelf-breadcrumb']");
+    expect(crumbs.findAll(".shelf-crumb").map((one) => one.text())).toEqual([
+      "All folders",
+      "System drive",
+      "Models",
+      "Lora",
+    ]);
+    const links = crumbs.findAll("button").map((one) => one.text());
+    expect(links).toEqual(["All folders", "Models"]);
+    expect(crumbs.find("[aria-current='location']").text()).toBe("Lora");
+    await crumbs.findAll("button")[1].trigger("click");
+    expect(store.folderScope.path).toBe("");
+    await crumbs.findAll("button")[0].trigger("click");
+    expect(store.place).toBe("all");
     expect(store.folderScope).toBe(null);
-    expect(wrapper.find('[data-testid="shelf-chip-folder"]').exists()).toBe(
-      false,
-    );
+    wrapper.unmount();
+  });
+
+  it("states the drive's free space under the list", async () => {
+    const { wrapper } = await openFolder();
+    const status = textOf(wrapper.find("[data-testid='shelf-status']"));
+    expect(status).toContain("System drive: 50.0 GB free of 1000.0 GB");
+    expect(status).toContain("95% full");
+    expect(
+      wrapper.find(".shelf-status-bar--full").exists(),
+    ).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("draws the strip on All models only, Types with no models left out", async () => {
+    const wrapper = await mountShelf([
+      adapter({ id: 1 }),
+      adapter({ id: 2, sha256: "b".repeat(64), base_model: "sdxl" }),
+    ]);
+    const store = useModelShelfStore();
+    store.setPlace("all");
+    await flushPromises();
+    const strip = wrapper.find("[data-testid='shelf-strip']");
+    expect(strip.exists()).toBe(true);
+    const types = strip.findAll("[role='radio']").map((one) => one.text());
+    expect(types).toEqual(["All 2", "LoRAs 2"]);
+    await strip.find("[data-testid='shelf-strip-type-lora']").trigger("click");
+    expect(store.sidebarFilter).toEqual({ type: "lora", base: null });
+    await strip.find("[data-base='sdxl']").trigger("click");
+    expect(store.sidebarFilter).toEqual({ type: "lora", base: "sdxl" });
+    expect(store.visibleRows.map((row) => row.id)).toEqual([2]);
+    store.setPlace("favourites");
+    await flushPromises();
+    expect(wrapper.find("[data-testid='shelf-strip']").exists()).toBe(false);
+    expect(wrapper.find("[data-testid='shelf-breadcrumb']").exists()).toBe(false);
     wrapper.unmount();
   });
 });

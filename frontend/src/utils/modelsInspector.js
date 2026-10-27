@@ -37,19 +37,21 @@ export const DISK_BUCKETS = [
 export const LARGEST_COUNT = 5;
 
 /**
- * The rail head's view name: the training runs page, the sidebar's Type or
- * Base filter, else the place.
+ * The rail head's view name: the training runs page, All models' Type or Base
+ * pick, the open folder, else the place.
  *
- * @param {{runs: boolean, place: string, sidebarFilter: ({axis: string, key: string}|null)}} view
+ * @param {{runs: boolean, place: string, sidebarFilter: ({type: ?string, base: ?string}|null), folderName?: string}} view
  */
-export function viewName({ runs, place, sidebarFilter }) {
+export function viewName({ runs, place, sidebarFilter, folderName = "" }) {
   if (runs) return "Training runs";
-  if (sidebarFilter) {
-    if (sidebarFilter.axis === "type") {
-      return SHELF_TYPES.find((type) => type.key === sidebarFilter.key)?.label ?? sidebarFilter.key;
-    }
-    return sidebarFilter.key;
+  if (sidebarFilter?.type) {
+    return (
+      SHELF_TYPES.find((type) => type.key === sidebarFilter.type)?.label ??
+      sidebarFilter.type
+    );
   }
+  if (sidebarFilter?.base) return sidebarFilter.base;
+  if (place === "folder") return folderName || "Folder";
   return PLACE_LABELS[place] ?? "";
 }
 

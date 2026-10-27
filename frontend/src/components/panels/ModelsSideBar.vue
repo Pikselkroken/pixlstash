@@ -1,6 +1,6 @@
 <template>
-  <!-- The Models workspace's own sidebar (#2168): the model-folder slot, the
-       places, the Type and Base model rows, Training, and the amber Add band.
+  <!-- The Models workspace's own sidebar (#2168): the Model folders slot, the
+       places, the Folders tree (#2203), Training, and the amber Add band.
        It replaces the library's sidebar on /models, as the shelf replaces the
        grid: nothing in the library's navigation is about files on this disk. -->
   <aside
@@ -9,105 +9,26 @@
     aria-label="Model navigation"
     data-testid="models-sidebar"
   >
-    <!-- The slot the library sidebar gives the project: which model folder,
-         drawn like the title bar's library picker. -->
-    <v-menu v-model="folderMenuOpen" location="bottom start" :offset="4">
-      <template #activator="{ props: menuProps }">
-        <button
-          v-bind="withRef(menuProps, (el) => (folderTrigger = el))"
-          type="button"
-          class="msb-slot"
-          :class="{ 'msb-slot--open': folderMenuOpen }"
-          aria-haspopup="menu"
-          :aria-label="slotLabel"
-          data-testid="models-folder-slot"
-        >
-          <span class="msb-slot-mark" aria-hidden="true"
-            ><v-icon size="14">mdi-folder-outline</v-icon></span
-          >
-          <span class="msb-slot-id">
-            <span class="msb-slot-name">{{ scoped.name }}</span>
-            <span
-              v-if="scoped.drive"
-              class="msb-bar"
-              :data-state="scoped.drive.state"
-              aria-hidden="true"
-              ><span :style="{ width: `${scoped.drive.used}%` }"></span
-            ></span>
-          </span>
-          <span class="msb-count">{{ scoped.size }}</span>
-          <v-icon size="14" class="msb-slot-chev" aria-hidden="true"
-            >mdi-unfold-more-horizontal</v-icon
-          >
-        </button>
-      </template>
-      <div
-        class="ctx-menu msb-menu"
-        role="menu"
-        aria-label="Model folders"
-        tabindex="-1"
-        data-testid="models-folder-menu"
-        @keydown="onMenuKeydown"
+    <!-- The slot the library sidebar gives the project, on the toolbar's line
+         at the toolbar's height (#2203): one button that opens Manage model
+         folders. The folders themselves are the tree below. -->
+    <button
+      type="button"
+      class="msb-slot"
+      aria-haspopup="dialog"
+      :aria-label="`Model folders, ${slotSummary}. Manage model folders`"
+      data-testid="models-folder-slot"
+      @click="ask('manage-folders', $event.currentTarget)"
+    >
+      <span class="msb-slot-mark" aria-hidden="true"
+        ><v-icon size="14">mdi-folder-outline</v-icon></span
       >
-        <span class="section-label msb-menu-label" role="none"
-          >Limit to folder</span
-        >
-        <button
-          v-for="option in folderOptions"
-          :key="option.id ?? 'all'"
-          type="button"
-          class="ctx-item msb-folder"
-          role="menuitemradio"
-          :aria-checked="option.checked ? 'true' : 'false'"
-          :aria-label="option.label"
-          :data-folder-id="option.id ?? 'all'"
-          @click="pickFolder(option.id)"
-        >
-          <v-icon v-if="option.checked" class="ctx-icon" aria-hidden="true"
-            >mdi-check</v-icon
-          >
-          <span v-else class="ctx-icon" aria-hidden="true"></span>
-          <span class="ctx-label-text msb-folder-id">
-            <span class="msb-folder-name">{{ option.name }}</span>
-            <span class="msb-folder-path">{{ option.path }}</span>
-          </span>
-          <span class="ctx-meta msb-folder-meta">
-            {{ option.size }}
-            <template v-if="option.drive">
-              ·
-              <span class="msb-free" :data-state="option.drive.state"
-                >{{ formatModelSize(option.drive.free) }} free</span
-              >
-              <span
-                class="msb-bar msb-bar--mini"
-                :data-state="option.drive.state"
-                aria-hidden="true"
-                ><span :style="{ width: `${option.drive.used}%` }"></span
-              ></span>
-            </template>
-          </span>
-        </button>
-        <div class="ctx-sep" role="separator"></div>
-        <button
-          type="button"
-          class="ctx-item"
-          role="menuitem"
-          @click="ask('add-folder')"
-        >
-          <span class="ctx-icon" aria-hidden="true"></span>
-          <span class="ctx-label-text">Add folder…</span>
-        </button>
-        <button
-          type="button"
-          class="ctx-item"
-          role="menuitem"
-          @click="ask('manage-folders')"
-        >
-          <span class="ctx-icon" aria-hidden="true"></span>
-          <span class="ctx-label-text">Manage model folders…</span>
-        </button>
-      </div>
-    </v-menu>
+      <span class="msb-slot-name">Model folders</span>
+      <span class="msb-count msb-slot-sum">{{ slotSummary }}</span>
+      <v-icon size="14" class="msb-slot-chev" aria-hidden="true"
+        >mdi-cog-outline</v-icon
+      >
+    </button>
 
     <nav class="msb-scroll" aria-label="Model places">
       <button
@@ -129,43 +50,11 @@
         <span class="msb-count">{{ row.count }}</span>
       </button>
 
-      <h3 class="section-label msb-head">Type</h3>
-      <button
-        v-for="row in typeRows"
-        :key="row.key"
-        type="button"
-        class="ps-row msb-row"
-        :class="{ active: row.active }"
-        :aria-current="row.active ? 'page' : undefined"
-        :aria-pressed="row.active ? 'true' : 'false'"
-        :data-type="row.key"
-        @click="pickFilter('type', row.key)"
-      >
-        <TypeMark class="ps-row-glyph" :mark="row.mark" :tint="row.tint" />
-        <span class="msb-label">{{ row.label }}</span>
-        <span class="msb-count">{{ row.count }}</span>
-      </button>
-
-      <template v-if="baseRows.length">
-        <h3 class="section-label msb-head">Base model</h3>
-        <button
-          v-for="row in baseRows"
-          :key="row.key"
-          type="button"
-          class="ps-row msb-row"
-          :class="{ active: row.active }"
-          :aria-current="row.active ? 'page' : undefined"
-          :aria-pressed="row.active ? 'true' : 'false'"
-          :data-base="row.key"
-          @click="pickFilter('base', row.key)"
-        >
-          <v-icon size="16" class="ps-row-glyph" aria-hidden="true"
-            >mdi-layers-outline</v-icon
-          >
-          <span class="msb-label">{{ row.label }}</span>
-          <span class="msb-count">{{ row.count }}</span>
-        </button>
-      </template>
+      <h3 class="section-label msb-head">Folders</h3>
+      <ModelFolderTree
+        :selected="onRuns || store.place !== 'folder' ? null : store.folderScope"
+        @select="openFolder"
+      />
 
       <!-- Training, last (#2169): its place, and the door to a new run. -->
       <div class="msb-head msb-head--action">
@@ -273,25 +162,19 @@ import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { VIcon, VMenu } from "vuetify/components";
 
-import { BASE_MODEL_UNASSIGNED } from "../../api/modelShelf";
 import { DOWNLOADS_KIND, SOURCE_KIND } from "../../api/modelFolders";
-import {
-  basename,
-  useModelFoldersStore,
-} from "../../stores/useModelFoldersStore";
+import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useTrainingRunsStore } from "../../stores/useTrainingRunsStore";
 import { useTrainingStore } from "../../stores/useTrainingStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
-import { driveFullness } from "../../utils/libraryChrome";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
-import { formatModelSize, SHELF_TYPES } from "../../utils/modelShelf";
 import { withRef } from "../../utils/withRef.js";
 import AiToolkitIcon from "../widgets/AiToolkitIcon.vue";
 import AppButton from "../widgets/AppButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
-import TypeMark from "../widgets/TypeMark.vue";
+import ModelFolderTree from "./ModelFolderTree.vue";
 
 const store = useModelShelfStore();
 const foldersStore = useModelFoldersStore();
@@ -305,16 +188,16 @@ const router = useRouter();
 // The library sidebar's width, so switching workspace does not move the edge.
 const width = computed(() => userPrefsStore.sidebarWidth ?? 240);
 
-const folderMenuOpen = ref(false);
 const addMenuOpen = ref(false);
-// The triggers outlive their menus, so a dialog opened from one hands focus
-// back to it. Not reactive: only `ask` reads them.
-let folderTrigger = null;
+// The trigger outlives its menu, so a dialog opened from it hands focus back
+// to it. Not reactive: only `ask` reads it.
 let addTrigger = null;
 
 onMounted(() => {
-  // The counts need the sets ("In no set yet") and the folders the slot draws.
+  // The counts need the sets ("In no set yet"); the tree needs the folders,
+  // their drives and a fresh read of each folder's own level.
   store.loadWorkflowSets();
+  foldersStore.clearDirs();
   foldersStore.refresh({ quiet: true });
   foldersStore.refreshDevices();
   // The Training runs row counts them wherever the workspace is.
@@ -332,7 +215,7 @@ const trainingNow = computed(() =>
   ),
 );
 
-// ── The folder slot ──────────────────────────────────────────────────────
+// ── The Model folders slot and the tree ──────────────────────────────────
 
 /** The folders the shelf catalogues: not the ai-toolkit root nor Downloads. */
 const shelfFolders = computed(() =>
@@ -341,39 +224,8 @@ const shelfFolders = computed(() =>
   ),
 );
 
-function folderName(folder) {
-  return folder.tool || basename(folder.path) || folder.path;
-}
-
-function folderEntry(folder) {
-  const drive = driveFullness(
-    foldersStore.deviceByFolderId.get(Number(folder.id)),
-  );
-  const size = formatModelSize(Number(folder.present_bytes) || 0);
-  return {
-    id: Number(folder.id),
-    name: folderName(folder),
-    path: folder.path,
-    size,
-    drive,
-    checked: store.folderScope === Number(folder.id),
-    label: [
-      folderName(folder),
-      size,
-      drive
-        ? `${formatModelSize(drive.free)} free, drive ${drive.used}% full`
-        : "",
-    ]
-      .filter(Boolean)
-      .join(", "),
-  };
-}
-
-const allFoldersEntry = computed(() => {
-  const bytes = shelfFolders.value.reduce(
-    (sum, folder) => sum + (Number(folder.present_bytes) || 0),
-    0,
-  );
+/** "2 drives · 7 folders": what the slot's button manages. */
+const slotSummary = computed(() => {
   const drives = new Set(
     shelfFolders.value
       .map((folder) => foldersStore.deviceByFolderId.get(Number(folder.id)))
@@ -381,76 +233,38 @@ const allFoldersEntry = computed(() => {
       .map((device) => device.device_id),
   ).size;
   const n = shelfFolders.value.length;
-  const path = [
-    n === 1 ? "1 folder" : `${n} folders`,
-    drives ? (drives === 1 ? "1 drive" : `${drives} drives`) : "",
+  return [
+    drives ? `${drives} ${drives === 1 ? "drive" : "drives"}` : "",
+    `${n} ${n === 1 ? "folder" : "folders"}`,
   ]
     .filter(Boolean)
-    .join(", ");
-  const size = formatModelSize(bytes);
-  return {
-    id: null,
-    name: "All folders",
-    path,
-    size,
-    drive: null,
-    checked: store.folderScope == null,
-    label: `All folders, ${path}, ${size}`,
-  };
+    .join(" · ");
 });
 
-const folderOptions = computed(() => [
-  allFoldersEntry.value,
-  ...shelfFolders.value.map(folderEntry),
-]);
-
-/** What the slot names: the scoped folder, else All folders. */
-const scoped = computed(
-  () =>
-    folderOptions.value.find((option) => option.checked) ??
-    allFoldersEntry.value,
-);
-
-const slotLabel = computed(() => {
-  const parts = [`Model folder: ${scoped.value.name}, ${scoped.value.size}`];
-  const drive = scoped.value.drive;
-  if (drive) {
-    parts.push(
-      `Its drive is ${drive.used}% full, ${drive.words}: ${formatModelSize(drive.free)} free of ${formatModelSize(drive.total)}`,
-    );
-  }
-  parts.push("Choose a folder to limit the list to");
-  return parts.join(". ");
-});
-
-// A scoped folder that is no longer registered (forgotten in Manage model
-// folders) takes the scope with it, or the list would sit empty under a slot
-// naming All folders.
+// An open folder that is no longer registered (forgotten in Manage model
+// folders) closes, or the list would sit empty under a stale breadcrumb.
 watch(
   () => [foldersStore.loaded, shelfFolders.value, store.folderScope],
   ([loaded, folders, scope]) => {
     if (!loaded || scope == null) return;
-    if (!folders.some((folder) => Number(folder.id) === scope)) {
+    if (!folders.some((folder) => Number(folder.id) === scope.folderId)) {
       store.setFolderScope(null);
     }
   },
   { immediate: true },
 );
 
-function pickFolder(id) {
-  folderMenuOpen.value = false;
-  // The picked row leaves with the menu: hand focus back to the slot.
-  folderTrigger?.focus?.();
-  store.setFolderScope(id);
-  if (id != null && onRuns.value) router.push({ name: "models" });
+/** Open a folder from the tree, leaving Training runs for the list. */
+function openFolder(scope) {
+  store.setFolderScope(scope);
+  if (onRuns.value) router.push({ name: "models" });
 }
 
 /**
  * Ask the shelf for one of its dialogs. The shelf owns them, and their
  * confirmations, because the toolbar's Add and Model folders used to.
  */
-function ask(what, el = folderTrigger) {
-  folderMenuOpen.value = false;
+function ask(what, el = null) {
   addMenuOpen.value = false;
   const target = el?.el ?? el ?? null;
   // Back on the button first, so the dialog that opens next returns there.
@@ -458,7 +272,7 @@ function ask(what, el = folderTrigger) {
   store.requestShell(what, target);
 }
 
-// ── Places, Type, Base model ─────────────────────────────────────────────
+// ── Places ───────────────────────────────────────────────────────────────
 
 const PLACES = [
   { id: "sets", label: "Sets", icon: "mdi-view-grid-outline" },
@@ -477,9 +291,7 @@ const placeRows = computed(() =>
     return {
       ...place,
       count: count(n),
-      // Lit only while no Type or Base row is: one row lights at a time.
-      active:
-        !onRuns.value && store.place === place.id && !store.sidebarFilter,
+      active: !onRuns.value && store.place === place.id,
       disabled: waiting,
       reason: waiting
         ? store.setsError
@@ -493,36 +305,6 @@ const placeRows = computed(() =>
 function pickPlace(row) {
   if (row.disabled) return;
   store.setPlace(row.id);
-  if (onRuns.value) router.push({ name: "models" });
-}
-
-const isPicked = (axis, key) =>
-  store.sidebarFilter?.axis === axis && store.sidebarFilter?.key === key;
-
-const typeRows = computed(() =>
-  SHELF_TYPES.map((type) => ({
-    ...type,
-    count: count(store.typeCounts[type.key] ?? 0),
-    active: !onRuns.value && isPicked("type", type.key),
-  })),
-);
-
-const baseRows = computed(() =>
-  store.baseCounts.map(({ key, n }) => ({
-    key,
-    label: key === BASE_MODEL_UNASSIGNED ? "Base model not set" : key,
-    count: count(n),
-    active: !onRuns.value && isPicked("base", key),
-  })),
-);
-
-/**
- * Pick a Type or Base model row. From Training runs it goes to the list it
- * narrows; a row already picked there is shown rather than taken back, since
- * it is not lit on that page and a click on it reads as "show me these".
- */
-function pickFilter(axis, key) {
-  if (!(onRuns.value && isPicked(axis, key))) store.setSidebarFilter(axis, key);
   if (onRuns.value) router.push({ name: "models" });
 }
 
@@ -566,8 +348,7 @@ function openRuns() {
   transition: background var(--dur-1) var(--ease-standard);
 }
 
-.msb-slot:hover,
-.msb-slot--open {
+.msb-slot:hover {
   background: var(--hover-wash);
 }
 
@@ -585,15 +366,9 @@ function openRuns() {
   height: var(--gutter-glyph);
 }
 
-.msb-slot-id {
+.msb-slot-name {
   flex: 1;
   min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.msb-slot-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -607,79 +382,8 @@ function openRuns() {
   opacity: var(--opacity-text-secondary);
 }
 
-/* The drive meter, as the title bar's library picker draws it. */
-.msb-bar {
-  display: flex;
-  height: 3px;
-  overflow: hidden;
-  border-radius: var(--radius-pill);
-  background: var(--drive-meter-track);
-}
-
-.msb-bar > span {
-  display: block;
-}
-
-.msb-bar--mini {
-  width: 28px;
-  flex-shrink: 0;
-}
-
-.msb-bar[data-state="success"] > span {
-  background: rgb(var(--v-theme-surface-success));
-}
-
-.msb-bar[data-state="warning"] > span {
-  background: rgb(var(--v-theme-surface-warning));
-}
-
-.msb-bar[data-state="error"] > span {
-  background: rgb(var(--v-theme-surface-error));
-}
-
-.msb-free[data-state="warning"] {
-  color: rgb(var(--v-theme-surface-warning));
-}
-
-.msb-free[data-state="error"] {
-  color: rgb(var(--v-theme-surface-error));
-}
-
-.msb-menu {
-  width: 300px;
-}
-
-.msb-menu-label {
-  display: block;
-  padding: var(--space-2) var(--space-3) var(--space-1);
-}
-
-.msb-folder {
-  min-height: calc(var(--control-h-bar) + var(--space-4));
-}
-
-.msb-folder-id {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.msb-folder-name,
-.msb-folder-path {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.msb-folder-path {
-  font-size: var(--text-2xs);
-  opacity: var(--opacity-text-secondary);
-}
-
-.msb-folder-meta {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
+.msb-slot-sum {
+  margin-left: 0;
   white-space: nowrap;
 }
 

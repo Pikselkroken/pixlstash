@@ -119,23 +119,36 @@
           />
         </v-menu>
 
-        <!-- The sidebar's Type/Base row and the folder slot, each as a
-             removable chip. × writes the same axis and key back, which
-             clears it. -->
-        <span
-          v-for="chip in filterChips"
-          :key="chip.key"
-          class="shelf-chip"
-          :data-testid="chip.testid"
+        <!-- The open folder's path (#2203), where a file manager puts the
+             way back up: All folders, the drive, the registered folder and
+             each subfolder. Only the drive is plain text: it is not a place. -->
+        <nav
+          v-if="breadcrumb.length"
+          class="shelf-crumbs"
+          aria-label="Folder"
+          data-testid="shelf-breadcrumb"
         >
-          {{ chip.label }}
-          <AppBarButton
-            icon="close"
-            :tooltip="chip.clearLabel"
-            :aria-label="chip.clearLabel"
-            @click="chip.clear()"
-          />
-        </span>
+          <template v-for="(crumb, i) in breadcrumb" :key="i">
+            <span v-if="i > 0" class="shelf-crumbs-sep" aria-hidden="true"
+              >›</span
+            >
+            <button
+              v-if="crumb.go"
+              type="button"
+              class="shelf-crumb shelf-crumb--link"
+              @click="crumb.go()"
+            >
+              {{ crumb.label }}
+            </button>
+            <span
+              v-else
+              class="shelf-crumb"
+              :class="{ 'shelf-crumb--here': i === breadcrumb.length - 1 }"
+              :aria-current="i === breadcrumb.length - 1 ? 'location' : undefined"
+              >{{ crumb.label }}</span
+            >
+          </template>
+        </nav>
       </template>
 
       <span class="shelf-spacer"></span>
@@ -157,6 +170,69 @@
           rail-name="Models and tasks"
         />
       </div>
+    </div>
+
+    <!-- All models' Type and Base model strip (#2203): what kind, where the
+         sidebar now answers where. The two combine. -->
+    <div
+      v-if="isShelfTab && store.place === 'all'"
+      class="shelf-strip"
+      data-testid="shelf-strip"
+    >
+      <span class="section-label" aria-hidden="true">Type</span>
+      <Segmented
+        :options="typeOptions"
+        :model-value="store.sidebarFilter?.type ?? 'all'"
+        aria-label="Type"
+        @update:model-value="
+          (key) => store.setSidebarFilter('type', key === 'all' ? null : key)
+        "
+      />
+      <v-menu
+        v-if="store.baseCounts.length"
+        v-model="baseMenuOpen"
+        location="bottom start"
+        :offset="4"
+      >
+        <template #activator="{ props: menuProps }">
+          <AppBarButton
+            v-bind="menuProps"
+            class="shelf-strip-base"
+            prefix="Base"
+            chevron
+            aria-haspopup="menu"
+            :open="baseMenuOpen"
+            :active="Boolean(store.sidebarFilter?.base)"
+            data-testid="shelf-strip-base"
+            ><span class="bar-btn-value">{{ baseLabel }}</span></AppBarButton
+          >
+        </template>
+        <div
+          class="ctx-menu"
+          role="menu"
+          aria-label="Base model"
+          tabindex="-1"
+          @keydown="onMenuKeydown"
+        >
+          <button
+            v-for="option in baseOptions"
+            :key="option.key ?? 'any'"
+            type="button"
+            class="ctx-item"
+            role="menuitemradio"
+            :aria-checked="option.checked ? 'true' : 'false'"
+            :data-base="option.key ?? 'any'"
+            @click="store.setSidebarFilter('base', option.key)"
+          >
+            <v-icon v-if="option.checked" class="ctx-icon" aria-hidden="true"
+              >mdi-check</v-icon
+            >
+            <span v-else class="ctx-icon" aria-hidden="true"></span>
+            <span class="ctx-label-text">{{ option.label }}</span>
+            <span class="ctx-meta">{{ option.count }}</span>
+          </button>
+        </div>
+      </v-menu>
     </div>
 
     <!-- The SECONDARY route into the thumbnail verb, kept rather than removed:
@@ -249,6 +325,34 @@
           @click="offlineDismissed = true"
         />
       </p>
+      <!-- An open folder's subfolders, as a file manager lists them: first,
+           and opened with a click. -->
+      <ul
+        v-if="subfolders.length"
+        class="shelf-folders"
+        aria-label="Subfolders"
+        data-testid="shelf-folders"
+      >
+        <li v-for="dir in subfolders" :key="dir.path">
+          <button
+            type="button"
+            class="shelf-folder"
+            :data-path="dir.path"
+            @click="openSubfolder(dir.path)"
+          >
+            <v-icon size="16" class="shelf-folder-glyph" aria-hidden="true"
+              >mdi-folder-outline</v-icon
+            >
+            <span class="shelf-folder-name">{{ dir.name }}</span>
+            <span class="shelf-folder-meta">{{
+              dir.bytes ? formatModelSize(dir.bytes) : ""
+            }}</span>
+            <span class="shelf-folder-meta shelf-folder-meta--count">{{
+              modelCount(dir.model_count)
+            }}</span>
+          </button>
+        </li>
+      </ul>
       <!-- The set grid, ahead of every row-list state: its groups OVERLAP, so
            it is a different screen rather than a banded version of this one. It
            still reads `visibleRows`, so Show and the filters keep applying. -->
@@ -999,6 +1103,28 @@
           </div>
         </div>
       </template>
+      <!-- The open folder's drive: how much room is left on it. -->
+      <div
+        v-if="inFolder"
+        class="shelf-status"
+        role="status"
+        data-testid="shelf-status"
+      >
+        <template v-if="openDrive">
+          <span
+            >{{ openDriveName }}: {{ formatModelSize(openDrive.free) }} free of
+            {{ formatModelSize(openDrive.total) }}</span
+          >
+          <span
+            class="shelf-status-bar"
+            :class="{ 'shelf-status-bar--full': openDrive.used >= 90 }"
+            aria-hidden="true"
+            ><span :style="{ width: `${openDrive.used}%` }"></span
+          ></span>
+          <span>{{ openDrive.used }}% full</span>
+        </template>
+        <span v-else>{{ openDriveName || "This drive" }} could not be measured</span>
+      </div>
     </div>
 
     <!-- The other view of the same destination. `v-if` and not `v-show`: the
@@ -1175,12 +1301,17 @@ import AppButton from "../widgets/AppButton.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import TypeMark from "../widgets/TypeMark.vue";
+import Segmented from "../widgets/Segmented.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
 import StackEdgeTicks from "../widgets/StackEdgeTicks.vue";
 import { useConfirm } from "../../composables/useConfirm";
 import { addModelFile } from "../../api/modelFiles";
 import { getPictureThumbnailBlob } from "../../api/pictures";
-import { fetchModelCompanions, openModelLocation } from "../../api/modelShelf";
+import {
+  BASE_MODEL_UNASSIGNED,
+  fetchModelCompanions,
+  openModelLocation,
+} from "../../api/modelShelf";
 import {
   createStack,
   removeStackMember,
@@ -1210,6 +1341,8 @@ import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { errorDetail } from "../../utils/apiError";
 import { formatUserDate, formatUserDay } from "../../utils/utils";
 import { isTypingTarget } from "../../utils/dom.js";
+import { driveFullness } from "../../utils/libraryChrome";
+import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import {
   adapterKindLabel,
   capabilityLabel,
@@ -3353,17 +3486,125 @@ function modelCount(n) {
   return `${n.toLocaleString()} ${n === 1 ? "model" : "models"}`;
 }
 
-/**
- * The toolbar's chips for what the sidebar narrowed the list to: the Type or
- * base model row, and the folder slot. Each × writes the same axis and key
- * back, which is how the store clears it.
- */
-const folderScopeName = computed(() => {
-  const folder = foldersStore.folders.find(
-    (one) => one.id === store.folderScope,
+// ── The open folder (#2203) ──────────────────────────────────────────────
+
+/** True on a folder of the Folders tree. */
+const inFolder = computed(
+  () => store.place === "folder" && store.folderScope != null,
+);
+
+/** The registered folder the open one is in. */
+const openFolderRow = computed(() =>
+  inFolder.value
+    ? foldersStore.folders.find(
+        (one) => Number(one.id) === store.folderScope.folderId,
+      )
+    : null,
+);
+
+const openDevice = computed(() =>
+  openFolderRow.value
+    ? foldersStore.deviceByFolderId.get(Number(openFolderRow.value.id))
+    : null,
+);
+const openDrive = computed(() => driveFullness(openDevice.value));
+const openDriveName = computed(
+  () => openDevice.value?.label || openDevice.value?.mount_point || "",
+);
+
+// The open level, read fresh on every open: the tree's copy may be from
+// before a move.
+watch(
+  () => (inFolder.value ? store.folderScope : null),
+  (scope) => {
+    if (scope) foldersStore.loadDirs(scope.folderId, scope.path, { force: true });
+  },
+  { immediate: true },
+);
+
+/** The open folder's subfolders (a locked folder's listing has none). */
+const subfolders = computed(() => {
+  if (!inFolder.value) return [];
+  const { folderId, path } = store.folderScope;
+  return (
+    foldersStore.dirListings.get(foldersStore.dirsKey(folderId, path))?.listing
+      ?.dirs ?? []
   );
-  return folder ? folder.tool || basename(folder.path) || folder.path : "Folder";
 });
+
+function openSubfolder(path) {
+  store.setFolderScope({ ...store.folderScope, path });
+}
+
+/**
+ * All folders › drive › registered folder › subfolders. All folders goes to
+ * All models; the drive is not a place, so it is plain text; the last crumb
+ * is where you are.
+ */
+const breadcrumb = computed(() => {
+  if (!inFolder.value) return [];
+  const { path } = store.folderScope;
+  const parts = path ? path.split("/") : [];
+  const folder = openFolderRow.value;
+  const crumbs = [{ label: "All folders", go: () => store.setPlace("all") }];
+  if (openDriveName.value) crumbs.push({ label: openDriveName.value });
+  crumbs.push({
+    label: folder
+      ? folder.tool || basename(folder.path) || folder.path
+      : "Folder",
+    go: parts.length ? () => openSubfolder("") : null,
+  });
+  parts.forEach((name, i) => {
+    crumbs.push({
+      label: name,
+      go:
+        i < parts.length - 1
+          ? () => openSubfolder(parts.slice(0, i + 1).join("/"))
+          : null,
+    });
+  });
+  return crumbs;
+});
+
+// ── All models' strip ────────────────────────────────────────────────────
+
+/** All, then each Type the shelf has: a zero-count Type is not offered. */
+const typeOptions = computed(() => [
+  {
+    id: "all",
+    label: `All ${store.placeCounts.all.toLocaleString()}`,
+    testid: "shelf-strip-type-all",
+  },
+  ...SHELF_TYPES.filter(
+    (type) =>
+      store.typeCounts[type.key] || store.sidebarFilter?.type === type.key,
+  ).map((type) => ({
+    id: type.key,
+    label: `${type.label} ${(store.typeCounts[type.key] ?? 0).toLocaleString()}`,
+    testid: `shelf-strip-type-${type.key}`,
+  })),
+]);
+
+const baseMenuOpen = ref(false);
+const baseName = (key) =>
+  key === BASE_MODEL_UNASSIGNED ? "Base model not set" : key;
+const baseLabel = computed(() =>
+  store.sidebarFilter?.base ? baseName(store.sidebarFilter.base) : "Any",
+);
+const baseOptions = computed(() => [
+  {
+    key: null,
+    label: "Any base model",
+    count: "",
+    checked: !store.sidebarFilter?.base,
+  },
+  ...store.baseCounts.map(({ key, n }) => ({
+    key,
+    label: baseName(key),
+    count: n.toLocaleString(),
+    checked: store.sidebarFilter?.base === key,
+  })),
+]);
 const NO_MODELS_LINE =
   "No models found. PixlStash lists what it finds in the model folders registered on this machine.";
 /** What an empty place says in its own words; Show's own empty state is above. */
@@ -3374,35 +3615,12 @@ const emptyPlaceLine = computed(() => {
   if (store.place === "favourites") return "No favourite models yet.";
   if (store.place === "recent") return "Nothing was added in the last 30 days.";
   if (store.place === "loose") return "Every model is in a set.";
+  if (inFolder.value) {
+    return subfolders.value.length
+      ? "No models directly in this folder."
+      : "No models in this folder.";
+  }
   return NO_MODELS_LINE;
-});
-const filterChips = computed(() => {
-  const chips = [];
-  const picked = store.sidebarFilter;
-  if (picked) {
-    const label =
-      picked.axis === "type"
-        ? (SHELF_TYPES.find((type) => type.key === picked.key)?.label ??
-          picked.key)
-        : picked.key;
-    chips.push({
-      key: `${picked.axis}:${picked.key}`,
-      label,
-      testid: "shelf-chip-sidebar",
-      clearLabel: `Remove the ${label} filter`,
-      clear: () => store.setSidebarFilter(picked.axis, picked.key),
-    });
-  }
-  if (store.folderScope != null) {
-    chips.push({
-      key: `folder:${store.folderScope}`,
-      label: folderScopeName.value,
-      testid: "shelf-chip-folder",
-      clearLabel: `Remove the ${folderScopeName.value} folder filter`,
-      clear: () => store.setFolderScope(null),
-    });
-  }
-  return chips;
 });
 
 /**
@@ -3492,8 +3710,10 @@ const countLabel = computed(() => {
   }
   const models = modelCount(store.visibleRows.length);
   const drawn = store.renderedCount;
-  if (drawn === store.visibleRows.length) return models;
-  return `${models} · ${drawn.toLocaleString()} copies`;
+  const folders = subfolders.value.length;
+  const lead = folders ? `${folders.toLocaleString()} ${folders === 1 ? "folder" : "folders"} · ` : "";
+  if (drawn === store.visibleRows.length) return `${lead}${models}`;
+  return `${lead}${models} · ${drawn.toLocaleString()} copies`;
 });
 
 /** True while the list is cut into groups, i.e. headers are drawn. */
@@ -4288,6 +4508,159 @@ watch(
    One line, one verb, dismissible. Nothing here is broken and nothing needs
    fixing - the models come back the moment the drive does - so it states the
    fact and stops, and deliberately never takes the error surface. */
+/* The open folder's breadcrumb (#2203), with the image grid's crumb look:
+   ancestors read as links, the separator half strength, the leaf as text. */
+.shelf-crumbs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+
+.shelf-crumb {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shelf-crumb--link {
+  cursor: pointer;
+  color: rgb(var(--v-theme-primary));
+}
+
+.shelf-crumb--link:hover {
+  text-decoration: underline;
+}
+
+.shelf-crumbs-sep {
+  flex: none;
+  opacity: var(--opacity-text-secondary);
+}
+
+/* All models' Type and Base model strip, under the toolbar. */
+.shelf-strip {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  min-height: var(--sidebar-slot-h);
+  padding: var(--space-2) var(--space-5);
+  overflow-x: auto;
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
+}
+
+/* An open folder's subfolders, ahead of its models. */
+.shelf-folders {
+  flex-shrink: 0;
+  max-height: 40%;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
+}
+
+.shelf-folder {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  width: 100%;
+  min-height: var(--control-h-bar);
+  padding: 0 var(--space-5);
+  border: 0;
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease-standard);
+}
+
+.shelf-folders li:last-child .shelf-folder {
+  border-bottom: 0;
+}
+
+.shelf-folder:hover {
+  background: var(--hover-wash);
+}
+
+.shelf-folder:focus-visible {
+  box-shadow: var(--focus-ring-inset);
+  outline: none;
+}
+
+.shelf-folder-glyph {
+  opacity: var(--opacity-text-secondary);
+}
+
+.shelf-folder-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--weight-semibold);
+}
+
+.shelf-folder-meta {
+  flex: none;
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  opacity: var(--opacity-text-secondary);
+}
+
+.shelf-folder-meta--count {
+  min-width: 10ch;
+  text-align: right;
+}
+
+/* The open folder's drive, under the list, on the toolbar's chrome: one of
+   the grounds the drive meter's track is audited on (contrastAudit.js). */
+.shelf-status {
+  flex-shrink: 0;
+  background: rgb(var(--v-theme-toolbar));
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--control-h);
+  padding: 0 var(--space-5);
+  border-top: 1px solid rgb(var(--v-theme-divider));
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: rgba(var(--v-theme-toolbar-text), var(--opacity-text-secondary));
+}
+
+.shelf-status-bar {
+  display: flex;
+  width: 120px;
+  height: 4px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--drive-meter-track);
+}
+
+.shelf-status-bar > span {
+  display: block;
+  background: rgb(var(--v-theme-surface-success));
+}
+
+.shelf-status-bar--full > span {
+  background: rgb(var(--v-theme-surface-warning));
+}
+
 .shelf-banner {
   display: flex;
   align-items: center;

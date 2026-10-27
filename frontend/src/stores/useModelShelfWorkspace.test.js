@@ -1,5 +1,6 @@
-// The shelf store's Models workspace section (#2168): places, the one
-// sidebar row, the folder scope, the type bands and set membership.
+// The shelf store's Models workspace section (#2168, #2203): places, All
+// models' Type and Base picks, the open folder, the type bands and set
+// membership.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
@@ -19,13 +20,17 @@ import { useFavouritesStore } from "./useFavouritesStore";
 
 const DAY = 86400000;
 const ago = (days) => new Date(Date.now() - days * DAY).toISOString();
-const at = (folderId) => [{ folder_id: folderId, state: "present" }];
+const at = (folderId, relpath = "m.safetensors") => [
+  { folder_id: folderId, relpath, state: "present" },
+];
 
+// Folder 1 holds 1 at its root, 3 in `Lora` and 4 two levels down, written
+// with a Windows separator as a Windows host stores it.
 const ROWS = [
-  { id: 1, file_kind: "checkpoint", added_at: ago(2), locations: at(1), sha256: "a" },
-  { id: 2, file_kind: "adapter", kind: "lora", added_at: ago(90), locations: at(2), sha256: "b" },
-  { id: 3, file_kind: "vae", added_at: ago(RECENT_DAYS + 1), locations: at(1), sha256: "c" },
-  { id: 4, file_kind: "engine", added_at: ago(1), locations: at(1), sha256: "d" },
+  { id: 1, file_kind: "checkpoint", base_model: "Flux.1 dev", added_at: ago(2), locations: at(1, "ckpt.safetensors"), sha256: "a" },
+  { id: 2, file_kind: "adapter", kind: "lora", base_model: "Flux.1 dev", added_at: ago(90), locations: at(2), sha256: "b" },
+  { id: 3, file_kind: "vae", base_model: "SDXL", added_at: ago(RECENT_DAYS + 1), locations: at(1, "Lora/vae.safetensors"), sha256: "c" },
+  { id: 4, file_kind: "engine", added_at: ago(1), locations: at(1, "Lora\\flux\\e.onnx"), sha256: "d" },
 ];
 
 function body(overrides = {}) {
@@ -87,7 +92,7 @@ describe("places", () => {
 
   it("leaves the set grid unnarrowed by the sidebar", () => {
     store.setPlace("sets");
-    store.folderScope = 2;
+    store.folderScope = { folderId: 2, path: "", locked: false };
     expect(ids()).toEqual([1, 2, 3, 4]);
   });
 });
@@ -109,8 +114,8 @@ describe("the place follows the grid", () => {
   });
 });
 
-describe("the sidebar row and the folder scope", () => {
-  it("narrows by one Type row and takes it back on a second pick", () => {
+describe("All models' Type and Base picks", () => {
+  it("narrows by a Type and takes it back on a second pick", () => {
     store.setPlace("sets");
     store.setSidebarFilter("type", "lora");
     expect(store.place).toBe("all");
@@ -120,22 +125,77 @@ describe("the sidebar row and the folder scope", () => {
     expect(ids()).toEqual([1, 2, 3, 4]);
   });
 
-  it("narrows the list and the counts to one folder", () => {
-    store.setFolderScope(1);
-    expect(store.place).toBe("all");
-    expect(ids()).toEqual([1, 3, 4]);
-    expect(store.placeCounts.all).toBe(3);
-    expect(store.typeCounts.lora).toBe(0);
-    expect(store.typeCounts.checkpoint).toBe(1);
+  it("combines a Type with a Base model, and drops one without the other", () => {
+    store.setPlace("all");
+    store.setSidebarFilter("base", "Flux.1 dev");
+    expect(ids()).toEqual([1, 2]);
+    store.setSidebarFilter("type", "checkpoint");
+    expect(store.sidebarFilter).toEqual({ type: "checkpoint", base: "Flux.1 dev" });
+    expect(ids()).toEqual([1]);
+    // Both must hold: no VAE here is a Flux one.
+    store.setSidebarFilter("type", "vae");
+    expect(ids()).toEqual([]);
+    store.setSidebarFilter("type", null);
+    expect(store.sidebarFilter).toEqual({ type: null, base: "Flux.1 dev" });
+    expect(ids()).toEqual([1, 2]);
   });
 
-  it("a place clears the Type row but keeps the folder", () => {
-    store.setFolderScope(1);
+  it("counts every model, whatever folder was last open", () => {
+    store.setFolderScope({ folderId: 2, path: "" });
+    expect(store.placeCounts.all).toBe(4);
+    expect(store.typeCounts.lora).toBe(1);
+    expect(store.typeCounts.checkpoint).toBe(1);
+  });
+});
+
+describe("the open folder", () => {
+  it("lists one level, as a file manager does", () => {
+    store.setFolderScope({ folderId: 1, path: "" });
+    expect(store.place).toBe("folder");
+    expect(store.view.groupBy).toBe(store.view.listGroupBy);
+    expect(ids()).toEqual([1]);
+    store.setFolderScope({ folderId: 1, path: "Lora" });
+    expect(ids()).toEqual([3]);
+    store.setFolderScope({ folderId: 1, path: "Lora/flux" });
+    expect(ids()).toEqual([4]);
+  });
+
+  it("lists everything under a locked folder, which cannot be browsed into", () => {
+    store.setFolderScope({ folderId: 1, path: "", locked: true });
+    expect(ids()).toEqual([1, 3, 4]);
+    store.setFolderScope({ folderId: 1, path: "Lora", locked: true });
+    expect(ids()).toEqual([3, 4]);
+  });
+
+  it("leaves Sets when it opens, and All models leaves it", () => {
+    store.setPlace("sets");
+    store.setFolderScope({ folderId: 1, path: "Lora" });
+    expect(store.place).toBe("folder");
+    expect(store.view.groupBy).not.toBe(GRID_GROUP_BY);
+    store.setPlace("all");
+    expect(store.folderScope).toBe(null);
+    expect(ids()).toEqual([1, 2, 3, 4]);
+  });
+
+  it("clears the Type and Base picks, and a place clears it", () => {
     store.setSidebarFilter("type", "vae");
-    store.setPlace("recent");
+    store.setFolderScope({ folderId: 1, path: "Lora" });
     expect(store.sidebarFilter).toBe(null);
-    expect(store.folderScope).toBe(1);
+    store.setPlace("recent");
+    expect(store.folderScope).toBe(null);
     expect(ids()).toEqual([1, 4]);
+  });
+
+  it("is never opened by name, only with a folder", () => {
+    store.setPlace("folder");
+    expect(store.place).not.toBe("folder");
+  });
+
+  it("leaves for All models when its folder is closed", () => {
+    store.setFolderScope({ folderId: 1, path: "" });
+    store.setFolderScope(null);
+    expect(store.place).toBe("all");
+    expect(store.folderScope).toBe(null);
   });
 });
 
