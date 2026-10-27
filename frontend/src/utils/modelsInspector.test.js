@@ -13,12 +13,15 @@ describe("the head's name", () => {
   it("names a runs page, a sidebar filter, else the place", () => {
     expect(viewName({ runs: true, place: "sets", sidebarFilter: null })).toBe("Training runs");
     expect(
-      viewName({ runs: false, place: "all", sidebarFilter: { axis: "type", key: "lora" } }),
+      viewName({ runs: false, place: "all", sidebarFilter: { type: "lora", base: null } }),
     ).toBe("LoRAs");
     expect(
-      viewName({ runs: false, place: "all", sidebarFilter: { axis: "base", key: "SDXL" } }),
+      viewName({ runs: false, place: "all", sidebarFilter: { type: null, base: "SDXL" } }),
     ).toBe("SDXL");
     expect(viewName({ runs: false, place: "loose", sidebarFilter: null })).toBe("In no set yet");
+    expect(
+      viewName({ runs: false, place: "folder", sidebarFilter: null, folderName: "Lora" }),
+    ).toBe("Lora");
   });
 
   it("counts a mix as selected, and each kind by its own noun", () => {

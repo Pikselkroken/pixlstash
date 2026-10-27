@@ -6,6 +6,7 @@ import {
   DOWNLOADS_KIND,
   forgetModelFolder,
   listModelFolderDevices,
+  listModelFolderDirs,
   listModelFolders,
   MANAGED_KIND,
   rescanModelFolder,
@@ -126,6 +127,84 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
   const registeredPaths = computed(() =>
     folders.value.map((folder) => folder.path).filter(Boolean),
   );
+
+  /**
+   * One level of subfolders per `"<folder id>:<path>"`: `{loading, listing,
+   * error}`. Shared by the Folders tree and the folder view, so the folder
+   * that is open is read once. Replaced wholesale so templates react.
+   */
+  const dirListings = ref(new Map());
+  const dirsInFlight = new Map();
+  /** Per key, the newest request: only it may write its answer. */
+  const dirsLatest = new Map();
+
+  /** The cache key for one listing. */
+  function dirsKey(id, path = "") {
+    return `${Number(id)}:${path}`;
+  }
+
+  /**
+   * Read one level of a registered folder, once unless `force`.
+   *
+   * @param {number} id - the registered folder.
+   * @param {string} [path=""] - POSIX, relative to it.
+   * @param {{force?: boolean}} [options]
+   * @returns {Promise<Object|null>} the listing, or null when it could not be
+   *   read (a remote owner is refused the route; the tree then offers no
+   *   subfolders rather than an error per row).
+   */
+  async function loadDirs(id, path = "", { force = false } = {}) {
+    const key = dirsKey(id, path);
+    const known = dirListings.value.get(key);
+    if (!force && known?.listing) return known.listing;
+    // A forced read supersedes one in flight: that one may have left before
+    // the scan or move that asked for this.
+    if (!force && dirsInFlight.has(key)) return dirsInFlight.get(key);
+    const startedAt = epoch;
+    const ticket = {};
+    dirsLatest.set(key, ticket);
+    const put = (entry) => {
+      if (startedAt !== epoch || dirsLatest.get(key) !== ticket) return;
+      dirListings.value = new Map(dirListings.value).set(key, entry);
+    };
+    put({ loading: true, listing: known?.listing ?? null, error: "" });
+    const request = listModelFolderDirs(id, path)
+      .then((listing) => {
+        put({ loading: false, listing, error: "" });
+        return listing;
+      })
+      .catch((err) => {
+        console.warn(`Could not list model folder ${id} at "${path}"`, err);
+        put({
+          loading: false,
+          listing: null,
+          error: errorDetail(err) || "Could not read this folder.",
+        });
+        return null;
+      })
+      .finally(() => {
+        if (dirsInFlight.get(key) === request) dirsInFlight.delete(key);
+      });
+    dirsInFlight.set(key, request);
+    return request;
+  }
+
+  /** Forget every listing, so the next look reads the disk again. */
+  function clearDirs() {
+    dirListings.value = new Map();
+  }
+
+  /**
+   * Re-read every listing already shown, in place: a scan, a move or an added
+   * file changes counts and folders under rows that are open. Clearing instead
+   * would fold every open row shut.
+   */
+  function reloadDirs() {
+    for (const key of dirListings.value.keys()) {
+      const at = key.indexOf(":");
+      loadDirs(Number(key.slice(0, at)), key.slice(at + 1), { force: true });
+    }
+  }
 
   /**
    * Re-read the registry.
@@ -429,6 +508,7 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
     folders.value = [];
     devices.value = [];
     scanning.value = new Map();
+    dirListings.value = new Map();
     loading.value = false;
     loaded.value = false;
     error.value = "";
@@ -455,6 +535,11 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
     downloadFolder,
     defaultCandidates,
     registeredPaths,
+    dirListings,
+    dirsKey,
+    loadDirs,
+    clearDirs,
+    reloadDirs,
     refresh,
     refreshDevices,
     add,

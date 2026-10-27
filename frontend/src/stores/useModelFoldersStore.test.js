@@ -15,6 +15,7 @@ const createModelFolder = vi.fn();
 const forgetModelFolder = vi.fn();
 const rescanModelFolder = vi.fn();
 const setDefaultModelFolder = vi.fn();
+const listModelFolderDirs = vi.fn();
 
 vi.mock("../api/modelFolders", () => ({
   MANAGED_KIND: "managed",
@@ -26,6 +27,7 @@ vi.mock("../api/modelFolders", () => ({
   forgetModelFolder: (...a) => forgetModelFolder(...a),
   rescanModelFolder: (...a) => rescanModelFolder(...a),
   setDefaultModelFolder: (...a) => setDefaultModelFolder(...a),
+  listModelFolderDirs: (...a) => listModelFolderDirs(...a),
 }));
 
 const fetchRows = vi.fn();
@@ -205,6 +207,28 @@ describe("forgetting", () => {
     expect(useNoticeStore().notices.at(-1).text).toContain(
       "Nothing was listed from it",
     );
+  });
+});
+
+describe("subfolder listings", () => {
+  it("lets a forced read supersede one in flight, and keeps the newer answer", async () => {
+    const store = useModelFoldersStore();
+    let answerStale;
+    listModelFolderDirs
+      .mockReset()
+      .mockImplementationOnce(
+        () => new Promise((resolve) => (answerStale = resolve)),
+      )
+      .mockResolvedValueOnce({ dirs: [{ name: "new" }] });
+    const stale = store.loadDirs(1, "");
+    // A scan landed while the first read was out: it must read again.
+    await store.loadDirs(1, "", { force: true });
+    expect(listModelFolderDirs).toHaveBeenCalledTimes(2);
+    answerStale({ dirs: [{ name: "old" }] });
+    await stale;
+    expect(store.dirListings.get(store.dirsKey(1, "")).listing.dirs).toEqual([
+      { name: "new" },
+    ]);
   });
 });
 

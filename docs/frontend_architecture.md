@@ -242,7 +242,7 @@ All state consumed by more than one component lives in a Pinia store. The stores
 | `useLockedSetsStore` | `useLockedSetsStore.js` | Which pictures are frozen by a locked picture set. Fed by `GET /picture_sets/locked-members`; refreshed on app start and on the same sidebar-refresh / `pictures_changed` ws triggers the sidebar uses. Single source of the lock-tooltip copy reused by the grid badge, overlay chip, and context-menu gating. |
 | `useModelShelfStore` | `useModelShelfStore.js` | The model shelf's rows and its `Show` selection. `rows` are the raw `/adapters` + `/checkpoints` payload, **every block fetched so far rather than the shown set**: a fetch replaces the blocks it asked for and leaves the rest standing, because the option vocabularies (`adapterKindOptions`, `capabilityOptions`, `baseModelOptions`) are derived from `rows`, so an overwriting narrowed fetch deleted the kind checkboxes that unticking Adapters is documented to *grey*, and dropped base models that stayed selected and persisted with no box left to untick them. `visibleRows` layers the resolved name, the reduced location state and `copies` (how many of the row's registered copies are `present`) on top and applies the kind, capability and base-model narrowing **client-side**, so a multi-select base-model filter is not one request per option. The capability filter matches **has this capability**, not *is this kind*: a model serving two features survives a tick of either, and like the kind boxes it narrows only the block it hangs under (engines), never the whole shelf. `groups` sorts `visibleRows` client-side on the five ruled `SortKey` values and cuts them into one level of groups (`none` / `type` / `base_model` / `feature`), always returning at least one group so the flat and grouped lists are one piece of markup; `workflow_set` is deliberately NOT in that list and is the shelf's DEFAULT (#1438) — its groups overlap, so it swaps the row list for `ModelSetGrid.vue` and is served instead by `workflowSets` / `visibleCombinations` / `setStacks` / `setFoldCounts`, read once from `GET /models/workflow-sets` by `loadWorkflowSets()` and refetched only after a scan (`fetchRows({markNew: true})`), never on a filter tick, because it is a window over every kept picture in the vault and every stored ComfyUI run; `hiddenSets` rides on that same payload and is changed through `PUT /models/workflow-sets/hidden` (**#1869**, the hide is per LIBRARY and server-side, not the per-browser `localStorage` flag it used to be), whose answer is the whole new list so a hide needs no re-read; `worksWithModel(id)` answers off the WHOLE payload rather than the narrowed one, since hiding a companion because its kind is unticked would turn a view setting into a claim about the evidence; sorting never refetches, because every field the keys read is already on the payload and three server-sorted blocks would be destroyed by the merge above. **One axis fans a row out across several groups** — `feature` (a multi-capability model is listed under each feature it serves, which is the design rule) — so `rowKey` carries the group on every grouped axis, not just the ones that need it: one key across several draws put `tabindex="0"` on all of them at once. A row that cannot answer the key sorts last in BOTH directions, and the unset group sorts last whatever the direction; an adapter declares no capability and groups under **its algorithm** (`LoRA`, `LoKr`, …) rather than under one "No feature recorded" bucket that held most of the shelf. One vocabulary spells it and one fold keys it, both in `utils/modelShelf.js`: `adapterKindKey` trims and lower-cases the free-text column, `adapterKindLabel` names the folded value, and the group key, the group header, the row's Kind cell, the nested `Show` checkboxes AND the `adapterKinds` filter behind them all read those two rather than `row.kind`. **The fold has to reach the filter, not just the label.** `LoRA` is reachable from the edit dialog, which trims but does not case-fold, so faceting on the raw column offered two checkboxes drawn with the same label that each ticked half the rows — while the axis folded them into one visible group. **And the fold has to reach the remembered selection too**, which `storedFilters` does on read: a shipped build persisted the raw column, so a blob holding `LoRA` would match nothing and appear in no checkbox — an empty shelf with the Adapters box reading fully on and nothing on screen naming the filter doing it. Folded rather than discarded by a `FILTERS_SCHEMA_VERSION` bump, which throws the whole blob away when the selection is still exactly what the user chose. The key is the folded value and never the label, because the key is what `modelShelfView.collapsed.feature` remembers a collapse by; it is prefixed `kind:` to keep an algorithm out of the capability keyspace. Group headers are uppercased by `.shelf-group-label` like every other header on the axis, so the header reads `LORA` where the cell reads `LoRA`: one vocabulary stops a *second spelling* existing, it does not exempt the axis from the shelf-wide case rule. Everything that is not an adapter with an algorithm still falls through to "No feature recorded", which is the whole of the rest: a checkpoint, an unclassified file, an engine declaring no capability and any `file_kind` this build does not know have no algorithm at all; an adapter whose `kind` folds to the empty string has none either (the hub CHECK makes it NOT NULL, not non-empty, so a whitespace-only one is reachable over the raw API); and an adapter whose `kind` is the literal `unknown` has the classifier's refusal rather than an algorithm (`KIND_UNKNOWN`, `utils/adapter_header.py`) — heading that `UNKNOWN` would stand a second shrug beside the real one and call it a feature. The `Show` facet still offers `Unknown` as a box, because "which of these could we not identify" is a real selection even where it is not a real feature. `view` (`groupBy`, `sortKey`, `sortDirection`) and the per-axis collapsed sets persist under `pixlstash:modelShelfView`, a SECOND key so `resetFilters` cannot take the sort order with it. `filters` (`adapters`, `adapterKinds`, `checkpoints`, `unclassified`, `engines`, `capabilities`, `baseModels`, `duplicatesOnly`) persists to `localStorage` under `pixlstash:modelShelfFilters` — not to `/users/me/config`, which is a fixed `User` model and would need a backend column. **`duplicatesOnly` is the one field `storedFilters` deliberately does not read back**: "only the files written twice" is a question somebody asks once while reclaiming disk, and remembered across a restart it is a shelf that opens showing four rows of an eighteen-hundred-row library with nothing on screen saying why. An empty `adapterKinds` / `capabilities` / `baseModels` array means **unconstrained**, the standard multi-select convention and the only reading under which a fresh install shows anything. `activeCount` counts filter SECTIONS that deviate from their default, not ticked boxes, or a mild narrowing would read as `9`. Only the four top-level type toggles refetch, and they narrow client-side too; the rest only narrow what is already loaded. Each fetch takes the next `epoch` and only the newest may write `rows` or clear `loading`, so a slower earlier flight cannot land last and show adapters only while Checkpoints is ticked; `resetForSession` bumps the same counter, so a read on the wire when the credential changed is discarded. `ModelShelf.vue` watches `loaded` and refetches when a session reset clears it, which the store cannot do itself because session-reset handlers run *before* the new credential is installed. **Session reset drops `rows` but keeps `filters`:** the models are hub-side facts about this machine, but every row carries the characters and sets in the ACTIVE LIBRARY that use it, while the selection and the view axes are the user's own preferences and hold no ids. `offlineMounts` and the `New` badge's `newIds` are both derived here and both documented under §13.1, "The three kinds of absence": `offlineMounts` reads `rows` rather than `visibleRows` on purpose, and `newIds` is a per-fetch id diff that only `fetchRows({ markNew: true })` fills and every other fetch clears. |
 | `useWorkflowsStore` | `useWorkflowsStore.js` | The Workflows grid's cards (v1.12 F1a) — `GET /workflows`, one card per workflow keyed by `id` (#1623); B9 (#1410) moved the grid onto that route when it deleted the shelf's topology list. `sortKey` is one of `rating` / `used` / `pictures` / `name` (the one ascending key, A to Z); *Your ratings* orders by **`rank`**, the Bayesian cover rank, not by the `rating` the card displays, or a 5.0 from one picture would lead a 4.8 from ninety. `selectedKeys` holds workflow ids: `select(id, {additive})` replaces the selection or toggles one id, `selectRange(ids)` takes a drawn run, and `runnableCard` is the one selected card or null. `refetch()` bumps the epoch, clears `loading` and re-reads the grid, so a write's re-read is never refused behind an older read still on the wire, and that older read cannot land over it. `invalidate()` is the one door in from outside the view — a ghost purge in Settings › Privacy — and re-reads the grid **only if it had been read**, so a purge made by somebody who never opened Workflows fires no request. `duplicateCard` re-reads the grid after writing rather than patching it, and returns the server's answer (whose `workflow_id` is the new manual workflow, which the caller selects) or `null` with the reason in `error`. `deleteSelected` deletes manual workflows only (the bar's gate), clears the selection when none was refused and bumps `recipesEpoch`, since their saved recipes become unfiled. `useSetKey` / `requestUseSet(id)` is how the selection menu's *Change model set…* row asks `WorkflowTab` to open its own set menu on that workflow (#1850): the `pictureToOpen` shape, a one-shot the tab clears when it takes it. **Every write the Workflow tab makes to a workflow's waiting changes ends in `refetch()`**, because the updates socket does not echo a write to the window that made it and the card's *Unsaved* badge is drawn off the grid. Session reset drops all of it: every count on a card is read across the active library's pictures. **`filters` (F7) is split across the wire on purpose**: the One-offs and Hidden flags are sent as `include_one_offs` / `include_hidden` and re-read the grid, because they widen the set the server answers with; Ghosts, Type, Checkpoint, Source and Rating only ever remove a card, so `filteredCards` applies them here. `filterChips` is the one answer to "which filters are on" — the panel's *Clear all*, the strip and the toolbar badge all count it — and its WORDS come from `workflowFilterChips` in `utils/filterChips.js`, the module that exists so one filter cannot be spelled two ways; the store owns the state and the refetch decision and nothing else. A filter that removes a card also **prunes `selectedKeys`**, because the selection bar and the rail's bulk verbs act on the selection and would otherwise offer Hide or Delete on cards nobody can see, and `filterOptions` counts each pick-one option over `cards` rather than `filteredCards`, so a count cannot go to zero on the row being read. |
-| `useModelFoldersStore` | `useModelFoldersStore.js` | The registered model folders and the scans running against them. Fetched by the shelf and by the Models sidebar's folder slot (its drive bar), and re-read when Settings › Models opens. It is a **store rather than dialog state** because a scan outlives the panel that started it, and because `POST .../rescan` answers 202 as soon as the thread starts, so completion has to be waited for: the store polls `GET /model-folders` every 3s and treats `last_checked` advancing as done, then refreshes `useModelShelfStore` and says what landed. It **gives up after 10 minutes**, because the scanner logs an exception without stamping `last_checked` and a crashed scan is otherwise indistinguishable from a slow one. `forget` captures the row's fields BEFORE the request, which is what makes the notice's `Add it back` possible and therefore what lets removal skip a confirmation prompt. **Session reset drops it whole:** absolute host paths are owner-only, and a session that lost its credential has no standing to keep polling. |
+| `useModelFoldersStore` | `useModelFoldersStore.js` | The registered model folders and the scans running against them. Fetched by the shelf and by the Models sidebar (its slot and Folders tree), and re-read when Settings › Models opens. It also caches the tree's one-level subfolder listings (`loadDirs`, `dirListings`, #2203). It is a **store rather than dialog state** because a scan outlives the panel that started it, and because `POST .../rescan` answers 202 as soon as the thread starts, so completion has to be waited for: the store polls `GET /model-folders` every 3s and treats `last_checked` advancing as done, then refreshes `useModelShelfStore` and says what landed. It **gives up after 10 minutes**, because the scanner logs an exception without stamping `last_checked` and a crashed scan is otherwise indistinguishable from a slow one. `forget` captures the row's fields BEFORE the request, which is what makes the notice's `Add it back` possible and therefore what lets removal skip a confirmation prompt. **Session reset drops it whole:** absolute host paths are owner-only, and a session that lost its credential has no standing to keep polling. |
 | `useGenStackPrefsStore` | `useGenStackPrefsStore.js` | Remembered client pref for whether newly filtered images stack with their source: `stackFilterOutputs` (plugin "Filters" runs), default ON and persisted to `localStorage`. Its `stackI2IOutputs` half went in v1.12 F5 with the two surfaces that read it, since `POST /workflows/run` does not stack. |
 | `useEntityListsStore` | `useEntityListsStore.js` | The character / picture-set / project **lists** themselves (`characters`, `pictureSets`, `projects`) plus `fetchedAt` and `pending` per kind. One cache for the three surfaces that need them — the `SideBar` tree, the image context menu's Person/Set/Project flyouts, and the tag-review scope pickers. **Stale-while-revalidate:** a caller renders the cached list immediately and calls `refresh(kind)` *without awaiting it*, so opening a flyout never waits on the network; concurrent callers share one in-flight request (`inFlight`, modelled on `useDedupStore.scopeCounts`). `invalidate(kinds)` is **refetch-only** — a `characters_changed` ws event or a local assignment says "ask again", it never writes the store from a payload (`origin_client_id` is echo-matching, not authority; see §9 and integration_architecture.md §8.1). **These are `SCOPED_LIST` routes, so their content is an authorization decision:** the cache is in-memory only (never `localStorage`/`sessionStorage`), `reset()` drops it on every auth-context transition via the single `onSessionReset` chokepoint in `apiClient` (logout / login / share-token entry / vault switch), and an epoch guard discards any response that was in flight across that transition. Revalidate-on-open is mandatory rather than an optimisation: a share/scoped session receives no ws events (the stream is owner-only), so it is that session's only invalidation path. **The sidebar's row counts ride along on these lists (`include_counts=true`, issue #651):** every character row carries `image_count` and `project_image_count` (scoped to the character's OWN `project_id`, or to "in no project" when it has none) and every project row carries `image_count`, which is what replaced `SideBar.fetchSidebarData`'s one-`/{id}/summary`-per-row fan-out. They live on the shared list rather than in a second counts-bearing cache on purpose (two shapes for one entity would mean two caches, two invalidation paths and two epochs), and the flyout / scope-picker consumers simply ignore the extra fields. Because both scopes are on every row and neither depends on the sidebar's current project selection, one cached response serves both sidebar view modes. Distinct from `useEntityNamesStore`, which holds id→name maps only. |
 | `useEntityNamesStore` | `useEntityNamesStore.js` | `characterNames`, `setNames`, `projectNames`, `refFolderLabels`, `importFolderLabels` (id→name maps). One-directional id→name only (names aren't unique). `SideBar` publishes via `merge*` setters after each fetch; `ImageGrid`'s breadcrumb consumes them to label the route's IDs. |
@@ -4436,8 +4436,8 @@ The shelf's former Shelf / Training runs tab strip is gone; the runs panel still
 **The toolbar is browse only (#2168).** From the left: the title `Models`, the count, and
 on the shelf tab the **Sort** split-button (a direction toggle and a menu, the menu not
 drawn on the Sets place), **Show** (the filter menu, whose badge counts active filters,
-never results), one removable chip for the sidebar's Type or Base row and one for a folder
-scope, and the name field; then the tail `[separator] [TbGlobalActions]`. Adding models,
+never results), the open folder's breadcrumb on the `folder` place (#2203), and the name
+field; then the tail `[separator] [TbGlobalActions]`. Adding models,
 managing folders and the training-runs view are the sidebar's; the verbs are on the
 selection pill, the row menu and the shortcuts. Everything but the title, the count and the
 tail is `v-if`'d to the shelf tab, because all of it acts on `model_file` rows that are not
@@ -4761,11 +4761,10 @@ and receives focus on entry, and roving focus arrives with the first thing a
 focused row can do. The shelf is reached by the title bar's Models segment, a
 real link with `aria-current` (#2158).
 
-**What left the bar, and what stayed (#904, #2168).** `Add`, `Model folders` and the folder
-choice are the sidebar's: the folder slot's *Limit to folder* menu with *Manage model
-folders…* and *Add folder…*, and the amber *Add models ▾* (`ModelsSideBar.vue`). The bar keeps
-what changes the view. A folder scope is no longer a bar control: it is the slot, and while it
-is narrowed a removable chip on the bar says so. Every other verb is on the row's context menu
+**What left the bar, and what stayed (#904, #2168, #2203).** `Add`, `Model folders` and the
+folder choice are the sidebar's: the slot's *Model folders* button, the Folders tree, and the
+amber *Add models ▾* (`ModelsSideBar.vue`). The bar keeps what changes the view. An open folder
+is not a bar control: it is a row of the tree, and the bar names it with a breadcrumb. Every other verb is on the row's context menu
 or the selection pill, so a mutation is never one stray click from a view switch.
 
 The **label rule** on the view controls: a control whose glyph is abstract and whose state
@@ -4840,18 +4839,12 @@ it has no docked form yet. Its header slot and footer band are
 `--sidebar-slot-h` and `--sidebar-band-h`, the Media sidebar's (#2159), so
 neither edge moves on a workspace switch.
 
-- **The header slot is the model folder**, drawn like the title bar's library
-  picker: the folder's name over its drive's 3px fullness bar
-  (`driveFullness` over `useModelFoldersStore().deviceByFolderId`), and its
-  `present_bytes`. Its menu, *Limit to folder*, lists All folders and every
-  folder the shelf catalogues (not the ai-toolkit root nor Downloads) with
-  path, size, free space and a mini bar, then *Add folder…* and *Manage model
-  folders…*. A pick is `store.setFolderScope(id)`, which narrows the row list
-  and every model count below, and moves a reader on Sets to All models, as
-  the design does; the set grid itself is never narrowed by it (the issue's
-  open question). A scoped folder that is no longer registered (forgotten in
-  Manage model folders) clears the scope, so the list never sits empty under a
-  slot that names another folder.
+- **The header slot is one *Model folders* button** (#2203), reading
+  "N drives · M folders" (the folders the shelf catalogues, not the ai-toolkit
+  root nor Downloads), at the toolbar's height and on its line. It opens
+  Manage model folders (`store.requestShell('manage-folders', el)`) and
+  nothing else: the per-folder list is now the tree, *Add folder…* is in *Add
+  models*, and *All folders* is the breadcrumb's first crumb.
 - **Places** are `store.place` (`SHELF_PLACES`): *Sets* is the set grid
   (`groupBy: workflow_set`); *All models*, *Favourites*, *Recently added*
   (`added_at` within `RECENT_DAYS`) and *In no set yet* are the row list under
@@ -4860,19 +4853,61 @@ neither edge moves on a workspace switch.
   built from the whole sets payload rather than from what `Show` leaves on the
   grid (one of the owner's own sets counts even while hidden in this library,
   since hiding is a view choice; a hidden evidence card does not), and is disabled until the sets are read rather than calling every
-  model loose.
-- **Type and Base model rows** are one choice, `store.sidebarFilter`
-  (`{axis, key}`); picking the lit row takes it back, and picking one leaves
-  the set grid for the list. Type keys are `SHELF_TYPES` (`shelfTypeOf`: every
-  adapter algorithm is a LoRA); an engine or unclassified file sits under no
-  Type row and is listed in All models. One row lights at a time: a place is
-  lit only while no Type or Base row is.
-- **Counts** (`placeCounts`, `typeCounts`, `baseCounts`) are over the offered
-  rows in the folder scope, stacks folded as the list folds them; *Sets*
-  counts the cards.
+  model loose. Picking any place clears the open folder and the Type/Base
+  picks: one row is lit at a time, and *All models* is how a folder is left.
+- **The Folders tree** (`panels/ModelFolderTree.vue`, between the places and
+  Training) is drives (label or mount point, free space, the 3px fullness bar
+  from `driveFullness`, in the warning colour from 90% full), then each
+  registered folder on that drive with its model count, then its subfolders on
+  expand. Subfolders come from `GET /model-folders/{id}/dirs?path=` one level
+  per request, through `useModelFoldersStore().loadDirs(id, path)`, a cache
+  keyed `"<id>:<path>"` shared with the folder view (`clearDirs()` on each
+  sidebar mount, `force` when the view opens a folder, and `reloadDirs()`, a
+  re-read of every cached listing in place, whenever the shelf's rows are
+  refetched, which every scan, move, added file and edit does). A listing the
+  folder view cannot read (404, 409, a remote owner's 403) says so in a banner
+  over the list rather than reading as "no subfolders". Every registered
+  folder's own level is read once on mount, for its count and whether it has
+  any subfolders. A **locked** folder (`movable !== "per_item"`: the managed
+  store, the HuggingFace cache, the InsightFace packs) shows a lock and never
+  expands. **Rows are flat**, carrying `aria-level`, under one `role="tree"`
+  rather than nested `group`s: the roving tabindex walks one list (Up/Down,
+  Home/End, Right opens then enters, Left closes then goes to the parent,
+  Enter/Space opens) and a row never re-mounts on expand. The recursion is in
+  the data, not the component. A listing that is refused (a remote owner: the
+  route is §16.3 `local_owner_only`) offers no subfolders rather than an error
+  per row. **Two modes**: `browse` (the sidebar) opens what is clicked, a
+  locked folder included; `pick` (the move work, #2204) refuses a locked folder
+  and anything its `disabled(node)` refuses. Both emit `select` with
+  `{folderId, path, locked}` and read `selected` back.
+- **The folder view.** `store.setFolderScope({folderId, path, locked})` opens
+  the `folder` place (never reachable through `setPlace`), leaving the set
+  grid for the list: "Sets mode never shows folders" is read as the grid
+  ignoring the folder, and opening one leaving Sets (#2168's question answered
+  no). The view is **one level**: a row is in it when one of its copies has
+  that folder id and its relpath's directory (read as POSIX, since a Windows
+  host stores `\`) is exactly `path`; a locked folder matches recursively.
+  `ModelShelf` draws the open folder's subfolders as rows at the top of the
+  list, the toolbar count as "5 folders · 6 models", a breadcrumb in place of
+  the old chips (*All folders* → All models, the drive as plain text, the
+  registered folder and each subfolder as links, the last one
+  `aria-current="location"`, in the image grid breadcrumb's crumb look), and a
+  status bar under the list with the drive's free space of its total and a
+  fullness bar.
+- **All models' strip.** Type and Base model are no longer sidebar rows: on
+  All models only, a strip under the toolbar holds a Type `Segmented` (All,
+  then every `SHELF_TYPES` entry with a count, zero counts left out so a
+  ControlNet appears when the library has one) and a Base model menu. They
+  combine: `store.sidebarFilter` is `{type, base}` (either null), or null when
+  neither is picked; `setSidebarFilter(axis, key)` sets one axis and keeps the
+  other, the same key or null taking it back. Type keys are `SHELF_TYPES`
+  (`shelfTypeOf`: every adapter algorithm is a LoRA).
+- **Counts** (`placeCounts`, `typeCounts`, `baseCounts`) are over every
+  offered row, stacks folded as the list folds them: a folder is a place now,
+  not a scope over the others. *Sets* counts the cards.
 - **The sidebar owns no dialog.** *Add models ▾* (the sidebar's amber
   button: Add folder…, Add file…, and Set ai-toolkit output folder… while
-  unset) and the slot's two rows go through `store.requestShell(what, el)`;
+  unset) and the slot's button go through `store.requestShell(what, el)`;
   `ModelShelf` watches `store.shellRequest` and opens the dialog it always
   owned, returning focus to `el`.
 - **Training**, last: a `+` at the head's right edge (*New training run…*,
@@ -6096,7 +6131,7 @@ nothing else in the UI would say so. Choosing another destination is what a drag
 onto a folder group already does, and it does it better — with the folder in
 front of you. Both stores are refreshed afterwards, for the reason the import
 refreshes both: the shelf gained a row and the destination folder's file count
-and `shelf_bytes` moved with it, so the folder slot's drive bar is stale too.
+and `shelf_bytes` moved with it, so the Folders tree's drive bar is stale too.
 
 **Dropping a `.safetensors` on the window is the same verb without the picker,
 and it works on the desktop only.** `useWindowFileImport` claims a model file
@@ -6175,8 +6210,8 @@ but its control is the `AddToEntityControl` rewrite that decision 6 of the nine
 puts after #759 — a combobox/listbox shell rather than a button — so it arrives
 with that rewrite instead of as a fourth dialog.
 
-**The drive meter is the sidebar's folder slot.** It reads the disk, not the catalogue: the
-slot's bar and the mini bars in its *Limit to folder* menu are `driveFullness` over
+**The drive meter is on the Folders tree's drive rows** (and the folder view's status bar). It
+reads the disk, not the catalogue: both are `driveFullness` over
 `useModelFoldersStore().deviceByFolderId`, which is `GET /model-folders/devices`. The free and
 total figures are the drive's own, not a sum of the sizes the shelf happens to know. The three-segment meter that split the shelf's own share out of the used space
 went with the drive bands.
@@ -6282,7 +6317,7 @@ still match the recorded sha256 (`snapshot.json` marks any left out).
 The registry is **Settings › Models** (`settings/ModelFoldersSection.vue`); the
 memory, VRAM and tagger settings that pane used to hold are the **Tagging**
 entry beside it (`BehaviourSection.vue`, nav id still `behaviour` because the
-server's library insights deep-link to it). The shelf's doors are the sidebar's folder slot menu (*Manage model folders…*, *Add folder…*) and
+server's library insights deep-link to it). The shelf's doors are the sidebar's *Model folders* slot button and
 its *Add models ▾* menu (*Add folder…*). Each reaches `openFolders`, which emits
 `open-settings` with `"models"`.
 

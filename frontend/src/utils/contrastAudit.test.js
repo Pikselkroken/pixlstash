@@ -146,12 +146,13 @@ describe('main.js status tokens', () => {
     expect(auditContrast(themes)).toHaveLength(92)
   })
 
-  it('draws both drive meters on the audited track', () => {
+  it('draws every drive meter on the audited track', () => {
     // The audit measures `--drive-meter-track`; a bar that drifts back to
     // another track would leave it green while the free space vanishes again.
     for (const [file, rule] of [
       ['../components/TitleBarLibraryPicker.vue', '.tlp-bar'],
-      ['../components/panels/ModelsSideBar.vue', '.msb-bar'],
+      ['../components/panels/ModelFolderTree.vue', '.mft-bar'],
+      ['../components/views/ModelShelf.vue', '.shelf-status-bar'],
     ]) {
       const source = readFileSync(resolve(HERE, file), 'utf8')
       const body = source.slice(source.indexOf(`${rule} {`)).split('}')[0]

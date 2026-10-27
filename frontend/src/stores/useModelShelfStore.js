@@ -84,9 +84,17 @@ import { checksByKey, comboKey } from "../utils/setVerdicts";
  * The Models sidebar's places (#2168). `sets` is the set grid; every other one
  * is the row list, narrowed. Not persisted, past the grid-or-list choice
  * `groupBy` already remembers: a place other than Sets and All models is a
- * question, as the `Show` filters below are.
+ * question, as the `Show` filters below are. `folder` is one folder of the
+ * Folders tree (#2203), opened by {@link setFolderScope} rather than by name.
  */
-export const SHELF_PLACES = ["sets", "all", "favourites", "recent", "loose"];
+export const SHELF_PLACES = [
+  "sets",
+  "all",
+  "favourites",
+  "recent",
+  "loose",
+  "folder",
+];
 
 /** How far back *Recently added* reaches, by when a scan first saw the file. */
 export const RECENT_DAYS = 30;
@@ -96,7 +104,7 @@ export const LIST_GROUP_BY = "type";
 
 /**
  * The axes a list can be banded by, in the Sort panel's order. Workflow set is
- * the Sets place rather than an option, and folder is the sidebar's slot.
+ * the Sets place rather than an option, and folder is the sidebar's tree.
  */
 export const LIST_GROUP_BY_KEYS = ["type", "base_model", "feature", "none"];
 
@@ -1104,15 +1112,17 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    */
   const place = ref(view.groupBy === GRID_GROUP_BY ? "sets" : "all");
   /**
-   * The sidebar's one Type or Base model row, `{axis: "type"|"base", key}`, or
-   * null. A single choice, unlike `Show`'s checklists: it is a place to look,
-   * and the toolbar draws it as one removable chip.
+   * All models' Type and Base model strip (#2203), `{type, base}` with either
+   * null, or null when neither is picked. The two combine: "every FLUX LoRA".
    */
   const sidebarFilter = ref(null);
   /**
-   * The model folder the list is limited to, by `model_folder.id`, or null for
-   * every folder. Narrows the row list and the sidebar's counts; the set grid
-   * is left whole for now (the issue's open question).
+   * The open folder of the Folders tree, `{folderId, path, locked}`, or null.
+   * `path` is POSIX under the registered folder, `""` its root. The view is
+   * one level, as a file manager's is; a `locked` folder (one PixlStash or
+   * another tool lays out) cannot be browsed into, so it lists everything
+   * under it. Only the `folder` place has one: the set grid never narrows by
+   * folder, and opening a folder leaves Sets.
    */
   const folderScope = ref(null);
   /** Every row fetched so far, across blocks. Not the shown set. */
@@ -3387,6 +3397,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     if (view.groupBy === GRID_GROUP_BY && place.value !== "sets") {
       place.value = "sets";
       sidebarFilter.value = null;
+      folderScope.value = null;
     } else if (view.groupBy !== GRID_GROUP_BY && place.value === "sets") {
       place.value = "all";
     }
@@ -3565,20 +3576,33 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     return Number.isFinite(at) && Date.now() - at <= RECENT_DAYS * 86400000;
   }
 
-  /** In the folder the slot limits the list to, when it limits it. */
+  /**
+   * In the open folder: a copy directly in it, or anywhere under a locked one.
+   * A relpath is stored with the host's separator, so it is read as POSIX.
+   */
   function inFolderScope(row) {
-    if (folderScope.value == null) return true;
-    return (row.locations ?? []).some(
-      (loc) => Number(loc?.folder_id) === folderScope.value,
-    );
+    const scope = folderScope.value;
+    if (scope == null) return true;
+    return (row.locations ?? []).some((loc) => {
+      if (Number(loc?.folder_id) !== scope.folderId) return false;
+      const relpath = String(loc?.relpath ?? "").replace(/\\/g, "/");
+      const dir = relpath.includes("/")
+        ? relpath.slice(0, relpath.lastIndexOf("/"))
+        : "";
+      if (!scope.locked) return dir === scope.path;
+      return !scope.path || dir === scope.path || dir.startsWith(`${scope.path}/`);
+    });
   }
 
-  /** Under the sidebar's Type or Base model row, when one is picked. */
+  /** Under All models' Type and Base model picks, when any is made. */
   function inSidebarFilter(row) {
     const picked = sidebarFilter.value;
     if (!picked) return true;
-    if (picked.axis === "type") return shelfTypeOf(row) === picked.key;
-    return (baseModelKey(row) || BASE_MODEL_UNASSIGNED) === picked.key;
+    if (picked.type && shelfTypeOf(row) !== picked.type) return false;
+    return (
+      !picked.base ||
+      (baseModelKey(row) || BASE_MODEL_UNASSIGNED) === picked.base
+    );
   }
 
   /**
@@ -3595,22 +3619,20 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     return true;
   }
 
-  /** Is this row in the sidebar's view: place, Type/Base row and folder. */
+  /** Is this row in the sidebar's view: place, Type/Base pick and folder. */
   function inSidebarView(row) {
     return inFolderScope(row) && inSidebarFilter(row) && inPlace(row);
   }
 
-  /** Rows matching `keep` in the folder scope, folded as the list folds them. */
+  /** Rows matching `keep`, folded as the list folds them. */
   function scopedCount(keep = () => true) {
-    return collapseStacks(
-      offeredRows.value.filter((row) => inFolderScope(row) && keep(row)),
-    );
+    return collapseStacks(offeredRows.value.filter((row) => keep(row)));
   }
 
   /**
-   * The sidebar's place counts. The model ones follow the folder scope, as
-   * the list does; Sets counts the cards, which the scope leaves whole.
-   * `loose` is null until the sets are read.
+   * The sidebar's place counts, over the whole shelf: a folder is a place of
+   * its own now, not a scope over the others. Sets counts the cards. `loose`
+   * is null until the sets are read.
    */
   const placeCounts = computed(() => {
     const all = scopedCount();
@@ -3625,7 +3647,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     };
   });
 
-  /** Models per Type row in the folder scope, by {@link SHELF_TYPES} key. */
+  /** Models per Type, by {@link SHELF_TYPES} key: the strip's counts. */
   const typeCounts = computed(() => {
     const counts = Object.fromEntries(SHELF_TYPES.map((type) => [type.key, 0]));
     for (const row of scopedCount()) {
@@ -3636,8 +3658,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   });
 
   /**
-   * The Base model rows: `[{key, n}]`, most models first, the unset bucket
-   * last. Folded keys, as the `Show` facet uses, so one base is one row.
+   * The strip's Base model menu: `[{key, n}]`, most models first, the unset
+   * bucket last. Folded keys, as the `Show` facet uses, so one base is one row.
    */
   const baseCounts = computed(() => {
     const counts = new Map();
@@ -3664,15 +3686,18 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
 
   /**
    * Open a place. Sets takes the grid; every other place takes the list under
-   * its own remembered grouping. A place clears the Type/Base row, as the
-   * design's sidebar lights one row at a time.
+   * its own remembered grouping. A place clears the Type/Base picks and the
+   * open folder, as the sidebar lights one row at a time: picking All models
+   * is how a folder is left.
    *
-   * @param {string} next - one of {@link SHELF_PLACES}.
+   * @param {string} next - one of {@link SHELF_PLACES}, bar `folder`, which
+   *   {@link setFolderScope} opens.
    */
   function setPlace(next) {
-    if (!SHELF_PLACES.includes(next)) return;
+    if (!SHELF_PLACES.includes(next) || next === "folder") return;
     place.value = next;
     sidebarFilter.value = null;
+    folderScope.value = null;
     clearEverySelection();
     const axis = next === "sets" ? GRID_GROUP_BY : view.listGroupBy;
     if (view.groupBy !== axis) setView({ groupBy: axis });
@@ -3687,30 +3712,48 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   }
 
   /**
-   * Pick a Type or Base model row, or take it back when it is the one picked.
+   * Pick a Type or a Base model on All models' strip, keeping the other axis;
+   * the same key again, or null, takes that axis back.
    *
    * @param {"type"|"base"} axis
-   * @param {string} key - a {@link SHELF_TYPES} key or a folded base model.
+   * @param {string|null} key - a {@link SHELF_TYPES} key or a folded base model.
    */
   function setSidebarFilter(axis, key) {
-    const picked = sidebarFilter.value;
-    sidebarFilter.value =
-      picked?.axis === axis && picked?.key === key ? null : { axis, key };
+    const picked = sidebarFilter.value ?? { type: null, base: null };
+    const next = { ...picked, [axis]: key == null || picked[axis] === key ? null : key };
+    sidebarFilter.value = next.type || next.base ? next : null;
     clearEverySelection();
     if (sidebarFilter.value) leaveSetGrid();
   }
 
   /**
-   * Limit the list to one model folder, or to every folder with null.
+   * Open one folder of the Folders tree, or leave it for All models with null.
    *
-   * @param {number|null} id - a `model_folder.id`.
+   * @param {{folderId: number, path?: string, locked?: boolean}|null} scope
    */
-  function setFolderScope(id) {
-    const next = id == null ? null : Number(id);
-    if (next === folderScope.value) return;
+  function setFolderScope(scope) {
+    if (scope == null) {
+      if (place.value === "folder") setPlace("all");
+      return;
+    }
+    const next = {
+      folderId: Number(scope.folderId),
+      path: scope.path ?? "",
+      locked: Boolean(scope.locked),
+    };
+    const open = folderScope.value;
+    if (
+      place.value === "folder" &&
+      open?.folderId === next.folderId &&
+      open?.path === next.path
+    ) {
+      return;
+    }
+    place.value = "folder";
     folderScope.value = next;
+    sidebarFilter.value = null;
     clearEverySelection();
-    if (next != null) leaveSetGrid();
+    if (view.groupBy !== view.listGroupBy) setView({ groupBy: view.listGroupBy });
   }
 
   // ── Selection and the verbs (F3) ────────────────────────────────────────

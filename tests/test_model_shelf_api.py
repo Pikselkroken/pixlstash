@@ -49,6 +49,7 @@ from fastapi.testclient import TestClient
 from send2trash import TrashPermissionError
 from sqlmodel import Session, delete
 
+from pixlstash import auth
 from pixlstash.authz.policy import AccessPolicy
 from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.database import DBPriority
@@ -10801,3 +10802,308 @@ def test_a_set_with_a_template_head_is_offered_the_rest_and_can_answer_it(
         assert entry["declined"] == [download["sha256"]]
     finally:
         _wipe_sets(shelf_env.server)
+
+
+# ===========================================================================
+# Browsing a model folder by directory (#2203)
+# ===========================================================================
+#
+# The tree lists one directory level per call. The names come from the disk,
+# because the scanner records files and never an empty directory; the counts
+# come from the hub's `present` copies beneath each entry. Each test lays out
+# both: a real tree under tmp_path, and the copies the hub says sit in it.
+
+
+def _add_folder(server, folder_id: int, path: str, kind: str, movable: str, owner):
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model_folder (id, path, kind, owner, movable, created_at) "
+            "VALUES (?, ?, ?, ?, ?, '2026-08-09T00:00:00Z')",
+            (folder_id, path, kind, owner, movable),
+        )
+
+
+def _set_copies(shelf_env, folder_id: int, copies) -> None:
+    """Make one folder hold exactly these `present` copies.
+
+    Each copy is ``(relpath, size)`` or ``(relpath, size, model_key)``; copies
+    that share a ``model_key`` are two copies of one model. The seed's rows for
+    the folder are dropped first, so a count names only what this test wrote.
+    """
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute("DELETE FROM model_file WHERE model_folder_id = ?", (folder_id,))
+        model_ids: dict[str, int] = {}
+        for copy in copies:
+            relpath, size = copy[0], copy[1]
+            key = copy[2] if len(copy) > 2 else relpath
+            if key not in model_ids:
+                model_ids[key] = conn.execute(
+                    "INSERT INTO model (file_kind, kind, sha256, filename, provenance, "
+                    "file_size, created_at) VALUES ('adapter', 'lora', ?, ?, 'external', ?, "
+                    "'2026-08-08T00:00:00Z')",
+                    (_h(f"dirs-{folder_id}-{key}"), relpath.rsplit("/", 1)[-1], size),
+                ).lastrowid
+            conn.execute(
+                "INSERT INTO model_file (model_id, model_folder_id, relpath, state, "
+                "seen_at, file_mtime) VALUES (?, ?, ?, 'present', "
+                "'2026-08-09T00:00:00Z', 0)",
+                (model_ids[key], folder_id, relpath),
+            )
+
+
+def _listing(shelf_env, folder_id: int = 1, path: str | None = None):
+    params = {} if path is None else {"path": path}
+    return shelf_env.owner.get(f"{API}/model-folders/{folder_id}/dirs", params=params)
+
+
+def _by_name(body: dict) -> dict[str, dict]:
+    return {entry["name"]: entry for entry in body["dirs"]}
+
+
+def test_dirs_count_every_copy_beneath_each_entry(shelf_env, tmp_path):
+    """Counts are recursive, distinct by model and summed by copy.
+
+    The file two levels down counts at the root and in its parent. Two copies of
+    one model count once by model and twice by bytes. An empty directory shows.
+    """
+    root = tmp_path / "loras"
+    (root / "people" / "alice").mkdir(parents=True)
+    (root / "people" / "empty").mkdir()
+    (root / "style").mkdir()
+    _seeded_folder_at(shelf_env.server, str(root))
+    _set_copies(
+        shelf_env,
+        1,
+        [
+            ("top.safetensors", 10),
+            ("people/b.safetensors", 5, "b"),
+            ("people/b-copy.safetensors", 5, "b"),
+            ("people/alice/a.safetensors", 20),
+        ],
+    )
+
+    body = _listing(shelf_env).json()
+    assert (body["path"], body["locked"]) == ("", False)
+    assert (body["model_count"], body["bytes"]) == (3, 40)
+    dirs = _by_name(body)
+    assert list(dirs) == ["people", "style"]
+    assert (dirs["people"]["model_count"], dirs["people"]["bytes"]) == (2, 30)
+    assert dirs["people"]["path"] == "people"
+    assert dirs["people"]["has_dirs"] is True
+    assert (dirs["style"]["model_count"], dirs["style"]["bytes"]) == (0, 0)
+    assert dirs["style"]["has_dirs"] is False
+
+    body = _listing(shelf_env, path="people").json()
+    assert (body["path"], body["model_count"], body["bytes"]) == ("people", 2, 30)
+    dirs = _by_name(body)
+    assert list(dirs) == ["alice", "empty"]
+    assert (dirs["alice"]["model_count"], dirs["alice"]["bytes"]) == (1, 20)
+    assert dirs["alice"]["path"] == "people/alice"
+    assert dirs["alice"]["has_dirs"] is False
+    assert (dirs["empty"]["model_count"], dirs["empty"]["bytes"]) == (0, 0)
+
+
+def test_dot_dirs_symlinks_and_files_are_not_offered(shelf_env, tmp_path):
+    root = tmp_path / "loras"
+    (root / "real").mkdir(parents=True)
+    (root / ".cache").mkdir()
+    (root / "style").mkdir()
+    (tmp_path / "outside").mkdir()
+    (root / "linked").symlink_to(tmp_path / "outside", target_is_directory=True)
+    (root / "alias").symlink_to(root / "style", target_is_directory=True)
+    (root / "notes.txt").write_text("not a folder")
+    _seeded_folder_at(shelf_env.server, str(root))
+    _set_copies(shelf_env, 1, [("real/a.safetensors", 4)])
+
+    body = _listing(shelf_env).json()
+    assert [entry["name"] for entry in body["dirs"]] == ["real", "style"]
+
+
+def test_a_samples_directory_is_hidden_beside_its_model_and_shown_without_one(
+    shelf_env, tmp_path
+):
+    root = tmp_path / "loras"
+    (root / "alice_samples").mkdir(parents=True)
+    (root / "bob_samples").mkdir()
+    (root / "people" / "alice_samples").mkdir(parents=True)
+    _seeded_folder_at(shelf_env.server, str(root))
+    _set_copies(shelf_env, 1, [("alice.safetensors", 3), ("people/x.safetensors", 1)])
+
+    root_names = [entry["name"] for entry in _listing(shelf_env).json()["dirs"]]
+    assert root_names == ["bob_samples", "people"]
+    # The rule is per directory: alice beside the root does not hide the
+    # previews of an alice inside people/, where no model of that name sits.
+    people_names = [
+        entry["name"] for entry in _listing(shelf_env, path="people").json()["dirs"]
+    ]
+    assert people_names == ["alice_samples"]
+
+
+def test_has_dirs_ignores_a_samples_directory_its_own_model_hides(shelf_env, tmp_path):
+    root = tmp_path / "loras"
+    (root / "parent" / "alice_samples").mkdir(parents=True)
+    (root / "other" / "deep").mkdir(parents=True)
+    _seeded_folder_at(shelf_env.server, str(root))
+    _set_copies(shelf_env, 1, [("parent/alice.safetensors", 2)])
+
+    dirs = _by_name(_listing(shelf_env).json())
+    assert dirs["parent"]["has_dirs"] is False
+    assert dirs["other"]["has_dirs"] is True
+
+
+def test_a_locked_folder_answers_its_counts_and_no_directories(shelf_env, tmp_path):
+    source = tmp_path / "ai-toolkit"
+    (source / "run" / "sub").mkdir(parents=True)
+    _add_folder(shelf_env.server, 2, str(source), "source", "external", "ai-toolkit")
+    _set_copies(shelf_env, 2, [("run/x.safetensors", 9)])
+
+    body = _listing(shelf_env, folder_id=2).json()
+    assert (body["locked"], body["dirs"]) == (True, [])
+    assert (body["model_count"], body["bytes"]) == (1, 9)
+    body = _listing(shelf_env, folder_id=2, path="run").json()
+    assert (body["locked"], body["dirs"]) == (True, [])
+    assert (body["path"], body["model_count"], body["bytes"]) == ("run", 1, 9)
+    # Nothing on disk is read, so a path the disk does not hold is not a 404.
+    r = _listing(shelf_env, folder_id=2, path="not-on-disk")
+    assert r.status_code == 200 and r.json()["locked"] is True, r.text
+
+
+def test_a_path_that_escapes_or_is_not_plain_is_refused_with_400(shelf_env, tmp_path):
+    root = tmp_path / "loras"
+    (root / "inside").mkdir(parents=True)
+    (tmp_path / "outside").mkdir()
+    (root / "escape").symlink_to(tmp_path / "outside", target_is_directory=True)
+    _seeded_folder_at(shelf_env.server, str(root))
+
+    assert _listing(shelf_env, path="inside").status_code == 200, (
+        "the positive control: a plain subpath must list"
+    )
+    for bad in (
+        "..",
+        "../x",
+        "a/../../x",
+        "inside/..",
+        "/etc",
+        "inside//x",
+        "./inside",
+        "inside/",
+        "escape",
+    ):
+        r = _listing(shelf_env, path=bad)
+        assert r.status_code == 400, f"{bad!r} answered {r.status_code}: {r.text}"
+
+
+def test_an_unknown_folder_or_a_path_that_is_not_a_directory_is_404(
+    shelf_env, tmp_path
+):
+    root = tmp_path / "loras"
+    (root / "sub").mkdir(parents=True)
+    (root / "notes.txt").write_text("not a folder")
+    _seeded_folder_at(shelf_env.server, str(root))
+
+    assert _listing(shelf_env, path="sub").status_code == 200, (
+        "the positive control: a directory must list"
+    )
+    assert _listing(shelf_env, folder_id=999).status_code == 404
+    assert _listing(shelf_env, path="missing").status_code == 404
+    assert _listing(shelf_env, path="notes.txt").status_code == 404
+
+
+def test_an_unreadable_directory_is_409_and_its_parent_still_lists(
+    shelf_env, tmp_path, monkeypatch
+):
+    root = tmp_path / "loras"
+    (root / "denied" / "inner").mkdir(parents=True)
+    (root / "peek_denied" / "deep").mkdir(parents=True)
+    _seeded_folder_at(shelf_env.server, str(root))
+    real_root = os.path.realpath(root)
+    refused = {
+        os.path.join(real_root, "denied"),
+        os.path.join(real_root, "peek_denied"),
+    }
+    real_scandir = os.scandir
+
+    def scandir(path=".", *args, **kwargs):
+        if os.fspath(path) in refused:
+            raise PermissionError(13, "Permission denied", os.fspath(path))
+        return real_scandir(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "scandir", scandir)
+
+    r = _listing(shelf_env, path="denied")
+    assert r.status_code == 409, r.text
+    r = _listing(shelf_env)
+    assert r.status_code == 200, r.text
+    dirs = _by_name(r.json())
+    assert set(dirs) == {"denied", "peek_denied"}
+    # A child that cannot be peeked reports has_dirs false; it is not a 409
+    # for the listing that found it.
+    assert dirs["peek_denied"]["has_dirs"] is False
+
+
+def test_the_folder_listing_is_local_owner_only_and_refuses_share_tokens(
+    shelf_env, tmp_path, monkeypatch
+):
+    root = tmp_path / "loras"
+    (root / "sub").mkdir(parents=True)
+    _seeded_folder_at(shelf_env.server, str(root))
+    url = f"{API}/model-folders/1/dirs"
+    assert_real_route(
+        shelf_env.server.api,
+        "GET",
+        url,
+        template=f"{API}/model-folders/{{folder_id}}/dirs",
+    )
+    assert shelf_env.owner.get(url).status_code == 200, (
+        "the owner cannot list it either; the refusals below would prove nothing"
+    )
+
+    # Both READ belts are emptied, so every refusal below is the gate's own.
+    monkeypatch.setattr(auth, "READ_BLOCKED_GET_PATHS", frozenset())
+    monkeypatch.setattr(auth, "READ_BLOCKED_GET_PREFIXES", ())
+    scoped = mint_read_token(
+        shelf_env.owner,
+        "folder dirs probe",
+        resource_type="character",
+        resource_id=shelf_env.character_id,
+    )
+    unscoped = mint_read_token(shelf_env.owner, "folder dirs global read")
+    for name, token in (("resource-scoped", scoped), ("unscoped READ", unscoped)):
+        client = bearer_client(shelf_env.server, token)
+        assert client.get(f"{API}/pictures").status_code == 200, (
+            f"the {name} token is dead; the refusal below would prove nothing"
+        )
+        r = client.get(url)
+        assert r.status_code == 403, (
+            f"a {name} share token listed a model folder: {r.status_code} {r.text}"
+        )
+
+
+def test_a_remote_owner_is_refused_the_folder_listing_naming_the_flag(
+    shelf_env, tmp_path
+):
+    """The locality half of the tier: a public address is refused, naming the flag,
+    and the flag admits it. Without this an OWNER_ONLY declaration would pass every
+    other test in this block."""
+    root = tmp_path / "loras"
+    (root / "sub").mkdir(parents=True)
+    _seeded_folder_at(shelf_env.server, str(root))
+    url = f"{API}/model-folders/1/dirs"
+    assert _listing(shelf_env).status_code == 200, "the positive control"
+    assert shelf_env.owner.get(url, headers=_xff(LAN_IPV4)).status_code == 200
+
+    r = shelf_env.owner.get(url, headers=_xff("8.8.8.8"))
+    assert r.status_code == 403, r.text
+    assert "allow_remote_host_ops" in r.text, r.text
+
+    config = shelf_env.server.auth._server_config
+    previous = config.get("allow_remote_host_ops")
+    config["allow_remote_host_ops"] = True
+    try:
+        r = shelf_env.owner.get(url, headers=_xff("8.8.8.8"))
+        assert r.status_code == 200, r.text
+    finally:
+        if previous is None:
+            config.pop("allow_remote_host_ops", None)
+        else:
+            config["allow_remote_host_ops"] = previous

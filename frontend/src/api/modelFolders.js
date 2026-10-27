@@ -96,6 +96,27 @@ export async function listModelFolderDevices() {
 }
 
 /**
+ * One level of a registered folder's subdirectories, for the Folders tree.
+ *
+ * Lazy by design: the tree asks once per expand. Read from the disk, so an
+ * empty directory is listed; its counts are the `present` copies under it,
+ * recursively. A folder the owner does not lay out (the managed store, the
+ * HuggingFace cache) answers `locked: true` with no `dirs`.
+ *
+ * @param {number|string} id - the registered folder.
+ * @param {string} [path=""] - POSIX, relative to the folder; `""` is its root.
+ * @returns {Promise<Object>} `{folder_id, path, locked, model_count, bytes,
+ *   dirs: [{name, path, model_count, bytes, has_dirs}]}`.
+ */
+export async function listModelFolderDirs(id, path = "") {
+  return unwrap(
+    apiClient.get(`${MODEL_FOLDERS_URL}/${encodeURIComponent(id)}/dirs`, {
+      params: { path },
+    }),
+  );
+}
+
+/**
  * Register a folder for the shelf to catalogue.
  *
  * Registering does not scan; call {@link rescanModelFolder} afterwards. A path
