@@ -103,9 +103,14 @@ function detail(id = KEY, name = "Cinematic portrait", extra = {}) {
   };
 }
 
-/** The diff lines, top to bottom. */
+/**
+ * The diff of each card, top to bottom: its chips in order, joined with a dot
+ * as a reader hears them. The chips themselves carry no separator.
+ */
 function diffsOf(wrapper) {
-  return wrapper.findAll(".wfrt-diff").map((line) => line.text());
+  return wrapper
+    .findAll(".wfrt-diff")
+    .map((line) => line.findAll(".wfrt-seg").map((chip) => chip.text()).join(" · "));
 }
 
 function render(props = {}) {
@@ -165,9 +170,10 @@ describe("WorkflowRecipesTab", () => {
       "3 saved",
     );
     // Nothing but the prompt differs from the default, and the card says so
-    // in place of the LoRA chips and the facts line (#1653).
+    // in place of the LoRA chips and the facts line (#1653). The one chip is
+    // that sentence, not a LoRA.
     expect(diffsOf(wrapper)[0]).toBe("Only the prompt");
-    expect(wrapper.find(".wfrt-chip").exists()).toBe(false);
+    expect(wrapper.findAll(".wfrt-card")[0].findAll(".wfrt-chip")).toHaveLength(0);
     expect(wrapper.find(".wfrt-facts").exists()).toBe(false);
   });
 
@@ -266,12 +272,14 @@ describe("WorkflowRecipesTab", () => {
     cover_picture_id: 88,
   };
 
-  it("offers no help text, saved recipes or not", async () => {
+  it("shows the one-line hint above both groups, saved recipes or not", async () => {
     listSavedRecipes.mockResolvedValue([]);
     listUsedLooks.mockResolvedValue([LOOK]);
     const wrapper = render();
     await flushPromises();
-    expect(wrapper.find(".wfrt-hint").exists()).toBe(false);
+    expect(wrapper.find(".wfrt-hint").text()).toBe(
+      "A recipe is one picture's exact settings, seed included. It lists only what differs from the default.",
+    );
     expect(wrapper.find(".wfrt-sub").text()).toBe(
       "1 recipe from your pictures",
     );
@@ -682,15 +690,110 @@ describe("WorkflowRecipesTab", () => {
     ]);
     const wrapper = render();
     await flushPromises();
-    const text = "realvisXL · + ada 0.8 · mira_v2 0.85 → 0.5 · Steps 40 · seed 1234";
+    // The seed leads; the rest keep the order the diff gives.
+    const text = "seed 1234 · realvisXL · + ada 0.8 · mira_v2 0.85 → 0.5 · Steps 40";
     expect(diffsOf(wrapper)).toEqual([text]);
-    // The separators and the arrow are the quiet ink; the names are not.
+    // The arrow is the quiet ink; the names are not.
     const quiet = wrapper.findAll(".wfrt-diff .wfrt-quiet").map((el) => el.text());
-    expect(quiet).toEqual(["·", "·", "→", "·", "·"]);
+    expect(quiet).toEqual(["→"]);
     // A screen reader hears the difference with the name.
     expect(wrapper.find(".wfrt-card").attributes("aria-label")).toBe(
       `Rainy tram platform, ${text}`,
     );
+  });
+
+  it("leads the chips with the seed, and puts 'on <workflow>' last on a multi-selection", async () => {
+    const OTHER = "b".repeat(32);
+    getWorkflowCard.mockImplementation(async (id) =>
+      id === OTHER ? detail(id, "Neon", { values: [] }) : detail(id),
+    );
+    listSavedRecipes.mockResolvedValue([
+      recipe(1, "Here", {
+        loras: [{ filename: "mira_v2.safetensors", strength: 0.5 }],
+        overrides: { "KSampler/steps": 40 },
+        keep_seed: true,
+        seed: 99,
+      }),
+      recipe(2, "There", { workflow_id: OTHER, keep_seed: true, seed: 7 }),
+    ]);
+    const wrapper = render({ workflowIds: [KEY, OTHER] });
+    await flushPromises();
+    const [here, there] = diffsOf(wrapper);
+    // Seed first, though recipeDiff appends it after the parameters.
+    expect(here.startsWith("seed 99 · ")).toBe(true);
+    expect(here).toBe("seed 99 · mira_v2 0.85 → 0.5 · Steps 40 · on Cinematic portrait");
+    expect(there).toBe("seed 7 · steps 12 · on Neon");
+  });
+
+  it("puts the seed chip first, and nothing else ahead of it", async () => {
+    listSavedRecipes.mockResolvedValue([
+      recipe(1, "Only a seed", { overrides: {}, keep_seed: true, seed: 1234 }),
+    ]);
+    const wrapper = render();
+    await flushPromises();
+    expect(diffsOf(wrapper)).toEqual(["seed 1234"]);
+    expect(wrapper.findAll(".wfrt-card")[0].find(".wfrt-seg").text()).toBe("seed 1234");
+  });
+
+  it("reads each thumbnail through pictureThumbnailUrl, never a raw path", async () => {
+    listUsedLooks.mockResolvedValue([LOOK]);
+    const wrapper = render();
+    await flushPromises();
+    const srcs = wrapper.findAll(".wfrt-thumb").map((img) => img.attributes("src"));
+    // Three saved recipes (source picture 7) and one look (cover 88).
+    expect(srcs).toEqual([
+      "/api/v1/pictures/thumbnails/7.webp",
+      "/api/v1/pictures/thumbnails/7.webp",
+      "/api/v1/pictures/thumbnails/7.webp",
+      "/api/v1/pictures/thumbnails/88.webp",
+    ]);
+  });
+
+  it("gives Saved Run… and Make defaults…, and From your pictures Clone… and Run…", async () => {
+    listSavedRecipes.mockResolvedValue([
+      recipe(1, "Rainy tram platform", { overrides: { "KSampler/steps": 40 } }),
+    ]);
+    listUsedLooks.mockResolvedValue([LOOK]);
+    const wrapper = render();
+    await flushPromises();
+    const [saved, looks] = wrapper.findAll(".wfrt-group");
+    const verbs = (group) => group.findAll(".wfrt-verb").map((b) => b.text());
+
+    expect(verbs(saved)).toEqual(["Make defaults…", "Run…"]);
+    // A saved recipe has nothing to clone; a look is the only thing Clone… reads.
+    expect(saved.find("[data-testid='wfrt-clone']").exists()).toBe(false);
+    expect(verbs(looks)).toEqual(["Clone…", "Run…"]);
+    expect(looks.find("[data-testid='wfrt-make-defaults']").exists()).toBe(false);
+  });
+
+  it("says what each group holds when one of them is empty", async () => {
+    listSavedRecipes.mockResolvedValue([]);
+    listUsedLooks.mockResolvedValue([LOOK]);
+    const wrapper = render();
+    await flushPromises();
+    const [saved, looks] = wrapper.findAll(".wfrt-group");
+    expect(saved.find(".section-label").text()).toBe("Saved");
+    expect(saved.text()).toContain("Nothing saved. Clone one from your pictures below.");
+    expect(saved.find(".wfrt-list").exists()).toBe(false);
+    expect(looks.find(".wfrt-list").exists()).toBe(true);
+
+    listSavedRecipes.mockResolvedValue([recipe(1, "Rainy tram platform")]);
+    listUsedLooks.mockResolvedValue([]);
+    useWorkflowsStore().notedRecipesChanged();
+    await flushPromises();
+    const [saved2, looks2] = wrapper.findAll(".wfrt-group");
+    expect(saved2.find(".wfrt-list").exists()).toBe(true);
+    expect(looks2.find(".section-label").text()).toBe("From your pictures");
+    expect(looks2.text()).toContain("None yet: they appear as the workflow makes pictures.");
+  });
+
+  it("shows no group at all when neither holds anything", async () => {
+    listSavedRecipes.mockResolvedValue([]);
+    listUsedLooks.mockResolvedValue([]);
+    const wrapper = render();
+    await flushPromises();
+    expect(wrapper.findAll(".wfrt-group")).toHaveLength(0);
+    expect(wrapper.text()).toContain("No recipes here yet");
   });
 
   it("says why a card is not compared, and never 'Only the prompt' early", async () => {
