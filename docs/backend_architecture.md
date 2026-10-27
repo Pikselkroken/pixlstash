@@ -35,7 +35,7 @@
 22. [Tiered Duplicate Detection](#22-tiered-duplicate-detection)
 23. [Opt-in telemetry](#23-opt-in-telemetry-the-install-id-and-the-consent-flags)
 24. [Folder structure: read, commit, layout and moves](#24-folder-structure-read-commit-layout-and-moves) — incl. [24.1 The folder-structure read](#241-the-folder-structure-read), [24.2 The folder-structure commit](#242-the-folder-structure-commit), [24.3 The library layout](#243-the-library-layout), [24.4 The layout and the move engine](#244-the-layout-and-the-move-engine), [24.5 Reconciling moves made outside PixlStash](#245-reconciling-moves-made-outside-pixlstash)
-25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Picking up a model that landed after the scan (#1985)](#2513-picking-up-a-model-that-landed-after-the-scan-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116), [25.17 Sample prompts written from the dataset (#2117)](#2517-sample-prompts-written-from-the-dataset-2117), [25.18 Watching a run live (#2118)](#2518-watching-a-run-live-2118), [25.19 The Train dialog's preview: dataset checks and resolve (#2119)](#2519-the-train-dialogs-preview-dataset-checks-and-resolve-2119), [25.20 Checking memory and speed, and learning from runs (#2120)](#2520-checking-memory-and-speed-and-learning-from-runs-2120), [25.21 Recipe updates from pixlstash.dev (#2122)](#2521-recipe-updates-from-pixlstashdev-2122), [25.22 Dataset snapshots: what a LoRA was trained on (#2123)](#2522-dataset-snapshots-what-a-lora-was-trained-on-2123), [25.23 Browsing a model folder by directory (#2203)](#2523-browsing-a-model-folder-by-directory-2203)
+25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Picking up a model that landed after the scan (#1985)](#2513-picking-up-a-model-that-landed-after-the-scan-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116), [25.17 Sample prompts written from the dataset (#2117)](#2517-sample-prompts-written-from-the-dataset-2117), [25.18 Watching a run live (#2118)](#2518-watching-a-run-live-2118), [25.19 The Train dialog's preview: dataset checks and resolve (#2119)](#2519-the-train-dialogs-preview-dataset-checks-and-resolve-2119), [25.20 Checking memory and speed, and learning from runs (#2120)](#2520-checking-memory-and-speed-and-learning-from-runs-2120), [25.21 Recipe updates from pixlstash.dev (#2122)](#2521-recipe-updates-from-pixlstashdev-2122), [25.22 Dataset snapshots: what a LoRA was trained on (#2123)](#2522-dataset-snapshots-what-a-lora-was-trained-on-2123), [25.23 Browsing a model folder by directory (#2203)](#2523-browsing-a-model-folder-by-directory-2203), [25.24 Moving into a subfolder, and when a file is already there (#2204)](#2524-moving-into-a-subfolder-and-when-a-file-is-already-there-2204)
 26. [Prompt match](#26-prompt-match)
 
 ---
@@ -11862,6 +11862,43 @@ arrow before it is asked.
   `GET /api/v1/models/{model_id}/samples` already exercises. The templated path is
   covered by the `/api/v1/model-folders/` prefix in `READ_BLOCKED_GET_PREFIXES`,
   and the registry entry is what enforces the tier.
+
+### 25.24 Moving into a subfolder, and when a file is already there (#2204)
+
+`POST /api/v1/model-moves` takes `destination_subpath` beside
+`destination_folder_id`: the directory inside the registered folder to land in,
+POSIX and relative, `""` for the root. The status response echoes it.
+`ModelMover.plan` (`pixlstash/services/model_mover.py`) checks it before
+anything is written:
+
+- **Addressing.** The same rule as the folder listing in 25.23: an empty, `.` or
+  `..` segment, a leading or trailing slash or a backslash is a 400. The rest goes
+  through `resolve_path_within` against the folder, so an absolute path or a
+  symlink leading out of the folder is a 400 too.
+- **A missing directory is a 409**, never created. A move lands only in a
+  folder the owner made, so a typo cannot put models where ComfyUI does not look.
+- **A locked destination is a 409.** A folder whose `movable` is not `per_item`
+  (the managed store, the HuggingFace cache, the InsightFace packs) takes no
+  move in, as it already gave none out. Before #2204 the managed store was a
+  valid destination. A relocation is exempt (its target is an ordinary folder
+  until it is promoted), and a relocation with a subpath is a 400.
+- **Each file lands at `<subpath>/<basename>`.** The duplicate-destination
+  check, the free check, the `model_file` key the row is repointed to and the
+  space check all use that path. Same-device is decided against the directory
+  the file lands in, not the folder root, since a drive can be mounted at a
+  subfolder.
+
+**The skip rule.** A file is "already there", reported `skipped` and not
+moved, only when it sits **directly in the destination directory**:
+`(folder_id, dirname(relpath))` equals `(destination_folder_id, subpath)`.
+Stored relpaths use `os.sep`, so the directory is converted to POSIX before the
+comparison (`relpath_dir`). The rule used to compare folder ids alone. That
+skipped the case #2204 was filed for: LoRAs at the root of a StabilityMatrix
+`Models` folder dropped onto `Models/Lora` are in the same registered folder, so
+nothing moved. Now a root file moves into `Lora`, a file in `Lora` dropped onto
+`Lora` is skipped, and a file in `Lora/old` dropped onto `Lora` moves up. Within
+one folder the move is a rename, and the row keeps its `model_id`, so sets,
+people and the rest of the model's curation come with it.
 
 ## 26. Prompt match
 

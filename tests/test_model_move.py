@@ -1213,6 +1213,214 @@ def test_a_file_already_in_the_destination_is_reported_skipped_not_dropped(
     assert report.outcomes[0].detail
 
 
+def test_a_file_at_the_root_moves_into_a_subfolder_of_its_own_folder(hub, tmp_path):
+    """The case #2204 was filed for: LoRAs at the root of a StabilityMatrix
+    ``Models`` folder dropped onto ``Models/Lora``. One registered folder, so the
+    old "already there" test - folder ids alone - skipped them and nothing moved.
+
+    A rename, because it is one filesystem, and the row keeps its model: the
+    sets and people hung off that model come along by construction.
+    """
+    models = tmp_path / "Models"
+    (models / "Lora").mkdir(parents=True)
+    folder_id = register_folder(hub, models)
+    model_id, source_path = register_file(hub, folder_id, models, "alice.safetensors")
+
+    mover = ModelMover(hub)
+    plan = mover.plan(
+        [(folder_id, "alice.safetensors")], folder_id, destination_subpath="Lora"
+    )
+    assert plan.skipped == [], "a root file was taken as already in Lora"
+    assert plan.destination_subpath == "Lora"
+    assert [move.same_device for move in plan.moves] == [True]
+
+    report = mover.execute(plan)
+
+    assert [outcome.status for outcome in report.outcomes] == [STATUS_MOVED]
+    assert not os.path.exists(source_path)
+    assert (models / "Lora" / "alice.safetensors").exists()
+    relpath = os.path.join("Lora", "alice.safetensors")
+    assert set(locations(hub)) == {(folder_id, relpath)}
+    assert locations(hub)[(folder_id, relpath)]["model_id"] == model_id
+    assert_no_dangling_rows(hub)
+
+
+def test_a_file_already_in_the_target_subfolder_is_skipped(hub, tmp_path):
+    """The skip rule's other half: a file directly in ``Lora`` dropped onto
+    ``Lora`` is nothing to do, and one in ``Lora/old`` is not already there."""
+    models = tmp_path / "Models"
+    (models / "Lora" / "old").mkdir(parents=True)
+    folder_id = register_folder(hub, models)
+    here = os.path.join("Lora", "here.safetensors")
+    deeper = os.path.join("Lora", "old", "deeper.safetensors")
+    register_file(hub, folder_id, models, here)
+    register_file(hub, folder_id, models, deeper)
+
+    plan = ModelMover(hub).plan(
+        [(folder_id, here), (folder_id, deeper)],
+        folder_id,
+        destination_subpath="Lora",
+    )
+
+    assert [(o.source_relpath, o.status) for o in plan.skipped] == [
+        (here, STATUS_SKIPPED)
+    ]
+    assert [move.destination_relpath for move in plan.moves] == [
+        os.path.join("Lora", "deeper.safetensors")
+    ]
+
+
+def test_a_cross_device_move_into_a_subfolder_copies_there(
+    two_folders, cross_device, monkeypatch
+):
+    """The copy path lands in the subfolder too, and the space check is made
+    against the directory the bytes go to."""
+    hub = two_folders["hub"]
+    (two_folders["destination_dir"] / "Lora").mkdir()
+    checked = []
+    real_require_space = mover_module.require_space
+
+    def spy(path, needed):
+        checked.append((path, needed))
+        return real_require_space(path, needed)
+
+    monkeypatch.setattr(mover_module, "require_space", spy)
+    mover = ModelMover(hub)
+    plan = mover.plan(
+        [(two_folders["source_id"], "alice.safetensors")],
+        two_folders["destination_id"],
+        destination_subpath="Lora",
+    )
+    landing = os.path.realpath(two_folders["destination_dir"] / "Lora")
+    assert checked == [(landing, plan.bytes_to_copy)]
+    assert plan.bytes_to_copy > 0
+
+    report = mover.execute(plan)
+
+    assert [outcome.status for outcome in report.outcomes] == [STATUS_MOVED]
+    relpath = os.path.join("Lora", "alice.safetensors")
+    assert (two_folders["destination_dir"] / relpath).exists()
+    assert set(locations(hub)) == {(two_folders["destination_id"], relpath)}
+    assert_no_dangling_rows(hub)
+
+
+def test_two_files_landing_on_one_name_in_a_subfolder_are_refused(hub, tmp_path):
+    """The duplicate-destination check holds with a subpath: ``v1/a`` and
+    ``v2/a`` both flatten to ``Lora/a``."""
+    models = tmp_path / "Models"
+    (models / "Lora").mkdir(parents=True)
+    folder_id = register_folder(hub, models)
+    first = os.path.join("v1", "alice.safetensors")
+    second = os.path.join("v2", "alice.safetensors")
+    register_file(hub, folder_id, models, first)
+    register_file(hub, folder_id, models, second)
+
+    with pytest.raises(MoveRefused, match="would both land on"):
+        ModelMover(hub).plan(
+            [(folder_id, first), (folder_id, second)],
+            folder_id,
+            destination_subpath="Lora",
+        )
+
+
+def test_an_existing_file_in_the_subfolder_is_never_overwritten(two_folders):
+    """The free check is made at the subfolder's name, not the root's."""
+    lora = two_folders["destination_dir"] / "Lora"
+    lora.mkdir()
+    (lora / "alice.safetensors").write_bytes(b"theirs")
+
+    with pytest.raises(MoveRefused, match="already exists"):
+        ModelMover(two_folders["hub"]).plan(
+            [(two_folders["source_id"], "alice.safetensors")],
+            two_folders["destination_id"],
+            destination_subpath="Lora",
+        )
+    assert (lora / "alice.safetensors").read_bytes() == b"theirs"
+
+
+@pytest.mark.parametrize(
+    "subpath",
+    ["..", "../loras", "Lora/../..", "/etc", "Lora/", "./Lora", "Lora\\x", "out"],
+    ids=[
+        "dotdot",
+        "dotdot-sibling",
+        "dotdot-nested",
+        "absolute",
+        "trailing",
+        "dot",
+        "backslash",
+        "symlink-out",
+    ],
+)
+def test_a_subpath_that_leaves_the_folder_is_refused(two_folders, subpath):
+    """Every escape is a 400 before anything is written. ``out`` is a symlink
+    inside the destination pointing at the source folder: plain by name, and
+    only ``resolve_path_within`` can see where it leads."""
+    destination_dir = two_folders["destination_dir"]
+    (destination_dir / "Lora").mkdir()
+    os.symlink(two_folders["source_dir"], destination_dir / "out")
+
+    with pytest.raises(MoveRefused) as refused:
+        ModelMover(two_folders["hub"]).plan(
+            [(two_folders["source_id"], "alice.safetensors")],
+            two_folders["destination_id"],
+            destination_subpath=subpath,
+        )
+    assert refused.value.status_code == 400
+    assert os.path.exists(two_folders["source_path"])
+    assert sorted(os.listdir(destination_dir / "Lora")) == []
+
+
+def test_a_missing_subfolder_is_refused_not_created(two_folders):
+    with pytest.raises(MoveRefused, match="Create it first") as refused:
+        ModelMover(two_folders["hub"]).plan(
+            [(two_folders["source_id"], "alice.safetensors")],
+            two_folders["destination_id"],
+            destination_subpath="Lora",
+        )
+    assert refused.value.status_code == 409
+    assert not (two_folders["destination_dir"] / "Lora").exists()
+
+
+@pytest.mark.parametrize("movable", ["root_only", "fixed"])
+def test_a_locked_destination_is_refused(two_folders, movable):
+    """The managed store, the HuggingFace cache and the InsightFace packs take
+    no drop: files do not leave them one at a time, and none arrive either."""
+    hub = two_folders["hub"]
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model_folder SET movable = ? WHERE id = ?",
+            (movable, two_folders["destination_id"]),
+        )
+
+    with pytest.raises(MoveRefused, match="locked") as refused:
+        ModelMover(hub).plan(
+            [(two_folders["source_id"], "alice.safetensors")],
+            two_folders["destination_id"],
+        )
+    assert refused.value.status_code == 409
+    assert os.path.exists(two_folders["source_path"])
+
+
+def test_a_relocation_cannot_target_a_subfolder(hub, tmp_path):
+    store = tmp_path / "store"
+    target = tmp_path / "elsewhere"
+    store.mkdir()
+    (target / "sub").mkdir(parents=True)
+    store_id = register_folder(hub, store)
+    target_id = register_folder(hub, target)
+    register_file(hub, store_id, store, "model.safetensors")
+
+    with pytest.raises(MoveRefused, match="relocation"):
+        ModelMover(hub).plan(
+            [(store_id, "model.safetensors")],
+            target_id,
+            destination_subpath="sub",
+            flatten=False,
+            relocating=True,
+        )
+
+
 def test_a_cancel_after_a_skipped_item_still_cancels_every_move(hub, tmp_path):
     """The skipped items lead the report, so the cancelled tail must be indexed
     off ``plan.moves`` and not off how many outcomes exist. Off by the number of
@@ -1412,7 +1620,16 @@ def test_a_root_only_folder_refuses_a_per_item_move(tmp_path):
                 "'2026-08-12T00:00:00Z')",
                 (int(cursor.lastrowid),),
             )
-        plan = mover.plan([(2, "a.safetensors")], 1)
+        # Into a third, unlocked folder: a locked one takes no drop (#2204).
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        with hub.transaction() as conn:
+            conn.execute(
+                "INSERT INTO model_folder (id, path, kind, movable, created_at) "
+                "VALUES (3, ?, 'user', 'per_item', '2026-08-12T00:00:00Z')",
+                (str(elsewhere),),
+            )
+        plan = mover.plan([(2, "a.safetensors")], 3)
         assert len(plan.moves) == 1, "a per_item source was wrongly refused"
     finally:
         hub.close()

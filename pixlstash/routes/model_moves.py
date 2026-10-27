@@ -144,17 +144,31 @@ class MoveRequest(BaseModel):
         description=(
             "A registered folder the shelf catalogues. A `source` folder is "
             "refused: it is an ai-toolkit output root, taken from, never "
-            "written into."
+            "written into. A locked folder (anything not `movable: per_item`: "
+            "the managed store, the HuggingFace cache, the InsightFace packs) "
+            "is refused with 409."
         )
+    )
+    destination_subpath: str = Field(
+        default="",
+        description=(
+            "The directory inside that folder to land in, POSIX and relative "
+            "(`Lora`, `Lora/sdxl`); empty for the folder's root. It must "
+            "already exist: a missing one is a 409, never created. One that "
+            "escapes the folder - `..`, an absolute path, a symlink leading out "
+            "- is a 400."
+        ),
     )
     items: list[MoveItem] = Field(
         description=(
-            "The copies to move. Files already in the destination folder are "
-            "skipped rather than refused, so a mixed selection dropped onto a "
-            "folder does the obvious thing; they come back in `results` with "
-            "status `skipped`, so every item you send is accounted for. "
-            "Filenames are flattened to the basename; a collision is refused "
-            "before anything moves, never overwritten."
+            "The copies to move. Files already directly in the destination "
+            "directory are skipped rather than refused, so a mixed selection "
+            "dropped onto a folder does the obvious thing; they come back in "
+            "`results` with status `skipped`, so every item you send is "
+            "accounted for. A file elsewhere in the same registered folder - "
+            "its root, another subfolder - is moved. Filenames are flattened "
+            "to the basename; a collision is refused before anything moves, "
+            "never overwritten."
         )
     )
 
@@ -214,6 +228,10 @@ class MoveStatusResponse(BaseModel):
         description="`running`, `finished`, or `idle` when none has ever run."
     )
     destination_folder_id: Optional[int] = None
+    destination_subpath: str = Field(
+        default="",
+        description="The directory inside that folder, as the request named it.",
+    )
     total: int = Field(
         default=0,
         description=(
@@ -251,6 +269,7 @@ def _snapshot(job: Optional[dict]) -> MoveStatusResponse:
     return MoveStatusResponse(
         status=job["status"],
         destination_folder_id=job["destination_folder_id"],
+        destination_subpath=job.get("destination_subpath", ""),
         total=job["total"],
         done=len(job["results"]),
         bytes_to_copy=job["bytes_to_copy"],
@@ -302,6 +321,7 @@ def _finish_job(job: dict) -> None:
 def _start_job(
     *,
     destination_folder_id: int,
+    destination_subpath: str = "",
     total: int,
     bytes_to_copy: int,
     run,
@@ -323,6 +343,7 @@ def _start_job(
 
     Args:
         destination_folder_id: What the client is watching this job move into.
+        destination_subpath: The directory inside it, ``""`` for its root.
         total: Items this job will decide.
         bytes_to_copy: Bytes that will actually be copied; zero for a rename.
         run: Called on the worker thread with the job dict, returning a
@@ -349,6 +370,7 @@ def _start_job(
         job = {
             "status": STATUS_RUNNING,
             "destination_folder_id": destination_folder_id,
+            "destination_subpath": destination_subpath,
             "total": total,
             "bytes_to_copy": bytes_to_copy,
             "results": [],
@@ -559,6 +581,7 @@ def create_router(server) -> APIRouter:
 
         return _start_job(
             destination_folder_id=plan.destination_folder_id,
+            destination_subpath=plan.destination_subpath,
             total=plan.total,
             bytes_to_copy=plan.bytes_to_copy,
             run=_run,
@@ -589,6 +612,7 @@ def create_router(server) -> APIRouter:
             plan = mover.plan(
                 [(item.folder_id, item.relpath) for item in payload.items],
                 payload.destination_folder_id,
+                destination_subpath=payload.destination_subpath,
             )
         except MoveRefused as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
