@@ -58,6 +58,7 @@
           class="msb-add"
           :aria-label="newFolderReason ? 'New folder, unavailable' : 'New folder'"
           :aria-disabled="newFolderReason ? 'true' : undefined"
+          ref="newFolderButton"
           data-testid="models-sidebar-new-folder"
           @click="openNewFolder"
         >
@@ -76,7 +77,7 @@
           :error="newFolder.error"
           @update:model-value="(value) => (newFolder.name = value)"
           @submit="commitNewFolder"
-          @cancel="newFolder = null"
+          @cancel="cancelNewFolder"
         />
       </div>
       <ModelFolderTree
@@ -187,7 +188,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { VIcon, VMenu } from "vuetify/components";
 
@@ -273,6 +274,7 @@ const shelfFolders = computed(() =>
 
 /** The tree, to reveal a folder the field below just made. */
 const tree = ref(null);
+const newFolderButton = ref(null);
 /** The field under the heading: `{folderId, path, name, error, busy}`, or null. */
 const newFolder = ref(null);
 
@@ -314,6 +316,12 @@ function openNewFolder() {
   };
 }
 
+/** Close the heading's field and give the focus back to its `+`. */
+function cancelNewFolder() {
+  newFolder.value = null;
+  nextTick(() => newFolderButton.value?.focus());
+}
+
 async function commitNewFolder() {
   const open = newFolder.value;
   if (!open || open.busy) return;
@@ -325,6 +333,8 @@ async function commitNewFolder() {
       open.path,
       open.name,
     );
+    // Esc while the request ran closed this field; the focus is not ours.
+    if (newFolder.value !== open) return;
     newFolder.value = null;
     tree.value?.reveal(open.folderId, open.path, created.path);
   } catch (err) {

@@ -61,6 +61,7 @@ vi.mock("../../api/training", async (importOriginal) => ({
 }));
 
 import ModelsSideBar from "./ModelsSideBar.vue";
+import { useLibrariesStore } from "../../stores/useLibrariesStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useTrainingStore } from "../../stores/useTrainingStore";
@@ -89,8 +90,9 @@ const ROWS = [
   { id: 3, file_kind: "vae", base_model: "SDXL", locations: at(1), sha256: "c" },
 ];
 
-function mountBar() {
+function mountBar(options = {}) {
   return mount(ModelsSideBar, {
+    ...options,
     global: {
       stubs: {
         "v-icon": true,
@@ -180,6 +182,22 @@ describe("ModelsSideBar", () => {
         .find('[role="treeitem"][data-folder-id="2"]')
         .attributes("aria-selected"),
     ).toBe("false");
+  });
+
+  it("gives the focus back to the Folders + when its field is cancelled", async () => {
+    useLibrariesStore().canManage = true;
+    const wrapper = mountBar({ attachTo: document.body });
+    await flushPromises();
+    await wrapper.find('[role="treeitem"][data-folder-id="2"]').trigger("click");
+    const add = wrapper.find('[data-testid="models-sidebar-new-folder"]');
+    await add.trigger("click");
+    const field = wrapper.find('[data-testid="model-folder-name"]');
+    expect(field.exists()).toBe(true);
+    await field.trigger("keydown", { key: "Escape" });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="model-folder-name"]').exists()).toBe(false);
+    expect(document.activeElement).toBe(add.element);
+    wrapper.unmount();
   });
 
   it("re-reads the open folder listings when the shelf refetches", async () => {

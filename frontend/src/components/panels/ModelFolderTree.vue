@@ -704,8 +704,10 @@ function followRename(job) {
   if (!rename || job?.kind !== "folder" || job.status !== "finished") return;
   pendingRename.value = null;
   const old = nodeKey(rename.folderId, rename.oldPath);
+  // A failure is reported by the move store, which holds its receipt in the
+  // corner card; here only the focus goes back.
   if (job.results?.[0]?.status !== "moved") {
-    focusEditorRow(old);
+    if (rename.focus) focusEditorRow(old);
     return;
   }
   const fresh = nodeKey(rename.folderId, rename.newPath);
@@ -720,6 +722,7 @@ function followRename(job) {
     foldersStore.loadDirs(rename.folderId, moved.slice(`f:${rename.folderId}:`.length));
   }
   expanded.value = next;
+  if (!rename.focus) return;
   focusedKey.value = fresh;
   pendingFocusKey.value = fresh;
 }
@@ -770,6 +773,9 @@ async function commitEditor() {
         open.path,
         name,
       );
+      // The reader may have pressed Esc and opened another field while the
+      // request ran: that field is theirs now, and so is the focus.
+      if (editor.value !== open) return;
       editor.value = null;
       reveal(open.folderId, open.path, created.path);
     } else {
@@ -781,12 +787,16 @@ async function commitEditor() {
         },
         { newName: name },
       );
-      editor.value = null;
+      // The rename happened either way, so its open state follows it; only
+      // the field and the focus are left alone if the reader has moved on.
+      const ours = editor.value === open;
+      if (ours) editor.value = null;
       const parent = parentPath(open.path);
       pendingRename.value = {
         folderId: open.folderId,
         oldPath: open.path,
         newPath: parent ? `${parent}/${name}` : name,
+        focus: ours,
       };
       followRename(moves.job);
     }

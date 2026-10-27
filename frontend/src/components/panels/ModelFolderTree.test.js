@@ -660,6 +660,32 @@ describe("the folder verbs (#2206)", () => {
     wrapper.unmount();
   });
 
+  it("leaves the reader's next field alone when an earlier create answers late", async () => {
+    const wrapper = await openLora();
+    let answer;
+    createModelFolderDir.mockReturnValueOnce(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    item(wrapper, 1, "Lora").element.focus();
+    await item(wrapper, 1, "Lora").trigger("keydown", { key: "N", ctrlKey: true, shiftKey: true });
+    await flushPromises();
+    await field(wrapper).setValue("flux2");
+    await field(wrapper).trigger("keydown", { key: "Enter" });
+    await field(wrapper).trigger("keydown", { key: "Escape" });
+    await flushPromises();
+    await item(wrapper, 1, "Lora").trigger("keydown", { key: "F2" });
+    await flushPromises();
+    expect(field(wrapper).attributes("aria-label")).toBe("Rename Lora");
+
+    answer({ folder_id: 1, path: "Lora/flux2" });
+    await flushPromises();
+    expect(field(wrapper).exists()).toBe(true);
+    expect(field(wrapper).attributes("aria-label")).toBe("Rename Lora");
+    wrapper.unmount();
+  });
+
   it("keeps a renamed folder open and focused once its job lands", async () => {
     const root = LISTINGS["1:"];
     try {
