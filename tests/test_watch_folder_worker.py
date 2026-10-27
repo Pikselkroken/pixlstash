@@ -154,8 +154,15 @@ def _assert_inbox_round_trip(client, folder, pictures):
     )
     assert naive.json() == {"marked": 0}
 
-    refused = client.post(f"{API_PREFIX}/import-folders/inbox/seen", json={})
-    assert refused.status_code == 400
+    # Nothing named, `all` beside a narrowing field, or an empty id list: each
+    # is refused, and none of them clears anything.
+    for body in (
+        {},
+        {"all": True, "import_source_folder": folder},
+        {"picture_ids": [], "import_source_folder": folder},
+    ):
+        refused = client.post(f"{API_PREFIX}/import-folders/inbox/seen", json=body)
+        assert refused.status_code == 400, body
     assert unseen_ids() == ids[2:]
 
     # A batch outside the Inbox's arrival times marks nothing.

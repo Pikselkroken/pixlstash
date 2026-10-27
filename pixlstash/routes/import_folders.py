@@ -81,8 +81,9 @@ class InboxResponse(BaseModel):
 class InboxSeenRequest(BaseModel):
     """What to take out of the Inbox; at least one field must be given.
 
-    ``all`` empties it. Otherwise the request names pictures, or a folder,
-    optionally narrowed to one batch by its ``since``/``until`` arrival times.
+    ``all`` empties it, and is refused beside any other field. Otherwise the
+    request names pictures (a non-empty list), or a folder, optionally narrowed
+    to one batch by its ``since``/``until`` arrival times.
     """
 
     all: bool = False
@@ -271,6 +272,22 @@ def create_router(server) -> APIRouter:
     )
     def mark_inbox_seen(request: Request, payload: InboxSeenRequest = Body(...)):
         conditions = [Picture.unseen.is_(True)]
+        narrowed = (
+            payload.picture_ids is not None
+            or payload.import_source_folder
+            or payload.since is not None
+            or payload.until is not None
+        )
+        # Over-broad by mistake must fail rather than clear the whole Inbox:
+        # `all` with a narrowing field, or an id list that came out empty.
+        if payload.all and narrowed:
+            raise HTTPException(
+                status_code=400,
+                detail="all cannot be combined with picture_ids, "
+                "import_source_folder, since or until.",
+            )
+        if payload.picture_ids == []:
+            raise HTTPException(status_code=400, detail="picture_ids is empty.")
         if not payload.all:
             if payload.picture_ids is None and not payload.import_source_folder:
                 raise HTTPException(
