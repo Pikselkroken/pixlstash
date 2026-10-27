@@ -285,14 +285,12 @@ function pickFacet(key, id) {
     calc(var(--space-3) + var(--rail-w));
 }
 
-/* The band the Add workflow button sits in, with the rail's own top edge.
-   52px is the workspace shell's sidebar band (#2170's shared rules); the
-   Media sidebar's PR names it `--sidebar-band-h`, and this takes the token
-   when that lands. */
+/* The band the Add workflow button sits in, with the rail's own top edge:
+   the shell's sidebar band, the Media sidebar's Import band's height. */
 .wfs-footer {
   flex: none;
   box-sizing: border-box;
-  height: 52px;
+  height: var(--sidebar-band-h);
   display: flex;
   align-items: center;
   padding: 0 var(--space-3);
