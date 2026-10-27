@@ -245,7 +245,7 @@
             <AppBarButton
               v-bind="menuProps"
               class="tb-fold-600"
-              icon="view-grid-outline"
+              icon="view-grid"
               :open="gbViewMenuOpen"
               tooltip="View options"
               aria-label="View options"
