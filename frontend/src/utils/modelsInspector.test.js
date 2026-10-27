@@ -128,6 +128,22 @@ describe("a set's words", () => {
   });
 });
 
+describe("a set's missing files", () => {
+  it("names a file a combination lacks even when the head is on the shelf", () => {
+    const group = {
+      key: "model:1",
+      head: { id: 1, name: "realvis.safetensors", filename: "realvis.safetensors" },
+      models: [{ id: 1, filename: "realvis.safetensors", on_shelf: true }],
+      combinations: [{ models: [{ id: 1 }], missing: [{ name: "detail_lora.safetensors" }] }],
+    };
+    const set = describeSet(group, { rowsById: new Map(), combinations: [] });
+    expect(set.missing).toBe(true);
+    expect(set.members.filter((m) => !m.onShelf).map((m) => m.name)).toEqual([
+      "detail_lora.safetensors",
+    ]);
+  });
+});
+
 describe("a model's folder", () => {
   it("is the folder of its first copy on disk, and empty when none is", () => {
     expect(

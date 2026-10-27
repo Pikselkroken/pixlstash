@@ -10,7 +10,7 @@ import {
   SHELF_TYPES,
   shelfTypeOf,
 } from "./modelShelf";
-import { headName, handMadeBase, handMadeName } from "./workflowSets";
+import { headName, handMadeBase, handMadeName, missingFileNames } from "./workflowSets";
 import { activityOf, combinationsOfSet } from "./setActivity";
 
 /** The provide/inject key the rail hands its sections their open or shut memory by. */
@@ -175,8 +175,19 @@ export function describeSet(group, { rowsById, combinations }) {
         onShelf: Boolean(m.on_shelf ?? true),
         size: rowsById.get(m.id)?.file_size ?? null,
       }));
-  if (!hand && group.head?.missing) {
-    members.push({ id: null, key: `missing:${group.key}`, name: headName(group.head), onShelf: false, size: null });
+  // Every file the card flags as missing, not only a missing head: the same
+  // list draws the card's "Missing a file" badge, so the rail cannot disagree.
+  if (!hand) {
+    for (const name of missingFileNames(group)) {
+      const isHead = group.head?.missing && name === group.head.name;
+      members.push({
+        id: null,
+        key: `missing:${name}`,
+        name: isHead ? headName(group.head) : name,
+        onShelf: false,
+        size: null,
+      });
+    }
   }
   const activity = activityOf(combinationsOfSet(group, combinations));
   const base = hand ? handMadeBase(group.set) : baseOf(group.head ?? {});

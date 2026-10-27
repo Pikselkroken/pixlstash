@@ -357,7 +357,7 @@ export function setMarks(models, missingNames = []) {
  * @param {Object} group - one entry from {@link setGroups}.
  * @returns {Array<string>} unique names, the head first.
  */
-function missingFileNames(group) {
+export function missingFileNames(group) {
   const names = group.head?.missing ? [group.head.name] : [];
   for (const combination of group.combinations ?? []) {
     for (const entry of combination.missing ?? []) names.push(entry.name);
