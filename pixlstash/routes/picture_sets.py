@@ -31,6 +31,7 @@ from pixlstash.db_models import (
 from pixlstash.event_types import EventType
 from pixlstash.services import operation_log_service
 from pixlstash.services.layout_move_service import rename_entity_folders
+from pixlstash.services.picture_set_tree import lift_children, validate_parent
 from pixlstash.services.project_membership_service import (
     picture_set_project_ids,
     reconcile_entity_projects_change,
@@ -93,6 +94,12 @@ class PictureSetResponse(BaseModel):
     set_icon: Optional[str] = None
     set_color: Optional[str] = None
     locked: bool = False
+    parent_set_id: Optional[int] = PydanticField(
+        default=None, description="The set this one sits under, if any."
+    )
+    parent_character_id: Optional[int] = PydanticField(
+        default=None, description="The person this set sits under, if any."
+    )
     picture_count: Optional[int] = None
     top_picture_ids: Optional[list[int]] = None
     thumbnail_url: Optional[str] = None
@@ -919,7 +926,8 @@ def create_router(server) -> APIRouter:
         description=(
             "Creates a new picture set with name and optional description. Accepts "
             "``project_ids`` (a list of projects the set joins) or the legacy "
-            "single ``project_id``."
+            "single ``project_id``, and at most one of ``parent_set_id`` and "
+            "``parent_character_id`` to create it as a child set."
         ),
         response_model=PictureSetCreateResponse,
     )
@@ -929,17 +937,22 @@ def create_router(server) -> APIRouter:
         project_ids, _provided = _resolve_target_project_ids(payload, None)
         set_icon = payload.get("set_icon", _UNSET)
         set_color = payload.get("set_color", _UNSET)
+        parent_set_id = payload.get("parent_set_id")
+        parent_character_id = payload.get("parent_character_id")
         if not name:
             raise HTTPException(status_code=400, detail="name is required")
 
         def create_set(session, name, description, project_ids, set_icon, set_color):
             _ensure_unique_set_name(session, name, project_ids)
+            validate_parent(session, None, parent_set_id, parent_character_id)
             auto_icon, auto_color = _auto_assign_icon_color(session, project_ids)
             picture_set = PictureSet(
                 name=name,
                 description=description,
                 set_icon=set_icon if set_icon is not _UNSET else auto_icon,
                 set_color=set_color if set_color is not _UNSET else auto_color,
+                parent_set_id=parent_set_id,
+                parent_character_id=parent_character_id,
             )
             session.add(picture_set)
             session.commit()
@@ -1524,7 +1537,11 @@ def create_router(server) -> APIRouter:
             "picture set still anchors them there. Re-sending the set's existing "
             "projects is an idempotent repair that heals missing membership rows. "
             "Returns 409 on a name clash inside any target project and 404 for an "
-            "unknown project id."
+            "unknown project id.\n\n"
+            "**Parent.** Sending either ``parent_set_id`` or ``parent_character_id`` "
+            "replaces the set's parent with the pair given (a missing key is null), "
+            "so both null moves it to the top level. A set cannot sit under itself "
+            "or one of its own child sets (400)."
         ),
         response_model=PictureSetUpdateResponse,
     )
@@ -1537,6 +1554,9 @@ def create_router(server) -> APIRouter:
         locked_param = payload.get("locked", _UNSET)
         if locked_param is not _UNSET:
             locked_param = bool(locked_param)
+        parent_provided = "parent_set_id" in payload or "parent_character_id" in payload
+        parent_set_id = payload.get("parent_set_id")
+        parent_character_id = payload.get("parent_character_id")
 
         def update_set(session, id, name, description, set_icon, set_color, locked):
             picture_set = session.get(PictureSet, id)
@@ -1561,6 +1581,10 @@ def create_router(server) -> APIRouter:
             color_changing = (
                 set_color is not _UNSET and set_color != picture_set.set_color
             )
+            parent_changing = parent_provided and (
+                parent_set_id != picture_set.parent_set_id
+                or parent_character_id != picture_set.parent_character_id
+            )
             name_effective_change = name is not None and name != picture_set.name
             project_effective_change = project_provided and sorted(
                 target_project_ids
@@ -1571,6 +1595,7 @@ def create_router(server) -> APIRouter:
                 or project_effective_change
                 or icon_changing
                 or color_changing
+                or parent_changing
             )
             if other_effective_change:
                 # Raises 423 iff the set is currently locked; passes through for an
@@ -1608,6 +1633,10 @@ def create_router(server) -> APIRouter:
                 picture_set.set_icon = set_icon
             if set_color is not _UNSET:
                 picture_set.set_color = set_color
+            if parent_changing:
+                validate_parent(session, id, parent_set_id, parent_character_id)
+                picture_set.parent_set_id = parent_set_id
+                picture_set.parent_character_id = parent_character_id
 
             # Reconcile member-picture project membership when this update sets
             # or changes the projects. A same-project re-assign (projects provided
@@ -1719,7 +1748,10 @@ def create_router(server) -> APIRouter:
     @router.delete(
         "/picture_sets/{id}",
         summary="Delete picture set",
-        description="Deletes a picture set and all its membership links.",
+        description=(
+            "Deletes a picture set and all its membership links. Its child sets "
+            "move to the top level with their pictures."
+        ),
         response_model=PictureSetDeleteResponse,
     )
     def delete_picture_set(id: int):
@@ -1730,6 +1762,7 @@ def create_router(server) -> APIRouter:
             # A locked set must be unlocked before it can be deleted (deliberate
             # friction so a misclick can't destroy a frozen eval set).
             enforce_set_not_locked(session, picture_set, "delete a locked set")
+            lift_children(session, set_id=id)
             session.delete(picture_set)
             session.commit()
             return True
