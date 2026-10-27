@@ -5,8 +5,8 @@ INTEGER, indexed; NULL is a top-level set, so existing sets need no data step.
 
 Schema-only and additive.
 
-Revision ID: 0136_add_picture_set_parent
-Revises: 0135_add_training_presets_auto_check
+Revision ID: 0137_add_picture_set_parent
+Revises: 0136_add_comfyui_connections
 Create Date: 2026-10-27
 """
 
@@ -16,8 +16,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0136_add_picture_set_parent"
-down_revision: Union[str, None] = "0135_add_training_presets_auto_check"
+revision: str = "0137_add_picture_set_parent"
+down_revision: Union[str, None] = "0136_add_comfyui_connections"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
