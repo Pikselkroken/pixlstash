@@ -50,7 +50,6 @@ from send2trash import TrashPermissionError
 from sqlmodel import Session, delete
 
 from pixlstash import auth
-
 from pixlstash.authz.policy import AccessPolicy
 from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.database import DBPriority

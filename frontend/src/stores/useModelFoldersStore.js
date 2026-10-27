@@ -187,6 +187,18 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
   }
 
   /**
+   * Re-read every listing already shown, in place: a scan, a move or an added
+   * file changes counts and folders under rows that are open. Clearing instead
+   * would fold every open row shut.
+   */
+  function reloadDirs() {
+    for (const key of dirListings.value.keys()) {
+      const at = key.indexOf(":");
+      loadDirs(Number(key.slice(0, at)), key.slice(at + 1), { force: true });
+    }
+  }
+
+  /**
    * Re-read the registry.
    *
    * @param {Object} [options]
@@ -519,6 +531,7 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
     dirsKey,
     loadDirs,
     clearDirs,
+    reloadDirs,
     refresh,
     refreshDevices,
     add,

@@ -4545,6 +4545,23 @@ describe("the open folder and All models' strip (#2203)", () => {
     wrapper.unmount();
   });
 
+  it("says when the open folder's subfolders could not be read", async () => {
+    const { wrapper } = await openFolder();
+    expect(wrapper.find("[data-testid='shelf-folders-error']").exists()).toBe(false);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    listModelFolderDirs.mockRejectedValue({
+      response: { status: 409, data: { detail: "Could not read the directory." } },
+    });
+    const store = useModelShelfStore();
+    store.setFolderScope({ folderId: 1, path: "VAE" });
+    await flushPromises();
+    expect(
+      textOf(wrapper.find("[data-testid='shelf-folders-error']")),
+    ).toContain("Subfolders could not be read");
+    warn.mockRestore();
+    wrapper.unmount();
+  });
+
   it("states the drive's free space under the list", async () => {
     const { wrapper } = await openFolder();
     const status = textOf(wrapper.find("[data-testid='shelf-status']"));

@@ -11830,8 +11830,10 @@ arrow before it is asked.
   what the scanner recorded" would have hidden it. A missing path or a file is
   404. A directory that cannot be listed is logged with the folder id, the path
   and the error, and answers 409.
-- **What the tree offers.** Dot-names and symlinks are skipped, and non-
-  directories too. Names sort case-insensitively. A `<stem>_samples` directory is
+- **What the tree offers.** Dot-names, symlinks and Windows junctions
+  (`DirEntry.is_junction`, Python 3.12+) are skipped, and non-directories too.
+  A bind mount is a plain directory to every API here and is offered, as the
+  scanner walks it: it is the owner's own mount inside their own folder. Names sort case-insensitively. A `<stem>_samples` directory is
   hidden when a `present` model file directly in the same directory has the stem
   `<stem>`: its previews belong to that model (see 25.7). The same rule decides
   `has_dirs` for each child, using the child's own direct files.
@@ -11850,7 +11852,7 @@ arrow before it is asked.
   what the database holds beneath the path, not what the tree shows.
 - **`has_dirs`.** One `os.scandir` peek per visible child, applying the same
   filters with that child's direct-file stems from the rows already read. A child
-  that cannot be peeked answers `has_dirs: false` and is logged at info.
+  that cannot be peeked answers `has_dirs: false` and is logged as a warning.
 - **Authority.** `LOCAL_OWNER_ONLY` (§16.3), not `owner_only`: the route reports
   directory names PixlStash never registered, the authority
   `GET /api/v1/models/{model_id}/samples` already exercises. The templated path is

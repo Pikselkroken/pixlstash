@@ -4858,7 +4858,11 @@ neither edge moves on a workspace switch.
   expand. Subfolders come from `GET /model-folders/{id}/dirs?path=` one level
   per request, through `useModelFoldersStore().loadDirs(id, path)`, a cache
   keyed `"<id>:<path>"` shared with the folder view (`clearDirs()` on each
-  sidebar mount, `force` when the view opens a folder). Every registered
+  sidebar mount, `force` when the view opens a folder, and `reloadDirs()`, a
+  re-read of every cached listing in place, whenever the shelf's rows are
+  refetched, which every scan, move, added file and edit does). A listing the
+  folder view cannot read (404, 409, a remote owner's 403) says so in a banner
+  over the list rather than reading as "no subfolders". Every registered
   folder's own level is read once on mount, for its count and whether it has
   any subfolders. A **locked** folder (`movable !== "per_item"`: the managed
   store, the HuggingFace cache, the InsightFace packs) shows a lock and never

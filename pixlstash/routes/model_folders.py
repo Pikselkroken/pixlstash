@@ -631,13 +631,18 @@ def _is_samples_dir_of(name: str, sample_stems: set[str]) -> bool:
 def _offered_dir(entry: os.DirEntry, sample_stems: set[str]) -> bool:
     """Whether the tree shows *entry* as a subdirectory.
 
-    Dot-names and symlinks are never offered. A ``<stem>_samples`` directory is
+    Dot-names, symlinks and Windows junctions (``DirEntry.is_junction``, 3.12+;
+    a junction is not a symlink to ``is_symlink``) are never offered. A bind
+    mount is a directory to every API here and is offered, as the scanner walks
+    it. A ``<stem>_samples`` directory is
     hidden beside a model whose filename stem is ``<stem>``: its previews belong
     to that model and are not a folder of their own.
     """
     if entry.name.startswith("."):
         return False
-    if entry.is_symlink() or not entry.is_dir(follow_symlinks=False):
+    if entry.is_symlink() or getattr(entry, "is_junction", lambda: False)():
+        return False
+    if not entry.is_dir(follow_symlinks=False):
         return False
     return not _is_samples_dir_of(entry.name, sample_stems)
 
@@ -1350,9 +1355,10 @@ def create_router(server) -> APIRouter:
                         entry.path, child_stems.get(entry.name, set())
                     )
                 except OSError as exc:
-                    logger.info(
+                    logger.warning(
                         "Could not look inside %s for subdirectories (%s); "
-                        "reporting has_dirs as false for it.",
+                        "reporting has_dirs as false, so the tree offers no "
+                        "expand on it.",
                         entry.path,
                         exc,
                     )

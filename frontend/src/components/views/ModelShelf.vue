@@ -325,6 +325,20 @@
           @click="offlineDismissed = true"
         />
       </p>
+      <!-- A listing that failed says so rather than reading as "no
+           subfolders": gone since the tree was drawn, unreadable, or refused
+           to a remote owner. -->
+      <p
+        v-if="folderListingError"
+        class="shelf-banner"
+        role="status"
+        data-testid="shelf-folders-error"
+      >
+        <v-icon size="16" aria-hidden="true">mdi-folder-alert-outline</v-icon>
+        <span class="shelf-banner-text"
+          >Subfolders could not be read: {{ folderListingError }}</span
+        >
+      </p>
       <!-- An open folder's subfolders, as a file manager lists them: first,
            and opened with a click. -->
       <ul
@@ -3529,6 +3543,16 @@ const subfolders = computed(() => {
   return (
     foldersStore.dirListings.get(foldersStore.dirsKey(folderId, path))?.listing
       ?.dirs ?? []
+  );
+});
+
+/** Why the open folder's listing failed, or "". */
+const folderListingError = computed(() => {
+  if (!inFolder.value) return "";
+  const { folderId, path } = store.folderScope;
+  return (
+    foldersStore.dirListings.get(foldersStore.dirsKey(folderId, path))?.error ??
+    ""
   );
 });
 

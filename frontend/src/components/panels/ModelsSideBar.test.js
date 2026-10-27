@@ -138,6 +138,11 @@ describe("ModelsSideBar", () => {
     const wrapper = mountBar();
     await flushPromises();
     expect(wrapper.text()).not.toContain("Limit to folder");
+    // Folders and Training are the only sections under the places.
+    expect(wrapper.findAll("h3").map((one) => one.text())).toEqual([
+      "Folders",
+      "Training",
+    ]);
     expect(wrapper.find("[data-type]").exists()).toBe(false);
     expect(wrapper.find("[data-base]").exists()).toBe(false);
   });
@@ -175,6 +180,18 @@ describe("ModelsSideBar", () => {
         .find('[role="treeitem"][data-folder-id="2"]')
         .attributes("aria-selected"),
     ).toBe("false");
+  });
+
+  it("re-reads the open folder listings when the shelf refetches", async () => {
+    const { listModelFolderDirs } = await import("../../api/modelFolders");
+    mountBar();
+    await flushPromises();
+    listModelFolderDirs.mockClear();
+    store.rows = [...ROWS];
+    await flushPromises();
+    expect(listModelFolderDirs.mock.calls.map((call) => call[0]).sort()).toEqual([
+      1, 2,
+    ]);
   });
 
   it("leaves Training runs for the list when a folder is opened", async () => {
