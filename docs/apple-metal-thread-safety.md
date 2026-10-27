@@ -518,8 +518,8 @@ retags, and the route's work beside tag batches in a harness failed 10 of 10
 The cost is latency. A task already on the worker is never pre-empted, so the
 hint waits it out: about 3.7 s per call beside retags, but 53 s in the one run
 where a Florence-2 caption batch was running, because on Metal Florence-2 was
-then held on the CPU in fp32 (see #1775). It runs on Metal in fp16 since #1786,
-which should shorten that wait; not yet measured.
+then held on the CPU in fp32 (see #1775). It runs on Metal in fp16 since #1786;
+how that changes the wait is not measured.
 
 This is not Metal-only. The cast is in place on the shared model, so on any
 host a tag batch on the worker beside it would have met fp32 weights (the CPU

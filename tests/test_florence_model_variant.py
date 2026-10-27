@@ -236,6 +236,11 @@ class TestDeviceFallback:
         svc._model_device = torch.device("cpu")
         assert not svc._is_device_error(RuntimeError("MPS backend out of memory"))
 
+    def test_a_model_bug_on_metal_is_not_retried(self):
+        svc = Florence2Service(device="mps")
+        svc._model_device = torch.device("mps")
+        assert not svc._is_device_error(KeyError("pixel_values"))
+
     def test_mps_batches_are_charged_against_the_memory_budget(self):
         seen = []
 

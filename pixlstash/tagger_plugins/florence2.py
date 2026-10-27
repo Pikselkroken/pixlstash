@@ -732,8 +732,12 @@ class Florence2Service:
                 logger.debug("Florence-2 loaded successfully on CPU")
             elif self._accelerator_available(requested_device):
                 # MPS was held on the CPU in fp32 until #1786: fp32 on Metal was
-                # only 1.15x. fp16 is the checkpoint's own dtype, so this load
+                # only 1.15x. fp16 is both checkpoints' own dtype, so this load
                 # casts nothing, and it is the path CUDA has always taken.
+                # Not measured on Metal yet: fp16 speed or output, detection's
+                # num_beams=3, OCR, large-ft, and whether the CUDA-measured
+                # per-image VRAM figure holds; scripts/bench_florence_mps.py
+                # times the first four.
                 try:
                     logger.debug(
                         "Attempting to load Florence-2 on %s with FP16...",

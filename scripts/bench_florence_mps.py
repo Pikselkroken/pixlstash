@@ -59,6 +59,11 @@ def measure(variant, device, dtype, paths, batch_size):
     for task in ("caption", "detect"):
         run(service, task, paths[:1], 1)  # warm-up: Metal compiles its kernels
         outputs, seconds = run(service, task, paths, batch_size)
+        if service._model_device.type != device.type:
+            raise SystemExit(
+                f"{variant} {task} fell back to {service._model_device}: "
+                f"{service._last_fallback_reason}"
+            )
         results[task] = (outputs, seconds * 1000 / len(paths))
         print(f"  {task}: {results[task][1]:.0f} ms/picture", flush=True)
     service.unload()
