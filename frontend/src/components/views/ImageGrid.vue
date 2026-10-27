@@ -8712,18 +8712,23 @@ function getExportCount() {
  * Export lives on the selection pill (#2160), so a whole view is Ctrl+A, then
  * Export. Ctrl+A selects the cells the grid holds, which are stack leaders and
  * whatever has streamed in so far; the view itself is more than that. Cells
- * still waiting for their picture, and ghosts, never block the answer.
+ * still waiting for their picture, and ghosts, never block the answer - but a
+ * grid with no picture drawn yet (empty, or every cell still loading) is no
+ * evidence the selection is the view, so the selection goes by id then.
  */
 function selectionCoversView() {
   const selected = new Set(
     selectedImageIds.value.map((id) => String(getPictureId(id))),
   );
   const ghosts = ghostedIdSet.value;
-  return allGridImages.value.every((img) => {
+  let sawPicture = false;
+  for (const img of allGridImages.value) {
     const id = getPictureId(img?.id);
-    if (id == null) return true;
-    return selected.has(String(id)) || Boolean(ghosts?.has(String(id)));
-  });
+    if (id == null) continue;
+    sawPicture = true;
+    if (!selected.has(String(id)) && !ghosts?.has(String(id))) return false;
+  }
+  return sawPicture;
 }
 
 /**

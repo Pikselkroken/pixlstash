@@ -129,6 +129,10 @@ describe("SelectionBar - the verbs on the selection (#2160)", () => {
       ).toBeTruthy();
     }
     expect(wrapper.find(".selection-count").text()).toBe("3 selected");
+    // Icon-only, so AppBarButton names it from its tooltip, count included.
+    expect(verb(wrapper, "more").attributes("aria-label")).toBe(
+      "More actions for 3 selected",
+    )
     expect(wrapper.find(".ate-btn").text()).toBe("Add to set");
   });
 
