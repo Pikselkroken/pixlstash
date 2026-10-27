@@ -22,12 +22,16 @@
       type="button"
       class="stf-rest"
       :class="{ 'stf-rest--active': summary }"
-      :aria-label="summary ? `Search, filtered by ${summary}` : 'Search'"
+      aria-label="Search"
+      :aria-describedby="summary ? 'search-token-summary' : null"
       aria-keyshortcuts="F"
       @click="focus"
     >
       <v-icon size="18" class="stf-icon">mdi-magnify</v-icon>
-      <span class="stf-rest-text">{{ summary || "Search" }}</span>
+      <!-- The name stays "Search"; what narrows the grid is its description. -->
+      <span id="search-token-summary" class="stf-rest-text">{{
+        summary || "Search"
+      }}</span>
       <kbd class="fm-kbd stf-rest-kbd" aria-hidden="true">F</kbd>
     </button>
     <template v-else>

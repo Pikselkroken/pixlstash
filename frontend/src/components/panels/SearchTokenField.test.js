@@ -324,8 +324,10 @@ describe("SearchTokenField", () => {
     });
     const rest = wrapper.find("button.stf-rest");
     expect(rest.text()).toContain("rain · lacks umbrella");
-    expect(rest.attributes("aria-label")).toBe(
-      "Search, filtered by rain · lacks umbrella",
+    expect(rest.attributes("aria-label")).toBe("Search");
+    const description = wrapper.find(
+      `#${rest.attributes("aria-describedby")}`,
     );
+    expect(description.text()).toBe("rain · lacks umbrella");
   });
 });
