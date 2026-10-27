@@ -4,7 +4,7 @@ import { nextTick, unref, watch } from "vue";
  * Whether an element is a text-entry target that owns its own keystrokes.
  *
  * The predicate every global key handler needs before claiming a bare letter:
- * typing "s" in a tag field must not also trigger the Selection menu.
+ * typing "s" in a tag field must not also open Add to set.
  *
  * `SELECT` counts because its type-ahead consumes letters the same way a text
  * field does, and `role="textbox"` catches the ARIA widgets that are not native

@@ -24,12 +24,16 @@
       aria-haspopup="listbox"
       :aria-controls="listboxId"
       :aria-label="config.ariaLabel"
+      :aria-keyshortcuts="keyHint || undefined"
       @click.stop="toggleMenu"
     >
       <v-icon :size="flyout ? undefined : 18" :class="{ 'ctx-icon': flyout }">{{
         config.icon
       }}</v-icon>
       <span class="ate-label">{{ effectiveLabel }}</span>
+      <kbd v-if="keyHint" class="fm-kbd ate-kbd" aria-hidden="true">{{
+        keyHint
+      }}</kbd>
       <v-icon
         :size="flyout ? undefined : 16"
         class="ate-chevron"
@@ -261,6 +265,9 @@ const props = defineProps({
   disabled: { type: Boolean, default: false },
   readonly: { type: Boolean, default: false },
   label: { type: String, default: null },
+  // The key that opens this picker from where it is mounted, drawn after the
+  // label (the selection pill's S, #2160). The host binds the key itself.
+  keyHint: { type: String, default: "" },
   includeDeletedMembers: { type: Boolean, default: false },
   expandStacks: { type: Boolean, default: true },
   placement: { type: String, default: "bottom" },

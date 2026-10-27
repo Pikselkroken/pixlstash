@@ -500,10 +500,15 @@ is a **label on a menu trigger**, not free text, so its affordance says "this is
 a control's state". Static text vs control: different affordance, different
 meaning.
 
+**Changed by #2160.** The workspace redesign draws the count as plain text with
+the verbs after it and ⋯ as the menu, so the affordance difference is gone. The
+unit still separates them: only the selection count says "selected", and it
+sits first in its own group behind a rule.
+
 | Element | Copy |
 |---|---|
-| Menu trigger | `12 selected` + chevron |
-| Trigger title | `Actions for 12 selected — press S` / `…(47 total including stacks) — press S` |
+| Count (#2160: text, the menu is ⋯) | `12 selected`; hover `47 total including stacks` |
+| ⋯ title | `More actions for 12 selected` |
 | Faces only | `3 faces selected` |
 | Both | `12 selected · 3 faces` |
 | Clear selection | `Clear selection (Esc)` when Esc owns it, else `Clear selection` |
@@ -606,7 +611,7 @@ user no signal it opens anything. Add both, plus `aria-keyshortcuts="S"`.
 | `F` | Open the search popover (toolbar) | unchanged |
 | `Esc` | The 4-step ladder in §6.1 | behaviour unchanged; the keycap now moves |
 | `Del` / `Backspace` | Delete selected | unchanged |
-| `S` | Toggle the selection menu | unchanged |
+| `S` | Add to set (#2160; it used to toggle the selection menu) | changed |
 | `ArrowDown` | Menu open, focus outside panel → first item | unchanged |
 | `Ctrl+A` | Select all in the result set | + announces via the grid region |
 | `T`, `1`–`5`, `0`, `Ctrl+Z` | Tag, score, undo | unchanged |

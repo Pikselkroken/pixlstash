@@ -22,12 +22,11 @@ function zipEntryNames(buf) {
   return names
 }
 
-/** Open the toolbar Export panel and run an export with captions disabled. */
+/** Open the selection pill's Export panel and export with captions disabled. */
 async function downloadExportZip(page, testInfo) {
-  // Select by class, not by title: the title is a live label that names the
-  // current selection ("Export 3 pictures to zip"), so a title selector breaks
-  // as soon as anything is selected. `.tb-export-btn` is the stable handle and
-  // is what Toolbar.test.js already uses.
+  // Select by class, not by name: the name is a live label that counts the
+  // selection ("Export 3 pictures"). `.tb-export-btn` is the stable handle
+  // and is what SelectionBar.test.js uses.
   await page.locator('button.tb-export-btn').click()
   const panel = page.locator('.tb-export-panel')
   await expect(panel).toBeVisible()
@@ -79,8 +78,26 @@ test.describe('export', () => {
     await expect.poll(() => page.url()).toContain('/set/')
     await grid.waitForThumbnailLoaded()
 
+    // Export lives on the selection (#2160): a whole view is Ctrl+A, then
+    // Export. The pill's count waits out the grid's stream.
+    await page.keyboard.press('Control+a')
+    await expect(page.locator('.selection-count')).toHaveText(
+      `${expected} selected`,
+    )
+
+    // A selection that is the whole view exports the view's own query, not
+    // the cells the grid happened to hold: a collapsed stack's members and a
+    // tail still streaming are in the view and not in the selection.
+    const exportUrls = []
+    page.on('request', (req) => {
+      if (/\/api\/v1\/pictures\/export\?/.test(req.url())) exportUrls.push(req.url())
+    })
     const zip = zipEntryNames(await downloadExportZip(page, testInfo))
     const images = zip.filter((n) => IMAGE_EXT.test(n))
     expect(images).toHaveLength(expected)
+    expect(exportUrls).toHaveLength(1)
+    const sent = new URL(exportUrls[0]).searchParams
+    expect(sent.getAll('id')).toEqual([])
+    expect(sent.get('set_id')).toBeTruthy()
   })
 })

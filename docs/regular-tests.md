@@ -133,8 +133,8 @@ missing or placeholder sources fail with the actual `src` in the diagnostic.
 ## Export — `export.spec.js` (plan §15)
 | Test | Covers | Status |
 |------|--------|--------|
-| exports 3 selected pictures to a ZIP containing exactly 3 image files | Ctrl-click 3 cards → toolbar Export panel (captions "none") → Export → the downloaded ZIP's central directory holds exactly 3 image entries | ✅ |
-| exports a picture set to a ZIP matching the sidebar count | Open a non-empty set, export the current view — ZIP image-entry count equals the set's sidebar count badge | ✅ |
+| exports 3 selected pictures to a ZIP containing exactly 3 image files | Ctrl-click 3 cards → the selection pill's Export panel (captions "none") → Export → the downloaded ZIP's central directory holds exactly 3 image entries | ✅ |
+| exports a picture set to a ZIP matching the sidebar count | Open a non-empty set, Ctrl+A, Export — the request carries the view's query rather than ids, and the ZIP image-entry count equals the set's sidebar count badge | ✅ |
 
 ## Tag predictions — `tag-predictions.spec.js` (plan §14)
 | Test | Covers | Status |
@@ -218,7 +218,7 @@ mutations) is unit-covered in `src/stores/useReviewSessionsStore.test.js`.
 
 | Test | Covers | Status |
 |------|--------|--------|
-| opens from the toolbar and renders the ranked board | Toolbar `Review and fix tags` → `.rs-overlay`; board title + the redesigned columns (Tag / Est. fixes / Est. wrong / Est. missing / Mismatch / Why it ranks here); ≥1 tag row | ✅ |
+| opens from its URL and renders the ranked board | `?review=board` (the toolbar button left with #2160) → `.rs-overlay`; board title + the redesigned columns (Tag / Est. fixes / Est. wrong / Est. missing / Mismatch / Why it ranks here); ≥1 tag row | ✅ |
 | the persistent rebuild control is visible in the header (Spec B) | The board header always exposes its rebuild control | ✅ |
 | the Why column is never blank for a row with a ranking signal | A row with a ranking signal always shows a "Why it ranks here" explanation | ✅ |
 | the filter input narrows the visible rows | `/`-focusable filter narrows rows to matches and restores on clear | ✅ |

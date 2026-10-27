@@ -1,4 +1,4 @@
-// The grid toolbar's app-wide tail and its ⋯ overflow.
+// The grid toolbar: browse only (#2160), its app-wide tail and its ⋯ overflow.
 //
 // jsdom does not evaluate container queries, so the width steps themselves are
 // not simulated here - they are covered by the CSS being SHARED (the same
@@ -34,8 +34,9 @@ import { useFilterStore } from "../../stores/useFilterStore";
 import { useSortStore } from "../../stores/useSortStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 
-// Vuetify is not installed in the test app; v-menu is stubbed with the two
-// behaviours the toolbar relies on (activator slot props carry the toggle,
+// Vuetify is not installed in the test app; v-menu is stubbed with the
+// behaviours the toolbar relies on (activator slot props carry the toggle and,
+// as Vuetify 3's VMenu does, the popup ARIA merged with `activatorProps`;
 // default slot renders inline while open).
 const VMenuStub = {
   name: "VMenu",
@@ -43,6 +44,7 @@ const VMenuStub = {
     modelValue: { type: Boolean, default: false },
     location: { type: String, default: "" },
     origin: { type: String, default: "" },
+    activatorProps: { type: Object, default: () => ({}) },
   },
   emits: ["update:modelValue"],
   setup(props, { slots, emit }) {
@@ -57,6 +59,9 @@ const VMenuStub = {
         [
           slots.activator?.({
             props: {
+              "aria-haspopup": "menu",
+              "aria-expanded": String(props.modelValue),
+              ...props.activatorProps,
               onClick: () => emit("update:modelValue", !props.modelValue),
             },
           }),
@@ -75,13 +80,11 @@ const globalOpts = {
       "v-switch": true,
       VTooltip: true,
       FilterMenu: true,
-      TbExportPanel: true,
-      TbImportPanel: true,
       TbTagPanel: true,
       UndoControl: true,
       TbGlobalActions: true,
-      // The real Export/Import panels host AppDialogs, whose VDialog needs an
-      // installed Vuetify; these tests are about the toolbar's menus.
+      // AppDialog's VDialog needs an installed Vuetify; these tests are about
+      // the toolbar's menus.
       AppDialog: true,
     },
   },
@@ -101,38 +104,50 @@ function mountToolbar(props = {}, stubs = {}) {
   });
 }
 
-describe("Toolbar - icon menu attachment", () => {
-  it("keeps Search, Export, and Import end-clamped while pointing at each icon centre", async () => {
-    const wrapper = mountToolbar(
-      {},
-      { TbExportPanel: false, TbImportPanel: false },
+describe("Toolbar - the search field", () => {
+  // #2160: a field-shaped trigger at the right of the bar, opening the same
+  // popover the icon did. The popover is end-aligned under it, so its caret
+  // takes the end inset rather than the 32px icon's centre.
+  it("opens the search popover from the field, end-clamped", async () => {
+    const wrapper = mountToolbar();
+    const field = wrapper.find('button.tb-search-field[aria-label="Search"]');
+    expect(field.exists()).toBe(true);
+    expect(field.attributes("aria-keyshortcuts")).toBe("F");
+    expect(field.text()).toContain("Search");
+    expect(field.find("kbd").text()).toBe("F");
+
+    const menu = wrapper
+      .findAll(".v-menu-stub")
+      .find((candidate) => candidate.find("button.tb-search-field").exists());
+    expect(menu.attributes("data-location")).toBe("bottom end");
+    expect(menu.attributes("data-origin")).toBe("top end");
+
+    await field.trigger("click");
+    expect(wrapper.find(".gb-search-panel .tbm-caret").classes()).toContain(
+      "tbm-caret--end",
     );
-    const iconMenus = [
-      ["Search", ".gb-search-panel"],
-      ["Export current grid to zip", ".tb-export-panel"],
-      ["Import photos", ".tb-import-panel"],
-    ];
+  });
 
-    for (const [title, panelSelector] of iconMenus) {
-      const menu = wrapper
-        .findAll(".v-menu-stub")
-        .find((candidate) =>
-          candidate.find(`button[aria-label="${title}"]`).exists(),
-        );
-      expect(menu, `${title} menu`).toBeTruthy();
-      expect(menu.attributes("data-location")).toBe("bottom end");
-      expect(menu.attributes("data-origin")).toBe("top end");
+  it("announces the popover as a dialog, with its open state", async () => {
+    const wrapper = mountToolbar();
+    const field = wrapper.find("button.tb-search-field");
+    expect(field.attributes("aria-haspopup")).toBe("dialog");
+    expect(field.attributes("aria-expanded")).toBe("false");
 
-      await menu.find(`button[aria-label="${title}"]`).trigger("click");
-      expect(wrapper.find(`${panelSelector} .tbm-caret`).classes()).toContain(
-        "tbm-caret--icon-center-end",
-      );
-    }
+    await field.trigger("click");
+    expect(field.attributes("aria-expanded")).toBe("true");
+    const panel = wrapper.find(".gb-search-panel");
+    expect(panel.attributes("role")).toBe("dialog");
+    expect(panel.attributes("aria-label")).toBe("Search");
+  });
 
-    const { readFileSync } = await import("node:fs");
-    const css = readFileSync(`${process.cwd()}/src/App.css`, "utf8");
-    expect(css).toMatch(
-      /\.tbm-caret--icon-center-end\s*{\s*right:\s*calc\(16px - 5\.5px\);\s*}/,
+  it("shows a committed query in place of the placeholder", async () => {
+    const { useSearchStore } = await import("../../stores/useSearchStore");
+    const searchStore = useSearchStore();
+    searchStore.searchQuery = "red hair";
+    const wrapper = mountToolbar();
+    expect(wrapper.find("button.tb-search-field").text()).toContain(
+      "red hair",
     );
   });
 });
@@ -411,23 +426,38 @@ describe("Toolbar - Recently changed stacks", () => {
   });
 });
 
-describe("Toolbar - the canonical app-wide tail", () => {
-  // The decision record: every toolbar that writes the operation log ends
-  // [separator][UndoControl][TbGlobalActions] (the model shelf does not write
-  // it and carries no undo, amendment #4); the ⋯ (amendment #2) is NOT part of
-  // the tail - a burger stands at the end of the group it collapses, the left
-  // action run.
-  it("orders the tail separator → UndoControl → TbGlobalActions", () => {
+describe("Toolbar - browse only (#2160)", () => {
+  // With nothing selected, the bar holds no verb that acts on pictures: Export
+  // and Train LoRA live on the selection pill, Import and Review tags in the
+  // sidebar, and undo on Ctrl+Z and the receipt.
+  it("carries no selection verb, no import, no review and no undo", () => {
+    const filterStore = useFilterStore();
+    filterStore.comfyuiConfigured = true;
     const wrapper = mountToolbar();
-    const undo = wrapper.findComponent({ name: "UndoControl" }).element;
+    expect(wrapper.find(".tb-export-btn").exists()).toBe(false);
+    expect(wrapper.find(".tb-train-btn").exists()).toBe(false);
+    expect(wrapper.find('button[aria-label="Import photos"]').exists()).toBe(
+      false,
+    );
+    expect(
+      wrapper.find('button[aria-label="Review and fix tags"]').exists(),
+    ).toBe(false);
+    expect(wrapper.findComponent({ name: "UndoControl" }).exists()).toBe(
+      false,
+    );
+  });
+
+  // The tail is the rail toggle alone, after the search field.
+  it("ends with the search field, then the rail toggle", () => {
+    const wrapper = mountToolbar();
+    const right = wrapper.find(".selection-bar-right").element;
     const globalActions = wrapper.findComponent({
       name: "TbGlobalActions",
     }).element;
-
+    expect(right.lastElementChild).toBe(globalActions);
     expect(
-      undo.previousElementSibling.classList.contains("bar-separator"),
+      precedes(wrapper.find("button.tb-search-field").element, globalActions),
     ).toBe(true);
-    expect(precedes(undo, globalActions)).toBe(true);
   });
 
   // Amendment #2: the burger lives at the END of the left group, where the
@@ -444,84 +474,28 @@ describe("Toolbar - the canonical app-wide tail", () => {
     expect(left.lastElementChild.classList.contains("tb-overflow")).toBe(true);
   });
 
-  // The separator amendments: a rule marks a SEMANTIC boundary, not a group
-  // edge - the elastic gap already draws left|right. Two rules remain, and
-  // with the burger anchoring the action run (amendment #2) BOTH render at
-  // all widths: G-S1's flanks stay populated down to the [Search][⋯] floor,
-  // so it carries no fold class any more.
-  it("renders exactly two separators, neither carrying a fold class", () => {
-    const wrapper = mountToolbar();
-    const separators = wrapper.findAll(".bar-separator");
-    expect(separators).toHaveLength(2);
-    for (const separator of separators) {
-      expect(separator.classes()).not.toContain("tb-fold-700");
-      expect(separator.classes()).not.toContain("tb-fold-600");
-    }
-    // The gap-guard variant is deleted outright.
-    expect(wrapper.find(".bar-separator--gap-guard").exists()).toBe(false);
-    // No rule leads the right group: its first element child is a control.
-    const right = wrapper.find(".selection-bar-right").element;
-    expect(right.firstElementChild.classList.contains("bar-separator")).toBe(
-      false,
-    );
+  // A rule marks a semantic boundary: the lens run | Generate. With nothing
+  // after the lens run, the rule would stand boxed at its end, so it goes
+  // with Generate.
+  it("draws the one rule only when Generate follows it", () => {
+    const filterStore = useFilterStore();
+    filterStore.comfyuiConfigured = true;
+    const withGenerate = mountToolbar();
+    const separators = withGenerate.findAll(".bar-separator");
+    expect(separators).toHaveLength(1);
+    expect(separators[0].classes()).not.toContain("tb-fold-700");
+
+    filterStore.comfyuiConfigured = false;
+    expect(mountToolbar().findAll(".bar-separator")).toHaveLength(0);
   });
 
-  it("mounts UndoControl exactly once - the left-group copy is gone", () => {
-    const wrapper = mountToolbar();
-    expect(wrapper.findAllComponents({ name: "UndoControl" })).toHaveLength(1);
-  });
-
-  // A read-only session KEEPS the control and inerts it (the demo has to show
-  // that undo exists), so the tail is the same shape at every access level.
-  // UndoControl owns the disabled state; this pins only that it is still here.
-  it("keeps UndoControl in a read-only session, tail otherwise intact", () => {
+  it("keeps the tail and the ⋯ in a read-only session", () => {
     readOnlyRef.value = true;
     const wrapper = mountToolbar();
-    expect(wrapper.findComponent({ name: "UndoControl" }).exists()).toBe(true);
     expect(wrapper.findComponent({ name: "TbGlobalActions" }).exists()).toBe(
       true,
     );
     expect(wrapper.find(".tb-overflow").exists()).toBe(true);
-  });
-});
-
-// The zip holds the grid's selection when there is one (ImageGrid's
-// exportCurrentViewToZip sends the selected ids and nothing else), so the
-// control has to name that subset instead of promising the whole grid.
-describe("Toolbar - the export control names what it will export", () => {
-  const exportTitle = (wrapper) =>
-    wrapper
-      .findAll("button.tb-export-btn")
-      .map((b) => b.attributes("aria-label"))
-      .at(0);
-
-  it("offers the whole grid while nothing is selected", () => {
-    expect(exportTitle(mountToolbar({ selectedCount: 0 }))).toBe(
-      "Export current grid to zip",
-    );
-  });
-
-  it("counts the selection when a subset of the grid is selected", () => {
-    expect(exportTitle(mountToolbar({ selectedCount: 12 }))).toBe(
-      "Export 12 pictures to zip",
-    );
-  });
-
-  it("stays singular for one picture", () => {
-    expect(exportTitle(mountToolbar({ selectedCount: 1 }))).toBe(
-      "Export 1 picture to zip",
-    );
-  });
-
-  it("carries the same count into the folded ⋯ row", async () => {
-    const wrapper = mountToolbar({ selectedCount: 3 });
-    await wrapper.find(".tbo-trigger").trigger("click");
-    const labels = wrapper
-      .find(".tbo-panel")
-      .findAll(".ctx-item")
-      .map((b) => b.text());
-    expect(labels).toContain("Export 3 pictures to zip");
-    expect(labels).not.toContain("Export grid to zip");
   });
 });
 
@@ -531,22 +505,15 @@ describe("Toolbar - the ⋯ overflow mirrors its controls", () => {
     return wrapper.find(".tbo-panel");
   }
 
-  // Amendment #2: the burger holds ONLY its own group's members. Review,
-  // Settings, Stats and History never appear here - Review stays a visible
-  // button at all widths, Settings/Stats never fold, and below 480 the
-  // History popover is simply unavailable (accepted, documented loss).
+  // Amendment #2: the burger holds ONLY its own group's members. The search
+  // field and the rail toggle never fold.
   it("carries rows for its own group's foldables and nothing else", async () => {
     const filterStore = useFilterStore();
     filterStore.comfyuiConfigured = true;
     const wrapper = mountToolbar();
     const panel = await openOverflow(wrapper);
     const labels = panel.findAll(".ctx-item").map((b) => b.text());
-    expect(labels).toEqual([
-      "Generate with ComfyUI…",
-      "Export grid to zip",
-      "Import photos…",
-      "View options…",
-    ]);
+    expect(labels).toEqual(["Generate with ComfyUI…", "View options…"]);
   });
 
   // The rail panel this used to open is gone (v1.12 F5); the entry stays and
@@ -584,39 +551,8 @@ describe("Toolbar - the ⋯ overflow mirrors its controls", () => {
     ).toBe(false);
   });
 
-  it("honours read-only: the Import row is gone", async () => {
-    readOnlyRef.value = true;
+  it("keeps the rail toggle as a visible control", () => {
     const wrapper = mountToolbar();
-    const panel = await openOverflow(wrapper);
-    const labels = panel.findAll(".ctx-item").map((b) => b.text());
-    expect(labels).not.toContain("Import photos…");
-    // Review never folds (amendment #2), so no row exists to gate.
-    expect(labels).not.toContain("Review and fix tags…");
-  });
-
-  it("emits the same intents as the buttons it mirrors", async () => {
-    const wrapper = mountToolbar();
-    const panel = await openOverflow(wrapper);
-    const row = (label) =>
-      panel.findAll(".ctx-item").find((b) => b.text() === label);
-
-    await row("Export grid to zip").trigger("click");
-    expect(wrapper.emitted("confirm-export-zip")).toHaveLength(1);
-
-    await openOverflow(wrapper);
-    await row("Import photos…").trigger("click");
-    expect(wrapper.emitted("open-import")).toHaveLength(1);
-  });
-
-  // The controls the amendment pinned OUT of the burger stay first-class.
-  it("keeps Review and the global pair as visible controls", () => {
-    const wrapper = mountToolbar();
-    expect(wrapper.find('button[aria-label="Review and fix tags"]').exists()).toBe(
-      true,
-    );
-    expect(
-      wrapper.find('button[aria-label="Review and fix tags"]').classes(),
-    ).not.toContain("tb-fold-700");
     expect(wrapper.findComponent({ name: "TbGlobalActions" }).exists()).toBe(
       true,
     );

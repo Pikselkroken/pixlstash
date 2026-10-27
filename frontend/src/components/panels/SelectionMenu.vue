@@ -776,9 +776,8 @@ watch(
 
 // ── Restore from snapshot (mirrors ImageGridContextMenu.vue) ─────────────────
 // The five most-recent compatible snapshots offered as quick-restore targets
-// for the current selection. Lives here so the Selection ▾ dropdown - and its
-// keyboard "S" entry point - exposes the same selection-scoped action as the
-// right-click context menu. Like the context menu, it drives the app-wide
+// for the current selection. Lives here so the pill's ⋯ menu exposes the same
+// selection-scoped action as the right-click context menu. Like the context menu, it drives the app-wide
 // RestoreConfirmDialog via the snapshots store (no parent wiring needed).
 const recentSnapshots = computed(() =>
   snapshotsStore.snapshots.filter((cp) => cp.is_compatible).slice(0, 5),

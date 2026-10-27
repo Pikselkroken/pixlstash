@@ -58,7 +58,6 @@
   />
   <div :style="wrapperStyle" class="grid-content-area">
     <Toolbar
-      :selectedCount="selectedImageIds.length"
       :selectedCharacter="String(selectionStore.selectedCharacter)"
       :selectedSort="sortStore.selectedSort"
       :allPicturesId="String(ALL_PICTURES_ID)"
@@ -67,10 +66,6 @@
       @expand-all-stacks="expandAllStacks"
       @collapse-all-stacks="collapseAllStacks"
       @open-duplicates="emit('open-duplicates')"
-      @open-import="emit('open-import')"
-      @local-import="emit('local-import', $event)"
-      @confirm-export-zip="emit('confirm-export-zip')"
-      @confirm-export-folder="emit('confirm-export-folder', $event)"
     />
     <FilterStrip
       :count-base-query="filterCountBaseQuery"
@@ -1178,6 +1173,7 @@
           :selected-group-name="selectedGroupName"
           :selected-sort="sortStore.selectedSort"
           :owns-escape="true"
+          :compact="searchResultsActive"
           :scrapheap-pictures-id="String(SCRAPHEAP_PICTURES_ID)"
           :selected-image-ids="selectedImageIds"
           :selected-media-support="selectedMediaSupport"
@@ -1225,6 +1221,8 @@
           @run-workflow="runWorkflowOnSelection"
           @edit-pictures="editSelection"
           @compare-pictures="compareSelection"
+          @confirm-export-zip="emit('confirm-export-zip')"
+          @confirm-export-folder="emit('confirm-export-folder', $event)"
         />
       </template>
     </GridActionPill>
@@ -8718,6 +8716,47 @@ function getExportCount() {
 // ============================================================
 // EXPORT
 // ============================================================
+/**
+ * Whether the selection holds every picture the grid has drawn.
+ *
+ * Export lives on the selection pill (#2160), so a whole view is Ctrl+A, then
+ * Export. Ctrl+A selects the cells the grid holds, which are stack leaders and
+ * whatever has streamed in so far; the view itself is more than that. Cells
+ * still waiting for their picture, and ghosts, never block the answer - but a
+ * grid with no picture drawn yet (empty, or every cell still loading) is no
+ * evidence the selection is the view, so the selection goes by id then.
+ */
+function selectionCoversView() {
+  const selected = new Set(
+    selectedImageIds.value.map((id) => String(getPictureId(id))),
+  );
+  const ghosts = ghostedIdSet.value;
+  let sawPicture = false;
+  for (const img of allGridImages.value) {
+    const id = getPictureId(img?.id);
+    if (id == null) continue;
+    sawPicture = true;
+    if (!selected.has(String(id)) && !ghosts?.has(String(id))) return false;
+  }
+  return sawPicture;
+}
+
+/**
+ * The pictures an export sends: the selected ids, or the view's own query when
+ * nothing is selected or the selection is the whole view - which is what the
+ * toolbar's whole-grid export sent, collapsed stack members and the unloaded
+ * tail included.
+ */
+function exportPictureParams() {
+  const selectedIds = selectedImageIds.value;
+  if (!selectedIds?.length || selectionCoversView()) {
+    return buildPictureIdsQueryParams();
+  }
+  const params = new URLSearchParams();
+  for (const id of selectedIds) params.append("id", getPictureId(id));
+  return params.toString();
+}
+
 async function exportCurrentViewToZip(options = {}) {
   const exportType = options.exportType || "full";
   const captionMode = options.captionMode || "description";
@@ -8726,17 +8765,7 @@ async function exportCurrentViewToZip(options = {}) {
   const useOriginalFileNames = options.useOriginalFileNames === true;
   const resolution = options.resolution || "original";
   const bboxMode = options.bboxMode || "none";
-  let params;
-  const selectedIds = selectedImageIds.value;
-  if (selectedIds && selectedIds.length > 0) {
-    const selParams = new URLSearchParams();
-    for (const id of selectedIds) {
-      selParams.append("id", getPictureId(id));
-    }
-    params = selParams.toString();
-  } else {
-    params = buildPictureIdsQueryParams();
-  }
+  const params = exportPictureParams();
   const extraParams = new URLSearchParams();
   if (exportType) {
     extraParams.append("export_type", exportType);
@@ -8861,17 +8890,7 @@ async function exportCurrentViewToFolder(options = {}) {
   const useOriginalFileNames = options.useOriginalFileNames === true;
   const resolution = options.resolution || "original";
   const bboxMode = options.bboxMode || "none";
-  let params;
-  const selectedIds = selectedImageIds.value;
-  if (selectedIds && selectedIds.length > 0) {
-    const selParams = new URLSearchParams();
-    for (const id of selectedIds) {
-      selParams.append("id", getPictureId(id));
-    }
-    params = selParams.toString();
-  } else {
-    params = buildPictureIdsQueryParams();
-  }
+  const params = exportPictureParams();
   const extraParams = new URLSearchParams();
   extraParams.append("destination", destination);
   if (exportType) {
