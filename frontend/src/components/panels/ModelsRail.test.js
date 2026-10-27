@@ -617,6 +617,34 @@ describe("a picked training run (#2169)", () => {
     expect(cancelTrainingJob).toHaveBeenCalledWith(7);
   });
 
+  it("draws no picture for a sample whose folder it cannot name, and keeps the grid", async () => {
+    // A live job can report a drawn sample before its run folder resolves to a
+    // model folder, and with no run on disk yet there is nothing else to
+    // address it by: an empty `src` would show a broken picture.
+    getTrainingJobLive.mockResolvedValue({
+      ...liveJob,
+      columns: [0, 500],
+      rows: [
+        {
+          index: 0,
+          prompt: "ar1a, portrait",
+          with_trigger: true,
+          cells: [
+            { state: "sample", filename: "s0.jpg" },
+            { state: "sample", filename: "s500.jpg" },
+          ],
+        },
+      ],
+      run_folder: null,
+    });
+    const { wrapper } = await mountOnRuns({ jobs: [liveJob], pick: ["job:u7"] });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const grid = wrapper.get('[data-testid="mrr-samples"]');
+    expect(grid.findAll(".mrr-cell")).toHaveLength(2);
+    expect(grid.findAll("img")).toHaveLength(0);
+  });
+
   it("offers no second Stop while the run is already stopping", async () => {
     getTrainingJobLive.mockResolvedValue({ ...liveJob, status: "stopping", rows: [] });
     const { wrapper } = await mountOnRuns({

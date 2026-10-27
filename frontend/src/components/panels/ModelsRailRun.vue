@@ -70,7 +70,15 @@
             }}<span v-if="row.noTrigger" class="mrr-tag"> · no trigger</span></span
           >
           <span v-for="(file, c) in row.cells" :key="c" class="mrr-cell">
-            <img v-if="file" :src="sampleUrl(file)" alt="" loading="lazy" />
+            <!-- Only with an address: a live job can name a sample before its
+                 folder resolves, and an empty src draws a broken picture. The
+                 cell stays, so the grid keeps its shape (as TrainingRunLive). -->
+            <img
+              v-if="file && sampleUrl(file)"
+              :src="sampleUrl(file)"
+              alt=""
+              loading="lazy"
+            />
           </span>
         </template>
       </div>
