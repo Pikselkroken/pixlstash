@@ -589,12 +589,12 @@ export function folderLabels(folders) {
     }
     const segments = group.map((folder) =>
       String(folder.path || "")
-        .replace(/[\\/]+$/, "")
-        .split(/[\\/]/),
+        .split(/[\\/]/)
+        .filter(Boolean),
     );
     group.forEach((folder, i) => {
       const own = segments[i];
-      let tail = own.join("/");
+      let tail = own.join("/") || name;
       for (let n = 1; n <= own.length; n += 1) {
         const candidate = own.slice(-n).join("/");
         const shared = segments.some(

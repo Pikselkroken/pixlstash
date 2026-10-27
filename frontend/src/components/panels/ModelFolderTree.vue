@@ -247,7 +247,7 @@ const nodes = computed(() => {
         kind: "folder",
         folderId: Number(folder.id),
         path: "",
-        name: foldersStore.labelByFolderId.get(Number(folder.id)),
+        name: foldersStore.labelByFolderId.get(Number(folder.id)) ?? "",
         level: 2,
         locked: isLocked(folder),
       });

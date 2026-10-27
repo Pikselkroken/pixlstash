@@ -292,4 +292,13 @@ describe("folderLabels", () => {
     expect(labels.get(3)).toBe("SD/Lora");
     expect(labels.get(4)).toBe("other/Lora");
   });
+
+  it("never shows a rooted path, even when one path ends another", () => {
+    const labels = folderLabels([
+      row(1, "/Lora", "StabilityMatrix"),
+      row(2, "/a/Lora", "StabilityMatrix"),
+    ]);
+    expect(labels.get(1)).toBe("Lora (StabilityMatrix)");
+    expect(labels.get(2)).toBe("a/Lora (StabilityMatrix)");
+  });
 });
