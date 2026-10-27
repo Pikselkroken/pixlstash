@@ -17,6 +17,7 @@ import { baseModels, modelDisplayName } from "../utils/workflowCard";
 import { onSessionReset } from "../utils/apiClient";
 import { errorMessage } from "../utils/apiError";
 import { favouritesFirst, useFavouritesStore } from "./useFavouritesStore";
+import { useWorkflowTemplatesStore } from "./useWorkflowTemplatesStore";
 
 /**
  * The Workflows grid (v1.12 F1a) — the cards, the sort and the selection.
@@ -27,6 +28,13 @@ import { favouritesFirst, useFavouritesStore } from "./useFavouritesStore";
  * workflow holds is the core rule's, never the owner's: there is no merge or
  * split.
  */
+
+/** The rail head's name for each place, when no facet is lit. */
+const PLACE_LABELS = {
+  all: "All workflows",
+  favourites: "Favourites",
+  recent: "Recently used",
+};
 
 export const SORT_KEYS = [
   "rating",
@@ -68,6 +76,13 @@ const nameCollator = new Intl.Collator(undefined, { numeric: true });
 const byName = (a, b) => nameCollator.compare(a.name ?? "", b.name ?? "");
 
 /**
+ * How far back "Recently used" reaches: a card last used this long ago or later.
+ * Client-side, read off `last_used`, so it never reads the server again.
+ */
+export const RECENT_DAYS = 30;
+const RECENT_MS = RECENT_DAYS * 24 * 60 * 60 * 1000;
+
+/**
  * What the Filters panel starts on (v1.12 F7).
  *
  * `hideOneOffs` is TRUE by default and `showHidden` FALSE, which is the grid
@@ -78,8 +93,12 @@ export const DEFAULT_FILTERS = Object.freeze({
   hideOneOffs: true,
   showHidden: false,
   // Only the cards the owner has favourited (#1578). Client-side: it only
-  // removes a card, so it never reads the server again.
+  // removes a card, so it never reads the server again. The Favourites place
+  // sets it; it is not a chip.
   favouritesOnly: false,
+  // The Recently used place: cards used within RECENT_DAYS. Client-side, and
+  // not a chip either.
+  recent: false,
   // "Keeps something deleted": a picture ghost or the name of a model that is
   // not on the shelf. The card counts the two apart; this row asks for either.
   ghosts: false,
@@ -94,6 +113,11 @@ export const DEFAULT_FILTERS = Object.freeze({
   // Text the card's name must contain, ignoring case.
   name: "",
 });
+
+/** Was this card last used at or after `since` (epoch ms)? A card never used is not. */
+function usedSince(card, since) {
+  return card.last_used ? Date.parse(card.last_used) >= since : false;
+}
 
 /** Does this card keep something deleted? */
 function keepsGhost(card) {
@@ -130,6 +154,9 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   const favouritesLead = ref(true);
   const filters = ref({ ...DEFAULT_FILTERS });
   const favourites = useFavouritesStore();
+  // Read for `viewName` and the sidebar: the Templates place is the templates
+  // store's `shown`, not a filter of this one.
+  const templates = useWorkflowTemplatesStore();
 
   // A stamp, not a boolean: an in-flight fetch that resolves after a session
   // reset must not write its rows, or its cover thumbnail URLs, into the new
@@ -194,6 +221,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   const filteredCards = computed(() => {
     const view = filters.value;
     const needle = view.name.trim().toLowerCase();
+    const since = Date.now() - RECENT_MS;
     return cards.value.filter((card) => {
       if (needle && !(card.name ?? "").toLowerCase().includes(needle)) {
         return false;
@@ -201,6 +229,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
       if (view.favouritesOnly && !favourites.isFavourite("workflow", card.id)) {
         return false;
       }
+      if (view.recent && !usedSince(card, since)) return false;
       if (view.ghosts && !keepsGhost(card)) return false;
       if (view.type != null && card.type !== view.type) return false;
       if (
@@ -240,6 +269,44 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     );
   });
 
+  /** How many of the cards read were used within RECENT_DAYS: the Recently used count. */
+  const recentCount = computed(() => {
+    const since = Date.now() - RECENT_MS;
+    return cards.value.filter((card) => usedSince(card, since)).length;
+  });
+
+  /**
+   * The place the rail lights: "all", "favourites" or "recent". Places are the
+   * sidebar's, not filters in the toolbar, so they have no chip; this only
+   * reads the two flags that carry them.
+   */
+  const place = computed(() => {
+    if (filters.value.favouritesOnly) return "favourites";
+    if (filters.value.recent) return "recent";
+    return "all";
+  });
+
+  /**
+   * The rail head's name for what the grid shows: the templates when that
+   * place is on, else the lit facet, else the place.
+   */
+  const viewName = computed(() => {
+    if (templates.shown) return "ComfyUI templates";
+    const { type, checkpoint } = filters.value;
+    if (type != null) {
+      return (
+        cards.value.find((card) => card.type === type)?.type_label ?? type
+      );
+    }
+    if (checkpoint != null) {
+      return (
+        filterOptions.value.checkpoints.find((model) => model.id === checkpoint)
+          ?.label ?? checkpoint
+      );
+    }
+    return PLACE_LABELS[place.value];
+  });
+
   /** How many of the cards read are favourites: the Filters row's count. */
   const favouriteCount = computed(
     () =>
@@ -257,18 +324,9 @@ export const useWorkflowsStore = defineStore("workflows", () => {
    * the module that exists so one filter cannot be spelled two ways; this
    * store owns the state and the refetch decision, and nothing else.
    */
-  const filterChips = computed(() => {
-    const chips = workflowFilterChips(filters.value, cards.value, setFilters);
-    if (filters.value.favouritesOnly) {
-      chips.unshift({
-        key: "favourites",
-        kind: "Showing",
-        value: "favourites",
-        remove: () => setFilters({ favouritesOnly: false }),
-      });
-    }
-    return chips;
-  });
+  const filterChips = computed(() =>
+    workflowFilterChips(filters.value, cards.value, setFilters),
+  );
 
   /**
    * "12 of 40" — what the grid is drawing of what the server sent.
@@ -627,6 +685,19 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     if (SORT_KEYS.includes(key)) sortKey.value = key;
   }
 
+  /**
+   * Light one of the three places. Picking one clears the Type and Base model
+   * facets, as the sidebar always has; the Templates place is the caller's.
+   */
+  function setPlace(next) {
+    setFilters({
+      favouritesOnly: next === "favourites",
+      recent: next === "recent",
+      type: null,
+      checkpoint: null,
+    });
+  }
+
   function setFavouritesLead(on) {
     favouritesLead.value = Boolean(on);
   }
@@ -759,6 +830,17 @@ export const useWorkflowsStore = defineStore("workflows", () => {
    */
   const useSetKey = ref("");
 
+  /**
+   * Bumped by the sidebar's Add workflow button. WorkflowsView watches it and
+   * opens its file picker, the way `useSetKey` asks the Workflow tab.
+   */
+  const addRequest = ref(0);
+
+  /** Ask the Workflows view to open its add-a-workflow picker. */
+  function requestAdd() {
+    addRequest.value += 1;
+  }
+
   /** Ask the Workflow tab to open *Change model set…* on one workflow. "" takes it back. */
   function requestUseSet(key) {
     useSetKey.value = key || "";
@@ -789,6 +871,12 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     sortedCards,
     filterChips,
     filterOfLabel,
+    place,
+    recentCount,
+    viewName,
+    setPlace,
+    addRequest,
+    requestAdd,
     filterOptions,
     selectedCards,
     runnableCard,

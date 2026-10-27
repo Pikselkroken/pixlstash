@@ -984,12 +984,13 @@ test.describe("from the keyboard", () => {
 
 test.describe("the Tasks tab's offer", () => {
   const RAN = THREE_CHANGES;
-  const rail = (page) => page.getByRole("complementary", { name: "Inspector" });
+  const rail = (page) => page.getByTestId("titlebar-tasks-panel");
+  const pill = (page) => page.getByTestId("titlebar-tasks");
   const offer = (page) => rail(page).locator("[data-offer]");
 
   async function openTasks(page) {
     await selectWorkflow(page);
-    await rail(page).getByRole("button", { name: "Tasks" }).click();
+    await pill(page).click();
     // After a reload the run comes back folded; its pill says why to open it.
     await expect(rail(page).getByTestId("tm-finished-pill")).toHaveText("3 changes");
     await rail(page).getByRole("button", { name: `Show the run of ${FINISHED.label}` }).click();
@@ -1011,10 +1012,9 @@ test.describe("the Tasks tab's offer", () => {
     await expect(offer(page).getByRole("button", { name: "Save as new…" })).toBeVisible();
     await expect(offer(page).getByRole("button", { name: "Save", exact: true })).toBeVisible();
 
-    // The rail is 288px: the row and its two verbs fit it.
-    expect((await rail(page).boundingBox()).width).toBe(288);
+    // The panel is narrower than the window: the row and its two verbs fit it.
     expect(await overflows(offer(page))).toBe(false);
-    expect(await overflows(rail(page).locator(".inspector-body"))).toBe(false);
+    expect(await overflows(rail(page).locator(".ttp-body"))).toBe(false);
     const row = await offer(page).boundingBox();
     for (const name of ["Save as new…", "Save"]) {
       const box = await offer(page).getByRole("button", { name, exact: true }).boundingBox();
@@ -1027,7 +1027,7 @@ test.describe("the Tasks tab's offer", () => {
   test("offers nothing where the last run changed nothing", async ({ page }) => {
     net = await stubWorkflow(page, { finished: [FINISHED] });
     await selectWorkflow(page);
-    await rail(page).getByRole("button", { name: "Tasks" }).click();
+    await pill(page).click();
     // Listed, as a receipt: no pill, and opened, no verbs.
     const run = rail(page).getByTestId("tm-finished-run");
     await expect(run).toContainText(FINISHED.label);
@@ -1102,7 +1102,11 @@ test.describe("the Tasks tab's offer", () => {
     await save.click({ force: true });
     await save.focus();
     await expect(save).toBeFocused();
-    await page.keyboard.press("Enter");
+    // Space, not Enter: the popover's own Enter handling (Vuetify's VMenu,
+    // closeOnContentClick off) moves focus on past the last control and
+    // closes the menu, so Enter never reaches the button.
+    await page.keyboard.press("Space");
+    await expect(save).toBeFocused();
     // The reason wraps inside the rail; nothing is pushed out of it.
     expect(await overflows(offer(page))).toBe(false);
     await shotRail(page, offer(page), "7-tasks-tab-offer-save-closed");
@@ -1336,7 +1340,8 @@ test.describe("the picker moves to another workflow", () => {
 
 test.describe("the Tasks tab's receipt says what the save left", () => {
   const RAN = THREE_CHANGES;
-  const rail = (page) => page.getByRole("complementary", { name: "Inspector" });
+  const rail = (page) => page.getByTestId("titlebar-tasks-panel");
+  const pill = (page) => page.getByTestId("titlebar-tasks");
   const offer = (page) => rail(page).locator("[data-offer]");
 
   async function save(page, saveExtra) {
@@ -1347,7 +1352,7 @@ test.describe("the Tasks tab's receipt says what the save left", () => {
       finished: [FINISHED],
     });
     await selectWorkflow(page);
-    await rail(page).getByRole("button", { name: "Tasks" }).click();
+    await pill(page).click();
     await rail(page).getByRole("button", { name: `Show the run of ${FINISHED.label}` }).click();
     await offer(page).getByRole("button", { name: "Save", exact: true }).click();
     const done = rail(page).getByTestId("tm-offer-done");
@@ -1366,7 +1371,7 @@ test.describe("the Tasks tab's receipt says what the save left", () => {
       "Saved to Portrait, soft window light. Portrait, soft window light still has 2 changes waiting in the Workflow tab. They were not part of this save.",
     );
     expect(await overflows(done)).toBe(false);
-    expect(await overflows(rail(page).locator(".inspector-body"))).toBe(false);
+    expect(await overflows(rail(page).locator(".ttp-body"))).toBe(false);
   });
 
   test("a change that could not be kept is said, in the warning colour", async ({ page }) => {

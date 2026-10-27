@@ -58,6 +58,7 @@ import { markEnd, markStart } from "./utils/perfMarks";
 import { LIGHTBOX_HOST_ID } from "./utils/dom";
 
 import SideBar from "./components/panels/SideBar.vue";
+import WorkflowsSidebar from "./components/panels/WorkflowsSidebar.vue";
 import TitleBar from "./components/TitleBar.vue";
 import PhotosImportDialog from "./components/io/PhotosImportDialog.vue";
 import RestoreConfirmDialog from "./components/widgets/RestoreConfirmDialog.vue";
@@ -837,12 +838,19 @@ defineExpose({
             sidebarStore.sidebarOverlay && sidebarStore.hideAutoSidebar()
           "
         >
-          <!-- The Models workspace brings its own sidebar (#2168). The
-               library's stays mounted under it, so a switch back to Media
-               neither refetches nor loses its scroll. -->
-          <ModelsSideBar v-if="isModelsView" />
+          <!-- The Workflows (#2165) and Models (#2168) workspaces bring their
+               own sidebars. The library's SideBar stays mounted but not drawn:
+               its refs (settings, import, folder picks) and drop targets are
+               the app's, and a switch back to Media neither refetches nor
+               loses its scroll. A wrapper, since SideBar has several roots and
+               v-show on it would not reach them. -->
+          <WorkflowsSidebar v-if="isWorkflowsView" />
+          <ModelsSideBar v-else-if="isModelsView" />
+          <div
+            v-show="!isWorkflowsView && !isModelsView"
+            style="display: contents"
+          >
           <SideBar
-            v-show="!isModelsView"
             ref="sidebarRef"
             :installType="installType"
             :dockerVariant="dockerVariant"
@@ -866,6 +874,7 @@ defineExpose({
             @update:set-loading="loading = $event"
             @update:check-for-updates="handleUpdateCheckForUpdates"
           />
+          </div>
         </div>
 
         <TelemetryConsentDialog

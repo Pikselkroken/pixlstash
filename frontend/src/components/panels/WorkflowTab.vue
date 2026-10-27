@@ -6,13 +6,37 @@
     :open="sidebarStore.workflowInspectorOpen"
     :tabs="tabs"
   >
-    <!-- The task manager, last tab and on its own: what the app is working on
-         is not part of a workflow, so it replaces the body rather than sitting
-         under it. Here so that a run started from this screen can be watched
-         from this screen. -->
-    <TasksPanel v-if="tab === 'tasks'" />
+    <!-- One head row on the toolbar's line (#2165, the StatsSidebar idiom): the
+         view's name when nothing is selected, the workflow's when one is, or
+         how many. Clear while anything is selected. -->
+    <template #head>
+      <h2 class="wftab-rail-title" data-testid="wftab-title">
+        <Tooltip :text="headTitle" activator="parent" />
+        {{ headTitle }}
+      </h2>
+      <AppButton
+        v-if="store.selectedKeys.length"
+        class="wftab-clear"
+        variant="ghost"
+        size="sm"
+        tooltip="Clear the selection"
+        data-testid="wftab-clear"
+        @click="store.clearSelection()"
+      >
+        Clear
+      </AppButton>
+    </template>
 
-    <p v-else-if="!card && !multiple" class="wftab-empty">
+    <!-- The star histogram, for one workflow with a rating: where its defaults
+         come from, drawn beside the tabs. -->
+    <template v-if="card && !multiple && ratingCounts" #lead>
+      <WorkflowStarChart
+        :counts="histogram"
+        :sampled="Boolean(defaultRecipe?.sampled) && !card.manual"
+      />
+    </template>
+
+    <p v-if="!card && !multiple" class="wftab-empty">
       Pick a workflow to see what it is made of.
     </p>
 
@@ -26,19 +50,10 @@
       @defaults-changed="takeDefaults"
     />
 
-    <!-- Several selected: the tab says so, and the VERBS ARE THE PILL'S.
-         They were here first, as two buttons of this tab's own; #1455 gave
-         the grid a selection bar that offers the same two and eight more, and
-         two surfaces deriving the same verb independently disagreed within a
-         week — this Hide was hardcoded `Hide` while the pill's is a toggle
-         reading Unhide on an all-hidden selection. Two live controls on one
-         screen, one of them saying the wrong thing about what it is about to
-         do.
-
-         So one owner. The pill is always on screen when this block is (both
-         are gated on a selection, and it is docked over the grid this rail
-         sits beside), so nothing became unreachable — and the reader is told
-         where the verbs are rather than left to find them. -->
+    <!-- Several selected: the tab says so, and the VERBS ARE THE PILL'S (the
+         grid's selection bar). Two surfaces deriving the same verb
+         independently disagreed once (#1455), so the rail names the bar and
+         does not offer its own copies. -->
     <template v-else-if="multiple">
       <div class="inspector-section">
         <span class="section-label">Selected</span>
@@ -62,30 +77,9 @@
     </p>
 
     <template v-else>
-      <div class="inspector-section wftab-head">
-        <BreakableTitle class="wftab-title" :name="card.name" />
-        <p class="wftab-sub">
-          <button
-            v-if="card.picture_count"
-            class="wftab-pictures"
-            type="button"
-            data-testid="wftab-show-pictures"
-            :aria-label="`Show all ${picturesLabel}`"
-            @click="showPictures(card)"
-          >
-            {{ picturesLabel }}</button
-          ><template v-else>{{ picturesLabel }}</template>
-          <!-- Where the defaults come from is the whole workflow's, so it sits
-               here and not inside any one panel. Absent when nothing is
-               rated. -->
-          <WorkflowStarChart
-            v-if="ratingCounts"
-            :counts="ratingCounts"
-            :sampled="Boolean(defaultRecipe?.sampled) && !card.manual"
-          />
-        </p>
-        <!-- Which version the workflow is on, and the way back to an earlier
-             one (#1850). Only where there is one to go back to. -->
+      <!-- Which version the workflow is on, and the way back to an earlier one
+           (#1850). Only where there is one to go back to. -->
+      <div v-if="headVersion || fromComfyui" class="wftab-version">
         <WorkflowVersionMenu
           v-if="headVersion"
           ref="versionMenu"
@@ -102,8 +96,7 @@
           @open-comfyui="openVersionInComfyui"
         />
         <!-- The newest version is one ComfyUI saved (#1852): said, with the
-             way back beside it, and nothing to answer. An inline button in a
-             line of secondary text, as "N pictures" above is. -->
+             way back beside it, and nothing to answer. -->
         <p
           v-if="fromComfyui"
           class="wftab-sublabel"
@@ -181,584 +174,459 @@
         </p>
       </section>
 
-      <!-- What a run starts from (#1653), as three bordered panels: Models,
-           LoRAs and Parameters, each with its verb in its own head. Inside a
-           panel, label-and-value rows on a 64px label column; a row says
-           where its value came from only when it is the exception ("Yours",
-           "in 31 of 40"). -->
-      <section class="wftab-panel" data-testid="wftab-default-recipe">
-        <div class="wftab-sec-head">
-          <span
-            ref="modelsHeading"
-            class="section-label"
-            role="heading"
-            aria-level="3"
-            tabindex="-1"
-            >Models</span
-          >
-          <!-- Fills the rows below from one of the owner's model sets, as
-               unsaved changes: nothing is written and no workflow is made. -->
-          <WorkflowUseSetMenu
-            ref="useSetMenu"
-            :workflow-id="selectedKey || ''"
-            :models="settableModels"
-            :disabled="chainNoGraph || !settableModels.length || !canEdit"
-            :disabled-reason="
-              chainNoGraph
-                ? 'wftab-chain-reason'
-                : changesFailed
-                  ? 'wftab-changes-failed'
-                  : undefined
-            "
-            @use="useSet"
-          />
-        </div>
-        <!-- Every row below is a view of the unsaved changes, so none can be
-             edited until they are read. A read that failed says so here, with
-             the way to ask again, rather than leave the rows locked for no
-             reason anybody can see. -->
-        <p
-          v-if="changesFailed"
-          id="wftab-changes-failed"
-          class="wftab-note wftab-quiet"
-          data-testid="wftab-changes-failed"
-        >
-          Could not read this workflow's unsaved changes just now, so its
-          models, stages and LoRAs cannot be changed.
-          <AppButton
-            size="sm"
-            variant="ghost"
-            data-testid="wftab-changes-retry"
-            @click="retryChanges"
-          >
-            Retry
-          </AppButton>
-        </p>
-        <!-- The list card's `default_recipe` is null, so until the detail
-             lands there is no default to show: its base-card slots are not
-             one. -->
-        <p v-if="detailPending" class="wftab-note wftab-quiet">
-          Reading its default recipe…
-        </p>
-        <p
-          v-else-if="detailFailed"
-          class="wftab-note wftab-quiet"
-          data-testid="wftab-recipe-failed"
-        >
-          Could not read its default recipe just now.
-          <AppButton
-            size="sm"
-            variant="ghost"
-            data-testid="wftab-recipe-retry"
-            @click="loadDetail(selectedKey)"
-          >
-            Retry
-          </AppButton>
-        </p>
-        <template v-if="detail">
-        <!-- One row per loader the default recipe names, and every one a
-             picker (#1850): a pick joins the unsaved changes, it is not
-             written. A missing file is a row that needs a pick, with the
-             warning kept above its field. -->
-        <div
-          v-for="row in modelRows"
-          :key="row.address"
-          class="wftab-field wftab-field--top"
-          :data-testid="`wftab-row-${row.kind}`"
-          :data-address="row.address"
-        >
-          <span class="wftab-labelcol">
-            <span v-if="row.first" class="wftab-label">{{ row.heading }}</span>
-            <span
-              v-if="row.edited"
-              class="wftab-yours wftab-yours--unsaved"
-              data-testid="wftab-edited"
-              >{{ row.fix ? "Fixed" : "Edited" }}</span
-            >
-            <span v-else-if="row.yours" class="wftab-yours">Yours</span>
-          </span>
-          <div class="wftab-col wftab-model">
-            <template v-if="row.missing && !row.edited">
-              <p class="wftab-warn" :class="{ 'wftab-coming': row.coming }">
-                <DownloadingMark
-                  v-if="row.coming"
-                  :percent="row.coming.percent"
-                />
-                <v-icon v-else size="16">mdi-alert-outline</v-icon>
-                {{ row.missingText }}
-              </p>
-              <p class="wftab-note wftab-quiet" data-testid="wftab-missing-file">
-                <span class="wftab-file"
-                  ><Tooltip :text="row.missing" activator="parent" />{{
-                    modelLabel(fileName(row.missing))
-                  }}</span
-                >{{ missingNote(row.missing, row.kind) }}
-              </p>
-              <p
-                v-if="row.target"
-                class="wftab-note wftab-quiet"
-                data-testid="wftab-missing-base"
-              >
-                It is a <b class="wftab-strong">{{ row.target }}</b> checkpoint,
-                {{
-                  row.likelyCount === 0
-                    ? "and nothing on your shelf is."
-                    : row.likelyCount === 1
-                      ? "and so is 1 on your shelf."
-                      : `and so are ${row.likelyCount} on your shelf.`
-                }}
-              </p>
-              <!-- What to do about it, in as few words: the why of an
-                   unmatched list is the mark's tooltip. A stale file is
-                   never downloadable, so it reads as a pick. -->
-              <p
-                v-if="downloadableFiles.has(row.missing) || row.options.length"
-                class="wftab-note wftab-quiet"
-                data-testid="wftab-missing-action"
-              >
-                <template v-if="downloadableFiles.has(row.missing)"
-                  >Download it<ModelDownloadButton :file="row.missing" />{{
-                    row.options.length ? " or pick a replacement below." : ""
-                  }}</template
-                ><template v-else>Pick a replacement below.</template
-                ><span
-                  v-if="row.unmatched"
-                  class="wftab-info-mark"
-                  tabindex="0"
-                  aria-label="Why every checkpoint is listed"
-                  data-testid="wftab-replace-unmatched"
-                  :data-note="UNMATCHED_REPLACEMENTS_TEXT"
-                  ><Tooltip
-                    :text="UNMATCHED_REPLACEMENTS_TEXT"
-                    activator="parent" /><v-icon size="16" aria-hidden="true"
-                    >mdi-help-circle-outline</v-icon
-                  ></span
-                >
-              </p>
-              <p
-                v-if="isAdding(row.missing)"
-                class="wftab-note wftab-quiet wftab-adding"
-                role="status"
-                data-testid="wftab-adding"
-              >
-                <v-progress-circular indeterminate size="12" width="2" />
-                Found in your model folders. Adding it to your shelf…
-              </p>
-            </template>
-            <AppSelect
-              v-if="row.options.length"
-              :model-value="row.pick ?? ''"
-              :label="row.name"
-              hide-label
-              :options="row.options"
-              :placeholder="row.grouped ? `${row.savedLabel} (missing)` : ''"
-              :disabled="!canEdit"
-              :data-testid="`wftab-pick-${row.kind}`"
-              @update:model-value="(file) => pickModel(row, file)"
-            >
-              <template v-if="row.grouped" #head>
-                <span data-testid="wftab-replacing"
-                  >Replacing <b class="wftab-strong">{{ row.savedLabel }}</b
-                  >{{ row.target ? ` · ${row.target}` : "" }}</span
-                >
-                <span
-                  v-if="row.target && !row.likelyCount"
-                  class="wftab-none-likely"
-                  data-testid="wftab-none-likely"
-                  ><v-icon
-                    size="16"
-                    class="wftab-tone--info"
-                    aria-hidden="true"
-                    >mdi-information-outline</v-icon
-                  >Nothing on your shelf is {{ row.target }}.</span
-                >
-              </template>
-            </AppSelect>
-            <span v-else class="wftab-value"
-              ><Tooltip v-if="row.file" :text="row.file" activator="parent" />{{
-                row.savedLabel
-              }}</span
-            >
-            <p
-              v-if="row.verdictLine"
-              class="wftab-verdict"
-              data-testid="wftab-verdict"
-            >
-              <v-icon
-                size="14"
-                :class="`wftab-tone--${row.verdictTone}`"
-                aria-hidden="true"
-                >{{ `mdi-${row.verdictIcon}` }}</v-icon
-              ><span>{{ row.verdictLine }}</span>
-            </p>
-            <!-- What the shelf files this loader's model as, where every
-                 workflow loading it says it is this loader's kind (#1962): the
-                 shelf's Kind menu, here too. It is the one note under the
-                 picker, so "Nothing to offer" gives way to it. -->
-            <KindMenu
-              v-if="row.offer"
-              :file-kind="row.offer.file_kind"
-              :kind-text="
-                row.offer.copy
-                  ? `${modelLabel(fileName(row.offer.copy.filename))}: ${fileKindLabel(row.offer.file_kind)} on shelf`
-                  : `${fileKindLabel(row.offer.file_kind)} on shelf`
+
+      <!-- What a run starts from (#1653), as the rail's sections (#2165): Models,
+           LoRAs, Parameters, GPU memory and Latest pictures, each with the
+           shared SectionHeader and its own collapse. Each row is a read; the
+           changes that need a dialog or a menu say so in their header. -->
+      <section
+        ref="modelsPanel"
+        class="inspector-section wftab-sec"
+        data-testid="wftab-default-recipe"
+      >
+        <SectionHeader v-model:collapsed="modelsCollapsed" label="Models">
+          <template #actions>
+            <!-- Fills the rows below from one of the owner's model sets, as
+                 unsaved changes: nothing is written and no workflow is made. -->
+            <WorkflowUseSetMenu
+              ref="useSetMenu"
+              :workflow-id="selectedKey || ''"
+              :models="settableModels"
+              :disabled="chainNoGraph || !settableModels.length || !canEdit"
+              :disabled-reason="
+                chainNoGraph
+                  ? 'wftab-chain-reason'
+                  : changesFailed
+                    ? 'wftab-changes-failed'
+                    : undefined
               "
-              :subject="
-                row.offer.copy
-                  ? modelLabel(fileName(row.offer.copy.filename))
-                  : row.savedLabel
-              "
-              :suggested-kind="row.offer.suggested_kind"
-              :suggested-by="row.offer.suggested_by"
-              :suggested-fields="row.offer.suggested_fields"
-              :evidence-heading="
-                row.offer.copy ? 'Named like the missing file' : undefined
-              "
-              :evidence-note="row.offer.copy ? copyNote(row) : ''"
-              :adapter="false"
-              @pick="(kind) => fileOffered(row, { file_kind: kind })"
-              @suggest="(on) => fileOffered(row, { suggest_kind: on })"
+              @use="useSet"
             />
-            <p
-              v-else-if="row.missing && !row.options.length && row.noOptions"
-              class="wftab-note wftab-quiet"
-              :data-testid="`wftab-no-replacement-${row.kind}`"
+          </template>
+        </SectionHeader>
+        <div v-if="!modelsCollapsed" class="wftab-body">
+          <!-- Every row below is a view of the unsaved changes, so none can be
+               changed until they are read. A read that failed says so here, with
+               the way to ask again. -->
+          <p
+            v-if="changesFailed"
+            id="wftab-changes-failed"
+            class="wftab-note wftab-quiet"
+            data-testid="wftab-changes-failed"
+          >
+            Could not read this workflow's unsaved changes just now, so its
+            models, stages and LoRAs cannot be changed.
+            <AppButton
+              size="sm"
+              variant="ghost"
+              data-testid="wftab-changes-retry"
+              @click="retryChanges"
             >
-              {{ row.noOptions }}
-            </p>
-            <!-- The saved value stays readable under a changed field, with
-                 the way back beside it. -->
-            <div v-if="row.edited" class="wftab-meta" data-testid="wftab-saved">
-              <span class="wftab-coverage wftab-quiet"
-                ><span
-                  v-if="row.fix"
-                  class="wftab-fix-mark"
-                  tabindex="0"
-                  :aria-label="`How ${row.name} was fixed`"
-                  data-testid="wftab-fix-mark"
-                  :data-note="autoFixNote(row.fix)"
-                  ><Tooltip :text="autoFixNote(row.fix)" activator="parent" /><v-icon
-                    size="16"
-                    aria-hidden="true"
-                    >mdi-auto-fix</v-icon
-                  ></span
-                ><span
-                  ><Tooltip :text="row.file" activator="parent" />{{
-                    row.fix ? "Corrected:" : "Saved:"
-                  }}
-                  {{ row.savedLabel }}</span
-                ></span
-              >
-              <AppButton
-                variant="ghost"
-                size="sm"
-                icon-only
-                icon-left="undo"
-                data-testid="wftab-reset-model"
-                :disabled="!canEdit"
-                :tooltip="`Put ${row.name} back to ${row.savedLabel}`"
-                @click="pickModel(row, '')"
-              />
-            </div>
-            <template v-if="row.kind === 'checkpoint' && row.first">
-              <!-- Show N (§1.5): only below the workflow's own count, which
-                   the head's link already shows. -->
-              <div
-                v-for="shown in checkpointShows"
-                :key="shown.name"
-                class="wftab-meta"
-              >
-                <span class="wftab-coverage wftab-quiet">{{
-                  checkpointShows.length > 1 ? shown.label : ""
-                }}</span>
-                <AppButton
-                  size="sm"
-                  variant="ghost"
-                  data-testid="wftab-show-checkpoint"
-                  :aria-label="showLabel(shown.pictures, shown.label)"
-                  @click="showValue('model', shown.name, shown.label)"
+              Retry
+            </AppButton>
+          </p>
+          <!-- The list card's `default_recipe` is null, so until the detail
+               lands there is no default to show. -->
+          <p v-if="detailPending" class="wftab-note wftab-quiet">
+            Reading its default recipe…
+          </p>
+          <p
+            v-else-if="detailFailed"
+            class="wftab-note wftab-quiet"
+            data-testid="wftab-recipe-failed"
+          >
+            Could not read its default recipe just now.
+            <AppButton
+              size="sm"
+              variant="ghost"
+              data-testid="wftab-recipe-retry"
+              @click="loadDetail(selectedKey)"
+            >
+              Retry
+            </AppButton>
+          </p>
+          <template v-if="detail">
+            <!-- One row per loader the default recipe names: its kind, then the
+                 file it loads. A missing file is amber, with what to do about it
+                 beneath. Changing the file is the set menu's, in the header. -->
+            <div
+              v-for="row in modelRows"
+              :key="row.address"
+              class="wftab-row"
+              :data-testid="`wftab-row-${row.kind}`"
+              :data-address="row.address"
+            >
+              <span class="wftab-row__label">{{ row.name }}</span>
+              <div class="wftab-row__value">
+                <span
+                  v-if="row.missing && !row.edited"
+                  class="wftab-warn"
+                  :class="{ 'wftab-coming': row.coming }"
                 >
-                  Show {{ shown.pictures }}
-                </AppButton>
-              </div>
-              <!-- The other checkpoints its pictures used: a disclosure, not
-                   a menu, because each is a row with its own Show N. -->
-              <button
-                v-if="otherCheckpoints.length"
-                type="button"
-                class="wftab-others"
-                data-testid="wftab-other-checkpoints"
-                aria-controls="wftab-other-checkpoints"
-                :aria-expanded="othersOpen ? 'true' : 'false'"
-                @click="othersOpen = !othersOpen"
-              >
-                <v-icon size="16" aria-hidden="true">{{
-                  othersOpen ? "mdi-chevron-down" : "mdi-chevron-right"
-                }}</v-icon>
-                +{{ otherCheckpoints.length }}
-                {{ otherCheckpoints.length === 1 ? "other" : "others" }}
-              </button>
-              <ul
-                v-if="othersOpen && otherCheckpoints.length"
-                id="wftab-other-checkpoints"
-                class="wftab-others-list"
-              >
-                <li v-for="other in otherCheckpoints" :key="other.name">
-                  <span class="wftab-others-name"
-                    ><Tooltip :text="other.name" activator="parent" />{{
-                      other.label
+                  <DownloadingMark
+                    v-if="row.coming"
+                    :percent="row.coming.percent"
+                  />
+                  <v-icon v-else size="14" aria-hidden="true"
+                    >mdi-alert-outline</v-icon
+                  >
+                  {{ row.missingText }}
+                </span>
+                <span v-else class="wftab-file"
+                  ><Tooltip v-if="row.file" :text="row.file" activator="parent" />{{
+                    row.savedLabel
+                  }}</span
+                >
+                <p
+                  v-if="row.missing && !row.edited"
+                  class="wftab-note wftab-quiet"
+                  data-testid="wftab-missing-file"
+                >
+                  <span class="wftab-file"
+                    ><Tooltip :text="row.missing" activator="parent" />{{
+                      modelLabel(fileName(row.missing))
                     }}</span
+                  >{{ missingNote(row.missing, row.kind) }}
+                </p>
+                <!-- What to do about it: download it, or replace it through
+                     the set menu where that menu can (a graph, a row that takes
+                     a pick). Neither, and the row offers nothing it cannot do. -->
+                <p
+                  v-if="
+                    row.missing &&
+                    !row.edited &&
+                    (downloadableFiles.has(row.missing) || setCanReplace(row))
+                  "
+                  class="wftab-note wftab-quiet"
+                  data-testid="wftab-missing-action"
+                >
+                  <template v-if="downloadableFiles.has(row.missing)"
+                    >Download it<ModelDownloadButton :file="row.missing"
+                  /></template>
+                  <template v-else>Change the model set to replace it.</template>
+                </p>
+                <p
+                  v-if="isAdding(row.missing)"
+                  class="wftab-note wftab-quiet wftab-adding"
+                  role="status"
+                  data-testid="wftab-adding"
+                >
+                  <v-progress-circular indeterminate size="12" width="2" />
+                  Found in your model folders. Adding it to your shelf…
+                </p>
+                <!-- What the shelf files this loader's model as, where every
+                     workflow loading it says it is this loader's kind (#1962). -->
+                <KindMenu
+                  v-if="row.offer"
+                  :file-kind="row.offer.file_kind"
+                  :kind-text="
+                    row.offer.copy
+                      ? `${modelLabel(fileName(row.offer.copy.filename))}: ${fileKindLabel(row.offer.file_kind)} on shelf`
+                      : `${fileKindLabel(row.offer.file_kind)} on shelf`
+                  "
+                  :subject="
+                    row.offer.copy
+                      ? modelLabel(fileName(row.offer.copy.filename))
+                      : row.savedLabel
+                  "
+                  :suggested-kind="row.offer.suggested_kind"
+                  :suggested-by="row.offer.suggested_by"
+                  :suggested-fields="row.offer.suggested_fields"
+                  :evidence-heading="
+                    row.offer.copy ? 'Named like the missing file' : undefined
+                  "
+                  :evidence-note="row.offer.copy ? copyNote(row) : ''"
+                  :adapter="false"
+                  @pick="(kind) => fileOffered(row, { file_kind: kind })"
+                  @suggest="(on) => fileOffered(row, { suggest_kind: on })"
+                />
+                <!-- The saved value stays readable under a changed row, with
+                     the way back beside it. -->
+                <div v-if="row.edited" class="wftab-meta" data-testid="wftab-saved">
+                  <span class="wftab-quiet"
+                    ><span
+                      v-if="row.fix"
+                      class="wftab-fix-mark"
+                      tabindex="0"
+                      :aria-label="`How ${row.name} was fixed`"
+                      data-testid="wftab-fix-mark"
+                      :data-note="autoFixNote(row.fix)"
+                      ><Tooltip :text="autoFixNote(row.fix)" activator="parent" /><v-icon
+                        size="14"
+                        aria-hidden="true"
+                        >mdi-auto-fix</v-icon
+                      ></span
+                    >{{ row.fix ? "Corrected:" : "Saved:" }}
+                    {{ row.savedLabel }}</span
                   >
                   <AppButton
-                    size="sm"
                     variant="ghost"
-                    :aria-label="showLabel(other.pictures, other.label)"
-                    @click="showValue('model', other.name, other.label)"
+                    size="sm"
+                    icon-only
+                    icon-left="undo"
+                    data-testid="wftab-reset-model"
+                    :disabled="!canEdit"
+                    :tooltip="`Put ${row.name} back to ${row.savedLabel}`"
+                    @click="pickModel(row, '')"
+                  />
+                </div>
+                <span
+                  v-if="row.yours || row.edited"
+                  class="wftab-yours"
+                  :class="{ 'wftab-yours--unsaved': row.edited }"
+                  :data-testid="row.edited ? 'wftab-edited' : undefined"
+                  >{{ row.edited ? (row.fix ? "Fixed" : "Edited") : "Yours" }}</span
+                >
+                <template v-if="row.kind === 'checkpoint' && row.first">
+                  <!-- Show N (§1.5): only below the workflow's own count. -->
+                  <div
+                    v-for="shown in checkpointShows"
+                    :key="shown.name"
+                    class="wftab-meta"
                   >
-                    Show {{ other.pictures }}
-                  </AppButton>
-                </li>
-              </ul>
-            </template>
-          </div>
-        </div>
-        <!-- No loader of the default recipe names a base model: what the
-             card and the graph a run submits say instead. Text, because there
-             is no loader address to write a pick to. -->
-        <div
-          v-if="!modelRows.some((row) => row.kind === 'checkpoint')"
-          class="wftab-field wftab-field--top"
-          data-testid="wftab-row-checkpoint"
-        >
-          <span class="wftab-labelcol">
-            <span class="wftab-label">{{
-              checkpointCount > 1 ? "Checkpoints" : "Checkpoint"
-            }}</span>
-          </span>
-          <div class="wftab-col wftab-model">
-            <!-- Missing: ComfyUI does not have the file (the run pre-flight's
-                 answer), or - when ComfyUI cannot be asked - the card has no
-                 name for it. Always with the FILE it is missing; the whole
-                 recorded value is the tooltip. -->
-            <template v-if="checkpointIsMissing">
-              <p class="wftab-warn">
-                <v-icon size="16">mdi-alert-outline</v-icon>
-                {{
-                  staleFiles.has(missingCheckpointFile)
-                    ? PACK_OUTDATED_TEXT
-                    : "Checkpoint missing"
-                }}
-              </p>
-              <p
-                v-if="missingCheckpointFile"
-                class="wftab-note wftab-quiet"
-                data-testid="wftab-missing-file"
-              >
-                <span class="wftab-file"
-                  ><Tooltip :text="missingCheckpointFile" activator="parent" />{{
-                    modelLabel(fileName(missingCheckpointFile))
+                    <span class="wftab-quiet">{{
+                      checkpointShows.length > 1 ? shown.label : ""
+                    }}</span>
+                    <AppButton
+                      size="sm"
+                      variant="ghost"
+                      data-testid="wftab-show-checkpoint"
+                      :aria-label="showLabel(shown.pictures, shown.label)"
+                      @click="showValue('model', shown.name, shown.label)"
+                    >
+                      Show {{ shown.pictures }}
+                    </AppButton>
+                  </div>
+                  <!-- The other checkpoints its pictures used: a disclosure. -->
+                  <button
+                    v-if="otherCheckpoints.length"
+                    type="button"
+                    class="wftab-others"
+                    data-testid="wftab-other-checkpoints"
+                    aria-controls="wftab-other-checkpoints"
+                    :aria-expanded="othersOpen ? 'true' : 'false'"
+                    @click="othersOpen = !othersOpen"
+                  >
+                    <v-icon size="14" aria-hidden="true">{{
+                      othersOpen ? "mdi-chevron-down" : "mdi-chevron-right"
+                    }}</v-icon>
+                    +{{ otherCheckpoints.length }}
+                    {{ otherCheckpoints.length === 1 ? "other" : "others" }}
+                  </button>
+                  <ul
+                    v-if="othersOpen && otherCheckpoints.length"
+                    id="wftab-other-checkpoints"
+                    class="wftab-others-list"
+                  >
+                    <li v-for="other in otherCheckpoints" :key="other.name">
+                      <span class="wftab-others-name"
+                        ><Tooltip :text="other.name" activator="parent" />{{
+                          other.label
+                        }}</span
+                      >
+                      <AppButton
+                        size="sm"
+                        variant="ghost"
+                        :aria-label="showLabel(other.pictures, other.label)"
+                        @click="showValue('model', other.name, other.label)"
+                      >
+                        Show {{ other.pictures }}
+                      </AppButton>
+                    </li>
+                  </ul>
+                </template>
+              </div>
+            </div>
+            <!-- No loader of the default recipe names a base model: what the
+                 card and the graph a run submits say instead. -->
+            <div
+              v-if="!modelRows.some((row) => row.kind === 'checkpoint')"
+              class="wftab-row"
+              data-testid="wftab-row-checkpoint"
+            >
+              <span class="wftab-row__label">{{
+                checkpointCount > 1 ? "Checkpoints" : "Checkpoint"
+              }}</span>
+              <div class="wftab-row__value">
+                <!-- Missing: ComfyUI does not have the file (the run pre-flight's
+                     answer), or the card has no name for it. -->
+                <template v-if="checkpointIsMissing">
+                  <span class="wftab-warn">
+                    <v-icon size="14" aria-hidden="true">mdi-alert-outline</v-icon>
+                    {{
+                      staleFiles.has(missingCheckpointFile)
+                        ? PACK_OUTDATED_TEXT
+                        : "Checkpoint missing"
+                    }}
+                  </span>
+                  <p
+                    v-if="missingCheckpointFile"
+                    class="wftab-note wftab-quiet"
+                    data-testid="wftab-missing-file"
+                  >
+                    <span class="wftab-file"
+                      ><Tooltip :text="missingCheckpointFile" activator="parent" />{{
+                        modelLabel(fileName(missingCheckpointFile))
+                      }}</span
+                    >{{ missingNote(missingCheckpointFile, "checkpoint") }}
+                  </p>
+                  <p v-else class="wftab-note wftab-quiet">
+                    No file name was kept for it anywhere.
+                  </p>
+                  <p
+                    v-if="downloadableFiles.has(missingCheckpointFile)"
+                    class="wftab-note wftab-quiet"
+                    data-testid="wftab-missing-action"
+                  >
+                    Download it<ModelDownloadButton :file="missingCheckpointFile" />
+                  </p>
+                  <p
+                    v-if="isAdding(missingCheckpointFile)"
+                    class="wftab-note wftab-quiet wftab-adding"
+                    role="status"
+                    data-testid="wftab-adding"
+                  >
+                    <v-progress-circular indeterminate size="12" width="2" />
+                    Found in your model folders. Adding it to your shelf…
+                  </p>
+                </template>
+                <span v-else-if="checkpointLabel" class="wftab-file">{{
+                  checkpointLabel
+                }}</span>
+                <!-- The card has no name for it, but the graph a run submits
+                     does: that is the file, installed as far as anybody knows. -->
+                <span v-else-if="graphBaseModel" class="wftab-file"
+                  ><Tooltip :text="graphBaseModels" activator="parent" />{{
+                    detail.graph_base_models
+                      .map((file) => modelLabel(fileName(file)))
+                      .join(" + ")
                   }}</span
-                >{{ missingNote(missingCheckpointFile, "checkpoint") }}
-              </p>
-              <p v-else class="wftab-note wftab-quiet">
-                No file name was kept for it anywhere.
-              </p>
-              <!-- After the v-else pair: between them it would take the else. -->
-              <p
-                v-if="downloadableFiles.has(missingCheckpointFile)"
-                class="wftab-note wftab-quiet"
-                data-testid="wftab-missing-action"
-              >
-                Download it<ModelDownloadButton :file="missingCheckpointFile" />
-              </p>
-              <p
-                v-if="isAdding(missingCheckpointFile)"
-                class="wftab-note wftab-quiet wftab-adding"
-                role="status"
-                data-testid="wftab-adding"
-              >
-                <v-progress-circular indeterminate size="12" width="2" />
-                Found in your model folders. Adding it to your shelf…
-              </p>
-            </template>
-            <span v-else-if="checkpointLabel" class="wftab-value">{{
-              checkpointLabel
-            }}</span>
-            <!-- The card has no name for it, but the graph a run submits
-                 does: that is the file, installed as far as anybody knows. -->
-            <span v-else-if="graphBaseModel" class="wftab-value"
-              ><Tooltip :text="graphBaseModels" activator="parent" />{{
-                detail.graph_base_models
-                  .map((file) => modelLabel(fileName(file)))
-                  .join(" + ")
-              }}</span
+                >
+                <!-- The graph loads no base model: an upscaler, say. -->
+                <span v-else-if="graphLoadsNone" class="wftab-quiet">
+                  None in this workflow
+                </span>
+                <!-- A recipe-less card's rows are what its file gave up. -->
+                <span v-else-if="checkpointIsUnread" class="wftab-quiet">
+                  Not read from its file
+                </span>
+                <span v-else class="wftab-quiet">Not recorded</span>
+              </div>
+            </div>
+            <div
+              v-if="!modelRows.some((row) => row.kind === 'vae')"
+              class="wftab-row"
+              data-testid="wftab-row-vae"
             >
-            <!-- The graph a run would submit was read and loads no base
-                 model: an upscaler, say. A fact, so it is said as one. -->
-            <span v-else-if="graphLoadsNone" class="wftab-value wftab-quiet">
-              None in this workflow
-            </span>
-            <!-- A recipe-less card's rows are what its file gave up, so an
-                 empty one is "not read", never a claim that it has none. -->
-            <span v-else-if="checkpointIsUnread" class="wftab-value wftab-quiet">
-              Not read from its file
-            </span>
-            <!-- Only when nothing anywhere names a base model: not the card,
-                 not the graph a run would submit, not the pre-flight. -->
-            <span v-else class="wftab-value wftab-quiet">Not recorded</span>
-          </div>
-        </div>
-        <div
-          v-if="!modelRows.some((row) => row.kind === 'vae')"
-          class="wftab-field"
-          data-testid="wftab-row-vae"
-        >
-          <span class="wftab-label">VAE</span>
-          <span class="wftab-value">From the checkpoint</span>
-        </div>
+              <span class="wftab-row__label">VAE</span>
+              <span class="wftab-row__value wftab-quiet">From the checkpoint</span>
+            </div>
 
-        <!-- Each optional stage of the base graph, and whether the workflow
-             runs it. A toggle joins the unsaved changes. Absent when the
-             graph has none. -->
-        <div
-          v-if="stageRows.length"
-          class="wftab-field wftab-field--top"
-          role="group"
-          aria-label="Stages"
-          data-testid="wftab-stages"
-        >
-          <span class="wftab-labelcol">
-            <span class="wftab-label">Stages</span>
-            <span
-              v-if="stageRows.some((stage) => stage.edited)"
-              class="wftab-yours wftab-yours--unsaved"
-              data-testid="wftab-stages-edited"
-              >Edited</span
+            <!-- Each optional stage of the base graph, as text: a stage the
+                 workflow runs is plain, one it does not is struck through. The
+                 name is a toggle (aria-pressed); a change joins the unsaved
+                 changes. -->
+            <div
+              v-if="stageRows.length"
+              class="wftab-row"
+              role="group"
+              aria-label="Stages"
+              data-testid="wftab-stages"
             >
-          </span>
-          <div class="wftab-checks">
-            <label
-              v-for="stage in stageRows"
-              :key="stage.key"
-              class="wftab-check"
+              <span class="wftab-row__label">Stages</span>
+              <div class="wftab-row__value wftab-stages">
+                <button
+                  v-for="stage in stageRows"
+                  :key="stage.key"
+                  type="button"
+                  class="wftab-stage"
+                  :class="{ 'wftab-stage--off': !stage.on }"
+                  :aria-pressed="stage.on ? 'true' : 'false'"
+                  :disabled="!canEdit"
+                  :data-testid="`wftab-stage-${stage.key}`"
+                  @click="toggleStage(stage, !stage.on)"
+                >
+                  <Tooltip
+                    v-if="stage.detail"
+                    :text="stage.detail"
+                    activator="parent"
+                  />
+                  {{ stage.label }}
+                </button>
+                <span
+                  v-if="stageRows.some((stage) => stage.edited)"
+                  class="wftab-yours wftab-yours--unsaved"
+                  data-testid="wftab-stages-edited"
+                  >Edited</span
+                >
+              </div>
+            </div>
+            <p
+              v-if="stageVoteNote"
+              class="wftab-note wftab-quiet"
+              data-testid="wftab-stage-note"
             >
-              <Tooltip
-                v-if="stage.detail"
-                :text="stage.detail"
-                activator="parent"
-              />
-              <input
-                type="checkbox"
-                :checked="stage.on"
-                :disabled="!canEdit"
-                :data-testid="`wftab-stage-${stage.key}`"
-                @change="toggleStage(stage, $event.target.checked)"
-              />
-              {{ stage.label }}
-            </label>
-          </div>
+              Off: most of its pictures ran without it.
+            </p>
+          </template>
         </div>
-        <p
-          v-if="stageVoteNote"
-          class="wftab-note wftab-quiet"
-          data-testid="wftab-stage-note"
-        >
-          Off: most of its pictures ran without it.
-        </p>
-        </template>
       </section>
 
-      <!-- The default recipe's LoRAs and the ones its pictures used besides,
-           as one family with two kinds of member. "Edit LoRAs…" is in the
-           head, beside what it edits, and is here even with no loader at all:
-           an entry point that only exists for workflows that already have
-           LoRAs is how adding the first one stays unreachable (#1478). -->
-      <section ref="loraPanel" class="wftab-panel" data-testid="wftab-loras">
-        <div class="wftab-sec-head">
-          <span
-            ref="defaultHeading"
-            class="section-label"
-            role="heading"
-            aria-level="3"
-            tabindex="-1"
-            >LoRAs</span
-          >
-          <AppButton
-            ref="editLorasButton"
-            size="sm"
-            variant="ghost"
-            data-testid="wftab-edit-loras"
-            :disabled="chainNoGraph"
-            :aria-describedby="chainNoGraph ? 'wftab-chain-reason' : undefined"
-            @click="openEditLoras(selectedKey)"
-          >
-            Edit LoRAs…
-          </AppButton>
-        </div>
-        <template v-if="detail">
-        <!-- The default recipe's LoRAs, in the order the chain applies them.
-             One that is not in every picture says how many it is in; one in
-             every picture says nothing, and that silence means "all". A
-             LoRA is here or in Also used, never both. -->
-        <div
-          v-for="(lora, index) in loraRows"
-          :key="lora.id"
-          class="wftab-field wftab-field--top"
-          data-testid="wftab-default-lora"
-          :data-slot="lora.slotKey || undefined"
+      <!-- The default recipe's LoRAs, read here; Edit LoRAs is the pencil in the
+           header, and is here even with no loader at all (#1478). Also used
+           is the pictures' own LoRAs the default does not load. -->
+      <section
+        ref="lorasSection"
+        class="inspector-section wftab-sec"
+        data-testid="wftab-loras"
+      >
+        <SectionHeader
+          v-model:collapsed="lorasCollapsed"
+          label="LoRAs"
+          :count="detail ? loraRows.filter((lora) => !lora.removed).length : null"
         >
-          <span class="wftab-labelcol">
-            <span v-if="!index" class="wftab-label">Default</span>
-            <span
-              v-if="lora.removed"
-              class="wftab-yours wftab-yours--unsaved"
-              data-testid="wftab-lora-removed"
-              >Removed</span
+          <template #actions>
+            <AppButton
+              ref="editLorasButton"
+              size="sm"
+              variant="ghost"
+              icon-only
+              icon-left="pencil"
+              tooltip="Edit LoRAs"
+              aria-label="Edit LoRAs"
+              data-testid="wftab-edit-loras"
+              :disabled="chainNoGraph"
+              :aria-describedby="chainNoGraph ? 'wftab-chain-reason' : undefined"
+              @click="openLorasDialog"
+            />
+          </template>
+        </SectionHeader>
+        <div v-if="!lorasCollapsed" class="wftab-body">
+          <template v-if="detail">
+            <!-- The default recipe's LoRAs, in the order the chain applies them:
+                 name, then strength. One that is not in every picture says how
+                 many it is in. -->
+            <div
+              v-for="lora in loraRows"
+              :key="lora.id"
+              class="wftab-row wftab-row--pair"
+              data-testid="wftab-default-lora"
+              :data-slot="lora.slotKey || undefined"
             >
-            <span
-              v-else-if="lora.strengthEdited"
-              class="wftab-yours wftab-yours--unsaved"
-              data-testid="wftab-lora-edited"
-              >Edited</span
-            >
-            <span v-else-if="lora.edited" class="wftab-yours">Yours</span>
-          </span>
-          <div class="wftab-col">
-            <!-- Removed, until the save: the row stays, struck through, with
-                 the way back where the × was. -->
-            <span
-              v-if="lora.removed"
-              class="wftab-value wftab-lora-value wftab-lora-gone"
-            >
-              <s class="wftab-chain-name"
-                ><Tooltip v-if="lora.file" :text="lora.file" activator="parent" />{{
-                  lora.label
-                }}</s
-              >
-              <AppButton
-                size="sm"
-                variant="ghost"
-                data-testid="wftab-lora-put-back"
-                :disabled="!canEdit"
-                :aria-label="`Put ${lora.label} back`"
-                @click="setLoraRemoved(lora, false)"
-              >
-                Put back
-              </AppButton>
-            </span>
-            <span v-else class="wftab-value wftab-lora-value">
-              <v-icon
-                v-if="!lora.on_shelf || lora.leftOut"
-                size="16"
-                class="wftab-chain-flag"
-                aria-hidden="true"
-                >mdi-alert-outline</v-icon
-              >
-              <span class="wftab-chain-name"
-                ><Tooltip v-if="lora.file" :text="lora.file" activator="parent" />{{
-                  lora.label
-                }}</span
-              >
+              <span class="wftab-lora-name" :class="{ 'wftab-gone': lora.removed }">
+                <Tooltip v-if="lora.file" :text="lora.file" activator="parent" />
+                <v-icon
+                  v-if="!lora.on_shelf || lora.leftOut"
+                  size="14"
+                  class="wftab-chain-flag"
+                  aria-hidden="true"
+                  >mdi-alert-outline</v-icon
+                >
+                {{ lora.label }}
+                <span v-if="lora.coverage" class="wftab-quiet wftab-coverage">
+                  {{ lora.coverage }}
+                </span>
+              </span>
               <span v-if="!lora.on_shelf" class="visually-hidden"
                 >, not on your model shelf</span
               >
@@ -770,64 +638,21 @@
                 class="wftab-lora-download"
                 :file="lora.file"
               />
-              <!-- The strength is edited where it is read. Only a loader the
-                   graph has, holding a LoRA the shelf knows, can be named in
-                   a change; any other keeps its strength as text. A
-                   component, so an answer landing while a number is half
-                   typed does not put the row's back. -->
-              <WorkflowStrengthInput
-                v-if="lora.canStrength"
-                class="wftab-strength"
-                step="0.05"
-                min="-10"
-                max="10"
-                :value="lora.strengthValue"
-                :disabled="!canEdit"
-                :aria-label="`Strength of ${lora.label}`"
-                data-testid="wftab-lora-strength"
-                @change="(raw, field) => setLoraStrength(lora, raw, field)"
-              />
-              <span v-else-if="lora.strengthText" class="wftab-chain-strength">{{
-                lora.strengthText
-              }}</span>
+              <span class="wftab-row__value wftab-num">
+                <span v-if="lora.removed" data-testid="wftab-lora-removed"
+                  >Removed</span
+                >
+                <template v-else>{{
+                  lora.canStrength ? lora.strengthValue : lora.strengthText
+                }}</template>
+                <span
+                  v-if="lora.edited && !lora.removed && !lora.strengthEdited"
+                  class="wftab-yours"
+                  >Yours</span
+                >
+              </span>
               <AppButton
-                v-if="lora.slot"
-                variant="ghost"
-                size="sm"
-                icon-only
-                icon-left="close"
-                data-testid="wftab-lora-remove"
-                :disabled="!canEdit"
-                :tooltip="`Remove ${lora.label}`"
-                @click="setLoraRemoved(lora, true)"
-              />
-            </span>
-            <div
-              v-if="lora.strengthEdited && !lora.removed"
-              class="wftab-meta"
-              data-testid="wftab-lora-saved"
-            >
-              <span class="wftab-coverage wftab-quiet"
-                >Saved: {{ lora.savedStrengthText }}</span
-              >
-              <AppButton
-                variant="ghost"
-                size="sm"
-                icon-only
-                icon-left="undo"
-                data-testid="wftab-reset-strength"
-                :disabled="!canEdit"
-                :tooltip="`Put the strength of ${lora.label} back to ${lora.savedStrengthText}`"
-                @click="setLoraStrength(lora, lora.savedStrength)"
-              />
-            </div>
-            <div
-              v-if="!lora.removed && (lora.coverage || lora.show)"
-              class="wftab-meta"
-            >
-              <span class="wftab-coverage wftab-quiet">{{ lora.coverage }}</span>
-              <AppButton
-                v-if="lora.show"
+                v-if="lora.show && !lora.removed"
                 size="sm"
                 variant="ghost"
                 :aria-label="showLabel(lora.show.pictures, lora.label)"
@@ -836,107 +661,182 @@
                 Show {{ lora.show.pictures }}
               </AppButton>
             </div>
-          </div>
+          </template>
+          <p v-if="usingChain && chainPending" class="wftab-note wftab-quiet">
+            Reading its LoRAs…
+          </p>
+          <p
+            v-else-if="chainNoGraph"
+            id="wftab-chain-reason"
+            class="wftab-note wftab-quiet"
+          >
+            PixlStash has no graph for this workflow, so its LoRAs cannot be read
+            or changed.
+          </p>
+          <p v-else-if="usingChain && chainFailed" class="wftab-note wftab-quiet">
+            Could not read its LoRAs just now.
+          </p>
+          <p
+            v-else-if="loraNote"
+            class="wftab-note wftab-quiet"
+            data-testid="wftab-shared-note"
+          >
+            {{ loraNote }}
+          </p>
+          <p
+            v-else-if="chain && !chainLoaders.length"
+            class="wftab-note wftab-quiet"
+          >
+            No LoRA loader. Editing adds the first one.
+          </p>
+          <!-- The LoRAs its pictures used that the default recipe does not load:
+               Also used, with Show N and Add. Absent, not empty, when none. -->
+          <template v-if="alsoUsed.length || summaryFailed">
+            <div v-if="alsoUsed.length" class="wftab-sub" data-testid="wftab-changes">
+              <span class="wftab-sublabel">Also used</span>
+              <WorkflowLoraPile
+                :summary="pileSummary"
+                :adding="busy.startsWith('default-lora:') ? busy.slice(13) : ''"
+                @show="showLora"
+                @add-default="addLoraToDefault"
+              />
+            </div>
+            <p v-else class="wftab-note wftab-quiet" data-testid="wftab-changes">
+              Could not read which LoRAs change between pictures just now.
+            </p>
+          </template>
         </div>
-        </template>
-        <p v-if="usingChain && chainPending" class="wftab-note wftab-quiet">
-          Reading its LoRAs…
-        </p>
-        <p
-          v-else-if="chainNoGraph"
-          id="wftab-chain-reason"
-          class="wftab-note wftab-quiet"
-        >
-          PixlStash has no graph for this workflow, so its LoRAs cannot be read
-          or changed.
-        </p>
-        <p v-else-if="usingChain && chainFailed" class="wftab-note wftab-quiet">
-          Could not read its LoRAs just now.
-        </p>
-        <p
-          v-else-if="loraNote"
-          class="wftab-note wftab-quiet"
-          data-testid="wftab-shared-note"
-        >
-          {{ loraNote }}
-        </p>
-        <p
-          v-else-if="chain && !chainLoaders.length"
-          class="wftab-note wftab-quiet"
-        >
-          No LoRA loader. Editing adds the first one.
-        </p>
-        <!-- The LoRAs its pictures used that the default recipe does not
-             load, as one pile under a hairline. Absent, not empty, when there
-             are none. -->
-        <template v-if="alsoUsed.length || summaryFailed">
-          <div class="wftab-rule" aria-hidden="true"></div>
-          <div v-if="alsoUsed.length" class="wftab-field" data-testid="wftab-changes">
-            <span class="wftab-label">Also used</span>
-            <WorkflowLoraPile
-              :summary="pileSummary"
-              :adding="busy.startsWith('default-lora:') ? busy.slice(13) : ''"
-              @show="showLora"
-              @add-default="addLoraToDefault"
-            />
-          </div>
-          <p v-if="alsoUsed.length" class="wftab-note wftab-quiet">
-            {{ pileNote }}
-          </p>
-          <p v-else class="wftab-note wftab-quiet" data-testid="wftab-changes">
-            Could not read which LoRAs change between pictures just now.
-          </p>
-        </template>
       </section>
 
-      <!-- GPU memory (VRAM orchestration) as two lines: the label beside a
-           sparkline of the newest peaks and the need, then what the need rests
-           on beside the run-alone switch. Read from the detail, so it waits
-           for it like the rest of the panel. -->
+      <!-- Parameters: the "Set each run" values read here, the pinned ones folded
+           behind their count. The pencil opens every parameter, grouped by node,
+           to change how each is set. -->
+      <section
+        class="inspector-section wftab-sec"
+        data-testid="wftab-parameters"
+      >
+        <SectionHeader
+          v-model:collapsed="paramsCollapsed"
+          label="Parameters"
+          :count="defaults.length || null"
+        >
+          <template #actions>
+            <AppButton
+              v-if="detail"
+              ref="editParamsButton"
+              size="sm"
+              variant="ghost"
+              icon-only
+              icon-left="pencil"
+              tooltip="Edit parameters"
+              aria-label="Edit parameters"
+              data-testid="wftab-edit-params"
+              @click="openParamsDialog"
+            />
+          </template>
+        </SectionHeader>
+        <div v-if="!paramsCollapsed" class="wftab-body">
+          <p
+            v-if="detailPending || (formHeld && defaults.length)"
+            class="wftab-note wftab-quiet"
+          >
+            Reading its parameters…
+          </p>
+          <p v-else-if="detailFailed" class="wftab-note wftab-quiet">
+            Could not read its parameters just now.
+          </p>
+          <template v-else-if="defaults.length">
+            <div v-if="runDefaults.length" class="wftab-kvs">
+              <p class="wftab-sublabel">Set each run</p>
+              <div
+                v-for="row in runDefaults"
+                :key="row.label"
+                class="wftab-row wftab-row--pair"
+                data-testid="wftab-param-run"
+              >
+                <span class="wftab-lora-name">{{ parameterTitle(row) }}</span>
+                <span class="wftab-row__value wftab-num">{{ row.value }}</span>
+              </div>
+            </div>
+            <details
+              v-if="fixedDefaults.length"
+              class="wftab-disclose"
+              data-testid="wftab-fixed-group"
+            >
+              <summary class="wftab-sublabel">
+                Pinned
+                <span class="wftab-count">{{ fixedDefaults.length }}</span>
+              </summary>
+              <div
+                v-for="row in fixedDefaults"
+                :key="row.label"
+                class="wftab-row wftab-row--pair"
+              >
+                <span class="wftab-lora-name">{{ parameterTitle(row) }}</span>
+                <span class="wftab-row__value wftab-num">{{ row.value }}</span>
+              </div>
+              <p class="wftab-note wftab-quiet">
+                Pinned values are used by every run.
+              </p>
+            </details>
+          </template>
+          <p
+            v-else-if="editorOnly"
+            class="wftab-note wftab-quiet"
+            data-testid="wftab-editor-only"
+          >
+            Parameters are not available yet: PixlStash could not convert this
+            ComfyUI workflow. Open it in ComfyUI from here and it is converted
+            there.
+          </p>
+          <p v-else class="wftab-note wftab-quiet">
+            Nothing this workflow made records a setting yet, so it has no
+            defaults to start from.
+          </p>
+        </div>
+      </section>
+
+      <!-- GPU memory (VRAM orchestration): the newest peaks as a 20px bar graph,
+           the need in the header, what the need rests on with Reset, and the Run
+           alone switch on its own row. Read from the detail, so it waits for it. -->
       <section
         v-if="gpu"
-        class="wftab-panel"
+        class="inspector-section wftab-sec"
         data-testid="wftab-gpu"
       >
-        <div class="wftab-gpu-line">
-          <span class="section-label" role="heading" aria-level="3">GPU memory</span>
-          <span class="wftab-gpu-answer">
+        <SectionHeader
+          v-model:collapsed="gpuCollapsed"
+          label="GPU memory"
+          :count="gpu.need_mb == null ? 'Not measured yet' : formatGb(gpu.need_mb)"
+        />
+        <div v-if="!gpuCollapsed" class="wftab-body">
+          <div
+            v-if="gpuBars.length"
+            class="wftab-peaks"
+            role="list"
+            aria-label="Measured peaks, oldest to newest"
+            data-testid="wftab-gpu-peaks"
+          >
             <span
-              v-if="gpuBars.length"
-              class="wftab-peaks"
-              role="list"
-              aria-label="Measured peaks, oldest to newest"
-              data-testid="wftab-gpu-peaks"
-            >
-              <span
-                v-for="(bar, index) in gpuBars"
-                :key="index"
-                role="listitem"
-                class="wftab-peak"
-                :class="{
-                  'wftab-peak--used': bar.used,
-                  'wftab-peak--oom': bar.outcome === 'oom',
-                }"
-                :style="{ height: `${bar.pct}%` }"
-                :aria-label="peakLabel(bar)"
-                ><Tooltip :text="peakLabel(bar)" activator="parent"
-              /></span>
-            </span>
-            <span
-              :class="gpu.need_mb == null ? 'wftab-note wftab-quiet' : 'wftab-gpu-need'"
-              data-testid="wftab-gpu-need"
-            >
-              {{ gpu.need_mb == null ? "Not measured yet" : formatGb(gpu.need_mb) }}
-            </span>
-          </span>
-        </div>
-        <div class="wftab-gpu-line">
-          <span class="wftab-gpu-answer">
+              v-for="(bar, index) in gpuBars"
+              :key="index"
+              role="listitem"
+              class="wftab-peak"
+              :class="{
+                'wftab-peak--used': bar.used,
+                'wftab-peak--oom': bar.outcome === 'oom',
+              }"
+              :style="{ height: `${Math.max(bar.pct, 6)}%` }"
+              :aria-label="peakLabel(bar)"
+              ><Tooltip :text="peakLabel(bar)" activator="parent"
+            /></span>
+          </div>
+          <div class="wftab-gpu-basis">
             <span class="wftab-note wftab-quiet" data-testid="wftab-gpu-basis">
               {{ gpuBasis }}
             </span>
-            <!-- Forgets the measured peaks: what a run on a picture far
-                 larger than usual leaves every later run waiting for. -->
+            <!-- Forgets the measured peaks: what a run on a picture far larger
+                 than usual leaves every later run waiting for. -->
             <AppButton
               v-if="gpu.peaks?.length"
               size="sm"
@@ -948,9 +848,9 @@
             >
               Reset
             </AppButton>
-          </span>
-          <!-- A label, so its text flips the switch too, and the tip opens on
-               the switch's focus as well as on hover. -->
+          </div>
+          <!-- A label, so its text flips the switch too, and the tip opens on the
+               switch's focus as well as on hover. -->
           <label class="wftab-gpu-alone">
             <Tooltip :text="RUN_ALONE_TIP" activator="parent" />
             <span class="wftab-gpu-tip">Run alone</span>
@@ -964,145 +864,74 @@
               @click="setExclusive(!gpu.exclusive)"
             ></button>
           </label>
+          <!-- Only while the backend has it on after running out of memory:
+               switching it off clears it, switching it on by hand never shows it. -->
+          <p
+            v-if="gpu.exclusive && gpu.exclusive_source === 'oom' && gpu.exclusive_at"
+            class="wftab-gpu-warn"
+            data-testid="wftab-gpu-oom"
+          >
+            <Tooltip text="Its last 3 runs ran out of GPU memory." activator="parent" />
+            <v-icon size="12">mdi-alert-outline</v-icon>
+            <span>Switched on {{ dayMonth(gpu.exclusive_at) }} after running out of memory</span>
+          </p>
         </div>
-        <!-- Only while the backend has it on after running out of memory:
-             switching it off clears it, switching it on by hand never shows
-             it. Never wraps. -->
-        <p
-          v-if="gpu.exclusive && gpu.exclusive_source === 'oom' && gpu.exclusive_at"
-          class="wftab-gpu-warn"
-          data-testid="wftab-gpu-oom"
-        >
-          <Tooltip text="Its last 3 runs ran out of GPU memory." activator="parent" />
-          <v-icon size="12">mdi-alert-outline</v-icon>
-          <span>Switched on {{ dayMonth(gpu.exclusive_at) }} after running out of memory</span>
-        </p>
       </section>
 
-      <!-- Each parameter is set each run (asked for by the Run form) or fixed
-           (every run uses the workflow's value; a recipe and an API or MCP
-           override still win). Grouped by what it was when the workflow was
-           opened, so a toggled row stays under the pointer and moves next
-           time. -->
-      <section class="wftab-panel" data-testid="wftab-parameters">
-        <div class="wftab-sec-head">
-          <span class="section-label" role="heading" aria-level="3"
-            >Parameters</span
+      <!-- Latest pictures: the workflow's newest ten, and Show all for the rest. -->
+      <section
+        class="inspector-section wftab-sec"
+        data-testid="wftab-latest"
+      >
+        <SectionHeader
+          v-model:collapsed="latestCollapsed"
+          label="Latest pictures"
+          :count="card.picture_count || 0"
+        >
+          <template #actions>
+            <AppButton
+              v-if="card.picture_count"
+              size="sm"
+              variant="ghost"
+              data-testid="wftab-show-pictures"
+              :aria-label="`Show all ${picturesLabel}`"
+              @click="showPictures(card)"
+            >
+              Show all
+            </AppButton>
+          </template>
+        </SectionHeader>
+        <div v-if="!latestCollapsed" class="wftab-body">
+          <div
+            v-if="latest.length"
+            class="wftab-thumbs"
+            data-testid="wftab-latest-grid"
           >
-          <!-- Any other setting of the graph's nodes, picked by node and made
-               a row here. Offered once the detail is in: the write it ends in
-               is whole-set, built from the rows on screen. -->
-          <AppButton
-            v-if="detail"
-            size="sm"
-            variant="ghost"
-            icon-only
-            icon-left="plus"
-            tooltip="Expose a parameter…"
-            :loading="busy === 'expose'"
-            data-testid="wftab-expose"
-            @click="exposeOpen = true"
-          />
-        </div>
-        <p
-          v-if="detailPending || (formHeld && defaults.length)"
-          class="wftab-note wftab-quiet"
-        >
-          Reading its parameters…
-        </p>
-        <p v-else-if="detailFailed" class="wftab-note wftab-quiet">
-          Could not read its parameters just now.
-        </p>
-        <template v-else-if="defaults.length">
-          <template v-if="runDefaults.length">
-            <p class="wftab-sublabel">Set each run</p>
-            <WorkflowDefaultRow
-              v-for="row in runDefaults"
-              :key="row.label"
-              :row="row"
-              :busy="busy === `default:${row.label}`"
-              :options="choicesFor(formOptions, row)"
-              :node="nodeOf(row)"
-              @toggle-pin="togglePin(row)"
-              @reset="writeDefault(row)"
-              @edit="(value) => writeDefault(row, { value })"
+            <img
+              v-for="picture in latest"
+              :key="picture.id"
+              class="wftab-thumb"
+              :src="pictureThumbnailUrl(picture.id)"
+              alt=""
+              loading="lazy"
             />
-          </template>
-          <template v-if="fixedDefaults.length">
-            <div
-              v-if="runDefaults.length"
-              class="wftab-rule"
-              aria-hidden="true"
-            ></div>
-            <!-- The group is one element, label, rows and note, so "in the
-                 Pinned group" is containment rather than document order. -->
-            <div class="wftab-rows" data-testid="wftab-fixed-group">
-              <!-- More than three fixed rows fold away behind their count. -->
-              <details
-                v-if="fixedDefaults.length > FIXED_SHOWN"
-                class="wftab-disclose"
-              >
-                <summary class="wftab-sublabel">
-                  Pinned
-                  <span class="wftab-count">{{ fixedDefaults.length }}</span>
-                </summary>
-                <div class="wftab-rows">
-                  <WorkflowDefaultRow
-                    v-for="row in fixedDefaults"
-                    :key="row.label"
-                    :row="row"
-                    :busy="busy === `default:${row.label}`"
-                    :options="choicesFor(formOptions, row)"
-                    :node="nodeOf(row)"
-                    @toggle-pin="togglePin(row)"
-                    @reset="writeDefault(row)"
-                    @edit="(value) => writeDefault(row, { value })"
-                  />
-                </div>
-              </details>
-              <template v-else>
-                <p class="wftab-sublabel">
-                  Pinned
-                  <span class="wftab-count">{{ fixedDefaults.length }}</span>
-                </p>
-                <WorkflowDefaultRow
-                  v-for="row in fixedDefaults"
-                  :key="row.label"
-                  :row="row"
-                  :busy="busy === `default:${row.label}`"
-                  :options="choicesFor(formOptions, row)"
-                  :node="nodeOf(row)"
-                  @toggle-pin="togglePin(row)"
-                  @reset="writeDefault(row)"
-                  @edit="(value) => writeDefault(row, { value })"
-                />
-              </template>
-              <p class="wftab-note wftab-quiet">
-                Pinned values are used by every run.
-              </p>
-            </div>
-          </template>
-        </template>
-        <p
-          v-else-if="editorOnly"
-          class="wftab-note wftab-quiet"
-          data-testid="wftab-editor-only"
-        >
-          Parameters are not available yet: PixlStash could not convert this
-          ComfyUI workflow. Open it in ComfyUI from here and it is converted
-          there.
-        </p>
-        <p v-else class="wftab-note wftab-quiet">
-          Nothing this workflow made records a setting yet, so it has no
-          defaults to start from.
-        </p>
+          </div>
+          <p v-else-if="latestPending" class="wftab-note wftab-quiet">
+            Reading its pictures…
+          </p>
+          <p v-else-if="latestFailed" class="wftab-note wftab-quiet">
+            Could not read its pictures just now.
+          </p>
+          <p v-else-if="!card.picture_count" class="wftab-note wftab-quiet">
+            Nothing made yet.
+          </p>
+          <!-- Counted, yet none came back: binned since, or in another
+               library. Said, so the section does not read as broken. -->
+          <p v-else class="wftab-note wftab-quiet">No pictures to show here.</p>
+        </div>
       </section>
     </template>
 
-    <!-- The inspector's footer slot sits below the scrolling body, so Run…
-         stays where the design puts it and never scrolls. -->
-    <!-- The Workflow tab's, and only its: Recipes runs a recipe from its own
-         row and Tasks is the app's business, so neither wants this footer. -->
     <template #footer>
       <!-- The first change is said once, politely, and focus stays on the row
            that made it. Outside the bar, so it is in the page before its
@@ -1252,6 +1081,7 @@
           @click="run"
         >
           {{ changeCount && !multiple ? "Run with changes…" : "Run…" }}
+          <kbd class="wftab-key" aria-hidden="true">R</kbd>
         </AppButton>
         <!-- Beside Run…, as the ComfyUI mark: the ComfyUI-PixlStash node reads
              `?pixlstash_workflow=` and loads the graph, so without the node
@@ -1267,6 +1097,7 @@
              the line below says which of the three. -->
         <AppButton
           v-if="canOpenComfyui"
+          class="wftab-open"
           icon-only
           :tooltip="comfyuiOpensACopy ? 'Open a copy in ComfyUI' : 'Open in ComfyUI'"
           data-testid="wftab-open-comfyui"
@@ -1381,6 +1212,33 @@
     <!-- Keyed to the card it was OPENED on, not to the selection: a save
          selects the new card, and the dialog must not re-read the chain of
          the card it just wrote under the owner's feet. -->
+    <WorkflowLorasDialog
+      v-if="lorasOpen"
+      :open="lorasOpen"
+      :subtitle="card?.name || ''"
+      :rows="loraRows"
+      :can-edit="canEdit"
+      :chain-no-graph="chainNoGraph"
+      @close="closeLorasDialog"
+      @strength="(lora, raw, field) => setLoraStrength(lora, raw, field)"
+      @remove="(lora, removed) => setLoraRemoved(lora, removed)"
+      @reset-strength="(lora) => setLoraStrength(lora, lora.savedStrength)"
+      @chain="openChainEditor"
+    />
+    <WorkflowParamsDialog
+      v-if="paramsOpen"
+      :open="paramsOpen"
+      :subtitle="card?.name || ''"
+      :rows="paramRows"
+      :busy="busy"
+      :expose-busy="busy === 'expose'"
+      :reading="Boolean(detailPending || (formHeld && defaults.length))"
+      @close="closeParamsDialog"
+      @toggle-pin="(row) => togglePin(row)"
+      @reset="(row) => writeDefault(row)"
+      @edit="(row, value) => writeDefault(row, { value })"
+      @expose="exposeOpen = true"
+    />
     <EditLorasDialog
       v-if="editKey"
       :open="Boolean(editKey)"
@@ -1454,6 +1312,7 @@ import {
   useComfyuiOpen,
 } from "../../composables/useComfyuiOpen";
 import { pickUpKey, useModelPickUp } from "../../composables/useModelPickUp";
+import { useSectionCollapse } from "../../composables/useSectionCollapse";
 import { useWorkflowPictures } from "../../composables/useWorkflowPictures";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
@@ -1470,6 +1329,7 @@ import {
   loraStem,
 } from "../../utils/loraChain";
 import { editModels } from "../../api/modelShelf";
+import { pictureThumbnailUrl, streamPictures } from "../../api/pictures";
 import { fileKindLabel, quantBadge } from "../../utils/modelShelf";
 import {
   MODELS_DOWNLOADING,
@@ -1485,19 +1345,14 @@ import {
   baseModels,
   checkpointUnread,
   modelDisplayName,
-  NO_REPLACEMENT_TEXT,
   outputCount,
-  replacementLabel,
-  UNMATCHED_REPLACEMENTS_TEXT,
-  REPLACEMENT_VERDICTS,
-  verdictLine,
-  verdictOptions,
 } from "../../utils/workflowCard";
 import {
   choicesFor,
   nodesByAddress,
   optionsByAddress,
   parameterAddress,
+  parameterTitle,
   setEachRun,
 } from "../../utils/workflowPins";
 import { slotOf, whole } from "../../utils/workflowChanges";
@@ -1517,26 +1372,21 @@ import {
 } from "../../utils/workflowEdits";
 import AppButton from "../widgets/AppButton.vue";
 import AppInspector from "../widgets/AppInspector.vue";
-import AppSelect from "../widgets/AppSelect.vue";
-import BreakableTitle from "../widgets/BreakableTitle.vue";
 import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
+import SectionHeader from "../widgets/SectionHeader.vue";
 import EditLorasDialog from "../io/EditLorasDialog.vue";
 import KindMenu from "../widgets/KindMenu.vue";
 import DownloadingMark from "../widgets/DownloadingMark.vue";
 import ModelDownloadButton from "../widgets/ModelDownloadButton.vue";
 import ExposeParameterDialog from "../io/ExposeParameterDialog.vue";
-import TasksPanel, { tasksTabFor } from "./TasksPanel.vue";
 import Tooltip from "../widgets/Tooltip.vue";
-import WorkflowDefaultRow from "./WorkflowDefaultRow.vue";
 import WorkflowStarChart from "./WorkflowStarChart.vue";
 import WorkflowLoraPile from "./WorkflowLoraPile.vue";
 import WorkflowRecipesTab from "./WorkflowRecipesTab.vue";
-import WorkflowStrengthInput from "./WorkflowStrengthInput.vue";
+import WorkflowLorasDialog from "./WorkflowLorasDialog.vue";
+import WorkflowParamsDialog from "./WorkflowParamsDialog.vue";
 import WorkflowUseSetMenu from "./WorkflowUseSetMenu.vue";
 import WorkflowVersionMenu from "./WorkflowVersionMenu.vue";
-
-/** Past this many, the Pinned group folds away behind "Pinned N". */
-const FIXED_SHOWN = 3;
 
 const store = useWorkflowsStore();
 const { showPictures, showLoraPictures, showValuePictures } =
@@ -1556,15 +1406,6 @@ const route = useRoute();
 const router = useRouter();
 
 const tab = ref("workflow");
-// A deep link to the Tasks tab, from a notice or a banner (`showTasksTab`).
-// This rail is the one a run is usually started from, so it is the one the
-// toast's *Show* has to land on.
-watch(
-  () => sidebarStore.tasksTabRequest,
-  () => {
-    tab.value = "tasks";
-  },
-);
 // A double-click on a card that opened this rail (`showCardInInspector`).
 watch(
   () => sidebarStore.cardTabRequest,
@@ -1591,22 +1432,24 @@ watch(
   { immediate: true },
 );
 
-// Tasks last, and never anything but last: it is the app's business, not this
-// workflow's.
+// The rail's own Tasks tab went with the Workflows rail (#2165). A notice's
+// "show me" lands on the title bar's Tasks pill, which is on every screen, so a
+// deep link to the task manager still has somewhere to go.
+watch(
+  () => sidebarStore.tasksTabRequest,
+  () => {
+    sidebarStore.tasksPillRequest += 1;
+  },
+);
+
 /**
- * Recipes first, as the design bands them; Workflow is still the tab a
- * selection opens on, because it is the one that says what the card IS; and
- * Tasks last, and never anything but last, because it is the app's business
- * and not this workflow's.
- *
- * Recipes answers for a selection of several too — the union of their recipes —
- * so it is never disabled. The Workflow tab is the one with nothing to say
- * about several cards at once.
+ * Workflow first: the tab a selection opens on, because it is the one that says
+ * what the card IS. Recipes answers for a selection of several too (the union
+ * of their recipes), so it is never disabled.
  */
 const tabs = computed(() => [
-  { value: "recipes", label: "Recipes", icon: "mdi-bookmark-outline" },
   { value: "workflow", label: "Workflow", icon: "mdi-sitemap-outline" },
-  tasksTabFor(tasksStore),
+  { value: "recipes", label: "Recipes", icon: "mdi-bookmark-outline" },
 ]);
 
 /** The detail of the selected card, and whether its read is still out. */
@@ -1688,6 +1531,134 @@ const recipesName = computed(() =>
 // Split from its prefix so the figure alone is F7's *Show all N pictures*
 // link, and the words that place the card stay text.
 const picturesLabel = computed(() => outputCount(card.value));
+
+/** The rail's head: the view's name, the one workflow's, or how many are selected. */
+const headTitle = computed(() => {
+  if (multiple.value) return `${store.selectedKeys.length} workflows`;
+  if (card.value) return card.value.name || "Untitled workflow";
+  return store.viewName ?? "All workflows";
+});
+
+/**
+ * The star histogram's six bars: the unrated pictures, then 1★ to 5★. The card
+ * carries the rated counts; unrated is what its picture count leaves over.
+ */
+const histogram = computed(() => {
+  const rated = ratingCounts.value ?? [0, 0, 0, 0, 0];
+  const ratedSum = rated.reduce((sum, count) => sum + (count || 0), 0);
+  const unrated = Math.max(
+    0,
+    (Number(card.value?.picture_count) || 0) - ratedSum,
+  );
+  return [unrated, ...rated];
+});
+
+// The rail's sections keep their own collapsed state, apart from any other
+// inspector that names a section the same.
+const RAIL = { scope: "workflow" };
+const modelsCollapsed = useSectionCollapse("models", RAIL);
+const lorasCollapsed = useSectionCollapse("loras", RAIL);
+const paramsCollapsed = useSectionCollapse("parameters", RAIL);
+const gpuCollapsed = useSectionCollapse("gpu", RAIL);
+const latestCollapsed = useSectionCollapse("latest", RAIL);
+
+const modelsPanel = ref(null);
+const editParamsButton = ref(null);
+
+/** Edit LoRAs and Edit parameters: each dialog open or shut. */
+const lorasOpen = ref(false);
+const paramsOpen = ref(false);
+
+/** An overlay opened from code drops focus to the page: it goes back to its opener. */
+async function restoreFocus(opener) {
+  await nextTick();
+  const active = document.activeElement;
+  if (!active || active === document.body) opener.value?.focus?.();
+}
+
+function openLorasDialog() {
+  lorasOpen.value = true;
+}
+
+async function closeLorasDialog() {
+  lorasOpen.value = false;
+  await restoreFocus(editLorasButton);
+}
+
+/** Add a LoRA or reorder the chain: the chain editor, which writes at once. */
+function openChainEditor() {
+  lorasOpen.value = false;
+  openEditLoras(selectedKey.value);
+}
+
+function openParamsDialog() {
+  paramsOpen.value = true;
+}
+
+async function closeParamsDialog() {
+  paramsOpen.value = false;
+  await restoreFocus(editParamsButton);
+}
+
+/** Every parameter the dialog offers, with the node it sets and its choices. */
+const paramRows = computed(() =>
+  defaults.value.map((row) => ({
+    row,
+    node: nodeOf(row),
+    options: choicesFor(formOptions.value, row),
+  })),
+);
+
+/** The newest pictures the Latest pictures section shows. */
+const LATEST_SHOWN = 10;
+const latest = ref([]);
+const latestFailed = ref(false);
+const latestPending = ref(false);
+let latestRead = 0;
+let latestKey = null;
+
+/**
+ * The workflow's newest pictures: the stream with its own filter, newest first.
+ * Each read is checked against the one that started after it, so an answer for
+ * a workflow the rail no longer shows is dropped.
+ */
+async function loadLatest(key) {
+  const ask = ++latestRead;
+  // Another workflow: its predecessor's thumbnails must not stand in for its
+  // own while the read is out. The same one re-read keeps what it shows.
+  if (key !== latestKey) {
+    latestKey = key;
+    latest.value = [];
+    latestFailed.value = false;
+  }
+  if (!key) {
+    latestPending.value = false;
+    return;
+  }
+  latestPending.value = true;
+  try {
+    const body = await streamPictures(
+      `workflow=${encodeURIComponent(key)}&sort=DATE&descending=true`,
+      { offset: 0, batchLimit: LATEST_SHOWN },
+    );
+    if (ask !== latestRead) return;
+    latest.value = (body?.pictures ?? []).slice(0, LATEST_SHOWN);
+    latestFailed.value = false;
+  } catch (err) {
+    if (ask !== latestRead) return;
+    latest.value = [];
+    latestFailed.value = true;
+    console.warn(`[workflows] could not read the latest pictures of ${key}`, err);
+  } finally {
+    if (ask === latestRead) latestPending.value = false;
+  }
+}
+
+watch(
+  [selectedKey, () => card.value?.picture_count],
+  ([key]) => loadLatest(key),
+  { immediate: true },
+);
 
 /**
  * The versions kept of a workflow, as `GET …/versions` answered, with the
@@ -1957,7 +1928,8 @@ const missingCheckpointFile = computed(
  * `GET …/model-swap?replacing=` per model row, keyed `kind:file`: the shelf
  * models that go with the workflow's checkpoint and that the file's loader
  * can load (`replacements`), and why there are none (`replacements_reason`).
- * Read for every row, missing or not: each is a picker (#1850).
+ * Read for every row, missing or not: the answer feeds a missing row's
+ * automatic fix and every row's kind offer, not a list to pick from (#2165).
  */
 const replacementsByFile = ref({});
 
@@ -1987,39 +1959,11 @@ function settable(model) {
   return !String(model.address ?? "").endsWith("/checkpoint_id");
 }
 
-/** A candidate's name alone, for a row whose chips say the rest. */
-function shownName(model) {
-  return model.display_name || modelLabel(fileName(model.filename));
-}
-
-/** A candidate as a picker option names it: never a bare filename. */
-function candidateLabel(model) {
-  return replacementLabel({
-    ...model,
-    filename: modelLabel(fileName(model.filename)),
-  });
-}
-
-/** Why a missing file's row has nothing to pick, or "". */
-function noReplacementText(kind, answer) {
-  if (!answer || answer.replacements?.length) return "";
-  const reason = answer.replacements_reason;
-  if (kind !== "checkpoint") return NO_REPLACEMENT_TEXT[reason] ?? "";
-  if (reason === "none_loadable")
-    return "No checkpoint on your shelf that could replace it is one this loader can load.";
-  return ["none_go_with_it", "unread"].includes(reason)
-    ? NO_REPLACEMENT_TEXT[reason]
-    : "Nothing on your shelf can replace it.";
-}
-
 /**
- * The model rows: one per loader the default recipe names, each a picker
- * where the shelf has something its loader can take.
+ * The model rows: one per loader the default recipe names, read-only (#2165).
  *
- * `pick` is the file waiting, unsaved, at that loader's address; the saved
- * file is the picker's first option, so choosing it takes the change back out
- * of the set. A pick the candidates do not list (one a model set filled in) is
- * listed too, or the field would read as saved while the row says Edited.
+ * `pick` is the file waiting, unsaved, at that loader's address: the likely
+ * match the tab picked itself, or what a model set filled in.
  */
 const rowModels = computed(() =>
   (recipeModels.value ?? []).filter(
@@ -2077,27 +2021,15 @@ const modelRows = computed(() => {
     const answer = canPick
       ? replacementsByFile.value[`${model.kind}:${file}`]
       : null;
+    // The candidates feed the automatic fix and the kind offer; the rows no
+    // longer offer them as a list to pick from.
     const candidates = (answer?.replacements ?? []).filter(
       (candidate) => !sameFile(candidate.filename, file),
     );
     const pick = canPick ? modelPick(waiting.value, model.address) : null;
-    const coming = comingOptions(spec, canPick ? file : null);
-    const extraPick =
-      pick &&
-      !candidates.some((candidate) => candidate.filename === pick) &&
-      !coming.some((option) => option.value === pick);
     // The row's own file on its way: said so, not "missing".
-    // A row's kind is its set slot's id (checkpoint, vae, text_encoder).
     const goneComing = gone
       ? tasksStore.runningDownload({ file: gone, slot: model.kind })
-      : null;
-    // A missing file's candidates filed under how likely each is to run it,
-    // where the server gave them a verdict; the file itself is no option.
-    const grouped =
-      Boolean(gone) && candidates.some((candidate) => candidate.verdict);
-    const target = grouped ? answer?.replacing_base_model || "" : "";
-    const picked = pick
-      ? candidates.find((candidate) => candidate.filename === pick)
       : null;
     const savedLabel =
       canPick && file !== model.filename
@@ -2106,13 +2038,8 @@ const modelRows = computed(() => {
     return {
       address: model.address,
       kind: model.kind,
-      // "Checkpoints" over a pair (Wan 2.2 high + low): one label for the
-      // rows of a kind, and which loader is which is not claimed.
-      heading:
-        several && model.kind === "checkpoint" ? "Checkpoints" : spec.heading,
       first: nth === 1,
-      // Said in full where the label column cannot: two of a kind share one
-      // visible label, and a picker's name has to tell them apart.
+      // Two of a kind (a Wan 2.2 pair) say which one they are.
       name: several ? `${spec.heading} ${nth}` : spec.heading,
       settable: canPick,
       file,
@@ -2128,70 +2055,12 @@ const modelRows = computed(() => {
         : staleFiles.value.has(gone)
           ? PACK_OUTDATED_TEXT
           : spec.missingText,
-      unmatched:
-        model.kind === "checkpoint" &&
-        candidates.length > 0 &&
-        !(grouped && target) &&
-        answer?.replacements_narrowed === false,
-      grouped,
-      target,
-      likelyCount: candidates.filter((c) => c.verdict === "likely").length,
-      verdictLine: grouped ? verdictLine(picked, target) : "",
-      verdictTone: REPLACEMENT_VERDICTS[picked?.verdict]?.tone ?? "",
-      verdictIcon: REPLACEMENT_VERDICTS[picked?.verdict]?.icon ?? "",
-      options: grouped
-        ? [
-            ...verdictOptions(candidates, target, shownName),
-            ...(extraPick
-              ? [{ value: pick, label: modelLabel(fileName(pick)) }]
-              : []),
-            ...coming,
-          ]
-        : candidates.length || pick || coming.length
-          ? [
-              // A missing file is no choice: said, or it reads as picked.
-              { value: "", label: gone ? `${savedLabel} (missing)` : savedLabel },
-              ...candidates.map((candidate) => ({
-                value: candidate.filename,
-                label: candidateLabel(candidate),
-              })),
-              ...(extraPick
-                ? [{ value: pick, label: modelLabel(fileName(pick)) }]
-                : []),
-              ...coming,
-            ]
-          : [],
-      noOptions: noReplacementText(model.kind, answer),
       // Only on the file the loader still loads: a replacement is a shelf
       // model of the loader's own kind already.
       offer: kindOfferFor(model, canPick, file, gone, pick, answer),
     };
   });
 });
-
-/**
- * The models on their way that a row's loader could take, as picker options:
- * every running download for a folder of the row's kind, but the row's own
- * file. Picked, it is an ordinary unsaved change; a run of it is refused,
- * loudly, until it has landed (`models_downloading`).
- *
- * Under one "Downloading" heading wearing the animated mark, which each
- * carries so the field keeps it beside a pick.
- */
-function comingOptions(spec, file) {
-  if (file === null) return [];
-  return tasksStore.runningDownloads
-    .filter((d) => spec.folders.has(d.directory) && !sameFile(d.file, file))
-    .map((d) => ({
-      value: d.file,
-      label: `${modelLabel(d.file)} (downloading)`,
-      name: modelLabel(d.file),
-      group: "Downloading",
-      groupIcon: "download",
-      groupDownloading: true,
-      groupNote: "runs once it has landed",
-    }));
-}
 
 /**
  * The shelf's kind offer on a model row (#1962), or null.
@@ -2325,7 +2194,7 @@ async function refocusRow(address) {
   await nextTick();
   // This tab's own Models panel: another panel on the page may draw the
   // same address.
-  const panel = modelsHeading.value?.closest("section");
+  const panel = modelsPanel.value;
   const rowEl = [...(panel?.querySelectorAll("[data-address]") ?? [])].find(
     (el) => el.dataset.address === address,
   );
@@ -2384,6 +2253,15 @@ function autoFixNote(fix) {
 /** Pick a file for a model row; the saved one ("") takes the change back. */
 function pickModel(row, file) {
   return edit((set) => withModel(set, row.address, file, row.file));
+}
+
+/**
+ * Whether *Change model set…* can replace this row's file: the card has a
+ * graph, and the row takes a pick (a shelf loader's does not). Not whether the
+ * rows are settled right now: that passes, and the note would flicker with it.
+ */
+function setCanReplace(row) {
+  return row.settable && !chainNoGraph.value;
 }
 
 /**
@@ -2961,15 +2839,6 @@ const pileSummary = computed(() => ({
     : null,
 }));
 
-const pileNote = computed(() => {
-  const rest = alsoUsed.value.length - 1;
-  const top = pileSummary.value.cover_asset
-    ? "On top: the cover picture's LoRA."
-    : "On top: the LoRA most pictures used.";
-  if (!rest) return `${top} Open it to see its pictures.`;
-  return `${top} Open the pile to see the other ${rest === 1 ? "one" : rest}.`;
-});
-
 /** A *Show N*'s accessible name, as the pile's own says it. */
 function showLabel(count, value) {
   return `Show the ${pictureCount(count)} in ${
@@ -3393,12 +3262,11 @@ async function loadChanges(key) {
  * Retry takes its own button away once the read is in, so focus goes to the
  * heading of the rows it unlocked, never to the page.
  */
-const modelsHeading = ref(null);
 async function retryChanges() {
   await loadChanges(selectedKey.value);
   await nextTick();
   const active = document.activeElement;
-  if (!active || active === document.body) modelsHeading.value?.focus();
+  if (!active || active === document.body) modelsPanel.value?.querySelector("button")?.focus();
 }
 
 /**
@@ -3471,27 +3339,13 @@ function toggleStage(stage, on) {
   return edit((set) => withStage(set, stage.key, on, stage.saved));
 }
 
-/** The LoRA panel: where a removed row's *Put back* and × are found. */
-const loraPanel = ref(null);
-
 /**
- * Remove a loader, or put it back. The control pressed leaves with the row's
- * state, so focus goes to the one that took its place: *Put back* after ×,
- * × after *Put back*.
+ * Remove a loader, or put it back: an unsaved change at once, from the Edit
+ * LoRAs dialog.
  */
-async function setLoraRemoved(lora, removed) {
-  if (!lora.slot) return;
-  const done = edit((set) => withLoraRemoved(set, lora.slot, removed));
-  await nextTick();
-  const row = [...(loraPanel.value?.querySelectorAll("[data-slot]") ?? [])].find(
-    (entry) => entry.dataset.slot === lora.slotKey,
-  );
-  row
-    ?.querySelector(
-      `[data-testid="${removed ? "wftab-lora-put-back" : "wftab-lora-remove"}"]`,
-    )
-    ?.focus();
-  await done;
+function setLoraRemoved(lora, removed) {
+  if (!lora.slot) return undefined;
+  return edit((set) => withLoraRemoved(set, lora.slot, removed));
 }
 
 /**
@@ -4225,8 +4079,8 @@ function sameLora(lora, use) {
   );
 }
 
-/** The LoRAs heading: where focus goes when the last pile row leaves. */
-const defaultHeading = ref(null);
+/** The LoRAs section: its chevron takes focus when the last pile row leaves. */
+const lorasSection = ref(null);
 
 /**
  * *Add to default* on a pile row (#1653): the LoRA joins the default recipe,
@@ -4254,7 +4108,7 @@ function addLoraToDefault(row) {
       detail.value = body;
       if (!alsoUsed.value.length) {
         await nextTick();
-        defaultHeading.value?.focus();
+        lorasSection.value?.querySelector(".section-head__chevron")?.focus();
       }
     }
     notices.push({
@@ -4880,7 +4734,6 @@ async function checkInstalled(key, { quiet = false } = {}) {
   replacementsByFile.value = found;
 }
 </script>
-
 <style scoped>
 .wftab-empty,
 .wftab-note {
@@ -4944,10 +4797,6 @@ async function checkInstalled(key, { quiet = false } = {}) {
   color: rgb(var(--v-theme-primary));
 }
 
-.wftab-head {
-  gap: var(--space-2);
-}
-
 /* The Workflow tab's body pads --space-4, not the inspector's --space-3, so no
    panel touches the rail edge; the 12px between panels is a clearly bigger
    step than the 8px between rows inside one. Only this tab: the stats charts
@@ -4986,36 +4835,12 @@ async function checkInstalled(key, { quiet = false } = {}) {
   overflow-wrap: anywhere;
 }
 
-/* One hairline between the two kinds of member of a group: Default and Also
-   used, Set each run and Pinned. */
-.wftab-rule {
-  height: 1px;
-  margin: var(--space-1) 0;
-  background: rgb(var(--v-theme-divider));
-}
-
-/* The GPU memory panel's two lines: a label or basis on the left, the
-   answer or the switch on the right. */
-.wftab-gpu-line {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  min-height: var(--control-h-sm);
-}
-
 .wftab-gpu-answer,
 .wftab-gpu-alone {
   display: flex;
   align-items: center;
   gap: var(--space-3);
   white-space: nowrap;
-}
-
-.wftab-gpu-need {
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
-  font-variant-numeric: tabular-nums;
 }
 
 .wftab-gpu-alone {
@@ -5037,12 +4862,14 @@ async function checkInstalled(key, { quiet = false } = {}) {
   display: flex;
   align-items: flex-end;
   gap: var(--space-1);
-  height: 14px;
+  height: 20px;
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
 }
 
 /* Square: the smallest radius token is wider than the bar. */
 .wftab-peak {
-  width: 3px;
+  flex: 1;
+  min-width: 0;
   min-height: var(--space-1);
   background: rgba(var(--v-theme-on-surface), 0.22);
 }
@@ -5145,42 +4972,6 @@ async function checkInstalled(key, { quiet = false } = {}) {
   line-height: 1;
 }
 
-.wftab-rows {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-/* The label column is --space-9, which "Checkpoint" fits at --text-xs.
-   `minmax(0, 1fr)`, not `1fr`: a bare `1fr` track grows to its longest
-   unbreakable word, and a file name then scrolls the whole inspector
-   sideways. */
-.wftab-field {
-  display: grid;
-  grid-template-columns: var(--space-9) minmax(0, 1fr);
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.wftab-label {
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-}
-
-/* A row whose value column can grow below its field (a meta line, the
-   Checkpoint row's other checkpoints): the label stays level with the field,
-   not centred on the whole column. */
-.wftab-field--top {
-  align-items: start;
-}
-
-.wftab-labelcol {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  min-height: var(--control-h);
-}
-
 /* "Yours": the one exception mark, a step above the label through weight and
    full ink, never hue; the same as `WorkflowDefaultRow`'s (design §2.1). */
 .wftab-yours {
@@ -5210,21 +5001,6 @@ async function checkInstalled(key, { quiet = false } = {}) {
   vertical-align: text-bottom;
   margin-right: var(--space-2);
   border-radius: var(--radius-sm);
-}
-
-/* Why a missing checkpoint's list is every checkpoint: the fix mark's shape,
-   trailing its sentence. */
-.wftab-info-mark {
-  display: inline-flex;
-  vertical-align: text-bottom;
-  margin-left: var(--space-2);
-  border-radius: var(--radius-sm);
-}
-
-.wftab-col {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
 }
 
 /* Coverage on the left, Show N on the right, under the field, so the name
@@ -5280,63 +5056,9 @@ async function checkInstalled(key, { quiet = false } = {}) {
   font-size: var(--text-sm);
 }
 
-.wftab-value {
-  display: flex;
-  align-items: center;
-  min-height: var(--control-h);
-  padding: 0 var(--space-3);
-  border: 1px solid rgb(var(--v-theme-divider));
-  border-radius: var(--radius-sm);
-  background: rgba(var(--v-theme-on-surface), 0.06);
-  font-size: var(--text-sm);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* A panel's label with its verb on the right. The ghost verb is pulled out
-   by its own padding, so its TEXT, not its hit area, lines up with the
-   fields' edge. */
-.wftab-sec-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  min-height: var(--control-h-sm);
-  margin-right: calc(-1 * var(--space-3));
-}
-
-.wftab-sec-head > .section-label {
-  min-width: 0;
-}
-
-.wftab-lora-value {
-  gap: var(--space-2);
-}
-
 .wftab-chain-flag {
   flex-shrink: 0;
   color: rgb(var(--v-theme-surface-warning));
-}
-
-.wftab-chain-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.wftab-chain-strength {
-  font-variant-numeric: tabular-nums;
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-}
-
-/* A missing file's name is often one long word: break it anywhere rather
-   than let it run past the column. */
-.wftab-model {
-  gap: var(--space-2);
-  overflow-wrap: anywhere;
 }
 
 /* The hue drawn as text, so the surface variant: the fill is 2.1:1 on the
@@ -5345,40 +5067,6 @@ async function checkInstalled(key, { quiet = false } = {}) {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-}
-
-.wftab-strong {
-  font-weight: var(--weight-medium);
-  color: rgb(var(--v-theme-on-surface));
-}
-
-/* A picked candidate's verdict, in its group's words: the hue on the mark. */
-.wftab-verdict {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-2);
-  margin: var(--space-3) 0 0;
-  font-size: var(--text-xs);
-  line-height: var(--leading-body);
-}
-.wftab-none-likely {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  margin-top: var(--space-3);
-  font-size: var(--text-sm);
-}
-.wftab-tone--success {
-  color: rgb(var(--v-theme-surface-success));
-}
-.wftab-tone--warning {
-  color: rgb(var(--v-theme-surface-warning));
-}
-.wftab-tone--error {
-  color: rgb(var(--v-theme-surface-error));
-}
-.wftab-tone--info {
-  color: rgb(var(--v-theme-surface-info));
 }
 
 .wftab-warn {
@@ -5514,67 +5202,6 @@ async function checkInstalled(key, { quiet = false } = {}) {
   padding: 0 var(--space-3);
 }
 
-/* A strength in its row: wide enough for "-0.85", right-aligned so the
-   figures of a column of rows line up. */
-.wftab-strength {
-  flex-shrink: 0;
-  width: var(--space-8);
-  height: var(--control-h-sm);
-  padding: 0 var(--space-2);
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-  appearance: textfield;
-}
-.wftab-strength::-webkit-inner-spin-button,
-.wftab-strength::-webkit-outer-spin-button {
-  appearance: none;
-}
-
-/* A loader that waits to be removed: its field recedes and its name is
-   struck, with Put back where the × was. */
-.wftab-lora-gone {
-  border-style: dashed;
-  background: none;
-}
-.wftab-lora-gone > s {
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-}
-
-/* The × and Put back sit in the field: pulled to its edge by the field's
-   own padding. */
-.wftab-lora-value > .app-btn {
-  flex-shrink: 0;
-  margin-right: calc(-1 * var(--space-2));
-}
-
-/* Beside the name, not at the row's end: the row's gap is its spacing. */
-.wftab-lora-value > .wftab-lora-download {
-  margin: 0;
-}
-
-.wftab-checks {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  padding-top: var(--space-2);
-}
-
-.wftab-check {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-3);
-  min-height: var(--control-h-sm);
-  font-size: var(--text-sm);
-  cursor: pointer;
-}
-
-.wftab-check > input {
-  width: var(--gutter-glyph);
-  height: var(--gutter-glyph);
-  margin: 0;
-  accent-color: rgb(var(--v-theme-primary));
-}
-
 .wftab-foot > :first-child {
   flex: 1;
 }
@@ -5601,5 +5228,194 @@ async function checkInstalled(key, { quiet = false } = {}) {
 
 .wftab-item:hover {
   background: var(--hover-wash);
+}
+
+/* The rail's head title: one line, ellipsised; the whole of it is in the tip. */
+.wftab-rail-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+}
+
+.wftab-clear {
+  flex: none;
+}
+
+/* A section's body, under its header. Rows are the rail's xs scale. */
+.wftab-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* A label and its value. The label keeps a fixed column; the value wraps. */
+.wftab-row {
+  display: grid;
+  grid-template-columns: minmax(0, 6.5rem) minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  min-width: 0;
+  font-size: var(--text-xs);
+}
+
+.wftab-row__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.wftab-row__value {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* A name and a value on one line: a LoRA's strength, a pinned parameter. */
+.wftab-row--pair {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.wftab-lora-name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-xs);
+}
+
+.wftab-gone {
+  text-decoration: line-through;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.wftab-num {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.wftab-file {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.wftab-kvs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.wftab-version {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+/* "Also used": the sub-list under the default's LoRAs, under a hairline. */
+.wftab-sub {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid rgb(var(--v-theme-divider));
+}
+
+/* Stages as text: each a toggle, an off one struck through. */
+.wftab-stages {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+}
+
+.wftab-stage {
+  min-height: var(--control-h-sm);
+  padding: 0 var(--space-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  font: inherit;
+  font-size: var(--text-xs);
+  color: rgb(var(--v-theme-on-surface));
+  cursor: pointer;
+}
+
+.wftab-stage:hover:not(:disabled) {
+  background: var(--hover-wash);
+}
+
+.wftab-stage--off {
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  text-decoration: line-through;
+}
+
+.wftab-stage:focus-visible {
+  outline: var(--focus-width) solid var(--focus-stroke);
+  outline-offset: 1px;
+}
+
+.wftab-stage:disabled {
+  opacity: var(--opacity-disabled);
+  cursor: default;
+}
+
+.wftab-gpu-basis {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* Latest pictures: five across, square, the rail's own radius. */
+.wftab-thumbs {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--space-1);
+}
+
+.wftab-thumb {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  background: rgba(var(--v-theme-on-surface), 0.06);
+}
+
+/* The Run… keycap: the letter in a small bordered box, dimmed to the button's
+   own ink. */
+.wftab-key {
+  display: inline-block;
+  min-width: var(--space-4);
+  margin-left: var(--space-2);
+  padding: 0 var(--space-1);
+  border: 1px solid currentColor;
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: var(--text-2xs);
+  line-height: var(--space-4);
+  text-align: center;
+  opacity: var(--opacity-text-secondary);
+}
+
+/* Open in ComfyUI: a bordered square, the shelf's own icon-button edge. */
+.wftab-open {
+  border: 1px solid rgb(var(--v-theme-divider));
 }
 </style>

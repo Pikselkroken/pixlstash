@@ -1,0 +1,388 @@
+// The Workflows workspace's own rail (#2165): the places, the ComfyUI
+// templates with their "N new" pill, the Type and Base model facets, and the
+// footer's Add workflow. The thing that can silently go wrong is which state a
+// row writes: a place must clear the facets and leave Templates, and the pill
+// must count what was not seen, not what is listed.
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
+import { createPinia, setActivePinia } from "pinia";
+
+const listWorkflowCards = vi.fn();
+vi.mock("../../api/workflows", () => ({
+  listWorkflowCards: (...args) => listWorkflowCards(...args),
+  getWorkflowCard: vi.fn(),
+  workflowCoverUrl: (cover) => cover?.url ?? "",
+}));
+
+const listTemplates = vi.fn();
+const addTemplates = vi.fn();
+vi.mock("../../api/comfyui", () => ({
+  listTemplates: (...args) => listTemplates(...args),
+  addTemplates: (...args) => addTemplates(...args),
+}));
+
+import WorkflowsSidebar from "./WorkflowsSidebar.vue";
+import { useWorkflowsStore, RECENT_DAYS } from "../../stores/useWorkflowsStore";
+import { useWorkflowTemplatesStore } from "../../stores/useWorkflowTemplatesStore";
+
+const DAY = 24 * 60 * 60 * 1000;
+const daysAgo = (days) => new Date(Date.now() - days * DAY).toISOString();
+
+function card(overrides = {}) {
+  return {
+    id: "auto:" + "a".repeat(64),
+    name: "Cinematic portrait",
+    type: "txt2img",
+    type_label: "Text to Image",
+    imported: false,
+    models: [{ name: "realvisXL_v5.safetensors", kind: "checkpoint" }],
+    loras: [],
+    picture_count: 3,
+    rating: 4,
+    covers: [],
+    saved_recipe_count: 0,
+    defaults: [],
+    base_topology: "d".repeat(64),
+    topologies: ["d".repeat(64)],
+    variant_count: 1,
+    last_used: null,
+    rank: 4,
+    ghosts: 0,
+    model_ghosts: 0,
+    origin_category: "pictures",
+    ...overrides,
+  };
+}
+
+const CARDS = [
+  card({
+    id: "auto:1",
+    name: "Portrait",
+    type: "txt2img",
+    type_label: "Text to Image",
+    models: [{ name: "realvisXL_v5.safetensors", kind: "checkpoint" }],
+    last_used: daysAgo(2),
+  }),
+  card({
+    id: "auto:2",
+    name: "Upscale pass",
+    type: "upscale",
+    type_label: "Upscale",
+    models: [{ name: "flux1-dev.safetensors", kind: "checkpoint" }],
+    last_used: daysAgo(RECENT_DAYS + 30),
+  }),
+  card({
+    id: "auto:3",
+    name: "Sketch",
+    type: "txt2img",
+    type_label: "Text to Image",
+    models: [{ name: "flux1-dev.safetensors", kind: "checkpoint" }],
+    last_used: null,
+  }),
+];
+
+const template = (name) => ({
+  key: `default/${name}`,
+  module: "default",
+  name,
+  source: "builtin",
+  title: name,
+  media_type: "image",
+  tags: [],
+  model_names: [],
+  files: [],
+});
+
+function listing(names, extra = {}) {
+  return { comfyui_url: "http://comfy", reachable: true, templates: names.map(template), ...extra };
+}
+
+const LABEL_KEY = "pixlstash:workflowTemplatesSeen";
+
+async function mountSidebar() {
+  const pinia = createPinia();
+  setActivePinia(pinia);
+  const store = useWorkflowsStore();
+  const templates = useWorkflowTemplatesStore();
+  await store.fetchCards();
+  const wrapper = mount(WorkflowsSidebar, {
+    global: { plugins: [pinia], stubs: { "v-icon": true } },
+    attachTo: document.body,
+  });
+  await flushPromises();
+  return { wrapper, store, templates };
+}
+
+/** The button whose label is `label` (the row's text, count excluded). */
+function row(wrapper, label) {
+  const found = wrapper
+    .findAll("button")
+    .find((button) => button.find(".wfs-row__label").exists() && button.find(".wfs-row__label").text() === label);
+  if (!found) throw new Error(`no row ${label}`);
+  return found;
+}
+
+function templatesRow(wrapper) {
+  return wrapper.findAll("button").find((button) => button.text().startsWith("Templates"));
+}
+
+// Every rail a test mounts (attached to the document) is taken down after it,
+// so no test's rail, or its watchers, outlives it into the next.
+enableAutoUnmount(afterEach);
+
+beforeEach(() => {
+  localStorage.clear();
+  listWorkflowCards.mockReset();
+  listWorkflowCards.mockResolvedValue({ cards: CARDS, one_offs: 0, hidden: 0 });
+  listTemplates.mockReset();
+  listTemplates.mockResolvedValue(listing(["a", "b"]));
+  addTemplates.mockReset();
+});
+
+describe("places", () => {
+  it("lights All workflows at rest, and counts every card read", async () => {
+    const { wrapper } = await mountSidebar();
+    const all = row(wrapper, "All workflows");
+    expect(all.attributes("aria-current")).toBe("page");
+    expect(all.classes()).toContain("wfs-row--lit");
+    expect(all.find(".wfs-row__count").text()).toBe("3");
+  });
+
+  it("picking Favourites sets the filter and lights only that row", async () => {
+    const { wrapper, store } = await mountSidebar();
+    await row(wrapper, "Favourites").trigger("click");
+    expect(store.filters.favouritesOnly).toBe(true);
+    expect(store.place).toBe("favourites");
+    expect(row(wrapper, "Favourites").attributes("aria-current")).toBe("page");
+    expect(row(wrapper, "All workflows").attributes("aria-current")).toBeUndefined();
+
+    // The place is the only control for the flag now, so it must also turn it off.
+    await row(wrapper, "All workflows").trigger("click");
+    expect(store.filters.favouritesOnly).toBe(false);
+    expect(row(wrapper, "Favourites").attributes("aria-current")).toBeUndefined();
+  });
+
+  it("Recently used keeps only cards used in the last RECENT_DAYS", async () => {
+    const { wrapper, store } = await mountSidebar();
+    expect(row(wrapper, "Recently used").find(".wfs-row__count").text()).toBe("1");
+    await row(wrapper, "Recently used").trigger("click");
+    expect(store.filters.recent).toBe(true);
+    expect(store.filteredCards.map((c) => c.name)).toEqual(["Portrait"]);
+  });
+
+  it("picking a place clears the Type and Base model facets", async () => {
+    const { wrapper, store } = await mountSidebar();
+    await row(wrapper, "Text to Image").trigger("click");
+    await row(wrapper, "flux1-dev.safetensors").trigger("click");
+    await row(wrapper, "Recently used").trigger("click");
+    expect(store.filters.type).toBeNull();
+    expect(store.filters.checkpoint).toBeNull();
+    expect(store.filters.recent).toBe(true);
+  });
+});
+
+describe("place counts before the grid is read", () => {
+  it("are blank rather than 0 while the first read is out", async () => {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    listWorkflowCards.mockReturnValue(new Promise(() => {}));
+    const wrapper = mount(WorkflowsSidebar, {
+      global: { plugins: [pinia], stubs: { "v-icon": true } },
+    });
+    await flushPromises();
+    expect(row(wrapper, "All workflows").find(".wfs-row__count").exists()).toBe(
+      false,
+    );
+    wrapper.unmount();
+  });
+});
+
+describe("facets", () => {
+  it("toggles the Type facet, and a second click takes it off", async () => {
+    const { wrapper, store } = await mountSidebar();
+    const type = row(wrapper, "Text to Image");
+    await type.trigger("click");
+    expect(store.filters.type).toBe("txt2img");
+    expect(row(wrapper, "Text to Image").classes()).toContain("wfs-row--lit");
+    // The place stays where it was: a facet narrows, it does not move the place.
+    expect(row(wrapper, "All workflows").attributes("aria-current")).toBe("page");
+    await row(wrapper, "Text to Image").trigger("click");
+    expect(store.filters.type).toBeNull();
+    expect(row(wrapper, "Text to Image").attributes("aria-current")).toBeUndefined();
+  });
+
+  it("toggles the Base model facet by its file name, shown by its label", async () => {
+    const { wrapper, store } = await mountSidebar();
+    await row(wrapper, "flux1-dev.safetensors").trigger("click");
+    expect(store.filters.checkpoint).toBe("flux1-dev.safetensors");
+    expect(row(wrapper, "flux1-dev.safetensors").attributes("aria-current")).toBe("page");
+  });
+
+  it("picking a facet while Templates is on goes back to the grid", async () => {
+    const { wrapper, store, templates } = await mountSidebar();
+    await templatesRow(wrapper).trigger("click");
+    expect(templates.shown).toBe(true);
+    await row(wrapper, "Text to Image").trigger("click");
+    expect(templates.shown).toBe(false);
+    expect(store.filters.type).toBe("txt2img");
+  });
+});
+
+describe("the Templates row", () => {
+  it("sets the shown flag, and lights only Templates", async () => {
+    const { wrapper, templates } = await mountSidebar();
+    await templatesRow(wrapper).trigger("click");
+    expect(templates.shown).toBe(true);
+    expect(templatesRow(wrapper).attributes("aria-current")).toBe("page");
+    expect(row(wrapper, "All workflows").attributes("aria-current")).toBeUndefined();
+  });
+
+  it("counts the templates once read", async () => {
+    const { wrapper } = await mountSidebar();
+    expect(templatesRow(wrapper).find(".wfs-row__count").text()).toBe("2");
+  });
+
+  it("shows a dash, not a zero, when ComfyUI did not answer", async () => {
+    listTemplates.mockResolvedValue(listing([], { reachable: false, detail: "down" }));
+    const { wrapper } = await mountSidebar();
+    expect(templatesRow(wrapper).find(".wfs-row__count").text()).toBe("–");
+    expect(templatesRow(wrapper).find(".wfs-new").exists()).toBe(false);
+  });
+
+  it("reads the list once when the rail mounts, and not again on a later visit", async () => {
+    const { wrapper } = await mountSidebar();
+    expect(listTemplates).toHaveBeenCalledTimes(1);
+    // App.vue mounts the rail with v-if, so each visit to /workflows is a new mount.
+    const pinia = wrapper.vm.$pinia;
+    wrapper.unmount();
+    mount(WorkflowsSidebar, { global: { plugins: [pinia], stubs: { "v-icon": true } } });
+    await flushPromises();
+    expect(listTemplates).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the N new pill", () => {
+  it("does not announce the whole list on the very first read", async () => {
+    const { wrapper } = await mountSidebar();
+    expect(templatesRow(wrapper).find(".wfs-new").exists()).toBe(false);
+  });
+
+  it("counts the keys the browser has not seen, and marks them seen when Templates opens", async () => {
+    // Seen so far: a, b. ComfyUI now also serves c.
+    localStorage.setItem(LABEL_KEY, JSON.stringify(["default/a", "default/b"]));
+    listTemplates.mockResolvedValue(listing(["a", "b", "c"]));
+    const { wrapper, templates } = await mountSidebar();
+    expect(templatesRow(wrapper).find(".wfs-new").text()).toBe("1 new");
+
+    await templatesRow(wrapper).trigger("click");
+    await flushPromises();
+    expect(templatesRow(wrapper).find(".wfs-new").exists()).toBe(false);
+    expect(JSON.parse(localStorage.getItem(LABEL_KEY))).toEqual(
+      expect.arrayContaining(["default/a", "default/b", "default/c"]),
+    );
+
+    // Leaving Templates and a later re-read that finds nothing new keeps it at none.
+    await row(wrapper, "All workflows").trigger("click");
+    expect(templates.shown).toBe(false);
+    listTemplates.mockResolvedValue(listing(["a", "b", "c"]));
+    await templates.fetchTemplates({ refresh: true });
+    await flushPromises();
+    expect(templatesRow(wrapper).find(".wfs-new").exists()).toBe(false);
+  });
+
+  it("does not take an offline first read as having seen the catalogue", async () => {
+    listTemplates.mockResolvedValue({ templates: [], reachable: false });
+    const { wrapper, templates } = await mountSidebar();
+    expect(localStorage.getItem(LABEL_KEY)).toBeNull();
+    // ComfyUI comes up: this is the first real sight, so nothing is "new".
+    listTemplates.mockResolvedValue(listing(["a", "b", "c"]));
+    await templates.fetchTemplates({ refresh: true });
+    await flushPromises();
+    expect(templatesRow(wrapper).find(".wfs-new").exists()).toBe(false);
+  });
+
+  // Nor does the Templates place being open over that empty read: whether it
+  // was opened onto it, or was open while ComfyUI was asked again.
+  it.each([
+    ["opened onto it", async () => {}],
+    [
+      "open while it is read again",
+      async (templates) => {
+        await templates.fetchTemplates({ refresh: true });
+        await flushPromises();
+      },
+    ],
+  ])("does not take an offline read with Templates %s as having seen the catalogue", async (_, whileOpen) => {
+    listTemplates.mockResolvedValue({ templates: [], reachable: false });
+    const { wrapper, templates } = await mountSidebar();
+    await templatesRow(wrapper).trigger("click");
+    expect(templates.shown).toBe(true);
+    await whileOpen(templates);
+    await row(wrapper, "All workflows").trigger("click");
+    expect(localStorage.getItem(LABEL_KEY)).toBeNull();
+
+    listTemplates.mockResolvedValue(listing(["a", "b", "c"]));
+    await templates.fetchTemplates({ refresh: true });
+    await flushPromises();
+    expect(templatesRow(wrapper).find(".wfs-new").exists()).toBe(false);
+  });
+
+  it("counts a template that appears on a later read as new", async () => {
+    const { wrapper, templates } = await mountSidebar();
+    expect(templatesRow(wrapper).find(".wfs-new").exists()).toBe(false);
+    listTemplates.mockResolvedValue(listing(["a", "b", "d"]));
+    await templates.fetchTemplates({ refresh: true });
+    await flushPromises();
+    expect(templatesRow(wrapper).find(".wfs-new").text()).toBe("1 new");
+  });
+});
+
+describe("Add workflow", () => {
+  it("bumps addRequest each press, for WorkflowsView to open its picker", async () => {
+    const { wrapper, store } = await mountSidebar();
+    expect(store.addRequest).toBe(0);
+    await wrapper.find(".wfs-add").trigger("click");
+    expect(store.addRequest).toBe(1);
+    await wrapper.find(".wfs-add").trigger("click");
+    expect(store.addRequest).toBe(2);
+  });
+});
+
+describe("viewName", () => {
+  it("is the place's name when nothing else is lit", async () => {
+    const { store } = await mountSidebar();
+    expect(store.viewName).toBe("All workflows");
+    store.setPlace("favourites");
+    expect(store.viewName).toBe("Favourites");
+    store.setPlace("recent");
+    expect(store.viewName).toBe("Recently used");
+  });
+
+  it("is the Type label when a Type facet is set, over the place", async () => {
+    const { store } = await mountSidebar();
+    store.setFilters({ type: "upscale" });
+    expect(store.viewName).toBe("Upscale");
+  });
+
+  it("is the base model's display label when a Base model facet is set", async () => {
+    const { store } = await mountSidebar();
+    store.setFilters({ checkpoint: "flux1-dev.safetensors" });
+    expect(store.viewName).toBe("flux1-dev.safetensors");
+  });
+
+  it("is ComfyUI templates while the Templates place is on, over any facet", async () => {
+    const { store, templates } = await mountSidebar();
+    store.setFilters({ type: "upscale" });
+    templates.shown = true;
+    expect(store.viewName).toBe("ComfyUI templates");
+  });
+});
+
+describe("the favourites chip", () => {
+  it("is gone: Favourites is a place, not a filter chip", async () => {
+    const { store } = await mountSidebar();
+    store.setFilters({ favouritesOnly: true });
+    expect(store.filterChips.some((chip) => chip.key === "favourites")).toBe(false);
+  });
+});

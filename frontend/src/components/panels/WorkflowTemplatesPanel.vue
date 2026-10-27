@@ -1,9 +1,9 @@
 <template>
-  <div class="wtp" role="tabpanel" aria-labelledby="wfv-tab-templates">
+  <div class="wtp" role="region" aria-label="ComfyUI templates">
     <!-- Where the list comes from, first on the strip: none of it is the
          owner's own work until it is added. A ComfyUI mark with a connected
-         dot (a red cross for the shipped copy), so the strip keeps
-         its room for the chips; the address and the re-read are one hover and one
+         dot (a red cross for the shipped copy); the filter chips are
+         the toolbar's (#2165). The address and the re-read are one hover and one
          click away. -->
     <div v-if="listed && store.loaded" class="wtp-strip">
       <v-menu location="bottom start" :close-on-content-click="false">
@@ -57,13 +57,6 @@
           </div>
         </div>
       </v-menu>
-      <FilterStrip
-        inline
-        class="wtp-chips"
-        :chips="store.filterChips"
-        :of-label="store.filterOfLabel"
-        :on-clear-all="store.clearFilters"
-      />
     </div>
 
     <p v-if="store.error" class="wtp-note wtp-note--error" role="alert">
@@ -256,7 +249,6 @@ import AppButton from "../widgets/AppButton.vue";
 import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
 import WorkflowTemplateCard from "../widgets/WorkflowTemplateCard.vue";
 import Tooltip from "../widgets/Tooltip.vue";
-import FilterStrip from "./FilterStrip.vue";
 
 const props = defineProps({
   // The Mine grid's two numbers (`WorkflowsView.vue`), so both tabs lay out
@@ -469,7 +461,7 @@ function onKeyDown(event) {
   min-height: 0;
 }
 
-/* The source line leads, the filter chips follow on the same row. */
+/* The source line, over the grid. */
 .wtp-strip {
   display: flex;
   align-items: center;
@@ -541,13 +533,6 @@ function onKeyDown(event) {
 
 .wtp-url {
   font-family: var(--font-mono);
-}
-
-.wtp-chips {
-  flex: 1;
-  min-width: 0;
-  border-bottom: none;
-  background: transparent;
 }
 
 .wtp-note {

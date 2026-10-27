@@ -517,16 +517,13 @@ describe("favourites", () => {
     expect(store.selectedKeys).toEqual([plain[1]]);
   });
 
-  it("shows as a chip that removes itself", async () => {
+  it("is not a chip: Favourites is a sidebar place now", async () => {
     const store = useWorkflowsStore();
     await store.fetchCards();
     store.setFilters({ favouritesOnly: true });
-    const chip = store.filterChips.find((entry) => entry.key === "favourites");
-    expect(chip.value).toBe("favourites");
-    chip.remove();
-    expect(store.filters.favouritesOnly).toBe(false);
     expect(store.filterChips.some((entry) => entry.key === "favourites")).toBe(
       false,
     );
+    expect(store.place).toBe("favourites");
   });
 });

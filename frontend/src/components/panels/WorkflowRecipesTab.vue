@@ -11,359 +11,478 @@
       <p class="wfrt-sub">{{ subtitle }}</p>
     </div>
 
-    <template v-if="!unfiled">
-      <p v-if="loading" class="wfrt-note wfrt-quiet">Reading your recipes…</p>
-      <p
-        v-else-if="!loadError && !recipes.length && !looks.length"
-        class="wfrt-note wfrt-quiet"
-      >
-        No recipes here yet. A picture shows up once PixlStash has read how it
-        was made, so a fresh import takes a moment to arrive.
-      </p>
-      <p v-else-if="loadError" class="wfrt-note wfrt-bad" role="alert">
-        {{ loadError }}
-      </p>
-    </template>
+    <p v-if="!unfiled" class="wfrt-hint">
+      A recipe is one picture's exact settings, seed included. It lists only
+      what differs from the default.
+    </p>
 
-    <!-- Saved first: they are few, in the owner's order, and the reason to
-         come back to this tab. The list below them can run to hundreds. -->
-    <div
-      v-if="!unfiled && !loading && !loadError && recipes.length"
-      class="section-label wfrt-section"
-    >
-      Saved
-    </div>
-
-    <!-- One list, one tab stop. The handle is the control: it is what a
-         pointer drags and what Alt+↑/↓ moves, so the row itself needs no
-         keyboard behaviour of its own.
-
-         `v-if`, not the band's `v-else`: chaining the two made the band and
-         the list alternatives, so the moment there was a used half to label,
-         the saved list it labelled disappeared. -->
-    <ul
-      v-if="!loading && !loadError && recipes.length"
-      class="wfrt-list"
-    >
-      <li
-        v-for="(recipe, index) in recipes"
-        :key="recipe.id"
-        class="wfrt-card"
-        :class="{ 'wfrt-card--dragging': draggingId === recipe.id }"
-        :aria-label="`${recipe.name || 'Untitled'}, ${recipeDiffs[recipe.id].text}`"
-        @dragover.prevent
-        @drop.prevent="onDrop(index)"
-      >
-        <div class="wfrt-top">
-          <!-- The handle is the drag source, not the card: a draggable card
-               makes the prompt unselectable and turns every press on Run… into
-               the start of a drag. The keyboard path is on the same control,
-               and it is in the accessible NAME rather than a tooltip, because
-               a tooltip needs a hover a keyboard user does not have. -->
-          <!-- No order to keep on a list of recipes whose workflow is gone. -->
-          <button
-            v-if="!unfiled"
-            class="wfrt-handle"
-            type="button"
-            draggable="true"
-            :aria-label="`Reorder ${recipe.name || 'this recipe'}: hold Alt and press the up or down arrow, or drag`"
-            @dragstart="onDragStart(recipe, $event)"
-            @dragend="draggingId = null"
-            @keydown.up.alt.prevent="move(index, -1)"
-            @keydown.down.alt.prevent="move(index, 1)"
-          >
-            <Tooltip
-              text="Drag to reorder, or Alt with the arrow keys"
-              activator="parent"
-              :describe="false"
-            />
-            <v-icon size="16">mdi-drag-vertical</v-icon>
-          </button>
-
-          <!-- The picture the recipe was saved from, and only that one: the
-               API credits a COUNT of matching pictures rather than their ids,
-               so the design's five-tile strip would be four tiles of
-               invention. A square at the head of the row rather than a band
-               across the card, because 1/1 is a ratio this app already has
-               and a one-picture band needed a new one. -->
-          <button
-            v-if="recipe.source_picture_id"
-            class="wfrt-thumb-btn"
-            type="button"
-            :aria-label="`Open the picture ${recipe.name || 'this recipe'} was saved from`"
-            @click="openPicture(recipe.source_picture_id)"
-          >
-            <Tooltip text="Open the picture" activator="parent" :describe="false" />
-            <img
-              class="wfrt-thumb"
-              :src="pictureThumbnailUrl(recipe.source_picture_id)"
-              alt=""
-              loading="lazy"
-              decoding="async"
-            />
-          </button>
-
-          <!-- Escape backs out, as it does in every dialog here; Enter and
-               blur both commit, which is what an inline field in a list has
-               to do to survive a click somewhere else. -->
-          <AppInput
-            v-if="renamingId === recipe.id"
-            v-model="renameDraft"
-            aria-label="Name for this recipe"
-            autofocus
-            autoselect
-            @enter="commitRename(recipe)"
-            @blur="commitRename(recipe)"
-            @keydown.esc.stop.prevent="cancelRename"
-          />
-          <span v-else class="wfrt-name">{{ recipe.name || "Untitled" }}</span>
-
-          <v-menu
-            v-if="renamingId !== recipe.id"
-            :model-value="menuId === recipe.id"
-            location="bottom end"
-            origin="top end"
-            :offset="4"
-            @update:model-value="(v) => (menuId = v ? recipe.id : null)"
-          >
-            <template #activator="{ props: menuProps }">
-              <!-- `withRef`, not a second `ref` beside `v-bind`: Vue's
-                   mergeProps keeps whichever comes last, so the menu would
-                   open unanchored or this ref would stay null. -->
-              <AppButton
-                v-bind="withRef(menuProps, (el) => registerMenuButton(recipe.id, el))"
-                size="sm"
-                icon-left="dots-horizontal"
-                icon-only
-                :tooltip="`More for ${recipe.name || 'this recipe'}`"
-                aria-haspopup="menu"
-              />
-            </template>
-            <div
-              class="ctx-menu"
-              role="menu"
-              tabindex="-1"
-              @keydown="onMenuKeydown"
-            >
-              <button
-                class="ctx-item"
-                type="button"
-                role="menuitem"
-                @click="startRename(recipe)"
-              >
-                <v-icon size="16">mdi-pencil</v-icon>
-                Rename
-              </button>
-              <button
-                class="ctx-item"
-                type="button"
-                role="menuitem"
-                @click="startExport(recipe)"
-              >
-                <v-icon size="16">mdi-export</v-icon>
-                Export…
-              </button>
-              <!-- Refused, not hidden, on a recipe whose saved-from graph
-                   went with its deleted workflow (#1687): `aria-disabled`
-                   rather than `disabled`, so the reason stays one hover
-                   away (the WorkflowSelectionBar pattern). -->
-              <button
-                class="ctx-item"
-                :class="{ 'ctx-item--disabled': recipe.extractable === false }"
-                type="button"
-                role="menuitem"
-                data-testid="wfrt-extract"
-                :aria-disabled="recipe.extractable === false ? 'true' : undefined"
-                @click="recipe.extractable === false || extractWorkflow(recipe)"
-              >
-                <Tooltip
-                  v-if="recipe.extractable === false"
-                  :text="NOT_EXTRACTABLE"
-                  activator="parent"
-                />
-                <v-icon size="16">mdi-sitemap-outline</v-icon>
-                Extract workflow
-              </button>
-              <button
-                class="ctx-item ctx-item--danger"
-                type="button"
-                role="menuitem"
-                @click="removeRecipe(recipe)"
-              >
-                <v-icon size="16">mdi-delete</v-icon>
-                Delete
-              </button>
-            </div>
-          </v-menu>
-        </div>
-
-        <!-- What the recipe changes against its workflow's default recipe
-             (#1653 §1.3), then the prompt. The diff comes first: the prompt
-             differs on every card, the diff is what tells them apart. -->
-        <div class="wfrt-body">
-          <p
-            :ref="(el) => registerDiff(`r:${recipe.id}`, el)"
-            class="wfrt-diff"
-            :class="{ 'wfrt-diff--open': expanded[`r:${recipe.id}`] }"
-          >
-            <span
-              v-for="(seg, i) in recipeDiffs[recipe.id].segments"
-              :key="i"
-              class="wfrt-seg"
-            ><span v-if="i" class="wfrt-quiet"> · </span><span
-                v-for="(part, j) in seg.parts"
-                :key="j"
-                :class="{ 'wfrt-quiet': part.quiet }"
-              >{{ part.text }}</span></span>
-          </p>
-          <button
-            v-if="hidden[`r:${recipe.id}`] || expanded[`r:${recipe.id}`]"
-            class="wfrt-more"
-            type="button"
-            :aria-expanded="expanded[`r:${recipe.id}`] ? 'true' : 'false'"
-            @click="toggleMore(`r:${recipe.id}`)"
-          >
-            {{ expanded[`r:${recipe.id}`] ? "Fewer" : `+${hidden[`r:${recipe.id}`]} more` }}
-          </button>
-          <p v-if="recipe.prompt" class="wfrt-prompt">{{ recipe.prompt }}</p>
-        </div>
-
-        <div class="wfrt-bot">
-          <!-- On the card, not in its ⋯ menu, where nobody found it. Only
-               when a parameter differs (the defaults PUT takes parameters;
-               LoRAs go in from the Workflow tab's pile), and a verb that
-               belongs to one workflow, so not on a multi-selection. -->
-          <AppButton
-            v-if="!multi && recipeDiffs[recipe.id].params.length"
-            :ref="(el) => registerDefaultsButton(recipe.id, el)"
-            size="sm"
-            variant="ghost"
-            data-testid="wfrt-make-defaults"
-            :tooltip="`Make ${recipe.name || 'this recipe'}'s settings the workflow's defaults`"
-            @click="startMakeDefaults(recipe)"
-          >
-            Make defaults…
-          </AppButton>
-          <!-- Run needs the workflow an unfiled recipe no longer has:
-               Extract workflow is its way back to running. -->
-          <AppButton
-            v-if="!unfiled"
-            size="sm"
-            icon-left="play"
-            @click="run(recipe)"
-          >
-            Run…
-          </AppButton>
-        </div>
-      </li>
-    </ul>
-
-    <!-- The looks the pictures themselves carry: every one they were made
-         with, filled in without anybody pressing anything. One cloned into
-         Saved stays here too, marked, because a clone is a copy and does not
-         take the original out of the list it was found in. -->
-    <template v-if="!loading && !loadError && looks.length">
-      <div class="section-label wfrt-section">From your pictures</div>
-      <ul class="wfrt-list">
-        <li v-for="look in looks" :key="look.key" class="wfrt-card">
-          <div class="wfrt-top">
+    <!-- Unfiled: one list, no groups, no order to keep on recipes whose
+         workflow is gone. -->
+    <template v-if="unfiled">
+      <ul v-if="!loading && !loadError && recipes.length" class="wfrt-list">
+        <li
+          v-for="recipe in recipes"
+          :key="recipe.id"
+          class="wfrt-card"
+          :aria-label="`${recipe.name || 'Untitled'}, ${recipeDiffs[recipe.id].text}`"
+        >
+          <div class="wfrt-row">
             <button
-              v-if="look.cover_picture_id"
+              v-if="recipe.source_picture_id"
               class="wfrt-thumb-btn"
               type="button"
-              aria-label="Open the newest picture made with this recipe"
-              @click="openPicture(look.cover_picture_id)"
+              :aria-label="`Open the picture ${recipe.name || 'this recipe'} was saved from`"
+              @click="openPicture(recipe.source_picture_id)"
             >
               <Tooltip text="Open the picture" activator="parent" :describe="false" />
               <img
                 class="wfrt-thumb"
-                :src="pictureThumbnailUrl(look.cover_picture_id)"
+                :src="pictureThumbnailUrl(recipe.source_picture_id)"
                 alt=""
                 loading="lazy"
                 decoding="async"
               />
             </button>
-            <span v-if="look.saved" class="wfrt-marked">
-              <v-icon size="16">mdi-check</v-icon>
-              Saved
-            </span>
-          </div>
-
-          <!-- `/recipes/used` names LoRA files only, so a look's diff is its
-               LoRA part and its count; never "Only the prompt" (§1.3). A
-               look carries no workflow id, so a multi-selection has no one
-               default to compare with and keeps the plain LoRA list. -->
-          <div v-if="lookDiffs[look.key]" class="wfrt-body">
-            <p
-              :ref="(el) => registerDiff(`l:${look.key}`, el)"
-              class="wfrt-diff"
-              :class="{ 'wfrt-diff--open': expanded[`l:${look.key}`] }"
-            >
-              <span
-                v-for="(seg, i) in lookDiffs[look.key].segments"
-                :key="i"
-                class="wfrt-seg"
-              ><span v-if="i" class="wfrt-quiet"> · </span><span
-                  v-for="(part, j) in seg.parts"
-                  :key="j"
-                  :class="{ 'wfrt-quiet': part.quiet }"
-                >{{ part.text }}</span></span>
-            </p>
-            <button
-              v-if="hidden[`l:${look.key}`] || expanded[`l:${look.key}`]"
-              class="wfrt-more"
-              type="button"
-              :aria-expanded="expanded[`l:${look.key}`] ? 'true' : 'false'"
-              @click="toggleMore(`l:${look.key}`)"
-            >
-              {{ expanded[`l:${look.key}`] ? "Fewer" : `+${hidden[`l:${look.key}`]} more` }}
-            </button>
-            <p v-if="look.prompt" class="wfrt-prompt">{{ look.prompt }}</p>
-          </div>
-
-          <template v-else>
-            <p v-if="look.prompt" class="wfrt-prompt">{{ look.prompt }}</p>
-            <div v-if="look.loras?.length" class="wfrt-chips">
-              <span
-                v-for="(lora, slot) in look.loras"
-                :key="slot"
-                class="wfrt-chip"
+            <div class="wfrt-main">
+              <div class="wfrt-top">
+                <!-- Rename as on a filed recipe: the field in place of the
+                     name, and the ⋯ menu out of its way. -->
+                <AppInput
+                  v-if="renamingId === recipe.id"
+                  v-model="renameDraft"
+                  aria-label="Name for this recipe"
+                  autofocus
+                  autoselect
+                  @enter="commitRename(recipe)"
+                  @blur="commitRename(recipe)"
+                  @keydown.esc.stop.prevent="cancelRename"
+                />
+                <span v-else class="wfrt-name">{{ recipe.name || "Untitled" }}</span>
+                <v-menu
+                  v-if="renamingId !== recipe.id"
+                  :model-value="menuId === recipe.id"
+                  location="bottom end"
+                  origin="top end"
+                  :offset="4"
+                  @update:model-value="(v) => (menuId = v ? recipe.id : null)"
+                >
+                  <template #activator="{ props: menuProps }">
+                    <AppButton
+                      v-bind="withRef(menuProps, (el) => registerMenuButton(recipe.id, el))"
+                      size="sm"
+                      icon-left="dots-horizontal"
+                      icon-only
+                      :tooltip="`More for ${recipe.name || 'this recipe'}`"
+                      aria-haspopup="menu"
+                    />
+                  </template>
+                  <div class="ctx-menu" role="menu" tabindex="-1" @keydown="onMenuKeydown">
+                    <button class="ctx-item" type="button" role="menuitem" @click="startRename(recipe)">
+                      <v-icon size="16">mdi-pencil</v-icon>
+                      Rename
+                    </button>
+                    <button class="ctx-item" type="button" role="menuitem" @click="startExport(recipe)">
+                      <v-icon size="16">mdi-export</v-icon>
+                      Export…
+                    </button>
+                    <button
+                      class="ctx-item"
+                      :class="{ 'ctx-item--disabled': recipe.extractable === false }"
+                      type="button"
+                      role="menuitem"
+                      data-testid="wfrt-extract"
+                      :aria-disabled="recipe.extractable === false ? 'true' : undefined"
+                      @click="recipe.extractable === false || extractWorkflow(recipe)"
+                    >
+                      <Tooltip
+                        v-if="recipe.extractable === false"
+                        :text="NOT_EXTRACTABLE"
+                        activator="parent"
+                      />
+                      <v-icon size="16">mdi-sitemap-outline</v-icon>
+                      Extract workflow
+                    </button>
+                    <button class="ctx-item ctx-item--danger" type="button" role="menuitem" @click="removeRecipe(recipe)">
+                      <v-icon size="16">mdi-delete</v-icon>
+                      Delete
+                    </button>
+                  </div>
+                </v-menu>
+              </div>
+              <div
+                :ref="(el) => registerDiff(`r:${recipe.id}`, el)"
+                class="wfrt-diff"
+                :class="{ 'wfrt-diff--open': expanded[`r:${recipe.id}`] }"
               >
-                <v-icon size="12">mdi-layers-outline</v-icon>
-                {{ lora.filename }}
-              </span>
+                <span
+                  v-for="(seg, i) in recipeDiffs[recipe.id].segments"
+                  :key="i"
+                  class="wfrt-seg"
+                >
+                  <span
+                    v-for="(part, j) in seg.parts"
+                    :key="j"
+                    :class="{ 'wfrt-quiet': part.quiet }"
+                  >{{ part.text }}</span>
+                </span>
+              </div>
+              <button
+                v-if="hidden[`r:${recipe.id}`] || expanded[`r:${recipe.id}`]"
+                class="wfrt-more"
+                type="button"
+                :aria-expanded="expanded[`r:${recipe.id}`] ? 'true' : 'false'"
+                @click="toggleMore(`r:${recipe.id}`)"
+              >
+                {{ expanded[`r:${recipe.id}`] ? "Fewer" : `+${hidden[`r:${recipe.id}`]} more` }}
+              </button>
+              <p v-if="recipe.prompt" class="wfrt-prompt">{{ recipe.prompt }}</p>
             </div>
-          </template>
-
-          <div class="wfrt-bot">
-            <span class="wfrt-facts">{{
-              lookDiffs[look.key] ? "" : pictureCount(look.pictures)
-            }}</span>
-            <AppButton
-              v-if="!look.saved"
-              size="sm"
-              icon-left="content-copy"
-              :loading="savingLook === look.key"
-              :disabled="!look.cover_picture_id"
-              tooltip="Clone this recipe into Saved, to name it and keep it at the top"
-              @click="keepLook(look)"
-            >
-              Clone…
-            </AppButton>
-            <AppButton
-              v-if="look.cover_picture_id"
-              size="sm"
-              icon-left="play"
-              tooltip="Run this recipe again, from the picture that made it"
-              @click="runLook(look)"
-            >
-              Run…
-            </AppButton>
           </div>
         </li>
       </ul>
     </template>
 
+    <template v-else>
+      <p v-if="loading" class="wfrt-note wfrt-quiet">Reading your recipes…</p>
+      <p v-else-if="loadError" class="wfrt-note wfrt-bad" role="alert">
+        {{ loadError }}
+      </p>
+      <p
+        v-else-if="!recipes.length && !looks.length"
+        class="wfrt-note wfrt-quiet"
+      >
+        No recipes here yet. A picture shows up once PixlStash has read how it
+        was made, so a fresh import takes a moment to arrive.
+      </p>
+
+      <!-- Two groups, each with its own empty line. Saved first: they are few,
+           in the owner's order, and the reason to come back to this tab. The
+           list of pictures can run to hundreds. -->
+      <template v-else>
+        <section class="wfrt-group">
+          <div class="section-label wfrt-section">Saved</div>
+          <!-- One list, one tab stop. The handle is the control: it is what a
+               pointer drags and what Alt+↑/↓ moves, so the row itself needs no
+               keyboard behaviour of its own.
+
+               A drag source is the handle, not the card: a draggable card makes
+               the prompt unselectable and turns every press on Run… into the
+               start of a drag. The handle's name carries the keyboard path, as
+               a tooltip needs a hover a keyboard user does not have. -->
+          <p v-if="!recipes.length" class="wfrt-note wfrt-quiet">
+            Nothing saved. Clone one from your pictures below.
+          </p>
+          <ul v-else class="wfrt-list">
+            <li
+              v-for="(recipe, index) in recipes"
+              :key="recipe.id"
+              class="wfrt-card"
+              :class="{ 'wfrt-card--dragging': draggingId === recipe.id }"
+              :aria-label="`${recipe.name || 'Untitled'}, ${recipeDiffs[recipe.id].text}`"
+              @dragover.prevent
+              @drop.prevent="onDrop(index)"
+            >
+              <div class="wfrt-row">
+                <!-- The picture the recipe was saved from, and only that one:
+                     the API credits a COUNT of matching pictures rather than
+                     their ids. Its rating badge is not drawn: the recipe row
+                     does not carry the rating (see the report). -->
+                <button
+                  v-if="recipe.source_picture_id"
+                  class="wfrt-thumb-btn"
+                  type="button"
+                  :aria-label="`Open the picture ${recipe.name || 'this recipe'} was saved from`"
+                  @click="openPicture(recipe.source_picture_id)"
+                >
+                  <Tooltip text="Open the picture" activator="parent" :describe="false" />
+                  <img
+                    class="wfrt-thumb"
+                    :src="pictureThumbnailUrl(recipe.source_picture_id)"
+                    alt=""
+                    loading="lazy"
+                    decoding="async"
+                  />
+                </button>
+
+                <div class="wfrt-main">
+                  <div class="wfrt-top">
+                    <button
+                      class="wfrt-handle"
+                      type="button"
+                      draggable="true"
+                      :aria-label="`Reorder ${recipe.name || 'this recipe'}: hold Alt and press the up or down arrow, or drag`"
+                      @dragstart="onDragStart(recipe, $event)"
+                      @dragend="draggingId = null"
+                      @keydown.up.alt.prevent="move(index, -1)"
+                      @keydown.down.alt.prevent="move(index, 1)"
+                    >
+                      <Tooltip
+                        text="Drag to reorder, or Alt with the arrow keys"
+                        activator="parent"
+                        :describe="false"
+                      />
+                      <v-icon size="16">mdi-drag-vertical</v-icon>
+                    </button>
+
+                    <!-- Escape backs out, as it does in every dialog here; Enter
+                         and blur both commit, which is what an inline field in a
+                         list has to do to survive a click somewhere else. -->
+                    <AppInput
+                      v-if="renamingId === recipe.id"
+                      v-model="renameDraft"
+                      aria-label="Name for this recipe"
+                      autofocus
+                      autoselect
+                      @enter="commitRename(recipe)"
+                      @blur="commitRename(recipe)"
+                      @keydown.esc.stop.prevent="cancelRename"
+                    />
+                    <span v-else class="wfrt-name">{{ recipe.name || "Untitled" }}</span>
+
+                    <v-menu
+                      v-if="renamingId !== recipe.id"
+                      :model-value="menuId === recipe.id"
+                      location="bottom end"
+                      origin="top end"
+                      :offset="4"
+                      @update:model-value="(v) => (menuId = v ? recipe.id : null)"
+                    >
+                      <template #activator="{ props: menuProps }">
+                        <!-- `withRef`, not a second `ref` beside `v-bind`: Vue's
+                             mergeProps keeps whichever comes last, so the menu
+                             would open unanchored or this ref would stay null. -->
+                        <AppButton
+                          v-bind="withRef(menuProps, (el) => registerMenuButton(recipe.id, el))"
+                          size="sm"
+                          icon-left="dots-horizontal"
+                          icon-only
+                          :tooltip="`More for ${recipe.name || 'this recipe'}`"
+                          aria-haspopup="menu"
+                        />
+                      </template>
+                      <div class="ctx-menu" role="menu" tabindex="-1" @keydown="onMenuKeydown">
+                        <button class="ctx-item" type="button" role="menuitem" @click="startRename(recipe)">
+                          <v-icon size="16">mdi-pencil</v-icon>
+                          Rename
+                        </button>
+                        <button class="ctx-item" type="button" role="menuitem" @click="startExport(recipe)">
+                          <v-icon size="16">mdi-export</v-icon>
+                          Export…
+                        </button>
+                        <!-- Refused, not hidden, on a recipe whose saved-from graph
+                             went with its deleted workflow (#1687): `aria-disabled`
+                             rather than `disabled`, so the reason stays one hover
+                             away (the WorkflowSelectionBar pattern). -->
+                        <button
+                          class="ctx-item"
+                          :class="{ 'ctx-item--disabled': recipe.extractable === false }"
+                          type="button"
+                          role="menuitem"
+                          data-testid="wfrt-extract"
+                          :aria-disabled="recipe.extractable === false ? 'true' : undefined"
+                          @click="recipe.extractable === false || extractWorkflow(recipe)"
+                        >
+                          <Tooltip
+                            v-if="recipe.extractable === false"
+                            :text="NOT_EXTRACTABLE"
+                            activator="parent"
+                          />
+                          <v-icon size="16">mdi-sitemap-outline</v-icon>
+                          Extract workflow
+                        </button>
+                        <button class="ctx-item ctx-item--danger" type="button" role="menuitem" @click="removeRecipe(recipe)">
+                          <v-icon size="16">mdi-delete</v-icon>
+                          Delete
+                        </button>
+                      </div>
+                    </v-menu>
+                  </div>
+
+                  <!-- What the recipe changes against its workflow's default
+                       recipe (#1653 §1.3), as chips: the seed first, then the
+                       rest in the order the diff gives. Clamped to two rows
+                       behind "+N more", as the text line was to two lines. -->
+                  <div
+                    :ref="(el) => registerDiff(`r:${recipe.id}`, el)"
+                    class="wfrt-diff"
+                    :class="{ 'wfrt-diff--open': expanded[`r:${recipe.id}`] }"
+                  >
+                    <span
+                      v-for="(seg, i) in recipeDiffs[recipe.id].segments"
+                      :key="i"
+                      class="wfrt-seg"
+                    >
+                      <span
+                        v-for="(part, j) in seg.parts"
+                        :key="j"
+                        :class="{ 'wfrt-quiet': part.quiet }"
+                      >{{ part.text }}</span>
+                    </span>
+                  </div>
+                  <button
+                    v-if="hidden[`r:${recipe.id}`] || expanded[`r:${recipe.id}`]"
+                    class="wfrt-more"
+                    type="button"
+                    :aria-expanded="expanded[`r:${recipe.id}`] ? 'true' : 'false'"
+                    @click="toggleMore(`r:${recipe.id}`)"
+                  >
+                    {{ expanded[`r:${recipe.id}`] ? "Fewer" : `+${hidden[`r:${recipe.id}`]} more` }}
+                  </button>
+                  <p v-if="recipe.prompt" class="wfrt-prompt">{{ recipe.prompt }}</p>
+
+                  <div class="wfrt-bot">
+                    <!-- On the card, not in its ⋯ menu, where nobody found it.
+                         Only when a parameter differs (the defaults PUT takes
+                         parameters; LoRAs go in from the Workflow tab's pile),
+                         and a verb that belongs to one workflow, so not on a
+                         multi-selection. -->
+                    <button
+                      v-if="!multi && recipeDiffs[recipe.id].params.length"
+                      :ref="(el) => registerDefaultsButton(recipe.id, el)"
+                      class="wfrt-verb"
+                      type="button"
+                      data-testid="wfrt-make-defaults"
+                      @click="startMakeDefaults(recipe)"
+                    >
+                      <Tooltip
+                        :text="`Make ${recipe.name || 'this recipe'}'s settings the workflow's defaults`"
+                        activator="parent"
+                      />
+                      Make defaults…
+                    </button>
+                    <!-- Run needs the workflow an unfiled recipe no longer has:
+                         Extract workflow is its way back to running. -->
+                    <button class="wfrt-verb" type="button" @click="run(recipe)">
+                      Run…
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </li>
+          </ul>
+        </section>
+
+        <!-- The looks the pictures themselves carry: every one they were made
+             with, filled in without anybody pressing anything. One cloned into
+             Saved stays here too, marked, because a clone is a copy and does not
+             take the original out of the list it was found in. -->
+        <section class="wfrt-group">
+          <div class="section-label wfrt-section">From your pictures</div>
+          <p v-if="!looks.length" class="wfrt-note wfrt-quiet">
+            None yet: they appear as the workflow makes pictures.
+          </p>
+          <ul v-else class="wfrt-list">
+            <li v-for="look in looks" :key="look.key" class="wfrt-card">
+              <div class="wfrt-row">
+                <button
+                  v-if="look.cover_picture_id"
+                  class="wfrt-thumb-btn"
+                  type="button"
+                  aria-label="Open the newest picture made with this recipe"
+                  @click="openPicture(look.cover_picture_id)"
+                >
+                  <Tooltip text="Open the picture" activator="parent" :describe="false" />
+                  <img
+                    class="wfrt-thumb"
+                    :src="pictureThumbnailUrl(look.cover_picture_id)"
+                    alt=""
+                    loading="lazy"
+                    decoding="async"
+                  />
+                </button>
+
+                <div class="wfrt-main">
+                  <div v-if="look.saved" class="wfrt-top">
+                    <span class="wfrt-marked">
+                      <v-icon size="16">mdi-check</v-icon>
+                      Saved
+                    </span>
+                  </div>
+
+                  <!-- `/recipes/used` names LoRA files only, so a look's diff is
+                       its LoRA part and its count; never "Only the prompt"
+                       (§1.3). A look carries no workflow id, so a multi-selection
+                       has no one default to compare with and keeps the plain
+                       LoRA list. -->
+                  <template v-if="lookDiffs[look.key]">
+                    <div
+                      :ref="(el) => registerDiff(`l:${look.key}`, el)"
+                      class="wfrt-diff"
+                      :class="{ 'wfrt-diff--open': expanded[`l:${look.key}`] }"
+                    >
+                      <span
+                        v-for="(seg, i) in lookDiffs[look.key].segments"
+                        :key="i"
+                        class="wfrt-seg"
+                      >
+                        <span
+                          v-for="(part, j) in seg.parts"
+                          :key="j"
+                          :class="{ 'wfrt-quiet': part.quiet }"
+                        >{{ part.text }}</span>
+                      </span>
+                    </div>
+                    <button
+                      v-if="hidden[`l:${look.key}`] || expanded[`l:${look.key}`]"
+                      class="wfrt-more"
+                      type="button"
+                      :aria-expanded="expanded[`l:${look.key}`] ? 'true' : 'false'"
+                      @click="toggleMore(`l:${look.key}`)"
+                    >
+                      {{ expanded[`l:${look.key}`] ? "Fewer" : `+${hidden[`l:${look.key}`]} more` }}
+                    </button>
+                    <p v-if="look.prompt" class="wfrt-prompt">{{ look.prompt }}</p>
+                  </template>
+
+                  <template v-else>
+                    <p v-if="look.prompt" class="wfrt-prompt">{{ look.prompt }}</p>
+                    <div v-if="look.loras?.length" class="wfrt-chips">
+                      <span
+                        v-for="(lora, slot) in look.loras"
+                        :key="slot"
+                        class="wfrt-chip"
+                      >
+                        <v-icon size="12">mdi-layers-outline</v-icon>
+                        {{ lora.filename }}
+                      </span>
+                    </div>
+                  </template>
+
+                  <div class="wfrt-bot">
+                    <span v-if="!lookDiffs[look.key]" class="wfrt-facts">{{
+                      pictureCount(look.pictures)
+                    }}</span>
+                    <button
+                      v-if="!look.saved"
+                      class="wfrt-verb"
+                      type="button"
+                      data-testid="wfrt-clone"
+                      :disabled="!look.cover_picture_id || savingLook === look.key"
+                      :aria-busy="savingLook === look.key ? 'true' : undefined"
+                      @click="keepLook(look)"
+                    >
+                      <Tooltip
+                        text="Clone this recipe into Saved, to name it and keep it at the top"
+                        activator="parent"
+                      />
+                      Clone…
+                    </button>
+                    <button
+                      v-if="look.cover_picture_id"
+                      class="wfrt-verb"
+                      type="button"
+                      @click="runLook(look)"
+                    >
+                      Run…
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </li>
+          </ul>
+        </section>
+      </template>
+    </template>
 
     <!-- One polite region for the whole list: a reorder made with the
          keyboard, and a refused write that slides the row back, are both
@@ -584,6 +703,18 @@ function defaultOf(workflowId) {
   return { recipe, name: entry.body.card.name };
 }
 
+/**
+ * The seed leads the chips: it is the one difference that makes a picture
+ * this one, so it is read first. `recipeDiff` returns it last; the rest keep
+ * the order it gave.
+ */
+function seedFirst(segments) {
+  return [
+    ...segments.filter((seg) => seg.kind === "seed"),
+    ...segments.filter((seg) => seg.kind !== "seed"),
+  ];
+}
+
 const recipeDiffs = computed(() => {
   const out = {};
   for (const recipe of recipes.value) {
@@ -597,7 +728,9 @@ const recipeDiffs = computed(() => {
       continue;
     }
     const diff = recipeDiff(recipe, base.recipe);
-    const segments = diff.segments.length ? diff.segments : [quiet("Only the prompt")];
+    const segments = seedFirst(
+      diff.segments.length ? diff.segments : [quiet("Only the prompt")],
+    );
     if (multi.value && base.name) segments.push(quiet(`on ${base.name}`));
     out[recipe.id] = finish(segments, diff.params);
   }
@@ -919,7 +1052,7 @@ function closeMakeDefaults() {
   // Its button, or the card's ⋯ when the write took the last difference and
   // the button with it.
   nextTick(() => {
-    const button = defaultsButtons.get(id)?.$el;
+    const button = defaultsButtons.get(id);
     if (button?.isConnected) button.focus();
     else focusMenuButton(id);
   });
@@ -1239,13 +1372,28 @@ function run(recipe) {
   line-height: var(--leading-body);
 }
 
+/* The hint over both groups: the design's `.hint`, the label size. */
+.wfrt-hint {
+  margin: 0;
+  font-size: var(--text-2xs);
+  line-height: var(--leading-body);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
 .wfrt-quiet,
-.wfrt-sub {
+.wfrt-sub,
+.wfrt-hint {
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .wfrt-bad {
   color: rgb(var(--v-theme-surface-error));
+}
+
+.wfrt-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
 }
 
 .wfrt-list {
@@ -1255,20 +1403,36 @@ function run(recipe) {
   margin: 0;
   padding: 0;
   list-style: none;
+  min-width: 0;
 }
 
 .wfrt-card {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
   padding: var(--space-3);
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-md);
   background: rgb(var(--v-theme-surface));
+  min-width: 0;
 }
 
 .wfrt-card--dragging {
   opacity: var(--opacity-disabled);
+}
+
+/* One recipe is one picture: the thumbnail at the left, the words at the
+   right. `min-width: 0` on each step keeps a long name from widening the rail. */
+.wfrt-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.wfrt-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
 }
 
 .wfrt-top {
@@ -1291,19 +1455,19 @@ function run(recipe) {
 .wfrt-name {
   flex: 1;
   min-width: 0;
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* `cover` so a portrait picture crops rather than letterboxes. */
+/* 64 by 84, the design's portrait tile. `cover` crops rather than letterboxes. */
 .wfrt-thumb {
   display: block;
   flex-shrink: 0;
-  width: var(--space-8);
-  aspect-ratio: 1 / 1;
+  width: var(--space-9);
+  aspect-ratio: 16 / 21;
   object-fit: cover;
   border-radius: var(--radius-sm);
 }
@@ -1327,10 +1491,10 @@ function run(recipe) {
 
 /* `ChipRow`'s `.chip-row__chip`, spelled the same: the dense chip is
    `--tag-h-xs` tall on the input surface, and `--text-2xs` is its size only
-   because the height is there to sit it in. This row wraps where `ChipRow`
-   clips to one line with a "+N", which is the whole reason it is not that
-   component - a recipe's LoRAs are the look and none of them is surplus. */
-.wfrt-chip {
+   because the height is there to sit it in. The diff's segments are chips too;
+   each part shrinks with an ellipsis, so a long name stays inside the chip. */
+.wfrt-chip,
+.wfrt-seg {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
@@ -1350,33 +1514,33 @@ function run(recipe) {
   white-space: nowrap;
 }
 
-/* The diff line, then +N more, then the prompt: one group, the in-group step. */
-.wfrt-body {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--space-2);
+.wfrt-seg > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* Full ink, above the secondary prompt: it is what tells cards apart. Relative
-   so the segments measure their offsets against it (the clamp count). */
+/* The chips of what a recipe changes, wrapping. Clamped to two rows behind
+   "+N more": the measure counts the chips that start below the second row. The
+   gap is the row gap too, so two rows are exactly two chips and a gap. Relative
+   so the chips measure their offsets against it. */
 .wfrt-diff {
   position: relative;
-  margin: 0;
-  font-size: var(--text-xs);
-  line-height: var(--leading-body);
-  font-weight: var(--weight-regular);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-width: 0;
+  max-width: 100%;
+  max-height: calc(var(--tag-h-xs) * 2 + var(--space-2));
+  overflow: hidden;
   font-variant-numeric: tabular-nums;
   color: rgb(var(--v-theme-on-surface));
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
 }
 
 .wfrt-diff--open {
-  display: block;
-  -webkit-line-clamp: unset;
+  max-height: none;
 }
 
 /* `.wftab-link`'s inline text button; the pointer target grown to 24px the
@@ -1404,11 +1568,35 @@ function run(recipe) {
   text-decoration-thickness: 2px;
 }
 
+/* The verbs: small text buttons at the row's text size, the pointer target 24px
+   tall. Underlined on hover, as the links in this rail are. */
 .wfrt-bot {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: flex-end;
-  gap: var(--space-2);
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.wfrt-verb {
+  height: var(--space-6);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: rgb(var(--v-theme-on-surface));
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+}
+
+.wfrt-verb:hover:not(:disabled) {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.wfrt-verb:disabled {
+  color: rgba(var(--v-theme-on-surface), var(--opacity-disabled));
+  cursor: default;
 }
 
 .wfrt-facts {
@@ -1442,7 +1630,7 @@ function run(recipe) {
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
-/* The band over each half: Saved, then From your pictures. */
+/* The band over each group: Saved, then From your pictures. */
 .wfrt-section {
   margin-top: var(--space-2);
 }

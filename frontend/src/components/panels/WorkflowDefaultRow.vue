@@ -55,37 +55,34 @@
         @click="emit('reset')"
       />
     </span>
-    <!-- A toggle with one constant name, pressed when fixed. `AppButton
-         icon-only` rather than a hand-rolled button: it is what makes the
-         tooltip the accessible NAME (docs/design/buttons.md). Open: a quiet
-         ghost lock. Fixed: the closed lock in a bordered button, so the one
-         control on a row whose value has lost its box still reads as one. -->
-    <AppButton
-      class="wfdef-lock"
-      size="sm"
-      :variant="fixed ? 'secondary' : 'ghost'"
-      icon-only
-      :icon-left="fixed ? 'lock-outline' : 'lock-open-variant-outline'"
-      :tooltip="`Pin ${row.label} for this workflow`"
-      :aria-pressed="fixed ? 'true' : 'false'"
-      :disabled="busy"
-      data-testid="wfdef-lock"
-      @click="emit('toggle-pin')"
+    <!-- Each run or Pinned: the pin toggle's own path, as the app's pick-one
+         control. The dialog is wide enough for the full Segmented, so this is
+         not a compact site (docs/design/buttons.md, "Pick one"). Segmented
+         owns the roving tab stop and moves focus before it asks, so focus
+         follows the arrow whenever the parent flips the row. -->
+    <Segmented
+      class="wfdef-seg"
+      :options="segOptions"
+      :model-value="fixed ? 'pinned' : 'each'"
+      :aria-label="`${fieldName}: when it is set`"
+      data-testid="wfdef-seg"
+      @update:model-value="emit('toggle-pin')"
     />
   </div>
 </template>
 
 <script setup>
-// One parameter of the Workflow tab's Parameters panel: its name, its value,
-// and the lock that says whether the Run form asks for it each run (open) or
-// every run uses the workflow's value (fixed). `row.pinned` is "set each run";
-// the stored pin list keeps its shape.
+// One parameter in the Edit parameters dialog: its name, its value, and the
+// Each run | Pinned switch that says whether the Run form asks for it each run
+// or every run uses the workflow's value. `row.pinned` means set each run; the
+// switch's Pinned side is its inverse, `fixed`.
 
 import { computed } from "vue";
 
 import { parameterTitle } from "../../utils/workflowPins";
 import AppButton from "../widgets/AppButton.vue";
 import AppSelect from "../widgets/AppSelect.vue";
+import Segmented from "../widgets/Segmented.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 
 const props = defineProps({
@@ -113,6 +110,13 @@ const fieldName = computed(() =>
   tip.value ? `${name.value} (${tip.value})` : name.value,
 );
 const fixed = computed(() => !props.row.pinned);
+
+/** The switch's two sides; a write out for the row holds both. */
+const segOptions = computed(() => [
+  { id: "each", label: "Each run", disabled: props.busy, testid: "wfdef-each-run" },
+  { id: "pinned", label: "Pinned", disabled: props.busy, testid: "wfdef-pinned" },
+]);
+
 const choosing = computed(() => !fixed.value && Boolean(props.options?.length));
 
 /**
@@ -146,10 +150,10 @@ function onChange(event) {
 
 <style scoped>
 /* Name and value take equal halves, so the value grows with the rail instead
-   of sitting in a fixed track; the lock is one `--control-h-sm` square. */
+   of sitting in a fixed track; the switch keeps its own column. */
 .wfdef {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) var(--control-h-sm);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-3);
 }
@@ -178,9 +182,10 @@ function onChange(event) {
   min-width: 0;
   height: var(--control-h);
   padding: 0 var(--space-3);
-  border: 1px solid rgb(var(--v-theme-divider));
+  /* AppInput's ground and border, so the dialog's fields read as one family. */
+  border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-sm);
-  background: rgba(var(--v-theme-on-surface), 0.06);
+  background: rgb(var(--v-theme-input-background));
   font-size: var(--text-sm);
 }
 
@@ -194,14 +199,14 @@ function onChange(event) {
 }
 
 /* A choice takes the row's whole width on a line of its own, under its name:
-   half the rail clips a sampler's name to its first letters. The lock keeps
+   half the rail clips a sampler's name to its first letters. The switch keeps
    its column, so it still lines up with the rows around it. */
 .wfdef--choice {
-  grid-template-columns: minmax(0, 1fr) var(--control-h-sm);
+  grid-template-columns: minmax(0, 1fr) auto;
   row-gap: var(--space-2);
 }
 
-.wfdef--choice .wfdef-lock {
+.wfdef--choice .wfdef-seg {
   grid-area: 1 / 2;
 }
 
@@ -242,13 +247,13 @@ function onChange(event) {
 
 /* `--control-h-sm` is the WCAG 2.2 pointer floor the token ramp names, and
    `AppButton size="sm"` is already that tall; this only squares it. */
-.wfdef-reset,
-.wfdef-lock {
+.wfdef-reset {
   flex: none;
   width: var(--control-h-sm);
 }
 
-.wfdef-lock[aria-pressed="false"] {
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+/* The switch is the app's Segmented; the row only keeps it from stretching. */
+.wfdef-seg {
+  flex: none;
 }
 </style>

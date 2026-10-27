@@ -331,28 +331,22 @@ describe("Toolbar - the shell band's one box recipe", () => {
     expect(decl(insSub, "font-size")).toBe(decl(qsub, "font-size"));
     expect(decl(insSub, "color")).toBe(decl(qsub, "color"));
 
-    // The two bars that joined the loop above lead with an identity too, and
-    // were unguarded: the workflow library shipped its title at --text-lg and
-    // its count at a fourth ink, the same drift the shelf's --text-xl was
-    // (#1415).
-    const wfTitle = blockOf(
-      "src/components/views/WorkflowsView.vue",
-      ".wfv-title",
-    );
-    const wfSub = blockOf(
-      "src/components/views/WorkflowsView.vue",
-      ".wfv-sub",
-    );
+    // Moves leads with an identity too, and was unguarded: the workflow
+    // library shipped its title at --text-lg and its count at a fourth ink,
+    // the same drift the shelf's --text-xl was (#1415). The Workflows bar is
+    // browse-only since #2165: its view is named by the rail head and the
+    // sidebar counts it, so it carries no identity pair to drift.
+    expect(readFileSync(
+      `${process.cwd()}/src/components/views/WorkflowsView.vue`,
+      "utf8",
+    )).not.toMatch(/class="wfv-(title|sub)"/);
     const mvTitle = blockOf(
       "src/components/views/MovesReview.vue",
       ".mv-title",
     );
     const mvSub = blockOf("src/components/views/MovesReview.vue", ".mv-sub");
 
-    for (const [title, sub] of [
-      [wfTitle, wfSub],
-      [mvTitle, mvSub],
-    ]) {
+    for (const [title, sub] of [[mvTitle, mvSub]]) {
       expect(decl(title, "font-size")).toBe(decl(qtitle, "font-size"));
       expect(decl(title, "font-weight")).toBe(decl(qtitle, "font-weight"));
       expect(decl(sub, "font-size")).toBe(decl(qsub, "font-size"));
@@ -369,10 +363,14 @@ describe("Toolbar - the shell band's one box recipe", () => {
       "src/components/views/WorkflowsView.vue",
       ".wfv-bar-tail",
     );
-    for (const identity of [wfTitle, mvTitle]) {
-      expect(identity).toContain("min-width: 0");
-      expect(identity).toMatch(/flex-shrink: [1-9]/);
-    }
+    expect(mvTitle).toContain("min-width: 0");
+    expect(mvTitle).toMatch(/flex-shrink: [1-9]/);
+    // The Workflows bar has no identity since #2165; its Search field gives.
+    const wfSearch = blockOf(
+      "src/components/views/WorkflowsView.vue",
+      ".wfv-search",
+    );
+    expect(wfSearch).toMatch(/flex: 0 [1-9] 260px/);
     expect(wfTail).toContain("flex: 0 0 auto");
   });
 });
