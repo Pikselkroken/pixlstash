@@ -1,6 +1,6 @@
 /* The row system lives in SideBar.global.css, NOT here. Scoped rules cannot
-   reach a child component's internals, and FolderTreeNode renders rows of the
-   same family. See docs/design/visual-language.md §5.1. */
+   reach a child component's internals. See docs/design/visual-language.md
+   §5.1. */
 
 .sidebar-collections-help-row {
   display: flex;
@@ -136,21 +136,6 @@
 
 .sidebar-section-scroll::-webkit-scrollbar-track {
   background: rgba(var(--v-theme-shadow), 0.15);
-}
-
-/* The two folder section bands' caret, at the far right AFTER the actions. */
-.sidebar-project-tree-expand-indicator {
-  flex-shrink: 0;
-  opacity: 0.5;
-  color: inherit;
-  transform: rotate(-90deg);
-  transition:
-    transform 0.15s,
-    opacity 0.12s;
-}
-
-.sidebar-project-tree-expand-indicator.expanded {
-  transform: rotate(0deg);
 }
 
 .sidebar-project-tree-files {
@@ -960,8 +945,7 @@
 }
 
 /* Under ~150px there isn't room for the per-entry image counts - drop them. */
-.sidebar--narrow .sidebar-list-count,
-.sidebar--narrow .sidebar-folder-count-badge {
+.sidebar--narrow .sidebar-list-count {
   display: none;
 }
 
@@ -1061,170 +1045,6 @@
     min-width: 44px;
     min-height: 44px;
   }
-}
-
-/* ── Reference Folders panel ──────────────────────────────── */
-.sidebar-folders-loading {
-  display: flex;
-  justify-content: center;
-  padding: var(--space-7);
-}
-
-.sidebar-folders-list {
-  flex: 0 0 auto;
-  overflow-y: visible;
-  overflow-x: hidden;
-  padding: var(--space-1) 0;
-  scrollbar-color: rgb(var(--v-theme-accent)) rgba(var(--v-theme-shadow), 0.15);
-}
-
-/* Add folder button in the folders tab needs no bottom divider - section headers do that job */
-
-.sidebar-folder-section-header {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: 28px;
-  cursor: pointer;
-  color: rgb(var(--v-theme-sidebar-text));
-  background: transparent;
-  border-top: 1px solid rgba(var(--v-theme-border), 0.22);
-  border-bottom: 1px solid rgba(var(--v-theme-border), 0.2);
-  user-select: none;
-  transition:
-    background 0.12s,
-    color 0.12s;
-}
-
-.sidebar-folder-section-header:first-child {
-  border-top: none;
-}
-
-.sidebar-folder-section-header:hover {
-  background: var(--hover-wash);
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-folder-section-title {
-  flex: 1 1 auto;
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: inherit;
-}
-
-.sidebar-folder-section-edit-btn {
-  width: 22px;
-  justify-content: flex-end;
-  flex-shrink: 0;
-  opacity: 0.66;
-  cursor: pointer;
-  color: rgb(var(--v-theme-sidebar-text));
-  transition:
-    opacity 0.15s,
-    color 0.15s;
-}
-
-.sidebar-folder-section-edit-btn:hover {
-  opacity: 1;
-}
-
-.sidebar-folder-root {
-  display: flex;
-  flex-direction: column;
-}
-
-.sidebar-folder-root-row {
-  font-size: var(--text-sm);
-}
-
-/* .sidebar-folder-row and its states, .sidebar-folder-children and
-   .sidebar-folder-label live in SideBar.global.css: FolderTreeNode renders them
-   too, and a scoped rule cannot reach into a child component. */
-
-.sidebar-folder-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  flex-shrink: 0;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.15s;
-}
-
-.sidebar-folder-row:hover .sidebar-folder-actions,
-.sidebar-folder-row:focus-within .sidebar-folder-actions,
-.sidebar-folder-row.active .sidebar-folder-actions {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.sidebar-folder-action-btn {
-  width: 22px;
-  height: 22px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-sm);
-  color: inherit;
-  opacity: 0.72;
-}
-
-.sidebar-folder-action-btn:hover {
-  background: var(--hover-wash);
-  opacity: 1;
-}
-
-/* The folder glyph and badge rules also live in SideBar.global.css, for the
-   same reason. */
-
-.sidebar-folder-status--active {
-  color: rgb(var(--v-theme-sidebar-text));
-  cursor: pointer;
-  border-radius: var(--radius-sm);
-  transition:
-    color 0.15s,
-    opacity 0.15s;
-}
-
-.sidebar-folder-status--active:hover {
-  color: rgb(var(--v-theme-sidebar-text));
-  opacity: 1;
-}
-
-.sidebar-folder-status--pending_mount {
-  color: rgb(var(--v-theme-surface-warning));
-}
-
-.sidebar-folder-status--scanning {
-  color: rgb(var(--v-theme-sidebar-text));
-  display: flex;
-  align-items: center;
-}
-
-.sidebar-folder-status--mount_error {
-  color: rgb(var(--v-theme-surface-error));
-}
-
-.sidebar-folder-loading-row {
-  display: flex;
-  justify-content: center;
-  padding: var(--space-3);
-}
-
-.sidebar-folder-empty-row {
-  padding: var(--space-2) var(--space-3);
-  font-size: var(--text-xs);
-  color: rgb(var(--v-theme-sidebar-text));
-  font-style: italic;
-}
-
-.sidebar-folder-error-row {
-  color: rgba(var(--v-theme-surface-error), 0.8);
 }
 
 /* ── Sidebar context menu ────────────────────────────── */
@@ -1405,115 +1225,11 @@
   z-index: var(--z-raised);
 }
 
-.folder-type-subtitle {
-  margin: 0;
-  font-size: var(--text-sm);
-  color: rgba(var(--v-theme-on-surface), 0.62);
-}
-
 .share-dialog-hint {
   margin: 0;
   font-size: var(--text-base);
   line-height: var(--leading-body);
   color: rgba(var(--v-theme-on-surface), 0.85);
-}
-
-.folder-type-options {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.folder-type-option {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
-  width: 100%;
-  border: 1px solid rgba(var(--v-theme-border), 0.35);
-  border-radius: var(--radius-md);
-  background: rgba(var(--v-theme-surface), 0.4);
-  padding: var(--space-3) var(--space-4);
-  text-align: left;
-  color: rgb(var(--v-theme-on-surface));
-}
-
-.folder-type-option:hover {
-  background: var(--hover-wash);
-}
-
-.folder-type-option-text {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.folder-type-option-text strong {
-  font-size: var(--text-base);
-  font-weight: var(--weight-semibold);
-}
-
-.folder-type-option-text small {
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-surface), 0.62);
-}
-
-.relocate-path-block {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.relocate-path-label {
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  opacity: 0.68;
-  text-transform: uppercase;
-}
-
-.relocate-path-value {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  border-radius: var(--radius-sm);
-  background: rgba(var(--v-theme-surface-variant), 0.35);
-  padding: var(--space-3) var(--space-3);
-  font-family: var(--font-mono);
-  font-size: var(--text-sm);
-}
-
-.relocate-destination-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.relocate-destination-input {
-  flex: 1;
-  min-width: 0;
-}
-
-.relocate-browse-btn {
-  flex-shrink: 0;
-}
-
-.relocate-warning {
-  font-size: var(--text-sm);
-  line-height: var(--leading-snug);
-  color: rgba(var(--v-theme-on-surface), 0.72);
-}
-
-.relocate-error {
-  font-size: var(--text-sm);
-  color: rgb(var(--v-theme-surface-error));
-  background: rgba(var(--v-theme-error), 0.08);
-  border: 1px solid rgba(var(--v-theme-surface-error), 0.22);
-  border-radius: var(--radius-sm);
-  padding: var(--space-3) var(--space-3);
-}
-
-.relocate-result {
-  font-size: var(--text-sm);
-  color: rgb(var(--v-theme-on-surface));
 }
 
 /* A fixed destination rendered as a real button rather than a clickable div,
@@ -1532,21 +1248,10 @@
   text-align: center;
 }
 
-/* v1.11 Phase 3: the "finish organising" resume row. Accented rather than the
-   plain sidebar-text color of an ordinary folder row, because it names
-   unfinished work the owner asked to come back to, not a settled folder. */
-.sidebar-mapping-resume-row {
+/* The "finish organising" resume row. Accented rather than the plain
+   sidebar-text colour of an ordinary row, because it names unfinished work the
+   owner asked to come back to. */
+.sidebar-mapping-resume-row,
+.sidebar-mapping-resume-row .v-icon {
   color: rgb(var(--v-theme-accent));
-}
-
-.sidebar-mapping-resume-icon {
-  flex-shrink: 0;
-}
-
-.sidebar-mapping-resume-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--text-sm);
 }

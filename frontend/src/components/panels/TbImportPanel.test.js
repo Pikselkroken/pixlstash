@@ -60,7 +60,7 @@ describe("TbImportPanel hardening", () => {
     );
 
     const tabs = wrapper.findAll('[role="tab"]');
-    expect(tabs).toHaveLength(5);
+    expect(tabs).toHaveLength(4);
     expect(tabs[0].attributes()).toMatchObject({
       "aria-selected": "true",
       tabindex: "0",

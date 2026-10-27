@@ -17,7 +17,6 @@ const read = (name) =>
 
 const globalCss = read("./SideBar.global.css");
 const scopedCss = read("./SideBar.css");
-const folderTreeNode = read("../editors/FolderTreeNode.vue");
 
 /** Strip comments so prose about a bug is never mistaken for the bug. */
 const code = (css) => css.replace(/\/\*[\s\S]*?\*\//g, "");
@@ -54,44 +53,22 @@ function ruleBody(css, selector) {
 }
 
 describe("the row system is defined once, unscoped", () => {
-  it("lives in the unscoped sheet so it reaches FolderTreeNode", () => {
-    // SideBar.css is `<style scoped>`, so a rule there cannot style a row
-    // rendered by a child component. This placement is the fix.
-    expect(globalCss).toContain(".sidebar-row-glyph");
+  it("lives in the unscoped sheet", () => {
+    expect(globalCss).toContain(".ps-row-glyph");
     expect(globalCss).toContain("--indent-step");
   });
 
   it("the refused-drop state is unscoped too", () => {
-    // #757 shipped `.not-droppable` twice: once in SideBar.css and once copied
-    // into FolderTreeNode under a comment explaining that the copy was needed
-    // because the styles are scoped. It is not needed once the folder-row
-    // family lives in the unscoped sheet, and a second copy is how the two
+    // #757 shipped `.not-droppable` twice, and a second copy is how the two
     // drift apart again.
-    expect(globalCss).toContain(".sidebar-folder-row.not-droppable");
+    expect(globalCss).toContain(".sidebar-list-item.not-droppable");
     expect(scopedCss).not.toContain("not-droppable");
-    const style = folderTreeNode.split("<style")[1] ?? "";
-    expect(style).not.toContain("not-droppable");
-  });
-
-  it("FolderTreeNode keeps no private copy of the row styles", () => {
-    // It used to, and the copy had drifted to a different inset with no base
-    // rail, so selecting a nested folder shifted its label 3px right.
-    const style = folderTreeNode.split("<style")[1] ?? "";
-    for (const dup of [
-      ".sidebar-folder-row {",
-      ".sidebar-folder-children {",
-      ".sidebar-folder-label {",
-    ]) {
-      expect(style).not.toContain(dup);
-    }
   });
 });
 
 describe("every row starts at one left edge", () => {
   const ROW_TYPES = [
     ".sidebar-list-item",
-    ".sidebar-folder-row",
-    ".sidebar-folder-section-header",
     ".sidebar-section-header",
   ];
 
@@ -161,13 +138,13 @@ describe("the selection rail is reserved, never added on select", () => {
 
 describe("optional glyphs keep their box", () => {
   it("hides an absent glyph with visibility, not display", () => {
-    const body = ruleBody(globalCss, ".sidebar-row-glyph--empty");
+    const body = ruleBody(globalCss, ".ps-row-glyph--empty");
     expect(body).toContain("visibility: hidden");
     expect(body).not.toContain("display");
   });
 
   it("keeps a fixed width so an absent glyph still holds its column", () => {
-    const body = ruleBody(globalCss, ".sidebar-row-glyph");
+    const body = ruleBody(globalCss, ".ps-row-glyph");
     expect(body).toContain("width: var(--gutter-glyph)");
   });
 

@@ -100,7 +100,6 @@ const SideBarStub = {
     refreshSidebar() {},
     async offerLoosePictures() {},
     openSettingsDialog() {},
-    openReferenceFolderEditor() {},
     startLocalImport() {},
   },
 };

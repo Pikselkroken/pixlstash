@@ -82,12 +82,11 @@ frontend/src/
 │   ├── useReviewRoute.js        # URL ⇄ tag-review overlay (`?review=…`); mirrors ImageGrid's `?overlay=` mechanics (+ *.test.js)
 │   ├── useActionReceipt.js      # The receipt contract (wording, keycaps, drain, pause, focus) shared by the grid pill and the lightbox's own narration
 │   ├── useVersionCheck.js       # "New version available" check (pixlstash.dev poll); single owner gated by `enabled`
-│   ├── useSidebarExpansion.js   # Which sidebar sections / projects / folders are open; localStorage-backed (+ *.test.js)
 │   ├── useDedupQueueKeyboard.js # The duplicate queue's key model, as a dependency-injected factory (+ *.test.js)
 │   ├── useDedupRowExpansion.js  # The queue row's one stack-expansion band: the "one open, on the focused row" invariant + the lazy member read (+ *.test.js)
 │   ├── useMixedStackQueue.js    # The Mixed stacks queue's view state: focus, selection, stranger marks and the member cursor (+ *.test.js)
 │   ├── useOneTimeNotice.js      # A notice shown once per browser and then never again; localStorage-backed (+ *.test.js)
-│   └── useSubmitGuard.js        # One in-flight submit at a time + the `pending` flag its button wears — see §10.2 (+ *.test.js)
+│   └── useSubmitGuard.js        # One in-flight submit at a time + the `pending` flag its button wears — see §10.1 (+ *.test.js)
 │
 ├── api/                         # Backend resource modules: the only place URL strings live (see §8)
 │   ├── config.js                # Per-user config blob: GET/PATCH /users/me/config
@@ -314,10 +313,12 @@ two routes do not clear `selectedFolderFilter`, and why `applyView` refuses to
 apply `?path=` on them (it guards on `folderKey`). The folder an "About your
 library" finding points at (§13.4) has no id of any kind, which is what this
 param is for. **It also carries the sidebar's subfolder selection.**
-`FolderTreeNode.vue` requires `rfId`, so a subfolder click takes
+A subfolder selection carries `rfId`, so it takes
 `pushRouteForCurrentSelection`'s ref-folder branch; the branch pushes `?path=`
 alongside the id, and `SideBar.routeSubfolderUnder` reads it back once the
 folder listing is in, selecting the subfolder rather than the folder root.
+(The sidebar no longer lists folders, so these routes are reached only by URL:
+an old link, Back, or a library insight.)
 **On an id-carrying route that query is RELATIVE to the folder the id names**
 (`SideBar._subPathUnder` builds it, and it reaches the branch as the payload's
 `subPath`). The id already says where the folder is, so repeating the absolute
@@ -625,16 +626,15 @@ Two things the fix must not undo, both asserted: a card the server reports **no*
 
 Every path still emits `refresh-sidebar` (the counts changed) and, under an open overlay, defers its grid work to `pendingOverlayGridRefresh` rather than restructuring the frozen filmstrip (§9.1), but only when a refetch was warranted in the first place, so a deferred redundant reload is not queued either. Regression coverage: `ImageGridProjectAssignRefresh.test.js` (both directions: no refetch in the global view, refetch still fires in the project view).
 
-#### `SideBar.vue` (6989 lines)
+#### `SideBar.vue` (6387 lines)
 The Media workspace's sidebar. Expanded, it is a fixed frame (#2159): the **header slot** (`--sidebar-slot-h`, the toolbar band's height, so its rule continues the toolbar's) holds the project scope, one list scrolls under it, and the 52px **footer band** (`--sidebar-band-h`) holds the one amber action, **Import**. Every workspace's sidebar uses the same two tokens, so the frame keeps its shape on a switch. Responsibilities:
 - **Project scope** (`SidebarScopeSlot.vue`): the project's colour tile, name and up/down chevrons over a "Limit view to" menu: Any project, each project with its count, Not in a project, then *New project…* and *Edit "name"…*. Right-click on the slot or a project row opens that project's context menu (share, export, edit, delete). Projects store no colour; `utils/setAppearance.projectColor` cycles the set palette by id, and a chosen project tints the slot (22 %) and the list (6 %) with it.
-- **One list in every scope, every row 32px** (`--control-h-bar`): places (All media, Favourites, Scrapheap), a **Review** group (Duplicates, Tags to review, and Moves while its queue holds anything), then **People**, **Sets**, the scoped project's **Project files** and **Folders** (reference and import folders, owner only). Section heads are uppercase labels with a `+` at the right edge. People wear a 20px round avatar, sets a 16px glyph; the thumbnail-size setting now sizes only the docked rail.
+- **One list in every scope, every row 32px** (`--control-h-bar`): places (All media, Favourites, Scrapheap), a **Review** group (Duplicates, Tags to review, and Moves while its queue holds anything), then **People**, **Sets** and the scoped project's **Project files**. Reference and import folders are not listed: adding a folder is *Add a library*, and a folder view is reached only by URL. A pending folder read for this library shows as a "Finish organising…" row below the list. Section heads are uppercase labels with a `+` at the right edge. People wear a 20px round avatar, sets a 16px glyph; the thumbnail-size setting now sizes only the docked rail.
 - **Favourites** is All media with the `favourite=1` filter on (#2155), not a container: the two rows split All media's highlight on `filterStore.favouriteOnlyFilter`, and the filter chip still shows it. Its count is a `/pictures/count?favourite=1` in the current scope, refreshed when a heart changes (`useGridScoring.setFavourite` emits `refresh-sidebar`).
 - Inside a project the People and Sets `+` open the add-or-remove menus (make a new one in the project, or tick existing ones in and out); elsewhere they create one.
-- Character, set and folder rows are drop targets for grid pictures (and faces, on people). Projects no longer are: the project rows went with the tree; assign from the grid's selection instead.
+- Character and set rows are drop targets for grid pictures (and faces, on people). Projects no longer are: the project rows went with the tree; assign from the grid's selection instead.
 - Settings dialog trigger, sort selector.
-- Expansion state (the folder section bands and the reference-folder tree) is owned by `composables/useSidebarExpansion.js` and persisted client-side — see §10.1.
-- Embeds: `ImageImporter`, `CharacterEditor`, `PictureSetEditor`, `ProjectEditor`, `FolderEditor`, `UserSettingsDialog`.
+- Embeds: `ImageImporter`, `CharacterEditor`, `PictureSetEditor`, `ProjectEditor`, `FolderMappingWizard`, `UserSettingsDialog`.
 - Exposes: `refreshSidebar()`, `openSettingsDialog()`, `startLocalImport()`, `currentProjectId`, `openCurrentSelectionEditor()`
 - Emits `open-import` (the footer's Import: App opens `PhotosImportDialog` with `currentProjectId` as its default project, and the button's tooltip names that destination, "Import into Library 1 › Nordvik") and `open-tag-review` (App opens the tag-review board).
 - Emits: 30+ events including `select-character`, `select-set`, `select-folder`, `update:public-url`, `update:theme-mode`, `update:sort-options`, `update:hidden-tags`, `toggle-dock`, `update:project-view-mode`, etc.
@@ -1164,20 +1164,14 @@ The shape is the same in both, and is a **CSS reflow of unchanged source order**
 #### `ProjectEditor.vue` (177 lines)
 Create/rename/delete a project. Props: `open`, `project`. Emits: `close`, `saved`, `deleted`.
 
-#### `FolderEditor.vue` (1638 lines)
-Configure import/reference folders (add, edit, remove, Docker command generation). Uses `dockerHelpers.js` for volume flag building. Embeds `FolderBrowser`, and `DockerSnippet.vue` for each copyable command (it emits `copy`; the editor owns the copy and its status line).
-
 #### `FolderBrowser.vue` (416 lines)
 Server-side directory browser dialog. Props: `open`, `initialPath`. Emits: `select`, `close`. Fetches `GET /folders/browse`.
-
-#### `FolderTreeNode.vue` (230 lines)
-Recursive tree node for nested folder display. Props: `entry`, `rfId`, `depth`, `selectedFolderKey`, `folderBrowseCache`, `expandedFolderIds`, `dropTargetKey`, `dropRejected`. Emits: `select`, `toggle`, `drag-over`, `drag-leave`, `drop`, `context`. `dropRejected` must be declared and forwarded down the recursion, or a refused payload paints the full `droppable` accept highlight on a row whose dragover never called `preventDefault()`; the row styling lives unscoped in `SideBar.global.css` (`.sidebar-folder-row.not-droppable`).
 
 ---
 
 ### Import Components
 
-#### `PhotosImportDialog.vue` (576 lines)
+#### `PhotosImportDialog.vue` (443 lines)
 Import source selection dialog. Sources: local file picker, Google Photos (OAuth), external API. Embeds `ProjectEditor`. Props: `open`. Emits: `close`, `import`.
 
 #### `ImageImporter.vue` (1185 lines)
@@ -1311,7 +1305,7 @@ The house-styled form/control primitives that wrap Vuetify with the PixlStash to
 
 **Fields and pick-one** (issue #1296, spec `docs/design/buttons.md`). Every field in the shell is `--control-h` at `--radius-sm`, the same box as the `AppButton` beside it: `AppInput`, `AppSelect` (`compact` is `--control-h-sm`; an option carrying `chips` turns it into a select-only `combobox`/`listbox` on the shared `.ctx-menu` surface, each row the name over a `ChipRow` of those chips and an option's `group` drawn as a `.ctx-label` heading, which is how the Run popup tells a stack's members apart, #1525), `AppStepper`, and the popover `.tbm-input` / `.tbm-num` / `.tbm-select`. The label is the uppercase `FieldLabel` above the box and never inside it, so `v-text-field` is not used. A field holding a path, hash, port or id passes `AppInput mono`; a name or phrase does not. `AppInput` also takes `readonly`, `error` (a string renders the message) and `ariaLabel` for a field with no visible label. Pick-one has exactly two shapes, chosen by arity, one per site: `Segmented` for two to five short options (a trough track with an inset `--track-ring`, `--control-h-bar` tall, olive selected segment; variants `label`, `icon-label`, `icon`, and `stacked` with a `#media` slot for a diagram of the outcome; where it genuinely does not fit, a compact switch whose selected side takes `--active-wash`, justified in a comment at the site, `docs/design/buttons.md`) and `OptionRows` for sort by and the filter menu's pick-one lists (no fill, a leading radio indicator on every row and no option icon, marked in `--selected-ink` with medium weight on the selected row, `columns` 1 or 2, a `#meta` slot). Both are `radiogroup`/`radio` with `aria-checked` and one roving tab stop moved by the arrow keys (`utils/radioGroup.js`); neither is `aria-pressed`. On/off toggles, multi-select filters and tabs are not pick-one and keep their own markup. **One designed exception:** the Train a LoRA dialog's *What is this set of?* is three option cards, each an outcome with a sentence under it (design "Outcome choices, numbers derived", #2119); they keep the same `radiogroup`/`radio` contract on `utils/radioGroup.js`. A new site does not copy them without its own design decision.
 
-**`AppButton loading`** (2026-07-30, issue #647): the pending state. Forces the button natively `disabled` so a create cannot be double-submitted, swaps the leading icon for `mdi-loading` + `mdi-spin`, sets `aria-busy`, and restores focus to itself when the request settles (a natively-disabled button drops focus to `<body>`, stranding a keyboard user who would otherwise have to tab all the way back). It does **not** dim and it does **not** change the label; there is no loading-text prop. Rationale and the contrast arithmetic: `docs/design/visual-language.md` §11. The behavioural half is `composables/useSubmitGuard.js` (§10.2).
+**`AppButton loading`** (2026-07-30, issue #647): the pending state. Forces the button natively `disabled` so a create cannot be double-submitted, swaps the leading icon for `mdi-loading` + `mdi-spin`, sets `aria-busy`, and restores focus to itself when the request settles (a natively-disabled button drops focus to `<body>`, stranding a keyboard user who would otherwise have to tab all the way back). It does **not** dim and it does **not** change the label; there is no loading-text prop. Rationale and the contrast arithmetic: `docs/design/visual-language.md` §11. The behavioural half is `composables/useSubmitGuard.js` (§10.1).
 
 **`AppDialog fullscreen`** (2026-07-29): a near-viewport dialog (min(1800px, 96vw) × 94vh, flexing body) for working surfaces where the content is the point — first user: the dedup Compare dialog, per the owner's "take the full space of the grid view". Ordinary forms take a `size` step.
 
@@ -4068,7 +4062,7 @@ While the lightbox overlay is open, the user's own in-overlay edits (and any oth
 
 ### Component naming
 - **PascalCase** filenames and registration: `ImageGrid.vue`, `UserSettingsDialog.vue`.
-- **Descriptive + domain-noun**: components are named after the UI element they represent, not a generic role (`FolderEditor`, not `Editor`).
+- **Descriptive + domain-noun**: components are named after the UI element they represent, not a generic role (`ProjectEditor`, not `Editor`).
 
 ### Props
 - camelCase in `defineProps`, kebab-case in templates (Vue 3 convention).
@@ -4098,24 +4092,10 @@ While the lightbox overlay is open, the user's own in-overlay edits (and any oth
 All persisted keys are prefixed `pixlstash:` to avoid collisions:
 - `pixlstash:statsSidebarOpen`, `pixlstash:sidebarDocked`
 - `pixlstash:characterMultiMode`, `pixlstash:setMultiMode`, `pixlstash:setDifferenceBaseId`
-- `pixlstash:sidebar:expansion` (one JSON blob — see §10.1)
 - `pixlstash:collapsedSections` (one JSON map, `<inspector>:<section>` → collapsed; `useSectionCollapse`, see `SectionHeader`)
 - `pixlstash:clientId` (per-tab, `sessionStorage` — the `X-Client-Id` / WS `origin_client_id` echo key; in-memory fallback if `sessionStorage` is unavailable)
 
-### 10.1 Sidebar expansion state (`composables/useSidebarExpansion.js`)
-
-Which sidebar folder sections and folders are open is a per-browser view preference, so it stays on the client: one versioned JSON blob under `pixlstash:sidebar:expansion`, read once when `SideBar` sets up and rewritten by a single watcher on change. Nothing is sent to the server, and a blob whose `v` does not match the current schema is discarded rather than half-applied.
-
-Two rules keep the restored state honest:
-
-- **Store the non-default choice.** Sections and project nodes are expanded by default, so what is persisted is the *collapsed* set (`collapsedProjectIds`, `projectPeopleCollapsed`, `projectSetsCollapsed`). `expandedProjectIds` stays derived: `syncProjectExpansion(ids)` expands each project the first time it is seen *unless* it is in the persisted collapsed set, so a project created after the preference was written still opens by default and a remembered collapse is not undone on every fetch. Ids for projects that no longer exist are pruned — but never on an empty list, which on boot means "not fetched yet" as often as "none exist". The folder tree defaults to collapsed, so there the *expanded* keys are stored (mixed: reference-folder id numbers and subfolder path strings), capped at 200 entries.
-- **Re-browse what was restored.** `folderBrowseCache` is per-session, so a restored subfolder would render with no children. `fetchReferenceFolders()` calls `browseExpandedFolderPaths()` to fetch a listing for each persisted path, and `browseExpandedFolders()` does the same after the cache is dropped (folder relocate, drag-drop move).
-
-localStorage failures (private mode, disabled storage, quota) warn once per sidebar and fall back to defaults; the sections still toggle for the session.
-
-Since #2159 the sidebar reads only the folder half: People and Sets no longer collapse and the project tree is gone, so the composable's section and project-node state is kept for the blob's schema but has no consumer.
-
-### 10.2 Submitting a form (`composables/useSubmitGuard.js`)
+### 10.1 Submitting a form (`composables/useSubmitGuard.js`)
 
 **Any handler that creates something server-side goes through `useSubmitGuard`.** Issue #647: a create form's button stayed live while its POST was in flight, so a double-click — or an impatient second click while the server was busy captioning an import — sent the request twice and the library gained two identical people, sets, or folders. The window is invisible to the user and widest exactly when the server is slowest, which is when they are most likely to click again.
 
@@ -4125,11 +4105,11 @@ const { pending: saving, run: save } = useSubmitGuard(submitCharacter);
 
 Bind `pending` to the submit button (`AppButton :loading`, or `:disabled` on a hand-rolled one) and call `run` wherever the handler used to be called. Three rules:
 
-- **Guard the handler, not just the button.** The button is not the only door in: every one of these forms also submits on Enter (an `@enter` on the name field, a `@keydown.enter`, a Ctrl+Enter document listener), and key auto-repeat fires those faster than a `disabled` attribute can be painted. `run` refusing a re-entrant call is what covers the keyboard; `pending` on the button is what makes the state visible. A component that already had a `saveLoading` ref bound to `:loading` was **not** safe — `FolderEditor` had six Enter-bound fields behind one guarded button.
+- **Guard the handler, not just the button.** The button is not the only door in: every one of these forms also submits on Enter (an `@enter` on the name field, a `@keydown.enter`, a Ctrl+Enter document listener), and key auto-repeat fires those faster than a `disabled` attribute can be painted. `run` refusing a re-entrant call is what covers the keyboard; `pending` on the button is what makes the state visible. A component that already had a `saveLoading` ref bound to `:loading` was **not** safe — the since-removed `FolderEditor` had six Enter-bound fields behind one guarded button.
 - **The handler must await its own work.** `useSubmitGuard` clears `pending` when the handler settles, so a wrapper that fires an async call without awaiting it clears the flag immediately and guards nothing.
 - **Do not catch inside the guard.** It deliberately re-raises, so the form's existing `useNoticeStore` toast or inline error line still fires; `pending` clears in `finally`, which is what re-enables the button for a retry.
 
-Guarded today: `CharacterEditor`, `PictureSetEditor`, `FolderEditor`, `FolderBrowser`, `ProjectFiles` (add-URL), `LoginScreen`. `ProjectEditor` and `NewReviewDialog` predate the composable and hand-roll the same shape; converge them when next touched.
+Guarded today: `CharacterEditor`, `PictureSetEditor`, `FolderBrowser`, `ProjectFiles` (add-URL), `LoginScreen`. `ProjectEditor` and `NewReviewDialog` predate the composable and hand-roll the same shape; converge them when next touched.
 
 ---
 
@@ -4177,7 +4157,7 @@ graph TD
     SideBar --> CharEd["CharacterEditor.vue"]
     SideBar --> SetEd["PictureSetEditor.vue"]
     SideBar --> ProjEd["ProjectEditor.vue"]
-    SideBar --> FolderEd["FolderEditor.vue"]
+    SideBar --> MapWiz["FolderMappingWizard.vue"]
     SideBar --> Importer["ImageImporter.vue"]
     SideBar --> SettingsDlg["UserSettingsDialog.vue"]
 
@@ -4188,8 +4168,6 @@ graph TD
     SettingsDlg --> CompSec["ComputeSection.vue (desktop)"]
     SettingsDlg --> ComfySec["ComfyuiHostSection.vue"]
     SettingsDlg --> AccSec["AccountSection.vue"]
-
-    FolderEd --> FolderBrowser["FolderBrowser.vue"]
 
     App --> TitleBar["TitleBar.vue"]
     TitleBar --> Wordmark["WordmarkLogo.vue"]
@@ -4316,7 +4294,7 @@ graph LR
         ImageOverlay
         StatsSidebar
         Settings["UserSettingsDialog + sections"]
-        Editors["CharacterEditor / PictureSetEditor<br/>/ ProjectEditor / FolderEditor"]
+        Editors["CharacterEditor / PictureSetEditor<br/>/ ProjectEditor"]
         Import["PhotosImportDialog / ImageImporter"]
         Shared["StarRatingOverlay / ProgressOverlay<br/>/ AddToEntityControl / PluginParametersUI<br/>/ ShareDialog / etc."]
     end
@@ -5215,7 +5193,7 @@ collapse gets none, because `aria-expanded` already says it.
 more fields under `pixlstash:modelShelfFilters`: `Reset filters` clears
 everything under that one, and losing your sort order to it would be a different
 promise than the button makes. The blob is versioned and a mismatch is discarded
-whole (`useSidebarExpansion.js`'s shape). Only the **collapsed** set is stored,
+whole. Only the **collapsed** set is stored,
 namespaced per axis, so a base model that appears after the preference was
 written still opens, and collapsing `Not set` under `Base model` is remembered only under its own axis.
 

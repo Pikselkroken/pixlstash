@@ -79,18 +79,13 @@ function tipText(el) {
     .find((t) => t.element.parentElement === el.element);
   return tip?.attributes("text") || undefined;
 }
-import FolderTreeNode from "../editors/FolderTreeNode.vue";
 
 const ADA = { id: 7, name: "Ada", image_count: 3, project_image_count: 3 };
 const SET = { id: 11, name: "Shoot", image_count: 2 };
 const PROJECT = { id: 3, name: "Book", image_count: 118 };
-const REF_FOLDER = { id: 21, folder: "/photos/ref", label: "Ref" };
 
 function respond(url) {
   const u = String(url ?? "");
-  if (u.includes("/reference-folders")) {
-    return { data: { folders: [REF_FOLDER], in_docker: false } };
-  }
   if (u.includes("/characters")) return { data: [ADA] };
   if (u.includes("/projects")) return { data: [PROJECT] };
   if (u.includes("/picture_sets")) return { data: [SET] };
@@ -210,60 +205,6 @@ describe("sidebar rows judge the drag payload during dragover", () => {
     }
 
     wrapper.unmount();
-  });
-
-  it("takes pictures but not faces on a reference-folder row", async () => {
-    // Folders are a section of the one list now (#2159), not a tab.
-    const wrapper = await mountSidebar();
-    const row = rowByTitle(
-      wrapper,
-      REF_FOLDER.folder,
-      ".sidebar-folder-root-row",
-    );
-
-    const accepted = await fire(row, "dragover", transfer(PICTURES));
-    expect(accepted.defaultPrevented).toBe(true);
-    expect(row.classes()).toContain("droppable");
-
-    await fire(row, "dragleave", transfer(PICTURES));
-    const refused = await fire(row, "dragover", transfer(FACES));
-    expect(refused.defaultPrevented).toBe(false);
-    expect(row.classes()).toContain("not-droppable");
-
-    wrapper.unmount();
-  });
-
-  it("refuses on a NESTED folder row too, not only the root", async () => {
-    // The root row got the refused branch; FolderTreeNode never declared
-    // `dropRejected`, so it landed as a DOM attribute and every nested row lit
-    // up with the full accept highlight for a payload it would not take.
-    const entry = { path: "/photos/ref/kids", name: "kids", image_count: 0 };
-    const node = mount(FolderTreeNode, {
-      props: {
-        entry,
-        rfId: REF_FOLDER.id,
-        folderBrowseCache: {},
-        expandedFolderIds: new Set(),
-        dropTargetKey: `path-${entry.path}`,
-        dropRejected: true,
-      },
-      global: {
-        config: {
-          compilerOptions: { isCustomElement: (tag) => tag.startsWith("v-") },
-        },
-      },
-    });
-    const row = node.find(".sidebar-folder-child-row");
-
-    expect(row.classes()).toContain("not-droppable");
-    expect(row.classes()).not.toContain("droppable");
-
-    // The accepted direction still paints, so this is not over-blocking.
-    await node.setProps({ dropRejected: false });
-    expect(row.classes()).toContain("droppable");
-    expect(row.classes()).not.toContain("not-droppable");
-
-    node.unmount();
   });
 
   it("keeps the highlight when the pointer crosses into a child element", async () => {
