@@ -126,11 +126,17 @@ async function focusMore(id) {
 // ── Run on ─────────────────────────────────────────────────────────────────
 
 /** The same switch as the Workflows sidebar's Run on menu. */
+// Bumped on every switch: only the newest one's answer is acted on, so two
+// quick picks cannot leave the sidebar on the one that answered last.
+let switchRun = 0;
+
 async function switchTo(row) {
   if (row.isCurrent) return;
+  const run = ++switchRun;
   const before = rows.value.find((r) => r.isCurrent);
   try {
     const body = await patchUserConfig({ comfyui_url: row.url });
+    if (run !== switchRun) return;
     useFilterStore().comfyuiUrl = body?.config?.comfyui_url || row.url;
     emit("changed", {
       connections: props.connections,
@@ -139,6 +145,7 @@ async function switchTo(row) {
     say(`Run on: ${row.name}`);
   } catch (e) {
     console.warn(`[settings] could not switch ComfyUI to ${row.url}`, e);
+    if (run !== switchRun) return;
     radioKey.value += 1;
     fail(
       `Could not switch Run on to ${row.name}: ${errorMessage(e, "the server did not answer.")}` +

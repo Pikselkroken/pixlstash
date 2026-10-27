@@ -103,6 +103,29 @@ describe("Run on", () => {
     wrapper.unmount();
   });
 
+  it("two quick picks end on the second, whichever answers last", async () => {
+    let answerFirst;
+    config.patchUserConfig
+      .mockImplementationOnce(
+        () => new Promise((resolve) => (answerFirst = resolve)),
+      )
+      .mockImplementationOnce(async ({ comfyui_url }) => ({
+        config: { comfyui_url },
+      }));
+    const wrapper = mountTable();
+    for (const id of ["box", "lap"]) {
+      const radio = byTestId(wrapper, `comfyui-run-on-${id}`);
+      radio.element.checked = true;
+      await radio.trigger("change");
+    }
+    await flushPromises();
+    answerFirst({ config: { comfyui_url: BOX.url } });
+    await flushPromises();
+    expect(filter.comfyuiUrl).toBe(LAPTOP.url);
+    expect(wrapper.emitted("changed").at(-1)[0].current).toBe("lap");
+    wrapper.unmount();
+  });
+
   it("a switch that did not save puts the check back and says so", async () => {
     config.patchUserConfig.mockRejectedValue(new Error("server busy"));
     const wrapper = mountTable();
