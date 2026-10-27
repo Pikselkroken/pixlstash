@@ -202,7 +202,7 @@ const pixlStashLight = {
     "surface-warning": "#755215",
     "surface-success": "#226534",
     "surface-info": "#30558c",
-    // App-only: the pure-black ink the track-trough and drive-meter tints in
+    // App-only: the pure-black ink the track-trough and drive-band tints in
     // style.css are mixed from.
     scrim: "#000000",
     shadow: "#1c160c",
