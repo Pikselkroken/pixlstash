@@ -324,11 +324,14 @@ describe("the docked library menu", () => {
     const rootItems = Array.from(
       menu.querySelectorAll(':scope > [role="menuitem"]'),
     );
-    expect(rootItems.map((item) => item.tagName)).toEqual([
-      "BUTTON",
-      "BUTTON",
-      "BUTTON",
+    // Global and Projects; Folders left the sidebar.
+    expect(
+      rootItems.map((item) => item.querySelector(".ctx-label-text").textContent),
+    ).toEqual([
+      "Global",
+      "Projects",
     ]);
+    expect(rootItems.map((item) => item.tagName)).toEqual(["BUTTON", "BUTTON"]);
     expect(document.activeElement).toBe(rootItems[0]);
 
     rootItems[0].dispatchEvent(

@@ -112,29 +112,6 @@
       </div>
     </div>
 
-    <!-- Folder watch -->
-    <div
-      v-else-if="activeTab === 'watch'"
-      :id="panelId('watch')"
-      class="tbm-section tb-import-guidance"
-      role="tabpanel"
-      :aria-labelledby="tabId('watch')"
-    >
-      <span class="tbm-label">Automatic folder monitoring</span>
-      <p class="tb-import-note">Import folders are managed in PixlStash.</p>
-      <ol>
-        <li>Open the sidebar <strong>Folders</strong> tab.</li>
-        <li>
-          Click <strong>Add folder</strong> and choose
-          <strong>Import folder</strong>.
-        </li>
-        <li>
-          Set <strong>Delete source files after import</strong> for one-way
-          ingest.
-        </li>
-      </ol>
-    </div>
-
     <!-- Cloud suppliers: manual-zip guidance (no live connection today) -->
     <div
       v-else
@@ -171,7 +148,6 @@ const emit = defineEmits(["local-import", "open-full-import"]);
 
 const IMPORT_TABS = [
   { id: "local", icon: "mdi-folder-outline", label: "Local" },
-  { id: "watch", icon: "mdi-folder-sync-outline", label: "Folder watch" },
   { id: "google", icon: "mdi-google", label: "Google" },
   { id: "icloud", icon: "mdi-apple-icloud", label: "iCloud" },
   { id: "flickr", icon: "mdi-flickr", label: "Flickr" },
@@ -470,7 +446,7 @@ function triggerLocalImport(files) {
   margin-top: var(--space-4);
 }
 
-/* Cloud / folder-watch guidance */
+/* Cloud guidance */
 .tb-import-guidance ol {
   margin: 0;
   padding-left: var(--space-5);

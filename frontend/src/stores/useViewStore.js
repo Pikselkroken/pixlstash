@@ -120,7 +120,7 @@ function parseStackState(raw) {
  * exactly what a finding opens.
  *
  * It carries the sidebar's subfolder selection too. A subfolder click also
- * carries `referenceFolderId` (`FolderTreeNode.vue` requires it), so
+ * carries `referenceFolderId` (it always does), so
  * `pushRouteForCurrentSelection` takes its ref-folder branch - the id owns the
  * payload and this param says which folder *inside* it is showing. `applyView`
  * therefore refuses to apply the bare `{pathPrefix, label}` on a folder route;

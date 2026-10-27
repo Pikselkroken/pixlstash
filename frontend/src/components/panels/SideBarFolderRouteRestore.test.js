@@ -551,34 +551,6 @@ describe("restoring /ref-folder/:id", () => {
     wrapper.unmount();
   });
 
-  // #1206 item 12. The cleanup matched `rf-<id>`, which is the ROOT row's key;
-  // a selected subfolder's key is `path-<abs path>`, so removing the folder
-  // under it left the highlight and the scanning light on a folder that no
-  // longer existed. Matching on the folder the selection belongs to is what the
-  // import-folder branch already did.
-  it("clears a selected subfolder when its reference folder is removed", async () => {
-    const wrapper = await mountSidebar({ teleport: true });
-    const sidebarStore = useSidebarStore();
-    routeToFolder(SUB);
-    await flushPromises();
-    expect(sidebarStore.folderScanning).toBe(true);
-
-    vi.spyOn(window, "confirm").mockReturnValue(true);
-    const rows = wrapper.findAll(".sidebar-folder-root-row");
-    await rows[0].trigger("contextmenu");
-    await flushPromises();
-    // The context menu is teleported to <body>, so it is not under `wrapper`.
-    const remove = document.querySelector(".sidebar-ctx-menu .ctx-item--danger");
-    expect(remove).not.toBe(null);
-    remove.click();
-    await flushPromises();
-
-    expect(lastFolderPayload(wrapper)).toBe(null);
-    expect(sidebarStore.folderScanning).toBe(false);
-
-    wrapper.unmount();
-  });
-
   it("ignores a path that is not inside this folder", async () => {
     // A `?path=` left over from an "About your library" destination names a
     // folder with no id at all. Applying it under this folder's id would build
@@ -601,7 +573,7 @@ describe("restoring /ref-folder/:id", () => {
 // upward from a fixed 190px height estimate, so a taller menu (a picture set's)
 // opened downward one row too long and lost its last entry off the window.
 describe("sidebar context menu placement", () => {
-  /** Right-click the first folder row at y=550 with the menu `menuH` tall. */
+  /** Right-click the list's empty space at y=550 with the menu `menuH` tall. */
   async function openMenuAt550(menuH) {
     vi.spyOn(window, "innerHeight", "get").mockReturnValue(800);
     vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(
@@ -610,10 +582,10 @@ describe("sidebar context menu placement", () => {
       },
     );
     const wrapper = await mountSidebar({ teleport: true });
-    routeToFolder(SUB); // expands the folder section so its rows render
     await flushPromises();
-    const rows = wrapper.findAll(".sidebar-folder-root-row");
-    await rows[0].trigger("contextmenu", { clientX: 20, clientY: 550 });
+    await wrapper
+      .find(".sidebar-scroll")
+      .trigger("contextmenu", { clientX: 20, clientY: 550 });
     await flushPromises();
     return { wrapper, menu: document.querySelector(".sidebar-ctx-menu") };
   }
