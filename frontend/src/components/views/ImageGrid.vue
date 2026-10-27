@@ -5876,6 +5876,10 @@ watch(
   { immediate: true },
 );
 onUnmounted(() => {
+  // The selection is the store's now (the rail reads it), so it would outlive
+  // the grid: a view that comes back starts with nothing selected, as it did
+  // when the selection died with the grid.
+  clearSelection();
   // No grid, no selection to run on - and no view either, so the context goes
   // too. Left behind it is the LAST grid's: a run started afterwards from the
   // Workflows view would file its output into whichever set happened to be
@@ -8444,7 +8448,38 @@ defineExpose({
   suggestPicturesForCharacter: faceSuggest.arm,
   // The set twin, from the sidebar's set context menu (#1489).
   suggestPicturesForSet: setSuggest.arm,
+  // The grid's rail (#2161), through App.vue: the selected pictures' own cards,
+  // and the very paths a tile and the lightbox use to rate, favourite and tag
+  // one, so the rail and the tile cannot disagree.
+  cardsByIds,
+  scoreOf: (img) =>
+    isReadOnly.value
+      ? (guestScoreMap.value.get(img.id) ?? img.score ?? 0)
+      : img.score || 0,
+  setScore,
+  toggleFavourite,
+  addTagToImage,
+  updateDescriptionForImage,
+  handleOverlayChange,
+  handleTagsApplied,
 });
+
+// The cards by id, for `cardsByIds`. Rating and favouriting replace a card
+// object rather than mutate it, so the rail looks its pictures up afresh.
+const gridCardById = computed(() => {
+  const byId = new Map();
+  for (const img of allGridImages.value) {
+    if (img?.id != null) byId.set(String(img.id), img);
+  }
+  return byId;
+});
+
+/** The loaded cards for these ids, in the order given; unloaded ones skipped. */
+function cardsByIds(ids) {
+  return (ids ?? [])
+    .map((id) => gridCardById.value.get(String(id)))
+    .filter(Boolean);
+}
 
 // Queue a deferred in-place grid reconcile to run when the overlay closes.
 // Used by the realtime-sync decision table: while the overlay is open we never

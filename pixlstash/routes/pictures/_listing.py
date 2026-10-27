@@ -157,6 +157,18 @@ class GridPicture(BaseModel):
         None,
         description="Path relative to the image root (omitted when grid_lite=true).",
     )
+    # Not in the grid projection: returned only to a caller that names them in
+    # `fields` (the stats rail's Properties for several pictures, #2161). Both
+    # are what `GET /pictures/{id}/metadata` already returns for each picture.
+    size_bytes: int | None = Field(
+        None, description="The file's size in bytes (only when asked for in fields)."
+    )
+    comfyui_models: str | None = Field(
+        None,
+        description="JSON list of the checkpoint / UNET names the picture was "
+        "generated with; '[]' when it was checked and has none (only when asked "
+        "for in fields).",
+    )
     purge_at: str | None = Field(
         None,
         description=(

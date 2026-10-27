@@ -42,6 +42,9 @@
         <div v-if="tagDataLoading" class="tag-data-loading">
           Loading tags...
         </div>
+        <div v-else-if="tagReadFailed" class="tag-data-loading">
+          Couldn't read these pictures' tags.
+        </div>
         <div
           v-else-if="tagsOnAll.length || tagsOnSome.length"
           class="tag-current-section"
@@ -127,6 +130,9 @@
               {{ tagsOnSomeHiddenCount }} hidden
             </span>
           </div>
+        </div>
+        <div v-if="predictionReadFailed" class="tag-data-loading">
+          Some pictures' rejected tags couldn't be read.
         </div>
         <div
           v-if="aggregatedPredictions.length || rejectedZoneIsDropTarget"
@@ -358,17 +364,13 @@
 <script setup>
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from "vue";
 import { API_BASE_URL, isReadOnly, newOperationBatchId } from "../../utils/apiClient";
-import {
-  listTags,
-  addPictureTag,
-  removePictureTag,
-  bulkFetchTags,
-  listTagPredictions,
-  confirmTagPrediction,
-  rejectTagPrediction,
-} from "../../api/tags";
+import { listTags } from "../../api/tags";
 import { resetPicturesTags } from "../../api/pictures";
 import { confirmRetag } from "../../composables/confirmRetag";
+import {
+  MAX_TAG_FETCH,
+  useSelectionTags,
+} from "../../composables/useSelectionTags";
 import { listTaggers } from "../../api/taggers";
 import { getUserConfig } from "../../api/config";
 import { isSentinelTag, formatSentinelTag } from "../../utils/tags.js";
@@ -382,7 +384,6 @@ import {
   useTagClipboardStore,
 } from "../../stores/useTagClipboardStore";
 
-const MAX_TAG_FETCH = 100;
 const MAX_PREVIEW_IMAGES = 16;
 
 const props = defineProps({
@@ -448,7 +449,6 @@ const previewColumns = computed(() =>
 const tagInputRef = ref(null);
 const tagInput = ref("");
 const tagLoading = ref(false);
-const tagError = ref("");
 const tagSuccess = ref("");
 const allTagsSB = ref([]);
 let allTagsFetchedAt = 0;
@@ -459,23 +459,48 @@ const tagSuggestionIndex = ref(-1);
 // startsWith filter still matches the completed tag.
 const dismissedFor = ref(null);
 const tagInputRect = ref(null);
-const tagActionLoading = ref([]);
-const fetchedTagData = ref([]);
-const tagDataLoading = ref(false);
-const tagDataCapped = ref(false);
-const fetchedPredictionData = ref([]);
 const generateTagsLoading = ref(false);
 const generateTagsError = ref("");
 const generateTagsSuccess = ref("");
 const taggerMenuOpen = ref(false);
 const taggerPlugins = ref([]);
 const taggerPluginsLoading = ref(false);
-const predictionLoading = ref(false);
-const predictionAcceptanceThresholdSB = ref(0.95);
-const labelThresholdsSB = ref({});
 const rejectedTagsCollapsedSB = ref(loadRejectedTagsCollapsedSB());
 const penalisedTagsSB = ref(new Set());
 let penalisedTagsFetchedAt = 0;
+
+// The selection's tags, coverage and rejected predictions, and the gestures on
+// them, shared with the grid's rail (#2161).
+const {
+  fetchedTagData,
+  tagDataLoading,
+  tagReadFailed,
+  predictionReadFailed,
+  tagDataCapped,
+  fetchedPredictionData,
+  predictionAcceptanceThreshold: predictionAcceptanceThresholdSB,
+  labelThresholds: labelThresholdsSB,
+  tagActionLoading,
+  predActionLoading,
+  tagError,
+  totalWithTagData,
+  tagsOnAll,
+  tagMinCoverage,
+  tagsOnSome,
+  tagsOnSomeHiddenCount,
+  predMinCoverage,
+  aggregatedPredictions,
+  fetchSelectedImageTags,
+  fetchSelectedImagePredictions,
+  refreshSelectionTags,
+  removeTagFromAll,
+  addTagToRemaining,
+  addTagsToAll,
+  confirmPredictionOnAll,
+  rejectTagOnAll,
+} = useSelectionTags(() => props.selectedImageIds, {
+  onApplied: (payload) => emit("tags-applied", payload),
+});
 
 function loadRejectedTagsCollapsedSB() {
   if (typeof window === "undefined") return true;
@@ -492,287 +517,6 @@ function persistRejectedTagsCollapsedSB(value) {
     "pixlstash:selectionBar:rejectedTagsCollapsed",
     value ? "1" : "0",
   );
-}
-
-async function fetchSelectedImageTags() {
-  const ids = (
-    Array.isArray(props.selectedImageIds) ? props.selectedImageIds : []
-  )
-    .map((id) => Number(id))
-    .filter((id) => Number.isFinite(id) && id > 0);
-  tagDataCapped.value = ids.length > MAX_TAG_FETCH;
-  const toFetch = ids.slice(0, MAX_TAG_FETCH);
-  if (!toFetch.length) {
-    fetchedTagData.value = [];
-    return;
-  }
-  if (!fetchedTagData.value.length) tagDataLoading.value = true;
-  try {
-    const rows = await bulkFetchTags(toFetch);
-    fetchedTagData.value = Array.isArray(rows) ? rows : [];
-  } catch {
-    fetchedTagData.value = [];
-  } finally {
-    tagDataLoading.value = false;
-  }
-}
-
-async function fetchSelectedImagePredictions() {
-  const ids = (
-    Array.isArray(props.selectedImageIds) ? props.selectedImageIds : []
-  )
-    .map((id) => Number(id))
-    .filter((id) => Number.isFinite(id) && id > 0)
-    .slice(0, MAX_TAG_FETCH);
-  if (!ids.length) {
-    fetchedPredictionData.value = [];
-    return;
-  }
-  predictionLoading.value = true;
-  try {
-    const results = await Promise.all(
-      ids.map((id) =>
-        listTagPredictions(id, {
-          status: "REJECTED",
-        })
-          .then((payload) => {
-            const predictions = Array.isArray(payload)
-              ? payload
-              : Array.isArray(payload?.tag_predictions)
-                ? payload.tag_predictions
-                : [];
-            const threshold = Number(payload?.meta?.acceptance_threshold);
-            if (Number.isFinite(threshold) && threshold > 0 && threshold <= 1) {
-              predictionAcceptanceThresholdSB.value = threshold;
-            }
-            labelThresholdsSB.value = payload?.meta?.label_thresholds || {};
-            return { id, predictions };
-          })
-          .catch(() => ({ id, predictions: [] })),
-      ),
-    );
-    fetchedPredictionData.value = results;
-  } catch {
-    fetchedPredictionData.value = [];
-  } finally {
-    predictionLoading.value = false;
-  }
-}
-
-const totalWithTagData = computed(() => fetchedTagData.value.length);
-
-const tagFrequency = computed(() => {
-  const freq = new Map();
-  for (const img of fetchedTagData.value) {
-    for (const t of img.tags || []) {
-      const name = typeof t === "string" ? t : t.tag;
-      const tagId = typeof t === "string" ? null : t.id;
-      if (!name) continue;
-      if (!freq.has(name))
-        freq.set(name, { count: 0, tagsByImageId: new Map() });
-      const entry = freq.get(name);
-      entry.count++;
-      entry.tagsByImageId.set(Number(img.id), tagId);
-    }
-  }
-  return freq;
-});
-
-const tagsOnAll = computed(() => {
-  if (!totalWithTagData.value) return [];
-  return [...tagFrequency.value.entries()]
-    .filter(([, v]) => v.count === totalWithTagData.value)
-    .map(([name, v]) => ({
-      name,
-      count: v.count,
-      tagsByImageId: v.tagsByImageId,
-    }))
-    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
-});
-
-const tagMinCoverage = ref(1);
-
-const tagsOnSome = computed(() => {
-  if (!totalWithTagData.value) return [];
-  return [...tagFrequency.value.entries()]
-    .filter(
-      ([, v]) =>
-        v.count > 0 &&
-        v.count < totalWithTagData.value &&
-        v.count >= tagMinCoverage.value,
-    )
-    .map(([name, v]) => ({
-      name,
-      count: v.count,
-      tagsByImageId: v.tagsByImageId,
-    }))
-    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
-});
-
-const predMinCoverage = ref(1);
-
-const aggregatedPredictions = computed(() => {
-  if (!fetchedPredictionData.value.length) return [];
-  const confirmedAll = new Set(
-    tagsOnAll.value.map((t) => t.name.toLowerCase()),
-  );
-  const freq = new Map();
-  for (const { id, predictions } of fetchedPredictionData.value) {
-    for (const p of predictions) {
-      const key = p.tag.toLowerCase();
-      if (confirmedAll.has(key)) continue;
-      // Skip synthetic `manual` rows: these are human-label ledger entries with a
-      // placeholder confidence (1.0/0.0), not tagger predictions. A manually
-      // removed tag would otherwise resurface here as a high-confidence "suggested
-      // tag to confirm" (see backend label_ledger.record_human_label).
-      if (p.model_version === "manual") continue;
-      if (!freq.has(key))
-        freq.set(key, { tag: p.tag, count: 0, totalConf: 0, ids: [] });
-      const e = freq.get(key);
-      e.count++;
-      e.totalConf += p.confidence;
-      e.ids.push(id);
-    }
-  }
-  return [...freq.values()]
-    .filter((e) => e.count >= predMinCoverage.value)
-    .map((e) => {
-      const avgConf = e.totalConf / e.count;
-      const perLabel = labelThresholdsSB.value[e.tag];
-      const threshold =
-        typeof perLabel === "number" && Number.isFinite(perLabel)
-          ? perLabel
-          : Number(predictionAcceptanceThresholdSB.value) || 0.95;
-      const avgNeeded = Math.max(0, threshold - avgConf);
-      return { ...e, avgConf, avgNeeded };
-    })
-    .sort((a, b) => b.count - a.count || b.avgConf - a.avgConf);
-});
-
-const predActionLoading = ref([]);
-
-/**
- * Confirm one predicted tag on every picture that carries the prediction.
- *
- * The fan-out records one operation per picture; they share a gesture batch id
- * so the whole confirm is one history step (the receipt shows it as one entry
- * with its `+N` count) and one Ctrl+Z walks all of it back.
- *
- * @param {Object} predEntry - the aggregated prediction row (`tag`, `ids`).
- * @param {Object} [options]
- * @param {string} [options.batchId] - an id from a caller that is already part
- *   of a larger gesture; a fresh one is minted otherwise.
- */
-async function confirmPredictionOnAll(
-  predEntry,
-  { batchId = newOperationBatchId() } = {},
-) {
-  if (predActionLoading.value.includes(predEntry.tag)) return;
-  predActionLoading.value = [...predActionLoading.value, predEntry.tag];
-  tagError.value = "";
-  try {
-    await Promise.all(
-      predEntry.ids.map((id) =>
-        confirmTagPrediction(id, predEntry.tag, {
-          batchId,
-        }),
-      ),
-    );
-    emit("tags-applied", {
-      tag: predEntry.tag,
-      pictureIds: predEntry.ids,
-      action: "add",
-    });
-    await Promise.all([
-      fetchSelectedImageTags(),
-      fetchSelectedImagePredictions(),
-    ]);
-  } catch (err) {
-    tagError.value = errorDetail(err) || err?.message || String(err);
-  } finally {
-    predActionLoading.value = predActionLoading.value.filter(
-      (n) => n !== predEntry.tag,
-    );
-  }
-}
-
-const tagsOnSomeHiddenCount = computed(() => {
-  if (!totalWithTagData.value || tagMinCoverage.value <= 1) return 0;
-  return [...tagFrequency.value.entries()].filter(
-    ([, v]) =>
-      v.count > 0 &&
-      v.count < totalWithTagData.value &&
-      v.count < tagMinCoverage.value,
-  ).length;
-});
-
-/**
- * Remove one tag from every selected picture that carries it.
- *
- * @param {Object} tagEntry - the aggregated tag row (`name`, `tagsByImageId`).
- * @param {Object} [options]
- * @param {string} [options.batchId] - gesture batch id shared across the
- *   fan-out (and with the reject that follows it on a drag), so the whole
- *   gesture is one history step and one Ctrl+Z.
- */
-async function removeTagFromAll(
-  tagEntry,
-  { batchId = newOperationBatchId() } = {},
-) {
-  if (tagActionLoading.value.includes(tagEntry.name)) return;
-  tagActionLoading.value = [...tagActionLoading.value, tagEntry.name];
-  tagError.value = "";
-  try {
-    await Promise.all(
-      [...tagEntry.tagsByImageId.entries()]
-        .filter(([, tagId]) => tagId != null)
-        .map(([imgId, tagId]) =>
-          removePictureTag(imgId, tagId, {
-            batchId,
-          }),
-        ),
-    );
-    emit("tags-applied", {
-      tag: tagEntry.name,
-      pictureIds: [...tagEntry.tagsByImageId.keys()],
-      action: "remove",
-    });
-    await fetchSelectedImageTags();
-  } catch (err) {
-    tagError.value = errorDetail(err) || err?.message || String(err);
-  } finally {
-    tagActionLoading.value = tagActionLoading.value.filter(
-      (n) => n !== tagEntry.name,
-    );
-  }
-}
-
-async function addTagToRemaining(tagEntry) {
-  if (tagActionLoading.value.includes(tagEntry.name)) return;
-  tagActionLoading.value = [...tagActionLoading.value, tagEntry.name];
-  tagError.value = "";
-  const missingIds = fetchedTagData.value
-    .filter((img) => !tagEntry.tagsByImageId.has(Number(img.id)))
-    .map((img) => Number(img.id));
-  try {
-    await Promise.all(
-      missingIds.map((id) =>
-        addPictureTag(id, tagEntry.name),
-      ),
-    );
-    emit("tags-applied", {
-      tag: tagEntry.name,
-      pictureIds: missingIds,
-      action: "add",
-    });
-    await fetchSelectedImageTags();
-  } catch (err) {
-    tagError.value = errorDetail(err) || err?.message || String(err);
-  } finally {
-    tagActionLoading.value = tagActionLoading.value.filter(
-      (n) => n !== tagEntry.name,
-    );
-  }
 }
 
 async function fetchTaggerPlugins() {
@@ -1029,20 +773,14 @@ async function applyTag() {
   const ids = selectedIdNumbers.value;
   if (!ids.length) return;
   tagLoading.value = true;
-  tagError.value = "";
   tagSuccess.value = "";
   try {
-    await Promise.all(
-      ids.flatMap((id) => tags.map((tag) => addPictureTag(id, tag))),
-    );
-    const names = tags.map((tag) => `"${tag}"`).join(", ");
-    tagSuccess.value = `Tagged ${ids.length} image${ids.length !== 1 ? "s" : ""} with ${names}`;
-    tagInput.value = "";
-    allTagsFetchedAt = 0;
-    emit("tags-applied", { tag: tags.join(", "), pictureIds: ids });
-    await fetchSelectedImageTags();
-  } catch (err) {
-    tagError.value = errorDetail(err) || err?.message || String(err);
+    if (await addTagsToAll(tags)) {
+      const names = tags.map((tag) => `"${tag}"`).join(", ");
+      tagSuccess.value = `Tagged ${ids.length} image${ids.length !== 1 ? "s" : ""} with ${names}`;
+      tagInput.value = "";
+      allTagsFetchedAt = 0;
+    }
   } finally {
     tagLoading.value = false;
   }
@@ -1074,7 +812,7 @@ async function pasteClipboard() {
         tag: tagClipboard.clipboardTags.join(", "),
         pictureIds: result.pictureIds,
       });
-      await fetchSelectedImageTags();
+      await refreshSelectionTags();
     }
   } finally {
     pasteLoading.value = false;
@@ -1137,31 +875,6 @@ async function onDropToCurrent() {
   const payload = dragPayload.value;
   onDragEnd();
   await confirmPredictionOnAll(payload);
-}
-
-/**
- * Record the human NEG for a tag on every picture it was just removed from.
- *
- * @param {Object} tagEntry - the aggregated tag row (`name`, `tagsByImageId`).
- * @param {Object} [options]
- * @param {string} [options.batchId] - the gesture batch id of the removal this
- *   reject belongs to.
- */
-async function rejectTagOnAll(tagEntry, { batchId } = {}) {
-  const imageIds = [...tagEntry.tagsByImageId.keys()];
-  if (!imageIds.length) return;
-  try {
-    await Promise.all(
-      imageIds.map((id) =>
-        rejectTagPrediction(id, tagEntry.name, {
-          batchId,
-        }),
-      ),
-    );
-    await fetchSelectedImagePredictions();
-  } catch (err) {
-    tagError.value = errorDetail(err) || err?.message || String(err);
-  }
 }
 
 async function onDropToRejected() {

@@ -121,11 +121,14 @@ describe("TbTagPanel - pasting copied tags", () => {
     await wrapper.find("input.tag-menu-input").setValue("rain, (hood:1.2)");
     await wrapper.find("input.tag-menu-input").trigger("keydown", { key: "Enter" });
     await flushPromises();
+    // One gesture, one undo step: every request carries the same batch id.
+    const [[, , { batchId }]] = tagsApi.addPictureTag.mock.calls;
+    expect(batchId).toEqual(expect.any(String));
     expect(tagsApi.addPictureTag.mock.calls).toEqual([
-      [1, "rain"],
-      [1, "hood"],
-      [2, "rain"],
-      [2, "hood"],
+      [1, "rain", { batchId }],
+      [1, "hood", { batchId }],
+      [2, "rain", { batchId }],
+      [2, "hood", { batchId }],
     ]);
   });
 });

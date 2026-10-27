@@ -581,3 +581,24 @@ export function isVideo(img) {
   }
   return isSupportedVideoFile(img.id || "");
 }
+
+/**
+ * Drop repeated face or object detections: the same id, or for a row without
+ * one the same box on the same frame. The lightbox and the grid's rail read
+ * both lists through this.
+ */
+export function dedupeDetections(items) {
+  if (!Array.isArray(items)) return [];
+  const seen = new Set();
+  const result = [];
+  for (const item of items) {
+    const id = item?.id;
+    const bbox = Array.isArray(item?.bbox) ? item.bbox.join(",") : "";
+    const frame = item?.frame_index ?? "";
+    const key = id != null ? `id:${id}` : `bbox:${frame}:${bbox}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(item);
+  }
+  return result;
+}
