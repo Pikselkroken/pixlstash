@@ -3366,12 +3366,17 @@ const folderScopeName = computed(() => {
   );
   return folder ? folder.tool || basename(folder.path) || folder.path : "Folder";
 });
+const NO_MODELS_LINE =
+  "No models found. PixlStash lists what it finds in the model folders registered on this machine.";
 /** What an empty place says in its own words; Show's own empty state is above. */
 const emptyPlaceLine = computed(() => {
+  // An empty shelf says so on every place: "every model is in a set" would be
+  // true of nothing.
+  if (!store.placeCounts.all) return NO_MODELS_LINE;
   if (store.place === "favourites") return "No favourite models yet.";
   if (store.place === "recent") return "Nothing was added in the last 30 days.";
   if (store.place === "loose") return "Every model is in a set.";
-  return "No models found. PixlStash lists what it finds in the model folders registered on this machine.";
+  return NO_MODELS_LINE;
 });
 const filterChips = computed(() => {
   const chips = [];

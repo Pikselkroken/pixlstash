@@ -4508,6 +4508,31 @@ describe("the sidebar's requests reach their dialog (#2168)", () => {
 });
 
 describe("the list's Type, favourite and Sets columns (#2168)", () => {
+  it("says an empty shelf is empty on In no set yet, not that all is in a set", async () => {
+    const wrapper = await mountShelf([]);
+    const store = useModelShelfStore();
+    store.setsLoaded = true;
+    store.setPlace("loose");
+    await wrapper.vm.$nextTick();
+    expect(wrapper.text()).toContain("No models found.");
+    expect(wrapper.text()).not.toContain("Every model is in a set.");
+    wrapper.unmount();
+  });
+
+  it("says every model is in a set when the shelf has models and none is loose", async () => {
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    const store = useModelShelfStore();
+    store.workflowSets = {
+      ...store.workflowSets,
+      handMade: [{ id: 10, name: "Kit", members: [{ id: 1, on_shelf: true }] }],
+    };
+    store.setsLoaded = true;
+    store.setPlace("loose");
+    await wrapper.vm.$nextTick();
+    expect(wrapper.text()).toContain("Every model is in a set.");
+    wrapper.unmount();
+  });
+
   it("marks a row with its Type letter, in the Type row's tint", async () => {
     const wrapper = await mountShelf([adapter({ id: 1 })]);
     const mark = wrapper.find(".shelf-row .type-mark");
