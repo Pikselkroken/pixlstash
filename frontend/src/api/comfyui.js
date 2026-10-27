@@ -154,9 +154,12 @@ export async function getPixlstashNode() {
  * @param {string} url - e.g. `"http://127.0.0.1:8188/"`.
  * @returns {Promise<{reachable: boolean, url: string, version: ?string,
  *   detail: ?string, listens_on_network: ?boolean, gpu: ?string,
- *   vram_mb: ?number}>} `listens_on_network`: whether ComfyUI's `--listen`
- *   lets other computers reach it, null unknown. `gpu` and `vram_mb`: the card
- *   ComfyUI runs on (`"CPU"` or `"Apple silicon"` with no size), null unknown.
+ *   vram_mb: ?number, can_open_workflows: ?boolean}>} `listens_on_network`:
+ *   whether ComfyUI's `--listen` lets other computers reach it, null unknown.
+ *   `gpu` and `vram_mb`: the card ComfyUI runs on (`"CPU"` or `"Apple
+ *   silicon"` with no size), null unknown. `can_open_workflows`: whether the
+ *   ComfyUI-PixlStash nodes are there, null when ComfyUI did not answer. A
+ *   listed connection keeps the answer.
  */
 export async function probeComfyui(url) {
   return unwrap(apiClient.post(comfyUrl("/probe"), { url }));
@@ -167,9 +170,13 @@ export async function probeComfyui(url) {
  * said, and `current`, the id of the one at `comfyui_url`. Switching is a
  * `comfyui_url` PATCH of the config.
  *
+ * `nodes` is whether the newest probe found the ComfyUI-PixlStash nodes, and
+ * `link` the connection's own link key: `{linked, linked_at, bound_address,
+ * refused_from, exposure, token_id, all_libraries, …}` (#2194).
+ *
  * @returns {Promise<{connections: Array<{id: string, name: string, url: string,
- *   status: ?("connected"|"offline"), gpu: ?string, vram_mb: ?number}>,
- *   current: ?string}>}
+ *   status: ?("connected"|"offline"), gpu: ?string, vram_mb: ?number,
+ *   nodes: ?boolean, link: Object}>, current: ?string}>}
  */
 export async function listComfyuiConnections() {
   return unwrap(apiClient.get(comfyUrl("/connections")));
@@ -186,54 +193,70 @@ export async function addComfyuiConnection({ url, name }) {
 }
 
 /**
- * Whether this PixlStash is linked to the saved ComfyUI. Owner-only.
+ * Rename a connection or move it to another address (#2194). Local owner only.
+ * Moving a linked connection revokes its key first, since the key is bound to
+ * the old address; link it again at the new one. 409 when another connection
+ * has the address. Answers as `listComfyuiConnections`.
  *
- * `bound_address` is the address the link's key works from (null for a link
- * made before keys were bound, which works from anywhere); `refused_from` the
- * last other address it was refused from since PixlStash started; `exposure`
- * `"other_computer"` or `"listening"` when other computers can reach ComfyUI.
- * `token_id` is the key's row in the token list and `all_libraries` whether it
- * works in every library (`setTokenLibraries` changes that).
- *
- * @returns {Promise<{linked: boolean, comfyui_url: ?string,
- *   pixlstash_url: ?string, where: ?("this_computer"|"local_network"),
- *   linked_at: ?string, bound_address: ?string, refused_from: ?string,
- *   exposure: ?("other_computer"|"listening"), token_id: ?number,
- *   all_libraries: boolean}>}
+ * @param {string} id
+ * @param {{name?: string, url?: string}} change
  */
-export async function getComfyuiLink() {
-  return unwrap(apiClient.get(comfyUrl("/link")));
+export async function updateComfyuiConnection(id, change) {
+  return unwrap(
+    apiClient.patch(comfyUrl(`/connections/${encodeURIComponent(id)}`), change),
+  );
 }
 
 /**
- * Link the saved ComfyUI: mint a token that reaches only what the PixlStash
- * nodes call and works only from ComfyUI's address, and write it, with
- * PixlStash's URL, into ComfyUI's settings. Local owner only.
+ * Remove a connection, revoking its key first; the current one hands Run on
+ * to the first one left. Rejects 500, keeping the row, when the key cannot be
+ * revoked. Local owner only. Answers as `listComfyuiConnections`.
+ *
+ * @param {string} id
+ */
+export async function removeComfyuiConnection(id) {
+  return unwrap(
+    apiClient.delete(comfyUrl(`/connections/${encodeURIComponent(id)}`)),
+  );
+}
+
+/**
+ * Link one connection, current or not, with its own key: mint a token that
+ * reaches only what the PixlStash nodes call and works only from that
+ * ComfyUI's address, and write it, with PixlStash's URL, into that ComfyUI's
+ * settings. Every other connection keeps its own key. Local owner only.
  *
  * Always resolves 200 whether or not it linked. `steps` is exactly four, in
  * order `reach`, `nodes`, `link`, `check`, each `{id, state, detail, reason}`
  * with `state` one of `done`, `failed`, `needs_you`, `not_run`.
- * `can_install_pack` is true when this PixlStash carries the nodes and the
- * saved ComfyUI is on this computer, so {@link installComfyuiPack} can run.
+ * `can_install_pack` is true when this PixlStash carries the nodes and that
+ * ComfyUI is on this computer, so {@link installComfyuiPack} can run.
  *
+ * @param {string} id
  * @returns {Promise<{linked: boolean, link: Object, steps: Array<Object>,
  *   can_install_pack: boolean, exposure: ?string}>}
  */
-export async function linkComfyui() {
-  return unwrap(apiClient.post(comfyUrl("/link")));
+export async function linkComfyuiConnection(id) {
+  return unwrap(
+    apiClient.post(comfyUrl(`/connections/${encodeURIComponent(id)}/link`)),
+  );
 }
 
 /**
- * Revoke the ComfyUI token and clear ComfyUI's copy, best-effort. Owner-only.
+ * Revoke one connection's key and clear that ComfyUI's copy, best effort.
+ * @param {string} id
  * @returns {Promise<{linked: false}>}
  */
-export async function unlinkComfyui() {
-  return unwrap(apiClient.delete(comfyUrl("/link")));
+export async function unlinkComfyuiConnection(id) {
+  return unwrap(
+    apiClient.delete(comfyUrl(`/connections/${encodeURIComponent(id)}/link`)),
+  );
 }
 
 /**
- * Install the ComfyUI-PixlStash nodes this PixlStash carries into the saved
- * ComfyUI, which must be on this computer. Owner-only, local caller only.
+ * Install the ComfyUI-PixlStash nodes this PixlStash carries into a ComfyUI
+ * on this computer: the connection `connectionId` names, else the current
+ * one. Owner-only, local caller only.
  *
  * Older copies go to the system trash (`replaced`). `restart` is `"requested"`
  * when ComfyUI-Manager was asked to restart ComfyUI, `"manual"` when the
@@ -243,8 +266,14 @@ export async function unlinkComfyui() {
  *   replaced: Array<string>, restart: ("requested"|"manual"),
  *   detail: ?string}>}
  */
-export async function installComfyuiPack() {
-  return unwrap(apiClient.post(comfyUrl("/pack/install")));
+export async function installComfyuiPack({ connectionId } = {}) {
+  return unwrap(
+    apiClient.post(
+      comfyUrl("/pack/install"),
+      null,
+      connectionId ? { params: { connection_id: connectionId } } : undefined,
+    ),
+  );
 }
 
 // The server's worst case: its 180 s wait on Manager (which can overrun by one

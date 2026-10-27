@@ -1649,6 +1649,22 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Saves an address the owner names for this server to fetch once chosen; the same reach comfyui_url already has; owner only",
     ),
+    ("PATCH", "/api/v1/comfyui/connections/{connection_id}"): RoutePolicy(
+        _LOCAL,
+        justification="Renames a ComfyUI connection or moves it, and moving a linked one revokes its key and has this server write into that ComfyUI's settings on its own network; a local owner only, like DELETE /comfyui/link (§16.3, #2194)",
+    ),
+    ("DELETE", "/api/v1/comfyui/connections/{connection_id}"): RoutePolicy(
+        _LOCAL,
+        justification="Removes a ComfyUI connection, revoking its link key and having this server write into that ComfyUI's settings on its own network; a local owner only, like DELETE /comfyui/link (§16.3, #2194)",
+    ),
+    ("POST", "/api/v1/comfyui/connections/{connection_id}/link"): RoutePolicy(
+        _LOCAL,
+        justification="Mints a ComfyUI-scope token and has this server push it to whatever answers at that connection's address on its own network: the server's network position is the authority, so a local owner only, like POST /comfyui/link (§16.3, #2194)",
+    ),
+    ("DELETE", "/api/v1/comfyui/connections/{connection_id}/link"): RoutePolicy(
+        _LOCAL,
+        justification="Revokes a connection's ComfyUI link token and has this server write into that ComfyUI's settings on its own network; a local owner only, like DELETE /comfyui/link (§16.3, #2194)",
+    ),
     ("POST", "/api/v1/comfyui/abort"): RoutePolicy(
         _OWNER,
         justification="Abort generation; POST blocked for READ tokens; owner only",

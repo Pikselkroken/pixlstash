@@ -1557,9 +1557,12 @@ def _system_stats_answer(monkeypatch, answer) -> list[str]:
     asked: list[str] = []
 
     def fake_get(url, timeout, allow_redirects=True, proxies=None):
+        asked.append(url)
+        if url.endswith("/extensions"):
+            # The node check, asked once ComfyUI has answered: no nodes.
+            return SimpleNamespace(raise_for_status=lambda: None, json=lambda: [])
         assert allow_redirects is False, "a redirect names a host nobody probed"
         assert proxies == comfyui_service.NO_PROXY
-        asked.append(url)
         if isinstance(answer, Exception):
             raise answer
         status, body = answer
@@ -1617,8 +1620,13 @@ def test_the_probe_recognises_comfyui_and_normalises_the_address(
         # ...nor devices, so neither is the card.
         "gpu": None,
         "vram_mb": None,
+        # It answered, so the nodes were asked for, and are not there.
+        "can_open_workflows": False,
     }
-    assert asked == ["https://comfy.example.com:8188/system_stats"]
+    assert asked == [
+        "https://comfy.example.com:8188/system_stats",
+        "https://comfy.example.com:8188/extensions",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -1794,6 +1802,20 @@ def test_the_connection_routes_are_owner_only(workflow_env, saved_address):
     assert len(_connections(workflow_env)["connections"]) == 2
 
 
+_UNLINKED = {
+    "linked": False,
+    "comfyui_url": None,
+    "pixlstash_url": None,
+    "where": None,
+    "linked_at": None,
+    "bound_address": None,
+    "refused_from": None,
+    "exposure": None,
+    "token_id": None,
+    "all_libraries": False,
+}
+
+
 def test_a_single_saved_address_upgrades_to_one_current_connection(
     workflow_env, saved_address
 ):
@@ -1807,6 +1829,8 @@ def test_a_single_saved_address_upgrades_to_one_current_connection(
                 "status": None,
                 "gpu": None,
                 "vram_mb": None,
+                "nodes": None,
+                "link": _UNLINKED,
             }
         ],
         "current": comfyui_connections.SAVED_ADDRESS_ID,
@@ -1910,6 +1934,7 @@ def test_a_stored_entry_is_read_whole():
         "status": None,
         "gpu": None,
         "vram_mb": None,
+        "nodes": None,
     }
 
 
@@ -2076,7 +2101,9 @@ def _link_tokens(server) -> list[int]:
         return list(
             session.exec(
                 select(UserToken.id).where(
-                    UserToken.description == comfyui_link_service.TOKEN_DESCRIPTION
+                    UserToken.description.startswith(
+                        comfyui_link_service.TOKEN_DESCRIPTION
+                    )
                 )
             ).all()
         )
@@ -2108,9 +2135,18 @@ def comfy_at(workflow_env, monkeypatch):
         return fake
 
     yield at
-    if fakes:
-        workflow_env.owner.delete(f"{API}/comfyui/link")
+    _unlink_every_connection(workflow_env)
     workflow_env.owner.patch(f"{API}/users/me/config", json={"comfyui_url": None})
+
+
+def _unlink_every_connection(workflow_env) -> None:
+    """Revoke every link key a test left, its connection listed or not."""
+    server = workflow_env.server
+    for connection_id in list(comfyui_link_service._records(server)):
+        workflow_env.owner.delete(f"{API}/comfyui/connections/{connection_id}/link")
+    for record in comfyui_link_service._records(server).values():
+        comfyui_link_service._delete_key(server, record["token_public_id"])
+    server._server_config[comfyui_link_service.LINKS_CONFIG_KEY] = {}
 
 
 def _steps(reply: dict) -> dict:
@@ -2732,12 +2768,28 @@ def test_linking_again_keeps_use_in_every_library_for_the_owner_only(
     finally:
         owner.delete(f"{API}/users/me/token/{agent['token_id']}")
 
-    # Nor does the owner's session to a ComfyUI at another address.
+    # Nor does a link of another connection, which gets a key of its own and
+    # leaves the widened one as it is (#2194).
     widen()
-    comfy_at("http://127.0.0.1:18189/")
-    reply = owner.post(link).json()
+    widened = _link_key(server)
+    other = _add_connection(owner, "http://127.0.0.1:18189/")
+    reply = owner.post(f"{API}/comfyui/connections/{other}/link").json()
     assert reply["linked"] is True, reply
-    assert _link_key(server).all_libraries is False
+    assert reply["link"]["token_id"] != widened.id
+    assert reply["link"]["all_libraries"] is False
+    body = _connections(workflow_env)
+    current = next(c for c in body["connections"] if c["id"] == body["current"])
+    assert (current["link"]["token_id"], current["link"]["all_libraries"]) == (
+        widened.id,
+        True,
+    )
+
+
+def _add_connection(owner, url: str) -> str:
+    """Add *url* as a connection, not current; its id."""
+    r = owner.post(f"{API}/comfyui/connections", json={"url": url})
+    assert r.status_code == 200, r.text
+    return next(c["id"] for c in r.json()["connections"] if c["url"] == url)
 
 
 def test_a_comfyui_row_naming_a_resource_is_refused_outright(
@@ -3218,10 +3270,10 @@ def test_a_link_that_cannot_be_recorded_revokes_its_token(
     fake = comfy_at("http://127.0.0.1:18188/")
     real_save = comfyui_link_service._save_record
 
-    def failing_save(server, record):
+    def failing_save(server, connection_id, record):
         if record is not None:
             raise OSError("disk full")
-        real_save(server, record)
+        real_save(server, connection_id, record)
 
     monkeypatch.setattr(comfyui_link_service, "_save_record", failing_save)
     with pytest.raises(OSError):
@@ -3283,7 +3335,7 @@ def test_a_replaced_token_that_cannot_be_revoked_is_reported_not_a_500(
     server = workflow_env.server
     comfy_at("http://127.0.0.1:18188/")
     assert workflow_env.owner.post(f"{API}/comfyui/link").json()["linked"] is True
-    old = server._server_config[comfyui_link_service.LINK_CONFIG_KEY]
+    old = _current_record(server)
     old_public_id = old["token_public_id"]
     real_revoke = comfyui_link_service._revoke
 
@@ -3311,6 +3363,11 @@ def test_a_replaced_token_that_cannot_be_revoked_is_reported_not_a_500(
             workflow_env.owner.delete(f"{API}/users/me/token/{token_id}")
 
 
+def _current_record(server) -> dict:
+    current = comfyui_connections.current_id(server.auth.get_user())
+    return comfyui_link_service.link_record(server, current)
+
+
 def test_the_link_records_the_public_id_create_token_returns(workflow_env, comfy_at):
     comfy_at("http://127.0.0.1:18188/")
     assert workflow_env.owner.post(f"{API}/comfyui/link").json()["linked"] is True
@@ -3319,12 +3376,14 @@ def test_the_link_records_the_public_id_create_token_returns(workflow_env, comfy
         return list(
             session.exec(
                 select(UserToken.public_id).where(
-                    UserToken.description == comfyui_link_service.TOKEN_DESCRIPTION
+                    UserToken.description.startswith(
+                        comfyui_link_service.TOKEN_DESCRIPTION
+                    )
                 )
             ).all()
         )
 
-    recorded = workflow_env.server._server_config[comfyui_link_service.LINK_CONFIG_KEY]
+    recorded = _current_record(workflow_env.server)
     assert workflow_env.server.auth._db.run_task(
         public_ids, priority=DBPriority.IMMEDIATE
     ) == [recorded["token_public_id"]]
@@ -3469,17 +3528,28 @@ def test_the_desktop_needs_remote_access_and_a_password_for_a_network_link(
     ) == ("http://127.0.0.1:61001", None)
 
 
-def test_a_moved_loopback_port_is_sent_to_the_linked_comfyui(monkeypatch):
+def test_a_moved_loopback_port_is_sent_to_every_linked_comfyui_here(monkeypatch):
+    """Each connection on this computer has its own key and its own record,
+    so each is told; one on the network is not."""
     monkeypatch.setenv("PIXLSTASH_INSTALL_TYPE", "electron")
     monkeypatch.setenv("PIXLSTASH_PORT", "61002")
-    record = {
-        "token_public_id": "example-public-id",
-        "comfyui_url": "http://127.0.0.1:8188/",
-        "pixlstash_url": "http://127.0.0.1:61001",
-        "where": "this_computer",
-    }
+
+    def record(url: str, where: str) -> dict:
+        return {
+            "token_public_id": f"example-{where}",
+            "comfyui_url": url,
+            "pixlstash_url": "http://127.0.0.1:61001",
+            "where": where,
+        }
+
     server = SimpleNamespace(
-        _server_config={comfyui_link_service.LINK_CONFIG_KEY: dict(record)}
+        _server_config={
+            comfyui_link_service.LINKS_CONFIG_KEY: {
+                "a": record("http://127.0.0.1:8188/", "this_computer"),
+                "b": record("http://127.0.0.1:8189/", "this_computer"),
+                "c": record("http://192.0.2.20:8188/", "local_network"),
+            }
+        }
     )
     writes = []
 
@@ -3491,16 +3561,298 @@ def test_a_moved_loopback_port_is_sent_to_the_linked_comfyui(monkeypatch):
 
     monkeypatch.setattr(comfyui_link_service.requests, "post", fake_post)
     comfyui_link_service.reannounce(server)
+    moved = {comfyui_link_service.SETTING_URL: "http://127.0.0.1:61002"}
     assert writes == [
-        (
-            "http://127.0.0.1:8188/settings",
-            {comfyui_link_service.SETTING_URL: "http://127.0.0.1:61002"},
-        )
+        ("http://127.0.0.1:8188/settings", moved),
+        ("http://127.0.0.1:8189/settings", moved),
     ]
-    saved = server._server_config[comfyui_link_service.LINK_CONFIG_KEY]
-    assert saved["pixlstash_url"] == "http://127.0.0.1:61002"
+    for connection_id, told in (("a", True), ("b", True), ("c", False)):
+        url = comfyui_link_service.link_record(server, connection_id)["pixlstash_url"]
+        assert (url == "http://127.0.0.1:61002") is told, connection_id
     comfyui_link_service.reannounce(server)
-    assert len(writes) == 1, "an unchanged port must not be re-sent"
+    assert len(writes) == 2, "an unchanged port must not be re-sent"
+
+
+# ===========================================================================
+# A link key per connection (#2194)
+# ===========================================================================
+
+_SECOND = "http://127.0.0.1:18189/"
+
+
+def _token_works(server, token: str) -> bool:
+    return bearer_client(server, token).get(f"{API}/sort_mechanisms").status_code == 200
+
+
+def _link_connection(workflow_env, fake, connection_id: str) -> str:
+    """Link one connection through its own route; the key ComfyUI was given."""
+    r = workflow_env.owner.post(f"{API}/comfyui/connections/{connection_id}/link")
+    assert r.status_code == 200, r.text
+    assert r.json()["linked"] is True, r.json()
+    return fake.settings[comfyui_link_service.SETTING_TOKEN]
+
+
+def test_each_connection_keeps_its_own_key_when_the_owner_switches(
+    workflow_env, comfy_at
+):
+    """The owner's ruling: a key never moves between ComfyUIs. Linking B leaves
+    A's key live, switching touches neither, and linking A again replaces only
+    A's own key."""
+    server = workflow_env.server
+    fake = comfy_at("http://127.0.0.1:18188/")
+    first = comfyui_connections.current_id(server.auth.get_user())
+    key_a = _link_connection(workflow_env, fake, first)
+    second = _add_connection(workflow_env.owner, _SECOND)
+    key_b = _link_connection(workflow_env, fake, second)
+    assert key_a != key_b
+    assert _token_works(server, key_a) and _token_works(server, key_b)
+    record_a = comfyui_link_service.link_record(server, first)
+    assert record_a["comfyui_url"] == "http://127.0.0.1:18188/"
+    assert comfyui_link_service.link_record(server, second)["comfyui_url"] == _SECOND
+    # The keys are told apart by address under Account › API Tokens.
+    tokens = workflow_env.owner.get(f"{API}/users/me/token").json()
+    names = {t["description"] for t in tokens}
+    assert {
+        "ComfyUI (linked) · 127.0.0.1:18188",
+        "ComfyUI (linked) · 127.0.0.1:18189",
+    } <= names
+
+    r = workflow_env.owner.patch(
+        f"{API}/users/me/config", json={"comfyui_url": _SECOND}
+    )
+    assert r.status_code == 200, r.text
+    assert comfyui_link_service.link_record(server, first) == record_a
+    assert _token_works(server, key_a) and _token_works(server, key_b)
+
+    again = _link_connection(workflow_env, fake, first)
+    assert not _token_works(server, key_a), "A's replaced key still works"
+    assert _token_works(server, again) and _token_works(server, key_b)
+    assert len(_link_tokens(server)) == 2
+
+
+def test_removing_a_linked_connection_revokes_its_key_and_hands_over(
+    workflow_env, comfy_at
+):
+    server = workflow_env.server
+    fake = comfy_at("http://127.0.0.1:18188/")
+    first = comfyui_connections.current_id(server.auth.get_user())
+    key = _link_connection(workflow_env, fake, first)
+    second = _add_connection(workflow_env.owner, _SECOND)
+
+    r = workflow_env.owner.delete(f"{API}/comfyui/connections/{first}")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert [c["id"] for c in body["connections"]] == [second]
+    assert body["current"] == second, "the next connection did not take over"
+    assert server.auth.get_user().comfyui_url == _SECOND
+    assert not _token_works(server, key)
+    assert _link_tokens(server) == []
+    assert comfyui_link_service.link_record(server, first) == {}
+    # Best effort, and here ComfyUI answered: its copy is blanked.
+    assert fake.settings[comfyui_link_service.SETTING_TOKEN] == ""
+
+    r = workflow_env.owner.delete(f"{API}/comfyui/connections/{first}")
+    assert r.status_code == 404, r.text
+
+
+def test_a_connection_whose_key_cannot_be_revoked_is_kept(
+    workflow_env, comfy_at, monkeypatch
+):
+    """No removal without revocation: the request fails and both the row and
+    its record stay, so the live key keeps an owner."""
+    server = workflow_env.server
+    fake = comfy_at("http://127.0.0.1:18188/")
+    first = comfyui_connections.current_id(server.auth.get_user())
+    key = _link_connection(workflow_env, fake, first)
+    record = comfyui_link_service.link_record(server, first)
+
+    def refuse(server_, request, public_id):
+        raise RuntimeError("database is locked")
+
+    # Undone before the fixture unlinks what the test left.
+    with monkeypatch.context() as patched:
+        patched.setattr(comfyui_link_service, "_revoke", refuse)
+        r = workflow_env.owner.delete(f"{API}/comfyui/connections/{first}")
+    assert r.status_code == 500, r.text
+    assert "database is locked" in r.json()["detail"]
+    assert first in [c["id"] for c in _connections(workflow_env)["connections"]]
+    assert comfyui_link_service.link_record(server, first) == record
+    assert _token_works(server, key)
+
+
+def test_moving_a_linked_connection_revokes_its_key_and_renaming_does_not(
+    workflow_env, comfy_at
+):
+    server = workflow_env.server
+    fake = comfy_at("http://127.0.0.1:18188/")
+    first = comfyui_connections.current_id(server.auth.get_user())
+    key = _link_connection(workflow_env, fake, first)
+    second = _add_connection(workflow_env.owner, _SECOND)
+    path = f"{API}/comfyui/connections/{first}"
+
+    r = workflow_env.owner.patch(path, json={"name": "  Studio  "})
+    assert r.status_code == 200, r.text
+    entry = next(c for c in r.json()["connections"] if c["id"] == first)
+    assert (entry["name"], entry["link"]["linked"]) == ("Studio", True)
+    assert _token_works(server, key)
+
+    # Refused before anything is revoked: taken, malformed, blank, unknown.
+    for body, status in (
+        ({"url": _SECOND.upper()}, 409),
+        ({"url": "127.0.0.1:18190"}, 400),
+        ({"name": "   "}, 400),
+    ):
+        r = workflow_env.owner.patch(path, json=body)
+        assert r.status_code == status, (body, r.text)
+    r = workflow_env.owner.patch(f"{API}/comfyui/connections/nope", json={"name": "x"})
+    assert r.status_code == 404, r.text
+    assert _token_works(server, key)
+
+    moved = "http://127.0.0.1:18190/"
+    r = workflow_env.owner.patch(path, json={"url": moved})
+    assert r.status_code == 200, r.text
+    entry = next(c for c in r.json()["connections"] if c["id"] == first)
+    assert (entry["url"], entry["name"], entry["link"]["linked"]) == (
+        moved,
+        "Studio",
+        False,
+    )
+    assert not _token_works(server, key)
+    assert server.auth.get_user().comfyui_url == moved, "runs did not follow"
+    assert r.json()["current"] == first
+    assert [c["id"] for c in r.json()["connections"]] == [first, second]
+
+
+def test_the_config_patch_cannot_orphan_a_linked_key(workflow_env, comfy_at):
+    """Clearing or re-addressing a linked current connection through the config
+    PATCH would leave its key without an owner or bound to the wrong address;
+    switching to another listed address, spelled any way, still works."""
+    server = workflow_env.server
+    fake = comfy_at("http://127.0.0.1:18188/")
+    first = comfyui_connections.current_id(server.auth.get_user())
+    key = _link_connection(workflow_env, fake, first)
+    second = _add_connection(workflow_env.owner, _SECOND)
+    config = f"{API}/users/me/config"
+    for value in (None, "", "http://127.0.0.1:18190/"):
+        r = workflow_env.owner.patch(config, json={"comfyui_url": value})
+        assert r.status_code == 409, (value, r.text)
+        assert "Settings › ComfyUI" in r.json()["detail"]
+    assert server.auth.get_user().comfyui_url == "http://127.0.0.1:18188/"
+
+    # Mixed case: the guard and the switch must both match it to the row.
+    r = workflow_env.owner.patch(config, json={"comfyui_url": "HTTP://127.0.0.1:18189"})
+    assert r.status_code == 200, r.text
+    assert _connections(workflow_env)["current"] == second
+    assert _token_works(server, key)
+    # Not linked, so the new current one may be cleared as before.
+    r = workflow_env.owner.patch(config, json={"comfyui_url": None})
+    assert r.status_code == 200, r.text
+
+
+def test_start_up_moves_the_single_record_onto_its_connection(workflow_env, comfy_at):
+    """A record from before #2194 lands under the connection with its address,
+    or one made for it; a record whose connection is gone has its key deleted."""
+    server = workflow_env.server
+    config = server._server_config
+    fake = comfy_at("http://127.0.0.1:18188/")
+    first = comfyui_connections.current_id(server.auth.get_user())
+    key = _link_connection(workflow_env, fake, first)
+    record = comfyui_link_service.link_record(server, first)
+
+    # As an older build left it: one record, no map.
+    config[comfyui_link_service.LINKS_CONFIG_KEY] = {}
+    config[comfyui_link_service.LINK_CONFIG_KEY] = dict(record)
+    comfyui_link_service.adopt_single_record(server)
+    assert comfyui_link_service.LINK_CONFIG_KEY not in config
+    assert comfyui_link_service.link_record(server, first) == record
+    assert _token_works(server, key)
+
+    # No connection has its address: one is added for it, not current.
+    elsewhere = {**record, "comfyui_url": "http://127.0.0.1:18191/"}
+    config[comfyui_link_service.LINKS_CONFIG_KEY] = {}
+    config[comfyui_link_service.LINK_CONFIG_KEY] = elsewhere
+    comfyui_link_service.adopt_single_record(server)
+    body = _connections(workflow_env)
+    added = next(c for c in body["connections"] if c["url"] == elsewhere["comfyui_url"])
+    assert body["current"] == first
+    assert comfyui_link_service.link_record(server, added["id"]) == elsewhere
+    assert added["link"]["linked"] is True
+    assert _token_works(server, key)
+
+    # Its connection is gone: the key is deleted by public id.
+    config[comfyui_link_service.LINKS_CONFIG_KEY] = {"gone": dict(record)}
+    comfyui_link_service.adopt_single_record(server)
+    assert config[comfyui_link_service.LINKS_CONFIG_KEY] == {}
+    assert not _token_works(server, key)
+    assert _link_tokens(server) == []
+
+
+def test_the_probe_records_the_node_check_on_its_connection(
+    workflow_env, saved_address, monkeypatch
+):
+    _system_stats_answer(monkeypatch, (200, {"system": {}}))
+    r = workflow_env.owner.post(f"{API}/comfyui/probe", json={"url": _THIS_PC})
+    assert r.json()["can_open_workflows"] is False, r.json()
+    [entry] = _connections(workflow_env)["connections"]
+    assert (entry["status"], entry["nodes"]) == ("connected", False)
+
+    monkeypatch.setattr(comfyui_module, "comfyui_can_open_workflows", lambda url: True)
+    workflow_env.owner.post(f"{API}/comfyui/probe", json={"url": _THIS_PC})
+    [entry] = _connections(workflow_env)["connections"]
+    assert entry["nodes"] is True
+
+    # Not answering: not known, rather than the last answer.
+    _system_stats_answer(monkeypatch, requests.ConnectionError("refused"))
+    r = workflow_env.owner.post(f"{API}/comfyui/probe", json={"url": _THIS_PC})
+    assert r.json()["can_open_workflows"] is None
+    [entry] = _connections(workflow_env)["connections"]
+    assert (entry["status"], entry["nodes"]) == ("offline", None)
+
+
+_KEYED_CONNECTION_ROUTES = [
+    ("PATCH", "/comfyui/connections/{connection_id}", {"name": "Renamed"}),
+    ("DELETE", "/comfyui/connections/{connection_id}", None),
+    ("POST", "/comfyui/connections/{connection_id}/link", None),
+    ("DELETE", "/comfyui/connections/{connection_id}/link", None),
+]
+
+
+@pytest.mark.parametrize("method, template, body", _KEYED_CONNECTION_ROUTES)
+def test_the_routes_that_link_or_revoke_a_connection_are_local_owner_only(
+    workflow_env, linked_comfyui, forwarded_for, monkeypatch, method, template, body
+):
+    """Both directions: a remote owner, a live READ token and the link key
+    itself are refused and change nothing; the same owner from this computer
+    is let through."""
+    server = workflow_env.server
+    owner = workflow_env.owner
+    template = f"{API}{template}"
+    assert ROUTE_POLICIES[(method, template)].policy is AccessPolicy.LOCAL_OWNER_ONLY
+    target = _add_connection(owner, _SECOND)
+    path = template.replace("{connection_id}", target)
+    assert_real_route(server.api, method, path, template)
+    monkeypatch.setitem(server.auth._server_config, "allow_remote_host_ops", False)
+    read = bearer_client(server, mint_read_token(owner, "connection route check"))
+    assert read.get(f"{API}/pictures").status_code == 200, (
+        "the READ token is dead; its refusal below would prove nothing"
+    )
+    assert linked_comfyui.get(f"{API}/pictures").status_code == 200, (
+        "the link key is dead; its refusal below would prove nothing"
+    )
+    before = _connections(workflow_env)
+    tokens = _link_tokens(server)
+
+    r = owner.request(method, path, json=body, headers={"X-Forwarded-For": "8.8.8.8"})
+    assert r.status_code == 403, r.text
+    assert read.request(method, path, json=body).status_code == 403
+    r = linked_comfyui.request(method, path, json=body)
+    assert r.status_code == 403, r.text
+    assert r.json()["detail"] == auth.COMFYUI_SCOPE_REFUSAL
+    assert _connections(workflow_env) == before
+    assert _link_tokens(server) == tokens
+
+    r = owner.request(method, path, json=body)
+    assert r.status_code == 200, r.text
 
 
 # ===========================================================================

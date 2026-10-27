@@ -1281,6 +1281,9 @@ class Server(
         # get_worker_progress, which the in-app upgrade bar consumes.
         self.vault.start()
         self._maybe_send_telemetry_ping()
+        # The one link record of older builds moves onto its connection, and a
+        # removed connection's key is revoked (#2194).
+        comfyui_link_service.adopt_single_record(self)
         # A link from before the ComfyUI scope (#1811) is held to it.
         comfyui_link_service.narrow_recorded_key(self)
         # A linked ComfyUI on this computer is told if the loopback port moved.

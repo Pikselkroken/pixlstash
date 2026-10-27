@@ -1,36 +1,29 @@
 <script setup>
-// The ComfyUI server that workflows run on. Workflows themselves are added by
+// The ComfyUI servers workflows run on. Workflows themselves are added by
 // dropping a file on the Workflows view or into the watched workflows folder.
+//
+// With connections saved this is a table of them (#2194), each linked with its
+// own key: `ComfyuiConnectionsTable.vue` holds the rows and their own changes,
+// this section the list, the empty state and the dialogs.
 //
 // Invariant: an address is only ever saved after the backend has proven a
 // ComfyUI answers there (`POST /comfyui/probe`). On this machine nothing has
-// to be typed: the usual ports are probed on open.
-import { computed, nextTick, ref, watch } from "vue";
+// to be typed: with no connection, the usual ports are probed on open.
+import { nextTick, ref, watch } from "vue";
 import { VIcon, VProgressCircular } from "vuetify/components";
 import { isReadOnly } from "../../utils/apiClient";
-import { getUserConfig, patchUserConfig } from "../../api/config";
-import {
-  getComfyuiLink,
-  getPixlstashNode,
-  probeComfyui,
-  unlinkComfyui,
-} from "../../api/comfyui";
+import { patchUserConfig } from "../../api/config";
+import { listComfyuiConnections, probeComfyui } from "../../api/comfyui";
 import AppButton from "../widgets/AppButton.vue";
 import AppInput from "../widgets/AppInput.vue";
 import FieldLabel from "../widgets/FieldLabel.vue";
 import Segmented from "../widgets/Segmented.vue";
-import ComfyuiExposureNotice from "./ComfyuiExposureNotice.vue";
+import NewComfyuiConnectionDialog from "../panels/NewComfyuiConnectionDialog.vue";
+import ComfyuiConnectionsTable from "./ComfyuiConnectionsTable.vue";
 import ComfyuiLinkDialog from "./ComfyuiLinkDialog.vue";
-import ComfyuiLinkLibraries from "./ComfyuiLinkLibraries.vue";
 import SettingsSection from "./SettingsSection.vue";
 import { errorMessage } from "../../utils/apiError";
-import {
-  PIXLSTASH_PACK_INSTALL,
-  PIXLSTASH_PACK_URL,
-} from "../../utils/runReasons";
 import { useFilterStore } from "../../stores/useFilterStore";
-import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
-import { formatUserDay } from "../../utils/utils";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -38,7 +31,7 @@ const props = defineProps({
   first: { type: Boolean, default: false },
 });
 
-const emit = defineEmits(["update:comfyui-configured"]);
+const emit = defineEmits(["update:comfyui-configured", "open-tab"]);
 
 // ComfyUI's own default port first, then ComfyUI Desktop's.
 const LOCAL_CANDIDATES = ["http://127.0.0.1:8188/", "http://127.0.0.1:8000/"];
@@ -48,104 +41,27 @@ const SCHEME_OPTIONS = [
   { id: "https", label: "https" },
 ];
 
-// idle (not loaded) | probing | found | address | connected
+// idle (not loaded) | probing | found | address | table
 const state = ref("idle");
-const comfyuiUrl = ref("");
 const foundUrl = ref("");
-// The probe reply `foundUrl` came from, kept for what it says about --listen.
-let foundProbe = null;
 const busy = ref(false);
 const actionError = ref("");
-// The newest probe of the saved URL (on load, after a save, Check again);
-// null while one is in flight, which the status shows as "Checking".
-const lastProbe = ref(null);
-let savedProbe = 0;
+let detectRun = 0;
+
+// `GET /comfyui/connections`.
+const connections = ref([]);
+const current = ref(null);
+const table = ref(null);
 
 const scheme = ref("http");
 const host = ref("127.0.0.1");
 const port = ref("8188");
 const formError = ref("");
 
-const unreachable = computed(() => lastProbe.value?.reachable === false);
-
-// A ComfyUI that other computers can reach lets them use PixlStash through
-// it. Said before the person links, not only in the Link dialog: one not on
-// this computer, or one here whose probe says it was started with a network
-// `--listen`. `URL.hostname` keeps an IPv6 host in its brackets.
-const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "[::1]"];
-const comfyuiOnNetwork = computed(() => {
-  try {
-    const hostname = new URL(comfyuiUrl.value).hostname.toLowerCase();
-    return Boolean(hostname) && !LOOPBACK_HOSTS.includes(hostname);
-  } catch {
-    return false;
-  }
-});
-// The newest probe decides, so restarting ComfyUI without --listen and
-// pressing Check again clears the notice; the link record's `exposure`, from
-// link time, stands in only while no probe has said either way.
-const exposure = computed(() => {
-  if (comfyuiOnNetwork.value) return "other_computer";
-  const listens = lastProbe.value?.listens_on_network;
-  if (listens === true) return "listening";
-  if (listens === false) return null;
-  return link.value?.exposure || null;
-});
-
-// Whether the configured ComfyUI has the ComfyUI-PixlStash node pack: `true`,
-// `false`, or `null` when there is no ComfyUI to ask or it did not answer.
-// Only a definite answer is shown, as the Workflows tab's Open in ComfyUI does.
-// The check looks for the pack's `open_workflow.js`, so an old install reads
-// as `false` too, and the sentence says so.
-const packInstalled = ref(null);
-let packCheck = 0;
-let detectRun = 0;
-
-// `GET /comfyui/link` for the saved ComfyUI; null until read, or when it could
-// not be read (then the Access row is not shown rather than guessed).
-const link = ref(null);
-const linkDialogOpen = ref(false);
-const linkButton = ref(null);
-const relinkButton = ref(null);
-const checkAgainButton = ref(null);
-let linkCheck = 0;
-const userPrefs = useUserPrefsStore();
-const linkedOn = computed(() =>
-  formatUserDay(link.value?.linked_at, userPrefs.dateFormat),
-);
-
-async function refreshLink() {
-  const check = ++linkCheck;
-  link.value = null;
-  if (!comfyuiUrl.value) return;
-  try {
-    const reply = await getComfyuiLink();
-    if (check === linkCheck) link.value = reply;
-  } catch (e) {
-    console.warn("[settings] could not read the ComfyUI link", e);
-  }
-}
-
-// Focus goes back to the Link button that opened the dialog, or, once linked
-// and that button is gone, to Check again rather than to the page.
-async function closeLinkDialog() {
-  linkDialogOpen.value = false;
-  await refreshLink();
-  await nextTick();
-  (linkButton.value || relinkButton.value || checkAgainButton.value)?.focus();
-}
-
-async function checkPixlstashPack() {
-  const check = ++packCheck;
-  packInstalled.value = null;
-  if (!comfyuiUrl.value) return;
-  try {
-    const { can_open_workflows: canOpen } = await getPixlstashNode();
-    if (check === packCheck) packInstalled.value = canOpen ?? null;
-  } catch (e) {
-    console.warn("[settings] could not ask ComfyUI about ComfyUI-PixlStash", e);
-  }
-}
+const adding = ref(false);
+const addButton = ref(null);
+// The row the Link dialog is open on: `{id, name, url}`.
+const linking = ref(null);
 
 function fillForm(url) {
   let parsed;
@@ -172,7 +88,6 @@ async function detectLocal() {
       if (run !== detectRun) return;
       if (reply?.reachable) {
         foundUrl.value = reply.url;
-        foundProbe = reply;
         state.value = "found";
         return;
       }
@@ -184,63 +99,43 @@ async function detectLocal() {
   state.value = "address";
 }
 
-// "Connected" claims ComfyUI answers, so the saved address is asked before
-// the pip says so. An answer for an address no longer saved is dropped.
-async function probeSaved() {
-  const check = ++savedProbe;
-  lastProbe.value = null;
-  let answer;
-  try {
-    answer = await probeComfyui(comfyuiUrl.value);
-  } catch (e) {
-    console.warn("[settings] could not check the saved ComfyUI", e);
-    answer = {
-      reachable: false,
-      detail: errorMessage(e, "Could not check ComfyUI."),
-    };
-  }
-  if (check === savedProbe) lastProbe.value = answer;
-}
-
-async function fetchComfyuiUrl() {
-  let cfg;
-  try {
-    cfg = await getUserConfig();
-  } catch (e) {
-    console.warn("[settings] could not read the ComfyUI address", e);
-    actionError.value = errorMessage(e, "Could not read the ComfyUI address.");
-    return;
-  }
-  comfyuiUrl.value = String(cfg?.comfyui_url || "").trim();
-  if (comfyuiUrl.value) {
+function show(body) {
+  connections.value = body?.connections || [];
+  current.value = body?.current ?? null;
+  if (connections.value.length) {
     detectRun++;
-    state.value = "connected";
-    fillForm(comfyuiUrl.value);
-    probeSaved();
-    checkPixlstashPack();
-    refreshLink();
-  } else {
+    state.value = "table";
+  } else if (state.value === "table") {
+    // The last one was removed.
+    emit("update:comfyui-configured", false);
+    detectLocal();
+  } else if (state.value === "idle") {
     detectLocal();
   }
 }
 
-// Only ever called with the url a probe just answered for, and that answer.
-async function save(url, probe) {
+async function load() {
+  try {
+    show(await listComfyuiConnections());
+  } catch (e) {
+    console.warn("[settings] could not read the ComfyUI connections", e);
+    actionError.value = errorMessage(e, "Could not read the ComfyUI connections.");
+  }
+}
+
+// Only ever called with the url a probe just answered for.
+async function save(url) {
   await patchUserConfig({ comfyui_url: url });
-  comfyuiUrl.value = url;
-  lastProbe.value = probe || { reachable: true, url };
-  state.value = "connected";
   useFilterStore().comfyuiUrl = url;
   emit("update:comfyui-configured", true);
-  checkPixlstashPack();
-  refreshLink();
+  await load();
 }
 
 async function connectFound() {
   busy.value = true;
   actionError.value = "";
   try {
-    await save(foundUrl.value, foundProbe);
+    await save(foundUrl.value);
   } catch (e) {
     actionError.value = errorMessage(e, "Could not save the ComfyUI address.");
   } finally {
@@ -277,7 +172,7 @@ async function connectAddress() {
         reply?.detail || `Nothing answered at ${hostPart}:${p}.`;
       return;
     }
-    await save(reply.url, reply);
+    await save(reply.url);
   } catch (e) {
     formError.value = errorMessage(e, "Could not reach that address.");
   } finally {
@@ -285,58 +180,30 @@ async function connectAddress() {
   }
 }
 
-async function checkAgain() {
-  busy.value = true;
-  actionError.value = "";
-  try {
-    await probeSaved();
-  } finally {
-    busy.value = false;
-  }
-  checkPixlstashPack();
-  refreshLink();
+/** A row changed: the new list, or null to read it again. */
+function changed(body) {
+  if (body) show(body);
+  else load();
 }
 
-async function disconnect() {
-  busy.value = true;
-  actionError.value = "";
-  // Revoke the key before forgetting the address it was written to. A refusal
-  // does not keep the address: the key stays listed under API Tokens, where it
-  // can still be deleted, and the person is told so. Skipped only when the
-  // link is known to be absent: a status that could not be read may hide a
-  // live key, and the DELETE is a no-op when there is none.
-  let keyLeft = "";
-  if (link.value?.linked !== false) {
-    try {
-      await unlinkComfyui();
-    } catch (e) {
-      console.warn("[settings] could not revoke the ComfyUI key", e);
-      keyLeft =
-        `${errorMessage(e, "The ComfyUI key could not be revoked.")} ` +
-        'The key "ComfyUI (linked)" still works: delete it under Account › API Tokens.';
-    }
-  }
-  try {
-    const body = await patchUserConfig({ comfyui_url: null });
-    // With other connections saved, the next one is current now (#2167).
-    const next = body?.config?.comfyui_url || "";
-    link.value = null;
-    comfyuiUrl.value = "";
-    savedProbe++;
-    lastProbe.value = null;
-    useFilterStore().comfyuiUrl = next;
-    if (next) {
-      fetchComfyuiUrl();
-    } else {
-      emit("update:comfyui-configured", false);
-      detectLocal();
-    }
-  } catch (e) {
-    actionError.value = errorMessage(e, "Failed to clear ComfyUI URL.");
-  } finally {
-    busy.value = false;
-  }
-  if (keyLeft) actionError.value = [keyLeft, actionError.value].join(" ").trim();
+// Opened from a button that stays, so focus goes back to it.
+async function closeAdd() {
+  adding.value = false;
+  await nextTick();
+  addButton.value?.focus();
+}
+
+async function added(body) {
+  show(body);
+  await closeAdd();
+}
+
+// Linking a row removes its Link button, so focus goes to the row's ⋯.
+async function closeLinkDialog() {
+  const id = linking.value?.id;
+  linking.value = null;
+  await load();
+  if (id) table.value?.focusMore(id);
 }
 
 // ── Lifecycle: fetch data when the parent dialog opens ───────────────────────
@@ -346,9 +213,9 @@ watch(
     if (!isOpen) return;
     actionError.value = "";
     formError.value = "";
-    lastProbe.value = null;
     if (isReadOnly.value) return;
-    fetchComfyuiUrl();
+    state.value = "idle";
+    load();
   },
   { immediate: true },
 );
@@ -360,10 +227,60 @@ watch(
     desc="Run workflows from PixlStash and save ComfyUI's pictures straight into your library. Automatic setup works for a ComfyUI on this computer or your local network."
     :first="first"
   >
+    <template v-if="state === 'table'">
+      <div class="cf-head">
+        <span class="section-label">Connections</span>
+        <AppButton
+          ref="addButton"
+          variant="outline"
+          size="sm"
+          icon-left="mdi-plus"
+          data-testid="comfyui-add-connection"
+          @click="adding = true"
+        >
+          Add connection
+        </AppButton>
+      </div>
+      <p class="cf-small cf-muted">
+        Run on picks where workflows go, the same choice as the Workflows
+        sidebar. Test checks a connection's status, card and nodes.
+      </p>
+      <ComfyuiConnectionsTable
+        ref="table"
+        :connections="connections"
+        :current="current"
+        :linking="linking?.id || null"
+        @changed="changed"
+        @link="linking = $event"
+      />
+      <span class="section-label cf-keys-label">Link keys</span>
+      <div class="cf-keys" data-testid="comfyui-link-keys-note">
+        <v-icon size="18" class="cf-keys__icon" aria-hidden="true"
+          >mdi-information-outline</v-icon
+        >
+        <p class="cf-small">
+          Each linked ComfyUI has its own key for its PixlStash nodes. A key
+          works only from that ComfyUI's address, covers the open library, and
+          cannot delete, change settings or make tokens. Switching Run on never
+          touches a key, so every linked connection keeps working, including
+          one that is offline. The keys are listed under
+          <button
+            type="button"
+            class="cf-link"
+            data-testid="comfyui-open-tokens"
+            @click="emit('open-tab', 'account')"
+          >
+            Account › API Tokens</button
+          >.
+        </p>
+      </div>
+    </template>
+
     <div
-      v-if="state !== 'idle' || actionError"
+      v-else-if="state !== 'idle' || actionError"
       class="cf-card"
-      :aria-busy="state === 'probing' ? 'true' : 'false'">
+      :aria-busy="state === 'probing' ? 'true' : 'false'"
+    >
       <!-- The live region is always there, so a line that arrives in it is
            announced; one inserted already filled often is not. -->
       <div role="status" class="cf-status">
@@ -471,147 +388,24 @@ watch(
         </div>
       </template>
 
-      <template v-else-if="state === 'connected'">
-        <div class="cf-row">
-          <span v-if="unreachable" class="cf-pip cf-pip--bad">
-            <v-icon size="16">mdi-alert-rhombus-outline</v-icon>
-            Not answering
-          </span>
-          <span v-else-if="!lastProbe" class="cf-pip">
-            <v-progress-circular indeterminate size="16" width="2" />
-            Checking
-          </span>
-          <span v-else class="cf-pip cf-pip--ok">
-            <v-icon size="16">mdi-check-circle</v-icon>
-            Connected
-          </span>
-          <span class="cf-mono cf-muted" data-testid="comfyui-connected-url">{{
-            comfyuiUrl
-          }}</span>
-        </div>
-        <p v-if="unreachable && lastProbe.detail" class="cf-small cf-muted">
-          {{ lastProbe.detail }}
-        </p>
-        <div role="status">
-          <p
-            v-if="packInstalled !== null"
-            class="cf-pack-status"
-            data-testid="comfyui-pack-status"
-          >
-            <a
-              class="cf-pack-link"
-              :href="PIXLSTASH_PACK_URL"
-              target="_blank"
-              rel="noopener noreferrer"
-              >ComfyUI-PixlStash</a
-            >
-            node pack:
-            <template v-if="packInstalled">installed.</template>
-            <template v-else>
-              not found, or too old. Opening workflows in ComfyUI and some
-              recipes need it. {{ PIXLSTASH_PACK_INSTALL }}
-            </template>
-          </p>
-        </div>
-        <div v-if="link" class="cf-access" data-testid="comfyui-access">
-          <p class="cf-small">
-            <span class="cf-muted">Access</span>
-            <span v-if="link.linked" data-testid="comfyui-access-value"
-              >PixlStash nodes only · linked {{ linkedOn }}</span
-            >
-            <span v-else data-testid="comfyui-access-value">Not linked</span>
-          </p>
-          <template v-if="!link.linked">
-            <div class="cf-row">
-              <AppButton
-                ref="linkButton"
-                variant="primary"
-                :disabled="busy"
-                data-testid="comfyui-link"
-                @click="linkDialogOpen = true"
-              >
-                Link ComfyUI
-              </AppButton>
-            </div>
-            <p class="cf-small cf-muted">
-              Linking gives ComfyUI a key for its PixlStash nodes: they can
-              browse this library, load its models, save pictures into it and
-              convert workflows. The key cannot delete, change settings or make
-              tokens.
-            </p>
-            <ComfyuiExposureNotice v-if="exposure" :exposure="exposure" />
-          </template>
-          <template v-else>
-            <p
-              v-if="link.refused_from"
-              class="cf-small"
-              data-testid="comfyui-key-refused"
-            >
-              PixlStash refused ComfyUI's key from {{ link.refused_from }}. It
-              only works from {{ link.bound_address }}, where ComfyUI was when
-              it was linked. If ComfyUI's address changed, link it again. If
-              {{ link.refused_from }} is not ComfyUI's computer, someone else
-              has the key: linking again replaces it.
-            </p>
-            <p
-              v-else-if="!link.bound_address"
-              class="cf-small cf-muted"
-              data-testid="comfyui-key-unbound"
-            >
-              This link was made before PixlStash tied ComfyUI's key to
-              ComfyUI's address, so the key works from any computer. Link again
-              to tie it.
-            </p>
-            <div v-if="link.refused_from || !link.bound_address" class="cf-row">
-              <AppButton
-                ref="relinkButton"
-                :variant="link.refused_from ? 'primary' : 'secondary'"
-                :disabled="busy"
-                data-testid="comfyui-relink"
-                @click="linkDialogOpen = true"
-              >
-                Link again
-              </AppButton>
-            </div>
-            <ComfyuiLinkLibraries :link="link" />
-            <ComfyuiExposureNotice v-if="exposure" :exposure="exposure" />
-          </template>
-        </div>
-        <div class="cf-row">
-          <AppButton
-            ref="checkAgainButton"
-            variant="secondary"
-            :loading="busy"
-            data-testid="comfyui-check-again"
-            @click="checkAgain"
-          >
-            Check again
-          </AppButton>
-          <span class="cf-spacer" />
-          <AppButton
-            variant="danger"
-            :disabled="busy"
-            data-testid="comfyui-disconnect"
-            @click="disconnect"
-          >
-            Disconnect
-          </AppButton>
-        </div>
-        <p
-          v-if="link?.linked"
-          class="cf-small cf-muted"
-          data-testid="comfyui-disconnect-note"
-        >
-          Disconnect removes PixlStash's key from ComfyUI and revokes it here.
-        </p>
-      </template>
-
       <p v-if="actionError" class="cf-error" role="alert">
         <v-icon size="16" class="cf-error__icon">mdi-alert-rhombus-outline</v-icon>
         <span>{{ actionError }}</span>
       </p>
     </div>
-    <ComfyuiLinkDialog :open="linkDialogOpen" @close="closeLinkDialog" />
+    <ComfyuiLinkDialog
+      v-if="linking"
+      open
+      :connection="linking"
+      @close="closeLinkDialog"
+    />
+    <!-- Mounted only while open, so it starts empty each time. -->
+    <NewComfyuiConnectionDialog
+      v-if="adding"
+      open
+      @close="closeAdd"
+      @added="added"
+    />
   </SettingsSection>
 </template>
 
@@ -644,10 +438,6 @@ watch(
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-3);
-}
-
-.cf-spacer {
-  flex: 1 1 auto;
 }
 
 .cf-stack {
@@ -689,14 +479,6 @@ watch(
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
-.cf-pip--ok {
-  color: rgb(var(--v-theme-surface-success));
-}
-
-.cf-pip--bad {
-  color: rgb(var(--v-theme-surface-error));
-}
-
 /* Scheme | host | port, bottoms aligned so the fields share a baseline. */
 .cf-fields {
   display: grid;
@@ -724,35 +506,49 @@ watch(
   margin-top: var(--space-1);
 }
 
-/* Access: label then value on one line, the fix underneath. */
-.cf-access {
+/* The section label with Add connection at its right, as the design's
+   Connections header. */
+.cf-head {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
   gap: var(--space-3);
 }
 
-.cf-access .cf-small {
+.cf-keys-label {
+  margin-top: var(--space-4);
+}
+
+/* The DS info notice: a 3px info rule down its left edge. */
+.cf-keys {
   display: flex;
-  gap: var(--space-4);
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid rgb(var(--v-theme-border));
+  border-left: 3px solid rgb(var(--v-theme-surface-info));
+  border-radius: var(--radius-sm);
+  background: rgb(var(--v-theme-surface));
 }
 
-/* ── Node pack status line ────────────────────────────────────────────────── */
-.cf-pack-status {
-  margin: 0;
-  font-size: var(--text-xs);
-  line-height: var(--leading-body);
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+.cf-keys__icon {
+  flex-shrink: 0;
+  color: rgb(var(--v-theme-surface-info));
 }
 
-/* The plugin catalogue link's shape (BehaviourSection.vue). */
-.cf-pack-link {
+/* A link that switches the Settings pane: text-shaped, as the pack link was. */
+.cf-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
   color: rgb(var(--v-theme-on-surface));
   font-weight: var(--weight-medium);
   text-decoration: underline;
   text-underline-offset: 2px;
+  cursor: pointer;
 }
 
-.cf-pack-link:hover {
+.cf-link:hover {
   text-decoration-thickness: 2px;
 }
 </style>
