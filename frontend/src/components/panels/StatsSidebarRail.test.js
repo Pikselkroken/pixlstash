@@ -483,6 +483,22 @@ describe("the selection's tag reads", () => {
     addPictureTag.mockReset();
   });
 
+  it("say a failed rejected-tag read failed, rather than show none", async () => {
+    listTagPredictions.mockImplementation(async (id) => {
+      if (id === 2) throw new Error("offline");
+      return { tag_predictions: [], meta: {} };
+    });
+    const tags = useSelectionTags(() => [1, 2]);
+    await tags.fetchSelectedImagePredictions();
+    expect(tags.predictionReadFailed.value).toBe(true);
+    listTagPredictions.mockImplementation(async () => ({
+      tag_predictions: [],
+      meta: {},
+    }));
+    await tags.fetchSelectedImagePredictions();
+    expect(tags.predictionReadFailed.value).toBe(false);
+  });
+
   it("say a failed read failed, rather than show no tags", async () => {
     bulkFetchTags.mockRejectedValueOnce(new Error("offline"));
     const tags = useSelectionTags(() => [1, 2]);

@@ -131,6 +131,9 @@
             </span>
           </div>
         </div>
+        <div v-if="predictionReadFailed" class="tag-data-loading">
+          Some pictures' rejected tags couldn't be read.
+        </div>
         <div
           v-if="aggregatedPredictions.length || rejectedZoneIsDropTarget"
           class="tag-current-section"
@@ -472,6 +475,7 @@ const {
   fetchedTagData,
   tagDataLoading,
   tagReadFailed,
+  predictionReadFailed,
   tagDataCapped,
   fetchedPredictionData,
   predictionAcceptanceThreshold: predictionAcceptanceThresholdSB,

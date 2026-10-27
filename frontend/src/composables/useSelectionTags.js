@@ -39,6 +39,8 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
   const tagDataReadFor = ref("");
   // A failed read is not "no tags": it says so instead of showing an empty list.
   const tagReadFailed = ref(false);
+  // Likewise for the rejected tags: set when any picture's read failed.
+  const predictionReadFailed = ref(false);
   const tagDataCapped = ref(false);
   const fetchedPredictionData = ref([]);
   const predictionLoading = ref(false);
@@ -105,10 +107,12 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
     const mine = (predictionRead += 1);
     if (!ids.length) {
       fetchedPredictionData.value = [];
+      predictionReadFailed.value = false;
       predictionLoading.value = false;
       return;
     }
     predictionLoading.value = true;
+    let failed = false;
     try {
       const results = await Promise.all(
         ids.map((id) =>
@@ -136,15 +140,20 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
             })
             .catch((e) => {
               console.warn(`Couldn't read picture ${id}'s rejected tags`, e);
+              failed = true;
               return { id, predictions: [] };
             }),
         ),
       );
       if (mine !== predictionRead) return;
       fetchedPredictionData.value = results;
+      predictionReadFailed.value = failed;
     } catch (e) {
       console.warn("Couldn't read the selected pictures' rejected tags", e);
-      if (mine === predictionRead) fetchedPredictionData.value = [];
+      if (mine === predictionRead) {
+        fetchedPredictionData.value = [];
+        predictionReadFailed.value = true;
+      }
     } finally {
       if (mine === predictionRead) predictionLoading.value = false;
     }
@@ -458,6 +467,7 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
     tagReadFailed,
     tagDataCapped,
     fetchedPredictionData,
+    predictionReadFailed,
     predictionLoading,
     predictionAcceptanceThreshold,
     labelThresholds,

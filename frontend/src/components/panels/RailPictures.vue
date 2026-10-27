@@ -130,7 +130,7 @@
     </section>
 
     <section
-      v-if="aggregatedPredictions.length"
+      v-if="aggregatedPredictions.length || predictionReadFailed"
       class="rail-pictures__section"
       aria-label="Rejected tags"
     >
@@ -139,7 +139,16 @@
         label="Rejected tags"
         :count="aggregatedPredictions.length"
       />
-      <div v-if="!rejectedCollapsed" class="rail-pictures__zone">
+      <p
+        v-if="!rejectedCollapsed && predictionReadFailed"
+        class="rail-pictures__hint rail-pictures__error"
+      >
+        Some pictures' rejected tags couldn't be read.
+      </p>
+      <div
+        v-if="!rejectedCollapsed && aggregatedPredictions.length"
+        class="rail-pictures__zone"
+      >
         <span
           v-for="p in aggregatedPredictions"
           :key="'pred-' + p.tag"
@@ -233,6 +242,7 @@ const propertiesCollapsed = useSectionCollapse("manyProperties");
 
 const {
   fetchedPredictionData,
+  predictionReadFailed,
   tagDataLoading,
   tagReadFailed,
   tagDataCapped,
