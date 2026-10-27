@@ -414,7 +414,16 @@ async function saveSetFromEditor(setData) {
     if (setData.id) {
       await patchPictureSet(setData.id, setData, opts);
     } else {
-      saved = (await createPictureSet(setData, opts))?.picture_set ?? null;
+      const created = await createPictureSet(setData, opts);
+      saved = created?.picture_set ?? null;
+      if (!saved) {
+        // The route declares `{status, picture_set}`; anything else is a
+        // contract break, logged rather than guessed around (#2124).
+        console.error(
+          "createPictureSet answered without `picture_set`; a host filing pictures into the new set cannot",
+          created,
+        );
+      }
     }
 
     if (saved) emit("saved", saved);
