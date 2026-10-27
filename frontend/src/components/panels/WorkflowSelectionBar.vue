@@ -170,6 +170,7 @@
       shape="round"
       icon="close"
       data-verb="clear"
+      aria-label="Clear selection"
       tooltip="Clear selection (Esc)"
       @click="store.clearSelection()"
     />

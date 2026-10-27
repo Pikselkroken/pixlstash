@@ -234,6 +234,16 @@ describe("the pill's gates", () => {
     expect(menuRow(wrapper, "hide").find(".ctx-label-text").text()).toBe("Hide");
   });
 
+  it("names every verb on its face with an aria-label of its own, never its tooltip", () => {
+    // The file's rule: the label is the stable verb, the tooltip the refusal.
+    const { wrapper } = bar(["a", "b"]);
+    const unnamed = faceVerbs(wrapper).filter(
+      (name) => !verb(wrapper, name).attributes("aria-label"),
+    );
+    expect(unnamed).toEqual([]);
+    expect(verb(wrapper, "clear").attributes("aria-label")).toBe("Clear selection");
+  });
+
   it("Clear is the pill's last verb, and clears the selection", async () => {
     const { wrapper, store } = bar(["a", "b"]);
     expect(faceVerbs(wrapper).at(-1)).toBe("clear");
