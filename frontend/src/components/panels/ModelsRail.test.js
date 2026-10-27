@@ -298,7 +298,8 @@ describe("one set", () => {
     store.setPlace("sets");
     store.selectSet(9);
     await wrapper.vm.$nextTick();
-    const toggle = wrapper.get('[data-testid="mrs-toggle-members"]');
+    // The shared header's chevron is the button that carries the state.
+    const toggle = wrapper.get('[data-testid="mrs-toggle-members"] button');
     expect(toggle.attributes("aria-expanded")).toBe("true");
     await toggle.trigger("click");
     expect(toggle.attributes("aria-expanded")).toBe("false");
@@ -308,7 +309,9 @@ describe("one set", () => {
     await wrapper.vm.$nextTick();
     store.selectSet(9);
     await wrapper.vm.$nextTick();
-    expect(wrapper.get('[data-testid="mrs-toggle-members"]').attributes("aria-expanded")).toBe("false");
+    expect(
+      wrapper.get('[data-testid="mrs-toggle-members"] button').attributes("aria-expanded"),
+    ).toBe("false");
   });
 
   it("lets go of the set on Clear, back to the view", async () => {

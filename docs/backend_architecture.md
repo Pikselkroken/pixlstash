@@ -5383,7 +5383,7 @@ Deriving from the join table rather than intersecting the raw scalar is delibera
 
 - **Residual (open): `metadata_fields()` is still "every column minus blobs", it is only *watched*.** The pin above turns a silent addition into a build failure; it does not make the projection an allowlist, and it cannot narrow anything by itself. Inverting it is the durable fix and was deliberately not attempted here: `metadata_fields()` is also the default `select_fields` of `Picture.find`, so removing a column changes what `scoring/smart_score.py`, `scoring/character_likeness.py` and `utils/service/export_utils.py` load, not only what six handlers serialise.
 - **Residual (open): the response models provide no containment.** `PictureFullMetadataResponse`, `PictureMetadataResponse` and `LikenessGroupResponse` all set `extra="allow"`, so the handler narrowing is the only filter on these six routes. Flipping any of them to `extra="ignore"` would drop ~40 undeclared metadata columns and gut the endpoint, so it is a schema project, not a one-line hardening.
-- **Residual (open): `GET /pictures` and `GET /pictures/stream` stay clean only via `GridPicture`.** They still select `project_id` and are filtered solely by the response model, as described above. Widening `GridPicture` or dropping the `response_model=` re-opens them silently.
+- **Residual (open): `GET /pictures` and `GET /pictures/stream` stay clean only via `GridPicture`.** They still select `project_id` and are filtered solely by the response model, as described above. Widening `GridPicture` or dropping the `response_model=` re-opens them silently. The one widening so far is `size_bytes` and `comfyui_models` (#2161, the stats rail's Properties for several pictures): both are what `GET /pictures/{id}/metadata` already returns for every picture the caller may read, and neither names a project or a set. It still declares no `project_id`.
 - **Owner:** backend (`senior-backend-developer`), tracked on issue #719.
 
 #### CLOSED (#721): the generic by-name readers serve the column namespace only
@@ -11393,9 +11393,22 @@ missing folder).
 
 A run's parameters come from a versioned recipe and this machine's memory, never
 from the owner reading an ai-toolkit config. A recipe is a JSON file in
-`pixlstash/data/training-presets/` (`zimage-turbo.json` is the first), loaded and
-schema-checked by `pixlstash/training/presets.py` (`validate_preset`; a broken
-file fails at load and in `tests/training/test_presets.py`). Its parts:
+`pixlstash/data/training-presets/`, loaded and schema-checked by
+`pixlstash/training/presets.py` (`validate_preset`; a broken file fails at load
+and in `tests/training/test_presets.py`). Four ship (#2121): Z-Image Turbo
+(`DEFAULT_PRESET`), Krea 2 Raw, FLUX.2 Klein 9B Base and Chroma1 Base.
+`list_presets` puts the default first, because the Train dialog preselects the
+first recipe the checkout can run. All four render over the same passthrough
+template. The three new recipes lock `datasets[*].cache_latents_to_disk`: Krea
+2's VAE, encoding every step, measured 5 GB above training. Krea 2's 8-bit
+profiles are `measured` (the probe's own shape, on a 32 GB card). Klein's and
+Chroma's are `derived` seeds, scaled by what Krea 2's derivation missed. The
+probe (§25.20) measures each setup on the owner's machine before its first run.
+Chroma has no profile below 8-bit: ai-toolkit's Chroma cannot offload layers and
+quantises on the GPU. The trainer is launched with
+`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` unless the owner set an
+allocator config (`SEAM.md`). Without it, Krea 2 failed every step on a 32 GB
+card, 5 GB short of a block while 5 GB sat reserved and split. Its parts:
 
 - `locked`: compatibility keys (architecture, training and extras checkpoints,
   the training adapter, LoRA exclusions, scheduler and sampler). None is on

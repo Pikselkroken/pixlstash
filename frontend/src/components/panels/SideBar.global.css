@@ -29,8 +29,6 @@
       twice here, once under a comment asserting it did not happen.
    --------------------------------------------------------------------------- */
 .sidebar-list-item,
-.sidebar-project-tree-row,
-.sidebar-project-tree-subheader,
 .sidebar-folder-row,
 .sidebar-folder-section-header,
 .sidebar-section-header,
@@ -174,7 +172,6 @@
    A glyph plus a texture, not colour alone: the row must read as refused in
    forced-colors and to a colour-blind user. */
 .sidebar-list-item.not-droppable,
-.sidebar-project-tree-row.not-droppable,
 .sidebar-folder-row.not-droppable {
   position: relative;
   background: repeating-linear-gradient(
@@ -189,13 +186,11 @@
 }
 
 .sidebar-list-item.not-droppable > *,
-.sidebar-project-tree-row.not-droppable > *,
 .sidebar-folder-row.not-droppable > * {
   opacity: var(--opacity-disabled);
 }
 
 .sidebar-list-item.not-droppable::after,
-.sidebar-project-tree-row.not-droppable::after,
 .sidebar-folder-row.not-droppable::after {
   content: "\F073A"; /* mdi-cancel */
   font-family: "Material Design Icons";
@@ -224,12 +219,12 @@
   background: transparent !important;
 }
 
-/* Override ProjectFiles header inside the project tree to match subheader style.
-   It sits alongside the People/Sets subheaders, so it takes their depth too. */
+/* ProjectFiles' header in the media list, set as a section head of it: the
+   rows' left edge (padding plus their transparent rail) and their height. */
 .sidebar-project-tree-files .pf-header {
-  min-height: 24px !important;
-  padding: var(--space-1) 0 var(--space-1)
-    calc(var(--space-3) + 1 * var(--indent-step)) !important;
+  min-height: var(--control-h-bar) !important;
+  margin-top: var(--space-3);
+  padding: 0 0 0 calc(var(--space-3) + var(--rail-w)) !important;
   padding-right: var(--sidebar-header-action-right-edge) !important;
   font-size: var(--text-2xs) !important;
   font-weight: var(--weight-semibold) !important;

@@ -451,6 +451,8 @@ export const scenes = [
     title: 'Export panel with Export to Folder…',
     async setup({ grid, page }) {
       await readyGrid(grid)
+      // Export is a selection verb (#2160): select the view, then open it.
+      await page.keyboard.press('Control+a')
       await page.locator('.tb-export-btn').first().click()
       // By class, not accessible name: the activator's own name subsumes the
       // whole panel's text, so a name-based locator matches two buttons.
@@ -528,7 +530,7 @@ export const scenes = [
     title: 'Project organisation',
     async setup({ grid, sidebar }) {
       await readyGrid(grid)
-      await sidebar.openProjectsTab()
+      await sidebar.openScopeMenu()
       return null
     },
   },
@@ -540,9 +542,7 @@ export const scenes = [
       await readyGrid(grid)
       // Navigate into a project, then a person inside it, so the breadcrumb is a
       // deep path (Projects › Project › Person), shown in the full app view.
-      await sidebar.openProjectsTab()
-      const project = sidebar.projectRows.first()
-      await project.click()
+      await sidebar.chooseFirstProject()
       await page.waitForTimeout(500)
       const personInProject = sidebar.characterItems.first()
       if (await personInProject.count()) {

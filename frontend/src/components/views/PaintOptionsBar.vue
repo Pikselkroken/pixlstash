@@ -1,13 +1,17 @@
 <template>
   <!-- The active tool's options, floating above the picture (the design's
        Photoshop-style options strip). -->
-  <div class="paint-options" role="group" :aria-label="`${current.label} options`">
-    <span class="paint-options-name">
+  <div
+    class="paint-options"
+    role="group"
+    :aria-label="current ? `${current.label} options` : 'Paint tools'"
+  >
+    <span v-if="current" class="paint-options-name">
       <v-icon size="18">{{ current.icon }}</v-icon>
       {{ current.label }}
     </span>
 
-    <template v-if="paint.tool.value === 'hand'">
+    <template v-if="!current">
       <span class="paint-options-hint">
         Choose a tool to mark where the edit goes, or crop.
       </span>
@@ -85,6 +89,8 @@
           : "Paints onto the selection"
       }}</span>
     </template>
+
+    <span v-if="current" class="paint-options-hint">Esc puts the tool down</span>
   </div>
 </template>
 
@@ -110,8 +116,9 @@ const props = defineProps({
 const emit = defineEmits(["apply-crop"]);
 
 const modes = PAINT_MODES;
+// `null` with no tool held.
 const current = computed(
-  () => PAINT_TOOLS.find((item) => item.id === props.paint.tool.value) || PAINT_TOOLS[0],
+  () => PAINT_TOOLS.find((item) => item.id === props.paint.tool.value) || null,
 );
 const isModeTool = computed(() => MODE_TOOLS.has(props.paint.tool.value));
 

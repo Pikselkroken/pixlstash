@@ -458,7 +458,8 @@
                   </div>
                 </template>
               </template>
-              <template v-if="showFaceBbox && overlayReady">
+              <!-- Out of the way while a selection is being painted. -->
+              <template v-if="showFaceBbox && overlayReady && !paintActive">
                 <div v-if="faceBboxes.length === 0" class="face-bbox-empty">
                   No bboxes found
                 </div>
@@ -641,8 +642,8 @@
             </button>
           </div>
 
-          <!-- Takes the pointer while a Paint tool is in hand; the Hand tool
-               leaves it to the lightbox's own pan. A stroke's click and
+          <!-- Takes the pointer while a Paint tool is in hand; with none held
+               the lightbox's own pan has it. A stroke's click and
                touches stop here: on the canvas they hide the chrome (the
                toolbox with it) or read as a swipe to the next picture. -->
           <div
@@ -650,7 +651,7 @@
               paintActive &&
               overlayReady &&
               !compareShown &&
-              paint.tool.value !== 'hand'
+              paint.tool.value
             "
             class="paint-input-layer"
             :class="`paint-input-layer--${paint.tool.value}`"
@@ -853,15 +854,12 @@
           />
 
           <div class="sidebar-section sidebar-section--faces">
-            <div
-              class="section-header section-header--collapsible section-label section-label--on-dark"
-              @click="facesCollapsed = !facesCollapsed"
-            >
-              <span>Faces</span>
-              <v-icon size="16" style="opacity: 0.6">{{
-                facesCollapsed ? "mdi-chevron-right" : "mdi-chevron-down"
-              }}</v-icon>
-            </div>
+            <SectionHeader
+              v-model:collapsed="facesCollapsed"
+              label="Faces"
+              :count="faceAssignItems.length || null"
+              on-dark
+            />
             <template v-if="!facesCollapsed">
               <div v-if="faceAssignItems.length" class="face-assign-grid">
                 <div
@@ -1022,6 +1020,7 @@ import {
   mediaMimeType,
   safeDownloadName,
   setInternalDragPayload,
+  dedupeDetections,
   displayedAspectRatio,
 } from "../../utils/media.js";
 import {
@@ -1087,6 +1086,8 @@ import OverlayActionReceipt from "../widgets/OverlayActionReceipt.vue";
 import OverlaySaveAsDialog from "../widgets/OverlaySaveAsDialog.vue";
 import PluginParametersUI from "../widgets/PluginParametersUI.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
+import SectionHeader from "../widgets/SectionHeader.vue";
+import { useSectionCollapse } from "../../composables/useSectionCollapse";
 import { FAVOURITE_KEY } from "../../stores/useFavouritesStore";
 import Tooltip from "../widgets/Tooltip.vue";
 import {
@@ -2926,6 +2927,9 @@ function handleKeydown(e) {
       // The gesture or the crop frame, not the lightbox.
       paint.cancel();
       paint.cropBox.value = null;
+    } else if (paintActive.value && paint.tool.value) {
+      // The tool goes down before anything closes.
+      paint.setTool(null);
     } else if (paintActive.value && paint.hasSelection.value) {
       // The selection goes first; the next Escape closes the lightbox.
       paint.clear();
@@ -3240,8 +3244,8 @@ function handleOverlayClick(event) {
     return;
   }
   // The Edit tab's tools live in the chrome. While they are out, any click
-  // that gets past the paint input layer (a Hand-tool press, a stroke the
-  // layer did not take) must not hide the toolbox mid-edit; Space still can.
+  // that gets past the paint input layer (a press with no tool held, a stroke
+  // the layer did not take) must not hide the toolbox mid-edit; Space still can.
   if (paintActive.value) {
     handleUserActivity();
     return;
@@ -3952,7 +3956,7 @@ function applyCrop(box) {
     stack: true,
   });
   paint.cropBox.value = null;
-  paint.tool.value = "hand";
+  paint.setTool(null);
 }
 
 function paintPoint(event) {
@@ -4439,22 +4443,6 @@ let metadataRequestId = 0;
 let faceBboxesRequestId = 0;
 let detectionBboxesRequestId = 0;
 let comfyWorkflowRequestId = 0;
-
-function dedupeDetections(items) {
-  if (!Array.isArray(items)) return [];
-  const seen = new Set();
-  const result = [];
-  for (const item of items) {
-    const id = item?.id;
-    const bbox = Array.isArray(item?.bbox) ? item.bbox.join(",") : "";
-    const frame = item?.frame_index ?? "";
-    const key = id != null ? `id:${id}` : `bbox:${frame}:${bbox}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    result.push(item);
-  }
-  return result;
-}
 
 async function fetchComfyWorkflow(imageId) {
   if (!imageId || !backendUrl.value) return;
@@ -5094,7 +5082,7 @@ function preloadAdjacentImages() {
 
 const comfyMetadata = ref(null);
 
-const facesCollapsed = ref(false);
+const facesCollapsed = useSectionCollapse("faces");
 
 watch(
   () => image.value?.id,

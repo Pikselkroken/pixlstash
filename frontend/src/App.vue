@@ -364,6 +364,14 @@ watch(mainAreaRef, (mainArea) => {
 // the sidebar can highlight the correct folder on deep-link or back-navigation.
 // Parsed once, by useViewStore.
 
+// The grid's cards for its selection, for the rail (#2161). The selection is
+// the store's; the cards are the grid's, read afresh because rating and
+// favouriting replace a card rather than change it.
+const railPictures = computed(
+  () =>
+    gridContainer.value?.cardsByIds?.(selectionStore.selectedImageIds) ?? [],
+);
+
 const activeCategoryLabel = computed(() => {
   if (selectionStore.selectedFolderFilter) {
     const folder = selectionStore.selectedFolderFilter.label || "Folder";
@@ -848,6 +856,8 @@ defineExpose({
             @select-duplicates="handleSelectDuplicates"
             @select-set="handleSelectSet"
             @select-folder="handleSelectFolder"
+            @open-import="openImportDialog"
+            @open-tag-review="reviewSessionsStore.overlayOpen = true"
             @train-lora="handleTrainLora"
             @images-assigned-to-character="handleImagesAssignedToCharacter"
             @images-moved="handleImagesMoved"
@@ -993,12 +1003,28 @@ defineExpose({
         <!-- The Workflows view's Templates tab (#2000) has its own: a template
              is not a workflow yet, so nothing of the Workflow tab applies.
              It offers the Tasks tab all the same. -->
+        <!-- Everywhere else the stats panel also inspects the grid's
+             selection (#2161). It rates, favourites and tags through the
+             grid's own paths, so the rail and the tile cannot disagree. -->
         <TemplateInspector
           v-if="isWorkflowsView && workflowTemplatesStore.shown"
         />
         <WorkflowTab v-else-if="isWorkflowsView" />
         <ModelsRail v-else-if="isModelsView" />
-        <StatsSidebar v-else />
+        <StatsSidebar v-else
+          :view-name="activeCategoryLabel"
+          :pictures="railPictures"
+          :covered="lightboxOpen"
+          :score-of="(card) => gridContainer?.scoreOf(card) ?? card.score ?? 0"
+          @set-score="(card, n) => gridContainer?.setScore(card, n)"
+          @toggle-favourite="(ids) => gridContainer?.toggleFavourite(ids)"
+          @add-tag="(id, tag) => gridContainer?.addTagToImage(id, tag)"
+          @update-description="
+            (id, text) => gridContainer?.updateDescriptionForImage(id, text)
+          "
+          @overlay-change="(change) => gridContainer?.handleOverlayChange(change)"
+          @tags-applied="(change) => gridContainer?.handleTagsApplied(change)"
+        />
         <!-- ImageOverlay teleports here: it lies over the centre column and
              the rail, and draws its own inspector where the rail is. -->
         <div :id="LIGHTBOX_HOST_ID" class="lightbox-host"></div>

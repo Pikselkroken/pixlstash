@@ -510,14 +510,15 @@ function openRuns() {
   font-size: var(--text-sm);
 }
 
-/* The header slot, on the toolbar's line so one rule runs across the window. */
+/* The header slot, the height the Media sidebar's scope slot takes, so a
+   workspace switch moves neither edge. */
 .msb-slot {
   flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: var(--space-3);
   width: 100%;
-  height: var(--toolbar-height);
+  height: var(--sidebar-slot-h);
   box-sizing: border-box;
   padding: 0 var(--space-4) 0 var(--space-4);
   border: 0;
@@ -724,12 +725,15 @@ function openRuns() {
   background: rgb(var(--v-theme-accent));
 }
 
-/* The footer band, with the screen's one amber button. */
+/* The footer band, with the screen's one amber button, at the Media
+   sidebar's band height. */
 .msb-band {
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  padding: var(--space-3);
+  height: var(--sidebar-band-h);
+  box-sizing: border-box;
+  padding: 0 var(--space-3);
   border-top: 1px solid rgb(var(--v-theme-divider));
 }
 </style>

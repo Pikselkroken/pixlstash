@@ -217,19 +217,24 @@ describe("the sidebar's project reads", () => {
     wrapper.unmount();
   });
 
-  it("never asks for the unassigned-project summary", async () => {
-    // `GET /projects/UNASSIGNED/summary` had no consumer: the tree's only count
-    // binding is `projectCounts[p.id]` over real project rows.
+  it("asks for the not-in-a-project count once, for the scope menu", async () => {
+    // The header slot's "Not in a project" row (#2159) is the number's one
+    // consumer; it lands in the scope counts, not in the per-project map.
+    apiGet.mockImplementation((url) =>
+      Promise.resolve(
+        String(url).includes("/projects/UNASSIGNED/summary")
+          ? { data: { image_count: 9 } }
+          : respond(url),
+      ),
+    );
     const wrapper = mountSidebar();
     await refreshAndSettle(wrapper);
 
     const unassignedSummaries = projectRequests().filter((u) =>
       u.includes("UNASSIGNED"),
     );
-    expect(
-      unassignedSummaries,
-      `the sidebar still requested: ${JSON.stringify(projectRequests())}`,
-    ).toEqual([]);
+    expect(unassignedSummaries).toHaveLength(1);
+    expect(wrapper.vm.scopeCounts.none).toBe(9);
 
     wrapper.unmount();
   });
@@ -262,7 +267,103 @@ describe("the sidebar's project reads", () => {
   });
 });
 
+describe("the project scope in the header slot (#2159)", () => {
+  it("navigates to All media in the project chosen", async () => {
+    const wrapper = mountSidebar();
+    await refreshAndSettle(wrapper);
+
+    wrapper.vm.chooseScope(3);
+    const [payload] = wrapper.emitted("select-character").at(-1);
+    expect(payload.id).toBe("ALL");
+    expect(payload.projectContext).toEqual({ mode: "project", projectId: 3 });
+    expect(wrapper.vm.scopeCounts.current).toBe(118);
+
+    wrapper.unmount();
+  });
+
+  it("scopes to the pictures in no project, and back to any", async () => {
+    const wrapper = mountSidebar();
+    await refreshAndSettle(wrapper);
+
+    wrapper.vm.chooseScope("none");
+    expect(wrapper.emitted("select-character").at(-1)[0].projectContext).toEqual(
+      { mode: "project", projectId: null },
+    );
+
+    wrapper.vm.chooseScope("any");
+    expect(wrapper.emitted("select-character").at(-1)[0].projectContext).toEqual(
+      { mode: "global", projectId: null },
+    );
+
+    wrapper.unmount();
+  });
+
+  it("opens a person inside the scope, not the person's own project", async () => {
+    // Ada's own project_id is unset; seen from project 4 she must stay in 4.
+    const wrapper = mountSidebar();
+    await refreshAndSettle(wrapper);
+    wrapper.vm.chooseScope(4);
+
+    wrapper.vm.selectCharacter(1, "Ada");
+    expect(wrapper.emitted("select-character").at(-1)[0].projectContext).toEqual(
+      { mode: "project", projectId: 4 },
+    );
+
+    wrapper.unmount();
+  });
+
+  it("blanks the favourites count until the new scope's arrives", async () => {
+    apiGet.mockImplementation((url) =>
+      Promise.resolve(
+        String(url).startsWith("/pictures/count")
+          ? { data: { count: 6 } }
+          : respond(url),
+      ),
+    );
+    const wrapper = mountSidebar();
+    await refreshAndSettle(wrapper);
+    expect(wrapper.vm.favouriteCount).toBe(6);
+
+    wrapper.vm.chooseScope(3);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm.favouriteCount).toBeNull();
+
+    wrapper.unmount();
+  });
+
+  it("asks for the favourites count in the current scope", async () => {
+    const wrapper = mountSidebar();
+    await refreshAndSettle(wrapper);
+    wrapper.vm.chooseScope(3);
+    await refreshAndSettle(wrapper);
+
+    const counts = apiGet.mock.calls
+      .map(([url]) => String(url))
+      .filter((u) => u.startsWith("/pictures/count"));
+    expect(counts.at(-1)).toBe("/pictures/count?favourite=1&project_id=3");
+
+    wrapper.unmount();
+  });
+});
+
 describe("a project's move menus", () => {
+  it("close on Escape and hand the keyboard back to their +", () => {
+    const wrapper = mountSidebar();
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+
+    wrapper.vm.openSetMoveMenu({ currentTarget: trigger });
+    expect(wrapper.vm.setMoveMenuOpen).toBe(true);
+    const event = new KeyboardEvent("keydown", { key: "Escape" });
+    wrapper.vm.onMoveMenuKeydown(event);
+
+    expect(wrapper.vm.setMoveMenuOpen).toBe(false);
+    expect(document.activeElement).toBe(trigger);
+
+    trigger.remove();
+    wrapper.unmount();
+  });
+
   it("open one at a time, so focus goes to the one just opened", () => {
     // Both are `.sidebar-move-menu`; left open together, `_focusMoveMenu`
     // focuses whichever teleported first rather than the one just opened.

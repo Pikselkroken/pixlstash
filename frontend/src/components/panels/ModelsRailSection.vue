@@ -1,28 +1,16 @@
 <template>
   <section class="mrs" :aria-label="title">
-    <div class="mrs-head">
-      <button
-        class="mrs-toggle"
-        type="button"
-        :aria-expanded="isOpen ? 'true' : 'false'"
-        :aria-controls="bodyId"
-        :data-testid="`mrs-toggle-${sectionKey}`"
-        @click="toggle"
-      >
-        <v-icon
-          class="mrs-chevron"
-          :class="{ 'mrs-chevron--shut': !isOpen }"
-          size="12"
-          aria-hidden="true"
-          >mdi-chevron-down</v-icon
-        >
-        <span class="section-label mrs-label">{{ title }}</span>
-        <span v-if="count != null" class="mrs-count num">{{ count }}</span>
-      </button>
-      <div v-if="$slots.end" class="mrs-end">
-        <slot name="end" />
-      </div>
-    </div>
+    <!-- The header every rail shares (#2161): chevron, label, count and the
+         section's verb at the right edge. -->
+    <SectionHeader
+      :label="title"
+      :count="count"
+      :collapsed="!isOpen"
+      :data-testid="`mrs-toggle-${sectionKey}`"
+      @update:collapsed="toggle"
+    >
+      <template v-if="$slots.end" #actions><slot name="end" /></template>
+    </SectionHeader>
     <div v-if="isOpen" :id="bodyId" class="mrs-body">
       <slot />
     </div>
@@ -31,17 +19,17 @@
 
 <script setup>
 /**
- * One collapsible section of the Models rail's inspector (#2168): a chevron,
- * the uppercase label, a count, and the section's verb at the right edge.
+ * One collapsible section of the Models rail's inspector (#2168), under the
+ * header every rail shares (`SectionHeader`, #2161).
  *
  * Open or shut is remembered per `sectionKey` by the rail that holds the
  * sections, so a set's *Models* stays shut when the reader moves to another
  * set. It is injected, not passed, so every section reads the same memory.
  */
 import { computed, inject } from "vue";
-import { VIcon } from "vuetify/components";
 
 import { RAIL_SECTIONS } from "../../utils/modelsInspector";
+import SectionHeader from "../widgets/SectionHeader.vue";
 
 const props = defineProps({
   /** The key the open or shut state is remembered under. */
@@ -72,53 +60,6 @@ function toggle() {
   gap: var(--space-2);
   padding: var(--space-3) 0;
   border-top: 1px solid rgba(var(--v-theme-on-surface), 0.12);
-}
-
-.mrs-head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: 24px;
-}
-
-.mrs-toggle {
-  display: inline-flex;
-  flex: 1;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.mrs-chevron {
-  transition: transform var(--dur-1) var(--ease-standard);
-}
-
-.mrs-chevron--shut {
-  transform: rotate(-90deg);
-}
-
-.mrs-label {
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-}
-
-.mrs-count {
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-  font-variant-numeric: tabular-nums;
-}
-
-.mrs-end {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex-shrink: 0;
 }
 
 .mrs-body {

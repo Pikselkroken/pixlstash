@@ -3,61 +3,61 @@
     class="sidebar-section sidebar-section--description"
     :class="{ 'sidebar-section--collapsed': descriptionCollapsed }"
   >
-    <div
-      class="section-header section-header--collapsible section-label section-label--on-dark"
-      @click="
-        descriptionCollapsed = !descriptionCollapsed;
-        descriptionCollapsed && cancelEditDescription();
-      "
+    <SectionHeader
+      :collapsed="descriptionCollapsed"
+      label="Description"
+      :count="headerCount"
+      on-dark
+      @update:collapsed="setDescriptionCollapsed"
     >
-      <!-- Description and Text share this header as label tabs, one panel on
-           screen at a time. The Text tab only exists once the reader found
-           words (or is reading them): a picture without text keeps the plain
-           Description header, with no empty state. -->
-      <div
-        v-if="showTabs"
-        class="section-tabs"
-        role="tablist"
-        aria-label="Description or text in picture"
-      >
-        <button
-          :id="descTabId"
-          ref="descTabRef"
-          class="section-tab"
-          type="button"
-          role="tab"
-          :aria-selected="!isTextTab"
-          :aria-controls="descPanelId"
-          :tabindex="isTextTab ? -1 : 0"
-          @click.stop="pickTab(DESCRIPTION_TAB)"
-          @keydown="onTabKeydown"
+      <template v-if="showTabs" #label>
+        <!-- Description and Text share this header as label tabs, one panel on
+             screen at a time. The Text tab only exists once the reader found
+             words (or is reading them): a picture without text keeps the plain
+             Description header, with no empty state. -->
+        <div
+          class="section-tabs"
+          role="tablist"
+          aria-label="Description or text in picture"
         >
-          Description
-        </button>
-        <button
-          :id="textTabId"
-          ref="textTabRef"
-          class="section-tab"
-          type="button"
-          role="tab"
-          :aria-selected="isTextTab"
-          :aria-controls="textPanelId"
-          :tabindex="isTextTab ? 0 : -1"
-          :disabled="textState !== 'read'"
-          @click.stop="pickTab(TEXT_TAB)"
-          @keydown="onTabKeydown"
-        >
-          Text
-          <template v-if="textState === 'pending' || textReadBusy">
-            <v-icon size="12" class="mdi-spin" aria-hidden="true"
-              >mdi-loading</v-icon
-            >
-            <span class="visually-hidden">, reading</span>
-          </template>
-        </button>
-      </div>
-      <span v-else>Description</span>
-      <span v-if="isTextTab" class="section-meta-group">
+          <button
+            :id="descTabId"
+            ref="descTabRef"
+            class="section-tab"
+            type="button"
+            role="tab"
+            :aria-selected="!isTextTab"
+            :aria-controls="descPanelId"
+            :tabindex="isTextTab ? -1 : 0"
+            @click.stop="pickTab(DESCRIPTION_TAB)"
+            @keydown="onTabKeydown"
+          >
+            Description
+          </button>
+          <button
+            :id="textTabId"
+            ref="textTabRef"
+            class="section-tab"
+            type="button"
+            role="tab"
+            :aria-selected="isTextTab"
+            :aria-controls="textPanelId"
+            :tabindex="isTextTab ? 0 : -1"
+            :disabled="textState !== 'read'"
+            @click.stop="pickTab(TEXT_TAB)"
+            @keydown="onTabKeydown"
+          >
+            Text
+            <template v-if="textState === 'pending' || textReadBusy">
+              <v-icon size="12" class="mdi-spin" aria-hidden="true"
+                >mdi-loading</v-icon
+              >
+              <span class="visually-hidden">, reading</span>
+            </template>
+          </button>
+        </div>
+      </template>
+      <template v-if="isTextTab" #actions>
         <!-- aria-disabled, not disabled, while busy: a disabled button drops
              the keyboard focus that just pressed it to <body>. -->
         <button
@@ -88,12 +88,8 @@
             {{ textCopyState === "text" ? "mdi-check-bold" : "mdi-content-copy" }}
           </v-icon>
         </button>
-        <span class="section-meta">{{ fullText.length }}</span>
-        <v-icon size="16" class="section-chevron">{{
-          descriptionCollapsed ? "mdi-chevron-right" : "mdi-chevron-down"
-        }}</v-icon>
-      </span>
-      <span v-else class="section-meta-group">
+      </template>
+      <template v-else #actions>
         <button
           v-if="props.image && !readOnly"
           class="section-meta-btn"
@@ -190,14 +186,8 @@
             }}
           </v-icon>
         </button>
-        <span v-if="!isSentinelDescription" class="section-meta">
-          {{ descriptionDraft.length }}
-        </span>
-        <v-icon size="16" style="opacity: 0.6">{{
-          descriptionCollapsed ? "mdi-chevron-right" : "mdi-chevron-down"
-        }}</v-icon>
-      </span>
-    </div>
+      </template>
+    </SectionHeader>
     <template v-if="!descriptionCollapsed && isTextTab">
       <!-- Read-only: the text is what the reader saw, with a box behind every
            word, so a misread is fixed by reading again, not by typing. -->
@@ -342,6 +332,8 @@ import { useNoticeStore } from "../../stores/useNoticeStore";
 import { errorDetail } from "../../utils/apiError";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import Tooltip from "../widgets/Tooltip.vue";
+import SectionHeader from "../widgets/SectionHeader.vue";
+import { useSectionCollapse } from "../../composables/useSectionCollapse";
 import {
   isDescriptionSentinel,
   formatDescriptionSentinel,
@@ -529,7 +521,14 @@ function revealWord(index) {
   });
 }
 
-const descriptionCollapsed = ref(false);
+const descriptionCollapsed = useSectionCollapse("description");
+
+/** Collapsing drops an edit in progress, as it always has. */
+function setDescriptionCollapsed(value) {
+  descriptionCollapsed.value = value;
+  if (value) cancelEditDescription();
+}
+
 const isEditingDescription = ref(false);
 const isSavingDescription = ref(false);
 const descriptionDraft = ref(
@@ -538,6 +537,11 @@ const descriptionDraft = ref(
 const isSentinelDescription = computed(() =>
   isDescriptionSentinel(props.image?.description),
 );
+// The header's quiet count: the length of what is on screen.
+const headerCount = computed(() => {
+  if (isTextTab.value) return fullText.value.length;
+  return isSentinelDescription.value ? null : descriptionDraft.value.length;
+});
 const descriptionEditorRef = ref(null);
 const descriptionCopy = copyMark("idle");
 const descriptionCopyState = descriptionCopy.state;
@@ -705,30 +709,6 @@ defineExpose({
   overflow: hidden;
 }
 
-.section-header--collapsible {
-  cursor: pointer;
-  user-select: none;
-}
-
-.section-header--collapsible:hover {
-  color: rgb(var(--v-theme-on-dark-surface));
-}
-
-/* Type and ink come from the shared `.section-label`; this is layout only. */
-.section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--space-2);
-  padding: var(--space-1) 0;
-}
-
-.section-meta-group {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-3);
-}
-
 .section-meta-btn {
   color: rgba(var(--v-theme-on-dark-surface), 0.7);
   padding: var(--space-1);
@@ -748,10 +728,6 @@ defineExpose({
 
 .section-meta-btn--with-chevron {
   gap: 1px;
-}
-
-.section-meta {
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
 }
 
 .overlay-lock-note {
@@ -950,10 +926,6 @@ defineExpose({
     var(--v-theme-on-dark-surface),
     var(--opacity-text-secondary)
   );
-}
-
-.section-chevron {
-  opacity: var(--opacity-text-secondary);
 }
 
 .section-meta-btn[aria-disabled="true"] {

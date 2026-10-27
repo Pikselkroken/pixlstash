@@ -585,24 +585,6 @@
    scoped block: that component has multiple root nodes, so this file's scope id
    is never stamped onto them and rules written here would not match. */
 
-.section-header--collapsible {
-  cursor: pointer;
-  user-select: none;
-}
-
-.section-header--collapsible:hover {
-  color: rgb(var(--v-theme-on-dark-surface));
-}
-
-/* Type and ink come from the shared `.section-label`; this is layout only. */
-.section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--space-2);
-  padding: var(--space-1) 0;
-}
-
 .rejected-threshold-label {
   margin-left: 6px;
   font-size: var(--text-2xs);

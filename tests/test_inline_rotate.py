@@ -800,6 +800,32 @@ def test_the_grid_projection_carries_the_orientation(client, server):
     assert _grid_row()["orientation"] == 6
 
 
+def test_a_listing_asked_for_size_and_models_returns_them(client, server):
+    """The stats rail reads several pictures' size and models this way (#2161).
+
+    ``GridPicture`` drops every key it does not declare, so a projection that
+    names a column the model lacks comes back without it and the rail's Total
+    size and Models rows silently go missing.
+    """
+    picture_id = _upload(client)
+    resp = client.get(
+        f"{API}/pictures",
+        params=[("id", picture_id), ("fields", "id,size_bytes,comfyui_models")],
+    )
+    assert resp.status_code == 200, resp.text
+    rows = [row for row in resp.json() if row["id"] == picture_id]
+    assert rows, f"picture {picture_id} is not in the listing"
+    stored = _picture_row(server, picture_id)["size_bytes"]
+    assert stored and rows[0]["size_bytes"] == stored
+    assert "comfyui_models" in rows[0]
+
+    # The grid projection does not carry them.
+    grid = client.get(f"{API}/pictures", params={"fields": "grid"})
+    assert grid.status_code == 200, grid.text
+    grid_row = next(row for row in grid.json() if row["id"] == picture_id)
+    assert grid_row.get("size_bytes") is None
+
+
 # ---------------------------------------------------------------------------
 # 5. Concurrency
 # ---------------------------------------------------------------------------

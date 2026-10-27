@@ -223,8 +223,12 @@ def _load_all() -> dict[str, dict]:
 
 
 def list_presets() -> list[dict]:
-    """Every shipped preset, by id."""
-    return [_load_all()[pid] for pid in sorted(_load_all())]
+    """Every shipped preset: :data:`DEFAULT_PRESET` first, then by id.
+
+    The Train dialog preselects the first one the checkout can run.
+    """
+    ids = sorted(_load_all(), key=lambda pid: (pid != DEFAULT_PRESET, pid))
+    return [_load_all()[pid] for pid in ids]
 
 
 def get_preset(preset_id: str) -> dict | None:

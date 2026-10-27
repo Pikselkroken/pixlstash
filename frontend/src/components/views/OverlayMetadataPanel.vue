@@ -1,14 +1,10 @@
 <template>
   <div class="sidebar-section">
-    <div
-      class="section-header section-header--collapsible section-label section-label--on-dark"
-      @click="metadataCollapsed = !metadataCollapsed"
-    >
-      <span>Metadata</span>
-      <v-icon size="16" style="opacity: 0.6">{{
-        metadataCollapsed ? "mdi-chevron-right" : "mdi-chevron-down"
-      }}</v-icon>
-    </div>
+    <SectionHeader
+      v-model:collapsed="metadataCollapsed"
+      label="Metadata"
+      on-dark
+    />
     <template v-if="!metadataCollapsed">
       <div v-if="!pictureInfoEntries.length" class="metadata-empty">
         No metadata available
@@ -37,11 +33,13 @@
 </template>
 
 <script setup>
-import { ref, computed } from "vue";
+import { computed } from "vue";
 import { isSupportedVideoFile, getOverlayFormat } from "../../utils/media.js";
 import { formatUserDate } from "../../utils/utils.js";
 import { openPictureLocation } from "../../api/pictures";
 import { API_BASE_URL } from "../../utils/apiClient";
+import SectionHeader from "../widgets/SectionHeader.vue";
+import { useSectionCollapse } from "../../composables/useSectionCollapse";
 const props = defineProps({
   image: { type: Object, default: null },
   dateFormat: { type: String, default: "locale" },
@@ -49,7 +47,7 @@ const props = defineProps({
   videoDuration: { type: Number, default: null },
 });
 
-const metadataCollapsed = ref(false);
+const metadataCollapsed = useSectionCollapse("metadata");
 
 function formatAspectRatio(width, height) {
   const gcd = (a, b) => (b === 0 ? a : gcd(b, a % b));
@@ -205,24 +203,6 @@ const pictureInfoEntries = computed(() => {
 </script>
 
 <style scoped>
-.section-header--collapsible {
-  cursor: pointer;
-  user-select: none;
-}
-
-.section-header--collapsible:hover {
-  color: rgb(var(--v-theme-on-dark-surface));
-}
-
-/* Type and ink come from the shared `.section-label`; this is layout only. */
-.section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--space-2);
-  padding: var(--space-1) 0;
-}
-
 .metadata-empty {
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-dark-surface), 0.6);

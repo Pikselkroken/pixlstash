@@ -58,7 +58,6 @@
   />
   <div :style="wrapperStyle" class="grid-content-area">
     <Toolbar
-      :selectedCount="selectedImageIds.length"
       :selectedCharacter="String(selectionStore.selectedCharacter)"
       :selectedSort="sortStore.selectedSort"
       :allPicturesId="String(ALL_PICTURES_ID)"
@@ -67,10 +66,6 @@
       @expand-all-stacks="expandAllStacks"
       @collapse-all-stacks="collapseAllStacks"
       @open-duplicates="emit('open-duplicates')"
-      @open-import="emit('open-import')"
-      @local-import="emit('local-import', $event)"
-      @confirm-export-zip="emit('confirm-export-zip')"
-      @confirm-export-folder="emit('confirm-export-folder', $event)"
     />
     <FilterStrip
       :count-base-query="filterCountBaseQuery"
@@ -1178,6 +1173,7 @@
           :selected-group-name="selectedGroupName"
           :selected-sort="sortStore.selectedSort"
           :owns-escape="true"
+          :compact="searchResultsActive"
           :scrapheap-pictures-id="String(SCRAPHEAP_PICTURES_ID)"
           :selected-image-ids="selectedImageIds"
           :selected-media-support="selectedMediaSupport"
@@ -1225,6 +1221,8 @@
           @run-workflow="runWorkflowOnSelection"
           @edit-pictures="editSelection"
           @compare-pictures="compareSelection"
+          @confirm-export-zip="emit('confirm-export-zip')"
+          @confirm-export-folder="emit('confirm-export-folder', $event)"
         />
       </template>
     </GridActionPill>
@@ -5876,6 +5874,10 @@ watch(
   { immediate: true },
 );
 onUnmounted(() => {
+  // The selection is the store's now (the rail reads it), so it would outlive
+  // the grid: a view that comes back starts with nothing selected, as it did
+  // when the selection died with the grid.
+  clearSelection();
   // No grid, no selection to run on - and no view either, so the context goes
   // too. Left behind it is the LAST grid's: a run started afterwards from the
   // Workflows view would file its output into whichever set happened to be
@@ -5991,16 +5993,22 @@ function _justifiedItemGeometry(img, localIdx) {
   return {
     width: layout.itemScaledWidths[globalIdx],
     cardHeight: layout.rowHeights[row],
+    fullRow: !layout.lastRowPartial || row < layout.rowHeights.length - 1,
   };
 }
 
 function getJustifiedCardStyle(img, localIdx) {
   const geo = _justifiedItemGeometry(img, localIdx);
   if (!geo) return null;
+  // A full row's packed widths sum to the FLOORED container width, so a
+  // fractional column would leave its right edge short by up to 1px. Growing
+  // each card by its own width hands that remainder out in proportion to the
+  // aspect ratio; flex-grow never moves a line break, which is decided by the
+  // basis alone. The partial last row stays at its natural widths.
   return {
     width: `${geo.width}px`,
     height: `${geo.cardHeight}px`,
-    flex: "0 0 auto",
+    flex: geo.fullRow ? `${geo.width} 0 ${geo.width}px` : "0 0 auto",
   };
 }
 
@@ -6013,7 +6021,10 @@ function getJustifiedThumbStyle(img, localIdx) {
 
 // Container style for the two layout modes. Square keeps the original CSS
 // grid; justified switches to flex-wrap (via the class) with the packing gap
-// bound inline so JS arithmetic and CSS can never drift.
+// bound inline so JS arithmetic and CSS can never drift. The same gap runs
+// round the edges: it is the gutter a selected tile's outline is drawn in, so
+// the outermost tiles need it as much as their neighbours do.
+// useVirtualScroll subtracts it from the measured width.
 const gridContainerStyle = computed(() => {
   const base = { position: "relative", ...badgeCssVars.value };
   if (isJustifiedMode.value) {
@@ -6021,6 +6032,7 @@ const gridContainerStyle = computed(() => {
       ...base,
       columnGap: `${JUSTIFIED_ROW_GAP}px`,
       rowGap: `${JUSTIFIED_ROW_GAP}px`,
+      padding: `${JUSTIFIED_ROW_GAP}px !important`,
     };
   }
   return {
@@ -8444,7 +8456,38 @@ defineExpose({
   suggestPicturesForCharacter: faceSuggest.arm,
   // The set twin, from the sidebar's set context menu (#1489).
   suggestPicturesForSet: setSuggest.arm,
+  // The grid's rail (#2161), through App.vue: the selected pictures' own cards,
+  // and the very paths a tile and the lightbox use to rate, favourite and tag
+  // one, so the rail and the tile cannot disagree.
+  cardsByIds,
+  scoreOf: (img) =>
+    isReadOnly.value
+      ? (guestScoreMap.value.get(img.id) ?? img.score ?? 0)
+      : img.score || 0,
+  setScore,
+  toggleFavourite,
+  addTagToImage,
+  updateDescriptionForImage,
+  handleOverlayChange,
+  handleTagsApplied,
 });
+
+// The cards by id, for `cardsByIds`. Rating and favouriting replace a card
+// object rather than mutate it, so the rail looks its pictures up afresh.
+const gridCardById = computed(() => {
+  const byId = new Map();
+  for (const img of allGridImages.value) {
+    if (img?.id != null) byId.set(String(img.id), img);
+  }
+  return byId;
+});
+
+/** The loaded cards for these ids, in the order given; unloaded ones skipped. */
+function cardsByIds(ids) {
+  return (ids ?? [])
+    .map((id) => gridCardById.value.get(String(id)))
+    .filter(Boolean);
+}
 
 // Queue a deferred in-place grid reconcile to run when the overlay closes.
 // Used by the realtime-sync decision table: while the overlay is open we never
@@ -8673,6 +8716,47 @@ function getExportCount() {
 // ============================================================
 // EXPORT
 // ============================================================
+/**
+ * Whether the selection holds every picture the grid has drawn.
+ *
+ * Export lives on the selection pill (#2160), so a whole view is Ctrl+A, then
+ * Export. Ctrl+A selects the cells the grid holds, which are stack leaders and
+ * whatever has streamed in so far; the view itself is more than that. Cells
+ * still waiting for their picture, and ghosts, never block the answer - but a
+ * grid with no picture drawn yet (empty, or every cell still loading) is no
+ * evidence the selection is the view, so the selection goes by id then.
+ */
+function selectionCoversView() {
+  const selected = new Set(
+    selectedImageIds.value.map((id) => String(getPictureId(id))),
+  );
+  const ghosts = ghostedIdSet.value;
+  let sawPicture = false;
+  for (const img of allGridImages.value) {
+    const id = getPictureId(img?.id);
+    if (id == null) continue;
+    sawPicture = true;
+    if (!selected.has(String(id)) && !ghosts?.has(String(id))) return false;
+  }
+  return sawPicture;
+}
+
+/**
+ * The pictures an export sends: the selected ids, or the view's own query when
+ * nothing is selected or the selection is the whole view - which is what the
+ * toolbar's whole-grid export sent, collapsed stack members and the unloaded
+ * tail included.
+ */
+function exportPictureParams() {
+  const selectedIds = selectedImageIds.value;
+  if (!selectedIds?.length || selectionCoversView()) {
+    return buildPictureIdsQueryParams();
+  }
+  const params = new URLSearchParams();
+  for (const id of selectedIds) params.append("id", getPictureId(id));
+  return params.toString();
+}
+
 async function exportCurrentViewToZip(options = {}) {
   const exportType = options.exportType || "full";
   const captionMode = options.captionMode || "description";
@@ -8681,17 +8765,7 @@ async function exportCurrentViewToZip(options = {}) {
   const useOriginalFileNames = options.useOriginalFileNames === true;
   const resolution = options.resolution || "original";
   const bboxMode = options.bboxMode || "none";
-  let params;
-  const selectedIds = selectedImageIds.value;
-  if (selectedIds && selectedIds.length > 0) {
-    const selParams = new URLSearchParams();
-    for (const id of selectedIds) {
-      selParams.append("id", getPictureId(id));
-    }
-    params = selParams.toString();
-  } else {
-    params = buildPictureIdsQueryParams();
-  }
+  const params = exportPictureParams();
   const extraParams = new URLSearchParams();
   if (exportType) {
     extraParams.append("export_type", exportType);
@@ -8816,17 +8890,7 @@ async function exportCurrentViewToFolder(options = {}) {
   const useOriginalFileNames = options.useOriginalFileNames === true;
   const resolution = options.resolution || "original";
   const bboxMode = options.bboxMode || "none";
-  let params;
-  const selectedIds = selectedImageIds.value;
-  if (selectedIds && selectedIds.length > 0) {
-    const selParams = new URLSearchParams();
-    for (const id of selectedIds) {
-      selParams.append("id", getPictureId(id));
-    }
-    params = selParams.toString();
-  } else {
-    params = buildPictureIdsQueryParams();
-  }
+  const params = exportPictureParams();
   const extraParams = new URLSearchParams();
   extraParams.append("destination", destination);
   if (exportType) {
