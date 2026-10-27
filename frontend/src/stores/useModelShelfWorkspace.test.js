@@ -78,9 +78,10 @@ describe("places", () => {
     expect(ids()).toEqual([]);
     expect(store.placeCounts.loose).toBe(null);
     await store.loadWorkflowSets();
-    // Model 2 is only in a hidden set, so it counts as in none.
-    expect(ids()).toEqual([2, 3, 4]);
-    expect(store.placeCounts.loose).toBe(3);
+    // Model 2 is in one of the owner's sets that is hidden here: still a set.
+    expect(ids()).toEqual([3, 4]);
+    expect(store.placeCounts.loose).toBe(2);
+    // The Sets place counts what the grid draws, which leaves the hidden out.
     expect(store.placeCounts.sets).toBe(1);
   });
 
@@ -157,10 +158,36 @@ describe("type bands", () => {
 });
 
 describe("set membership", () => {
-  it("names the shown sets a model is in and skips hidden ones", async () => {
+  it("names every own set a model is in, a hidden one marked", async () => {
     await store.loadWorkflowSets();
-    expect(store.setMembership.get(1)).toEqual([{ key: "hand:7", name: "Mine" }]);
-    expect(store.setMembership.has(2)).toBe(false);
+    expect(store.setMembership.get(1)).toEqual([
+      { key: "hand:7", name: "Mine", hidden: false },
+    ]);
+    expect(store.setMembership.get(2)).toEqual([
+      { key: "hand:8", name: "Hidden", hidden: true },
+    ]);
+  });
+
+  it("leaves out an evidence card the owner hid", async () => {
+    setsBody = body({
+      hand_made: [],
+      hidden_sets: ["model:1"],
+      combinations: [
+        {
+          key: "c1",
+          models: [
+            { id: 1, kind: "checkpoint", name: "a", on_shelf: true },
+            { id: 3, kind: "vae", name: "c", on_shelf: true },
+          ],
+          picture_count: 1,
+          recipes: 1,
+          covered_by: [],
+          missing: [],
+        },
+      ],
+    });
+    await store.loadWorkflowSets();
+    expect(store.setMembership.has(3)).toBe(false);
   });
 });
 

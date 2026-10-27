@@ -4834,7 +4834,8 @@ neither edge moves on a workspace switch.
   `view.listGroupBy`, a remembered grouping of its own (default `type`, bands
   in the sidebar's Type order). *In no set yet* reads `store.setMembership`,
   built from the whole sets payload rather than from what `Show` leaves on the
-  grid, and is disabled until the sets are read rather than calling every
+  grid (one of the owner's own sets counts even while hidden in this library,
+  since hiding is a view choice; a hidden evidence card does not), and is disabled until the sets are read rather than calling every
   model loose.
 - **Type and Base model rows** are one choice, `store.sidebarFilter`
   (`{axis, key}`); picking the lit row takes it back, and picking one leaves

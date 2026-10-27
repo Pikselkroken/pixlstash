@@ -3506,13 +3506,15 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   const setsKnown = computed(() => setsLoaded.value && !setsError.value);
 
   /**
-   * Every shown set card each model is in: model id → `[{key, name}]`.
+   * Every set each model is in: model id → `[{key, name, hidden}]`.
    *
    * Built from the whole payload, not from what `Show` leaves on the grid,
    * because the list's Sets column, *In no set yet* and the rail's *In sets*
-   * are facts about the model rather than about a checkbox. A card the owner
-   * hid, and a combination one of their own sets already covers, is not a
-   * set here, as neither is drawn.
+   * are facts about the model rather than about a checkbox. One of the
+   * owner's own sets counts even while hidden in this library: hiding is a
+   * view choice, and a model in a hidden set of theirs is not "in no set
+   * yet". An evidence card the owner hid is not a set here, nor is a
+   * combination one of their own sets already covers (that set stands for it).
    */
   const setMembership = computed(() => {
     const byId = new Map();
@@ -3534,8 +3536,11 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     }
     for (const set of handMadeSets.value) {
       const key = `hand:${set.id}`;
-      if (hiddenSetKeys.value.has(key)) continue;
-      const entry = { key, name: handMadeName(set) };
+      const entry = {
+        key,
+        name: handMadeName(set),
+        hidden: hiddenSetKeys.value.has(key),
+      };
       for (const member of set.members ?? []) {
         if (member.on_shelf) add(member.id, entry);
       }
@@ -3543,9 +3548,15 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     return byId;
   });
 
-  /** How many set cards the membership above holds: the Sets place's count. */
+  /** The cards the grid draws, by the membership above: the Sets place's count. */
   const setCardCount = computed(
-    () => new Set([...setMembership.value.values()].flat().map((e) => e.key)).size,
+    () =>
+      new Set(
+        [...setMembership.value.values()]
+          .flat()
+          .filter((entry) => !entry.hidden)
+          .map((entry) => entry.key),
+      ).size,
   );
 
   /** Added within {@link RECENT_DAYS}, by when a scan first saw the file. */

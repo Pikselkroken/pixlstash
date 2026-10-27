@@ -202,7 +202,9 @@ const isTrainedLora = computed(
 );
 
 const setNames = computed(() =>
-  (store.setMembership.get(props.row.id) ?? []).map((set) => set.name),
+  (store.setMembership.get(props.row.id) ?? []).map((set) =>
+    set.hidden ? `${set.name} (hidden)` : set.name,
+  ),
 );
 
 const activity = computed(() =>
