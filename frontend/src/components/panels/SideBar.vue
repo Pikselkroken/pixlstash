@@ -5253,10 +5253,14 @@ defineExpose({
             <span class="sidebar-section-title">Review</span>
           </div>
           <!-- The Inbox: what import folders brought in that has not been
-               looked at. Only once an import folder exists; caught up, it
-               stays with a 0 as the other Review rows do. -->
+               looked at. Only once an import folder exists, or while anything
+               waits in it (its folder may since have been removed); caught
+               up, it stays with a 0 as the other Review rows do. -->
           <button
-            v-if="!isReadOnly && importFoldersStore.hasFolders"
+            v-if="
+              !isReadOnly &&
+              (importFoldersStore.hasFolders || importFoldersStore.unseenCount > 0)
+            "
             type="button"
             :class="['sidebar-list-item', { active: isInboxView }]"
             :aria-current="isInboxView ? 'page' : undefined"

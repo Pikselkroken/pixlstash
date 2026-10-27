@@ -1438,6 +1438,8 @@ class Picture(SQLModel, table=True):
         stack_state: Optional[str] = None,
         impossible_sources: Optional[List[str]] = None,
         file_path_prefix: Optional[str] = None,
+        import_source_folder: Optional[str] = None,
+        unseen: bool = False,
         comfyui_models_filter: Optional[List[str]] = None,
         comfyui_loras_filter: Optional[List[str]] = None,
         workflow_structural_hashes: Optional[List[str]] = None,
@@ -1481,7 +1483,9 @@ class Picture(SQLModel, table=True):
         # Intrinsic-attribute predicates via the shared compiler.  The unassigned /
         # project / deleted scoping is applied above; stack-leader collapsing stays
         # below.  ComfyUI membership is applied after it, the same way `find`
-        # applies it. Import-source / import-excluded are not filtered here.
+        # applies it. Import-excluded is not filtered here; the import source
+        # and the Inbox are, so "No character" narrows them rather than
+        # replacing them.
         #
         # ``file_path_prefix`` IS honoured, on the same children-only semantics
         # ``find()`` uses, so "the unassigned pictures in one folder" is one
@@ -1506,6 +1510,8 @@ class Picture(SQLModel, table=True):
             stack_state=stack_state,
             impossible_sources=impossible_sources,
             file_path_prefix=file_path_prefix,
+            import_source_folder=import_source_folder,
+            unseen_only=unseen,
             workflow_structural_hashes=workflow_structural_hashes,
             apply_deleted_filter=False,
         ).apply(query)

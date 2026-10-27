@@ -923,6 +923,8 @@ def select_pictures_for_listing(
         face_filter_value: str | None = None,
         stack_state_value: str | None = None,
         impossible_sources_value: list[str] | None = None,
+        import_source_folder_value: str | None = None,
+        unseen_only_value: bool = False,
     ):
         if deleted_only:
             query = select(Picture.id).where(
@@ -975,6 +977,8 @@ def select_pictures_for_listing(
                 and not face_filter_value
                 and not stack_state_value
                 and not impossible_sources_value
+                and not import_source_folder_value
+                and not unseen_only_value
             ):
                 return None
             query = select(Picture.id).where(
@@ -1027,6 +1031,8 @@ def select_pictures_for_listing(
             face_filter=face_filter_value,
             stack_state=stack_state_value,
             impossible_sources=impossible_sources_value,
+            import_source_folder=import_source_folder_value,
+            unseen_only=unseen_only_value,
             apply_deleted_filter=False,
         ).apply(query)
 
@@ -1070,6 +1076,8 @@ def select_pictures_for_listing(
             face_filter_value=face_filter,
             stack_state_value=stack_state,
             impossible_sources_value=impossible_sources,
+            import_source_folder_value=query_params.get("import_source_folder"),
+            unseen_only_value=bool(query_params.get("unseen")),
         )
         if set_filter_ids:
             set_candidate_ids = server.vault.db.run_immediate_read_task(
@@ -1179,6 +1187,8 @@ def select_pictures_for_listing(
                 stack_state=stack_state,
                 impossible_sources=impossible_sources,
                 file_path_prefix=file_path_prefix,
+                import_source_folder=query_params.get("import_source_folder"),
+                unseen=bool(query_params.get("unseen")),
                 tags_filter=query_params.get("tags_filter") or None,
                 tags_rejected_filter=query_params.get("tags_rejected_filter") or None,
                 tags_confidence_above_filter=query_params.get(
@@ -1231,6 +1241,8 @@ def select_pictures_for_listing(
             stack_state=stack_state,
             impossible_sources=impossible_sources,
             file_path_prefix=file_path_prefix,
+            import_source_folder=query_params.get("import_source_folder"),
+            unseen=bool(query_params.get("unseen")),
             comfyui_models_filter=query_params.get("comfyui_models_filter"),
             comfyui_loras_filter=query_params.get("comfyui_loras_filter"),
             workflow_structural_hashes=workflow_structural_hashes,

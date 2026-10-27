@@ -130,9 +130,33 @@ def _assert_inbox_round_trip(client, folder, pictures):
     assert rated.status_code == 200, rated.text
     assert unseen_ids() == ids[1:]
 
+    # Tagging is looking at it too.
+    tagged = client.post(
+        f"{API_PREFIX}/pictures/{ids[1]}/tags", json={"tag": "inbox-test"}
+    )
+    assert tagged.status_code == 200, tagged.text
+    assert unseen_ids() == ids[2:]
+
+    # "No character" narrows the Inbox rather than replacing it: the
+    # unassigned branch of the listing honours `unseen` as well.
+    unassigned = client.get(
+        f"{API_PREFIX}/pictures",
+        params={"fields": "grid", "unseen": "1", "character_id": "UNASSIGNED"},
+    )
+    assert unassigned.status_code == 200, unassigned.text
+    unassigned_ids = {row["id"] for row in unassigned.json()}
+    assert unassigned_ids and unassigned_ids <= set(ids[2:])
+
+    # A time with no offset is read as UTC, not refused with a 500.
+    naive = client.post(
+        f"{API_PREFIX}/import-folders/inbox/seen",
+        json={"import_source_folder": folder, "until": "2000-01-01T00:00:00"},
+    )
+    assert naive.json() == {"marked": 0}
+
     refused = client.post(f"{API_PREFIX}/import-folders/inbox/seen", json={})
     assert refused.status_code == 400
-    assert unseen_ids() == ids[1:]
+    assert unseen_ids() == ids[2:]
 
     # A batch outside the Inbox's arrival times marks nothing.
     missed = client.post(
@@ -153,7 +177,7 @@ def _assert_inbox_round_trip(client, folder, pictures):
         },
     )
     assert marked.status_code == 200, marked.text
-    assert marked.json() == {"marked": len(ids) - 1}
+    assert marked.json() == {"marked": len(ids) - 2}
     assert unseen_ids() == []
     assert client.get(f"{API_PREFIX}/import-folders/inbox").json()["total"] == 0
     everything = client.get(f"{API_PREFIX}/pictures", params={"fields": "grid"})

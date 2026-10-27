@@ -1,11 +1,11 @@
 """Import folder CRUD API for automatic watch-folder imports."""
 
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Body, HTTPException, Request
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 from sqlalchemy import Integer, cast, func, update
 from sqlmodel import Session, select
 
@@ -89,6 +89,15 @@ class InboxSeenRequest(BaseModel):
     import_source_folder: Optional[str] = None
     since: Optional[datetime] = None
     until: Optional[datetime] = None
+
+    @field_validator("since", "until")
+    @classmethod
+    def _read_naive_as_utc(cls, value: Optional[datetime]) -> Optional[datetime]:
+        # `imported_at` is stored in UTC and refuses a naive bind, so a time
+        # without an offset is read as UTC, as the server writes them.
+        if value is not None and value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
 
 
 class InboxSeenResponse(BaseModel):
