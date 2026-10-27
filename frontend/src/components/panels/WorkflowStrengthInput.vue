@@ -3,6 +3,7 @@
     type="number"
     :value="value"
     @change="emit('change', $event.target.value, $event.target)"
+    @keydown.enter.stop="$event.target.blur()"
   />
 </template>
 
@@ -20,6 +21,10 @@
 //
 // The class, the range, `disabled` and the accessible name fall through to
 // the input.
+//
+// Enter commits: it blurs the field, which is the native change. Inside an
+// AppDialog the key would otherwise be taken as "accept" (a dialog with no
+// accept listener) and the typed value would never be sent.
 
 defineProps({
   /** The row's strength as the field shows it. */

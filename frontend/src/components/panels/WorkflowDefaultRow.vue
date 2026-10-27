@@ -55,31 +55,46 @@
         @click="emit('reset')"
       />
     </span>
-    <!-- A toggle with one constant name, pressed when fixed. `AppButton
-         icon-only` rather than a hand-rolled button: it is what makes the
-         tooltip the accessible NAME (docs/design/buttons.md). Open: a quiet
-         ghost lock. Fixed: the closed lock in a bordered button, so the one
-         control on a row whose value has lost its box still reads as one. -->
-    <AppButton
-      class="wfdef-lock"
-      size="sm"
-      :variant="fixed ? 'secondary' : 'ghost'"
-      icon-only
-      :icon-left="fixed ? 'lock-outline' : 'lock-open-variant-outline'"
-      :tooltip="`Pin ${row.label} for this workflow`"
-      :aria-pressed="fixed ? 'true' : 'false'"
-      :disabled="busy"
-      data-testid="wfdef-lock"
-      @click="emit('toggle-pin')"
-    />
+    <!-- Each run or Pinned: a two-way switch, the pin toggle's own path. The
+         pressed side is the state; the other side asks for the change. A
+         radio group, so the pair reads as one setting to a keyboard. -->
+    <span
+      class="wfdef-seg"
+      role="radiogroup"
+      :aria-label="`${fieldName}: when it is set`"
+      data-testid="wfdef-seg"
+    >
+      <button
+        type="button"
+        role="radio"
+        class="wfdef-seg-opt"
+        :aria-checked="fixed ? 'false' : 'true'"
+        :disabled="busy"
+        data-testid="wfdef-each-run"
+        @click="fixed && emit('toggle-pin')"
+      >
+        Each run
+      </button>
+      <button
+        type="button"
+        role="radio"
+        class="wfdef-seg-opt"
+        :aria-checked="fixed ? 'true' : 'false'"
+        :disabled="busy"
+        data-testid="wfdef-pinned"
+        @click="!fixed && emit('toggle-pin')"
+      >
+        Pinned
+      </button>
+    </span>
   </div>
 </template>
 
 <script setup>
-// One parameter of the Workflow tab's Parameters panel: its name, its value,
-// and the lock that says whether the Run form asks for it each run (open) or
-// every run uses the workflow's value (fixed). `row.pinned` is "set each run";
-// the stored pin list keeps its shape.
+// One parameter in the Edit parameters dialog: its name, its value, and the
+// Each run | Pinned switch that says whether the Run form asks for it each run
+// or every run uses the workflow's value. `row.pinned` means set each run; the
+// switch's Pinned side is its inverse, `fixed`.
 
 import { computed } from "vue";
 
@@ -146,10 +161,10 @@ function onChange(event) {
 
 <style scoped>
 /* Name and value take equal halves, so the value grows with the rail instead
-   of sitting in a fixed track; the lock is one `--control-h-sm` square. */
+   of sitting in a fixed track; the switch keeps its own column. */
 .wfdef {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) var(--control-h-sm);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-3);
 }
@@ -194,14 +209,14 @@ function onChange(event) {
 }
 
 /* A choice takes the row's whole width on a line of its own, under its name:
-   half the rail clips a sampler's name to its first letters. The lock keeps
+   half the rail clips a sampler's name to its first letters. The switch keeps
    its column, so it still lines up with the rows around it. */
 .wfdef--choice {
-  grid-template-columns: minmax(0, 1fr) var(--control-h-sm);
+  grid-template-columns: minmax(0, 1fr) auto;
   row-gap: var(--space-2);
 }
 
-.wfdef--choice .wfdef-lock {
+.wfdef--choice .wfdef-seg {
   grid-area: 1 / 2;
 }
 
@@ -242,13 +257,44 @@ function onChange(event) {
 
 /* `--control-h-sm` is the WCAG 2.2 pointer floor the token ramp names, and
    `AppButton size="sm"` is already that tall; this only squares it. */
-.wfdef-reset,
-.wfdef-lock {
+.wfdef-reset {
   flex: none;
   width: var(--control-h-sm);
 }
 
-.wfdef-lock[aria-pressed="false"] {
+/* The switch: two segments in one bordered track, the pressed one filled. */
+.wfdef-seg {
+  flex: none;
+  display: inline-flex;
+  height: var(--control-h-sm);
+  padding: var(--space-1);
+  border: 1px solid rgb(var(--v-theme-divider));
+  border-radius: var(--radius-sm);
+}
+
+.wfdef-seg-opt {
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  font: inherit;
+  font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  cursor: pointer;
+}
+
+.wfdef-seg-opt[aria-checked="true"] {
+  background: rgba(var(--v-theme-on-surface), 0.12);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.wfdef-seg-opt:focus-visible {
+  outline: var(--focus-width) solid var(--focus-stroke);
+  outline-offset: calc(-1 * var(--focus-width));
+}
+
+.wfdef-seg-opt:disabled {
+  opacity: var(--opacity-disabled);
+  cursor: default;
 }
 </style>

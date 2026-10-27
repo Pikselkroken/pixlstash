@@ -53,3 +53,27 @@ describe("a parameter row's name", () => {
     );
   });
 });
+
+describe("a parameter row's Each run | Pinned switch", () => {
+  it("asks for the pin toggle from the side that is not checked, and not from the checked one", async () => {
+    // Set each run: Each run is checked, so only Pinned asks for the change.
+    const eachRun = mountRow({ row: { ...ROW, pinned: true, exposed: false } });
+    expect(eachRun.find("[data-testid='wfdef-each-run']").attributes("aria-checked")).toBe(
+      "true",
+    );
+    await eachRun.find("[data-testid='wfdef-each-run']").trigger("click");
+    expect(eachRun.emitted("toggle-pin")).toBeUndefined();
+    await eachRun.find("[data-testid='wfdef-pinned']").trigger("click");
+    expect(eachRun.emitted("toggle-pin")).toHaveLength(1);
+
+    // Pinned: the other way round.
+    const pinned = mountRow({ row: { ...ROW, pinned: false, exposed: false } });
+    expect(pinned.find("[data-testid='wfdef-pinned']").attributes("aria-checked")).toBe(
+      "true",
+    );
+    await pinned.find("[data-testid='wfdef-pinned']").trigger("click");
+    expect(pinned.emitted("toggle-pin")).toBeUndefined();
+    await pinned.find("[data-testid='wfdef-each-run']").trigger("click");
+    expect(pinned.emitted("toggle-pin")).toHaveLength(1);
+  });
+});

@@ -1,10 +1,9 @@
 <template>
-  <!-- Where the workflow's defaults come from, drawn rather than said: its
-       pictures' star ratings, 1★ to 5★, with the bars the defaults are read
-       from at full ink. One accessible name carries every count and the
-       source, and the tooltip says the same. -->
-  <!-- Focusable so the tooltip opens from the keyboard too. -->
-  <span
+  <!-- Where the workflow's defaults come from, drawn: its pictures by star
+       rating, unrated first and then 1★ to 5★, in one 32px histogram. The
+       bars the defaults are read from are at full ink. The accessible name
+       carries every count, and so does the tooltip. -->
+  <div
     class="wfstars"
     role="img"
     tabindex="0"
@@ -12,107 +11,124 @@
     data-testid="wftab-stars"
   >
     <Tooltip :text="summary" activator="parent" />
-    <svg
-      :width="WIDTH"
-      :height="HEIGHT"
-      :viewBox="`0 0 ${WIDTH} ${HEIGHT}`"
-      aria-hidden="true"
-    >
-      <rect
+    <div class="wfstars-bars" aria-hidden="true">
+      <span
         v-for="bar in bars"
-        :key="bar.star"
-        :x="bar.x"
-        :y="HEIGHT - bar.h"
-        :width="BAR"
-        :height="bar.h"
-        rx="1"
+        :key="bar.label"
+        class="wfstars-bar"
         :class="bar.source ? 'wfstars-hi' : 'wfstars-lo'"
-      />
-    </svg>
-    <span class="wfstars-cap" aria-hidden="true">★ Star ratings</span>
-  </span>
+        :style="{ height: `${bar.pct}%` }"
+      ></span>
+    </div>
+    <div class="wfstars-labels" aria-hidden="true">
+      <span v-for="bar in bars" :key="bar.label">{{ bar.label }}</span>
+    </div>
+  </div>
 </template>
 
 <script setup>
-// The star-rating histogram beside "N pictures" in the Workflow tab's head
-// (design: grouped panels). Drawn only for a workflow with at least one
-// rating; the parent decides that.
+// The star-rating histogram in the rail's lead (#2165). Drawn only for a
+// workflow with at least one rating; the parent decides that.
 
 import { computed } from "vue";
 
 import Tooltip from "../widgets/Tooltip.vue";
 
 const props = defineProps({
-  /** Pictures per star, 1★ first: the card's `rating_counts`. */
+  /**
+   * Pictures per rating, six of them: none, then 1★ to 5★. The parent takes
+   * the unrated count out of the workflow's picture count.
+   */
   counts: { type: Array, required: true },
   /**
    * Whether the default recipe was sampled from the pictures at all. A manual
-   * workflow's is its document's own values (the server still counts that as
-   * one sample, so the parent excludes manual cards), and the chart then
-   * claims no source and inks every bar alike.
+   * workflow's is its document's own values, so the chart claims no source
+   * and inks every bar alike.
    */
   sampled: { type: Boolean, default: false },
 });
 
-const BAR = 6;
-const GAP = 2;
-const HEIGHT = 16;
-const WIDTH = 5 * BAR + 4 * GAP;
+const LABELS = ["None", "1★", "2★", "3★", "4★", "5★"];
 
 /** How many are rated 4★+: the defaults come from those, or from all when none is. */
-const best = computed(() => (props.counts[3] || 0) + (props.counts[4] || 0));
+const best = computed(() => (props.counts[4] || 0) + (props.counts[5] || 0));
 
 const bars = computed(() => {
   const tallest = Math.max(1, ...props.counts.map((count) => count || 0));
-  return [1, 2, 3, 4, 5].map((star, index) => {
+  return LABELS.map((label, index) => {
     const count = props.counts[index] || 0;
     return {
-      star,
-      x: index * (BAR + GAP),
-      // A rating with no pictures keeps a 1px stub, so five slots read as five.
-      h: count ? Math.max(1, Math.round((HEIGHT * count) / tallest)) : 1,
-      source: props.sampled && best.value ? star >= 4 : true,
+      label,
+      count,
+      // A bar with no pictures keeps a 2px stub, so six slots read as six.
+      pct: count ? Math.max(6, (count / tallest) * 100) : 6,
+      source: props.sampled && best.value ? index >= 4 : true,
     };
   });
 });
 
 const summary = computed(() => {
-  const each = [1, 2, 3, 4, 5]
-    .map((star, index) => `${star} ${star === 1 ? "star" : "stars"} ${props.counts[index] || 0}`)
-    .join(", ");
-  if (!props.sampled) return `Ratings: ${each}.`;
+  const each = LABELS.map(
+    (label, index) => `${label} ${props.counts[index] || 0}`,
+  ).join(", ");
+  if (!props.sampled) return `Pictures by rating: ${each}.`;
   const source = best.value
-    ? `The defaults come from its pictures rated 4 stars or more.`
+    ? "The defaults come from its pictures rated 4 stars or more."
     : "None is rated 4 stars yet, so the defaults come from all its pictures.";
-  return `Ratings: ${each}. ${source}`;
+  return `Pictures by rating: ${each}. ${source}`;
 });
 </script>
 
 <style scoped>
 .wfstars {
-  display: inline-flex;
-  align-items: flex-end;
-  gap: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
 }
 
-.wfstars svg {
-  display: block;
+/* Thirty-two pixels tall, bars on one baseline. */
+.wfstars-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-1);
+  height: 32px;
+}
+
+.wfstars-bar {
+  flex: 1;
+  min-width: 0;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+
+.wfstars-labels {
+  display: flex;
+  gap: var(--space-1);
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.wfstars-labels > span {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Ink, never hue: amber and olive stay with Run and selection. The quiet bars
-   take the secondary fade, not the design's 50%: the token file allows only
-   two fades, and the disabled one says "inactive", which these are not. */
+   take the secondary fade. */
 .wfstars-hi {
-  fill: rgb(var(--v-theme-on-surface));
+  background: rgb(var(--v-theme-on-surface));
 }
 
 .wfstars-lo {
-  fill: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  background: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
-.wfstars-cap {
-  font-size: var(--text-2xs);
-  line-height: 1;
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+.wfstars:focus-visible {
+  outline: var(--focus-width) solid var(--focus-stroke);
+  outline-offset: 2px;
 }
 </style>
