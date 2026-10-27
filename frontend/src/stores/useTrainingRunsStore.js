@@ -305,6 +305,9 @@ export const useTrainingRunsStore = defineStore("trainingRuns", () => {
     jobsFailed.value = false;
     chosen.value = [];
     chosenSteps.value = [];
+    // Explicitly, as the source watcher does: left to the `single` watcher,
+    // a run of the same name picked before it runs would keep empty steps.
+    stepsFilledFor = "";
   }
 
   // Owner-only host data read under one credential: a change of credential
