@@ -1710,7 +1710,7 @@ cache and provider answer in the three functions that switch on the name.
 | `wd14` | ONNX CUDA EP | **CoreML EP** | 3.4x. `ModelFormat: MLProgram` is mandatory — the provider's `NeuralNetwork` default fails on this model outright |
 | CLIP (`clip_service`) | fp16 | **MPS, fp32** | 1.8x. fp16 not adopted: embedding drift under cosine search is unmeasured |
 | SBERT (`sbert`) | inherits device | **MPS** | 2.1x, no code change — the device string passes straight through |
-| `florence2` | fp16 | **CPU (held)** | Verified correct on MPS (6/6 captions byte-identical) but only 1.15x: captioning is autoregressive, so dispatch overhead eats the gain. Held deliberately; see the comment at the load site |
+| `florence2` | fp16 | **MPS, fp16** | Held on the CPU until #1786: fp32 on MPS was correct (6/6 captions byte-identical) but only 1.15x. fp16 is the checkpoint's own dtype, so the load casts nothing. The fp16 speed-up is not yet measured; `scripts/bench_florence_mps.py` times captions and detection against the CPU |
 | `joycaption` | nf4 / fp16 | **CPU** | Blocked: its default `nf4` precision needs `bitsandbytes`, which has no MPS backend |
 | InsightFace (face pipeline) | ONNX CUDA EP | **CPU** | Blocked, measured: `det_10g` has a dynamic input shape and CoreML raises "Invalid shape for output feature `_448`" on the first detection |
 
