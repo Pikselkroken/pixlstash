@@ -25,7 +25,7 @@ async function mintLibraryReadToken(apiContext) {
 }
 
 test.describe('read-only session: owner-only features stay visible', () => {
-  test('shows Undo and Duplicates as inert rather than hiding them', async ({
+  test('shows Duplicates and Models as inert rather than hiding them', async ({
     browser,
     apiContext,
     baseURL,
@@ -59,25 +59,13 @@ test.describe('read-only session: owner-only features stay visible', () => {
     try {
       await page.goto(`/?token=${encodeURIComponent(token)}`)
 
-      // ── Undo: mounted, inert, and it says why ──────────────────────────
-      const undo = page.locator('.uc-btn--undo')
-      await expect(undo).toBeVisible({ timeout: 15_000 })
-      await expect(undo).toHaveAttribute('aria-disabled', 'true')
-      // Icon-only, so the reason is the control's name: one string for the
-      // tooltip and the accessible name (buttons.md, "Tooltips").
-      await expect(undo).toHaveAttribute(
-        'aria-label',
-        'Undo is only available in your own library',
-      )
-      // `aria-disabled`, not the native attribute: the control stays tabbable
-      // so a keyboard user reaches the explanation too.
-      await expect(undo).not.toHaveAttribute('disabled', /.*/)
-
+      // Undo has no control in the grid since #2160 (Ctrl+Z and the receipt
+      // carry it), so the inert-but-visible case starts at Duplicates.
       // ── Duplicates: a visible destination that does not navigate ───────
       const duplicates = page
         .locator('.sidebar-list-item', { hasText: 'Duplicates' })
         .first()
-      await expect(duplicates).toBeVisible()
+      await expect(duplicates).toBeVisible({ timeout: 15_000 })
       await expect(duplicates).toHaveAttribute('aria-disabled', 'true')
       // A labelled row keeps its name; the reason is its tooltip, exposed to
       // assistive tech as the row's accessible description (aria-describedby,

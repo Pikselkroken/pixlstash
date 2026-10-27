@@ -8,8 +8,9 @@ import { expect } from '@playwright/test'
  * its own beyond readiness waits.
  *
  * The overlay opens from a Pinia store flag (reviewSessionsStore.overlayOpen),
- * toggled by the toolbar button named "Review and fix tags". There are no
- * data-testid attributes in the feature; selectors are class/title/kbd based.
+ * which `?review=board` sets (useReviewRoute). The toolbar button that used to
+ * toggle it left the browse-only toolbar (#2160). There are no data-testid
+ * attributes in the feature; selectors are class/title/kbd based.
  *
  * The new-review dialog's tag chips are the health-board rows, so the health
  * cache MUST be built before a review can be created through the UI. Use
@@ -19,8 +20,7 @@ import { expect } from '@playwright/test'
 export class ReviewSessions {
   constructor(page) {
     this.page = page
-    // Launch + shell
-    this.launchButton = page.locator('button[aria-label="Review and fix tags"]').first()
+    // Shell
     this.overlay = page.locator('.rs-overlay')
     this.shell = page.locator('.rs-shell')
 
@@ -111,10 +111,11 @@ export class ReviewSessions {
     this.archivedBack = page.locator('.rs-archived-back')
   }
 
-  /** Open the overlay from the toolbar and wait for the shell. */
+  /** Open the overlay on the board through its URL and wait for the shell. */
   async open() {
-    await expect(this.launchButton).toBeVisible()
-    await this.launchButton.click()
+    const url = new URL(this.page.url())
+    url.searchParams.set('review', 'board')
+    await this.page.goto(url.toString())
     await expect(this.overlay).toBeVisible()
   }
 

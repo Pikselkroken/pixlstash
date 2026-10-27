@@ -22,12 +22,11 @@ function zipEntryNames(buf) {
   return names
 }
 
-/** Open the toolbar Export panel and run an export with captions disabled. */
+/** Open the selection pill's Export panel and export with captions disabled. */
 async function downloadExportZip(page, testInfo) {
-  // Select by class, not by title: the title is a live label that names the
-  // current selection ("Export 3 pictures to zip"), so a title selector breaks
-  // as soon as anything is selected. `.tb-export-btn` is the stable handle and
-  // is what Toolbar.test.js already uses.
+  // Select by class, not by name: the name is a live label that counts the
+  // selection ("Export 3 pictures"). `.tb-export-btn` is the stable handle
+  // and is what SelectionBar.test.js uses.
   await page.locator('button.tb-export-btn').click()
   const panel = page.locator('.tb-export-panel')
   await expect(panel).toBeVisible()
@@ -78,6 +77,13 @@ test.describe('export', () => {
     await row.click()
     await expect.poll(() => page.url()).toContain('/set/')
     await grid.waitForThumbnailLoaded()
+
+    // Export lives on the selection (#2160): a whole view is Ctrl+A, then
+    // Export. The pill's count waits out the grid's stream.
+    await page.keyboard.press('Control+a')
+    await expect(page.locator('.selection-count')).toHaveText(
+      `${expected} selected`,
+    )
 
     const zip = zipEntryNames(await downloadExportZip(page, testInfo))
     const images = zip.filter((n) => IMAGE_EXT.test(n))

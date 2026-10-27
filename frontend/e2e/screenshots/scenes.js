@@ -451,6 +451,8 @@ export const scenes = [
     title: 'Export panel with Export to Folder…',
     async setup({ grid, page }) {
       await readyGrid(grid)
+      // Export is a selection verb (#2160): select the view, then open it.
+      await page.keyboard.press('Control+a')
       await page.locator('.tb-export-btn').first().click()
       // By class, not accessible name: the activator's own name subsumes the
       // whole panel's text, so a name-based locator matches two buttons.

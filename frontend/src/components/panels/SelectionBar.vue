@@ -4,7 +4,7 @@
        the bottom-edge anchor. The face count is folded into the menu trigger's
        label rather than standing on its own, so the half opens with exactly one
        number (merged-grid-action-pill.md §6.3). -->
-  <div class="selection-bar">
+  <div class="selection-bar" :class="{ 'selection-bar--compact': compact }">
       <div
         v-if="
           selectedCount > 0 &&
@@ -72,9 +72,13 @@
         </v-menu>
       </div>
       <!--
-        Selection ▾ dropdown - mirrors the right-click context menu for every
-        selection-scoped action, so keyboard ("S") and toolbar users reach the
-        same actions as a right-click on the same selection. The context menu
+        The verbs live here, not in the toolbar (#2160): the count, Favourite,
+        Tag (T), Add to set (S), Export, Train LoRA, then ⋯ for the rest, a
+        rule, and Scrapheap and Clear (Esc).
+
+        ⋯ opens SelectionMenu, which mirrors the right-click context menu for
+        every selection-scoped action, so a keyboard user reaches the same
+        actions as a right-click on the same selection. The context menu
         additionally offers three single-image actions (Share image, Find
         similar faces, Remove all shares) that are deliberately context-only:
         they act on a specific right-clicked image and its per-image face /
@@ -85,36 +89,194 @@
         class="selection-ctx-bar"
         :class="{ 'selection-ctx-bar--active': selectedCount > 0 }"
       >
+        <!-- The group's first child is its count, so entering the group
+             announces it without a live region of its own. Never truncated
+             by the ladder: a count is the blast radius of everything else. -->
+        <span class="selection-count"
+          ><Tooltip
+            v-if="countTitle"
+            :text="countTitle"
+            activator="parent"
+          />{{ selectionCountLabel }}</span
+        >
+        <span class="pill-divider" aria-hidden="true"></span>
+        <!-- Favourite leads the verbs (#1578's pill): the glyph says which
+             way it will go, filled when every selected picture already is
+             one. A verb, so it stays ink; red marks the state, on the tile. -->
+        <AppBarButton
+          v-if="selectedCount > 0 && !isScrapheapView && !isReadOnly"
+          shape="round"
+          :icon="favouriteOn ? 'heart' : 'heart-outline'"
+          data-verb="favourite"
+          :aria-label="favouriteLabel"
+          :aria-pressed="favouriteOn ? 'true' : 'false'"
+          aria-keyshortcuts="H"
+          :tooltip="`${favouriteLabel} (H)`"
+          @click="emit('favourite')"
+        />
+        <div v-if="!isScrapheapView && !isReadOnly" class="plugin-run-controls">
+          <v-menu
+            v-model="tagMenuOpen"
+            :close-on-content-click="false"
+            location-strategy="connected"
+            location="bottom end"
+            origin="top end"
+            transition="scale-transition"
+          >
+            <template #activator="{ props: menuProps }">
+              <div
+                v-bind="
+                  withRef(menuProps, (el) => (tagBtnRef = el))
+                "
+                class="hidden-panel-activator"
+                aria-hidden="true"
+              ></div>
+            </template>
+            <TbTagPanel
+              :selected-count="selectedCount"
+              :selected-image-ids="props.selectedImageIds"
+              :all-grid-images="props.allGridImages"
+              :open="tagMenuOpen"
+              @tags-applied="emit('tags-applied', $event)"
+              @close="tagMenuOpen = false"
+            />
+          </v-menu>
+        </div>
+        <AppBarButton
+          v-if="showTagControls"
+          class="pill-verb"
+          shape="round"
+          icon="tag-outline"
+          data-verb="tag"
+          aria-label="Tag"
+          aria-keyshortcuts="T"
+          tooltip="Tag selected (T)"
+          @click="openTagInput()"
+        >
+          <span class="pill-verb-label">Tag</span>
+          <kbd class="fm-kbd pill-verb-kbd" aria-hidden="true">T</kbd>
+        </AppBarButton>
+        <Tooltip v-if="showTagControls" :text="addToSetTitle">
+          <template #activator="{ props: tipProps }">
+            <AddToEntityControl
+              v-bind="withRef(tipProps, (el) => (addToSetRef = el))"
+              class="pill-ate"
+              type="set"
+              label="Add to set"
+              key-hint="S"
+              float-menu
+              :subject-ids="selectedImageIds"
+              :disabled="!!groupingLockReason"
+              :locked-set-ids="lockedSetsStore.lockedSetIds"
+              @added="$emit('added-to-set', $event)"
+            />
+          </template>
+        </Tooltip>
+        <!-- Export: the zip or folder export of the selection. A whole view
+             is Ctrl+A, then this. -->
+        <v-menu
+          v-if="selectedCount > 0"
+          v-model="exportStore.exportMenuOpen"
+          :close-on-content-click="false"
+          location="top"
+          origin="bottom center"
+          :offset="8"
+          transition="scale-transition"
+        >
+          <template #activator="{ props: menuProps }">
+            <AppBarButton
+              v-bind="menuProps"
+              class="pill-verb tb-export-btn"
+              shape="round"
+              data-verb="export"
+              icon="tray-arrow-down"
+              :open="exportStore.exportMenuOpen"
+              :tooltip="exportTitle"
+              :aria-label="exportTitle"
+            >
+              <span class="pill-verb-label">Export</span>
+            </AppBarButton>
+          </template>
+          <TbExportPanel
+            @confirm-export="emit('confirm-export-zip')"
+            @confirm-export-folder="emit('confirm-export-folder', $event)"
+          />
+        </v-menu>
+        <!-- Train LoRA: a run trains on one set or one character, so this is
+             live only in such a view (the dialog cannot take a loose
+             selection); elsewhere it stays, dimmed, and says why. The
+             sidebar's set and person menus offer it too. -->
+        <AppBarButton
+          v-if="selectedCount > 0 && !isReadOnly && !isScrapheapView"
+          class="pill-verb tb-train-btn"
+          shape="round"
+          data-verb="train"
+          icon="school-outline"
+          :disabled="!canTrain"
+          :open="trainingStore.trainDialogOpen"
+          aria-label="Train LoRA"
+          :tooltip="
+            canTrain
+              ? `Train a LoRA on ${trainScope.name || 'this view'}`
+              : 'Open a set or person to train a LoRA on it.'
+          "
+          @click="openTrainDialog()"
+        >
+          <span class="pill-verb-label">Train LoRA</span>
+        </AppBarButton>
+        <!-- Upscale… (#1868): the keepers picked after a run, upscaled and
+             stacked on top of themselves. Pictures only: a video has no
+             picture loader to go behind. -->
+        <AppBarButton
+          v-if="canUpscale"
+          class="upscale-btn"
+          shape="round"
+          icon="arrow-expand-all"
+          data-testid="selection-upscale"
+          :tooltip="`Upscale the ${selectedCount === 1 ? 'selected picture' : `${selectedCount} selected pictures`}`"
+          @click="upscale.openFor(props.selectedImageIds)"
+        >
+          <span class="bar-btn-apply-label">Upscale…</span>
+        </AppBarButton>
+        <AppBarButton
+          v-if="
+            selectedCount > 0 &&
+            !isScrapheapView &&
+            !isReadOnly &&
+            impossibleSources.length > 0
+          "
+          class="clear-impossible-btn"
+          shape="round"
+          icon="tag-off-outline"
+          :loading="clearingImpossible"
+          :tooltip="`Strip the impossible tags from the ${selectedCount} selected picture(s)`"
+          @click="$emit('clear-impossible-tags')"
+        >
+          <span class="clear-impossible-label">{{
+            clearingImpossible ? "Clearing…" : "Clear impossible tags"
+          }}</span>
+        </AppBarButton>
         <v-menu
           v-model="selectionMenuOpen"
           :close-on-content-click="false"
-          location="bottom end"
-          origin="top end"
+          location="top end"
+          origin="bottom end"
           transition="scale-transition"
         >
           <template #activator="{ props: menuProps }">
             <!-- A menu button with neither aria-haspopup nor aria-expanded
-                 gives a screen-reader user no signal that it opens anything.
-                 The count rides in the accessible name so it is read on focus,
-                 which is why selecting images one at a time needs no live
-                 region of its own. -->
+                 gives a screen-reader user no signal that it opens anything. -->
             <AppBarButton
               v-bind="menuProps"
               class="selection-menu-trigger"
               shape="round"
-              icon="image-multiple-outline"
-              chevron
-              :disabled="selectedCount === 0 && selectedFaceCount === 0"
+              data-verb="more"
+              icon="dots-horizontal"
+              :disabled="!hasSelection"
               :tooltip="triggerTitle"
-              :aria-label="triggerTitle"
               aria-haspopup="menu"
               :aria-expanded="selectionMenuOpen ? 'true' : 'false'"
-              aria-keyshortcuts="S"
-            >
-              <!-- Never truncated by the ladder: a count is the blast radius of
-                   everything else in this half. -->
-              <span class="bar-btn-apply-label">{{ selectionCountLabel }}</span>
-            </AppBarButton>
+            />
           </template>
           <SelectionMenu
             ref="selectionMenuRef"
@@ -164,100 +326,29 @@
             @move-to-library="$emit('move-to-library', $event)"
           />
         </v-menu>
-        <!-- Favourite leads the verbs (#1578's pill): the glyph says which
-             way it will go, filled when every selected picture already is
-             one. A verb, so it stays ink; red marks the state, on the tile. -->
-        <AppBarButton
-          v-if="selectedCount > 0 && !isScrapheapView && !isReadOnly"
-          shape="round"
-          :icon="favouriteOn ? 'heart' : 'heart-outline'"
-          data-verb="favourite"
-          :aria-label="favouriteLabel"
-          :aria-pressed="favouriteOn ? 'true' : 'false'"
-          aria-keyshortcuts="H"
-          :tooltip="`${favouriteLabel} (H)`"
-          @click="emit('favourite')"
-        />
-        <div v-if="!isScrapheapView && !isReadOnly" class="plugin-run-controls">
-          <v-menu
-            v-model="tagMenuOpen"
-            :close-on-content-click="false"
-            location-strategy="connected"
-            location="bottom end"
-            origin="top end"
-            transition="scale-transition"
-          >
-            <template #activator="{ props: menuProps }">
-              <div
-                v-bind="
-                  withRef(menuProps, (el) => (tagBtnRef = el))
-                "
-                class="hidden-panel-activator"
-                aria-hidden="true"
-              ></div>
-            </template>
-            <TbTagPanel
-              :selected-count="selectedCount"
-              :selected-image-ids="props.selectedImageIds"
-              :all-grid-images="props.allGridImages"
-              :open="tagMenuOpen"
-              @tags-applied="emit('tags-applied', $event)"
-              @close="tagMenuOpen = false"
-            />
-          </v-menu>
-        </div>
-        <!-- Upscale… (#1868): the keepers picked after a run, upscaled and
-             stacked on top of themselves. Pictures only: a video has no
-             picture loader to go behind. -->
-        <AppBarButton
-          v-if="canUpscale"
-          class="upscale-btn"
-          shape="round"
-          icon="arrow-expand-all"
-          data-testid="selection-upscale"
-          :tooltip="`Upscale the ${selectedCount === 1 ? 'selected picture' : `${selectedCount} selected pictures`}`"
-          @click="upscale.openFor(props.selectedImageIds)"
-        >
-          <span class="bar-btn-apply-label">Upscale…</span>
-        </AppBarButton>
-        <AppBarButton
-          v-if="
-            selectedCount > 0 &&
-            !isScrapheapView &&
-            !isReadOnly &&
-            impossibleSources.length > 0
-          "
-          class="clear-impossible-btn"
-          shape="round"
-          icon="tag-off-outline"
-          :loading="clearingImpossible"
-          :tooltip="`Strip the impossible tags from the ${selectedCount} selected picture(s)`"
-          @click="$emit('clear-impossible-tags')"
-        >
-          <span class="clear-impossible-label">{{
-            clearingImpossible ? "Clearing…" : "Clear impossible tags"
-          }}</span>
-        </AppBarButton>
-        <AppBarButton
-          icon="selection-off"
-          shape="round"
-          :disabled="!hasSelection"
-          :tooltip="clearTitle"
-          :aria-keyshortcuts="ownsEscape ? 'Escape' : undefined"
-          @click="$emit('clear-selection')"
-        />
-        <!-- Separated from Clear selection by its own group gap. Two identical
-             32px (48px on touch) transparent icon buttons 8px apart, one of
-             them destructive, is the adjacency this pill can least afford - and Delete now also
-             sits in the same surface as the bulk Assign write. -->
+        <span class="pill-divider" aria-hidden="true"></span>
+        <!-- The destructive verb sits past the rule, in the danger ink, and
+             keeps a group gap from Clear: two identical 32px round buttons
+             side by side, one of them destructive, is the adjacency this pill
+             can least afford. -->
         <AppBarButton
           class="delete-btn"
           shape="round"
+          data-verb="scrapheap"
           icon="delete"
           danger
           :disabled="!hasSelection || isReadOnly"
           :tooltip="deleteTitle"
           @click="$emit('delete-selected')"
+        />
+        <AppBarButton
+          icon="close"
+          shape="round"
+          data-verb="clear"
+          :disabled="!hasSelection"
+          :tooltip="clearTitle"
+          :aria-keyshortcuts="ownsEscape ? 'Escape' : undefined"
+          @click="$emit('clear-selection')"
         />
     </div>
     <!-- /selection-ctx-bar -->
@@ -270,11 +361,24 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { isReadOnly } from "../../utils/apiClient";
 import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
 import { useUpscaleStore } from "../../stores/useUpscaleStore";
+import { useExportStore } from "../../stores/useExportStore";
+import { useTrainingStore } from "../../stores/useTrainingStore";
+import { useSelectionStore } from "../../stores/useSelectionStore";
+import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
+import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
+import {
+  ALL_PICTURES_ID,
+  UNASSIGNED_PICTURES_ID,
+  SCRAPHEAP_PICTURES_ID,
+} from "../../stores/useViewStore";
 import SelectionMenu from "./SelectionMenu.vue";
 import TbTagPanel from "./TbTagPanel.vue";
+import TbExportPanel from "./TbExportPanel.vue";
 import PluginParametersUI from "../widgets/PluginParametersUI.vue";
+import AddToEntityControl from "../widgets/AddToEntityControl.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import { isEditableElement } from "../../utils/dom.js";
 import { favouriteVerb } from "../../stores/useFavouritesStore";
 
@@ -290,6 +394,12 @@ const props = defineProps({
    * here and the search half must not also claim it.
    */
   ownsEscape: { type: Boolean, default: true },
+  /**
+   * The search half shares the pill: the verbs drop their words for their
+   * glyphs, so the two halves fit side by side without wrapping
+   * (merged-grid-action-pill.md §7). Each keeps its name in aria-label.
+   */
+  compact: { type: Boolean, default: false },
   scrapheapPicturesId: { type: String, required: true },
   selectedImageIds: { type: Array, default: () => [] },
   selectedMediaSupport: {
@@ -348,9 +458,80 @@ const emit = defineEmits([
   "run-workflow",
   "edit-pictures",
   "compare-pictures",
+  "confirm-export-zip",
+  "confirm-export-folder",
 ]);
 
 const upscale = useUpscaleStore();
+const exportStore = useExportStore();
+const trainingStore = useTrainingStore();
+const selectionStore = useSelectionStore();
+const entityNames = useEntityNamesStore();
+const lockedSetsStore = useLockedSetsStore();
+
+// ── Train LoRA: single-set / single-character scope gating ───────────────────
+// A run trains on one set or one character (a character's reference set is
+// chosen inside the dialog). Enable the button only when the current view is
+// exactly that; otherwise disable with a teaching tooltip.
+const TRAIN_SPECIAL_CHARACTER_IDS = new Set([
+  ALL_PICTURES_ID,
+  UNASSIGNED_PICTURES_ID,
+  SCRAPHEAP_PICTURES_ID,
+]);
+
+const trainScope = computed(() => {
+  const sel = selectionStore;
+  const setIds = Array.isArray(sel.selectedSetIds) ? sel.selectedSetIds : [];
+  const charIds = Array.isArray(sel.selectedCharacterIds)
+    ? sel.selectedCharacterIds
+    : [];
+  // Single set: one set selected, no multi-set overlap. A character next to a
+  // set is ignored here, as the grid ignores it (useGridFetch sends only the
+  // set_id), so the scope is the whole set the view shows.
+  const singleSetId =
+    sel.selectedSet != null && sel.selectedSet !== "" && setIds.length <= 1
+      ? Number(sel.selectedSet)
+      : null;
+  if (singleSetId != null && Number.isFinite(singleSetId)) {
+    return {
+      type: "set",
+      id: singleSetId,
+      name: entityNames.setNames[singleSetId] || sel.lastSelectedSetLabel,
+    };
+  }
+  // Single character: a real character id (not ALL/UNASSIGNED/SCRAPHEAP), not a
+  // multi-character view, and no set selected.
+  const charId = sel.selectedCharacter;
+  const isSpecial =
+    charId == null || TRAIN_SPECIAL_CHARACTER_IDS.has(String(charId));
+  if (!isSpecial && charIds.length <= 1 && !setIds.length) {
+    const numId = Number(charId);
+    if (Number.isFinite(numId)) {
+      return {
+        type: "character",
+        id: numId,
+        name:
+          entityNames.characterNames[numId] ||
+          sel.lastSelectedCharacterLabel,
+      };
+    }
+  }
+  return null;
+});
+
+const canTrain = computed(() => trainScope.value != null && !isReadOnly.value);
+
+// Open the Train a LoRA dialog on the set or character in view.
+function openTrainDialog() {
+  const scope = trainScope.value;
+  if (!scope) return;
+  trainingStore.openForScope({
+    type: scope.type,
+    id: scope.id,
+    name: scope.name,
+  });
+}
+
 const canUpscale = computed(
   () =>
     props.selectedCount > 0 &&
@@ -394,13 +575,28 @@ const selectionCountLabel = computed(() => {
   return `${props.selectedFaceCount} faces selected`;
 });
 
-const triggerTitle = computed(() => {
-  if (!hasSelection.value) return "Select images to apply actions";
-  const stacks =
-    props.selectedExpandedCount > props.selectedCount
-      ? ` (${props.selectedExpandedCount} total including stacks)`
-      : "";
-  return `Actions for ${selectionCountLabel.value}${stacks} - press S`;
+// Stacks count once in the label; the hover says what they hold.
+const countTitle = computed(() =>
+  props.selectedExpandedCount > props.selectedCount
+    ? `${props.selectedExpandedCount} total including stacks`
+    : undefined,
+);
+
+const triggerTitle = computed(() =>
+  hasSelection.value
+    ? `More actions for ${selectionCountLabel.value}`
+    : "Select images to apply actions",
+);
+
+const addToSetTitle = computed(
+  () => props.groupingLockReason || "Add to set (S)",
+);
+
+// The live label names what lands in the zip before the panel is open (whose
+// count is only refreshed once it is).
+const exportTitle = computed(() => {
+  const n = props.selectedCount;
+  return `Export ${n} picture${n === 1 ? "" : "s"}`;
 });
 
 const clearTitle = computed(() =>
@@ -448,9 +644,21 @@ function handleSelectionMenuHotkey(event) {
     return;
   }
   if (event.key !== "s" && event.key !== "S") return;
-  if (props.selectedCount <= 0) return;
+  if (!showTagControls.value || props.groupingLockReason) return;
+  // The lightbox owns its own S (its sidebar), and an open menu its own keys.
+  if (document.querySelector(".image-overlay")) return;
   event.preventDefault();
-  selectionMenuOpen.value = !selectionMenuOpen.value;
+  openAddToSet();
+}
+
+// S is Add to set (#2160). The picker opens from a real click on its own
+// trigger, the same way T opens the tag panel.
+const addToSetRef = ref(null);
+function openAddToSet() {
+  const root = addToSetRef.value?.$el ?? addToSetRef.value;
+  const trigger = root?.querySelector?.(".ate-btn");
+  if (root?.classList?.contains("open") || !trigger) return;
+  trigger.click();
 }
 
 onMounted(() => window.addEventListener("keydown", handleSelectionMenuHotkey));
@@ -458,7 +666,16 @@ onUnmounted(() => {
   window.removeEventListener("keydown", handleSelectionMenuHotkey);
 });
 
-watch(selectionMenuOpen, (open) => emit("selection-menu-open", open));
+// The grid's Esc ladder stands aside while a surface opened from the pill is up,
+// so the Esc that closes it does not also clear the selection under it. Export
+// and Train LoRA joined the ⋯ menu here with #2160.
+watch(
+  () =>
+    selectionMenuOpen.value ||
+    exportStore.exportMenuOpen ||
+    trainingStore.trainDialogOpen,
+  (open) => emit("selection-menu-open", open),
+);
 
 const pluginParameters = ref({});
 
@@ -603,9 +820,58 @@ defineExpose({ openTagInput, openPluginPanel });
 }
 
 /* 8px here plus the run's own 8px gap = the --space-5 group gap that keeps the
-   destructive control off its neighbour's elbow. */
+   destructive control off Clear's elbow. */
 .delete-btn {
-  margin-left: var(--space-3);
+  margin-right: var(--space-3);
+}
+
+/* The count opens the half as text, not as a control (#2160): ⋯ is the menu. */
+.selection-count {
+  padding: 0 var(--space-2);
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* The rules inside the half: after the count, and before the destructive pair.
+   `divider`, not the seam's `border`: these part runs of one context, the seam
+   parts two. */
+.pill-divider {
+  width: 1px;
+  height: var(--rule-h);
+  background: rgb(var(--v-theme-divider));
+  flex-shrink: 0;
+}
+
+.pill-verb-kbd {
+  margin-left: var(--space-1);
+}
+
+/* The set picker's own trigger, dressed as the round bar verbs beside it
+   (AppBarButton, shape round). Its `:where()` skin leaves the specificity for
+   exactly this. */
+.pill-ate :deep(.ate-btn) {
+  height: var(--control-h-bar);
+  padding: 0 var(--space-3);
+  gap: var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: inherit;
+  font-size: var(--text-base);
+  font-weight: var(--weight-regular);
+  white-space: nowrap;
+}
+.pill-ate :deep(.ate-btn:hover:not(:disabled)) {
+  background: var(--hover-wash);
+}
+.pill-ate.open :deep(.ate-btn) {
+  background: var(--hover-wash);
+  border-color: rgb(var(--v-theme-border));
+}
+.pill-ate :deep(.ate-chevron) {
+  display: none;
 }
 
 /* Hidden panel activators - zero-size but remain in DOM for menu positioning */
@@ -702,7 +968,25 @@ defineExpose({ openTagInput, openPluginPanel });
    count: losing a selection count is worse than losing any word beside it
    (merged-grid-action-pill.md §7). The old rule hid both at 660px together. */
 @container selbar (max-width: 1100px) {
-  .clear-impossible-label {
+  .clear-impossible-label,
+  .pill-verb-kbd,
+  .pill-ate :deep(.ate-kbd) {
+    display: none;
+  }
+}
+
+/* Then the verbs fall back to their glyphs, each named by its aria-label, so
+   the pill never wraps (merged-grid-action-pill.md §5). They do at any width
+   while the search half shares the pill. */
+.selection-bar--compact .pill-verb-label,
+.selection-bar--compact .pill-verb-kbd,
+.selection-bar--compact .pill-ate :deep(.ate-label),
+.selection-bar--compact .pill-ate :deep(.ate-kbd) {
+  display: none;
+}
+@container selbar (max-width: 900px) {
+  .pill-verb-label,
+  .pill-ate :deep(.ate-label) {
     display: none;
   }
 }

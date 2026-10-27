@@ -58,7 +58,6 @@
   />
   <div :style="wrapperStyle" class="grid-content-area">
     <Toolbar
-      :selectedCount="selectedImageIds.length"
       :selectedCharacter="String(selectionStore.selectedCharacter)"
       :selectedSort="sortStore.selectedSort"
       :allPicturesId="String(ALL_PICTURES_ID)"
@@ -67,10 +66,6 @@
       @expand-all-stacks="expandAllStacks"
       @collapse-all-stacks="collapseAllStacks"
       @open-duplicates="emit('open-duplicates')"
-      @open-import="emit('open-import')"
-      @local-import="emit('local-import', $event)"
-      @confirm-export-zip="emit('confirm-export-zip')"
-      @confirm-export-folder="emit('confirm-export-folder', $event)"
     />
     <FilterStrip
       :count-base-query="filterCountBaseQuery"
@@ -1178,6 +1173,7 @@
           :selected-group-name="selectedGroupName"
           :selected-sort="sortStore.selectedSort"
           :owns-escape="true"
+          :compact="searchResultsActive"
           :scrapheap-pictures-id="String(SCRAPHEAP_PICTURES_ID)"
           :selected-image-ids="selectedImageIds"
           :selected-media-support="selectedMediaSupport"
@@ -1225,6 +1221,8 @@
           @run-workflow="runWorkflowOnSelection"
           @edit-pictures="editSelection"
           @compare-pictures="compareSelection"
+          @confirm-export-zip="emit('confirm-export-zip')"
+          @confirm-export-folder="emit('confirm-export-folder', $event)"
         />
       </template>
     </GridActionPill>
