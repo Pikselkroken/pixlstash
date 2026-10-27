@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "presets": [
+    {
+      "id": "chroma1-base",
+      "version": 1,
+      "file": "chroma1-base.json",
+      "sha256": "ce026fe92b9d6bdaa19bd298aacf41d193684098d6388f9ac9986da91afc2ca8",
+      "min_pixlstash": "1.13.0"
+    },
+    {
+      "id": "flux2-klein-9b-base",
+      "version": 1,
+      "file": "flux2-klein-9b-base.json",
+      "sha256": "db743a349afbd7a9ffa09c03e92b91e65684057bbdf4598b05c06f8f0d5eeead",
+      "min_pixlstash": "1.13.0"
+    },
+    {
+      "id": "krea2-raw",
+      "version": 1,
+      "file": "krea2-raw.json",
+      "sha256": "74449bcf89a8ca263cf767508d09fc634a92eac9551d15bf2bfeb99cf0efce5a",
+      "min_pixlstash": "1.13.0"
+    },
+    {
+      "id": "zimage-turbo",
+      "version": 1,
+      "file": "zimage-turbo.json",
+      "sha256": "65e57d20258f9646581a3ce5e970ae66e8f2f49c84f17da160a8756818796988",
+      "min_pixlstash": "1.13.0"
+    }
+  ]
+}

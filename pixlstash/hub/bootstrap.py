@@ -234,6 +234,7 @@ _USER_COLUMNS_TO_COPY = (
     "ai_toolkit_repo_path",
     "ai_toolkit_python",
     "ai_toolkit_commit",
+    "training_presets_auto_check",
     "public_url",
     "keep_models_in_memory",
     "max_vram_gb",

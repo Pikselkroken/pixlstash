@@ -3,6 +3,7 @@ import { defineStore } from "pinia";
 import {
   cancelTrainingJob,
   checkAiToolkit,
+  checkTrainingPresets,
   createTrainingJob,
   deleteTrainingJob,
   discoverAiToolkit,
@@ -14,7 +15,7 @@ import {
   putAiToolkitConfig,
   resolveTraining,
 } from "../api/training";
-import { getUserConfig } from "../api/config";
+import { getUserConfig, patchUserConfig } from "../api/config";
 import { DEFAULT_TIMEOUTS, useNoticeStore } from "./useNoticeStore";
 import { onSessionReset } from "../utils/apiClient";
 import { useSidebarStore } from "./useSidebarStore";
@@ -66,6 +67,11 @@ export const useTrainingStore = defineStore("training", () => {
   // ── Dialog: the choices, and what they resolve to ──────────────────────────
   const presets = ref([]); // GET /training/presets: { id, label, offered, … }
   const presetsLoading = ref(false);
+  // Recipe updates from pixlstash.dev: the opt-in (null until asked) and
+  // the last check's outcome, a sentence for the dialog.
+  const presetsAutoCheck = ref(null);
+  const presetCheckBusy = ref(false);
+  const presetCheckMessage = ref("");
   const selectedPreset = ref(null); // recipe id
   const triggerWord = ref("");
   // What the LoRA learns; a character is always a person, a set must choose.
@@ -180,8 +186,12 @@ export const useTrainingStore = defineStore("training", () => {
     submitError.value = "";
     trainDialogOpen.value = true;
 
+    presetCheckMessage.value = "";
     fetchPresets();
-    if (!configLoaded.value) fetchConfig();
+    (configLoaded.value ? Promise.resolve() : fetchConfig()).then(() => {
+      // The opt-in daily check; the server skips it when one ran today.
+      if (presetsAutoCheck.value === true) checkPresetUpdates(true);
+    });
     const entry =
       type === "character" ? { character_id: scopeId.value } : { set_id: scopeId.value };
     await loadDataset(entry);
@@ -249,6 +259,45 @@ export const useTrainingStore = defineStore("training", () => {
     } finally {
       presetsLoading.value = false;
     }
+  }
+
+  /**
+   * Ask the server to check pixlstash.dev for newer recipes. A recipe it
+   * replaced is listed again and the preview re-resolved with it. The
+   * automatic check speaks only when it changed something.
+   */
+  async function checkPresetUpdates(automatic = false) {
+    if (presetCheckBusy.value) return;
+    presetCheckBusy.value = true;
+    if (!automatic) presetCheckMessage.value = "";
+    try {
+      const result = await checkTrainingPresets(automatic);
+      const updated = result?.updated || [];
+      if (updated.length) {
+        await fetchPresets();
+        if (trainDialogOpen.value) resolveSoon();
+        const names = updated.map((u) => `${u.label} (version ${u.version})`);
+        presetCheckMessage.value = `Updated ${names.join(", ")}.`;
+      } else if (!automatic) {
+        presetCheckMessage.value = result?.error
+          ? `${result.error} Your recipes are unchanged.`
+          : "Your recipes are up to date.";
+      }
+    } catch (err) {
+      console.warn("Recipe update check failed:", err);
+      if (!automatic) {
+        presetCheckMessage.value =
+          "Could not check for recipe updates. Your recipes are unchanged.";
+      }
+    } finally {
+      presetCheckBusy.value = false;
+    }
+  }
+
+  /** Turn the daily recipe check on or off (Settings › AI-toolkit). */
+  async function setPresetsAutoCheck(value) {
+    await patchUserConfig({ training_presets_auto_check: value });
+    presetsAutoCheck.value = value;
   }
 
   let promptsSeq = 0;
@@ -489,6 +538,7 @@ export const useTrainingStore = defineStore("training", () => {
       const config = await getUserConfig();
       aiToolkitRepoPath.value = config?.ai_toolkit_repo_path || "";
       aiToolkitPython.value = config?.ai_toolkit_python || "";
+      presetsAutoCheck.value = config?.training_presets_auto_check ?? null;
       configLoaded.value = true;
     } catch (err) {
       console.warn("Failed to load ai-toolkit config:", err);
@@ -556,6 +606,8 @@ export const useTrainingStore = defineStore("training", () => {
     jobs.value = [];
     jobsError.value = "";
     presets.value = [];
+    presetsAutoCheck.value = null;
+    presetCheckMessage.value = "";
     aiToolkitRepoPath.value = "";
     aiToolkitPython.value = "";
     configLoaded.value = false;
@@ -597,6 +649,11 @@ export const useTrainingStore = defineStore("training", () => {
     // dialog: choices
     presets,
     presetsLoading,
+    presetsAutoCheck,
+    presetCheckBusy,
+    presetCheckMessage,
+    checkPresetUpdates,
+    setPresetsAutoCheck,
     selectedPreset,
     triggerWord,
     subject,

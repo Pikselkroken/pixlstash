@@ -28,6 +28,7 @@ from fastapi.testclient import TestClient
 from pixlstash.hub import training_runs
 from pixlstash.resources.arbiter import Tenant, arbiter
 from pixlstash.routes.training import _redact_host_paths
+from pixlstash.training import preset_updates, presets
 from pixlstash.server import Server
 from pixlstash.utils.service.export_utils import ExportUtils
 
@@ -947,6 +948,52 @@ def test_list_presets_scoped_token_forbidden():
         scoped = _scoped_client(server, read_token)
         r = scoped.get("/training/presets")
         assert r.status_code == 403, r.text
+    finally:
+        _teardown(temp_dir, server)
+
+
+# ---------------------------------------------------------------------------
+# POST /training/presets/check
+# ---------------------------------------------------------------------------
+
+
+def test_preset_check_fetches_only_when_asked_or_opted_in(monkeypatch):
+    """The automatic check does nothing until the owner turns it on; the
+    button always checks. A READ token cannot trigger either."""
+    temp_dir, owner, server, read_token = _setup()
+    fetched = []
+
+    def fetch(name):
+        fetched.append(name)
+        raise preset_updates.FetchError("offline")
+
+    monkeypatch.setattr(preset_updates, "_fetch", fetch)
+    try:
+        cache = presets.cache_dir()
+        assert os.path.dirname(cache) == os.path.dirname(server.server_config_path)
+
+        r = owner.post("/training/presets/check", params={"automatic": True})
+        assert r.status_code == 200, r.text
+        assert r.json() == {"checked": False, "updated": [], "error": None}
+        assert fetched == []
+
+        r = owner.get("/users/me/config")
+        assert r.json()["training_presets_auto_check"] is None
+        r = owner.patch("/users/me/config", json={"training_presets_auto_check": True})
+        assert r.status_code == 200, r.text
+        r = owner.post("/training/presets/check", params={"automatic": True})
+        assert r.json()["checked"] is True
+        assert "pixlstash.dev" in r.json()["error"]
+        assert fetched == ["index.json"]
+
+        r = owner.post("/training/presets/check")
+        assert r.json()["checked"] is True
+        assert fetched == ["index.json", "index.json"]
+
+        scoped = _scoped_client(server, read_token)
+        r = scoped.post("/training/presets/check")
+        assert r.status_code == 403, r.text
+        assert fetched == ["index.json", "index.json"]
     finally:
         _teardown(temp_dir, server)
 

@@ -1182,7 +1182,11 @@ class TrainingService:
         with self._pending_specs_lock:
             self._pending_specs[job_uuid] = pending
         self._write_pending_sidecar(job_uuid, pending)
-        self._update_job(job_uuid, resolved_profile=json.dumps(settled))
+        # The recipe may be a newer version than at enqueue (#2122): the row
+        # names the one it now trains with.
+        self._update_job(
+            job_uuid, resolved_profile=json.dumps(settled), preset=settled["preset"]
+        )
         logger.info(
             "Job %s trains with %s (%s; previews %s).",
             job_uuid,

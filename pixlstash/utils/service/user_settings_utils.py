@@ -110,6 +110,7 @@ def serialize_user_config(user) -> dict:
         "ai_toolkit_repo_path",
         "ai_toolkit_python",
         "ai_toolkit_commit",
+        "training_presets_auto_check",
         "public_url",
         "similarity_character",
         "stack_strictness",
@@ -142,8 +143,9 @@ def serialize_user_config(user) -> dict:
         )
         for key in allowed_fields
     }
-    # check_for_updates is tri-state: serialise as-is, including None (undecided)
-    config["check_for_updates"] = getattr(source, "check_for_updates", None)
+    # Tri-state: serialise as-is, including None (undecided)
+    for key in ("check_for_updates", "training_presets_auto_check"):
+        config[key] = getattr(source, key, None)
 
     config["expand_all_stacks"] = (
         getattr(source, "show_stacks")
@@ -237,6 +239,7 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "ai_toolkit_repo_path",
         "ai_toolkit_python",
         "ai_toolkit_commit",
+        "training_presets_auto_check",
         "public_url",
         "similarity_character",
         "stack_strictness",
@@ -414,15 +417,15 @@ def apply_user_config_patch(user, patch_data) -> bool:
                 setattr(user, key, new_value)
                 updated = True
             continue
-        if key == "check_for_updates":
+        if key in ("check_for_updates", "training_presets_auto_check"):
             if value in ("", "null"):
                 new_value = None
             elif value is None:
                 new_value = None
             else:
                 new_value = bool(value)
-            if user.check_for_updates != new_value:
-                user.check_for_updates = new_value
+            if getattr(user, key) != new_value:
+                setattr(user, key, new_value)
                 updated = True
             continue
         if key == "date_format":

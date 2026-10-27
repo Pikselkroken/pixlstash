@@ -152,6 +152,7 @@ CREATE TABLE IF NOT EXISTS user (
     ai_toolkit_repo_path        TEXT,
     ai_toolkit_python           TEXT,
     ai_toolkit_commit           TEXT,
+    training_presets_auto_check INTEGER,
     public_url                  TEXT,
     keep_models_in_memory       INTEGER,
     max_vram_gb                 REAL,
@@ -724,7 +725,8 @@ _V2_SUPERSEDED_SHELF_TABLES = ("adapter_file", "adapter", "checkpoint")
 #
 # `preset` is the recipe as `id@version`, `resolved_profile` the resolver's JSON
 # (choices, memory profile, every value and its source) and `advanced_pins` the
-# owner's Advanced values as JSON; all three are written once, at enqueue.
+# owner's Advanced values as JSON; all three are written at enqueue, and the
+# first two again when a probed run is re-resolved at launch (§25.20).
 #
 # The live view's three (#2118): `phase_log` is the JSON list of
 # `{phase, at}` the worker appends whenever the run enters a phase,
@@ -2070,6 +2072,9 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     for column in ("ai_toolkit_repo_path", "ai_toolkit_python", "ai_toolkit_commit"):
         if column not in user_columns:
             conn.execute(f"ALTER TABLE user ADD COLUMN {column} TEXT")
+    # Recipe updates from pixlstash.dev (#2122): NULL until the owner is asked.
+    if "training_presets_auto_check" not in user_columns:
+        conn.execute("ALTER TABLE user ADD COLUMN training_presets_auto_check INTEGER")
     # Mouse preferences (#2138): NULL reads as the model default.
     for column in ("grid_open_gesture", "viewer_wheel_action"):
         if column not in user_columns:

@@ -55,6 +55,9 @@ class User(SQLModel, table=True):
     ai_toolkit_repo_path: Optional[str] = Field(default=None)
     ai_toolkit_python: Optional[str] = Field(default=None)
     ai_toolkit_commit: Optional[str] = Field(default=None)
+    # Check pixlstash.dev for newer training recipes once a day (#2122). None
+    # until the owner has been asked, which the Train dialog does once.
+    training_presets_auto_check: Optional[bool] = Field(default=None)
     public_url: Optional[str] = Field(default=None)
     similarity_character: Optional[int] = Field(default=None)
     stack_strictness: Optional[float] = Field(default=0.92)

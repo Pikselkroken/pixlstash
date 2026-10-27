@@ -9,6 +9,7 @@ import { setActivePinia, createPinia } from "pinia";
 vi.mock("../../api/training", () => ({
   cancelTrainingJob: vi.fn(),
   checkAiToolkit: vi.fn(),
+  checkTrainingPresets: vi.fn(),
   createTrainingJob: vi.fn(),
   deleteTrainingJob: vi.fn(),
   discoverAiToolkit: vi.fn(),
@@ -25,6 +26,7 @@ vi.mock("../../api/config", () => ({
     ai_toolkit_repo_path: "/home/me/ai-toolkit",
     ai_toolkit_python: "/home/me/ai-toolkit/venv/bin/python",
   })),
+  patchUserConfig: vi.fn(async () => ({})),
 }));
 vi.mock("../../api/characters", () => ({
   characterThumbnailUrl: (id) => `/api/v1/characters/${id}/thumbnail`,
@@ -35,6 +37,7 @@ vi.mock("vuetify/components", async () => {
 });
 
 import * as training from "../../api/training";
+import * as config from "../../api/config";
 import { useTrainingStore } from "../../stores/useTrainingStore";
 import TrainLoraDialog from "./TrainLoraDialog.vue";
 
@@ -357,6 +360,79 @@ describe("memory and speed measured on this machine (#2120)", () => {
     expect(wrapper.find('[data-testid="tld-foot-text"]').text()).toBe(
       "It checks memory and speed first, so the time is not known yet. " +
         "Other GPU work pauses while it runs.",
+    );
+  });
+});
+
+describe("recipe updates from pixlstash.dev (#2122)", () => {
+  const SCOPE = { type: "character", id: 4, name: "Grandad" };
+
+  it("checks on the button, and asks once whether to check every day", async () => {
+    training.checkTrainingPresets.mockResolvedValue({
+      checked: true,
+      updated: [],
+      error: null,
+    });
+    const { wrapper } = await openDialog(SCOPE, dataset());
+    // Not opted in: opening the dialog fetches nothing.
+    expect(training.checkTrainingPresets).not.toHaveBeenCalled();
+
+    await wrapper.find('[data-testid="tld-check-presets"]').trigger("click");
+    await flushPromises();
+    expect(training.checkTrainingPresets).toHaveBeenCalledWith(false);
+    expect(wrapper.find('[data-testid="tld-check-presets-status"]').text()).toBe(
+      "Your recipes are up to date.",
+    );
+    const ask = wrapper.find('[data-testid="tld-auto-check-ask"]');
+    expect(ask.text()).toContain("Check for recipe updates automatically, once a day?");
+
+    const no = ask.findAll("button").find((b) => b.text() === "No");
+    await no.trigger("click");
+    await flushPromises();
+    expect(config.patchUserConfig).toHaveBeenCalledWith({
+      training_presets_auto_check: false,
+    });
+    expect(wrapper.find('[data-testid="tld-auto-check-note"]').text()).toBe(
+      "You can turn on automatic checks any time in Settings › AI-toolkit.",
+    );
+
+    // Answered: a second check does not ask again.
+    await wrapper.find('[data-testid="tld-check-presets"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.find('[data-testid="tld-auto-check-ask"]').exists()).toBe(false);
+  });
+
+  it("runs the opted-in check on open and lists the updated recipe", async () => {
+    config.getUserConfig.mockResolvedValueOnce({
+      ai_toolkit_repo_path: "/home/me/ai-toolkit",
+      ai_toolkit_python: "/home/me/ai-toolkit/venv/bin/python",
+      training_presets_auto_check: true,
+    });
+    training.checkTrainingPresets.mockResolvedValue({
+      checked: true,
+      updated: [{ id: "zimage-turbo", label: "Z-Image Turbo", version: 2 }],
+      error: null,
+    });
+    const { wrapper } = await openDialog(SCOPE, dataset());
+    await flushPromises();
+    expect(training.checkTrainingPresets).toHaveBeenCalledWith(true);
+    expect(training.listTrainingPresets).toHaveBeenCalledTimes(2);
+    expect(wrapper.find('[data-testid="tld-check-presets-status"]').text()).toBe(
+      "Updated Z-Image Turbo (version 2).",
+    );
+  });
+
+  it("says an unreachable site changed nothing", async () => {
+    training.checkTrainingPresets.mockResolvedValue({
+      checked: true,
+      updated: [],
+      error: "Could not read the recipe list from pixlstash.dev.",
+    });
+    const { wrapper } = await openDialog(SCOPE, dataset());
+    await wrapper.find('[data-testid="tld-check-presets"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.find('[data-testid="tld-check-presets-status"]').text()).toBe(
+      "Could not read the recipe list from pixlstash.dev. Your recipes are unchanged.",
     );
   });
 });

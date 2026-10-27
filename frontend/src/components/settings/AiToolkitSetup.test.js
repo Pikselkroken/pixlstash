@@ -8,6 +8,12 @@ import { createPinia, setActivePinia } from "pinia";
 vi.mock("vuetify/components", () => ({
   VIcon: { template: "<i />" },
   VProgressCircular: { template: "<i />" },
+  VSwitch: {
+    props: ["modelValue", "label"],
+    emits: ["update:modelValue"],
+    template:
+      "<label><input type='checkbox' :checked='modelValue' @change=\"$emit('update:modelValue', $event.target.checked)\" />{{ label }}</label>",
+  },
 }));
 
 const training = vi.hoisted(() => ({
@@ -25,6 +31,7 @@ vi.mock("../../api/training", () => training);
 
 const config = vi.hoisted(() => ({
   getUserConfig: vi.fn(),
+  patchUserConfig: vi.fn(),
 }));
 vi.mock("../../api/config", () => config);
 
@@ -450,6 +457,24 @@ describe("closing the folder browser", () => {
 
     expect(document.activeElement).toBe(
       byTestId(w, "ait-choose-folder").element,
+    );
+  });
+});
+
+describe("recipe updates (#2122)", () => {
+  it("is off until turned on, and the switch saves the opt-in", async () => {
+    config.patchUserConfig.mockResolvedValue({});
+    const w = await mountSetup();
+    const box = byTestId(w, "ait-recipe-auto-check").find("input");
+    expect(box.element.checked).toBe(false);
+
+    await box.setValue(true);
+    await flushPromises();
+    expect(config.patchUserConfig).toHaveBeenCalledWith({
+      training_presets_auto_check: true,
+    });
+    expect(byTestId(w, "ait-recipe-auto-check").find("input").element.checked).toBe(
+      true,
     );
   });
 });
