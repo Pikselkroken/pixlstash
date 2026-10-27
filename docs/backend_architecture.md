@@ -11457,9 +11457,9 @@ scaled by what Krea 2's derivation missed. The probe (§25.20) measures each
 setup on the owner's machine before its first run. Chroma has no profile below
 8-bit: ai-toolkit's Chroma cannot offload layers and quantises on the GPU. MOSS
 needs ai-toolkit 0.13.28 or later (Base support and the fresh-cache tokenizer
-fix), so an older checkout lists it as not offered. The gate reads only the
-`moss_image` folder, which 0.13.27 already has, so that one release is offered
-it and fails at load. Its 9B text encoder is larger than its
+fix). The gate reads only the `moss_image` folder: a checkout before 0.13.27
+lists the recipe as not offered, and a 0.13.27 checkout, which has the folder,
+is offered it and fails when ai-toolkit loads the model. Its 9B text encoder is larger than its
 transformer, so its offload profile offloads the text encoder too. The trainer is launched with
 `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` unless the owner set an
 allocator config (`SEAM.md`). Without it, Krea 2 failed every step on a 32 GB
