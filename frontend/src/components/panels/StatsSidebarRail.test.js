@@ -314,6 +314,23 @@ describe("keys for chips selected in the rail", () => {
     }
   });
 
+  it("leaves Ctrl+C to selected text, as the lightbox does", async () => {
+    const { wrapper, panel } = mountWithChips(true);
+    await select(wrapper, [7]);
+    const para = document.createElement("p");
+    para.textContent = "IMG_2291.jpg";
+    document.body.appendChild(para);
+    try {
+      window.getSelection().selectAllChildren(para);
+      press("c", { ctrlKey: true });
+      expect(panel.copySelection).not.toHaveBeenCalled();
+      expect(grid).toHaveBeenCalledOnce();
+    } finally {
+      window.getSelection().removeAllRanges();
+      para.remove();
+    }
+  });
+
   it("leaves the keys to the grid while no chip is selected", async () => {
     const { wrapper, panel } = mountWithChips(false);
     await select(wrapper, [7]);

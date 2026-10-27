@@ -265,6 +265,9 @@ function onChipKeydown(e) {
       if (!isReadOnly.value && !locked.value) void panel.removeSelection();
     };
   } else if (command && !e.shiftKey && e.key?.toLowerCase() === "c") {
+    // Selected text copies as text, as it does in the lightbox.
+    const text = window.getSelection?.();
+    if (text && !text.isCollapsed && text.toString()) return;
     act = () => void panel.copySelection();
   }
   if (!act) return;
