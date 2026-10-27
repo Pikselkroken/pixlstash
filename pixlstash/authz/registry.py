@@ -674,6 +674,13 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _LOCAL,
         justification="§16.3 lists one directory level inside a registered model folder and reports the names of subdirectories PixlStash never registered, with recursive counts of what sits under them - the authority of models/{model_id}/samples (a walk of a registered root, narrowed); owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
+    # The tier of /dirs: the subpaths it returns name directories inside a
+    # registered folder that PixlStash never registered, read off the host
+    # ComfyUI's own folder list. It also has this server ask the saved ComfyUI.
+    ("GET", "/api/v1/model-folders/comfyui-reads"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 asks the saved ComfyUI on this computer where it loads each kind of model from and returns the subdirectories of registered model folders that match, names PixlStash never registered - the authority of model-folders/{folder_id}/dirs; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
     ("POST", "/api/v1/model-folders/{folder_id}/rescan"): RoutePolicy(
         _LOCAL,
         justification="§16.3 walks a registered host path and reads every model file under it - the same authority as reference-folders/detect-sidecars; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",

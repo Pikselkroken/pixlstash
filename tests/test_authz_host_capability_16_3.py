@@ -508,6 +508,9 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     directory level inside a registered folder and names subdirectories PixlStash
     never registered: ``models/{model_id}/samples``' authority, so the tier, not
     the ``owner_only`` the shelf's reads carry.
+    66 = 65 + 1 with ``GET /model-folders/comfyui-reads``, which returns the
+    subdirectories of registered folders the host ComfyUI loads from, names
+    PixlStash never registered: the authority of ``/dirs``.
 
     Arithmetic, not judgement."""
     loopback = {
@@ -522,7 +525,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 9, sorted(loopback)
-    assert len(local) == 65, sorted(local)
+    assert len(local) == 66, sorted(local)
 
 
 # ===========================================================================
