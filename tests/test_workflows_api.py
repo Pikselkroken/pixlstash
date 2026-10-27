@@ -72,6 +72,7 @@ from pixlstash.db_models import (
     PicturePendingPerson,
     Project,
     ReferenceFolder,
+    User,
     UserToken,
 )
 from pixlstash.db_models.saved_recipe import SavedRecipe
@@ -1892,6 +1893,22 @@ def test_picking_a_listed_address_spelled_differently_does_not_move_the_current(
     body = _connections(workflow_env)
     assert body["connections"] == before
     assert body["current"] == before[1]["id"]
+
+
+@pytest.mark.parametrize(
+    "stored, read_as",
+    [
+        ("not json", [_THIS_PC]),
+        ('{"url": "http://192.0.2.20:8188/"}', [_THIS_PC]),
+        ("[1, 2]", []),
+        ("[]", []),
+    ],
+)
+def test_a_stored_list_of_the_wrong_shape_reads_as_the_saved_address(stored, read_as):
+    """Only text that is not a JSON list falls back; a list, even empty or of
+    no entries, is what was stored."""
+    user = User(comfyui_url=_THIS_PC, comfyui_connections=stored)
+    assert [e["url"] for e in comfyui_connections.read(user)] == read_as
 
 
 def test_the_probe_notes_its_answer_on_a_listed_connection(

@@ -33,6 +33,7 @@ async function mountSlot({ url = LOCAL, configRead = true } = {}) {
   filterStore.comfyuiConfigured = Boolean(url);
   filterStore.comfyuiUrl = url;
   const wrapper = mount(WorkflowsComfyuiSlot, {
+    attachTo: document.body,
     global: {
       plugins: [pinia],
       stubs: {
@@ -204,6 +205,25 @@ describe("with several ComfyUI saved (#2167)", () => {
     const { wrapper } = await mountSlot();
     await rows(wrapper)[0].trigger("click");
     expect(patchUserConfig).not.toHaveBeenCalled();
+  });
+
+  it("gives focus back to the slot when the new-connection dialog is cancelled", async () => {
+    const { wrapper } = await mountSlot();
+    await item(wrapper, "New ComfyUI connection…").trigger("click");
+    const dialog = wrapper.find('[data-testid="dialog"]');
+    await dialog.findAll("button").find((b) => b.text().startsWith("Cancel")).trigger("click");
+    await flushPromises();
+    expect(wrapper.find('[data-testid="dialog"]').exists()).toBe(false);
+    expect(document.activeElement).toBe(slot(wrapper).element);
+  });
+
+  it("shows a fresh answer on a row whose address is spelled differently", async () => {
+    probeComfyui.mockImplementation(async (url) => ({ reachable: false, url }));
+    const { wrapper } = await mountSlot({ url: "HTTP://127.0.0.1:8188" });
+    await menuOpen(wrapper);
+    expect(rows(wrapper)).toHaveLength(2);
+    expect(rows(wrapper)[0].attributes("aria-checked")).toBe("true");
+    expect(rows(wrapper)[0].find(".wcs-row-status").text()).toBe("Offline");
   });
 
   it("New ComfyUI connection adds one without switching", async () => {

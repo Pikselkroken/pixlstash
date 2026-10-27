@@ -58,13 +58,16 @@ def read(user) -> list[dict]:
     raw = getattr(user, "comfyui_connections", None)
     if raw is not None:
         try:
-            return [e for e in json.loads(raw) if isinstance(e, dict) and e.get("url")]
+            parsed = json.loads(raw)
         except (ValueError, TypeError):
-            logger.error(
-                "user.comfyui_connections is not a JSON list (%r); reading it as "
-                "the saved address alone. The next connection change rewrites it.",
-                str(raw)[:200],
-            )
+            parsed = None
+        if isinstance(parsed, list):
+            return [e for e in parsed if isinstance(e, dict) and e.get("url")]
+        logger.error(
+            "user.comfyui_connections is not a JSON list (%r); reading it as "
+            "the saved address alone. The next connection change rewrites it.",
+            str(raw)[:200],
+        )
     url = getattr(user, "comfyui_url", None)
     return [_entry(SAVED_ADDRESS_ID, default_name(url), url)] if url else []
 

@@ -25,6 +25,7 @@
   <v-menu v-else v-model="open" location="bottom start" :offset="4">
     <template #activator="{ props: menuProps }">
       <button
+        ref="trigger"
         v-bind="menuProps"
         type="button"
         class="wcs-slot"
@@ -100,13 +101,13 @@
   <NewComfyuiConnectionDialog
     v-if="adding"
     open
-    @close="adding = false"
+    @close="closeDialog"
     @added="added"
   />
 </template>
 
 <script setup>
-import { computed, reactive, ref, watch } from "vue";
+import { computed, nextTick, reactive, ref, watch } from "vue";
 import { VIcon, VMenu } from "vuetify/components";
 import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
 import NewComfyuiConnectionDialog from "./NewComfyuiConnectionDialog.vue";
@@ -120,10 +121,11 @@ const emit = defineEmits(["open-settings"]);
 const filterStore = useFilterStore();
 const open = ref(false);
 const adding = ref(false);
+const trigger = ref(null);
 // `GET /comfyui/connections`; empty until read, when the slot names the
 // saved address the way the server would.
 const connections = ref([]);
-// This session's probe answers by address; `failed` when the probe itself did
+// This session's probe answers by `urlKey`; `failed` when the probe itself did
 // not come back. An address with none reads its stored status meanwhile.
 const answers = reactive({});
 
@@ -160,7 +162,7 @@ function gpuLabel(gpu, vramMb) {
 
 /** A connection as the menu draws it, its status the newest known. */
 function describe(entry) {
-  const answer = answers[entry.url];
+  const answer = answers[urlKey(entry.url)];
   let state = entry.status || "checking";
   let gpu = gpuLabel(entry.gpu, entry.vram_mb);
   if (answer === "failed") state = "unknown";
@@ -205,10 +207,10 @@ async function load() {
 /** Ask the server whether ComfyUI answers at *url*. */
 async function check(url) {
   try {
-    answers[url] = await probeComfyui(url);
+    answers[urlKey(url)] = await probeComfyui(url);
   } catch (err) {
     console.warn(`[workflows] could not ask whether ComfyUI answers at ${url}`, err);
-    answers[url] = "failed";
+    answers[urlKey(url)] = "failed";
   }
 }
 
@@ -218,7 +220,7 @@ watch(
   () => filterStore.comfyuiUrl,
   (url) => {
     if (!filterStore.comfyuiConfigured || !url) return;
-    delete answers[url];
+    delete answers[urlKey(url)];
     check(url);
     load();
   },
@@ -248,9 +250,17 @@ function newConnection() {
   adding.value = true;
 }
 
-function added(list) {
+// Opened from a menu item that is gone by the time it closes, so focus goes
+// back to the slot rather than to the page.
+async function closeDialog() {
   adding.value = false;
+  await nextTick();
+  trigger.value?.focus();
+}
+
+async function added(list) {
   connections.value = list?.connections || connections.value;
+  await closeDialog();
   open.value = true;
 }
 
