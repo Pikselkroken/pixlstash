@@ -124,6 +124,16 @@ describe("ModelsSideBar", () => {
     expect(wrapper.find(".msb-slot-name").text()).toBe("models");
   });
 
+  it("lets go of a folder that is no longer registered", async () => {
+    store.setFolderScope(99);
+    expect(store.folderScope).toBe(99);
+    const wrapper = mountBar();
+    await flushPromises();
+    expect(store.folderScope).toBe(null);
+    expect(wrapper.find(".msb-slot-name").text()).toBe("All folders");
+    expect(countOf(wrapper, "place", "all")).toBe("3");
+  });
+
   it("counts In no set yet once the sets are read", async () => {
     const wrapper = mountBar();
     await flushPromises();

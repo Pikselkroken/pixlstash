@@ -4443,10 +4443,10 @@ receipt is `ActionReceipt` (`local-only`) for its own set edits. `.shelf-toolbar
 `container-name: shelfbar toolbar` and the ladder in the CSS is three rungs that act on the
 bar: at `≤1238px` the title and the count fold (`.shelf-fold-1262`), at `≤1007px` the name
 field goes (Show's own copy is always there), and at `≤816px` Sort drops its value
-(`.bar-btn-value`) and keeps glyph and chevron. A fourth `@container` rule at `≤656px`
-targets `.shelf-fold-680` and `.shelf-overflow`, which no element carries since the verbs left
-the bar, so it does nothing. The floor was measured before #2168 and is not re-measured here,
-and the thresholds are the CSS's, not the design amendment's.
+(`.bar-btn-value`) and keeps glyph and chevron. The rung that folded Add and Model
+folders into a ⋯ went with them (#2168). The thresholds were measured on the wider bar
+before #2168, so they fire later than they need to and never earlier; they are the CSS's,
+not the design amendment's.
 
 **And the band itself is the grid bar's, not its own** (Amendment #5). What the
 three bars hold was unified before what they *are* was: the shelf strip shipped
@@ -4815,8 +4815,11 @@ it has no docked form yet.
   folder the shelf catalogues (not the ai-toolkit root nor Downloads) with
   path, size, free space and a mini bar, then *Add folder…* and *Manage model
   folders…*. A pick is `store.setFolderScope(id)`, which narrows the row list
-  and every count below; the set grid is left whole (the issue's open
-  question).
+  and every model count below, and moves a reader on Sets to All models, as
+  the design does; the set grid itself is never narrowed by it (the issue's
+  open question). A scoped folder that is no longer registered (forgotten in
+  Manage model folders) clears the scope, so the list never sits empty under a
+  slot that names another folder.
 - **Places** are `store.place` (`SHELF_PLACES`): *Sets* is the set grid
   (`groupBy: workflow_set`); *All models*, *Favourites*, *Recently added*
   (`added_at` within `RECENT_DAYS`) and *In no set yet* are the row list under
@@ -4834,7 +4837,7 @@ it has no docked form yet.
 - **Counts** (`placeCounts`, `typeCounts`, `baseCounts`) are over the offered
   rows in the folder scope, stacks folded as the list folds them; *Sets*
   counts the cards.
-- **The sidebar owns no dialog.** *Add models ▾* (the screen's one amber
+- **The sidebar owns no dialog.** *Add models ▾* (the sidebar's amber
   button: Add folder…, Add file…, and Set ai-toolkit output folder… while
   unset) and the slot's two rows go through `store.requestShell(what, el)`;
   `ModelShelf` watches `store.shellRequest` and opens the dialog it always

@@ -253,7 +253,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { VIcon, VMenu } from "vuetify/components";
 
@@ -397,6 +397,20 @@ const slotLabel = computed(() => {
   parts.push("Choose a folder to limit the list to");
   return parts.join(". ");
 });
+
+// A scoped folder that is no longer registered (forgotten in Manage model
+// folders) takes the scope with it, or the list would sit empty under a slot
+// naming All folders.
+watch(
+  () => [foldersStore.loaded, shelfFolders.value, store.folderScope],
+  ([loaded, folders, scope]) => {
+    if (!loaded || scope == null) return;
+    if (!folders.some((folder) => Number(folder.id) === scope)) {
+      store.setFolderScope(null);
+    }
+  },
+  { immediate: true },
+);
 
 function pickFolder(id) {
   folderMenuOpen.value = false;
