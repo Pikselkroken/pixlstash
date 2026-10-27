@@ -235,6 +235,63 @@ class TestConfig:
         run = read_run(str(run_dir))
         assert run.trigger_words == ["ohwx", "woman"]
 
+    def test_reads_the_planned_steps_rate_and_preview_prompts(self, tmp_path):
+        run_dir = _run_folder(tmp_path)
+        (run_dir / "config.yaml").write_text(
+            "process:\n"
+            "  - train:\n"
+            "      steps: 3000\n"
+            "      lr: 0.0001\n"
+            "    sample:\n"
+            "      samples:\n"
+            "        - prompt: ohwx, portrait\n"
+            "        - prompt: a red bicycle\n",
+            encoding="utf-8",
+        )
+        run = read_run(str(run_dir))
+        assert run.total_steps == 3000
+        assert run.learning_rate == 0.0001
+        assert run.sample_prompts == ["ohwx, portrait", "a red bicycle"]
+
+    def test_reads_a_rate_yaml_leaves_as_a_string(self, tmp_path):
+        run_dir = _run_folder(tmp_path)
+        (run_dir / "config.yaml").write_text("train:\n  lr: 1e-4\n", encoding="utf-8")
+        assert read_run(str(run_dir)).learning_rate == 0.0001
+
+    def test_a_malformed_sample_keeps_the_rows_in_step(self, tmp_path):
+        run_dir = _run_folder(tmp_path)
+        (run_dir / "config.yaml").write_text(
+            "sample:\n  samples:\n    - oops\n    - prompt: two\n", encoding="utf-8"
+        )
+        assert read_run(str(run_dir)).sample_prompts == ["", "two"]
+
+    def test_a_non_finite_rate_is_left_unknown(self, tmp_path):
+        run_dir = _run_folder(tmp_path)
+        (run_dir / "config.yaml").write_text("train:\n  lr: .nan\n", encoding="utf-8")
+        assert read_run(str(run_dir)).learning_rate is None
+
+    def test_a_malformed_bare_prompt_keeps_the_rows_in_step(self, tmp_path):
+        run_dir = _run_folder(tmp_path)
+        (run_dir / "config.yaml").write_text(
+            "sample:\n  prompts:\n    - 5\n    - two\n", encoding="utf-8"
+        )
+        assert read_run(str(run_dir)).sample_prompts == ["", "two"]
+
+    def test_reads_the_older_bare_prompt_list(self, tmp_path):
+        run_dir = _run_folder(tmp_path)
+        (run_dir / "config.yaml").write_text(
+            "sample:\n  prompts:\n    - one\n    - two\n", encoding="utf-8"
+        )
+        assert read_run(str(run_dir)).sample_prompts == ["one", "two"]
+
+    def test_a_config_without_them_leaves_them_unknown(self, tmp_path):
+        run_dir = _run_folder(tmp_path)
+        (run_dir / "config.yaml").write_text(CONFIG, encoding="utf-8")
+        run = read_run(str(run_dir))
+        assert run.total_steps is None
+        assert run.learning_rate is None
+        assert run.sample_prompts == []
+
 
 class TestOutputRoot:
     def test_lists_every_run_by_name(self, tmp_path):

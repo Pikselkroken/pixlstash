@@ -117,6 +117,20 @@ class RunResponse(BaseModel):
     rank: Optional[int] = Field(
         default=None, description="`linear` from the config, when it records one."
     )
+    total_steps: Optional[int] = Field(
+        default=None, description="`train.steps` from the config: the steps asked for."
+    )
+    learning_rate: Optional[float] = Field(
+        default=None, description="`train.lr` from the config."
+    )
+    sample_prompts: list[str] = Field(
+        default_factory=list,
+        description="The preview prompts, in the order a sample's `index` counts.",
+    )
+    modified_at: Optional[float] = Field(
+        default=None,
+        description="Epoch seconds of the newest checkpoint's last write.",
+    )
     config_error: Optional[str] = Field(
         default=None,
         description=(
@@ -323,8 +337,27 @@ def _to_run_response(run) -> RunResponse:
         base_model=run.base_model,
         trigger_words=list(run.trigger_words),
         rank=run.rank,
+        total_steps=run.total_steps,
+        learning_rate=run.learning_rate,
+        sample_prompts=list(run.sample_prompts),
+        modified_at=_newest_mtime(run.checkpoints),
         config_error=run.config_error,
     )
+
+
+def _newest_mtime(checkpoints) -> Optional[float]:
+    times = []
+    for checkpoint in checkpoints:
+        try:
+            times.append(os.path.getmtime(checkpoint.path))
+        except OSError as exc:
+            logger.warning(
+                "Could not stat run checkpoint %s: %s. Leaving it out of the "
+                "run's date.",
+                checkpoint.path,
+                exc,
+            )
+    return max(times) if times else None
 
 
 def _size_of(path: str) -> Optional[int]:

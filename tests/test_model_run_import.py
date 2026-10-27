@@ -34,12 +34,12 @@ from types import SimpleNamespace
 
 import pytest
 
+import pixlstash.vault as vault_module
 from pixlstash.hub import training_runs
+from pixlstash.routes.model_imports import _to_run_response
 from pixlstash.services import model_mover as mover_module
 from pixlstash.services import run_importer as importer_module
 from pixlstash.services.model_mover import MoveRefused
-from pixlstash.services.stack_detector import set_cover
-from pixlstash.vault import Vault
 from pixlstash.services.run_importer import (
     PROVENANCE_TRAINED,
     STATUS_CANCELLED,
@@ -47,6 +47,9 @@ from pixlstash.services.run_importer import (
     STATUS_IMPORTED,
     RunImporter,
 )
+from pixlstash.services.stack_detector import set_cover
+from pixlstash.utils.aitoolkit_run import read_output_root
+from pixlstash.vault import Vault
 
 
 class Crash(BaseException):
@@ -759,8 +762,6 @@ def test_a_symlink_at_a_destination_name_is_refused_not_written_through(shelf):
 
 
 def test_space_is_checked_before_the_first_byte(shelf, monkeypatch):
-    import shutil
-
     monkeypatch.setattr(
         mover_module.shutil,
         "disk_usage",
@@ -806,7 +807,6 @@ def test_cancel_stops_the_queue_and_rolls_nothing_back(shelf):
 def test_listing_runs_hashes_nothing_and_writes_nothing(shelf, monkeypatch):
     """The property the whole card grid rests on: an output root can be browsed
     without importing, hashing or moving anything."""
-    from pixlstash.utils.aitoolkit_run import read_output_root
 
     def refuse(*args, **kwargs):
         raise AssertionError("listing a run must not hash anything")
@@ -819,6 +819,16 @@ def test_listing_runs_hashes_nothing_and_writes_nothing(shelf, monkeypatch):
     assert runs[0].base_model == "black-forest-labs/FLUX.1-dev"
     assert models(shelf["hub"]) == {}
     assert os.listdir(shelf["destination_dir"]) == []
+
+
+def test_a_listed_run_is_dated_by_its_newest_checkpoint(shelf):
+    """The card's date: the last write of any checkpoint, read by a stat."""
+
+    run = read_output_root(str(shelf["output_root"]))[0]
+    newest = run.checkpoints[-1].path
+    os.utime(newest, (2_000_000_000, 2_000_000_000))
+
+    assert _to_run_response(run).modified_at == 2_000_000_000
 
 
 def _a_training_run(hub, run_uuid="run-clementine"):
@@ -1058,7 +1068,6 @@ def test_choosing_a_step_after_the_import_moves_the_cover_and_the_sets_lora(
     shelf, monkeypatch
 ):
     """The set's attached LoRA is the step chosen, not the last one."""
-    import pixlstash.vault as vault_module
 
     run_id = _a_training_run(shelf["hub"])
     _download_target(shelf)

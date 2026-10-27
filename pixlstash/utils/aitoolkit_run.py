@@ -26,6 +26,7 @@ none of them reliably. Other trainers get their own reader later, or not at all.
 
 from __future__ import annotations
 
+import math
 import os
 import re
 from dataclasses import dataclass, field
@@ -86,6 +87,11 @@ class TrainingRun:
     base_model: str | None = None
     trigger_words: list[str] = field(default_factory=list)
     rank: int | None = None
+    total_steps: int | None = None
+    """``train.steps``: the steps the run was asked for, not how far it got."""
+    learning_rate: float | None = None
+    sample_prompts: list[str] = field(default_factory=list)
+    """The preview prompts in sample-index order, so ``index`` names a row."""
     config_error: str | None = None
     """Why the config could not be read, when it could not. The run is still
     usable without it: steps and samples come from filenames."""
@@ -232,7 +238,10 @@ def _config_path(run_dir: str) -> str | None:
 
 
 def _apply_config(run: TrainingRun) -> None:
-    """Fill in base model, triggers and rank from ``config.yaml``, best effort.
+    """Fill in what the run was asked for from ``config.yaml``, best effort.
+
+    Base model, triggers, rank, planned steps, learning rate and the preview
+    prompts.
 
     Every failure here is recorded on the run and logged, never raised: the
     checkpoints and samples are the point, and they come from filenames. A run
@@ -292,6 +301,48 @@ def _apply_config(run: TrainingRun) -> None:
         logger.debug("Ignoring boolean `linear` in %s; it is not a rank.", path)
     elif isinstance(rank, int):
         run.rank = rank
+
+    train = _find_key(parsed, "train")
+    if isinstance(train, dict):
+        steps = train.get("steps")
+        if isinstance(steps, int) and not isinstance(steps, bool) and steps > 0:
+            run.total_steps = steps
+        lr = train.get("lr")
+        # PyYAML reads `1e-4` (no decimal point) as a string, not a float.
+        if isinstance(lr, str):
+            try:
+                lr = float(lr)
+            except ValueError:
+                logger.debug("Ignoring unreadable `lr` %r in %s.", lr, path)
+        if isinstance(lr, (int, float)) and not isinstance(lr, bool):
+            # `.nan` / `.inf` would make the listing's JSON unreadable.
+            if math.isfinite(lr):
+                run.learning_rate = float(lr)
+            else:
+                logger.debug("Ignoring non-finite `lr` %r in %s.", lr, path)
+
+    run.sample_prompts = _sample_prompts(_find_key(parsed, "sample"))
+
+
+def _sample_prompts(sample: object) -> list[str]:
+    """The preview prompts, from either layout ai-toolkit has written.
+
+    Newer configs list ``samples: [{prompt: ...}]``; older ones a bare
+    ``prompts: [...]`` of strings.
+    """
+    if not isinstance(sample, dict):
+        return []
+    entries = sample.get("samples")
+    if isinstance(entries, list):
+        # One per entry, malformed ones blank, so `index` still names a row.
+        return [
+            str(entry.get("prompt") or "") if isinstance(entry, dict) else ""
+            for entry in entries
+        ]
+    prompts = sample.get("prompts")
+    if isinstance(prompts, list):
+        return [prompt if isinstance(prompt, str) else "" for prompt in prompts]
+    return []
 
 
 def read_run(run_dir: str) -> TrainingRun:

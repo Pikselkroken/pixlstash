@@ -37,8 +37,25 @@ vi.mock("../../api/modelShelf", async (importOriginal) => ({
   })),
 }));
 
+vi.mock("../../api/modelImports", async (importOriginal) => ({
+  ...(await importOriginal()),
+  listRuns: vi.fn(async () => [
+    { name: "aria_v3", checkpoints: [{ filename: "a.safetensors", step: null }] },
+    { name: "walter_v2", checkpoints: [{ filename: "w.safetensors", step: null }] },
+  ]),
+}));
+
+vi.mock("../../api/training", async (importOriginal) => ({
+  ...(await importOriginal()),
+  listTrainingJobs: vi.fn(async () => [
+    { id: 1, uuid: "u1", name: "aria_v4", status: "running", step: 5, run_name: null },
+  ]),
+}));
+
 import ModelsSideBar from "./ModelsSideBar.vue";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
+import { useTasksStore } from "../../stores/useTasksStore";
+import { useTrainingStore } from "../../stores/useTrainingStore";
 
 const FOLDERS = [
   { id: 1, path: "/home/me/ComfyUI/models", kind: "user", present_bytes: 9e9 },
@@ -234,5 +251,28 @@ describe("ModelsSideBar", () => {
     await flushPromises();
     await row(wrapper, "place", "runs").trigger("click");
     expect(push).toHaveBeenCalledWith({ name: "models-runs" });
+  });
+
+  it("counts the training runs, and lights the dot from the polled leases", async () => {
+    const wrapper = mountBar();
+    await flushPromises();
+    const runs = wrapper.find('[data-place="runs"]');
+    // Two in the folder, one queued run that has no folder yet.
+    expect(runs.find("[data-testid='models-sidebar-runs-count']").text()).toBe("3");
+    // The runs store's job list is not re-read off the runs view, so it does
+    // not light the dot: only an AI Toolkit lease does.
+    expect(runs.find("[data-testid='models-sidebar-live-dot']").exists()).toBe(false);
+    useTasksStore().resources = { leases: [{ tenant: "aitoolkit" }] };
+    await flushPromises();
+    expect(runs.find("[data-testid='models-sidebar-live-dot']").exists()).toBe(true);
+  });
+
+  it("opens the Train a LoRA dialog on its picker from the Training +", async () => {
+    const training = useTrainingStore();
+    training.openToPick = vi.fn();
+    const wrapper = mountBar();
+    await flushPromises();
+    await wrapper.find("[data-testid='models-sidebar-new-run']").trigger("click");
+    expect(training.openToPick).toHaveBeenCalled();
   });
 });

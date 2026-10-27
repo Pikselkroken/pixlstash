@@ -23,10 +23,50 @@
       </header>
 
       <div class="mrail-scroll">
-        <!-- The training runs page: its own detail is issue #2169. -->
-        <p v-if="onRuns" class="mrail-hint" data-testid="mrail-runs-hint">
-          Pick a training run to see its loss and its checkpoints here.
-        </p>
+        <!-- The training runs place (#2169): the picked run, or the folder. -->
+        <template v-if="onRuns">
+          <ModelsRailRun
+            v-if="pickedRuns.length === 1"
+            :key="pickedRuns[0].key"
+            :card="pickedRuns[0]"
+          />
+          <div
+            v-else-if="pickedRuns.length > 1"
+            class="mrail-pane"
+            data-testid="mrail-runs-many"
+          >
+            <dl class="mrs-facts">
+              <div class="mrs-fact">
+                <dt>Checkpoints</dt>
+                <dd>{{ runCheckpoints }}</dd>
+              </div>
+              <div class="mrs-fact">
+                <dt>Base models</dt>
+                <dd>{{ runBases || "–" }}</dd>
+              </div>
+            </dl>
+            <p class="mrs-hint">
+              At two or more runs, Import takes every checkpoint of each; each
+              run lands as one stack.
+            </p>
+          </div>
+          <div v-else class="mrail-pane" data-testid="mrail-runs-hint">
+            <dl class="mrs-facts">
+              <div class="mrs-fact">
+                <dt>Folder</dt>
+                <dd class="mrail-path">{{ runsStore.source?.path || "–" }}</dd>
+              </div>
+              <div class="mrs-fact">
+                <dt>Runs</dt>
+                <dd>{{ runsLine }}</dd>
+              </div>
+            </dl>
+            <p class="mrs-hint">
+              Pick a run to see its samples and loss. Import puts its LoRA on
+              the shelf.
+            </p>
+          </div>
+        </template>
 
         <div v-else-if="kind === 'none'" class="mrail-pane">
           <p v-if="store.setsError" class="mrail-warn" role="alert">
@@ -192,13 +232,17 @@ import {
 import AppButton from "../widgets/AppButton.vue";
 import AppInspector from "../widgets/AppInspector.vue";
 import TypeMark from "../widgets/TypeMark.vue";
+import { useTrainingRunsStore } from "../../stores/useTrainingRunsStore";
+import { baseOf as runBaseOf } from "../../utils/trainingRuns.js";
 import ModelsRailModel from "./ModelsRailModel.vue";
+import ModelsRailRun from "./ModelsRailRun.vue";
 import ModelsRailSet from "./ModelsRailSet.vue";
 import TasksPanel, { tasksTabFor } from "./TasksPanel.vue";
 
 const store = useModelShelfStore();
 const sidebarStore = useSidebarStore();
 const tasksStore = useTasksStore();
+const runsStore = useTrainingRunsStore();
 const route = useRoute();
 
 // The sets say where each model already is, and the rail's figures and the
@@ -267,10 +311,40 @@ const kind = computed(() => {
   return "many";
 });
 
-const hasSelection = computed(() => kind.value !== "none");
+const hasSelection = computed(() =>
+  onRuns.value ? pickedRuns.value.length > 0 : kind.value !== "none",
+);
+
+// ── Training runs ─────────────────────────────────────────────────────────
+
+const pickedRuns = computed(() => runsStore.chosenCards);
+
+const runCheckpoints = computed(() => {
+  const n = pickedRuns.value.reduce(
+    (sum, card) => sum + (card.run?.checkpoints || []).length,
+    0,
+  );
+  return `${n.toLocaleString()} ${n === 1 ? "checkpoint" : "checkpoints"}`;
+});
+
+const runBases = computed(() =>
+  [...new Set(pickedRuns.value.map((card) => runBaseOf(card)))].join(", "),
+);
+
+const runsLine = computed(() => {
+  const n = runsStore.count;
+  if (n == null) return "–";
+  const live = runsStore.liveCount;
+  return live ? `${n.toLocaleString()} · ${live} training now` : n.toLocaleString();
+});
 
 const title = computed(() => {
-  if (onRuns.value) return "Training runs";
+  if (onRuns.value) {
+    const picked = pickedRuns.value;
+    if (picked.length === 1) return picked[0].name;
+    if (picked.length > 1) return `${picked.length} runs`;
+    return "Training runs";
+  }
   if (kind.value === "set") return setName(pickedGroups.value[0]);
   if (kind.value === "model") return rowName(pickedRows.value[0]);
   if (kind.value === "many") {
@@ -284,6 +358,10 @@ const title = computed(() => {
 });
 
 function clearSelection() {
+  if (onRuns.value) {
+    runsStore.clearSelection();
+    return;
+  }
   store.clearSelection();
   store.clearSetSelection();
   store.clearMissingSelection();
@@ -412,10 +490,10 @@ function bytesText(bytes) {
   padding-top: var(--space-3);
 }
 
-.mrail-hint {
-  margin: var(--space-3) 0 0;
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-  font-size: var(--text-xs);
+.mrail-path {
+  min-width: 0;
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
 }
 
 .mrail-warn {

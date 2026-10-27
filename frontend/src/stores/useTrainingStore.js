@@ -63,6 +63,9 @@ export const useTrainingStore = defineStore("training", () => {
   const datasetLoading = ref(false);
   const datasetError = ref("");
   const trainOn = ref("all"); // a character's pictures: "reference" | "all"
+  // Opened from the Models workspace, which has no set or person in view: the
+  // dialog leads with a Train on picker, and Start lands on Training runs.
+  const pickable = ref(false);
 
   // ── Dialog: the choices, and what they resolve to ──────────────────────────
   const presets = ref([]); // GET /training/presets: { id, label, offered, … }
@@ -170,6 +173,7 @@ export const useTrainingStore = defineStore("training", () => {
   let openSeq = 0;
   async function openForScope({ type, id, name }) {
     const seq = ++openSeq;
+    pickable.value = false;
     scopeType.value = type;
     scopeId.value = id != null ? Number(id) : null;
     scopeName.value = name || "";
@@ -208,6 +212,39 @@ export const useTrainingStore = defineStore("training", () => {
       trainOn.value = "reference";
       await loadDataset(scopePayload.value);
     }
+  }
+
+  /** Open with nothing chosen yet, on the Train on picker (#2169). */
+  function openToPick() {
+    openSeq += 1;
+    resolveSoon.cancel();
+    promptsSoon.cancel();
+    scopeType.value = null;
+    scopeId.value = null;
+    scopeName.value = "";
+    triggerWord.value = "";
+    subject.value = null;
+    effort.value = "standard";
+    fit.value = "auto";
+    trainOn.value = "all";
+    pins.value = {};
+    defaultPrompts.value = [];
+    prompts.value = [];
+    dataset.value = null;
+    datasetError.value = "";
+    plan.value = null;
+    submitError.value = "";
+    pickable.value = true;
+    trainDialogOpen.value = true;
+    fetchPresets();
+    if (!configLoaded.value) fetchConfig();
+  }
+
+  /** The picker's choice: the dialog reads it as if opened on it. */
+  function pickScope(entry) {
+    const opened = openForScope(entry);
+    pickable.value = true;
+    return opened;
   }
 
   function closeDialog() {
@@ -615,6 +652,7 @@ export const useTrainingStore = defineStore("training", () => {
     aiToolkitCheck.value = null;
     aiToolkitStatus.value = null;
     closeDialog();
+    pickable.value = false;
     scopeType.value = null;
     scopeId.value = null;
     scopeName.value = "";
@@ -639,6 +677,9 @@ export const useTrainingStore = defineStore("training", () => {
     datasetLoading,
     datasetError,
     trainOn,
+    pickable,
+    openToPick,
+    pickScope,
     character,
     pictureCount,
     displayName,

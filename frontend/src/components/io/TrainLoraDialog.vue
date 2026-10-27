@@ -27,6 +27,46 @@
       <span>{{ store.datasetError }}</span>
     </p>
 
+    <!-- The Models workspace's door has no set or person in view, so it asks
+         first (#2169): people, then sets, each with its picture count. -->
+    <div v-if="store.pickable" class="tld-field" data-testid="tld-train-on">
+      <FieldLabel :id="sourceLabelId">Train on</FieldLabel>
+      <div
+        role="radiogroup"
+        class="tld-sources"
+        :aria-labelledby="sourceLabelId"
+        @keydown="onSourceKey"
+      >
+        <button
+          v-for="o in sourceOptions"
+          :key="o.id"
+          type="button"
+          role="radio"
+          class="tld-source"
+          :class="{ 'tld-opt--on': o.id === pickedSource }"
+          :aria-checked="o.id === pickedSource ? 'true' : 'false'"
+          :tabindex="o.id === sourceTabStop ? 0 : -1"
+          :data-testid="`tld-source-${o.id}`"
+          @click="pickSource(o)"
+        >
+          <img
+            class="tld-source__img"
+            :class="{ 'tld-source__img--person': o.type === 'character' }"
+            :src="o.thumb"
+            alt=""
+            loading="lazy"
+          />
+          <span class="tld-source__text">
+            <span class="tld-source__name">{{ o.name }}</span>
+            <small>{{ o.detail }}</small>
+          </span>
+        </button>
+        <p v-if="!sourceOptions.length" class="tld-hint">
+          No people or sets to train on yet.
+        </p>
+      </div>
+    </div>
+
     <!-- A person (or a person's reference set): the subject is the lead, not
          a question. -->
     <div v-if="character" class="tld-lead" data-testid="tld-lead">
@@ -444,7 +484,7 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref, useId, watch } from "vue";
+import { computed, nextTick, reactive, ref, useId, watch } from "vue";
 import { VIcon, VSwitch } from "vuetify/components";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
@@ -453,7 +493,11 @@ import AppSelect from "../widgets/AppSelect.vue";
 import FieldLabel from "../widgets/FieldLabel.vue";
 import Segmented from "../widgets/Segmented.vue";
 import PinnedChip from "./TrainLoraPinnedChip.vue";
+import { useRouter } from "vue-router";
 import { characterThumbnailUrl } from "../../api/characters";
+import { pictureSetThumbnailUrl } from "../../api/pictureSets";
+import { useEntityListsStore } from "../../stores/useEntityListsStore";
+import { useTrainingRunsStore } from "../../stores/useTrainingRunsStore";
 import { useTrainingStore } from "../../stores/useTrainingStore";
 import { arrowStep, tabStopId } from "../../utils/radioGroup.js";
 import {
@@ -481,7 +525,10 @@ import {
 const emit = defineEmits(["started"]);
 
 const store = useTrainingStore();
+const lists = useEntityListsStore();
+const router = useRouter();
 
+const sourceLabelId = useId();
 const subjectLabelId = useId();
 const effortLabelId = useId();
 const advancedId = useId();
@@ -559,6 +606,70 @@ const trainOnOptions = computed(() => {
     },
   ];
 });
+
+// ── Train on: the picker the Models workspace's door opens on ────────────
+
+watch(
+  () => store.trainDialogOpen && store.pickable,
+  (picking) => {
+    if (!picking) return;
+    // Cached lists draw at once; the refresh swaps in fresh counts.
+    lists.refresh("characters");
+    lists.refresh("sets");
+  },
+  { immediate: true },
+);
+
+const plural = (n) => `${formatCount(n)} picture${n === 1 ? "" : "s"}`;
+
+const sourceOptions = computed(() => [
+  ...lists.characters.map((c) => ({
+    id: `character:${c.id}`,
+    type: "character",
+    entityId: Number(c.id),
+    name: c.name,
+    detail: `Person · ${plural(c.image_count ?? 0)}`,
+    thumb: characterThumbnailUrl(c.id),
+  })),
+  // A reference set trains as its person, who is already listed.
+  ...lists.pictureSets
+    .filter((set) => !set.reference_character)
+    .map((set) => ({
+      id: `set:${set.id}`,
+      type: "set",
+      entityId: Number(set.id),
+      name: set.name,
+      detail: `Set · ${plural(set.picture_count ?? 0)}`,
+      thumb: pictureSetThumbnailUrl(set.id),
+    })),
+]);
+
+const pickedSource = computed(() =>
+  store.scopeType && store.scopeId != null
+    ? `${store.scopeType}:${store.scopeId}`
+    : null,
+);
+
+const sourceTabStop = computed(() =>
+  tabStopId(sourceOptions.value, pickedSource.value),
+);
+
+function pickSource(option) {
+  if (option.id === pickedSource.value) return;
+  store.pickScope({ type: option.type, id: option.entityId, name: option.name });
+}
+
+function onSourceKey(event) {
+  const group = event.currentTarget;
+  const id = arrowStep(event, sourceOptions.value, pickedSource.value);
+  const option = sourceOptions.value.find((o) => o.id === id);
+  if (!option) return;
+  pickSource(option);
+  // The roving stop moves with the choice, and focus with it.
+  nextTick(() =>
+    group?.querySelector(`[data-testid="tld-source-${option.id}"]`)?.focus(),
+  );
+}
 
 const subjectTabStop = computed(() =>
   tabStopId(SUBJECT_OPTIONS, store.subject),
@@ -779,6 +890,7 @@ const checks = computed(() => {
 const blocker = computed(() => {
   if (store.configLoaded && !store.aiToolkitConfigured)
     return "Set up AI-toolkit to train.";
+  if (store.pickable && !store.scopeType) return "Pick a person or a set to train on.";
   if (!store.dataset) return store.datasetLoading ? "" : "Nothing to train on.";
   if (store.pictureCount === 0) return "There are no pictures to train on.";
   if (!store.effectiveSubject) return "Say what the set is of.";
@@ -814,7 +926,12 @@ async function onStart() {
   if (!canStart.value) return;
   try {
     const job = await store.startTraining();
+    const fromModels = store.pickable;
     store.closeDialog();
+    // The new run's card is on Training runs; from the Models workspace's
+    // door that is where Start lands.
+    useTrainingRunsStore().loadJobs();
+    if (fromModels) router.push({ name: "models-runs" });
     // The create response carries the resolver's result as an object.
     const profile = job?.resolved_profile?.profile_label;
     store.showQueuedToast(
@@ -1034,6 +1151,84 @@ function goToSettings() {
 .tld-opt--on {
   border-color: transparent;
   background: var(--active-wash);
+}
+
+/* Train on: people and sets as compact radios, three across, the list
+   scrolling inside the dialog rather than pushing the rest off it. */
+.tld-sources {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+  /* Three rows, then it scrolls. */
+  max-height: calc(
+    3 * (var(--control-h-bar) + var(--space-4)) + 2 * var(--space-3) +
+      2 * var(--space-1)
+  );
+  overflow-y: auto;
+  padding: var(--space-1);
+}
+
+.tld-source {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  height: calc(var(--control-h-bar) + var(--space-4));
+  padding: 0 var(--space-3);
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: rgb(var(--v-theme-on-surface));
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease-standard);
+}
+
+.tld-source:not(.tld-opt--on):hover {
+  background: var(--hover-wash);
+}
+
+.tld-source.tld-opt--on::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 2px var(--active-bar);
+  pointer-events: none;
+}
+
+.tld-source__img {
+  flex-shrink: 0;
+  width: var(--space-7);
+  height: var(--space-7);
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  object-position: top center;
+  background: rgba(var(--v-theme-on-surface), 0.08);
+}
+
+.tld-source__img--person {
+  border-radius: var(--radius-pill);
+}
+
+.tld-source__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.tld-source__name {
+  overflow: hidden;
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tld-source__text small {
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 /* The ring is drawn on an overlay: App.css's

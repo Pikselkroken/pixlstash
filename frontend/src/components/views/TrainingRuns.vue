@@ -40,28 +40,6 @@
       />
     </div>
 
-    <!-- Runs PixlStash is training that have no folder yet (queued, setting
-         up): a card each, so a run is on this tab from the moment it is asked
-         for. Opening one is the only thing to do with it. -->
-    <div v-if="pendingJobs.length" class="tr-grid tr-grid--jobs" aria-label="Training now">
-      <button
-        v-for="job in pendingJobs"
-        :key="job.uuid"
-        type="button"
-        class="tr-card tr-card--job"
-        @click="openRun(job)"
-      >
-        <div class="tr-card-preview tr-card-preview--none">
-          <v-icon size="18" class="mdi-spin">mdi-loading</v-icon>
-          <span>{{ jobStatus(job) }}</span>
-        </div>
-        <div class="tr-card-body">
-          <span class="tr-card-name">{{ job.name }}</span>
-          <span class="tr-card-meta"><span>{{ job.base_model }}</span></span>
-        </div>
-      </button>
-    </div>
-
     <p v-if="!source" class="tr-note" role="status">
       No ai-toolkit output folder is set yet.
       <AppButton size="sm" variant="secondary" @click="emit('set-folder')">
@@ -78,103 +56,141 @@
          A RELOAD does not take this branch: the grid stays up and the reload
          button carries its own spinner, because replacing a list you are
          reading with a spinner is worse than leaving it up a moment longer. -->
-    <div v-else-if="loading && !runs.length" class="tr-loading" role="status">
+    <div
+      v-else-if="loading && !runs.length && !cards.length"
+      class="tr-loading"
+      role="status"
+    >
       <v-icon size="28" class="mdi-spin">mdi-loading</v-icon>
       <span>Reading runs…</span>
     </div>
     <p v-else-if="error" class="tr-note" role="alert">{{ error }}</p>
-    <p v-else-if="!runs.length" class="tr-note" role="status">
+    <p v-else-if="!cards.length" class="tr-note" role="status">
       Nothing in that folder looks like a training run yet.
     </p>
+    <p v-if="jobsFailed" class="tr-note" role="alert">
+      Could not read which runs are training, so nothing can be imported until
+      it can.
+      <AppButton size="sm" variant="secondary" @click="reload">Retry</AppButton>
+    </p>
 
-    <!-- `listbox` + `aria-multiselectable`, not a radiogroup. An import takes as
-         many runs as are ticked: `POST /model-imports` is per-run and holds a
-         non-blocking lock, so a batch is N sequential requests rather than
-         something the API cannot express. -->
     <div
-      v-else
+      v-if="!(source && loading && !cards.length) && !error"
       ref="gridEl"
       class="tr-grid"
-      role="listbox"
-      aria-multiselectable="true"
-      aria-label="Training runs"
       :class="{ 'tr-grid--selecting': chosen.length > 0 }"
       @keydown="onGridKeydown"
     >
-      <div
-        v-for="(run, index) in runs"
-        :key="run.name"
-        class="tr-card"
-        :class="{ 'tr-card--checked': isChosen(run) }"
-        role="option"
-        :aria-selected="isChosen(run)"
-        :tabindex="index === cursor ? 0 : -1"
-        :data-run-index="index"
-        @click="jobOf(run) ? openRun(jobOf(run)) : toggle(run)"
-        @focus="cursor = index"
-        @keydown.enter.prevent="jobOf(run) ? openRun(jobOf(run)) : toggle(run)"
-        @keydown.space.prevent="toggle(run)"
+      <!-- The door into training from here (#2169). This screen has no set or
+           person in view, so the dialog opens on its Train on picker. -->
+      <button
+        type="button"
+        class="tr-new"
+        data-testid="tr-new-run"
+        aria-haspopup="dialog"
+        @click="training.openToPick()"
       >
-        <div class="tr-card-shot">
-          <!-- The first prompt at the run's highest step: what it has learned so
-               far, on a prompt that stays the same across runs so two cards are
-               comparable (see `coverOf`). `loading="lazy"`, because a run
-               carries up to 130 samples and only visible cards need to fetch. -->
-          <img
-            v-if="coverOf(run)"
-            class="tr-card-preview"
-            :src="coverOf(run)"
-            alt=""
-            loading="lazy"
-          />
-          <div v-else class="tr-card-preview tr-card-preview--none">
-            <v-icon size="18">mdi-image-off-outline</v-icon>
-            <span>No previews</span>
+        <span class="tr-new-mark" aria-hidden="true"
+          ><v-icon size="16">mdi-plus</v-icon></span
+        >
+        <span class="tr-new-label">New training run</span>
+        <span class="tr-new-hint"
+          >Pick a person or a set, and PixlStash writes the captions and the
+          plan.</span
+        >
+      </button>
+
+      <!-- `listbox` + `aria-multiselectable`, not a radiogroup. An import takes
+           as many runs as are ticked: `POST /model-imports` is per-run and holds
+           a non-blocking lock, so a batch is N sequential requests rather than
+           something the API cannot express. `display: contents`, so the cards
+           sit in the grid beside the New tile while staying one listbox. -->
+      <div
+        class="tr-list"
+        role="listbox"
+        aria-multiselectable="true"
+        aria-label="Training runs"
+      >
+        <div
+          v-for="(card, index) in cards"
+          :key="card.key"
+          class="tr-card"
+          :class="{ 'tr-card--checked': isChosen(card) }"
+          role="option"
+          :aria-selected="isChosen(card)"
+          :tabindex="index === cursor ? 0 : -1"
+          :data-run-index="index"
+          :data-run-key="card.key"
+          @click="toggle(card)"
+          @focus="cursor = index"
+          @keydown.enter.prevent="toggle(card)"
+          @keydown.space.prevent="toggle(card)"
+        >
+          <div class="tr-card-shot">
+            <!-- The highest step's samples, one per prompt, first prompt first:
+                 what it has learned so far, on prompts that stay the same
+                 across runs so two cards are comparable (see `stripOf`).
+                 `loading="lazy"`, because a run carries up to 130 samples and
+                 only visible cards need to fetch. -->
+            <div v-if="stripOf(card).length" class="tr-card-strip">
+              <img
+                v-for="url in stripOf(card)"
+                :key="url"
+                class="tr-card-preview"
+                :src="url"
+                alt=""
+                loading="lazy"
+              />
+            </div>
+            <div v-else class="tr-card-preview tr-card-preview--none">
+              <v-icon v-if="card.live" size="18" class="mdi-spin"
+                >mdi-loading</v-icon
+              >
+              <v-icon v-else size="18">mdi-image-off-outline</v-icon>
+              <span>{{ card.live ? jobStatus(card.job) : "No previews" }}</span>
+            </div>
+
+            <!-- The countable half of the checked state. The rail says "this
+                 one is in"; a disc per card is what makes "seven of them are
+                 in" readable at a glance. Hidden by opacity and never by
+                 `v-if`, so the target does not pop into existence under the
+                 pointer. -->
+            <span class="tr-card-check" aria-hidden="true">
+              <v-icon v-if="isChosen(card)" size="16">mdi-check</v-icon>
+            </span>
           </div>
 
-          <!-- The countable half of the checked state. The rail says "this one
-               is in"; a disc per card is what makes "seven of them are in"
-               readable at a glance. Hidden by opacity and never by `v-if`, so
-               the target does not pop into existence under the pointer. -->
-          <!-- A run PixlStash trained opens on a click, so its disc is the
-               way to tick it (Space does it too); elsewhere the whole card
-               ticks and the disc only shows it. -->
-          <span
-            class="tr-card-check"
-            :aria-hidden="jobOf(run) ? undefined : 'true'"
-            :role="jobOf(run) ? 'checkbox' : undefined"
-            :aria-checked="jobOf(run) ? isChosen(run) : undefined"
-            :aria-label="jobOf(run) ? `Select ${run.name}` : undefined"
-            @click="jobOf(run) && ($event.stopPropagation(), toggle(run))"
-          >
-            <v-icon v-if="isChosen(run)" size="16">mdi-check</v-icon>
-          </span>
-        </div>
-
-        <div class="tr-card-body">
-          <span class="tr-card-name">{{ run.name }}</span>
-          <span v-if="jobOf(run)" class="tr-card-live">
-            <span v-if="isTraining(jobOf(run))" class="tr-live-dot" aria-hidden="true"></span>
-            {{ jobStatus(jobOf(run)) }}
-          </span>
-          <span class="tr-card-meta">
-            <span>{{ stepCount(run) }}</span>
-            <span>{{ run.base_model || "Base model not recorded" }}</span>
-            <span v-if="run.rank">rank {{ run.rank }}</span>
-          </span>
-          <!-- An unconfirmed cover is a fact about the run, not a warning about
-               the user: ai-toolkit writes a bare final file at the end, so a run
-               without one either is still training or was interrupted. The
-               highest step is then the best available answer, not a certain
-               one, and saying so is the difference between a surprise and a
-               choice. -->
-          <span v-if="!hasBareFinal(run)" class="tr-card-note">
-            No final file yet, so the newest step is the cover.
-          </span>
-          <span v-if="run.config_error" class="tr-card-note">
-            Could not read its config, so the base model and triggers are
-            unknown. The steps still import.
-          </span>
+          <div class="tr-card-body">
+            <span class="tr-card-title">
+              <span class="tr-card-name">{{ card.name }}</span>
+              <span v-if="card.live" class="tr-card-chip">Training</span>
+            </span>
+            <span
+              v-if="progressOf(card) != null"
+              class="tr-card-bar"
+              :class="{ 'tr-card-bar--live': card.live }"
+              aria-hidden="true"
+              ><span :style="{ width: `${progressOf(card)}%` }"></span
+            ></span>
+            <span class="tr-card-meta">
+              <span class="tr-fact">{{ baseOf(card) }}</span>
+              <span class="tr-fact">{{ stepsOf(card) }}</span>
+              <span v-if="dateOf(card)" class="tr-fact">{{ dateOf(card) }}</span>
+            </span>
+            <!-- An unconfirmed cover is a fact about the run, not a warning
+                 about the user: ai-toolkit writes a bare final file at the end,
+                 so a run without one either is still training or was
+                 interrupted. The highest step is then the best available
+                 answer, not a certain one, and saying so is the difference
+                 between a surprise and a choice. -->
+            <span v-if="card.run && !card.live && !hasBareFinal(card.run)" class="tr-card-note">
+              No final file yet, so the newest step is the cover.
+            </span>
+            <span v-if="card.run?.config_error" class="tr-card-note">
+              Could not read its config, so the base model and triggers are
+              unknown. The steps still import.
+            </span>
+          </div>
         </div>
       </div>
     </div>
@@ -182,7 +198,7 @@
     <!-- The same floating pill the shelf docks over its rows, in the same
          strip. Centred, which is also what keeps it clear of the fixed
          bottom-right shortcuts FAB that a full-width bar ran underneath. -->
-    <div v-if="chosen.length" class="selbar-float">
+    <div v-if="importable.length" class="selbar-float">
       <div class="selbar" role="toolbar" aria-label="Selected training runs">
         <v-menu
           v-model="countMenuOpen"
@@ -199,8 +215,7 @@
               :aria-expanded="countMenuOpen"
             >
               <Tooltip :text="countTitle" activator="parent" />
-              <AiToolkitIcon :size="16" />
-              <span>{{ chosen.length.toLocaleString() }}</span>
+              <span>{{ runCountLabel }}</span>
               <span class="selbar-size">· {{ fileCountLabel }}</span>
               <v-icon size="16" class="selbar-chevron">mdi-menu-down</v-icon>
             </button>
@@ -348,14 +363,15 @@
          setting, so it is a property of where the runs live and not a choice
          being made here. Tinted rather than coloured text: `warning` as a
          foreground measures 3.09:1 on the light canvas. -->
-    <p v-if="chosen.length && deletesSource" class="tr-warning" role="status">
+    <p v-if="importable.length && deletesSource" class="tr-warning" role="status">
       {{ deleteWarning }}
     </p>
   </div>
 </template>
 
 <script setup>
-// The ai-toolkit training runs - the model shelf's second view (shelf plan F6).
+// The ai-toolkit training runs - the Models workspace's Training runs place
+// (shelf plan F6, #2169).
 //
 // A VIEW and not a dialog, which is the whole reason it can stay current. A
 // dialog is opened, read once and dismissed, so a run that finished while it
@@ -365,10 +381,9 @@
 // and it changes without PixlStash doing anything, so it gets a view that
 // reloads: on entry, and whenever the tab is looked at again.
 //
-// It lives INSIDE `ModelShelf.vue` as a tabpanel rather than at its own route,
-// because these are models too - still in ai-toolkit's output folder rather
-// than on the shelf, and importing one is the act of moving it from here to
-// there. The shelf owns the toolbar, the tabs and the count.
+// The runs and which are picked live in `useTrainingRunsStore`, because the
+// rail describes the picked run and the sidebar counts them. This view draws
+// the grid, owns the import pill and keeps the list current.
 //
 // Built on the promise the listing route makes: describing a run costs nothing
 // and changes nothing, so the whole grid - names, steps, sizes, previews, what
@@ -384,6 +399,7 @@ import {
   ref,
   watch,
 } from "vue";
+import { storeToRefs } from "pinia";
 import { VIcon, VMenu } from "vuetify/components";
 
 import { useRoute, useRouter } from "vue-router";
@@ -393,111 +409,73 @@ import TrainingRunLive from "./TrainingRunLive.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
-import { importRun, listRuns, runSampleUrl } from "../../api/modelImports";
-import { listTrainingJobs } from "../../api/training";
+import { importRun, runSampleUrl } from "../../api/modelImports";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useTrainingRunsStore } from "../../stores/useTrainingRunsStore";
+import { useTrainingStore } from "../../stores/useTrainingStore";
 import { errorDetail } from "../../utils/apiError";
 import { formatModelSize } from "../../utils/modelShelf";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
+import {
+  baseOf,
+  dateOf,
+  hasBareFinal,
+  jobStatus,
+  progressOf,
+  stepsOf,
+} from "../../utils/trainingRuns.js";
 
-const emit = defineEmits(["set-folder", "count"]);
+const emit = defineEmits(["set-folder"]);
+
+/** A live run's figures are re-read this often while this view is up. */
+const LIVE_POLL_MS = 5000;
 
 const folders = useModelFoldersStore();
 const shelf = useModelShelfStore();
+const runsStore = useTrainingRunsStore();
+const training = useTrainingStore();
+const {
+  runs,
+  cards,
+  chosen,
+  chosenSteps,
+  importable,
+  single,
+  loading,
+  error,
+  jobs,
+  jobsLoaded,
+  jobsFailed,
+  source,
+} = storeToRefs(runsStore);
+const { isChosen, toggle, selectAll: pickAll, clearSelection: unpick } =
+  runsStore;
 
 const gridEl = ref(null);
 const destinationId = ref(null);
-/** Run NAMES, not indices: a reload reorders and renumbers, names survive it. */
-const chosen = ref([]);
-const chosenSteps = ref([]);
 const cursor = ref(0);
-const runs = ref([]);
-const loading = ref(false);
 const working = ref(false);
-const error = ref("");
 const countMenuOpen = ref(false);
 const stepMenuOpen = ref(false);
 const destMenuOpen = ref(false);
 
-// ── The runs PixlStash trains ───────────────────────────────────────────────
+// ── A run's own page ───────────────────────────────────────────────────────
 
 const route = useRoute();
 const router = useRouter();
-const jobs = ref([]);
-const jobsLoaded = ref(false);
-const LIVE_STATUSES = ["queued", "running", "stopping"];
 
 const openUuid = computed(() =>
   typeof route.query.run === "string" ? route.query.run : "",
 );
-/** The job list could not be read, so "not in this library" is not known. */
-const jobsFailed = ref(false);
 const openJob = computed(
   () => jobs.value.find((job) => job.uuid === openUuid.value) ?? null,
 );
 
-/** The job that trained a folder run, matched on the folder's name. */
-function jobOf(run) {
-  return jobs.value.find((job) => job.run_name && job.run_name === run.name) ?? null;
-}
-
-/** Live jobs with no folder card yet. */
-const pendingJobs = computed(() => {
-  const names = new Set(runs.value.map((run) => run.name));
-  return jobs.value.filter(
-    (job) => LIVE_STATUSES.includes(job.status) && !names.has(job.run_name),
-  );
-});
-
-function isTraining(job) {
-  return LIVE_STATUSES.includes(job.status);
-}
-
-function jobStatus(job) {
-  switch (job.status) {
-    case "queued":
-      return "Waiting for the GPU";
-    case "running":
-      return job.total_steps
-        ? `Training ${job.step.toLocaleString()} / ${job.total_steps.toLocaleString()}`
-        : "Setting up";
-    case "stopping":
-      return "Stopping";
-    case "stopped":
-      return `Stopped at step ${job.step.toLocaleString()}`;
-    case "error":
-      return "Failed";
-    default:
-      return "Trained by PixlStash";
-  }
-}
-
-function openRun(job) {
-  router.push({ name: "models-runs", query: { run: job.uuid } });
-}
-
 function closeRun() {
   router.push({ name: "models-runs" });
 }
-
-async function loadJobs() {
-  try {
-    jobs.value = await listTrainingJobs();
-    jobsFailed.value = false;
-  } catch (err) {
-    // The grid still lists the folder's runs; only the live pages are lost.
-    console.warn("Could not list the training jobs:", err);
-    jobs.value = [];
-    jobsFailed.value = true;
-  } finally {
-    jobsLoaded.value = true;
-  }
-}
-
-/** The registered ai-toolkit output root. One, by the store's own rule. */
-const source = computed(() => folders.sourceFolder);
 
 /**
  * Where an import may land.
@@ -521,14 +499,8 @@ const destinationName = computed(() => {
   return parts[parts.length - 1] || folder.path;
 });
 
-const chosenRuns = computed(() =>
-  runs.value.filter((run) => chosen.value.includes(run.name)),
-);
-
-/** The one chosen run, or null - what gates the per-step picker. */
-const single = computed(() =>
-  chosenRuns.value.length === 1 ? chosenRuns.value[0] : null,
-);
+/** The runs an Import takes: the picked cards that are finished. */
+const chosenRuns = computed(() => importable.value.map((card) => card.run));
 
 const deletesSource = computed(() =>
   Boolean(source.value?.delete_after_import),
@@ -543,7 +515,7 @@ const deleteWarning = computed(
     } will be gone from disk once the files have landed.`,
 );
 
-/** How many files the press will actually copy, across every chosen run. */
+/** How many checkpoints the press will actually copy, across every run. */
 const fileTotal = computed(() =>
   single.value
     ? chosenSteps.value.length
@@ -553,9 +525,15 @@ const fileTotal = computed(() =>
       ),
 );
 
-const fileCountLabel = computed(
-  () =>
-    `${fileTotal.value.toLocaleString()} ${fileTotal.value === 1 ? "file" : "files"}`,
+const plural = (n, one, many) =>
+  `${n.toLocaleString()} ${n === 1 ? one : many}`;
+
+const fileCountLabel = computed(() =>
+  plural(fileTotal.value, "checkpoint", "checkpoints"),
+);
+
+const runCountLabel = computed(() =>
+  plural(chosenRuns.value.length, "run", "runs"),
 );
 
 const stepsLabel = computed(() => {
@@ -565,9 +543,14 @@ const stepsLabel = computed(() => {
 });
 
 const countTitle = computed(
-  () => `${chosen.value.length} of ${runs.value.length} runs selected`,
+  () =>
+    `${chosenRuns.value.length} of ${
+      cards.value.filter((card) => !card.live && card.run).length
+    } runs selected`,
 );
 
+// The rule in force, said on the button: one run takes the checkpoints its
+// picker names; two or more take every checkpoint of each, as one stack each.
 const confirmLabel = computed(() => {
   if (!fileTotal.value) return "Import";
   const n = chosenRuns.value.length;
@@ -591,81 +574,35 @@ const canSubmit = computed(
 );
 
 /**
- * The run's cover: the FIRST prompt at its highest step.
+ * The card's strip: the samples at the run's highest step, one per prompt,
+ * first prompt first.
  *
- * Highest step because that is what the run has learned so far. First prompt,
- * and deliberately not the last one rendered - `index` distinguishes *prompts*
- * within a step, not time, so every sample at the top step is equally "newest"
- * and a tie-break on recency has nothing to break. Choosing index 0 keeps the
- * cover on the same prompt for every run and at every step, which is what makes
- * two cards in this grid comparable and stops a card changing subject when a
- * later step renders more prompts.
+ * Highest step because that is what the run has learned so far. Prompt order,
+ * and deliberately not render order - `index` distinguishes *prompts* within a
+ * step, not time, so every sample at the top step is equally "newest". Keeping
+ * prompt 0 first keeps the strip's first frame on the same prompt for every run
+ * and at every step, which is what makes two cards in this grid comparable.
  */
-function coverOf(run) {
-  const samples = run.samples || [];
-  if (!samples.length || source.value?.id == null) return "";
-  const cover = samples.reduce((best, s) =>
-    s.step > best.step || (s.step === best.step && s.index < best.index)
-      ? s
-      : best,
-  );
-  return runSampleUrl(source.value.id, run.name, cover.filename);
-}
-
-/** True when the run wrote the bare final file that confirms it finished. */
-function hasBareFinal(run) {
-  return (run.checkpoints || []).some((cp) => cp.step === null);
-}
-
-function stepCount(run) {
-  const n = (run.checkpoints || []).length;
-  return `${n.toLocaleString()} ${n === 1 ? "checkpoint" : "checkpoints"}`;
-}
-
-function isChosen(run) {
-  return chosen.value.includes(run.name);
-}
-
-/**
- * Add or remove a run.
- *
- * Ticking the only chosen run fills the step list with all of its checkpoints,
- * because importing part of a run is the exception: the steps become one stack
- * and the point of a stack is that the run is kept together.
- */
-function toggle(run) {
-  chosen.value = isChosen(run)
-    ? chosen.value.filter((name) => name !== run.name)
-    : [...chosen.value, run.name];
+function stripOf(card) {
+  const samples = card.run?.samples || [];
+  if (!samples.length || source.value?.id == null) return [];
+  const top = Math.max(...samples.map((s) => s.step));
+  return samples
+    .filter((s) => s.step === top)
+    .sort((a, b) => a.index - b.index)
+    .slice(0, 4)
+    .map((s) => runSampleUrl(source.value.id, card.run.name, s.filename));
 }
 
 function selectAll() {
-  chosen.value = runs.value.map((run) => run.name);
+  pickAll();
   countMenuOpen.value = false;
 }
 
 function clearSelection() {
-  chosen.value = [];
+  unpick();
   countMenuOpen.value = false;
 }
-
-// Whenever the selection narrows to exactly one run, the step list becomes
-// meaningful and starts filled. Anywhere else it is not shown and not read.
-//
-// Keyed on the run's NAME and not on the computed's identity: `single`
-// recomputes whenever `runs` is replaced, which a reload does on every window
-// focus, and refilling there would silently re-tick a checkpoint the reader had
-// just excluded - the exact "moves the ground under you" failure the reload is
-// written to avoid.
-let stepsFilledFor = "";
-watch(single, (run) => {
-  const name = run?.name || "";
-  if (name === stepsFilledFor) return;
-  stepsFilledFor = name;
-  chosenSteps.value = run
-    ? (run.checkpoints || []).map((cp) => cp.step ?? null)
-    : [];
-});
 
 /** Arrow keys move the cursor; Space and Enter tick. Escape clears. */
 function onGridKeydown(event) {
@@ -675,115 +612,43 @@ function onGridKeydown(event) {
     return;
   }
   const keys = ["ArrowDown", "ArrowRight", "ArrowUp", "ArrowLeft"];
-  if (!keys.includes(event.key) || !runs.value.length) return;
+  if (!keys.includes(event.key) || !cards.value.length) return;
   event.preventDefault();
   const grid = event.currentTarget;
   const step = event.key === "ArrowUp" || event.key === "ArrowLeft" ? -1 : 1;
-  cursor.value = (cursor.value + step + runs.value.length) % runs.value.length;
+  // From the New tile the cursor belongs to the last card focused: enter the
+  // cards at the near end instead of stepping from it.
+  if (event.target?.closest?.(".tr-new")) {
+    cursor.value = step === 1 ? 0 : cards.value.length - 1;
+  } else {
+    cursor.value =
+      (cursor.value + step + cards.value.length) % cards.value.length;
+  }
   nextTick(() => {
     grid?.querySelector(`[data-run-index="${cursor.value}"]`)?.focus();
   });
 }
 
 /**
- * Re-read the runs under the output root.
+ * Re-read the runs, keeping the reader's place.
  *
- * Keeps the reader's place. A reload fires on its own whenever the tab regains
- * focus, so it must not move the page under someone who is mid-decision: the
- * scroll offset is restored, and every still-present run keeps its tick. Runs
- * that have VANISHED (imported from another window, or deleted) drop out of the
- * selection rather than leaving it pointing at nothing.
- *
- * Reads overlap - mount, a folder change, a visibility change and a window
- * focus all start one, and none of them cancels the last - so every completion
- * is checked against the generation before it writes anything. An older read
- * answering last would otherwise replace the newer one's rows, and the
- * selection reconciled below would be filtering the newer listing's names
- * against the older one's. The folder id is captured too and the request is
- * made against THAT rather than re-read from the store, so a read is always
- * asking about the folder it was started for.
+ * A reload fires on its own whenever the tab regains focus, so it must not
+ * move the page under someone who is mid-decision: the scroll offset is
+ * restored here, and the store keeps every still-present tick.
  */
-let generation = 0;
 async function loadRuns() {
-  const sourceId = source.value?.id ?? null;
-  const gen = ++generation;
-  const current = () => gen === generation;
-  if (sourceId == null) {
-    runs.value = [];
-    emit("count", null);
-    // This read is over, and it owns the flag as much as any other: an
-    // in-flight one is now stale and will decline to clear it.
-    loading.value = false;
-    return;
-  }
   const scrollTop = gridEl.value?.scrollTop ?? 0;
-  const keep = [...chosen.value];
-  const keepSteps = [...chosenSteps.value];
-  loading.value = true;
-  error.value = "";
-  try {
-    const found = await listRuns(sourceId);
-    if (!current()) return;
-    runs.value = found;
-    emit("count", runs.value.length);
-    const names = new Set(runs.value.map((run) => run.name));
-    chosen.value = keep.filter((name) => names.has(name));
-    if (chosen.value.length === 1 && keep.length === 1) {
-      chosenSteps.value = keepSteps;
-    }
-    cursor.value = Math.min(cursor.value, Math.max(runs.value.length - 1, 0));
-    await nextTick();
-    if (gridEl.value) gridEl.value.scrollTop = scrollTop;
-  } catch (err) {
-    if (!current()) return;
-    error.value = errorDetail(err) || "Could not read that folder.";
-    runs.value = [];
-    emit("count", null);
-    clearSelection();
-  } finally {
-    // Only the current read owns the spinner: an older one clearing it would
-    // report the newer, still-running read as finished.
-    if (current()) loading.value = false;
-  }
+  await runsStore.loadRuns();
+  cursor.value = Math.min(cursor.value, Math.max(cards.value.length - 1, 0));
+  await nextTick();
+  if (gridEl.value) gridEl.value.scrollTop = scrollTop;
 }
 
 /** The button, and the auto-reload, are the same act. */
 function reload() {
   loadRuns();
-  loadJobs();
+  runsStore.loadJobs();
 }
-
-/**
- * Read the runs whenever the output root changes - including from nothing.
- *
- * The load used to hang off `onMounted` alone, which was wrong in the one case
- * that matters most: setting the folder from THIS view's own empty state. The
- * shelf answers that by showing the runs tab, but the runs tab is already
- * showing, so nothing remounts and the panel sat empty next to a folder it now
- * had. Depending on the folder itself is the fix rather than re-emitting a
- * navigation that is already where it wants to be.
- *
- * `loadRuns` clears and reports an empty count when the id goes away, so
- * forgetting the folder is the same edge handled by the same call.
- *
- * The old root's rows and its selection are dropped FIRST, before the new read
- * is even started. Waiting for the new listing to replace them leaves the old
- * root's cards on screen under the new root's path for as long as the walk
- * takes, with Import live: a run name means nothing outside the root it was
- * read under, so a tick surviving that window sends the new root's id with the
- * old root's run name - which is issue #1019 whatever the response ordering
- * does. Same reason the count is cleared rather than left describing a folder
- * the shelf is no longer pointing at.
- */
-watch(
-  () => source.value?.id,
-  () => {
-    runs.value = [];
-    emit("count", null);
-    clearSelection();
-    loadRuns();
-  },
-);
 
 /**
  * Reload when the tab is looked at again.
@@ -831,15 +696,36 @@ watch(openUuid, (uuid) => {
   if (!uuid) reload();
 });
 
+// While a run trains its card follows it: the job's step for the bar, the
+// folder for its samples and checkpoints (the listing costs nothing). A run
+// leaving the live set has written its last checkpoint, so the folder is read
+// again.
+let liveTimer = null;
+watch(
+  () => runsStore.liveCount,
+  (n, before) => {
+    clearInterval(liveTimer);
+    liveTimer = null;
+    if (n > 0) {
+      liveTimer = setInterval(() => {
+        if (document.visibilityState === "visible") reload();
+      }, LIVE_POLL_MS);
+    }
+    if (before != null && n < before) loadRuns();
+  },
+  { immediate: true },
+);
+
 onMounted(() => {
   if (!folders.loaded) folders.refresh();
   loadRuns();
-  loadJobs();
+  runsStore.loadJobs();
   document.addEventListener("visibilitychange", onVisible);
   window.addEventListener("focus", onVisible);
 });
 
 onBeforeUnmount(() => {
+  clearInterval(liveTimer);
   document.removeEventListener("visibilitychange", onVisible);
   window.removeEventListener("focus", onVisible);
 });
@@ -944,37 +830,6 @@ function batchReceipt(imported, failed) {
   padding: var(--space-5);
 }
 
-.tr-grid--jobs {
-  flex: none;
-  overflow: visible;
-}
-
-/* A queued run's card: a button, because opening it is all it does. */
-.tr-card--job {
-  padding: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-}
-
-.tr-card-live {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--text-xs);
-  font-variant-numeric: tabular-nums;
-  color: rgb(var(--v-theme-on-background));
-}
-
-/* The attention dot: amber, while the run trains. */
-.tr-live-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: var(--radius-pill);
-  background: rgb(var(--v-theme-accent));
-}
-
 .tr-meta {
   display: flex;
   align-items: center;
@@ -1045,16 +900,82 @@ function batchReceipt(imported, failed) {
   box-shadow: var(--selection-edge);
 }
 
+/* The New tile leads the grid, dashed like the set grid's New workflow set:
+   a place to start rather than a thing to pick. */
+.tr-new {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: 180px;
+  padding: var(--space-4);
+  border: 1px dashed rgb(var(--v-theme-border));
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: rgb(var(--v-theme-on-background));
+  font: inherit;
+  text-align: center;
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease-standard);
+}
+
+.tr-new:hover {
+  background: var(--hover-wash);
+}
+
+.tr-new-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-h-bar);
+  height: var(--control-h-bar);
+  border-radius: var(--radius-pill);
+  background: rgba(var(--v-theme-on-background), 0.08);
+}
+
+.tr-new-label {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.tr-new-hint {
+  max-width: 24ch;
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-background), var(--opacity-text-secondary));
+}
+
+/* One listbox, laid out as the grid's own cells beside the New tile. */
+.tr-list {
+  display: contents;
+}
+
 .tr-card-shot {
   position: relative;
 }
 
+/* The highest step's samples side by side, at a fixed height so a run with
+   one prompt is not four times taller than a run with four. */
+.tr-card-strip {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: var(--space-1);
+  aspect-ratio: 3 / 1;
+  background: rgba(var(--v-theme-on-background), 0.06);
+}
+
 .tr-card-preview {
   width: 100%;
-  aspect-ratio: 1;
+  height: 100%;
   object-fit: cover;
   display: block;
   background: rgba(var(--v-theme-on-background), 0.06);
+}
+
+.tr-card-preview--none {
+  aspect-ratio: 3 / 1;
+  height: auto;
 }
 
 .tr-card-preview--none {
@@ -1122,6 +1043,60 @@ function batchReceipt(imported, failed) {
   font-weight: var(--weight-semibold);
   color: rgb(var(--v-theme-on-background));
   word-break: break-word;
+}
+
+.tr-card-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* Amber is the attention colour: this run is training now. Outlined, the
+   recipe of the set card's badges, so the ink stays the label's. */
+.tr-card-chip {
+  flex-shrink: 0;
+  height: var(--tag-h-xs);
+  line-height: calc(var(--tag-h-xs) - 2px);
+  padding: 0 var(--space-2);
+  border: 1px solid rgb(var(--v-theme-accent));
+  border-radius: var(--radius-sm);
+  color: rgb(var(--v-theme-on-background));
+  font-size: var(--text-2xs);
+}
+
+.tr-card-bar {
+  display: block;
+  height: 3px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--track-trough);
+}
+
+.tr-card-bar > span {
+  display: block;
+  height: 100%;
+  background: rgb(var(--v-theme-tertiary));
+}
+
+.tr-card-bar--live > span {
+  background: rgb(var(--v-theme-accent));
+}
+
+/* The set card's fact chips (`msc__fact`). */
+.tr-fact {
+  display: inline-block;
+  max-width: 100%;
+  box-sizing: border-box;
+  height: var(--tag-h-xs);
+  line-height: calc(var(--tag-h-xs) - 2px);
+  padding: 0 var(--space-2);
+  overflow: hidden;
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-sm);
+  font-size: var(--text-2xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tr-card-meta {
