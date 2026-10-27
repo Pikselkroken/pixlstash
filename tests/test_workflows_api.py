@@ -3787,6 +3787,82 @@ def test_start_up_moves_the_single_record_onto_its_connection(workflow_env, comf
     assert _link_tokens(server) == []
 
 
+def test_a_link_that_waited_on_a_remove_records_no_key(
+    workflow_env, comfy_at, monkeypatch
+):
+    """A remove holds the link lock while it revokes and drops the row; a link
+    of that row queued behind it must find it gone, not record a key for it."""
+    server = workflow_env.server
+    comfy_at("http://127.0.0.1:18188/")
+    second = _add_connection(workflow_env.owner, _SECOND)
+    uid = server.auth.get_user().id
+    real_lock = comfyui_link_service._LINK_LOCK
+
+    class RemovedWhileWaiting:
+        def __enter__(self):
+            real_lock.acquire()
+            comfyui_connections.save(
+                server, uid, lambda user: comfyui_connections.remove(user, second)
+            )
+
+        def __exit__(self, *exc):
+            real_lock.release()
+            return False
+
+    monkeypatch.setattr(comfyui_link_service, "_LINK_LOCK", RemovedWhileWaiting())
+    r = workflow_env.owner.post(f"{API}/comfyui/connections/{second}/link")
+    assert r.status_code == 200, r.text
+    reply = r.json()
+    assert reply["linked"] is False
+    assert _steps(reply)["reach"]["reason"] == "connection_changed", reply
+    assert comfyui_link_service.link_record(server, second) == {}
+    assert _link_tokens(server) == []
+
+
+def test_two_connections_to_one_comfyui_are_not_both_linked(workflow_env, comfy_at):
+    """ComfyUI keeps one PixlStash key: linking the same ComfyUI under a second
+    address would overwrite the first connection's key there."""
+    server = workflow_env.server
+    fake = comfy_at("http://127.0.0.1:18188/")
+    first = comfyui_connections.current_id(server.auth.get_user())
+    key = _link_connection(workflow_env, fake, first)
+    twin = _add_connection(workflow_env.owner, "http://localhost:18188/")
+    reply = workflow_env.owner.post(f"{API}/comfyui/connections/{twin}/link").json()
+    assert reply["linked"] is False
+    assert _steps(reply)["link"]["reason"] == "already_linked", reply
+    assert fake.settings[comfyui_link_service.SETTING_TOKEN] == key
+    assert _token_works(server, key)
+    assert len(_link_tokens(server)) == 1
+
+
+def test_start_up_revokes_nothing_when_the_list_cannot_be_read(workflow_env, comfy_at):
+    """An unreadable list reads as the saved address alone; every other
+    connection's key would look orphaned, so none is revoked."""
+    server = workflow_env.server
+    fake = comfy_at("http://127.0.0.1:18188/")
+    second = _add_connection(workflow_env.owner, _SECOND)
+    key = _link_connection(workflow_env, fake, second)
+    uid = server.auth.get_user().id
+    stored = server.auth.get_user().comfyui_connections
+
+    def corrupt(user):
+        user.comfyui_connections = "not json"
+        return True
+
+    comfyui_connections.save(server, uid, corrupt)
+    try:
+        comfyui_link_service.adopt_single_record(server)
+        assert comfyui_link_service.link_record(server, second) != {}
+        assert _token_works(server, key)
+    finally:
+
+        def restore(user):
+            user.comfyui_connections = stored
+            return True
+
+        comfyui_connections.save(server, uid, restore)
+
+
 def test_the_probe_records_the_node_check_on_its_connection(
     workflow_env, saved_address, monkeypatch
 ):

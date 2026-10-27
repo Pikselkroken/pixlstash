@@ -444,6 +444,15 @@ def _link(server, request: Request, connection: Optional[dict]) -> dict:
     if not saved_url:
         steps["reach"] = _step("failed", "No ComfyUI address is saved.")
         return reply()
+    # Read again under the lock: a remove or move that held it first would
+    # otherwise leave this link's key recorded for a connection that is gone.
+    if not _still_listed(server, connection):
+        steps["reach"] = _step(
+            "failed",
+            "This connection was removed or moved while the link waited. Try again.",
+            "connection_changed",
+        )
+        return reply()
     try:
         probe = probe_comfyui(saved_url)
         where, pinned = locate(saved_url)
@@ -480,6 +489,24 @@ def _link(server, request: Request, connection: Optional[dict]) -> dict:
             "This ComfyUI is outside your local network. Automatic setup only "
             "links a ComfyUI on this computer or your local network.",
             "not_local",
+        )
+        return reply()
+    # ComfyUI keeps one PixlStash key, so a second connection to the same
+    # ComfyUI (localhost and 127.0.0.1) would overwrite the first one's key.
+    twin = next(
+        (
+            other_id
+            for other_id, other in _records(server).items()
+            if other_id != connection_id and _pinned(other) == pinned
+        ),
+        None,
+    )
+    if twin is not None:
+        steps["link"] = _step(
+            "needs_you",
+            "Another connection is already linked to this same ComfyUI, which "
+            "holds one key. Remove one of the two connections.",
+            "already_linked",
         )
         return reply()
     try:
@@ -586,8 +613,8 @@ def _link(server, request: Request, connection: Optional[dict]) -> dict:
                 old_token,
             )
             leftover = (
-                'The key "ComfyUI (linked)" it replaced could not be revoked '
-                "and still works: delete the older one under Account › API Tokens."
+                "The key it replaced could not be revoked and still works: "
+                "delete the older one under Account › API Tokens."
             )
     logger.info(
         "ComfyUI at %s linked to %s with a ComfyUI-only key (token %s; replaced %s).",
@@ -646,14 +673,25 @@ def _link(server, request: Request, connection: Optional[dict]) -> dict:
     return reply(linked=True)
 
 
-def unlink(server, request: Request, connection_id: Optional[str]) -> dict:
+def unlink(server, request: Request, connection_id: Optional[str], then=None):
     """Revoke the connection's key and clear ComfyUI's copy, best effort.
 
     A revoke that fails raises and leaves the record, so a connection is never
-    removed while its key still works.
+    removed while its key still works. *then*, when given, runs under the same
+    hold of the link lock and its result is returned: a remove or move that
+    changes the list there cannot interleave with a link of that connection.
     """
     with _LINK_LOCK:
-        return _unlink(server, request, connection_id)
+        result = _unlink(server, request, connection_id)
+        return then() if then is not None else result
+
+
+def _still_listed(server, connection: dict) -> bool:
+    """Whether *connection* is still listed, at the same address."""
+    return any(
+        entry["id"] == connection["id"] and entry["url"] == connection["url"]
+        for entry in comfyui_connections.read(server.auth.get_user())
+    )
 
 
 def _pinned(record: dict) -> Optional[str]:
@@ -752,7 +790,18 @@ def _adopt_single_record(server) -> None:
                 single["token_public_id"],
             )
             _delete_key(server, single["token_public_id"])
-    listed = {e["id"] for e in comfyui_connections.read(server.auth.get_user())}
+    user = server.auth.get_user()
+    if not comfyui_connections.is_readable(user):
+        # read() falls back to the saved address alone, which would make every
+        # other connection's live key look orphaned. Keep them all.
+        logger.error(
+            "The ComfyUI connection list cannot be read; no link key is revoked "
+            "at this start. %d link record(s) are kept as they are.",
+            len(records),
+        )
+        listed = set(records)
+    else:
+        listed = {e["id"] for e in comfyui_connections.read(user)}
     for connection_id in [cid for cid in records if cid not in listed]:
         public_id = records.pop(connection_id).get("token_public_id")
         logger.info(

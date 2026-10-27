@@ -102,6 +102,21 @@ def read(user) -> list[dict]:
     return [_entry(SAVED_ADDRESS_ID, default_name(url), url)] if url else []
 
 
+def is_readable(user) -> bool:
+    """Whether the stored list is a JSON list, or not stored yet.
+
+    ``read`` falls back to the saved address alone otherwise, which is not the
+    whole list: nothing may be revoked on its say-so.
+    """
+    raw = getattr(user, "comfyui_connections", None)
+    if raw is None:
+        return True
+    try:
+        return isinstance(json.loads(raw), list)
+    except (ValueError, TypeError):
+        return False
+
+
 def current_id(user) -> str | None:
     """The id of the connection runs go to, or None with no address saved."""
     saved = _key(getattr(user, "comfyui_url", None))
