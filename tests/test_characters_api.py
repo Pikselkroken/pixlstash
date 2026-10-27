@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from pixlstash.db_models import Face, Picture
 from pixlstash.routes.characters import _face_thumbnail_crop_box
+from pixlstash.tasks.face_extraction_task import CROP_EXPAND_SCALE
 from pixlstash.server import Server
 from tests.utils import upload_pictures_and_wait
 
@@ -478,16 +479,23 @@ def test_thumbnail_crop_undoes_the_stored_face_box_padding():
     with, so the face fills the thumbnail instead of sitting small in it."""
     # 256 * 1.25 = 320 is already a multiple of 64: the crop is the raw box.
     raw = [400, 300, 656, 556]
-    stored = Face.expand_face_bbox(raw, 1000, 1000, 0.25)
+    stored = Face.expand_face_bbox(raw, 1000, 1000, CROP_EXPAND_SCALE - 1)
     assert stored == [368, 268, 688, 588]
     assert _face_thumbnail_crop_box(stored, 1000, 1000) == tuple(raw)
 
     # 128 * 1.25 = 160 rounds up to 192: tighter than stored, the face still whole.
     raw = [200, 200, 328, 328]
-    stored = Face.expand_face_bbox(raw, 1000, 1000, 0.25)
+    stored = Face.expand_face_bbox(raw, 1000, 1000, CROP_EXPAND_SCALE - 1)
     x1, y1, x2, y2 = _face_thumbnail_crop_box(stored, 1000, 1000)
     assert x2 - x1 < stored[2] - stored[0]
     assert x1 <= raw[0] and y1 <= raw[1] and x2 >= raw[2] and y2 >= raw[3]
+
+    # Clamped at the image edge, the stored box lost its centre: shrinking it
+    # would cut into the face, so it is cropped as stored.
+    for raw in ([0, 0, 100, 100], [900, 900, 1000, 1000]):
+        stored = Face.expand_face_bbox(raw, 1000, 1000, CROP_EXPAND_SCALE - 1)
+        x1, y1, x2, y2 = _face_thumbnail_crop_box(stored, 1000, 1000)
+        assert x1 <= raw[0] and y1 <= raw[1] and x2 >= raw[2] and y2 >= raw[3]
 
     # Degenerate box: nothing to crop.
     assert _face_thumbnail_crop_box([10, 10, 10, 40], 100, 100) is None

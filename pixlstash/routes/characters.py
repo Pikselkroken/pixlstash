@@ -112,7 +112,9 @@ def _face_thumbnail_crop_box(bbox, image_width: int, image_height: int):
     A stored face box is the detector's box grown by ``CROP_EXPAND_SCALE`` and
     rounded up to 64 px (``Face.expand_face_bbox``), so cropping it as-is shows
     the face small inside hair and background. Shrinking it back by the same
-    scale gets the detector's own face box, about centred on the stored one.
+    scale gets about the detector's own face box. A box touching the image edge
+    was clamped there without re-centring, so it is cropped as stored rather
+    than shrunk off-centre into the face.
     """
     x1, y1, x2, y2 = [float(v) for v in bbox]
     x1 = max(0.0, min(float(image_width - 1), x1))
@@ -121,7 +123,9 @@ def _face_thumbnail_crop_box(bbox, image_width: int, image_height: int):
     y2 = max(0.0, min(float(image_height), y2))
     if x2 <= x1 or y2 <= y1:
         return None
-    side = max(x2 - x1, y2 - y1) / CROP_EXPAND_SCALE
+    side = max(x2 - x1, y2 - y1)
+    if x1 > 0 and y1 > 0 and x2 < image_width and y2 < image_height:
+        side /= CROP_EXPAND_SCALE
     cx = (x1 + x2) / 2.0
     cy = (y1 + y2) / 2.0
     new_x1 = cx - side / 2.0
