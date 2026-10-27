@@ -1043,6 +1043,8 @@ function handleOutsideClick(event) {
 async function fetchMembers() {
   const ids = normalisedPictureIds.value;
   const requestKey = normalisedIdsKey.value;
+  // The last selection's person must not pin while this one is read.
+  soleSelectionPersonId.value = null;
   // Host-driven: the membership arrived as a prop, so there is nothing to read
   // and the picture readers would not understand these ids anyway.
   if (props.membership) {

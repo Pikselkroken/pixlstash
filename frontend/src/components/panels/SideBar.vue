@@ -1749,8 +1749,10 @@ watch(setTree, (tree) => {
     }
     if (keys.length) expandTreeKeys(keys);
   }
-  // The baseline is only taken once the sets have actually arrived.
-  if (visibleSets.value.length) {
+  // The baseline is taken once both lists have arrived: people landing after
+  // the sets would otherwise move every person's sets under them at once and
+  // read as news, opening them all.
+  if (entityLists.has("sets") && entityLists.has("characters")) {
     knownChildIds = new Set(
       [...now.values()].flat().map((kid) => Number(kid.id)),
     );
@@ -2684,6 +2686,11 @@ async function toggleSetLock(set) {
 }
 
 // --- Child sets (#2124): New set inside…, Move out of… ---
+
+/** Whether a set sits under anything, listed here or not. */
+function setHasParent(set) {
+  return set?.parent_set_id != null || set?.parent_character_id != null;
+}
 
 /** The display name of the set or person a set sits under, or "". */
 function setParentName(set) {
@@ -5401,10 +5408,11 @@ defineExpose({
                 :key="char.id"
                 :class="[
                   'sidebar-character-group',
-                  'sidebar-tree-node',
-                  characterChildCount(char.id) && isTreeOpen(`c:${char.id}`)
-                    ? 'sidebar-tree-group'
-                    : 'sidebar-tree-plain',
+                  {
+                    'sidebar-tree-group':
+                      characterChildCount(char.id) &&
+                      isTreeOpen(`c:${char.id}`),
+                  },
                 ]"
               >
                 <div
@@ -5763,8 +5771,7 @@ defineExpose({
                 v-for="group in setSectionGroups"
                 :key="group.root.id"
                 :class="[
-                  'sidebar-tree-node',
-                  group.open ? 'sidebar-tree-group' : 'sidebar-tree-plain',
+                  { 'sidebar-tree-group': group.open },
                 ]"
               >
                 <div
@@ -6338,6 +6345,21 @@ defineExpose({
         </button>
         <button
           class="ctx-item"
+          :disabled="isReadOnly"
+          @click="
+            createChildSet({
+              characterId: sidebarCtxCharacter.id,
+              name: sidebarCtxCharacter.name,
+            })
+          "
+        >
+          <v-icon class="ctx-icon">mdi-folder-plus-outline</v-icon>
+          <span class="ctx-label-text"
+            >New set in "{{ sidebarCtxCharacter.name }}"…</span
+          >
+        </button>
+        <button
+          class="ctx-item"
           :disabled="sidebarCtxDeleteIds.length > 1 || isReadOnly"
           :class="{
             'ctx-item--disabled': sidebarCtxDeleteIds.length > 1 || isReadOnly,
@@ -6664,7 +6686,7 @@ defineExpose({
         <!-- A locked set refuses the move, so it is greyed with the reason
              rather than offered and then refused. -->
         <button
-          v-if="setParentName(sidebarCtxSet)"
+          v-if="setHasParent(sidebarCtxSet)"
           class="ctx-item"
           :disabled="isReadOnly || sidebarCtxSet.locked"
           :class="{ 'ctx-item--disabled': sidebarCtxSet.locked }"
@@ -6675,9 +6697,13 @@ defineExpose({
             activator="parent"
           />
           <v-icon class="ctx-icon">mdi-arrow-top-left</v-icon>
-          <span class="ctx-label-text"
-            >Move out of "{{ setParentName(sidebarCtxSet) }}"</span
-          >
+          <!-- A parent outside the current scope is not listed, so it has no
+               name to give; the set still moves. -->
+          <span class="ctx-label-text">{{
+            setParentName(sidebarCtxSet)
+              ? `Move out of "${setParentName(sidebarCtxSet)}"`
+              : "Move to the top level"
+          }}</span>
         </button>
         <button
           class="ctx-item"

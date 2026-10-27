@@ -93,20 +93,22 @@ def lift_children(
 
 
 def owning_character_id(session: Session, set_id: int) -> Optional[int]:
-    """The person a set is of: its reference owner, or the nearest person above it.
+    """The person a set is of: the nearest person at or above it.
 
-    A set under a person, or under a set under a person, is a character LoRA's
-    dataset; a chain that ends at a top-level set is a concept's.
+    A step names its person either as the set's reference owner or through
+    ``parent_character_id``, so a set under a person, under a person's
+    reference set, or under a set under either, is a character LoRA's dataset;
+    a chain that ends at an ordinary top-level set is a concept's.
     """
-    owner = session.exec(
-        select(Character.id).where(Character.reference_picture_set_id == set_id)
-    ).first()
-    if owner is not None:
-        return owner
     seen: set[int] = set()
     current: Optional[int] = set_id
     while current is not None and current not in seen:
         seen.add(current)
+        owner = session.exec(
+            select(Character.id).where(Character.reference_picture_set_id == current)
+        ).first()
+        if owner is not None:
+            return owner
         row = session.get(PictureSet, current)
         if row is None:
             return None

@@ -229,17 +229,6 @@
   border-bottom: 1px solid rgb(var(--v-theme-divider));
 }
 
-/* Plain neighbouring rows: a hairline from the name column, so the marks
-   still read as one clean column. */
-.sidebar-tree-plain + .sidebar-tree-plain > .sidebar-list-item:first-child::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: calc(var(--tree-row-start) + var(--sidebar-thumb-size) + var(--space-3));
-  right: var(--space-4);
-  border-top: 1px solid rgb(var(--v-theme-divider));
-}
-
 .sidebar-section-add {
   display: inline-flex;
   align-items: center;
@@ -981,12 +970,6 @@
   margin: 0;
   border: none;
   box-shadow: none;
-}
-
-.sidebar-set-thumb-image--large {
-  width: var(--sidebar-thumb-size);
-  height: var(--sidebar-thumb-size);
-  border-radius: var(--sidebar-item-radius);
 }
 
 .sidebar-list-item:hover .sidebar-character-thumb,

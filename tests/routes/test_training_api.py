@@ -1457,6 +1457,14 @@ def test_dataset_counts_and_checks_and_knows_a_reference_set():
             "/training/dataset", params={"set_id": child_id, "character_id": char_id}
         )
         assert r.status_code == 200, r.text
+        # A set under the person's reference set is theirs too.
+        r = owner.post(
+            "/picture_sets", json={"name": "ref kid", "parent_set_id": ref_id}
+        )
+        ref_kid = r.json()["picture_set"]["id"]
+        r = owner.get("/training/dataset", params={"set_id": ref_kid})
+        assert r.json()["character_id"] == char_id
+        assert r.json()["character"]["child_set"]["id"] == ref_kid
         # The reference set itself is not a child set.
         r = owner.get("/training/dataset", params={"set_id": ref_id})
         assert r.json()["character"]["child_set"] is None

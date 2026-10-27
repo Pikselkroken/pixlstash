@@ -86,11 +86,11 @@ export function flattenBranch(children, bySet, isExpanded) {
   return rows;
 }
 
-// A level-1 child's mark lands under its parent's name (visual-language.md
-// §5.1). Each deeper level steps in by half a child mark plus --space-3, so its
-// guide hangs from the centre of the mark above and still ticks in before its
-// own: a whole mark per level left a name at depth 2 a few letters wide.
-const DEEPER_STEP = "(var(--tree-kid-thumb) / 2 + var(--space-3))";
+// A child's mark hangs just past the centre of its parent's mark: half that
+// mark plus --space-4, which leaves the guide a visible tick before the child.
+// The owner ruled under-the-name too deep (a whole parent mark per level).
+const LEVEL_ONE = "var(--sidebar-thumb-size) / 2 + var(--space-4)";
+const DEEPER_STEP = "(var(--tree-kid-thumb) / 2 + var(--space-4))";
 
 /**
  * Where the guide line of a level-`level` row falls, from the start of its
@@ -101,7 +101,7 @@ const DEEPER_STEP = "(var(--tree-kid-thumb) / 2 + var(--space-3))";
  */
 export function treeGuideX(level) {
   if (level <= 1) return "calc(var(--sidebar-thumb-size) / 2)";
-  return `calc(var(--sidebar-thumb-size) + var(--space-3) + ${level - 2} * ${DEEPER_STEP} + var(--tree-kid-thumb) / 2)`;
+  return `calc(${LEVEL_ONE} + ${level - 2} * ${DEEPER_STEP} + var(--tree-kid-thumb) / 2)`;
 }
 
 /**
@@ -111,7 +111,7 @@ export function treeGuideX(level) {
  * @returns {string} a CSS length.
  */
 export function treeSpacerWidth(level) {
-  return `calc(var(--sidebar-thumb-size) + var(--space-3) + ${Math.max(0, level - 1)} * ${DEEPER_STEP})`;
+  return `calc(${LEVEL_ONE} + ${Math.max(0, level - 1)} * ${DEEPER_STEP})`;
 }
 
 /**
