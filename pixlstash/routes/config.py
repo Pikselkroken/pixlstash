@@ -213,6 +213,13 @@ def create_router(server) -> APIRouter:
             ),
         )
         check_for_updates: Optional[bool] = None
+        training_presets_auto_check: Optional[bool] = Field(
+            default=None,
+            description=(
+                "Check pixlstash.dev for newer training recipes once a day, "
+                "when the Train dialog opens. Off until turned on."
+            ),
+        )
         telemetry_send_install_id: Optional[bool] = Field(
             default=None,
             description=(

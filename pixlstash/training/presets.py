@@ -23,6 +23,12 @@ It picks the least offloading that fits within the fit choice and never lowers
 resolution, rank or steps to make a run fit; when nothing fits it says which
 budget is short. Keys are the dotted :data:`TUNABLE_KEYS` names, relative to
 ``config.process[0]``.
+
+A newer version of a shipped recipe can be downloaded from pixlstash.dev
+(:mod:`pixlstash.training.preset_updates`) into :func:`use_cache_dir`. It
+replaces the shipped one only while it passes :func:`validate_update`: the
+same family, model sources and compatibility keys, a higher version, and no key
+outside the schema.
 """
 
 from __future__ import annotations
@@ -59,6 +65,39 @@ EVIDENCE = ("measured", "reported", "derived", "none")
 PROMPTS_KEY = "sample.samples[*].prompt"
 _MAX_PROMPTS = 16
 EFFORT_STEP_KEYS = ("steps_per_picture", "min_steps", "max_steps")
+FIELDS = (
+    "id",
+    "version",
+    "label",
+    "requires_arch",
+    "template",
+    "divisibility",
+    "locked",
+    "defaults",
+    "inference_target",
+    "preview",
+    "subject",
+    "effort",
+    "fit",
+    "hardware_profiles",
+    "sources",
+)
+PROFILE_FIELDS = (
+    "label",
+    "vram_mb",
+    "ram_mb",
+    "max_bucket",
+    "max_rank",
+    "max_batch",
+    "evidence",
+    "settings",
+)
+_PROFILE_NUMBERS = ("vram_mb", "ram_mb", "max_bucket", "max_rank", "max_batch")
+# What a downloaded recipe may not change: the family and its model sources.
+UPDATE_FIXED = ("id", "requires_arch", "template", "divisibility", "locked")
+
+# Where downloaded recipes are kept (beside the hub); None reads shipped only.
+_cache_dir: str | None = None
 
 
 class PresetError(ValueError):
@@ -117,25 +156,11 @@ def validate_preset(preset: dict) -> dict:
         PresetError: Naming the first broken part.
     """
     pid = preset.get("id") or "?"
-    for field in (
-        "id",
-        "version",
-        "label",
-        "requires_arch",
-        "template",
-        "divisibility",
-        "locked",
-        "defaults",
-        "inference_target",
-        "preview",
-        "subject",
-        "effort",
-        "fit",
-        "hardware_profiles",
-        "sources",
-    ):
+    for field in FIELDS:
         if field not in preset:
             raise PresetError(f"{pid}: missing '{field}'.")
+    if not isinstance(preset["version"], int) or isinstance(preset["version"], bool):
+        raise PresetError(f"{pid}: version must be a whole number.")
     if "model.name_or_path" not in preset["locked"]:
         raise PresetError(f"{pid}: locked must name 'model.name_or_path'.")
     for key in preset["locked"]:
@@ -145,7 +170,8 @@ def validate_preset(preset: dict) -> dict:
     target = preset["inference_target"]
     if target not in preset["preview"]:
         raise PresetError(f"{pid}: no preview for inference target '{target}'.")
-    _check_table(pid, f"preview.{target}", preset["preview"][target])
+    for name, table in preset["preview"].items():
+        _check_table(pid, f"preview.{name}", table)
     if set(preset["subject"]) != set(SUBJECTS):
         raise PresetError(f"{pid}: subject must hold exactly {', '.join(SUBJECTS)}.")
     for name, row in preset["subject"].items():
@@ -154,7 +180,13 @@ def validate_preset(preset: dict) -> dict:
         raise PresetError(f"{pid}: effort must hold exactly {', '.join(EFFORTS)}.")
     for name, row in preset["effort"].items():
         steps = [row.get(k) for k in EFFORT_STEP_KEYS]
-        if not all(isinstance(v, (int, float)) and v > 0 for v in steps):
+        if not all(
+            isinstance(v, (int, float))
+            and not isinstance(v, bool)
+            and math.isfinite(v)
+            and v > 0
+            for v in steps
+        ):
             raise PresetError(
                 f"{pid}: effort.{name} needs {', '.join(EFFORT_STEP_KEYS)}."
             )
@@ -174,17 +206,13 @@ def validate_preset(preset: dict) -> dict:
     for name, profile in profiles.items():
         if profile.get("evidence") not in EVIDENCE:
             raise PresetError(f"{pid}: profile {name} has no valid evidence level.")
-        for field in (
-            "label",
-            "vram_mb",
-            "ram_mb",
-            "max_bucket",
-            "max_rank",
-            "max_batch",
-            "settings",
-        ):
+        for field in PROFILE_FIELDS:
             if field not in profile:
                 raise PresetError(f"{pid}: profile {name} is missing '{field}'.")
+        for field in _PROFILE_NUMBERS:
+            value = profile[field]
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise PresetError(f"{pid}: profile {name} {field} must be above 0.")
         _check_table(pid, f"hardware_profiles.{name}", profile["settings"])
         # Every profile writes the same keys, so the one picked fully decides
         # the memory settings instead of inheriting another tier's.
@@ -209,8 +237,69 @@ def validate_preset(preset: dict) -> dict:
     return preset
 
 
+def validate_update(preset: dict, shipped: dict) -> dict:
+    """Check a downloaded *preset* may replace *shipped*, and return it.
+
+    It may change values and memory profiles, never the family, its model
+    sources and compatibility keys (:data:`UPDATE_FIXED`), and it holds no key
+    outside the schema.
+
+    Raises:
+        PresetError: Naming the first thing it may not do.
+    """
+    pid = shipped["id"]
+    if not isinstance(preset, dict):
+        raise PresetError(f"{pid}: a recipe must be an object.")
+    extra = set(preset) - set(FIELDS)
+    if extra:
+        raise PresetError(f"{pid}: unknown keys {', '.join(sorted(extra))}.")
+    try:
+        validate_preset(preset)
+    except (TypeError, AttributeError, KeyError) as exc:
+        # A wrong type the shipped files never carry (a list for a table).
+        raise PresetError(f"{pid}: malformed recipe: {exc!r}.") from exc
+    for field in UPDATE_FIXED:
+        if preset[field] != shipped[field]:
+            raise PresetError(f"{pid}: an update may not change '{field}'.")
+    if not isinstance(preset["label"], str):
+        raise PresetError(f"{pid}: label must be text.")
+    for name, profile in preset["hardware_profiles"].items():
+        extra = set(profile) - set(PROFILE_FIELDS)
+        if extra:
+            raise PresetError(
+                f"{pid}: profile {name} has unknown keys {', '.join(sorted(extra))}."
+            )
+    for choice, names in preset["fit"].items():
+        if not isinstance(names, list):
+            raise PresetError(f"{pid}: fit.{choice} must be a list.")
+    sources = preset["sources"]
+    if not isinstance(sources, dict) or not all(
+        isinstance(v, str) for v in sources.values()
+    ):
+        raise PresetError(f"{pid}: sources must map each value to text.")
+    return preset
+
+
+def use_cache_dir(path: str | None) -> None:
+    """Read downloaded recipes from *path* (None: shipped only)."""
+    global _cache_dir
+    _cache_dir = path
+    reload()
+
+
+def cache_dir() -> str | None:
+    """Where downloaded recipes are kept, or None."""
+    return _cache_dir
+
+
+def reload() -> None:
+    """Forget what was read, so the next read sees the cache as it is now."""
+    _load_all.cache_clear()
+
+
 @lru_cache(maxsize=None)
-def _load_all() -> dict[str, dict]:
+def shipped_presets() -> dict[str, dict]:
+    """The recipes that ship in ``pixlstash/data/training-presets/``, by id."""
     presets = {}
     for filename in sorted(os.listdir(PRESET_DIR)):
         if not filename.endswith(".json"):
@@ -222,8 +311,45 @@ def _load_all() -> dict[str, dict]:
     return presets
 
 
+def _cached(shipped: dict) -> dict | None:
+    """The downloaded version of *shipped*, when it may replace it."""
+    if _cache_dir is None:
+        return None
+    path = os.path.join(_cache_dir, f"{shipped['id']}.json")
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as handle:
+            preset = validate_update(json.load(handle), shipped)
+    except (OSError, ValueError) as exc:
+        logger.warning(
+            "Ignoring the downloaded recipe %s (%s); using the shipped version %s.",
+            path,
+            exc,
+            shipped["version"],
+        )
+        return None
+    if preset["version"] <= shipped["version"]:
+        logger.info(
+            "Ignoring the downloaded recipe %s: version %s is not above the "
+            "shipped %s.",
+            path,
+            preset["version"],
+            shipped["version"],
+        )
+        return None
+    return preset
+
+
+@lru_cache(maxsize=None)
+def _load_all() -> dict[str, dict]:
+    return {
+        pid: _cached(shipped) or shipped for pid, shipped in shipped_presets().items()
+    }
+
+
 def list_presets() -> list[dict]:
-    """Every shipped preset: :data:`DEFAULT_PRESET` first, then by id.
+    """Every preset, downloaded where newer: :data:`DEFAULT_PRESET` first, then by id.
 
     The Train dialog preselects the first one the checkout can run.
     """
@@ -232,7 +358,7 @@ def list_presets() -> list[dict]:
 
 
 def get_preset(preset_id: str) -> dict | None:
-    """The shipped preset *preset_id*, or None."""
+    """The preset *preset_id* (its downloaded version where newer), or None."""
     return _load_all().get(preset_id)
 
 

@@ -41,6 +41,7 @@ from pixlstash.training import (
     ai_toolkit_install,
     live_view,
     measurements,
+    preset_updates,
     presets,
     sample_prompts,
 )
@@ -217,6 +218,10 @@ def create_router(server) -> APIRouter:
         The configured :class:`fastapi.APIRouter`.
     """
     router = APIRouter()
+    # Recipes downloaded from pixlstash.dev live beside the hub.
+    presets.use_cache_dir(
+        os.path.join(os.path.dirname(server.server_config_path), "training-presets")
+    )
 
     def _ensure_secure(request: Request) -> None:
         server.auth.ensure_secure_when_required(request)
@@ -582,6 +587,29 @@ def create_router(server) -> APIRouter:
                 "Whether the saved checkout ships that model code; a recipe "
                 "that is not offered cannot be queued."
             ),
+        )
+
+    class PresetUpdateItem(BaseModel):
+        """A recipe a check replaced with a newer version from pixlstash.dev."""
+
+        id: str = Field(..., description="The recipe's id.")
+        label: str = Field(..., description="The model family it trains.")
+        version: int = Field(..., description="The version now in use.")
+
+    class PresetCheckResponse(BaseModel):
+        """What a check for newer training recipes did."""
+
+        checked: bool = Field(
+            ...,
+            description=(
+                "False when an automatic check was not due or is not turned on."
+            ),
+        )
+        updated: list[PresetUpdateItem] = Field(
+            ..., description="The recipes replaced by a newer version."
+        )
+        error: Optional[str] = Field(
+            None, description="Why the recipe list could not be read, if it could not."
         )
 
     class SamplePromptItem(BaseModel):
@@ -1824,6 +1852,27 @@ def create_router(server) -> APIRouter:
         _ensure_secure(request)
         user = server.auth.get_user()
         return _preset_items(user.ai_toolkit_repo_path if user is not None else None)
+
+    @router.post(
+        "/training/presets/check",
+        summary="Check pixlstash.dev for newer training recipes",
+        response_model=PresetCheckResponse,
+        description=(
+            "Fetches the recipe list from pixlstash.dev and keeps each newer "
+            "recipe that validates, matches its sha256, needs no newer "
+            "PixlStash and changes no model source; anything else is logged "
+            "and ignored. `automatic` is the daily check: it does nothing "
+            "unless the owner turned automatic checks on, or when the last "
+            "check was under a day ago. Owner-only."
+        ),
+    )
+    def check_training_presets(request: Request, automatic: bool = False):
+        _ensure_secure(request)
+        if automatic:
+            user = server.auth.get_user()
+            if user is None or not user.training_presets_auto_check:
+                return {"checked": False, "updated": [], "error": None}
+        return preset_updates.check(automatic=automatic)
 
     @router.get(
         "/training/sample-prompts",

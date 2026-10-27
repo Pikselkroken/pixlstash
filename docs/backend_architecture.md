@@ -35,7 +35,7 @@
 22. [Tiered Duplicate Detection](#22-tiered-duplicate-detection)
 23. [Opt-in telemetry](#23-opt-in-telemetry-the-install-id-and-the-consent-flags)
 24. [Folder structure: read, commit, layout and moves](#24-folder-structure-read-commit-layout-and-moves) — incl. [24.1 The folder-structure read](#241-the-folder-structure-read), [24.2 The folder-structure commit](#242-the-folder-structure-commit), [24.3 The library layout](#243-the-library-layout), [24.4 The layout and the move engine](#244-the-layout-and-the-move-engine), [24.5 Reconciling moves made outside PixlStash](#245-reconciling-moves-made-outside-pixlstash)
-25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Picking up a model that landed after the scan (#1985)](#2513-picking-up-a-model-that-landed-after-the-scan-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116), [25.17 Sample prompts written from the dataset (#2117)](#2517-sample-prompts-written-from-the-dataset-2117), [25.18 Watching a run live (#2118)](#2518-watching-a-run-live-2118), [25.19 The Train dialog's preview: dataset checks and resolve (#2119)](#2519-the-train-dialogs-preview-dataset-checks-and-resolve-2119), [25.20 Checking memory and speed, and learning from runs (#2120)](#2520-checking-memory-and-speed-and-learning-from-runs-2120)
+25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Picking up a model that landed after the scan (#1985)](#2513-picking-up-a-model-that-landed-after-the-scan-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116), [25.17 Sample prompts written from the dataset (#2117)](#2517-sample-prompts-written-from-the-dataset-2117), [25.18 Watching a run live (#2118)](#2518-watching-a-run-live-2118), [25.19 The Train dialog's preview: dataset checks and resolve (#2119)](#2519-the-train-dialogs-preview-dataset-checks-and-resolve-2119), [25.20 Checking memory and speed, and learning from runs (#2120)](#2520-checking-memory-and-speed-and-learning-from-runs-2120), [25.21 Recipe updates from pixlstash.dev (#2122)](#2521-recipe-updates-from-pixlstashdev-2122)
 26. [Prompt match](#26-prompt-match)
 
 ---
@@ -816,6 +816,7 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/training/jobs/{job_id}/live                                           |                 | Watch a training job                                          |
 | GET    | /api/v1/training/jobs/{job_id}/status                                         |                 | Poll training job status                                      |
 | GET    | /api/v1/training/presets                                                      |                 | List training recipes                                         |
+| POST   | /api/v1/training/presets/check                                                |                 | Check pixlstash.dev for newer training recipes                |
 | POST   | /api/v1/training/resolve                                                      |                 | Preview what a training run would use                         |
 | GET    | /api/v1/training/sample-prompts                                               |                 | Default sample prompts for a training run                     |
 | GET    | /api/v1/workflows                                                             | workflows       | The Workflows grid                                            |
@@ -11694,6 +11695,48 @@ WDDM, Docker) no GPU peak is measured, the seed stays the need and the lease
 keeps its whole reservation. Not verified on hardware in this change: an
 ai-toolkit probe end to end, and the after-training pass's
 `pretrained_lora_path` + `start_step` behaviour.
+
+### 25.21 Recipe updates from pixlstash.dev (#2122)
+
+A recipe (§25.16) can be corrected without shipping PixlStash. The site serves
+`website/training-presets/v1/`: `index.json` (`id`, `version`, `file`, `sha256`
+and `min_pixlstash` per recipe) and each shipped recipe byte for byte.
+`scripts/build_training_presets_site.py` writes it from
+`pixlstash/data/training-presets/` (`preset_updates.site_files`), and
+`tests/training/test_preset_updates.py` fails while the committed copy has
+drifted, so a recipe edit lands on the site with the next Pages deploy of
+`main`. `.gitattributes` pins both trees to LF, because the index carries each
+file's hash. `min_pixlstash` is `preset_updates.MIN_PIXLSTASH`: raise it when
+the schema changes in a way an older app would misread.
+
+**The backend fetches, never the browser.** `POST /training/presets/check`
+(owner-only) calls `preset_updates.check`: the index, then each recipe it names,
+from the fixed `SITE_URL`, with a 3 s timeout, no redirects and a 1 MB cap per
+file. It runs only on the Train dialog's "Check for recipe updates" button or,
+with `?automatic=true`, the daily check, which the route refuses unless the
+owner set `user.training_presets_auto_check` (NULL until asked, so off) and
+which `check` skips when the last check, of either kind, was under a day ago
+(the `last-check` stamp, written before the request so a failing check does not
+repeat).
+
+**A downloaded file wins only when** its id is a recipe this app ships, its
+version is above the one in use, `min_pixlstash` is met, its sha256 matches the
+index, it parses without NaN or Infinity, the file's version is the index's,
+and it passes `presets.validate_update`: the full schema plus no key outside
+`FIELDS` or `PROFILE_FIELDS`, and `id`, `requires_arch`, `template`,
+`divisibility` and the whole `locked` table equal to the shipped recipe's
+(`UPDATE_FIXED`). So it can change values and memory profiles for a family the
+app knows, never add a model source, a family or a config key outside
+`TUNABLE_KEYS`. The URL is built from the shipped id, never from the index's
+`file`. Anything else is logged and ignored.
+
+**The cache lives beside the hub**, `<config dir>/training-presets/<id>.json`,
+set by the training router (`presets.use_cache_dir`). `presets._load_all`
+overlays it on `shipped_presets()` at every read after `presets.reload()`,
+validating again, so a cached file that an app upgrade has caught up with (its
+version no longer above the shipped one) or that was edited on disk falls back
+to the shipped recipe with a log line. A run records `id@version`, so a run
+names the version it was resolved with.
 
 ## 26. Prompt match
 

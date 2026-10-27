@@ -13,6 +13,16 @@ export function listTrainingPresets() {
 }
 
 /**
+ * Ask pixlstash.dev for newer recipes; the backend fetches and verifies them.
+ * `automatic` is the daily check, a no-op unless the owner turned it on.
+ */
+export function checkTrainingPresets(automatic = false) {
+  return unwrap(
+    apiClient.post("/training/presets/check", null, { params: { automatic } }),
+  );
+}
+
+/**
  * What a run of a set or character would hold, and the checks before Start.
  * `set_id` with `character_id` means that character's reference set.
  */

@@ -655,6 +655,7 @@ jobs:
           tests/training/test_live_view.py
           tests/training/test_local_ai_toolkit.py
           tests/training/test_measurements.py
+          tests/training/test_preset_updates.py
           tests/training/test_presets.py
           tests/training/test_sample_prompts.py
           tests/training/test_training_service.py

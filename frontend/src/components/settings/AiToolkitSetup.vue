@@ -6,7 +6,7 @@
 // Invariant: the two paths are only saved once a check has passed on them, so
 // a saved install is one PixlStash has seen train.
 import { computed, nextTick, ref, watch } from "vue";
-import { VIcon, VProgressCircular } from "vuetify/components";
+import { VIcon, VProgressCircular, VSwitch } from "vuetify/components";
 import { useTrainingStore } from "../../stores/useTrainingStore";
 import { errorMessage } from "../../utils/apiError";
 import AppButton from "../widgets/AppButton.vue";
@@ -39,6 +39,8 @@ const folderPath = ref("");
 const browseOpen = ref(false);
 // What the live region says. One line per change of state.
 const liveText = ref("");
+
+const autoCheckError = ref("");
 
 const connectButton = ref(null);
 const checkAgainButton = ref(null);
@@ -286,6 +288,16 @@ async function disconnect() {
   (connectButton.value || chooseButton.value)?.focus();
 }
 
+// Check pixlstash.dev for newer recipes once a day (off until turned on).
+async function setAutoCheck(on) {
+  autoCheckError.value = "";
+  try {
+    await store.setPresetsAutoCheck(on);
+  } catch (err) {
+    autoCheckError.value = errorMessage(err, "Could not save that setting.");
+  }
+}
+
 // ── Lifecycle: read the saved install, or look for one, when the tab opens ──
 watch(
   () => props.open,
@@ -525,6 +537,26 @@ watch(
         >
           Disconnect
         </AppButton>
+      </div>
+
+      <div class="ait-stack">
+        <v-switch
+          :model-value="store.presetsAutoCheck === true"
+          color="primary"
+          density="compact"
+          hide-details
+          label="Check pixlstash.dev for recipe updates automatically"
+          data-testid="ait-recipe-auto-check"
+          @update:model-value="setAutoCheck"
+        />
+        <p class="ait-small ait-muted">
+          Once a day, when you open Train a LoRA. A newer recipe can correct
+          settings and memory figures; it never changes which model is trained.
+        </p>
+        <p v-if="autoCheckError" class="ait-error" role="alert">
+          <v-icon size="16" class="ait-error__icon">mdi-alert-rhombus-outline</v-icon>
+          <span>{{ autoCheckError }}</span>
+        </p>
       </div>
 
       <!-- How this install trains. The same for every local install. -->

@@ -2195,6 +2195,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         justification="Chooses which checkpoint covers one of the owner's own trained runs; renumbers stack_position in the hub and moves the set's or character's LoRA attachment in the vault, touching no file on disk; PUT blocked for READ tokens; owner only",
     ),
     ("GET", "/api/v1/training/presets"): RoutePolicy(_OWNER),
+    ("POST", "/api/v1/training/presets/check"): RoutePolicy(
+        _OWNER,
+        justification="Fetches the recipe list from the fixed pixlstash.dev URL and writes verified recipes into the app's own cache beside the hub; takes no URL or path from the caller and returns no per-object data; POST blocked for READ tokens; owner only",
+    ),
     ("GET", "/api/v1/training/sample-prompts"): RoutePolicy(_OWNER),
     ("GET", "/api/v1/training/dataset"): RoutePolicy(_OWNER),
     ("POST", "/api/v1/training/resolve"): RoutePolicy(_OWNER),

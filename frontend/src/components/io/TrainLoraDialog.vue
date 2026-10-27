@@ -111,8 +111,47 @@
         <span v-if="presetVerdict && presetVerdict !== 'fits'" class="tld-hint">
           {{ VERDICT_LABELS[presetVerdict] }}
         </span>
+        <span class="tld-hint">
+          <button
+            type="button"
+            class="tld-link"
+            :aria-busy="store.presetCheckBusy"
+            :aria-disabled="store.presetCheckBusy"
+            data-testid="tld-check-presets"
+            @click="onCheckPresets"
+          >
+            Check for recipe updates
+          </button>
+          <span role="status" data-testid="tld-check-presets-status">{{
+            store.presetCheckBusy
+              ? " Checking pixlstash.dev…"
+              : store.presetCheckMessage && ` ${store.presetCheckMessage}`
+          }}</span>
+        </span>
       </div>
     </div>
+
+    <!-- Asked once, after the first check: whether to check every day. -->
+    <div
+      v-if="askAutoCheck"
+      class="tld-notice tld-notice--ask"
+      role="group"
+      aria-labelledby="tld-auto-check-q"
+      data-testid="tld-auto-check-ask"
+    >
+      <span id="tld-auto-check-q" class="tld-sp">
+        Check for recipe updates automatically, once a day?
+      </span>
+      <AppButton size="sm" variant="secondary" @click="answerAutoCheck(true)">
+        Yes
+      </AppButton>
+      <AppButton size="sm" variant="ghost" @click="answerAutoCheck(false)">
+        No
+      </AppButton>
+    </div>
+    <p v-else-if="autoCheckNote" class="tld-hint" role="status" data-testid="tld-auto-check-note">
+      {{ autoCheckNote }}
+    </p>
 
     <div class="tld-field">
       <div class="tld-label-row">
@@ -804,6 +843,41 @@ function keepEnterInField(event) {
   if (event.target instanceof HTMLInputElement) event.preventDefault();
 }
 
+// Recipe updates. The first check asks whether to check every day; the answer
+// is the setting in Settings › AI-toolkit, so it is asked only once.
+const askAutoCheck = ref(false);
+const autoCheckNote = ref("");
+
+async function onCheckPresets() {
+  if (store.presetCheckBusy) return;
+  const firstTime = store.presetsAutoCheck === null;
+  await store.checkPresetUpdates();
+  if (firstTime && store.presetsAutoCheck === null) askAutoCheck.value = true;
+}
+
+async function answerAutoCheck(on) {
+  askAutoCheck.value = false;
+  try {
+    await store.setPresetsAutoCheck(on);
+    autoCheckNote.value = on
+      ? "PixlStash will check once a day when you open this dialog."
+      : "You can turn on automatic checks any time in Settings › AI-toolkit.";
+  } catch (err) {
+    console.warn("Could not save the recipe update setting:", err);
+    autoCheckNote.value = "Could not save that. Try again in Settings › AI-toolkit.";
+  }
+}
+
+watch(
+  () => store.trainDialogOpen,
+  (open) => {
+    if (!open) {
+      askAutoCheck.value = false;
+      autoCheckNote.value = "";
+    }
+  },
+);
+
 function goToSettings() {
   store.closeDialog();
   // Bump the deep-link request. App.vue opens the settings dialog and
@@ -1007,6 +1081,10 @@ function goToSettings() {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+}
+
+.tld-notice--ask {
+  align-items: center;
 }
 
 .tld-link {

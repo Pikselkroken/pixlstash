@@ -152,6 +152,7 @@ CREATE TABLE IF NOT EXISTS user (
     ai_toolkit_repo_path        TEXT,
     ai_toolkit_python           TEXT,
     ai_toolkit_commit           TEXT,
+    training_presets_auto_check INTEGER,
     public_url                  TEXT,
     keep_models_in_memory       INTEGER,
     max_vram_gb                 REAL,
@@ -2070,6 +2071,9 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     for column in ("ai_toolkit_repo_path", "ai_toolkit_python", "ai_toolkit_commit"):
         if column not in user_columns:
             conn.execute(f"ALTER TABLE user ADD COLUMN {column} TEXT")
+    # Recipe updates from pixlstash.dev (#2122): NULL until the owner is asked.
+    if "training_presets_auto_check" not in user_columns:
+        conn.execute("ALTER TABLE user ADD COLUMN training_presets_auto_check INTEGER")
     # Mouse preferences (#2138): NULL reads as the model default.
     for column in ("grid_open_gesture", "viewer_wheel_action"):
         if column not in user_columns:
