@@ -35,9 +35,9 @@
     <!-- The toolbar is browse only (#2168): Sort, Filter, the name search and
          the app's own controls. Adding, managing folders, and the training-runs
          view are the sidebar's; the verbs are on the selection pill, the row
-         menu and the shortcuts. -->
+         menu and the shortcuts. No `Models` title: the title bar's segment and
+         the sidebar already name the view. -->
     <div class="shelf-toolbar">
-      <span class="shelf-title shelf-fold-1262">Models</span>
 
       <!-- An open run's status, Stop and back arrow (TrainingRunLive teleports
            them here): the design puts run status in the shelf's own bar. -->
@@ -45,7 +45,7 @@
 
       <span
         v-if="!runOpen"
-        class="shelf-sub shelf-sub--ingap shelf-fold-1262"
+        class="shelf-sub shelf-fold-1262"
         >{{ isShelfTab ? countLabel : runsCountLabel }}</span
       >
 
@@ -4447,25 +4447,17 @@ watch(
      here put them 8px further left than the grid's, so the pair jumped
      sideways on every view switch. LEFT stays --space-5, the shelf's own
      content gutter (`.shelf-group-btn` and the rows inset by --space-5), so
-     the title sits flush over the list. */
+     the count sits flush over the list. */
   padding: 0 var(--space-3) 0 var(--space-5);
   /* Paint the chrome surface the other two bars paint. Unpainted, this strip
      showed `.shelf`'s `background` through it, which is a different hue and
      value from `toolbar` in both themes - the bar read as page, not chrome.
-     `toolbar-text` is what `.bar-btn` already uses, so the title and the count
-     now inherit the same ink as the buttons beside them. */
+     `toolbar-text` is what `.bar-btn` already uses, so the count now
+     inherits the same ink as the buttons beside it. */
   background: rgb(var(--v-theme-toolbar));
   color: rgb(var(--v-theme-toolbar-text));
   border-bottom: 1px solid rgb(var(--v-theme-divider));
   flex-shrink: 0;
-}
-
-/* --text-md, the queue's `.qtitle`, not --text-xl: 22px is a view heading and
-   does not sit in a 36px band. The two bars that lead with an identity now
-   lead with it at one size. */
-.shelf-title {
-  font-size: var(--text-md);
-  font-weight: var(--weight-semibold);
 }
 
 /* 0.6, the queue's `.qsub` alpha exactly. It was 0.7 on `on-background`, and
@@ -4482,7 +4474,7 @@ watch(
   flex: 1 1 auto;
 }
 
-/* The toolbar separates the title from its controls at --space-4; the controls
+/* The toolbar separates the count from its controls at --space-4; the controls
    separate from each other at --space-3, which is the gap the grid bar uses.
    Without the cluster every child of .shelf-toolbar sat at the wider gap. */
 .shelf-bar-cluster {
@@ -4493,7 +4485,7 @@ watch(
 
 /* ── The ladder ──────────────────────────────────────────────────────────────
 
-   The bar has been browse-only since #2168: the title and count, Sort, Show
+   The bar has been browse-only since #2168: the count, Sort, Show
    (Filter), the sidebar's chips, the name field and the rail toggle. Add and
    Model folders moved to the Models sidebar, so the fold that hid them behind
    a ⋯ went with them. The rungs below were measured on the wider bar this one
@@ -4510,9 +4502,8 @@ watch(
   flex: none;
 }
 
-/* Rung 1. The two things on the bar that REPORT rather than control: the
-   view's own name, which the sidebar already says, and the count. They go
-   before the name field, a control. */
+/* Rung 1. The one thing on the bar that REPORTS rather than controls: the
+   count. It goes before the name field, a control. */
 @container shelfbar (max-width: 1238px) {
   .shelf-fold-1262 {
     display: none;
@@ -4669,12 +4660,6 @@ watch(
   align-items: center;
   flex: 1 1 auto;
   min-width: 0;
-  margin-left: var(--space-3);
-}
-
-/* The gap the count sits in is the bar's cluster gap, not a hair. */
-.shelf-sub--ingap {
-  margin-left: var(--space-4);
 }
 
 /* Raised so the focus ring is not clipped by the welded sibling. */

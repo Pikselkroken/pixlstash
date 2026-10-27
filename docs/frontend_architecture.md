@@ -4430,13 +4430,14 @@ view by construction. `/models/runs` stays a PATH for the reason above, and
 The shelf's former Shelf / Training runs tab strip is gone; the runs panel still carries
 `aria-labelledby="shelf-tab-runs"`, which names an id nothing defines any more.
 
-**The toolbar is browse only (#2168).** From the left: the title `Models`, the count, and
+**The toolbar is browse only (#2168).** From the left: the count (no `Models` title: the
+title bar's segment and the sidebar name the view), and
 on the shelf tab the **Sort** split-button (a direction toggle and a menu, the menu not
 drawn on the Sets place), **Show** (the filter menu, whose badge counts active filters,
 never results), the open folder's breadcrumb on the `folder` place (#2203), and the name
 field; then the tail `[separator] [TbGlobalActions]`. Adding models,
 managing folders and the training-runs view are the sidebar's; the verbs are on the
-selection pill, the row menu and the shortcuts. Everything but the title, the count and the
+selection pill, the row menu and the shortcuts. Everything but the count and the
 tail is `v-if`'d to the shelf tab, because all of it acts on `model_file` rows that are not
 on screen on the runs tab. Hidden rather than disabled: a disabled control owes an
 explanation, and these are not about a selection the reader just made. While a run is open
@@ -4466,7 +4467,7 @@ steps on screens the reader is not on. `Ctrl+Z` still declines here (`useGlobalK
 `SHELF_NO_UNDO_KEY`, so a held chord updates one card rather than stacking. The shelf's only
 receipt is `ActionReceipt` (`local-only`) for its own set edits. `.shelf-toolbar` declares
 `container-name: shelfbar toolbar` and the ladder in the CSS is three rungs that act on the
-bar: at `≤1238px` the title and the count fold (`.shelf-fold-1262`), at `≤1007px` the name
+bar: at `≤1238px` the count folds (`.shelf-fold-1262`), at `≤1007px` the name
 field goes (Show's own copy is always there), and at `≤816px` Sort drops its value
 (`.bar-btn-value`) and keeps glyph and chevron. The rung that folded Add and Model
 folders into a ⋯ went with them (#2168). The thresholds were measured on the wider bar
@@ -4485,8 +4486,8 @@ and moved the one pair of controls that means the same thing in every view.
 `rgb(var(--v-theme-toolbar))` with `toolbar-text` ink, and takes the queue's
 split inset `0 var(--space-3) 0 var(--space-5)` — right pinned to the grid's so
 the app-wide tail is a fixed anchor, left at the shelf's own content gutter.
-`.shelf-title` sits at `--text-md` (the queue's `.qtitle`) rather than
-`--text-xl`, and `.shelf-sub` at the queue's `.qsub` alpha. `Toolbar.test.js` reads the CSS block of all three
+`.shelf-sub` takes the queue's `.qsub` size and alpha (the bar no longer
+carries a `.shelf-title`). `Toolbar.test.js` reads the CSS block of all three
 selectors and asserts the shared recipe, the equal right inset, exactly one
 `background` declaration painting `toolbar`, and the identity type matching the
 queue's; jsdom computes no layout, so the coupling is what is pinned. **Fine
@@ -4836,9 +4837,9 @@ it has no docked form yet. Its header slot and footer band are
 `--sidebar-slot-h` and `--sidebar-band-h`, the Media sidebar's (#2159), so
 neither edge moves on a workspace switch.
 
-- **The header slot is one *Model folders* button** (#2203), reading
-  "N drives · M folders" (the folders the shelf catalogues, not the ai-toolkit
-  root nor Downloads), at the toolbar's height and on its line. It opens
+- **The header slot is one *Model folders* button** (#2203), the name and a
+  cog with no count (the tree below already shows the drives and folders), at
+  the toolbar's height and on its line. It opens
   Manage model folders (`store.requestShell('manage-folders', el)`) and
   nothing else: the per-folder list is now the tree, *Add folder…* is in *Add
   models*, and *All folders* is the breadcrumb's first crumb.

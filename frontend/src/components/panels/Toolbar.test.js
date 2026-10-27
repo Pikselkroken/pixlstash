@@ -289,11 +289,10 @@ describe("Toolbar - the shell band's one box recipe", () => {
     expect(rightInset(workflows)).toBe(rightInset(grid));
     expect(rightInset(moves)).toBe(rightInset(grid));
 
-    // Two of the three bars LEAD with an identity (the queue's count, the
-    // shelf's title) and each carries a quieter count beneath it. They read as
-    // one bar in two contexts only if that pair is one size and one ink: the
-    // shelf shipped its title at --text-xl, a 22px view heading that does not
-    // sit in a 36px band, and its count at a third alpha.
+    // The queue LEADS with an identity and a quieter count beside it; the
+    // shelf dropped its title (the sidebar names the view) but keeps the count.
+    // They read as one bar in two contexts only if that count is one size and
+    // one ink: the shelf once shipped its count at a third alpha.
     const decl = (block, property) => {
       const match = block.match(new RegExp(`${property}:\\s*([^;]+);`));
       expect(match, `${property} in ${block.slice(0, 24)}`).toBeTruthy();
@@ -304,10 +303,6 @@ describe("Toolbar - the shell band's one box recipe", () => {
       ".qtitle",
     );
     const qsub = blockOf("src/components/views/DuplicateQueue.vue", ".qsub");
-    const shelfTitle = blockOf(
-      "src/components/views/ModelShelf.vue",
-      ".shelf-title",
-    );
     const shelfSub = blockOf(
       "src/components/views/ModelShelf.vue",
       ".shelf-sub",
@@ -322,8 +317,6 @@ describe("Toolbar - the shell band's one box recipe", () => {
       ".ins-sub",
     );
 
-    expect(decl(shelfTitle, "font-size")).toBe(decl(qtitle, "font-size"));
-    expect(decl(shelfTitle, "font-weight")).toBe(decl(qtitle, "font-weight"));
     expect(decl(shelfSub, "font-size")).toBe(decl(qsub, "font-size"));
     expect(decl(shelfSub, "color")).toBe(decl(qsub, "color"));
     expect(decl(insTitle, "font-size")).toBe(decl(qtitle, "font-size"));
