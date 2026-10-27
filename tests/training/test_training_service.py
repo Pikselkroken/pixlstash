@@ -1339,7 +1339,9 @@ def _run_to_end(hub, service, job, timeout=60.0):
     return _job_status(hub, job["uuid"])
 
 
-def test_an_unmeasured_setup_is_checked_then_learned_from(hub, repo_dir, watched):
+def test_an_unmeasured_setup_is_checked_then_learned_from(
+    hub, repo_dir, watched, monkeypatch
+):
     """The first run of a setup probes it, trains on what the probe measured,
     and leaves its own measurement for the next run."""
     lease = _StubLease()
@@ -1355,10 +1357,15 @@ def test_an_unmeasured_setup_is_checked_then_learned_from(hub, repo_dir, watched
     job = _enqueue_resolved(
         service, resolution, _write_template(repo_dir, steps=4, save_every=2)
     )
+    # A newer recipe arrives from pixlstash.dev while the job waits (#2122):
+    # the re-resolved run uses it and its row says so.
+    newer = {**_ZIT, "version": _ZIT["version"] + 1}
+    monkeypatch.setattr(presets, "get_preset", lambda pid: newer)
 
     row = _run_to_end(hub, service, job)
 
     assert row.status == "completed", row.error
+    assert row.preset == f"zimage-turbo@{newer['version']}"
     # One probe of six updates, then the run itself.
     assert watched() == [f"steps={training_service_module.PROBE_STEPS}", "steps=4"]
     phases = [entry["phase"] for entry in json.loads(row.phase_log)]

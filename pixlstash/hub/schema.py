@@ -725,7 +725,8 @@ _V2_SUPERSEDED_SHELF_TABLES = ("adapter_file", "adapter", "checkpoint")
 #
 # `preset` is the recipe as `id@version`, `resolved_profile` the resolver's JSON
 # (choices, memory profile, every value and its source) and `advanced_pins` the
-# owner's Advanced values as JSON; all three are written once, at enqueue.
+# owner's Advanced values as JSON; all three are written at enqueue, and the
+# first two again when a probed run is re-resolved at launch (§25.20).
 #
 # The live view's three (#2118): `phase_log` is the JSON list of
 # `{phase, at}` the worker appends whenever the run enters a phase,

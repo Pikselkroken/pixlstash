@@ -24,6 +24,7 @@ _MUTABLE_COLUMNS = frozenset(
         "status",
         "base_model",
         "trigger_word",
+        "preset",
         "resolved_profile",
         "rendered_config",
         "dataset_snapshot_path",

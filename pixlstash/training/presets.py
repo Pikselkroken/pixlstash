@@ -27,8 +27,8 @@ budget is short. Keys are the dotted :data:`TUNABLE_KEYS` names, relative to
 A newer version of a shipped recipe can be downloaded from pixlstash.dev
 (:mod:`pixlstash.training.preset_updates`) into :func:`use_cache_dir`. It
 replaces the shipped one only while it passes :func:`validate_update`: the
-same family, model sources and compatibility keys, a higher version, and no key
-outside the schema.
+same family, the same ``locked`` table (model checkpoints, adapter and
+compatibility keys), a higher version, and no key outside the schema.
 """
 
 from __future__ import annotations
@@ -240,9 +240,9 @@ def validate_preset(preset: dict) -> dict:
 def validate_update(preset: dict, shipped: dict) -> dict:
     """Check a downloaded *preset* may replace *shipped*, and return it.
 
-    It may change values and memory profiles, never the family, its model
-    sources and compatibility keys (:data:`UPDATE_FIXED`), and it holds no key
-    outside the schema.
+    It may change values and memory profiles, never the family or the
+    ``locked`` table of model checkpoints, adapter and compatibility keys
+    (:data:`UPDATE_FIXED`), and it holds no key outside the schema.
 
     Raises:
         PresetError: Naming the first thing it may not do.
@@ -321,7 +321,7 @@ def _cached(shipped: dict) -> dict | None:
     try:
         with open(path, encoding="utf-8") as handle:
             preset = validate_update(json.load(handle), shipped)
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:
         logger.warning(
             "Ignoring the downloaded recipe %s (%s); using the shipped version %s.",
             path,

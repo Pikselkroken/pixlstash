@@ -11711,8 +11711,10 @@ the schema changes in a way an older app would misread.
 
 **The backend fetches, never the browser.** `POST /training/presets/check`
 (owner-only) calls `preset_updates.check`: the index, then each recipe it names,
-from the fixed `SITE_URL`, with a 3 s timeout, no redirects and a 1 MB cap per
-file. It runs only on the Train dialog's "Check for recipe updates" button or,
+from the fixed `SITE_URL`, with no redirects, a 1 MB cap per file and 3 s in
+all per file however slowly it arrives (one `recv` per read, the deadline
+checked between them, `Accept-Encoding: identity` so the cap and the hash are
+on the bytes sent). It runs only on the Train dialog's "Check for recipe updates" button or,
 with `?automatic=true`, the daily check, which the route refuses unless the
 owner set `user.training_presets_auto_check` (NULL until asked, so off) and
 which `check` skips when the last check, of either kind, was under a day ago
@@ -11727,16 +11729,25 @@ and it passes `presets.validate_update`: the full schema plus no key outside
 `divisibility` and the whole `locked` table equal to the shipped recipe's
 (`UPDATE_FIXED`). So it can change values and memory profiles for a family the
 app knows, never add a model source, a family or a config key outside
-`TUNABLE_KEYS`. The URL is built from the shipped id, never from the index's
-`file`. Anything else is logged and ignored.
+`TUNABLE_KEYS`. `sources` is provenance text and may change. The URL is built
+from the shipped id, never from the index's `file`, and a second index entry
+for an id is ignored. Anything else is logged and ignored.
+
+**Trust is TLS to pixlstash.dev**: the sha256 comes from the same origin, so it
+catches a truncated or mismatched file, not a compromised site. What such a site
+could still change is bounded by `TUNABLE_KEYS`' ranges (learning rate, steps,
+save and sample frequency, memory figures), never a checkpoint or code. A
+signature over the index is the upgrade if that bound is not enough.
 
 **The cache lives beside the hub**, `<config dir>/training-presets/<id>.json`,
 set by the training router (`presets.use_cache_dir`). `presets._load_all`
 overlays it on `shipped_presets()` at every read after `presets.reload()`,
 validating again, so a cached file that an app upgrade has caught up with (its
 version no longer above the shipped one) or that was edited on disk falls back
-to the shipped recipe with a log line. A run records `id@version`, so a run
-names the version it was resolved with.
+to the shipped recipe with a log line, at the next read (a restart, or a check
+that updated something). A run records `id@version` at enqueue; a probed run
+re-resolved at launch (§25.20) uses the version in use then and rewrites
+`preset` to say so.
 
 ## 26. Prompt match
 

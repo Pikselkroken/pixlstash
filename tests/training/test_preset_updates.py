@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import http.server
 import json
 import os
+import threading
+import time
 
 import pytest
 
@@ -212,3 +215,107 @@ def test_a_tampered_cache_file_falls_back_to_the_shipped_recipe(site):
         json.dump(preset, handle)
     presets.reload()
     assert presets.get_preset("zimage-turbo")["version"] == 1
+
+
+# ---------------------------------------------------------------------------
+# _fetch against a real HTTP server: redirects, size, a slow trickle
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def server(monkeypatch):
+    """A local server whose routes are ``{path: handler(request)}``."""
+    routes = {}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            routes[self.path](self)
+
+        def log_message(self, *args):
+            return None
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    httpd.daemon_threads = True
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setattr(
+        preset_updates, "SITE_URL", f"http://127.0.0.1:{httpd.server_port}/v1"
+    )
+    try:
+        yield routes
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def _send(body: bytes, status=200, headers=None):
+    def handle(request):
+        request.send_response(status)
+        for key, value in (headers or {}).items():
+            request.send_header(key, value)
+        request.send_header("Content-Length", str(len(body)))
+        request.end_headers()
+        request.wfile.write(body)
+
+    return handle
+
+
+def test_fetch_reads_the_file(server):
+    server["/v1/index.json"] = _send(b'{"presets": []}')
+    assert preset_updates._fetch("index.json") == b'{"presets": []}'
+
+
+def test_fetch_refuses_a_redirect(server):
+    server["/v1/index.json"] = _send(
+        b"", status=302, headers={"Location": "http://127.0.0.1:1/elsewhere"}
+    )
+    with pytest.raises(preset_updates.FetchError, match="302"):
+        preset_updates._fetch("index.json")
+
+
+def test_fetch_refuses_a_file_over_the_cap(server, monkeypatch):
+    monkeypatch.setattr(preset_updates, "MAX_BYTES", 100)
+    server["/v1/index.json"] = _send(b"x" * 1000)
+    with pytest.raises(preset_updates.FetchError, match="larger"):
+        preset_updates._fetch("index.json")
+
+
+def test_fetch_gives_up_on_a_trickle_at_the_deadline(server, monkeypatch):
+    """One byte at a time never trips the per-read timeout; the total does."""
+    monkeypatch.setattr(preset_updates, "TIMEOUT_SECONDS", 0.5)
+
+    def trickle(request):
+        request.send_response(200)
+        request.send_header("Content-Length", "100")
+        request.end_headers()
+        try:
+            for _ in range(100):
+                request.wfile.write(b"x")
+                request.wfile.flush()
+                time.sleep(0.05)
+        except OSError:
+            return  # the client gave up, as it should
+
+    server["/v1/index.json"] = trickle
+    started = time.monotonic()
+    with pytest.raises(preset_updates.FetchError, match="longer"):
+        preset_updates._fetch("index.json")
+    assert time.monotonic() - started < 2
+
+
+@pytest.mark.parametrize(
+    "text",
+    [b'{"presets": [], "x": NaN}', b'{"presets": [], "x": -Infinity}', b"[" * 100_000],
+)
+def test_index_text_without_finite_values_or_too_deep_is_refused(site, text):
+    site["files"]["index.json"] = text
+    result = preset_updates.check()
+    assert result["updated"] == [] and "pixlstash.dev" in result["error"]
+
+
+def test_a_second_entry_for_an_id_is_not_fetched_again(site):
+    index = json.loads(site["files"]["index.json"])
+    index["presets"].append(dict(index["presets"][0]))
+    site["files"]["index.json"] = json.dumps(index).encode()
+    assert len(preset_updates.check()["updated"]) == 1
+    assert site["fetched"] == ["index.json", "zimage-turbo.json"]

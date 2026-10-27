@@ -27,6 +27,7 @@ import time
 from importlib.metadata import PackageNotFoundError, version as package_version
 
 import requests
+import urllib3
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.training import presets
@@ -106,7 +107,7 @@ def check(*, automatic: bool = False) -> dict:
         entries = index["presets"]
         if not isinstance(entries, list):
             raise ValueError("'presets' is not a list")
-    except (FetchError, ValueError, KeyError, TypeError) as exc:
+    except (FetchError, ValueError, KeyError, TypeError, RecursionError) as exc:
         logger.warning(
             "Recipe update check: could not read %s/index.json: %s", SITE_URL, exc
         )
@@ -116,10 +117,23 @@ def check(*, automatic: bool = False) -> dict:
             "error": "Could not read the recipe list from pixlstash.dev.",
         }
     updated = []
+    seen = set()
     for entry in entries:
+        pid = entry.get("id") if isinstance(entry, dict) else None
+        if pid in seen:
+            logger.warning("Recipe update check: ignoring a second entry for %r", pid)
+            continue
+        seen.add(pid)
         try:
             preset = _take(entry, cache)
-        except (FetchError, ValueError, KeyError, TypeError, OSError) as exc:
+        except (
+            FetchError,
+            ValueError,
+            KeyError,
+            TypeError,
+            OSError,
+            RecursionError,
+        ) as exc:
             logger.warning("Recipe update check: ignoring %r: %s", entry, exc)
             continue
         if preset is not None:
@@ -196,24 +210,34 @@ def _take(entry: dict, cache: str) -> dict | None:
 
 
 def _fetch(name: str) -> bytes:
-    """GET ``SITE_URL/name``: no redirects, :data:`MAX_BYTES` at most."""
+    """GET ``SITE_URL/name``: no redirects, :data:`MAX_BYTES` at most, and
+    :data:`TIMEOUT_SECONDS` in all, however slowly the bytes arrive.
+    """
     url = f"{SITE_URL}/{name}"
     deadline = time.monotonic() + TIMEOUT_SECONDS
     try:
         with requests.get(
-            url, timeout=TIMEOUT_SECONDS, allow_redirects=False, stream=True
+            url,
+            timeout=TIMEOUT_SECONDS,
+            allow_redirects=False,
+            stream=True,
+            # Undecoded bytes, so the size cap and the sha256 are on what was sent.
+            headers={"Accept-Encoding": "identity"},
         ) as response:
             if response.status_code != 200:
                 raise FetchError(f"{url} answered {response.status_code}")
             body = b""
-            for chunk in response.iter_content(64 * 1024):
+            while True:
+                if time.monotonic() > deadline:
+                    raise FetchError(f"{url} took longer than {TIMEOUT_SECONDS} s")
+                # One recv at most, so a trickle cannot hold past the deadline.
+                chunk = response.raw.read1(64 * 1024)
+                if not chunk:
+                    return body
                 body += chunk
                 if len(body) > MAX_BYTES:
                     raise FetchError(f"{url} is larger than {MAX_BYTES} bytes")
-                if time.monotonic() > deadline:
-                    raise FetchError(f"{url} took longer than {TIMEOUT_SECONDS} s")
-            return body
-    except requests.RequestException as exc:
+    except (requests.RequestException, urllib3.exceptions.HTTPError, OSError) as exc:
         raise FetchError(f"{url}: {exc}") from exc
 
 
