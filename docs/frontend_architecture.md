@@ -4980,8 +4980,8 @@ folder itself, its descendants, the folder it is already in, and any drop while
 a move runs. Its tip names the mechanism from `device_id`, as the file tip does.
 
 **The drop asks only when there is something to ask.** A drop calls
-`askFolderMove`, which runs the dry run. A move on one drive is a rename: it
-starts at once, with no dialog. Across drives the plan goes to
+`askFolderMove`, which runs the dry run. A move on one drive, into any folder
+on it, is a filesystem rename: it starts at once, with no dialog. Across drives the plan goes to
 `FolderMoveDialog` on its second step, where one sentence states the models,
 the other files, the bytes, that another drive copies and removes, and what
 it frees. That decision is the single `if` in `askFolderMove`; if the owner

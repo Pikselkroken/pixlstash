@@ -11296,8 +11296,11 @@ def test_a_folder_move_runs_on_the_move_job_and_reports_its_kind(shelf_env, tmp_
     )
     assert r.status_code == 202, r.text
     assert r.json()["kind"] == "folder"
+    # Undeclared on MoveStatusResponse, carried by its extra="allow".
+    assert (r.json()["name"], r.json()["files"]) == ("sdxl", 1)
     body = _wait_for_move(shelf_env)
     assert body["kind"] == "folder"
+    assert (body["name"], body["files"]) == ("sdxl", 1)
     assert body["destination_subpath"] == "people/sdxl"
     assert [item["status"] for item in body["results"]] == ["moved"], body
     assert (root / "people" / "sdxl" / "a.safetensors").is_file()

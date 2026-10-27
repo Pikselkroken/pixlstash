@@ -660,6 +660,45 @@ describe("the folder verbs (#2206)", () => {
     wrapper.unmount();
   });
 
+  it("keeps a renamed folder open and focused once its job lands", async () => {
+    const root = LISTINGS["1:"];
+    try {
+      const wrapper = await openLora();
+      await item(wrapper, 1, "Lora").find(".mft-twist").trigger("click");
+      await flushPromises();
+      expect(keys(wrapper)).toContain("f:1:Lora/flux");
+
+      item(wrapper, 1, "Lora").element.focus();
+      await item(wrapper, 1, "Lora").trigger("keydown", { key: "F2" });
+      await flushPromises();
+      moveModelFolderDir.mockResolvedValueOnce(started);
+      await field(wrapper).setValue("Lora2");
+      await field(wrapper).trigger("keydown", { key: "Enter" });
+      await flushPromises();
+
+      // The rename lands: the server's listings now name it, the job finishes
+      // and the store re-reads what is loaded, as the poll does.
+      LISTINGS["1:"] = [{ ...root[0], name: "Lora2", path: "Lora2" }, root[1]];
+      LISTINGS["1:Lora2"] = [{ ...LORA_LISTING[0], path: "Lora2/flux" }];
+      useModelMovesStore().job = {
+        ...started,
+        status: "finished",
+        results: [{ folder_id: 1, relpath: "Lora", status: "moved", detail: null }],
+        name: "Lora2",
+      };
+      useModelFoldersStore().reloadDirs();
+      await flushPromises();
+
+      expect(keys(wrapper)).toContain("f:1:Lora2/flux");
+      expect(keys(wrapper)).not.toContain("f:1:Lora/flux");
+      expect(document.activeElement).toBe(item(wrapper, 1, "Lora2").element);
+      wrapper.unmount();
+    } finally {
+      LISTINGS["1:"] = root;
+      delete LISTINGS["1:Lora2"];
+    }
+  });
+
   it("takes F2 and Ctrl+Shift+N on a row, so nothing reaches the shelf's window keys", async () => {
     const wrapper = await openLora();
     const seen = vi.fn();

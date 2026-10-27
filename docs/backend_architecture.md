@@ -12109,8 +12109,9 @@ parent with `new_name`; there is no rename route. The work is
   publication; it removes the partial and repoints nothing. A failed check or
   copy removes the partial; a failed repoint removes the published copy. The
   source is untouched in all three. The source is removed only when every file
-  in it is in the copy at the same size, so a file written into it during the
-  copy keeps it; that, and a source that cannot be removed, is reported in the
+  in it is in the copy at the same size, and then file by file from that list
+  rather than with `rmtree`, so a file written into it during the copy keeps
+  it, and one written after the comparison stays with its directories; that, and a source that cannot be removed, is reported in the
   item's `detail` and logged: the rows name the new copy, so what is left is a
   duplicate and never a dangling row. A crash between the publication and the
   repoint commit is the accepted ceiling: rows naming the old place, which a

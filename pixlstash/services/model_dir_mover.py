@@ -188,10 +188,14 @@ def _disk_usage(path: str) -> tuple[int, int]:
 
 
 def _tree_listing(path: str) -> dict[str, int]:
-    """``{relpath: size}`` of every file under *path*, not following links."""
+    """``{relpath: size}`` of every file under *path*, not following links.
+
+    A link to a directory is listed as an entry of its own: ``os.walk`` puts it
+    among the directories and does not enter it, and the copy holds it as a link.
+    """
     listing: dict[str, int] = {}
-    for root, _dirs, names in os.walk(path):
-        for name in names:
+    for root, dirs, names in os.walk(path):
+        for name in names + [d for d in dirs if os.path.islink(os.path.join(root, d))]:
             full = os.path.join(root, name)
             try:
                 listing[os.path.relpath(full, path)] = os.lstat(full).st_size
@@ -515,8 +519,11 @@ def _copy(
             f"Moved, but the original was kept: {len(changed)} file(s) in it "
             "changed during the copy."
         )
+    # Exactly the files just compared, never ``rmtree``: a file written after
+    # the comparison is in no copy, so it and the directories holding it stay.
     try:
-        shutil.rmtree(plan.source_path)
+        for relpath in source_files:
+            os.unlink(os.path.join(plan.source_path, relpath))
     except OSError as exc:
         logger.error(
             "Moved %s to %s, but could not remove the original: %s. The rows name "
@@ -526,6 +533,22 @@ def _copy(
             exc,
         )
         return f"Moved, but the original could not be removed: {exc}"
+    for root, _dirs, _names in os.walk(plan.source_path, topdown=False):
+        try:
+            os.rmdir(root)
+        except OSError as exc:
+            logger.debug("Left %s in place: %s", root, exc)
+    if os.path.lexists(plan.source_path):
+        logger.error(
+            "Moved %s to %s, but files written into the original during the move "
+            "were left there; they are not in the copy.",
+            plan.source_path,
+            plan.destination_path,
+        )
+        return (
+            "Moved, but files written into the original during the move were "
+            "left there."
+        )
     return ""
 
 

@@ -690,6 +690,53 @@ function startRename(node) {
   };
 }
 
+/**
+ * A rename accepted by the server, until its job lands: `{folderId, oldPath,
+ * newPath}`. Row keys are paths, so the renamed row is a new row; the open
+ * state and the focus follow it here rather than vanishing with the old key.
+ */
+const pendingRename = ref(null);
+/** A row to focus as soon as it is drawn. */
+const pendingFocusKey = ref(null);
+
+function followRename(job) {
+  const rename = pendingRename.value;
+  if (!rename || job?.kind !== "folder" || job.status !== "finished") return;
+  pendingRename.value = null;
+  const old = nodeKey(rename.folderId, rename.oldPath);
+  if (job.results?.[0]?.status !== "moved") {
+    focusEditorRow(old);
+    return;
+  }
+  const fresh = nodeKey(rename.folderId, rename.newPath);
+  const next = new Set();
+  for (const key of expanded.value) {
+    if (key !== old && !key.startsWith(`${old}/`)) {
+      next.add(key);
+      continue;
+    }
+    const moved = fresh + key.slice(old.length);
+    next.add(moved);
+    foldersStore.loadDirs(rename.folderId, moved.slice(`f:${rename.folderId}:`.length));
+  }
+  expanded.value = next;
+  focusedKey.value = fresh;
+  pendingFocusKey.value = fresh;
+}
+
+watch(() => moves.job, followRename);
+
+watch(
+  nodes,
+  () => {
+    const key = pendingFocusKey.value;
+    if (!key || !rowEls.has(key)) return;
+    pendingFocusKey.value = null;
+    rowEls.get(key).focus();
+  },
+  { flush: "post" },
+);
+
 /** Put the focus back on the row the field was opened from. */
 function focusEditorRow(key) {
   nextTick(() => rowEls.get(key)?.focus());
@@ -735,7 +782,13 @@ async function commitEditor() {
         { newName: name },
       );
       editor.value = null;
-      focusEditorRow(open.key);
+      const parent = parentPath(open.path);
+      pendingRename.value = {
+        folderId: open.folderId,
+        oldPath: open.path,
+        newPath: parent ? `${parent}/${name}` : name,
+      };
+      followRename(moves.job);
     }
   } catch (err) {
     open.busy = false;

@@ -1915,3 +1915,29 @@ def test_a_file_written_into_the_source_during_the_copy_keeps_the_source(
     assert late.read_bytes() == b"written mid-move"
     assert (dir_tree["destination_dir"] / "sdxl" / "alice.safetensors").is_file()
     assert_no_dangling_rows(dir_tree["hub"])
+
+
+def test_a_file_written_after_the_final_check_is_left_not_deleted(
+    dir_tree, dir_cross_device, monkeypatch
+):
+    """The source goes file by file from the list just compared, never by
+    ``rmtree``: a file that lands after that list is in no copy, so it stays."""
+    listing = dir_mover_module._tree_listing
+    late = dir_tree["source_dir"] / "sdxl" / "alice_samples" / "step_300.png"
+
+    def list_then_a_job_writes(path):
+        found = listing(path)
+        if path == str(dir_tree["source_dir"] / "sdxl") or path.endswith(
+            os.path.join("loras", "sdxl")
+        ):
+            late.write_bytes(b"written after the check")
+        return found
+
+    monkeypatch.setattr(dir_mover_module, "_tree_listing", list_then_a_job_writes)
+    _, outcome = _move_sdxl(dir_tree)
+    assert outcome.status == STATUS_MOVED
+    assert "left there" in outcome.detail
+    assert late.read_bytes() == b"written after the check"
+    assert not (dir_tree["source_dir"] / "sdxl" / "alice.safetensors").exists()
+    assert (dir_tree["destination_dir"] / "sdxl" / "alice.safetensors").is_file()
+    assert_no_dangling_rows(dir_tree["hub"])
