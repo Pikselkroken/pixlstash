@@ -201,6 +201,19 @@ describe("with several ComfyUI saved (#2167)", () => {
     expect(slot(wrapper).text()).toContain("Render box");
   });
 
+  it("says so in the reopened menu when the switch does not save", async () => {
+    patchUserConfig.mockRejectedValue(new Error("server down"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { wrapper, filterStore } = await mountSlot();
+    await rows(wrapper)[1].trigger("click");
+    await flushPromises();
+    expect(filterStore.comfyuiUrl).toBe(LOCAL);
+    const error = wrapper.find('[data-testid="workflows-comfyui-pick-error"]');
+    expect(error.text()).toBe("Could not switch to Render box: server down");
+    expect(error.attributes("role")).toBe("alert");
+    warn.mockRestore();
+  });
+
   it("picking the current one saves nothing", async () => {
     const { wrapper } = await mountSlot();
     await rows(wrapper)[0].trigger("click");

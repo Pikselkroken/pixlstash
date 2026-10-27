@@ -57,6 +57,14 @@
       @keydown="onMenuKeydown"
     >
       <span class="section-label wcs-menu-label" role="none">Run on</span>
+      <!-- A switch that did not save: the menu reopens on it. -->
+      <span
+        v-if="pickError"
+        class="wcs-menu-error"
+        role="alert"
+        data-testid="workflows-comfyui-pick-error"
+        >{{ pickError }}</span
+      >
       <button
         v-for="row in rows"
         :key="row.id"
@@ -114,6 +122,7 @@ import NewComfyuiConnectionDialog from "./NewComfyuiConnectionDialog.vue";
 import { listComfyuiConnections, probeComfyui } from "../../api/comfyui";
 import { patchUserConfig } from "../../api/config";
 import { useFilterStore } from "../../stores/useFilterStore";
+import { errorMessage } from "../../utils/apiError";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 
 const emit = defineEmits(["open-settings"]);
@@ -122,6 +131,7 @@ const filterStore = useFilterStore();
 const open = ref(false);
 const adding = ref(false);
 const trigger = ref(null);
+const pickError = ref("");
 // `GET /comfyui/connections`; empty until read, when the slot names the
 // saved address the way the server would.
 const connections = ref([]);
@@ -228,7 +238,11 @@ watch(
 );
 
 watch(open, async (on) => {
-  if (!on) return;
+  if (!on) {
+    // Said once, in the menu it reopened; gone the next time it opens.
+    pickError.value = "";
+    return;
+  }
   await load();
   rows.value.forEach((row) => check(row.url));
 });
@@ -242,6 +256,8 @@ async function pick(row) {
     filterStore.comfyuiUrl = body?.config?.comfyui_url || row.url;
   } catch (err) {
     console.warn(`[workflows] could not switch ComfyUI to ${row.url}`, err);
+    pickError.value = `Could not switch to ${row.name}: ${errorMessage(err, "the server did not answer.")}`;
+    open.value = true;
   }
 }
 
@@ -393,6 +409,13 @@ function settings() {
 .wcs-menu-label {
   display: block;
   padding: var(--space-2) var(--space-3) var(--space-1);
+}
+
+.wcs-menu-error {
+  display: block;
+  padding: 0 var(--space-3) var(--space-2);
+  font-size: var(--text-2xs);
+  color: rgb(var(--v-theme-surface-error));
 }
 
 .wcs-row {
