@@ -10,10 +10,10 @@
           class="mrs-icon"
           type="button"
           aria-label="Edit name, type and base model…"
-          title="Edit name, type and base model…"
           data-testid="mrm-rename"
           @click="store.requestVerb('rename')"
         >
+          <Tooltip text="Edit name, type and base model…" activator="parent" />
           <v-icon size="14" aria-hidden="true">mdi-pencil-outline</v-icon>
         </button>
       </template>
@@ -64,10 +64,10 @@
           type="button"
           aria-haspopup="menu"
           :aria-expanded="setsOpen ? 'true' : 'false'"
-          title="Add this model to one of your sets"
           data-testid="mrm-add-to-set"
           @click="setsOpen = !setsOpen"
         >
+          <Tooltip text="Add this model to one of your sets" activator="parent" />
           Add to set…
         </button>
       </template>
@@ -138,6 +138,7 @@ import {
   baseModelCell,
   fileKindLabel,
   formatModelSize,
+  SHELF_TYPES,
   shelfTypeOf,
 } from "../../utils/modelShelf";
 import { formatUserDate } from "../../utils/utils";
@@ -148,6 +149,7 @@ import { triggerWord } from "../../utils/triggerWords";
 import ShelfRunLoss from "../views/ShelfRunLoss.vue";
 import ModelsRailSection from "./ModelsRailSection.vue";
 import ModelsRailThumbs from "./ModelsRailThumbs.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 
 const props = defineProps({
   /** The one model's shelf row. */
@@ -160,7 +162,13 @@ const userPrefs = useUserPrefsStore();
 /** Whether the *In sets* menu is open. */
 const setsOpen = ref(false);
 
-const fileKind = computed(() => fileKindLabel(props.row.file_kind));
+// The sidebar's Type word; an engine or unclassified file keeps its own.
+const fileKind = computed(
+  () =>
+    SHELF_TYPES.find((type) => type.key === shelfTypeOf(props.row))?.one ||
+    fileKindLabel(props.row.file_kind) ||
+    "Other",
+);
 const base = computed(() => baseModelCell(props.row).text || "–");
 const folder = computed(() => modelFolder(props.row));
 const added = computed(() =>

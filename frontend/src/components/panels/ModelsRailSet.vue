@@ -10,10 +10,10 @@
           class="mrs-icon"
           type="button"
           aria-label="Edit set…"
-          title="Edit set…"
           data-testid="mrs-edit-set"
           @click="editSet"
         >
+          <Tooltip text="Edit set…" activator="parent" />
           <v-icon size="14" aria-hidden="true">mdi-pencil-outline</v-icon>
         </button>
       </template>
@@ -23,11 +23,7 @@
         class="mrs-row"
         :data-testid="member.onShelf ? undefined : 'mrs-missing-member'"
       >
-        <ModelMark
-          class="mrs-mark"
-          :row="rowOf(member)"
-          aria-hidden="true"
-        />
+        <TypeMark v-bind="shelfTypeMark(rowOf(member))" />
         <span
           class="mrs-name"
           :class="{ 'mrs-warn': !member.onShelf }"
@@ -130,11 +126,12 @@ import { VIcon } from "vuetify/components";
 
 import { useWorkflowPictures } from "../../composables/useWorkflowPictures";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
-import { formatModelSize } from "../../utils/modelShelf";
+import { formatModelSize, shelfTypeMark } from "../../utils/modelShelf";
 import { describeSet, setVerdict } from "../../utils/modelsInspector";
-import ModelMark from "../widgets/ModelMark.vue";
+import TypeMark from "../widgets/TypeMark.vue";
 import ModelsRailSection from "./ModelsRailSection.vue";
 import ModelsRailThumbs from "./ModelsRailThumbs.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 
 const props = defineProps({
   /** A `setGroups` entry, or a `handMadeGroups` entry (`set` set). */
@@ -177,9 +174,5 @@ function showAll() {
 .mrs-set {
   display: flex;
   flex-direction: column;
-}
-
-.mrs-mark {
-  flex-shrink: 0;
 }
 </style>

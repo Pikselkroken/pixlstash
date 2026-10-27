@@ -1324,7 +1324,8 @@ describe("the shelf's own accessible name", () => {
     // sentence in it is about the row list, and the region now also contains
     // the training-runs panel, which has none of those controls.
     const panel = wrapper.find("#shelf-panel-shelf");
-    expect(panel.attributes("role")).toBe("tabpanel");
+    expect(panel.attributes("role")).toBe("region");
+    expect(panel.attributes("aria-label")).toBe("Model list");
     expect(panel.attributes("aria-describedby")).toBe("shelf-help");
     expect(wrapper.find("#shelf-help").exists()).toBe(true);
   });
@@ -4508,7 +4509,7 @@ describe("the sidebar's requests reach their dialog (#2168)", () => {
 describe("the list's Type, favourite and Sets columns (#2168)", () => {
   it("marks a row with its Type letter, in the Type row's tint", async () => {
     const wrapper = await mountShelf([adapter({ id: 1 })]);
-    const mark = wrapper.find(".shelf-row .shelf-mark");
+    const mark = wrapper.find(".shelf-row .type-mark");
     expect(mark.text()).toBe("L");
     expect(mark.attributes("data-tint")).toBe("secondary");
     wrapper.unmount();

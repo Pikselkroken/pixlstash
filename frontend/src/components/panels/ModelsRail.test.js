@@ -188,6 +188,15 @@ describe("nothing picked", () => {
     expect(wrapper.findAll('[data-testid="mrail-largest"]')).toHaveLength(3);
   });
 
+  it("figures the whole shelf on the Sets place, where no tray is open", async () => {
+    const { wrapper, store } = await mountRail();
+    store.setPlace("sets");
+    await wrapper.vm.$nextTick();
+    expect(title(wrapper)).toBe("Sets");
+    expect(wrapper.get('[data-testid="mrail-stat-disk"]').text()).not.toBe("–");
+    expect(wrapper.findAll('[data-testid="mrail-largest"]')).toHaveLength(3);
+  });
+
   it("notes a set missing its checkpoint, and Select it picks that card on the Sets place", async () => {
     const orphan = {
       combo_key: "orphan",
@@ -315,6 +324,8 @@ describe("one model", () => {
     await wrapper.vm.$nextTick();
     // The shelf reads the filename as its name: underscores become spaces.
     expect(title(wrapper)).toBe("FilmGrain XL");
+    // An adapter is a LoRA, in the sidebar's Type word.
+    expect(wrapper.find(".mrs-facts dd").text()).toBe("LoRA");
     expect(wrapper.text()).toContain("Trigger word");
     expect(wrapper.text()).toContain("fg3");
     expect(wrapper.text()).toContain("/m/FilmGrain_XL");

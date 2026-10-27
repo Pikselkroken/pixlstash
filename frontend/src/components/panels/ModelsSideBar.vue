@@ -141,12 +141,7 @@
         :data-type="row.key"
         @click="store.setSidebarFilter('type', row.key)"
       >
-        <i
-          class="msb-mark ps-row-glyph"
-          :data-tint="row.tint"
-          aria-hidden="true"
-          >{{ row.mark }}</i
-        >
+        <TypeMark class="ps-row-glyph" :mark="row.mark" :tint="row.tint" />
         <span class="msb-label">{{ row.label }}</span>
         <span class="msb-count">{{ row.count }}</span>
       </button>
@@ -278,6 +273,7 @@ import { withRef } from "../../utils/withRef.js";
 import AiToolkitIcon from "../widgets/AiToolkitIcon.vue";
 import AppButton from "../widgets/AppButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
+import TypeMark from "../widgets/TypeMark.vue";
 
 const store = useModelShelfStore();
 const foldersStore = useModelFoldersStore();
@@ -699,26 +695,6 @@ function openRuns() {
   font-size: var(--text-xs);
   font-variant-numeric: tabular-nums;
   opacity: var(--opacity-text-secondary);
-}
-
-/* The Type letter, the same mark the list and a set card draw a model under. */
-.msb-mark {
-  border-radius: var(--radius-sm);
-  font-style: normal;
-  font-size: var(--text-3xs);
-  font-weight: var(--weight-bold);
-  color: rgb(var(--v-theme-on-tertiary));
-  background: rgb(var(--v-theme-tertiary));
-}
-
-.msb-mark[data-tint="secondary"] {
-  color: rgb(var(--v-theme-on-secondary));
-  background: rgb(var(--v-theme-secondary));
-}
-
-.msb-mark[data-tint="neutral"] {
-  color: rgb(var(--v-theme-sidebar-text));
-  background: var(--track-trough);
 }
 
 .msb-live {

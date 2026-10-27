@@ -204,9 +204,9 @@
           :key="index"
           class="msc__mark-chip"
           :class="{ 'msc__mark-chip--missing': mark.missing }"
-          :title="mark.title"
         >
-          <i class="msc__k" :data-tint="mark.tint">{{ mark.mark }}</i>
+          <Tooltip :text="mark.title" activator="parent" />
+          <TypeMark class="msc__k" :mark="mark.mark" :tint="mark.tint" />
           <span class="msc__mark-name">{{ mark.name }}</span>
         </span>
         <span v-if="moreMarks" class="msc__more">+{{ moreMarks }}</span>
@@ -277,6 +277,8 @@ import AppButton from "./AppButton.vue";
 import FavouriteHeart from "./FavouriteHeart.vue";
 import ModelMark from "./ModelMark.vue";
 import VerdictIcon from "./VerdictIcon.vue";
+import Tooltip from "./Tooltip.vue";
+import TypeMark from "./TypeMark.vue";
 
 /** The member marks a card draws before "+N" takes the rest. */
 const MARKS_SHOWN = 3;
@@ -473,8 +475,7 @@ const accessibleName = computed(() => {
 }
 
 /* Open and selected are two states and they read differently on purpose: open is
-   a border in the active ink beside the rotated ▸, selected is the shell's own
-   wash and ring. A card can be both, and then it wears both. */
+   a border in the active ink, selected is the shell's own wash and ring. A card can be both, and then it wears both. */
 .msc--open {
   border-color: var(--active-bar);
 }
@@ -705,8 +706,8 @@ const accessibleName = computed(() => {
   white-space: nowrap;
 }
 
-/* The member marks: each a Type letter and a name, the sidebar's `.msb-mark`
-   pattern at card size. A row of them clips at its edge, never wraps. */
+/* The member marks: each a `TypeMark` letter and a name, at chip size. A row
+   of them clips at its edge, never wraps. */
 .msc__marks {
   min-width: 0;
   overflow: hidden;
@@ -729,29 +730,11 @@ const accessibleName = computed(() => {
   color: rgb(var(--v-theme-surface-warning));
 }
 
+/* The Type letter at chip height. */
 .msc__k {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
   width: var(--tag-h-xs);
   height: var(--tag-h-xs);
-  border-radius: var(--radius-sm);
-  color: rgb(var(--v-theme-on-tertiary));
-  background: rgb(var(--v-theme-tertiary));
-  font-style: normal;
   font-size: var(--text-2xs);
-  font-weight: var(--weight-bold);
-}
-
-.msc__k[data-tint="secondary"] {
-  color: rgb(var(--v-theme-on-secondary));
-  background: rgb(var(--v-theme-secondary));
-}
-
-.msc__k[data-tint="neutral"] {
-  color: rgb(var(--v-theme-on-surface));
-  background: var(--track-trough);
 }
 
 .msc__mark-name {

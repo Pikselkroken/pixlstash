@@ -604,6 +604,18 @@ export function shelfTypeOf(row) {
 }
 
 /**
+ * The Type letter and tint a row is drawn under (`TypeMark`'s props), or a
+ * neutral "?" for a file no Type row takes.
+ *
+ * @param {{file_kind?: string}} row
+ * @returns {{mark: string, tint: string}}
+ */
+export function shelfTypeMark(row) {
+  const type = SHELF_TYPES.find((one) => one.key === shelfTypeOf(row));
+  return type ? { mark: type.mark, tint: type.tint } : { mark: "?", tint: "neutral" };
+}
+
+/**
  * Look a free-text value up in a label table, falling through to itself.
  *
  * `Object.hasOwn` rather than a plain index, because both tables are keyed by

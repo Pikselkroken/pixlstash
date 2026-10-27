@@ -746,7 +746,7 @@ function defaultFilters() {
     // again. Not restored on startup either, for the same reason: it is how a
     // hide is taken back, not a way to keep the shelf.
     showHidden: false,
-    // The name filter's text, matched as the Models rail's picker matches: the
+    // The name filter's text, matched as a set's ＋ picker matches: the
     // name the row shows or its filename. Not restored on startup either: a
     // search is a question, and a shelf that opened still narrowed by
     // yesterday's would read as missing models.

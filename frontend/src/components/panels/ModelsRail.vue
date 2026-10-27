@@ -101,7 +101,7 @@
                 class="mrail-file"
                 data-testid="mrail-largest"
               >
-                <ModelMark class="mrs-mark" :row="row" aria-hidden="true" />
+                <TypeMark v-bind="shelfTypeMark(row)" />
                 <span class="mrs-name">{{ rowName(row) }}</span>
                 <span class="mrs-num num">{{ bytesText(row.file_size) }}</span>
               </li>
@@ -175,7 +175,7 @@ import { VIcon } from "vuetify/components";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useTasksStore } from "../../stores/useTasksStore";
-import { formatModelSize } from "../../utils/modelShelf";
+import { formatModelSize, shelfTypeMark } from "../../utils/modelShelf";
 import {
   baseOf,
   describeSet,
@@ -191,7 +191,7 @@ import {
 } from "../../utils/modelsInspector";
 import AppButton from "../widgets/AppButton.vue";
 import AppInspector from "../widgets/AppInspector.vue";
-import ModelMark from "../widgets/ModelMark.vue";
+import TypeMark from "../widgets/TypeMark.vue";
 import ModelsRailModel from "./ModelsRailModel.vue";
 import ModelsRailSet from "./ModelsRailSet.vue";
 import TasksPanel, { tasksTabFor } from "./TasksPanel.vue";
@@ -291,10 +291,12 @@ function clearSelection() {
 
 // ── Nothing picked: the view's figures ────────────────────────────────────
 
-/** The sets grid's models on the Sets place, else the list's. */
-const viewRows = computed(() =>
-  store.place === "sets" ? store.setGridRows : store.visibleRows,
-);
+/**
+ * The models the figures are about: the list's. On the Sets place that is the
+ * whole shelf under `Show`, since the sidebar's narrowing is off there; the
+ * grid's own rows are only what an open tray shows, which is none at rest.
+ */
+const viewRows = computed(() => store.visibleRows);
 
 const stat1 = computed(() =>
   store.place === "sets"
@@ -439,7 +441,8 @@ function bytesText(bytes) {
 }
 
 .mrail-stat-n {
-  font-size: var(--text-lg);
+  font-size: var(--text-md);
+  white-space: nowrap;
   font-weight: var(--weight-semibold);
   font-variant-numeric: tabular-nums;
 }
@@ -523,6 +526,7 @@ function bytesText(bytes) {
   align-items: center;
   gap: var(--space-2);
   min-height: 24px;
+  font-size: var(--text-xs);
 }
 
 .mrail-note {

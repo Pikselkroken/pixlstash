@@ -513,16 +513,6 @@ export function isInternalImageDrag(dataTransfer) {
 export const PICTURE_DRAG_MIME = "application/x-pixlstash-pictures";
 export const FACE_DRAG_MIME = "application/x-pixlstash-faces";
 /**
- * Registered copies of model files, dragged from the shelf onto a folder.
- *
- * A third marker rather than a field in the body, for the reason above and for
- * one more: the sidebar's set and character rows accept pictures, and a model
- * dropped on one has no meaning at all. `types` is what refuses it during
- * dragover, before the pointer ever suggests the drop would work.
- */
-export const MODEL_FILE_DRAG_MIME = "application/x-pixlstash-model-files";
-
-/**
  * Payload `type` to its marker. A kind absent from this map gets no marker, so
  * no drop target accepts it - an unmapped payload must fail closed rather than
  * inherit the picture marker and be filed as a picture drag (issue #757 again,
@@ -531,7 +521,6 @@ export const MODEL_FILE_DRAG_MIME = "application/x-pixlstash-model-files";
 const DRAG_MARKERS = {
   "image-ids": PICTURE_DRAG_MIME,
   "face-bbox": FACE_DRAG_MIME,
-  "model-files": MODEL_FILE_DRAG_MIME,
 };
 
 /**
@@ -557,13 +546,6 @@ export function isPictureDrag(dataTransfer) {
   if (!dataTransfer) return false;
   const types = dataTransfer.types ? Array.from(dataTransfer.types) : [];
   return types.includes(PICTURE_DRAG_MIME);
-}
-
-/** True when the drag carries registered copies of model files. */
-export function isModelFileDrag(dataTransfer) {
-  if (!dataTransfer) return false;
-  const types = dataTransfer.types ? Array.from(dataTransfer.types) : [];
-  return types.includes(MODEL_FILE_DRAG_MIME);
 }
 
 /** True when the drag carries face bounding boxes. */

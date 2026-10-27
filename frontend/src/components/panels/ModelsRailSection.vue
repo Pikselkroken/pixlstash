@@ -177,7 +177,7 @@ function toggle() {
 .mrs-icon {
   border: 0;
   background: none;
-  color: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-surface));
   font: inherit;
   font-size: var(--text-xs);
   cursor: pointer;

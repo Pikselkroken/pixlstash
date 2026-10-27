@@ -149,7 +149,7 @@ export function useWindowFileImport({ sidebarRef }) {
     if (!resolved.length) {
       noticeStore.warning(
         "A model file has to be added from the machine running PixlStash. " +
-          "Open Models and use Add ▾ → Add file… to pick it there.",
+          "Open Models and use Add models ▾ → Add file… to pick it there.",
         { key: `model-file-drop-${(modelDropSeq += 1)}` },
       );
       return;

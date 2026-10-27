@@ -202,8 +202,8 @@
       v-if="isShelfTab"
       id="shelf-panel-shelf"
       class="shelf-body"
-      role="tabpanel"
-      aria-labelledby="shelf-tab-shelf"
+      role="region"
+      aria-label="Model list"
       aria-describedby="shelf-help"
       :inert="moves.running || undefined"
     >
@@ -582,15 +582,12 @@
                       v-if="row.memberCount > 1"
                       :count="row.memberCount"
                     />
-                    <span
+                    <TypeMark
                       v-if="typeOf(row)"
-                      class="shelf-mark"
-                      :data-tint="typeOf(row).tint"
-                      >{{ typeOf(row).mark }}<Tooltip
-                        :text="typeOf(row).one"
-                        activator="parent"
-                      /></span
-                    >
+                      :mark="typeOf(row).mark"
+                      :tint="typeOf(row).tint"
+                      ><Tooltip :text="typeOf(row).one" activator="parent"
+                    /></TypeMark>
                     <!-- Which file the run is being drawn from, said in words
                          rather than by position: once the strip is open the
                          reader is looking at six rows and choosing between
@@ -1011,8 +1008,8 @@
     <TrainingRuns
       v-else
       id="shelf-panel-runs"
-      role="tabpanel"
-      aria-labelledby="shelf-tab-runs"
+      role="region"
+      aria-label="Training runs"
       @set-folder="openAddSource"
       @count="runsCount = $event"
     />
@@ -1178,6 +1175,7 @@ import PicturePicker from "../widgets/PicturePicker.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
+import TypeMark from "../widgets/TypeMark.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
 import StackEdgeTicks from "../widgets/StackEdgeTicks.vue";
 import { useConfirm } from "../../composables/useConfirm";
@@ -4089,40 +4087,16 @@ watch(
 
 /* ── The ladder ──────────────────────────────────────────────────────────────
 
-   MEASURED, not guessed. Rendering this bar's markup and this block in
-   Chromium at `width: max-content`, with the widest content each control can
-   hold (a 12ch Group value, a 12ch Sort value, the shelf tab's long count):
+   The bar has been browse-only since #2168: the title and count, Sort, Show
+   (Filter), the sidebar's chips, the name field and the rail toggle. Add and
+   Model folders moved to the Models sidebar, so the fold that hid them behind
+   a ⋯ went with them. The rungs below were measured on the wider bar this one
+   replaced, so they now fire later than they need to, never earlier; remeasure
+   at `width: max-content` when a control is next added.
 
-     full                1263px   (1071px before the name field)
-     after rung 1        1032px
-     after rung 1b        840px
-     after rung 2         679px
-     after rung 3         565px   ← the floor
-
-   So the bar has never fitted a 1280px window minus the sidebar, which is
-   what this ladder is for. **Each rung fires at the width the configuration
-   above it needs**, which is why the numbers are what they are and not round
-   ones - change a control and the rungs move with the measurement.
-
-   **The queries are 24px under the widths the classes are named for**, and
-   deliberately: `container-type: inline-size` queries the CONTENT box, while
-   the figures above are the bar's border box, and this bar's inset is
-   `0 var(--space-3) 0 var(--space-5)` = 24px. Named for the bar width because
-   that is the number a person measures with a window edge; written as the
-   content width because that is the number the query sees.
-
-   Rung 3 folds only the two verbs. `Group`, `Sort` and `Show` compress and
-   never fold: they are menus, and a menu inside the ⋯ is a submenu - the same
-   line the Duplicates bar draws, where the toggles fold and the tier menu
-   compresses.
-
-   Remeasure by loading `.shelf-toolbar` at `width: max-content`; the numbers
-   move whenever a control is added, and the rung widths are the sum, not a
-   guess about it. */
-
-.shelf-overflow {
-  display: none;
-}
+   **The queries are 24px under the widths the classes are named for**:
+   `container-type: inline-size` queries the CONTENT box, and this bar's inset
+   is `0 var(--space-3) 0 var(--space-5)` = 24px. */
 
 /* The toolbar's name field. A fixed width, so typing never moves the bar. */
 .shelf-name-bar {
@@ -4131,48 +4105,27 @@ watch(
 }
 
 /* Rung 1. The two things on the bar that REPORT rather than control: the
-   view's own name, which the sidebar and the tab pair beside it both already
-   say, and the count, whose two widths ("1,842 models · 12 copies" vs "8
-   runs") are why the spacer sits where it does. They go before the name
-   field, a control: the full bar plus the field (180px and a 12px gap) is
-   1071 + 192 = 1263px. Buys 231px. */
+   view's own name, which the sidebar already says, and the count. They go
+   before the name field, a control. */
 @container shelfbar (max-width: 1238px) {
   .shelf-fold-1262 {
     display: none;
   }
 }
 
-/* Rung 1b. The name field, a shortcut to the one at the top of Show: 840 +
-   192 = 1032px is what the bar needs with it after rung 1. */
+/* Rung 1b. The name field, a shortcut to the one at the top of Show. */
 @container shelfbar (max-width: 1007px) {
   .shelf-name-bar {
     display: none;
   }
 }
 
-/* Rung 2. `Group` and `Sort` drop their VALUE and keep their glyph and
-   chevron - the grid Filter trigger's compressed grammar. The value is the
-   reason the list looks the way it does, so it goes after the two labels that
-   mean nothing, and never silently: both buttons carry it in `title` and in
-   their accessible name at every width. Buys 161px. */
+/* Rung 2. `Sort` drops its VALUE and keeps its glyph and chevron, the grid
+   Filter trigger's compressed grammar. Never silently: the button carries it
+   in `title` and in its accessible name at every width. */
 @container shelfbar (max-width: 816px) {
   .bar-btn-value {
     display: none;
-  }
-}
-
-/* Rung 3. `Add ▾` and `Model folders` fold into the ⋯ that appears in their
-   place. They are the bar's only two verbs, they open something and write
-   nothing on the press, and their rows are the same `.ctx-item` rows the Add
-   menu already draws. Buys 114px net of the ⋯ itself, and what is left - the
-   tab pair, the ⋯, and the three compressed view menus - is the 565px floor:
-   below that the bar overflows and there is nothing left to give. */
-@container shelfbar (max-width: 656px) {
-  .shelf-fold-680 {
-    display: none;
-  }
-  .shelf-overflow {
-    display: flex;
   }
 }
 
@@ -5006,31 +4959,6 @@ button.shelf-head-cell:hover {
   width: var(--shelf-col-sets);
   text-align: right;
   font-variant-numeric: tabular-nums;
-}
-
-/* The Type letter drawn before the name: the same shape as the sidebar's
-   `.msb-mark`, so a checkpoint's C reads the same in both places. */
-.shelf-mark {
-  display: inline-grid;
-  place-items: center;
-  width: var(--space-5);
-  height: var(--space-5);
-  border-radius: var(--radius-sm);
-  font-style: normal;
-  font-size: var(--text-3xs);
-  font-weight: var(--weight-bold);
-  color: rgb(var(--v-theme-on-tertiary));
-  background: rgb(var(--v-theme-tertiary));
-}
-
-.shelf-mark[data-tint="secondary"] {
-  color: rgb(var(--v-theme-on-secondary));
-  background: rgb(var(--v-theme-secondary));
-}
-
-.shelf-mark[data-tint="neutral"] {
-  color: rgb(var(--v-theme-on-surface));
-  background: var(--track-trough);
 }
 
 /* The favourite heart after the name: an indicator, not a control. Toggling it
