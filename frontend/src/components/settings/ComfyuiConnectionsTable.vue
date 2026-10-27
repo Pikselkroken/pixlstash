@@ -198,11 +198,12 @@ function startEditAddress(row) {
   editing.value = { id: row.id, kind: "address" };
 }
 
-function cancelEdit() {
+// Leaving the field cancels too, without taking focus from where it went.
+function cancelEdit(refocus = true) {
   const id = editing.value?.id;
   editing.value = null;
   editError.value = "";
-  if (id) focusMore(id);
+  if (id && refocus) focusMore(id);
 }
 
 async function saveName(row) {
@@ -254,7 +255,9 @@ async function saveAddress(row) {
       editError.value = probe?.detail || `Nothing answered at ${hostPart}:${p}.`;
       return;
     }
-    if (probe.url.replace(/\/+$/, "") === row.url.replace(/\/+$/, "")) {
+    // As the server matches addresses: case and a trailing slash aside.
+    const urlKey = (url) => url.replace(/\/+$/, "").toLowerCase();
+    if (urlKey(probe.url) === urlKey(row.url)) {
       cancelEdit();
       return;
     }
@@ -263,9 +266,10 @@ async function saveAddress(row) {
     answers[row.id] = probe;
     if (row.isCurrent) useFilterStore().comfyuiUrl = probe.url;
     emit("changed", body);
-    // Its key was bound to the old address and is revoked: link it at the
-    // new one straight away.
-    if (row.link.linked) {
+    // Its key was bound to the old address and the server revoked it: link
+    // it at the new one straight away.
+    const after = body.connections.find((c) => c.id === row.id);
+    if (row.link.linked && !after?.link?.linked) {
       emit("link", { ...row, url: probe.url });
     } else {
       say(`${row.name} moved to ${hostPart}:${p}`);
@@ -413,7 +417,7 @@ function onMenuKey(event, row) {
                     :disabled="saving"
                     data-testid="comfyui-rename-field"
                     @enter="saveName(row)"
-                    @blur="!saving && cancelEdit()"
+                    @blur="!saving && cancelEdit(false)"
                   />
                 </form>
                 <template v-else>

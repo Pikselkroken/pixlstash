@@ -2655,6 +2655,32 @@ def create_router(server) -> APIRouter:
         )
         return _connection_list(user)
 
+    def _unlink_then(request: Request, connection_id: str, then, *, kept, doing):
+        """Revoke the connection's key, then run *then*, under one hold of the
+        link lock. A revoke that fails is a 500 saying what was *kept*; a
+        failure of *then* after the key went is logged and raised as it is."""
+        try:
+            return comfyui_link_service.unlink(
+                server, request, connection_id, then=then
+            )
+        except Exception as exc:
+            if not comfyui_link_service.link_record(server, connection_id):
+                logger.exception(
+                    "Revoked the link key of ComfyUI connection %s, then could not %s.",
+                    connection_id,
+                    doing,
+                )
+                raise
+            logger.exception(
+                "Could not revoke the link key of ComfyUI connection %s; %s.",
+                connection_id,
+                kept,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=f"The connection's key could not be revoked, so {kept}: {exc}",
+            ) from exc
+
     @router.patch(
         "/comfyui/connections/{connection_id}",
         summary="Rename a ComfyUI connection or change its address",
@@ -2704,11 +2730,12 @@ def create_router(server) -> APIRouter:
         if _connection_or_404(trial, connection_id)["url"] != before["url"]:
             # Revoked and moved under one hold of the link lock, so a link
             # waiting on it finds the new address and not a key's old one.
-            user = comfyui_link_service.unlink(
-                server,
+            user = _unlink_then(
                 request,
                 connection_id,
-                then=lambda: comfyui_connections.save(server, user_id, change),
+                lambda: comfyui_connections.save(server, user_id, change),
+                kept="its address was not changed",
+                doing="move it",
             )
         else:
             user = comfyui_connections.save(server, user_id, change)
@@ -2738,26 +2765,11 @@ def create_router(server) -> APIRouter:
                 lambda user: comfyui_connections.remove(user, connection_id),
             )
 
-        try:
-            # Revoked and removed under one hold of the link lock, so a link
-            # waiting on it cannot record a key for the removed connection.
-            user = comfyui_link_service.unlink(
-                server, request, connection_id, then=drop
-            )
-        except Exception as exc:
-            if not comfyui_link_service.link_record(server, connection_id):
-                raise
-            logger.exception(
-                "Could not revoke the link key of ComfyUI connection %s; the "
-                "connection is kept.",
-                connection_id,
-            )
-            raise HTTPException(
-                status_code=500,
-                detail=(
-                    f"The connection's key could not be revoked, so it was kept: {exc}"
-                ),
-            ) from exc
+        # Revoked and removed under one hold of the link lock, so a link
+        # waiting on it cannot record a key for the removed connection.
+        user = _unlink_then(
+            request, connection_id, drop, kept="it was kept", doing="remove it"
+        )
         return _connection_list(user)
 
     @router.post(

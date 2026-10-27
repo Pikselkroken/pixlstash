@@ -253,6 +253,30 @@ describe("rename and edit address, in place", () => {
     wrapper.unmount();
   });
 
+  it("leaving the rename field cancels it without taking focus", async () => {
+    const wrapper = mountTable();
+    await menuItem(wrapper, "box", "rename").trigger("click");
+    const field = byTestId(wrapper, "comfyui-rename-field").find("input");
+    const elsewhere = byTestId(wrapper, "comfyui-test-pc").element;
+    elsewhere.focus();
+    await field.trigger("blur");
+    await flushPromises();
+    expect(byTestId(wrapper, "comfyui-rename-field").exists()).toBe(false);
+    expect(document.activeElement).toBe(elsewhere);
+    wrapper.unmount();
+  });
+
+  it("the same address in another case is no move, and asks nothing", async () => {
+    comfyui.probeComfyui.mockResolvedValue({ reachable: true, url: PC.url });
+    const wrapper = mountTable([{ ...PC, url: "HTTP://127.0.0.1:8188" }, BOX]);
+    await menuItem(wrapper, "pc", "edit-address").trigger("click");
+    await byTestId(wrapper, "comfyui-edit-save").trigger("click");
+    await flushPromises();
+    expect(comfyui.updateComfyuiConnection).not.toHaveBeenCalled();
+    expect(wrapper.emitted("link")).toBeUndefined();
+    wrapper.unmount();
+  });
+
   it("saves an address only once ComfyUI answers there", async () => {
     comfyui.probeComfyui.mockResolvedValue({
       reachable: false,

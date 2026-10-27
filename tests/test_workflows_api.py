@@ -3680,6 +3680,34 @@ def test_a_connection_whose_key_cannot_be_revoked_is_kept(
     assert _token_works(server, key)
 
 
+def test_a_connection_whose_key_cannot_be_revoked_is_not_moved(
+    workflow_env, comfy_at, monkeypatch
+):
+    """The move's revoke failing is a 500 that says the address stayed, as the
+    remove's is; the key keeps its connection at its old address."""
+    server = workflow_env.server
+    fake = comfy_at("http://127.0.0.1:18188/")
+    first = comfyui_connections.current_id(server.auth.get_user())
+    key = _link_connection(workflow_env, fake, first)
+
+    def refuse(server_, request, public_id):
+        raise RuntimeError("database is locked")
+
+    with monkeypatch.context() as patched:
+        patched.setattr(comfyui_link_service, "_revoke", refuse)
+        r = workflow_env.owner.patch(
+            f"{API}/comfyui/connections/{first}",
+            json={"url": "http://127.0.0.1:18190/"},
+        )
+    assert r.status_code == 500, r.text
+    assert "address was not changed" in r.json()["detail"]
+    entry = next(
+        c for c in _connections(workflow_env)["connections"] if c["id"] == first
+    )
+    assert (entry["url"], entry["link"]["linked"]) == ("http://127.0.0.1:18188/", True)
+    assert _token_works(server, key)
+
+
 def test_moving_a_linked_connection_revokes_its_key_and_renaming_does_not(
     workflow_env, comfy_at
 ):
