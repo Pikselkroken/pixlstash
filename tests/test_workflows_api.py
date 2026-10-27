@@ -72,6 +72,7 @@ from pixlstash.db_models import (
     PicturePendingPerson,
     Project,
     ReferenceFolder,
+    User,
     UserToken,
 )
 from pixlstash.db_models.saved_recipe import SavedRecipe
@@ -119,6 +120,7 @@ from pixlstash.services.workflow_hash import (
 )
 from pixlstash.hub import workflow_versions
 from pixlstash.services import (
+    comfyui_connections,
     comfyui_link_service,
     comfyui_pack_service,
     comfyui_templates,
@@ -1721,6 +1723,248 @@ def test_the_probe_refuses_an_address_that_is_not_http(workflow_env, monkeypatch
     r = workflow_env.owner.post(f"{API}/comfyui/probe", json={"url": url})
     assert r.status_code == 400, r.text
     assert asked == []
+
+
+# ===========================================================================
+# Several ComfyUI connections (#2167)
+# ===========================================================================
+
+_THIS_PC = "http://127.0.0.1:8188/"
+_RENDER_BOX = "http://192.0.2.20:8188/"
+
+
+@pytest.fixture
+def saved_address(workflow_env, monkeypatch):
+    """An owner with one ``comfyui_url`` and no list, as before #2167.
+
+    Restored to no address and no list after, so a connection a test added is
+    not made current by another test's clear.
+    """
+    monkeypatch.setattr(config_routes, "register_comfyui_model_folders", lambda *a: [])
+    server = workflow_env.server
+    uid = server.auth.get_user().id
+
+    def reset(url):
+        def change(user):
+            user.comfyui_url = url
+            user.comfyui_connections = None
+            return True
+
+        comfyui_connections.save(server, uid, change)
+
+    reset(_THIS_PC)
+    yield
+    reset(None)
+
+
+def _connections(workflow_env) -> dict:
+    r = workflow_env.owner.get(f"{API}/comfyui/connections")
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _current_url(body: dict) -> str | None:
+    return next(
+        (c["url"] for c in body["connections"] if c["id"] == body["current"]), None
+    )
+
+
+def test_the_connection_routes_are_owner_only(workflow_env, saved_address):
+    """Both directions: a live scoped token is refused, the owner answered."""
+    path = f"{API}/comfyui/connections"
+    for method in ("GET", "POST"):
+        assert_real_route(workflow_env.server.api, method, path)
+        assert ROUTE_POLICIES[(method, path)].policy is AccessPolicy.OWNER_ONLY
+    assert path in auth.READ_BLOCKED_GET_PATHS
+    token = mint_read_token(
+        workflow_env.owner,
+        "connections check",
+        resource_type="character",
+        resource_id=workflow_env.character_id,
+    )
+    client = bearer_client(workflow_env.server, token)
+    assert client.get(f"{API}/pictures").status_code == 200, (
+        "the scoped token is dead; the refusals below would prove nothing"
+    )
+    body = {"url": _RENDER_BOX}
+    assert client.get(path).status_code == 403
+    assert client.post(path, json=body).status_code == 403
+    assert len(_connections(workflow_env)["connections"]) == 1, "the refusal added it"
+    assert workflow_env.owner.post(path, json=body).status_code == 200
+    assert len(_connections(workflow_env)["connections"]) == 2
+
+
+def test_a_single_saved_address_upgrades_to_one_current_connection(
+    workflow_env, saved_address
+):
+    body = _connections(workflow_env)
+    assert body == {
+        "connections": [
+            {
+                "id": comfyui_connections.SAVED_ADDRESS_ID,
+                "name": "This PC",
+                "url": _THIS_PC,
+                "status": None,
+                "gpu": None,
+                "vram_mb": None,
+            }
+        ],
+        "current": comfyui_connections.SAVED_ADDRESS_ID,
+    }
+    # Nothing was written to read it so.
+    assert workflow_env.server.auth.get_user().comfyui_connections is None
+
+
+def test_adding_a_connection_does_not_switch_and_picking_it_does(
+    workflow_env, saved_address
+):
+    r = workflow_env.owner.post(
+        f"{API}/comfyui/connections",
+        json={"url": " http://192.0.2.20:8188 ", "name": "Render box"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert [(c["name"], c["url"]) for c in body["connections"]] == [
+        ("This PC", _THIS_PC),
+        ("Render box", _RENDER_BOX),
+    ]
+    assert _current_url(body) == _THIS_PC
+    # The same address again is left as it is, under its first name.
+    again = workflow_env.owner.post(
+        f"{API}/comfyui/connections", json={"url": _RENDER_BOX, "name": "Other"}
+    ).json()
+    assert again == body
+
+    r = workflow_env.owner.patch(
+        f"{API}/users/me/config", json={"comfyui_url": _RENDER_BOX}
+    )
+    assert r.status_code == 200, r.text
+    picked = _connections(workflow_env)
+    assert picked["connections"] == body["connections"], "picking it edited the list"
+    assert picked["current"] == body["connections"][1]["id"]
+    # What runs, templates and model availability read.
+    assert workflow_env.server.auth.get_user().comfyui_url == _RENDER_BOX
+
+
+def test_clearing_the_address_removes_that_connection_and_the_next_takes_over(
+    workflow_env, saved_address
+):
+    laptop = "http://192.0.2.30:8188/"
+    for url in (_RENDER_BOX, laptop):
+        workflow_env.owner.post(f"{API}/comfyui/connections", json={"url": url})
+    r = workflow_env.owner.patch(f"{API}/users/me/config", json={"comfyui_url": None})
+    assert r.status_code == 200, r.text
+    assert r.json()["config"]["comfyui_url"] == _RENDER_BOX, "not the first left"
+    body = _connections(workflow_env)
+    assert [c["url"] for c in body["connections"]] == [_RENDER_BOX, laptop]
+    assert _current_url(body) == _RENDER_BOX
+    for _ in range(2):
+        r = workflow_env.owner.patch(
+            f"{API}/users/me/config", json={"comfyui_url": None}
+        )
+    assert r.json()["config"]["comfyui_url"] is None
+    assert _connections(workflow_env) == {"connections": [], "current": None}
+
+
+def test_a_new_address_in_settings_moves_the_current_connection(
+    workflow_env, saved_address
+):
+    workflow_env.owner.post(f"{API}/comfyui/connections", json={"url": _RENDER_BOX})
+    moved = "http://127.0.0.1:8000/"
+    workflow_env.owner.patch(f"{API}/users/me/config", json={"comfyui_url": moved})
+    body = _connections(workflow_env)
+    assert [(c["id"], c["url"]) for c in body["connections"]][0] == (
+        comfyui_connections.SAVED_ADDRESS_ID,
+        moved,
+    )
+    assert [c["url"] for c in body["connections"]][1:] == [_RENDER_BOX]
+    assert _current_url(body) == moved
+
+
+def test_picking_a_listed_address_spelled_differently_does_not_move_the_current(
+    workflow_env, saved_address
+):
+    """A PATCH through the API is stored as typed; it must still pick the row."""
+    workflow_env.owner.post(f"{API}/comfyui/connections", json={"url": _RENDER_BOX})
+    before = _connections(workflow_env)["connections"]
+    workflow_env.owner.patch(
+        f"{API}/users/me/config", json={"comfyui_url": "HTTP://192.0.2.20:8188"}
+    )
+    body = _connections(workflow_env)
+    assert body["connections"] == before
+    assert body["current"] == before[1]["id"]
+
+
+def test_a_stored_entry_is_read_whole():
+    """A row missing its name, or with a field of the wrong type, still answers
+    the response model instead of failing it."""
+    stored = json.dumps(
+        [{"id": "x", "url": _RENDER_BOX, "status": "weird", "gpu": 3, "vram_mb": "8"}]
+    )
+    user = User(comfyui_url=_THIS_PC, comfyui_connections=stored)
+    [entry] = comfyui_connections.read(user)
+    assert entry == {
+        "id": "x",
+        "name": "192.0.2.20",
+        "url": _RENDER_BOX,
+        "status": None,
+        "gpu": None,
+        "vram_mb": None,
+    }
+
+
+def test_clearing_with_no_connection_current_turns_comfyui_off():
+    """An address that matches no listed connection is not a current one to
+    hand over from."""
+    user = User(
+        comfyui_url="http://192.0.2.99:8188/",
+        comfyui_connections=json.dumps([{"id": "b", "url": _RENDER_BOX}]),
+    )
+    comfyui_connections.set_url(user, None)
+    assert user.comfyui_url is None
+    assert [e["url"] for e in comfyui_connections.read(user)] == [_RENDER_BOX]
+
+
+@pytest.mark.parametrize(
+    "stored, read_as",
+    [
+        ("not json", [_THIS_PC]),
+        ('{"url": "http://192.0.2.20:8188/"}', [_THIS_PC]),
+        ("[1, 2]", []),
+        ('[{"url": "http://192.0.2.20:8188/"}]', []),
+        ("[]", []),
+    ],
+)
+def test_a_stored_list_of_the_wrong_shape_reads_as_the_saved_address(stored, read_as):
+    """Only text that is not a JSON list falls back; a list, even empty or of
+    no entries, is what was stored."""
+    user = User(comfyui_url=_THIS_PC, comfyui_connections=stored)
+    assert [e["url"] for e in comfyui_connections.read(user)] == read_as
+
+
+def test_the_probe_notes_its_answer_on_a_listed_connection(
+    workflow_env, saved_address, monkeypatch
+):
+    device = {"name": "cuda:0 NVIDIA GeForce RTX 4090 : a", "type": "cuda"}
+    _system_stats_answer(monkeypatch, (200, {"system": {}, "devices": [device]}))
+    workflow_env.owner.post(f"{API}/comfyui/probe", json={"url": _THIS_PC})
+    [entry] = _connections(workflow_env)["connections"]
+    assert (entry["status"], entry["gpu"]) == ("connected", "NVIDIA GeForce RTX 4090")
+
+    _system_stats_answer(monkeypatch, requests.ConnectionError("refused"))
+    workflow_env.owner.post(f"{API}/comfyui/probe", json={"url": _THIS_PC})
+    workflow_env.owner.post(f"{API}/comfyui/probe", json={"url": _RENDER_BOX})
+    body = _connections(workflow_env)
+    assert [(c["url"], c["status"], c["gpu"]) for c in body["connections"]] == [
+        (_THIS_PC, "offline", None)
+    ], "an address not listed was added, or the offline answer was not noted"
+
+
+@pytest.mark.parametrize("url", ["127.0.0.1:8188", "http://me@127.0.0.1:8188/"])
+def test_a_connection_must_be_a_plain_http_address(workflow_env, saved_address, url):
+    r = workflow_env.owner.post(f"{API}/comfyui/connections", json={"url": url})
+    assert r.status_code == 400, r.text
+    assert len(_connections(workflow_env)["connections"]) == 1
 
 
 # ===========================================================================

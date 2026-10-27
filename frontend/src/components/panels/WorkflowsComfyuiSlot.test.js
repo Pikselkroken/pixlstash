@@ -8,8 +8,16 @@ import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 
 const probeComfyui = vi.fn();
+const listComfyuiConnections = vi.fn();
+const addComfyuiConnection = vi.fn();
 vi.mock("../../api/comfyui", () => ({
   probeComfyui: (...args) => probeComfyui(...args),
+  listComfyuiConnections: (...args) => listComfyuiConnections(...args),
+  addComfyuiConnection: (...args) => addComfyuiConnection(...args),
+}));
+const patchUserConfig = vi.fn();
+vi.mock("../../api/config", () => ({
+  patchUserConfig: (...args) => patchUserConfig(...args),
 }));
 
 import WorkflowsComfyuiSlot from "./WorkflowsComfyuiSlot.vue";
@@ -25,12 +33,20 @@ async function mountSlot({ url = LOCAL, configRead = true } = {}) {
   filterStore.comfyuiConfigured = Boolean(url);
   filterStore.comfyuiUrl = url;
   const wrapper = mount(WorkflowsComfyuiSlot, {
+    attachTo: document.body,
     global: {
       plugins: [pinia],
       stubs: {
         "v-icon": true,
         "v-menu": {
-          template: "<div><slot name='activator' :props='{}' /><slot /></div>",
+          props: ["modelValue"],
+          emits: ["update:modelValue"],
+          template:
+            "<div><slot name='activator' :props='{ onClick: () => $emit(\"update:modelValue\", true) }' /><slot /></div>",
+        },
+        AppDialog: {
+          props: ["open", "title"],
+          template: "<div v-if='open' data-testid='dialog'><slot /><slot name='footer' /></div>",
         },
       },
     },
@@ -47,6 +63,10 @@ const item = (wrapper, label) =>
 enableAutoUnmount(afterEach);
 
 beforeEach(() => {
+  listComfyuiConnections.mockReset();
+  listComfyuiConnections.mockResolvedValue({ connections: [], current: null });
+  addComfyuiConnection.mockReset();
+  patchUserConfig.mockReset();
   probeComfyui.mockReset();
   probeComfyui.mockImplementation(async (url) => ({
     reachable: true,
@@ -124,10 +144,129 @@ describe("with one ComfyUI saved", () => {
     expect(slot(wrapper).text()).toContain("Offline");
   });
 
-  it("opens the ComfyUI settings from both New connection and Settings", async () => {
+  it("opens the ComfyUI settings from Settings", async () => {
+    const { wrapper } = await mountSlot();
+    await item(wrapper, "ComfyUI settings…").trigger("click");
+    expect(wrapper.emitted("open-settings")).toEqual([["comfyui"]]);
+  });
+});
+
+describe("with several ComfyUI saved (#2167)", () => {
+  const BOX = "http://192.0.2.20:8188/";
+  const listed = {
+    connections: [
+      { id: "saved", name: "This PC", url: LOCAL, status: "connected", gpu: null },
+      { id: "b1", name: "Render box", url: BOX, status: "offline", gpu: null },
+    ],
+    current: "saved",
+  };
+  const rows = (wrapper) => wrapper.findAll('[role="menuitemradio"]');
+  const menuOpen = async (wrapper) => {
+    await slot(wrapper).trigger("click");
+    await flushPromises();
+  };
+
+  beforeEach(() => {
+    listComfyuiConnections.mockResolvedValue(listed);
+  });
+
+  it("lists every connection with its status, the current one checked", async () => {
+    probeComfyui.mockImplementation(async (url) => ({ reachable: url === LOCAL, url }));
+    const { wrapper } = await mountSlot();
+    await menuOpen(wrapper);
+    expect(probeComfyui).toHaveBeenCalledWith(BOX);
+    expect(rows(wrapper).map((r) => r.attributes("aria-checked"))).toEqual([
+      "true",
+      "false",
+    ]);
+    expect(rows(wrapper)[1].text()).toContain("Render box");
+    expect(rows(wrapper)[1].text()).toContain("192.0.2.20:8188");
+    expect(rows(wrapper)[1].find(".wcs-row-status").text()).toBe("Offline");
+  });
+
+  it("shows the last status while a connection is being asked again", async () => {
+    const { wrapper } = await mountSlot();
+    probeComfyui.mockImplementation(() => new Promise(() => {}));
+    await menuOpen(wrapper);
+    expect(rows(wrapper)[1].find(".wcs-row-status").text()).toBe("Offline");
+  });
+
+  it("switches by saving the picked address, and the slot follows", async () => {
+    patchUserConfig.mockResolvedValue({ config: { comfyui_url: BOX } });
+    const { wrapper, filterStore } = await mountSlot();
+    await rows(wrapper)[1].trigger("click");
+    await flushPromises();
+    expect(patchUserConfig).toHaveBeenCalledWith({ comfyui_url: BOX });
+    expect(filterStore.comfyuiUrl).toBe(BOX);
+    expect(slot(wrapper).text()).toContain("Render box");
+  });
+
+  it("says so in the reopened menu when the switch does not save", async () => {
+    patchUserConfig.mockRejectedValue(new Error("server down"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { wrapper, filterStore } = await mountSlot();
+    await rows(wrapper)[1].trigger("click");
+    await flushPromises();
+    expect(filterStore.comfyuiUrl).toBe(LOCAL);
+    const error = wrapper.find('[data-testid="workflows-comfyui-pick-error"]');
+    expect(error.text()).toBe("Could not switch to Render box: server down");
+    expect(error.attributes("role")).toBe("alert");
+    warn.mockRestore();
+  });
+
+  it("picking the current one saves nothing", async () => {
+    const { wrapper } = await mountSlot();
+    await rows(wrapper)[0].trigger("click");
+    expect(patchUserConfig).not.toHaveBeenCalled();
+  });
+
+  it("gives focus back to the slot when the new-connection dialog is cancelled", async () => {
     const { wrapper } = await mountSlot();
     await item(wrapper, "New ComfyUI connection…").trigger("click");
-    await item(wrapper, "ComfyUI settings…").trigger("click");
-    expect(wrapper.emitted("open-settings")).toEqual([["comfyui"], ["comfyui"]]);
+    const dialog = wrapper.find('[data-testid="dialog"]');
+    await dialog.findAll("button").find((b) => b.text().startsWith("Cancel")).trigger("click");
+    await flushPromises();
+    expect(wrapper.find('[data-testid="dialog"]').exists()).toBe(false);
+    expect(document.activeElement).toBe(slot(wrapper).element);
+  });
+
+  it("shows a fresh answer on a row whose address is spelled differently", async () => {
+    probeComfyui.mockImplementation(async (url) => ({ reachable: false, url }));
+    const { wrapper } = await mountSlot({ url: "HTTP://127.0.0.1:8188" });
+    await menuOpen(wrapper);
+    expect(rows(wrapper)).toHaveLength(2);
+    expect(rows(wrapper)[0].attributes("aria-checked")).toBe("true");
+    expect(rows(wrapper)[0].find(".wcs-row-status").text()).toBe("Offline");
+  });
+
+  it("New ComfyUI connection adds one without switching", async () => {
+    const { wrapper, filterStore } = await mountSlot();
+    await item(wrapper, "New ComfyUI connection…").trigger("click");
+    const dialog = wrapper.find('[data-testid="dialog"]');
+    expect(dialog.exists()).toBe(true);
+    const [address, name] = dialog.findAll("input");
+    await address.setValue("192.0.2.30:8188");
+    await name.setValue("Laptop");
+    const after = {
+      connections: [
+        ...listed.connections,
+        { id: "c3", name: "Laptop", url: "http://192.0.2.30:8188/", status: null },
+      ],
+      current: "saved",
+    };
+    addComfyuiConnection.mockResolvedValue(after);
+    listComfyuiConnections.mockResolvedValue(after);
+    await dialog.findAll("button").find((b) => b.text().startsWith("Add")).trigger("click");
+    await flushPromises();
+    expect(addComfyuiConnection).toHaveBeenCalledWith({
+      url: "http://192.0.2.30:8188",
+      name: "Laptop",
+    });
+    expect(wrapper.find('[data-testid="dialog"]').exists()).toBe(false);
+    expect(rows(wrapper).map((r) => r.text())).toEqual(
+      expect.arrayContaining([expect.stringContaining("Laptop")]),
+    );
+    expect(patchUserConfig).not.toHaveBeenCalled();
+    expect(filterStore.comfyuiUrl).toBe(LOCAL);
   });
 });

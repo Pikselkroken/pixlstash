@@ -1477,6 +1477,46 @@ def test_0133_adds_mouse_preferences_on_a_fresh_and_a_populated_vault():
         assert again.returncode == 0, again.stderr
 
 
+def test_0136_adds_comfyui_connections_and_keeps_the_saved_address():
+    """The column arrives either way and an existing user's ``comfyui_url`` is
+    left as it was, reading NULL for the list (one connection, #2167)."""
+
+    def has_column(conn):
+        return "comfyui_connections" in {
+            row[1] for row in conn.execute("PRAGMA table_info(user)")
+        }
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        db_url = f"sqlite:///{db_path}"
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert has_column(conn), "the baseline's create_all()"
+
+        before = "0135_add_training_presets_auto_check"
+        down = _run_alembic(["downgrade", before], db_url, _MIGRATIONS_DIR)
+        assert down.returncode == 0, down.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert not has_column(conn)
+            _insert_minimal_row(
+                conn, "user", username="owner", comfyui_url="http://127.0.0.1:8188/"
+            )
+            conn.commit()
+
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert has_column(conn), "migration 0136"
+            assert conn.execute(
+                "SELECT comfyui_url, comfyui_connections FROM user"
+            ).fetchall() == [("http://127.0.0.1:8188/", None)]
+            conn.execute("UPDATE alembic_version SET version_num = ?", (before,))
+            conn.commit()
+        again = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert again.returncode == 0, again.stderr
+
+
 def test_0128_adds_prompt_match_once_on_a_fresh_and_a_populated_vault():
     """Column and probe index arrive either way, existing pictures read NULL
     (not scored), and a second upgrade over a vault that has both is a no-op."""

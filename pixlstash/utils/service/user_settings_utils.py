@@ -3,6 +3,8 @@
 import json
 import os
 
+from pixlstash.services import comfyui_connections
+
 from pixlstash.utils.system_utils import (  # noqa: F401
     MAX_VRAM_BUDGET_GB,
     default_max_vram_gb,
@@ -316,7 +318,9 @@ def apply_user_config_patch(user, patch_data) -> bool:
             else:
                 new_value = str(value).strip()
             if user.comfyui_url != new_value:
-                user.comfyui_url = new_value
+                # The connection list follows (#2167); clearing it makes the
+                # next connection current when one remains.
+                comfyui_connections.set_url(user, new_value)
                 updated = True
             continue
         if key in {

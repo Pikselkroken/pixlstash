@@ -149,6 +149,7 @@ CREATE TABLE IF NOT EXISTS user (
 
     -- machine / deployment settings (owner-level, not library-level)
     comfyui_url                 TEXT,
+    comfyui_connections         TEXT,
     ai_toolkit_repo_path        TEXT,
     ai_toolkit_python           TEXT,
     ai_toolkit_commit           TEXT,
@@ -2112,6 +2113,10 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     # Recipe updates from pixlstash.dev (#2122): NULL until the owner is asked.
     if "training_presets_auto_check" not in user_columns:
         conn.execute("ALTER TABLE user ADD COLUMN training_presets_auto_check INTEGER")
+    # Several ComfyUI connections (#2167): NULL reads as the one comfyui_url,
+    # so an existing owner needs no row rewritten.
+    if "comfyui_connections" not in user_columns:
+        conn.execute("ALTER TABLE user ADD COLUMN comfyui_connections TEXT")
     # Mouse preferences (#2138): NULL reads as the model default.
     for column in ("grid_open_gesture", "viewer_wheel_action"):
         if column not in user_columns:

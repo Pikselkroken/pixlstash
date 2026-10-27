@@ -363,6 +363,19 @@ describe("connecting ComfyUI", () => {
     expect(config.patchUserConfig).toHaveBeenCalledWith({ comfyui_url: null });
     expect(wrapper.emitted("update:comfyui-configured")).toEqual([[false]]);
   });
+
+  it("disconnect shows the connection that takes over when another is saved", async () => {
+    const box = "http://192.0.2.20:8188/";
+    config.getUserConfig.mockResolvedValue({ comfyui_url: "http://127.0.0.1:8188/" });
+    probeAnswers({});
+    const wrapper = await mountPane();
+    config.getUserConfig.mockResolvedValue({ comfyui_url: box });
+    config.patchUserConfig.mockResolvedValue({ config: { comfyui_url: box } });
+    await byTestId(wrapper, "comfyui-disconnect").trigger("click");
+    await flushPromises();
+    expect(wrapper.emitted("update:comfyui-configured")).toBeUndefined();
+    expect(comfyui.probeComfyui).toHaveBeenLastCalledWith(box);
+  });
 });
 
 it("says why when the saved address cannot be read, instead of hiding the card", async () => {
