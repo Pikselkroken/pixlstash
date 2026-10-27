@@ -132,6 +132,16 @@
   background: var(--hover-wash);
 }
 
+/* A child's caret sits in its own slot, just before its mark, where its
+   parent's guide line meets it. */
+.sidebar-tree-kid > .sidebar-tree-toggle {
+  /* Over the spacer, which follows it and would otherwise take its clicks. */
+  z-index: var(--z-raised);
+  left: calc(
+    var(--tree-row-start) + var(--tree-spacer) - var(--gutter-glyph)
+  );
+}
+
 .sidebar-tree-spacer {
   position: relative;
   flex: none;
@@ -169,6 +179,12 @@
   display: none;
 }
 
+/* With a caret in the slot the line stops at it: the caret is the junction. */
+.sidebar-tree-kid--parent .sidebar-tree-spacer::after,
+.sidebar-tree-kid--parent.sidebar-tree-kid--last .sidebar-tree-spacer::before {
+  right: calc(var(--gutter-glyph) + var(--space-1));
+}
+
 /* The line from an open parent's mark down to its row's bottom edge, where
    its first child's guide picks it up. */
 .sidebar-tree-stub {
@@ -184,7 +200,9 @@
   top: calc(50% + var(--tree-kid-thumb) / 2);
 }
 
-.sidebar-tree-mark {
+/* Two classes, so it outranks the later `.sidebar-list-icon` width (the
+   top-level mark's); a wider box centred the glyph off its guide. */
+.sidebar-list-icon.sidebar-tree-mark {
   width: var(--tree-kid-thumb);
   height: var(--tree-kid-thumb);
 }
@@ -217,7 +235,9 @@
   /* Not the 100% `.sidebar-character-group` carries: with the margin that
      pushes the counts past the rail's edge. */
   width: auto;
-  margin: var(--space-2);
+  /* Opening a parent must not move it: the -1px takes the border back, so the
+     row inside starts where the closed row stood. The room goes below. */
+  margin: -1px var(--space-2) var(--space-2);
   padding-bottom: var(--space-2);
   background: var(--group-surface);
   border: 1px solid var(--group-border);

@@ -2687,6 +2687,18 @@ async function toggleSetLock(set) {
 
 // --- Child sets (#2124): New set inside…, Move out of… ---
 
+// Sets nest three levels at most, counting the person or top-level set; the
+// server refuses deeper (picture_set_tree.MAX_DEPTH).
+const MAX_SET_DEPTH = 2;
+const SET_DEPTH_REASON =
+  "Sets nest three levels deep at most, counting the person or top-level set.";
+
+/** How far below its person or top-level set a set sits (0 at the top). */
+function setDepth(set) {
+  const { setIds, characterId } = ancestorsOf(set?.id, pictureSets.value);
+  return setIds.length + (characterId != null ? 1 : 0);
+}
+
 /** Whether a set sits under anything, listed here or not. */
 function setHasParent(set) {
   return set?.parent_set_id != null || set?.parent_character_id != null;
@@ -5566,6 +5578,8 @@ defineExpose({
                     {
                       'sidebar-tree-kid': row.level > 0,
                       'sidebar-tree-kid--last': row.level > 0 && row.last,
+                      'sidebar-tree-kid--parent':
+                        row.level > 0 && row.childCount > 0,
                       active:
                         selectedSetIdSet.has(row.set.id) &&
                         selectionOwnsHighlight,
@@ -5783,6 +5797,8 @@ defineExpose({
                     {
                       'sidebar-tree-kid': row.level > 0,
                       'sidebar-tree-kid--last': row.level > 0 && row.last,
+                      'sidebar-tree-kid--parent':
+                        row.level > 0 && row.childCount > 0,
                       active:
                         selectedSetIdSet.has(row.set.id) &&
                         selectionOwnsHighlight,
@@ -6424,7 +6440,10 @@ defineExpose({
         </button>
         <button
           class="ctx-item"
-          :disabled="isReadOnly"
+          :disabled="isReadOnly || setDepth(sidebarCtxSet) >= MAX_SET_DEPTH"
+          :class="{
+            'ctx-item--disabled': setDepth(sidebarCtxSet) >= MAX_SET_DEPTH,
+          }"
           @click="
             createChildSet({
               setId: sidebarCtxSet.id,
@@ -6432,6 +6451,12 @@ defineExpose({
             })
           "
         >
+          <Tooltip
+            :text="
+              setDepth(sidebarCtxSet) >= MAX_SET_DEPTH ? SET_DEPTH_REASON : ''
+            "
+            activator="parent"
+          />
           <v-icon class="ctx-icon">mdi-folder-plus-outline</v-icon>
           <span class="ctx-label-text"
             >New set inside "{{ sidebarCtxSet.name }}"…</span

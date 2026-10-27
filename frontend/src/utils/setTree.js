@@ -86,11 +86,14 @@ export function flattenBranch(children, bySet, isExpanded) {
   return rows;
 }
 
-// A child's mark hangs just past the centre of its parent's mark: half that
-// mark plus --space-4, which leaves the guide a visible tick before the child.
-// The owner ruled under-the-name too deep (a whole parent mark per level).
-const LEVEL_ONE = "var(--sidebar-thumb-size) / 2 + var(--space-4)";
-const DEEPER_STEP = "(var(--tree-kid-thumb) / 2 + var(--space-4))";
+// A child hangs just past the centre of its parent's mark: the guide drops
+// from that centre, then the child's own caret slot (--gutter-glyph, reserved
+// whether or not it has children, as at the top level), then its mark. The
+// owner ruled under-the-name too deep, and carets in the far-left gutter read
+// as belonging to nothing.
+const CARET_SLOT = "var(--space-1) + var(--gutter-glyph)";
+const LEVEL_ONE = `var(--sidebar-thumb-size) / 2 + ${CARET_SLOT}`;
+const DEEPER_STEP = `(var(--tree-kid-thumb) / 2 + ${CARET_SLOT})`;
 
 /**
  * Where the guide line of a level-`level` row falls, from the start of its

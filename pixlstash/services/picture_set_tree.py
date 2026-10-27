@@ -2,8 +2,9 @@
 
 The parent is a home, not a constraint: a child's pictures need not be in its
 parent, a parent's count is its own pictures, and deleting a parent lifts its
-children to the top level rather than deleting them. Nesting has no depth limit;
-the only shape refused is a set becoming its own ancestor.
+children to the top level rather than deleting them. Nesting stops at three
+levels counting the person or top-level set (owner ruling), and no set may
+become its own ancestor.
 """
 
 from typing import Optional
@@ -12,6 +13,9 @@ from fastapi import HTTPException
 from sqlmodel import Session, select, update
 
 from pixlstash.db_models import Character, PictureSet
+
+# How far below a person or top-level set a set may sit: three levels in all.
+MAX_DEPTH = 2
 
 
 def validate_parent(
@@ -48,9 +52,13 @@ def validate_parent(
             raise HTTPException(
                 status_code=404, detail=f"No person {parent_character_id}."
             )
+        _check_depth(session, set_id, 1)
+        return
+    if parent_set_id is None:
         return
     seen: set[int] = set()
     current = parent_set_id
+    top = None
     while current is not None:
         if set_id is not None and current == set_id:
             raise HTTPException(
@@ -64,7 +72,42 @@ def validate_parent(
         row = session.get(PictureSet, current)
         if row is None:
             raise HTTPException(status_code=404, detail=f"No set {current}.")
+        top = row
         current = row.parent_set_id
+    # The parent's own depth: one per set above it, one more for a person atop.
+    parent_depth = len(seen) - 1 + (1 if top.parent_character_id is not None else 0)
+    _check_depth(session, set_id, parent_depth + 1)
+
+
+def _check_depth(session: Session, set_id: Optional[int], depth: int) -> None:
+    """Raise 400 when a set placed at *depth* would put a set past MAX_DEPTH.
+
+    A moved set carries its own child sets with it, so their levels count.
+    """
+    height = 0
+    frontier = [set_id] if set_id is not None else []
+    seen = set(frontier)
+    while frontier:
+        kids = [
+            kid
+            for kid in session.exec(
+                select(PictureSet.id).where(PictureSet.parent_set_id.in_(frontier))
+            ).all()
+            if kid not in seen
+        ]
+        if not kids:
+            break
+        height += 1
+        seen.update(kids)
+        frontier = kids
+    if depth + height > MAX_DEPTH:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Sets nest three levels deep at most, counting the person or "
+                "top-level set."
+            ),
+        )
 
 
 def lift_children(

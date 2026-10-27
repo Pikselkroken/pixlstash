@@ -160,3 +160,30 @@ def test_a_scoped_reader_does_not_learn_a_parent():
     character = {"id": 2}
     narrow_project_fields(character, [], {5})
     assert "parent_set_id" not in character
+
+
+def test_sets_nest_three_levels_at_most(client):
+    ash = _person(client, "Ash")
+    a = _set(client, "A", parent_character_id=ash)
+    b = _set(client, "B", parent_set_id=a)
+    # Ash > A > B is three levels; a fourth is refused.
+    r = client.post("/picture_sets", json={"name": "C", "parent_set_id": b})
+    assert r.status_code == 400, r.text
+
+    # Under a top-level set the same: T > U > V and no deeper.
+    t = _set(client, "T")
+    u = _set(client, "U", parent_set_id=t)
+    _set(client, "V", parent_set_id=u)
+    assert (
+        client.post("/picture_sets", json={"name": "W", "parent_set_id": u}).status_code
+        == 200
+    )
+
+    # A moved set brings its children: X > Y fits under Ash, not under A.
+    x = _set(client, "X")
+    _set(client, "Y", parent_set_id=x)
+    r = client.patch(f"/picture_sets/{x}", json={"parent_set_id": a})
+    assert r.status_code == 400, r.text
+    assert _row(client, x)["parent_set_id"] is None
+    r = client.patch(f"/picture_sets/{x}", json={"parent_character_id": ash})
+    assert r.status_code == 200, r.text
