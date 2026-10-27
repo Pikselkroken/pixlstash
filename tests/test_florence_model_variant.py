@@ -167,6 +167,86 @@ class TestDeviceFallback:
         assert len(fallback_causes) == 1
         assert isinstance(fallback_causes[0], torch.OutOfMemoryError)
 
+    def test_mps_loads_on_metal_in_fp16(self, monkeypatch):
+        svc = Florence2Service(device="mps")
+        loaded = []
+
+        def fake_load(device, dtype):
+            loaded.append((device.type, dtype))
+            svc._model = object()
+            svc._processor = object()
+
+        monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
+        monkeypatch.setattr(svc, "_load_model", fake_load)
+
+        svc.ensure_ready()
+
+        assert loaded == [("mps", torch.float16)]
+        assert svc._last_fallback_reason is None
+
+    def test_mps_unavailable_loads_cpu_and_records_reason(self, monkeypatch):
+        svc = Florence2Service(device="mps")
+        loaded = []
+
+        def fake_load(device, dtype):
+            loaded.append((device.type, dtype))
+            svc._model = object()
+            svc._processor = object()
+
+        monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+        monkeypatch.setattr(svc, "_load_model", fake_load)
+
+        svc.ensure_ready()
+
+        assert loaded == [("cpu", torch.float32)]
+        assert svc._last_fallback_reason.startswith("mps_unavailable:")
+
+    def test_metal_oom_retries_caption_on_cpu(self, monkeypatch, tmp_path):
+        path = tmp_path / "sample.png"
+        Image.new("RGB", (8, 8), "white").save(path)
+        svc = Florence2Service(device="mps")
+        svc._model = object()
+        svc._processor = object()
+        svc._model_device = torch.device("mps")
+        svc._dtype = torch.float16
+        calls = 0
+        fallback_causes = []
+
+        def infer(_image):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("MPS backend out of memory")
+            return "Recovered on CPU."
+
+        def reload_cpu(cause=None):
+            fallback_causes.append(cause)
+            svc._model_device = torch.device("cpu")
+            return True
+
+        monkeypatch.setattr(svc, "_infer_single", infer)
+        monkeypatch.setattr(svc, "_reload_on_cpu", reload_cpu)
+
+        assert svc.generate_caption(str(path)) == "Recovered on CPU."
+        assert calls == 2
+        assert len(fallback_causes) == 1
+
+    def test_a_model_bug_on_the_cpu_is_not_retried(self):
+        svc = Florence2Service(device="mps")
+        svc._model_device = torch.device("cpu")
+        assert not svc._is_device_error(RuntimeError("MPS backend out of memory"))
+
+    def test_mps_batches_are_charged_against_the_memory_budget(self):
+        seen = []
+
+        def vram_cap(base_mb, per_item_mb):
+            seen.append(base_mb)
+            return 3
+
+        svc = Florence2Service(device="mps", vram_cap_fn=vram_cap)
+        assert svc.description_batch_size() == 3
+        assert seen == [FLORENCE_BASE_VRAM_MB]
+
 
 class TestPluginSchema:
     def test_model_variant_is_a_select_defaulting_to_base(self):
