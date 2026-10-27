@@ -107,6 +107,10 @@ const TemplateInspector = defineAsyncComponent(
 const WorkflowTab = defineAsyncComponent(
   () => import("./components/panels/WorkflowTab.vue"),
 );
+// The Models workspace's sidebar (#2168), loaded with the screen it serves.
+const ModelsSideBar = defineAsyncComponent(
+  () => import("./components/panels/ModelsSideBar.vue"),
+);
 // The Models screen's rail (Models | Tasks), for the same reason: the stats it
 // replaces there describe the library, and a hidden copy would keep fetching.
 const ModelsRail = defineAsyncComponent(
@@ -834,12 +838,18 @@ defineExpose({
             sidebarStore.sidebarOverlay && sidebarStore.hideAutoSidebar()
           "
         >
+          <!-- The Workflows (#2165) and Models (#2168) workspaces bring their
+               own sidebars. The library's SideBar stays mounted but not drawn:
+               its refs (settings, import, folder picks) and drop targets are
+               the app's, and a switch back to Media neither refetches nor
+               loses its scroll. A wrapper, since SideBar has several roots and
+               v-show on it would not reach them. -->
           <WorkflowsSidebar v-if="isWorkflowsView" />
-          <!-- On /workflows SideBar stays mounted but not drawn: its refs
-               (settings, import, folder picks) and drop targets are the app's.
-               A wrapper, since SideBar has several roots and v-show would not
-               reach them. -->
-          <div v-show="!isWorkflowsView" style="display: contents">
+          <ModelsSideBar v-else-if="isModelsView" />
+          <div
+            v-show="!isWorkflowsView && !isModelsView"
+            style="display: contents"
+          >
           <SideBar
             ref="sidebarRef"
             :installType="installType"

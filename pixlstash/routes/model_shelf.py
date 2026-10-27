@@ -1020,6 +1020,33 @@ class WorkflowSetMissingBase(BaseModel):
     )
 
 
+class WorkflowSetCombinationWorkflow(BaseModel):
+    """One workflow a combination's kept pictures were made with."""
+
+    id: str = Field(description="The workflow's id (`GET /workflows`).")
+    name: str = Field(
+        description=(
+            "What the workflow is called: the owner's name, else its base card's "
+            "name or file, else its id."
+        )
+    )
+    picture_count: int = Field(
+        description="Kept pictures of this combination made with this workflow."
+    )
+
+
+class WorkflowSetLatestPicture(BaseModel):
+    """One of a combination's newest kept pictures."""
+
+    picture_id: int = Field(description="The picture's id.")
+    at: str = Field(
+        description=(
+            "ISO-8601 time the grid's date sort reads for the picture: its "
+            "creation time, else its import time."
+        )
+    )
+
+
 class WorkflowSetCombination(BaseModel):
     """One set of files a picture proves ran together."""
 
@@ -1079,6 +1106,28 @@ class WorkflowSetCombination(BaseModel):
             "Ids of the hand-made sets holding every model of this combination "
             "on the shelf. The combination is still listed: the grid hides a "
             "covered one, Works with reads them all."
+        ),
+    )
+    workflows: list[WorkflowSetCombinationWorkflow] = Field(
+        default_factory=list,
+        description=(
+            "The workflows this combination's kept pictures were made with, most "
+            "pictures first, then name. A picture with no workflow counts toward "
+            "none, so the sum is at most `picture_count`."
+        ),
+    )
+    last_used_at: Optional[str] = Field(
+        default=None,
+        description=(
+            "ISO-8601 time of the newest kept picture behind the combination, "
+            "null when it has none."
+        ),
+    )
+    latest: list[WorkflowSetLatestPicture] = Field(
+        default_factory=list,
+        description=(
+            "Up to ten of the combination's kept pictures, newest first, by the "
+            "same date `last_used_at` reads."
         ),
     )
 
@@ -2823,6 +2872,15 @@ def create_router(server) -> APIRouter:
                     picture_count=combination["picture_count"],
                     covers=_cover_strip(combination["covers"]),
                     covered_by=combination["covered_by"],
+                    workflows=[
+                        WorkflowSetCombinationWorkflow(**entry)
+                        for entry in combination.get("workflows", [])
+                    ],
+                    last_used_at=combination.get("last_used_at"),
+                    latest=[
+                        WorkflowSetLatestPicture(**entry)
+                        for entry in combination.get("latest", [])
+                    ],
                 )
                 for combination in found["combinations"]
             ],

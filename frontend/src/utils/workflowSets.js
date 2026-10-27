@@ -25,7 +25,14 @@
 // lists them under `In no set yet`.
 
 import { favouritesFirst } from "../stores/useFavouritesStore";
-import { fileKindLabel, fileTime, modelName, quantBadge } from "./modelShelf";
+import {
+  fileKindLabel,
+  fileTime,
+  modelName,
+  quantBadge,
+  SHELF_TYPES,
+  shelfTypeOf,
+} from "./modelShelf";
 
 /** The kinds a set is named after, as the server's `_SET_BASE_KINDS`. */
 const BASE_KINDS = new Set(["checkpoint", "unknown"]);
@@ -308,12 +315,63 @@ export function sharingLabel(otherSets) {
 }
 
 /**
+ * The Type letter a member's mark draws, from its file kind.
+ *
+ * An unclassified file has no shelf Type, so it draws a `?` in neutral ink rather
+ * than borrowing another Type's letter.
+ *
+ * @param {string} kind - a member's `kind` (its `file_kind`).
+ * @returns {{mark: string, tint: string, type: string}}
+ */
+function typeMark(kind) {
+  const key = shelfTypeOf({ file_kind: kind });
+  const type = SHELF_TYPES.find((entry) => entry.key === key);
+  return type
+    ? { mark: type.mark, tint: type.tint, type: type.one }
+    : { mark: "?", tint: "neutral", type: "" };
+}
+
+/**
+ * The member marks a card draws, in order: each model's Type and name, then every
+ * file the set names that the shelf does not hold, flagged `missing`.
+ *
+ * @param {Array<Object>} models - members as served, `{name, filename, kind}`.
+ * @param {Array<string>} missingNames - files the shelf lacks, the checkpoint first.
+ * @returns {Array<{name: string, mark: string, tint: string, type: string, missing: boolean}>}
+ */
+export function setMarks(models, missingNames = []) {
+  return [
+    ...missingNames.map((name) => ({ name, ...typeMark(""), missing: true })),
+    ...models.map((model) => ({
+      name: headName(model),
+      ...typeMark(model.kind),
+      missing: false,
+    })),
+  ];
+}
+
+/**
+ * The files an evidence group names that the shelf does not hold: its head when
+ * the head is one, then every file a combination lists as `missing`.
+ *
+ * @param {Object} group - one entry from {@link setGroups}.
+ * @returns {Array<string>} unique names, the head first.
+ */
+export function missingFileNames(group) {
+  const names = group.head?.missing ? [group.head.name] : [];
+  for (const combination of group.combinations ?? []) {
+    for (const entry of combination.missing ?? []) names.push(entry.name);
+  }
+  return [...new Set(names.filter(Boolean))];
+}
+
+/**
  * One group as `ModelSetCard` draws it.
  *
- * Three meta rows, which is what the approved design gives this card: the name
- * with its kind, the per-kind counts, and the facts. The per-kind row answers the
- * question a grid is scanned for - what SHAPE is this set, one VAE and two
- * encoders or none at all - without opening anything.
+ * The card draws its marks, its size and its missing-file flag from here. The
+ * base model and the last-used time need the whole payload, so the grid adds
+ * them. The full count line - models, recipes, pictures, runs - stays in `facts`
+ * for the card's accessible name; it is no longer drawn as chips.
  *
  * @param {Object} group - one entry from {@link setGroups}.
  * @returns {Object} a card for `ModelSetCard`.
@@ -324,6 +382,7 @@ export function setCard(group) {
   // On the grid only because ComfyUI ran it: no picture here to show, so the
   // cover says where the evidence came from instead of "0 pictures".
   const fromComfyUI = group.pictures === 0 && historyRuns > 0;
+  const missingNames = missingFileNames(group);
   return {
     key: group.key,
     // The head names the card, so a Flux or Wan group with no checkpoint row is
@@ -333,6 +392,12 @@ export function setCard(group) {
     kindLabel: group.head?.missing ? "Missing" : memberKindLabel(group.head),
     missing: Boolean(group.head?.missing),
     kinds: kindCounts(models.filter((model) => model.id !== group.head?.id)),
+    marks: setMarks(models, missingNames),
+    missingFile: missingNames.length > 0,
+    sizeBytes: models.reduce(
+      (sum, model) => sum + (Number(model.file_size) || 0),
+      0,
+    ),
     facts: [
       models.length === 1 ? "1 model" : `${models.length} models`,
       fromComfyUI && !group.recipes ? null : recipeCount(group.recipes),
@@ -677,6 +742,19 @@ export function handMadeCard(set, identical = 0) {
       members
         .filter((m) => m.slot !== "checkpoint")
         .map((m) => ({ ...m, kindLabel: memberKindLabel(m) })),
+    ),
+    baseModel: handMadeBase(set) || "",
+    // Every member in the order the set holds them, an off-shelf one flagged
+    // rather than dropped.
+    marks: members.map((m) => ({
+      name: headName(m),
+      ...typeMark(m.kind),
+      missing: !m.on_shelf,
+    })),
+    missingFile: offShelf > 0,
+    sizeBytes: members.reduce(
+      (sum, m) => sum + (m.on_shelf ? Number(m.file_size) || 0 : 0),
+      0,
     ),
     facts: [
       members.length === 1 ? "1 model" : `${members.length} models`,

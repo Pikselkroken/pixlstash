@@ -40,6 +40,7 @@ import sys
 import tempfile
 import threading
 import time
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from urllib.parse import quote
 
@@ -1045,6 +1046,116 @@ def test_workflow_sets_orders_the_strongest_evidence_first(shelf_env):
 
         assert [c["picture_count"] for c in body["combinations"]] == [4, 1]
     finally:
+        _wipe_recipes(shelf_env.server)
+
+
+def _seed_workflow_of(server, workflow_id: str, structural_hash: str) -> None:
+    """Place the variant *structural_hash* in the manual workflow *workflow_id*,
+    the way the hub files a variant under a workflow it is in."""
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO workflow_group (workflow_id, kind) "
+            "VALUES (?, 'manual')",
+            (workflow_id,),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO workflow_group_member (topology_hash, workflow_id) "
+            "VALUES (?, ?)",
+            (f"topo-{structural_hash}", workflow_id),
+        )
+        conn.execute(
+            "INSERT INTO workflow_variant "
+            "(structural_hash, topology_hash, workflow_key, key_version) "
+            "VALUES (?, ?, ?, 'v1')",
+            (structural_hash, f"topo-{structural_hash}", f"key-{structural_hash}"),
+        )
+
+
+def _unseed_workflows(server) -> None:
+    with server.hub.transaction() as conn:
+        conn.execute("DELETE FROM workflow_group_member")
+        conn.execute("DELETE FROM workflow_variant")
+        conn.execute("DELETE FROM workflow_group")
+
+
+def test_workflow_sets_name_each_combinations_workflows_and_newest_pictures(
+    shelf_env,
+):
+    """The three facts a combination carries beyond its counts, off the same
+    kept pictures as `picture_count`.
+
+    One combination, three recipes naming the same files:
+    * `sh-wf-a`: 11 pictures in workflow A, dated May 1 to May 11;
+    * `sh-wf-c`: 2 pictures in workflow B, dated June 1 and June 2;
+    * `sh-wf-b`: 1 picture in no workflow, dated July 1.
+
+    So picture_count is 14, workflows sum to 13 (the workflow-less picture
+    counts toward none), and `latest` is the ten newest of the 14 - including
+    the workflow-less one - so the four oldest of workflow A's are not in it.
+    A workflow with no card on this hub is named by its id.
+    """
+    try:
+        assets = [
+            ("ckpt_name", "base_xl.safetensors"),
+            ("lora_name", "alice.safetensors"),
+        ]
+        for name in ("sh-wf-a", "sh-wf-b", "sh-wf-c"):
+            _seed_recipe(shelf_env.server, name, assets)
+        _seed_workflow_of(shelf_env.server, "manual:wf-a", "sh-wf-a")
+        _seed_workflow_of(shelf_env.server, "manual:wf-b", "sh-wf-c")
+
+        a_ids = [
+            _seed_picture(
+                shelf_env.server,
+                "sh-wf-a",
+                created_at=datetime(2026, 5, 1 + day, tzinfo=timezone.utc),
+            )
+            for day in range(11)
+        ]
+        c_ids = [
+            _seed_picture(
+                shelf_env.server,
+                "sh-wf-c",
+                created_at=datetime(2026, 6, 1 + day, tzinfo=timezone.utc),
+            )
+            for day in range(2)
+        ]
+        b_id = _seed_picture(
+            shelf_env.server,
+            "sh-wf-b",
+            created_at=datetime(2026, 7, 1, tzinfo=timezone.utc),
+        )
+
+        body = shelf_env.owner.get(f"{API}/models/workflow-sets").json()
+        assert len(body["combinations"]) == 1
+        card = body["combinations"][0]
+
+        assert card["picture_count"] == 14
+        assert card["workflows"] == [
+            {"id": "manual:wf-a", "name": "manual:wf-a", "picture_count": 11},
+            {"id": "manual:wf-b", "name": "manual:wf-b", "picture_count": 2},
+        ]
+        assert (
+            sum(w["picture_count"] for w in card["workflows"]) <= card["picture_count"]
+        )
+
+        assert (
+            card["last_used_at"]
+            == datetime(2026, 7, 1, tzinfo=timezone.utc).isoformat()
+        )
+        expected = [b_id, *reversed(c_ids), *reversed(a_ids[4:])]
+        assert [p["picture_id"] for p in card["latest"]] == expected
+        assert len(card["latest"]) == 10
+        assert (
+            card["latest"][0]["at"]
+            == datetime(2026, 7, 1, tzinfo=timezone.utc).isoformat()
+        )
+        assert (
+            card["latest"][-1]["at"]
+            == datetime(2026, 5, 5, tzinfo=timezone.utc).isoformat()
+        )
+    finally:
+        _unseed_workflows(shelf_env.server)
         _wipe_recipes(shelf_env.server)
 
 

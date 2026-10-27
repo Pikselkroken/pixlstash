@@ -110,6 +110,13 @@ function verb(wrapper, name) {
   return wrapper.find(`[data-verb="${name}"]`);
 }
 
+/** The verbs drawn on the pill itself, in order: not the ones inside a menu. */
+function pillVerbs(wrapper) {
+  return wrapper
+    .findAll(".selbar [data-verb]")
+    .filter((button) => !button.element.closest(".ctx-menu"));
+}
+
 beforeEach(() => {
   setActivePinia(createPinia());
   window.localStorage.clear();
@@ -125,7 +132,7 @@ beforeEach(() => {
 describe("the selection bar", () => {
   it("is absent with nothing selected", () => {
     const wrapper = mount(ShelfSelectionBar, globalOpts);
-    expect(wrapper.find(".shelf-selbar").exists()).toBe(false);
+    expect(wrapper.find(".selbar").exists()).toBe(false);
   });
 
   it("offers Rename for one model and refuses it for two", async () => {
@@ -140,6 +147,28 @@ describe("the selection bar", () => {
     store.toggleSelected(2);
     await wrapper.vm.$nextTick();
     expect(verb(wrapper, "rename").attributes("disabled")).toBeDefined();
+  });
+
+  it("hands focus back to ⋯ when a verb is picked from its menu", async () => {
+    selectRows([row(1, "present")]);
+    // A menu that opens on its activator's click, as the real one does.
+    const opening = {
+      props: ["modelValue"],
+      emits: ["update:modelValue"],
+      template:
+        '<div class="v-menu-stub"><span @click="$emit(\'update:modelValue\', true)"><slot name="activator" :props="{}" /></span><slot /></div>',
+    };
+    const wrapper = mount(ShelfSelectionBar, {
+      attachTo: document.body,
+      global: { stubs: { ...globalOpts.global.stubs, "v-menu": opening } },
+    });
+    await wrapper.find('.selbar [data-verb="more"]').trigger("click");
+    document.activeElement?.blur?.();
+    await wrapper.find('.selbar .ctx-menu [data-verb="copy-filenames"]').trigger("click");
+    expect(document.activeElement).toBe(
+      wrapper.find('.selbar [data-verb="more"]').element,
+    );
+    wrapper.unmount();
   });
 
   it("refuses Forget while a copy is still on disk", async () => {
@@ -174,24 +203,100 @@ describe("the selection bar", () => {
     expect(tip(forget)).toContain("the 1 whose files are gone");
   });
 
-  it("names every icon verb, and does not lean on the tooltip to do it", async () => {
-    // The pill's verbs are icons, so `aria-label` is the only thing naming
-    // them - and it has to be the VERB, stable across selections, because the
-    // tooltip beside it is the refusal and changes with what is selected.
+  it("names every pill verb, and keeps the name stable as the selection changes", async () => {
+    // A pill button is named by its visible words where it has them, and by
+    // its aria-label where it is an icon. The name is the VERB and never
+    // changes, because the tooltip beside it is the refusal and changes with the
+    // selection.
     selectRows([row(1, "present")]);
     const wrapper = mount(ShelfSelectionBar, globalOpts);
-    const verbs = wrapper.findAll("[data-verb]");
+    const name = (button) =>
+      button.attributes("aria-label") || button.text().trim();
+    const verbs = pillVerbs(wrapper);
     expect(verbs.length).toBeGreaterThan(0);
-    for (const button of verbs) {
-      expect(button.attributes("aria-label")).toBeTruthy();
-    }
-    // Stable: the tooltip moves with the selection, the name does not.
-    const before = wrapper.find('[data-verb="move"]').attributes("aria-label");
+    for (const button of verbs) expect(name(button)).toBeTruthy();
+
+    const before = name(verb(wrapper, "move"));
+    expect(before).toBe("Move");
     selectRows([row(2, "missing")]);
     await wrapper.vm.$nextTick();
-    expect(wrapper.find('[data-verb="move"]').attributes("aria-label")).toBe(
-      before,
+    expect(name(verb(wrapper, "move"))).toBe(before);
+  });
+
+  it("labels Assign, Move and Favourite on the pill, and puts H on the heart", () => {
+    selectRows([row(1, "present")]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(verb(wrapper, "assign").text()).toBe("Assign");
+    expect(verb(wrapper, "move").text()).toBe("Move");
+    const favourite = verb(wrapper, "favourite");
+    expect(favourite.text()).toContain("Favourite");
+    expect(favourite.find("kbd").text()).toBe("H");
+    expect(favourite.find("kbd").attributes("aria-hidden")).toBe("true");
+  });
+
+  it("lays the pill out as count, verbs, ⋯, then the removal and Clear", () => {
+    selectRows([row(1, "present")]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(pillVerbs(wrapper).map((b) => b.attributes("data-verb"))).toEqual([
+      "assign",
+      "move",
+      "favourite",
+      "more",
+      "forget",
+      "clear",
+    ]);
+    // The destructive verb is the error-coloured one, and it is not last.
+    const forget = verb(wrapper, "forget");
+    expect(forget.classes()).toContain("bar-btn--danger");
+    expect(verb(wrapper, "clear").classes()).not.toContain("bar-btn--danger");
+    expect(verb(wrapper, "clear").attributes("aria-label")).toBe(
+      "Clear selection (Esc)",
     );
+  });
+
+  it("moves the verbs that have no pill slot under ⋯, with their gates", () => {
+    // Stack, unstack, rename, set thumbnail and delete are on the ⋯ menu and
+    // not on the pill. Each keeps its gate: the refusal is the same tooltip the
+    // context menu carries.
+    selectRows([row(1, "present")]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    const more = wrapper
+      .findAll(".selbar .ctx-menu")
+      .find((menu) => menu.find('[data-verb="delete"]').exists());
+    for (const name of ["stack", "unstack", "rename", "set-icon", "delete"]) {
+      expect(more.find(`[data-verb="${name}"]`).exists(), name).toBe(true);
+      expect(pillVerbs(wrapper).map((b) => b.attributes("data-verb")), name)
+        .not.toContain(name);
+    }
+    // Stack refuses one model with its reason, under ⋯ as on the menu.
+    expect(more.find('[data-verb="stack"]').attributes("disabled")).toBeDefined();
+    expect(tip(more.find('[data-verb="stack"]'))).toContain("Select two or more");
+    // The pill's own verbs are not repeated under ⋯: Move, Favourite and
+    // Remove by their data-verb, Assign by its pickers, which carry no verb.
+    for (const name of ["assign", "move", "favourite", "forget"]) {
+      expect(more.find(`[data-verb="${name}"]`).exists(), name).toBe(false);
+    }
+    const pickers = wrapper.findAllComponents({ name: "AddToEntityControl" });
+    expect(pickers.some((picker) => more.element.contains(picker.element))).toBe(false);
+  });
+
+  it("offers Rename under ⋯ disabled, with its reason, on a selection of two", async () => {
+    const store = selectRows([row(1, "present")]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(wrapper.find(".selbar .ctx-menu [data-verb=\"rename\"]").attributes("disabled")).toBeUndefined();
+    store.rows = [...store.rows, row(2, "present")];
+    store.toggleSelected(2);
+    await wrapper.vm.$nextTick();
+    const rename = wrapper.find(".selbar .ctx-menu [data-verb=\"rename\"]");
+    expect(rename.attributes("disabled")).toBeDefined();
+    expect(tip(rename)).toBeTruthy();
+  });
+
+  it("clears the selection from the × on the pill", async () => {
+    const store = selectRows([row(1, "present")]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    await verb(wrapper, "clear").trigger("click");
+    expect(store.selectedRows).toEqual([]);
   });
 
   it("words Hide by the selection, and emits it rather than hiding", async () => {
@@ -506,7 +611,7 @@ describe("the delete verb", () => {
     const wrapper = mount(ShelfSelectionBar, globalOpts);
     const del = verb(wrapper, "delete");
     expect(del.attributes("disabled")).toBeUndefined();
-    expect(del.attributes("aria-label")).toBe("Move to Trash");
+    expect(del.text()).toContain("Move to Trash");
   });
 
   it("refuses a file in a folder PixlStash keeps for itself", () => {
@@ -557,14 +662,12 @@ describe("the delete verb", () => {
     window.dispatchEvent(new KeyboardEvent("keydown", { shiftKey: true }));
     await wrapper.vm.$nextTick();
     const del = verb(wrapper, "delete");
-    expect(del.attributes("aria-label")).toBe("Permanently delete");
+    expect(del.text()).toContain("Permanently delete");
     expect(tip(del)).toContain("no undo");
 
     window.dispatchEvent(new KeyboardEvent("keyup", { shiftKey: false }));
     await wrapper.vm.$nextTick();
-    expect(verb(wrapper, "delete").attributes("aria-label")).toBe(
-      "Move to Trash",
-    );
+    expect(verb(wrapper, "delete").text()).toContain("Move to Trash");
   });
 
   it("reads permanence off the press, not off the tracked key state", async () => {
@@ -857,9 +960,12 @@ describe("Hide, over selected cards from pictures", () => {
       "Hide 2 workflow sets",
       "Hide 2 workflow sets",
     ]);
-    // Favourite leads the menu now; the hide verb is still in it.
-    for (const menu of wrapper.findAll(".shelf-menu[role='menu']").slice(-2)) {
-      expect(menu.findAll(".ctx-item")[0].text()).toContain("Favourite");
+    // The pill's `⋯` leads with Hide, since Favourite is on the pill; the
+    // context menu, which has no pill beside it, still leads with Favourite.
+    const [more, pointer] = wrapper.findAll(".shelf-menu[role='menu']").slice(-2);
+    expect(more.findAll(".ctx-item")[0].text()).toBe("Hide 2 workflow sets");
+    expect(pointer.findAll(".ctx-item")[0].text()).toContain("Favourite");
+    for (const menu of [more, pointer]) {
       expect(
         menu.findAll(".ctx-item").map((item) => item.text()),
       ).toContain("Hide 2 workflow sets");
@@ -1014,84 +1120,6 @@ describe("Edit set, on a set from pictures", () => {
     wrapper.vm.contextOpen = false;
     await wrapper.vm.$nextTick();
     expect(cloneItem(wrapper)).toBeUndefined();
-  });
-});
-
-describe("the Models rail's selection", () => {
-  /** A menu row of the rail's verbs, by its words. */
-  const railItem = (menu, label) =>
-    menu.findAll(".ctx-item").find((b) => b.text().includes(label));
-
-  it("keeps the shelf's pill down: the rail has its own footer and menu", async () => {
-    const store = selectRows([row(1, "present"), row(2, "present")]);
-    const wrapper = mount(ShelfSelectionBar, globalOpts);
-    expect(wrapper.find(".selbar").exists()).toBe(true);
-    store.setRailSelection([2]);
-    await wrapper.vm.$nextTick();
-    expect(wrapper.find(".selbar").exists()).toBe(false);
-  });
-
-  it("gates the rail's rows by the rail's selection, as the shelf's are", async () => {
-    // Row 2's file is gone and row 1's is not: Remove from shelf follows the
-    // rail's pick, not what the shelf last had selected.
-    const store = selectRows([row(1, "present")]);
-    store.rows = [...store.rows, row(2, "missing")];
-    const wrapper = mount(ShelfSelectionBar, {
-      ...globalOpts,
-      props: { rail: true },
-    });
-    expect(wrapper.vm.forgettable).toHaveLength(0);
-    // The shelf's selection is the shelf's pill's: this mount draws none.
-    expect(wrapper.find(".selbar").exists()).toBe(false);
-    store.setRailSelection([2]);
-    expect(wrapper.vm.forgettable.map((r) => r.id)).toEqual([2]);
-  });
-
-  it("draws only rows in the rail's mount, and asks the shelf instead of emitting", async () => {
-    const store = selectRows([row(1, "present")]);
-    store.setRailSelection([1]);
-    const wrapper = mount(ShelfSelectionBar, {
-      ...globalOpts,
-      props: { rail: true },
-    });
-    // Nothing of its own on screen, even with a selection to act on.
-    expect(wrapper.find(".selbar").exists()).toBe(false);
-    expect(wrapper.find(".ctx-item").exists()).toBe(false);
-
-    const menu = mount(wrapper.vm.RailVerbs, globalOpts);
-    // The rail leads with its own New workflow set and Hide model, so the
-    // shelf's are left out.
-    expect(railItem(menu, "New workflow set")).toBeUndefined();
-    expect(railItem(menu, "Hide")).toBeUndefined();
-    await railItem(menu, "Set kind").trigger("click");
-    expect(store.verbRequest).toEqual({ verb: "set-kind", args: [] });
-    expect(wrapper.emitted("set-kind")).toBeUndefined();
-    expect(wrapper.emitted("picked")).toHaveLength(1);
-    menu.unmount();
-  });
-
-  it("passes the press's own Shift on with Delete", async () => {
-    const store = selectRows([
-      row(1, "present", {
-        locations: [
-          { state: "present", folder_id: 1, folder_path: "/m", relpath: "x" },
-        ],
-      }),
-    ]);
-    useModelFoldersStore().folders = [
-      { id: 1, path: "/m", deletable: true },
-    ];
-    store.setRailSelection([1]);
-    const wrapper = mount(ShelfSelectionBar, {
-      ...globalOpts,
-      props: { rail: true },
-    });
-    const menu = mount(wrapper.vm.RailVerbs, globalOpts);
-    const del = menu.find(".ctx-item--danger");
-    expect(del.attributes("disabled")).toBeUndefined();
-    await del.trigger("click", { shiftKey: true });
-    expect(store.verbRequest).toEqual({ verb: "delete", args: [true] });
-    menu.unmount();
   });
 });
 
