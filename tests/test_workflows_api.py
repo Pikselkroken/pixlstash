@@ -1895,6 +1895,36 @@ def test_picking_a_listed_address_spelled_differently_does_not_move_the_current(
     assert body["current"] == before[1]["id"]
 
 
+def test_a_stored_entry_is_read_whole():
+    """A row missing its name, or with a field of the wrong type, still answers
+    the response model instead of failing it."""
+    stored = json.dumps(
+        [{"id": "x", "url": _RENDER_BOX, "status": "weird", "gpu": 3, "vram_mb": "8"}]
+    )
+    user = User(comfyui_url=_THIS_PC, comfyui_connections=stored)
+    [entry] = comfyui_connections.read(user)
+    assert entry == {
+        "id": "x",
+        "name": "192.0.2.20",
+        "url": _RENDER_BOX,
+        "status": None,
+        "gpu": None,
+        "vram_mb": None,
+    }
+
+
+def test_clearing_with_no_connection_current_turns_comfyui_off():
+    """An address that matches no listed connection is not a current one to
+    hand over from."""
+    user = User(
+        comfyui_url="http://192.0.2.99:8188/",
+        comfyui_connections=json.dumps([{"id": "b", "url": _RENDER_BOX}]),
+    )
+    comfyui_connections.set_url(user, None)
+    assert user.comfyui_url is None
+    assert [e["url"] for e in comfyui_connections.read(user)] == [_RENDER_BOX]
+
+
 @pytest.mark.parametrize(
     "stored, read_as",
     [

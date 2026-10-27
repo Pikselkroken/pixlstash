@@ -53,6 +53,21 @@ def _entry(entry_id: str, name: str, url: str) -> dict:
     }
 
 
+def _whole(stored: dict) -> dict:
+    """*stored* with every key present and of the type the routes answer with."""
+    url = str(stored["url"])
+    entry = _entry(str(stored["id"]), str(stored.get("name") or default_name(url)), url)
+    if stored.get("status") in ("connected", "offline"):
+        entry["status"] = stored["status"]
+    if isinstance(stored.get("gpu"), str):
+        entry["gpu"] = stored["gpu"]
+    if isinstance(stored.get("vram_mb"), int) and not isinstance(
+        stored["vram_mb"], bool
+    ):
+        entry["vram_mb"] = stored["vram_mb"]
+    return entry
+
+
 def read(user) -> list[dict]:
     """The owner's connections, in the order they were added."""
     raw = getattr(user, "comfyui_connections", None)
@@ -62,9 +77,11 @@ def read(user) -> list[dict]:
         except (ValueError, TypeError):
             parsed = None
         if isinstance(parsed, list):
-            # An entry every reader can use: the routes key rows by id.
+            # Only entries every reader can use (the routes key rows by id),
+            # each made whole, so a hand-edited or older row cannot fail the
+            # response.
             return [
-                e
+                _whole(e)
                 for e in parsed
                 if isinstance(e, dict) and e.get("url") and e.get("id")
             ]
@@ -117,9 +134,11 @@ def set_url(user, new: str | None) -> None:
     old = _key(user.comfyui_url)
     current = next((e for e in entries if old and _key(e["url"]) == old), None)
     if new is None:
+        # Only a removed current connection hands over; with none current,
+        # clearing turns ComfyUI off.
         if current is not None:
             entries.remove(current)
-        new = entries[0]["url"] if entries else None
+            new = entries[0]["url"] if entries else None
     elif any(_key(e["url"]) == _key(new) for e in entries):
         pass
     elif current is not None:

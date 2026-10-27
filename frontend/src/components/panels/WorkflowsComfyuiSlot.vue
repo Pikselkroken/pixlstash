@@ -25,8 +25,7 @@
   <v-menu v-else v-model="open" location="bottom start" :offset="4">
     <template #activator="{ props: menuProps }">
       <button
-        ref="trigger"
-        v-bind="menuProps"
+        v-bind="withRef(menuProps, (el) => (trigger = el))"
         type="button"
         class="wcs-slot"
         :aria-label="`ComfyUI: ${instance.name}, ${instance.status}`"
@@ -124,13 +123,15 @@ import { patchUserConfig } from "../../api/config";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { errorMessage } from "../../utils/apiError";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
+import { withRef } from "../../utils/withRef.js";
 
 const emit = defineEmits(["open-settings"]);
 
 const filterStore = useFilterStore();
 const open = ref(false);
 const adding = ref(false);
-const trigger = ref(null);
+// The slot button, set through `withRef` beside the menu's own activator ref.
+let trigger = null;
 const pickError = ref("");
 // `GET /comfyui/connections`; empty until read, when the slot names the
 // saved address the way the server would.
@@ -271,7 +272,7 @@ function newConnection() {
 async function closeDialog() {
   adding.value = false;
   await nextTick();
-  trigger.value?.focus();
+  trigger?.focus();
 }
 
 async function added(list) {
