@@ -1122,7 +1122,7 @@ Connects ComfyUI (`comfyui_url` in the user config), on the ComfyUI tab. Props: 
 
 Four states in one card. **Looking**: with no address saved, it probes `http://127.0.0.1:8188/` then `:8000/` (ComfyUI Desktop) through `POST /comfyui/probe`. **Found**: the first that answers, with one key *Connect*. **Address**: scheme, host and port, for when nothing answered or the person picks *Use another address*. **Connected**: the saved address, the node-pack line, *Check again* and *Disconnect*. **Every address is probed before it is saved**, and what is saved is the probe's normalised `url`, never the typed text: an unreachable address shows the probe's `detail` under the fields and writes nothing. A saved address opens on Connected with the status "Checking" while it is probed: "Connected" only once it answers, "Not answering" with the `detail` when it does not, and *Check again* asks again. An answer that lands after the address was disconnected is dropped. A host typed already bracketed (`[::1]`) is wrapped once, not twice.
 
-Connected also shows **Access**, from `GET /comfyui/link`: "PixlStash nodes only · linked <date>", or "Not linked" with the one primary *Link ComfyUI* and a sentence saying what the key lets the nodes do (browse, load models, save, convert workflows) and that it cannot delete, change settings or make tokens (#1811). **`ComfyuiLinkLibraries.vue` is the *Use in every library* switch for the link's key**, shown on the linked card and in the Link dialog once linked, only with more than one library and `can_manage`; it calls `setTokenLibraries` with the status's `token_id`, the same call as the token table's **Every library** switch, which now works on the link key too. **When other computers can reach ComfyUI, `ComfyuiExposureNotice.vue` says so, what it lets them do and what to do about it**: before linking for a ComfyUI not on this computer (`other_computer`) or one here whose probe says `listens_on_network` (`listening`), in the Link dialog under the steps from the reply's `exposure`, and on the linked card from the newest probe (so *Check again* after a restart without `--listen` clears it), falling back to the status's `exposure` until a probe says either way. Linked, the card also says when the key was refused from another address (`refused_from`: ComfyUI's address changed, or someone else has the key) with a primary *Link again*, and offers a secondary *Link again* for a link made before keys were bound (`bound_address` null). *Check again* re-reads the link status as well as probing. *Link ComfyUI* opens `ComfyuiLinkDialog.vue`, which POSTs `/comfyui/link` on open and renders the four steps the reply carries (reach, nodes, link, check) with each fix inline under its step: the pack install sentence for `pack_missing`; for `remote_access_off` / `https_off` on the desktop, *Turn on remote access with HTTPS* through the same `window.pixlstashDesktop.setServerSettings` bridge `ComputeSection.vue` uses, which restarts the backend and reloads the page, so the person links again afterwards. When the nodes are missing and the link reply says `can_install_pack`, the dialog offers *Install and restart ComfyUI* (`POST /comfyui/pack/install`), lists any older copy moved to the trash, then polls `GET /comfyui/pixlstash-node` every 2 s until the nodes load and links again by itself, giving up after 120 s; without the offer it shows the manual install steps. *Disconnect* calls `DELETE /comfyui/link` first when linked; if that fails it still clears the address and says the key "ComfyUI (linked)" is live and listed under Account › API Tokens, where it can be deleted. Closing the dialog returns focus to *Link ComfyUI* (or *Check again* once linked). There is no workflow import or list in Settings: a workflow is added through *Add…* on the Workflows view (or dropped on it) or into the watched `workflows/` folder. Deleting a workflow is the Workflows grid's *Delete…*, on manual workflows only (§13.2).
+Connected also shows **Access**, from `GET /comfyui/link`: "PixlStash nodes only · linked <date>", or "Not linked" with the one primary *Link ComfyUI* and a sentence saying what the key lets the nodes do (browse, load models, save, convert workflows) and that it cannot delete, change settings or make tokens (#1811). **`ComfyuiLinkLibraries.vue` is the *Use in every library* switch for the link's key**, shown on the linked card and in the Link dialog once linked, only with more than one library and `can_manage`; it calls `setTokenLibraries` with the status's `token_id`, the same call as the token table's **Every library** switch, which now works on the link key too. **When other computers can reach ComfyUI, `ComfyuiExposureNotice.vue` says so, what it lets them do and what to do about it**: before linking for a ComfyUI not on this computer (`other_computer`) or one here whose probe says `listens_on_network` (`listening`), in the Link dialog under the steps from the reply's `exposure`, and on the linked card from the newest probe (so *Check again* after a restart without `--listen` clears it), falling back to the status's `exposure` until a probe says either way. Linked, the card also says when the key was refused from another address (`refused_from`: ComfyUI's address changed, or someone else has the key) with a primary *Link again*, and offers a secondary *Link again* for a link made before keys were bound (`bound_address` null). *Check again* re-reads the link status as well as probing. *Link ComfyUI* opens `ComfyuiLinkDialog.vue`, which POSTs `/comfyui/link` on open and renders the four steps the reply carries (reach, nodes, link, check) with each fix inline under its step: the pack install sentence for `pack_missing`; for `remote_access_off` / `https_off` on the desktop, *Turn on remote access with HTTPS* through the same `window.pixlstashDesktop.setServerSettings` bridge `ComputeSection.vue` uses, which restarts the backend and reloads the page, so the person links again afterwards. When the nodes are missing and the link reply says `can_install_pack`, the dialog offers *Install and restart ComfyUI* (`POST /comfyui/pack/install`), lists any older copy moved to the trash, then polls `GET /comfyui/pixlstash-node` every 2 s until the nodes load and links again by itself, giving up after 120 s; without the offer it shows the manual install steps. *Disconnect* calls `DELETE /comfyui/link` first when linked; if that fails it still clears the address and says the key "ComfyUI (linked)" is live and listed under Account › API Tokens, where it can be deleted. Closing the dialog returns focus to *Link ComfyUI* (or *Check again* once linked). There is no workflow import or list in Settings: a workflow is added through *Add workflow* in the Workflows sidebar (or dropped on it) or into the watched `workflows/` folder. Deleting a workflow is the Workflows grid's *Delete…*, on manual workflows only (§13.2).
 
 In the Connected state, one line says whether it has the ComfyUI-PixlStash node pack, from `GET /comfyui/pixlstash-node` asked on open and after every save: "installed", or "not found, or too old" with the install sentence (`PIXLSTASH_PACK_INSTALL`) and `ComfyUI-PixlStash` linked to the pack's repo (`PIXLSTASH_PACK_URL`, both in `utils/runReasons.js`). "Too old" because the check looks for the pack's `open_workflow.js`, which older versions lack. `null` or a failed request shows nothing.
 
@@ -2116,15 +2116,26 @@ the core rule groups workflows instead (there is no merge or split), and a check
 LoRA that used to be a member is a recipe value the workflow's pictures are
 filtered by.
 
-- **Toolbar**: *Add…* first, which is today's workflow import
-  (`POST /comfyui/workflows/import`) rather than anything new; then Sort (Your
-  ratings / Recently used / Recently changed / Recently created / Picture
-  count / Name) in the shipped `.tbm` popover, Filters and the name field
-  (below); and then the
-  app-wide tail — `[separator] [TbGlobalActions]` in its own `--space-3`
-  cluster, `rail-name="inspector"`. Replacing the grid replaces the grid's
-  toolbar, so without the tail nothing on this screen opens Settings or the
-  right rail, and the rail is where `WorkflowTab` is drawn (#1415).
+- **Toolbar, browse only** (#2165): Sort (Your ratings / Recently used /
+  Recently changed / Recently created / Picture count / Name) in the shipped
+  `.tbm` popover, *Filter* (below), the active filters as removable chips
+  inline in the bar (`FilterStrip inline` over `store.filterChips`, or the
+  templates store's chips while Templates is shown), a spacer, a **Search**
+  field (260px, shrinking, an `F` keycap) bound to `store.filters.name` or the
+  templates store's name filter, and then the app-wide tail —
+  `[separator] [TbGlobalActions]` in its own `--space-3` cluster,
+  `rail-name="inspector"`. There is no title, no Mine | Templates switch and
+  no *Add…*: the source is the left sidebar's (`WorkflowsSidebar.vue`, §13.2),
+  and its amber *Add workflow* calls `useWorkflowsStore().requestAdd()`, which
+  bumps `addRequest`; the view watches it and clicks its hidden workflow file
+  input, so the import is still `POST /comfyui/workflows/import`. Replacing
+  the grid replaces the grid's toolbar, so without the tail nothing on this
+  screen opens the right rail, where `WorkflowTab` is drawn (#1415).
+- **Keys on the grid**: arrows move the cursor, Space adds to the selection,
+  Ctrl/Cmd+A selects all shown, `H` favourites, `R` runs (the rail footer's
+  keycap; the focused card is selected alone first if it was not in the
+  selection, and a draft does nothing), F2 renames, Delete deletes behind its
+  confirmation, Shift+F10 / ContextMenu open the card menu.
 - **Filters** (F7) is the picture grid's cascade on the toolbar's funnel,
   `WorkflowFilterMenu.vue`: the same `.tbm` root of `.fm-row` kinds under
   section labels, each opening a pick-one submenu beside it, so a reader who
@@ -2142,18 +2153,15 @@ filtered by.
   (`All` for Type, `Any` for the rest, counting every card) and has no Clear
   of its own. Above the kinds sits a **name field** (`NameFilterField.vue`,
   `filters.name`, a case-blind substring of the card's name, chipped as
-  *Name*); the toolbar carries a second copy of it after Filters, bound to the
-  same value and folded by a container query when the bar is narrow. The
-  app's `F` key (`searchStore.searchFocusToken`) focuses the toolbar copy, or
-  opens Filters on the menu's copy when the toolbar's is folded. Keys follow
+  *Name*); the toolbar's Search field is bound to the same value. The app's
+  `F` key (`searchStore.searchFocusToken`) focuses the toolbar's field. Keys follow
   the grid's: ↑/↓ move through the root rows, → or Enter opens a submenu on its chosen radio (or the Checkpoint field), ←
   returns to the row, caught in the capture phase because the radiogroup
   would otherwise take it as "previous". Which side applies which filter is in the
   `useWorkflowsStore` row of §3. The funnel's badge and the strip both count
-  `filterChips`, so neither can describe a filter the other has dropped, and
-  the subtitle counts only the one-offs STILL withheld — a grid showing its
-  one-offs must not also caption itself "7 one-offs". **Hidden workflows are
-  never counted**, on the subtitle, the Hidden row or a note. Filters that leave no card
+  `filterChips`, so neither can describe a filter the other has dropped.
+  **Hidden workflows are never counted**, on the Hidden row or a note.
+  Filters that leave no card
   get `.wfv-note`, not the first-run empty state: that screen offers three
   ways to get a first workflow and this reader already has some. A
   `?topology=` or `?workflow=` link whose card a filter is hiding gets its own note with a
@@ -2269,6 +2277,13 @@ filtered by.
   and when the list shrinks past it, no card at all — which takes the grid's
   only tab stop with it and strands a keyboard user outside a screen they
   cannot re-enter.
+- **The selection pill's face** (#2165, `WorkflowSelectionBar.vue`): the count
+  menu, then *Show pictures*, *Open in ComfyUI* (the menu row's gates, opening
+  the adapted graph) and *Export* with their words, `⋯`, then Delete (the one
+  error-coloured verb) and Clear (×, Esc). The words drop below a 720px
+  container (`wfpill` on `.wfv-pill-host`). Favourite, Run, Rename and Hide
+  live only in the `⋯` menu, which is the same render as the card context
+  menu; Run is also the rail footer's and `R`.
 - **The card menu has no clone verb** (#1850; `panels/WorkflowSelectionBar.vue`, one list for the bar's ⋯ and the context menu). Its rows are Rename, Hide, *Change model set…*, Export, Duplicate and Delete, with *Open in ComfyUI* under Run… (below). *Change model set…* is offered for exactly one workflow and changes that workflow, so it sits with the rows that do; the bar emits `use-set` and the view opens the rail and calls `store.requestUseSet(id)`, which `WorkflowTab` answers by opening its own set menu. Duplicate says *Duplicated as <name>.*
 - **Nothing rearranges workflows.** They are automatic (`auto:<core and families digest>`);
   there is no Merge or Split verb, and a wrong grouping is fixed in the core
@@ -2285,9 +2300,10 @@ filtered by.
   the model shelf wear one chip rather than two copies. `ImageGrid.css` still
   owns where it sits in a picture tile's stacking order; the shelf tightens it
   to fit a 24px mark (`.shelf-row-ident .stack-cover-flag`).
-- **Grid-level counts.** The toolbar subtitle reads "N workflows · N
-  one-offs" from the payload's own `one_offs`, the second half only while the
-  One-offs filter is leaving them out. The payload's `hidden` is read
+- **Grid-level counts.** The bar has no subtitle since #2165: the sidebar
+  counts the places and facets, and the payload's `one_offs` is said only in
+  the empty state's note while the One-offs filter is leaving them out. The
+  payload's `hidden` is read
   only as whether there are any: somebody hid those workflows to stop looking
   at them, so no screen prints how many (`withheldNames` in
   `WorkflowsView.vue` words it as "hidden workflows and 12 one-offs"), and the
@@ -2305,14 +2321,39 @@ slot mark; the design pass that shows recipe values against the workflow's
 defaults is a follow-up, so today each tab draws its own layer.
 
 The Workflows grid's right rail, mounted by `App.vue` on `/workflows` in place
-of `StatsSidebar`. Three `AppInspector` tabs — **Recipes | Workflow | Tasks**,
-Recipes and Workflow in the design's order and Tasks always last — and **no Run
-tab**: Run… is an action, so it belongs in the footer and opens a popup (F5).
-**Workflow** is still the tab a selection opens on; it is the one that says what
-the card is, and a card with no saved recipe yet would otherwise open on an
-empty list. The footer is the Workflow tab's alone: Recipes runs a recipe from
-its own row, and Tasks replaces the body, so Run… would act on a card the reader
-can no longer see.
+of `StatsSidebar`. Two `AppInspector` tabs — **Workflow | Recipes** — and **no
+Run tab**: Run… is an action, so it belongs in the footer and opens a popup (F5).
+**Workflow** is the tab a selection opens on; it is the one that says what the
+card is. The footer is the Workflow tab's alone: Recipes runs a recipe from its
+own row.
+
+- **Layout (#2165), the rail pattern of #2161.** A `#head` row on the
+  toolbar's line: `store.viewName` with nothing selected, the workflow's name
+  for one, "N workflows" for several, and **Clear** while anything is
+  selected. The `#lead` is the star histogram (`WorkflowStarChart.vue`: six
+  32px bars, none and 1★–5★, `role="img"` with the counts in its label) over
+  the tabs. The Workflow tab's sections are `SectionHeader`s collapsed through
+  `useSectionCollapse` (scope `workflow`): **Models** (read-only rows, missing
+  files in the warning ink, *Stages* as text whose names are `aria-pressed`
+  toggle buttons, an off stage struck through; the verb is *Change model
+  set…*, `WorkflowUseSetMenu`), **LoRAs** (read-only name and strength, the
+  *Also used* list from `WorkflowLoraPile.vue` with *Add*, and a pencil that
+  opens `WorkflowLorasDialog.vue`, where strength, remove, put back and reset
+  are unsaved changes as they are made, closed with one *Done*; its *Add a
+  LoRA or reorder…* opens `EditLorasDialog`, which writes a version),
+  **Parameters** ("Set each run" rows, "Pinned N" folded; the pencil opens
+  `WorkflowParamsDialog.vue`, rows grouped by node with a filter, an *Each run
+  | Pinned* radiogroup per row that is today's toggle-pin, and *Expose a
+  parameter…*), **GPU memory** (the need as the header count, a 20px bar
+  graph of the measured peaks, the basis with *Reset*, the *Run alone*
+  switch) and **Latest pictures** (up to ten, `GET /pictures/stream` with the
+  workflow filter sorted by date descending, through `pictureThumbnailUrl`;
+  *Show all* is `useWorkflowPictures`). The footer is the draft bar, an amber
+  *Run…* with an `R` keycap, and the bordered *Open in ComfyUI*. **There is no
+  per-model picker** (the issue's ruling): a model changes through *Change
+  model set…*, a recipe, or ComfyUI. Where a bullet below describes per-row
+  pickers, the panels' side labels, the stacked LoRA pile or the "N pictures"
+  head line, it is history.
 
 - **Open in ComfyUI is an icon-only button beside Run…**, wearing the ComfyUI
   logomark (`widgets/ComfyuiIcon.vue`, `currentColor` on the AiToolkitIcon
@@ -2397,12 +2438,10 @@ can no longer see.
   (`comfyuiOpenTarget`) takes this second shape and nothing else. The popup
   stays open: the run is still to make.
 
-- **Tasks is the shared `TasksPanel`, and always last.** This view replaces
-  the grid, and its rail replaces the grid's, so without the tab a run started
-  from this screen could not be watched from this screen: the reader had to
-  leave the workflows they were browsing to see the work they had just asked
-  for. It replaces the body rather than sitting under it, and the footer goes
-  with the body — Run… acts on a card the reader can no longer see.
+- **No Tasks tab since #2165**: the title bar's Tasks pill
+  (`TitleBarTasks.vue`) watches runs from every workspace. A deep link to the
+  task list made here (`sidebarStore.tasksTabRequest`, `showTasksTab`) is
+  answered by bumping `tasksPillRequest`, which opens the pill.
 
 - **Built as a sibling of the shelf's own inspector, not a reshaping of it**,
   though the implementation plan names that file: every step of this feature
@@ -3011,7 +3050,8 @@ can no longer see.
   *has*, which is derived from the graph and is served only by the file-keyed
   `GET /comfyui/workflows/{name}/inputs`. Without it there is nothing to draw
   a mode control against.
-- **The "N pictures" figure is the way out to the pictures**, wired by F7
+- **Latest pictures' *Show all* is the way out to the pictures** (the "N
+  pictures" head figure until #2165), wired by F7
   (#1409) into `useWorkflowPictures`. §F2's rule for the shipped shelf's rail —
   "the second tab is always the way out to the pictures, which is what stops
   the rail being terminal" — is met by the header figure rather than by a tab:
@@ -3033,6 +3073,18 @@ The **saved recipe** — the user's Recipe, which is a prompt, its LoRAs with
 strengths and the parameters they changed. Not a `workflow_recipe` row, which
 new code calls a *variant*. Owner-only, like everything under `/workflows`.
 
+- **Layout (#2165).** One hint line ("A recipe is one picture's exact
+  settings, seed included…"), then **Saved** (Run…, *Make defaults…* when a
+  parameter differs, ⋯ with Rename / Export… / Extract workflow / Delete) and
+  **From your pictures** (Clone…, Run…), each with its own empty line when
+  the other group holds recipes. Each recipe is one picture: a 64×84
+  thumbnail through `pictureThumbnailUrl`, the name, then the differences
+  from the default as chips with **the seed first** (`seedFirst` in the
+  component; `utils/recipeDiff.js` keeps its own documented order), clamped
+  to two chip rows behind "+N more". Verbs are `--text-xs` text buttons.
+  **No rating badge yet**: neither `SavedRecipeOut` nor `UsedLook` carries the
+  picture's rating, so drawing one needs that field on both payloads. Unfiled
+  mode is one list with ⋯ only.
 - **The tab has two halves: Saved on top, From your pictures below.** A
   saved recipe is a *clone* of a recipe the pictures carry, made with
   Clone…, which the owner can then name, edit and reorder.
@@ -6911,6 +6963,34 @@ radio drops keyboard focus on the first arrow press; a pick made mid-save is
 queued and only the newest is sent, and a failed save puts back the last
 position the server confirmed.
 
+#### The Workflows sidebar (#2165)
+
+In the Workflows workspace the left column is `WorkflowsSidebar.vue`, not
+`SideBar`: `App.vue` mounts it on `isWorkflowsView` and keeps `SideBar` mounted
+behind a `v-show` wrapper (`display: contents`, since `SideBar` is multi-root),
+so `sidebarRef`, the importer and its drop targets stay alive.
+
+- **Places**, one lit at a time: *All workflows*, *Favourites*
+  (`filters.favouritesOnly`) and *Recently used* (`filters.recent`: a
+  `last_used` within `RECENT_DAYS`, 30), set by `store.setPlace()`, which also
+  clears the facets and leaves Templates. `store.place` reads them back.
+- ***From ComfyUI › Templates*** sets `useWorkflowTemplatesStore().shown`. Its
+  count is blank until the list is read and "–" while ComfyUI is unreachable;
+  the sidebar reads the list once on mount (the server caches it). "N new"
+  compares the keys with `pixlstash:workflowTemplatesSeen` in localStorage: a
+  first read with nothing stored marks every key seen, and showing the place
+  marks them seen again.
+- **Type** and **Base model** are facets over `store.filterOptions` (all cards,
+  so a count never narrows to zero under its own neighbour), toggling
+  `filters.type` / `filters.checkpoint`. Places are not chips (the lit row
+  says which is on, and the Filter menu has no Favourites box any more);
+  facets and the Filter menu's filters are.
+- **The footer band** is one amber *Add workflow* (`requestAdd()`, see
+  `WorkflowsView`). There is no Hidden row (Show hidden stays in Filter) and
+  no header slot content yet (the ComfyUI selector is #2166).
+- **`store.viewName`** names the view for the rail head: "ComfyUI templates",
+  else the lit facet's label, else the place's name.
+
 #### What F1b removed, and what is owed back
 
 The shelf was a topology list with its own store, its own shaping helpers and
@@ -6944,7 +7024,7 @@ from the UI today and are not oversights**:
 - ~~**Drag-and-drop of a `.json` onto the view.**~~ **Back.** The whole
   `.wfv` is the drop target, marked with the olive wash and ring while a file
   drag is over it, and a drop goes through `addWorkflowFiles`, the same
-  function *Add…* calls, so both post to `POST /comfyui/workflows/import`.
+  function the sidebar's *Add workflow* reaches (through `addRequest`), so both post to `POST /comfyui/workflows/import`.
   Every import is a new manual workflow (no overwrite or keep-both choice);
   the view re-reads the grid and lands on the last one's `workflow_id`
   (`landOn`: select it, cursor on its card), as Duplicate and the Workflow
@@ -7036,7 +7116,7 @@ either way: it is one close's instruction, not a property of the route that
 later closes inherit.
 
 **Nothing reads ComfyUI's saved workflows by itself** (#1854). A workflow
-reaches this grid with the pictures it made, or as a file: the toolbar's *Add…*
+reaches this grid with the pictures it made, or as a file: the sidebar's *Add workflow*
 or a `.json` dropped on the view (`POST /comfyui/workflows/import`), or the
 watched workflows folder. The view
 asks ComfyUI nothing on its own and has no status or summary of such a read to
@@ -7128,9 +7208,10 @@ answer the same question inside the surface that raised it.
 
 #### The Templates tab: workflows from ComfyUI templates (#2000)
 
-**A second source on the same screen, not a dialog.** The toolbar leads with a
-`Mine | Templates` switch (`.tbm-seg`, `role="tablist"`, arrow keys activate on
-arrival, as the model shelf's Shelf | Training runs). Which tab is shown is
+**A second source on the same screen, not a dialog.** It is the Workflows
+sidebar's *From ComfyUI › Templates* place (#2165; it replaced a
+`Mine | Templates` switch on the toolbar), and `WorkflowTemplatesPanel` is a
+`region` named "ComfyUI templates". Which source is shown is
 `useWorkflowTemplatesStore.shown`, not view state, because the right rail is
 `App.vue`'s: it mounts `TemplateInspector.vue` in place of `WorkflowTab` while
 it is true; its band is *Template* and the shared *Tasks* (§4.4), so a run
@@ -7138,16 +7219,18 @@ started on Mine can be watched from here. A `?workflow=` or `?topology=` link
 always lands on Mine. Mine is
 unchanged by the tab's existence.
 
-- **The list is read live and lazily**: `GET /comfyui/templates` the first time
-  the tab is shown, again from the strip's re-read button (`refresh`), and,
+- **The list is read live**: `GET /comfyui/templates` once when the Workflows
+  sidebar mounts (its Templates row counts them and says how many are new),
+  again from the strip's re-read button (`refresh`), and,
   while ComfyUI did not answer, on every opening and every 10 s while the tab is
   open (the server keeps no failed read, so ComfyUI started after PixlStash
   fills the tab by itself). The server reads the owner's ComfyUI and keeps the
   answer ten minutes; nothing
   here asks ComfyUI itself, and every thumbnail goes through
   `templateThumbnailUrl` (`api/comfyui.js`), never a raw path in `<img src>`.
-- **The tab's controls are the toolbar's own.** Sort, Filters and the name field
-  act on the templates store while the tab is shown. `WorkflowTemplateFilterMenu`
+- **The tab's controls are the toolbar's own.** Sort, Filter, the chips and
+  Search act on the templates store while the tab is shown; the panel draws no
+  chip strip of its own. `WorkflowTemplateFilterMenu`
   is Mine's cascade with ComfyUI's own template filters (Category, its side
   list's: the index's categories, then Partner Nodes, then one per node pack;
   Model; Use case, its tags; Runs on) and PixlStash's Readiness. Unlike every
