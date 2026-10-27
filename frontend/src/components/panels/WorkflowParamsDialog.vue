@@ -31,9 +31,12 @@
         Expose a parameter…
       </AppButton>
     </div>
-    <p class="wfp-hint">
-      {{ rows.length }} {{ rows.length === 1 ? "parameter" : "parameters" }} ·
-      {{ eachCount }} set each run
+    <!-- While a filter is on, how many of the parameters the list shows; the
+         Each run count stays the workflow's, which is what the switches change. -->
+    <p class="wfp-hint" data-testid="wfp-count">
+      <template v-if="needle">{{ shownCount }} of </template>{{ rows.length }}
+      {{ rows.length === 1 ? "parameter" : "parameters" }} · {{ eachCount }} set
+      each run
     </p>
 
     <p v-if="reading" class="wfp-note" data-testid="wfp-reading">
@@ -105,21 +108,27 @@ const eachCount = computed(
   () => props.rows.filter((item) => item.row.pinned).length,
 );
 
+const needle = computed(() => filter.value.trim().toLowerCase());
+
 /** Grouped by node, in the order the nodes first appear, after the filter. */
 const groups = computed(() => {
-  const needle = filter.value.trim().toLowerCase();
   const byNode = new Map();
   for (const item of props.rows) {
     const text = [parameterTitle(item.row), item.row.label, item.node]
       .join(" ")
       .toLowerCase();
-    if (needle && !text.includes(needle)) continue;
+    if (needle.value && !text.includes(needle.value)) continue;
     const node = item.node || "";
     if (!byNode.has(node)) byNode.set(node, { node, rows: [] });
     byNode.get(node).rows.push(item);
   }
   return [...byNode.values()];
 });
+
+/** How many parameters the filter leaves on screen. */
+const shownCount = computed(() =>
+  groups.value.reduce((sum, group) => sum + group.rows.length, 0),
+);
 </script>
 
 <style scoped>
