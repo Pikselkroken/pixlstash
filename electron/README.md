@@ -56,6 +56,19 @@ root. It finds a `.venv` in the worktree, the main checkout, or beside it, and
 puts the worktree first on `PYTHONPATH` so the backend runs the worktree's code
 even when the venv has another checkout installed editable.
 
+`desktop-dev.sh run` never opens the real data. Each run it refreshes a scratch
+copy (`scripts/desktop_dev_scratch.py`): the app's settings and hub go to
+`~/.config/pixlstash-desktop-dev-scratch`, and every library is copied into a
+hidden `.<folder>.pixlstash-dev-scratch` beside it, its `vault.db` copied and its
+pictures hard-linked. A branch's migrations therefore only upgrade the copy, and
+the next run starts again from the real data at the revision the installed app
+reads. A copied library that another branch already migrated past this checkout
+is migrated back down on the copy, using that branch's migration files from git
+(the hub has no downgrades, so a hub ahead of the checkout still refuses).
+`run --keep-data` reuses the last copy, to restart without losing a test's
+state. Model, reference and import folders are shared with the real app, not
+copied (delete-after-import is switched off in the copy).
+
 To exercise the **bundled** path locally (what `npm start` / installers use), first
 build the runtime into `electron/resources/` once, then run/package as usual:
 
@@ -73,6 +86,7 @@ Useful env vars:
 | --- | --- |
 | `PIXLSTASH_DESKTOP_DEV=1` | Dev passthrough to a local interpreter (repo `.venv`). |
 | `PIXLSTASH_DEV_BACKEND` | Explicit interpreter path for dev. |
+| `PIXLSTASH_DESKTOP_USER_DATA` | Use this folder as the app's userData (set by `desktop-dev.sh run`). |
 | `PIXLSTASH_PIP_INDEX_URL` | Override the pip index for GPU installs (corporate mirror/proxy). |
 
 ## Build installers

@@ -124,7 +124,12 @@ const APP_ICON = loadAppIcon();
 // only by case - fine on Linux, but a COLLISION on case-insensitive filesystems
 // (Windows, default macOS). Pin it to 'pixlstash-desktop'. Must run before
 // anything reads userData (config paths, the single-instance lock).
-app.setPath('userData', join(app.getPath('appData'), 'pixlstash-desktop'));
+// PIXLSTASH_DESKTOP_USER_DATA is scripts/desktop-dev.sh's scratch copy, so a
+// branch's migrations never touch the real hub and libraries.
+app.setPath(
+  'userData',
+  process.env.PIXLSTASH_DESKTOP_USER_DATA || join(app.getPath('appData'), 'pixlstash-desktop'),
+);
 
 const manager = new BackendManager();
 let serverProcess: ServerProcess | null = null;

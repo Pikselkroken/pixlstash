@@ -7,6 +7,11 @@
 #   scripts/desktop-dev.sh run     launch Electron on this checkout's backend code
 #   scripts/desktop-dev.sh         both
 #
+# `run` never opens the real data: it refreshes a scratch copy of the desktop
+# app's hub and libraries (scripts/desktop_dev_scratch.py) and runs on that.
+# `run --keep-data` reuses the last copy, to restart without losing a test's
+# state.
+#
 # The interpreter is PIXLSTASH_DEV_BACKEND if set, otherwise the first .venv
 # in this checkout, in the main checkout, or beside the main checkout (where a
 # venv shared by several checkouts lives).
@@ -43,14 +48,22 @@ build() {
 }
 
 run() {
-  local python
+  local python scratch keep=""
   python="${PIXLSTASH_DEV_BACKEND:-$(find_venv_python)}"
-  echo "desktop-dev: backend $python on $ROOT"
-  cd "$ROOT/electron"
   # PYTHONPATH makes this checkout's pixlstash win over an editable install
   # of another checkout in the shared venv.
+  export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
+  if [[ "${1:-}" == --keep-data ]]; then
+    keep=--keep
+    shift
+  fi
+  # A fresh copy of the real data every run: this branch's migrations upgrade
+  # only the copy, so the installed app never meets a revision it cannot read.
+  scratch="$("$python" "$ROOT/scripts/desktop_dev_scratch.py" ${keep:+"$keep"})"
+  echo "desktop-dev: backend $python on $ROOT, data copied to $scratch"
+  cd "$ROOT/electron"
   PIXLSTASH_DESKTOP_DEV=1 PIXLSTASH_DEV_BACKEND="$python" \
-    PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}" \
+    PIXLSTASH_DESKTOP_USER_DATA="$scratch" \
     exec node scripts/dev-run.mjs "$@"
 }
 
