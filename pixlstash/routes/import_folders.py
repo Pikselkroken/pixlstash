@@ -12,6 +12,7 @@ from sqlmodel import Session, select
 from pixlstash.database import DBPriority
 from pixlstash.db_models.import_folder import ImportFolder
 from pixlstash.db_models.picture import Picture
+from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.host_path_utils import is_absolute_host_path, normalize_host_path
 from pixlstash.utils.library_roots import (
@@ -161,8 +162,6 @@ def create_router(server) -> APIRouter:
         )
 
     def _notify_changed(request: Request) -> None:
-        from pixlstash.event_types import EventType
-
         server.vault.notify(
             EventType.CHANGED_PICTURES,
             {
