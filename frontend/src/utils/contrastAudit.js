@@ -343,7 +343,8 @@ export function auditContrast(
 
     // The drive meter's empty track: on the title bar (`toolbar`), the models
     // sidebar slot (`sidebar`) and the library menu (`surface`), and against
-    // each fill.
+    // each fill. Three, not four: `driveFullness` (libraryChrome.js) only ever
+    // returns success, warning or error, so the meter never draws `info`.
     const { key, alpha } = meterTracks[theme]
     for (const where of ['toolbar', 'sidebar', 'surface']) {
       const track = composite(need(key), need(where), alpha)
