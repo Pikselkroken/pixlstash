@@ -244,7 +244,14 @@ def _downgrade_to_this_checkout(vault_path: str) -> None:
                     pending.append(parent)
         config = Config()
         config.set_main_option("script_location", str(migrations))
-        engine = create_engine(f"sqlite:///{vault_path}", poolclass=pool.NullPool)
+        # Through a file URI, as in _snapshot_sqlite: a "?" or "#" in a folder
+        # name would otherwise end SQLAlchemy's URL.
+        uri = Path(vault_path).absolute().as_uri()
+        engine = create_engine(
+            "sqlite://",
+            creator=lambda: sqlite3.connect(uri, uri=True),
+            poolclass=pool.NullPool,
+        )
         try:
             with engine.connect() as connection:
                 config.attributes["connection"] = connection
@@ -350,15 +357,18 @@ def refresh(real_dir: str, scratch_dir: str) -> None:
     finally:
         hub.close()
 
-    # The legacy single-library setting is still read at start-up, and the log
-    # would land in the real app's: point both at the copy.
+    # With no usable active library, start-up registers and migrates
+    # image_root, so it never names a real folder: a copy, or an empty library
+    # inside the scratch folder. The log would land in the real app's too.
     config_path = os.path.join(scratch_dir, "server-config.json")
     if os.path.isfile(config_path):
         with open(config_path, encoding="utf-8") as handle:
             config = json.load(handle)
         root = config.get("image_root")
-        if root and os.path.realpath(root) in moved:
-            config["image_root"] = moved[os.path.realpath(root)]
+        if root:
+            config["image_root"] = moved.get(
+                os.path.realpath(root), os.path.join(scratch_dir, "library")
+            )
         log_file = config.get("log_file")
         if log_file and os.path.dirname(os.path.realpath(log_file)) == os.path.realpath(
             real_dir

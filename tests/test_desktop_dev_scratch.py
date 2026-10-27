@@ -251,3 +251,45 @@ def test_snapshot_reads_a_path_with_uri_characters(tmp_path):
 
     with contextlib.closing(sqlite3.connect(tmp_path / "copy.db")) as conn:
         assert conn.execute("SELECT x FROM t").fetchall() == [(7,)]
+
+
+def test_image_root_never_names_a_real_folder_left_out_of_the_copy(tmp_path):
+    scratch_mod = _load_module()
+    real_dir, _library_dir = _make_real_data(tmp_path)
+    scratch_dir = tmp_path / "scratch"
+    # Start-up registers and migrates image_root when no active library opens.
+    (real_dir / "server-config.json").write_text(
+        json.dumps({"image_root": str(tmp_path / "an-old-unregistered-root")})
+    )
+
+    scratch_mod.refresh(str(real_dir), str(scratch_dir))
+
+    config = json.loads((scratch_dir / "server-config.json").read_text())
+    assert config["image_root"] == str(scratch_dir / "library")
+
+
+def test_downgrade_opens_a_vault_whose_folder_name_has_uri_characters(tmp_path):
+    scratch_mod = _load_module()
+    _real_dir, library_dir = _make_real_data(tmp_path)
+    vault = tmp_path / "odd #1?" / "vault.db"
+    vault.parent.mkdir()
+    with contextlib.closing(sqlite3.connect(library_dir / "vault.db")) as src:
+        (head,) = src.execute("SELECT version_num FROM alembic_version").fetchone()
+        with contextlib.closing(sqlite3.connect(vault)) as dst:
+            src.backup(dst)
+    with contextlib.closing(sqlite3.connect(vault)) as conn:
+        conn.execute("CREATE TABLE from_a_newer_branch (id INTEGER PRIMARY KEY)")
+        conn.execute(
+            "UPDATE alembic_version SET version_num = '9999_from_a_newer_branch'"
+        )
+        conn.commit()
+    scratch_mod._migration_from_any_branch = lambda revision: _NEWER_MIGRATION.format(
+        head=head
+    )
+
+    scratch_mod._downgrade_to_this_checkout(str(vault))
+
+    with contextlib.closing(sqlite3.connect(vault)) as conn:
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchall() == [
+            (head,)
+        ]
