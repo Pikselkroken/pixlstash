@@ -73,86 +73,58 @@
          different things on purpose: the label is the verb and never changes,
          so a screen reader hears a stable name; the tooltip is the REFUSAL and
          changes with the selection. A tooltip alone is not an accessible name
-         a reader can rely on. -->
+         a reader can rely on.
+
+         The face is the three verbs a reader reaches for without a menu, then
+         `⋯`, which holds the whole inventory (VerbMenu). Favourite, Run, Rename
+         and Hide live there, and Run and Favourite keep their keys (R and H). -->
     <!-- The way out to the pictures (#1797): the picture grid's own
          "pictures" glyph, first because it reads the selection rather than
-         changing it. -->
-    <!-- Favourite leads (#1578): it is the one verb every card takes, and the
-         glyph says which way it will go. Filled when every selected card is one
-         already, so the next press unfavourites. -->
-    <AppBarButton
-      shape="round"
-      :icon="favouriteOn ? 'heart' : 'heart-outline'"
-      data-verb="favourite"
-      :aria-label="favouriteLabel"
-      :tooltip="favouriteTitle"
-      @click="emit('favourite')"
-    />
-
+         changing it. Its words drop below the pill's container width
+         (`wfpill`, WorkflowsView), never the verb itself. -->
     <AppBarButton
       shape="round"
       icon="image-multiple-outline"
       data-verb="show-pictures"
+      class="wfsel-verb"
       :aria-label="showPicturesLabel"
       :disabled="!hasPictures"
       :tooltip="showPicturesTitle"
-      @click="emit('show-pictures')"
-    />
+      @click="onVerb('show-pictures')"
+    >
+      <span class="wfsel-word">Show pictures</span>
+    </AppBarButton>
+
+    <!-- *Open in ComfyUI* is the adapted open by default, as the Workflow tab's
+         first button is; the menu's submenu keeps Original. The gates are the
+         menu row's own (`comfyuiOpenable`, `canOpenComfyui`), and its refusal
+         sentence is the tooltip when there is one. Absent with no ComfyUI. -->
+    <AppBarButton
+      v-if="canOpenComfyui"
+      shape="round"
+      data-verb="open-comfyui"
+      class="wfsel-verb"
+      aria-label="Open in ComfyUI"
+      :disabled="!comfyuiOpenable"
+      :tooltip="comfyuiTitle || adaptedTitle"
+      @click="onVerb('open-comfyui')"
+    >
+      <ComfyuiIcon :size="18" />
+      <span class="wfsel-word">Open in ComfyUI</span>
+    </AppBarButton>
 
     <AppBarButton
       shape="round"
-      icon="play"
-      data-verb="run"
-      aria-label="Run this workflow"
-      :disabled="!canRun || busy"
-      :loading="running('run')"
-      :tooltip="runTitle"
-      @click="emit('run')"
-    />
-
-    <!-- Rename rides along DISABLED rather than disappearing, which is the
-         shelf's rule and this screen's now: a row of buttons that reflows as
-         the selection grows is a row you have to re-read, and a disabled
-         button with its reason in the tooltip teaches where the verb lives. -->
-    <AppBarButton
-      shape="round"
-      icon="pencil-outline"
-      data-verb="rename"
-      aria-label="Rename"
-      :disabled="!single || busy"
-      :loading="running('rename')"
-      :tooltip="renameTitle"
-      @click="emit('rename')"
-    />
-
-    <AppBarButton
-      shape="round"
-      :icon="allHidden ? 'eye-outline' : 'eye-off-outline'"
-      data-verb="hide"
-      :aria-label="hideLabel"
-      :disabled="busy"
-      :loading="running('hide')"
-      :tooltip="hideTitle"
-      @click="emit('hide', allHidden)"
-    />
-
-    <span class="selbar-sep"></span>
-
-    <!-- The one destructive verb, so the one verb in the error colour, and
-         always in the same last place before `⋯`: a destructive
-         button that moves with the selection is how a reader presses the wrong
-         one. -->
-    <AppBarButton
-      shape="round"
-      danger
-      icon="delete-outline"
-      data-verb="delete"
-      aria-label="Delete workflow"
-      :disabled="!deletable || busy"
-      :loading="running('delete')"
-      :tooltip="deleteTitle"
-      @click="emit('delete')"
-    />
+      icon="tray-arrow-down"
+      data-verb="export"
+      class="wfsel-verb"
+      aria-label="Export"
+      :disabled="!single"
+      :tooltip="exportTitle"
+      @click="onVerb('export')"
+    >
+      <span class="wfsel-word">Export</span>
+    </AppBarButton>
 
     <v-menu
       v-model="moreMenuOpen"
@@ -174,6 +146,33 @@
       </template>
       <VerbMenu />
     </v-menu>
+
+    <span class="selbar-sep"></span>
+
+    <!-- The one destructive verb, so the one verb in the error colour, and
+         always in the same place before Clear: a destructive button that moves
+         with the selection is how a reader presses the wrong one. -->
+    <AppBarButton
+      shape="round"
+      danger
+      icon="delete-outline"
+      data-verb="delete"
+      aria-label="Delete workflow"
+      :disabled="!deletable || busy"
+      :loading="running('delete')"
+      :tooltip="deleteTitle"
+      @click="emit('delete')"
+    />
+
+    <!-- Clear is the × beside the count's own "Clear selection" row: the pill
+         is where a reader ends a selection, and Esc is the same act. -->
+    <AppBarButton
+      shape="round"
+      icon="close"
+      data-verb="clear"
+      tooltip="Clear selection (Esc)"
+      @click="store.clearSelection()"
+    />
   </div>
 
   <!-- The card context menu: the FULL inventory, and the thing every other
@@ -567,10 +566,6 @@ const pinThumbnailTitle = computed(() => {
  */
 const allHidden = computed(
   () => cards.value.length > 0 && cards.value.every((card) => card.hidden),
-);
-
-const hideLabel = computed(() =>
-  allHidden.value ? "Unhide these workflows" : "Hide these workflows",
 );
 
 const hideTitle = computed(() => {
@@ -989,6 +984,24 @@ defineExpose({
    function, which scoped CSS cannot reach. */
 .wf-menu {
   min-width: 210px;
+}
+
+/* The face's words, and what they cost. Show pictures, Open in ComfyUI and
+   Export carry theirs while the pill has the room: together they add about
+   300px to a pill that is about 400px without them, so the words go below
+   720px of container (`.wfv-pill-host`, WorkflowsView), and the verb keeps
+   its icon at the same 32px round it is at every width. The class is on the
+   labelled verbs only, so the icon-only ones never change. Estimated, not
+   measured: check at the grid's minimum width. */
+@container wfpill (max-width: 719px) {
+  .wfsel-word {
+    display: none;
+  }
+  .wfsel-verb {
+    width: var(--control-h-bar);
+    padding: 0;
+    justify-content: center;
+  }
 }
 
 /* The PixlStash mark is the brand in colour, so it takes none of the dimming
