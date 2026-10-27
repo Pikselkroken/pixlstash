@@ -11367,16 +11367,30 @@ One finder scan at a time, changed folders first and then the longest
 unscanned, so a set of folders on one drive is walked in turn. That is cheap
 enough to repeat because a scan of an unchanged folder reads nothing: a file
 whose size and mtime match its row is touched, not hashed (`_describe`'s fast
-path), so a repeat costs one `stat` per model file plus a short write per 200.
+path), so a repeat costs one `stat` and one row upsert per model file, committed
+200 at a time. No bytes are read, but the hub is written every pass.
 
 **A scan leaves a file that is still arriving.** Scans now run exactly while a
 download is landing, and an adapter hashed half-written is a `model` row under a
 digest nothing will ever match. A file the folder has no `present` row for is
 skipped (`FolderScanResult.arriving`) while it has an in-flight sibling
 (`.part`, …) or is a safetensors shorter than its header says
-(`safetensors_complete`); the write that completes it is a change, so the watch
-brings the scan back. A file the folder already lists goes through the fast path
-as before, so a file rewritten in place is never swept to `missing`.
+(`safetensors_complete`), or is a `.gguf` or `.pth` changed within the last
+`ARRIVING_SETTLE_S` (10 s), since neither format states its own length. The
+write that completes it is a change, so the watch usually brings the scan back;
+the finder also comes back `_ARRIVING_RETRY_S` after any scan that left a file
+arriving, for a copy that stalls and so sends the watch nothing. A file the
+folder already lists goes through the fast path as before, so a file rewritten
+in place is never swept to `missing`.
+
+**An empty folder is unreachable, not a folder of deletions.** An unmounted drive
+often leaves its mount point behind, empty and readable, and now that scans run
+on start-up and on a timer, sweeping it would mark every model `missing` and
+hash it all again when the drive comes back. A walk that finds a directory with
+nothing in it at all, of a folder that still has rows to sweep, marks them
+`unreachable` instead (`_mark_unreachable`). A folder whose models were deleted
+but that still holds anything else is swept as before; one emptied completely
+reads `unreachable` until the owner forgets it.
 
 **The shelf hears about it.** A scan that found copies the folder had no
 `present` row for announces their ids as `models_arrived`, the event a download

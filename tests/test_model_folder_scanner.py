@@ -79,6 +79,18 @@ def write_unknown(path):
     return _write_safetensors(path, {"vae.weight": _tensor([64, 64])})
 
 
+def _not_empty(folder):
+    """Leave something besides models in *folder*: one with nothing in it at
+    all reads as an unmounted drive, not as deleted files."""
+    (folder / "notes.txt").write_text("kept")
+
+
+def _settled(path):
+    """Age a ``.gguf`` or ``.pth`` past the window a scan waits out for one."""
+    old = os.path.getmtime(path) - scanner_module.ARRIVING_SETTLE_S - 1
+    os.utime(path, (old, old))
+
+
 @pytest.fixture
 def scanner(hub):
     return ModelFolderScanner(hub)
@@ -421,6 +433,7 @@ class TestStates:
         folder.mkdir()
         path = folder / "a.safetensors"
         write_adapter(path)
+        _not_empty(folder)
         folder_id = register_folder(hub, folder)
         scanner.scan_folder(folder_id, str(folder), "user")
         with hub.transaction() as conn:
@@ -439,6 +452,7 @@ class TestStates:
         folder.mkdir()
         path = folder / "sdxl.safetensors"
         write_checkpoint(path)
+        _not_empty(folder)
         folder_id = register_folder(hub, folder)
         scanner.scan_folder(folder_id, str(folder), "user")
 
@@ -782,6 +796,7 @@ class TestScanCost:
         folder.mkdir()
         path = folder / "a.safetensors"
         write_adapter(path, name="AAAA")
+        _not_empty(folder)
         folder_id = register_folder(hub, folder)
         scanner.scan_folder(folder_id, str(folder), "user")
         stale = digest_at(hub, "a.safetensors")
@@ -1036,6 +1051,7 @@ class TestFilesWithNoReadableHeader:
         # happened to be unparseable: they are a valid start of a real format
         # whose header this build does not read.
         path.write_bytes(b"GGUF" + struct.pack("<I", 3) + b"\0" * size)
+        _settled(path)
         return str(path)
 
     def test_a_gguf_is_registered_with_the_quant_from_its_name(
@@ -1094,6 +1110,7 @@ class TestFilesWithNoReadableHeader:
         folder = tmp_path / "upscale_models"
         folder.mkdir()
         (folder / "4xNomos8kSC.pth").write_bytes(b"PK\x03\x04" + b"\0" * 64)
+        _settled(folder / "4xNomos8kSC.pth")
         folder_id = register_folder(hub, folder)
 
         result = scanner.scan_folder(folder_id, str(folder), "user")
@@ -1536,6 +1553,41 @@ class TestScansThatRunByThemselves:
         third = scanner.scan_folder(folder_id, str(folder), "user")
         assert third.arrived_model_ids == [located(hub)["two.safetensors"]["model_id"]]
 
+    def test_a_gguf_is_left_until_it_has_sat_still(self, hub, scanner, tmp_path):
+        """A GGUF states no length, so a half-copied one would hash as a model
+        nothing ever matches. Its mtime is the only evidence it is done."""
+        folder = tmp_path / "unet"
+        folder.mkdir()
+        path = folder / "flux1-dev-Q4_K_M.gguf"
+        path.write_bytes(b"GGUF" + struct.pack("<I", 3) + b"\0" * 64)
+        folder_id = register_folder(hub, folder)
+
+        result = scanner.scan_folder(folder_id, str(folder), "user")
+        assert result.arriving == 1
+        assert located(hub) == {}
+
+        _settled(path)
+        result = scanner.scan_folder(folder_id, str(folder), "user")
+        assert result.arriving == 0
+        assert set(located(hub)) == {"flux1-dev-Q4_K_M.gguf"}
+
+    def test_an_empty_mount_point_is_unreachable_not_a_folder_of_deletions(
+        self, hub, scanner, tmp_path
+    ):
+        """An unmounted drive leaves its mount point behind, empty and readable.
+        Swept, every model would read missing and be hashed again on return."""
+        folder = tmp_path / "drive"
+        folder.mkdir()
+        write_adapter(folder / "a.safetensors")
+        folder_id = register_folder(hub, folder)
+        scanner.scan_folder(folder_id, str(folder), "user")
+
+        os.remove(folder / "a.safetensors")
+        result = scanner.scan_folder(folder_id, str(folder), "user")
+
+        assert result.state == STATE_UNREACHABLE
+        assert located(hub)["a.safetensors"]["state"] == STATE_UNREACHABLE
+
 
 class _FakeWatcher:
     def __init__(self):
@@ -1647,6 +1699,33 @@ class TestModelFolderScanFinder:
         finder.mark_due(own)
         task = finder.find_task()
         assert task is not None and task.folder_id == own
+
+    def test_a_scan_that_left_a_file_arriving_comes_back_for_it(
+        self, hub, tmp_path, monkeypatch
+    ):
+        """A copy that stalls sends the watch nothing more, so the finder has
+        to return for it rather than wait out the ten-minute timer."""
+        from pixlstash.tasks import model_folder_scan_finder as finder_module
+
+        register_folder(hub, tmp_path)
+        finder = self._finder(hub)
+        clock = [1_000_000.0]
+        monkeypatch.setattr(finder_module.time, "time", lambda: clock[0])
+        task = finder.find_task()
+        self._finish(task)
+        task.result = {"arriving": 1}
+        finder.on_task_complete(task, None)
+
+        clock[0] += finder_module._ARRIVING_RETRY_S - 1
+        assert finder.find_task() is None, "not before the file could settle"
+        clock[0] += 1
+        again = finder.find_task()
+        assert again is not None and again.folder_id == task.folder_id
+        self._finish(again)
+        again.result = {"arriving": 0}
+        finder.on_task_complete(again, None)
+        clock[0] += finder_module._ARRIVING_RETRY_S
+        assert finder.find_task() is None, "nothing left arriving"
 
     def test_a_scan_dropped_before_submission_releases_its_folder(self, hub, tmp_path):
         own = register_folder(hub, tmp_path)

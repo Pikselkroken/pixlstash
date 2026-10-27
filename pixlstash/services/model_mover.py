@@ -37,7 +37,7 @@ destination name and then drops the source one (:func:`publish_no_clobber`), so
 a crash between it and the commit leaves the file at the destination - and, if
 the crash lands between those two syscalls, at the source as well - with the row
 still naming the source. That is a ``missing`` row and an unregistered file, or
-a plain duplicate, and a manual rescan of either folder repairs both by content,
+a plain duplicate, and the next scan of either folder repairs both by content,
 because ``model`` is keyed by sha256 and the row keeps its curation. An *error*
 in that gap is not a residue at all: the publication removes the name it claimed
 and the move fails with both files where they were. The window is the
@@ -1241,7 +1241,7 @@ class ModelMover:
         No copy, no verify and no space check, because no second copy is made -
         the ruling. The residue of a crash between the two steps is a file at the
         destination that no row names plus a row that will read ``missing``, and
-        a manual rescan of either folder re-links it by content with its
+        the next scan of either folder re-links it by content with its
         curation intact. That is narrower than the copy path's guarantee, and it
         is bought with a window measured in syscalls rather than in minutes of
         I/O.

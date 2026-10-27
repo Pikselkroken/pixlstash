@@ -5,9 +5,9 @@ watchdog watch is up (at start-up, and when an unplugged drive comes back),
 again whenever a model file in it is created, changed, moved or deleted
 (debounced), and at least every ``RESCAN_INTERVAL_S`` besides, for the changes
 a watch cannot see, such as on a network mount. That is affordable because a scan of an unchanged
-folder reads nothing: a file whose size and mtime match its row is touched, not
+folder reads no bytes: a file whose size and mtime match its row is touched, not
 hashed (``ModelFolderScanner._describe``), so a repeat walk costs one ``stat``
-per model file.
+and one row upsert per model file.
 
 The roots PixlStash declares rather than walks (its own downloads,
 InsightFace, the HuggingFace cache) are re-declared on the same timer, so a
@@ -31,7 +31,10 @@ from pixlstash.event_types import EventType
 from pixlstash.hub.db import HubDatabase
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.builtin_models import BUILTIN_OWNER
-from pixlstash.services.model_folder_scanner import TAKEN_FROM_KINDS
+from pixlstash.services.model_folder_scanner import (
+    ARRIVING_SETTLE_S,
+    TAKEN_FROM_KINDS,
+)
 from pixlstash.tasks.base_task import TaskStatus
 from pixlstash.tasks.base_task_finder import BaseTaskFinder
 from pixlstash.tasks.model_folder_scan_task import claim_scan, release_scan
@@ -41,6 +44,11 @@ logger = get_logger(__name__)
 # How often the registry is read. One small hub query; the interval only bounds
 # how soon a due folder is noticed when nothing woke the planner.
 _CHECK_INTERVAL_S = 2.0
+
+# How soon a folder is scanned again after a scan left a file in it that was
+# still arriving. A watch sees the last write, but a file that sits still
+# without growing (a stalled copy of a .gguf) sends nothing more.
+_ARRIVING_RETRY_S = ARRIVING_SETTLE_S
 
 # The longest a folder goes without a scan, whatever its watch says.
 RESCAN_INTERVAL_S = 600.0
@@ -116,6 +124,9 @@ class ModelFolderScanFinder(BaseTaskFinder):
         self._changed: set[int] = set()
         # folder id -> time.time() the finder last handed out its scan.
         self._handed_out_at: dict[int, float] = {}
+        # folder id -> time.time() a scan of it finished leaving a file that
+        # was still arriving.
+        self._arriving_at: dict[int, float] = {}
         self._watched: set[int] = set()
         # Folders whose watch could not be set up (an inotify limit, say), so
         # the failure is logged once rather than every check.
@@ -146,11 +157,16 @@ class ModelFolderScanFinder(BaseTaskFinder):
         )
         with self._lock:
             self._changed &= ids
-            changed = set(self._changed)
+            for gone in [fid for fid in self._arriving_at if fid not in ids]:
+                del self._arriving_at[gone]
+            now = time.time()
+            changed = set(self._changed) | {
+                fid
+                for fid, at in self._arriving_at.items()
+                if now - at >= _ARRIVING_RETRY_S
+            }
         for gone in [fid for fid in self._handed_out_at if fid not in ids]:
             del self._handed_out_at[gone]
-
-        now = time.time()
 
         def last_scan(row: dict) -> float:
             return max(
@@ -175,14 +191,20 @@ class ModelFolderScanFinder(BaseTaskFinder):
                 continue  # Already being scanned; a change stays due for after.
             with self._lock:
                 self._changed.discard(folder_id)
+                self._arriving_at.pop(folder_id, None)
             self._handed_out_at[folder_id] = now
             return task
         return None
 
     def on_task_complete(self, task, error) -> None:
-        """Release the claim of a scan the planner never submitted."""
+        """Release the claim of a scan the planner never submitted, and come
+        back for a file a finished one left because it was still arriving."""
         if task.status == TaskStatus.PENDING:
             release_scan(task)
+            return
+        if isinstance(task.result, dict) and task.result.get("arriving"):
+            with self._lock:
+                self._arriving_at[task.folder_id] = time.time()
 
     def _sync_watches(self, folders: list[dict], ids: set[int]) -> None:
         if self._watcher is None:

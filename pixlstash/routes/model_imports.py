@@ -25,8 +25,8 @@ checkpoint nobody has hashed has no sha256 to be addressed by.
 
 Authorization: every route here is `LOCAL_OWNER_ONLY`, declared in
 ``pixlstash/authz/registry.py``. The listing walks a registered host path and
-reads every run under it, which is the same authority as
-``model-folders/{id}/rescan``; the import writes files into one registered folder
+reads every run under it, which is the same authority as the background
+folder scan (``ModelFolderScanFinder``); the import writes files into one registered folder
 and may unlink them from another, which is the ``model-moves`` authority; and
 both sample routes read inside a registered folder, which is the authority
 ``GET /adapters/{sha256}/file`` sits on for the same reason - bytes out of a
