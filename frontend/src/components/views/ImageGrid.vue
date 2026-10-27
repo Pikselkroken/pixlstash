@@ -3978,7 +3978,7 @@ async function handleCreateSetFromMenu({ characterId = null, name = "" } = {}) {
       ? { project_ids: personProjectIds }
       : projectStore.projectViewMode === "project" &&
           projectStore.selectedProjectId != null
-        ? { project_id: projectStore.selectedProjectId }
+        ? { project_ids: [projectStore.selectedProjectId] }
         : {}),
     parent_character_id: characterId,
     parent_name: name,

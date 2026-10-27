@@ -70,7 +70,17 @@ describe("ancestorsOf", () => {
       set(11, { parent_set_id: 10 }),
       set(12, { parent_set_id: 11 }),
     ];
-    expect(ancestorsOf(12, sets)).toEqual({ setIds: [11, 10], characterId: 7 });
-    expect(ancestorsOf(10, sets)).toEqual({ setIds: [], characterId: 7 });
+    expect(ancestorsOf(12, sets)).toEqual({
+      setIds: [11, 10],
+      characterId: 7,
+      resolved: true,
+    });
+    expect(ancestorsOf(10, sets)).toEqual({
+      setIds: [],
+      characterId: 7,
+      resolved: true,
+    });
+    // A parent outside the list leaves the depth unknown.
+    expect(ancestorsOf(13, [set(13, { parent_set_id: 99 })]).resolved).toBe(false);
   });
 });

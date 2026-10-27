@@ -423,6 +423,10 @@ async function saveSetFromEditor(setData) {
           "createPictureSet answered without `picture_set`; a host filing pictures into the new set cannot",
           created,
         );
+        noticeStore.error(
+          `Created ${setData.name}, but couldn't read it back to add pictures to it. Add them from the Set menu.`,
+          { key: "set-save" },
+        );
       }
     }
 

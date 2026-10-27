@@ -2693,9 +2693,17 @@ const MAX_SET_DEPTH = 2;
 const SET_DEPTH_REASON =
   "Sets nest three levels deep at most, counting the person or top-level set.";
 
-/** How far below its person or top-level set a set sits (0 at the top). */
+/**
+ * How far below its person or top-level set a set sits (0 at the top). A
+ * chain that stops at a parent outside the list (another scope) counts as
+ * full, so the menu never offers a create the server would refuse.
+ */
 function setDepth(set) {
-  const { setIds, characterId } = ancestorsOf(set?.id, pictureSets.value);
+  const { setIds, characterId, resolved } = ancestorsOf(
+    set?.id,
+    pictureSets.value,
+  );
+  if (!resolved) return MAX_SET_DEPTH;
   return setIds.length + (characterId != null ? 1 : 0);
 }
 

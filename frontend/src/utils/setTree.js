@@ -123,13 +123,16 @@ export function treeSpacerWidth(level) {
  *
  * @param {number} setId
  * @param {Array<Object>} sets
- * @returns {{setIds: number[], characterId: number|null}}
+ * @returns {{setIds: number[], characterId: number|null, resolved: boolean}}
+ *   `resolved` is false when the chain stops at a parent set that is not
+ *   listed, so the depth it implies is a lower bound.
  */
 export function ancestorsOf(setId, sets) {
   const byId = new Map((sets ?? []).map((s) => [Number(s.id), s]));
   const setIds = [];
   let characterId = null;
   const seen = new Set();
+  let resolved = true;
   let current = byId.get(Number(setId));
   while (current && !seen.has(Number(current.id))) {
     seen.add(Number(current.id));
@@ -138,9 +141,12 @@ export function ancestorsOf(setId, sets) {
     }
     if (current.parent_set_id == null) break;
     const parent = byId.get(Number(current.parent_set_id));
-    if (!parent) break;
+    if (!parent) {
+      resolved = false;
+      break;
+    }
     setIds.push(Number(parent.id));
     current = parent;
   }
-  return { setIds, characterId };
+  return { setIds, characterId, resolved };
 }
