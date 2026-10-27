@@ -271,3 +271,93 @@ describe("ModelFolderTree as a drop target (#2204)", () => {
   });
 });
 
+
+describe("ModelFolderTree and where ComfyUI loads from (#2205)", () => {
+  const READS = {
+    known: true,
+    reads: [
+      { folder_id: 1, subpath: "Lora", category: "loras", kind: "lora" },
+      { folder_id: 1, subpath: "VAE", category: "vae", kind: "vae" },
+    ],
+  };
+  const TYPE = "application/x-pixlstash-model-copies";
+
+  function dragOver(el) {
+    const event = new Event("dragover", { bubbles: true, cancelable: true });
+    event.dataTransfer = { types: [TYPE], dropEffect: "" };
+    el.element.dispatchEvent(event);
+  }
+
+  async function expanded() {
+    const wrapper = mountTree();
+    await flushPromises();
+    await item(wrapper, 1).find(".mft-twist").trigger("click");
+    await flushPromises();
+    return wrapper;
+  }
+
+  const marks = (row) =>
+    row.findAll('[data-testid="comfyui-mark"]').map((one) => one.text());
+
+  it("marks each folder with what ComfyUI loads from it, and says so", async () => {
+    useModelFoldersStore().comfyuiReads = READS;
+    const wrapper = await expanded();
+    expect(marks(item(wrapper, 1, "Lora"))).toEqual(["L"]);
+    expect(marks(item(wrapper, 1, "VAE"))).toEqual(["V"]);
+    expect(marks(item(wrapper, 1))).toEqual([]);
+    expect(item(wrapper, 1, "Lora").attributes("aria-label")).toContain(
+      "ComfyUI loads LoRAs from here",
+    );
+    wrapper.unmount();
+  });
+
+  it("draws no marks while where ComfyUI loads from is not known", async () => {
+    useModelFoldersStore().comfyuiReads = { ...READS, known: false };
+    const wrapper = await expanded();
+    expect(wrapper.findAll('[data-testid="comfyui-mark"]')).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  it("names the new ComfyUI name in the drop tip when a move changes it", async () => {
+    useModelFoldersStore().comfyuiReads = READS;
+    const shelf = useModelShelfStore();
+    const wrapper = await expanded();
+    await item(wrapper, 1, "Lora").find(".mft-twist").trigger("click");
+    await flushPromises();
+    const copy = { folder_id: 1, relpath: "Lora/Neon.safetensors" };
+    const loose = { folder_id: 1, relpath: "Ink.safetensors" };
+    const kinds = new Map([
+      ["1\u0000Lora/Neon.safetensors", "lora"],
+      ["1\u0000Ink.safetensors", "lora"],
+    ]);
+    const drag = (items) => ({
+      items,
+      totalBytes: 1,
+      bytesByFolderId: new Map([[1, 1]]),
+      kinds,
+    });
+
+    shelf.dragCopies = drag([copy]);
+    dragOver(item(wrapper, 1, "Lora/flux"));
+    expect(shelf.dropTip.text).toContain(
+      "ComfyUI: Neon.safetensors → flux/Neon.safetensors",
+    );
+    // Out of every LoRA folder: ComfyUI stops listing it.
+    shelf.dragCopies = drag([copy]);
+    dragOver(item(wrapper, 1, "VAE"));
+    expect(shelf.dropTip.text).toContain(
+      "ComfyUI will no longer list Neon.safetensors",
+    );
+    // From the root into Lora, the fix the design is for.
+    shelf.dragCopies = drag([loose]);
+    dragOver(item(wrapper, 1, "Lora"));
+    expect(shelf.dropTip.text).toContain("ComfyUI will list Ink.safetensors");
+
+    // Unknown: the tip says nothing about ComfyUI.
+    useModelFoldersStore().comfyuiReads = { ...READS, known: false };
+    shelf.dragCopies = drag([copy]);
+    dragOver(item(wrapper, 1, "Lora/flux"));
+    expect(shelf.dropTip.text).not.toContain("ComfyUI");
+    wrapper.unmount();
+  });
+});

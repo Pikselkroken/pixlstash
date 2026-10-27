@@ -85,6 +85,7 @@ vi.mock("../../api/modelShelf", () => ({
 const listModelFolderDevices = vi.fn();
 const listModelFolders = vi.fn();
 const listModelFolderDirs = vi.fn();
+const getComfyuiReads = vi.fn();
 // `onMounted` calls `moves.adopt()`, which reads the move job so a move
 // started before a reload is picked up. Left unmocked it reaches the network,
 // fails, and `console.warn`s from a promise nothing in the test awaits - which
@@ -153,6 +154,7 @@ const createModelFolder = vi.fn();
 vi.mock("../../api/modelFolders", async (importOriginal) => ({
   ...(await importOriginal()),
   createModelFolder: (...args) => createModelFolder(...args),
+  getComfyuiReads: (...args) => getComfyuiReads(...args),
   listModelFolderDevices: (...args) => listModelFolderDevices(...args),
   listModelFolderDirs: (...args) => listModelFolderDirs(...args),
   listModelFolders: (...args) => listModelFolders(...args),
@@ -383,6 +385,8 @@ beforeEach(() => {
   setModelIcon.mockReset();
   listModelFolders.mockReset();
   listModelFolders.mockResolvedValue([]);
+  getComfyuiReads.mockReset();
+  getComfyuiReads.mockResolvedValue({ known: false, reads: [] });
   listModelFolderDirs.mockReset();
   listModelFolderDirs.mockImplementation(async (id, path) => ({
     folder_id: id,
@@ -4596,6 +4600,59 @@ describe("the open folder and All models' strip (#2203)", () => {
     it("does not drag a row that is not selected", async () => {
       const { wrapper } = await openFolder();
       expect(wrapper.find(".shelf-row").attributes("draggable")).toBeUndefined();
+      wrapper.unmount();
+    });
+  });
+
+  describe("where ComfyUI loads from (#2205)", () => {
+    const READS = {
+      known: true,
+      reads: [{ folder_id: 1, subpath: "Lora", category: "loras", kind: "lora" }],
+    };
+
+    it("marks the folder ComfyUI loads from, and says a model outside it is not listed", async () => {
+      getComfyuiReads.mockResolvedValue(READS);
+      const { wrapper, store } = await openFolder();
+      expect(getComfyuiReads).toHaveBeenCalledTimes(1);
+      const lora = wrapper.find(".shelf-folder[data-path='Lora']");
+      expect(textOf(lora.find("[data-testid='comfyui-mark']"))).toContain("LoRAs");
+      expect(
+        wrapper.find(".shelf-folder[data-path='VAE'] [data-testid='comfyui-mark']").exists(),
+      ).toBe(false);
+
+      const row = wrapper.find(".shelf-row");
+      expect(textOf(row.find("[data-testid='shelf-row-nolist']"))).toBe(
+        "ComfyUI does not list it here",
+      );
+      const note = wrapper.find("[data-testid='shelf-misplaced-note']");
+      expect(textOf(note)).toContain("1 model in this folder is outside the folders ComfyUI loads from");
+      await note.find("[data-testid='shelf-select-misplaced']").trigger("click");
+      expect(store.selectedRows.map((one) => one.id)).toEqual([1]);
+
+      // Inside the folder ComfyUI loads LoRAs from, nothing to say.
+      store.setFolderScope({ folderId: 1, path: "Lora" });
+      await flushPromises();
+      expect(wrapper.find("[data-testid='shelf-row-nolist']").exists()).toBe(false);
+      expect(wrapper.find("[data-testid='shelf-misplaced-note']").exists()).toBe(false);
+      wrapper.unmount();
+    });
+
+    it("draws no marks, lines or note while where ComfyUI loads from is unknown", async () => {
+      getComfyuiReads.mockResolvedValue({ ...READS, known: false });
+      const { wrapper } = await openFolder();
+      expect(wrapper.find("[data-testid='comfyui-mark']").exists()).toBe(false);
+      expect(wrapper.find("[data-testid='shelf-row-nolist']").exists()).toBe(false);
+      expect(wrapper.find("[data-testid='shelf-misplaced-note']").exists()).toBe(false);
+      wrapper.unmount();
+    });
+
+    it("treats a refused read as unknown", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      getComfyuiReads.mockRejectedValue({ response: { status: 403 } });
+      const { wrapper } = await openFolder();
+      expect(wrapper.find("[data-testid='shelf-row-nolist']").exists()).toBe(false);
+      expect(warn).toHaveBeenCalled();
+      warn.mockRestore();
       wrapper.unmount();
     });
   });

@@ -117,6 +117,20 @@ export async function listModelFolderDirs(id, path = "") {
 }
 
 /**
+ * Where the owner's ComfyUI loads each kind of model from, inside the
+ * registered folders (#2205). Read live from ComfyUI by the server.
+ *
+ * `known` is false when none of ComfyUI's folders is on the shelf: no ComfyUI
+ * set, not answering, or on another machine. Nothing is misplaced then.
+ *
+ * @returns {Promise<Object>} `{known, reads: [{folder_id, subpath, category,
+ *   kind}]}`, `subpath` POSIX and relative to the folder.
+ */
+export async function getComfyuiReads() {
+  return unwrap(apiClient.get(`${MODEL_FOLDERS_URL}/comfyui-reads`));
+}
+
+/**
  * Register a folder for the shelf to catalogue.
  *
  * Registering does not scan; call {@link rescanModelFolder} afterwards. A path
