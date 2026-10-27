@@ -116,7 +116,6 @@ frontend/src/
 │   ├── characterCreateFlow.js   # Pure helpers for the context-menu create-person flow: default naming + face-vs-picture assignment choice (+ *.test.js)
 │   ├── clipboard.js             # Cross-browser clipboard write helper
 │   ├── descriptions.js          # Pure helpers for picture-description formatting/normalisation
-│   ├── dockerHelpers.js         # Pure helpers for Docker volume/mount path building
 │   ├── keepCoverOnly.js         # Keep-cover-only: the copy + the two selection computations, pure (+ *.test.js)
 │   ├── media.js                 # File extension lists, file-type predicates, drop-target helpers
 │   ├── rotate.js                # In-place rotate: the format/reference-folder gates, the menu label and the skip note, pure (+ *.test.js)
@@ -172,7 +171,7 @@ frontend/src/
 ### Key Design Principles
 
 - **Pinia for cross-component state.** All state shared across more than one component lives in a Pinia store in `src/stores/`. `App.vue` owns only layout-shell state (sidebar/stats visibility, pending import counts) that is not consumed anywhere else.
-- **The route is the single source of truth for the grid view; the sidebar navigates only on a deliberate choice.** An entry click (a place, a person, a set, a folder) and the header slot's **project scope** navigate, via `router.push()`. Anything that only changes what the sidebar *shows* (the docked rail's Projects / Folders flyouts, opening a section) must **not** push a route, emit a `select-*` event or write the filter / selection / sort / grid stores. The scope is a navigation by design (#2159): choosing a project narrows the grid, the counts and the People and Sets lists together, so the slot always names the scope the grid is in. See [§5 → SideBar.vue](#sidebarvue-6989-lines).
+- **The route is the single source of truth for the grid view; the sidebar navigates only on a deliberate choice.** An entry click (a place, a person, a set, a folder) and the header slot's **project scope** navigate, via `router.push()`. Anything that only changes what the sidebar *shows* (the docked rail's Projects flyout, opening a section) must **not** push a route, emit a `select-*` event or write the filter / selection / sort / grid stores. The scope is a navigation by design (#2159): choosing a project narrows the grid, the counts and the People and Sets lists together, so the slot always names the scope the grid is in. See [§5 → SideBar.vue](#sidebarvue-6390-lines).
 - **Composables for reusable logic.** Complex logic extracted from mega-components lives in `src/composables/` as `useX()` functions. Composables accept dependencies as parameters and are independently unit-testable.
 - **Flat component structure.** All components sit directly in `src/components/` with sub-directories by domain (`views/`, `panels/`, `editors/`, `settings/`, `io/`, `widgets/`). Shared presentational sub-components (e.g. `StarRatingOverlay`, `ProgressOverlay`) live in `widgets/`.
 - **Utilities are pure functions.** Every file in `src/utils/` exports only plain functions and constants; none hold reactive state themselves (except `apiClient.js`, which holds `isAuthenticated`, `sessionContext`, and `isReadOnly`).
@@ -626,7 +625,7 @@ Two things the fix must not undo, both asserted: a card the server reports **no*
 
 Every path still emits `refresh-sidebar` (the counts changed) and, under an open overlay, defers its grid work to `pendingOverlayGridRefresh` rather than restructuring the frozen filmstrip (§9.1), but only when a refetch was warranted in the first place, so a deferred redundant reload is not queued either. Regression coverage: `ImageGridProjectAssignRefresh.test.js` (both directions: no refetch in the global view, refetch still fires in the project view).
 
-#### `SideBar.vue` (6387 lines)
+#### `SideBar.vue` (6390 lines)
 The Media workspace's sidebar. Expanded, it is a fixed frame (#2159): the **header slot** (`--sidebar-slot-h`, the toolbar band's height, so its rule continues the toolbar's) holds the project scope, one list scrolls under it, and the 52px **footer band** (`--sidebar-band-h`) holds the one amber action, **Import**. Every workspace's sidebar uses the same two tokens, so the frame keeps its shape on a switch. Responsibilities:
 - **Project scope** (`SidebarScopeSlot.vue`): the project's colour tile, name and up/down chevrons over a "Limit view to" menu: Any project, each project with its count, Not in a project, then *New project…* and *Edit "name"…*. Right-click on the slot or a project row opens that project's context menu (share, export, edit, delete). Projects store no colour; `utils/setAppearance.projectColor` cycles the set palette by id, and a chosen project tints the slot (22 %) and the list (6 %) with it.
 - **One list in every scope, every row 32px** (`--control-h-bar`): places (All media, Favourites, Scrapheap), a **Review** group (Duplicates, Tags to review, and Moves while its queue holds anything), then **People**, **Sets** and the scoped project's **Project files**. Reference and import folders are not listed: adding a folder is *Add a library*, and a folder view is reached only by URL. A pending folder read for this library shows as a "Finish organising…" row below the list. Section heads are uppercase labels with a `+` at the right edge. People wear a 20px round avatar, sets a 16px glyph; the thumbnail-size setting now sizes only the docked rail.
@@ -646,15 +645,15 @@ The header slot's project scope is a **navigation**, unlike the Global / Project
 - **Choosing a scope lands on All media in it**, keeping the Favourites filter. `chooseScope` sets the sidebar's `projectViewMode` / `selectedProjectId` and goes through `selectCharacter(ALL_PICTURES_ID)`, so the route, the grid and the counts all follow. A person or set clicked afterwards opens **inside the scope** (`currentScopeContext()`), never in the entity's own `project_id`: someone in two projects, seen from the second, must not jump the view to the first.
 - **The slot names the scope the grid is in.** A watcher mirrors `projectStore.projectViewMode` / `selectedProjectId` back into the sidebar, so Back, a deep link or a library-wide route (the Scrapheap, Duplicates) moves the slot with the grid; those last read as Any project.
 - **Not in a project has a URL.** It has no route of its own, so it rides as `?project=none` on All media, a person or a set (`useAppNavigation.pushRouteForCurrentSelection` writes it, `useViewStore.parseRouteView` reads it). Without it a reload widened the grid to the whole library while the menu still said otherwise.
-- **The docked rail stays display-only.** Its Global / Projects / Folders flyout (`sidebarPrimaryTab`) only changes which list the rail shows; entry clicks inside it navigate as above.
+- **The docked rail stays display-only.** Its Global / Projects flyout only changes which list the rail shows; entry clicks inside it navigate as above.
 - **Anti-pattern (do not reintroduce):** a display switch (a rail mode, a section toggle) that pushes a route or resets a filter. Only an entry click and the scope navigate.
 
 Drag-to-assign:
 
-- **Every person, set and folder row is a drop target.** It accepts a drop of
+- **Every person and set row is a drop target.** It accepts a drop of
   the current grid selection (`application/json` payload via `dataTransfer`)
   to assign those pictures — `handleDragOverCharacter` / `dragOverSetItem` and
-  siblings. People, Sets and Folders are all in the one list, so a selection
+  siblings. People and Sets are both in the one list, so a selection
   found anywhere can be dropped without leaving the view it was found in.
 - **A drop target judges the payload KIND during dragover, from `types` alone.**
   The JSON body is protected while a drag is in flight (`getData()` returns `""`
@@ -3614,20 +3613,6 @@ anything outside the file can reach them.
 
 ---
 
-### `dockerHelpers.js`
-
-Pure helpers for constructing Docker run/compose snippets in the folder editor UI.
-
-| Export | Description |
-|--------|-------------|
-| `normalizeFolderPath(value)` | Trim and strip trailing slashes. |
-| `buildDockerVolumeFlag(hostPath, containerPath, format)` | Build `-v host:container` flag; `format='windows'` uses double-quotes. |
-| `deriveLabelFromHostPath(value)` | Extract leaf folder name as a human label. |
-| `inferImportMount(folder, fallbackIndex)` | Derive `{hostPath, containerPath}` for an import folder. |
-| `inferReferenceMount(folder, fallbackIndex)` | Derive `{hostPath, containerPath}` for a reference folder. |
-
----
-
 ### `zoomMath.js` + `composables/useWheelZoom.js` — the zoom family (mandatory shared core)
 
 **Any new zoom surface MUST build on this core.** Do not re-implement wheel
@@ -4284,7 +4269,6 @@ graph LR
         media["media.js"]
         clipboard["clipboard.js"]
         setApp["setAppearance.js"]
-        docker["dockerHelpers.js"]
     end
 
     subgraph Components

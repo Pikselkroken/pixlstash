@@ -261,7 +261,7 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
     if (sel.selectedFolderFilter) {
       const f = sel.selectedFolderFilter;
       // `?path=` rides along on the folder routes too. A sidebar subfolder
-      // click carries `rfId` (`FolderTreeNode.vue` requires it), so it takes
+      // selection carries `rfId` (it always does), so it takes
       // the ref-folder branch, and without the query the URL named the folder
       // ROOT: a reload or a shared link landed one level up from what was on
       // screen. The id still owns the payload - `useViewStore.applyView`

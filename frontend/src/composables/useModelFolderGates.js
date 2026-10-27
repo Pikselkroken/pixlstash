@@ -58,7 +58,7 @@ export function useModelFolderGates() {
 
   const remoteReason = computed(() => (canManage.value ? "" : REMOTE_REASON));
 
-  /** Docker takes a host path this UI has no way to ask for (`FolderEditor`'s job). */
+  /** Docker takes a host path this UI has no way to ask for. */
   const addReason = computed(
     () => remoteReason.value || (librariesStore.inDocker ? DOCKER_REASON : ""),
   );
