@@ -1286,6 +1286,14 @@
       @started="onMoveStarted"
       @close="closeMove"
     />
+    <!-- A folder the Folders tree moved or was asked to move (#2206). -->
+    <FolderMoveDialog
+      :open="folderMoveOpen"
+      :source="folderMoveSource"
+      :initial-destination="folderMoveDestination"
+      :plan="folderMovePlan"
+      @close="closeFolderMove"
+    />
     <ModelDropTip />
 
     <!-- The shipped host-path picker again, in its file mode. A server-side
@@ -1322,8 +1330,8 @@
         :status="moveProgressStatus"
         :message="moves.failure || moveProgressMessage"
         :percent="moves.failure ? 100 : moves.percent"
-        :count="moves.failure ? null : moves.done"
-        :total="moves.failure ? null : moves.total"
+        :count="moves.failure || moves.kind === 'folder' ? null : moves.done"
+        :total="moves.failure || moves.kind === 'folder' ? null : moves.total"
         :abort-label="moveProgressAction"
         @abort="moves.failure ? dismissMoveFailure() : moves.cancel()"
       />
@@ -1356,6 +1364,7 @@ import KindMenu from "../widgets/KindMenu.vue";
 import ShelfEditDialog from "../panels/ShelfEditDialog.vue";
 import MergeCopiesDialog from "../panels/MergeCopiesDialog.vue";
 import ShelfMoveDialog from "../panels/ShelfMoveDialog.vue";
+import FolderMoveDialog from "../panels/FolderMoveDialog.vue";
 import ModelDropTip from "../panels/ModelDropTip.vue";
 import { useModelCopyDrop } from "../../composables/useModelCopyDrop";
 import ModelWorksWithDialog from "../panels/ModelWorksWithDialog.vue";
@@ -1451,6 +1460,7 @@ import {
   trainingStep,
   unstackReceipt,
   sortDirectionLabel,
+  isInFoldersTree,
 } from "../../utils/modelShelf";
 
 // Settings lives in App.vue's sidebar dialog, so the toolbar's Settings button
@@ -1807,11 +1817,17 @@ const foldersById = computed(
     new Map(foldersStore.folders.map((folder) => [Number(folder.id), folder])),
 );
 
-const moveProgressMessage = computed(() =>
-  moves.cancelRequested
+const moveProgressMessage = computed(() => {
+  // A folder is one job of one item: say which folder, not "1 of 1 files".
+  if (moves.kind === "folder") {
+    return moves.cancelRequested
+      ? `Stopping ${moves.folderName}…`
+      : `Moving ${moves.folderName}…`;
+  }
+  return moves.cancelRequested
     ? "Stopping after the file in flight…"
-    : "Moving model files…",
-);
+    : "Moving model files…";
+});
 
 /**
  * What the corner card is saying: progress, or the failure it ended in.
@@ -1894,6 +1910,39 @@ watch(
 /** A paste's cut is spent once its move starts; the rows stop drawing dim. */
 function onMoveStarted() {
   if (moveFromCut.value) store.clearCut();
+}
+
+/** The folder move dialog: the tree or its menu asked for it (#2206). */
+const folderMoveOpen = ref(false);
+const folderMoveSource = ref({ folderId: 0, path: "", name: "" });
+const folderMoveDestination = ref(null);
+const folderMovePlan = ref(null);
+const folderMoveInvoker = shallowRef(null);
+
+watch(
+  () => store.folderMoveRequest,
+  (request) => {
+    if (!request) return;
+    folderMoveInvoker.value =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    folderMoveSource.value = request.source;
+    folderMoveDestination.value = request.destination;
+    folderMovePlan.value = request.plan;
+    folderMoveOpen.value = true;
+  },
+);
+
+/** Close the folder dialog and give the focus back to what opened it. */
+async function closeFolderMove() {
+  const returnTo = folderMoveInvoker.value;
+  folderMoveOpen.value = false;
+  folderMoveInvoker.value = null;
+  folderMoveDestination.value = null;
+  folderMovePlan.value = null;
+  await nextTick();
+  (returnTo?.isConnected ? returnTo : rootEl.value)?.focus();
 }
 
 // ── Drag and cut (#2204) ─────────────────────────────────────────────────
@@ -2036,8 +2085,13 @@ function shelfOwnsTheKey(event) {
   // model, the bar floats over it, and `selectVisible` answers the grid's own
   // idea of "shown". So Ctrl+A builds a selection the reader can see, and Delete
   // opens the confirmation for rows they can point at.
+  // The Folders tree (#2206) is in the sidebar, and its F2, Ctrl+Shift+N and
+  // Delete belong to the folder under the focus. Delete here would be a file
+  // deletion, so this must step aside even with no selection to delete.
+  if (isInFoldersTree(event)) return false;
   if (
     moveOpen.value ||
+    folderMoveOpen.value ||
     addSourceOpen.value ||
     addFileOpen.value ||
     thumbnailPickerOpen.value ||

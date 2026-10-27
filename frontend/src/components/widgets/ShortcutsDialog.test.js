@@ -57,6 +57,13 @@ describe("ShortcutsDialog: the shelf's cut and paste (#2204)", () => {
       .findAll("tr")
       .filter((row) => row.text().includes("On Models"))
       .map((row) => row.find("td").text());
-    expect(rows).toEqual(["Ctrl+X", "Ctrl+V", "Esc"]);
+    expect(rows).toEqual([
+      "Ctrl+X",
+      "Ctrl+V",
+      "Esc",
+      // The Folders tree's own verbs (#2206).
+      "F2",
+      "Ctrl+Shift+N",
+    ]);
   });
 });

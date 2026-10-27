@@ -1232,6 +1232,22 @@ export function copyKey(loc) {
 export const MODEL_COPIES_TYPE = "application/x-pixlstash-model-copies";
 
 /**
+ * Whether a key press came from the Folders tree (#2206).
+ *
+ * The shelf's window listeners cannot tell the tree's keys from their own by
+ * the event alone: the tree is in the sidebar, outside `.shelf`. Its rows carry
+ * `.mft`, and a press from one belongs to the folder under the focus, never to
+ * a model selection. Delete is the one that matters: from a row it would open a
+ * FILE deletion.
+ *
+ * @param {KeyboardEvent} event
+ * @returns {boolean}
+ */
+export function isInFoldersTree(event) {
+  return Boolean(event?.target?.closest?.(".mft"));
+}
+
+/**
  * The POSIX directory of a copy's `relpath`, `""` at its folder's root. The
  * scanner stores relpaths with the host's separator.
  *

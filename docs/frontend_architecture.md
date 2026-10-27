@@ -4939,6 +4939,74 @@ neither edge moves on a workspace switch.
   sidebar calls `runsStore.ensureLoaded()` on mount so the count is there on
   every place, not only after the runs view has been opened.
 
+#### Folder verbs in the tree (`panels/ModelFolderTree.vue`, #2206)
+
+**One menu, four ways in.** A folder row's menu opens by right-click, by the
+⋯ (shown on hover or on the row's focus, and kept out of the tab order: the
+row is the one stop), or by Shift+F10 and the Menu key on the focused row. F2
+renames and Ctrl+Shift+N makes a folder, on the focused row. `menuFor(node)`
+decides what a row offers. A subfolder gets *New folder*, *Move folder to…*,
+*Rename*, a rule, and *Remove folder…*, drawn disabled with its reason (the
+verb is #2207's). A registered root gets *New folder* and *Stop watching…*,
+which asks the shelf for Manage model folders, and nothing that would move
+its directory, because the server refuses to move a root. A locked folder has
+no menu at all: its lock is what it shows. Pick mode has no menus; it chooses.
+
+**Every verb goes through `useModelFolderGates`.** `folderVerbReason(folder)`
+gives the remote tier, a running move (`moves.busy`), then a scan of the
+registered folder, in that order. An entry with a reason is drawn with
+`blockedAttrs` and its reason on a tooltip, not left out, so the reader can
+see why. *Stop watching…* uses `forgetReason`.
+
+**One name field for every folder name.** `ModelFolderNameField` is used by the
+tree, by the Folders heading's + (which makes the folder in the open one) and
+by the Move dialogs' *New folder in <destination>…* row (`ModelFolderNewRow`).
+In the tree a new folder is listed as the first child of its parent and a
+rename sits on the row's own level. Enter applies and Escape cancels, and every
+key stops at the field, so the tree's arrows and the shelf's window keys never
+see them. A refusal is the server's `detail`, shown under the field in the
+danger ink, and the field stays open with what was typed. A create goes
+through `useModelFoldersStore.createDir`, which re-reads the parent's listing;
+the tree that shows the new folder calls its exposed `reveal(folderId, parent,
+newPath)`, which opens the way down, lists it and takes the focus. A rename is a
+move with `newName`, through the one job slot.
+
+**A folder drag has a type of its own.** Subfolder rows are `draggable` and
+carry `application/x-pixlstash-model-folder` (`FOLDER_TYPE`), not the model
+copies' type. The source is also held in `useModelShelfStore.dragFolder`,
+because a drop target cannot read `dataTransfer` during `dragover`. `useFolderDrop`
+refuses, with the shared `.not-droppable` hatch, a drive, a locked folder, the
+folder itself, its descendants, the folder it is already in, and any drop while
+a move runs. Its tip names the mechanism from `device_id`, as the file tip does.
+
+**The drop asks only when there is something to ask.** A drop calls
+`askFolderMove`, which runs the dry run. A move on one drive is a rename: it
+starts at once, with no dialog. Across drives the plan goes to
+`FolderMoveDialog` on its second step, where one sentence states the models,
+the other files, the bytes, that another drive copies and removes, and what
+it frees. That decision is the single `if` in `askFolderMove`; if the owner
+wants folder drops to confirm too, that is the line to change. *Move folder
+to…* opens the dialog on its pick step and goes through the same decision.
+
+**Keys stay in the tree.** `shelfOwnsTheKey` steps aside for a press from a
+`.mft` row (`isInFoldersTree`). Delete there belongs to the folder, and must
+never reach the shelf's file deletion, even with nothing selected. The tree
+stops the propagation of the keys it handles.
+
+**The corner card is kind-aware.** `useModelMovesStore.kind` is `files` or
+`folder`. A folder job reads *Moving sdxl…* and its receipt (`folderReceipt`) is
+*Moved sdxl.*, *Renamed sdxl to sdxl2.*, *Could not move sdxl: <detail>* (held
+as a failure, as the file receipts are) or *Stopped; sdxl was left where it
+was.* Its count is not drawn: one item is not a bar. A move that takes the
+open folder out of the view (the folder itself, or one under it) closes the
+view when it starts, so the list does not point at a path that is about to
+change.
+
+**Refusals throw, and the caller shows them.** `planFolder` and `moveFolder`
+reject with the server's sentence (`begin(..., { rethrow: true })`), so a
+rename shows it under its field, and a drop or the dialog shows it as a notice
+or in the dialog. A refused plan starts nothing.
+
 #### Sorting and grouping (the `Sort` split-button)
 
 **Sorting is client-side, and that is the correct answer rather than a

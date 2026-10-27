@@ -7,9 +7,10 @@ import {
   relocateModelFolder,
   startModelMove,
 } from "../api/modelMoves";
+import { moveModelFolderDir } from "../api/modelFolders";
 import { onSessionReset } from "../utils/apiClient";
 import { errorDetail } from "../utils/apiError";
-import { useModelFoldersStore } from "./useModelFoldersStore";
+import { basename, useModelFoldersStore } from "./useModelFoldersStore";
 import { useModelShelfStore } from "./useModelShelfStore";
 import { useNoticeStore } from "./useNoticeStore";
 
@@ -25,6 +26,9 @@ const POLL_MS = 1000;
  * finished during the outage is still reported while the owner is looking.
  */
 const POLL_MAX_MS = 15000;
+
+const MOVE_RUNNING_REASON =
+  "A move is already running. There is one at a time, machine-wide.";
 
 /**
  * What each per-item status means in a receipt, and whether it is bad news.
@@ -100,6 +104,35 @@ export function moveReceipt(results, cancelled = false) {
 }
 
 /**
+ * Say what a folder job did, in one sentence (#2206).
+ *
+ * A folder job has one result, the directory itself. `Renamed` is said when the
+ * final name differs from the one it had, which only a rename changes: a move
+ * keeps the name. Failed and stopped jobs name the directory they left where it
+ * was, by its old name, because that is where it still is.
+ *
+ * @param {Object} job - a folder job's snapshot.
+ * @returns {string}
+ */
+export function folderReceipt(job) {
+  const [result] = Array.isArray(job?.results) ? job.results : [];
+  const was = basename(result?.relpath || job?.name);
+  const now = job?.name || was;
+  if (result?.status === "moved") {
+    const head =
+      now === was ? `Moved ${now}.` : `Renamed ${was} to ${now}.`;
+    return result.detail ? `${head} ${result.detail}` : head;
+  }
+  if (result?.status === "failed") {
+    return `Could not move ${was}: ${result.detail || "the move failed"}`;
+  }
+  if (result?.status === "cancelled") {
+    return `Stopped; ${was} was left where it was.`;
+  }
+  return "Nothing moved.";
+}
+
+/**
  * The one model move, and the poll that watches it.
  *
  * A STORE and not dialog state, for the same reason folder scans are: the move
@@ -143,6 +176,12 @@ export const useModelMovesStore = defineStore("modelMoves", () => {
 
   const status = computed(() => job.value?.status || "idle");
   const running = computed(() => status.value === "running");
+  /** What the job moves: `files` (model copies) or `folder` (#2206). */
+  const kind = computed(() => job.value?.kind || "files");
+  /** The folder a folder job is moving or renaming, for the corner card. */
+  const folderName = computed(() =>
+    basename(job.value?.name || job.value?.results?.[0]?.relpath),
+  );
   /** True while a move may not be started: one job, machine-wide. */
   const busy = computed(() => running.value || starting.value);
 
@@ -248,7 +287,10 @@ export const useModelMovesStore = defineStore("modelMoves", () => {
     if (!watching) return true;
     watching = false;
     const results = snapshot?.results || [];
-    const receipt = moveReceipt(results, Boolean(snapshot?.cancel_requested));
+    const receipt =
+      snapshot?.kind === "folder"
+        ? folderReceipt(snapshot)
+        : moveReceipt(results, Boolean(snapshot?.cancel_requested));
     // Two surfaces for two kinds of news: a run that landed says so in passing,
     // a run that lost files holds the panel until it is read.
     if (results.some((r) => r.status === "failed")) failure.value = receipt;
@@ -312,8 +354,15 @@ export const useModelMovesStore = defineStore("modelMoves", () => {
     );
   }
 
-  /** Take the one job slot with *request*, and watch whatever it returns. */
-  async function begin(request, failureMessage) {
+  /**
+   * Take the one job slot with *request*, and watch whatever it returns.
+   *
+   * @param {Function} request
+   * @param {string} failureMessage
+   * @param {{rethrow?: boolean}} [options] - `rethrow`: the caller shows the
+   *   refusal where it asked (a rename's field), so it is not also a notice.
+   */
+  async function begin(request, failureMessage, { rethrow = false } = {}) {
     const notices = useNoticeStore();
     starting.value = true;
     error.value = "";
@@ -326,12 +375,75 @@ export const useModelMovesStore = defineStore("modelMoves", () => {
       startPolling();
       return true;
     } catch (err) {
+      if (rethrow) throw err;
       error.value = errorDetail(err) || failureMessage;
       notices.push({ level: "error", text: error.value });
       return false;
     } finally {
       starting.value = false;
     }
+  }
+
+  /**
+   * Ask the server what moving a folder would do, without moving it (#2206).
+   *
+   * The server runs every refusal, so a throw here is the answer "no" with its
+   * reason in `detail`. Nothing is touched, and the store stays idle.
+   *
+   * @param {{folderId: number, path: string}} source - the directory.
+   * @param {{folderId: number, path: string}} destination - its new parent.
+   * @param {string} [newName] - for a rename, the name it will have.
+   * @returns {Promise<Object>} the facts: `same_drive`, `models`, `files`,
+   *   `other_files`, `bytes`, `destination_path`, `name`.
+   */
+  async function planFolder(source, destination, newName = "") {
+    return moveModelFolderDir(source.folderId, {
+      path: source.path,
+      destinationFolderId: Number(destination.folderId),
+      destinationPath: destination.path ?? "",
+      newName: newName || undefined,
+      dryRun: true,
+    });
+  }
+
+  /**
+   * Move or rename a folder, and watch the job to its end (#2206).
+   *
+   * Refusals THROW (with the server's sentence, or a plain one for the busy
+   * slot), so a rename can show them under its field. A folder the move takes
+   * out of the open view closes it, or the list would sit empty under a path
+   * that no longer exists.
+   *
+   * @param {{folderId: number, path: string}} source
+   * @param {{folderId: number, path: string}} destination
+   * @param {{newName?: string}} [options]
+   * @returns {Promise<boolean>} true when the job was accepted.
+   */
+  async function moveFolder(source, destination, { newName = "" } = {}) {
+    if (busy.value) throw new Error(MOVE_RUNNING_REASON);
+    const shelf = useModelShelfStore();
+    const accepted = await begin(
+      () =>
+        moveModelFolderDir(source.folderId, {
+          path: source.path,
+          destinationFolderId: Number(destination.folderId),
+          destinationPath: destination.path ?? "",
+          newName: newName || undefined,
+        }),
+      "Could not move that folder.",
+      { rethrow: true },
+    );
+    // Only once the server took the job: a refused move moved nothing, so the
+    // reader stays in the folder they were looking at.
+    const open = shelf.folderScope;
+    if (
+      open &&
+      Number(open.folderId) === Number(source.folderId) &&
+      (open.path === source.path || open.path.startsWith(`${source.path}/`))
+    ) {
+      shelf.setFolderScope(null);
+    }
+    return accepted;
   }
 
   /**
@@ -410,6 +522,10 @@ export const useModelMovesStore = defineStore("modelMoves", () => {
     cancelRequested,
     start,
     relocate,
+    planFolder,
+    moveFolder,
+    kind,
+    folderName,
     cancel,
     dismissFailure,
     adopt,

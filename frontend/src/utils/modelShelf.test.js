@@ -6,6 +6,7 @@ import { describe, it, expect } from "vitest";
 import { contrastRatio } from "./contrastAudit.js";
 import { ICON_CARDS, SET_COLORS } from "./setAppearance";
 import {
+  isInFoldersTree,
   adapterKindKey,
   adapterKindLabel,
   assignmentRing,
@@ -1885,5 +1886,21 @@ describe("the date column's value", () => {
     const member = { added_at: ISO, newest_member_at: "2026-09-01T00:00:00" };
     expect(modelDate(member, "added_at")).toBe("2026-09-01T00:00:00");
     expect(modelDate(member, "added_at", true)).toBe(ISO);
+  });
+});
+
+describe("a key from the Folders tree (#2206)", () => {
+  it("is the tree's when it is pressed on a tree row, and not the shelf's", () => {
+    const tree = document.createElement("div");
+    tree.className = "mft";
+    const row = document.createElement("div");
+    tree.appendChild(row);
+    const shelf = document.createElement("div");
+    shelf.className = "shelf-row";
+    expect(isInFoldersTree({ target: row })).toBe(true);
+    expect(isInFoldersTree({ target: shelf })).toBe(false);
+    // A press with nothing focused lands on the body, which is nobody's tree.
+    expect(isInFoldersTree({ target: document.body })).toBe(false);
+    expect(isInFoldersTree({})).toBe(false);
   });
 });

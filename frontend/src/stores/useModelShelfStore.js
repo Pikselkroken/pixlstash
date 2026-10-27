@@ -3533,6 +3533,20 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    */
   const moveRequest = shallowRef(null);
   let moveAsks = 0;
+  /**
+   * The folder being dragged in the Folders tree, `{folderId, path, name}`, or
+   * null. Held here because a drop target cannot read `dataTransfer` data
+   * before the drop, the same reason `dragCopies` is held.
+   */
+  const dragFolder = shallowRef(null);
+  /**
+   * A folder move the tree or its menu asked for: `{source, destination, plan,
+   * at}`. `destination` and `plan` are null for *Move folder to…*, which opens
+   * the dialog on the pick step; a drop that needs confirming carries both.
+   * `ModelShelf` owns the dialog, as it owns the file move's.
+   */
+  const folderMoveRequest = shallowRef(null);
+  let folderMoveAsks = 0;
 
   /**
    * The selection's copies that can move. In a folder view, only the copy in
@@ -3614,6 +3628,20 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    */
   function requestMove(copies, destination) {
     moveRequest.value = { copies, destination, at: (moveAsks += 1) };
+  }
+
+  /**
+   * @param {{folderId: number, path: string, name: string}} source
+   * @param {{folderId: number, path: string}|null} [destination]
+   * @param {Object|null} [plan] - the dry run's facts, when already read.
+   */
+  function requestFolderMove(source, destination = null, plan = null) {
+    folderMoveRequest.value = {
+      source,
+      destination,
+      plan,
+      at: (folderMoveAsks += 1),
+    };
   }
 
   /** True once the sets are read, so "in no set" is an answer, not a guess. */
@@ -4781,6 +4809,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     dragCopies.value = null;
     dropTip.value = null;
     moveRequest.value = null;
+    dragFolder.value = null;
+    folderMoveRequest.value = null;
     anchorId.value = null;
     anchorOccurrence.value = null;
     loaded.value = false;
@@ -4984,6 +5014,9 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     dragCopies,
     dropTip,
     moveRequest,
+    dragFolder,
+    folderMoveRequest,
+    requestFolderMove,
     movableSelection,
     cutSelection,
     clearCut,

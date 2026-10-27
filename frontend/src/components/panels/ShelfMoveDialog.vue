@@ -13,6 +13,7 @@
            every file is already in are refused. -->
       <div ref="treeBoxEl" class="smd-tree">
         <ModelFolderTree
+          ref="treeRef"
           mode="pick"
           label="Move them to"
           :selected="destination"
@@ -20,6 +21,16 @@
           @select="pick"
         />
       </div>
+      <!-- A folder made here is the destination, so the move can go straight
+           into it (#2206). -->
+      <ModelFolderNewRow
+        v-if="destination"
+        :folder-id="destination.folderId"
+        :path="destination.path"
+        :label="destinationName(folders.folders, destination)"
+        :reason="gates.folderVerbReason({ id: destination.folderId })"
+        @created="onCreated"
+      />
     </div>
 
     <p v-if="!destinations.length" class="smd-note" role="status">
@@ -83,8 +94,11 @@ import { computed, nextTick, ref, watch } from "vue";
 
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
+import ModelFolderNewRow from "./ModelFolderNewRow.vue";
 import ModelFolderTree from "./ModelFolderTree.vue";
 import { DOWNLOADS_KIND, SOURCE_KIND } from "../../api/modelFolders";
+import { destinationName } from "../../composables/useModelCopyDrop";
+import { useModelFolderGates } from "../../composables/useModelFolderGates";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
 import {
@@ -117,11 +131,13 @@ const emit = defineEmits(["close", "started"]);
 
 const folders = useModelFoldersStore();
 const moves = useModelMovesStore();
+const gates = useModelFolderGates();
 
 /** `{folderId, path}` picked in the tree, or null. */
 const destination = ref(null);
 const working = ref(false);
 const treeBoxEl = ref(null);
+const treeRef = ref(null);
 const moveButton = ref(null);
 
 const itemCount = computed(() => props.items.length);
@@ -147,6 +163,12 @@ function refused(entry) {
 
 function pick(node) {
   destination.value = { folderId: node.folderId, path: node.path };
+}
+
+/** A folder made in the destination: reveal it, and pick it. */
+function onCreated({ folderId, path }) {
+  treeRef.value?.reveal(folderId, destination.value?.path ?? "", path);
+  destination.value = { folderId, path };
 }
 
 const subtitle = computed(

@@ -39,7 +39,14 @@ function mountDialog(props = {}) {
   wrapper = mount(ShelfMoveDialog, {
     props: { open: true, items: ITEMS, totalBytes: 2048, ...props },
     attachTo: document.body,
-    global: { stubs: { AppDialog: AppDialogStub, "v-icon": true } },
+    global: {
+      stubs: {
+        AppDialog: AppDialogStub,
+        "v-icon": true,
+        "v-menu": { props: ["modelValue"], template: '<div v-if="modelValue"><slot /></div>' },
+        Tooltip: true,
+      },
+    },
   });
   return wrapper;
 }

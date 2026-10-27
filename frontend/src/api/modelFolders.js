@@ -229,3 +229,66 @@ export async function pickUpModelFiles(files, { add = false } = {}) {
   );
   return Array.isArray(body?.files) ? body.files : [];
 }
+
+/**
+ * Create a directory inside a registered folder (#2206).
+ *
+ * A plain `mkdir`: one segment, no tree. The server refuses a reserved Windows
+ * name, a leading dot, a trailing dot or space, a slash, and a name already
+ * taken (409), and answers its reason in `detail`, which the caller shows under
+ * the field as it stands. Not offered in Docker (403): the folder is on the
+ * host, behind a bind mount this process cannot write through.
+ *
+ * @param {number|string} id - the registered folder.
+ * @param {Object} options
+ * @param {string} [options.path=""] - the POSIX parent, relative to the folder;
+ *   `""` is its root.
+ * @param {string} options.name - one segment.
+ * @returns {Promise<{folder_id: number, path: string}>} the new directory's
+ *   POSIX relpath.
+ */
+export async function createModelFolderDir(id, { path = "", name }) {
+  return unwrap(
+    apiClient.post(`${MODEL_FOLDERS_URL}/${encodeURIComponent(id)}/dirs`, {
+      path,
+      name,
+    }),
+  );
+}
+
+/**
+ * Move a folder inside the registry, or rename it (#2206).
+ *
+ * A rename is a move whose destination is the folder's own parent, with a
+ * `newName`. With `dryRun` the server runs every refusal and answers the facts
+ * (`same_drive`, the counts, the bytes) without touching anything, so it doubles
+ * as validation. Without it the answer is a 202 with the job the move corner
+ * card already watches (`kind: "folder"`).
+ *
+ * @param {number|string} id - the folder the directory is in.
+ * @param {Object} options
+ * @param {string} options.path - the directory, POSIX, relative to its folder.
+ * @param {number} options.destinationFolderId
+ * @param {string} options.destinationPath - the directory's new parent.
+ * @param {string} [options.newName] - the new name, for a rename.
+ * @param {boolean} [options.dryRun=false]
+ * @returns {Promise<Object>} the dry-run facts, or the job's first snapshot.
+ */
+export async function moveModelFolderDir(
+  id,
+  { path, destinationFolderId, destinationPath, newName, dryRun = false },
+) {
+  const body = {
+    path,
+    destination_folder_id: destinationFolderId,
+    destination_path: destinationPath,
+  };
+  if (newName) body.new_name = newName;
+  if (dryRun) body.dry_run = true;
+  return unwrap(
+    apiClient.post(
+      `${MODEL_FOLDERS_URL}/${encodeURIComponent(id)}/dirs/move`,
+      body,
+    ),
+  );
+}

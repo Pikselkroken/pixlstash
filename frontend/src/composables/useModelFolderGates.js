@@ -96,6 +96,18 @@ export function useModelFolderGates() {
     return isScanning(folder) ? SCANNING_REASON : "";
   }
 
+  /**
+   * Why a verb on a folder row of the Folders tree (new, rename, move) cannot be
+   * done right now, or "". Takes the folder's registered id, since a subfolder
+   * row is refused for its registered folder's sake: a scan is writing that
+   * folder's rows, and a move is the one job machine-wide (#2206).
+   */
+  function folderVerbReason(folder) {
+    if (remoteReason.value) return remoteReason.value;
+    if (moves.busy) return MOVE_RUNNING_REASON;
+    return isScanning(folder) ? SCANNING_REASON : "";
+  }
+
   return {
     canManage,
     remoteReason,
@@ -104,5 +116,6 @@ export function useModelFolderGates() {
     canForget,
     forgetReason,
     relocateReason,
+    folderVerbReason,
   };
 }
