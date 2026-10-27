@@ -41,6 +41,7 @@ Prints the scratch directory. ``--keep`` reuses an existing copy as it is.
 from __future__ import annotations
 
 import argparse
+import ast
 import contextlib
 import glob
 import json
@@ -63,6 +64,7 @@ import pixlstash
 from pixlstash.hub.bootstrap import known_vault_revisions
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.registry import VAULT_FILENAME, LibraryRegistry
+from pixlstash.utils.atomic_write import write_json_atomic
 
 REAL_DIR = user_config_dir("pixlstash-desktop", roaming=True)
 SCRATCH_DIR = user_config_dir("pixlstash-desktop-dev-scratch", roaming=True)
@@ -79,9 +81,6 @@ _IN_PLACE_CACHE_DIR = "tmp"  # set and face thumbnails
 _IN_PLACE_TWINS = ("_watermarked", "_oriented")  # routes/pictures/_serving.py
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MIGRATIONS_DIR = Path(pixlstash.__file__).resolve().parent / "migrations"
-_DOWN_REVISION = re.compile(
-    r'^down_revision(?:\s*:\s*[^=]+)?\s*=\s*["\']([^"\']+)', re.M
-)
 
 
 def _snapshot_sqlite(source: str, target: str) -> None:
@@ -154,6 +153,8 @@ def _migration_from_any_branch(revision: str) -> str:
             "log",
             "--branches",
             "--remotes=origin",
+            # Only commits after which the file exists: never one deleting it.
+            "--diff-filter=AM",
             "-1",
             "--format=%H",
             "--",
@@ -174,6 +175,27 @@ def _migration_from_any_branch(revision: str) -> str:
         text=True,
         check=True,
     ).stdout
+
+
+def _down_revisions(source: str) -> list[str]:
+    """Return the parents a migration's source names in ``down_revision``.
+
+    Parsed rather than matched, for the tuple a merge migration uses and the
+    parenthesised string some here wrap over two lines.
+    """
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets = [node.target]
+        else:
+            continue
+        if any(isinstance(t, ast.Name) and t.id == "down_revision" for t in targets):
+            value = ast.literal_eval(node.value)
+            if value is None:
+                return []
+            return [value] if isinstance(value, str) else list(value)
+    return []
 
 
 def _downgrade_to_this_checkout(vault_path: str) -> None:
@@ -207,13 +229,13 @@ def _downgrade_to_this_checkout(vault_path: str) -> None:
             (migrations / "versions" / f"{revision}.py").write_text(
                 source, encoding="utf-8"
             )
-            parent = _DOWN_REVISION.search(source)
-            if (
-                parent
-                and parent.group(1) not in known
-                and not (migrations / "versions" / f"{parent.group(1)}.py").exists()
-            ):
-                pending.append(parent.group(1))
+            for parent in _down_revisions(source):
+                if (
+                    parent not in known
+                    and parent not in pending
+                    and not (migrations / "versions" / f"{parent}.py").exists()
+                ):
+                    pending.append(parent)
         config = Config()
         config.set_main_option("script_location", str(migrations))
         engine = create_engine(f"sqlite:///{vault_path}", poolclass=pool.NullPool)
@@ -299,10 +321,9 @@ def refresh(real_dir: str, scratch_dir: str) -> None:
             # Recorded before it exists, so a refresh that fails half-way is
             # still cleaned up by the next one.
             moved[real] = copy
-            with open(
-                os.path.join(scratch_dir, COPIES_FILE), "w", encoding="utf-8"
-            ) as handle:
-                json.dump(sorted(moved.values()), handle)
+            write_json_atomic(
+                os.path.join(scratch_dir, COPIES_FILE), sorted(moved.values())
+            )
             if os.path.isdir(copy):
                 shutil.rmtree(copy)
             try:
@@ -337,8 +358,7 @@ def refresh(real_dir: str, scratch_dir: str) -> None:
             real_dir
         ):
             config["log_file"] = os.path.join(scratch_dir, os.path.basename(log_file))
-        with open(config_path, "w", encoding="utf-8") as handle:
-            json.dump(config, handle, indent=2)
+        write_json_atomic(config_path, config)
 
 
 def main() -> None:

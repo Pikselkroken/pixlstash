@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 import sqlite3
+import subprocess
 
 import pytest
 
@@ -194,3 +195,44 @@ def test_refresh_refuses_while_a_dev_run_holds_the_copy(tmp_path):
     with pytest.raises(SystemExit, match="another dev run"):
         scratch_mod.refresh(str(real_dir), str(scratch_dir))
     assert (scratch_dir / "SingletonLock").is_symlink()
+
+
+def test_down_revisions_reads_every_form_a_migration_uses():
+    scratch_mod = _load_module()
+    plain = 'down_revision = "0135_a"\n'
+    typed = 'from typing import Union\ndown_revision: Union[str, None] = (\n    "0072_b"\n)\n'
+    merge = 'down_revision = ("0135_a", "0136_c")\n'
+    first = "down_revision = None\n"
+
+    assert scratch_mod._down_revisions(plain) == ["0135_a"]
+    assert scratch_mod._down_revisions(typed) == ["0072_b"]
+    assert scratch_mod._down_revisions(merge) == ["0135_a", "0136_c"]
+    assert scratch_mod._down_revisions(first) == []
+
+
+def test_migration_source_skips_a_later_commit_that_deleted_it(tmp_path):
+    scratch_mod = _load_module()
+    repo = tmp_path / "repo"
+    versions = repo / "pixlstash" / "migrations" / "versions"
+    versions.mkdir(parents=True)
+
+    def git(*args):
+        subprocess.run(
+            ["git", "-c", "user.name=example", "-c", "user.email=me@example.com"]
+            + list(args),
+            cwd=repo,
+            check=True,
+            capture_output=True,
+        )
+
+    git("init", "-q")
+    (versions / "9999_newer.py").write_text('down_revision = "0135_a"\n')
+    git("add", ".")
+    git("commit", "-q", "-m", "add")
+    git("rm", "-q", str(versions / "9999_newer.py"))
+    git("commit", "-q", "-m", "squashed away")
+    scratch_mod.REPO_ROOT = repo
+
+    assert scratch_mod._migration_from_any_branch("9999_newer") == (
+        'down_revision = "0135_a"\n'
+    )
