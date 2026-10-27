@@ -234,8 +234,9 @@ function onTriggerContext(event) {
   outline: none;
 }
 
-/* Any project / Not in a project: a neutral tile, and the name at secondary
-   strength, since neither narrows to something with a colour of its own. */
+/* Any project / Not in a project: a neutral tile, since neither narrows to
+   something with a colour of its own. A project stands out by its tile and
+   tint, not by a dimmer name. */
 .scope-tile {
   display: inline-flex;
   align-items: center;
@@ -261,10 +262,6 @@ function onTriggerContext(event) {
   font-size: var(--text-base);
   font-weight: var(--weight-semibold);
   line-height: 1.2;
-}
-
-.scope-slot:not(.scope-slot--project) .scope-name {
-  opacity: var(--opacity-text-secondary);
 }
 
 .scope-chevron {
