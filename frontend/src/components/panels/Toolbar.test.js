@@ -34,8 +34,9 @@ import { useFilterStore } from "../../stores/useFilterStore";
 import { useSortStore } from "../../stores/useSortStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 
-// Vuetify is not installed in the test app; v-menu is stubbed with the two
-// behaviours the toolbar relies on (activator slot props carry the toggle,
+// Vuetify is not installed in the test app; v-menu is stubbed with the
+// behaviours the toolbar relies on (activator slot props carry the toggle and,
+// as Vuetify 3's VMenu does, the popup ARIA merged with `activatorProps`;
 // default slot renders inline while open).
 const VMenuStub = {
   name: "VMenu",
@@ -43,6 +44,7 @@ const VMenuStub = {
     modelValue: { type: Boolean, default: false },
     location: { type: String, default: "" },
     origin: { type: String, default: "" },
+    activatorProps: { type: Object, default: () => ({}) },
   },
   emits: ["update:modelValue"],
   setup(props, { slots, emit }) {
@@ -57,6 +59,9 @@ const VMenuStub = {
         [
           slots.activator?.({
             props: {
+              "aria-haspopup": "menu",
+              "aria-expanded": String(props.modelValue),
+              ...props.activatorProps,
               onClick: () => emit("update:modelValue", !props.modelValue),
             },
           }),
@@ -121,6 +126,19 @@ describe("Toolbar - the search field", () => {
     expect(wrapper.find(".gb-search-panel .tbm-caret").classes()).toContain(
       "tbm-caret--end",
     );
+  });
+
+  it("announces the popover as a dialog, with its open state", async () => {
+    const wrapper = mountToolbar();
+    const field = wrapper.find("button.tb-search-field");
+    expect(field.attributes("aria-haspopup")).toBe("dialog");
+    expect(field.attributes("aria-expanded")).toBe("false");
+
+    await field.trigger("click");
+    expect(field.attributes("aria-expanded")).toBe("true");
+    const panel = wrapper.find(".gb-search-panel");
+    expect(panel.attributes("role")).toBe("dialog");
+    expect(panel.attributes("aria-label")).toBe("Search");
   });
 
   it("shows a committed query in place of the placeholder", async () => {

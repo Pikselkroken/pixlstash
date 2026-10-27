@@ -680,12 +680,15 @@ onUnmounted(() => {
 // The grid's Esc ladder stands aside while a surface opened from the pill is up,
 // so the Esc that closes it does not also clear the selection under it. The
 // Export panel and the Train LoRA dialog joined the ⋯ menu in this with #2160.
+// Immediate: the pill mounts with the selection, and the Train LoRA dialog can
+// already be up then (the sidebar opens it too).
 watch(
   () =>
     selectionMenuOpen.value ||
     exportStore.exportMenuOpen ||
     trainingStore.trainDialogOpen,
   (open) => emit("selection-menu-open", open),
+  { immediate: true },
 );
 
 const pluginParameters = ref({});

@@ -406,11 +406,14 @@
           origin="top end"
           :offset="8"
           transition="scale-transition"
+          :activator-props="{ 'aria-haspopup': 'dialog' }"
         >
           <template #activator="{ props: menuProps }">
             <!-- Drawn as a field, opened as the popover the icon used to
                  open: the token field, its history and F all stay as they
-                 were. A committed query shows in place of the placeholder. -->
+                 were. A committed query shows in place of the placeholder.
+                 The popover holds a field, not menu items, so it is announced
+                 as a dialog; v-menu supplies aria-expanded. -->
             <button
               v-bind="menuProps"
               type="button"
@@ -432,7 +435,7 @@
               <kbd class="fm-kbd tb-search-field-kbd" aria-hidden="true">F</kbd>
             </button>
           </template>
-          <div class="tbm gb-search-panel">
+          <div class="tbm gb-search-panel" role="dialog" aria-label="Search">
             <span class="tbm-caret tbm-caret--end"></span>
             <div class="tbm-header">
               <v-icon size="18" class="tbm-header-icon">mdi-magnify</v-icon>

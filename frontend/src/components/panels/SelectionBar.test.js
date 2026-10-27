@@ -209,4 +209,11 @@ describe("SelectionBar - the verbs on the selection (#2160)", () => {
     await wrapper.vm.$nextTick();
     expect(wrapper.emitted("selection-menu-open")?.at(-1)).toEqual([true]);
   });
+
+  it("reports a Train LoRA dialog already open when it mounts", () => {
+    // The sidebar opens the dialog too, so the pill can arrive under it.
+    useTrainingStore().trainDialogOpen = true;
+    wrapper = mountBar();
+    expect(wrapper.emitted("selection-menu-open")).toEqual([[true]]);
+  });
 });
