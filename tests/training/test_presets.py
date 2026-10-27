@@ -54,6 +54,11 @@ def test_chroma_has_no_profile_below_8_bit():
     assert raised.value.budget == "vram"
     assert raised.value.need_mb == chroma["hardware_profiles"]["q8"]["vram_mb"]
     assert _resolve(chroma, fit="save_memory")["profile"] == "q8"
+    # Pinning an offload on is refused, not reported as applied and ignored.
+    for pin in ({"model.layer_offloading": True}, {"model.low_vram": True}):
+        with pytest.raises(presets.NoProfileFits) as raised:
+            _resolve(chroma, pins=pin)
+        assert raised.value.budget == "profile"
 
 
 def test_table_keys_are_tunable_and_locked_keys_are_not():

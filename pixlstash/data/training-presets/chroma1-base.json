@@ -84,6 +84,8 @@
       "settings": {
         "model.quantize": true,
         "model.quantize_te": true,
+        "model.low_vram": false,
+        "model.layer_offloading": false,
         "train.cache_text_embeddings": false,
         "model.qtype": "qfloat8",
         "model.qtype_te": "qfloat8"
@@ -100,6 +102,8 @@
       "settings": {
         "model.quantize": false,
         "model.quantize_te": false,
+        "model.low_vram": false,
+        "model.layer_offloading": false,
         "train.cache_text_embeddings": false,
         "model.qtype": "qfloat8",
         "model.qtype_te": "qfloat8"
@@ -116,6 +120,8 @@
       "settings": {
         "model.quantize": false,
         "model.quantize_te": false,
+        "model.low_vram": false,
+        "model.layer_offloading": false,
         "train.cache_text_embeddings": true,
         "model.qtype": "qfloat8",
         "model.qtype_te": "qfloat8"
@@ -128,8 +134,8 @@
     "defaults": "ai-toolkit UI defaults for chroma: the UI sets no timestep type, so its general default, sigmoid, applies",
     "preview.base": "lodestones/Chroma1-Base model card: 40 steps at guidance 3.0; previews use 30 steps to keep a preview round short",
     "subject": "heuristic, as for Z-Image Turbo: ai-toolkit's own caption dropout default is 0.0; content_or_style per jobs/process/BaseSDTrainProcess.py",
-    "effort": "heuristic: no source gives Chroma1 LoRA steps or learning rate, so these follow Z-Image Turbo's ranges",
-    "fit": "chroma_model.py has no layer offloading and no low_vram path, so there is no profile that saves memory below q8; caching captions does not lower the peak either, which is set while loading",
+    "effort": "heuristic: no source gives Chroma1 LoRA steps or learning rate, so the step ranges are Z-Image Turbo's and the learning rates Krea 2's (1.5e-4 at most, for a model of this size)",
+    "fit": "chroma_model.py has no layer offloading and no low_vram path, so there is no profile that saves memory below q8, and every profile writes both off so that pinning either one on is refused rather than ignored; caching captions does not lower the peak either, which is set while loading",
     "hardware_profiles": "derived from chroma_model.py's load order and the weights, never run here: an 8.9B transformer (17.8 GB bf16, 8.9 GB qfloat8), the 4.7B T5-XXL encoder (9.5 GB bf16, 4.75 GB qfloat8), a 0.16 GB VAE, about 0.4 GB of LoRA, gradients and 8-bit Adam at rank 32 and about 2.6 GB of activations at 1024; each vram_mb calibrated like every untested seed here: the derived peak plus 0.6 GB of CUDA context, x1.08 (what Krea 2's derivation missed against its measurement) and x1.1 (the margin a measured peak is admitted with)",
     "hardware_profiles.q8.vram_mb": "derived: chroma_model.py moves the bf16 transformer onto the GPU to quantise it and then loads the bf16 T5 there beside it, so loading peaks near 19 GB before calibration, above training's 16.8 GB",
     "hardware_profiles.bf16.vram_mb": "derived: the bf16 transformer and T5 resident, plus VAE, LoRA state and activations, 31.1 GB before calibration",

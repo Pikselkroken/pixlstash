@@ -51,6 +51,8 @@ CREATE TABLE IF NOT EXISTS Job (
   sample_now      INTEGER NOT NULL DEFAULT 0
 );
 """
+# Flags added since a job.db could have been created, for a table that exists.
+_LATER_JOB_FLAGS = ("sample_now",)
 
 # The trainer's CUDA allocator setting, unless the owner set their own.
 _ALLOC_CONF = "expandable_segments:True"
@@ -779,6 +781,14 @@ class LocalAiToolkit(TrainerBackend):
         conn = sqlite3.connect(sqlite_db_path, timeout=30.0)
         try:
             conn.execute(_JOB_TABLE_SQL)
+            # A pass re-prepares in the same work dir, so a job.db made by an
+            # older PixlStash lacks what the trainer now polls every step.
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(Job)")}
+            for flag in _LATER_JOB_FLAGS:
+                if flag not in columns:
+                    conn.execute(
+                        f"ALTER TABLE Job ADD COLUMN {flag} INTEGER NOT NULL DEFAULT 0"
+                    )
             conn.execute(
                 "INSERT OR REPLACE INTO Job (id, status) VALUES (?, 'queued')",
                 (job_id,),

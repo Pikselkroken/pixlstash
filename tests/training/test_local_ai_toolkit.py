@@ -140,6 +140,37 @@ def test_prepare_creates_db_row_and_config(tmp_path):
     assert flags == [(0, 0, 0, 0)]
 
 
+def test_prepare_adds_sample_now_to_a_job_db_made_before_it(tmp_path):
+    """A pass re-prepares in the same work dir: an older Job table gains the
+    column the trainer polls, and keeps its row."""
+    backend = _make_backend()
+    spec = _make_spec(tmp_path)
+    db_path = backend.handle_for(
+        spec.work_dir, spec.job_id, spec.job_name
+    ).sqlite_db_path
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE Job (id TEXT NOT NULL PRIMARY KEY, status TEXT NOT NULL "
+        "DEFAULT 'stopped', info TEXT NOT NULL DEFAULT '', step INTEGER NOT NULL "
+        "DEFAULT 0, speed_string TEXT NOT NULL DEFAULT '', stop INTEGER NOT NULL "
+        "DEFAULT 0, return_to_queue INTEGER NOT NULL DEFAULT 0, save_now INTEGER "
+        "NOT NULL DEFAULT 0)"
+    )
+    conn.execute("INSERT INTO Job (id, step) VALUES (?, 250)", (spec.job_id,))
+    conn.commit()
+    conn.close()
+
+    handle = backend.prepare(spec)
+
+    conn = sqlite3.connect(handle.sqlite_db_path)
+    try:
+        rows = conn.execute("SELECT status, step, sample_now FROM Job").fetchall()
+    finally:
+        conn.close()
+    assert rows == [("queued", 0, 0)]
+
+
 def test_config_written_ascii_only(tmp_path):
     """A non-ASCII trigger word is escaped to \\uXXXX in the written config."""
     backend = _make_backend()
