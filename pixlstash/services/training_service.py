@@ -1446,7 +1446,13 @@ class TrainingService:
         checkpoints = [*progress.checkpoints, progress.final_checkpoint]
         drawn: set[int] = set()
         for path in checkpoints:
-            match = _CHECKPOINT_STEP_RE.search(os.path.basename(path))
+            # The final is ``<job_name>.safetensors``, with no step to read: a
+            # job name ending in digits would otherwise read as one.
+            match = (
+                None
+                if path == progress.final_checkpoint
+                else _CHECKPOINT_STEP_RE.search(os.path.basename(path))
+            )
             step = int(match.group(1)) if match else int(progress.step)
             if step in drawn:
                 continue  # the final can share its step with the last save
