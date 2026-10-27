@@ -164,7 +164,7 @@
         <AppBarButton
           shape="round"
           icon="dots-horizontal"
-          v-bind="menuProps"
+          v-bind="withRef(menuProps, (el) => (moreTrigger = el))"
           data-verb="more"
           aria-label="More actions"
           aria-haspopup="menu"
@@ -256,6 +256,7 @@ import {
   trashName,
 } from "../../utils/modelShelf";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
+import { withRef } from "../../utils/withRef.js";
 import { hideSetsVerb } from "../../utils/workflowSets";
 
 const props = defineProps({
@@ -308,6 +309,9 @@ const selectAllHint = formatKeyHint(selectAllKeyHint());
 const countMenuOpen = ref(false);
 const assignMenuOpen = ref(false);
 const moreMenuOpen = ref(false);
+// The ⋯ button, so a verb picked from its menu hands focus back to it: the
+// rows leave with the menu. Not reactive: only `onVerb` reads it.
+let moreTrigger = null;
 const contextOpen = ref(false);
 /** The set-grid card the context menu was opened on, by group key, or "". */
 const contextSetKey = ref("");
@@ -1025,8 +1029,10 @@ const verbHandlers = computed(() => ({
     // Read before the menu closes: it is the open menu's card.
     const cloned = clonableSet.value;
     const targets = favouriteTargets.value;
+    const fromMore = moreMenuOpen.value;
     contextOpen.value = false;
     moreMenuOpen.value = false;
+    if (fromMore) moreTrigger?.focus?.();
     if (verb === "copy-filenames")
       copyLines(
         store.selectedRows.map((row) => row.filename).filter(Boolean),

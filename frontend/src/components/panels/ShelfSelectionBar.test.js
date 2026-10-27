@@ -149,6 +149,28 @@ describe("the selection bar", () => {
     expect(verb(wrapper, "rename").attributes("disabled")).toBeDefined();
   });
 
+  it("hands focus back to ⋯ when a verb is picked from its menu", async () => {
+    selectRows([row(1, "present")]);
+    // A menu that opens on its activator's click, as the real one does.
+    const opening = {
+      props: ["modelValue"],
+      emits: ["update:modelValue"],
+      template:
+        '<div class="v-menu-stub"><span @click="$emit(\'update:modelValue\', true)"><slot name="activator" :props="{}" /></span><slot /></div>',
+    };
+    const wrapper = mount(ShelfSelectionBar, {
+      attachTo: document.body,
+      global: { stubs: { ...globalOpts.global.stubs, "v-menu": opening } },
+    });
+    await wrapper.find('.selbar [data-verb="more"]').trigger("click");
+    document.activeElement?.blur?.();
+    await wrapper.find('.selbar .ctx-menu [data-verb="copy-filenames"]').trigger("click");
+    expect(document.activeElement).toBe(
+      wrapper.find('.selbar [data-verb="more"]').element,
+    );
+    wrapper.unmount();
+  });
+
   it("refuses Forget while a copy is still on disk", async () => {
     selectRows([row(1, "present")]);
     const wrapper = mount(ShelfSelectionBar, globalOpts);

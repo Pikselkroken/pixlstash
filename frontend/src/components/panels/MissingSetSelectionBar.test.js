@@ -79,6 +79,28 @@ describe("MissingSetSelectionBar", () => {
     expect(wrapper.emitted("replace")).toHaveLength(1);
   });
 
+  it("hands focus back to ⋯ when a verb is picked from its menu", async () => {
+    selectMissing(["gone.sft"]);
+    // A menu that opens on its activator's click, as the real one does.
+    const opening = {
+      props: ["modelValue"],
+      emits: ["update:modelValue"],
+      template:
+        '<div><span @click="$emit(\'update:modelValue\', true)"><slot name="activator" :props="{}" /></span><slot /></div>',
+    };
+    const wrapper = mount(MissingSetSelectionBar, {
+      attachTo: document.body,
+      global: { stubs: { ...globalOpts.global.stubs, "v-menu": opening } },
+    });
+    await wrapper.find('.selbar [data-verb="more"]').trigger("click");
+    document.activeElement?.blur?.();
+    await wrapper.find('.selbar .ctx-menu [data-verb="copy-filenames"]').trigger("click");
+    expect(document.activeElement).toBe(
+      wrapper.find('.selbar [data-verb="more"]').element,
+    );
+    wrapper.unmount();
+  });
+
   it("puts ⋯ on the pill when the card has more than Replace and Hide", () => {
     selectMissing(["gone.sft"]);
     const wrapper = mount(MissingSetSelectionBar, globalOpts);

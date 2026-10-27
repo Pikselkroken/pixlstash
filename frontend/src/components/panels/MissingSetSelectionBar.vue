@@ -35,7 +35,7 @@
         <AppBarButton
           shape="round"
           icon="dots-horizontal"
-          v-bind="menuProps"
+          v-bind="withRef(menuProps, (el) => (moreTrigger = el))"
           data-verb="more"
           aria-label="More actions"
           aria-haspopup="menu"
@@ -148,6 +148,7 @@ import { useContextMenuAt } from "../../composables/useContextMenuAt";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
+import { withRef } from "../../utils/withRef.js";
 import { hideSetsVerb } from "../../utils/workflowSets";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
@@ -213,6 +214,9 @@ const menu = computed(() =>
 
 const { contextOpen, contextAt, openContextMenu } = useContextMenuAt();
 const moreOpen = ref(false);
+// The ⋯ button, so a verb picked from its menu hands focus back to it: the
+// rows leave with the menu. Not reactive: only `verb` reads it.
+let moreTrigger = null;
 
 /** The card's menu without Replace and its separator: what `⋯` holds. */
 const moreRows = computed(() => MENU.slice(2));
@@ -224,8 +228,10 @@ const countLabel = computed(() => {
 });
 
 function verb(name) {
+  const fromMore = moreOpen.value;
   contextOpen.value = false;
   moreOpen.value = false;
+  if (fromMore) moreTrigger?.focus?.();
   if (name === "copy-filenames") copyFilenames();
   else emit(name);
 }
