@@ -86,7 +86,13 @@ MIGRATIONS_DIR = Path(pixlstash.__file__).resolve().parent / "migrations"
 def _snapshot_sqlite(source: str, target: str) -> None:
     """Copy a live SQLite database consistently, without writing to *source*."""
     with (
-        contextlib.closing(sqlite3.connect(f"file:{source}?mode=ro", uri=True)) as src,
+        contextlib.closing(
+            sqlite3.connect(
+                # as_uri percent-encodes a "?" or "#" in a folder name.
+                f"{Path(source).absolute().as_uri()}?mode=ro",
+                uri=True,
+            )
+        ) as src,
         contextlib.closing(sqlite3.connect(target)) as dst,
     ):
         src.backup(dst)

@@ -236,3 +236,18 @@ def test_migration_source_skips_a_later_commit_that_deleted_it(tmp_path):
     assert scratch_mod._migration_from_any_branch("9999_newer") == (
         'down_revision = "0135_a"\n'
     )
+
+
+def test_snapshot_reads_a_path_with_uri_characters(tmp_path):
+    scratch_mod = _load_module()
+    folder = tmp_path / "pictures #1?"
+    folder.mkdir()
+    with contextlib.closing(sqlite3.connect(folder / "vault.db")) as conn:
+        conn.execute("CREATE TABLE t (x INTEGER)")
+        conn.execute("INSERT INTO t VALUES (7)")
+        conn.commit()
+
+    scratch_mod._snapshot_sqlite(str(folder / "vault.db"), str(tmp_path / "copy.db"))
+
+    with contextlib.closing(sqlite3.connect(tmp_path / "copy.db")) as conn:
+        assert conn.execute("SELECT x FROM t").fetchall() == [(7,)]
