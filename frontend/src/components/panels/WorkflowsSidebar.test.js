@@ -246,8 +246,14 @@ describe("the Templates row", () => {
     expect(templatesRow(wrapper).find(".wfs-new").exists()).toBe(false);
   });
 
-  it("reads the list once when the rail mounts", async () => {
-    await mountSidebar();
+  it("reads the list once when the rail mounts, and not again on a later visit", async () => {
+    const { wrapper } = await mountSidebar();
+    expect(listTemplates).toHaveBeenCalledTimes(1);
+    // App.vue mounts the rail with v-if, so each visit to /workflows is a new mount.
+    const pinia = wrapper.vm.$pinia;
+    wrapper.unmount();
+    mount(WorkflowsSidebar, { global: { plugins: [pinia], stubs: { "v-icon": true } } });
+    await flushPromises();
     expect(listTemplates).toHaveBeenCalledTimes(1);
   });
 });
@@ -286,6 +292,32 @@ describe("the N new pill", () => {
     const { wrapper, templates } = await mountSidebar();
     expect(localStorage.getItem(LABEL_KEY)).toBeNull();
     // ComfyUI comes up: this is the first real sight, so nothing is "new".
+    listTemplates.mockResolvedValue(listing(["a", "b", "c"]));
+    await templates.fetchTemplates({ refresh: true });
+    await flushPromises();
+    expect(templatesRow(wrapper).find(".wfs-new").exists()).toBe(false);
+  });
+
+  // Nor does the Templates place being open over that empty read: whether it
+  // was opened onto it, or was open while ComfyUI was asked again.
+  it.each([
+    ["opened onto it", async () => {}],
+    [
+      "open while it is read again",
+      async (templates) => {
+        await templates.fetchTemplates({ refresh: true });
+        await flushPromises();
+      },
+    ],
+  ])("does not take an offline read with Templates %s as having seen the catalogue", async (_, whileOpen) => {
+    listTemplates.mockResolvedValue({ templates: [], reachable: false });
+    const { wrapper, templates } = await mountSidebar();
+    await templatesRow(wrapper).trigger("click");
+    expect(templates.shown).toBe(true);
+    await whileOpen(templates);
+    await row(wrapper, "All workflows").trigger("click");
+    expect(localStorage.getItem(LABEL_KEY)).toBeNull();
+
     listTemplates.mockResolvedValue(listing(["a", "b", "c"]));
     await templates.fetchTemplates({ refresh: true });
     await flushPromises();

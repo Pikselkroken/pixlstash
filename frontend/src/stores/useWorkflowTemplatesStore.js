@@ -305,8 +305,14 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
   const seenKeys = ref(new Set(storedSeen ?? []));
   const seenInitialised = ref(storedSeen !== null);
 
-  /** Mark *keys* seen, here and in what the browser remembers. */
+  /**
+   * Mark *keys* seen, here and in what the browser remembers. An empty list
+   * (ComfyUI down, or none served) is not a sight of the catalogue: taking it
+   * as one would store `[]`, and the whole catalogue would read as new once
+   * ComfyUI answers, in this session and every later one.
+   */
   function markSeen(keys) {
+    if (!keys.length) return;
     seenInitialised.value = true;
     for (const key of keys) seenKeys.value.add(key);
     writeSeen([...seenKeys.value]);
@@ -352,9 +358,9 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
         detail.value = body?.detail ?? "";
         loaded.value = true;
         // Seen while the place is on screen, or never seen at all yet. A
-        // first read that found nothing (ComfyUI down, or none served) does
-        // not count as having seen the catalogue, or the whole of it would
-        // read as new once ComfyUI answers.
+        // read that found nothing (ComfyUI down, or none served) does not
+        // count as having seen the catalogue, or the whole of it would read
+        // as new once ComfyUI answers; `markSeen` ignores an empty list.
         const firstSight =
           !seenInitialised.value && reachable.value && templates.value.length;
         if (firstSight || shown.value) {
