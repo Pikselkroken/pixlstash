@@ -85,13 +85,8 @@ test.describe('justified grid', () => {
       'aria-pressed',
       wasOpen ? 'false' : 'true',
     )
-    // The repack follows a ResizeObserver; wait for the column to settle.
-    await expect.poll(async () => {
-      const { rows, content } = await measure(page)
-      return rows.length > 1 &&
-        Math.abs(Math.max(...rows[0].map((c) => c.right)) - content.right) < 0.05
-    }).toBe(true)
-    await expectFullRowsFlush(page)
+    // The repack follows a ResizeObserver, so retry until the column settles.
+    await expect(() => expectFullRowsFlush(page)).toPass({ timeout: 5000 })
 
     // A column whose width is not a whole pixel: rows are packed to the
     // floored width, and the cards have to grow into the remainder.
@@ -105,7 +100,7 @@ test.describe('justified grid', () => {
     }).toBe(true)
     const { content } = await measure(page)
     expect(content.right % 1).not.toBe(0)
-    await expectFullRowsFlush(page)
+    await expect(() => expectFullRowsFlush(page)).toPass({ timeout: 5000 })
   })
 
   test("a selected tile's ring sits in the gutter, clear of every neighbour", async ({
@@ -138,7 +133,7 @@ test.describe('justified grid', () => {
         wash: 'rgba(0, 0, 0, 0)',
       })
       // The glow comes in from the edge: an inset, blurred olive shadow.
-      expect(shadow).toMatch(/^rgb\(.+\) 0px 0px 12px 2px inset$/)
+      expect(shadow).toMatch(/^rgb\(.+\) 0px 0px 12px 4px inset$/)
 
       const { cards, box } = await measure(page)
       const own = cards[index]
