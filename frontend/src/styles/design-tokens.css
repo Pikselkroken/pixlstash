@@ -60,8 +60,8 @@
   /* ---------------------------------------------------------------------------
      TREE - the sidebar's child sets (#2124). A guide line drops from a parent's
      mark and elbows into each child; an expanded parent and its children sit on
-     one faintly raised group. Rows inside a group are separated from their
-     parent by the theme `divider`, which is not a new value. See
+     one faintly raised group, with no rule between the parent and its
+     children (one cut the parent's first line). See
      visual-language.md §5.1, "Child rows".
      --------------------------------------------------------------------------- */
   --tree-guide: rgba(var(--v-theme-on-surface), 0.3);  /* decorative: the indent

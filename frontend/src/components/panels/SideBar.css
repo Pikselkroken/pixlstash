@@ -253,10 +253,6 @@
   overflow: hidden;
 }
 
-.sidebar-tree-group > .sidebar-list-item:first-child {
-  border-bottom: 1px solid rgb(var(--v-theme-divider));
-}
-
 .sidebar-section-add {
   display: inline-flex;
   align-items: center;
