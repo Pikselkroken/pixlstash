@@ -327,7 +327,8 @@ def test_a_run_without_a_memory_profile_errors_instead_of_training(hub, repo_dir
 
 
 def test_only_a_clip_recipe_builds_its_dataset_with_the_clips(hub, repo_dir):
-    """The run's recipe decides whether the set's video clips are exported."""
+    """The job's locked config decides whether the set's video clips are
+    exported, so a recipe gone since it was queued changes nothing."""
     asked = []
     empty = _make_dataset_builder(image_count=0)
 
@@ -342,19 +343,25 @@ def test_only_a_clip_recipe_builds_its_dataset_with_the_clips(hub, repo_dir):
     template = _write_template(repo_dir, steps=4, save_every=2)
     service.start()
     try:
-        for preset in ("minimax-h3-motion@1", "minimax-h3-image@1"):
+        # The third was queued under a recipe this PixlStash no longer ships.
+        for preset_id, recorded in (
+            ("minimax-h3-motion", "minimax-h3-motion@1"),
+            ("minimax-h3-image", "minimax-h3-image@1"),
+            ("minimax-h3-motion", "a-retired-recipe@1"),
+        ):
             job = service.enqueue(
                 set_id=_SET_ID,
-                name=preset,
+                name=recorded,
                 base_model="m",
                 trigger_word="t",
                 template_path=template,
-                resolution={**_RESOLUTION, "preset": preset},
+                locked=presets.to_patch(presets.get_preset(preset_id)["locked"]),
+                resolution={**_RESOLUTION, "preset": recorded},
             )
             assert _poll_until(lambda: _job_status(hub, job["uuid"]).status == "error")
     finally:
         service.stop()
-    assert asked == [True, False]
+    assert asked == [True, False, True]
 
 
 def test_enqueue_needs_a_scope(hub, repo_dir):

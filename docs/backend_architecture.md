@@ -11600,8 +11600,10 @@ selection the dataset builder writes).
 the run's recipe trains on them: `presets.trains_clips` is true when its locked
 dataset keys make ai-toolkit read the dataset as video (`num_frames` above 1 or
 `auto_frame_count`), and ai-toolkit then reads clips and stills alike. The
-count at enqueue, the builder (`TrainingService._build_dataset`, from the run's
-recorded recipe) and `GET /training/presets` (`clips`) all ask it. A clip is
+count at enqueue and `GET /training/presets` (`clips`) ask it; the builder
+(`TrainingService._build_dataset`) asks the same of the job's own locked config
+(`presets.reads_video`), so a recipe gone since the job was queued changes
+nothing. A clip is
 copied as it is, captioned like a still; ai-toolkit cuts its frames. The only
 clip recipe is MiniMax H3's motion mode, which locks 24 fps and
 `auto_frame_count`, so each clip trains at its real length snapped down to the
