@@ -1166,6 +1166,25 @@ describe("WorkflowRecipesTab", () => {
     expect(menuRow(wrapper, "Delete")).toBeDefined();
   });
 
+  it("renames an unfiled recipe in place, as a filed one", async () => {
+    listUnfiledRecipes.mockResolvedValue([recipe(9, "Orphan", { workflow_id: null })]);
+    editSavedRecipe.mockResolvedValue({ id: 9, name: "Orphan, named" });
+    const wrapper = render({ unfiled: true, workflowIds: [], workflowName: "Unfiled recipes" });
+    await flushPromises();
+    await menuRow(wrapper, "Rename").trigger("click");
+    await flushPromises();
+    const input = wrapper.find(".wfrt-card input");
+    expect(input.exists()).toBe(true);
+    // The ⋯ menu makes way for the field, as on a filed recipe.
+    expect(wrapper.find(".wfrt-card .ctx-menu").exists()).toBe(false);
+    await input.setValue("Orphan, named");
+    await input.trigger("keydown", { key: "Enter" });
+    await flushPromises();
+
+    expect(editSavedRecipe).toHaveBeenCalledWith(9, { name: "Orphan, named" });
+    expect(namesOf(wrapper)).toEqual(["Orphan, named"]);
+  });
+
   it("refuses Extract, with its reason, on a recipe whose workflow was deleted", async () => {
     listUnfiledRecipes.mockResolvedValue([
       recipe(9, "Stranded", { workflow_id: "manual:gone", extractable: false }),

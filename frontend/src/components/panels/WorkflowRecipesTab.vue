@@ -45,8 +45,21 @@
             </button>
             <div class="wfrt-main">
               <div class="wfrt-top">
-                <span class="wfrt-name">{{ recipe.name || "Untitled" }}</span>
+                <!-- Rename as on a filed recipe: the field in place of the
+                     name, and the ⋯ menu out of its way. -->
+                <AppInput
+                  v-if="renamingId === recipe.id"
+                  v-model="renameDraft"
+                  aria-label="Name for this recipe"
+                  autofocus
+                  autoselect
+                  @enter="commitRename(recipe)"
+                  @blur="commitRename(recipe)"
+                  @keydown.esc.stop.prevent="cancelRename"
+                />
+                <span v-else class="wfrt-name">{{ recipe.name || "Untitled" }}</span>
                 <v-menu
+                  v-if="renamingId !== recipe.id"
                   :model-value="menuId === recipe.id"
                   location="bottom end"
                   origin="top end"
