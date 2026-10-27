@@ -37,6 +37,8 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
   // The pictures `fetchedTagData` was read for. Rows of another selection
   // are not this one's tags, so until they are replaced they read as loading.
   const tagDataReadFor = ref("");
+  // A failed read is not "no tags": it says so instead of showing an empty list.
+  const tagReadFailed = ref(false);
   const tagDataCapped = ref(false);
   const fetchedPredictionData = ref([]);
   const predictionLoading = ref(false);
@@ -66,6 +68,7 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
     tagDataCapped.value = ids.length > MAX_TAG_FETCH;
     const toFetch = ids.slice(0, MAX_TAG_FETCH);
     const readFor = toFetch.join(",");
+    tagReadFailed.value = false;
     if (!toFetch.length) {
       tagRead += 1;
       fetchedTagData.value = [];
@@ -84,7 +87,10 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
       fetchedTagData.value = Array.isArray(rows) ? rows : [];
     } catch (e) {
       console.warn("Couldn't read the selected pictures' tags", e);
-      if (mine === tagRead) fetchedTagData.value = [];
+      if (mine === tagRead) {
+        fetchedTagData.value = [];
+        tagReadFailed.value = true;
+      }
     } finally {
       if (mine === tagRead) {
         tagDataReadFor.value = readFor;
@@ -253,19 +259,20 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
    * picture skipped the notice and the re-read for the others that did
    * change, leaving the panel showing tags that were no longer true.
    *
-   * @param {Array<number>} ids
-   * @param {(id: number) => Promise} call
-   * @returns {Promise<Array<number>>} the ids whose request succeeded;
+   * @param {Array} ids - one per request: picture ids, or `[id, tag]` pairs.
+   * @param {(id: *) => Promise} call
+   * @param {string} [what] - what a failed request failed to do, for `tagError`.
+   * @returns {Promise<Array>} the entries whose request succeeded;
    *   `tagError` says how many did not, and why.
    */
-  async function fanOut(ids, call) {
+  async function fanOut(ids, call, what = "pictures were not changed") {
     const results = await Promise.allSettled(ids.map((id) => call(id)));
     const done = ids.filter((_, i) => results[i].status === "fulfilled");
     const failed = results.filter((r) => r.status === "rejected");
     if (failed.length) {
       const reason = failed[0].reason;
       console.warn(`${failed.length} of ${ids.length} tag changes failed`, reason);
-      tagError.value = `${failed.length} of ${ids.length} pictures were not changed: ${
+      tagError.value = `${failed.length} of ${ids.length} ${what}: ${
         errorDetail(reason) || reason?.message || String(reason)
       }`;
     }
@@ -426,14 +433,20 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
     tagError.value = "";
     const batchId = newOperationBatchId();
     try {
-      const done = await fanOut(ids, (id) =>
-        Promise.all(tags.map((tag) => addPictureTag(id, tag, { batchId }))),
+      // One request per picture and tag: a picture that took one tag of
+      // several still changed, and is reported as changed.
+      const pairs = ids.flatMap((id) => tags.map((tag) => [id, tag]));
+      const done = await fanOut(
+        pairs,
+        ([id, tag]) => addPictureTag(id, tag, { batchId }),
+        "tags were not added",
       );
-      if (done.length) {
-        onApplied({ tag: key, pictureIds: done, action: "add" });
+      const doneIds = [...new Set(done.map(([id]) => id))];
+      if (doneIds.length) {
+        onApplied({ tag: key, pictureIds: doneIds, action: "add" });
       }
       await refreshSelectionTags();
-      return done.length === ids.length;
+      return done.length === pairs.length;
     } finally {
       tagActionLoading.value = tagActionLoading.value.filter((n) => n !== key);
     }
@@ -442,6 +455,7 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
   return {
     fetchedTagData,
     tagDataLoading,
+    tagReadFailed,
     tagDataCapped,
     fetchedPredictionData,
     predictionLoading,

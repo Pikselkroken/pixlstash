@@ -323,6 +323,28 @@ describe("keys for chips selected in the rail", () => {
   });
 });
 
+describe("several pictures' rating", () => {
+  const rating = (wrapper) =>
+    wrapper
+      .findAll(".rail-pictures__props dt")
+      .find((dt) => dt.text() === "Rating");
+
+  it("is Mixed when the loaded cards differ", async () => {
+    const wrapper = mountRail();
+    await select(wrapper, [7, 9]);
+    expect(rating(wrapper).element.nextElementSibling.textContent).toBe("Mixed");
+  });
+
+  it("is left out, not called Mixed, while some cards are not loaded", async () => {
+    const wrapper = mountRail();
+    useSelectionStore().selectedImageIds = [7, 8, 9];
+    await wrapper.setProps({ pictures: [CARDS[7], CARDS[8]] });
+    await flush();
+    expect(wrapper.find(".rail-pictures__props").exists()).toBe(true);
+    expect(rating(wrapper)).toBeUndefined();
+  });
+});
+
 describe("under the lightbox", () => {
   it("drops its copies of the lightbox's panels until the lightbox closes", async () => {
     const wrapper = mountRail();
@@ -425,6 +447,34 @@ describe("the selection's tag reads", () => {
     expect(bulkFetchTags).toHaveBeenCalled();
     expect(tags.tagError.value).toMatch(/^1 of 2 pictures were not changed/);
     bulkFetchTags.mockReset().mockResolvedValue([]);
+  });
+
+  it("count a picture that took one tag of several as changed", async () => {
+    addPictureTag.mockReset().mockImplementation(async (id, tag) => {
+      if (id === 2 && tag === "sea") throw new Error("refused");
+      return {};
+    });
+    const applied = vi.fn();
+    const tags = useSelectionTags(() => [1, 2, 3], { onApplied: applied });
+    expect(await tags.addTagsToAll(["sun", "sea"])).toBe(false);
+    expect(applied).toHaveBeenCalledWith({
+      tag: "sun, sea",
+      pictureIds: [1, 2, 3],
+      action: "add",
+    });
+    expect(tags.tagError.value).toMatch(/^1 of 6 tags were not added/);
+    addPictureTag.mockReset();
+  });
+
+  it("say a failed read failed, rather than show no tags", async () => {
+    bulkFetchTags.mockRejectedValueOnce(new Error("offline"));
+    const tags = useSelectionTags(() => [1, 2]);
+    await tags.fetchSelectedImageTags();
+    expect(tags.tagDataLoading.value).toBe(false);
+    expect(tags.tagReadFailed.value).toBe(true);
+    bulkFetchTags.mockResolvedValueOnce([{ id: 1, tags: [] }, { id: 2, tags: [] }]);
+    await tags.fetchSelectedImageTags();
+    expect(tags.tagReadFailed.value).toBe(false);
   });
 
   it("add a tag to the rest past the read cap too", async () => {

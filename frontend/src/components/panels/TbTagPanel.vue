@@ -42,6 +42,9 @@
         <div v-if="tagDataLoading" class="tag-data-loading">
           Loading tags...
         </div>
+        <div v-else-if="tagReadFailed" class="tag-data-loading">
+          Couldn't read these pictures' tags.
+        </div>
         <div
           v-else-if="tagsOnAll.length || tagsOnSome.length"
           class="tag-current-section"
@@ -468,6 +471,7 @@ let penalisedTagsFetchedAt = 0;
 const {
   fetchedTagData,
   tagDataLoading,
+  tagReadFailed,
   tagDataCapped,
   fetchedPredictionData,
   predictionAcceptanceThreshold: predictionAcceptanceThresholdSB,

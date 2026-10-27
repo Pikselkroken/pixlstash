@@ -51,6 +51,12 @@
       </SectionHeader>
       <template v-if="!tagsCollapsed">
         <p v-if="tagDataLoading" class="rail-pictures__hint">Reading tags…</p>
+        <p
+          v-else-if="tagReadFailed"
+          class="rail-pictures__hint rail-pictures__error"
+        >
+          Couldn't read these pictures' tags.
+        </p>
         <div v-else class="rail-pictures__zone">
           <span
             v-for="t in tagsOnAll"
@@ -167,8 +173,10 @@
         label="Properties"
       />
       <dl v-if="!propertiesCollapsed" class="rail-pictures__props">
-        <dt>Rating</dt>
-        <dd>{{ ratingText }}</dd>
+        <template v-if="ratingText">
+          <dt>Rating</dt>
+          <dd>{{ ratingText }}</dd>
+        </template>
         <template v-if="totalSize">
           <dt>Total size</dt>
           <dd>{{ totalSize }}</dd>
@@ -226,6 +234,7 @@ const propertiesCollapsed = useSectionCollapse("manyProperties");
 const {
   fetchedPredictionData,
   tagDataLoading,
+  tagReadFailed,
   tagDataCapped,
   tagActionLoading,
   predActionLoading,
@@ -282,10 +291,13 @@ watch(
 );
 onBeforeUnmount(() => clearTimeout(settleTimer));
 
+// "Mixed" only when the loaded cards differ. With some cards not loaded (a
+// select-all past what the grid has read) and the rest agreeing, the rating
+// is unknown, so the row goes rather than guess.
 const ratingText = computed(() => {
-  if (props.cards.length < props.ids.length) return "Mixed";
   const scores = new Set(props.cards.map((c) => Number(c.score) || 0));
-  if (scores.size !== 1) return "Mixed";
+  if (scores.size > 1) return "Mixed";
+  if (!scores.size || props.cards.length < props.ids.length) return "";
   const [score] = scores;
   return score ? `${score} ★` : "Unrated";
 });
