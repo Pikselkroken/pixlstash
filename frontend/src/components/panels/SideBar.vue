@@ -1723,19 +1723,23 @@ watch(
 );
 
 /**
- * Open a parent the moment it gains a child, so a set just made inside a
- * person or set (from the picker or the menu) is on screen, not behind a
- * closed chevron. The first list is the baseline, not news.
+ * Open a parent the moment it gains a set that did not exist before, so a set
+ * just made inside a person or set (from the picker or the menu) is on screen,
+ * not behind a closed chevron. The first list is the baseline, not news.
+ *
+ * "Did not exist" is judged against every set, not the scoped tree: a project
+ * switch brings existing sets into view, and judged against the tree those
+ * read as new and opened every parent.
  */
-let knownChildIds = null;
+let knownSetIds = null;
 watch(setTree, (tree) => {
   const now = new Map();
   for (const [id, kids] of tree.byCharacter) now.set(`c:${id}`, kids);
   for (const [id, kids] of tree.bySet) now.set(`s:${id}`, kids);
-  if (knownChildIds) {
+  if (knownSetIds) {
     const keys = [];
     for (const [key, kids] of now) {
-      if (kids.some((kid) => !knownChildIds.has(Number(kid.id)))) {
+      if (kids.some((kid) => !knownSetIds.has(Number(kid.id)))) {
         keys.push(key);
         if (key.startsWith("s:")) {
           const { setIds, characterId } = ancestorsOf(
@@ -1753,9 +1757,7 @@ watch(setTree, (tree) => {
   // the sets would otherwise move every person's sets under them at once and
   // read as news, opening them all.
   if (entityLists.has("sets") && entityLists.has("characters")) {
-    knownChildIds = new Set(
-      [...now.values()].flat().map((kid) => Number(kid.id)),
-    );
+    knownSetIds = new Set(pictureSets.value.map((s) => Number(s.id)));
   }
 });
 
