@@ -152,6 +152,11 @@ describe("places", () => {
     expect(store.place).toBe("favourites");
     expect(row(wrapper, "Favourites").attributes("aria-current")).toBe("page");
     expect(row(wrapper, "All workflows").attributes("aria-current")).toBeUndefined();
+
+    // The place is the only control for the flag now, so it must also turn it off.
+    await row(wrapper, "All workflows").trigger("click");
+    expect(store.filters.favouritesOnly).toBe(false);
+    expect(row(wrapper, "Favourites").attributes("aria-current")).toBeUndefined();
   });
 
   it("Recently used keeps only cards used in the last RECENT_DAYS", async () => {

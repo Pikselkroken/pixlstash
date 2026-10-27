@@ -2249,6 +2249,17 @@ describe("favourites (#1578)", () => {
     );
   });
 
+  it("R and H typed into Search are text, not Run or Favourite", async () => {
+    const wrapper = await grid();
+    const openRun = vi.spyOn(useRunDialogStore(), "openRun").mockImplementation(() => {});
+    const input = wrapper.find(".wfv-search input");
+    for (const key of ["r", "h"]) await input.trigger("keydown", { key });
+    await flush();
+    expect(openRun).not.toHaveBeenCalled();
+    expect(setFavourites).not.toHaveBeenCalled();
+    expect(useWorkflowsStore().selectedKeys).toEqual([]);
+  });
+
   it("H on a card inside the selection favourites the whole selection", async () => {
     const wrapper = await grid();
     await wrapper.find('[data-key="c"]').trigger("click");
