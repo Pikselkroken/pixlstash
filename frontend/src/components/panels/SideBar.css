@@ -231,18 +231,24 @@
    of the rows outside it. Scoped under the section so it outranks the later
    `.sidebar-character-group` rule. */
 .sidebar-section-scroll .sidebar-tree-group {
-  --tree-group-inset: calc(var(--space-2) + 1px);
+  --tree-group-inset: var(--space-2);
   --row-pad: calc(var(--space-3) - var(--tree-group-inset));
+  /* Restated here, not inherited: a custom property is computed where it is
+     declared, so the section's --tree-row-start was built from the section's
+     own padding and put every stub and caret in a group 5px off its line. */
+  --tree-row-start: calc(var(--row-pad) + var(--indent-step));
   --sidebar-right-edge: calc(var(--space-3) - var(--tree-group-inset));
   /* Not the 100% `.sidebar-character-group` carries: with the margin that
      pushes the counts past the rail's edge. */
   width: auto;
-  /* Opening a parent must not move it: the -1px takes the border back, so the
-     row inside starts where the closed row stood. The room goes below. */
-  margin: -1px var(--space-2) var(--space-2);
+  margin: 0 var(--space-2) var(--space-2);
   padding-bottom: var(--space-2);
   background: var(--group-surface);
-  border: 1px solid var(--group-border);
+  /* An inset outline, not a border: it takes no room, so opening a parent
+     does not move it, and nothing pokes above the section, whose sideways
+     clip would cut the top edge off. */
+  outline: 1px solid var(--group-border);
+  outline-offset: -1px;
   border-radius: var(--radius-md);
   overflow: hidden;
 }

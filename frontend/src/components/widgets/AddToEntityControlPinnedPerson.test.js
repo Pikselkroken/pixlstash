@@ -84,8 +84,14 @@ describe("the pinned person block", () => {
     expect(names(pin)).toEqual(["LoRA v3", "New set in Wren…2 pictures"]);
     expect(wrapper.find(".ate-section-label").text()).toBe("Other sets");
     // The trigger controls both lists, the person's first.
-    const ids = wrapper.findAll('[role="listbox"]').map((lb) => lb.attributes("id"));
-    expect(wrapper.find(".ate-btn").attributes("aria-controls")).toBe(ids.join(" "));
+    const pinnedId = pin.find('[role="listbox"]').attributes("id");
+    const otherId = wrapper
+      .findAll('[role="listbox"]')
+      .find((lb) => !lb.element.closest(".ate-pin"))
+      .attributes("id");
+    expect(wrapper.find(".ate-btn").attributes("aria-controls")).toBe(
+      `${pinnedId} ${otherId}`,
+    );
 
     await wrapper.find(".ate-search input").setValue("zzz");
     expect(names(wrapper.find(".ate-pin"))).toContain("LoRA v3");

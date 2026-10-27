@@ -187,3 +187,9 @@ def test_sets_nest_three_levels_at_most(client):
     assert _row(client, x)["parent_set_id"] is None
     r = client.patch(f"/picture_sets/{x}", json={"parent_character_id": ash})
     assert r.status_code == 200, r.text
+    # A set two deep (P > Q > R) has nowhere to go but the top level.
+    p = _set(client, "P")
+    q = _set(client, "Q", parent_set_id=p)
+    _set(client, "R", parent_set_id=q)
+    r = client.patch(f"/picture_sets/{p}", json={"parent_character_id": ash})
+    assert r.status_code == 400, r.text
