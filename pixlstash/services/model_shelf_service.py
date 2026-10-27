@@ -65,6 +65,8 @@ from pixlstash.services.workflow_hash import (
 from pixlstash.services.workflow_identity import CHECKPOINT_WIDGETS, match_type
 from pixlstash.services.workflow_library_service import (
     cover_order,
+    recipe_filed_pictures,
+    recipe_latest_pictures,
     recipe_picture_counts,
     variant_cover_candidates,
 )
@@ -1477,6 +1479,9 @@ def propose_companions(
 # fetch bitmaps nothing draws.
 SET_COVER_DEPTH = 3
 
+# How many of a combination's newest kept pictures it names (`latest`).
+SET_LATEST_DEPTH = 10
+
 
 def _history_runs(hub) -> dict[str, set[int]]:
     """Return each stored ComfyUI run's model ids, keyed on its ``prompt_id``.
@@ -1676,7 +1681,13 @@ def fetch_workflow_sets(hub, vault) -> dict:
         the shelf does not hold, each ``{"name", "workflow_ids"}``; see
         :func:`_missing_bases`), ``recipes``, ``history_runs``,
         ``picture_count`` and ``covers`` (up to :data:`SET_COVER_DEPTH` cover
-        candidates, best first). A combination with no base model, on the
+        candidates, best first). Three more come off the same kept pictures,
+        so they agree with ``picture_count``: ``workflows`` (each
+        ``{"id", "name", "picture_count"}``, the workflows its pictures were
+        made with, most pictures first; a picture in no workflow counts
+        toward none), ``last_used_at`` (ISO-8601 of the newest, or ``None``)
+        and ``latest`` (up to :data:`SET_LATEST_DEPTH` ``{"picture_id",
+        "at"}``, newest first). A combination with no base model, on the
         shelf or missing, is served but counts for no model's set.
         ``hub_combinations`` is every combination some recipe names,
         before the "a picture here" cut, so it holds every library's recipes
@@ -1690,14 +1701,56 @@ def fetch_workflow_sets(hub, vault) -> dict:
         hub, index[0], recipe_models, ambiguous, namesakes
     )
     runs = _history_runs(hub)
-    pictures = vault.db.run_immediate_read_task(
+    # Local: `hub.workflow_card_reads` imports this module (as in `_missing_bases`).
+    from pixlstash.hub.workflow_card_reads import (
+        card_index,
+        run_filed_workflow_ids,
+        variant_workflows,
+        workflow_index,
+    )
+
+    live = run_filed_workflow_ids(hub)
+    filed, latest_rows, candidates = vault.db.run_immediate_read_task(
         lambda session: (
-            recipe_picture_counts(session),
+            recipe_filed_pictures(session, live),
+            recipe_latest_pictures(session, SET_LATEST_DEPTH),
             variant_cover_candidates(session, SET_COVER_DEPTH),
         )
     )
-    missing_workflows = _fixable_workflows(hub, pictures[0], missing_workflows)
-    counts, candidates = pictures
+    # The recipe's count is the sum of its filed rows: the same predicates as
+    # `recipe_picture_counts`, so the workflows below always add up to it.
+    counts: dict[str, int] = {}
+    for recipe, _key, pictures in filed:
+        counts[recipe] = counts.get(recipe, 0) + pictures
+    missing_workflows = _fixable_workflows(hub, counts, missing_workflows)
+
+    # Which workflow each recipe's pictures were made with, by the same rule as
+    # the recipe route's `workflow_id`: a run of a live run-filed workflow
+    # belongs to that workflow, any other picture to its variant's.
+    variant_of = variant_workflows(hub)
+    live_set = set(live)
+    workflow_pictures: dict[str, dict[str, int]] = {}
+    for recipe, key, pictures in filed:
+        workflow_id = key if key in live_set else variant_of.get(key)
+        if workflow_id is None:
+            continue
+        held = workflow_pictures.setdefault(recipe, {})
+        held[workflow_id] = held.get(workflow_id, 0) + pictures
+    latest_by_recipe: dict[str, list[tuple[int, Optional[datetime]]]] = {}
+    for recipe, picture_id, used_at in latest_rows:
+        latest_by_recipe.setdefault(recipe, []).append((picture_id, used_at))
+    # A workflow's name is the owner's, else its base card's, else its id.
+    cards = card_index(hub)
+    card_by_key = {card.workflow_key: card for card in cards}
+    workflow_names: dict[str, str] = {}
+    for workflow in workflow_index(hub, cards=cards):
+        base = workflow.base_card or (workflow.cards[0] if workflow.cards else None)
+        card = card_by_key.get(base) if base else None
+        workflow_names[workflow.workflow_id] = (
+            workflow.name
+            or (card and (card.name or card.file_name))
+            or workflow.workflow_id
+        )
 
     covers_by_recipe: dict[str, list] = {}
     for candidate in candidates:
@@ -1722,6 +1775,8 @@ def fetch_workflow_sets(hub, vault) -> dict:
             "history_runs": 0,
             "picture_count": 0,
             "covers": [],
+            "workflows": {},
+            "latest": [],
             "unsure": set(),
             "namesakes": set(),
         }
@@ -1742,6 +1797,11 @@ def fetch_workflow_sets(hub, vault) -> dict:
         entry["recipes"] += 1
         entry["picture_count"] += counts.get(recipe, 0)
         entry["covers"].extend(covers_by_recipe.get(recipe, ()))
+        for workflow_id, pictures in workflow_pictures.get(recipe, {}).items():
+            entry["workflows"][workflow_id] = (
+                entry["workflows"].get(workflow_id, 0) + pictures
+            )
+        entry["latest"].extend(latest_by_recipe.get(recipe, ()))
         if recipe in unresolved:
             entry["unsure"].update(present)
         entry["unsure"].update(ambiguous.get(recipe, set()) & present)
@@ -1773,6 +1833,13 @@ def fetch_workflow_sets(hub, vault) -> dict:
             present, key=lambda m: (_set_kind_rank(models[m]), name(m).lower())
         )
         key = ",".join(str(m) for m in sorted(present))
+        # Newest first, the id breaking a tie; a picture with no date is no
+        # "latest" at all.
+        latest = sorted(
+            (p for p in entry["latest"] if p[1] is not None),
+            key=lambda p: (p[1].timestamp(), p[0]),
+            reverse=True,
+        )[:SET_LATEST_DEPTH]
         every.append(
             {
                 # JSON for the names: a filename may hold a comma.
@@ -1807,6 +1874,29 @@ def fetch_workflow_sets(hub, vault) -> dict:
                 "covers": sorted(entry["covers"], key=cover_order, reverse=True)[
                     :SET_COVER_DEPTH
                 ],
+                # The workflows its pictures were made with, most pictures first.
+                "workflows": [
+                    {
+                        "id": workflow_id,
+                        "name": workflow_names.get(workflow_id, workflow_id),
+                        "picture_count": pictures,
+                    }
+                    for workflow_id, pictures in sorted(
+                        entry["workflows"].items(),
+                        key=lambda item: (
+                            -item[1],
+                            workflow_names.get(item[0], item[0]).lower(),
+                            item[0],
+                        ),
+                    )
+                ],
+                # The newest kept pictures behind it, newest first. A picture
+                # with no date at all is no "latest".
+                "latest": [
+                    {"picture_id": picture_id, "at": used_at.isoformat()}
+                    for picture_id, used_at in latest
+                ],
+                "last_used_at": latest[0][1].isoformat() if latest else None,
             }
         )
     # Biggest evidence first, so the grid opens on the combinations the library

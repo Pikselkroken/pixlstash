@@ -684,7 +684,7 @@ describe("sorting", () => {
     store.setView({ sortKey: "size", sortDirection: "asc" });
     expect(store.view.sortDirection).toBe("asc");
     // And a patch that is about something else entirely does not touch it.
-    store.setView({ groupBy: "folder" });
+    store.setView({ groupBy: "base_model" });
     expect(store.view.sortDirection).toBe("asc");
   });
 
@@ -805,41 +805,6 @@ describe("grouping", () => {
     ]);
   });
 
-  it("lists a model under every folder holding a copy of it", async () => {
-    // Copied into two folders, or an interrupted move. A "primary location"
-    // would be a fiction the shelf then has to explain, and it makes the
-    // storage answer wrong: the file really does occupy both disks.
-    listAdapters.mockResolvedValue([
-      adapter({
-        id: 1,
-        locations: [
-          { state: "present", folder_path: "/a", relpath: "x.st" },
-          { state: "missing", folder_path: "/b", relpath: "x.st" },
-        ],
-      }),
-    ]);
-    const store = useModelShelfStore();
-    await store.fetchRows();
-    store.setView({ groupBy: "folder" });
-
-    expect(store.groups.map((g) => g.label)).toEqual(["/a", "/b"]);
-    // ...and each row reports THAT folder's state, not the merged one, or a
-    // file present here and gone there would claim to be fine where it is not.
-    expect(store.groups[0].rows[0].locState).toBe("present");
-    expect(store.groups[1].rows[0].locState).toBe("missing");
-    // One model, two rows drawn: the toolbar states both numbers.
-    expect(store.visibleRows.length).toBe(1);
-    expect(store.renderedCount).toBe(2);
-  });
-
-  it("names the group for a model no folder holds any more", async () => {
-    listAdapters.mockResolvedValue([adapter({ id: 1, locations: [] })]);
-    const store = useModelShelfStore();
-    await store.fetchRows();
-    store.setView({ groupBy: "folder" });
-    expect(store.groups.map((g) => g.label)).toEqual(["No registered copy"]);
-  });
-
   it("still renders one group when nothing is grouped, so the list has one shape", async () => {
     // `none` is no longer the default axis (#1438), so it is chosen here: the
     // one-group shape is what keeps the flat list and the banded list from
@@ -894,10 +859,9 @@ describe("grouping", () => {
     expect(store.groups[3].rows.length).toBe(666);
     expect(store.renderedCount).toBe(1800);
 
-    // Folders cluster hard: 2 of 1,800 files in one folder and the rest in the
-    // other is the normal shape, not a defect to smooth over.
-    store.setView({ groupBy: "folder" });
-    expect(store.groups.map((g) => g.rows.length)).toEqual([1200, 600]);
+    // Type is the band that replaced Folder (#2168): 1,800 rows, one band each.
+    store.setView({ groupBy: "type" });
+    expect(store.groups.reduce((n, g) => n + g.rows.length, 0)).toBe(1800);
   });
 });
 
@@ -918,7 +882,7 @@ describe("collapsing a group", () => {
     expect(store.isCollapsed("/a")).toBe(true);
 
     // The same key on the other axis is a different group entirely.
-    store.setView({ groupBy: "folder" });
+    store.setView({ groupBy: "feature" });
     expect(store.isCollapsed("/a")).toBe(false);
 
     store.setView({ groupBy: "base_model" });
@@ -979,12 +943,49 @@ describe("the view is remembered", () => {
     // user's own preference and say nothing about the previous credential.
     listAdapters.mockResolvedValue([adapter()]);
     const store = useModelShelfStore();
-    store.setView({ groupBy: "folder", sortDirection: "asc" });
+    store.setView({ groupBy: "base_model", sortDirection: "asc" });
     await store.fetchRows();
     store.resetForSession();
     expect(store.rows).toEqual([]);
-    expect(store.view.groupBy).toBe("folder");
+    expect(store.view.groupBy).toBe("base_model");
     expect(store.view.sortDirection).toBe("asc");
+  });
+
+  it("reads a remembered Folder grouping back as Type", () => {
+    // Folder is no longer an axis (#2168): what a reader chose as Folder lands
+    // on the band that the sidebar's folder slot did not replace, not on a
+    // grouping that no longer exists.
+    window.localStorage.setItem(
+      "pixlstash:modelShelfView",
+      JSON.stringify({
+        v: 2,
+        groupBy: "folder",
+        listGroupBy: "folder",
+        sortKey: "name",
+        sortDirection: "asc",
+      }),
+    );
+    const store = useModelShelfStore();
+    expect(store.view.listGroupBy).toBe("type");
+    expect(store.view.groupBy).toBe("type");
+    expect(store.view.sortKey).toBe("name");
+  });
+
+  it("keeps a remembered list grouping, and migrates one from before it existed", () => {
+    // A blob that carries its own listGroupBy keeps it, whatever groupBy says.
+    window.localStorage.setItem(
+      "pixlstash:modelShelfView",
+      JSON.stringify({ v: 2, groupBy: "base_model", listGroupBy: "none" }),
+    );
+    expect(useModelShelfStore().view.listGroupBy).toBe("none");
+
+    // One from before #2168 carries none: its list grouping is its groupBy.
+    setActivePinia(createPinia());
+    window.localStorage.setItem(
+      "pixlstash:modelShelfView",
+      JSON.stringify({ v: 2, groupBy: "base_model" }),
+    );
+    expect(useModelShelfStore().view.listGroupBy).toBe("base_model");
   });
 
   it("falls back to the defaults on a blob from another schema", () => {
@@ -1001,7 +1002,7 @@ describe("the view is remembered", () => {
     // The default of `groupBy` changed, and nothing else in the blob did. A
     // version 1 blob could only ever say `none`, so that field is not evidence
     // of a choice and is the one thing not carried forward; the widths, the
-    // collapsed groups, the sort and the folder layout are exactly what the
+    // collapsed groups and the sort are exactly what the
     // reader set and survive. The first version of #1438 bumped the version and
     // threw all of it away for a change to one field.
     window.localStorage.setItem(
@@ -1011,7 +1012,6 @@ describe("the view is remembered", () => {
         groupBy: "none",
         sortKey: "name",
         sortDirection: "asc",
-        folderLayout: "alpha",
         columnWidths: { kind: 120, base: 84, size: 74, date: 96 },
         collapsed: { base_model: ["sdxl"] },
       }),
@@ -1022,7 +1022,6 @@ describe("the view is remembered", () => {
     expect(store.view.groupBy).toBe("workflow_set");
     expect(store.view.sortKey).toBe("name");
     expect(store.view.sortDirection).toBe("asc");
-    expect(store.view.folderLayout).toBe("alpha");
     expect(store.view.columnWidths.kind).toBe(120);
     store.setView({ groupBy: "base_model" });
     expect(store.isCollapsed("sdxl")).toBe(true);
@@ -1084,6 +1083,7 @@ describe("the column widths", () => {
       base: 72,
       size: 56,
       date: 80,
+      sets: 44,
     });
   });
 
@@ -1103,6 +1103,7 @@ describe("the column widths", () => {
       base: 84,
       size: 74,
       date: 96,
+      sets: 56,
     });
   });
 
@@ -1120,6 +1121,7 @@ describe("the column widths", () => {
       base: 84,
       size: 90,
       date: 96,
+      sets: 56,
     });
   });
 
@@ -1136,6 +1138,7 @@ describe("the column widths", () => {
       base: 150,
       size: 74,
       date: 96,
+      sets: 56,
     });
 
     window.localStorage.setItem(
@@ -1149,6 +1152,7 @@ describe("the column widths", () => {
       base: 150,
       size: 400,
       date: 96,
+      sets: 56,
     });
   });
 
@@ -1166,6 +1170,7 @@ describe("the column widths", () => {
       base: 84,
       size: 74,
       date: 96,
+      sets: 56,
     });
   });
 });
@@ -1233,25 +1238,19 @@ describe("stacks are atomic", () => {
     expect([...store.selectedIds].sort()).toEqual([1, 2, 3, 4]);
   });
 
-  it("never hands a verb the same model twice, even drawn in two folders", () => {
+  it("never hands a verb the same model twice, even drawn under two features", () => {
     // The review of #881 read `selectedRows` as one entry per DRAWN row, which
-    // would duplicate under folder grouping - a model with copies in two
-    // folders is drawn twice. It is not: `selectedRows` filters `visibleRows`,
+    // would duplicate under the feature axis - a model serving two features is
+    // drawn twice. It is not: `selectedRows` filters `visibleRows`,
     // which is one entry per model, and the per-folder duplication happens in
     // `groups` for rendering only. Asserted rather than argued, and it stays
     // asserted so a future change to that derivation cannot quietly reintroduce
     // duplicate ids on the wire.
     const store = useModelShelfStore();
     store.rows = [
-      adapter({
-        id: 1,
-        locations: [
-          { state: "present", folder_id: 1, folder_path: "/a", relpath: "x" },
-          { state: "present", folder_id: 2, folder_path: "/b", relpath: "x" },
-        ],
-      }),
+      adapter({ id: 1, capabilities: ["captioner", "detector"] }),
     ];
-    store.setView({ groupBy: "folder" });
+    store.setView({ groupBy: "feature" });
     store.toggleSelected(1);
 
     // Drawn twice...
@@ -1298,36 +1297,6 @@ describe("stacks are atomic", () => {
     expect([...store.selectedIds].sort()).toEqual([1, 2, 3, 4]);
   });
 
-  it("narrows a member's copies to the folder it is drawn under", () => {
-    // The row is narrowed so the file line answers "where is this" with a path
-    // in the folder it is under; an expanded strip has to follow, or the steps
-    // answer with a path from the folder above.
-    const store = useModelShelfStore();
-    const twoFolders = (id, position) =>
-      adapter({
-        id,
-        sha256: String(id).repeat(64).slice(0, 64),
-        stack_id: 7,
-        stack_position: position,
-        locations: [
-          { state: "present", folder_id: 1, folder_path: "/a", relpath: "x" },
-          { state: "present", folder_id: 2, folder_path: "/b", relpath: "x" },
-        ],
-      });
-    store.rows = [twoFolders(1, 0), twoFolders(2, 1)];
-    store.setView({ groupBy: "folder" });
-
-    for (const group of store.groups) {
-      for (const row of group.rows) {
-        for (const member of row.members) {
-          expect(member.locations.map((l) => l.folder_id)).toEqual([
-            group.folderId,
-          ]);
-        }
-      }
-    }
-  });
-
   it("counts a part of a run as its parts, not as the run", () => {
     // Ctrl-clicking one file out of a selected run leaves two files, and the
     // bar has to say two. Reading the cover's presence as "the run" instead
@@ -1340,44 +1309,6 @@ describe("stacks are atomic", () => {
     expect(store.selectedModelIds).toEqual([1, 3]);
   });
 
-  it("hands the verbs the Models rail's selection while the rail has one", () => {
-    // The rail lists each file by itself, so a step of a run is that file and
-    // not the run: Delete there must not take the two steps nobody picked.
-    const store = shelfWithARun();
-    store.setRailSelection([2]);
-    expect(store.selectedRows.map((r) => r.id)).toEqual([2]);
-    expect(store.selectedModelIds).toEqual([2]);
-    // With the display fields the gates read, as every other screen's rows.
-    expect(store.selectedRows[0].locState).toBe("present");
-  });
-
-  it("holds one model selection at a time, the shelf's or the rail's", () => {
-    const store = shelfWithARun();
-    store.selectFromClick(4, {}, [1, 4]);
-    store.setRailSelection([2]);
-    expect(store.selectedIds.size).toBe(0);
-    expect(store.selectedRows.map((r) => r.id)).toEqual([2]);
-
-    // A shelf click takes it back, in the same breath: a row drag reads the
-    // selection straight after making it.
-    store.selectFromClick(4, {}, [1, 4]);
-    expect(store.railSelection).toBeNull();
-    expect(store.selectedRows.map((r) => r.id)).toEqual([4]);
-
-    // Clearing the shelf's selection is not a pick: clicking a set card does
-    // it, and the models selected in the rail to add to that set are still
-    // meant.
-    store.setRailSelection([2]);
-    store.clearSelection();
-    expect(store.selectedRows.map((r) => r.id)).toEqual([2]);
-  });
-
-  it("leaves the shelf's selection alone when the rail reports none", () => {
-    const store = shelfWithARun();
-    store.selectFromClick(4, {}, [1, 4]);
-    store.setRailSelection([]);
-    expect(store.selectedRows.map((r) => r.id)).toEqual([4]);
-  });
 });
 
 describe("the verbs", () => {
@@ -2550,117 +2481,6 @@ describe("duplicate copies", () => {
     await store.resetFilters();
     expect(store.filters.name).toBe("");
     expect(store.visibleRows.length).toBe(2);
-  });
-
-  it("keeps the count when the folder axis narrows a draw to one copy", async () => {
-    listAdapters.mockResolvedValue([
-      adapter({
-        id: 1,
-        locations: [
-          { state: "present", folder_path: "/m", relpath: "a.st" },
-          { state: "present", folder_path: "/n", relpath: "a.st" },
-        ],
-      }),
-    ]);
-    const store = useModelShelfStore();
-    await store.fetchRows();
-    store.setView({ groupBy: "folder" });
-    // The draw carries one location and still reports both copies: the count is
-    // a fact about the file, not about the group it is drawn under.
-    expect(store.groups[0].rows[0].locations.length).toBe(1);
-    expect(store.groups[0].rows.map((r) => r.copies)).toEqual([2]);
-  });
-
-  it("names each copy's draw for its own file, in name order", async () => {
-    // Byte-identical files under three names are ONE model whose `filename` is
-    // whichever the scanner met first (#1270).
-    listAdapters.mockResolvedValue([
-      adapter({
-        id: 1,
-        display_name: null,
-        filename: "ae.sft",
-        locations: [
-          { state: "present", folder_path: "/m", relpath: "ae.sft" },
-          {
-            state: "present",
-            folder_path: "/m",
-            relpath: "vae/ae.safetensors",
-          },
-          {
-            state: "present",
-            folder_path: "/m",
-            relpath: "zImageTurbo_vae.st",
-          },
-        ],
-      }),
-      adapter({ id: 2, display_name: null, filename: "b.st" }),
-    ]);
-    const store = useModelShelfStore();
-    await store.fetchRows();
-    store.setView({ groupBy: "folder", sortKey: "name", sortDirection: "asc" });
-    const drawn = store.groups[0].rows;
-    // `b.st`'s copy is `a.st`, so its draw sorts first although its model's
-    // own name sorts last.
-    expect(drawn.map((r) => r.filename)).toEqual([
-      "a.st",
-      "ae.sft",
-      "ae.safetensors",
-      "zImageTurbo_vae.st",
-    ]);
-    expect(drawn.map((r) => r.name.text)).toEqual([
-      "a",
-      "ae",
-      "ae",
-      "zImageTurbo vae",
-    ]);
-    // The model itself still carries one filename; only the draws differ.
-    expect(store.visibleRows.find((r) => r.id === 1).filename).toBe("ae.sft");
-  });
-
-  it("keeps a name somebody gave on every copy's draw", async () => {
-    listAdapters.mockResolvedValue([
-      adapter({
-        locations: [
-          { state: "present", folder_path: "/m", relpath: "a.st" },
-          { state: "present", folder_path: "/n", relpath: "other.st" },
-        ],
-      }),
-    ]);
-    const store = useModelShelfStore();
-    await store.fetchRows();
-    store.setView({ groupBy: "folder" });
-    const drawn = store.groups.flatMap((g) => g.rows);
-    expect(drawn.map((r) => r.filename)).toEqual(["a.st", "other.st"]);
-    expect(drawn.map((r) => r.name.text)).toEqual([
-      "Cyanwood Style",
-      "Cyanwood Style",
-    ]);
-  });
-
-  it("draws two copies in one folder under two keys, not one key twice", async () => {
-    listAdapters.mockResolvedValue([
-      adapter({
-        id: 1,
-        locations: [
-          { state: "present", folder_path: "/m", relpath: "qwen_3_4b.st" },
-          { state: "present", folder_path: "/m", relpath: "zimage_te.st" },
-        ],
-      }),
-    ]);
-    const store = useModelShelfStore();
-    await store.fetchRows();
-    store.setView({ groupBy: "folder" });
-    const drawn = store.groups[0].rows;
-    // One folder, one header, two draws - and the whole point is that they are
-    // distinguishable. Equal `rowKey`s put `tabindex="0"` on both at once and
-    // made `indexOf` answer with the first, which is the collision the push
-    // site was already warning about on the other axis.
-    expect(drawn.length).toBe(2);
-    expect(new Set(drawn.map((r) => r.rowKey)).size).toBe(2);
-    expect(drawn.map((r) => r.locations[0].relpath)).toEqual([
-      "qwen_3_4b.st",
-      "zimage_te.st",
-    ]);
   });
 });
 

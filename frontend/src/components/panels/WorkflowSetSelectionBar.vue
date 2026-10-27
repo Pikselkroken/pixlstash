@@ -1,28 +1,41 @@
 <template>
   <!-- The pill while hand-made SETS are selected (#1520). The same floating
-       object as the file pill (`ShelfSelectionBar`), with the set vocabulary:
-       Rename, Duplicate set, Merge, Hide and Delete set. Hide sits before
-       Delete so the one destructive verb stays last. No file verb is here, and none of
-       these touches a file - which is why Delete set is not in the error
-       colour the file Delete wears. -->
+       object as the file pill (`ShelfSelectionBar`): count first, then the two
+       ways into what the set has done (Show workflows, Show pictures), Rename,
+       and `⋯` for the rest. Hide sits before the Clear, and no set verb that
+       destroys anything is on the pill itself. None of these touches a file. -->
   <div
     v-if="store.selectedSets.length"
     class="selbar"
     role="toolbar"
     aria-label="Selected workflow sets"
   >
-    <button class="selbar-count" type="button" @click="clear">
-      <Tooltip text="Clear the selection (Esc)" activator="parent" />
-      <v-icon size="16">mdi-layers-outline</v-icon>
-      <span>{{ countLabel }}</span>
-      <v-icon size="16" class="selbar-chevron">mdi-close</v-icon>
-    </button>
+    <span class="selbar-count">{{ countLabel }}</span>
     <span class="selbar-sep"></span>
+    <AppBarButton
+      shape="round"
+      icon="graph-outline"
+      data-verb="show-workflows"
+      :disabled="!openWorkflowTarget"
+      :tooltip="showWorkflowsTitle"
+      @click="openWorkflow"
+    >
+      Show workflows
+    </AppBarButton>
+    <AppBarButton
+      shape="round"
+      icon="image-multiple-outline"
+      data-verb="show-pictures"
+      :disabled="!pictureWorkflows.length"
+      :tooltip="showPicturesTitle"
+      @click="showPictures"
+    >
+      Show pictures
+    </AppBarButton>
     <AppBarButton
       shape="round"
       icon="pencil-outline"
       data-verb="rename-set"
-      aria-label="Rename"
       :disabled="store.selectedSets.length !== 1"
       :tooltip="
         store.selectedSets.length === 1
@@ -30,32 +43,62 @@
           : 'Rename one set at a time.'
       "
       @click="emit('rename')"
-    />
-    <AppBarButton
-      shape="round"
-      icon="content-duplicate"
-      data-verb="duplicate-set"
-      aria-label="Duplicate set"
-      :disabled="store.selectedSets.length !== 1"
-      :tooltip="
-        store.selectedSets.length === 1
-          ? 'Duplicate set: a copy with the same models. No file is touched.'
-          : 'Duplicate one set at a time.'
-      "
-      @click="emit('duplicate')"
-    />
-    <!-- Merge (#1972): live only when every selected set is on the same
-         checkpoint, and otherwise in its place, disabled, saying why. -->
-    <AppBarButton
-      v-if="merge"
-      shape="round"
-      icon="call-merge"
-      data-verb="merge-sets"
-      :aria-label="merge.label"
-      :disabled="!merge.enabled"
-      :tooltip="`${merge.label}. ${merge.reason}`"
-      @click="emit('merge', merge)"
-    />
+    >
+      Rename
+    </AppBarButton>
+
+    <!-- Duplicate, merge, reset, keep separate and delete: the set verbs the
+         pill does not carry as words. Same gates as the context menu. -->
+    <v-menu
+      v-model="moreOpen"
+      :close-on-content-click="false"
+      location="top end"
+      origin="bottom end"
+      :offset="8"
+    >
+      <template #activator="{ props: menuProps }">
+        <AppBarButton
+          shape="round"
+          icon="dots-horizontal"
+          v-bind="withRef(menuProps, (el) => (moreTrigger = el))"
+          data-verb="more"
+          aria-label="More actions"
+          aria-haspopup="menu"
+          :aria-expanded="moreOpen"
+          tooltip="More…"
+        />
+      </template>
+      <div
+        class="ctx-menu shelf-menu"
+        role="menu"
+        tabindex="-1"
+        @keydown="onMenuKeydown"
+      >
+        <template v-for="(row, index) in moreRows" :key="index">
+          <div v-if="row.sep" class="ctx-sep"></div>
+          <button
+            v-else
+            class="ctx-item"
+            :class="{
+              'ctx-item--disabled': row.disabled,
+              'ctx-item--danger': row.danger,
+            }"
+            type="button"
+            role="menuitem"
+            :disabled="row.disabled"
+            :data-verb="row.key"
+            @click="verb(row.verb, row.payload)"
+          >
+            <Tooltip v-if="row.title" :text="row.title" activator="parent" />
+            <v-icon class="ctx-icon">{{ row.icon }}</v-icon>
+            <span class="ctx-label-text">{{ row.label }}</span>
+          </button>
+        </template>
+      </div>
+    </v-menu>
+
+    <span class="selbar-sep"></span>
+
     <AppBarButton
       v-if="hide"
       shape="round"
@@ -67,11 +110,11 @@
     />
     <AppBarButton
       shape="round"
-      icon="layers-remove"
-      data-verb="delete-set"
-      aria-label="Delete set"
-      tooltip="Delete set (Del). No file is touched, and it can be undone."
-      @click="emit('delete')"
+      icon="close"
+      data-verb="clear"
+      aria-label="Clear selection (Esc)"
+      tooltip="Clear selection (Esc)"
+      @click="clear"
     />
   </div>
 
@@ -225,12 +268,16 @@
  * Emits and runs nothing itself, like `ShelfSelectionBar`: the view owns the
  * rename dialog and the store owns the writes and their receipts.
  */
-import { computed } from "vue";
+import { computed, ref } from "vue";
+import { useRouter } from "vue-router";
 import { VIcon } from "vuetify/components";
 
 import { useContextMenuAt } from "../../composables/useContextMenuAt";
+import { useWorkflowPictures } from "../../composables/useWorkflowPictures";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
+import { withRef } from "../../utils/withRef.js";
+import { activityOf, combinationsOfSet } from "../../utils/setActivity";
 import {
   handMadeName,
   hideSetsVerb,
@@ -266,25 +313,14 @@ const store = useModelShelfStore();
 const hide = computed(() => hideSetsVerb(props.sets));
 
 const { contextOpen, contextAt, openContextMenu } = useContextMenuAt();
+const moreOpen = ref(false);
+// The ⋯ button, so a verb picked from its menu hands focus back to it before
+// the verb's own dialog opens (and takes it as the place to return to). Not
+// reactive: only `verb` reads it.
+let moreTrigger = null;
 
-/**
- * "2 sets · Lumen XL v4" when every selected set is on one checkpoint, so
- * the pill says Merge is live before it is pressed; "2 sets · 2 checkpoints"
- * otherwise.
- */
-const countLabel = computed(() => {
-  const sets = store.selectedSets;
-  const n = sets.length;
-  const count = n === 1 ? "1 set" : `${n} sets`;
-  if (n < 2) return count;
-  const names = new Set(
-    sets.map((set) => setCheckpoint(set)?.sha256 ?? "").filter(Boolean),
-  );
-  if (merge.value?.enabled) {
-    return `${count} · ${setCheckpoint(store.mergeTarget)?.name ?? ""}`;
-  }
-  return names.size > 1 ? `${count} · ${names.size} checkpoints` : count;
-});
+/** "2 selected", the count the pill leads with. */
+const countLabel = computed(() => `${store.selectedSets.length} selected`);
 
 /** The one set the menu is about, or null with several selected. */
 const one = computed(() =>
@@ -314,12 +350,148 @@ const offered = computed(() => Boolean(one.value?.offer));
 /** The one selected set carries changes Reset to automatic would undo. */
 const changed = computed(() => Boolean(one.value) && canReset(one.value));
 
+/**
+ * The `⋯` rows: the set verbs the pill has no word for, in the context menu's
+ * order and under its gates, Delete last.
+ */
+const moreRows = computed(() => {
+  const rows = [];
+  rows.push({
+    key: "duplicate-set",
+    verb: "duplicate",
+    icon: "mdi-content-duplicate",
+    label: "Duplicate set",
+    disabled: !one.value,
+    title: one.value
+      ? "Duplicate set: a copy with the same models. No file is touched."
+      : "Duplicate one set at a time.",
+  });
+  if (merge.value) {
+    rows.push({
+      key: "merge-sets",
+      verb: "merge",
+      payload: merge.value,
+      icon: "mdi-call-merge",
+      label: merge.value.label,
+      disabled: !merge.value.enabled,
+      title: merge.value.reason,
+    });
+  } else if (one.value) {
+    for (const partner of partners.value) {
+      rows.push({
+        key: "merge-sets",
+        verb: "merge",
+        payload: { into: one.value, others: [partner] },
+        icon: "mdi-call-merge",
+        label: `Merge with “${handMadeName(partner)}”`,
+        title: `Merges “${handMadeName(partner)}” into this set. No file is touched.`,
+      });
+    }
+    if (!partners.value.length) {
+      rows.push({
+        key: "merge-sets",
+        icon: "mdi-call-merge",
+        label: noPartner.value,
+        disabled: true,
+      });
+    }
+  }
+  if (offered.value) {
+    rows.push({
+      key: "merge-offer",
+      verb: "merge-offer",
+      icon: "mdi-plus",
+      label: "Review models to add…",
+    });
+    rows.push({
+      key: "keep-separate",
+      verb: "keep-separate",
+      icon: "mdi-call-split",
+      label: "Keep separate",
+    });
+  }
+  if (one.value && changed.value) {
+    rows.push({
+      key: "reset-set",
+      verb: "reset",
+      icon: "mdi-backup-restore",
+      label: "Reset to automatic",
+    });
+  }
+  rows.push({ sep: true });
+  rows.push({
+    key: "delete-set",
+    verb: "delete",
+    icon: "mdi-layers-remove",
+    label: store.selectedSets.length === 1 ? "Delete set" : "Delete sets",
+    danger: true,
+    title: "Delete set (Del). No file is touched, and it can be undone.",
+  });
+  return rows;
+});
+
+/**
+ * What the selected sets have run in, as the Workflows screen counts it: one
+ * entry per workflow, most pictures first. Several sets read their union, each
+ * combination once, so a picture is not counted twice.
+ */
+const pictureWorkflows = computed(() => {
+  const combinations = new Set(
+    groups.value.flatMap((group) =>
+      combinationsOfSet(group, store.workflowSets.combinations),
+    ),
+  );
+  return activityOf([...combinations]).workflows;
+});
+
+/** The sets' hand-made groups, which carry the combinations a set covers. */
+const groups = computed(() =>
+  store.selectedSets
+    .map((set) => store.handMadeGroups.find((g) => g.key === `hand:${set.id}`))
+    .filter(Boolean),
+);
+
+/** The workflow Show workflows opens: one set's most-pictured, else nothing. */
+const openWorkflowTarget = computed(() =>
+  store.selectedSets.length === 1 ? (pictureWorkflows.value[0] ?? null) : null,
+);
+
+const showWorkflowsTitle = computed(() => {
+  if (store.selectedSets.length !== 1)
+    return "Select one set to open its workflow.";
+  if (!openWorkflowTarget.value)
+    return "This set has not run in any workflow yet.";
+  return `Open ${openWorkflowTarget.value.name || "its workflow"}, the one its pictures came from most.`;
+});
+
+const showPicturesTitle = computed(() =>
+  pictureWorkflows.value.length
+    ? "These are the pictures of the workflows it ran in."
+    : "No workflow has run with this set, so it has no pictures yet.",
+);
+
+const router = useRouter();
+const { showWorkflowsPictures } = useWorkflowPictures();
+
+function openWorkflow() {
+  const target = openWorkflowTarget.value;
+  if (!target) return;
+  router.push({ name: "workflows", query: { workflow: target.id } });
+}
+
+function showPictures() {
+  showWorkflowsPictures(pictureWorkflows.value);
+}
+
 function clear() {
   store.clearSetSelection();
 }
 
 function verb(name, payload) {
+  const fromMore = moreOpen.value;
   contextOpen.value = false;
+  moreOpen.value = false;
+  if (fromMore) moreTrigger?.focus?.();
   emit(name, payload);
 }
 

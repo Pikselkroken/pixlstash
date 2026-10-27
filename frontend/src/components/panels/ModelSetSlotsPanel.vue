@@ -27,17 +27,6 @@
           <!-- One unit, so a narrow bar wraps the actions together to the
                right of the next line rather than stranding Close on the left. -->
           <span class="mss__actions">
-            <!-- The way to the Models rail from where the need arises: it opens
-                 the rail with Fits on this set, which nothing else does. -->
-            <AppButton
-              variant="ghost"
-              size="sm"
-              icon-left="cube-outline"
-              data-testid="models-fit"
-              :tooltip="`Show the shelf models that fit ${name || 'this set'}`"
-              @click="emit('models-fit')"
-              >Models · {{ fitCount }} fit</AppButton
-            >
             <!-- Only while there is something to undo: an automatic set
                  already holds exactly what its pictures ran with. -->
             <AppButton
@@ -242,20 +231,8 @@
         v-for="{ slot, items } in slots"
         :key="slot.id"
         class="mss__slot"
-        :class="{
-          'mss__slot--refuse': dragRows && !dragFits(slot),
-          'mss__slot--target': dragRows && dragFits(slot),
-          'mss__slot--drop': dragOver === `slot:${slot.id}` && dragFits(slot),
-        }"
         role="presentation"
         :data-slot="slot.id"
-        :data-rail-drop="dragRows ? `slot:${slot.id}` : undefined"
-        :data-rail-refused="
-          dragRows && !dragFits(slot)
-            ? dragRefused || `Not for ${slot.label}`
-            : undefined
-        "
-        @rail-drop.stop="onSlotDrop(slot)"
       >
         <div class="mss__label" role="presentation">
           <span class="mss__slotname">{{ slot.label }}</span>
@@ -476,7 +453,6 @@ import { isReadOnly } from "../../utils/apiClient";
 import { modelFileTitle, quantBadge } from "../../utils/modelShelf";
 import { memberVerdictOf, memberVerdictText } from "../../utils/setVerdicts";
 import {
-  fitsSlot,
   pictureCount,
   recipeCount,
   offerQuestion,
@@ -516,17 +492,6 @@ const props = defineProps({
    * `key` names the offer (set and checkpoint), so a refetch is not a new one.
    */
   baseOffer: { type: Object, default: null },
-  /** How many shelf models fit this set, for Models · N fit. */
-  fitCount: { type: Number, default: 0 },
-  /** The shelf rows a drag from the Models rail carries, else null. */
-  dragRows: { type: Array, default: null },
-  /** The `data-rail-drop` key under the pointer (`store.railOver`). */
-  dragOver: { type: String, default: "" },
-  /**
-   * Why the whole set refuses that drag (`store.railDropRefusal`), else "":
-   * then no slot takes it either, as its card does not.
-   */
-  dragRefused: { type: String, default: "" },
   /** This set's `set_checks` entry, or null when none was served. */
   check: { type: Object, default: null },
   /** `(verdict) => Promise`: record the set's verdict; rejects on failure. */
@@ -554,26 +519,7 @@ const emit = defineEmits([
   "keep-separate",
   "add-ghost",
   "cursor",
-  // The Models rail (design B): open it with Fits on, and a drop on a slot.
-  "models-fit",
-  "drop-slot",
 ]);
-
-/** A slot takes a drop only when every dragged model fits it. */
-function dragFits(slot) {
-  if (props.dragRefused) return false;
-  return (props.dragRows ?? []).every((row) => fitsSlot(row, slot));
-}
-
-/**
- * A drop handed over by the rail (`rail-drop`), which only hands it to a slot
- * that does not refuse it. Stopped here: the tray's own row must not take it
- * as well.
- */
-function onSlotDrop(slot) {
-  if (!props.dragRows?.length || !dragFits(slot)) return;
-  emit("drop-slot", slot.id);
-}
 
 const slots = computed(() => setSlots(props.set));
 
@@ -927,25 +873,6 @@ const notchStyle = computed(() => {
   grid-template-columns: minmax(96px, 12%) minmax(0, 1fr);
   gap: var(--space-4);
   align-items: start;
-}
-
-/* A rail drag: a slot the models do not fit fades and refuses the drop; every
-   slot that takes them wears a dashed rim for the whole drag, and the one under
-   the pointer turns it solid over the active wash. An outline, not an inset
-   ring: an outline paints above the slot's own tiles. */
-.mss__slot--refuse {
-  opacity: var(--opacity-disabled);
-}
-
-.mss__slot--target {
-  outline: var(--focus-width) dashed var(--active-bar);
-  outline-offset: var(--space-1);
-  border-radius: var(--radius-md);
-}
-
-.mss__slot--drop {
-  outline-style: solid;
-  background: var(--active-wash);
 }
 
 .mss__label {

@@ -10263,6 +10263,19 @@ single-axis groupings could not answer: a checkpoint, its VAE and its text
 encoders are a set, the same VAE belongs to several sets at once, and a sticky
 band can only put a row in one place.
 
+- **Three facts per combination, off the same kept pictures (#2168).** `workflows`
+  (`[{id, name, picture_count}]`, most pictures first) names the workflows the
+  pictures were made with: a picture of a live run-filed workflow's run belongs to
+  that workflow, any other to its recipe's variant's workflow
+  (`variant_workflows`, the rule `GET /comfyui/pictures/{id}/recipe` reports as
+  `workflow_id`), and a picture in no workflow counts toward none. `last_used_at`
+  and `latest` (ten newest, `{picture_id, at}`) use the grid's date sort
+  (`created_at`, else `imported_at`). The count is the sum of the same
+  `GROUP BY` rows that give `picture_count` (`recipe_filed_pictures`), and the
+  newest pictures come from one `ROW_NUMBER()` window (`recipe_latest_pictures`),
+  so nothing is a second query that could disagree. A workflow's name is the
+  owner's, else its base card's, else its id; the grid's generated name is not
+  reproduced here.
 - **One entry per *combination*: the model ids one recipe resolves to.** Several
   recipes naming the same files are one combination with their recipe and
   picture counts summed, because the combination is the fact and the recipe is

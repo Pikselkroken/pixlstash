@@ -194,6 +194,13 @@ export async function fetchModelCompanions(ids) {
  * the CLIENT's (see `utils/workflowSets.js`): the server groups nothing, so the
  * toolbar can price every fold setting without another request.
  *
+ * Each combination also carries, off the same kept pictures as its
+ * `picture_count`: `workflows` (`[{id, name, picture_count}]`, the workflows its
+ * pictures were made with, most pictures first; a picture in no workflow counts
+ * toward none, so the sum is at most `picture_count`), `last_used_at` (ISO-8601
+ * of its newest kept picture, or `null`) and `latest` (up to ten
+ * `{picture_id, at}`, newest first).
+ *
  * `hand_made` is the owner's own sets (#1520), newest first. A set lives on its
  * checkpoint (#1972): its `members` are what the pictures on it ran with plus
  * what the owner added, minus the `declined` models they removed (served again
