@@ -179,10 +179,12 @@
   display: none;
 }
 
-/* With a caret in the slot the line stops at it: the caret is the junction. */
+/* With a caret in the slot the line runs into the slot until it meets the
+   chevron, which an MDI glyph draws from about 5px into its 16px box. Ending
+   at the slot's edge left the line hanging short of the caret. */
 .sidebar-tree-kid--parent .sidebar-tree-spacer::after,
 .sidebar-tree-kid--parent.sidebar-tree-kid--last .sidebar-tree-spacer::before {
-  right: calc(var(--gutter-glyph) + var(--space-1));
+  right: calc(var(--gutter-glyph) - var(--space-2));
 }
 
 /* The line from an open parent's mark down to its row's bottom edge, where

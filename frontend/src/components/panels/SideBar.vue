@@ -5570,7 +5570,7 @@ defineExpose({
                   </span>
                 </div>
                 <div
-                  v-for="row in treeRowsByCharacter.get(char.id) ?? []"
+                  v-for="row in treeRowsByCharacter.get(Number(char.id)) ?? []"
                   :key="`tree-${row.set.id}`"
                   :class="[
                     'sidebar-list-item',
