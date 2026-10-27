@@ -320,8 +320,8 @@ const hasSelection = computed(() =>
 const pickedRuns = computed(() => runsStore.chosenCards);
 
 const runCheckpoints = computed(() => {
-  const n = runsStore.importable.reduce(
-    (sum, card) => sum + (card.run.checkpoints || []).length,
+  const n = pickedRuns.value.reduce(
+    (sum, card) => sum + (card.run?.checkpoints || []).length,
     0,
   );
   return `${n.toLocaleString()} ${n === 1 ? "checkpoint" : "checkpoints"}`;

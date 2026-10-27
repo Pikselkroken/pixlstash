@@ -26,6 +26,7 @@ none of them reliably. Other trainers get their own reader later, or not at all.
 
 from __future__ import annotations
 
+import math
 import os
 import re
 from dataclasses import dataclass, field
@@ -314,7 +315,11 @@ def _apply_config(run: TrainingRun) -> None:
             except ValueError:
                 logger.debug("Ignoring unreadable `lr` %r in %s.", lr, path)
         if isinstance(lr, (int, float)) and not isinstance(lr, bool):
-            run.learning_rate = float(lr)
+            # `.nan` / `.inf` would make the listing's JSON unreadable.
+            if math.isfinite(lr):
+                run.learning_rate = float(lr)
+            else:
+                logger.debug("Ignoring non-finite `lr` %r in %s.", lr, path)
 
     run.sample_prompts = _sample_prompts(_find_key(parsed, "sample"))
 
@@ -336,7 +341,7 @@ def _sample_prompts(sample: object) -> list[str]:
         ]
     prompts = sample.get("prompts")
     if isinstance(prompts, list):
-        return [str(prompt) for prompt in prompts if isinstance(prompt, str)]
+        return [prompt if isinstance(prompt, str) else "" for prompt in prompts]
     return []
 
 

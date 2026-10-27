@@ -616,7 +616,14 @@ function onGridKeydown(event) {
   event.preventDefault();
   const grid = event.currentTarget;
   const step = event.key === "ArrowUp" || event.key === "ArrowLeft" ? -1 : 1;
-  cursor.value = (cursor.value + step + cards.value.length) % cards.value.length;
+  // From the New tile the cursor belongs to the last card focused: enter the
+  // cards at the near end instead of stepping from it.
+  if (event.target?.closest?.(".tr-new")) {
+    cursor.value = step === 1 ? 0 : cards.value.length - 1;
+  } else {
+    cursor.value =
+      (cursor.value + step + cards.value.length) % cards.value.length;
+  }
   nextTick(() => {
     grid?.querySelector(`[data-run-index="${cursor.value}"]`)?.focus();
   });

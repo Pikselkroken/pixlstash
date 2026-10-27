@@ -39,9 +39,11 @@ export const useTrainingRunsStore = defineStore("trainingRuns", () => {
   const jobsFailed = ref(false);
 
   /**
-   * Card KEYS, not indices: a reload reorders, keys survive it. A run
-   * PixlStash trains is keyed by its job, so its card keeps the tick when its
-   * folder appears under it.
+   * Card KEYS, not indices: a reload reorders, keys survive it. A run with a
+   * folder is keyed by its name whether or not its job has been read, so a
+   * tick survives the job list landing or failing; a queued job with no folder
+   * yet is keyed by its job, and `reconcile` carries that tick over to its
+   * folder card when the folder appears.
    */
   const chosen = ref([]);
   const chosenSteps = ref([]);
@@ -69,7 +71,7 @@ export const useTrainingRunsStore = defineStore("trainingRuns", () => {
     const fromFolder = runs.value.map((run) => {
       const job = byRunName.get(run.name) ?? null;
       return {
-        key: job ? `job:${job.uuid}` : `run:${run.name}`,
+        key: `run:${run.name}`,
         name: run.name,
         run,
         job,
@@ -224,10 +226,18 @@ export const useTrainingRunsStore = defineStore("trainingRuns", () => {
     }
   }
 
-  /** Drop the ticks of cards that are no longer listed. */
+  /**
+   * Keep each tick on its run: a queued job's `job:<uuid>` moves to the folder
+   * card that job now names, and ticks on cards no longer listed are dropped.
+   */
   function reconcile() {
     const keys = new Set(cards.value.map((card) => card.key));
-    chosen.value = chosen.value.filter((key) => keys.has(key));
+    const byJob = new Map(
+      cards.value.filter((card) => card.job).map((card) => [`job:${card.job.uuid}`, card.key]),
+    );
+    chosen.value = [
+      ...new Set(chosen.value.map((key) => byJob.get(key) ?? key)),
+    ].filter((key) => keys.has(key));
   }
 
   let jobsGeneration = 0;

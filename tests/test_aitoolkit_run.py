@@ -265,6 +265,18 @@ class TestConfig:
         )
         assert read_run(str(run_dir)).sample_prompts == ["", "two"]
 
+    def test_a_non_finite_rate_is_left_unknown(self, tmp_path):
+        run_dir = _run_folder(tmp_path)
+        (run_dir / "config.yaml").write_text("train:\n  lr: .nan\n", encoding="utf-8")
+        assert read_run(str(run_dir)).learning_rate is None
+
+    def test_a_malformed_bare_prompt_keeps_the_rows_in_step(self, tmp_path):
+        run_dir = _run_folder(tmp_path)
+        (run_dir / "config.yaml").write_text(
+            "sample:\n  prompts:\n    - 5\n    - two\n", encoding="utf-8"
+        )
+        assert read_run(str(run_dir)).sample_prompts == ["", "two"]
+
     def test_reads_the_older_bare_prompt_list(self, tmp_path):
         run_dir = _run_folder(tmp_path)
         (run_dir / "config.yaml").write_text(

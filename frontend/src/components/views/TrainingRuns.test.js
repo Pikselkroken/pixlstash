@@ -827,6 +827,46 @@ describe("the runs PixlStash trains (#2118)", () => {
     expect(importBtn(wrapper)).toBeDefined();
   });
 
+  it("keeps a tick on its run when the job list lands after the folder", async () => {
+    let release;
+    listTrainingJobs.mockReturnValue(new Promise((r) => (release = r)));
+    const wrapper = await openWith([run("Clementine_abcd1234"), run("Foxglove")]);
+    await tick(wrapper, "Foxglove");
+    release([job({ status: "completed", run_name: "Clementine_abcd1234" })]);
+    await settle(wrapper);
+    expect(useTrainingRunsStore().chosen).toEqual(["run:Foxglove"]);
+    expect(importBtn(wrapper)).toBeDefined();
+  });
+
+  it("carries a queued run's tick to its card once its folder appears", async () => {
+    listTrainingJobs.mockResolvedValue([job({ run_name: null })]);
+    const wrapper = await openWith([]);
+    await wrapper.find(".tr-card").trigger("click");
+    const runsStore = useTrainingRunsStore();
+    expect(runsStore.chosen).toEqual(["job:abcd1234ef"]);
+
+    listRuns.mockResolvedValue([run("Clementine_abcd1234")]);
+    listTrainingJobs.mockResolvedValue([job()]);
+    await runsStore.reload();
+    await settle(wrapper);
+    expect(runsStore.chosen).toEqual(["run:Clementine_abcd1234"]);
+    expect(wrapper.findAll(".tr-card")).toHaveLength(1);
+  });
+
+  it("enters the cards at the near end from the New tile", async () => {
+    const wrapper = await openWith([run(), run("Foxglove"), run("Hazel")], FOLDERS);
+    const cards = wrapper.findAll(".tr-card");
+    // The cursor sits on the middle card, as if it was focused last; a step
+    // from it would land on a neighbour, never on the near end.
+    const tile = wrapper.find("[data-testid='tr-new-run']");
+    await cards[1].trigger("focus");
+    await tile.trigger("keydown", { key: "ArrowDown" });
+    expect(cards[0].attributes("tabindex")).toBe("0");
+    await cards[1].trigger("focus");
+    await tile.trigger("keydown", { key: "ArrowUp" });
+    expect(cards[2].attributes("tabindex")).toBe("0");
+  });
+
   it("gives a queued run a card before it has a folder", async () => {
     listTrainingJobs.mockResolvedValue([
       job({ status: "queued", step: 0, run_name: null }),

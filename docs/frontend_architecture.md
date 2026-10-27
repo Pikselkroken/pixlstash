@@ -6172,8 +6172,10 @@ its own overrides (the container-query fold, the icon-trigger accent) and
 listing, the job list and which cards are picked, because the grid draws and
 picks them, the rail describes the pick and the sidebar counts them. A card is
 `{ key, name, run, job, live }`: every folder run, plus each live job with no
-folder yet. A run a job trained is keyed `job:<uuid>`, so its tick survives its
-folder appearing; one trained elsewhere is `run:<name>`. Cards sort live first,
+folder yet. A run with a folder is keyed `run:<name>` whether or not its job
+has been read, so a tick survives the job list landing or failing; a queued job
+with no folder is `job:<uuid>`, and the tick moves to its folder card when the
+folder appears. Cards sort live first,
 then newest (`modified_at`, else the job's `created_at`). The read guards
 (generation per read, ticks reconciled to what is still listed, the old root's
 rows dropped the moment the root changes) moved from the view into the store
