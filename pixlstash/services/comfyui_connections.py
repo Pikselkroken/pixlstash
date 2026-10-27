@@ -62,7 +62,12 @@ def read(user) -> list[dict]:
         except (ValueError, TypeError):
             parsed = None
         if isinstance(parsed, list):
-            return [e for e in parsed if isinstance(e, dict) and e.get("url")]
+            # An entry every reader can use: the routes key rows by id.
+            return [
+                e
+                for e in parsed
+                if isinstance(e, dict) and e.get("url") and e.get("id")
+            ]
         logger.error(
             "user.comfyui_connections is not a JSON list (%r); reading it as "
             "the saved address alone. The next connection change rewrites it.",

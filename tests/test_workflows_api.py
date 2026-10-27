@@ -1901,6 +1901,7 @@ def test_picking_a_listed_address_spelled_differently_does_not_move_the_current(
         ("not json", [_THIS_PC]),
         ('{"url": "http://192.0.2.20:8188/"}', [_THIS_PC]),
         ("[1, 2]", []),
+        ('[{"url": "http://192.0.2.20:8188/"}]', []),
         ("[]", []),
     ],
 )
