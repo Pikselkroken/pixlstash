@@ -44,7 +44,7 @@ import { useNoticeStore } from "./useNoticeStore";
 function folder(overrides = {}) {
   return {
     id: 1,
-    path: "/home/g/loras",
+    path: "/home/me/loras",
     kind: "user",
     owner: null,
     movable: "per_item",
@@ -100,7 +100,7 @@ describe("scanning", () => {
       folder({ id: 2, scan_status: "pending" }),
     ]);
     const store = useModelFoldersStore();
-    await store.add({ path: "/home/g/loras", kind: "user" });
+    await store.add({ path: "/home/me/loras", kind: "user" });
     expect(useNoticeStore().notices.at(-1).text).toContain(
       "Looking for models",
     );
@@ -127,7 +127,7 @@ describe("scanning", () => {
       folder({ id: 2, scan_status: "failed", scan_error: "disk on fire" }),
     ]);
     const store = useModelFoldersStore();
-    await store.add({ path: "/home/g/loras", kind: "user" });
+    await store.add({ path: "/home/me/loras", kind: "user" });
     const notice = useNoticeStore().notices.at(-1);
     expect(notice.level).toBe("error");
     expect(notice.text).toBe("Could not scan loras: disk on fire");
@@ -185,7 +185,7 @@ describe("forgetting", () => {
 
     await notice.action.handler();
     expect(createModelFolder).toHaveBeenCalledWith({
-      path: "/home/g/loras",
+      path: "/home/me/loras",
       kind: "user",
       hostPath: "/mnt/host/loras",
       deleteAfterImport: false,
@@ -252,7 +252,7 @@ describe("sentence helpers", () => {
   });
 
   it("names the folder by its last segment, trailing slash or not", () => {
-    expect(basename("/home/g/loras/")).toBe("loras");
+    expect(basename("/home/me/loras/")).toBe("loras");
     expect(basename("C:\\models\\lora")).toBe("lora");
   });
 });
