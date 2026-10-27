@@ -6224,6 +6224,28 @@ describe("the rail's head, sections and dialogs (#2165)", () => {
     expect(wrapper.find("[data-testid='wftab-show-pictures']").text()).toBe("Show all");
   });
 
+  it("says it is reading, and never shows the last workflow's pictures for the next", async () => {
+    streamPictures.mockResolvedValue({ pictures: [{ id: 7 }] });
+    const other = card({ id: OTHER, name: "Other" });
+    const { wrapper, store } = await mountWith([KEY], [card(), other]);
+    const latestText = () => wrapper.find("[data-testid='wftab-latest']").text();
+    expect(wrapper.findAll("[data-testid='wftab-latest-grid'] img")).toHaveLength(1);
+
+    const read = held();
+    streamPictures.mockReturnValue(read.promise);
+    store.selectedKeys = [OTHER];
+    await flush(wrapper);
+    expect(wrapper.find("[data-testid='wftab-latest-grid']").exists()).toBe(false);
+    expect(latestText()).toContain("Reading its pictures…");
+
+    read.release({ pictures: [{ id: 9 }] });
+    await flush(wrapper);
+    expect(
+      wrapper.findAll("[data-testid='wftab-latest-grid'] img").map((img) => img.attributes("src")),
+    ).toEqual([pictureThumbnailUrl(9)]);
+    expect(latestText()).not.toContain("Reading");
+  });
+
   it("opens Edit LoRAs as a dialog, and Done closes it", async () => {
     getWorkflowCard.mockResolvedValue(detail());
     const { wrapper } = await mountWith([KEY]);

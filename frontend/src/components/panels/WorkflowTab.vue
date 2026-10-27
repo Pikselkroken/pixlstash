@@ -909,12 +909,18 @@
               loading="lazy"
             />
           </div>
+          <p v-else-if="latestPending" class="wftab-note wftab-quiet">
+            Reading its pictures…
+          </p>
           <p v-else-if="latestFailed" class="wftab-note wftab-quiet">
             Could not read its pictures just now.
           </p>
           <p v-else-if="!card.picture_count" class="wftab-note wftab-quiet">
             Nothing made yet.
           </p>
+          <!-- Counted, yet none came back: binned since, or in another
+               library. Said, so the section does not read as broken. -->
+          <p v-else class="wftab-note wftab-quiet">No pictures to show here.</p>
         </div>
       </section>
     </template>
@@ -1600,7 +1606,9 @@ const paramRows = computed(() =>
 const LATEST_SHOWN = 10;
 const latest = ref([]);
 const latestFailed = ref(false);
+const latestPending = ref(false);
 let latestRead = 0;
+let latestKey = null;
 
 /**
  * The workflow's newest pictures: the stream with its own filter, newest first.
@@ -1609,10 +1617,18 @@ let latestRead = 0;
  */
 async function loadLatest(key) {
   const ask = ++latestRead;
-  if (!key) {
+  // Another workflow: its predecessor's thumbnails must not stand in for its
+  // own while the read is out. The same one re-read keeps what it shows.
+  if (key !== latestKey) {
+    latestKey = key;
     latest.value = [];
+    latestFailed.value = false;
+  }
+  if (!key) {
+    latestPending.value = false;
     return;
   }
+  latestPending.value = true;
   try {
     const body = await streamPictures(
       `workflow=${encodeURIComponent(key)}&sort=DATE&descending=true`,
@@ -1626,6 +1642,8 @@ async function loadLatest(key) {
     latest.value = [];
     latestFailed.value = true;
     console.warn(`[workflows] could not read the latest pictures of ${key}`, err);
+  } finally {
+    if (ask === latestRead) latestPending.value = false;
   }
 }
 
