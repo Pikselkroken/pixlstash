@@ -1463,3 +1463,233 @@ class TestCuratedBaseModel:
 
         (row,) = models(hub).values()
         assert row["base_model_source"] == "filename_fuzzy", dict(row)
+
+
+class TestScansThatRunByThemselves:
+    """A scan now runs whenever a folder changes, which is while a download is
+    landing in it, and says what it found so the shelf can be told."""
+
+    def test_a_file_still_arriving_is_left_for_a_later_scan(
+        self, hub, scanner, tmp_path
+    ):
+        folder = tmp_path / "loras"
+        folder.mkdir()
+        sibling = write_adapter(folder / "fresh.safetensors")
+        (folder / "fresh.safetensors.part").write_bytes(b"")
+        truncated = folder / "short.safetensors"
+        blob = json.dumps(
+            {"blocks.0.lora_A.weight": {**_tensor([8, 16]), "data_offsets": [0, 4096]}}
+        ).encode("utf-8")
+        truncated.write_bytes(struct.pack("<Q", len(blob)) + blob)
+        write_adapter(folder / "whole.safetensors")
+        folder_id = register_folder(hub, folder)
+
+        result = scanner.scan_folder(folder_id, str(folder), "user")
+
+        assert result.arriving == 2
+        assert set(located(hub)) == {"whole.safetensors"}
+
+        # The download finishes: the sibling goes and the bytes land.
+        os.remove(str(folder / "fresh.safetensors.part"))
+        with open(truncated, "ab") as handle:
+            handle.write(b"\0" * 4096)
+        result = scanner.scan_folder(folder_id, str(folder), "user")
+        assert result.arriving == 0
+        assert set(located(hub)) == {
+            "whole.safetensors",
+            "fresh.safetensors",
+            "short.safetensors",
+        }
+        assert digest_at(hub, "fresh.safetensors") == sha256_file(sibling)
+
+    def test_a_listed_file_with_a_sibling_is_not_swept_to_missing(
+        self, hub, scanner, tmp_path
+    ):
+        """Being rewritten in place is not being deleted."""
+        folder = tmp_path / "loras"
+        folder.mkdir()
+        write_adapter(folder / "kept.safetensors")
+        folder_id = register_folder(hub, folder)
+        scanner.scan_folder(folder_id, str(folder), "user")
+
+        (folder / "kept.safetensors.part").write_bytes(b"")
+        scanner.scan_folder(folder_id, str(folder), "user")
+
+        assert located(hub)["kept.safetensors"]["state"] == STATE_PRESENT
+
+    def test_only_copies_new_to_the_folder_are_reported_as_arrived(
+        self, hub, scanner, tmp_path
+    ):
+        folder = tmp_path / "loras"
+        folder.mkdir()
+        write_adapter(folder / "one.safetensors", name="One")
+        folder_id = register_folder(hub, folder)
+
+        first = scanner.scan_folder(folder_id, str(folder), "user")
+        assert first.arrived_model_ids == [located(hub)["one.safetensors"]["model_id"]]
+
+        assert (
+            scanner.scan_folder(folder_id, str(folder), "user").arrived_model_ids == []
+        )
+
+        write_adapter(folder / "two.safetensors", name="Two")
+        third = scanner.scan_folder(folder_id, str(folder), "user")
+        assert third.arrived_model_ids == [located(hub)["two.safetensors"]["model_id"]]
+
+
+class _FakeWatcher:
+    def __init__(self):
+        self.watched: dict[int, str] = {}
+
+    def watch_folder(self, folder_id, path):
+        if os.path.isdir(path):
+            self.watched[folder_id] = path
+
+    def unwatch_folder(self, folder_id):
+        self.watched.pop(folder_id, None)
+
+    def watched_ids(self):
+        return set(self.watched)
+
+
+class TestModelFolderScanFinder:
+    """Which folder the background scan picks, and when it leaves one alone."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh_registry(self):
+        from pixlstash.tasks import model_folder_scan_task
+
+        with model_folder_scan_task._scans_lock:
+            model_folder_scan_task._scans.clear()
+        yield
+        with model_folder_scan_task._scans_lock:
+            model_folder_scan_task._scans.clear()
+
+    @staticmethod
+    def _finder(hub, watcher=None):
+        from pixlstash.tasks.model_folder_scan_finder import ModelFolderScanFinder
+
+        finder = ModelFolderScanFinder(hub, watcher=watcher)
+        # Every call is a check; the 2 s throttle is not what is under test.
+        finder._due = lambda _interval: True
+        return finder
+
+    @staticmethod
+    def _finish(task):
+        from pixlstash.tasks.base_task import TaskStatus
+
+        task.status = TaskStatus.COMPLETED
+
+    def test_hands_out_each_scanned_folder_once_and_never_a_taken_from_one(
+        self, hub, tmp_path
+    ):
+        own = register_folder(hub, tmp_path)
+        register_folder(hub, tmp_path / "runs", kind="source")
+        register_folder(hub, tmp_path / "dl", kind="downloads")
+        finder = self._finder(hub)
+
+        task = finder.find_task()
+        assert task.folder_id == own
+        self._finish(task)
+        assert finder.find_task() is None, "handed out again inside the interval"
+
+    def test_a_change_makes_a_folder_due_again_and_waits_out_a_running_scan(
+        self, hub, tmp_path
+    ):
+        own = register_folder(hub, tmp_path)
+        finder = self._finder(hub)
+        task = finder.find_task()
+
+        finder.mark_due(own)
+        assert finder.find_task() is None, "a second scan beside a running one"
+
+        self._finish(task)
+        again = finder.find_task()
+        assert again is not None and again.folder_id == own
+        self._finish(again)
+        assert finder.find_task() is None
+
+    def test_a_folder_scanned_long_ago_is_due_and_a_recent_one_is_not(
+        self, hub, tmp_path
+    ):
+        from datetime import datetime, timedelta, timezone
+
+        from pixlstash.tasks.model_folder_scan_finder import RESCAN_INTERVAL_S
+
+        stale = register_folder(hub, tmp_path / "a")
+        fresh = register_folder(hub, tmp_path / "b")
+        now = datetime.now(timezone.utc)
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model_folder SET last_checked = ? WHERE id = ?",
+                ((now - timedelta(seconds=RESCAN_INTERVAL_S + 5)).isoformat(), stale),
+            )
+            conn.execute(
+                "UPDATE model_folder SET last_checked = ? WHERE id = ?",
+                (now.isoformat(), fresh),
+            )
+        finder = self._finder(hub)
+
+        task = finder.find_task()
+        assert task.folder_id == stale
+        self._finish(task)
+        assert finder.find_task() is None
+
+    def test_a_change_is_answered_inside_the_check_throttle(self, hub, tmp_path):
+        """The watch wakes the planner at once; a change that waited for the
+        next 2 s check would wait for the planner's backoff instead."""
+        from pixlstash.tasks.model_folder_scan_finder import ModelFolderScanFinder
+
+        own = register_folder(hub, tmp_path)
+        finder = ModelFolderScanFinder(hub)
+        self._finish(finder.find_task())
+
+        finder.mark_due(own)
+        task = finder.find_task()
+        assert task is not None and task.folder_id == own
+
+    def test_a_scan_dropped_before_submission_releases_its_folder(self, hub, tmp_path):
+        own = register_folder(hub, tmp_path)
+        finder = self._finder(hub)
+        task = finder.find_task()
+
+        finder.on_task_complete(task, RuntimeError("dropped"))
+        finder.mark_due(own)
+        assert finder.find_task() is not None
+
+    def test_a_folder_is_scanned_once_its_watch_is_up(self, hub, tmp_path):
+        """Whatever changed before the watch existed (while PixlStash was
+        closed, in the second after the folder was added) has no event."""
+        from datetime import datetime, timezone
+
+        own = register_folder(hub, tmp_path)
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model_folder SET last_checked = ? WHERE id = ?",
+                (datetime.now(timezone.utc).isoformat(), own),
+            )
+        assert self._finder(hub).find_task() is None, "control: not due by time"
+
+        finder = self._finder(hub, _FakeWatcher())
+        task = finder.find_task()
+        assert task is not None and task.folder_id == own
+        self._finish(task)
+        assert finder.find_task() is None, "only when the watch is new"
+
+    def test_watches_follow_the_registry(self, hub, tmp_path):
+        a = tmp_path / "a"
+        a.mkdir()
+        own = register_folder(hub, a)
+        unplugged = register_folder(hub, tmp_path / "not-there")
+        register_folder(hub, tmp_path, kind="source")
+        watcher = _FakeWatcher()
+        finder = self._finder(hub, watcher)
+
+        finder.find_task()
+        assert watcher.watched == {own: str(a)}
+
+        (tmp_path / "not-there").mkdir()
+        with hub.transaction() as conn:
+            conn.execute("DELETE FROM model_folder WHERE id = ?", (own,))
+        finder.find_task()
+        assert set(watcher.watched) == {unplugged}

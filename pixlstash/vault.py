@@ -90,6 +90,8 @@ from pixlstash.tasks.missing_saved_recipe_workflow_finder import (
     MissingSavedRecipeWorkflowFinder,
 )
 from pixlstash.tasks.downloads_intake_finder import DownloadsIntakeFinder
+from pixlstash.tasks.model_folder_scan_finder import ModelFolderScanFinder
+from pixlstash.services.model_folder_scanner import SHELF_MODEL_SUFFIXES
 
 
 logger = get_logger(__name__)
@@ -311,6 +313,7 @@ class Vault:
             self._planner_work_finders = {}
             self._work_planner = None
             self._ref_folder_watcher = None
+            self._model_folder_watcher = None
             self._closed = False
             self._started = False
             return
@@ -384,6 +387,7 @@ class Vault:
         self._planner_work_finders[TaskType.PENDING_SCORE_INVALIDATION] = (
             PendingScoreInvalidationFinder(vault=self)
         )
+        self._model_folder_watcher = None
         # The one finder here that works on the HUB rather than on this vault:
         # a model folder is a fact about the machine, so the checkpoints it
         # registers are shared by every library. Registered only when the vault
@@ -411,6 +415,21 @@ class Vault:
             # The watched Downloads folder, a hub fact for the same reason.
             self._planner_work_finders[TaskType.DOWNLOADS_INTAKE] = (
                 DownloadsIntakeFinder(hub=registered_hub, notifier=self.notify)
+            )
+            # And the model folders themselves: rescanned when a model file in
+            # one changes, and every ten minutes besides. There is no Rescan.
+            self._model_folder_watcher = ReferenceFolderWatcher(
+                on_folder_changed=self._on_model_folder_fs_changed,
+                extensions=frozenset(SHELF_MODEL_SUFFIXES),
+                # A download writes for minutes; one scan after it goes quiet.
+                debounce_s=5.0,
+            )
+            self._planner_work_finders[TaskType.MODEL_FOLDER_SCAN] = (
+                ModelFolderScanFinder(
+                    hub=registered_hub,
+                    watcher=self._model_folder_watcher,
+                    notifier=self.notify,
+                )
             )
             # The workflow-card backfill (§B2). Hub-only in the strongest sense:
             # it reads stored documents and never a picture, so it keys the
@@ -496,6 +515,8 @@ class Vault:
         self._arbiter.add_listener(self._on_resource_lease)
         self._ref_folder_watcher.start()
         self._start_existing_folder_watches()
+        if self._model_folder_watcher is not None:
+            self._model_folder_watcher.start()
         # Reconcile before the training worker starts: a trainer that survived a
         # restart is re-attached (or finalized, if it died) before the worker can
         # claim a queued job and ask the arbiter for the card. The yielder is
@@ -772,6 +793,15 @@ class Vault:
         once caption sync is turned on."""
         self._on_reference_folder_fs_changed(None)
 
+    def _on_model_folder_fs_changed(self, folder_id: int) -> None:
+        """A model file in a registered model folder changed: scan it now."""
+        finder = self._planner_work_finders.get(TaskType.MODEL_FOLDER_SCAN)
+        if finder is None:
+            return
+        finder.mark_due(folder_id)
+        if self._work_planner is not None:
+            self._work_planner.wake()
+
     def _on_reference_folder_fs_changed(self, folder_id: int | None) -> None:
         """Callback invoked by the filesystem watcher when a relevant file changes.
 
@@ -848,6 +878,8 @@ class Vault:
                 self.training_service.stop()
             if self._ref_folder_watcher is not None:
                 self._ref_folder_watcher.stop()
+            if self._model_folder_watcher is not None:
+                self._model_folder_watcher.stop()
             if self._task_runner is not None:
                 self._arbiter.remove_yielder(self._yield_gpu)
                 self._arbiter.remove_listener(self._on_resource_lease)
@@ -2148,8 +2180,9 @@ class Vault:
                     missing = 0
                     worker_active_override = False
             elif worker_type == TaskType.MODEL_FOLDER_SCAN:
-                # User-triggered (no finder): live counters straight off the
-                # running task(s), the PICTURE_IMPORT / DETECTION shape. Counted
+                # Live counters straight off the running task(s), whether the
+                # finder or a registration queued them, the PICTURE_IMPORT /
+                # DETECTION shape. Counted
                 # in model files, not pictures - the shelf lives in the hub and
                 # the generic library total would be meaningless here.
                 label = "model_folder_scan"

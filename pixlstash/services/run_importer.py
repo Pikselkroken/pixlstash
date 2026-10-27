@@ -407,7 +407,7 @@ class RunImporter:
             ):
                 raise MoveRefused(
                     f"{relpath} is already registered in the destination folder. "
-                    "Rescan it first."
+                    "Try again once its next scan has caught up."
                 )
             targets[checkpoint.path] = (
                 target,

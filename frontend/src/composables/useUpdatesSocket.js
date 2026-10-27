@@ -21,6 +21,7 @@ import { useNoticeStore } from "../stores/useNoticeStore";
 import { useTasksStore } from "../stores/useTasksStore";
 import { useWorkflowsStore } from "../stores/useWorkflowsStore";
 import { patchWorkflowCard } from "../api/workflows";
+import { useModelFoldersStore } from "../stores/useModelFoldersStore";
 import { useModelShelfStore } from "../stores/useModelShelfStore";
 import { useWorkflowTemplatesStore } from "../stores/useWorkflowTemplatesStore";
 import {
@@ -571,7 +572,8 @@ export function useUpdatesSocket({
           }, WORKFLOWS_CHANGED_DEBOUNCE_MS);
         }
       } else if (payload?.type === "models_arrived" && !isReadOnly.value) {
-        // Models moved onto the shelf from the Downloads folder. Owner-only,
+        // Models moved onto the shelf from the Downloads folder, or found by a
+        // folder's own scan. Owner-only,
         // like every /models route; the store re-reads its rows and raises the
         // sidebar's `new` tag, and says so when the arrival completed a
         // ComfyUI template (#2001).
@@ -580,6 +582,9 @@ export function useUpdatesSocket({
         );
         // A template's files are marked on the shelf or not as of its read.
         useWorkflowTemplatesStore().onModelsArrived();
+        // And the folders' counts, which a scan that found them has changed.
+        const modelFolders = useModelFoldersStore();
+        if (modelFolders.loaded) modelFolders.refresh({ quiet: true });
       } else if (payload?.type === "snapshot_created" && !isReadOnly.value) {
         snapshotsStore.onSnapshotCreated();
       } else if (payload?.type === "snapshot_deleted" && !isReadOnly.value) {

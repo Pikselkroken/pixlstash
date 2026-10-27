@@ -1,4 +1,4 @@
-"""Registering the folders the model shelf catalogues, and rescanning one.
+"""Registering the folders the model shelf catalogues.
 
 A ``model_folder`` is a **hub** row: a folder of LoRAs is a fact about this disk,
 and re-registering the same folder in every library would be absurd. So these
@@ -19,7 +19,7 @@ row disappeared mid-flight would unlink the source with nothing left registering
 the copy it had just made.
 
 **It is a slot, not a general exclusion, and the mover is what actually
-guarantees the invariant.** A rescan writes the same rows and is deliberately
+guarantees the invariant.** A scan writes the same rows and is deliberately
 *outside* this lock (backend architecture §"MODEL_FOLDER_SCAN"), and a
 multi-run import is a sequence of separate lock-taking requests, so a forget can
 still land between two of them. What closes the hole in every case is
@@ -56,15 +56,14 @@ describe locations PixlStash registers for itself (tagger artifacts, the
 InsightFace root, the HuggingFace cache), and a hand-made row of either kind would
 collide with that registration.
 
-**A rescan is a task, not a thread.** ``POST .../rescan`` submits a
-:class:`~pixlstash.tasks.model_folder_scan_task.ModelFolderScanTask` to the
-shared ``TaskRunner`` and answers 202 with its ``task_id``. That is what gives
-the walk per-file progress (``GET /workers/progress`` →
-``workers.ModelFolderScanTask``) and a real terminal state (the folder's
-``scan_status``), neither of which the daemon thread it replaced could offer -
-and it is why the scan no longer outlives the process that started it (#856).
+**Nobody scans by hand.** Registering a catalogued folder queues its first
+:class:`~pixlstash.tasks.model_folder_scan_task.ModelFolderScanTask` at once,
+and :class:`~pixlstash.tasks.model_folder_scan_finder.ModelFolderScanFinder`
+rescans it whenever a model file in it changes and every ten minutes besides.
+The walk's per-file progress is in ``GET /workers/progress`` →
+``workers.ModelFolderScanTask`` and its outcome is the folder's ``scan_status``.
 
-Authorization: the read is ``OWNER_ONLY``; every mutator and the rescan are
+Authorization: the read is ``OWNER_ONLY``; every mutator is
 ``LOCAL_OWNER_ONLY`` with a §16.3 justification, because they take - or walk - a
 caller-supplied host path. That is the same tier and the same reason as the
 ``reference-folders`` block. Declared in ``pixlstash/authz/registry.py``, never
@@ -76,7 +75,6 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -88,10 +86,7 @@ from platformdirs import user_config_dir
 from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services.builtin_caches import (
-    huggingface_cache_dir,
-    redeclare_model_root,
-)
+from pixlstash.services.builtin_caches import huggingface_cache_dir
 from pixlstash.services.builtin_models import BUILTIN_OWNER
 from pixlstash.services import comfyui_link_service
 from pixlstash.services.comfyui_service import (
@@ -117,8 +112,14 @@ from pixlstash.services.model_folder_scanner import (
     ModelFolderScanner,
 )
 from pixlstash.services.model_mover import SHELF_IO_LOCK
-from pixlstash.tasks.base_task import TaskStatus
-from pixlstash.tasks.model_folder_scan_task import ModelFolderScanTask
+from pixlstash.tasks.base_task import TaskPriority
+from pixlstash.tasks.model_folder_scan_finder import scanned_folders
+from pixlstash.tasks.model_folder_scan_task import (
+    claim_scan,
+    forget_scan,
+    release_scan,
+    scan_state,
+)
 from pixlstash.utils.adapter_header import FILE_ENGINE
 from pixlstash.utils.host_path_utils import is_absolute_host_path, normalize_host_path
 from pixlstash.utils.path_utils import path_is_within, resolve_path_within
@@ -154,41 +155,6 @@ DEFAULT_ELIGIBLE_KINDS = ("user", MANAGED_KIND)
 # workflow names a missing file exactly while it is downloading, and `curl -O`
 # writes straight to the final name; the Downloads intake waits the same way.
 PICK_UP_SETTLE_S = 10.0
-
-# How long a rescan of a PixlStash-owned folder waits for the shelf's I/O slot.
-# Long enough to queue behind the other declarations one Rescan all fires at
-# once, short enough to answer a running move with a 409 rather than a hang.
-_REDECLARE_WAIT_S = 5.0
-
-# The most recent scan submitted for each folder, whatever state it ended in.
-# One entry per registered folder, dropped when the folder is forgotten, so it
-# cannot grow.
-#
-# It serves two purposes. It is the "already running" gate: the scanner is
-# correct under concurrent runs (its missing sweep is ``seen_at <`` the run's own
-# stamp, not ``!=``), so this is not a correctness lock - it stops a double-click
-# from reading 438 GB twice. And it is where a *finished* scan's outcome lives,
-# because ``TaskRunner`` forgets a task the moment it completes; a caller that
-# had only ``last_checked`` to look at could not tell a crash from a slow read.
-#
-# In memory on purpose: after a restart nothing is scanning and nothing is
-# pending, so there is no state worth persisting.
-_scans: dict[int, ModelFolderScanTask] = {}
-_scans_lock = threading.Lock()
-
-# The two states that mean "this folder is spoken for". PENDING covers the
-# window between submission and a worker picking the task up, which the old bare
-# thread had no equivalent of - it started running the moment it was created.
-_SCAN_IN_FLIGHT = (TaskStatus.PENDING, TaskStatus.RUNNING)
-
-
-def _scan_state(folder_id: int) -> tuple[Optional[str], Optional[str]]:
-    """Return ``(scan_status, scan_error)`` for a folder's most recent scan."""
-    with _scans_lock:
-        task = _scans.get(folder_id)
-    if task is None:
-        return None, None
-    return task.status.value, task.error
 
 
 def _stability_matrix_roots() -> list[str]:
@@ -425,10 +391,11 @@ class ModelFolderResponse(BaseModel):
     scan_status: Optional[str] = Field(
         default=None,
         description=(
-            "State of the most recent scan submitted for this folder since the "
-            "server started: `pending`, `running`, `completed`, `failed` or "
-            "`cancelled`. Null when this server has not been asked to scan the "
-            "folder yet - which is not the same as never having scanned it, so "
+            "State of the most recent scan of this folder since the server "
+            "started: `pending`, `running`, `completed`, `failed` or "
+            "`cancelled`. Scans run by themselves. Null when this server has not "
+            "scanned the folder yet - which is not the same as never having "
+            "scanned it, so "
             "read `last_checked` for that. Poll this rather than watching "
             "`last_checked` advance: a scan that threw never stamps "
             "`last_checked`, so a timestamp cannot tell a crash from a slow read."
@@ -783,30 +750,6 @@ class ModelFolderDeleteResponse(BaseModel):
     )
 
 
-class ModelFolderRescanResponse(BaseModel):
-    """Body of ``POST /model-folders/{folder_id}/rescan``."""
-
-    model_config = ConfigDict(extra="allow")
-
-    status: str = Field(
-        description="`started`, `already_running`, `declared` - a built-in folder, whose "
-        "rows are declared rather than scanned and were re-read before this "
-        "answered - or `skipped`, for a `source` folder, which holds runs "
-        "rather than models, and for a built-in folder that could not be read."
-    )
-    id: int
-    task_id: Optional[str] = Field(
-        default=None,
-        description=(
-            "The task now queued on the task runner, or the one already running "
-            "when `status` is `already_running`. Null for a skipped `source` "
-            "folder. Its live progress is in `GET /workers/progress` under "
-            "`workers.ModelFolderScanTask`; its outcome is the folder's "
-            "`scan_status`."
-        ),
-    )
-
-
 class ModelFolderPickUpRequest(BaseModel):
     """Body of ``POST /model-folders/pick-up``."""
 
@@ -1025,59 +968,50 @@ def register_model_folder(
     return folder_id
 
 
-def queue_model_folder_scan(
-    server, folder_id: int, path: str, kind: str
-) -> tuple[str, Optional[str]]:
-    """Queue a scan of a registered folder unless one is already in flight.
+def queue_model_folder_scan(server, folder_id: int, path: str, kind: str) -> bool:
+    """Queue the first scan of a folder just registered, ahead of other work.
 
-    Args:
-        server: The Server instance, for ``hub`` and the vault's task runner.
-        folder_id: The ``model_folder`` row to scan.
-        path: That row's path.
-        kind: That row's kind.
+    The finder would find it anyway (a folder never scanned is due at once);
+    queuing it here is what lets the registration answer with the scan already
+    ``pending``, so the folder reads as being looked at rather than as empty.
 
     Returns:
-        ``("started" | "already_running", task_id)``.
-
-    Raises:
-        HTTPException: 503 when the task runner refuses the submission.
+        False when it was not queued: one is already in flight, or the task
+        runner refused it, in which case the finder's next check takes it.
     """
-    with _scans_lock:
-        running = _scans.get(folder_id)
-        if running is not None and running.status in _SCAN_IN_FLIGHT:
-            return "already_running", running.id
-        task = ModelFolderScanTask(server.hub, folder_id, path, kind)
-        # Claimed before submission, so the gate covers the queued window
-        # too. A submission that fails releases it below.
-        _scans[folder_id] = task
-
+    task = claim_scan(
+        server.hub,
+        folder_id,
+        path,
+        kind,
+        priority=TaskPriority.HIGH,
+        notifier=server.vault.notify,
+    )
+    if task is None:
+        return False
     try:
         task_id = server.vault.submit_task(task)
     except RuntimeError as exc:
         logger.error(
-            "Could not queue a rescan of model folder %s (id=%s): the task "
-            "runner refused the submission: %s",
+            "Could not queue the first scan of model folder %s (id=%s): the "
+            "task runner refused the submission: %s. The background scan will "
+            "pick it up instead.",
             path,
             folder_id,
             exc,
         )
         task_id = None
     if task_id is None:
-        with _scans_lock:
-            if _scans.get(folder_id) is task:
-                del _scans[folder_id]
-        raise HTTPException(
-            status_code=503,
-            detail="The task runner is not available, so the scan cannot be queued.",
-        )
+        release_scan(task)
+        return False
     logger.info(
-        "Rescan of model folder %s (id=%s, kind=%s) queued as task %s.",
+        "First scan of model folder %s (id=%s, kind=%s) queued as task %s.",
         path,
         folder_id,
         kind,
         task_id,
     )
-    return "started", task_id
+    return True
 
 
 def register_comfyui_model_folders(server, base_url: str) -> list[int]:
@@ -1134,16 +1068,7 @@ def register_comfyui_model_folders(server, base_url: str) -> list[int]:
             )
             continue
         registered.append(folder_id)
-        try:
-            queue_model_folder_scan(server, folder_id, resolved, "user")
-        except HTTPException as exc:
-            logger.warning(
-                "ComfyUI model folder %s (id=%s) registered but not scanned: %s. "
-                "Rescan it from the model folders dialog.",
-                resolved,
-                folder_id,
-                exc.detail,
-            )
+        queue_model_folder_scan(server, folder_id, resolved, "user")
     return registered
 
 
@@ -1200,7 +1125,7 @@ def create_router(server) -> APIRouter:
             download_id = _download_folder_id()
         delete_after_import = row["delete_after_import"]
         scan_status, scan_error = (
-            scan if scan is not None else _scan_state(int(row["id"]))
+            scan if scan is not None else scan_state(int(row["id"]))
         )
         return ModelFolderResponse(
             id=int(row["id"]),
@@ -1248,7 +1173,7 @@ def create_router(server) -> APIRouter:
         # with the count from before it wrote - an empty folder that just
         # succeeded. This way round the stale pairing is "still running" with a
         # full count, which the next poll corrects.
-        scans = {int(row["id"]): _scan_state(int(row["id"])) for row in rows}
+        scans = {int(row["id"]): scan_state(int(row["id"])) for row in rows}
         counts = _file_counts()
         present_bytes = _present_bytes_by_folder()
         # Once per list, not per row: the dialog polls this every few seconds.
@@ -1538,8 +1463,9 @@ def create_router(server) -> APIRouter:
             "Adds a folder for the shelf to catalogue (`kind=user`), to take "
             "ai-toolkit runs from (`kind=source`), or to watch for downloaded "
             "models (`kind=downloads`, one at most), which are moved into the "
-            "default folder. Registering does not scan; call the rescan route, "
-            "which queues the walk as a background task."
+            "default folder. A catalogued folder's first scan is queued at "
+            "once as a background task (its `scan_status`), and it is rescanned "
+            "by itself whenever a model file in it changes."
         ),
         tags=["model_shelf"],
         response_model=ModelFolderResponse,
@@ -1556,7 +1482,13 @@ def create_router(server) -> APIRouter:
             host_path=payload.host_path,
             delete_after_import=payload.delete_after_import,
         )
-        return _to_response(_fetch_folder(folder_id))
+        folder = _fetch_folder(folder_id)
+        if folder["kind"] not in TAKEN_FROM_KINDS:
+            queue_model_folder_scan(server, folder_id, folder["path"], folder["kind"])
+            # So the background scan sets up the folder's watch now rather
+            # than on its next check.
+            server.vault.wake()
+        return _to_response(folder)
 
     @router.patch(
         "/model-folders/{folder_id}",
@@ -1733,11 +1665,7 @@ def create_router(server) -> APIRouter:
                 )
                 tombstoned = int(cursor.rowcount or 0)
                 conn.execute("DELETE FROM model_folder WHERE id = ?", (folder_id,))
-            # Drop the remembered scan with the folder. SQLite reuses rowids, so
-            # a folder registered later could otherwise inherit this one's
-            # outcome.
-            with _scans_lock:
-                _scans.pop(folder_id, None)
+            forget_scan(folder_id)
         finally:
             SHELF_IO_LOCK.release()
         logger.info(
@@ -1750,85 +1678,6 @@ def create_router(server) -> APIRouter:
         return ModelFolderDeleteResponse(
             status="success", id=folder_id, tombstoned_files=tombstoned
         )
-
-    def _redeclare(folder_id: int) -> ModelFolderRescanResponse:
-        """Re-run the declaration of a folder PixlStash owns, in the request.
-
-        Milliseconds, so not a task: the HuggingFace cache's index read
-        measured 0.01 s against 116 GB. It still waits for the shelf's I/O
-        slot, because relocating one of these roots repoints this row's path,
-        and a declaration at the old path would re-create the row there. A
-        sibling declaration from the same Rescan all holds the slot for
-        milliseconds and is waited out; a move holds it for minutes and is a
-        409.
-        """
-        if not SHELF_IO_LOCK.acquire(timeout=_REDECLARE_WAIT_S):
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "Another model move, import or rescan is holding the "
-                    "shelf. Rescan this folder once it has finished."
-                ),
-            )
-        try:
-            # Read again under the slot: a relocation may have repointed it.
-            path = _fetch_folder(folder_id)["path"]
-            try:
-                declared = redeclare_model_root(server.hub, path)
-            except (sqlite3.Error, OSError) as exc:
-                logger.error(
-                    "Could not re-declare model folder %s (id=%s): %s. Its rows "
-                    "keep the state the last declaration gave them.",
-                    path,
-                    folder_id,
-                    exc,
-                )
-                raise HTTPException(
-                    status_code=500, detail="Could not re-read that folder."
-                ) from exc
-        finally:
-            SHELF_IO_LOCK.release()
-        return ModelFolderRescanResponse(
-            status="skipped" if declared is None else "declared", id=folder_id
-        )
-
-    @router.post(
-        "/model-folders/{folder_id}/rescan",
-        summary="Rescan a registered model folder",
-        description=(
-            "Walks the folder and reconciles the shelf with what is on disk. "
-            "Returns immediately with the id of the task now queued on the task "
-            "runner, because a folder of 1,800 adapters is minutes of reading. "
-            "Watch it two ways: live file progress in `GET /workers/progress` "
-            "under `workers.ModelFolderScanTask`, and the outcome in this "
-            "folder's `scan_status` from `GET /model-folders`. A `source` folder "
-            "is skipped: it is taken from, never catalogued in place. A folder "
-            "PixlStash owns (its downloads, InsightFace, the HuggingFace cache) "
-            "is re-declared from its index before this answers: no task, and a "
-            "409 while a move or an import is running."
-        ),
-        status_code=202,
-        tags=["model_shelf"],
-        response_model=ModelFolderRescanResponse,
-    )
-    def rescan_model_folder(folder_id: int, request: Request):
-        server.auth.ensure_secure_when_required(request)
-        folder = _fetch_folder(folder_id)
-        if folder["owner"] == BUILTIN_OWNER:
-            # A built-in folder is DECLARED, and pointing the scanner at it
-            # would be actively wrong: it yields only `.safetensors` and sweeps
-            # what it did not see to `missing`, so it would mark the ONNX tagger
-            # and both `.pth` scorers missing on every pass. Its rescan is the
-            # declaration again, which reads an index rather than the files.
-            return _redeclare(folder_id)
-        if folder["kind"] in TAKEN_FROM_KINDS:
-            # A source folder holds runs to import, not models to catalogue.
-            return ModelFolderRescanResponse(status="skipped", id=folder_id)
-
-        status, task_id = queue_model_folder_scan(
-            server, folder_id, folder["path"], folder["kind"]
-        )
-        return ModelFolderRescanResponse(status=status, id=folder_id, task_id=task_id)
 
     @router.post(
         "/model-folders/pick-up",
@@ -1855,14 +1704,7 @@ def create_router(server) -> APIRouter:
         }
         if not names:
             return ModelFolderPickUpResponse(files=[])
-        # The folders a rescan would walk (see `rescan_model_folder`).
-        folders = [
-            (int(row["id"]), row["path"])
-            for row in server.hub.fetchall(
-                "SELECT id, path, kind, owner FROM model_folder ORDER BY id"
-            )
-            if row["kind"] not in TAKEN_FROM_KINDS and row["owner"] != BUILTIN_OWNER
-        ]
+        folders = [(int(row["id"]), row["path"]) for row in scanned_folders(server.hub)]
         scanner = ModelFolderScanner(server.hub)
         found = [
             hit for hit in scanner.find_unregistered(folders, names) if _settled(hit[1])

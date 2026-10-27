@@ -934,8 +934,8 @@ def create_router(server) -> APIRouter:
                     status_code=409,
                     detail=(
                         f"That file is already inside {row['path']}, a folder "
-                        "PixlStash knows about. Rescan that folder instead of "
-                        "copying the file a second time."
+                        "PixlStash scans by itself, so it is on the shelf (or "
+                        "will be in a moment) without a second copy."
                     ),
                 )
         return resolved
@@ -1035,7 +1035,8 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    f"{relpath} is already registered in that folder. Rescan it first."
+                    f"{relpath} is already registered in that folder. Try "
+                    "again once its next scan has caught up."
                 ),
             )
 

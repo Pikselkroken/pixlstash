@@ -133,7 +133,8 @@ export async function getComfyuiReads() {
 /**
  * Register a folder for the shelf to catalogue.
  *
- * Registering does not scan; call {@link rescanModelFolder} afterwards. A path
+ * The server queues the folder's first scan itself and rescans it whenever a
+ * model file in it changes, so the row comes back with `scan_status`. A path
  * that is already registered answers 409, which the picker avoids by disabling
  * the rows it was given in `registeredPaths`.
  *
@@ -209,30 +210,14 @@ export async function forgetModelFolder(id) {
 }
 
 /**
- * Start a scan of a registered folder.
- *
- * Returns 202 as soon as the thread is started, NOT when the scan finishes: a
- * folder of 1,800 adapters is minutes of hashing and there is no progress
- * channel. The only completion signal is `last_checked` advancing on a later
- * {@link listModelFolders}, which is what the store polls for.
- *
- * @param {number|string} id
- * @returns {Promise<Object>} the response body, whose `status` is `started`,
- *   `already_running`, or `skipped` for a `source` folder.
- */
-export async function rescanModelFolder(id) {
-  return unwrap(apiClient.post(`${MODEL_FOLDERS_URL}/${id}/rescan`, {}));
-}
-
-/**
  * Look for model files that landed after their folder's last scan (#1985).
  *
  * *files* are the names a workflow reports missing; they are matched by
- * basename in every folder a rescan would walk. Without `add` this only walks,
+ * basename in every folder the server scans. Without `add` this only walks,
  * nothing is opened or hashed, so it is cheap to ask whenever a file is
  * missing. With `add` each file found is registered as a scan would.
  *
- * §16.3 like the rescan: a remote owner gets a 403.
+ * §16.3 like the folder mutators: a remote owner gets a 403.
  *
  * @param {string[]} files
  * @param {{add?: boolean}} [options]

@@ -35,7 +35,7 @@
 22. [Tiered Duplicate Detection](#22-tiered-duplicate-detection)
 23. [Opt-in telemetry](#23-opt-in-telemetry-the-install-id-and-the-consent-flags)
 24. [Folder structure: read, commit, layout and moves](#24-folder-structure-read-commit-layout-and-moves) — incl. [24.1 The folder-structure read](#241-the-folder-structure-read), [24.2 The folder-structure commit](#242-the-folder-structure-commit), [24.3 The library layout](#243-the-library-layout), [24.4 The layout and the move engine](#244-the-layout-and-the-move-engine), [24.5 Reconciling moves made outside PixlStash](#245-reconciling-moves-made-outside-pixlstash)
-25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Picking up a model that landed after the scan (#1985)](#2513-picking-up-a-model-that-landed-after-the-scan-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116), [25.17 Sample prompts written from the dataset (#2117)](#2517-sample-prompts-written-from-the-dataset-2117), [25.18 Watching a run live (#2118)](#2518-watching-a-run-live-2118), [25.19 The Train dialog's preview: dataset checks and resolve (#2119)](#2519-the-train-dialogs-preview-dataset-checks-and-resolve-2119), [25.20 Checking memory and speed, and learning from runs (#2120)](#2520-checking-memory-and-speed-and-learning-from-runs-2120), [25.21 Recipe updates from pixlstash.dev (#2122)](#2521-recipe-updates-from-pixlstashdev-2122), [25.22 Dataset snapshots: what a LoRA was trained on (#2123)](#2522-dataset-snapshots-what-a-lora-was-trained-on-2123), [25.23 Browsing a model folder by directory (#2203)](#2523-browsing-a-model-folder-by-directory-2203), [25.24 Moving into a subfolder, and when a file is already there (#2204)](#2524-moving-into-a-subfolder-and-when-a-file-is-already-there-2204), [25.25 Where ComfyUI loads each kind from (#2205)](#2525-where-comfyui-loads-each-kind-from-2205)
+25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Folders scan themselves, and picking up a model before they do (#1985)](#2513-folders-scan-themselves-and-picking-up-a-model-before-they-do-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116), [25.17 Sample prompts written from the dataset (#2117)](#2517-sample-prompts-written-from-the-dataset-2117), [25.18 Watching a run live (#2118)](#2518-watching-a-run-live-2118), [25.19 The Train dialog's preview: dataset checks and resolve (#2119)](#2519-the-train-dialogs-preview-dataset-checks-and-resolve-2119), [25.20 Checking memory and speed, and learning from runs (#2120)](#2520-checking-memory-and-speed-and-learning-from-runs-2120), [25.21 Recipe updates from pixlstash.dev (#2122)](#2521-recipe-updates-from-pixlstashdev-2122), [25.22 Dataset snapshots: what a LoRA was trained on (#2123)](#2522-dataset-snapshots-what-a-lora-was-trained-on-2123), [25.23 Browsing a model folder by directory (#2203)](#2523-browsing-a-model-folder-by-directory-2203), [25.24 Moving into a subfolder, and when a file is already there (#2204)](#2524-moving-into-a-subfolder-and-when-a-file-is-already-there-2204), [25.25 Where ComfyUI loads each kind from (#2205)](#2525-where-comfyui-loads-each-kind-from-2205)
 26. [Prompt match](#26-prompt-match)
 
 ---
@@ -652,7 +652,6 @@ Public guest scoring and shared-link endpoints.
 | DELETE | /api/v1/model-folders/{folder_id}                                             | model_shelf     | Forget a registered model folder                              |
 | GET    | /api/v1/model-folders/{folder_id}/dirs                                        | model_shelf     | List one directory level of a model folder                    |
 | POST   | /api/v1/model-folders/{folder_id}/relocate                                    | model_shelf     | Move a folder PixlStash owns to another location              |
-| POST   | /api/v1/model-folders/{folder_id}/rescan                                      | model_shelf     | Rescan a registered model folder                              |
 | GET    | /api/v1/model-folders/{folder_id}/runs                                        | model_shelf     | List the training runs in an ai-toolkit output folder         |
 | GET    | /api/v1/model-folders/{folder_id}/runs/{run_name}/samples/{filename}          | model_shelf     | One preview image from a training run                         |
 | GET    | /api/v1/model-icons/{sha256}                                                  | model_shelf     | Serve one stored icon                                         |
@@ -1143,7 +1142,7 @@ The write path has to tell the two apart. Blanking a description is how a pictur
 | `REFERENCE_FOLDER_SCAN` | CPU | `ReferenceFolderScanFinder` | Periodic reference-folder rescan |
 | `DETECTION` | GPU | _(none — user-triggered)_ | Florence-2 object detection / phrase grounding → `Detection` rows. Enqueued by `POST /pictures/detect` (the Segment action); HIGH priority, no WorkFinder. Reuses the captioning Florence-2 model via `InferenceEngine.detect_objects`. |
 | `PICTURE_IMPORT` | CPU | _(none — user-triggered)_ | Async streaming-staging import (#459). Finishes a committed staging session server-side (the *safe* window): hashes, de-dupes by `pixel_sha` (incl. intra-batch), ingests each staged file, inserts `Picture` rows with a pending-tag sentinel, then removes the staging dir. Enqueued by `POST /pictures/import/staging/{id}/commit`; HIGH priority, no WorkFinder. Live progress via the worker-progress snapshot (`_total_count`/`_processed_count`), completion emits `CHANGED_PICTURES` + `PICTURE_IMPORTED`. |
-| `MODEL_FOLDER_SCAN` | CPU | _(none — user-triggered)_ | Model shelf. Walks one registered `model_folder` and reconciles its `model` / `model_file` rows with disk (`ModelFolderScanner.scan_folder`). Enqueued by `POST /model-folders/{id}/rescan`; HIGH priority, no WorkFinder. **Works on the hub, not the vault** — like `CHECKPOINT_HASH`, because a model folder is a fact about the machine. It replaced a bare `threading.Thread`, which nothing observed: the scan hashes every adapter it sees, so a 57 GB folder ran for minutes with no progress, a crash was indistinguishable from a slow read (the scanner logs and returns without stamping `last_checked`), and the thread was exactly the leaked-daemon shape #856's teardown gate exists to catch. Live progress via the worker-progress snapshot (`_total_count`/`_processed_count`, fed by the scanner's `progress` callback once per file); the outcome is the task's own `status`, surfaced per folder as `scan_status` / `scan_error` on `GET /model-folders`. **One scan per folder at a time**, gated by `_scans` in `routes/model_folders.py`, claimed *before* submission so the gate covers the queued window too. Deliberately **not** under `SHELF_IO_LOCK`: that lock serialises the mutating shelf operations (moves, imports) against each other, and a minutes-long read has no business blocking a move the owner asked for. Concurrent scans of *different* folders are safe by construction — the missing sweep is `seen_at <` the run's own stamp, per-folder (#794). **The scan's write cadence is bounded by time as well as by count** (`_WRITE_INTERVAL_S = 2.0` beside `_WRITE_BATCH = 200`), which is what lets `CHECKPOINT_HASH` overlap it: a 91-file folder is one commit at the very end under the count alone, and a measured 6.11 GB scan showed `MissingCheckpointHashFinder` zero rows at any point while it ran, so the two workers went strictly nose to tail. Time rather than a smaller count because the cost driver is per-file hashing, not row count — ten 4 GB adapters are ten files and several minutes. Commits are cheap enough to spend: 0.06 ms marginal per extra commit over 1,800 files on the hub (WAL, `synchronous=NORMAL`). Measured on a 9.4 GB folder: first work visible to the finder at 2.05 s of a 4.33 s scan, against never before, with scan wall time unchanged. |
+| `MODEL_FOLDER_SCAN` | CPU | `ModelFolderScanFinder` | Model shelf. Walks one registered `model_folder` and reconciles its `model` / `model_file` rows with disk (`ModelFolderScanner.scan_folder`). **Nobody asks for it** (§25.13): the finder hands one out, MEDIUM priority, when a model file in a folder changes (a `ReferenceFolderWatcher` per folder, given the model suffixes and a 5 s debounce), when a folder's watch is first set up (start-up included), and whenever a folder has gone `RESCAN_INTERVAL_S` (10 min) without one; `POST /model-folders` queues a folder's first scan at HIGH so the answer already says `pending`. **Works on the hub, not the vault** — like `CHECKPOINT_HASH`, because a model folder is a fact about the machine. It replaced a bare `threading.Thread`, which nothing observed: the scan hashes every adapter it sees, so a 57 GB folder ran for minutes with no progress, a crash was indistinguishable from a slow read (the scanner logs and returns without stamping `last_checked`), and the thread was exactly the leaked-daemon shape #856's teardown gate exists to catch. Live progress via the worker-progress snapshot (`_total_count`/`_processed_count`, fed by the scanner's `progress` callback once per file); the outcome is the task's own `status`, surfaced per folder as `scan_status` / `scan_error` on `GET /model-folders`. **One scan per folder at a time**, gated by `claim_scan` in `tasks/model_folder_scan_task.py`, claimed *before* submission so the gate covers the queued window too, and one finder scan at a time across folders. Deliberately **not** under `SHELF_IO_LOCK`: that lock serialises the mutating shelf operations (moves, imports) against each other, and a minutes-long read has no business blocking a move the owner asked for. Concurrent scans of *different* folders are safe by construction — the missing sweep is `seen_at <` the run's own stamp, per-folder (#794). **The scan's write cadence is bounded by time as well as by count** (`_WRITE_INTERVAL_S = 2.0` beside `_WRITE_BATCH = 200`), which is what lets `CHECKPOINT_HASH` overlap it: a 91-file folder is one commit at the very end under the count alone, and a measured 6.11 GB scan showed `MissingCheckpointHashFinder` zero rows at any point while it ran, so the two workers went strictly nose to tail. Time rather than a smaller count because the cost driver is per-file hashing, not row count — ten 4 GB adapters are ten files and several minutes. Commits are cheap enough to spend: 0.06 ms marginal per extra commit over 1,800 files on the hub (WAL, `synchronous=NORMAL`). Measured on a 9.4 GB folder: first work visible to the finder at 2.05 s of a 4.33 s scan, against never before, with scan wall time unchanged. |
 | `GFS_SNAPSHOT` | CPU | `EnsureGfsSnapshotFinder` | Drives the Grandfather-Father-Son automatic snapshot schedule: at most one snapshot per check (every 5 minutes), of the highest tier that is due (`MONTHLY` / `WEEKLY` / `DAILY`). Retention prunes each tier independently (7 daily / 4 weekly / 12 monthly). Registered in `vault.py`. |
 | `SCRAPHEAP_RETENTION_PURGE` | CPU | `ScrapheapRetentionPurgeFinder` | Scrapheap auto-purge. Every 15 minutes, selects UNPROTECTED, UNLOCKED soft-deleted pictures whose deadline has passed and permanently destroys them through the ONE destruction path, `scrapheap_service.purge_scrapheap_pictures(..., include_protected=False)`. **Deadline = `max(deleted_at + scrapheap_retention_days, scrapheap_retention_reduced_at + 1 day)`** — the second term is a FLOOR measured from the last window *lowering*, not a per-picture extension, so after a reduction nothing is purgeable for a day regardless of age. (Measuring the grace from `deleted_at` would only help the `[days, days+1)` band, leaving `Never -> 30` free to wipe a long-lived scrapheap on the next sweep.) The deadline and the locked-set freeze are enforced **twice** — in the finder's candidate query and again by a `RetentionGuard` inside `build_purge_plan`, which re-derives them from the row's current `deleted_at` (the task runs at LOW priority, so a restore/re-delete in between is a real TOCTOU). Locked-set members (directly, or via a live stack sibling) are skipped and reported, never raised — on **every** path: `build_purge_plan` enforces the freeze unconditionally, so the manual `DELETE /pictures/scrapheap` cannot destroy one either, at either `include_protected` value (returned as `skipped_locked`). `POST /pictures/scrapheap/delete-preview` reports `locked_count` / `protected_count` / `unprotected_count` as three DISJOINT buckets summing to `total_count`, keyed on which action destroys the row — locked classified FIRST (the opposite of `auto_purge_exempt_reason`, where protected wins) because the preview answers "what will this button destroy?" and must lead with the binding blocker, while the badge answers "why is this kept?" and leads with the permanent reason. The candidate query evaluates the deadline in SQL — `deleted = TRUE AND deleted_at <= now - retention_days`, keyset-paginated on `(deleted_at, id)` so `ix_picture_deleted_at` is actually used (ordering by `id` instead made SQLite walk every scrapheap row via `ix_picture_deleted`: 1.23 ms/page vs 0.08 ms/page on a 200k library with a 20k scrapheap) — and returns early without scanning at all while `now < reduced_at + grace`, since no row can be due inside the floor. The lock lookup is chunked; the lock lookup is chunked to `LOCK_QUERY_CHUNK` ids so a large scrapheap cannot hit the 999-variable limit of SQLite < 3.32 and silently disable the sweep. The scrapheap listing applies the SAME two exemptions through the same helpers, exposing `purge_at` / `auto_purge_exempt` / `auto_purge_exempt_reason` (`"protected"` | `"locked"` | `null`; protected wins when both apply), so the countdown the UI renders can never disagree with what the sweep will do. Full restore and per-resource restore both re-stamp `deleted_at = now()` on restored scrapheap rows, so restoring an old snapshot cannot hand the sweep an already-expired deadline. Protected reference-folder originals (`allow_delete_file=False`) are exempt from any timer and are excluded from the candidate query — only the consent-gated manual delete-forever (`include_protected=true`) can destroy them. `scrapheap_retention_days=null` ("Never") disables the finder entirely, and a config save NEVER purges synchronously. **`null` is the DEFAULT (`scrapheap_service.DEFAULT_RETENTION_DAYS`): auto-purge is opt-in.** An unattended path that removes files from disk must be one the user switched on, so an install that has never saved a window — a fresh install, or one upgraded from a release without the setting — is never on the clock; an unparseable stored value also resolves to Never rather than to a window. The server-config key is written *only* by `apply_retention_config` (i.e. by an explicit PATCH), so "key absent" reliably means "never chosen" and an existing explicit choice, including an explicit `30`, survives the upgrade untouched. Because the default is Never (an infinite window), **turning auto-purge on is a *reduction*** and therefore earns both the grace floor and the `/impact` confirm — the switch-on is the one change that can expose an entire long-lived scrapheap at once. Registered in `vault.py`. |
 | `TAG_HEALTH_AUTO_REBUILD` | CPU | `TagHealthAutoRebuildFinder` | Checks `tag_health_service.is_stale` at most every 5 minutes (`AUTO_REBUILD_CHECK_INTERVAL_S`); when stale and no rebuild is running, dispatches through the same idempotent `start_rebuild` path `POST /tag_health/rebuild` uses. Closes the loop so `GET /tag_health`'s `stale` flag (new pictures / `TaggerRun`s / reviewed `TagSuggestion`s since the cache's `computed_at`) self-heals without a manual click. |
@@ -1161,7 +1160,7 @@ The write path has to tell the two apart. Blanking a description is how a pictur
 
 Most finders still fetch the full ORM row; only `MissingThumbnailFinder` and `MissingSmartScoreFinder` (the two hottest) have been narrowed so far.
 
-**User-triggered tasks** (e.g. `DETECTION`, `PICTURE_IMPORT`, `MODEL_FOLDER_SCAN`) have no finder: they are enqueued directly from a route in response to a user action and replace prior rows on re-run rather than being gated on a `NULL` column. A route that needs background work therefore submits a task (`Vault.submit_task`) — **never a bare thread**. The task runner owns the lifecycle, which is what gives the work a queue position, live progress in the worker-progress snapshot, a real terminal `status`, and a deterministic shutdown (#856).
+**User-triggered tasks** (e.g. `DETECTION`, `PICTURE_IMPORT`) have no finder: they are enqueued directly from a route in response to a user action and replace prior rows on re-run rather than being gated on a `NULL` column. A route that needs background work therefore submits a task (`Vault.submit_task`) — **never a bare thread**. The task runner owns the lifecycle, which is what gives the work a queue position, live progress in the worker-progress snapshot, a real terminal `status`, and a deterministic shutdown (#856).
 
 ### VRAM arbitration
 
@@ -5271,6 +5270,7 @@ The authz refactor (§16.2) moved this class off `require_user_id` and onto decl
   - **Updated 2026-10-03 (first-import promote route removed) — the locality total is now `56 = 49 local + 7 loopback`.** `POST /api/v1/libraries/{library_uuid}/promote` leaves the local tier and the registry: its only caller, "Start an empty library here", was removed from the first-import wizard, and an empty folder already gets `vault.db` from `POST /libraries`. A finished import still promotes its vault, internally from the commit. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_49_local_7_loopback`.
   - **Updated 2026-10-08 (#1810, ComfyUI link from a local owner) — the locality total is now `59 = 51 local + 8 loopback`.** Re-derived from `ROUTE_POLICIES`. `POST /api/v1/comfyui/pack/install` (2026-10-06) is the 8th loopback route, missed here when it landed. `POST` and `DELETE /api/v1/comfyui/link` retarget from `owner_only` to the local tier: linking has this server push a token to whatever answers at the saved ComfyUI address on its own network, and saving that address is allowed remotely, so a remote owner could aim it. `GET /api/v1/comfyui/link` only reports and stays `owner_only`. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_49_local_7_loopback`, whose name predates both counts.
   - **Updated 2026-10-24 (#2054, installing a known node pack) — the locality total is now `66 = 57 local + 9 loopback`.** Re-derived from `ROUTE_POLICIES`. `POST /api/v1/comfyui/node-packs/{pack_id}/install` is the 9th loopback route: it has the saved ComfyUI's ComfyUI-Manager install third-party code (a pack from `node_packs.KNOWN_PACKS`, at its pinned version; nothing else comes from the caller) and restarts ComfyUI, the host-shell class, so loopback only, which `allow_remote_host_ops` cannot loosen. The ComfyUI itself may be on the local network, since Manager does the writing. `GET /api/v1/comfyui/node-packs/{pack_id}` only reports whether the pack's nodes load and is `owner_only`. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_49_local_7_loopback`.
+  - **Updated 2026-10-27 (model folders scan themselves) — the locality total is now `73 = 64 local + 9 loopback`.** `POST /api/v1/model-folders/{folder_id}/rescan` leaves the local tier and the registry: a registered folder is scanned in the background (`ModelFolderScanFinder`, §25.13) and `POST /model-folders` queues its first scan, so no route walks a folder on request. The rows that cited the rescan's authority now cite the background scan's, which walks the same folders.
   - **Updated 2026-09-07 (PixlStash Views withdrawn, superseded by the line above) — the locality total is now `52 = 45 local + 7 loopback`.** Re-derived from `ROUTE_POLICIES`, not subtracted from the line above, which had itself gone stale twice in between (`POST /api/v1/pictures/export/folder` and `DELETE /api/v1/folder-structure/commit` both landed without re-deriving it). `GET` and `PATCH /api/v1/server-config/views` are **removed**, along with the feature behind them: the settings section was never wired into the app, so the routes were reachable only by a direct API call and nothing in the product ever set `library_settings.views_root`. Neither route was the *subject* of any assertion in `tests/test_authz_host_capability_16_3.py` — the behavioural §16.3 tests drive `GET /filesystem/browse` and `POST /pictures/{id}/open-location`, and `READ_BLOCKED_GET_PATHS` membership is **derived** from `ROUTE_POLICIES` by `test_every_untemplated_owner_class_get_is_on_the_read_blocked_belt` rather than written down — so the removal costs two counted routes and no coverage. One thing survives the feature: `ReferenceFolderScanTask` still refuses to descend a directory holding a `.pixlstash-views` marker, because the API shipped in v1.11 and a tree it published is still on disk; without the prune every link under one would be indexed as a second copy of a picture. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_45_local_7_loopback`. Arithmetic, not judgement.
 
 **Correction to the historical claim.** The compensating-control line above ("remote `ALL` blocked by `require_local_for_write`") overstates the protection for this class as it stood. The `_require_local_for_write` **method** runs only at `/login` (`auth.py` — password-login path), not per-request on these handlers; the genuine per-request control was the middleware's separate remote-`ALL`-**token** block. A remote **cookie** owner session was therefore *not* locality-gated on these endpoints at all — the exact gap the `LOCAL_OWNER_ONLY` retarget closes (a remote cookie owner is now locality-checked, and the 3 red-line routes are loopback-only).
@@ -8883,8 +8883,8 @@ full set lives in `model_capability` (below).
 **The scanner must skip these folders**, which is what `model_folder.owner`
 marks. It yields `SHELF_MODEL_SUFFIXES` only and sweeps whatever it did not see
 to `missing`, so pointed here it would mark the ONNX tagger and both `.pth`
-scorers missing on every pass. `POST /model-folders/{id}/rescan` answers `skipped` for
-them, as it already does for a `source` folder.
+scorers missing on every pass. `ModelFolderScanFinder` never hands out a scan of
+them (`scanned_folders`), as it never does for a `source` folder.
 
 **The filenames are restated rather than imported.** Every downloader names its
 files as module constants, but those modules import onnxruntime, torch, cv2 and
@@ -9168,15 +9168,16 @@ cannot cost the shelf the other two, and every failure is logged and swallowed:
 a machine that has never run face detection has no InsightFace directory, and one
 that has downloaded nothing through the library has no cache. Both are normal.
 
-**A rescan of one of these roots is its declaration again**
-(`builtin_caches.redeclare_model_root`). Until it was, `POST
-/model-folders/{id}/rescan` answered `skipped` for them and the frontend's
-Rescan all left them out, so a repo deleted from the HuggingFace cache stayed
-`present` through every rescan until the next restart. It runs in the request
-(an index read, not a walk) and answers `declared`; it waits up to 5 s for
+**The background scan of one of these roots is its declaration again**
+(`builtin_caches.redeclare_model_root`, from `ModelFolderScanTask` when the
+folder's `owner` is PixlStash). Without it a repo deleted from the HuggingFace
+cache stayed `present` until the next restart. `ModelFolderScanFinder` hands
+these out on its ten-minute timer only, with no watch (the cache's contents are
+an index, not model files a watch would see arrive); the declaration stamps
+`last_checked`, which is the timer's clock. It waits up to 5 s for
 `SHELF_IO_LOCK`, because a relocation repoints the row's path and a declaration
-at the old path would re-create the row there. A move holding the slot longer is
-a 409.
+at the old path would re-create the row there; a move holding the slot longer
+skips that pass, and the next one tries again.
 
 **Where the folder is: one accessor, and a location that can be recorded (#905,
 closing #112).** `builtin_models.builtin_model_dir()` is the single answer, and
@@ -11139,10 +11140,10 @@ row reads `is_default: true` and the client never re-derives the fallback.
 the route checks first and the partial unique index
 `ux_model_folder_single_downloads` holds it against a race, and a second `POST`
 answers 409 either way. It joins `source` in
-`model_folder_scanner.TAKEN_FROM_KINDS`: never scanned (`rescan` answers
-`skipped`), never a destination for `Add file`, a move or an import. It is also
-the one registered folder `Add file` may copy *from*, because nothing in it is
-catalogued and the "rescan instead" refusal would send the owner nowhere.
+`model_folder_scanner.TAKEN_FROM_KINDS`: never scanned, never a destination for
+`Add file`, a move or an import. It is also the one registered folder `Add file`
+may copy *from*, because nothing in it is catalogued and the "it is scanned
+already" refusal would send the owner nowhere.
 
 `DownloadsIntakeFinder` (a hub finder registered in `vault.py` beside the
 checkpoint hasher) lists its top level every two seconds and hands out what is
@@ -11331,20 +11332,63 @@ an address of its choosing.
   Hugging Face or Civitai token is sent, so a gated file fails as a web page;
   relocating the download folder mid-download fails that download.
 
-### 25.13 Picking up a model that landed after the scan (#1985)
+### 25.13 Folders scan themselves, and picking up a model before they do (#1985)
 
-A folder is scanned when it is registered and when the owner presses Rescan,
-and at no other time. A model downloaded into it afterwards (ComfyUI Manager, a
-browser saving straight into `models/loras`) has no `model_file` row, so the
-PixlStash loaders cannot load it off the shelf and a workflow naming it reads as
-missing while the file sits on disk.
+**There is no Rescan.** The owner used to press it after every download, and
+a model saved into a folder by ComfyUI Manager or a browser read as missing
+until they did. `ModelFolderScanFinder` (`tasks/model_folder_scan_finder.py`, a
+hub finder registered in `vault.py`) now keeps every scanned folder
+(`scanned_folders`: not a taken-from kind, not built-in) in step on its own:
 
-`POST /model-folders/pick-up` closes that without a rescan. It takes the
-filenames the run pre-flight reports in `missing_models` and walks every folder
-a rescan would (not a taken-from kind, not built-in) for files of those
-basenames, case-insensitively, that have no `present` row
+- **On registration.** `POST /model-folders` queues the first scan at HIGH
+  priority, so the folder answers `scan_status: pending` rather than reading as
+  empty. ComfyUI's folders, registered when it is linked, get the same.
+- **On a change.** A second `ReferenceFolderWatcher`, given
+  `SHELF_MODEL_SUFFIXES` and a 5 s debounce, watches each scanned folder. A model
+  file created, written, moved or deleted marks the folder due and wakes the
+  planner. Opened and closed-unwritten events are ignored by every watch: a scan
+  reads the files it walks, ComfyUI reads the LoRAs it loads, and either would
+  otherwise wake another scan.
+- **When its watch comes up.** The finder sets the watches up itself, on each
+  check, and a folder whose watch has just been set is due: whatever changed
+  before the watch existed has no event. That is every folder at start-up (an
+  edit made while PixlStash was closed), a drive that was unplugged and is back,
+  and a folder in the second after it was added, before its watch was set
+  (registration wakes the planner so that second is short).
+- **On a timer.** PixlStash's own roots (its downloads, InsightFace, the
+  HuggingFace cache) are re-declared from their index rather than walked
+  (§25.3), on this timer only. A folder whose last finished scan and last handed-out one are
+  both older than `RESCAN_INTERVAL_S` (10 min) is due, which covers a network
+  mount the watch cannot see into and a folder whose watch could not be set up
+  (an inotify limit). The handed-out clock is what stops a scan that keeps
+  crashing, which never stamps `last_checked`, from being handed out every 2 s.
+
+One finder scan at a time, changed folders first and then the longest
+unscanned, so a set of folders on one drive is walked in turn. That is cheap
+enough to repeat because a scan of an unchanged folder reads nothing: a file
+whose size and mtime match its row is touched, not hashed (`_describe`'s fast
+path), so a repeat costs one `stat` per model file plus a short write per 200.
+
+**A scan leaves a file that is still arriving.** Scans now run exactly while a
+download is landing, and an adapter hashed half-written is a `model` row under a
+digest nothing will ever match. A file the folder has no `present` row for is
+skipped (`FolderScanResult.arriving`) while it has an in-flight sibling
+(`.part`, …) or is a safetensors shorter than its header says
+(`safetensors_complete`); the write that completes it is a change, so the watch
+brings the scan back. A file the folder already lists goes through the fast path
+as before, so a file rewritten in place is never swept to `missing`.
+
+**The shelf hears about it.** A scan that found copies the folder had no
+`present` row for announces their ids as `models_arrived`, the event a download
+announces, so the open shelf re-reads and badges them as new. A scan that only
+marked files missing announces nothing; the shelf shows that on its next read.
+
+**Pick-up is still there for the seconds in between.** `POST
+/model-folders/pick-up` takes the filenames the run pre-flight reports in
+`missing_models` and walks every scanned folder for files of those basenames,
+case-insensitively, that have no `present` row
 (`ModelFolderScanner.find_unregistered`; a `missing` or `unreachable` row is
-picked up again, as a rescan would). A file is only taken once it has finished
+picked up again, as a scan would). A file is only taken once it has finished
 arriving, the Downloads intake's rule: no in-flight sibling (`.part`, …),
 unchanged for `PICK_UP_SETTLE_S`, and a whole safetensors file
 (`safetensors_complete`), because a workflow names a missing file exactly while
@@ -11361,7 +11405,8 @@ that names a missing model: look first, and only when something is found show
 "Found in your model folders" with a spinner while it is added, then pre-flight
 again. A name looked for is not looked for again for 15 s, because the Run
 popup pre-flights on every edit. A remote owner is refused (§16.3, the
-rescan's tier) and the file stays missing, as before.
+folder mutators' tier) and the file stays missing until the folder's own scan
+registers it.
 
 **What it does not fix.** The walk is a full `os.walk` of every scanned folder,
 twice when something is found; on a large or network tree that is the cost of

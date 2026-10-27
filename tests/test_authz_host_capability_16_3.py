@@ -511,6 +511,10 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     66 = 65 + 1 with ``GET /model-folders/comfyui-reads``, which returns the
     subdirectories of registered folders the host ComfyUI loads from, names
     PixlStash never registered: the authority of ``/dirs``.
+    74 = 65 + 9 when ``POST /model-folders/{folder_id}/rescan`` was removed: a
+    registered folder is scanned in the background (``ModelFolderScanFinder``),
+    so no route walks one on request. The routes that cited its authority walk
+    what that scan walks.
 
     Arithmetic, not judgement."""
     loopback = {
@@ -525,7 +529,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 9, sorted(loopback)
-    assert len(local) == 66, sorted(local)
+    assert len(local) == 65, sorted(local)
 
 
 # ===========================================================================

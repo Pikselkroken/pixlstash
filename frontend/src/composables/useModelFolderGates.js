@@ -7,11 +7,7 @@
 
 import { computed } from "vue";
 
-import {
-  BUILTIN_KIND,
-  DOWNLOADS_KIND,
-  MANAGED_KIND,
-} from "../api/modelFolders";
+import { DOWNLOADS_KIND } from "../api/modelFolders";
 import { useLibrariesStore } from "../stores/useLibrariesStore";
 import { useModelFoldersStore } from "../stores/useModelFoldersStore";
 import { useModelMovesStore } from "../stores/useModelMovesStore";
@@ -71,19 +67,6 @@ export function useModelFolderGates() {
     return store.scanningIds.has(folder.id);
   }
 
-  /**
-   * A source folder is taken from, never catalogued, so its scan is a no-op.
-   * PixlStash's own roots (the HuggingFace cache among them) are re-read from
-   * their index, which is how a repo deleted from the cache leaves the shelf.
-   */
-  function canScan(folder) {
-    return (
-      folder.kind === "user" ||
-      folder.kind === MANAGED_KIND ||
-      folder.kind === BUILTIN_KIND
-    );
-  }
-
   /** Only what the owner associated can be disassociated. */
   function canForget(folder) {
     return (
@@ -93,19 +76,13 @@ export function useModelFolderGates() {
     );
   }
 
-  /** Why this folder cannot be scanned right now, or "" when it can. */
-  function scanReason(folder) {
-    if (remoteReason.value) return remoteReason.value;
-    return isScanning(folder) ? SCANNING_REASON : "";
-  }
-
   function forgetReason(folder) {
     if (remoteReason.value) return remoteReason.value;
     // Forgetting deletes the very `model_file` rows a running move or import
     // is writing, so the server takes the one machine-wide slot for it too and
     // answers a second caller with a 409 (#1017).
     if (moves.busy) return MOVE_RUNNING_REASON;
-    // The scanner thread is still writing rows against this folder id.
+    // The scan is still writing rows against this folder id.
     return isScanning(folder) ? SCANNING_REASON : "";
   }
 
@@ -119,22 +96,13 @@ export function useModelFolderGates() {
     return isScanning(folder) ? SCANNING_REASON : "";
   }
 
-  /** Start a scan, unless the folder cannot be scanned or the server would refuse. */
-  async function scan(folder) {
-    if (!canScan(folder) || scanReason(folder)) return;
-    await store.scan(folder.id);
-  }
-
   return {
     canManage,
     remoteReason,
     addReason,
     isScanning,
-    canScan,
     canForget,
-    scanReason,
     forgetReason,
     relocateReason,
-    scan,
   };
 }

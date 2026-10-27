@@ -13,7 +13,6 @@ import { setActivePinia, createPinia } from "pinia";
 const listModelFolders = vi.fn();
 const createModelFolder = vi.fn();
 const forgetModelFolder = vi.fn();
-const rescanModelFolder = vi.fn();
 const setDefaultModelFolder = vi.fn();
 const setDownloadModelFolder = vi.fn();
 
@@ -26,7 +25,6 @@ vi.mock("../../api/modelFolders", () => ({
   listModelFolders: (...a) => listModelFolders(...a),
   createModelFolder: (...a) => createModelFolder(...a),
   forgetModelFolder: (...a) => forgetModelFolder(...a),
-  rescanModelFolder: (...a) => rescanModelFolder(...a),
   setDefaultModelFolder: (...a) => setDefaultModelFolder(...a),
   setDownloadModelFolder: (...a) => setDownloadModelFolder(...a),
 }));
@@ -177,7 +175,6 @@ beforeEach(() => {
   relocate.mockReset().mockResolvedValue(true);
   moveBusy = false;
   forgetModelFolder.mockReset().mockResolvedValue({ tombstoned_files: 0 });
-  rescanModelFolder.mockReset().mockResolvedValue({ status: "started" });
   setDefaultModelFolder.mockReset().mockResolvedValue({});
   setDownloadModelFolder.mockReset().mockResolvedValue({});
 });
@@ -316,47 +313,24 @@ describe("forgetting", () => {
   });
 });
 
-describe("Rescan all", () => {
-  it("scans every catalogued folder and skips the rest", async () => {
-    const wrapper = await open([
-      folder(),
-      { ...MANAGED, is_default: true },
-      HF_CACHE,
-      folder({ id: 3, kind: "source", path: "/home/me/ai-toolkit/output" }),
-      WATCHED,
-    ]);
-    await byText(wrapper, "Rescan all").trigger("click");
-    const ids = rescanModelFolder.mock.calls.map((c) => c[0]).sort();
-    // The HuggingFace cache too: a repo deleted from it leaves the shelf only
-    // when its index is read again.
-    expect(ids).toEqual([1, 2, 6]);
-  });
-
-  it("counts the scans down and takes no second click while they start", async () => {
-    let answer;
-    rescanModelFolder.mockReturnValue(
-      new Promise((r) => {
-        answer = r;
-      }),
-    );
+describe("scanning", () => {
+  it("has no Rescan: the foot says the folders keep themselves current", async () => {
     const wrapper = await open([folder(), { ...MANAGED, is_default: true }]);
-    await byText(wrapper, "Rescan all").trigger("click");
-    expect(byText(wrapper, "Scanning").text()).toContain("Scanning 1 of 2…");
-    await byText(wrapper, "Scanning").trigger("click");
-    expect(rescanModelFolder).toHaveBeenCalledTimes(2);
-    answer({ status: "started" });
-    await new Promise((r) => setTimeout(r, 0));
-    // Both still running on the server: the first of two.
-    expect(byText(wrapper, "Scanning").text()).toContain("Scanning 1 of 2…");
+    expect(wrapper.text()).not.toContain("Rescan");
+    expect(wrapper.find(".mf-foot [role='status']").text()).toBe(
+      "Kept up to date as models are added or removed",
+    );
   });
 
-  it("is blocked, described and silent from a remote session", async () => {
-    const wrapper = await open([folder()], { canManage: false });
-    const rescan = byText(wrapper, "Rescan all");
-    expect(rescan.attributes("aria-disabled")).toBe("true");
-    expect(rescan.attributes("aria-describedby")).toBe("mf-remote-note");
-    await rescan.trigger("click");
-    expect(rescanModelFolder).not.toHaveBeenCalled();
+  it("says how many folders the server is scanning right now", async () => {
+    const wrapper = await open([
+      folder({ scan_status: "running" }),
+      folder({ id: 3, path: "/home/me/more", scan_status: "pending" }),
+      { ...MANAGED, is_default: true, scan_status: "completed" },
+    ]);
+    expect(wrapper.find(".mf-foot [role='status']").text()).toBe(
+      "Scanning 2 folders…",
+    );
   });
 });
 
