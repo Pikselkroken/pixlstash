@@ -1894,12 +1894,15 @@ class TrainingService:
         # own (``pixlstash-<uuid>``, see _run_folders).
         self._remove_tree(dataset_dir)
         os.makedirs(dataset_dir, exist_ok=True)
+        preset_id = str(self._resolution(info["uuid"]).get("preset") or "")
+        preset = presets.get_preset(preset_id.split("@")[0])
         try:
             return self._dataset_builder(
                 dest_dir=dataset_dir,
                 set_id=info.get("set_id"),
                 character_id=info.get("character_id"),
                 trigger_word=info.get("trigger_word"),
+                clips=preset is not None and presets.trains_clips(preset),
             )
         except Exception:
             logger.exception("Job %s: dataset build failed", info["uuid"])

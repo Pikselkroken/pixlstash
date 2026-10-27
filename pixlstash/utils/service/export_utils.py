@@ -893,11 +893,12 @@ class ExportUtils:
                         )
 
     @staticmethod
-    def _training_pictures(server, set_id, character_id, params):
+    def _training_pictures(server, set_id, character_id, params, clips=False):
         """The pictures a training dataset of the set or character holds.
 
         The same skips the writer applies, so a manifest's ids and count
-        describe exactly what gets written.
+        describe exactly what gets written. Video clips are left out unless
+        *clips*: only a recipe that trains on clips is given them.
         """
         pics = ExportUtils._gather_export_pictures(
             server,
@@ -906,27 +907,32 @@ class ExportUtils:
             {"set_id": set_id, "character_id": character_id},
             params,
         )
-        return [
-            pic
-            for pic in pics
-            if getattr(pic, "file_path", None)
-            and os.path.exists(
-                ImageUtils.resolve_picture_path(server.vault.image_root, pic.file_path)
+        kept = []
+        for pic in pics:
+            if not getattr(pic, "file_path", None):
+                continue
+            path = ImageUtils.resolve_picture_path(
+                server.vault.image_root, pic.file_path
             )
-            and not VideoUtils.is_video_file(
-                ImageUtils.resolve_picture_path(server.vault.image_root, pic.file_path)
-            )
-        ]
+            if os.path.exists(path) and (clips or not VideoUtils.is_video_file(path)):
+                kept.append(pic)
+        return kept
 
     @staticmethod
-    def count_training_pictures(server, *, set_id=None, character_id=None) -> int:
+    def count_training_pictures(
+        server, *, set_id=None, character_id=None, clips=False
+    ) -> int:
         """How many pictures :meth:`build_training_dataset` would write."""
         params = {
             "only_deleted": False,
             "picture_ids": [],
             "select_fields": Picture.metadata_fields(),
         }
-        return len(ExportUtils._training_pictures(server, set_id, character_id, params))
+        return len(
+            ExportUtils._training_pictures(
+                server, set_id, character_id, params, clips=clips
+            )
+        )
 
     @staticmethod
     def training_captions(
@@ -945,7 +951,7 @@ class ExportUtils:
         return ExportUtils._captions_and_tags(pics)
 
     @staticmethod
-    def _training_rows(server, set_id, character_id) -> list:
+    def _training_rows(server, set_id, character_id, clips=False) -> list:
         """The dataset's pictures with their tags, in id order."""
         params = {
             "only_deleted": False,
@@ -953,7 +959,9 @@ class ExportUtils:
             "select_fields": Picture.metadata_fields() | {"tags"},
         }
         return sorted(
-            ExportUtils._training_pictures(server, set_id, character_id, params),
+            ExportUtils._training_pictures(
+                server, set_id, character_id, params, clips=clips
+            ),
             key=lambda pic: pic.id,
         )
 
@@ -968,11 +976,13 @@ class ExportUtils:
         """What the Train dialog checks before a run of the set or character.
 
         Returns:
-            ``{"count", "untagged", "near_duplicates", "other_people"}``: the
-            picture count, how many pictures have no tags (the dataset's
-            captions are the tags, so those train on the trigger word alone),
-            how many have a near copy in the dataset, and how many show a face
-            named as somebody other than *character_id* (0 without one).
+            ``{"count", "clips", "untagged", "near_duplicates",
+            "other_people"}``: the picture count (stills), the video clips a
+            recipe that trains on clips adds to them, how many pictures have
+            no tags (the dataset's captions are the tags, so those train on
+            the trigger word alone), how many have a near copy in the dataset,
+            and how many show a face named as somebody other than
+            *character_id* (0 without one).
         """
         # Local import to break a cycle: dedup_tier_service imports
         # set_lock_service → stack_membership → pixlstash.utils.service, whose
@@ -983,7 +993,8 @@ class ExportUtils:
             near_pairs_in_bucket,
         )
 
-        pics = ExportUtils._training_rows(server, set_id, character_id)
+        rows = ExportUtils._training_rows(server, set_id, character_id, clips=True)
+        pics = [pic for pic in rows if not VideoUtils.is_video_file(pic.file_path)]
         _, tags = ExportUtils._captions_and_tags(pics)
         ids = [pic.id for pic in pics]
 
@@ -1012,6 +1023,7 @@ class ExportUtils:
         near, others = server.vault.db.run_task(near_and_others)
         return {
             "count": len(ids),
+            "clips": len(rows) - len(pics),
             "untagged": sum(1 for row in tags if not row),
             "near_duplicates": near,
             "other_people": others,
@@ -1028,6 +1040,7 @@ class ExportUtils:
         caption_mode="tags",
         resolution="original",
         tag_format="spaces",
+        clips=False,
     ):
         """Build an ai-toolkit training dataset snapshot into ``dest_dir``.
 
@@ -1035,7 +1048,9 @@ class ExportUtils:
         writer as the folder export (:meth:`generate_folder_export`), so the
         files match a FULL export made with the same settings: one
         ``image_NNNNN.<ext>`` plus ``image_NNNNN.txt`` caption per picture.
-        Videos and pictures whose source file is missing are skipped.
+        Pictures whose source file is missing are skipped, and so are videos
+        unless ``clips``: those are copied as they are, and ai-toolkit cuts
+        its frames from them.
 
         Captions default to the picture's tags.  When ``trigger_word`` is
         given it leads every caption as its first comma-separated token.
@@ -1054,6 +1069,9 @@ class ExportUtils:
             caption_mode: ``"tags"`` (default), ``"description"``, or ``"none"``.
             resolution: ``"original"`` (default), ``"half"``, or ``"quarter"``.
             tag_format: ``"spaces"`` (default) or ``"underscores"``.
+            clips: Whether the set's video clips go in beside its stills (a
+                recipe that trains on clips,
+                :func:`pixlstash.training.presets.trains_clips`).
 
         Returns:
             Manifest dict: ``{"dest_dir", "image_count", "picture_ids",
@@ -1094,7 +1112,9 @@ class ExportUtils:
             "trigger_word": trigger,
         }
 
-        pics = ExportUtils._training_pictures(server, set_id, character_id, params)
+        pics = ExportUtils._training_pictures(
+            server, set_id, character_id, params, clips=clips
+        )
 
         feature_faces_by_pic, face_tags_by_face, detections_by_pic, _ = (
             ExportUtils._prepare_feature_maps_and_total(server, pics, params)

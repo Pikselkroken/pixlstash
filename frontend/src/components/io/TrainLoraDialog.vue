@@ -231,10 +231,33 @@
         <span v-if="fitLine" class="tld-readout" data-testid="tld-fit-readout">{{
           fitLine
         }}</span>
-        <template v-if="store.fit === 'best_quality'">
+        <template v-if="store.fit === 'best_quality' && values?.['model.quantize']?.value">
+          This model's weights come in 8-bit already, so this keeps as much of
+          it on the GPU as fits instead.
+        </template>
+        <template v-else-if="store.fit === 'best_quality'">
           Keeps the model's weights at full precision. It needs more memory and
           can run slower; it does not promise a better LoRA.
         </template>
+      </span>
+    </div>
+
+    <!-- A recipe that trains on clips asks whether their sound trains too. -->
+    <div v-if="soundOn !== null" class="tld-field" data-testid="tld-sound">
+      <FieldLabel>Sound</FieldLabel>
+      <Segmented
+        full
+        aria-label="Sound"
+        :options="SOUND_OPTIONS"
+        :model-value="soundOn ? 'sound' : 'silent'"
+        @update:model-value="(id) => store.setPin(AUDIO_KEY, id === 'sound')"
+      />
+      <span class="tld-hint">
+        {{
+          soundOn
+            ? "Clips train with their soundtrack, so the LoRA learns how they sound as well as how they move."
+            : "Clips train without their soundtrack; only how they look and move is learned."
+        }}
       </span>
     </div>
 
@@ -553,6 +576,11 @@ const SUBJECT_OPTIONS = [
     detail: "An object, outfit or place, kept recognisable.",
   },
 ];
+const AUDIO_KEY = "datasets[*].do_audio";
+const SOUND_OPTIONS = [
+  { id: "sound", label: "Learn the sound too" },
+  { id: "silent", label: "Picture only" },
+];
 const EFFORT_OPTIONS = Object.entries(EFFORT_LABELS).map(([id, label]) => ({
   id,
   label,
@@ -584,6 +612,11 @@ const values = computed(() => resolution.value?.values || null);
 const rules = computed(() => plan.value?.rules || {});
 const derived = computed(() => plan.value?.derived || {});
 const planError = computed(() => plan.value?.error?.message || "");
+/** The Sound choice, or null when the recipe trains on no clips. */
+const soundOn = computed(() => {
+  const entry = values.value?.[AUDIO_KEY];
+  return store.presetClips && entry ? !!entry.value : null;
+});
 
 const subtitle = computed(() => {
   if (!store.dataset) return store.scopeName;
@@ -775,6 +808,8 @@ const sourceCtx = computed(() => ({
 const pinnedBy = computed(() => {
   const out = { subject: [], effort: [], fit: [], model: [] };
   for (const key of Object.keys(store.allPins)) {
+    // The Sound choice is its own control, not a pin on the recipe.
+    if (key === AUDIO_KEY) continue;
     const source =
       key === PROMPTS_KEY ? "subject" : derived.value[key]?.source || "model";
     const choice = choiceOfSource(source);
@@ -860,14 +895,27 @@ const checks = computed(() => {
   const d = store.dataset;
   if (!d) return [];
   const out = [];
-  if (d.count === 0) {
+  const n = store.pictureCount;
+  if (n === 0) {
     out.push({ id: "none", bad: true, text: "There are no pictures to train on." });
     return out;
   }
-  if (d.count < d.min_pictures) {
+  if (n < d.min_pictures) {
     out.push({
       id: "few",
-      text: `Only ${d.count} picture${d.count === 1 ? "" : "s"}. A LoRA usually needs ${d.min_pictures} or more, and with fewer it tends to copy them rather than learn from them.`,
+      text: `Only ${n} picture${n === 1 ? "" : "s"}. A LoRA usually needs ${d.min_pictures} or more, and with fewer it tends to copy them rather than learn from them.`,
+    });
+  }
+  const clips = d.clips || 0;
+  if (clips > 0 && !store.presetClips) {
+    out.push({
+      id: "clips",
+      text: `${clips} video clip${clips === 1 ? " is" : "s are"} left out: this model trains on still pictures. A motion recipe trains on clips.`,
+    });
+  } else if (clips === 0 && store.presetClips) {
+    out.push({
+      id: "no-clips",
+      text: "There are no video clips here, so this learns from still pictures alone and no motion.",
     });
   }
   if (d.untagged > 0) {

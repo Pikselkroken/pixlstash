@@ -40,10 +40,50 @@ def test_every_shipped_preset_passes_its_schema():
         "chroma1-base",
         "flux2-klein-9b-base",
         "krea2-raw",
+        "minimax-h3-image",
+        "minimax-h3-motion",
         "moss-image-base",
     ]
     for preset in presets.list_presets():
         assert os.path.isfile(presets.template_path(preset))
+
+
+def test_only_the_h3_motion_recipe_trains_on_clips():
+    """The dataset builder hands a recipe the set's clips only when ai-toolkit
+    reads its dataset as video; every still-picture recipe would drop them."""
+    clip_recipes = [p["id"] for p in presets.list_presets() if presets.trains_clips(p)]
+    assert clip_recipes == ["minimax-h3-motion"]
+    motion = presets.get_preset("minimax-h3-motion")
+    # Clips are read at 24 fps and snapped to the VAE's 17n + 5 frames.
+    assert motion["locked"]["datasets[*].fps"] == 24
+    assert motion["locked"]["datasets[*].auto_frame_count"] is True
+
+
+def test_h3_keeps_its_pre_quantised_formats_and_its_distillation_handling():
+    """H3 ships int8 ConvRot and nvfp4 weights; any other qtype re-quantises
+    them on load. It is guidance-distilled, so both recipes train with the
+    adapter and contrastive guidance, and sound is a choice only for clips."""
+    for pid in ("minimax-h3-image", "minimax-h3-motion"):
+        preset = presets.get_preset(pid)
+        values = presets.resolved_values(_resolve(preset, vram_mb=100_000, ram_mb=None))
+        assert (values["model.qtype"], values["model.qtype_te"]) == (
+            "convrot8",
+            "nvfp4",
+        )
+        locked = preset["locked"]
+        assert locked["train.do_guidance_loss"] is True
+        assert locked["train.guidance_loss_target"] == 3.5
+        assert locked["model.assistant_lora_path"].startswith(
+            "ostris/minimax_h3_training_adapter/"
+        )
+        assert ("datasets[*].do_audio" in values) == (pid == "minimax-h3-motion")
+    motion = presets.get_preset("minimax-h3-motion")
+    for sound in (True, False):
+        pins = presets.validate_pins(motion, {"datasets[*].do_audio": sound})
+        values = presets.resolved_values(
+            _resolve(motion, vram_mb=100_000, ram_mb=None, pins=pins)
+        )
+        assert values["datasets[*].do_audio"] is sound
 
 
 def test_chroma_has_no_profile_below_8_bit():

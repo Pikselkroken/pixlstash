@@ -660,6 +660,13 @@ def create_router(server) -> APIRouter:
                 "that is not offered cannot be queued."
             ),
         )
+        clips: bool = Field(
+            default=False,
+            description=(
+                "Whether the recipe trains on the set's video clips as well as "
+                "its stills; every other recipe leaves clips out."
+            ),
+        )
 
     class PresetUpdateItem(BaseModel):
         """A recipe a check replaced with a newer version from pixlstash.dev."""
@@ -757,7 +764,15 @@ def create_router(server) -> APIRouter:
                 "the one whose reference set set_id is."
             ),
         )
-        count: int = Field(..., description="Pictures the dataset would hold.")
+        count: int = Field(..., description="Still pictures the dataset would hold.")
+        clips: int = Field(
+            default=0,
+            description=(
+                "Video clips a recipe that trains on clips adds to count; "
+                "every other recipe leaves them out. The checks below cover "
+                "the stills."
+            ),
+        )
         min_pictures: int = Field(
             ..., description="Below this many pictures the dialog warns."
         )
@@ -939,6 +954,7 @@ def create_router(server) -> APIRouter:
                 "base_model": preset["locked"]["model.name_or_path"],
                 "requires_arch": preset["requires_arch"],
                 "offered": presets.offered(preset, architectures),
+                "clips": presets.trains_clips(preset),
             }
             for preset in presets.list_presets()
         ]
@@ -1348,7 +1364,10 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
         picture_count = ExportUtils.count_training_pictures(
-            server, set_id=set_id, character_id=character_id
+            server,
+            set_id=set_id,
+            character_id=character_id,
+            clips=presets.trains_clips(preset),
         )
         if picture_count == 0:
             raise HTTPException(

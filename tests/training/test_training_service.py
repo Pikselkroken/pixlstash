@@ -326,6 +326,37 @@ def test_a_run_without_a_memory_profile_errors_instead_of_training(hub, repo_dir
     assert lease.acquire_count == 0
 
 
+def test_only_a_clip_recipe_builds_its_dataset_with_the_clips(hub, repo_dir):
+    """The run's recipe decides whether the set's video clips are exported."""
+    asked = []
+    empty = _make_dataset_builder(image_count=0)
+
+    def builder(**kwargs):
+        asked.append(kwargs["clips"])
+        return empty(**kwargs)
+
+    lease, notify = _StubLease(), _CapturingNotify()
+    service = _make_service(
+        hub, repo_dir, lease=lease, notify=notify, dataset_builder=builder
+    )
+    template = _write_template(repo_dir, steps=4, save_every=2)
+    service.start()
+    try:
+        for preset in ("minimax-h3-motion@1", "minimax-h3-image@1"):
+            job = service.enqueue(
+                set_id=_SET_ID,
+                name=preset,
+                base_model="m",
+                trigger_word="t",
+                template_path=template,
+                resolution={**_RESOLUTION, "preset": preset},
+            )
+            assert _poll_until(lambda: _job_status(hub, job["uuid"]).status == "error")
+    finally:
+        service.stop()
+    assert asked == [True, False]
+
+
 def test_enqueue_needs_a_scope(hub, repo_dir):
     lease, notify = _StubLease(), _CapturingNotify()
     service = _make_service(

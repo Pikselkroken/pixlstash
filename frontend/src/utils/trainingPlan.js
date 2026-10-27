@@ -93,6 +93,10 @@ const KEY_LABELS = {
   "datasets[*].flip_x": "Mirror pictures",
   "network.conv": "Conv rank",
   "network.conv_alpha": "Conv alpha",
+  "datasets[*].do_audio": "Learn the sound",
+  "train.audio_loss_multiplier": "Sound weight",
+  "sample.num_frames": "Sample frames",
+  "sample.fps": "Sample frame rate",
 };
 
 /** The sizes the "Train at sizes" chips offer (all multiples of 16). */

@@ -129,7 +129,16 @@ export const useTrainingStore = defineStore("training", () => {
 
   /** The character the run is filed under, or null for an ordinary set. */
   const character = computed(() => dataset.value?.character || null);
-  const pictureCount = computed(() => dataset.value?.count ?? 0);
+  /** Whether the chosen recipe trains on the set's video clips too. */
+  const presetClips = computed(
+    () => !!presets.value.find((p) => p.id === selectedPreset.value)?.clips,
+  );
+  /** What the run trains on: the stills, and the clips when the recipe takes them. */
+  const pictureCount = computed(
+    () =>
+      (dataset.value?.count ?? 0) +
+      (presetClips.value ? dataset.value?.clips ?? 0 : 0),
+  );
   const displayName = computed(
     () => character.value?.name || scopeName.value || "",
   );
@@ -706,6 +715,7 @@ export const useTrainingStore = defineStore("training", () => {
     openToPick,
     pickScope,
     character,
+    presetClips,
     pictureCount,
     displayName,
     scopePayload,

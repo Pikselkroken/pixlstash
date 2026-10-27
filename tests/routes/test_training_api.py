@@ -1057,8 +1057,12 @@ def test_list_presets_offers_only_what_the_saved_checkout_can_run(tmp_path):
             "chroma1-base": False,
             "flux2-klein-9b-base": False,
             "krea2-raw": False,
+            "minimax-h3-image": False,
+            "minimax-h3-motion": False,
             "moss-image-base": False,
         }
+        # Only the motion recipe trains on the set's clips.
+        assert [item["id"] for item in listed if item["clips"]] == ["minimax-h3-motion"]
     finally:
         _teardown(temp_dir, server)
 
@@ -1297,6 +1301,8 @@ def test_resolve_previews_the_run_and_every_recipes_fit():
                     ("chroma1-base", "Chroma1 Base"),
                     ("flux2-klein-9b-base", "FLUX.2 Klein 9B Base"),
                     ("krea2-raw", "Krea 2 Raw"),
+                    ("minimax-h3-image", "MiniMax H3 · image"),
+                    ("minimax-h3-motion", "MiniMax H3 · motion"),
                     ("moss-image-base", "MOSS-Image Base"),
                 )
             ),
@@ -1733,6 +1739,22 @@ def test_create_job_refuses_a_set_with_no_pictures():
         assert r.status_code == 422, r.text
         assert "no pictures" in r.text
         assert server.vault.training_service.enqueue_calls == []
+
+        # A set of clips alone: the motion recipe counts the clips a stills
+        # recipe leaves out, so it gets past the empty-set refusal.
+        ExportUtils.count_training_pictures = staticmethod(
+            lambda server, clips=False, **kwargs: 3 if clips else 0
+        )
+        repo = _fake_checkout(
+            os.path.join(temp_dir.name, "h3kit"), archs=("minimax_h3",)
+        )
+        _save_checkout(owner, repo, sys.executable)
+        body = {"set_id": set_id, "name": "x", "trigger_word": "tw"}
+        for preset, empty in (("minimax-h3-image", True), ("minimax-h3-motion", False)):
+            r = owner.post(
+                "/training/jobs", json={**body, "subject": "thing", "preset": preset}
+            )
+            assert ("no pictures" in r.text) is empty, (preset, r.text)
     finally:
         _teardown(temp_dir, server)
 
