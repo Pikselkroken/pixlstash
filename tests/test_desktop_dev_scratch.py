@@ -312,3 +312,19 @@ def test_keep_never_reuses_a_refresh_that_did_not_finish(tmp_path):
     (copy / "made-by-the-dev-run.png").write_bytes(b"kept")
     scratch_mod.prepare(str(real_dir), str(scratch_dir), keep=True)
     assert (copy / "made-by-the-dev-run.png").exists()
+
+
+def test_image_root_is_rewritten_even_when_there_is_no_hub(tmp_path):
+    scratch_mod = _load_module()
+    real_dir = tmp_path / "real"
+    real_dir.mkdir(mode=0o700)
+    (real_dir / "server-config.json").write_text(
+        json.dumps({"image_root": str(tmp_path / "pictures" / "library")})
+    )
+    scratch_dir = tmp_path / "scratch"
+
+    scratch_mod.refresh(str(real_dir), str(scratch_dir))
+
+    config = json.loads((scratch_dir / "server-config.json").read_text())
+    assert config["image_root"] == str(scratch_dir / "library")
+    assert not (scratch_dir / "hub.db").exists()

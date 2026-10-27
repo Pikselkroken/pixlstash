@@ -295,25 +295,10 @@ def _remove_previous(scratch_dir: str) -> None:
         shutil.rmtree(scratch_dir)
 
 
-def refresh(real_dir: str, scratch_dir: str) -> None:
-    """Replace *scratch_dir* with a fresh copy of *real_dir* and its libraries."""
-    if _in_use(scratch_dir):
-        raise SystemExit(
-            f"desktop-dev: another dev run is using {scratch_dir}; quit it first."
-        )
-    _remove_previous(scratch_dir)
-    os.makedirs(scratch_dir, mode=0o700)
-    for path in glob.glob(os.path.join(real_dir, "*.json")):
-        shutil.copy2(path, scratch_dir)
-    presets = os.path.join(real_dir, "training-presets")
-    if os.path.isdir(presets):
-        shutil.copytree(presets, os.path.join(scratch_dir, "training-presets"))
-    real_hub = os.path.join(real_dir, "hub.db")
-    if not os.path.isfile(real_hub):
-        return  # Never set up: the dev run gets the first-run wizard.
+def _copy_libraries(real_hub: str, scratch_dir: str) -> dict[str, str]:
+    """Copy the hub and every library it registers; map each real folder to its copy."""
     scratch_hub = os.path.join(scratch_dir, "hub.db")
     _snapshot_sqlite(real_hub, scratch_hub)
-
     moved: dict[str, str] = {}
     hub = HubDatabase(scratch_hub)
     try:
@@ -359,6 +344,26 @@ def refresh(real_dir: str, scratch_dir: str) -> None:
             conn.execute("UPDATE model_folder SET delete_after_import = 0")
     finally:
         hub.close()
+    return moved
+
+
+def refresh(real_dir: str, scratch_dir: str) -> None:
+    """Replace *scratch_dir* with a fresh copy of *real_dir* and its libraries."""
+    if _in_use(scratch_dir):
+        raise SystemExit(
+            f"desktop-dev: another dev run is using {scratch_dir}; quit it first."
+        )
+    _remove_previous(scratch_dir)
+    os.makedirs(scratch_dir, mode=0o700)
+    for path in glob.glob(os.path.join(real_dir, "*.json")):
+        shutil.copy2(path, scratch_dir)
+    presets = os.path.join(real_dir, "training-presets")
+    if os.path.isdir(presets):
+        shutil.copytree(presets, os.path.join(scratch_dir, "training-presets"))
+    real_hub = os.path.join(real_dir, "hub.db")
+    # No hub means the dev run gets the first-run wizard; the config below is
+    # still rewritten, since start-up would otherwise register image_root.
+    moved = _copy_libraries(real_hub, scratch_dir) if os.path.isfile(real_hub) else {}
 
     # With no usable active library, start-up registers and migrates
     # image_root, so it never names a real folder: a copy, or an empty library
