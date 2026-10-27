@@ -1292,6 +1292,7 @@ def test_vault_reconciles_a_surviving_trainer_before_the_worker_starts():
         _yield_gpu=noop,
         _on_resource_lease=noop,
         _ref_folder_watcher=SimpleNamespace(start=noop),
+        _model_folder_watcher=SimpleNamespace(start=noop),
         _start_existing_folder_watches=noop,
         training_service=SimpleNamespace(
             adopt_live_runs=lambda: order.append("adopt"),
