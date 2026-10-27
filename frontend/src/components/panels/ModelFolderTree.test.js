@@ -88,6 +88,25 @@ describe("ModelFolderTree", () => {
     wrapper.unmount();
   });
 
+  it("tells apart folders that one tool owns", async () => {
+    const folders = useModelFoldersStore();
+    folders.folders = [
+      ...FOLDERS,
+      { id: 4, path: "/home/me/.insightface/models", kind: "foreign", movable: "root_only", tool: "PixlStash" },
+    ];
+    folders.devices = [{ ...DEVICES[0], folder_ids: [1, 2, 4] }];
+    const wrapper = mountTree();
+    await flushPromises();
+    expect(item(wrapper, 1).find(".mft-label").text()).toBe("Models");
+    expect(item(wrapper, 2).find(".mft-label").text()).toBe(
+      ".pixlstash/models (PixlStash)",
+    );
+    expect(item(wrapper, 4).find(".mft-label").text()).toBe(
+      ".insightface/models (PixlStash)",
+    );
+    wrapper.unmount();
+  });
+
   it("reads each folder's own level once, and a subfolder only on expand", async () => {
     const wrapper = mountTree();
     await flushPromises();

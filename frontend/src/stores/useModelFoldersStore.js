@@ -79,6 +79,9 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
     return byId;
   });
 
+  /** folder id → its row name, told apart from its namesakes. */
+  const labelByFolderId = computed(() => folderLabels(folders.value));
+
   /** The one folder that is PixlStash's own storage. Always exactly one. */
   const managedFolder = computed(() =>
     folders.value.find((folder) => folder.kind === MANAGED_KIND),
@@ -524,6 +527,7 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
     folders,
     devices,
     deviceByFolderId,
+    labelByFolderId,
     loading,
     loaded,
     error,
@@ -556,6 +560,55 @@ export function basename(path) {
   const trimmed = String(path || "").replace(/[\\/]+$/, "");
   const parts = trimmed.split(/[\\/]/);
   return parts[parts.length - 1] || trimmed || "the folder";
+}
+
+/**
+ * folder id → the name a folder row goes by.
+ *
+ * A folder is named for its tool, else its last segment. Folders that would
+ * share a name (every StabilityMatrix folder reads "StabilityMatrix") are told
+ * apart by the shortest tail of their paths no other in the group shares, with
+ * the tool after it: "Lora (StabilityMatrix)", "Models/Lora", "Other/Lora".
+ *
+ * @param {Array<Object>} folders - the registry rows.
+ * @returns {Map<number, string>}
+ */
+export function folderLabels(folders) {
+  const nameOf = (folder) => folder.tool || basename(folder.path);
+  const groups = new Map();
+  for (const folder of folders) {
+    const name = nameOf(folder);
+    if (!groups.has(name)) groups.set(name, []);
+    groups.get(name).push(folder);
+  }
+  const labels = new Map();
+  for (const [name, group] of groups) {
+    if (group.length === 1) {
+      labels.set(Number(group[0].id), name);
+      continue;
+    }
+    const segments = group.map((folder) =>
+      String(folder.path || "")
+        .replace(/[\\/]+$/, "")
+        .split(/[\\/]/),
+    );
+    group.forEach((folder, i) => {
+      const own = segments[i];
+      let tail = own.join("/");
+      for (let n = 1; n <= own.length; n += 1) {
+        const candidate = own.slice(-n).join("/");
+        const shared = segments.some(
+          (other, j) => j !== i && other.slice(-n).join("/") === candidate,
+        );
+        if (!shared) {
+          tail = candidate;
+          break;
+        }
+      }
+      labels.set(Number(folder.id), folder.tool ? `${tail} (${folder.tool})` : tail);
+    });
+  }
+  return labels;
 }
 
 /** "1 file" / "12 files", so a sentence never reads "1 files". */

@@ -39,6 +39,7 @@ import {
   useModelFoldersStore,
   basename,
   countLabel,
+  folderLabels,
 } from "./useModelFoldersStore";
 import { useNoticeStore } from "./useNoticeStore";
 
@@ -260,5 +261,35 @@ describe("sentence helpers", () => {
   it("names the folder by its last segment, trailing slash or not", () => {
     expect(basename("/home/g/loras/")).toBe("loras");
     expect(basename("C:\\models\\lora")).toBe("lora");
+  });
+});
+
+describe("folderLabels", () => {
+  const row = (id, path, tool = null) => ({ id, path, tool });
+
+  it("keeps a lone tool's name and tells namesakes apart by path", () => {
+    const labels = folderLabels([
+      row(1, "/home/me/StabilityMatrix/Models/Lora", "StabilityMatrix"),
+      row(2, "/home/me/StabilityMatrix/Models/VAE", "StabilityMatrix"),
+      row(3, "/home/me/.cache/huggingface/hub", "HuggingFace"),
+      row(4, "/home/me/loras"),
+    ]);
+    expect(labels.get(1)).toBe("Lora (StabilityMatrix)");
+    expect(labels.get(2)).toBe("VAE (StabilityMatrix)");
+    expect(labels.get(3)).toBe("HuggingFace");
+    expect(labels.get(4)).toBe("loras");
+  });
+
+  it("reaches up a segment when the last ones match", () => {
+    const labels = folderLabels([
+      row(1, "/home/me/pixlstash/models", "PixlStash"),
+      row(2, "/home/me/.insightface/models/", "PixlStash"),
+      row(3, "D:\\SD\\Lora"),
+      row(4, "/mnt/other/Lora"),
+    ]);
+    expect(labels.get(1)).toBe("pixlstash/models (PixlStash)");
+    expect(labels.get(2)).toBe(".insightface/models (PixlStash)");
+    expect(labels.get(3)).toBe("SD/Lora");
+    expect(labels.get(4)).toBe("other/Lora");
   });
 });
