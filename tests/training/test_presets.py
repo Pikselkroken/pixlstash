@@ -34,9 +34,26 @@ def _resolve(preset=_ZIT, **kwargs):
 def test_every_shipped_preset_passes_its_schema():
     """The loader validated them; list them so a broken file fails here."""
     ids = [p["id"] for p in presets.list_presets()]
-    assert "zimage-turbo" in ids
+    # The default leads, because the Train dialog preselects the first.
+    assert ids == [
+        "zimage-turbo",
+        "chroma1-base",
+        "flux2-klein-9b-base",
+        "krea2-raw",
+    ]
     for preset in presets.list_presets():
         assert os.path.isfile(presets.template_path(preset))
+
+
+def test_chroma_has_no_profile_below_8_bit():
+    """ai-toolkit's Chroma loads its bf16 transformer onto the GPU to quantise
+    it and cannot offload layers, so saving memory cannot go under q8."""
+    chroma = presets.get_preset("chroma1-base")
+    with pytest.raises(presets.NoProfileFits) as raised:
+        _resolve(chroma, fit="save_memory", vram_mb=_16GB)
+    assert raised.value.budget == "vram"
+    assert raised.value.need_mb == chroma["hardware_profiles"]["q8"]["vram_mb"]
+    assert _resolve(chroma, fit="save_memory")["profile"] == "q8"
 
 
 def test_table_keys_are_tunable_and_locked_keys_are_not():
