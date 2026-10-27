@@ -935,6 +935,25 @@ class ExportUtils:
         )
 
     @staticmethod
+    def training_counts(server, *, set_id=None, character_id=None) -> tuple[int, int]:
+        """The stills and the video clips a training dataset could hold.
+
+        Returns:
+            ``(stills, clips)``: what every recipe trains on, and what a recipe
+            that trains on clips adds to it.
+        """
+        params = {
+            "only_deleted": False,
+            "picture_ids": [],
+            "select_fields": Picture.metadata_fields(),
+        }
+        pics = ExportUtils._training_pictures(
+            server, set_id, character_id, params, clips=True
+        )
+        clips = sum(1 for pic in pics if VideoUtils.is_video_file(pic.file_path))
+        return len(pics) - clips, clips
+
+    @staticmethod
     def training_captions(
         server, *, set_id=None, character_id=None
     ) -> tuple[list[str], list[list[str]]]:

@@ -11607,7 +11607,13 @@ clip recipe is MiniMax H3's motion mode, which locks 24 fps and
 `auto_frame_count`, so each clip trains at its real length snapped down to the
 video VAE's `17n + 5` frames (5, 22, 39, ... 107 is about 4.5 s) and its sound
 stays in step. Nothing caps a clip's length: a long clip trains every frame,
-and its memory grows with it. The rendered config is the template, the
+and its memory grows with it. An animated GIF is a still here (`is_video_file`
+goes by extension), so it trains as one frame. The sample prompts are still
+written from the stills' captions only. `GET /training/dataset` gives each
+character count's clips beside it (`reference_clips`, `all_clips`,
+`child_set.clips`), and the probe fingerprints a clip run's sound and preview
+length (`measurements.CLIP_FINGERPRINT_KEYS`, named only when a recipe
+resolves them, so other recipes keep their measurements). The rendered config is the template, the
 resolved values (checked by `validate_tunables`) and the locked keys merged
 last; placeholders are substituted after the merge, so a recipe's prompts get
 the trigger word.

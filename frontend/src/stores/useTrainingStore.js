@@ -20,6 +20,7 @@ import { DEFAULT_TIMEOUTS, useNoticeStore } from "./useNoticeStore";
 import { onSessionReset } from "../utils/apiClient";
 import { useSidebarStore } from "./useSidebarStore";
 import {
+  AUDIO_KEY,
   PROMPTS_KEY,
   displayPrompt,
   promptFromDisplay,
@@ -462,6 +463,11 @@ export const useTrainingStore = defineStore("training", () => {
       if (trainDialogOpen.value) resolveSoon();
     },
   );
+  // The clips' sound is asked only of a clip recipe; switching to one that
+  // trains on stills drops the answer instead of sending it unseen.
+  watch(presetClips, (clips) => {
+    if (!clips && AUDIO_KEY in pins.value) unpin([AUDIO_KEY]);
+  });
   watch(
     () => [trainDialogOpen.value, effectiveSubject.value, dataset.value],
     () => {

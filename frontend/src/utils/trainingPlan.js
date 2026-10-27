@@ -7,6 +7,9 @@ export const TRIGGER_TOKEN = "{{TRIGGER_WORD}}";
 
 export const PROMPTS_KEY = "sample.samples[*].prompt";
 
+/** Whether a clip recipe's run learns the clips' sound: the dialog's Sound choice. */
+export const AUDIO_KEY = "datasets[*].do_audio";
+
 export const SUBJECT_LABELS = {
   person: "A person",
   style: "A style",

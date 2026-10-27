@@ -1896,6 +1896,12 @@ class TrainingService:
         os.makedirs(dataset_dir, exist_ok=True)
         preset_id = str(self._resolution(info["uuid"]).get("preset") or "")
         preset = presets.get_preset(preset_id.split("@")[0])
+        if preset is None:
+            logger.warning(
+                "Job %s: recipe %r is gone; building its dataset from stills only.",
+                info["uuid"],
+                preset_id,
+            )
         try:
             return self._dataset_builder(
                 dest_dir=dataset_dir,

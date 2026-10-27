@@ -397,7 +397,7 @@ describe("a recipe that trains on clips (#2179)", () => {
     await store.resolvePlan();
     await flushPromises();
     expect(store.pictureCount).toBe(24);
-    expect(training.resolveTraining).toHaveBeenLastCalledWith(
+    expect(training.resolveTraining).toHaveBeenCalledWith(
       expect.objectContaining({ preset: "minimax-h3-motion", picture_count: 24 }),
     );
     expect(wrapper.find('[data-testid="tld-checks"]').exists()).toBe(false);
@@ -426,6 +426,38 @@ describe("a recipe that trains on clips (#2179)", () => {
     await flushPromises();
     expect(wrapper.text()).toContain("weights come in 8-bit already");
     expect(wrapper.text()).not.toContain("full precision");
+  });
+
+  it("drops the Sound answer when a stills recipe is picked", async () => {
+    const { store } = await openDialog(
+      { type: "character", id: 4, name: "Grandad" },
+      dataset({ count: 20, clips: 4 }),
+    );
+    store.selectedPreset = "minimax-h3-motion";
+    await flushPromises();
+    store.setPin(AUDIO, false);
+    store.selectedPreset = "zimage-turbo";
+    await flushPromises();
+    expect(AUDIO in store.allPins).toBe(false);
+  });
+
+  it("explains a set of clips alone to a stills recipe, and counts them for a clip one", async () => {
+    const { wrapper, store } = await openDialog(
+      { type: "character", id: 4, name: "Grandad" },
+      dataset({
+        count: 0,
+        clips: 3,
+        character: { ...GRANDAD, reference_count: 0, reference_clips: 3, all_clips: 5 },
+      }),
+    );
+    expect(wrapper.find('[data-testid="tld-checks"]').text()).toContain(
+      "no still pictures to train on. This set's 3 video clips train only with a motion recipe",
+    );
+    store.selectedPreset = "minimax-h3-motion";
+    await store.resolvePlan();
+    await flushPromises();
+    expect(wrapper.text()).toContain("Reference set · 3");
+    expect(wrapper.text()).toContain("Every picture of Grandad · 145");
   });
 
   it("says a clip recipe on a set without clips learns no motion", async () => {

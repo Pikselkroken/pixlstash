@@ -738,8 +738,14 @@ def create_router(server) -> APIRouter:
         reference_count: int = Field(
             0, description="Pictures a run of the reference set would hold."
         )
+        reference_clips: int = Field(
+            0, description="Video clips a clip recipe adds to reference_count."
+        )
         all_count: int = Field(
             ..., description="Pictures a run of every picture of it would hold."
+        )
+        all_clips: int = Field(
+            0, description="Video clips a clip recipe adds to all_count."
         )
         child_set: Optional[dict] = Field(
             default=None,
@@ -2186,24 +2192,25 @@ def create_router(server) -> APIRouter:
                 )
             ref = row.reference_picture_set_id
 
-            def count(**scope):
-                return ExportUtils.count_training_pictures(server, **scope)
+            def counts(**scope):
+                return ExportUtils.training_counts(server, **scope)
 
             is_child = set_id is not None and set_id != ref
+            asked = (facts["count"], facts["clips"])
+            reference = (
+                asked
+                if set_id is not None and not is_child
+                else (counts(set_id=ref) if ref is not None else (0, 0))
+            )
+            every = asked if set_id is None else counts(character_id=character_id)
             character = {
                 "id": row.id,
                 "name": row.name,
                 "reference_set_id": ref,
-                "reference_count": (
-                    facts["count"]
-                    if set_id is not None and not is_child
-                    else (count(set_id=ref) if ref is not None else 0)
-                ),
-                "all_count": (
-                    facts["count"]
-                    if set_id is None
-                    else count(character_id=character_id)
-                ),
+                "reference_count": reference[0],
+                "reference_clips": reference[1],
+                "all_count": every[0],
+                "all_clips": every[1],
                 "child_set": None,
             }
             if is_child:
@@ -2211,6 +2218,7 @@ def create_router(server) -> APIRouter:
                     "id": set_id,
                     "name": scoped_set.name if scoped_set is not None else "",
                     "count": facts["count"],
+                    "clips": facts["clips"],
                 }
         return {
             "set_id": set_id,

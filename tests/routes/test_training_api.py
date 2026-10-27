@@ -46,6 +46,7 @@ _ROOM_24GB = {"vram_mb": 22_800, "ram_mb": 60_000}
 _ROOM_16GB = {"vram_mb": 14_900, "ram_mb": 60_000}
 _PICTURES = {"count": 24}
 _COUNT_TRAINING_PICTURES = ExportUtils.count_training_pictures
+_TRAINING_COUNTS = ExportUtils.training_counts
 
 
 class _FakeTrainingService:
@@ -175,12 +176,17 @@ def _setup(checkout=True):
     ExportUtils.count_training_pictures = staticmethod(
         lambda server, **kwargs: _PICTURES["count"]
     )
+    ExportUtils.training_counts = staticmethod(
+        lambda server, **kwargs: (_PICTURES["count"], _PICTURES.get("clips", 0))
+    )
 
     return temp_dir, client, server, read_token
 
 
 def _teardown(temp_dir, server):
     ExportUtils.count_training_pictures = staticmethod(_COUNT_TRAINING_PICTURES)
+    ExportUtils.training_counts = staticmethod(_TRAINING_COUNTS)
+    _PICTURES.pop("clips", None)
     server.close()
     temp_dir.cleanup()
     gc.collect()
@@ -1409,11 +1415,13 @@ def test_dataset_counts_and_checks_and_knows_a_reference_set():
     ExportUtils.training_facts = staticmethod(
         lambda server, **scope: {
             "count": 3,
+            "clips": 2,
             "untagged": 1,
             "near_duplicates": 2,
             "other_people": 0,
         }
     )
+    _PICTURES["clips"] = 1
     try:
         set_id = _make_picture_set(owner)
         r = owner.get("/training/dataset", params={"set_id": set_id})
@@ -1435,12 +1443,21 @@ def test_dataset_counts_and_checks_and_knows_a_reference_set():
         assert out["character"]["reference_set_id"] == ref_id
         assert out["character"]["reference_count"] == 3
         assert out["character"]["all_count"] == _PICTURES["count"]
+        # The clips a clip recipe adds ride beside each count.
+        assert (out["character"]["reference_clips"], out["character"]["all_clips"]) == (
+            2,
+            1,
+        )
 
         r = owner.get("/training/dataset", params={"character_id": char_id})
         out = r.json()
         assert out["set_id"] is None
         assert out["character"]["all_count"] == 3
         assert out["character"]["reference_count"] == _PICTURES["count"]
+        assert (out["character"]["all_clips"], out["character"]["reference_clips"]) == (
+            2,
+            1,
+        )
 
         # A set under the person, or under a set under the person, is theirs:
         # a character LoRA trained on that set's pictures (#2124).
@@ -1459,6 +1476,7 @@ def test_dataset_counts_and_checks_and_knows_a_reference_set():
                 "id": sid,
                 "name": name,
                 "count": 3,
+                "clips": 2,
             }
             assert out["character"]["reference_count"] == _PICTURES["count"]
         r = owner.get(

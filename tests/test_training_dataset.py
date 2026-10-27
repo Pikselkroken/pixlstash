@@ -254,6 +254,7 @@ def test_build_training_dataset_skips_videos(env):
     # clip recipe would add.
     facts = ExportUtils.training_facts(server, set_id=set_id)
     assert (facts["count"], facts["clips"]) == (1, 1)
+    assert ExportUtils.training_counts(server, set_id=set_id) == (1, 1)
 
 
 def test_build_training_dataset_no_trigger_word(env):

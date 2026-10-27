@@ -527,6 +527,7 @@ import {
   EFFORT_LABELS,
   FIT_LABELS,
   PRIMARY_ROWS,
+  AUDIO_KEY,
   PROMPTS_KEY,
   SIZE_CHOICES,
   VERDICT_LABELS,
@@ -576,7 +577,6 @@ const SUBJECT_OPTIONS = [
     detail: "An object, outfit or place, kept recognisable.",
   },
 ];
-const AUDIO_KEY = "datasets[*].do_audio";
 const SOUND_OPTIONS = [
   { id: "sound", label: "Learn the sound too" },
   { id: "silent", label: "Picture only" },
@@ -629,18 +629,26 @@ const trainOnOptions = computed(() => {
   if (!ch) return [];
   // Opened on a set under the person (#2124): that set first.
   const child = store.childSet;
+  // A recipe that trains on clips counts them too.
+  const n = (count, clips) => count + (store.presetClips ? clips || 0 : 0);
+  const reference = n(ch.reference_count, ch.reference_clips);
   return [
     ...(child
-      ? [{ id: "set", label: `${child.name} · ${formatCount(child.count)}` }]
+      ? [
+          {
+            id: "set",
+            label: `${child.name} · ${formatCount(n(child.count, child.clips))}`,
+          },
+        ]
       : []),
     {
       id: "reference",
-      label: `Reference set · ${formatCount(ch.reference_count)}`,
-      disabled: ch.reference_set_id == null || ch.reference_count === 0,
+      label: `Reference set · ${formatCount(reference)}`,
+      disabled: ch.reference_set_id == null || reference === 0,
     },
     {
       id: "all",
-      label: `Every picture of ${ch.name} · ${formatCount(ch.all_count)}`,
+      label: `Every picture of ${ch.name} · ${formatCount(n(ch.all_count, ch.all_clips))}`,
     },
   ];
 });
@@ -896,8 +904,15 @@ const checks = computed(() => {
   if (!d) return [];
   const out = [];
   const n = store.pictureCount;
+  const clips = d.clips || 0;
   if (n === 0) {
-    out.push({ id: "none", bad: true, text: "There are no pictures to train on." });
+    out.push({
+      id: "none",
+      bad: true,
+      text: clips
+        ? `There are no still pictures to train on. This set's ${clips} video clip${clips === 1 ? "" : "s"} train only with a motion recipe.`
+        : "There are no pictures to train on.",
+    });
     return out;
   }
   if (n < d.min_pictures) {
@@ -906,7 +921,6 @@ const checks = computed(() => {
       text: `Only ${n} picture${n === 1 ? "" : "s"}. A LoRA usually needs ${d.min_pictures} or more, and with fewer it tends to copy them rather than learn from them.`,
     });
   }
-  const clips = d.clips || 0;
   if (clips > 0 && !store.presetClips) {
     out.push({
       id: "clips",
