@@ -13,7 +13,7 @@
     data-testid="model-set-card"
   >
     <!-- The favourite heart on the cover's top-left corner (#1578). It leads the
-         corner, and the cover's own badges move in beside it. -->
+         corner, and the badges step in beside it. -->
     <span v-if="favouritable" class="msc__fav">
       <FavouriteHeart
         variant="cover"
@@ -22,6 +22,34 @@
         @toggle="emit('favourite')"
       />
     </span>
+    <!-- The cover's top-left badges, drawn over whichever cover the card has.
+         Yours: the owner changed what the pictures ran with (#1972). Missing a
+         file: a checkpoint or member is not on the shelf. Automatic draws
+         nothing. The amber dot marks a model the pictures brought in that the
+         owner has not seen: it rides the Yours badge, and stands alone on an
+         automatic set, which has no badge to ride. -->
+    <div v-if="badges" class="msc__badges" aria-hidden="true">
+      <span
+        v-if="card.fresh && !yours"
+        class="msc__new"
+        data-testid="set-new-dot"
+      ></span>
+      <span
+        v-if="yours"
+        class="msc__badge"
+        data-testid="set-badge-yours"
+        ><span v-if="card.fresh" class="msc__new"></span>Yours</span
+      >
+      <span
+        v-if="card.missingFile"
+        class="msc__badge msc__badge--warn"
+        data-testid="set-badge-missing"
+        >Missing a file</span
+      >
+      <span v-if="card.fromComfyUI" class="msc__badge">
+        <v-icon size="12">mdi-sitemap-outline</v-icon>{{ runsLabel }}
+      </span>
+    </div>
     <div
       v-if="card.covers.length"
       class="msc__cover"
@@ -34,14 +62,6 @@
       >
         <img :src="coverSrc(cover)" alt="" loading="lazy" />
       </span>
-      <!-- Automatic while the set holds exactly what its pictures ran with,
-           Custom once the owner has added or removed something (#1972). -->
-      <span
-        class="msc__badge msc__badge--start"
-        :class="{ 'msc__badge--hand': !automatic }"
-        aria-hidden="true"
-        ><span v-if="card.fresh" class="msc__new"></span>{{ badge }}</span
-      >
       <span class="msc__badge msc__badge--end" aria-hidden="true">
         <v-icon size="12">mdi-image-multiple</v-icon
         >{{ card.pictures.toLocaleString() }}
@@ -54,11 +74,6 @@
       class="msc__cover msc__cover--empty msc__cover--hand"
       aria-hidden="true"
     >
-      <span
-        class="msc__badge msc__badge--start"
-        :class="{ 'msc__badge--hand': !automatic }"
-        ><span v-if="card.fresh" class="msc__new"></span>{{ badge }}</span
-      >
       <ModelMark
         v-if="card.markModel"
         class="msc__mark"
@@ -77,15 +92,9 @@
       <span v-else class="msc__empty-line">Checkpoint not on shelf</span>
     </div>
     <div v-else class="msc__cover msc__cover--empty" aria-hidden="true">
-      <!-- On the grid only because ComfyUI ran it (#1565): say where the
-           evidence came from, with the run count where recipes would sit. -->
-      <template v-if="card.fromComfyUI">
-        <span class="msc__badge msc__badge--start">
-          <v-icon size="12">mdi-sitemap-outline</v-icon
-          >{{ card.historyRuns === 1 ? "1 run" : `${card.historyRuns} runs` }}
-        </span>
-        <span class="msc__empty-line">Ran in ComfyUI</span>
-      </template>
+      <!-- On the grid only because ComfyUI ran it (#1565): the run count sits in
+           the badges above, and the cover says where the evidence came from. -->
+      <span v-if="card.fromComfyUI" class="msc__empty-line">Ran in ComfyUI</span>
       <span v-else class="msc__empty-line">No picture to show</span>
     </div>
     <!-- The template offer (#1999), asked as a question on the cover's foot
@@ -156,38 +165,11 @@
     </div>
 
     <!-- The visible rows are hidden from assistive tech: the card's own label
-         already reads all of them, including what "+N" clipped. -->
+         already reads all of them, including the marks "+N" clipped. -->
     <div class="msc__meta">
       <div class="msc__row">
-        <AppButton
-          class="msc__toggle"
-          :class="{ 'msc__toggle--open': expanded }"
-          variant="ghost"
-          size="sm"
-          icon-left="menu-right"
-          icon-only
-          tabindex="-1"
-          :tooltip="
-            expanded
-              ? 'Hide the models in this set'
-              : 'Show the models in this set'
-          "
-          :aria-expanded="String(expanded)"
-          :aria-controls="panelId || undefined"
-          @click="emit('toggle')"
-        />
         <span class="msc__name" aria-hidden="true">{{ card.name }}</span>
-        <span
-          v-if="card.kindLabel"
-          class="msc__kind"
-          :class="{ 'msc__kind--missing': card.missing }"
-          aria-hidden="true"
-          >{{
-          card.kindLabel
-        }}</span>
-        <span v-if="card.hidden" class="msc__kind" aria-hidden="true"
-          >Hidden</span
-        >
+        <span v-if="card.hidden" class="msc__tag" aria-hidden="true">Hidden</span>
         <!-- The owner's word on the set, never PixlStash's check. -->
         <VerdictIcon
           v-if="card.verdict"
@@ -198,8 +180,9 @@
              than deleted (the next read would only draw it again). A hand-made
              set is the owner's own and can be deleted, and hiding it is the
              same view choice on top: out of the way in THIS library only.
-             Mouse-only, like the toggle: the grid owns Tab, and Delete on the
-             card deletes a hand-made set, hides a derived one. -->
+             Mouse-only: the grid owns Tab, and Delete on the card deletes a
+             hand-made set, hides a derived one; the selection pill's Hide set
+             does the same from the keyboard. -->
         <AppButton
           class="msc__hide"
           variant="ghost"
@@ -213,19 +196,21 @@
           @dblclick.stop
         />
       </div>
-      <!-- What SHAPE this set is - one VAE and two encoders, or none at all -
-           which is the question a grid is scanned for. -->
-      <div class="msc__row">
-        <ChipRow
-          v-if="kindChips.length"
-          :items="kindChips"
-          aria-hidden="true"
-        />
-        <span v-else class="msc__none" aria-hidden="true">{{
-          card.handMade
-            ? "Nothing else in it yet"
-            : "Nothing else has run with it"
-        }}</span>
+      <!-- Each member as its Type letter and its name, three at most; the rest
+           are "+N". A file the shelf lacks is named in warning ink. -->
+      <div class="msc__row msc__marks" aria-hidden="true">
+        <span
+          v-for="(mark, index) in shownMarks"
+          :key="index"
+          class="msc__mark-chip"
+          :class="{ 'msc__mark-chip--missing': mark.missing }"
+          :title="mark.title"
+        >
+          <i class="msc__k" :data-tint="mark.tint">{{ mark.mark }}</i>
+          <span class="msc__mark-name">{{ mark.name }}</span>
+        </span>
+        <span v-if="moreMarks" class="msc__more">+{{ moreMarks }}</span>
+        <span v-if="!shownMarks.length" class="msc__none">Nothing in it yet</span>
       </div>
       <div class="msc__row msc__row--facts">
         <!-- The one thing an incomplete set must say, in place of its facts:
@@ -237,33 +222,37 @@
           ><v-icon size="14">mdi-alert-outline</v-icon>Incomplete: no
           checkpoint</span
         >
-        <span v-else class="msc__facts" aria-hidden="true">{{
-          card.facts.join(" · ")
-        }}</span>
+        <template v-else>
+          <span v-if="card.baseModel" class="msc__fact">{{
+            card.baseModel
+          }}</span>
+          <span v-if="sizeLabel" class="msc__fact">{{ sizeLabel }}</span>
+          <span v-if="card.lastUsed" class="msc__fact">{{
+            card.lastUsed
+          }}</span>
+        </template>
       </div>
     </div>
   </article>
 </template>
 
 <script setup>
-// One workflow set on the model shelf's set grid (#1438).
+// One workflow set on the Models workspace's set grid (#1438, #2168).
 //
 // **A card is one base model** - a checkpoint, or the diffusion file a Flux or
-// Wan graph loads instead - and ▸ opens the tray of models that have run with it.
-// Three meta rows: the name with its kind, the per-kind tally of everything else
-// in the set, and the facts.
+// Wan graph loads instead - and opening its tray shows the models that have run
+// with it. The tray is opened by the grid's own gestures (Enter, double-click),
+// and by the rail's Edit set; the card carries no button for it.
 //
 // **Deliberately not `WorkflowCard`.** The shape is the same on purpose - the
-// 2fr/1fr cover mosaic, the scrim badges, the layered stack count, ▸, and four
-// single-line rows that clip to "+N" - because a reader should not have to learn
-// a second card. What is NOT shared is the vocabulary: that card's ⓘ panel says
-// "Stack of 3 workflows" and "Saved recipes", and its picture list is keyed on a
-// workflow. A set is neither, so borrowing the component would have put three
-// wrong words on every card to save this file. The tokens, the badge treatment
-// and the row rhythm are copied; nothing that says "workflow" is.
+// cover mosaic, the scrim badges, the layered count, the rhythm of its meta rows
+// - because a reader should not have to learn a second card. What is NOT shared
+// is the vocabulary: that card's ⓘ panel says "Stack of 3 workflows", and a set
+// is neither. The tokens, the badge treatment and the row rhythm are copied;
+// nothing that says "workflow" is.
 //
-// There is no ⓘ here either: everything the card knows is already on it, and the
-// detail a reader wants next is the file list, which is one ▸ away.
+// The meta block is three rows as the design board draws it: the name, the
+// member marks, and the facts (base model, size on disk, last used).
 //
 // **On an evidence card, selected means its BASE MODEL is selected**, never the
 // set: the shelf's verbs write one file each and two of them destroy bytes, so a
@@ -275,29 +264,28 @@
 //
 // A HAND-MADE card (`card.handMade`, #1520) is the owner's set rather than the
 // evidence for one: dashed, and selected means the SET is selected - its verbs
-// touch no file. Both kinds wear the same badge (#1972): Automatic while the
-// set holds exactly what its pictures ran with, Custom once the owner has
-// changed it, with an amber dot while the pictures have brought in a model the
-// owner has not seen yet.
+// touch no file. Its badge says Yours once the owner has changed what its
+// pictures ran with (#1972); an automatic one draws no badge.
 
 import { computed } from "vue";
 import { VIcon } from "vuetify/components";
 
 import { pictureThumbnailUrl } from "../../api/pictures";
+import { formatModelSize } from "../../utils/modelShelf";
+import { setVerdictText } from "../../utils/setVerdicts";
 import AppButton from "./AppButton.vue";
-import ChipRow from "./ChipRow.vue";
 import FavouriteHeart from "./FavouriteHeart.vue";
 import ModelMark from "./ModelMark.vue";
 import VerdictIcon from "./VerdictIcon.vue";
-import { setVerdictText } from "../../utils/setVerdicts";
+
+/** The member marks a card draws before "+N" takes the rest. */
+const MARKS_SHOWN = 3;
 
 const props = defineProps({
-  /** One card from `setCard` (see `utils/workflowSets.js`). */
+  /** One card from `setCard` / `handMadeCard`, with the grid's facts added. */
   card: { type: Object, required: true },
   /** This card's tray is open. */
   expanded: { type: Boolean, default: false },
-  /** The id of the tray ▸ opens, for `aria-controls`. */
-  panelId: { type: String, default: "" },
   /** This card's base model is in the shelf's selection. */
   selected: { type: Boolean, default: false },
   /** Draw the favourite heart: the grid's cards carry one, other lists do not. */
@@ -308,7 +296,6 @@ const props = defineProps({
 
 const emit = defineEmits([
   "favourite",
-  "toggle",
   "offer",
   "add",
   "keep-separate",
@@ -321,7 +308,16 @@ const automatic = computed(
   () => !props.card.handMade || Boolean(props.card.automatic),
 );
 
-const badge = computed(() => (automatic.value ? "Automatic" : "Custom"));
+/** The owner's own set, changed from what its pictures ran with. */
+const yours = computed(() => Boolean(props.card.handMade) && !automatic.value);
+
+const badges = computed(
+  () =>
+    yours.value ||
+    Boolean(props.card.fresh) ||
+    props.card.missingFile ||
+    props.card.fromComfyUI,
+);
 
 /**
  * The URL a browser loads one cover from.
@@ -338,14 +334,41 @@ function coverSrc(cover) {
   return pictureThumbnailUrl(cover.picture_id, { version: cover.version });
 }
 
-/** Row 2: the per-kind tally of everything else in the set. */
-const kindChips = computed(() =>
-  props.card.kinds.map((entry, i) => ({
-    key: `kind-${i}`,
-    label: entry,
-    icon: "cube-outline",
+/** The first marks drawn, each with the words its title and label give it. */
+const shownMarks = computed(() =>
+  (props.card.marks ?? []).slice(0, MARKS_SHOWN).map((mark) => ({
+    ...mark,
+    title: mark.missing
+      ? `${mark.name} is not on the shelf`
+      : [mark.type, mark.name].filter(Boolean).join(" "),
   })),
 );
+
+/** How many marks "+N" stands for. */
+const moreMarks = computed(() =>
+  Math.max(0, (props.card.marks ?? []).length - MARKS_SHOWN),
+);
+
+const sizeLabel = computed(() =>
+  props.card.sizeBytes ? formatModelSize(props.card.sizeBytes) : "",
+);
+
+const runsLabel = computed(() =>
+  props.card.historyRuns === 1
+    ? "1 run"
+    : `${props.card.historyRuns} runs`,
+);
+
+/**
+ * The facts a reader sees, in words: the base model, the size and the last use,
+ * as the chips draw them. None when the set is incomplete, which draws its
+ * warning instead.
+ */
+const drawnFacts = computed(() => {
+  if (props.card.handMade && props.card.incomplete) return [];
+  return [props.card.baseModel, sizeLabel.value, props.card.lastUsed]
+    .filter(Boolean);
+});
 
 // The cover's question, read in full: its buttons are off the tab order, so
 // the name says where the keyboard answers it.
@@ -369,39 +392,59 @@ const offerName = computed(() => {
 });
 
 // "+N" is not a control, so this is the only place a screen reader hears the
-// chips a narrow card clipped - and the only place it hears the whole set.
+// marks a narrow card clipped - and the only place it hears the whole set, with
+// the count line (`facts`) that the card no longer draws.
 const accessibleName = computed(() => {
-  const { name, kindLabel, kinds, facts, handMade, incomplete } = props.card;
-  if (handMade) {
+  const card = props.card;
+  const marks = (card.marks ?? []).map((mark) =>
+    mark.missing ? `${mark.name} not on the shelf` : mark.name,
+  );
+  // One mark is the set's own file and nothing else: say so, as the drawn
+  // "Nothing else" line used to.
+  const withMarks = marks.length
+    ? [
+        `with ${marks.join(", ")}`,
+        marks.length === 1
+          ? card.handMade
+            ? "nothing else in it yet"
+            : "nothing else has run with it"
+          : null,
+      ]
+        .filter(Boolean)
+        .join(", ")
+    : card.handMade
+      ? "nothing in it yet"
+      : "nothing else has run with it";
+  if (card.handMade) {
     return [
-      name,
+      card.name,
       automatic.value ? "automatic" : "custom",
-      props.card.fresh
-        ? `${props.card.fresh} new from pictures`
-        : null,
-      props.card.hidden ? "hidden" : null,
-      kindLabel,
-      incomplete
+      card.fresh ? `${card.fresh} new from pictures` : null,
+      card.hidden ? "hidden" : null,
+      card.missingFile ? "a file missing from the shelf" : null,
+      card.incomplete
         ? "incomplete: no checkpoint"
-        : props.card.checkpointOffShelf
+        : card.checkpointOffShelf
           ? "checkpoint not on shelf"
           : null,
-      kinds.length ? `with ${kinds.join(", ")}` : "nothing else in it yet",
-      // What is drawn: an incomplete card shows its warning in place of facts.
-      incomplete ? null : facts.join(", "),
+      withMarks,
+      ...drawnFacts.value,
+      card.incomplete ? null : card.facts.join(", "),
       offerName.value,
     ]
       .filter(Boolean)
       .join(", ");
   }
   return [
-    name,
+    card.name,
     "automatic",
-    props.card.missing ? "base model not on shelf" : kindLabel,
-    props.card.fromComfyUI ? "ran in ComfyUI" : null,
-    props.card.hidden ? "hidden" : null,
-    kinds.length ? `with ${kinds.join(", ")}` : "nothing else has run with it",
-    facts.join(", "),
+    card.missing ? "base model not on shelf" : null,
+    card.missingFile ? "a file missing from the shelf" : null,
+    card.fromComfyUI ? "ran in ComfyUI" : null,
+    card.hidden ? "hidden" : null,
+    withMarks,
+    ...drawnFacts.value,
+    card.facts.join(", "),
   ]
     .filter(Boolean)
     .join(", ");
@@ -410,12 +453,13 @@ const accessibleName = computed(() => {
 
 <style scoped src="./cardCover.css"></style>
 <style scoped>
-/* 92 = 8 + 3 × 24 + 2 × 2 + 8: the meta block, fixed whatever the card holds
+/* The meta block is 8 + 3 rows + 2 gaps + 8, fixed whatever the card holds
    and `flex: none` so a change to that sum shows as a wrong height rather than
-   being absorbed. Local on purpose, as `WorkflowCard`'s is; the `6 / 5` cover
-   the two cards share is in `cardCover.css`. */
+   being absorbed. Three rows of the small control height with the space-2 gap
+   between them. Local on purpose, as `WorkflowCard`'s is; the `6 / 5` cover the
+   two cards share is in `cardCover.css`. */
 .msc {
-  --msc-meta-h: 92px;
+  --msc-meta-h: calc(var(--space-3) * 2 + var(--control-h-sm) * 3 + var(--space-2) * 2);
 
   position: relative;
   display: flex;
@@ -435,16 +479,18 @@ const accessibleName = computed(() => {
   border-color: var(--active-bar);
 }
 
-/* The shell's selection mark (`style.css` rule 3): the wash, plus
-   `--selection-ring` because a card has no left edge to rail.
+/* The selection mark. The wash sits over the card as an OVERLAY, not as the
+   card's own background: an inset box-shadow paints under the children, and the
+   top of this card is the cover's opaque `<img>`s, so the mark would stop dead
+   at the pictures. `pointer-events: none` so the card under it still takes its
+   click. The ring is an outline two space-1 wide and off the card by the same,
+   in the active ink: the design board's `outline: 2px solid` at `outline-offset:
+   2px`, on the tokens. */
+.msc--on {
+  outline: var(--space-1) solid var(--active-bar);
+  outline-offset: var(--space-1);
+}
 
-   **An OVERLAY, not the card's own background and shadow**, for the reason
-   `WorkflowCard.vue` records at the same rule: an inset box-shadow paints over
-   an element's background but UNDER its children, and the top 55% of this card
-   is the cover's opaque `<img>`s. Put on the card itself the mark appears along
-   the meta rows and stops dead at the pictures. `pointer-events: none` so ▸
-   underneath still takes its click, and the radius is inherited so the ring
-   follows the card's own corners. */
 .msc--on::after {
   content: "";
   position: absolute;
@@ -452,7 +498,6 @@ const accessibleName = computed(() => {
   z-index: var(--z-raised);
   border-radius: inherit;
   background: var(--active-wash);
-  box-shadow: var(--selection-ring);
   pointer-events: none;
 }
 
@@ -484,9 +529,8 @@ const accessibleName = computed(() => {
 }
 
 /* Hidden, drawn only while the grid shows hidden sets: the cover fades, whether
-   it holds pictures or is the empty stand-in (a hand-made set with none, or a
-   picture set with no cover), and the card's own text does not, so the card
-   stays readable and the "Hidden" tag says why. */
+   it holds pictures or is the empty stand-in, and the card's own text does not,
+   so the card stays readable and the "Hidden" tag says why. */
 .msc--hidden .msc__pic,
 .msc--hidden .msc__cover--empty {
   opacity: var(--opacity-disabled);
@@ -510,8 +554,29 @@ const accessibleName = computed(() => {
   --entity-thumb: calc(var(--space-6) * 3);
 }
 
-.msc__badge--hand {
-  border: 1px dashed currentColor;
+/* The top-left badge group, over the cover whichever kind of cover it is. The
+   heart leads the corner; the group steps in past it. */
+.msc__badges {
+  position: absolute;
+  top: var(--space-3);
+  left: var(--space-3);
+  z-index: var(--z-raised);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  pointer-events: none;
+}
+
+.msc__badges .msc__badge {
+  position: static;
+}
+
+.msc__badge--warn {
+  color: rgb(var(--v-theme-surface-warning));
+}
+
+.msc__badge--end {
+  right: var(--space-3);
 }
 
 .msc__warn {
@@ -582,19 +647,14 @@ const accessibleName = computed(() => {
   gap: var(--space-3);
 }
 
-/* A model the pictures brought in that the owner has not seen yet (#1972):
-   the attention dot, in the amber kept for the dot alone. */
+/* A model the pictures brought in that the owner has not seen yet (#1972): the
+   attention dot, in the amber kept for the dot alone. It rides the Yours badge. */
 .msc__new {
   flex: none;
   width: var(--badge-size-dot);
   height: var(--badge-size-dot);
   border-radius: var(--radius-pill);
   background: rgb(var(--v-theme-accent));
-}
-
-.msc__badge--start {
-  left: var(--space-3);
-  z-index: var(--z-raised);
 }
 
 /* The heart leads the cover's top-left corner; the badges step in past it. */
@@ -605,7 +665,7 @@ const accessibleName = computed(() => {
   z-index: var(--z-raised);
 }
 
-.msc--favouritable .msc__badge--start {
+.msc--favouritable .msc__badges {
   left: calc(var(--space-3) + var(--control-h) + var(--space-2));
 }
 
@@ -614,13 +674,9 @@ const accessibleName = computed(() => {
   box-sizing: border-box;
   height: var(--msc-meta-h);
   display: grid;
-  grid-template-rows: repeat(4, var(--control-h-sm));
-  row-gap: var(--space-1);
+  grid-template-rows: repeat(3, var(--control-h-sm));
+  row-gap: var(--space-2);
   padding: var(--space-3);
-}
-
-.msc__row--facts {
-  padding-right: var(--space-3);
 }
 
 .msc__name {
@@ -632,7 +688,8 @@ const accessibleName = computed(() => {
   font-weight: var(--weight-semibold);
 }
 
-.msc__kind {
+/* The "Hidden" tag, the one tag the name row keeps. */
+.msc__tag {
   display: inline-flex;
   align-items: center;
   box-sizing: border-box;
@@ -648,37 +705,87 @@ const accessibleName = computed(() => {
   white-space: nowrap;
 }
 
-.msc__kind--missing {
-  border-color: rgba(var(--v-theme-warning), 0.5);
-  background: rgba(var(--v-theme-warning), 0.16);
+/* The member marks: each a Type letter and a name, the sidebar's `.msb-mark`
+   pattern at card size. A row of them clips at its edge, never wraps. */
+.msc__marks {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.msc__mark-chip {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: var(--space-2);
+  max-width: calc(var(--space-6) * 5);
+  height: var(--tag-h-xs);
+  padding-right: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: rgb(var(--v-theme-input-background));
+  font-size: var(--text-2xs);
+}
+
+.msc__mark-chip--missing .msc__mark-name {
   color: rgb(var(--v-theme-surface-warning));
 }
 
-.msc__facts {
+.msc__k {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: var(--tag-h-xs);
+  height: var(--tag-h-xs);
+  border-radius: var(--radius-sm);
+  color: rgb(var(--v-theme-on-tertiary));
+  background: rgb(var(--v-theme-tertiary));
+  font-style: normal;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-bold);
+}
+
+.msc__k[data-tint="secondary"] {
+  color: rgb(var(--v-theme-on-secondary));
+  background: rgb(var(--v-theme-secondary));
+}
+
+.msc__k[data-tint="neutral"] {
+  color: rgb(var(--v-theme-on-surface));
+  background: var(--track-trough);
+}
+
+.msc__mark-name {
+  min-width: 0;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.msc__more {
+  flex-shrink: 0;
   font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-  font-variant-numeric: tabular-nums;
-  text-overflow: ellipsis;
 }
 
-/* ▸ carries full ink: opening a stack is the card's own affordance. */
-.msc__toggle {
+/* A fact is a small bordered chip, as the design draws it: base model, size,
+   last used. Tabular figures keep a size column from jittering. */
+.msc__fact {
+  display: inline-flex;
+  align-items: center;
   flex-shrink: 0;
-  color: rgb(var(--v-theme-on-surface));
+  box-sizing: border-box;
+  height: var(--tag-h-xs);
+  padding: 0 var(--space-2);
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-sm);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
-.msc__toggle :deep(.app-btn__icon) {
-  transition: transform var(--dur-1) var(--ease-standard);
-}
-
-.msc__toggle--open :deep(.app-btn__icon) {
-  transform: rotate(90deg);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .msc__toggle :deep(.app-btn__icon) {
-    transition: none;
-  }
+.msc__row--facts {
+  overflow: hidden;
+  padding-right: var(--space-3);
 }
 </style>

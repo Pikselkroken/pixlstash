@@ -1,30 +1,79 @@
 <template>
   <!-- The pill while cards named after a MISSING base model are selected. The
-       same floating object as the other two pills. Replace swaps the missing
-       file in the workflows that load it; Hide takes the selected cards off
-       the grid. No file on the shelf is touched, so nothing here wears the
-       error colour. -->
+       same floating object as the other two pills: count, Replace (the verb
+       that fixes it, worded), `⋯` for the rest of the card's menu, then Hide
+       and Clear. Replace swaps the missing file in the workflows that load it;
+       Hide takes the selected cards off the grid. No file on the shelf is
+       touched, so nothing here wears the error colour. -->
   <div
     v-if="store.selectedMissing.length"
     class="selbar"
     role="toolbar"
     aria-label="Selected sets with a missing model"
   >
-    <button class="selbar-count" type="button" @click="store.clearMissingSelection()">
-      <Tooltip text="Clear the selection (Esc)" activator="parent" />
-      <v-icon size="16">mdi-file-alert-outline</v-icon>
-      <span>{{ countLabel }}</span>
-      <v-icon size="16" class="selbar-chevron">mdi-close</v-icon>
-    </button>
+    <span class="selbar-count">{{ countLabel }}</span>
     <span class="selbar-sep"></span>
     <AppBarButton
       shape="round"
       icon="file-replace-outline"
       data-verb="replace-missing"
-      aria-label="Replace"
       tooltip="Replace in every workflow that loads it"
       @click="emit('replace')"
-    />
+    >
+      Replace…
+    </AppBarButton>
+
+    <v-menu
+      v-if="moreRows.length"
+      v-model="moreOpen"
+      :close-on-content-click="false"
+      location="top end"
+      origin="bottom end"
+      :offset="8"
+    >
+      <template #activator="{ props: menuProps }">
+        <AppBarButton
+          shape="round"
+          icon="dots-horizontal"
+          v-bind="menuProps"
+          data-verb="more"
+          aria-label="More actions"
+          aria-haspopup="menu"
+          :aria-expanded="moreOpen"
+          tooltip="More…"
+        />
+      </template>
+      <div
+        class="ctx-menu shelf-menu"
+        role="menu"
+        tabindex="-1"
+        @keydown="onMenuKeydown"
+      >
+        <template v-for="(entry, index) in moreRows" :key="index">
+          <div v-if="entry === SEP" class="ctx-sep"></div>
+          <button
+            v-else
+            class="ctx-item"
+            :class="{ 'ctx-item--disabled': !entry.verb, 'ctx-item--danger': entry.danger }"
+            type="button"
+            role="menuitem"
+            :disabled="!entry.verb"
+            :data-verb="entry.verb || undefined"
+            @click="entry.verb && verb(entry.verb)"
+          >
+            <Tooltip v-if="!entry.verb" :text="NO_ROW" activator="parent" />
+            <v-icon class="ctx-icon">{{ entry.icon }}</v-icon>
+            <span class="ctx-label-text">{{
+              typeof entry.label === "function" ? entry.label() : entry.label
+            }}</span>
+            <span v-if="entry.kbd" class="ctx-shortcut">{{ entry.kbd }}</span>
+          </button>
+        </template>
+      </div>
+    </v-menu>
+
+    <span class="selbar-sep"></span>
+
     <AppBarButton
       v-if="hide"
       shape="round"
@@ -33,6 +82,14 @@
       :aria-label="hide.label"
       :tooltip="hide.label"
       @click="emit('hide-sets')"
+    />
+    <AppBarButton
+      shape="round"
+      icon="close"
+      data-verb="clear"
+      aria-label="Clear selection (Esc)"
+      tooltip="Clear selection (Esc)"
+      @click="store.clearMissingSelection()"
     />
   </div>
 
@@ -84,7 +141,7 @@
  * The verb surface for selected missing-base cards. Emits only, like
  * `WorkflowSetSelectionBar`: the view owns the Replace dialog.
  */
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { VIcon } from "vuetify/components";
 
 import { useContextMenuAt } from "../../composables/useContextMenuAt";
@@ -155,6 +212,10 @@ const menu = computed(() =>
 );
 
 const { contextOpen, contextAt, openContextMenu } = useContextMenuAt();
+const moreOpen = ref(false);
+
+/** The card's menu without Replace and its separator: what `⋯` holds. */
+const moreRows = computed(() => MENU.slice(2));
 
 const countLabel = computed(() => {
   // Files, not cards: one set can be missing two.
@@ -164,6 +225,7 @@ const countLabel = computed(() => {
 
 function verb(name) {
   contextOpen.value = false;
+  moreOpen.value = false;
   if (name === "copy-filenames") copyFilenames();
   else emit(name);
 }

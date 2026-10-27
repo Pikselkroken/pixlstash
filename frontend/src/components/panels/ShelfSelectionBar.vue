@@ -1,13 +1,12 @@
 <template>
   <!-- The floating pill, the SAME object the photo grid docks over its tiles:
-       bottom-centre, panel surface, pill radius, elevation-4. Nine labelled
-       buttons in a docked bar was a sentence to re-read on every selection;
-       a row of icons is a chord you learn once, and the words are never gone -
-       hover has them and right-click has all of them (#904). The last of them
-       is the only one that destroys bytes, which is why it is the only one in
-       the error colour (#933). -->
+       bottom-centre, panel surface, pill radius, elevation-4. Count first, the
+       three verbs that are used most carry their words, the rest sit in `⋯`,
+       and the one that removes a row from the shelf is the only icon in the
+       error colour. Every verb is also on the row context menu, which is the
+       full inventory and is unchanged. -->
   <div
-    v-if="!rail && !store.railSelection && store.selectedRows.length"
+    v-if="store.selectedRows.length"
     class="selbar"
     role="toolbar"
     aria-label="Selected models"
@@ -63,31 +62,14 @@
 
     <span class="selbar-sep"></span>
 
-    <!-- The favourite leads the icon row (#1578): a heart, H, the same verb the
-         menu leads with. Disabled, with its reason, when nothing is keyed. -->
-    <AppBarButton
-      shape="round"
-      :icon="favouriteOn ? 'heart' : 'heart-outline'"
-      data-verb="favourite"
-      :aria-label="favouriteLabel"
-      :disabled="!favouritable"
-      :tooltip="favouriteTitle || `${favouriteLabel} (H)`"
-      @click="store.toggleFavourites(favouriteTargets)"
-    />
-
-    <span class="selbar-sep"></span>
-
     <!-- Assign is one button and one popover, because "person or set" is one
          question: which thing does this adapter belong to. The two pickers
          inside it are the shared `AddToEntityControl` the grid uses, so the
          search, the tri-state and the keyboard model are learned once.
 
-         Every verb below carries BOTH `aria-label` and a tooltip, and they say
-         different things on purpose. The label is the verb and never changes,
-         so a screen reader hears a stable name and voice control has something
-         to say; the tooltip is the REFUSAL - "Only files that are actually on
-         this machine can be moved" - and changes with the selection. A tooltip
-         alone is not an accessible name a reader can rely on. -->
+         The verbs here carry their WORDS, so the visible text is the name; the
+         tooltip is the REFUSAL ("Only files that are actually on this machine
+         can be moved") and changes with the selection. -->
     <v-menu
       v-model="assignMenuOpen"
       :close-on-content-click="false"
@@ -101,10 +83,11 @@
           icon="account-plus-outline"
           v-bind="menuProps"
           data-verb="assign"
-          aria-label="Assign to person or set"
           :disabled="!assignable.length"
           :tooltip="assignTitle || 'Assign to person or set'"
-        />
+        >
+          Assign
+        </AppBarButton>
       </template>
       <div class="ctx-menu shelf-menu shelf-menu--assign">
         <Tooltip :text="assignTitle || ''">
@@ -140,89 +123,36 @@
       </div>
     </v-menu>
 
-    <AppBarButton
-      shape="round"
-      icon="layers-outline"
-      data-verb="stack"
-      :aria-label="
-        stackFuses ? 'Fuse these into one stack' : 'Stack these into one stack'
-      "
-      :disabled="!stackable"
-      :tooltip="stackTitle"
-      @click="emit('stack')"
-    />
-
-    <AppBarButton
-      shape="round"
-      icon="layers-off-outline"
-      data-verb="unstack"
-      aria-label="Break this stack up"
-      :disabled="!unstackable"
-      :tooltip="unstackTitle"
-      @click="emit('unstack')"
-    />
-
+    <!-- Move rides along DISABLED rather than disappearing, with its refusal. -->
     <AppBarButton
       shape="round"
       icon="folder-move-outline"
       data-verb="move"
-      aria-label="Move to another folder"
       :disabled="!movable.length || moves.busy"
       :tooltip="moveTitle"
       @click="emit('move')"
-    />
+    >
+      Move
+    </AppBarButton>
 
-    <!-- Rename rides along DISABLED rather than disappearing: a row of buttons
-         that reflows as the selection grows is a row you have to re-read, and a
-         disabled button with its reason in the tooltip teaches where the verb
-         lives. -->
+    <!-- Favourite leads the verbs (#1578): a heart and its H, the same verb the
+         menus lead with. Disabled, with its reason, when nothing is keyed. -->
     <AppBarButton
       shape="round"
-      icon="pencil-outline"
-      data-verb="rename"
-      aria-label="Rename"
-      :disabled="!single"
-      :tooltip="renameTitle"
-      @click="emit('rename')"
-    />
+      :icon="favouriteOn ? 'heart' : 'heart-outline'"
+      data-verb="favourite"
+      :aria-label="favouriteLabel"
+      aria-keyshortcuts="H"
+      :disabled="!favouritable"
+      :tooltip="favouriteTitle || `${favouriteLabel} (H)`"
+      @click="store.toggleFavourites(favouriteTargets)"
+    >
+      {{ favouriteLabel }}
+      <kbd class="selbar-kbd" aria-hidden="true">H</kbd>
+    </AppBarButton>
 
-    <AppBarButton
-      shape="round"
-      icon="image-outline"
-      data-verb="set-icon"
-      aria-label="Set thumbnail"
-      :tooltip="iconTitle"
-      @click="emit('set-icon')"
-    />
-
-    <span class="selbar-sep"></span>
-
-    <AppBarButton
-      shape="round"
-      icon="playlist-remove"
-      data-verb="forget"
-      aria-label="Remove from shelf"
-      :disabled="!forgettable.length"
-      :tooltip="forgetTitle"
-      @click="emit('forget')"
-    />
-
-    <!-- The one verb that destroys bytes, so it is the one verb drawn in the
-         error colour. `aria-label` follows the modifier rather than staying
-         fixed like the others': a screen-reader user holding Shift is being
-         offered a different, unrecoverable operation, and a stable name would
-         be the one place that did not say so. -->
-    <AppBarButton
-      shape="round"
-      danger
-      :icon="shiftHeld ? 'delete-forever-outline' : 'delete-outline'"
-      data-verb="delete"
-      :aria-label="deleteLabel"
-      :disabled="!deletable.length"
-      :tooltip="deleteTitle"
-      @click="emit('delete', $event.shiftKey)"
-    />
-
+    <!-- Every other verb, under the same gates and refusals as the context
+         menu: stack, unstack, rename, set thumbnail, delete and the rest. -->
     <v-menu
       v-model="moreMenuOpen"
       :close-on-content-click="false"
@@ -242,8 +172,33 @@
           tooltip="More…"
         />
       </template>
-      <VerbMenu :single="false" v-bind="verbHandlers" />
+      <VerbMenu :single="single" :pill="true" v-bind="verbHandlers" />
     </v-menu>
+
+    <span class="selbar-sep"></span>
+
+    <!-- Remove from shelf: the one verb drawn in the error colour, last. It
+         removes a row, not bytes, but it is the verb that ends the selection's
+         presence on the shelf, so it wears the destructive treatment. -->
+    <AppBarButton
+      shape="round"
+      danger
+      icon="delete-outline"
+      data-verb="forget"
+      aria-label="Remove from shelf"
+      :disabled="!forgettable.length"
+      :tooltip="forgetTitle"
+      @click="emit('forget')"
+    />
+
+    <AppBarButton
+      shape="round"
+      icon="close"
+      data-verb="clear"
+      aria-label="Clear selection (Esc)"
+      tooltip="Clear selection (Esc)"
+      @click="clear"
+    />
   </div>
 
   <!-- The row context menu: the FULL inventory, and the thing every other
@@ -251,7 +206,6 @@
        row, which is what a context menu is; the view opens it through
        `openContextMenu` after it has made the row the selection. -->
   <v-menu
-    v-if="!rail"
     v-model="contextOpen"
     :target="contextAt"
     :close-on-content-click="false"
@@ -312,13 +266,6 @@ const props = defineProps({
    */
   sets: { type: Array, default: () => [] },
   /**
-   * Mounted by the Models rail, which has a menu and a selection of its own:
-   * no pill and no menu here, only the verb rows (`RailVerbs`) under the same
-   * gates. A verb goes to the shelf through `store.requestVerb`, since the
-   * rail is not the shelf's child, and `picked` tells the rail to close.
-   */
-  rail: { type: Boolean, default: false },
-  /**
    * The evidence cards picked on the set grid. Read by the favourite verb, so
    * it favourites a set and not the model the card is named after.
    */
@@ -347,7 +294,6 @@ const emit = defineEmits([
   "remove-from-set",
   "hide-sets",
   "hide-models",
-  "picked",
 ]);
 
 const store = useModelShelfStore();
@@ -1027,13 +973,10 @@ function onAttach(payload, attach) {
 const verbHandlers = computed(() => ({
   rows: store.selectedRows,
   hideSets: hideSetsVerb(props.sets),
-  // The rail's menu has its own Hide row, above these.
-  hideModels: props.rail
-    ? null
-    : hideModelsVerb(
-        store.selectedModels.map((model) => model.id),
-        store.hiddenModelIds,
-      ),
+  hideModels: hideModelsVerb(
+    store.selectedModels.map((model) => model.id),
+    store.hiddenModelIds,
+  ),
   newSetTitle: newSetTitle.value,
   removableFromSet: removableFromSet.value,
   clonable: Boolean(clonableSet.value),
@@ -1074,7 +1017,6 @@ const verbHandlers = computed(() => ({
   deletable: deletable.value.length > 0,
   deleteLabel: deleteLabel.value,
   deleteTitle: deleteTitle.value,
-  rail: props.rail,
   favouriteOn: favouriteOn.value,
   favouriteLabel: favouriteLabel.value,
   favouritable: favouritable.value,
@@ -1085,8 +1027,6 @@ const verbHandlers = computed(() => ({
     const targets = favouriteTargets.value;
     contextOpen.value = false;
     moreMenuOpen.value = false;
-    const send = props.rail ? store.requestVerb : emit;
-    if (props.rail) emit("picked");
     if (verb === "copy-filenames")
       copyLines(
         store.selectedRows.map((row) => row.filename).filter(Boolean),
@@ -1097,10 +1037,10 @@ const verbHandlers = computed(() => ({
     // The gesture decides, not the tracked key state: `shiftHeld` drives the
     // label and nothing else, so a stale one can never turn a trash into an
     // unlink.
-    else if (verb === "delete") send("delete", Boolean(event?.shiftKey));
+    else if (verb === "delete") emit("delete", Boolean(event?.shiftKey));
     else if (verb === "favourite") store.toggleFavourites(targets);
-    else if (verb === "clone-set") send("clone-set", cloned);
-    else send(verb);
+    else if (verb === "clone-set") emit("clone-set", cloned);
+    else emit(verb);
   },
   onAttach,
 }));
@@ -1115,7 +1055,9 @@ const verbHandlers = computed(() => ({
  * threaded through it as props anyway, which is exactly what `verbHandlers` is.
  */
 const VerbItems = (props) => {
-  const item = (icon, label, { on, disabled, title, kbd, danger } = {}) =>
+  // `verb` names the row for `data-verb`, so a test or a shortcut can find a
+  // row by the operation it performs, the way it finds a pill button.
+  const item = (icon, label, { verb, on, disabled, title, kbd, danger } = {}) =>
     h(
       "button",
       {
@@ -1127,6 +1069,7 @@ const VerbItems = (props) => {
         type: "button",
         role: "menuitem",
         disabled,
+        "data-verb": verb,
         onClick: on,
       },
       [
@@ -1161,25 +1104,33 @@ const VerbItems = (props) => {
           }),
       },
     );
+  // `pill`: the `⋯` under the selection pill. Favourite, Assign, Move and
+  // Remove from shelf are on the pill itself, so they are left out here; the
+  // context menu, which has no pill beside it, lists all of them.
+  const pill = Boolean(props.pill);
 
   return [
     // Favourite leads the whole menu (#1578): it touches no file, and it is the
     // one verb every surface shares. Unhashed models have no key and say why.
-    item(
-      props.favouriteOn ? "mdi-heart" : "mdi-heart-outline",
-      props.favouriteLabel,
-      {
-        on: () => props.onVerb("favourite"),
-        disabled: !props.favouritable,
-        title: props.favouriteTitle,
-        kbd: "H",
-      },
-    ),
-    sep(),
+    pill
+      ? null
+      : item(
+          props.favouriteOn ? "mdi-heart" : "mdi-heart-outline",
+          props.favouriteLabel,
+          {
+            verb: "favourite",
+            on: () => props.onVerb("favourite"),
+            disabled: !props.favouritable,
+            title: props.favouriteTitle,
+            kbd: "H",
+          },
+        ),
+    pill ? null : sep(),
     // Inside an open hand-made set's tray the set's own verb leads: it is what
     // the reader is working on, and it never touches a file.
     props.removableFromSet
       ? item("mdi-minus-circle-outline", "Remove from set", {
+          verb: "remove-from-set",
           on: () => props.onVerb("remove-from-set"),
           title: "Takes it off this set only. The file stays on the shelf.",
         })
@@ -1190,6 +1141,7 @@ const VerbItems = (props) => {
     // and those take a row off the shelf or a file off the disk.
     props.hideSets
       ? item(props.hideSets.icon, props.hideSets.label, {
+          verb: "hide-sets",
           on: () => props.onVerb("hide-sets"),
           title: props.hideSets.hide
             ? "No file is touched. Show them, under the grid, brings hidden sets back."
@@ -1201,52 +1153,65 @@ const VerbItems = (props) => {
     // are at the foot.
     props.hideModels
       ? item(props.hideModels.icon, props.hideModels.label, {
+          verb: "hide-models",
           on: () => props.onVerb("hide-models"),
           title: props.hideModels.title,
         })
       : null,
     props.hideSets || props.hideModels ? sep() : null,
-    props.single
+    // Rename is on the pill's `⋯` too, disabled with its reason for a
+    // selection of several, as the pill used to draw it; the context menu
+    // leaves it out for several.
+    props.single || pill
       ? item("mdi-pencil-outline", "Rename", {
+          verb: "rename",
           on: () => props.onVerb("rename"),
+          disabled: !props.single,
           title: props.renameTitle,
           kbd: "F2",
         })
       : null,
     item("mdi-image-outline", "Set thumbnail…", {
+      verb: "set-icon",
       on: () => props.onVerb("set-icon"),
       title: props.iconTitle,
     }),
     props.hasIcons
       ? item("mdi-image-off-outline", "Clear thumbnail", {
+          verb: "clear-icons",
           on: () => props.onVerb("clear-icons"),
           title: props.clearIconTitle,
         })
       : null,
     sep(),
     item("mdi-cube-outline", "Set base model…", {
+      verb: "set-base-model",
       on: () => props.onVerb("set-base-model"),
     }),
     item("mdi-shape-outline", "Set kind…", {
+      verb: "set-kind",
       on: () => props.onVerb("set-kind"),
     }),
     item("mdi-format-quote-close-outline", "Set trigger words…", {
+      verb: "set-trigger-words",
       on: () => props.onVerb("set-trigger-words"),
       disabled: !props.triggerable,
       title: props.triggerTitle,
     }),
-    assign("character", "Assign to person"),
-    assign("set", "Assign to set"),
+    pill ? null : assign("character", "Assign to person"),
+    pill ? null : assign("set", "Assign to set"),
     item(
       "mdi-layers-outline",
       props.single ? "Stack with selection" : "Stack these",
       {
+        verb: "stack",
         on: () => props.onVerb("stack"),
         disabled: !props.stackable,
         title: props.stackTitle,
       },
     ),
     item("mdi-layers-off-outline", "Ungroup", {
+      verb: "unstack",
       on: () => props.onVerb("unstack"),
       disabled: !props.unstackable,
       title: props.unstackTitle,
@@ -1256,26 +1221,32 @@ const VerbItems = (props) => {
     // reader who has never opened a stack finds out that opening one is a
     // gesture, which a hidden item could never tell them.
     item("mdi-arrow-collapse-up", "Make this the cover", {
+      verb: "make-cover",
       on: () => props.onVerb("make-cover"),
       disabled: !props.coverable,
       title: props.coverTitle,
     }),
     item("mdi-layers-minus", props.releaseLabel, {
+      verb: "remove-from-stack",
       on: () => props.onVerb("remove-from-stack"),
       disabled: !props.releasable,
       title: props.releaseTitle,
     }),
-    item("mdi-folder-move-outline", "Move to…", {
-      on: () => props.onVerb("move"),
-      disabled: !props.movable,
-      title: props.moveTitle,
-    }),
+    pill
+      ? null
+      : item("mdi-folder-move-outline", "Move to…", {
+          verb: "move",
+          on: () => props.onVerb("move"),
+          disabled: !props.movable,
+          title: props.moveTitle,
+        }),
     // Listed always and disabled with its reason, like the two run verbs above:
     // a reader whose shelf has no duplicates on screen is the one who most needs
     // to learn that the verb exists and what it acts on. NOT the danger
     // treatment - it removes a redundant copy and keeps the model, which is the
     // opposite of what the red below is for.
     item("mdi-call-merge", "Keep one copy…", {
+      verb: "merge-copies",
       on: () => props.onVerb("merge-copies"),
       disabled: !props.mergeable,
       title: props.mergeTitle,
@@ -1286,6 +1257,7 @@ const VerbItems = (props) => {
     // Single selection only for the opener: it is one window per press.
     props.single
       ? item("mdi-folder-open-outline", "Open in file manager", {
+          verb: "open-location",
           on: () => props.onVerb("open-location"),
           disabled: !props.openable,
           title: props.openTitle,
@@ -1297,12 +1269,13 @@ const VerbItems = (props) => {
     // missing from its list is untested rather than incompatible (#1438).
     props.single
       ? item("mdi-connection", "Works with…", {
+          verb: "works-with",
           on: () => props.onVerb("works-with"),
         })
       : null,
-    // The rail leads its menu with its own New workflow set, for any model.
-    props.single && !props.rail
+    props.single
       ? item("mdi-layers-plus", "New workflow set with this checkpoint", {
+          verb: "new-set",
           on: () => props.onVerb("new-set"),
           disabled: Boolean(props.newSetTitle),
           title: props.newSetTitle,
@@ -1310,6 +1283,7 @@ const VerbItems = (props) => {
       : null,
     props.clonable
       ? item("mdi-pencil-outline", "Edit set", {
+          verb: "clone-set",
           on: () => props.onVerb("clone-set"),
           title:
             "Makes it a set of your own on this checkpoint. It keeps following the pictures and reads Automatic until you change it. No file is touched.",
@@ -1318,9 +1292,10 @@ const VerbItems = (props) => {
     item(
       "mdi-content-copy",
       props.single ? "Copy filename" : "Copy filenames",
-      { on: () => props.onVerb("copy-filenames") },
+      { verb: "copy-filenames", on: () => props.onVerb("copy-filenames") },
     ),
     item("mdi-fingerprint", "Copy SHA-256", {
+      verb: "copy-sha256",
       on: () => props.onVerb("copy-sha256"),
       disabled: !props.hashed,
       // "Yet" only where a hash is on its way: an engine or a cached Hugging
@@ -1334,12 +1309,15 @@ const VerbItems = (props) => {
     sep(),
     // NOT the danger treatment: removing a model whose file is already gone
     // destroys a row, not bytes. The one below it does destroy bytes, which is
-    // what the red is for.
-    item("mdi-playlist-remove", "Remove from shelf", {
-      on: () => props.onVerb("forget"),
-      disabled: !props.forgettable,
-      title: props.forgetTitle,
-    }),
+    // what the red is for. Off the pill's `⋯` because the pill has it as an icon.
+    pill
+      ? null
+      : item("mdi-playlist-remove", "Remove from shelf", {
+          verb: "forget",
+          on: () => props.onVerb("forget"),
+          disabled: !props.forgettable,
+          title: props.forgetTitle,
+        }),
     // The label IS the operation here, and it changes under Shift - the
     // file-manager gesture, spelled the way Windows Explorer spells it. The
     // event is handed on rather than the tracked key state, so what runs is
@@ -1350,6 +1328,7 @@ const VerbItems = (props) => {
         : "mdi-delete-outline",
       props.deleteLabel,
       {
+        verb: "delete",
         on: (event) => props.onVerb("delete", event),
         disabled: !props.deletable,
         title: props.deleteTitle,
@@ -1363,16 +1342,11 @@ const VerbItems = (props) => {
 const VerbMenu = (props) =>
   h("div", { class: "ctx-menu shelf-menu", role: "menu" }, VerbItems(props));
 
-/** The verb rows alone, for the Models rail to draw inside its own menu. */
-const RailVerbs = () =>
-  VerbItems({ ...verbHandlers.value, single: single.value });
-
 // The opener the view calls, and the gates the suite asserts directly rather
 // than through seven `title` strings. Last in the file because `defineExpose`
 // evaluates its argument where it stands.
 defineExpose({
   openContextMenu,
-  RailVerbs,
   deletable,
   forgettable,
   assignable,
@@ -1393,6 +1367,19 @@ defineExpose({
 </script>
 
 <style>
+/* The key-hint chip on a labelled pill verb (Favourite H). The same paint as
+   AppButton's `.app-btn__key`: currentColor border, so it follows the verb. */
+.selbar-kbd {
+  margin-left: var(--space-1);
+  padding: 0 var(--space-1);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: 1.5;
+  border: 1px solid currentColor;
+  border-radius: var(--radius-sm);
+  opacity: 0.55;
+}
+
 /* The rows are the global `.ctx-*` menu (styles/context-menu.css). What is left
    here is sizing, and it is global because the verb menu is a render function,
    which scoped CSS cannot reach. */

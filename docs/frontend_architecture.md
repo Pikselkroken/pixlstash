@@ -1568,8 +1568,23 @@ The uniform workflow card and its two parts. Mounted by `WorkflowsView.vue` (F1a
 
 #### `ModelSetGrid.vue` (`views/`) + `ModelSetCard.vue` / `ModelSetMemberCard.vue` (`widgets/`) + `ModelSetPanel.vue` / `ModelWorksWithDialog.vue` (`panels/`), #1438
 
-The model shelf's `Workflow set` axis: a card grid of the sets of files a picture
+The model shelf's *Sets* place: a card grid of the sets of files a picture
 proves ran together, with a model free to appear in more than one.
+
+- **The card's anatomy (#2168).** Over the cover, top left, **Yours** on a
+  hand-made set the owner has changed (the old Custom; an automatic set draws
+  no badge, and its amber `card.fresh` dot stands alone there) and **Missing a
+  file** in warning ink when the checkpoint or any member is off the shelf;
+  the picture count stays top right. Under the name, up to three member chips
+  (`[Type letter] name`, `SHELF_TYPES` mark and tint, a missing file in warning
+  ink under a neutral `?`) and `+N` for the rest, in place of the kind tally.
+  Then three fact chips: base model, size on disk (on-shelf members) and last
+  used (`activityOf(...).lastUsedAt`, "never"). The recipe, run and model
+  counts and "identical to N other sets" stay in the card's accessible name;
+  the rail's About carries recipes and runs. There is no ▸: Enter, a double
+  click and the rail's *Edit set…* open the tray, and a plain click only
+  selects. The grid mirrors its picked evidence cards into
+  `store.pickedCardKeys` for the rail.
 
 - **The SHAPE is borrowed; the components are not.** `ModelSetCard.vue` is the
   shipped workflow card measured out again — the same `252px` / `132px` pair,
@@ -1616,14 +1631,15 @@ proves ran together, with a model free to appear in more than one.
   views and `shelfOwnsTheKey` no longer excludes the grid, so Escape, Delete and
   Ctrl+A work there; the grid emits `menu` with the pointer and the view opens
   the bar's own context menu, so there is one set of refusals rather than two
-  that can drift. **A card's ▸ is exempt**: its click bubbles into the row, and
-  a disclosure control that replaced the selection would arm a model the reader
-  never pointed at, so `targetOwnsTheGesture` — the same test `onKeyDown`
-  already used for a press aimed at a button — now filters clicks too.
+  that can drift. **A button on a card is exempt** (its heart, its hide): its
+  click bubbles into the row, and a control that replaced the selection would
+  arm a model the reader never pointed at, so `targetOwnsTheGesture` — the same
+  test `onKeyDown` already used for a press aimed at a button — filters clicks
+  too.
 - **With a tray open, a plain click on another card moves the tray to it**
   (`followWithTray`), as well as selecting it, whichever kind of card it is
   (hand-made, from pictures, or named after a missing file). Opening the first tray is still a
-  double click, ▸ or Enter, and Ctrl and Shift clicks leave the tray alone
+  double click, Enter or the rail's *Edit set…*, and Ctrl and Shift clicks leave the tray alone
   because they build a selection across cards. Moving the tray moves every row
   below it, so the second press of a double click lands on whatever slid under
   the pointer: `swallowAfterTrayMove`, a capture listener on the scroller, stops
@@ -1822,12 +1838,12 @@ the shelf's workflow sets section) and served as `hand_made` on
   tile. A hand-made card is `ModelSetCard` with `card.handMade`: a dashed edge,
   the checkpoint's `ModelMark` as the cover until a picture belongs to it, and
   "Incomplete: no checkpoint" in place of its facts when it has none. Every
-  card wears one badge (#1972): **Automatic** on an evidence card and on a set
-  the server serves `automatic`, **Custom** (dashed) on one the owner has added
-  to or removed from, with an amber dot (`card.fresh`) while the pictures have
+  set the owner has added to or removed from wears **Yours** (#1972, drawn as
+  Custom until #2168; an evidence card and a set the server serves `automatic`
+  wear none), with an amber dot (`card.fresh`) while the pictures have
   brought in a model the owner has not seen. Renaming does not change it. The
-  facts end "identical to N other sets" when `identicalSets` finds sets
-  holding the same digests: marked, never removed for the owner.
+  accessible name ends "identical to N other sets" when `identicalSets` finds
+  sets holding the same digests: marked, never removed for the owner.
 - **The New tile opens a template picker (#1999, #2001), not an empty set.**
   Click, Enter or `N` opens `WorkflowTemplatePicker.vue` (`panels/`), a
   `v-menu` beside the tile that reads `GET /models/workflow-templates` afresh on
@@ -4894,6 +4910,49 @@ Windowing is `content-visibility: auto` with `contain-intrinsic-size` on the
 row rather than a virtual scroller: the browser skips layout and paint outside
 the viewport, which is what 1,800 rows need, in two declarations.
 
+#### The Models sidebar (`panels/ModelsSideBar.vue`, #2168)
+
+**The Models workspace brings its own sidebar.** `App.vue` mounts
+`ModelsSideBar` in the sidebar shell on `isModelsView` and keeps `SideBar`
+mounted under it with `v-show`, so a switch back to Media neither refetches
+the library's navigation nor loses its scroll. It takes the library sidebar's
+width (`userPrefsStore.sidebarWidth`) so the edge does not move on a switch;
+it has no docked form yet.
+
+- **The header slot is the model folder**, drawn like the title bar's library
+  picker: the folder's name over its drive's 3px fullness bar
+  (`driveFullness` over `useModelFoldersStore().deviceByFolderId`), and its
+  `present_bytes`. Its menu, *Limit to folder*, lists All folders and every
+  folder the shelf catalogues (not the ai-toolkit root nor Downloads) with
+  path, size, free space and a mini bar, then *Add folder…* and *Manage model
+  folders…*. A pick is `store.setFolderScope(id)`, which narrows the row list
+  and every count below; the set grid is left whole (the issue's open
+  question).
+- **Places** are `store.place` (`SHELF_PLACES`): *Sets* is the set grid
+  (`groupBy: workflow_set`); *All models*, *Favourites*, *Recently added*
+  (`added_at` within `RECENT_DAYS`) and *In no set yet* are the row list under
+  `view.listGroupBy`, a remembered grouping of its own (default `type`, bands
+  in the sidebar's Type order). *In no set yet* reads `store.setMembership`,
+  built from the whole sets payload rather than from what `Show` leaves on the
+  grid, and is disabled until the sets are read rather than calling every
+  model loose.
+- **Type and Base model rows** are one choice, `store.sidebarFilter`
+  (`{axis, key}`); picking the lit row takes it back, and picking one leaves
+  the set grid for the list. Type keys are `SHELF_TYPES` (`shelfTypeOf`: every
+  adapter algorithm is a LoRA); an engine or unclassified file sits under no
+  Type row and is listed in All models. One row lights at a time: a place is
+  lit only while no Type or Base row is.
+- **Counts** (`placeCounts`, `typeCounts`, `baseCounts`) are over the offered
+  rows in the folder scope, stacks folded as the list folds them; *Sets*
+  counts the cards.
+- **The sidebar owns no dialog.** *Add models ▾* (the screen's one amber
+  button: Add folder…, Add file…, and Set ai-toolkit output folder… while
+  unset) and the slot's two rows go through `store.requestShell(what, el)`;
+  `ModelShelf` watches `store.shellRequest` and opens the dialog it always
+  owned, returning focus to `el`.
+- **Training runs** is the `models-runs` route, with the live dot while a run
+  holds the GPU; #2169 builds the place out.
+
 #### Sorting and grouping (the `Sort` split-button)
 
 **Sorting is client-side, and that is the correct answer rather than a
@@ -6677,124 +6736,45 @@ bumps the same counter whether or not anything is selected. Opening from it pers
 puts focus on the rail's active tab (`openRailFromTab`). The set grid reserves
 the tab's width on that edge while the rail is closed; the row list does not.
 
-- **What it lists.** Every shelf model some set slot takes that a set can keep
-  by hash, now or once the hasher has read it (`railListed`). A model with no
-  `sha256` and `hash_pending` false never gets one (a cached Hugging Face repo
-  is a directory), so it can never be added and is not offered. They sit under
-  the set panel's slot headings, each saying where it already is ("In no set
-  yet", "In Night city", "In 2 of your sets"). Picking a model already in
-  another set is ordinary. The tab shows the count. A stack is one row, its
-  leader (`store.railRows` folds with `collapseStacks`, as the row list does;
-  the closed handle and the set panel's *Models · N fit* count the same list),
-  and the row's words, its Fits evidence and its Add are the leader's own; only
-  the search reads every member, so a step's filename finds its stack. *Hide
-  model* on that row hides every member, since hiding the leader alone would
-  put the next member in its place. Every means every: while
-  the rail is mounted (`store.setRailMounted`) every `fetchRows` also reads the
-  blocks Show has unticked (`fetchedBlocks`) into `rows`, which is everything
-  known, not the shown set, so the shelf's own list is unchanged and a scan or
-  a session reset refreshes the rail's blocks with the shown ones. The shelf's
-  post-reset watcher re-reads the sets too, since the grid and the rail asked
-  for them only as they mounted. Until the sets are read nothing says where a model is and *In no
-  set yet* is disabled; a failed read says so with Retry rather than calling
-  every model loose.
-- **Its order.** An `A–Z | Newest | Oldest` track under the filters
-  (`PICK_ORDERS`, `orderRows`). The dates are file dates (`fileTime`, from
-  `newest_file_mtime`): for a download that is usually when it was downloaded,
-  though a copy that keeps timestamps keeps the original's and a rewrite moves
-  it. `added_at` is when a scan first saw the file, so a first scan gives a
-  whole library one moment. Under a date order
-  the slot headings give way to one heading per download (`downloadBatches`:
-  neighbours more than `DOWNLOAD_GAP_MS`, two hours, apart start a new one), so
-  a checkpoint and the encoder and VAE fetched with it sit together; undated
-  rows close the list. With Fits on the ranked groups stay and the rest follow
-  the order. The choice is `store.pickOrder`, remembered under
-  `pixlstash:modelPickOrder` and shared with every slot's ＋ picker.
-- **Two filters, never applied for you.** *Fits <set>* (`setFits` in
-  `utils/workflowSets.js`: not held, a kind some slot takes, the set's base
-  model, or used beside its checkpoint, which ranks first with the picture
-  count as the reason) and *In no set yet*. The Fits set is
-  `store.railFitsSetId`; the set panel's *Models · N fit* button is the only
-  thing that sets it for you. A deleted filtered set clears it and says so.
-- **Its own list, and one selection on screen.** A listbox, one tab stop:
-  arrows, Shift/Ctrl, Home/End, type-ahead, Space, Ctrl+A and Escape act on the
-  rail's selection only, and the shelf's window key handler declines any key
-  whose target is inside `.mrail` (`shelfOwnsTheKey`). The rail mirrors its
-  selection into `store.railSelection` (`setRailSelection`), and while that is
-  set `selectedRows` is the rail's rows, each file standing for itself, never
-  for its run. Taking it drops the shelf's `selectedIds`, and a model picked
-  on the shelf drops it, which the rail watches for. `clearSelection` leaves
-  it alone, because a click on a set card clears the shelf's models and the
-  reader who selected here to add to that set still means them. The shelf's
-  window keys never act on it (`ownSelection` in `ModelShelf.vue`): Delete and
-  Escape pressed over the shelf are about the shelf. Leaving the list (the
-  Tasks tab, a closed rail) lets go of it.
-- **Its verbs.** The rail's own lead the menu and are set in semibold: *Add to
-  <open set>* (Enter, and the row's mouse-only Add), *Add to set…* and *New
-  workflow set with these*. Under them the footer's ⋯ and the row menu
-  (right-click, Shift+F10, the Menu key) hold every verb of the shelf's row
-  menu, and Delete and F2 answer on the list. The rows are not a second
-  copy: the rail mounts `ShelfSelectionBar` with `rail`, which draws no pill
-  and no menu and exposes `RailVerbs`, the same rows under the same gates,
-  minus the two the rail's menu already has of its own: *New workflow set
-  with this checkpoint* and *Hide model*, which sits between the set verbs
-  and these. The rail is not the shelf's
-  child, so a pick goes through `store.requestVerb`; `ModelShelf.vue` watches
-  `store.verbRequest` and runs it from `verbListeners`, the one map its own
-  bar is bound to with `v-on`, so each confirmation exists once. Rename takes
-  `ShelfEditDialog` under a rail selection, since the row may not be drawn on
-  the list. The shelf's pill stays down for a rail selection: it would come up
-  on every click of a list whose commonest gesture is Add. Nothing is asked
-  for on the runs tab, which draws no shelf to run it.
-- **Adds in a run.** Adds into the open set go out with `addToHandMadeSet(…,
-  {quiet: true})`; once they pause for 1.5 s, `announceAdded` raises one
-  receipt for the whole run (what the set still holds of it), whose Undo takes
-  all of it back. A run ends on an add to another set, a set panel opening or
-  closing, a tab switch or the rail closing. A session change drops a
-  waiting run instead of raising it: its receipt would name a set by id in
-  the next library. An added row keeps its place with
-  a check (*In set*); a row whose write is out ignores a second press. The
-  receipt is raised again only when the run has grown since it went up.
-- **Checkpoints and hashes.** A row still being hashed (`hash_pending`) is
-  listed but cannot be added or dragged. A checkpoint into a set that has one reads *Add as 2nd*;
-  pressing that button is the answer, while Enter, the footer, the menu and a
-  drop ask first (`store.confirmSecondCheckpoint`). A drop on a set whose base
-  model differs from the dragged models' one is refused with a notice, as the
-  *Add to set…* menu fades that set.
-- **Dragging is a pointer drag, not HTML5 drag-and-drop.** The browser's
-  drag hands the gesture and its image to the window system, and on the
-  desktop shell (X11) that image arrived late and dim and the whole drag
-  lagged. So a press on a row (mouse or pen, main button) becomes a drag after
-  4 px of travel; the rail draws its own pill (`.mrail-ghost`, teleported to
-  `<body>`, moved by `transform` on every `pointermove`), finds the target
-  under the pointer with `elementFromPoint(...).closest("[data-rail-drop]")`,
-  and on release dispatches a bubbling `rail-drop` event on it. Only on the
-  Workflow set axis. Escape puts the models back, the edges of whatever
-  scrolls under the pointer scroll it, and the click the release fires on the
-  source row is swallowed so it cannot narrow the selection. Touch never
-  starts one.
-- **The target contract.** A target carries `data-rail-drop="<key>"` (a card
-  key, `new`, or `slot:<id>`), plus `data-rail-refused="<why>"` when it will not
-  take the drag, and listens for `rail-drop`. The rows travel in
-  `store.railDrag` and the key under the pointer in `store.railOver`, which
-  targets light up from. The rail never hands a drop to a refusing target, and
-  each target checks again where it writes. `ModelSetGrid` takes a drop on a
-  hand-made card (each model to its kind's slot,
-  `store.addRowsToHandMadeSet`) and on *New workflow set*
-  (`store.createSetFromRows`); `ModelSetSlotsPanel` takes it on a slot every
-  dragged model fits, and stops it there. A drop is one write and one receipt.
-- **What a drag shows.** For the whole drag every target wears a dashed rim
-  (`railTargets` in `ModelSetGrid`, an overlay above the card's cover, since
-  an inset ring paints under its pictures), the target under the pointer
-  turns solid over the active wash and says what the drop does, the carried
-  rows look picked up, the pill names them in the primary fill, and the
-  rail's footer says where to drop. A hand-made set that will not take the
-  models (`store.railDropRefusal`: holds them all, or another base model)
-  fades and states the reason; its open tray's slots refuse too, and over any
-  refusing target the pill goes neutral with ⊘ and the cursor shows no-drop.
-  Evidence cards fade.
-- Not built yet: the narrow-window drawer (`statsForcedHidden`), *Works with*
-  from the rail, and virtualisation (rows use `content-visibility: auto`).
+**It is an inspector, not a list (#2168).** It used to be a picker of every
+shelf model with its own selection, filters, order track and pointer drag onto
+set cards; the shelf's own list is the list now (*All models*), so the rail
+describes what is selected on the shelf instead. Adding a model to a set is
+*Add to set…* (the rail's one-model view, the pill and the row menu) and a
+set's own slot ＋ pickers; nothing drags from the rail any more.
+
+- **The head** is a 40px row on the toolbar's line: the view's name (the
+  place, or the sidebar's Type / Base row, or *Training runs* on
+  `models-runs`), one set's or model's name, or `N sets` / `N models` /
+  `N selected`, and *Clear* while anything is selected (`utils/modelsInspector.js`).
+- **Nothing selected:** three figures (sets on Sets, models elsewhere; on
+  disk; in no set), *Disk by type* (Checkpoints teal, encoders + VAEs and the
+  rest neutral, LoRAs raspberry; a `role="img"` bar with its figures as its
+  name, plus a legend), *Largest files*, and the missing-checkpoint note with
+  *Select it*, which opens Sets and calls `store.selectAllMissing()` (the
+  banner that used to sit over the grid).
+- **One set** (`ModelsRailSet.vue`): a hand-made set from `selectedSets`, or
+  one evidence or missing card from `store.pickedCardKeys`, which the grid
+  mirrors because only it can tell a picked card from its head picked in an
+  open tray. *Models* (members with their Type mark; a missing file in warning
+  ink; *Edit set…* opens the card's tray; the "has run with each other"
+  verdict), *Works in* (links to `/workflows?workflow=`), *Latest pictures*
+  (each opens the picture; *Show all* is the workflows' pictures), *About*
+  (base, on disk, made by, last used, recipes, ComfyUI runs). The activity is
+  `utils/setActivity.js` over the combinations' `workflows`, `last_used_at`
+  and `latest`, which `GET /models/workflow-sets` serves per combination.
+- **One model** (`ModelsRailModel.vue`): *File* (type, base, size, folder,
+  added, trigger word with Copy; the pencil asks the shelf for Rename through
+  `store.requestVerb`), *In sets* (`store.setMembership`, with *Add to set…*),
+  *Training* for a trained LoRA (`ShelfRunLoss`), *Latest pictures*. No *Show
+  all*: the picture filters match the graph's raw widget strings, so no value
+  a shelf row carries finds every picture of one model.
+- **Several:** on disk and base models, and the pill's verbs named.
+- Sections (`ModelsRailSection.vue`) remember open or shut per section key
+  while the rail is mounted, across selections.
+- Not built yet: the narrow-window drawer (`statsForcedHidden`), the runs
+  rail (#2169), and refusing a set on another base model in *Add to set…*,
+  which the old drag did.
 
 **The Kind cell is a menu (#1962).** `widgets/KindMenu.vue` turns the Kind chip
 into a menu that sets `file_kind` in place, the way the name and the base model
