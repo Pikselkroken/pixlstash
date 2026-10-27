@@ -414,6 +414,8 @@ watch(
 
 function pickFolder(id) {
   folderMenuOpen.value = false;
+  // The picked row leaves with the menu: hand focus back to the slot.
+  folderTrigger?.focus?.();
   store.setFolderScope(id);
   if (id != null && onRuns.value) router.push({ name: "models" });
 }
@@ -425,7 +427,10 @@ function pickFolder(id) {
 function ask(what, el = folderTrigger) {
   folderMenuOpen.value = false;
   addMenuOpen.value = false;
-  store.requestShell(what, el?.el ?? el ?? null);
+  const target = el?.el ?? el ?? null;
+  // Back on the button first, so the dialog that opens next returns there.
+  target?.focus?.();
+  store.requestShell(what, target);
 }
 
 // ── Places, Type, Base model ─────────────────────────────────────────────

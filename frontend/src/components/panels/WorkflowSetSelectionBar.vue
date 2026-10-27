@@ -60,7 +60,7 @@
         <AppBarButton
           shape="round"
           icon="dots-horizontal"
-          v-bind="menuProps"
+          v-bind="withRef(menuProps, (el) => (moreTrigger = el))"
           data-verb="more"
           aria-label="More actions"
           aria-haspopup="menu"
@@ -276,6 +276,7 @@ import { useContextMenuAt } from "../../composables/useContextMenuAt";
 import { useWorkflowPictures } from "../../composables/useWorkflowPictures";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
+import { withRef } from "../../utils/withRef.js";
 import { activityOf, combinationsOfSet } from "../../utils/setActivity";
 import {
   handMadeName,
@@ -313,6 +314,10 @@ const hide = computed(() => hideSetsVerb(props.sets));
 
 const { contextOpen, contextAt, openContextMenu } = useContextMenuAt();
 const moreOpen = ref(false);
+// The ⋯ button, so a verb picked from its menu hands focus back to it before
+// the verb's own dialog opens (and takes it as the place to return to). Not
+// reactive: only `verb` reads it.
+let moreTrigger = null;
 
 /** "2 selected", the count the pill leads with. */
 const countLabel = computed(() => `${store.selectedSets.length} selected`);
@@ -483,8 +488,10 @@ function clear() {
 }
 
 function verb(name, payload) {
+  const fromMore = moreOpen.value;
   contextOpen.value = false;
   moreOpen.value = false;
+  if (fromMore) moreTrigger?.focus?.();
   emit(name, payload);
 }
 

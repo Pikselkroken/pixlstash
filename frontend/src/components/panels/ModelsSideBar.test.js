@@ -134,6 +134,28 @@ describe("ModelsSideBar", () => {
     expect(countOf(wrapper, "place", "all")).toBe("3");
   });
 
+  it("hands focus back to the folder slot after a pick", async () => {
+    const wrapper = mount(ModelsSideBar, {
+      attachTo: document.body,
+      global: {
+        stubs: {
+          "v-icon": true,
+          Tooltip: true,
+          AiToolkitIcon: true,
+          "v-menu": {
+            template: "<div><slot name='activator' :props='{}' /><slot /></div>",
+          },
+        },
+      },
+    });
+    await flushPromises();
+    await wrapper.find('[data-folder-id="2"]').trigger("click");
+    expect(document.activeElement).toBe(
+      wrapper.find('[data-testid="models-folder-slot"]').element,
+    );
+    wrapper.unmount();
+  });
+
   it("counts In no set yet once the sets are read", async () => {
     const wrapper = mountBar();
     await flushPromises();
