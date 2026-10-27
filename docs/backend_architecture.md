@@ -35,7 +35,7 @@
 22. [Tiered Duplicate Detection](#22-tiered-duplicate-detection)
 23. [Opt-in telemetry](#23-opt-in-telemetry-the-install-id-and-the-consent-flags)
 24. [Folder structure: read, commit, layout and moves](#24-folder-structure-read-commit-layout-and-moves) — incl. [24.1 The folder-structure read](#241-the-folder-structure-read), [24.2 The folder-structure commit](#242-the-folder-structure-commit), [24.3 The library layout](#243-the-library-layout), [24.4 The layout and the move engine](#244-the-layout-and-the-move-engine), [24.5 Reconciling moves made outside PixlStash](#245-reconciling-moves-made-outside-pixlstash)
-25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Picking up a model that landed after the scan (#1985)](#2513-picking-up-a-model-that-landed-after-the-scan-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116), [25.17 Sample prompts written from the dataset (#2117)](#2517-sample-prompts-written-from-the-dataset-2117), [25.18 Watching a run live (#2118)](#2518-watching-a-run-live-2118), [25.19 The Train dialog's preview: dataset checks and resolve (#2119)](#2519-the-train-dialogs-preview-dataset-checks-and-resolve-2119), [25.20 Checking memory and speed, and learning from runs (#2120)](#2520-checking-memory-and-speed-and-learning-from-runs-2120), [25.21 Recipe updates from pixlstash.dev (#2122)](#2521-recipe-updates-from-pixlstashdev-2122), [25.22 Dataset snapshots: what a LoRA was trained on (#2123)](#2522-dataset-snapshots-what-a-lora-was-trained-on-2123), [25.23 Browsing a model folder by directory (#2203)](#2523-browsing-a-model-folder-by-directory-2203), [25.24 Moving into a subfolder, and when a file is already there (#2204)](#2524-moving-into-a-subfolder-and-when-a-file-is-already-there-2204)
+25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Picking up a model that landed after the scan (#1985)](#2513-picking-up-a-model-that-landed-after-the-scan-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116), [25.17 Sample prompts written from the dataset (#2117)](#2517-sample-prompts-written-from-the-dataset-2117), [25.18 Watching a run live (#2118)](#2518-watching-a-run-live-2118), [25.19 The Train dialog's preview: dataset checks and resolve (#2119)](#2519-the-train-dialogs-preview-dataset-checks-and-resolve-2119), [25.20 Checking memory and speed, and learning from runs (#2120)](#2520-checking-memory-and-speed-and-learning-from-runs-2120), [25.21 Recipe updates from pixlstash.dev (#2122)](#2521-recipe-updates-from-pixlstashdev-2122), [25.22 Dataset snapshots: what a LoRA was trained on (#2123)](#2522-dataset-snapshots-what-a-lora-was-trained-on-2123), [25.23 Browsing a model folder by directory (#2203)](#2523-browsing-a-model-folder-by-directory-2203), [25.24 Moving into a subfolder, and when a file is already there (#2204)](#2524-moving-into-a-subfolder-and-when-a-file-is-already-there-2204), [25.25 Where ComfyUI loads each kind from (#2205)](#2525-where-comfyui-loads-each-kind-from-2205)
 26. [Prompt match](#26-prompt-match)
 
 ---
@@ -645,6 +645,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/model-files/merge                                                     | model_shelf     | Keep one copy of a model and remove the rest                  |
 | GET    | /api/v1/model-folders                                                         | model_shelf     | List registered model folders                                 |
 | POST   | /api/v1/model-folders                                                         | model_shelf     | Register a model folder                                       |
+| GET    | /api/v1/model-folders/comfyui-reads                                           | model_shelf     | Where ComfyUI loads each kind of model from                   |
 | GET    | /api/v1/model-folders/devices                                                 | model_shelf     | Capacity of the drives the model folders sit on               |
 | POST   | /api/v1/model-folders/pick-up                                                 | model_shelf     | Find and register model files that landed after the last scan |
 | PATCH  | /api/v1/model-folders/{folder_id}                                             | model_shelf     | Update a registered model folder                              |
@@ -11935,6 +11936,46 @@ nothing moved. Now a root file moves into `Lora`, a file in `Lora` dropped onto
 `Lora` is skipped, and a file in `Lora/old` dropped onto `Lora` moves up. Within
 one folder the move is a rename, and the row keeps its `model_id`, so sets,
 people and the rest of the model's curation come with it.
+
+### 25.25 Where ComfyUI loads each kind from (#2205)
+
+A model in a folder ComfyUI does not load its kind from is invisible to
+ComfyUI's own loaders, while PixlStash's digest loaders still find it, so
+nothing would say so. `GET /api/v1/model-folders/comfyui-reads` answers
+`{known, reads: [{folder_id, subpath, prefix, category, kind}]}`, which the shelf turns
+into a Type mark on each folder ComfyUI loads from and a line on each misplaced
+model.
+
+- **Read live.** The saved `comfyui_url` is located first
+  (`comfyui_link_service.locate`); only a ComfyUI on this computer is asked,
+  at the pinned address, through `comfyui_folder_paths`
+  (`services/comfyui_service.py`). From any other host the paths name a disk
+  this is not.
+- **Matching** (`comfyui_reads`, `routes/model_folders.py`). Each category path
+  and each registered folder are realpathed. A path inside a folder reads from
+  that subdirectory (`subpath`, POSIX, spelled as the disk spells it); a folder
+  inside a path is read whole (`subpath ""`), and `prefix` is its path under
+  ComfyUI's folder, which ComfyUI puts in front of the file's name. ComfyUI
+  loads recursively, so a read covers everything under it.
+- **Categories to shelf Types** (`COMFYUI_CATEGORY_KINDS`): `loras` is `lora`;
+  `checkpoints`, `diffusion_models` and `unet` are `checkpoint`, because the
+  shelf files a bare diffusion model as one (`_ROLE_FOLDERS` in
+  `utils/adapter_header.py`); `vae`; `text_encoders` and `clip` are
+  `text_encoder`; `upscale_models` is `upscaler`; `controlnet`. Every other
+  category is left out.
+- **`known` is false whenever no read lands in a registered folder**: no ComfyUI
+  set, not on this computer, unreachable (logged), or none of its folders on the
+  shelf. Without it every file would read as misplaced; the client draws no mark
+  and no line at all then. PixlStash in Docker beside a ComfyUI on the host is
+  the same case: the container's paths are not ComfyUI's, so nothing matches.
+  The client also calls a model misplaced only when some folder loading its
+  kind is on the shelf, so a kind ComfyUI loads only from elsewhere is left
+  alone.
+- **Authority.** `LOCAL_OWNER_ONLY` (§16.3), the tier of 25.23: the subpaths
+  name directories PixlStash never registered. A remote owner is refused unless
+  `allow_remote_host_ops` is set, and the client treats a refusal as
+  `known: false`. Untemplated, so it is also on
+  `READ_BLOCKED_GET_PATHS`.
 
 ## 26. Prompt match
 

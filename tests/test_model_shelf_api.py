@@ -11129,3 +11129,179 @@ def test_a_remote_owner_is_refused_the_folder_listing_naming_the_flag(
             config.pop("allow_remote_host_ops", None)
         else:
             config["allow_remote_host_ops"] = previous
+
+
+# ---------------------------------------------------------------------------
+# GET /model-folders/comfyui-reads - where ComfyUI loads each kind from (#2205)
+# ---------------------------------------------------------------------------
+
+_READS = f"{API}/model-folders/comfyui-reads"
+
+
+@pytest.fixture
+def comfyui_at(shelf_env, monkeypatch):
+    """Point the owner's ComfyUI at a stand-in on this computer.
+
+    Returns a setter taking what ``/internal/folder_paths`` answers (a dict, or
+    an exception to raise) and where ``locate`` places ComfyUI; the URLs asked
+    are recorded on it. ``.test`` never resolves, so the save's own folder
+    registration finds nothing to add.
+    """
+    asked: list[str] = []
+    state = {"answer": {}, "where": "this_computer"}
+
+    def locate(url):
+        return state["where"], "http://127.0.0.1:18188/"
+
+    def folder_paths(url):
+        asked.append(url)
+        if isinstance(state["answer"], Exception):
+            raise state["answer"]
+        return state["answer"]
+
+    monkeypatch.setattr(
+        model_folders_routes, "comfyui_link_service", SimpleNamespace(locate=locate)
+    )
+    monkeypatch.setattr(model_folders_routes, "comfyui_folder_paths", folder_paths)
+    r = shelf_env.owner.patch(
+        f"{API}/users/me/config", json={"comfyui_url": "http://comfy.test:8188"}
+    )
+    assert r.status_code == 200, r.text
+
+    def setter(answer, where="this_computer"):
+        state["answer"], state["where"] = answer, where
+
+    setter.asked = asked
+    yield setter
+    shelf_env.owner.patch(f"{API}/users/me/config", json={"comfyui_url": ""})
+
+
+def test_comfyui_reads_match_each_category_to_a_registered_folder(
+    shelf_env, tmp_path, comfyui_at
+):
+    """A category path inside the folder reads from that subdirectory, mixed case
+    and nested kept as the disk spells them; one around the folder reads it whole.
+    A category outside every folder, and one the shelf has no Type for, are left
+    out."""
+    install = tmp_path / "ComfyUI"
+    models = install / "models"
+    for sub in ("Lora", "StableDiffusion/SDXL", "custom_nodes"):
+        (models / sub).mkdir(parents=True)
+    _seeded_folder_at(shelf_env.server, str(models))
+    comfyui_at(
+        {
+            "loras": [str(models / "Lora")],
+            "checkpoints": [str(models / "StableDiffusion" / "SDXL")],
+            "diffusion_models": [str(install)],
+            "vae": [str(tmp_path / "elsewhere" / "vae")],
+            "custom_nodes": [str(models / "custom_nodes")],
+            "clip": "not a list",
+        }
+    )
+
+    r = shelf_env.owner.get(_READS)
+    assert r.status_code == 200, r.text
+    assert r.json() == {
+        "known": True,
+        "reads": [
+            # ComfyUI names a file here `models/<relpath>`: the prefix.
+            {
+                "folder_id": 1,
+                "subpath": "",
+                "prefix": "models",
+                "category": "diffusion_models",
+                "kind": "checkpoint",
+            },
+            {
+                "folder_id": 1,
+                "subpath": "Lora",
+                "prefix": "",
+                "category": "loras",
+                "kind": "lora",
+            },
+            {
+                "folder_id": 1,
+                "subpath": "StableDiffusion/SDXL",
+                "prefix": "",
+                "category": "checkpoints",
+                "kind": "checkpoint",
+            },
+        ],
+    }
+    assert comfyui_at.asked == ["http://127.0.0.1:18188"], (
+        "asked somewhere other than the address locate vetted"
+    )
+
+
+def test_comfyui_reads_are_unknown_when_nothing_lands_in_a_registered_folder(
+    shelf_env, tmp_path, comfyui_at
+):
+    """ComfyUI answered, but none of its folders is on the shelf. Saying `known`
+    here would call every model on the shelf misplaced."""
+    (tmp_path / "shelf").mkdir()
+    _seeded_folder_at(shelf_env.server, str(tmp_path / "shelf"))
+    comfyui_at({"loras": [str(tmp_path / "comfy" / "loras")]})
+
+    r = shelf_env.owner.get(_READS)
+    assert r.status_code == 200, r.text
+    assert r.json() == {"known": False, "reads": []}
+    assert comfyui_at.asked, "the stand-in was never asked; nothing was measured"
+
+
+def test_comfyui_reads_are_unknown_when_comfyui_cannot_be_asked(
+    shelf_env, tmp_path, comfyui_at
+):
+    """Unreachable, or on another machine (whose paths name another disk, so it
+    is not even asked), or not set at all: no marks rather than guessed ones."""
+    _seeded_folder_at(shelf_env.server, str(tmp_path))
+    comfyui_at(comfyui_service.requests.ConnectionError("refused"))
+    r = shelf_env.owner.get(_READS)
+    assert r.status_code == 200, r.text
+    assert r.json() == {"known": False, "reads": []}
+    assert len(comfyui_at.asked) == 1
+
+    comfyui_at({"loras": [str(tmp_path)]}, where="local_network")
+    assert shelf_env.owner.get(_READS).json() == {"known": False, "reads": []}
+    assert len(comfyui_at.asked) == 1, "a ComfyUI on another machine was asked"
+
+    shelf_env.owner.patch(f"{API}/users/me/config", json={"comfyui_url": ""})
+    comfyui_at({"loras": [str(tmp_path)]})
+    assert shelf_env.owner.get(_READS).json() == {"known": False, "reads": []}
+    assert len(comfyui_at.asked) == 1, "asked with no ComfyUI set"
+
+
+def test_comfyui_reads_are_local_owner_only_and_refuse_share_tokens(
+    shelf_env, tmp_path, monkeypatch, comfyui_at
+):
+    _seeded_folder_at(shelf_env.server, str(tmp_path))
+    comfyui_at({"loras": [str(tmp_path)]})
+    assert_real_route(shelf_env.server.api, "GET", _READS)
+    r = shelf_env.owner.get(_READS)
+    assert r.status_code == 200 and r.json()["known"], (
+        "the owner cannot read it either; the refusals below would prove nothing"
+    )
+
+    # Both READ belts are emptied, so every refusal below is the gate's own.
+    monkeypatch.setattr(auth, "READ_BLOCKED_GET_PATHS", frozenset())
+    monkeypatch.setattr(auth, "READ_BLOCKED_GET_PREFIXES", ())
+    scoped = mint_read_token(
+        shelf_env.owner,
+        "comfyui reads probe",
+        resource_type="character",
+        resource_id=shelf_env.character_id,
+    )
+    unscoped = mint_read_token(shelf_env.owner, "comfyui reads global read")
+    for name, token in (("resource-scoped", scoped), ("unscoped READ", unscoped)):
+        client = bearer_client(shelf_env.server, token)
+        assert client.get(f"{API}/pictures").status_code == 200, (
+            f"the {name} token is dead; the refusal below would prove nothing"
+        )
+        r = client.get(_READS)
+        assert r.status_code == 403, (
+            f"a {name} share token read ComfyUI's folders: {r.status_code} {r.text}"
+        )
+
+    assert shelf_env.owner.get(_READS, headers=_xff(LAN_IPV4)).status_code == 200
+    r = shelf_env.owner.get(_READS, headers=_xff("8.8.8.8"))
+    assert r.status_code == 403, r.text
+    assert "allow_remote_host_ops" in r.text, r.text

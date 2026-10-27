@@ -4180,11 +4180,21 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     // no undo, and (the bar being gated on `selectedRows`) nothing on screen to
     // do it deliberately. The other caller, the pill's *Select all shown*, never
     // had the guard at all. One refusal here answers for both.
+    selectRows(drawn);
+  }
+
+  /**
+   * Select exactly these rows, a stack's members with it, in place of the
+   * selection. Nothing to select leaves the selection alone.
+   *
+   * @param {Array<Object>} drawn - rows as the list draws them.
+   */
+  function selectRows(drawn) {
     if (!drawn.length) return;
     selectedIds.value = new Set(
       drawn.flatMap((row) => row.memberIds ?? [row.id]),
     );
-    anchorId.value = drawn[0]?.id ?? null;
+    anchorId.value = drawn[0].id;
     anchorOccurrence.value = anchorId.value;
   }
 
@@ -4849,6 +4859,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     toggleSelected,
     selectFromClick,
     selectVisible,
+    selectRows,
     clearSelection,
     editSelected,
     editModelIds,

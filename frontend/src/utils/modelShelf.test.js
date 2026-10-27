@@ -18,7 +18,13 @@ import {
   baseModelKey,
   capabilityLabel,
   collapseStacks,
+  comfyuiLoadsTitle,
+  comfyuiMarks,
+  comfyuiName,
+  comfyuiReadFor,
   copyPathsTitle,
+  isMisplaced,
+  SHELF_TYPES,
   modelFileTitle,
   dateColumnKey,
   quantBadge,
@@ -1262,6 +1268,99 @@ describe("allAlreadyIn", () => {
         path: "Lora",
       }),
     ).toBe(false);
+  });
+});
+
+describe("where ComfyUI loads from (#2205)", () => {
+  // Mixed case on purpose: every other shelf fixture is lowercase, which hides
+  // a lookup that folds case on one side only.
+  const reads = {
+    known: true,
+    reads: [
+      { folder_id: 1, subpath: "Lora/Flux", category: "loras", kind: "lora" },
+      { folder_id: 1, subpath: "Lora", category: "loras", kind: "lora" },
+      { folder_id: 2, subpath: "", category: "checkpoints", kind: "checkpoint" },
+      { folder_id: 1, subpath: "VAE", category: "vae", kind: "vae" },
+    ],
+  };
+  const at = (folder_id, relpath) => ({ folder_id, relpath });
+
+  it("names a copy by its path under the deepest folder that loads its kind", () => {
+    expect(comfyuiName(at(1, "Lora/Flux/Neon.safetensors"), "lora", reads)).toBe(
+      "Neon.safetensors",
+    );
+    expect(comfyuiName(at(1, "Lora/SDXL/Ink.safetensors"), "lora", reads)).toBe(
+      "SDXL/Ink.safetensors",
+    );
+    expect(comfyuiName(at(2, "Base/Big.safetensors"), "checkpoint", reads)).toBe(
+      "Base/Big.safetensors",
+    );
+    // The scanner stores Windows relpaths with backslashes.
+    expect(comfyuiName(at(1, "Lora\\SDXL\\Ink.safetensors"), "lora", reads)).toBe(
+      "SDXL/Ink.safetensors",
+    );
+    expect(comfyuiReadFor(at(1, "Lora/Flux/a.st"), "lora", reads).subpath).toBe(
+      "Lora/Flux",
+    );
+  });
+
+  it("calls a copy misplaced only outside every folder that loads its kind", () => {
+    expect(isMisplaced(at(1, "Lora/Neon.safetensors"), "lora", reads)).toBe(false);
+    expect(isMisplaced(at(1, "Neon.safetensors"), "lora", reads)).toBe(true);
+    // A VAE folder does not load LoRAs, and a folder that merely starts with
+    // the same letters is not inside it.
+    expect(isMisplaced(at(1, "VAE/Neon.safetensors"), "lora", reads)).toBe(true);
+    expect(isMisplaced(at(1, "LoraExtra/Neon.safetensors"), "lora", reads)).toBe(
+      true,
+    );
+    // The disk's spelling is the one ComfyUI reported: `lora` is not `Lora`.
+    expect(isMisplaced(at(1, "lora/Neon.safetensors"), "lora", reads)).toBe(true);
+    expect(comfyuiName(at(1, "lora/Neon.safetensors"), "lora", reads)).toBeNull();
+    // Another registered folder is another place.
+    expect(isMisplaced(at(2, "Lora/Neon.safetensors"), "lora", reads)).toBe(true);
+    // A file of no Type ComfyUI loads is never misplaced.
+    expect(isMisplaced(at(1, "x.onnx"), "", reads)).toBe(false);
+    // Nor one whose Type ComfyUI loads only from folders off the shelf: there
+    // is nowhere on the shelf to drag it to.
+    expect(isMisplaced(at(1, "4x.pth"), "upscaler", reads)).toBe(false);
+  });
+
+  it("puts a registered folder's own path inside ComfyUI's in front of the name", () => {
+    // Registered `.../checkpoints/Flux`, ComfyUI reading `.../checkpoints`.
+    const inside = {
+      known: true,
+      reads: [
+        { folder_id: 3, subpath: "", prefix: "Flux", category: "checkpoints", kind: "checkpoint" },
+      ],
+    };
+    expect(comfyuiName(at(3, "Dev/Big.safetensors"), "checkpoint", inside)).toBe(
+      "Flux/Dev/Big.safetensors",
+    );
+  });
+
+  it("guesses nothing while where ComfyUI loads from is not known", () => {
+    const unknown = { known: false, reads: reads.reads };
+    expect(isMisplaced(at(1, "Neon.safetensors"), "lora", unknown)).toBe(false);
+    expect(isMisplaced(at(1, "Neon.safetensors"), "lora", null)).toBe(false);
+    expect(comfyuiName(at(1, "Lora/Neon.safetensors"), "lora", unknown)).toBeNull();
+    expect(comfyuiMarks(1, "Lora", unknown)).toEqual([]);
+  });
+
+  it("marks a folder with each Type ComfyUI loads from exactly there", () => {
+    expect(comfyuiMarks(1, "Lora", reads).map((type) => type.mark)).toEqual(["L"]);
+    expect(comfyuiMarks(1, "lora", reads)).toEqual([]);
+    expect(comfyuiMarks(1, "", reads)).toEqual([]);
+    expect(comfyuiMarks(2, "", reads).map((type) => type.key)).toEqual([
+      "checkpoint",
+    ]);
+  });
+
+  it("words a mark the way a sentence spells each Type", () => {
+    const title = (key) =>
+      comfyuiLoadsTitle(SHELF_TYPES.find((type) => type.key === key));
+    expect(title("lora")).toBe("ComfyUI loads LoRAs from here");
+    expect(title("text_encoder")).toBe("ComfyUI loads text encoders from here");
+    expect(title("controlnet")).toBe("ComfyUI loads ControlNets from here");
   });
 });
 

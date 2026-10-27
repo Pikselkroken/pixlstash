@@ -316,6 +316,7 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         "/api/v1/insights",
         "/api/v1/libraries",
         "/api/v1/model-folders",
+        "/api/v1/model-folders/comfyui-reads",
         "/api/v1/model-folders/devices",
         "/api/v1/model-stacks/proposals",
         "/api/v1/models/base-models",

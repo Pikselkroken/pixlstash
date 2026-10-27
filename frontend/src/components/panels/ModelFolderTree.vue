@@ -77,6 +77,16 @@
           node.expanded ? "mdi-folder-open-outline" : "mdi-folder-outline"
         }}</v-icon>
         <span class="mft-label">{{ node.name }}</span>
+        <!-- What ComfyUI loads from this very folder (#2205). -->
+        <span
+          v-for="type in node.marks"
+          :key="type.key"
+          class="mft-mark"
+          data-testid="comfyui-mark"
+          ><Tooltip :text="comfyuiLoadsTitle(type)" activator="parent" /><TypeMark
+            :mark="type.mark"
+            :tint="type.tint"
+        /></span>
         <v-icon
           v-if="node.locked"
           size="14"
@@ -102,7 +112,13 @@ import {
   useModelFoldersStore,
 } from "../../stores/useModelFoldersStore";
 import { driveFullness } from "../../utils/libraryChrome";
-import { formatModelSize } from "../../utils/modelShelf";
+import {
+  comfyuiLoadsTitle,
+  comfyuiMarks,
+  formatModelSize,
+} from "../../utils/modelShelf";
+import Tooltip from "../widgets/Tooltip.vue";
+import TypeMark from "../widgets/TypeMark.vue";
 
 /**
  * Browse or pick a model folder.
@@ -191,6 +207,11 @@ function pushFolderRows(out, entry) {
       : (entry.hasDirs ?? !listing?.error));
   const n = entry.count ?? listing?.listing?.model_count;
   const refused = props.mode === "pick" && (entry.locked || props.disabled?.(entry));
+  const marks = comfyuiMarks(
+    entry.folderId,
+    entry.path,
+    foldersStore.comfyuiReads,
+  );
   out.push({
     ...entry,
     key,
@@ -198,10 +219,12 @@ function pushFolderRows(out, entry) {
     expanded: expandable && open,
     disabled: Boolean(refused),
     count: count(n),
+    marks,
     aria: [
       entry.name,
       n == null ? "" : `${count(n)} ${Number(n) === 1 ? "model" : "models"}`,
       entry.locked ? "locked" : "",
+      ...marks.map(comfyuiLoadsTitle),
     ]
       .filter(Boolean)
       .join(", "),
@@ -497,6 +520,11 @@ watch(
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.mft-mark {
+  display: inline-flex;
+  margin-left: var(--space-2);
 }
 
 .mft-lock {

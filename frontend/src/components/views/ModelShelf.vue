@@ -339,6 +339,33 @@
           >Subfolders could not be read: {{ folderListingError }}</span
         >
       </p>
+      <!-- Models ComfyUI's own loaders cannot see here (#2205). A note, not an
+           error: PixlStash's loaders find them by hash wherever they are. -->
+      <p
+        v-if="misplacedIds.size"
+        class="shelf-banner"
+        role="status"
+        data-testid="shelf-misplaced-note"
+      >
+        <v-icon size="16" class="shelf-banner-warn" aria-hidden="true"
+          >mdi-alert-outline</v-icon
+        >
+        <span class="shelf-banner-text"
+          >{{ misplacedIds.size }}
+          {{ misplacedIds.size === 1 ? "model in this folder is" : "models in this folder are" }}
+          outside the folders ComfyUI loads from, so ComfyUI does not list
+          {{ misplacedIds.size === 1 ? "it" : "them" }}. PixlStash's own loaders
+          still find {{ misplacedIds.size === 1 ? "it" : "them" }}.</span
+        >
+        <span class="shelf-spacer"></span>
+        <AppButton
+          size="sm"
+          variant="outline"
+          data-testid="shelf-select-misplaced"
+          @click="selectMisplaced"
+          >Select {{ misplacedIds.size === 1 ? "it" : "them" }}</AppButton
+        >
+      </p>
       <!-- An open folder's subfolders, as a file manager lists them: first,
            and opened with a click. -->
       <ul
@@ -363,6 +390,19 @@
               >mdi-folder-outline</v-icon
             >
             <span class="shelf-folder-name">{{ dir.name }}</span>
+            <!-- What ComfyUI loads from this folder (#2205). -->
+            <span
+              v-for="type in comfyuiMarks(store.folderScope.folderId, dir.path, foldersStore.comfyuiReads)"
+              :key="type.key"
+              class="shelf-folder-loads"
+              data-testid="comfyui-mark"
+              ><Tooltip
+                :text="comfyuiLoadsTitle(type)"
+                activator="parent"
+              /><TypeMark :mark="type.mark" :tint="type.tint" />{{
+                type.label
+              }}</span
+            >
             <span class="shelf-folder-meta">{{
               dir.bytes ? formatModelSize(dir.bytes) : ""
             }}</span>
@@ -936,6 +976,11 @@
                         that draws the duplicate twice.
                         --><template v-if="row.copies > 1">
                         · {{ row.copies }} copies</template
+                      ><span
+                        v-if="misplacedIds.has(row.id)"
+                        class="shelf-row-nolist"
+                        data-testid="shelf-row-nolist"
+                        >ComfyUI does not list it here</span
                       >
                     </span>
                   </span>
@@ -1380,7 +1425,11 @@ import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import {
   adapterKindLabel,
   capabilityLabel,
+  comfyuiLoadsTitle,
+  comfyuiMarks,
   companionsSentences,
+  inFolderScopeOf,
+  isMisplaced,
   modelFileTitle,
   dateColumnKey,
   defaultSortDirection,
@@ -3695,6 +3744,32 @@ const subfolders = computed(() => {
   );
 });
 
+/**
+ * The open folder's models ComfyUI's own loaders cannot see there (#2205), by
+ * row id. Empty while where ComfyUI loads from is unknown, and in a locked
+ * folder, whose files cannot be dragged out to fix it.
+ */
+const misplacedIds = computed(() => {
+  const ids = new Set();
+  const scope = inFolder.value ? store.folderScope : null;
+  const reads = foldersStore.comfyuiReads;
+  if (!scope || scope.locked || !reads.known) return ids;
+  for (const row of store.visibleRows) {
+    const kind = shelfTypeOf(row);
+    const here = (row.locations ?? []).filter(
+      (loc) => loc?.state === "present" && inFolderScopeOf(loc, scope),
+    );
+    if (here.some((loc) => isMisplaced(loc, kind, reads))) ids.add(row.id);
+  }
+  return ids;
+});
+
+function selectMisplaced() {
+  store.selectRows(
+    store.visibleRows.filter((row) => misplacedIds.value.has(row.id)),
+  );
+}
+
 /** Why the open folder's listing failed, or "". */
 const folderListingError = computed(() => {
   if (!inFolder.value) return "";
@@ -4332,6 +4407,8 @@ onMounted(() => {
   // Unawaited already means it does not hold up the shelf.
   foldersStore.refreshDevices();
   foldersStore.refresh();
+  // Where ComfyUI loads each kind from, for the folder marks (#2205).
+  foldersStore.loadComfyuiReads();
   // The names, colours and thumbnails behind the assignment rings. Cached
   // and shared with the sidebar, so on a warm cache this repaints the marks
   // without a request; unawaited, because a row whose marks read `#12` for a
@@ -4801,6 +4878,15 @@ watch(
   opacity: var(--opacity-text-secondary);
 }
 
+/* "ComfyUI loads LoRAs from here": the folder's Type mark and its word. */
+.shelf-folder-loads {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+}
+
 .shelf-folder-meta--count {
   min-width: 10ch;
   text-align: right;
@@ -4855,6 +4941,10 @@ watch(
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.shelf-banner-warn {
+  color: rgb(var(--v-theme-surface-warning));
 }
 
 .shelf-banner b {
@@ -5249,6 +5339,13 @@ button.shelf-head-cell:hover {
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-background), 0.7);
+}
+
+/* A misplaced copy's quiet line (#2205), in the UI face after the filename. */
+.shelf-row-nolist {
+  margin-left: var(--space-3);
+  font-family: var(--font-ui);
+  color: rgb(var(--v-theme-surface-warning));
 }
 
 .shelf-row-name {

@@ -4891,6 +4891,24 @@ neither edge moves on a workspace switch.
   `aria-current="location"`, in the image grid breadcrumb's crumb look), and a
   status bar under the list with the drive's free space of its total and a
   fullness bar.
+- **Where ComfyUI loads from (#2205).** `useModelFoldersStore.comfyuiReads` is
+  `GET /model-folders/comfyui-reads`, asked once on shelf mount
+  (`loadComfyuiReads`); a failed or refused read is `{known: false}`. A folder
+  ComfyUI loads a Type from carries that Type's `TypeMark` (`comfyuiMarks`, an
+  exact `folder_id` + `subpath` match) on its tree row and on its folder-view
+  row, with *ComfyUI loads LoRAs from here* in the tooltip and the tree row's
+  label. In the folder view only, and never in a locked folder (its files cannot
+  be dragged out to fix it), a copy whose Type ComfyUI loads but that sits
+  outside every folder loading it (`isMisplaced`, recursive, case kept as the
+  disk spells it, and only for a kind ComfyUI loads from somewhere on the
+  shelf, so there is a folder to drag it to) gets *ComfyUI does not list it here* on its filename line,
+  and a note above the list counts them and offers *Select them*
+  (`store.selectRows`). The drop tip adds the ComfyUI name a move changes
+  (`comfyuiNameWords`, from `comfyuiName` before and after, the read's
+  `prefix` in front when the registered folder sits inside ComfyUI's; `movableCopies`
+  carries each copy's Type in `kinds`, since the move route refuses extra
+  fields on its items). **With `known` false, none of it is drawn**: no marks,
+  no lines, no note, nothing about ComfyUI in the tip.
 - **All models' strip.** Type and Base model are no longer sidebar rows: on
   All models only, a strip under the toolbar holds a Type `Segmented` (All,
   then every `SHELF_TYPES` entry with a count, zero counts left out so a

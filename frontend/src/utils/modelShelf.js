@@ -1181,10 +1181,14 @@ export function importReceipt(report) {
  * @param {{folderId: number, path: string, locked?: boolean}|null} [scope] -
  *   the open folder, or null for every copy.
  * @returns {{items: Array<{folder_id: number, relpath: string}>,
- *   totalBytes: number, bytesByFolderId: Map<number, number>}}
+ *   totalBytes: number, bytesByFolderId: Map<number, number>,
+ *   kinds: Map<string, string>}} `kinds` is each copy's Type by
+ *   {@link copyKey}, for the drop tip's ComfyUI name; the items stay bare
+ *   because the move route refuses any other field.
  */
 export function movableCopies(rows, foldersById = null, scope = null) {
   const items = [];
+  const kinds = new Map();
   const bytesByFolderId = new Map();
   let totalBytes = 0;
   for (const row of Array.isArray(rows) ? rows : []) {
@@ -1199,6 +1203,7 @@ export function movableCopies(rows, foldersById = null, scope = null) {
       const bytes = Number(row.file_size) || 0;
       const folderId = Number(loc.folder_id);
       items.push({ folder_id: loc.folder_id, relpath: loc.relpath });
+      kinds.set(copyKey(loc), shelfTypeOf(row));
       bytesByFolderId.set(
         folderId,
         (bytesByFolderId.get(folderId) || 0) + bytes,
@@ -1206,7 +1211,17 @@ export function movableCopies(rows, foldersById = null, scope = null) {
       totalBytes += bytes;
     }
   }
-  return { items, totalBytes, bytesByFolderId };
+  return { items, totalBytes, bytesByFolderId, kinds };
+}
+
+/**
+ * One copy's key: its folder and its relpath.
+ *
+ * @param {{folder_id: number, relpath: string}} loc
+ * @returns {string}
+ */
+export function copyKey(loc) {
+  return `${Number(loc?.folder_id)}\u0000${loc?.relpath}`;
 }
 
 /**
@@ -1243,6 +1258,104 @@ export function inFolderScopeOf(loc, scope) {
   const path = scope.path ?? "";
   if (!scope.locked) return dir === path;
   return !path || dir === path || dir.startsWith(`${path}/`);
+}
+
+/**
+ * The directory ComfyUI loads a copy's kind from that holds it (#2205), the
+ * deepest when two do, or null. ComfyUI loads a folder recursively.
+ *
+ * @param {{folder_id: number, relpath: string}} loc
+ * @param {string} kind - a {@link SHELF_TYPES} key, from `shelfTypeOf`.
+ * @param {{known: boolean, reads: Array<{folder_id: number, subpath: string,
+ *   kind: string}>}} reads - `GET /model-folders/comfyui-reads`.
+ * @returns {Object|null} the read.
+ */
+export function comfyuiReadFor(loc, kind, reads) {
+  if (!reads?.known || !kind) return null;
+  const dir = relpathDir(loc?.relpath);
+  let best = null;
+  for (const read of reads.reads ?? []) {
+    if (read.kind !== kind) continue;
+    if (Number(read.folder_id) !== Number(loc?.folder_id)) continue;
+    const sub = read.subpath ?? "";
+    if (sub && dir !== sub && !dir.startsWith(`${sub}/`)) continue;
+    if (!best || sub.length > best.subpath.length) best = { ...read, subpath: sub };
+  }
+  return best;
+}
+
+/**
+ * Whether ComfyUI's own loaders cannot see a copy: ComfyUI loads its kind
+ * from some folder on the shelf, and it sits outside every one. Always false
+ * when where ComfyUI looks is not known, so nothing is guessed.
+ *
+ * @param {{folder_id: number, relpath: string}} loc
+ * @param {string} kind - a {@link SHELF_TYPES} key; `""` is never misplaced.
+ * @param {Object} reads - see {@link comfyuiReadFor}.
+ * @returns {boolean}
+ */
+export function isMisplaced(loc, kind, reads) {
+  // Only a kind ComfyUI loads from somewhere on the shelf: otherwise there is
+  // no folder to drag it into, and "ComfyUI does not list it" would be noise.
+  if (!reads?.known || !reads.reads?.some((read) => read.kind === kind)) {
+    return false;
+  }
+  return comfyuiReadFor(loc, kind, reads) == null;
+}
+
+/**
+ * What ComfyUI calls a copy in its loader's list: its path under the folder
+ * it is loaded from, `flux/x.safetensors`, or null when it is not listed. A
+ * registered folder inside ComfyUI's carries its own path as the read's
+ * `prefix`.
+ *
+ * @param {{folder_id: number, relpath: string}} loc
+ * @param {string} kind
+ * @param {Object} reads - see {@link comfyuiReadFor}.
+ * @returns {string|null}
+ */
+export function comfyuiName(loc, kind, reads) {
+  const read = comfyuiReadFor(loc, kind, reads);
+  if (!read) return null;
+  const posix = String(loc.relpath ?? "").replace(/\\/g, "/");
+  const name = read.subpath ? posix.slice(read.subpath.length + 1) : posix;
+  return read.prefix ? `${read.prefix}/${name}` : name;
+}
+
+/**
+ * A folder mark's words: `ComfyUI loads LoRAs from here`. A Type's label is
+ * lowercased mid-sentence unless it is spelled with capitals inside it.
+ *
+ * @param {{label: string}} type - a {@link SHELF_TYPES} entry.
+ * @returns {string}
+ */
+export function comfyuiLoadsTitle(type) {
+  const label = /^[A-Z][a-z]*(\s|$)/.test(type.label)
+    ? type.label[0].toLowerCase() + type.label.slice(1)
+    : type.label;
+  return `ComfyUI loads ${label} from here`;
+}
+
+/**
+ * The Types ComfyUI loads from exactly this directory, for its folder marks.
+ *
+ * @param {number} folderId
+ * @param {string} path - POSIX, relative to the folder, `""` for its root.
+ * @param {Object} reads - see {@link comfyuiReadFor}.
+ * @returns {Array<Object>} {@link SHELF_TYPES} entries, in their order.
+ */
+export function comfyuiMarks(folderId, path, reads) {
+  if (!reads?.known) return [];
+  const kinds = new Set(
+    (reads.reads ?? [])
+      .filter(
+        (read) =>
+          Number(read.folder_id) === Number(folderId) &&
+          (read.subpath ?? "") === (path ?? ""),
+      )
+      .map((read) => read.kind),
+  );
+  return SHELF_TYPES.filter((type) => kinds.has(type.key));
 }
 
 /**

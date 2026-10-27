@@ -5,6 +5,7 @@ import {
   createModelFolder,
   DOWNLOADS_KIND,
   forgetModelFolder,
+  getComfyuiReads,
   listModelFolderDevices,
   listModelFolderDirs,
   listModelFolders,
@@ -30,6 +31,9 @@ const POLL_MS = 3000;
  * ceiling the poll would run for the life of the tab.
  */
 const SCAN_WAIT_CEILING_MS = 10 * 60 * 1000;
+
+/** Where ComfyUI loads from, before it is read or when it cannot be. */
+const NO_COMFYUI_READS = Object.freeze({ known: false, reads: [] });
 
 /**
  * The registered model folders, and the scans running against them.
@@ -187,6 +191,26 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
       });
     dirsInFlight.set(key, request);
     return request;
+  }
+
+  /**
+   * Where ComfyUI loads each kind from (#2205): `{known, reads}`. Unknown
+   * until read, and unknown when the read fails (a remote owner is refused
+   * it), so no folder is marked and no model called misplaced on a guess.
+   */
+  const comfyuiReads = ref(NO_COMFYUI_READS);
+
+  /** Ask once per shelf visit; ComfyUI's folders rarely move under it. */
+  async function loadComfyuiReads() {
+    const startedAt = epoch;
+    let answer = NO_COMFYUI_READS;
+    try {
+      const body = await getComfyuiReads();
+      if (body?.known && Array.isArray(body.reads)) answer = body;
+    } catch (err) {
+      console.warn("Could not read where ComfyUI loads models from", err);
+    }
+    if (startedAt === epoch) comfyuiReads.value = answer;
   }
 
   /** Forget every listing, so the next look reads the disk again. */
@@ -509,6 +533,7 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
     devices.value = [];
     scanning.value = new Map();
     dirListings.value = new Map();
+    comfyuiReads.value = NO_COMFYUI_READS;
     loading.value = false;
     loaded.value = false;
     error.value = "";
@@ -537,6 +562,8 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
     registeredPaths,
     dirListings,
     dirsKey,
+    comfyuiReads,
+    loadComfyuiReads,
     loadDirs,
     clearDirs,
     reloadDirs,

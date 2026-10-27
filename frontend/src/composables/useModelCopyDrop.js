@@ -15,6 +15,8 @@ import {
 import { useModelShelfStore } from "../stores/useModelShelfStore";
 import {
   allAlreadyIn,
+  comfyuiName,
+  copyKey,
   formatModelSize,
   MODEL_COPIES_TYPE,
   moveMechanism,
@@ -50,6 +52,42 @@ export function mechanismWords(copies, folderId, deviceByFolderId) {
     return `Copied to another drive; ${drives.join(", ")} gets ${formatModelSize(freed)} back`;
   }
   return "May need copying, so it can take a while";
+}
+
+/**
+ * What a move does to the names ComfyUI lists the copies under (#2205), or
+ * `""` when no name changes. A workflow saved in ComfyUI under the old name no
+ * longer finds the file, so the tip says so before the drop.
+ *
+ * @param {Object} copies - from `movableCopies`, with its `kinds`.
+ * @param {{folderId: number, path?: string}} destination
+ * @param {Object} reads - `useModelFoldersStore().comfyuiReads`.
+ * @returns {string}
+ */
+export function comfyuiNameWords(copies, destination, reads) {
+  if (!reads?.known) return "";
+  const changed = [];
+  for (const item of copies?.items ?? []) {
+    const kind = copies.kinds?.get(copyKey(item)) ?? "";
+    const file = String(item.relpath ?? "").replace(/\\/g, "/").split("/").pop();
+    const moved = {
+      folder_id: destination.folderId,
+      relpath: destination.path ? `${destination.path}/${file}` : file,
+    };
+    const before = comfyuiName(item, kind, reads);
+    const after = comfyuiName(moved, kind, reads);
+    if (before !== after) changed.push({ file, before, after });
+  }
+  if (!changed.length) return "";
+  const [{ file, before, after }] = changed;
+  const more = changed.length > 1 ? ` (and ${changed.length - 1} more)` : "";
+  if (after == null) return `ComfyUI will no longer list ${file}${more}`;
+  if (before == null) {
+    return after === file
+      ? `ComfyUI will list ${file}${more}`
+      : `ComfyUI will list ${file} as ${after}${more}`;
+  }
+  return `ComfyUI: ${before} → ${after}${more}`;
 }
 
 /**
@@ -90,6 +128,11 @@ export function useModelCopyDrop() {
     }
     event.preventDefault();
     event.dataTransfer.dropEffect = "move";
+    const comfyui = comfyuiNameWords(
+      store.dragCopies,
+      destination,
+      folders.comfyuiReads,
+    );
     store.dropTip = {
       x: event.clientX,
       y: event.clientY,
@@ -97,7 +140,7 @@ export function useModelCopyDrop() {
         store.dragCopies,
         destination.folderId,
         folders.deviceByFolderId,
-      )}`,
+      )}${comfyui ? ` · ${comfyui}` : ""}`,
     };
   }
 

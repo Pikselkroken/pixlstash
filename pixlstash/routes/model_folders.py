@@ -82,6 +82,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
+import requests
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 from platformdirs import user_config_dir
 from pydantic import BaseModel, ConfigDict, Field
@@ -93,7 +94,10 @@ from pixlstash.services.builtin_caches import (
 )
 from pixlstash.services.builtin_models import BUILTIN_OWNER
 from pixlstash.services import comfyui_link_service
-from pixlstash.services.comfyui_service import comfyui_model_roots
+from pixlstash.services.comfyui_service import (
+    comfyui_folder_paths,
+    comfyui_model_roots,
+)
 from pixlstash.services.downloads_intake import (
     IN_FLIGHT_SUFFIXES,
     safetensors_complete,
@@ -589,6 +593,111 @@ class ModelFolderDirsResponse(BaseModel):
         default_factory=list,
         description="The subdirectories of `path`, sorted case-insensitively by name.",
     )
+
+
+class ComfyuiReadResponse(BaseModel):
+    """One directory ComfyUI loads one kind of model from."""
+
+    model_config = ConfigDict(extra="allow")
+
+    folder_id: int = Field(description="The registered folder it is in.")
+    subpath: str = Field(
+        description=(
+            "POSIX, relative to the folder, empty for the folder itself. ComfyUI "
+            "loads from everything under it."
+        )
+    )
+    prefix: str = Field(
+        default="",
+        description=(
+            "POSIX path of the registered folder under ComfyUI's own folder when "
+            "the folder sits inside it, else empty. ComfyUI names a file by its "
+            "path under its own folder, so this goes in front of it."
+        ),
+    )
+    category: str = Field(description="ComfyUI's name for it, e.g. `loras`.")
+    kind: str = Field(
+        description=(
+            "The shelf Type it loads: `lora`, `checkpoint`, `vae`, "
+            "`text_encoder`, `upscaler` or `controlnet`."
+        )
+    )
+
+
+class ComfyuiReadsResponse(BaseModel):
+    """Body of ``GET /model-folders/comfyui-reads``."""
+
+    model_config = ConfigDict(extra="allow")
+
+    known: bool = Field(
+        description=(
+            "False when no read lands in a registered folder: no ComfyUI set, "
+            "it did not answer, or it is on another machine. Nothing can then be "
+            "said about where a model is misplaced."
+        )
+    )
+    reads: list[ComfyuiReadResponse] = Field(default_factory=list)
+
+
+# ComfyUI's model categories, as `/internal/folder_paths` names them, to the
+# shelf Type each loads. `unet` and `diffusion_models` are `checkpoint`
+# because the shelf files a bare diffusion model as one (`_ROLE_FOLDERS` in
+# `utils/adapter_header.py`, `_SLOT_BY_DIRECTORY` in `workflow_templates.py`),
+# so a UNet there is where ComfyUI looks for it.
+COMFYUI_CATEGORY_KINDS = {
+    "loras": "lora",
+    "checkpoints": "checkpoint",
+    "diffusion_models": "checkpoint",
+    "unet": "checkpoint",
+    "vae": "vae",
+    "text_encoders": "text_encoder",
+    "clip": "text_encoder",
+    "upscale_models": "upscaler",
+    "controlnet": "controlnet",
+}
+
+
+def comfyui_reads(folders: list[dict], folder_paths) -> list[dict]:
+    """Where in the registered folders ComfyUI loads each kind from.
+
+    A category path inside a registered folder reads from that subdirectory; a
+    registered folder inside a category path is read whole. Containment is by
+    realpath, so a symlinked folder still matches.
+
+    Args:
+        folders: rows with ``id`` and ``path``.
+        folder_paths: ComfyUI's ``/internal/folder_paths`` answer.
+
+    Returns:
+        ``{folder_id, subpath, prefix, category, kind}`` per match, sorted.
+    """
+    if not isinstance(folder_paths, dict):
+        return []
+    roots = [(int(row["id"]), os.path.realpath(row["path"])) for row in folders]
+    reads = set()
+    for category, kind in COMFYUI_CATEGORY_KINDS.items():
+        paths = folder_paths.get(category)
+        for path in paths if isinstance(paths, list) else []:
+            if not isinstance(path, str) or not path.strip():
+                continue
+            real = os.path.realpath(path)
+            for folder_id, root in roots:
+                if path_is_within(real, root):
+                    sub = _posix_relpath(real, root)
+                    reads.add((folder_id, sub, "", category, kind))
+                elif path_is_within(root, real):
+                    prefix = _posix_relpath(root, real)
+                    reads.add((folder_id, "", prefix, category, kind))
+    return [
+        {"folder_id": f, "subpath": s, "prefix": p, "category": c, "kind": k}
+        for f, s, p, c, k in sorted(reads)
+    ]
+
+
+def _posix_relpath(path: str, base: str) -> str:
+    """*path* under *base*, POSIX, ``""`` for *base* itself."""
+    rel = os.path.relpath(path, base).replace(os.sep, "/")
+    return "" if rel == "." else rel
 
 
 _SAMPLES_SUFFIX = "_samples"
@@ -1235,6 +1344,46 @@ def create_router(server) -> APIRouter:
             existing.folder_ids.append(folder_id)
             existing.shelf_bytes += shelf_bytes.get(folder_id, 0)
         return ModelFolderDeviceListResponse(devices=devices)
+
+    @router.get(
+        "/model-folders/comfyui-reads",
+        summary="Where ComfyUI loads each kind of model from",
+        description=(
+            "The directories inside the registered folders that the configured "
+            "ComfyUI loads each kind of model from, read live from its "
+            "`/internal/folder_paths`, so `extra_model_paths.yaml` counts.\n\n"
+            "`known` is false when no read lands in a registered folder: no "
+            "ComfyUI set, it did not answer, or it is not on this computer, "
+            "whose paths would name another machine's disk. A model is only "
+            "ever called misplaced when `known` is true."
+        ),
+        tags=["model_shelf"],
+        response_model=ComfyuiReadsResponse,
+    )
+    def list_comfyui_reads(request: Request):
+        server.auth.ensure_secure_when_required(request)
+        user = server.auth.get_user_for_request(request)
+        url = (getattr(user, "comfyui_url", None) or "").strip()
+        if not url:
+            return ComfyuiReadsResponse(known=False)
+        try:
+            where, pinned = comfyui_link_service.locate(url)
+        except ValueError as exc:
+            logger.info("ComfyUI reads not asked of %s: %s", url, exc)
+            return ComfyuiReadsResponse(known=False)
+        if where != "this_computer":
+            return ComfyuiReadsResponse(known=False)
+        try:
+            # The vetted address, so a second DNS answer cannot supply paths.
+            folder_paths = comfyui_folder_paths(pinned.rstrip("/"))
+        except (requests.RequestException, ValueError) as exc:
+            logger.warning(
+                "Could not read where ComfyUI at %s loads models from: %s", url, exc
+            )
+            return ComfyuiReadsResponse(known=False)
+        rows = server.hub.fetchall("SELECT id, path FROM model_folder ORDER BY id")
+        reads = comfyui_reads([dict(row) for row in rows], folder_paths)
+        return ComfyuiReadsResponse(known=bool(reads), reads=reads)
 
     def _present_copies(folder_id: int, prefix: str) -> list:
         """Every `present` copy under *prefix*, in one query.
