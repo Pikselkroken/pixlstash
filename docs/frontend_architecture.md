@@ -1551,6 +1551,7 @@ Load-bearing behaviours:
 - **The server derives every number.** `GET /training/dataset` once per scope (count, the character and its two counts, and the checks: too few, untagged, near copies, other people, shown as warnings) and `POST /training/resolve` after each change (debounced, stale replies dropped by a sequence number). The client computes no setting: the steps' clamp (`steps_clamp`) and the picture range an effort covers (`steps_rule.fits`) come from the server too, and `derived` (the same resolve with no pins) is what a reset returns to and which choice a pin belongs to.
 - **A typed value is a pin.** `setPin` drops a value equal to the derived one; the row reads *Typed by you, so it stays put* with a reset, the choice keeps its name and shows *N pinned · unpin* (`TrainLoraPinnedChip.vue`), and the Advanced caret says *N pinned by you*. A typed field keeps its text only while focused and pins only a value inside its `TUNABLE_KEYS` rule; an invalid one blocks Start with its reason.
 - **Sample prompts** are lines `{text, alt}` from `GET /training/sample-prompts`, `text` holding `{{TRIGGER_WORD}}` and shown with the trigger word in place; the word's chip swaps a written line to its other form (or adds/strips the token on an edited one), each line has a remove (at least one stays) and *Add a prompt* adds one. Lines that differ from the written set are sent as the `sample.samples[*].prompt` pin, which both the preview and Start send, so the set the dialog holds at Start is the run's set.
+- **Opened from the Models workspace** (#2169: the sidebar's Training `+` and the runs grid's *New training run* tile), which has no set or person in view, `openToPick()` opens it with nothing chosen and `pickable` set, and it leads with a **Train on** radiogroup of people (`image_count`) and sets (`picture_count`; reference sets left out, since they train as their person) from `useEntityListsStore`. A pick goes through `pickScope`, which is `openForScope` with `pickable` kept, so the dialog then reads exactly as it does from the library (*Character LoRA of …* or *What is this set of?*). From there, Start reloads the runs store's jobs and lands on `models-runs`; from anywhere else it stays put.
 - **Start** (Enter, but never from an Advanced field: the table marks that Enter handled, so `AppDialog` does not accept) is disabled, with the first reason in the footer, until the run resolves; it sends the scope (`set_id` and `character_id` together for a reference set), the recipe, the three choices and every pin. Not built yet: the time estimate (#2120), the busy-GPU offer, offering to caption untagged pictures, and *Check for preset updates*.
 
 #### `WorkflowCard.vue`, `ChipRow.vue`, `InfoPopover.vue` (`widgets/`, v1.12 Workflows & Recipes)
@@ -4851,8 +4852,12 @@ neither edge moves on a workspace switch.
   unset) and the slot's two rows go through `store.requestShell(what, el)`;
   `ModelShelf` watches `store.shellRequest` and opens the dialog it always
   owned, returning focus to `el`.
-- **Training runs** is the `models-runs` route, with the live dot while a run
-  holds the GPU; #2169 builds the place out.
+- **Training**, last: a `+` at the head's right edge (*New training run…*,
+  `trainingStore.openToPick()`) and the **Training runs** row, the
+  `models-runs` route, with the amber dot while a run trains (a live job in
+  `useTrainingRunsStore`, or an AI Toolkit lease) and the run count. The
+  sidebar calls `runsStore.ensureLoaded()` on mount so the count is there on
+  every place, not only after the runs view has been opened.
 
 #### Sorting and grouping (the `Sort` split-button)
 
@@ -6160,16 +6165,54 @@ already global, so half the family lived in each place. `Toolbar.vue` keeps only
 its own overrides (the container-query fold, the icon-trigger accent) and
 `TbGlobalActions.vue`'s byte-identical second copy is gone.
 
+#### The Training runs place (#2169)
+
+**One store, three readers.** `stores/useTrainingRunsStore.js` holds the folder
+listing, the job list and which cards are picked, because the grid draws and
+picks them, the rail describes the pick and the sidebar counts them. A card is
+`{ key, name, run, job, live }`: every folder run, plus each live job with no
+folder yet. A run a job trained is keyed `job:<uuid>`, so its tick survives its
+folder appearing; one trained elsewhere is `run:<name>`. Cards sort live first,
+then newest (`modified_at`, else the job's `created_at`). The read guards
+(generation per read, ticks reconciled to what is still listed, the old root's
+rows dropped the moment the root changes) moved from the view into the store
+unchanged; the view keeps the scroll restore, the focus and visibility
+reloads, and a 5 s job poll while any run is live, re-reading the folder when a
+run leaves the live set. The store is reset on a session change
+(`stores/sessionReset.test.js`). The wording a card and the rail share (steps,
+progress, base, date, the samples grid) is `utils/trainingRuns.js`.
+
+**The grid** leads with a dashed **New training run** tile (it opens
+`TrainLoraDialog` on its Train on picker) and then the cards, the listbox
+being `display: contents` so its options sit in the grid beside the tile. A
+card shows the highest step's samples as a strip in prompt order, a progress
+bar (amber while live), base / steps / date chips and an amber-outlined
+*Training* chip while live.
+
+**Selection.** A click, Enter or Space picks. Finished runs gather into a
+batch; a live run is picked on its own (picking it replaces the batch, and a
+finished run picked next replaces it), and is never importable. The pill shows
+only while something importable is picked: "N runs · M checkpoints ▾" (Select
+all shown takes every finished run), "Every checkpoint ▾" for one run, the
+destination folder, and **Import M checkpoints** / **Import N runs · M
+checkpoints**, which is the checkpoint rule in force.
+
+**The listing describes what the config asked for** (backend §25.14's reader):
+besides base, triggers and rank, `GET /model-folders/{id}/runs` carries
+`total_steps` (`train.steps`), `learning_rate` (`train.lr`), `sample_prompts`
+(either `sample.samples[].prompt` or the older bare `sample.prompts`) and
+`modified_at`, the newest checkpoint's mtime, still without hashing or writing
+anything.
+
 #### Watching a run train (#2118)
 
-A run PixlStash trains opens **its own page inside the Training runs tab**:
+A run PixlStash trains opens **its own page inside the Training runs place**:
 `views/TrainingRunLive.vue`, reached at `/models/runs?run=<job uuid>`. The query
 string, not a new route, because it is a modifier on the runs view and
-`MODEL_SHELF_ROUTES` stays the one list the shelf answers to. Three doors lead
-there: a folder card whose run a job trained (matched on the job summary's
-`run_name`; clicking such a card opens the page, and its check disc or Space
-still ticks it for import), a card for a live job that has no folder yet, and
-the **Watch** button on the Tasks tab's AI Toolkit row (the lease's `job_id`).
+`MODEL_SHELF_ROUTES` stays the one list the shelf answers to. Two doors lead
+there: the rail's **Open run** on a picked run a job trained (a card click
+picks rather than opens since #2169), and the **Watch** button on the Tasks
+tab's AI Toolkit row (the lease's `job_id`).
 The tab wears the amber attention dot while any AI Toolkit lease is held or
 waiting, read from `useTasksStore().resources`, the poll that already runs; the
 listing itself is still not polled.
@@ -6350,9 +6393,19 @@ set's own slot ＋ pickers; nothing drags from the rail any more.
 - Sections (`ModelsRailSection.vue`) draw the header every rail shares
   (`widgets/SectionHeader.vue`, #2161) and remember open or shut per section
   key while the rail is mounted, across selections.
-- Not built yet: the narrow-window drawer (`statsForcedHidden`), the runs
-  rail (#2169), and refusing a set on another base model in *Add to set…*,
-  which the old drag did.
+- **On Training runs** (#2169) the rail reads `useTrainingRunsStore().chosenCards`
+  instead of the shelf's selection. Nothing picked: the output folder, the run
+  count and how many train now. One run (`ModelsRailRun.vue`): *Training*
+  (status, bar, steps, time left, loss chart and value; a red *Stop* while it
+  trains), *Samples* (prompts × the last four sampled steps, the no-trigger
+  check prompt marked, *Open run* for a run PixlStash trained), *Checkpoints*
+  (each save with its size), *Set-up* (trained on, base, trigger, rank · LR,
+  folder). A run PixlStash trains is read from `GET /training/jobs/{id}/live`,
+  polled every 2 s while it trains; one trained elsewhere is described from the
+  folder listing alone. Several runs: the checkpoint count, the base models and
+  the stacking rule. *Clear* lets go of the runs.
+- Not built yet: the narrow-window drawer (`statsForcedHidden`), and refusing a
+  set on another base model in *Add to set…*, which the old drag did.
 
 **The Kind cell is a menu (#1962).** `widgets/KindMenu.vue` turns the Kind chip
 into a menu that sets `file_kind` in place, the way the name and the base model

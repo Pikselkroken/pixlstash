@@ -167,8 +167,21 @@
         </button>
       </template>
 
-      <!-- Training is a place of its own; issue #2169 builds it out. -->
-      <h3 class="section-label msb-head">Training</h3>
+      <!-- Training, last (#2169): its place, and the door to a new run. -->
+      <div class="msb-head msb-head--action">
+        <h3 class="section-label msb-head-label">Training</h3>
+        <button
+          type="button"
+          class="msb-add"
+          aria-label="New training run…"
+          aria-haspopup="dialog"
+          data-testid="models-sidebar-new-run"
+          @click="training.openToPick()"
+        >
+          <Tooltip text="New training run…" activator="parent" :describe="false" />
+          <v-icon size="16" aria-hidden="true">mdi-plus</v-icon>
+        </button>
+      </div>
       <button
         type="button"
         class="ps-row msb-row"
@@ -188,6 +201,9 @@
           aria-hidden="true"
         ></span>
         <span v-if="trainingNow" class="visually-hidden">, training now</span>
+        <span class="msb-count" data-testid="models-sidebar-runs-count">{{
+          count(runsStore.count)
+        }}</span>
       </button>
     </nav>
 
@@ -265,6 +281,8 @@ import {
 } from "../../stores/useModelFoldersStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useTasksStore } from "../../stores/useTasksStore";
+import { useTrainingRunsStore } from "../../stores/useTrainingRunsStore";
+import { useTrainingStore } from "../../stores/useTrainingStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { driveFullness } from "../../utils/libraryChrome";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
@@ -278,6 +296,8 @@ import TypeMark from "../widgets/TypeMark.vue";
 const store = useModelShelfStore();
 const foldersStore = useModelFoldersStore();
 const tasksStore = useTasksStore();
+const runsStore = useTrainingRunsStore();
+const training = useTrainingStore();
 const userPrefsStore = useUserPrefsStore();
 const route = useRoute();
 const router = useRouter();
@@ -297,14 +317,18 @@ onMounted(() => {
   store.loadWorkflowSets();
   foldersStore.refresh({ quiet: true });
   foldersStore.refreshDevices();
+  // The Training runs row counts them wherever the workspace is.
+  runsStore.ensureLoaded();
 });
 
 const onRuns = computed(() => route.name === "models-runs");
 
-const trainingNow = computed(() =>
-  (tasksStore.resources?.leases ?? []).some(
-    (lease) => lease.tenant === "aitoolkit",
-  ),
+const trainingNow = computed(
+  () =>
+    runsStore.liveCount > 0 ||
+    (tasksStore.resources?.leases ?? []).some(
+      (lease) => lease.tenant === "aitoolkit",
+    ),
 );
 
 // ── The folder slot ──────────────────────────────────────────────────────
@@ -670,6 +694,44 @@ function openRuns() {
 .msb-head {
   margin: 0;
   padding: var(--space-5) var(--space-4) var(--space-2) var(--space-5);
+}
+
+/* The Training head carries its + at the right edge, as the design draws it. */
+.msb-head--action {
+  display: flex;
+  align-items: center;
+  padding-top: var(--space-4);
+  padding-bottom: var(--space-1);
+  padding-right: var(--space-3);
+}
+
+.msb-head-label {
+  flex: 1;
+  margin: 0;
+}
+
+/* The library sidebar's section + (`sidebar-section-add`). */
+.msb-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: rgb(var(--v-theme-sidebar-text));
+  cursor: pointer;
+}
+
+.msb-add:hover {
+  background: var(--hover-wash);
+}
+
+.msb-add:focus-visible {
+  box-shadow: var(--focus-ring-inset);
+  outline: none;
 }
 
 .msb-row {

@@ -86,6 +86,11 @@ class TrainingRun:
     base_model: str | None = None
     trigger_words: list[str] = field(default_factory=list)
     rank: int | None = None
+    total_steps: int | None = None
+    """``train.steps``: the steps the run was asked for, not how far it got."""
+    learning_rate: float | None = None
+    sample_prompts: list[str] = field(default_factory=list)
+    """The preview prompts in sample-index order, so ``index`` names a row."""
     config_error: str | None = None
     """Why the config could not be read, when it could not. The run is still
     usable without it: steps and samples come from filenames."""
@@ -232,7 +237,10 @@ def _config_path(run_dir: str) -> str | None:
 
 
 def _apply_config(run: TrainingRun) -> None:
-    """Fill in base model, triggers and rank from ``config.yaml``, best effort.
+    """Fill in what the run was asked for from ``config.yaml``, best effort.
+
+    Base model, triggers, rank, planned steps, learning rate and the preview
+    prompts.
 
     Every failure here is recorded on the run and logged, never raised: the
     checkpoints and samples are the point, and they come from filenames. A run
@@ -292,6 +300,38 @@ def _apply_config(run: TrainingRun) -> None:
         logger.debug("Ignoring boolean `linear` in %s; it is not a rank.", path)
     elif isinstance(rank, int):
         run.rank = rank
+
+    train = _find_key(parsed, "train")
+    if isinstance(train, dict):
+        steps = train.get("steps")
+        if isinstance(steps, int) and not isinstance(steps, bool) and steps > 0:
+            run.total_steps = steps
+        lr = train.get("lr")
+        if isinstance(lr, (int, float)) and not isinstance(lr, bool):
+            run.learning_rate = float(lr)
+
+    run.sample_prompts = _sample_prompts(_find_key(parsed, "sample"))
+
+
+def _sample_prompts(sample: object) -> list[str]:
+    """The preview prompts, from either layout ai-toolkit has written.
+
+    Newer configs list ``samples: [{prompt: ...}]``; older ones a bare
+    ``prompts: [...]`` of strings.
+    """
+    if not isinstance(sample, dict):
+        return []
+    entries = sample.get("samples")
+    if isinstance(entries, list):
+        return [
+            str(entry.get("prompt") or "")
+            for entry in entries
+            if isinstance(entry, dict)
+        ]
+    prompts = sample.get("prompts")
+    if isinstance(prompts, list):
+        return [str(prompt) for prompt in prompts if isinstance(prompt, str)]
+    return []
 
 
 def read_run(run_dir: str) -> TrainingRun:

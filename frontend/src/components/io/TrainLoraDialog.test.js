@@ -28,7 +28,21 @@ vi.mock("../../api/config", () => ({
 }));
 vi.mock("../../api/characters", () => ({
   characterThumbnailUrl: (id) => `/api/v1/characters/${id}/thumbnail`,
+  listCharacters: vi.fn(async () => [
+    { id: 4, name: "Grandad", image_count: 140 },
+  ]),
 }));
+vi.mock("../../api/pictureSets", () => ({
+  pictureSetThumbnailUrl: (id) => `/api/v1/picture_sets/${id}/thumbnail`,
+  listPictureSets: vi.fn(async () => [
+    { id: 9, name: "Pub nights", picture_count: 112 },
+    // Grandad's reference set trains as Grandad, who is listed already.
+    { id: 40, name: "Grandad refs", picture_count: 24, reference_character: { id: 4 } },
+  ]),
+}));
+vi.mock("../../api/projects", () => ({ listProjects: vi.fn(async () => []) }));
+const push = vi.fn();
+vi.mock("vue-router", () => ({ useRouter: () => ({ push }) }));
 vi.mock("vuetify/components", async () => {
   const { vuetifyComponentStubs } = await import("../../testing/vuetifyStubs");
   return vuetifyComponentStubs();
@@ -312,6 +326,72 @@ describe("TrainLoraDialog", () => {
       "needs 10.5 GB",
     );
     expect(startButton(wrapper).attributes("disabled")).toBeDefined();
+  });
+});
+
+describe("opened from the Models workspace (#2169)", () => {
+  it("asks what to train on, then reads the pick as if opened on it", async () => {
+    const wrapper = mount(TrainLoraDialog, globalOpts);
+    const store = useTrainingStore();
+    store.openToPick();
+    await flushPromises();
+
+    const picker = wrapper.find('[data-testid="tld-train-on"]');
+    const names = picker.findAll('[role="radio"]').map((b) => b.text());
+    expect(names).toEqual(["GrandadPerson · 140 pictures", "Pub nightsSet · 112 pictures"]);
+    expect(wrapper.find("footer").text()).toContain(
+      "Pick a person or a set to train on.",
+    );
+    expect(startButton(wrapper).attributes("disabled")).toBeDefined();
+
+    training.getTrainingDataset.mockResolvedValue(
+      dataset({ set_id: 9, character_id: null, character: null, count: 112 }),
+    );
+    await wrapper.find('[data-testid="tld-source-set:9"]').trigger("click");
+    await flushPromises();
+    expect(training.getTrainingDataset).toHaveBeenCalledWith({ set_id: 9 });
+    expect(store.pickable).toBe(true);
+    expect(
+      wrapper.find('[data-testid="tld-source-set:9"]').attributes("aria-checked"),
+    ).toBe("true");
+    // A set asks what it is of, as it does from the library.
+    expect(wrapper.find('[data-testid="tld-subject-style"]').exists()).toBe(true);
+
+    training.getTrainingDataset.mockResolvedValue(dataset());
+    await wrapper.find('[data-testid="tld-source-character:4"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.find('[data-testid="tld-lead"]').text()).toContain(
+      "Character LoRA of Grandad",
+    );
+  });
+
+  it("lands on Training runs when Start is pressed from there", async () => {
+    const wrapper = mount(TrainLoraDialog, globalOpts);
+    const store = useTrainingStore();
+    store.openToPick();
+    training.getTrainingDataset.mockResolvedValue(dataset());
+    training.listTrainingJobs.mockResolvedValue([]);
+    await store.pickScope({ type: "character", id: 4, name: "Grandad" });
+    await store.resolvePlan();
+    await flushPromises();
+
+    await startButton(wrapper).trigger("click");
+    await flushPromises();
+    expect(training.createTrainingJob).toHaveBeenCalled();
+    expect(push).toHaveBeenCalledWith({ name: "models-runs" });
+    expect(training.listTrainingJobs).toHaveBeenCalled();
+  });
+
+  it("stays where it is when opened on a set or person elsewhere", async () => {
+    const { wrapper } = await openDialog(
+      { type: "character", id: 4, name: "Grandad" },
+      dataset(),
+    );
+    expect(wrapper.find('[data-testid="tld-train-on"]').exists()).toBe(false);
+    await startButton(wrapper).trigger("click");
+    await flushPromises();
+    expect(training.createTrainingJob).toHaveBeenCalled();
+    expect(push).not.toHaveBeenCalled();
   });
 });
 

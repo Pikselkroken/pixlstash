@@ -48,6 +48,7 @@ import { useEntityListsStore } from "./useEntityListsStore";
 import { useProjectStore } from "./useProjectStore";
 import { useSelectionStore } from "./useSelectionStore";
 import { useSnapshotsStore } from "./useSnapshotsStore";
+import { useTrainingRunsStore } from "./useTrainingRunsStore";
 import { useTrainingStore } from "./useTrainingStore";
 import { useDedupStore } from "./useDedupStore";
 import { useReviewSessionsStore } from "./useReviewSessionsStore";
@@ -335,6 +336,17 @@ const STORES = [
       s.aiToolkitDiscovery === null &&
       s.aiToolkitCheck === null &&
       s.aiToolkitStatus === null,
+  },
+  {
+    name: "useTrainingRunsStore",
+    use: useTrainingRunsStore,
+    seed: (s) => {
+      s.runs = [{ name: "aria_v3", checkpoints: [] }];
+      s.jobs = [{ id: 1, uuid: "u1", name: "aria_v4", status: "running" }];
+      s.chosen = ["run:aria_v3"];
+    },
+    isEmpty: (s) =>
+      s.runs.length === 0 && s.jobs.length === 0 && s.chosen.length === 0,
   },
   {
     name: "useDedupStore",

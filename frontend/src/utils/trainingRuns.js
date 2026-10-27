@@ -1,0 +1,156 @@
+// What a training-run card and the rail say about one run (#2169).
+//
+// A card is `{ key, name, run, job, live }` from `useTrainingRunsStore`: `run`
+// is the folder listing's entry (null while a queued run has no folder yet),
+// `job` the PixlStash job that trained it (null for a run trained elsewhere).
+
+/** True when the run wrote the bare final file that confirms it finished. */
+export function hasBareFinal(run) {
+  return (run?.checkpoints || []).some((cp) => cp.step === null);
+}
+
+/** The highest step a run saved a checkpoint at, or 0. */
+export function lastSavedStep(run) {
+  return Math.max(
+    0,
+    ...(run?.checkpoints || []).map((cp) => cp.step ?? 0),
+  );
+}
+
+/** The run's state in words, from its job. */
+export function jobStatus(job) {
+  switch (job?.status) {
+    case "queued":
+      return "Waiting for the GPU";
+    case "running":
+      return job.total_steps
+        ? `Training ${job.step.toLocaleString()} / ${job.total_steps.toLocaleString()}`
+        : "Setting up";
+    case "stopping":
+      return "Stopping";
+    case "stopped":
+      return `Stopped at step ${job.step.toLocaleString()}`;
+    case "error":
+      return "Failed";
+    default:
+      return "Trained by PixlStash";
+  }
+}
+
+/** The steps asked for, from the job or else the run's config. */
+function totalOf(card) {
+  return card.job?.total_steps ?? card.run?.total_steps ?? null;
+}
+
+/** How far it got: the job's step while it reports one, else the last save. */
+function doneOf(card) {
+  if (card.job && (card.live || card.job.status === "stopped")) {
+    return card.job.step ?? 0;
+  }
+  return lastSavedStep(card.run);
+}
+
+/** "1,200 / 3,000 steps", "3,000 steps", "800 / 2,000 steps · stopped". */
+export function stepsOf(card) {
+  const total = totalOf(card);
+  const done = doneOf(card);
+  const finished = !card.live && hasBareFinal(card.run);
+  const stopped = card.job?.status === "stopped" ? " · stopped" : "";
+  if (finished) return `${(total ?? done).toLocaleString()} steps${stopped}`;
+  if (total) {
+    return `${done.toLocaleString()} / ${total.toLocaleString()} steps${stopped}`;
+  }
+  return `${done.toLocaleString()} steps${stopped}`;
+}
+
+/** The bar's fill in percent, or null when how far is not known. */
+export function progressOf(card) {
+  if (!card.live && hasBareFinal(card.run)) return 100;
+  const total = totalOf(card);
+  if (!total) return null;
+  return Math.min(100, Math.round((doneOf(card) / total) * 100));
+}
+
+/** The base model as the run's config or job names it. */
+export function baseOf(card) {
+  return card.run?.base_model || card.job?.base_model || "Base model not recorded";
+}
+
+/** The run's day: its newest checkpoint, else when its job was asked for. */
+export function dateOf(card) {
+  const seconds = card.run?.modified_at;
+  const at =
+    seconds != null
+      ? new Date(seconds * 1000)
+      : card.job?.created_at
+        ? new Date(card.job.created_at)
+        : null;
+  if (!at || Number.isNaN(at.getTime())) return "";
+  return at.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
+
+function minutes(seconds) {
+  const m = Math.max(1, Math.round(seconds / 60));
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  return m % 60 ? `${h} h ${m % 60} min` : `${h} h`;
+}
+
+/** "about 1 h 10 min" from the live view's remaining range, or "". */
+export function timeLeft(speed) {
+  const low = speed?.remaining_low_s;
+  const high = speed?.remaining_high_s;
+  if (low == null || high == null) return "";
+  return `about ${minutes((low + high) / 2)}`;
+}
+
+/**
+ * The samples as prompts × steps, at most the last `columns` sampled steps.
+ *
+ * From the live view's rows when PixlStash trained the run (it knows which
+ * prompts carry the trigger word); otherwise from the folder's samples, named
+ * by the config's prompts. Returns `{ steps, rows: [{ prompt, noTrigger,
+ * cells: [filename|""] }] }`; `noTrigger` is true only when it is known.
+ */
+export function sampleGrid({ live, run, columns = 4 }) {
+  if (live?.rows?.length) {
+    const drawn = (live.columns || [])
+      .map((step, i) => ({ step, i }))
+      .filter(({ i }) => live.rows.some((row) => row.cells[i]?.state === "sample"))
+      .slice(-columns);
+    return {
+      steps: drawn.map(({ step }) => step),
+      rows: live.rows.map((row) => ({
+        prompt: row.prompt || `Prompt ${row.index + 1}`,
+        noTrigger: row.with_trigger === false,
+        cells: drawn.map(({ i }) =>
+          row.cells[i]?.state === "sample" ? row.cells[i].filename : "",
+        ),
+      })),
+    };
+  }
+  const samples = run?.samples || [];
+  const steps = [...new Set(samples.map((s) => s.step))]
+    .sort((a, b) => a - b)
+    .slice(-columns);
+  const indexes = [...new Set(samples.map((s) => s.index))].sort((a, b) => a - b);
+  const words = (run?.trigger_words || []).map((w) => w.toLowerCase());
+  return {
+    steps,
+    rows: indexes.map((index) => {
+      const prompt = run?.sample_prompts?.[index] || "";
+      return {
+        prompt: prompt || `Prompt ${index + 1}`,
+        noTrigger:
+          Boolean(prompt) &&
+          words.length > 0 &&
+          !words.some((w) => prompt.toLowerCase().includes(w)),
+        cells: steps.map(
+          (step) =>
+            samples.find((s) => s.step === step && s.index === index)?.filename ||
+            "",
+        ),
+      };
+    }),
+  };
+}

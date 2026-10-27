@@ -821,6 +821,18 @@ def test_listing_runs_hashes_nothing_and_writes_nothing(shelf, monkeypatch):
     assert os.listdir(shelf["destination_dir"]) == []
 
 
+def test_a_listed_run_is_dated_by_its_newest_checkpoint(shelf):
+    """The card's date: the last write of any checkpoint, read by a stat."""
+    from pixlstash.routes.model_imports import _to_run_response
+    from pixlstash.utils.aitoolkit_run import read_output_root
+
+    run = read_output_root(str(shelf["output_root"]))[0]
+    newest = run.checkpoints[-1].path
+    os.utime(newest, (2_000_000_000, 2_000_000_000))
+
+    assert _to_run_response(run).modified_at == 2_000_000_000
+
+
 def _a_training_run(hub, run_uuid="run-clementine"):
     """The hub row a PixlStash training run writes before it starts."""
     return training_runs.create_run(

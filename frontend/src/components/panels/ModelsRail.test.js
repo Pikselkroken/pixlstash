@@ -64,8 +64,29 @@ vi.mock("../../api/modelIcons", () => ({
   modelIconUrl: (sha) => `/api/v1/model-icons/${sha}`,
 }));
 
+const getTrainingJobLive = vi.fn();
+const cancelTrainingJob = vi.fn();
+vi.mock("../../api/training", () => ({
+  getTrainingJobLive: (...args) => getTrainingJobLive(...args),
+  cancelTrainingJob: (...args) => cancelTrainingJob(...args),
+  listTrainingJobs: vi.fn(async () => []),
+}));
+vi.mock("../../api/modelImports", () => ({
+  listRuns: vi.fn(async () => []),
+  runSampleUrl: (folderId, runName, filename) =>
+    `/runs/${folderId}/${runName}/${filename}`,
+}));
+vi.mock("../../api/characters", () => ({
+  listCharacters: vi.fn(async () => [{ id: 3, name: "Aria", image_count: 64 }]),
+}));
+vi.mock("../../api/pictureSets", () => ({
+  listPictureSets: vi.fn(async () => []),
+}));
+
 import { formatModelSize } from "../../utils/modelShelf";
 import ModelsRail from "./ModelsRail.vue";
+import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
+import { useTrainingRunsStore } from "../../stores/useTrainingRunsStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 
@@ -477,5 +498,137 @@ describe("the training runs page", () => {
     expect(title(wrapper)).toBe("Training runs");
     expect(wrapper.find('[data-testid="mrail-runs-hint"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="mrail-stat-count"]').exists()).toBe(false);
+  });
+});
+
+describe("a picked training run (#2169)", () => {
+  const finished = {
+    name: "walter_v2",
+    checkpoints: [
+      { filename: "walter_v2_000001000.safetensors", step: 1000, size: 2e8 },
+      { filename: "walter_v2.safetensors", step: null, size: 2e8 },
+    ],
+    samples: [
+      { filename: "a_1000_0.jpg", step: 1000, index: 0 },
+      { filename: "a_1000_1.jpg", step: 1000, index: 1 },
+      { filename: "a_500_0.jpg", step: 500, index: 0 },
+    ],
+    base_model: "SDXL",
+    trigger_words: ["w4lt3r"],
+    sample_prompts: ["w4lt3r, portrait", "a red bicycle"],
+    rank: 16,
+    learning_rate: 0.0001,
+    total_steps: 2000,
+  };
+  const liveJob = {
+    id: 7,
+    uuid: "u7",
+    name: "aria_v4",
+    status: "running",
+    step: 1200,
+    total_steps: 3000,
+    base_model: "Flux.1 dev",
+    trigger_word: "ar1a",
+    character_id: 3,
+    run_name: null,
+  };
+
+  async function mountOnRuns({ runs = [], jobs = [], pick = [] } = {}) {
+    routeState.name = "models-runs";
+    const folders = useModelFoldersStore();
+    folders.folders = [{ id: 1, path: "/home/me/ai-toolkit/output", kind: "source" }];
+    folders.loaded = true;
+    const runsStore = useTrainingRunsStore();
+    runsStore.runs = runs;
+    runsStore.jobs = jobs;
+    runsStore.chosen = pick;
+    const mountedRail = await mountRail();
+    return { ...mountedRail, runsStore };
+  }
+
+  it("with nothing picked names the folder and counts the runs", async () => {
+    const { wrapper } = await mountOnRuns({ runs: [finished], jobs: [liveJob] });
+    const pane = wrapper.get('[data-testid="mrail-runs-hint"]');
+    expect(pane.text()).toContain("/home/me/ai-toolkit/output");
+    expect(pane.text()).toContain("2 · 1 training now");
+  });
+
+  it("describes one finished run: samples, checkpoints and set-up", async () => {
+    const { wrapper } = await mountOnRuns({
+      runs: [finished],
+      pick: ["run:walter_v2"],
+    });
+    expect(title(wrapper)).toBe("walter_v2");
+    expect(wrapper.get('[data-testid="mrr-steps"]').text()).toBe("2,000 steps");
+    expect(wrapper.find('[data-testid="mrr-stop"]').exists()).toBe(false);
+    // Trained elsewhere: there is no run page to open.
+    expect(wrapper.find('[data-testid="mrr-open"]').exists()).toBe(false);
+    const grid = wrapper.get('[data-testid="mrr-samples"]');
+    expect(grid.text()).toContain("a red bicycle · no trigger");
+    expect(grid.findAll("img").map((img) => img.attributes("src"))).toEqual([
+      "/runs/1/walter_v2/a_500_0.jpg",
+      "/runs/1/walter_v2/a_1000_0.jpg",
+      "/runs/1/walter_v2/a_1000_1.jpg",
+    ]);
+    expect(wrapper.text()).toContain("walter_v2.safetensors");
+    expect(wrapper.text()).toContain("16 · 0.0001");
+    expect(wrapper.text()).toContain("/home/me/ai-toolkit/output/walter_v2");
+  });
+
+  it("follows a live run and stops it from its Training section", async () => {
+    getTrainingJobLive.mockResolvedValue({
+      ...liveJob,
+      columns: [0, 500, 1000],
+      rows: [
+        {
+          index: 0,
+          prompt: "ar1a, portrait",
+          with_trigger: true,
+          cells: [
+            { state: "sample", filename: "s0.jpg" },
+            { state: "sample", filename: "s500.jpg" },
+            { state: "todo", filename: null },
+          ],
+        },
+      ],
+      run_folder: { folder_id: 1, run_name: "aria_v4" },
+      loss_curve: [
+        { step: 1, loss: 0.5 },
+        { step: 2, loss: 0.31 },
+      ],
+      speed: { remaining_low_s: 3600, remaining_high_s: 4800 },
+      dataset_picture_ids: [1, 2, 3],
+    });
+    cancelTrainingJob.mockResolvedValue({});
+    const { wrapper } = await mountOnRuns({ jobs: [liveJob], pick: ["job:u7"] });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(title(wrapper)).toBe("aria_v4");
+    expect(wrapper.text()).toContain("1,200 / 3,000 steps");
+    expect(wrapper.text()).toContain("about 1 h 10 min");
+    expect(wrapper.text()).toContain("0.310");
+    expect(wrapper.text()).toContain("Aria · 3 pictures");
+    // Only the steps that have drawn a sample are columns.
+    expect(wrapper.findAll(".mrr-col").map((c) => c.text())).toEqual(["0", "500"]);
+    expect(wrapper.find('[data-testid="mrr-open"]').exists()).toBe(true);
+
+    await wrapper.get('[data-testid="mrr-stop"]').trigger("click");
+    expect(cancelTrainingJob).toHaveBeenCalledWith(7);
+  });
+
+  it("says the stacking rule for several runs, and Clear lets go of them", async () => {
+    const other = { ...finished, name: "walter_v3", base_model: "Flux.1 dev" };
+    const { wrapper, runsStore } = await mountOnRuns({
+      runs: [finished, other],
+      pick: ["run:walter_v2", "run:walter_v3"],
+    });
+    expect(title(wrapper)).toBe("2 runs");
+    const pane = wrapper.get('[data-testid="mrail-runs-many"]');
+    expect(pane.text()).toContain("4 checkpoints");
+    expect(pane.text()).toContain("SDXL, Flux.1 dev");
+    expect(pane.text()).toContain("each run lands as one stack");
+
+    await wrapper.get('[data-testid="mrail-clear"]').trigger("click");
+    expect(runsStore.chosen).toEqual([]);
   });
 });

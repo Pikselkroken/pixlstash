@@ -54,6 +54,8 @@ import TrainingRuns from "./TrainingRuns.vue";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useTrainingRunsStore } from "../../stores/useTrainingRunsStore";
+import { useTrainingStore } from "../../stores/useTrainingStore";
 
 const globalOpts = {
   global: {
@@ -148,10 +150,18 @@ beforeEach(() => {
   nav.push.mockReset();
   nav.route.query = {};
   useModelShelfStore().fetchRows = vi.fn();
+  // An import re-reads the registry. Left real it goes to the network and
+  // lands after the test, and the store action it then runs makes THAT
+  // test's pinia the active one again under the next test.
+  useModelFoldersStore().refresh = vi.fn(async () => {});
 });
 
-afterEach(() => {
+afterEach(async () => {
   while (mounted.length) mounted.pop().unmount();
+  // Let a test's trailing reads land before the next test's pinia is made: a
+  // store action resolving late makes ITS pinia the active one again, and the
+  // next test would then read the old test's notices.
+  await new Promise((resolve) => setTimeout(resolve, 0));
 });
 
 describe("drawing the grid", () => {
@@ -310,9 +320,38 @@ describe("drawing the grid", () => {
     expect(importRun.mock.calls[0][0].destinationFolderId).toBe(9);
   });
 
-  it("tells the shelf how many runs there are, for the count beside the tabs", async () => {
-    const wrapper = await openWith([run(), run("Foxglove")]);
-    expect(wrapper.emitted("count").at(-1)).toEqual([2]);
+  it("counts the runs for the sidebar and the toolbar", async () => {
+    await openWith([run(), run("Foxglove")]);
+    expect(useTrainingRunsStore().count).toBe(2);
+  });
+
+  it("leads with a New training run tile that opens the Train on picker", async () => {
+    const wrapper = await openWith([run()]);
+    const training = useTrainingStore();
+    training.openToPick = vi.fn();
+    const tile = wrapper.find("[data-testid='tr-new-run']");
+    expect(tile.element.nextElementSibling.getAttribute("role")).toBe("listbox");
+    await tile.trigger("click");
+    expect(training.openToPick).toHaveBeenCalled();
+    expect(wrapper.findAll(".tr-card")).toHaveLength(1);
+  });
+
+  it("draws the highest step's samples as the card's strip, prompt order", async () => {
+    const wrapper = await openWith([
+      run("Clementine", {
+        samples: [
+          { filename: "s_500_1.jpg", step: 500, index: 1 },
+          { filename: "s_250_0.jpg", step: 250, index: 0 },
+          { filename: "s_500_0.jpg", step: 500, index: 0 },
+        ],
+      }),
+    ]);
+    const srcs = wrapper
+      .findAll(".tr-card-strip img")
+      .map((img) => img.attributes("src"));
+    expect(srcs).toHaveLength(2);
+    expect(srcs[0]).toContain("s_500_0.jpg");
+    expect(srcs[1]).toContain("s_500_1.jpg");
   });
 });
 
@@ -366,7 +405,7 @@ describe("choosing runs", () => {
 
     await tick(wrapper, "Foxglove");
     expect(wrapper.findAll(".tr-step")).toHaveLength(0);
-    expect(importBtn(wrapper).text()).toContain("4 files");
+    expect(importBtn(wrapper).text()).toBe("Import 2 runs · 4 checkpoints");
   });
 
   it("never offers a source or an external folder as a destination", async () => {
@@ -610,7 +649,7 @@ describe("staying current without moving the ground", () => {
 
       expect(wrapper.findAll(".tr-card")).toHaveLength(0);
       expect(importBtn(wrapper)).toBeUndefined();
-      expect(wrapper.emitted("count").at(-1)).toEqual([null]);
+      expect(useTrainingRunsStore().runs).toEqual([]);
       expect(wrapper.find(".tr-loading").exists()).toBe(true);
 
       release([run("Hazel")]);
@@ -631,7 +670,7 @@ describe("staying current without moving the ground", () => {
       expect(wrapper.findAll(".tr-card-name").map((n) => n.text())).toEqual([
         "Foxglove",
       ]);
-      expect(wrapper.emitted("count").at(-1)).toEqual([1]);
+      expect(useTrainingRunsStore().count).toBe(1);
     });
 
     it("does not report the current read finished when an older one ends", async () => {
@@ -747,27 +786,30 @@ describe("the runs PixlStash trains (#2118)", () => {
     ...overrides,
   });
 
-  it("opens a trained run's page from its card, and still ticks it from the disc", async () => {
+  it("picks a live run on its own, and offers no import for it", async () => {
     listTrainingJobs.mockResolvedValue([job()]);
     const wrapper = await openWith([run("Clementine_abcd1234"), run("Foxglove")]);
     const card = wrapper
       .findAll(".tr-card")
       .find((c) => c.find(".tr-card-name").text() === "Clementine_abcd1234");
-    expect(card.find(".tr-card-live").text()).toBe("Training 1,000 / 1,500");
+    expect(card.find(".tr-card-chip").text()).toBe("Training");
+    expect(card.text()).toContain("1,000 / 1,500 steps");
 
-    await card.trigger("click");
-    expect(nav.push).toHaveBeenCalledWith({
-      name: "models-runs",
-      query: { run: "abcd1234ef" },
-    });
-    expect(card.attributes("aria-selected")).toBe("false");
+    // Live first: the grid leads with the run that is training.
+    expect(wrapper.findAll(".tr-card")[0].element).toBe(card.element);
 
-    await card.find(".tr-card-check").trigger("click");
-    expect(card.attributes("aria-selected")).toBe("true");
-    // A run trained elsewhere still ticks from anywhere on its card.
-    nav.push.mockClear();
     await tick(wrapper, "Foxglove");
+    await card.trigger("click");
+    // Selecting the live run replaces the batch, and opens nothing.
     expect(nav.push).not.toHaveBeenCalled();
+    expect(card.attributes("aria-selected")).toBe("true");
+    expect(wrapper.findAll(".tr-card--checked")).toHaveLength(1);
+    expect(importBtn(wrapper)).toBeUndefined();
+
+    // A finished run picked next takes the live one's place.
+    await tick(wrapper, "Foxglove");
+    expect(card.attributes("aria-selected")).toBe("false");
+    expect(importBtn(wrapper).text()).toBe("Import 2 checkpoints");
   });
 
   it("gives a queued run a card before it has a folder", async () => {
@@ -776,14 +818,12 @@ describe("the runs PixlStash trains (#2118)", () => {
       job({ uuid: "old", status: "completed", run_name: null }),
     ]);
     const wrapper = await openWith([]);
-    const cards = wrapper.findAll(".tr-card--job");
+    const cards = wrapper.findAll(".tr-card");
     expect(cards).toHaveLength(1);
     expect(cards[0].text()).toContain("Waiting for the GPU");
     await cards[0].trigger("click");
-    expect(nav.push).toHaveBeenCalledWith({
-      name: "models-runs",
-      query: { run: "abcd1234ef" },
-    });
+    expect(cards[0].attributes("aria-selected")).toBe("true");
+    expect(useTrainingRunsStore().chosenCards[0].job.uuid).toBe("abcd1234ef");
   });
 
   it("draws the run's page for ?run=, and says so when it is not here", async () => {

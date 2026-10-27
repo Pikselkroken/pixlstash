@@ -1011,7 +1011,6 @@
       role="region"
       aria-label="Training runs"
       @set-folder="openAddSource"
-      @count="runsCount = $event"
     />
 
     <!-- The pill floats bottom-centre OVER the list, exactly like the photo
@@ -1206,6 +1205,7 @@ import { useOperationStore } from "../../stores/useOperationStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useSearchStore } from "../../stores/useSearchStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
+import { useTrainingRunsStore } from "../../stores/useTrainingRunsStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { errorDetail } from "../../utils/apiError";
 import { formatUserDate, formatUserDay } from "../../utils/utils";
@@ -2485,13 +2485,12 @@ watch(isShelfTab, (on) => operationStore.setLocalReceiptHost(on), {
 });
 onUnmounted(() => operationStore.setLocalReceiptHost(false));
 
-/** How many runs the other view is showing, for the count beside the tabs. */
-const runsCount = ref(null);
-const runsCountLabel = computed(() =>
-  runsCount.value == null
-    ? ""
-    : `${runsCount.value.toLocaleString()} ${runsCount.value === 1 ? "run" : "runs"}`,
-);
+/** How many runs the Training runs place holds, for the count in the bar. */
+const trainingRuns = useTrainingRunsStore();
+const runsCountLabel = computed(() => {
+  const n = trainingRuns.count;
+  return n == null ? "" : `${n.toLocaleString()} ${n === 1 ? "run" : "runs"}`;
+});
 
 function showTab(which) {
   const name = which === "runs" ? "models-runs" : "models";
