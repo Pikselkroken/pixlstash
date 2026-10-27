@@ -1057,6 +1057,7 @@ def test_list_presets_offers_only_what_the_saved_checkout_can_run(tmp_path):
             "chroma1-base": False,
             "flux2-klein-9b-base": False,
             "krea2-raw": False,
+            "moss-image-base": False,
         }
     finally:
         _teardown(temp_dir, server)
@@ -1296,6 +1297,7 @@ def test_resolve_previews_the_run_and_every_recipes_fit():
                     ("chroma1-base", "Chroma1 Base"),
                     ("flux2-klein-9b-base", "FLUX.2 Klein 9B Base"),
                     ("krea2-raw", "Krea 2 Raw"),
+                    ("moss-image-base", "MOSS-Image Base"),
                 )
             ),
         ]
