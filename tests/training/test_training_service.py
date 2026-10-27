@@ -23,6 +23,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+import uuid
 from types import SimpleNamespace
 
 import pytest
@@ -1449,11 +1450,21 @@ def test_the_ram_guard_stops_a_probe(hub, repo_dir, watched, monkeypatch):
     assert lease.release_count == 1
 
 
+@pytest.mark.parametrize("id_prefix", [None, "09960682"])
 def test_deferred_previews_are_drawn_from_each_checkpoint_after_training(
-    hub, repo_dir, watched
+    hub, repo_dir, watched, monkeypatch, id_prefix
 ):
     """Measured: training fits, previews do not. The run trains without them and
-    each kept checkpoint is sampled once training is done."""
+    each kept checkpoint is sampled once training is done.
+
+    An id that starts with eight digits gives the final checkpoint a name that
+    reads like a step (``probed_09960682.safetensors``); it is still sampled at
+    the run's own step."""
+    if id_prefix:
+        real_uuid4 = uuid.uuid4
+        monkeypatch.setattr(
+            uuid, "uuid4", lambda: uuid.UUID(id_prefix + real_uuid4().hex[8:])
+        )
     first = _resolve_small(hub)
     measurements.record(
         hub,
