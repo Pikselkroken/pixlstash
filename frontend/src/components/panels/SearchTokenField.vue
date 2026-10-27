@@ -22,7 +22,7 @@
       type="button"
       class="stf-rest"
       :class="{ 'stf-rest--active': summary }"
-      aria-label="Search"
+      :aria-label="summary ? `Search, filtered by ${summary}` : 'Search'"
       aria-keyshortcuts="F"
       @click="focus"
     >
@@ -79,7 +79,7 @@
           autocomplete="off"
           aria-label="Search"
           aria-autocomplete="list"
-          aria-controls="search-token-suggestions"
+          :aria-controls="listVisible ? 'search-token-suggestions' : null"
           :aria-expanded="listVisible ? 'true' : 'false'"
           :aria-activedescendant="
             listVisible && rows.length ? `search-token-option-${currentIndex}` : null
@@ -271,8 +271,14 @@ const tokens = computed(() =>
 );
 
 // At rest: what narrows the grid, in one line - the words, then each filter.
+// A Lacks tag says so, or it would read as the Has tag of the same name.
 const summary = computed(() =>
-  [searchStore.searchQuery?.trim(), ...tokens.value.map((t) => t.value)]
+  [
+    searchStore.searchQuery?.trim(),
+    ...tokens.value.map((t) =>
+      t.style === "lacks" ? `lacks ${t.value}` : t.value,
+    ),
+  ]
     .filter(Boolean)
     .join(" · "),
 );
@@ -363,17 +369,20 @@ function tagEntries() {
     }));
 }
 
+// Most pictures first, as the Filter menu's Workflow list; the count tells
+// two workflows of one name apart.
 function workflowEntries() {
   const ticked = new Set((filters.workflowFilter || []).map((w) => w.id));
   return catalog.value.workflows
     .filter((card) => !ticked.has(card.id))
+    .sort((a, b) => (b.picture_count ?? 0) - (a.picture_count ?? 0))
     .map((card) => {
       const name = card.name || "Unnamed workflow";
       return {
         key: `workflow:${card.id}`,
         label: name,
         icon: "mdi-sitemap-outline",
-        where: "Content › Workflow",
+        count: card.picture_count ?? 0,
         apply: () => {
           filters.workflowFilter = [
             ...(filters.workflowFilter || []),
@@ -641,7 +650,8 @@ function onKeydown(event) {
   }
   if (event.key === "Tab") {
     // With nothing to add, Tab moves focus as usual: never a keyboard trap.
-    if (!listVisible.value || !rows.value.length) return;
+    // Recent searches (an empty field) are not filters: they take a click.
+    if (!listVisible.value || !query.value || !rows.value.length) return;
     event.preventDefault();
     pickRow(rows.value[currentIndex.value], event.shiftKey);
     return;
@@ -788,6 +798,10 @@ defineExpose({ focus });
   flex-shrink: 0;
 }
 /* Open, the tokens stay on one line and scroll, so the bar keeps its height. */
+.stf-field:focus-within {
+  outline: var(--focus-width) solid var(--focus-stroke);
+  outline-offset: var(--focus-offset);
+}
 .stf-field {
   overflow-x: auto;
   scrollbar-width: none;

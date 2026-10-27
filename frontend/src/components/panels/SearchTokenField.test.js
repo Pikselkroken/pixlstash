@@ -3,7 +3,7 @@
 // highlighted filter and Shift+Tab its opposite, and pasted comma text makes
 // tokens.
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { ref } from "vue";
 import { mount, flushPromises } from "@vue/test-utils";
@@ -78,6 +78,11 @@ beforeEach(() => {
   // Past the shared list's 30 s cache, so each test reads its own mocks.
   clock += 60_000;
   vi.spyOn(Date, "now").mockReturnValue(clock);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  wrapper?.unmount();
 });
 
 async function mountField(props = {}) {
@@ -256,12 +261,51 @@ describe("SearchTokenField", () => {
     expect(copy).toHaveBeenCalledWith(["rain"]);
   });
 
-  it("an empty field lists recent searches, and picking one runs it", async () => {
+  it("an empty field lists recent searches; a click runs one, Tab leaves", async () => {
     const search = useSearchStore();
     search.addToSearchHistory("red hair");
     await mountField();
     expect(wrapper.find(".stf-sec").text()).toBe("Recent");
-    await press("Tab");
+    const tab = await press("Tab");
+    expect(tab.defaultPrevented).toBe(false);
+    expect(search.searchQuery).toBe("");
+    await wrapper.find('[role="option"]').trigger("click");
     expect(search.searchQuery).toBe("red hair");
+  });
+
+  it("closes when focus leaves it, and Escape closes an empty field", async () => {
+    await mountField();
+    await input().trigger("focusout", { relatedTarget: document.body });
+    expect(wrapper.find("input.stf-input").exists()).toBe(false);
+    expect(wrapper.emitted("update:open").at(-1)).toEqual([false]);
+
+    await wrapper.vm.focus();
+    await press("Escape");
+    expect(wrapper.find("input.stf-input").exists()).toBe(false);
+  });
+
+  it("Escape with text hides the list first, then Tab moves focus", async () => {
+    await mountField();
+    await type("look");
+    await press("Escape");
+    expect(wrapper.find(".stf-drop").exists()).toBe(false);
+    expect(wrapper.find("input.stf-input").exists()).toBe(true);
+    const tab = await press("Tab");
+    expect(tab.defaultPrevented).toBe(false);
+    expect(useFilterStore().tagFilter).toEqual([]);
+  });
+
+  it("names its filters to a screen reader at rest, Lacks as lacks", async () => {
+    const filters = useFilterStore();
+    filters.tagFilter = ["rain"];
+    filters.tagRejectedFilter = ["umbrella"];
+    wrapper = mount(SearchTokenField, {
+      global: { stubs: { "v-icon": true } },
+    });
+    const rest = wrapper.find("button.stf-rest");
+    expect(rest.text()).toContain("rain · lacks umbrella");
+    expect(rest.attributes("aria-label")).toBe(
+      "Search, filtered by rain · lacks umbrella",
+    );
   });
 });

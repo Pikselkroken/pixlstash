@@ -220,7 +220,8 @@ the status run goes below `--text-sm`.**
 ### Added
 
 **The query string.** Verified: nothing on screen today names what was searched —
-`SearchResultBar` never shows it, the toolbar popover is closed, and only
+`SearchResultBar` never shows it, the toolbar search field names it only in
+its resting summary, and only
 `bar-btn--active` hints a search is live. A recognition-over-recall failure worth
 fixing while the pill is rebuilt. Truncate to ~24 chars, full string in `title`.
 
