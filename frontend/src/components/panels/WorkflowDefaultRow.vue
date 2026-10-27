@@ -63,12 +63,17 @@
       role="radiogroup"
       :aria-label="`${fieldName}: when it is set`"
       data-testid="wfdef-seg"
+      @keydown="onSegKeydown"
     >
+      <!-- One tab stop, on the checked side; the arrows pick the other one,
+           as a radio group's do. -->
       <button
+        ref="eachRunOpt"
         type="button"
         role="radio"
         class="wfdef-seg-opt"
         :aria-checked="fixed ? 'false' : 'true'"
+        :tabindex="fixed ? -1 : 0"
         :disabled="busy"
         data-testid="wfdef-each-run"
         @click="fixed && emit('toggle-pin')"
@@ -76,10 +81,12 @@
         Each run
       </button>
       <button
+        ref="pinnedOpt"
         type="button"
         role="radio"
         class="wfdef-seg-opt"
         :aria-checked="fixed ? 'true' : 'false'"
+        :tabindex="fixed ? 0 : -1"
         :disabled="busy"
         data-testid="wfdef-pinned"
         @click="!fixed && emit('toggle-pin')"
@@ -96,7 +103,7 @@
 // or every run uses the workflow's value. `row.pinned` means set each run; the
 // switch's Pinned side is its inverse, `fixed`.
 
-import { computed } from "vue";
+import { computed, ref } from "vue";
 
 import { parameterTitle } from "../../utils/workflowPins";
 import AppButton from "../widgets/AppButton.vue";
@@ -128,6 +135,21 @@ const fieldName = computed(() =>
   tip.value ? `${name.value} (${tip.value})` : name.value,
 );
 const fixed = computed(() => !props.row.pinned);
+
+const eachRunOpt = ref(null);
+const pinnedOpt = ref(null);
+
+/** Any arrow picks the other side of the pair, and focus goes with it. */
+function onSegKeydown(event) {
+  if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
+    return;
+  }
+  event.preventDefault();
+  if (props.busy) return;
+  emit("toggle-pin");
+  (fixed.value ? eachRunOpt : pinnedOpt).value?.focus();
+}
+
 const choosing = computed(() => !fixed.value && Boolean(props.options?.length));
 
 /**

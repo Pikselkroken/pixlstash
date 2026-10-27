@@ -2046,7 +2046,7 @@ describe("the DEFAULT RECIPE section (#1653)", () => {
     expect(wrapper.find(`[data-testid='wftab-also-row-${BO}']`).exists()).toBe(false);
     const pile = wrapper.find("[data-testid='wftab-changes']");
     expect(pile.text()).toContain("Ada");
-    expect(pile.text()).toContain("Ada");
+    expect(pile.text()).not.toContain("Bo");
     // The pile sits in the LoRAs panel, under the default rows.
     const pileRow = wrapper.find("[data-testid='wftab-loras'] [data-testid='wftab-changes']");
     expect(pileRow.find(".wftab-sublabel").text()).toBe("Also used");
@@ -2159,6 +2159,26 @@ describe("the DEFAULT RECIPE section (#1653)", () => {
       await flush(wrapper);
       expect(setWorkflowDefaultLora).toHaveBeenLastCalledWith(KEY, { sha256: BO_SHA, include: null });
       expect(wrapper.find(`[data-testid='wftab-also-row-${BO}']`).exists()).toBe(true);
+    });
+
+    it("hands focus to the LoRAs chevron when the last Also used row leaves", async () => {
+      getWorkflowCard.mockResolvedValue(withRecipe({ loras: [] }));
+      const only = loraSummary();
+      only.varying = only.varying.filter((use) => use.asset === BO);
+      getLoraSummary.mockResolvedValue(only);
+      setWorkflowDefaultLora.mockResolvedValueOnce(boAdded());
+      const store = useWorkflowsStore();
+      store.cards = [card()];
+      store.selectedKeys = [KEY];
+      const wrapper = mount(WorkflowTab, { ...globalOpts, attachTo: document.body });
+      mounted.push(wrapper);
+      await flush(wrapper);
+      await addButton(wrapper, BO).trigger("click");
+      await flush(wrapper);
+      expect(wrapper.find("[data-testid='wftab-changes']").exists()).toBe(false);
+      expect(document.activeElement).toBe(
+        wrapper.find("[data-testid='wftab-loras'] .section-head__chevron").element,
+      );
     });
 
     it("still confirms, with Undo, when the selection moved while it was out", async () => {
@@ -4436,6 +4456,10 @@ describe("the tab as the editor (#1850)", () => {
         { node_id: "31", field: "lora_name" },
       ]);
       expect(loraRowsOf(wrapper)).toHaveLength(4);
+      // The header counts what the chain will load: the struck row is out.
+      expect(
+        wrapper.find("[data-testid='wftab-loras'] .section-head__count").text(),
+      ).toBe("3");
       expect(film().find('[data-testid="wftab-lora-removed"]').text()).toBe(
         "Removed",
       );

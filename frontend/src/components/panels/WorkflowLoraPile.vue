@@ -93,6 +93,19 @@ function addDefault(row) {
   emit("add-default", row);
 }
 
+// A failed add leaves its row where it was: forget it, or a later change that
+// takes that row out for another reason would move focus unasked.
+watch(
+  () => props.adding,
+  (now, before) => {
+    if (before && before === addedAsset && !now) {
+      nextTick(() => {
+        if (rows.value.some((row) => row.asset === addedAsset)) addedAsset = "";
+      });
+    }
+  },
+);
+
 // An added LoRA leaves the list, and its button with it: focus moves to the row
 // that took its place (its first button), else the list, rather than falling to
 // the page.

@@ -569,14 +569,14 @@
            header, and is here even with no loader at all (#1478). Also used
            is the pictures' own LoRAs the default does not load. -->
       <section
-       
+        ref="lorasSection"
         class="inspector-section wftab-sec"
         data-testid="wftab-loras"
       >
         <SectionHeader
           v-model:collapsed="lorasCollapsed"
           label="LoRAs"
-          :count="detail ? loraRows.length : null"
+          :count="detail ? loraRows.filter((lora) => !lora.removed).length : null"
         >
           <template #actions>
             <AppButton
@@ -686,12 +686,7 @@
                Also used, with Show N and Add. Absent, not empty, when none. -->
           <template v-if="alsoUsed.length || summaryFailed">
             <div v-if="alsoUsed.length" class="wftab-sub" data-testid="wftab-changes">
-              <span
-                ref="defaultHeading"
-                class="wftab-sublabel"
-                tabindex="-1"
-                >Also used</span
-              >
+              <span class="wftab-sublabel">Also used</span>
               <WorkflowLoraPile
                 :summary="pileSummary"
                 :adding="busy.startsWith('default-lora:') ? busy.slice(13) : ''"
@@ -4061,8 +4056,8 @@ function sameLora(lora, use) {
   );
 }
 
-/** The LoRAs heading: where focus goes when the last pile row leaves. */
-const defaultHeading = ref(null);
+/** The LoRAs section: its chevron takes focus when the last pile row leaves. */
+const lorasSection = ref(null);
 
 /**
  * *Add to default* on a pile row (#1653): the LoRA joins the default recipe,
@@ -4090,7 +4085,7 @@ function addLoraToDefault(row) {
       detail.value = body;
       if (!alsoUsed.value.length) {
         await nextTick();
-        defaultHeading.value?.focus();
+        lorasSection.value?.querySelector(".section-head__chevron")?.focus();
       }
     }
     notices.push({

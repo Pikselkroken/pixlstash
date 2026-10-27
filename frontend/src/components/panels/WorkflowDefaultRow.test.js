@@ -76,4 +76,20 @@ describe("a parameter row's Each run | Pinned switch", () => {
     await pinned.find("[data-testid='wfdef-each-run']").trigger("click");
     expect(pinned.emitted("toggle-pin")).toHaveLength(1);
   });
+
+  it("is one tab stop on the checked side, and an arrow picks the other side", async () => {
+    const wrapper = mountRow({ row: { ...ROW, pinned: true } });
+    const eachRun = wrapper.find("[data-testid='wfdef-each-run']");
+    const pinned = wrapper.find("[data-testid='wfdef-pinned']");
+    expect(eachRun.attributes("tabindex")).toBe("0");
+    expect(pinned.attributes("tabindex")).toBe("-1");
+    await eachRun.trigger("keydown", { key: "ArrowRight" });
+    expect(wrapper.emitted("toggle-pin")).toHaveLength(1);
+    await eachRun.trigger("keydown", { key: "Tab" });
+    expect(wrapper.emitted("toggle-pin")).toHaveLength(1);
+    // Busy: the arrow is swallowed, nothing is asked for.
+    await wrapper.setProps({ busy: true });
+    await eachRun.trigger("keydown", { key: "ArrowLeft" });
+    expect(wrapper.emitted("toggle-pin")).toHaveLength(1);
+  });
 });
