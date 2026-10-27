@@ -478,6 +478,15 @@ Findings to honour:
   drive a ghost, so it carries a 1px `outline` at 4.24 / 5.67 rather than relying on a
   colour step. A meter's own frame is a legitimate substitute for a fill boundary; a
   line *between two fills* is not.
+- **The drive meter's empty part is `--drive-meter-track`, an ink tint, not
+  `--track-trough`.** The trough is a black tint made as the well of the segmented
+  track, which draws its edge with a ring; under the 3px drive meter it measured 1.17:1 (dark) / 1.25:1 (light) off the
+  chrome and the free space vanished. The ink at 40% lightens in dark and darkens in
+  light, and clears 2.3:1 against both the chrome and the `surface-<status>` fill;
+  3:1 on both sides does not fit. Gated by `frontend/src/utils/contrastAudit.js`.
+  It is measured for the status fills only. In dark the track is about as light as the
+  olive and teal fills (roughly 1.2:1 apart), so a meter filled with those needs its
+  own measurement, not this token.
 - **The `on-<status>` values, on their solid fill, identical in both themes:**
   `on-error` #f7f1ea 5.40 · `on-warning` #1b1b1b 6.99 · `on-success` #f7f1ea 4.57 ·
   `on-info` #f7f1ea 6.68.

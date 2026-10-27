@@ -71,6 +71,16 @@ const FLOOR_SURFACE_TEXT = 4
  */
 const UNSAVED_WASH = 0.26
 
+const STYLE_CSS = resolve(HERE, '../style.css')
+
+/**
+ * The drive meter's empty track against the chrome it sits on and against the
+ * `surface-<status>` fill beside it. 3:1 on both sides does not fit between
+ * the canvas and the fill (light tops out at 2.43 each), so this is the floor
+ * a drawn track must still clear; the old black trough measured 1.17 - 1.25.
+ */
+const FLOOR_METER_TRACK = 2.3
+
 /** `#rrggbb` → `{r,g,b}`. Tolerates stray whitespace in the source value. */
 export function parseHex(value) {
   const h = String(value).trim().replace(/^#/, '')
@@ -165,11 +175,38 @@ export function readThemeColors(source = readFileSync(MAIN_JS, 'utf8')) {
 }
 
 /**
+ * `--drive-meter-track` per theme, read from the two theme blocks in
+ * `style.css` so the audit measures the alpha that ships.
+ *
+ * @returns {{light:{key,alpha}, dark:{key,alpha}}} the ink key and its alpha.
+ */
+export function readDriveMeterTrack(source = readFileSync(STYLE_CSS, 'utf8')) {
+  const tracks = {}
+  for (const [name, marker] of [
+    ['light', '.v-theme--pixlStashLight {'],
+    ['dark', '.v-theme--pixlStashDark {'],
+  ]) {
+    const start = source.indexOf(marker)
+    if (start === -1) throw new Error(`Could not find "${marker}" in style.css`)
+    const block = source.slice(start, source.indexOf('\n}', start))
+    const m = block.match(
+      /--drive-meter-track:\s*rgba\(var\(--v-theme-([\w-]+)\),\s*([\d.]+)\)/,
+    )
+    if (!m) throw new Error(`No --drive-meter-track in the ${name} theme block`)
+    tracks[name] = { key: m[1], alpha: Number(m[2]) }
+  }
+  return tracks
+}
+
+/**
  * Measure every status pair in both themes.
  *
  * @returns {Array<{group,name,fg,bg,ratio,floor,pass}>} one row per pair.
  */
-export function auditContrast(themes = readThemeColors()) {
+export function auditContrast(
+  themes = readThemeColors(),
+  meterTracks = readDriveMeterTrack(),
+) {
   const rows = []
   const add = (group, name, fg, bg, floor) => {
     const ratio = contrastRatio(fg, bg)
@@ -302,6 +339,31 @@ export function auditContrast(themes = readThemeColors()) {
         composite(onDark, chrome, TINT_ON_DARK_CHROME),
         FLOOR_RAIL,
       )
+    }
+
+    // The drive meter's empty track: on the title bar (`toolbar`), the models
+    // sidebar slot (`sidebar`) and the library menu (`surface`), and against
+    // each fill. Three, not four: `driveFullness` (libraryChrome.js) only ever
+    // returns success, warning or error, so the meter never draws `info`.
+    const { key, alpha } = meterTracks[theme]
+    for (const where of ['toolbar', 'sidebar', 'surface']) {
+      const track = composite(need(key), need(where), alpha)
+      add(
+        `${theme} · drive meter`,
+        `track on ${where}`,
+        track,
+        need(where),
+        FLOOR_METER_TRACK,
+      )
+      for (const level of ['success', 'warning', 'error']) {
+        add(
+          `${theme} · drive meter`,
+          `surface-${level} on track (${where})`,
+          need(`surface-${level}`),
+          track,
+          FLOOR_METER_TRACK,
+        )
+      }
     }
   }
   return rows
