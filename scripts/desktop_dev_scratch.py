@@ -296,6 +296,8 @@ def _in_use(scratch_dir: str) -> bool:
             return marker in handle.read().split(b"\0")
     except FileNotFoundError:
         return False  # Exited between the checks.
+    except PermissionError:
+        return False  # Not dumpable, so not the dev run's Electron, whose is readable.
 
 
 def _remove_previous(scratch_dir: str) -> None:
