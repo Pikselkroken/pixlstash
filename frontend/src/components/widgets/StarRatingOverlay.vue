@@ -4,6 +4,7 @@
     :class="{
       'star-overlay--compact': compact,
       'star-overlay--number': numberMode,
+      'star-overlay--fav-on': favouritable && favourite,
     }"
   >
     <template v-if="numberMode">
@@ -38,7 +39,10 @@
         >{{ dScore > 0 ? dScore : 1 }}</span
       >
     </template>
-    <template v-else>
+    <!-- The stars and the hairline after them in one box, so a host can
+         collapse the strip to its heart (a favourite at rest on a grid tile). -->
+    <span v-else class="star-overlay__stars">
+      <template v-if="stars">
       <span v-for="n in max" :key="n" class="star-slot">
         <Tooltip
           :text="`Set rating ${n} (${n})`"
@@ -58,7 +62,34 @@
           >mdi-star</v-icon
         >
       </span>
-    </template>
+      <span
+        v-if="favouritable"
+        class="star-overlay__rule"
+        aria-hidden="true"
+      ></span>
+      </template>
+    </span>
+    <!-- The favourite heart ends the strip. Red is the ON state only; off is
+         the light ink outline the stars use. -->
+    <span v-if="favouritable && !numberMode" class="star-slot">
+      <Tooltip
+        :text="favourite ? 'Unfavourite' : 'Favourite'"
+        shortcut="H"
+        activator="parent"
+        :describe="false"
+      />
+      <v-icon
+        :size="iconSize"
+        class="star-overlay__heart"
+        :class="{ 'star-overlay__heart--on': favourite }"
+        role="button"
+        :aria-label="favourite ? 'Unfavourite' : 'Favourite'"
+        :aria-pressed="favourite ? 'true' : 'false'"
+        style="cursor: pointer"
+        @click.stop="emit('toggle-favourite')"
+        >{{ favourite ? "mdi-heart" : "mdi-heart-outline" }}</v-icon
+      >
+    </span>
   </div>
 </template>
 
@@ -72,9 +103,15 @@ const props = defineProps({
   iconSize: { type: [Number, String], default: "large" },
   compact: { type: Boolean, default: false },
   numberMode: { type: Boolean, default: false },
+  /** Draw the stars. Off, a favouritable strip is its heart alone. */
+  stars: { type: Boolean, default: true },
+  /** End the strip with the favourite heart. */
+  favouritable: { type: Boolean, default: false },
+  /** Is this picture a favourite now? */
+  favourite: { type: Boolean, default: false },
 });
 
-const emit = defineEmits(["set-score"]);
+const emit = defineEmits(["set-score", "toggle-favourite"]);
 
 const dScore = computed(() => Math.max(0, props.score || 0));
 
@@ -120,6 +157,30 @@ function cycleRating() {
 .star-overlay .v-icon:hover {
   background: rgba(var(--v-theme-on-dark-surface), 0.16);
   border-radius: var(--radius-sm);
+}
+
+.star-overlay__stars {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* The hairline between the score and the heart: the strip says two things. */
+.star-overlay__rule {
+  flex: none;
+  width: 1px;
+  height: 1em;
+  margin: 0 var(--space-2);
+  background: rgba(var(--v-theme-on-dark-surface), 0.35);
+}
+
+.star-overlay__heart {
+  color: rgba(var(--v-theme-on-dark-surface), 0.75);
+}
+
+/* Every mount is over a photo or the always-dark lightbox, so the red is the
+   dark-surface one in both themes. */
+.star-overlay__heart--on {
+  color: rgb(var(--v-theme-dark-surface-favourite));
 }
 
 .star-overlay--number {

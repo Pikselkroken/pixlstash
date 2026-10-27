@@ -1825,6 +1825,9 @@ _PICTURE_METADATA_FIELDS = {
     "description",
     "description_file",
     "description_file_mtime",
+    # The owner's heart beside the score: a fact about this one picture, the
+    # same class as `score`, naming nothing else.
+    "favourite",
     "file_path",
     "format",
     "height",

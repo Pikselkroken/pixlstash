@@ -370,6 +370,7 @@ def register_routes(router, server):
         min_score: int = Query(None),
         max_score: int = Query(None),
         unscored: bool = Query(False),
+        favourite: bool = Query(False),
     ):
         candidate_ids = None
         only_deleted = character_id == "SCRAPHEAP"
@@ -686,6 +687,7 @@ def register_routes(router, server):
                 min_score is not None,
                 max_score is not None,
                 unscored,
+                favourite,
                 tag,
                 rejected_tag,
                 tag_confidence_above,
@@ -709,6 +711,7 @@ def register_routes(router, server):
                 tags_confidence_below_filter_value,
                 comfyui_models_filter_value,
                 comfyui_loras_filter_value,
+                favourite_only_value=False,
             ):
                 query = select(Picture.id).where(Picture.id.in_(candidate_ids_list))
                 # This post-filter narrows an already-id-bounded set; only the
@@ -719,6 +722,7 @@ def register_routes(router, server):
                     min_score=min_score_value,
                     max_score=max_score_value,
                     unscored=unscored_value,
+                    favourite_only=favourite_only_value,
                     comfyui_models_filter=comfyui_models_filter_value,
                     comfyui_loras_filter=comfyui_loras_filter_value,
                     tags_filter=tags_filter_value,
@@ -742,6 +746,7 @@ def register_routes(router, server):
                 tag_confidence_below or None,
                 comfyui_model or None,
                 comfyui_lora or None,
+                favourite_only_value=favourite,
             )
             # Determine which group indices have at least one matching picture.
             matching_group_indices = {
@@ -990,6 +995,7 @@ def register_routes(router, server):
             min_score=min_score,
             max_score=max_score,
             unscored=_predicate_filter.unscored,
+            favourite_only=_predicate_filter.favourite_only,
             smart_score_bucket=smart_score_bucket,
             resolution_bucket=resolution_bucket,
             file_path_prefix=file_path_prefix,

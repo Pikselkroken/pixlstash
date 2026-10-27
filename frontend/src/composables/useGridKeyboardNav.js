@@ -8,6 +8,9 @@ import {
 } from "./useJustifiedLayout.js";
 import { useGridStore } from "../stores/useGridStore";
 import { useSearchStore } from "../stores/useSearchStore";
+import { FAVOURITE_KEY } from "../stores/useFavouritesStore";
+import { useTagClipboardStore } from "../stores/useTagClipboardStore";
+import { bareDigit } from "../utils/shortcutKeys";
 
 /**
  * Manages keyboard navigation and keyboard-driven actions for the image grid.
@@ -45,6 +48,8 @@ export function useGridKeyboardNav(
     isJustifiedMode,
     justifiedLayout,
     isGhosted = () => false,
+    // The Scrapheap shows no heart, so H marks nothing there either.
+    isScrapheap = () => false,
   },
   props,
   emit,
@@ -58,12 +63,37 @@ export function useGridKeyboardNav(
     selectionBarRef,
     applyScoresForSelection,
     setScore,
+    toggleFavourite = () => {},
     moveStackMember = () => false,
     getOpenStackPlace = () => null,
+    onPasteResult = () => {},
   },
 ) {
   const searchStore = useSearchStore();
   const gridStore = useGridStore();
+  const tagClipboard = useTagClipboardStore();
+
+  /**
+   * The star rating a bare digit gives: 0-5 with no modifier held, else null.
+   * Ctrl+2 is not two stars.
+   */
+  function starRating(event) {
+    const digit = bareDigit(event);
+    return digit !== null && digit <= 5 ? digit : null;
+  }
+
+  /** Ctrl+V on the grid selection: paste the copied tags. */
+  function pasteOnSelection(ids) {
+    Promise.resolve(tagClipboard.pasteClipboard(ids))
+      .then((result) => {
+        if (result?.pictureIds.length) onPasteResult(result);
+      })
+      .catch((error) => {
+        // pasteClipboard reports its own failures; this is a failed refresh
+        // of the grid afterwards.
+        console.error("Refreshing the grid after a paste failed on", ids, error);
+      });
+  }
   // ── Scrapheap ghosts ────────────────────────────────────────────────────
   // A ghosted tile is on screen but inert: it is already in the Scrapheap and
   // is only being held there while its undo is one click away.
@@ -186,6 +216,19 @@ export function useGridKeyboardNav(
         scrollWrapper.value.scrollTop = newScrollTop;
       }
     }
+  }
+
+  /**
+   * Whether Ctrl+V may paste. Not on auto-repeat, and not behind a modal
+   * dialog, where its result could not be seen; that is the same
+   * Vuetify-scrim test the global undo key uses.
+   */
+  function canWriteFromKeys(event) {
+    if (event.repeat) return false;
+    return (
+      typeof document === "undefined" ||
+      document.querySelector(".v-overlay--active .v-overlay__scrim") == null
+    );
   }
 
   // Clear selection on ESC key
@@ -474,14 +517,46 @@ export function useGridKeyboardNav(
       event.preventDefault();
       selectionBarRef.value?.openTagInput();
     } else if (
+      String(event.key).toLowerCase() === FAVOURITE_KEY &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
+      !overlayOpen.value &&
+      !isReadOnly.value &&
+      !isScrapheap()
+    ) {
+      // H favourites the selection, else the hovered picture, else the
+      // cursor's, as the digits score them.
+      const ids = selectedImageIds.value.length
+        ? selectedImageIds.value.slice()
+        : [
+            allGridImages.value[hoveredImageIdx.value ?? cursorIdx.value]?.id,
+          ].filter(Boolean);
+      if (!ids.length) return;
+      event.preventDefault();
+      toggleFavourite(ids);
+    } else if (
+      (event.code === "KeyV" || event.key === "v" || event.key === "V") &&
+      event.ctrlKey &&
+      !event.metaKey &&
+      !event.shiftKey &&
+      !event.altKey &&
+      selectedImageIds.value.length > 0 &&
+      !isReadOnly.value &&
+      canWriteFromKeys(event)
+    ) {
+      // Ctrl+V pastes the copied tags onto the selection.
+      event.preventDefault();
+      pasteOnSelection(selectedImageIds.value.slice());
+    } else if (
       (hoveredImageIdx.value !== null || selectedImageIds.value.length > 0) &&
       !overlayOpen.value &&
       !isReadOnly.value &&
-      /^[1-5]$|^0$/.test(event.key)
+      starRating(event) !== null
     ) {
-      // Number key pressed, set score for hovered image
+      // A bare 0-5 sets the star rating: the selection, else the hovered picture.
+      const score = starRating(event);
       if (selectedImageIds.value.length > 0) {
-        const score = parseInt(event.key, 10);
         const ids = selectedImageIds.value.slice();
         applyScoresForSelection(ids, score);
         event.preventDefault();
@@ -490,7 +565,6 @@ export function useGridKeyboardNav(
       const idx = hoveredImageIdx.value;
       const img = allGridImages.value[idx];
       if (img && img.id) {
-        let score = parseInt(event.key, 10);
         setScore(img, score);
         event.preventDefault();
       }

@@ -296,6 +296,20 @@ describe("FilterMenu", () => {
     expect(store.tagFilter).toEqual(["outdoors"]);
   });
 
+  it("leads with Favourites only, counted as the view plus favourite=1", async () => {
+    const store = useFilterStore();
+    const wrapper = await mountMenu();
+    const row = wrapper.findAll("label.fm-check")[0];
+    expect(row.find(".fm-check-label").text()).toBe("Favourites only");
+    expect(getPictureCount.mock.calls.map(([q]) => q)).toContain(
+      "set_id=4&favourite=1",
+    );
+    expect(row.find(".fm-n").text()).toBe("3");
+    await row.find("input").setValue(true);
+    expect(store.favouriteOnlyFilter).toBe(true);
+    wrapper.unmount();
+  });
+
   it("counts each choice as the view plus that one filter", async () => {
     const store = useFilterStore();
     store.tagFilter = ["outdoors"];

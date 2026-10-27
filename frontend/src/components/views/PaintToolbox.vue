@@ -81,8 +81,8 @@ const tools = PAINT_TOOLS;
   --focus-stroke: rgb(var(--v-theme-on-dark-surface));
 
   position: absolute;
-  top: calc(var(--topbar-height) + var(--space-3));
-  left: calc(var(--filmstrip-rail-width, var(--rail-open-width)) + var(--space-3));
+  top: var(--space-3);
+  left: var(--space-3);
   z-index: var(--z-floating);
   display: grid;
   grid-template-columns: 34px;

@@ -65,6 +65,23 @@ body {
   padding: 0;
   position: relative;
 }
+/* The centre column plus the right rail, the box a picture opened in the
+   lightbox fills (#2163). `isolation` keeps the lightbox's own layers inside
+   it, so the auto-hide sidebar, its trigger and its scrim (`--z-floating` on
+   `.file-manager`) still slide over an open picture. */
+.workspace-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: row;
+  position: relative;
+  isolation: isolate;
+}
+/* Holds no box of its own: the teleported lightbox is placed against
+   `.workspace-body`. */
+.lightbox-host {
+  display: contents;
+}
 .main-area {
   flex: 1;
   display: flex;

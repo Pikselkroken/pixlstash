@@ -257,6 +257,54 @@ class TestListing:
     def test_nothing_is_named_as_importing_when_nothing_is(self, server):
         assert _owner(server).get(f"{API}/libraries").json()["importing_name"] is None
 
+    def test_each_reachable_library_reports_its_drive_for_any_owner(self, server):
+        """The title bar's fullness meter: a capacity, not a path."""
+        for ip in (None, REMOTE_IP):
+            client = _owner(server, ip)
+            active = next(
+                entry
+                for entry in client.get(f"{API}/libraries").json()["libraries"]
+                if entry["is_active"]
+            )
+            assert active["total_bytes"] > 0
+            assert 0 <= active["free_bytes"] <= active["total_bytes"]
+
+    def test_an_unplugged_library_reports_no_drive(
+        self, server, tmp_path, added_libraries
+    ):
+        """No meter rather than a 0 B one: an empty bar would read as a full drive."""
+        folder = tmp_path / "unplugged"
+        folder.mkdir()
+        library = added_libraries(_add(_owner(server), folder))
+        os.remove(folder / VAULT_FILENAME)
+
+        entry = next(
+            entry
+            for entry in _owner(server).get(f"{API}/libraries").json()["libraries"]
+            if entry["uuid"] == library["uuid"]
+        )
+        assert entry["is_reachable"] is False
+        assert entry["total_bytes"] is None
+        assert entry["free_bytes"] is None
+
+    def test_a_drive_that_cannot_be_measured_reports_none_and_says_so(
+        self, server, monkeypatch, caplog
+    ):
+        """A stat that raises leaves the meter out; the listing still answers."""
+
+        def refuse(path):
+            raise OSError(5, "Input/output error", path)
+
+        monkeypatch.setattr("pixlstash.routes.libraries.shutil.disk_usage", refuse)
+        with caplog.at_level("WARNING"):
+            response = _owner(server).get(f"{API}/libraries")
+
+        assert response.status_code == 200
+        active = next(e for e in response.json()["libraries"] if e["is_active"])
+        assert active["total_bytes"] is None
+        assert active["free_bytes"] is None
+        assert "Cannot measure the drive under library" in caplog.text
+
     def test_the_response_names_libraries_by_uuid_not_row_id(self, server):
         entry = _owner(server).get(f"{API}/libraries").json()["libraries"][0]
         assert "id" not in entry, "a row id must never be the client's handle"

@@ -26,13 +26,9 @@
           Look again
         </AppButton>
         <!-- The app-wide tail, minus undo: this view replaces the grid and its
-             toolbar, so without it neither Settings nor the right rail has a
-             control on the screen (#1415). Settings travels on the same `act`
-             channel the findings' own buttons use. -->
-        <TbGlobalActions
-          separator
-          @open-settings="emit('act', { kind: 'settings' })"
-        />
+             toolbar, so without it the right rail has no control on the
+             screen (#1415). -->
+        <TbGlobalActions separator />
       </div>
     </div>
 

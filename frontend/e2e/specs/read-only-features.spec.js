@@ -100,9 +100,10 @@ test.describe('read-only session: owner-only features stay visible', () => {
       expect(new URL(page.url()).pathname).not.toContain('duplicates')
 
       // ── Models: the shelf is a third such destination (#1014) ──────────
+      // A workspace on the title bar's switch now (#2158), not a sidebar row.
       const models = page
-        .locator('.sidebar-list-item', { hasText: 'Models' })
-        .first()
+        .getByRole('navigation', { name: 'Workspace' })
+        .getByRole('button', { name: 'Models' })
       await expect(models).toBeVisible()
       await expect(models).toHaveAttribute('aria-disabled', 'true')
       await expect(models).toHaveAccessibleDescription(

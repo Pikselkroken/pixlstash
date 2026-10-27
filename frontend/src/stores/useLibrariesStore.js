@@ -9,6 +9,7 @@ import {
 import { defineStore } from "pinia";
 
 import { listLibraries, setActiveLibrary } from "../api/libraries";
+import { useConfirm } from "../composables/useConfirm";
 import { onSessionReset } from "../utils/apiClient";
 import { reloadPage } from "../utils/reloadPage";
 import { errorDetail } from "../utils/apiError";
@@ -154,6 +155,30 @@ export const useLibrarySwitchStore = defineStore("library-switch", () => {
     }
   }
 
+  /**
+   * Ask, then switch: the one confirmation every switch control shows
+   * (Settings › Libraries and the title bar's library picker), so the two
+   * cannot word the reload or the share-link warning differently.
+   *
+   * @returns {Promise<boolean>} false when the owner declined.
+   */
+  async function confirmAndBegin(target, current, trigger) {
+    const shareCount = Number(current?.active_share_links ?? 0);
+    const ok = await useConfirm().confirm({
+      title: `Switch to ${target.name}?`,
+      message:
+        "PixlStash will reload. Work in progress finishes or is cancelled first.",
+      warning:
+        shareCount > 0
+          ? `${shareCount} share ${shareCount === 1 ? "link points" : "links point"} at ${current?.name}. ${shareCount === 1 ? "It stops" : "They stop"} working until you switch back.`
+          : "",
+      confirmLabel: "Switch and reload",
+    });
+    if (!ok) return false;
+    await begin(target, current, trigger);
+    return true;
+  }
+
   async function stayOnCurrent() {
     const returnTarget = triggerElement.value;
     phase.value = "idle";
@@ -191,6 +216,7 @@ export const useLibrarySwitchStore = defineStore("library-switch", () => {
     error,
     overlayOpen,
     begin,
+    confirmAndBegin,
     stayOnCurrent,
   };
 });

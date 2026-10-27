@@ -3,14 +3,18 @@ import { ref } from "vue";
 import { setActivePinia, createPinia } from "pinia";
 import { useGridStore } from "../stores/useGridStore.js";
 import { useSearchStore } from "../stores/useSearchStore.js";
+import { useTagClipboardStore } from "../stores/useTagClipboardStore.js";
 
 // The composable imports the singleton apiClient for isReadOnly; mock it so no
 // real axios instance is constructed and read-only is deterministic.
 vi.mock("../utils/apiClient", () => ({
   API_BASE_URL: "/api/v1",
   isReadOnly: { value: false },
+  newOperationBatchId: () => "cli-test",
+  onSessionReset: () => () => {},
 }));
 
+import { isReadOnly } from "../utils/apiClient";
 import { useGridKeyboardNav } from "./useGridKeyboardNav.js";
 
 // Build a harness around handleKeyDown with the deps/callbacks it destructures.
@@ -31,10 +35,13 @@ function makeNav({
   searchQuery = "",
   moveStackMember = undefined,
   getOpenStackPlace = () => ({ position: 1, count: 3 }),
+  scrapheap = false,
+  onPasteResult = vi.fn(),
 } = {}) {
   const selectedImageIds = ref(["a", "b"]);
   const deleteSelected = vi.fn();
   const applyScoresForSelection = vi.fn();
+  const setScore = vi.fn();
 
   const deps = {
     scrollWrapper: ref(scrollWrapper),
@@ -55,11 +62,13 @@ function makeNav({
     isJustifiedMode: ref(justified !== null),
     justifiedLayout: ref(justified),
     isGhosted: (index) => ghostedIndexes.includes(index),
+    isScrapheap: () => scrapheap,
   };
 
   const openOverlay = vi.fn();
   const clearSearchQuery = vi.fn();
   const focusCursor = vi.fn();
+  const toggleFavourite = vi.fn();
   const callbacks = {
     clearFaceSelection: vi.fn(),
     clearSearchQuery,
@@ -69,7 +78,9 @@ function makeNav({
     deleteSelected,
     selectionBarRef: ref({ openTagInput: vi.fn() }),
     applyScoresForSelection,
-    setScore: vi.fn(),
+    setScore,
+    toggleFavourite,
+    onPasteResult,
     ...(moveStackMember ? { moveStackMember, getOpenStackPlace } : {}),
   };
 
@@ -97,6 +108,9 @@ function makeNav({
     openOverlay,
     clearSearchQuery,
     focusCursor,
+    toggleFavourite,
+    onPasteResult,
+    setScore,
   };
 }
 
@@ -479,5 +493,110 @@ describe("useGridKeyboardNav - reordering an open stack", () => {
     onGlobalKeyPress("Home", {});
     expect(move).not.toHaveBeenCalled();
     expect(wrapper.scrollTop).toBe(0);
+  });
+});
+
+describe("H favourites", () => {
+  it("toggles the selection, but marks nothing in the Scrapheap", () => {
+    const nav = makeNav();
+    nav.handleKeyDown(keyEvent({ key: "h" }));
+    expect(nav.toggleFavourite).toHaveBeenCalledWith(["a", "b"]);
+
+    const heap = makeNav({ scrapheap: true });
+    heap.handleKeyDown(keyEvent({ key: "h" }));
+    expect(heap.toggleFavourite).not.toHaveBeenCalled();
+  });
+});
+
+describe("useGridKeyboardNav - star keys and Ctrl+V (#2139)", () => {
+  // Digits are read by position (e.code); a modifier held is never a rating.
+  it("rates on a bare digit and not when Ctrl, Shift or Alt is held", () => {
+    const { handleKeyDown, applyScoresForSelection } = makeNav();
+
+    handleKeyDown(keyEvent({ key: "2", code: "Digit2", ctrlKey: true }));
+    handleKeyDown(keyEvent({ key: "@", code: "Digit2", shiftKey: true }));
+    handleKeyDown(keyEvent({ key: "2", code: "Digit2", altKey: true }));
+    expect(applyScoresForSelection).not.toHaveBeenCalled();
+
+    handleKeyDown(keyEvent({ key: "2", code: "Digit2" }));
+    expect(applyScoresForSelection).toHaveBeenCalledWith(["a", "b"], 2);
+  });
+
+  it("a modified digit does not rate the hovered picture when nothing is selected", () => {
+    const { handleKeyDown, deps, setScore } = makeNav();
+    deps.selectedImageIds.value = [];
+    deps.hoveredImageIdx.value = 0;
+
+    handleKeyDown(keyEvent({ key: "2", code: "Digit2", ctrlKey: true }));
+    expect(setScore).not.toHaveBeenCalled();
+
+    handleKeyDown(keyEvent({ key: "2", code: "Digit2" }));
+    expect(setScore).toHaveBeenCalledWith({ id: "a" }, 2);
+  });
+
+  it("still rates from the numpad", () => {
+    const { handleKeyDown, applyScoresForSelection } = makeNav();
+
+    handleKeyDown(keyEvent({ key: "3", code: "Numpad3" }));
+    expect(applyScoresForSelection).toHaveBeenCalledWith(["a", "b"], 3);
+  });
+
+  it("Ctrl+V pastes the copied tags on the selection and refreshes the grid", async () => {
+    const onPasteResult = vi.fn();
+    const { handleKeyDown } = makeNav({ onPasteResult });
+    const result = { pictureIds: ["a"], failed: 0 };
+    const paste = vi
+      .spyOn(useTagClipboardStore(), "pasteClipboard")
+      .mockResolvedValue(result);
+    const event = keyEvent({ key: "v", code: "KeyV", ctrlKey: true });
+
+    handleKeyDown(event);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(event.preventDefault).toHaveBeenCalled();
+    expect(paste).toHaveBeenCalledWith(["a", "b"]);
+    expect(onPasteResult).toHaveBeenCalledWith(result);
+  });
+
+  it("Ctrl+Shift+V and Ctrl+V with nothing selected are left to the browser", () => {
+    const { handleKeyDown, deps } = makeNav();
+    const paste = vi.spyOn(useTagClipboardStore(), "pasteClipboard").mockResolvedValue(null);
+
+    handleKeyDown(keyEvent({ key: "V", ctrlKey: true, shiftKey: true }));
+    expect(paste).not.toHaveBeenCalled();
+
+    deps.selectedImageIds.value = [];
+    handleKeyDown(keyEvent({ key: "v", ctrlKey: true }));
+    expect(paste).not.toHaveBeenCalled();
+  });
+
+  it("Ctrl+V does nothing on auto-repeat or behind a modal dialog", () => {
+    const { handleKeyDown } = makeNav();
+    const paste = vi.spyOn(useTagClipboardStore(), "pasteClipboard").mockResolvedValue(null);
+    handleKeyDown(keyEvent({ key: "v", code: "KeyV", ctrlKey: true, repeat: true }));
+    const overlay = document.createElement("div");
+    overlay.className = "v-overlay--active";
+    overlay.innerHTML = '<div class="v-overlay__scrim"></div>';
+    document.body.appendChild(overlay);
+    try {
+      handleKeyDown(keyEvent({ key: "v", code: "KeyV", ctrlKey: true }));
+    } finally {
+      overlay.remove();
+    }
+
+    expect(paste).not.toHaveBeenCalled();
+  });
+
+  it("does not paste on a read-only library", () => {
+    const { handleKeyDown } = makeNav();
+    const paste = vi.spyOn(useTagClipboardStore(), "pasteClipboard").mockResolvedValue(null);
+    isReadOnly.value = true;
+    try {
+      handleKeyDown(keyEvent({ key: "v", ctrlKey: true }));
+    } finally {
+      isReadOnly.value = false;
+    }
+    expect(paste).not.toHaveBeenCalled();
   });
 });

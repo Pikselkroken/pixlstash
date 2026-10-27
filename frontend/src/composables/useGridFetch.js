@@ -212,6 +212,7 @@ export function useGridFetch(
       // Changes which pictures the grid shows, so an unforced fetch must not
       // early-return as a no-op against the previous state's key.
       stackStateFilter: filterStore.stackStateFilter ?? "all",
+      favouriteOnlyFilter: Boolean(filterStore.favouriteOnlyFilter),
       similarityCharacter: sortStore.selectedSimilarityCharacter ?? null,
       comfyuiModelFilter: filterStore.comfyuiModelFilter ?? [],
       comfyuiLoraFilter: filterStore.comfyuiLoraFilter ?? [],
@@ -442,6 +443,9 @@ export function useGridFetch(
     if (filterStore.unscoredOnlyFilter) {
       params.append("unscored", "1");
     }
+    if (filterStore.favouriteOnlyFilter) {
+      params.append("favourite", "1");
+    }
     if (filterStore.smartScoreBucketFilter != null) {
       params.append("smart_score_bucket", filterStore.smartScoreBucketFilter);
     }
@@ -565,6 +569,9 @@ export function useGridFetch(
     }
     if (filterStore.unscoredOnlyFilter) {
       params.append("unscored", "1");
+    }
+    if (filterStore.favouriteOnlyFilter) {
+      params.append("favourite", "1");
     }
     if (filterStore.smartScoreBucketFilter != null) {
       params.append("smart_score_bucket", filterStore.smartScoreBucketFilter);
@@ -1115,6 +1122,7 @@ export function useGridFetch(
         if (filterStore.maxScoreFilter != null)
           _filterP.set("max_score", String(filterStore.maxScoreFilter));
         if (filterStore.unscoredOnlyFilter) _filterP.set("unscored", "1");
+        if (filterStore.favouriteOnlyFilter) _filterP.set("favourite", "1");
         // Filter params: smart score bucket
         if (filterStore.smartScoreBucketFilter != null)
           _filterP.set(

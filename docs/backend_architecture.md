@@ -351,6 +351,7 @@ Key endpoints (see the auto-generated index below for the full set):
 | POST | `/pictures/{id}/plugin/{name}` | Run image plugin |
 | PATCH | `/pictures/project` | Bulk assign to project |
 | POST | `/pictures/scores` | Bulk apply user ratings |
+| POST | `/pictures/favourite` | Mark or unmark the owner's favourite pictures (see below) |
 | POST | `/pictures/{id}/face` | Create face record |
 | DELETE | `/pictures/{id}/face/{index}` | Delete face |
 | POST | `/pictures/detect` | Queue object detection (Segment) for a batch; optional `prompt` for open-vocab grounding |
@@ -359,6 +360,8 @@ Key endpoints (see the auto-generated index below for the full set):
 | POST | `/pictures/face-search` | Face-likeness search (see below) |
 | POST | `/pictures/scrapheap/delete-preview` | What a delete-forever would destroy + the `confirm_token` the delete requires |
 | DELETE | `/pictures/scrapheap` | **The one irreversible endpoint.** Requires `confirm_token` |
+
+**A picture favourite lives with the picture, not in the hub (`picture.favourite`).** Models and workflows keep their favourites in the hub's `favourite` table and rank them in the browser, which holds every row. The picture grid is paged by the server, so "Favourites only" has to run in the picture query: `favourite=1` on `GET /pictures`, `/pictures/count`, `/pictures/search`, `/pictures/stats` and `/pictures/likeness-groups` sets `PredicateFilter.favourite_only`, which every listing branch passes through like `unscored`. Unlike a score range it is also a **stack-leader scope** (`_scope_predicates_for_leaders`, beside the folder and face facets): the heart is often on a variant rather than the cover, so a collapsed stack is shown by its best-ranked favourite member instead of vanishing. A partial index (`ix_picture_favourite`, `WHERE favourite IS 1`, the form the filter compiles to; SQLite skips a partial index whose term differs) holds only the favourites. `POST /pictures/favourite` (`{picture_ids, favourite}`, `owner_only`) writes the column as one recorded operation (`pictures.favourite`; the operation log's `favourite` facet, so `Ctrl+Z` reverts the batch), and because it is a vault column, snapshots and restores keep it. The column rides `grid_fields()` so a tile can draw its heart. A share token sees it as it sees `score`, but cannot write it.
 
 **Delete-forever needs a server-side confirmation (`confirm_token`).** The type-to-confirm dialog is a *client* control and proves nothing to the server: `DELETE /pictures/scrapheap` with an empty body used to destroy the entire scrapheap and its files with no server-side intent check at all. There is no CSRF token anywhere, and CORS admits **any** `localhost`/LAN-IP *port* with credentials (§6 of `integration_architecture.md`), so a page served on another local port could drive the owner's own session straight into it.
 
@@ -685,6 +688,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/pictures/export/folder                                                | pictures        | Start picture export-to-folder job                            |
 | GET    | /api/v1/pictures/export/status                                                | pictures        | Get export job status                                         |
 | POST   | /api/v1/pictures/face-search                                                  | pictures        | Search by face likeness                                       |
+| POST   | /api/v1/pictures/favourite                                                    | pictures        | Mark or unmark favourite pictures                             |
 | POST   | /api/v1/pictures/import                                                       | pictures        | Import media files                                            |
 | POST   | /api/v1/pictures/import/staging                                               | pictures        | Open an async import staging session                          |
 | DELETE | /api/v1/pictures/import/staging/{staging_id}                                  | pictures        | Cancel a staging session                                      |
@@ -1073,7 +1077,7 @@ The write path has to tell the two apart. Blanking a description is how a pictur
 
 **A raising finder costs only its own turn.** The planner catches per finder, not per cycle, so one failing `find_task()` is logged and skipped while the rest of the sweep continues; only shutdown abandons a cycle.
 
-**`on_all_tasks_complete()` fires from either edge.** "Exhausted and idle" can be entered by the last task completing *or* by the finder reporting no more work, whichever happens second. `WorkPlanner._claim_drain` is armed on submit and claimed under `_lock` by whichever edge sees the condition first, so the drain (an InsightFace release for `MissingFaceExtractionFinder` when models are not kept in memory; `MissingTagFinder` no longer tears WD14 down on drain — its session is bounded by `gpu_mem_limit` and freed by `Vault._maybe_aggressive_unload`'s idle sweep) is announced exactly once per burst and is not announced over a task that has just been taken.
+**`on_all_tasks_complete()` fires from either edge.** "Exhausted and idle" can be entered by the last task completing *or* by the finder reporting no more work, whichever happens second. `WorkPlanner._claim_drain` is armed on submit and claimed under `_lock` by whichever edge sees the condition first, so the drain (an InsightFace release for `MissingFaceExtractionFinder` when models are not kept in memory, returned as a task the planner queues on the GPU worker; `MissingTagFinder` no longer tears WD14 down on drain — its session is bounded by `gpu_mem_limit` and freed by `Vault._maybe_aggressive_unload`'s idle sweep) is announced exactly once per burst and is not announced over a task that has just been taken.
 
 ### Registered tasks
 
@@ -1150,7 +1154,7 @@ PixlStash, a ComfyUI on the same machine and (later) AI-toolkit do not fit in on
 
 A device with no NVML (`measurable: false`: Metal, ROCm) runs heavy work one at a time (`unmeasurable`) and LIGHT freely.
 
-**The reclaim ladder** runs for the first lease short of memory, one rung per poll, re-reading the cards after each: (1) **PixlStash yields** (`Vault._yield_gpu`): the planner is held under the lease's id (`WorkPlanner.hold(owner, None)`), `TaskRunner.preempt_gpu` stops the running GPU task at a task boundary and cancels the queued GPU tasks (never URGENT or awaited ones, never the CPU queue), and once the worker is idle `Vault.unload_models()` unloads everything whatever `keep_models_in_memory` says. The hold ends when that lease is granted or released. An exclusive lease always has PixlStash yield before it is granted (Q27). (2) **ComfyUI frees** (`POST /free`, settled over two reads within 30 s), only if nothing at all is queued on it and the lease asking is not ComfyUI's own. (3) Otherwise it waits. **ComfyUI after ComfyUI never frees.**
+**The reclaim ladder** runs for the first lease short of memory, one rung per poll, re-reading the cards after each: (1) **PixlStash yields** (`Vault._yield_gpu`): the planner is held under the lease's id (`WorkPlanner.hold(owner, None)`), `TaskRunner.preempt_gpu` stops the running GPU task at a task boundary and cancels the queued GPU tasks (never URGENT or awaited ones, never the CPU queue), and `Vault.unload_models()`, queued on the GPU worker as a `DeviceReleaseTask` behind the batch in flight, unloads everything whatever `keep_models_in_memory` says (the arbiter's thread waits for it only `YIELD_WAIT_S`). The hold ends when that lease is granted or released. An exclusive lease always has PixlStash yield before it is granted (Q27). (2) **ComfyUI frees** (`POST /free`, settled over two reads within 30 s), only if nothing at all is queued on it and the lease asking is not ComfyUI's own. (3) Otherwise it waits. **ComfyUI after ComfyUI never frees.**
 
 **Preemption never looks like a failure.** A finder defers a batch for the session on any error other than `TaskCancelledError` (`MissingOcrFinder`, `MissingPromptMatchFinder`), so a task stopped to make room ends as exactly `TaskCancelledError` whatever it raised on the way out (`TaskRunner._run` rewrites it), and its unprocessed pictures, still `NULL`, are found again. `WorkPlanner.hold` is keyed by owner (`hold(owner, seconds | None)`, `release(owner)`) so the folder-structure read and a VRAM lease cannot end each other's hold.
 
@@ -1725,9 +1729,12 @@ third is unfixed. Details, and every measurement, are in
 `docs/apple-metal-thread-safety.md`.
 
 Two sources of a second thread on the accelerator are closed at their source
-rather than synchronised, and a third is routed onto the GPU worker. The rest —
-the tagger preload, the idle sweep's flush, the face finder's end-of-work flush, stopping the
-vault, image plugins, and a few allocator calls — are listed under "Not covered" in that document.
+rather than synchronised, and two more are routed onto the GPU worker: the
+anomaly-region route, and every model unload, whose device-cache flush is
+queued as a `DeviceReleaseTask` (the idle sweep, making room, the face finder's
+end-of-work release; `Vault.stop()` skips the flush if a worker outlived the
+stop). The rest — the tagger preload, image plugins, and a few allocator calls
+— are listed under "Not covered" in that document.
 
 **Loading.** transformers reads and casts weights on a pool of
 `min(4, cpu_count)` threads, so *merely loading a model* trips it — measured at
@@ -1833,6 +1840,7 @@ Modules in [pixlstash/services/](../pixlstash/services/) contain business logic 
 | [utils/service/picture_stats.py](../pixlstash/utils/service/picture_stats.py) | Aggregation queries for `GET /pictures/stats`; accepts a `PictureStatsParams` dataclass and returns the stats dict; used by `routes/pictures/_misc.py`. Lives under `utils/service/`, not `services/`. Includes `score_agreement` (see below) |
 | [services/config_service.py](../pixlstash/services/config_service.py) | Hardware monitoring (CPU, RAM, GPU via `psutil` / `pynvml`) and import-folder path resolution; extracted from `routes/config.py` |
 | [services/picture_service.py](../pixlstash/services/picture_service.py) | DB-layer helpers for single-picture reads from route handlers; accept a `Database` (`vault.db`) and delegate session management to it |
+| [services/tag_preferences.py](../pixlstash/services/tag_preferences.py) | The tag chip size (#2139), served in `GET`/`PATCH /users/me/config` as `tag_chip_size`. A hub table, not a `user` column: `user_tag_preference`, per user, like `hidden_tags`. |
 | [services/search_query_service.py](../pixlstash/services/search_query_service.py) | DB-layer helpers for face-search and likeness-search queries; same `Database`-delegating pattern as `picture_service.py` |
 | [services/edit_selection.py](../pixlstash/services/edit_selection.py) | **A selection on a picture, as JSON, and the one rasteriser for it** (the lightbox Edit tab's Paint tools). `Selection` is `{version: 1, steps, refine}`: steps are `rect` / `ellipse` (`box`), `lasso` (`points`), `brush` (`points`, `radius`; the eraser is a brush with `mode: "subtract"`), `wand` (`point`, `tolerance`, a fixed-range 4-connected colour flood) and `invert`, each combined `new` / `add` / `subtract` / `intersect`. Geometry is fractions of the picture (a brush radius of its shorter side), so the same steps land on a resized copy; refine values are pixels and run in order fill holes (a closing with a disc of the size, which fills every gap and hole the disc cannot fit in), grow or shrink, feather. `render_mask` serves both `POST /pictures/{id}/mask` (the preview) and a run's `selection` (`write_masked_picture`, the mask in the alpha channel), so the preview is the mask the workflow gets. Pictures are read EXIF-rotated, as the browser shows them. A segmenter's named pick is meant to join as one more step kind (`{"tool": "segment", "label": "scarf"}`), and a saved edit is this document plus the request that used it. |
 | [services/plugin_service.py](../pixlstash/services/plugin_service.py) | Plugin listing and async orchestration for `POST /pictures/plugins/{name}`; emits `PLUGIN_PROGRESS` WebSocket events; used by `routes/pictures/_misc.py` |
@@ -4825,6 +4833,17 @@ It is owner metadata with no host path sensitivity and is available before the
 switch so the confirmation UI can warn how many resource-scoped links will go
 inactive. The switch response retains its top-level `active_share_links` count
 for the library just left.
+
+Every entry also carries `total_bytes` and `free_bytes`, the drive under the
+library's folder, for the title bar's fullness meter (#2158). They are a
+capacity rather than a path, so a remote owner gets them too, as
+`GET /model-folders/devices` gives its drives' sizes. An unreachable library is
+not measured and reports both as null; so does a reachable one whose
+`shutil.disk_usage` raises, with a warning. Measuring here rather than on a
+route of its own does not change the listing's cost in kind: `is_reachable`
+already stats each library's folder on every read. Library *size* is not
+reported: `picture.size_bytes` is recorded at import and has no backfill, so a
+sum would understate an older library.
 
 **Accepted risk — remote registry metadata.** An authenticated remote owner may
 list library names, active/reachable status, UUIDs, and share-link counts even
@@ -11110,9 +11129,9 @@ and announces `models_arrived` with the model ids it registered.
   folder; across drives the copy is short and the writer finishes an unlinked
   original, so the tail is lost. Browser downloads are not exposed (they write
   under a temporary name until done), and neither is any `.safetensors`.
-- **The sidebar's `new` tag.** `models_arrived` (integration §8) sets
-  `useModelShelfStore().unseenArrivals`, which puts the `new` tag on the
-  sidebar's Models row until the shelf is opened, and re-reads a shelf already
+- **The `new` mark.** `models_arrived` (integration §8) sets
+  `useModelShelfStore().unseenArrivals`, which puts a dot on the title bar's
+  Models workspace segment until the shelf is opened, and re-reads a shelf already
   read with `markNew`, so the arrivals wear the row `New` badge. An unread shelf
   is not fetched: against no previous fetch every row would be new.
 - **The arrival is recorded** (#2001): a move stamps `model.arrived_at` (UTC

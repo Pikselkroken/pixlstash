@@ -22,7 +22,14 @@
       <!-- The tab band is pinned to the toolbar height, so the sidebar tabs,
            the toolbar and this band share one bottom rule across the window.
            Tabs name the SUBJECT of the pane, never the view. -->
-      <div v-if="tabs.length" class="inspector-tabs">
+      <!-- `tabs-end` rides the band's right edge (the lightbox's stars and
+           heart, #2163). With it the tabs size to their labels instead of
+           sharing the width, and the band is drawn even with no tabs. -->
+      <div
+        v-if="tabs.length || $slots['tabs-end']"
+        class="inspector-tabs"
+        :class="{ 'inspector-tabs--with-end': $slots['tabs-end'] }"
+      >
         <button
           v-for="tab in tabs"
           :key="tab.value"
@@ -60,6 +67,9 @@
             aria-hidden="true"
           ></span>
         </button>
+        <div v-if="$slots['tabs-end']" class="inspector-tabs-end">
+          <slot name="tabs-end" />
+        </div>
       </div>
       <div class="inspector-body">
         <slot />
@@ -214,6 +224,17 @@ const emit = defineEmits(["update:modelValue"]);
     color var(--dur-1) var(--ease-standard),
     background var(--dur-1) var(--ease-standard),
     border-color var(--dur-1) var(--ease-standard);
+}
+
+.inspector-tabs--with-end .inspector-tab {
+  flex: 0 0 auto;
+}
+
+.inspector-tabs-end {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  padding-right: var(--space-2);
 }
 
 .inspector-tab:hover:not(:disabled) {

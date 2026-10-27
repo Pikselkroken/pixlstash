@@ -11,13 +11,13 @@
   -moz-osx-font-smoothing: grayscale;
   overflow: hidden;
 
-  /* Reserved height of the custom desktop title bar. 0 in a plain browser
-     (there is no title bar), overridden to the real height in the Electron
-     shell by `html.is-desktop` below. Full-screen overlays anchor their top at
+  /* Reserved height of the title bar (TitleBar.vue), which both shells draw
+     since the workspace switch moved into it (#2158). MUST stay in sync with
+     `.titlebar { height }` there. Full-screen overlays anchor their top at
      this value so they never cover the title bar / window controls. Defined on
      :root so it inherits everywhere, including Vuetify overlays teleported to
      <body> (outside .app-viewport). */
-  --titlebar-h: 0px;
+  --titlebar-h: 40px;
 }
 
 body {
@@ -407,20 +407,3 @@ html.is-desktop .sidebar-view-header {
   min-height: 36px;
 }
 
-/* Keep the custom title bar visible (and its drag region + window controls
-   usable) when the full-screen image lightbox is open: start the overlay below
-   the title bar instead of covering it. In a browser there is no title bar, so
-   --titlebar-h is 0px and the overlay stays full-screen. */
-html.is-desktop .image-overlay {
-  top: var(--titlebar-h);
-}
-
-/* Title-bar height in the desktop shell. MUST stay in sync with
-   `.titlebar { height }` in TitleBar.vue. The floating sidebar / stats drawers
-   and every full-screen overlay are `position: fixed`, so their `top` must
-   clear the title bar too; they anchor on var(--titlebar-h) (drawers add the
-   toolbar height on top). In a plain browser there is no title bar, so the
-   :root default of 0px keeps the original full-screen behaviour. */
-html.is-desktop {
-  --titlebar-h: 34px;
-}

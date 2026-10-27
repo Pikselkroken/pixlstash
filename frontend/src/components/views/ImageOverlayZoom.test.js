@@ -593,7 +593,7 @@ describe("ImageOverlay zoom - the readout and the announcer", () => {
 describe("ImageOverlay zoom - overlays ride the transform", () => {
   it("face bboxes keep their layout-space position at an intermediate scale", async () => {
     const wrapper = await openMeasured();
-    await wrapper.find('[aria-label="Toggle face bounding boxes"]').trigger("click");
+    await wrapper.find('[aria-label="Face boxes"]').trigger("click");
     await flush();
     await wrapper.vm.$nextTick();
     const boxAtFit = wrapper.find(".face-bbox-overlay");
@@ -620,7 +620,7 @@ describe("ImageOverlay zoom - overlays ride the transform", () => {
     press("z"); // 100%, centred: css scale 2, offset 0
     await wrapper.vm.$nextTick();
     await wrapper
-      .find('[aria-label="Draw face bounding box"]')
+      .find('[aria-label="Draw a face box"]')
       .trigger("click");
     const layer = wrapper.find(".overlay-draw-layer");
     expect(layer.exists()).toBe(true);

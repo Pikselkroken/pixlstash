@@ -50,8 +50,16 @@ const open = computed(() => props.modelValue);
           <td>Set star rating on hovered / selected image(s)</td>
         </tr>
         <tr :class="{ 'shortcut-disabled': isReadOnly }">
+          <td><kbd>H</kbd></td>
+          <td>Favourite or unfavourite hovered / selected image(s)</td>
+        </tr>
+        <tr :class="{ 'shortcut-disabled': isReadOnly }">
           <td><kbd>T</kbd></td>
           <td>Tag selected images</td>
+        </tr>
+        <tr :class="{ 'shortcut-disabled': isReadOnly }">
+          <td><kbd>Ctrl</kbd>+<kbd>V</kbd></td>
+          <td>Paste copied tags on the selected images</td>
         </tr>
         <tr>
           <td>
@@ -149,8 +157,20 @@ const open = computed(() => props.modelValue);
           <td>Set star rating</td>
         </tr>
         <tr :class="{ 'shortcut-disabled': isReadOnly }">
+          <td><kbd>H</kbd></td>
+          <td>Favourite or unfavourite</td>
+        </tr>
+        <tr :class="{ 'shortcut-disabled': isReadOnly }">
           <td><kbd>T</kbd></td>
           <td>Add tag</td>
+        </tr>
+        <tr>
+          <td><kbd>Ctrl</kbd>+<kbd>C</kbd></td>
+          <td>Copy the selected tags</td>
+        </tr>
+        <tr :class="{ 'shortcut-disabled': isReadOnly }">
+          <td><kbd>Ctrl</kbd>+<kbd>V</kbd></td>
+          <td>Paste copied tags on the open picture</td>
         </tr>
         <tr :class="{ 'shortcut-disabled': isReadOnly }">
           <td><kbd>[</kbd> / <kbd>]</kbd></td>

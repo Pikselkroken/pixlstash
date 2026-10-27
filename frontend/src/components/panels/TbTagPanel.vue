@@ -224,6 +224,16 @@
             Apply to All
           </AppButton>
         </div>
+        <div v-if="clipboardCount && !isReadOnly" class="plugin-menu-actions">
+          <AppButton
+            icon-left="mdi-clipboard-outline"
+            :loading="pasteLoading"
+            :tooltip="pasteTooltip"
+            @click="pasteClipboard"
+          >
+            Paste {{ clipboardCount }} tag{{ clipboardCount !== 1 ? "s" : "" }}
+          </AppButton>
+        </div>
         <div v-if="tagError" class="plugin-menu-error" role="alert">
           {{ tagError }}
         </div>
@@ -346,7 +356,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, nextTick } from "vue";
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from "vue";
 import { API_BASE_URL, isReadOnly, newOperationBatchId } from "../../utils/apiClient";
 import {
   listTags,
@@ -367,6 +377,10 @@ import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import AppButton from "../widgets/AppButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import StackLayer from "../widgets/StackLayer.vue";
+import {
+  splitTagText,
+  useTagClipboardStore,
+} from "../../stores/useTagClipboardStore";
 
 const MAX_TAG_FETCH = 100;
 const MAX_PREVIEW_IMAGES = 16;
@@ -1009,25 +1023,23 @@ async function applyTag() {
   ) {
     fillFromSuggestion(tagSuggestions.value[tagSuggestionIndex.value]);
   }
-  const tag = tagInput.value.trim();
-  if (!tag) return;
-  const ids = (
-    Array.isArray(props.selectedImageIds) ? props.selectedImageIds : []
-  )
-    .map((id) => Number(id))
-    .filter((id) => Number.isFinite(id) && id > 0);
+  // Comma-separated text (a prompt pasted in) becomes one tag per item.
+  const tags = splitTagText(tagInput.value);
+  if (!tags.length) return;
+  const ids = selectedIdNumbers.value;
   if (!ids.length) return;
   tagLoading.value = true;
   tagError.value = "";
   tagSuccess.value = "";
   try {
     await Promise.all(
-      ids.map((id) => addPictureTag(id, tag)),
+      ids.flatMap((id) => tags.map((tag) => addPictureTag(id, tag))),
     );
-    tagSuccess.value = `Tagged ${ids.length} image${ids.length !== 1 ? "s" : ""} with "${tag}"`;
+    const names = tags.map((tag) => `"${tag}"`).join(", ");
+    tagSuccess.value = `Tagged ${ids.length} image${ids.length !== 1 ? "s" : ""} with ${names}`;
     tagInput.value = "";
     allTagsFetchedAt = 0;
-    emit("tags-applied", { tag, pictureIds: ids });
+    emit("tags-applied", { tag: tags.join(", "), pictureIds: ids });
     await fetchSelectedImageTags();
   } catch (err) {
     tagError.value = errorDetail(err) || err?.message || String(err);
@@ -1035,6 +1047,64 @@ async function applyTag() {
     tagLoading.value = false;
   }
 }
+
+// ── Paste copied tags (#2139) ────────────────────────────────────────────────
+const tagClipboard = useTagClipboardStore();
+const clipboardCount = computed(() => tagClipboard.clipboardTags.length);
+const pasteLoading = ref(false);
+const selectedIdNumbers = computed(() =>
+  (Array.isArray(props.selectedImageIds) ? props.selectedImageIds : [])
+    .map((id) => Number(id))
+    .filter((id) => Number.isFinite(id) && id > 0),
+);
+const pasteTooltip = computed(
+  () =>
+    `Paste ${tagClipboard.clipboardTags.join(", ")} on all ${selectedIdNumbers.value.length} (Ctrl+V)`,
+);
+
+/** The Paste button, or Ctrl+V: the copied tags on every selected picture. */
+async function pasteClipboard() {
+  const ids = selectedIdNumbers.value;
+  if (!ids.length || pasteLoading.value || isReadOnly.value) return;
+  pasteLoading.value = true;
+  try {
+    const result = await tagClipboard.pasteClipboard(ids);
+    if (result?.pictureIds.length) {
+      emit("tags-applied", {
+        tag: tagClipboard.clipboardTags.join(", "),
+        pictureIds: result.pictureIds,
+      });
+      await fetchSelectedImageTags();
+    }
+  } finally {
+    pasteLoading.value = false;
+  }
+}
+
+/**
+ * Ctrl+V anywhere in the open panel but a text field, which keeps its own
+ * paste. The grid's keys stand down while this panel is open.
+ */
+function onWindowKeydown(event) {
+  if (!props.open || event.repeat) return;
+  if (!(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey) {
+    return;
+  }
+  if (event.code !== "KeyV" && event.key?.toLowerCase() !== "v") return;
+  const target = event.target;
+  if (
+    target instanceof HTMLElement &&
+    (target.isContentEditable ||
+      ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))
+  ) {
+    return;
+  }
+  event.preventDefault();
+  void pasteClipboard();
+}
+
+onMounted(() => window.addEventListener("keydown", onWindowKeydown));
+onBeforeUnmount(() => window.removeEventListener("keydown", onWindowKeydown));
 
 // ── Drag-and-drop between current / rejected ──────────────────────────────────
 const dragSource = ref(null); // 'current' | 'rejected'
@@ -1264,7 +1334,7 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
   gap: var(--space-2);
   border-radius: var(--radius-lg);
   padding: var(--space-1) var(--space-3);
-  font-size: var(--text-xs);
+  font-size: var(--tag-chip-font, var(--text-xs));
   transition:
     background 0.15s,
     opacity 0.15s;

@@ -17,6 +17,28 @@
         </button>
       </div>
 
+      <!-- Favourites only leads (the Workflows menu's box, #1578): one
+           yes-or-no, so a box rather than a kind with its own menu. Hidden for
+           a share token, which cannot see the owner's hearts as its own. -->
+      <div v-if="!isReadOnly" class="tbm-section">
+        <span class="tbm-label">Show</span>
+        <label class="tbm-check fm-check">
+          <input
+            type="checkbox"
+            :checked="store.favouriteOnlyFilter"
+            @change="store.favouriteOnlyFilter = $event.target.checked"
+          />
+          <v-icon size="14" class="fm-fav-heart" aria-hidden="true"
+            >mdi-heart</v-icon
+          >
+          <span class="fm-check-label">Favourites only</span>
+          <span class="fm-n">{{ formatCount(count("favourite=1")) }}</span>
+        </label>
+        <span class="fm-hint"
+          >Narrows whatever you are looking at: a person, a set, a project, a
+          search.</span
+        >
+      </div>
       <div class="tbm-section">
         <span class="tbm-label">Picture</span>
         <template v-for="k in PICTURE_KINDS" :key="k.id">
@@ -870,5 +892,13 @@ function clearConfidence() {
 }
 .fm-check--off {
   opacity: var(--opacity-disabled);
+}
+.fm-fav-heart {
+  color: rgb(var(--v-theme-favourite));
+}
+.fm-hint {
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
+  line-height: var(--leading-snug);
 }
 </style>

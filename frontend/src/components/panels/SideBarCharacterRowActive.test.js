@@ -285,22 +285,11 @@ describe("the character row's single-selection fallback", () => {
 describe("the shelf's two routes are one destination", () => {
   // `SideBar` keeps its own `isModelsView`, separate from the one
   // `useAppNavigation` exports, and adding the runs tab broke this half
-  // silently: on `/models/runs` the Models entry went dark AND the underlying
-  // picture selection lit a row of its own, which is the two-active-
-  // destinations defect the guard exists to prevent. Both now read
-  // `MODEL_SHELF_ROUTES`, so the pair cannot drift apart again.
-  it("treats /models/runs as the Models destination", async () => {
-    nav.route.name = "models-runs";
-    const wrapper = await mountSidebar();
-    const models = wrapper
-      .findAll("button")
-      .find((b) => b.text().includes("Models"));
-    expect(models).toBeTruthy();
-    expect(models.attributes("aria-current")).toBe("page");
-    wrapper.unmount();
-    nav.route.name = "all-pictures";
-  });
-
+  // silently: on `/models/runs` the underlying picture selection lit a row of
+  // its own, which is the two-active-destinations defect the guard exists to
+  // prevent. Both now read `MODEL_SHELF_ROUTES`, so the pair cannot drift
+  // apart again. (That the runs route lights the Models workspace is the title
+  // bar's now: TitleBar.test.js.)
   it("does not let a picture selection light a second destination there", async () => {
     nav.route.name = "models-runs";
     useSelectionStore().selectedCharacter = ADA.id;

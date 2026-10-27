@@ -35,4 +35,36 @@ test.describe('image overlay', () => {
     await page.keyboard.press('Escape')
     await expect(overlay.root).toBeHidden()
   })
+
+  // The lightbox opens inside the frame (#2163): over the centre column and in
+  // the rail's place, never over the title bar or the sidebar.
+  test('moves nothing outside the centre column', async ({ page, overlay }) => {
+    const box = (selector) =>
+      page.locator(selector).first().evaluate((el) => {
+        const r = el.getBoundingClientRect()
+        return { x: r.x, y: r.y, w: r.width, h: r.height }
+      })
+    await overlay.openFromGrid()
+    // The rail is open (the page object opens it); close the lightbox to
+    // measure the frame as the grid draws it.
+    await overlay.close()
+    const titleBar = await box('.titlebar')
+    const sidebar = await box('.sidebar-shell')
+    const rail = await box('.stats-sidebar')
+    const toolbar = await box('.selection-bar-overlay')
+
+    await overlay.openFromGrid()
+    expect(await box('.titlebar')).toEqual(titleBar)
+    expect(await box('.sidebar-shell')).toEqual(sidebar)
+    // The lightbox's pane stands exactly where the rail stood, and its
+    // toolbar on the grid toolbar's line.
+    expect(await box('.image-overlay .overlay-sidebar')).toEqual(rail)
+    const bar = await box('.image-overlay .overlay-topbar')
+    expect(bar.y).toBe(toolbar.y)
+    expect(bar.h).toBe(toolbar.h)
+
+    await overlay.close()
+    expect(await box('.stats-sidebar')).toEqual(rail)
+    expect(await box('.sidebar-shell')).toEqual(sidebar)
+  })
 })

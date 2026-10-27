@@ -21,6 +21,7 @@
     :dateFormat="userPrefsStore.dateFormat"
     :showStacks="gridStore.showStacks"
     :showProblemIcon="gridStore.showProblemIcon"
+    :favouritable="!isScrapheapView"
     :availablePlugins="availablePlugins"
     :comfyuiProgress="comfyuiProgress"
     :comfyuiProgressPercent="comfyuiProgressPercent"
@@ -30,8 +31,10 @@
     :guestScore="overlayGuestScore"
     :editRequest="overlayEditRequest"
     :compareRequest="overlayCompareRequest"
+    :view-label="activeCategoryLabel"
     @close="closeOverlay()"
     @apply-score="applyScore"
+    @apply-favourite="applyOverlayFavourite"
     @set-guest-score="(img, n) => setGuestScore(img, n)"
     @add-tag="addTagToImage"
     @update-description="updateDescriptionForImage"
@@ -64,7 +67,6 @@
       @expand-all-stacks="expandAllStacks"
       @collapse-all-stacks="collapseAllStacks"
       @open-duplicates="emit('open-duplicates')"
-      @open-settings="emit('open-settings')"
       @open-import="emit('open-import')"
       @local-import="emit('local-import', $event)"
       @confirm-export-zip="emit('confirm-export-zip')"
@@ -81,9 +83,9 @@
       }}</span>
     </transition>
     <!-- ── Breadcrumb: current-view path (bottom-left overlay) ──
-         Hidden on the desktop shell, where it lives in the title bar. -->
+         In both shells: the title bar holds the workspace switch (#2158). -->
     <nav
-      v-if="breadcrumb.length && !isDesktop"
+      v-if="breadcrumb.length"
       ref="breadcrumbEl"
       class="grid-breadcrumb"
       :class="{
@@ -606,12 +608,14 @@
               @drop="handleStackReorderDrop(img, $event)"
               @dragleave="handleStackReorderDragLeave(img, $event)"
             >
-              <!-- Top-left permanent badges (top→bottom): problem, reference folder, lock, share -->
+              <!-- Top-left permanent badges (top→bottom): stack count, new run,
+                   stack place, problem, reference folder, lock, share -->
               <div
                 v-if="
                   isThumbnailReady(img.id) &&
                   img.thumbnail &&
-                  (getOpenStackPlace(img) ||
+                  (shouldShowStackBadge(img) ||
+                    getOpenStackPlace(img) ||
                     newBatch.isNew(img.id) ||
                     (gridStore.showProblemIcon && hasPenalisedTags(img)) ||
                     img.reference_folder_id ||
@@ -620,6 +624,16 @@
                 "
                 class="thumbnail-top-left-badges"
               >
+                <!-- The stack count leads: it is permanent, so leading means it
+                     never moves, and the top-right corner belongs to the score
+                     strip alone. -->
+                <StackBadge
+                  v-if="shouldShowStackBadge(img)"
+                  :count="getStackBadgeCount(img)"
+                  :tint="getStackBadgeTint(img)"
+                  @activate="toggleStackExpand(img)"
+                  @mouseenter.stop="prefetchStackMembers(img)"
+                />
                 <!-- Made by the last run (#1868), until the next one ends: the
                      batch to pick the keepers from. -->
                 <span
@@ -1007,34 +1021,16 @@
                 </button>
                 </div>
               </div>
-              <!-- Top-right badge column - the shared home for corner
-                   indicators (stack count in the corner, hover-only stars
-                   below it, right-aligned, 2px gap). The stack count is
-                   PERMANENT - how many pictures a tile stands for is a fact
-                   about the tile, and hiding it until hover is what made
-                   stacks invisible while browsing. The hover behaviour
-                   therefore lives on the container's other children, not the
-                   container.
-
-                   The permanent badge leads the column deliberately: below the
-                   stars its rest position was set by a strip that is
-                   `opacity: 0` but still in flow, so it hung a row off the
-                   corner and moved whenever the star size or `showStars`
-                   changed. Leading, it never moves; only what appears beneath
-                   it does. -->
+              <!-- Top-right: the score strip alone, ending in the favourite
+                   heart. Hover-only, except that a favourite at rest keeps the
+                   strip collapsed to its heart and the stars slide out to the
+                   left under the pointer (ImageGrid.css). -->
               <div
                 v-if="isThumbnailReady(img.id) && img.thumbnail"
                 class="thumbnail-top-right-badges"
               >
-                <StackBadge
-                  v-if="shouldShowStackBadge(img)"
-                  :count="getStackBadgeCount(img)"
-                  :tint="getStackBadgeTint(img)"
-                  @activate="toggleStackExpand(img)"
-                  @mouseenter.stop="prefetchStackMembers(img)"
-                />
                 <StarRatingOverlay
-                  v-if="gridStore.showStars"
+                  v-if="gridStore.showStars || (!isReadOnly && !isScrapheapView)"
                   :score="
                     isReadOnly
                       ? (guestScoreMap.get(img.id) ?? img.score ?? 0)
@@ -1042,7 +1038,12 @@
                   "
                   :icon-size="badgeIconSizes.star"
                   :compact="true"
+                  :stars="gridStore.showStars"
+                  :favouritable="!isReadOnly && !isScrapheapView"
+                  :favourite="Boolean(img.favourite)"
+                  :style="{ '--star-size': `${badgeIconSizes.star}px` }"
                   @set-score="setScore(img, $event)"
+                  @toggle-favourite="toggleFavourite([img.id])"
                 />
               </div>
             </div>
@@ -1196,6 +1197,7 @@
           :clearing-impossible="clearingImpossibleTags"
           @clear-impossible-tags="handleClearImpossibleTags"
           @clear-selection="clearSelection"
+          @favourite="toggleFavourite(selectedImageIds)"
           @added-to-set="handleOverlayAddedToSet"
           @remove-from-group="removeFromGroup"
           @keep-cover-only="openKeepCoverOnly"
@@ -1937,6 +1939,11 @@ function handleTagsApplied(payload) {
   // reload that blanked the grid buys nothing here (#1162).
   if (payload?.action === "reset") return;
   debouncedFetchAllGridImages({ force: true });
+}
+
+/** Refresh the grid after Ctrl+V pasted copied tags onto the selection (#2139). */
+function handlePasteResult() {
+  handleTagsApplied({ action: "add" });
 }
 
 async function handleAutoTag({ model } = {}) {
@@ -3359,10 +3366,8 @@ function errorDetail(err, fallback = "Please try again.") {
 const reviewOverlayOpen = computed(() => reviewSessionsStore.overlayOpen);
 
 // ── Breadcrumb (current-view path) ──────────────────────────────────────
-// The trail logic lives in useBreadcrumb, shared with the desktop title bar.
-// In the desktop shell the breadcrumb renders in the title bar instead, so the
-// in-grid overlay below is gated on !isDesktop.
-const isDesktop = typeof window !== "undefined" && !!window.pixlstashDesktop;
+// The trail logic lives in useBreadcrumb. It renders here in both shells: the
+// title bar holds the workspace switch instead (#2158).
 const { breadcrumb, navigateBreadcrumb } = useBreadcrumb();
 
 // Below 600px the centred notice card widens over the bottom-left breadcrumb, so
@@ -5286,6 +5291,7 @@ const selectedExpandedCount = computed(() => {
     filterStore.minScoreFilter == null &&
     filterStore.maxScoreFilter == null &&
     !filterStore.unscoredOnlyFilter &&
+    !filterStore.favouriteOnlyFilter &&
     filterStore.smartScoreBucketFilter == null &&
     filterStore.resolutionBucketFilter == null;
 
@@ -6651,6 +6657,8 @@ watch(
 
 const {
   setScore,
+  setFavourite,
+  toggleFavourite,
   setGuestScore,
   handleGuestConsentAccepted,
   handleGuestConsentRejected,
@@ -6692,6 +6700,12 @@ const {
   removeImagesById,
 });
 
+// The overlay flips its own copy at once; a refused change puts it back there
+// as well as on the tiles.
+async function applyOverlayFavourite(img, on) {
+  if (!(await setFavourite([img.id], on))) img.favourite = !on;
+}
+
 // ============================================================
 // KEYBOARD NAVIGATION
 // (moved to useGridKeyboardNav composable)
@@ -6716,6 +6730,7 @@ const { onGlobalKeyPress, handleKeyDown } = useGridKeyboardNav(
     isJustifiedMode,
     justifiedLayout,
     isGhosted: isGridIndexGhosted,
+    isScrapheap: () => isScrapheapView.value,
   },
   props,
   emit,
@@ -6729,8 +6744,10 @@ const { onGlobalKeyPress, handleKeyDown } = useGridKeyboardNav(
     selectionBarRef,
     applyScoresForSelection,
     setScore,
+    toggleFavourite,
     moveStackMember,
     getOpenStackPlace,
+    onPasteResult: handlePasteResult,
   },
 );
 
@@ -6979,6 +6996,9 @@ async function openOverlay(img) {
 // The default is the reader's own close (the X, Escape, the `close` emit, which
 // carries no payload), which is the one that goes back where it came from.
 function closeOverlay(returnToOrigin = true) {
+  // Read before the lightbox goes: the picture it ended on, not the one it
+  // was opened on.
+  const lastShown = imageOverlayRef.value?.currentPicture?.() ?? null;
   overlayOpen.value = false;
   overlayImageId.value = null;
   overlayInitialExpandedStackIds.value = [];
@@ -7035,6 +7055,28 @@ function closeOverlay(returnToOrigin = true) {
     preserveScrollOnNextFetch.value = true;
     debouncedFetchAllGridImages();
   }
+  if (returnToOrigin) selectAndRevealPicture(lastShown);
+}
+
+/**
+ * Back on the grid with the picture the lightbox ended on selected and in
+ * view (#2163): the reader walked to it, so it is where they are. A member of
+ * a stack folded here is shown by its stack's card.
+ */
+function selectAndRevealPicture(picture) {
+  if (picture?.id == null) return;
+  const list = allGridImages.value || [];
+  let idx = list.findIndex((img) => String(img?.id) === String(picture.id));
+  const stackId = getPictureStackId(picture);
+  if (idx < 0 && stackId) {
+    idx = list.findIndex((img) => getPictureStackId(img) === stackId);
+  }
+  const card = list[idx];
+  if (!card?.id || isImageGhosted(card)) return;
+  selectedImageIds.value = [card.id];
+  lastSelectedImageId.value = card.id;
+  cursorIdx.value = idx;
+  void nextTick(() => scrollCursorIntoView(idx));
 }
 
 // ============================================================
@@ -7115,6 +7157,7 @@ watch(
     () => filterStore.minScoreFilter,
     () => filterStore.maxScoreFilter,
     () => filterStore.unscoredOnlyFilter,
+    () => filterStore.favouriteOnlyFilter,
     () => filterStore.smartScoreBucketFilter,
     () => filterStore.resolutionBucketFilter,
     () => filterStore.tagFilter,

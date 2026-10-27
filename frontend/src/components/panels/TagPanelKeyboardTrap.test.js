@@ -12,6 +12,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
+import { createPinia, setActivePinia } from "pinia";
 import { nextTick } from "vue";
 
 const tagsApi = vi.hoisted(() => ({
@@ -45,6 +46,8 @@ const STUBS = {
 };
 
 beforeEach(() => {
+  // TbTagPanel reads the tag clipboard store, which needs an active Pinia.
+  setActivePinia(createPinia());
   Object.values(tagsApi).forEach((mock) => mock.mockReset());
   tagsApi.listTags.mockResolvedValue([
     { tag: "sunset", count: 9 },

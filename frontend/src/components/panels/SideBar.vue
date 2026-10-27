@@ -20,7 +20,6 @@ import FolderTreeNode from "../editors/FolderTreeNode.vue";
 import FolderEditor from "../editors/FolderEditor.vue";
 import FolderBrowser from "../editors/FolderBrowser.vue";
 import AppButton from "../widgets/AppButton.vue";
-import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppInput from "../widgets/AppInput.vue";
@@ -28,7 +27,6 @@ import FolderMappingWizard from "../folders/FolderMappingWizard.vue";
 import { useFolderMappingStore } from "../../stores/useFolderMappingStore";
 import { useLibrariesStore } from "../../stores/useLibrariesStore";
 import ShareDialog from "../io/ShareDialog.vue";
-import WordmarkLogo from "../WordmarkLogo.vue";
 import unknownPerson from "../../assets/unknown-person.png"; // Fallback avatar for characters without thumbnails
 import {
   API_BASE_URL,
@@ -95,7 +93,6 @@ import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
-import { useVersionCheck } from "../../composables/useVersionCheck";
 import { useSidebarExpansion } from "../../composables/useSidebarExpansion";
 import { useRoute } from "vue-router";
 import { useDedupStore, scopeKey } from "../../stores/useDedupStore";
@@ -137,10 +134,6 @@ function noticeDetail(e) {
   return errorDetail(e) || e?.message || "Please try again.";
 }
 
-// The desktop shell hosts the brand (logo + "new version" alert) in the title
-// bar, so the sidebar copies below are gated on !isDesktop.
-const isDesktop = typeof window !== "undefined" && !!window.pixlstashDesktop;
-
 const dedupStore = useDedupStore();
 const movesStore = useMovesStore();
 const modelShelfStore = useModelShelfStore();
@@ -153,20 +146,6 @@ const sortStore = useSortStore();
 const projectStore = useProjectStore();
 const userPrefsStore = useUserPrefsStore();
 
-const telemetryIndicatorTitle = computed(() => {
-  const active = [];
-  if (userPrefsStore.checkForUpdates) active.push("update checks");
-  if (userPrefsStore.telemetrySendInstallId)
-    active.push("an anonymous install ID");
-  if (userPrefsStore.telemetrySendFeatureUsage) active.push("feature usage");
-  if (userPrefsStore.telemetrySendErrorReports) active.push("error reports");
-  if (userPrefsStore.telemetrySendHardwareProfile)
-    active.push("a hardware profile");
-  if (!active.length) return "Telemetry is off";
-  if (active.length === 1) return `Sending ${active[0]}`;
-  const last = active.pop();
-  return `Sending ${active.join(", ")} and ${last}`;
-});
 const gridStore = useGridStore();
 const filterStore = useFilterStore();
 const runDialogStore = useRunDialogStore();
@@ -185,7 +164,7 @@ const isDuplicatesView = computed(() => route.name === "duplicates");
 // out of this the way it did when the two predicates were separate literals.
 const isModelsView = computed(() => MODEL_SHELF_ROUTES.includes(route.name));
 const isWorkflowsView = computed(() => WORKFLOW_ROUTES.includes(route.name));
-// The Models row's `new` tag means "arrived while you were not looking", so the
+// The title bar's Models dot means "arrived while you were not looking", so the
 // shelf being open answers it, including for an arrival while it is open.
 watch(
   () => isModelsView.value && modelShelfStore.unseenArrivals,
@@ -203,13 +182,6 @@ watch(
 const READ_ONLY_DEDUP_HINT =
   "Duplicate review is only available in your own library";
 
-// The shelf is the same shape of refusal: every /models, /adapters,
-// /checkpoints and /model-* route is owner-only, because the shelf lists files
-// on the machine PixlStash runs on. Same show-but-disable rule as Duplicates -
-// the destination stays visible and says why (issue #1014).
-const READ_ONLY_SHELF_HINT =
-  "The model shelf is only available in your own library";
-
 // "About your library" is a destination too: it reads the library rather than
 // showing it, so it has no selection to express.
 const isInsightsView = computed(() => route.name === "insights");
@@ -221,7 +193,7 @@ const isInsightsView = computed(() => route.name === "insights");
 const READ_ONLY_INSIGHTS_HINT =
   "Findings about a library are only available in your own";
 
-// Moves is not a permanent destination the way the three above are: it is a
+// Moves is not a permanent destination the way Duplicates and Insights are: it is a
 // to-do queue of moves made outside PixlStash, most libraries never populate
 // it (no reference folder has opted into a layout), and unlike the others its
 // data is never useful to a share visitor even as a curiosity. So it follows
@@ -229,9 +201,6 @@ const READ_ONLY_INSIGHTS_HINT =
 // movesStore.hasAnyPending, which itself never becomes true for a read-only
 // session because nothing here ever calls GET /moves/pending for one.
 const isMovesView = computed(() => route.name === "moves");
-
-const READ_ONLY_WORKFLOWS_HINT =
-  "The workflow library is only available in your own library";
 
 const props = defineProps({
   backendUrl: { type: String, default: () => API_BASE_URL },
@@ -241,10 +210,8 @@ const props = defineProps({
 
 const emit = defineEmits([
   "select-duplicates",
-  "select-models",
   "select-insights",
   "select-moves",
-  "select-workflows",
   "select-character",
   "select-set",
   "train-lora",
@@ -261,30 +228,6 @@ const emit = defineEmits([
   "update:check-for-updates",
   "select-folder",
 ]);
-
-// "New version available" alert. Disabled on the desktop shell, where the title
-// bar owns the check, so it never runs twice.
-const {
-  latestVersion,
-  latestVersionUrl,
-  latestSecurityLevel,
-  updateAvailable,
-  updateDismissed,
-  isHighSecurity,
-  securityUpdateTitle,
-  dismissUpdateAlert,
-} = useVersionCheck(
-  () => props.installType,
-  () => userPrefsStore.checkForUpdates,
-  !isDesktop,
-);
-
-const securityUpdateClass = computed(() => {
-  if (!latestSecurityLevel.value) return "sidebar-update-available";
-  return isHighSecurity.value
-    ? "sidebar-update-available sidebar-update-security sidebar-update-security--high"
-    : "sidebar-update-available sidebar-update-security";
-});
 
 const imageImporterRef = ref(null);
 const sidebarRootRef = ref(null);
@@ -4977,79 +4920,6 @@ defineExpose({
     >
       <Tooltip text="Drag to resize sidebar" activator="parent" />
     </div>
-    <!-- On the desktop shell the brand (logo + name + update alert) lives in
-         the title bar, so this row collapses to just the dock toggle. -->
-    <div
-      v-if="!isDesktop"
-      class="sidebar-brand"
-      @contextmenu.prevent="openSidebarCtxMenu('empty', null, $event)"
-    >
-      <div class="sidebar-brand-left">
-        <!-- The logo is a real outbound link - let its native right-click menu
-             (copy/open link) through and don't open the sidebar's view menu. -->
-        <a
-          href="https://pikselkroken.github.io/pixlstash/"
-          target="_blank"
-          rel="noopener noreferrer"
-          class="sidebar-brand-logo-link"
-          @contextmenu.stop
-        >
-          <img
-            src="/Logo.png"
-            alt="PixlStash logo"
-            class="sidebar-brand-logo"
-          />
-        </a>
-        <div v-if="!sidebarStore.effectiveDocked" class="sidebar-brand-text">
-          <div class="sidebar-brand-title-row">
-            <WordmarkLogo class="sidebar-brand-title" />
-            <button
-              v-if="userPrefsStore.telemetryActive"
-              type="button"
-              class="sidebar-telemetry-dot"
-              :aria-label="`${telemetryIndicatorTitle}. Open privacy settings.`"
-              @click="openSettingsDialog('privacy')"
-            >
-              <Tooltip
-                :text="telemetryIndicatorTitle"
-                activator="parent"
-                :describe="false"
-              />
-            </button>
-          </div>
-          <div
-            v-if="updateAvailable && !updateDismissed"
-            class="sidebar-update-wrapper"
-          >
-            <a
-              :href="latestVersionUrl"
-              target="_blank"
-              rel="noopener noreferrer"
-              :class="securityUpdateClass"
-              @contextmenu.stop
-              ><Tooltip
-                :text="securityUpdateTitle"
-                activator="parent"
-              />&#x2191; v{{ latestVersion
-              }}{{
-                latestSecurityLevel ? " security \u26a0\ufe0f" : " available"
-              }}</a
-            ><button
-              class="sidebar-update-dismiss"
-              :aria-label="`Dismiss v${latestVersion} update alert`"
-              @click.prevent="dismissUpdateAlert"
-            >
-              <Tooltip
-                :text="`Dismiss v${latestVersion} update alert`"
-                activator="parent"
-                :describe="false"
-              />
-              &times;
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
     <!-- The docked counterpart of the Global / Projects / Folders tab strip
          below, and gated on `scopedResourceType` for the same reason it is:
          a share token scoped to a character, a picture or a set can read no
@@ -6074,55 +5944,9 @@ defineExpose({
             </button>
           </div>
 
-          <!-- The shelf's dock mirror. Same <button> reasoning as the
-               expanded row, and the same read-only treatment as Duplicates
-               above it. -->
-          <div :class="['sidebar-collapsed-row', { active: isModelsView }]">
-            <button
-              type="button"
-              class="sidebar-collapsed-item sidebar-destination-btn"
-              :class="{
-                active: isModelsView,
-                'sidebar-collapsed-item--unavailable': isReadOnly,
-              }"
-              :aria-current="isModelsView ? 'page' : undefined"
-              :aria-disabled="isReadOnly || undefined"
-              aria-label="Models"
-              @click="isReadOnly || emit('select-models')"
-            >
-              <Tooltip
-                :text="isReadOnly ? READ_ONLY_SHELF_HINT : 'Models'"
-                activator="parent"
-              />
-              <v-icon>mdi-layers-outline</v-icon>
-            </button>
-          </div>
-
-          <!-- The workflow library's dock mirror, same treatment as Models. -->
-          <div :class="['sidebar-collapsed-row', { active: isWorkflowsView }]">
-            <button
-              type="button"
-              class="sidebar-collapsed-item sidebar-destination-btn"
-              :class="{
-                active: isWorkflowsView,
-                'sidebar-collapsed-item--unavailable': isReadOnly,
-              }"
-              :aria-current="isWorkflowsView ? 'page' : undefined"
-              :aria-disabled="isReadOnly || undefined"
-              aria-label="Workflows"
-              @click="isReadOnly || emit('select-workflows')"
-            >
-              <Tooltip
-                :text="isReadOnly ? READ_ONLY_WORKFLOWS_HINT : 'Workflows'"
-                activator="parent"
-              />
-              <ComfyuiIcon />
-            </button>
-          </div>
-
           <!-- Moves in the dock: reachable whenever the queue holds anything
                at all (movesStore.hasAnyPending), never shown-and-disabled the
-               way the three permanent destinations above are - see the
+               way Duplicates above is - see the
                comment on isMovesView. The attention dot is narrower than the
                row: an off_layout-only queue has nothing to decide, so it
                earns the row (or its retention window would expire it unseen)
@@ -6677,77 +6501,6 @@ defineExpose({
               </button>
             </div>
 
-            <!-- The shelf is a destination, not a filter: it lists the LoRAs
-                 and checkpoints on this machine, which no picture view can
-                 express. A <button>, unlike the rows above it, because a new
-                 destination must not be born unreachable by keyboard; the
-                 other three are filed to follow.
-
-                 Inert rather than hidden for a READ session, exactly like
-                 Duplicates above and for the same reason: the demo site is a
-                 READ session, and hiding a feature there advertises a smaller
-                 product than PixlStash is (`e2e/specs/read-only-features.spec.js`).
-                 Every /models route is owner-only, so the row must be quiet as
-                 well as inert - it can carry no count and start no fetch
-                 (issue #1014). -->
-            <div class="sidebar-all-pictures-row">
-              <button
-                type="button"
-                class="sidebar-list-item sidebar-destination-btn"
-                :class="{
-                  active: isModelsView,
-                  'sidebar-list-item--unavailable': isReadOnly,
-                }"
-                :aria-current="isModelsView ? 'page' : undefined"
-                :aria-disabled="isReadOnly || undefined"
-                @click="isReadOnly || emit('select-models')"
-              >
-                <Tooltip
-                  :text="isReadOnly ? READ_ONLY_SHELF_HINT : ''"
-                  activator="parent"
-                />
-                <span class="sidebar-list-icon sidebar-list-icon--toplevel"
-                  ><v-icon size="18">mdi-layers-outline</v-icon></span
-                >
-                <span class="sidebar-list-label">Models</span>
-                <!-- Models arrived from the Downloads folder while the shelf
-                     was not open. Cleared by opening it. -->
-                <span
-                  v-if="modelShelfStore.unseenArrivals && !isReadOnly"
-                  class="sidebar-list-count"
-                  ><span class="sidebar-new-tag">new</span></span
-                >
-              </button>
-            </div>
-
-            <!-- Workflows sits under Models because it is the same kind of
-                 destination: a list of what this MACHINE holds, which no
-                 picture view can express. Owner-only for the same reason as
-                 well — every /workflows route is, so the row is inert and
-                 carries no count rather than starting a fetch a share session
-                 cannot satisfy. -->
-            <div class="sidebar-all-pictures-row">
-              <button
-                type="button"
-                class="sidebar-list-item sidebar-destination-btn"
-                :class="{
-                  active: isWorkflowsView,
-                  'sidebar-list-item--unavailable': isReadOnly,
-                }"
-                :aria-current="isWorkflowsView ? 'page' : undefined"
-                :aria-disabled="isReadOnly || undefined"
-                @click="isReadOnly || emit('select-workflows')"
-              >
-                <Tooltip
-                  :text="isReadOnly ? READ_ONLY_WORKFLOWS_HINT : ''"
-                  activator="parent"
-                />
-                <span class="sidebar-list-icon sidebar-list-icon--toplevel"
-                  ><ComfyuiIcon :size="16" /></span
-                >
-                <span class="sidebar-list-label">Workflows</span>
-              </button>
-            </div>
 
             <!-- Moves: a to-do queue, not a permanent destination, so it earns
                  its row while the queue holds anything at all - including an
