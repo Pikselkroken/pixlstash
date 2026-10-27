@@ -108,27 +108,27 @@ def test_running_in_docker_false_outside_container(monkeypatch):
     assert Server.running_in_docker() is False
 
 
-def test_detect_install_type_docker(monkeypatch):
+def test_detect_install_type_docker(monkeypatch, isolate_the_machine):
     monkeypatch.setenv("PIXLSTASH_IN_DOCKER", "1")
     monkeypatch.delenv("PIXLSTASH_INSTALL_TYPE", raising=False)
     assert Server.detect_install_type() == "docker"
 
 
-def test_detect_install_type_pip_default(monkeypatch):
+def test_detect_install_type_pip_default(monkeypatch, isolate_the_machine):
     monkeypatch.delenv("PIXLSTASH_IN_DOCKER", raising=False)
     monkeypatch.delenv("PIXLSTASH_INSTALL_TYPE", raising=False)
     monkeypatch.setattr(os.path, "exists", lambda path: False)
     assert Server.detect_install_type() == "pip"
 
 
-def test_detect_install_type_override_other(monkeypatch):
+def test_detect_install_type_override_other(monkeypatch, isolate_the_machine):
     """A valid override wins even when docker signals are present."""
     monkeypatch.setenv("PIXLSTASH_IN_DOCKER", "1")
     monkeypatch.setenv("PIXLSTASH_INSTALL_TYPE", "other")
     assert Server.detect_install_type() == "other"
 
 
-def test_detect_install_type_invalid_override_ignored(monkeypatch):
+def test_detect_install_type_invalid_override_ignored(monkeypatch, isolate_the_machine):
     """An invalid/empty override is ignored and detection takes over."""
     monkeypatch.delenv("PIXLSTASH_IN_DOCKER", raising=False)
     monkeypatch.setattr(os.path, "exists", lambda path: False)
@@ -138,7 +138,7 @@ def test_detect_install_type_invalid_override_ignored(monkeypatch):
     assert Server.detect_install_type() == "pip"
 
 
-def test_detect_install_type_always_in_allowed_set(monkeypatch):
+def test_detect_install_type_always_in_allowed_set(monkeypatch, isolate_the_machine):
     """Whatever the inputs, the result is always one of the allowed values."""
     for env_value in ("1", "0", "", "true"):
         monkeypatch.setenv("PIXLSTASH_IN_DOCKER", env_value)

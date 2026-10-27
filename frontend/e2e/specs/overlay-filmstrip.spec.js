@@ -84,5 +84,10 @@ test.describe('lightbox filmstrip', () => {
     await expect
       .poll(async () => (await activePlacement(page))?.centreOffset ?? Infinity)
       .toBeLessThan(2)
+    // And it stays there. The arrow's own native scroll is smooth and lands
+    // after the jump, so a poll that reads early passes while the strip ends
+    // up 40px off; that drift failed only on CI's slower runners.
+    await page.waitForTimeout(750)
+    expect((await activePlacement(page))?.centreOffset ?? Infinity).toBeLessThan(2)
   })
 })

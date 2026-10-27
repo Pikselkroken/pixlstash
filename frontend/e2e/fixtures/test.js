@@ -166,6 +166,14 @@ export const test = base.extend({
     await use(context)
   },
 
+  // A spec's route handler that passes a poll through (`route.fetch()`) can
+  // still be waiting on the server when the test ends: the context closes
+  // under it and the test fails after it passed. Drop the handlers first.
+  page: async ({ page }, use) => {
+    await use(page)
+    await page.unrouteAll({ behavior: 'ignoreErrors' })
+  },
+
   // The minted credentials object: { token, username, password }.
   // Playwright resolves a fixture's dependencies by parsing this destructuring
   // pattern, so a fixture that needs none must still be written `({}, use)`.

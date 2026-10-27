@@ -45,38 +45,15 @@ from pathlib import Path
 import pytest
 import yaml
 
-from pixlstash.server import Server, _log_install_detection_once
+from pixlstash.server import Server
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 VERSION_CHECK_JS = REPO_ROOT / "frontend" / "src" / "composables" / "useVersionCheck.js"
 WORKER_VALIDATE_JS = REPO_ROOT / "website" / "telemetry-worker" / "src" / "validate.js"
 
 
-@pytest.fixture(autouse=True)
-def isolate_the_machine(tmp_path, monkeypatch):
-    """Cut every test in this file off from the developer's own machine.
-
-    ``detect_install_type()`` reads the dev-machine marker out of
-    ``user_data_dir("pixlstash")`` at priority 0, ahead of the
-    ``PIXLSTASH_INSTALL_TYPE`` override - so on a machine that actually has
-    the marker, every channel assertion below returns ``"dev"`` and nine of
-    these tests fail. That machine is not hypothetical: it is precisely the
-    maintainer box the release checklist tells you to create the marker on.
-
-    CI cannot catch this - a runner has neither the marker nor the env var -
-    so the isolation has to be here. Points the probe at an empty per-test
-    directory and clears both declaring variables; a test that wants either
-    sets it itself afterwards.
-    """
-    monkeypatch.setattr(
-        "pixlstash.server.user_data_dir", lambda *args, **kwargs: str(tmp_path)
-    )
-    monkeypatch.delenv(Server.DEV_MACHINE_ENV_VAR, raising=False)
-    monkeypatch.delenv("PIXLSTASH_INSTALL_TYPE", raising=False)
-    # Detection lines are logged once per distinct message for the life of the
-    # process, so one test's line would silence the next test's assertion on it.
-    _log_install_detection_once.cache_clear()
-    return tmp_path
+# Every test here is cut off from the developer's machine (conftest.py).
+pytestmark = pytest.mark.usefixtures("isolate_the_machine")
 
 
 MANIFEST_DIR = REPO_ROOT / "website" / "latest-version"
