@@ -34,10 +34,10 @@ export class GridPage {
     this.collapseAllStacksButton = page
       .locator('.app-btn', { hasText: 'Collapse all' })
       .first()
-    // Search popover (.gb-search-panel) opened from the toolbar search icon.
-    this.searchOverlay = page.locator('.gb-search-panel')
-    this.searchInput = page.locator('.gb-search-panel input').first()
-    this.searchHistoryChips = page.locator('.gb-recent-row')
+    // The toolbar search field: clicked or F, it widens and drops its list.
+    this.searchOverlay = page.locator('.stf-drop')
+    this.searchInput = page.locator('input.stf-input').first()
+    this.searchHistoryChips = page.locator('.stf-row')
     // Right-click context menu (§3.5) — ImageGridContextMenu.vue.
     this.contextMenu = page.locator('.image-ctx-menu')
     // The pill's ⋯ — SelectionBar.vue's activator (`.selection-menu-trigger` inside

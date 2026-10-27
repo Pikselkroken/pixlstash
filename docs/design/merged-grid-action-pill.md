@@ -608,7 +608,7 @@ user no signal it opens anything. Add both, plus `aria-keyshortcuts="S"`.
 
 | Key | Action | Change |
 |---|---|---|
-| `F` | Open the search popover (toolbar) | unchanged |
+| `F` | Focus the toolbar search field | unchanged |
 | `Esc` | The 4-step ladder in §6.1 | behaviour unchanged; the keycap now moves |
 | `Del` / `Backspace` | Delete selected | unchanged |
 | `S` | Add to set (#2160; it used to toggle the selection menu) | changed |

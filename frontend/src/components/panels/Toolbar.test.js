@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { h } from "vue";
 import { setActivePinia, createPinia } from "pinia";
-import { mount } from "@vue/test-utils";
+import { flushPromises, mount } from "@vue/test-utils";
 
 vi.mock("../../utils/apiClient", async () => {
   const { ref } = await import("vue");
@@ -105,50 +105,49 @@ function mountToolbar(props = {}, stubs = {}) {
 }
 
 describe("Toolbar - the search field", () => {
-  // #2160: a field-shaped trigger at the right of the bar, opening the same
-  // popover the icon did. The popover is end-aligned under it, so its caret
-  // takes the end inset rather than the 32px icon's centre.
-  it("opens the search popover from the field, end-clamped", async () => {
+  // The field itself, not a trigger for a popover: at rest the 260 px field
+  // with F on it; focused it widens in place and Sort's label and View step
+  // aside.
+  it("rests as a field named Search, with F on it", () => {
     const wrapper = mountToolbar();
-    const field = wrapper.find('button.tb-search-field[aria-label="Search"]');
+    const field = wrapper.find('.stf button.stf-rest[aria-label="Search"]');
     expect(field.exists()).toBe(true);
     expect(field.attributes("aria-keyshortcuts")).toBe("F");
     expect(field.text()).toContain("Search");
     expect(field.find("kbd").text()).toBe("F");
-
-    const menu = wrapper
-      .findAll(".v-menu-stub")
-      .find((candidate) => candidate.find("button.tb-search-field").exists());
-    expect(menu.attributes("data-location")).toBe("bottom end");
-    expect(menu.attributes("data-origin")).toBe("top end");
-
-    await field.trigger("click");
-    expect(wrapper.find(".gb-search-panel .tbm-caret").classes()).toContain(
-      "tbm-caret--end",
-    );
+    expect(wrapper.find(".gb-search-panel").exists()).toBe(false);
   });
 
-  it("announces the popover as a dialog, with its open state", async () => {
-    const wrapper = mountToolbar();
-    const field = wrapper.find("button.tb-search-field");
-    expect(field.attributes("aria-haspopup")).toBe("dialog");
-    expect(field.attributes("aria-expanded")).toBe("false");
-
-    await field.trigger("click");
-    expect(field.attributes("aria-expanded")).toBe("true");
-    const panel = wrapper.find(".gb-search-panel");
-    expect(panel.attributes("role")).toBe("dialog");
-    expect(panel.attributes("aria-label")).toBe("Search");
-  });
-
-  it("shows a committed query in place of the placeholder", async () => {
+  it("opens in place on F, and the bar steps aside while it is open", async () => {
     const { useSearchStore } = await import("../../stores/useSearchStore");
-    const searchStore = useSearchStore();
-    searchStore.searchQuery = "red hair";
     const wrapper = mountToolbar();
-    expect(wrapper.find("button.tb-search-field").text()).toContain(
-      "red hair",
-    );
+    const bar = wrapper.find(".selection-bar-overlay");
+    expect(bar.classes()).not.toContain("selection-bar-overlay--searching");
+
+    useSearchStore().requestSearchFocus();
+    await flushPromises();
+    expect(wrapper.find(".stf").classes()).toContain("stf--open");
+    expect(wrapper.find("input.stf-input").exists()).toBe(true);
+    expect(bar.classes()).toContain("selection-bar-overlay--searching");
+  });
+
+  it("shows a committed query and the filters as its summary", async () => {
+    const { useSearchStore } = await import("../../stores/useSearchStore");
+    useSearchStore().searchQuery = "red hair";
+    useFilterStore().tagFilter = ["rain"];
+    const wrapper = mountToolbar();
+    const field = wrapper.find("button.stf-rest");
+    expect(field.text()).toContain("red hair · rain");
+    expect(field.classes()).toContain("stf-rest--active");
+  });
+
+  // One state, several views: the funnel counts what the strip shows.
+  it("counts the active filters on the Filter button", () => {
+    useFilterStore().tagFilter = ["rain", "umbrella"];
+    const wrapper = mountToolbar();
+    expect(
+      wrapper.find('[aria-label="Filters"] .bar-filter-badge').text(),
+    ).toBe("2");
   });
 });
 
@@ -454,7 +453,7 @@ describe("Toolbar - browse only (#2160)", () => {
     }).element;
     expect(right.lastElementChild).toBe(globalActions);
     expect(
-      precedes(wrapper.find("button.tb-search-field").element, globalActions),
+      precedes(wrapper.find(".stf").element, globalActions),
     ).toBe(true);
   });
 

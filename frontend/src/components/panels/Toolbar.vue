@@ -1,5 +1,8 @@
 <template>
-  <div class="selection-bar-overlay">
+  <div
+    class="selection-bar-overlay"
+    :class="{ 'selection-bar-overlay--searching': gbSearchOpen }"
+  >
     <div class="selection-bar-content">
       <div class="selection-bar-left">
         <AppBarButton
@@ -203,8 +206,8 @@
           </div>
         </v-menu>
         <!-- ── Filter button ──────────────────────────────────────── -->
-        <!-- No count badge: the filter strip under the toolbar shows every
-             active filter as a chip. The menu stays open through every choice
+        <!-- The count is the filters the strip and the search field's tokens
+             show (one state, three views). The menu stays open through every choice
              (close-on-content-click off); Esc, a click outside or the funnel
              close it. -->
         <v-menu
@@ -221,6 +224,7 @@
               icon="filter-outline"
               :active="filterChipCount > 0 && !gbFilterMenuOpen"
               :open="gbFilterMenuOpen"
+              :badge="filterChipCount || null"
               tooltip="Filters"
               aria-label="Filters"
               ><span class="tb-label">Filter</span></AppBarButton
@@ -244,7 +248,7 @@
           <template #activator="{ props: menuProps }">
             <AppBarButton
               v-bind="menuProps"
-              class="tb-fold-600"
+              class="tb-fold-600 tb-view"
               icon="view-grid"
               :open="gbViewMenuOpen"
               tooltip="View options"
@@ -398,78 +402,13 @@
            decisions.md amendment). A leading rule here once boxed the button
            after it, and its narrow-width gap-guard twin drew a double rule. -->
       <div class="selection-bar-right">
-        <!-- ── Toolbar: Search (a field-shaped trigger → search popover) ── -->
-        <v-menu
-          v-model="gbSearchMenuOpen"
-          :close-on-content-click="false"
-          location="bottom end"
-          origin="top end"
-          :offset="8"
-          transition="scale-transition"
-          :activator-props="{ 'aria-haspopup': 'dialog' }"
-        >
-          <template #activator="{ props: menuProps }">
-            <!-- Drawn as a field, opened as the popover the icon used to
-                 open: the token field, its history and F all stay as they
-                 were. A committed query shows in place of the placeholder.
-                 The popover holds a field, not menu items, so it is announced
-                 as a dialog; v-menu supplies aria-expanded. -->
-            <button
-              v-bind="menuProps"
-              type="button"
-              class="tb-search-field"
-              :class="{
-                'tb-search-field--active':
-                  searchStore.isSearchActive && !gbSearchMenuOpen,
-                'tb-search-field--open': gbSearchMenuOpen,
-              }"
-              aria-label="Search"
-              aria-keyshortcuts="F"
-            >
-              <v-icon size="18" class="tb-search-field-icon"
-                >mdi-magnify</v-icon
-              >
-              <span class="tb-search-field-text">{{
-                searchStore.searchQuery?.trim() || "Search"
-              }}</span>
-              <kbd class="fm-kbd tb-search-field-kbd" aria-hidden="true">F</kbd>
-            </button>
-          </template>
-          <div class="tbm gb-search-panel" role="dialog" aria-label="Search">
-            <span class="tbm-caret tbm-caret--end"></span>
-            <div class="tbm-header">
-              <v-icon size="18" class="tbm-header-icon">mdi-magnify</v-icon>
-              <span class="tbm-title">Search</span>
-            </div>
-            <div class="gb-search-field">
-              <SearchTokenField
-                ref="searchInputRef"
-                @close="gbSearchMenuOpen = false"
-              />
-            </div>
-            <div
-              v-if="gbSearchHistoryItems.length"
-              class="tbm-section gb-search-recent"
-            >
-              <span class="tbm-label">Recent</span>
-              <div class="gb-recent-list">
-                <button
-                  v-for="item in gbSearchHistoryItems"
-                  :key="item"
-                  class="gb-recent-row"
-                  type="button"
-                  @click="gbApplySearchHistory(item)"
-                >
-                  <v-icon size="16" class="gb-recent-icon">mdi-history</v-icon>
-                  <span class="gb-recent-label">{{ item }}</span>
-                  <v-icon size="14" class="gb-recent-apply"
-                    >mdi-arrow-top-left</v-icon
-                  >
-                </button>
-              </div>
-            </div>
-          </div>
-        </v-menu>
+        <!-- ── Toolbar: Search. The field itself: focused, it widens in place
+             and drops its list; Sort's label and View step aside meanwhile. -->
+        <SearchTokenField
+          ref="searchInputRef"
+          :all-pictures-view="isAllPicturesView"
+          @update:open="gbSearchOpen = $event"
+        />
         <!-- ── The app-wide tail: the rail toggle (shared with the duplicates
              queue, which is why it lives in its own component). Never folds
              (amendment #2); the activity light stays first-class on it at
@@ -482,7 +421,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { isReadOnly } from "../../utils/apiClient";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useSortStore } from "../../stores/useSortStore";
@@ -605,30 +544,15 @@ const gbSearchActive = computed(() =>
   Boolean(searchStore.searchQuery && searchStore.searchQuery.trim()),
 );
 
-// ── Grid Bar: Search (icon trigger → search menu popover) ──────────────────────
+// ── Grid Bar: Search (the field widens in place while it has focus) ────────────
 const searchInputRef = ref(null);
-const gbSearchMenuOpen = ref(false);
-// Full history when the field is empty; prefix-filtered while typing.
-const gbSearchHistoryItems = computed(() => searchStore.filteredSearchHistory);
+const gbSearchOpen = ref(false);
 
-function gbApplySearchHistory(item) {
-  searchStore.searchInput = item;
-  searchStore.commitSearch();
-  gbSearchMenuOpen.value = false;
-}
-
-// Focus the field whenever the menu opens (click or the "F" shortcut).
-watch(gbSearchMenuOpen, (open) => {
-  if (open) nextTick(() => searchInputRef.value?.focus());
-});
-
-// The global "F" shortcut opens the search menu (App bumps this token rather
+// The global "F" shortcut focuses the search field (App bumps this token rather
 // than holding a ref down through ImageGrid → Toolbar).
 watch(
   () => searchStore.searchFocusToken,
-  () => {
-    gbSearchMenuOpen.value = true;
-  },
+  () => searchInputRef.value?.focus(),
 );
 
 const gbSortModel = computed({
@@ -1020,119 +944,20 @@ const gbCollapseAllStacksDisabled = computed(
    component boundary, so every `.bar-btn` outside this file rendered unstyled.
    Only the toolbar's own overrides stay here. */
 
-/* ── Search field (#2160): a field-shaped trigger for the search popover ──── */
-.tb-search-field {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-3);
-  width: 260px;
+/* ── Search: while the field has focus it widens over Sort's label and View,
+   which step aside, and the right group may give so it never overflows. The
+   bar rises to the dropdown layer meanwhile, so the list it drops paints over
+   the grid's floating chrome (the date pill, the selection pill). ──────── */
+.selection-bar-overlay--searching {
+  z-index: var(--z-dropdown);
+}
+.selection-bar-overlay--searching .bar-split-menu,
+.selection-bar-overlay--searching .tb-view {
+  display: none;
+}
+.selection-bar-overlay--searching .selection-bar-right {
+  flex-shrink: 1;
   min-width: 0;
-  height: var(--control-h);
-  padding: 0 var(--space-3);
-  box-sizing: border-box;
-  border: 1px solid rgb(var(--v-theme-border));
-  border-radius: var(--radius-sm);
-  background: rgb(var(--v-theme-input-background));
-  color: rgba(var(--v-theme-toolbar-text), var(--opacity-text-secondary));
-  font-family: var(--font-ui);
-  font-size: var(--text-sm);
-  cursor: text;
-  transition: border-color var(--dur-1) var(--ease-standard);
-}
-.tb-search-field:hover {
-  background-image: var(--hover-neutral);
-}
-.tb-search-field--active,
-.tb-search-field--open {
-  color: rgb(var(--v-theme-toolbar-text));
-}
-.tb-search-field--open {
-  border-color: rgb(var(--v-theme-primary));
-}
-/* A committed query is a lit filter: the glyph takes the selection ink, as the
-   lit funnel beside it does. */
-.tb-search-field--active .tb-search-field-icon {
-  color: var(--selected-ink);
-}
-.tb-search-field-icon {
-  flex-shrink: 0;
-}
-.tb-search-field-text {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  text-align: left;
-}
-.tb-search-field-kbd {
-  flex-shrink: 0;
-}
-
-@container selbar (max-width: 700px) {
-  .tb-search-field {
-    width: 160px;
-  }
-}
-
-/* ── Search menu (field trigger → popover with input + recent searches) ────── */
-.gb-search-panel {
-  width: 420px;
-  max-width: 92vw;
-}
-.gb-search-field {
-  /* Match the section side padding (12px) so the input lines up with the recent
-     rows and with every other toolbar menu; top matches the menu headers (8px).
-     The tight 4px bottom only works when a Recent section sits below and supplies
-     its own top padding. */
-  padding: var(--space-3) var(--space-4) var(--space-2);
-}
-.gb-search-field:last-child {
-  /* No Recent section below: the field owns the panel's bottom edge, so match the
-     section last-child rhythm (16px) instead of hugging the edge with 4px. */
-  padding-bottom: var(--space-5);
-}
-.gb-search-recent {
-  padding-top: var(--space-4);
-}
-.gb-recent-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-.gb-recent-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  width: 100%;
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-sm);
-  color: rgb(var(--v-theme-on-panel));
-  font-family: var(--font-ui);
-  font-size: var(--text-sm);
-  text-align: left;
-  transition: background var(--dur-1) var(--ease-standard);
-}
-.gb-recent-row:hover {
-  background: var(--hover-wash);
-}
-.gb-recent-icon {
-  color: rgba(var(--v-theme-on-panel), 0.5);
-  flex-shrink: 0;
-}
-.gb-recent-label {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.gb-recent-apply {
-  color: rgba(var(--v-theme-on-panel), 0.35);
-  flex-shrink: 0;
-}
-.gb-recent-row:hover .gb-recent-apply {
-  color: rgba(var(--v-theme-on-panel), 0.7);
 }
 
 /* ── Sort panel ───────────────────────────────────────────────────────────── */
@@ -1290,11 +1115,6 @@ const gbCollapseAllStacksDisabled = computed(
 
   .bar-btn--icon {
     width: 46px;
-    height: 46px;
-  }
-
-  /* The search field matches the bar buttons beside it on touch. */
-  .tb-search-field {
     height: 46px;
   }
 
