@@ -22,7 +22,7 @@
       :disabled="disabled"
       :aria-expanded="menuOpen"
       aria-haspopup="listbox"
-      :aria-controls="listboxId"
+      :aria-controls="ariaControls"
       :aria-label="config.ariaLabel"
       :aria-keyshortcuts="keyHint || undefined"
       @click.stop="toggleMenu"
@@ -122,7 +122,7 @@
               {{ group.label }}
             </div>
             <div
-              :id="group.pinned ? undefined : listboxId"
+              :id="group.pinned ? pinnedListboxId : listboxId"
               role="listbox"
               :aria-label="group.listLabel || config.listLabel"
               :aria-multiselectable="isMultiSelect ? 'true' : undefined"
@@ -486,6 +486,12 @@ const writesAreHosted = computed(
 // The trigger's aria-controls target. Several of these controls sit in one menu,
 // so the id has to be per-instance.
 const listboxId = useId();
+// The pinned person's block (#2124) is a second listbox; the trigger controls
+// both, so assistive tech is pointed at the person's sets too.
+const pinnedListboxId = `${listboxId}-person`;
+const ariaControls = computed(() =>
+  pinnedPerson.value ? `${pinnedListboxId} ${listboxId}` : listboxId,
+);
 // Membership is a live per-selection read, so until it lands we know which
 // entities exist but not which ones this selection is already in. Toggling is
 // held back until then; the list itself renders immediately.

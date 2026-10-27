@@ -2721,7 +2721,7 @@ function createChildSet({ setId = null, characterId = null, name = "" }) {
   const projectIds = parent ? getEntityProjectIds(parent) : [];
   setEditorSet.value = {
     ...(projectIds.length ? { project_ids: projectIds } : {}),
-    ...nextSetAppearance(nonReferenceSets.value, nonReferenceSets.value),
+    ...nextSetAppearance(nonReferenceSets.value),
     parent_set_id: setId,
     parent_character_id: characterId,
     parent_name: name || parent?.name || "",
