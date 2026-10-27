@@ -64,6 +64,7 @@ vi.mock("../../api/modelIcons", () => ({
   modelIconUrl: (sha) => `/api/v1/model-icons/${sha}`,
 }));
 
+import { formatModelSize } from "../../utils/modelShelf";
 import ModelsRail from "./ModelsRail.vue";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
@@ -368,6 +369,26 @@ describe("several picked", () => {
     const many = wrapper.get('[data-testid="mrail-many"]');
     expect(many.text()).toContain("On disk");
     expect(many.text()).toContain("SDXL");
+  });
+
+  it("counts a file two picked sets share once", async () => {
+    const { wrapper, store } = await mountRail({
+      handMade: [
+        handSet(9, "Portraits", [member(1, "RealVisXL_v5", "checkpoint")]),
+        handSet(10, "Street", [
+          member(1, "RealVisXL_v5", "checkpoint"),
+          member(5, "Soft_Light", "lora"),
+        ]),
+      ],
+    });
+    store.setPlace("sets");
+    store.selectSet(9);
+    store.selectSet(10, { ctrl: true });
+    await wrapper.vm.$nextTick();
+    // Rows 1 and 5 weigh 1 KB and 5 KB: 6 KB, not the 7 KB of counting 1 twice.
+    expect(wrapper.get('[data-testid="mrail-many"]').text()).toContain(
+      formatModelSize(6 * 1024),
+    );
   });
 
   it("heads two sets by their count, not as one set", async () => {

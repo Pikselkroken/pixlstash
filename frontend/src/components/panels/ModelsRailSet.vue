@@ -157,7 +157,8 @@ function rowOf(member) {
 }
 
 function pictureWord(count) {
-  return `${Number(count).toLocaleString()} ${count === 1 ? "picture" : "pictures"}`;
+  const n = Number(count) || 0;
+  return `${n.toLocaleString()} ${n === 1 ? "picture" : "pictures"}`;
 }
 
 /** Open the set's tray in the grid, the way its card does. */

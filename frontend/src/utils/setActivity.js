@@ -52,7 +52,8 @@ export function activityOf(combinations) {
     ),
     lastUsedAt,
     latest: [...latest.values()]
-      .sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
+      // An unreadable date sorts last rather than making the order undefined.
+      .sort((a, b) => (Date.parse(b.at) || 0) - (Date.parse(a.at) || 0))
       .slice(0, LATEST_PICTURES),
     pictures,
   };

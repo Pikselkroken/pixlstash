@@ -3382,6 +3382,14 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       patch = { ...patch, sortDirection: defaultSortDirection(patch.sortKey) };
     }
     Object.assign(view, patch);
+    // The grid IS the Sets place (#2168): a `groupBy` written without going
+    // through `setPlace` must not leave the sidebar describing another view.
+    if (view.groupBy === GRID_GROUP_BY && place.value !== "sets") {
+      place.value = "sets";
+      sidebarFilter.value = null;
+    } else if (view.groupBy !== GRID_GROUP_BY && place.value === "sets") {
+      place.value = "all";
+    }
     rememberView();
   }
 

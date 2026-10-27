@@ -338,11 +338,19 @@ const pickedSetInfo = computed(() =>
   ),
 );
 
-const manyBytes = computed(
-  () =>
-    totalBytes(pickedRows.value) +
-    pickedSetInfo.value.reduce((sum, info) => sum + info.size, 0),
-);
+/**
+ * On disk, each file once: two picked sets can share a VAE, and a set can be
+ * picked with one of its own models, so the sum is over distinct model ids.
+ */
+const manyBytes = computed(() => {
+  const ids = new Set(pickedRows.value.flatMap((row) => row.memberIds ?? [row.id]));
+  for (const info of pickedSetInfo.value) {
+    for (const member of info.members) {
+      if (member.onShelf && member.id != null) ids.add(member.id);
+    }
+  }
+  return totalBytes([...ids].map((id) => rowsById.value.get(id)));
+});
 
 const manyBases = computed(() =>
   [

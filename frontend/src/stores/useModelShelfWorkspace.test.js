@@ -91,6 +91,23 @@ describe("places", () => {
   });
 });
 
+describe("the place follows the grid", () => {
+  it("keeps the place in step with a groupBy written outside setPlace", () => {
+    store.setPlace("favourites");
+    store.setSidebarFilter("type", "lora");
+    store.setView({ groupBy: GRID_GROUP_BY });
+    expect(store.place).toBe("sets");
+    expect(store.sidebarFilter).toBe(null);
+    store.setView({ groupBy: "none" });
+    expect(store.place).toBe("all");
+    // A place opened the ordinary way keeps its own name.
+    store.setPlace("recent");
+    expect(store.place).toBe("recent");
+    store.setView({ sortKey: "name" });
+    expect(store.place).toBe("recent");
+  });
+});
+
 describe("the sidebar row and the folder scope", () => {
   it("narrows by one Type row and takes it back on a second pick", () => {
     store.setPlace("sets");

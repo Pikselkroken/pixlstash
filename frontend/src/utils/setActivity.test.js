@@ -47,6 +47,19 @@ describe("activityOf", () => {
     expect(got.latest.map((p) => p.picture_id)).toEqual([13, 11, 12]);
   });
 
+  it("puts a picture with an unreadable date last", () => {
+    const got = activityOf([
+      {
+        latest: [
+          { picture_id: 1, at: "not a date" },
+          { picture_id: 2, at: "2026-10-01T00:00:00Z" },
+          { picture_id: 3, at: "2026-10-05T00:00:00Z" },
+        ],
+      },
+    ]);
+    expect(got.latest.map((p) => p.picture_id)).toEqual([3, 2, 1]);
+  });
+
   it("caps the latest pictures", () => {
     const latest = Array.from({ length: 14 }, (_, i) => ({
       picture_id: i,
