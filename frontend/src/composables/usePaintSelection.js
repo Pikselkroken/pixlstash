@@ -23,7 +23,6 @@ export const PAINT_TOOLS = [
   { id: "brush", label: "Brush", key: "B", icon: "mdi-brush" },
   { id: "eraser", label: "Eraser", key: "E", icon: "mdi-eraser" },
   { id: "crop", label: "Crop", key: "C", icon: "mdi-crop" },
-  { id: "hand", label: "Hand", key: "H", icon: "mdi-hand-back-right-outline" },
 ];
 
 /** New / Add / Subtract / Intersect, the selection tools' combine modes. */
@@ -68,7 +67,9 @@ function point(p) {
  *   - the picture's pixel size, for the brush radius.
  */
 export function usePaintSelection({ pictureId, dims }) {
-  const tool = ref("hand");
+  // The tool in hand, or `null` with none: then the lightbox pans and zooms,
+  // and H is the favourite key again.
+  const tool = ref(null);
   const mode = ref("new");
   // The brush's radius in the picture's pixels; sent as a fraction.
   const brushSize = ref(24);
@@ -119,7 +120,7 @@ export function usePaintSelection({ pictureId, dims }) {
   /** A pointer went down at `p` (fractions) with the tool in hand. */
   function begin(p, modifiers = {}) {
     const chosen = tool.value;
-    if (chosen === "hand") return;
+    if (!chosen) return;
     if (chosen === "wand") {
       commit({
         tool: "wand",

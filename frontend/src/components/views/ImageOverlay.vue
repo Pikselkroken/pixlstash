@@ -458,7 +458,8 @@
                   </div>
                 </template>
               </template>
-              <template v-if="showFaceBbox && overlayReady">
+              <!-- Out of the way while a selection is being painted. -->
+              <template v-if="showFaceBbox && overlayReady && !paintActive">
                 <div v-if="faceBboxes.length === 0" class="face-bbox-empty">
                   No bboxes found
                 </div>
@@ -641,8 +642,8 @@
             </button>
           </div>
 
-          <!-- Takes the pointer while a Paint tool is in hand; the Hand tool
-               leaves it to the lightbox's own pan. A stroke's click and
+          <!-- Takes the pointer while a Paint tool is in hand; with none held
+               the lightbox's own pan has it. A stroke's click and
                touches stop here: on the canvas they hide the chrome (the
                toolbox with it) or read as a swipe to the next picture. -->
           <div
@@ -650,7 +651,7 @@
               paintActive &&
               overlayReady &&
               !compareShown &&
-              paint.tool.value !== 'hand'
+              paint.tool.value
             "
             class="paint-input-layer"
             :class="`paint-input-layer--${paint.tool.value}`"
@@ -2926,6 +2927,9 @@ function handleKeydown(e) {
       // The gesture or the crop frame, not the lightbox.
       paint.cancel();
       paint.cropBox.value = null;
+    } else if (paintActive.value && paint.tool.value) {
+      // The tool goes down before anything closes.
+      paint.setTool(null);
     } else if (paintActive.value && paint.hasSelection.value) {
       // The selection goes first; the next Escape closes the lightbox.
       paint.clear();
@@ -3240,8 +3244,8 @@ function handleOverlayClick(event) {
     return;
   }
   // The Edit tab's tools live in the chrome. While they are out, any click
-  // that gets past the paint input layer (a Hand-tool press, a stroke the
-  // layer did not take) must not hide the toolbox mid-edit; Space still can.
+  // that gets past the paint input layer (a press with no tool held, a stroke
+  // the layer did not take) must not hide the toolbox mid-edit; Space still can.
   if (paintActive.value) {
     handleUserActivity();
     return;
@@ -3952,7 +3956,7 @@ function applyCrop(box) {
     stack: true,
   });
   paint.cropBox.value = null;
-  paint.tool.value = "hand";
+  paint.setTool(null);
 }
 
 function paintPoint(event) {

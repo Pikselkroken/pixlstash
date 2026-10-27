@@ -702,7 +702,7 @@ describe("the lightbox Edit tab", () => {
     const press = (key) =>
       window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
     press("b");
-    expect(wrapper.vm.paint.tool.value).toBe("hand");
+    expect(wrapper.vm.paint.tool.value).toBeNull();
     await wrapper.findAll(".inspector-tab")[2].trigger("click");
     press("b");
     expect(wrapper.vm.paint.tool.value).toBe("brush");
@@ -751,7 +751,7 @@ describe("the lightbox Edit tab", () => {
     expect(shellHidden()).toBe(true);
   });
 
-  it("clears the selection on the first Escape and closes on the next", async () => {
+  it("puts the tool down, then clears the selection, then closes on Escape", async () => {
     const wrapper = await openOn(7, undefined, configured);
     await wrapper.findAll(".inspector-tab")[2].trigger("click");
     wrapper.vm.paint.setTool("wand");
@@ -766,10 +766,103 @@ describe("the lightbox Edit tab", () => {
       new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
     );
     slider.remove();
+    expect(wrapper.vm.paint.tool.value).toBeNull();
+    expect(wrapper.vm.paint.hasSelection.value).toBe(true);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     expect(wrapper.vm.paint.hasSelection.value).toBe(false);
     expect(wrapper.emitted("close")).toBeUndefined();
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     expect(wrapper.emitted("close")).toHaveLength(1);
+  });
+
+  it("leaves the lightbox on the Escape after the one that put the tool down", async () => {
+    const wrapper = await openOn(7, undefined, configured);
+    await wrapper.findAll(".inspector-tab")[2].trigger("click");
+    wrapper.vm.paint.setTool("brush");
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    expect(wrapper.vm.paint.tool.value).toBeNull();
+    expect(wrapper.emitted("close")).toBeUndefined();
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    expect(wrapper.emitted("close")).toHaveLength(1);
+  });
+
+  it("favourites on H with the Edit tab open, and no tool takes the key", async () => {
+    const wrapper = await openOn(7, undefined, configured);
+    await wrapper.findAll(".inspector-tab")[2].trigger("click");
+    const press = () =>
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "h" }));
+    press();
+    expect(wrapper.vm.paint.tool.value).toBeNull();
+    expect(wrapper.emitted("apply-favourite")?.[0]?.[1]).toBe(true);
+    wrapper.vm.paint.setTool("brush");
+    press();
+    expect(wrapper.vm.paint.tool.value).toBe("brush");
+    expect(wrapper.emitted("apply-favourite")?.[1]?.[1]).toBe(false);
+  });
+
+  it("puts the crop tool down once the crop is sent", async () => {
+    const wrapper = await openOn(7, undefined, configured);
+    await wrapper.findAll(".inspector-tab")[2].trigger("click");
+    wrapper.vm.paint.setTool("crop");
+    wrapper.vm.paint.setCropBox([0, 0, 0.5, 0.5]);
+    wrapper.vm.applyCrop([0, 0, 0.5, 0.5]);
+    expect(wrapper.emitted("run-plugin")?.[0]?.[0].pluginName).toBe("crop");
+    expect(wrapper.vm.paint.tool.value).toBeNull();
+  });
+
+  it("hides the face boxes while the Paint tools are out", async () => {
+    const wrapper = await openOn(
+      7,
+      [{ id: 7, tags: [], format: "png" }],
+      configured,
+    );
+    const img = wrapper.find(".overlay-img");
+    for (const [property, value] of [
+      ["complete", true],
+      ["naturalWidth", 800],
+      ["naturalHeight", 600],
+      ["clientWidth", 400],
+      ["clientHeight", 300],
+    ]) {
+      Object.defineProperty(img.element, property, { configurable: true, value });
+    }
+    await img.trigger("load");
+    wrapper.vm.showFaceBbox = true;
+    await flush();
+    expect(wrapper.find(".face-bbox-empty").exists()).toBe(true);
+    await wrapper.findAll(".inspector-tab")[2].trigger("click");
+    expect(wrapper.find(".face-bbox-empty").exists()).toBe(false);
+    await wrapper.findAll(".inspector-tab")[0].trigger("click");
+    expect(wrapper.find(".face-bbox-empty").exists()).toBe(true);
+  });
+
+  it("leaves the pointer to the pan with no tool held", async () => {
+    const wrapper = await openOn(
+      7,
+      [{ id: 7, tags: [], format: "png" }],
+      configured,
+    );
+    await wrapper.findAll(".inspector-tab")[2].trigger("click");
+    const img = wrapper.find(".overlay-img");
+    for (const [property, value] of [
+      ["complete", true],
+      ["naturalWidth", 800],
+      ["naturalHeight", 600],
+      ["clientWidth", 400],
+      ["clientHeight", 300],
+    ]) {
+      Object.defineProperty(img.element, property, { configurable: true, value });
+    }
+    await img.trigger("load");
+    await flush();
+    expect(wrapper.find(".paint-input-layer").exists()).toBe(false);
+    wrapper.vm.paint.setTool("lasso");
+    await flush();
+    expect(wrapper.find(".paint-input-layer").exists()).toBe(true);
+    // Pressing the tool in hand puts it down, as Escape does.
+    await wrapper.find('.paint-tool[aria-label="Lasso (L)"]').trigger("click");
+    expect(wrapper.vm.paint.tool.value).toBeNull();
+    expect(wrapper.find(".paint-input-layer").exists()).toBe(false);
   });
 
   it("compares two pictures Ctrl-clicked in the filmstrip, ComfyUI or not", async () => {
@@ -861,7 +954,7 @@ describe("the lightbox Edit tab", () => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
     press("b");
     press("i");
-    expect(wrapper.vm.paint.tool.value).toBe("hand");
+    expect(wrapper.vm.paint.tool.value).toBeNull();
     expect(wrapper.vm.paint.steps.value).toEqual([]);
   });
 
