@@ -24,7 +24,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 import pixlstash.startup_checks as startup_checks
 from pixlstash.hub.db import HubDatabase
-from pixlstash.server import Server
+from pixlstash.server import Server, _log_install_detection_once
 from pixlstash.tasks.face_extraction_task import FaceExtractionTask
 from pixlstash.tasks.image_embedding_task import ImageEmbeddingTask
 from pixlstash.tasks.tag_task import TagTask
@@ -440,6 +440,33 @@ def hub(tmp_path):
     """
     with HubDatabase(str(tmp_path / "hub.db")) as database:
         yield database
+
+
+@pytest.fixture
+def isolate_the_machine(tmp_path, monkeypatch):
+    """Cut a test off from the developer's own machine.
+
+    ``detect_install_type()`` reads the dev-machine marker out of
+    ``user_data_dir("pixlstash")`` at priority 0, ahead of the
+    ``PIXLSTASH_INSTALL_TYPE`` override - so on a machine that actually has
+    the marker, every channel assertion returns ``"dev"``. That machine is not
+    hypothetical: it is precisely the maintainer box the release checklist
+    tells you to create the marker on.
+
+    CI cannot catch this - a runner has neither the marker nor the env var -
+    so the isolation has to be here. Points the probe at an empty per-test
+    directory and clears both declaring variables; a test that wants either
+    sets it itself afterwards.
+    """
+    monkeypatch.setattr(
+        "pixlstash.server.user_data_dir", lambda *args, **kwargs: str(tmp_path)
+    )
+    monkeypatch.delenv(Server.DEV_MACHINE_ENV_VAR, raising=False)
+    monkeypatch.delenv("PIXLSTASH_INSTALL_TYPE", raising=False)
+    # Detection lines are logged once per distinct message for the life of the
+    # process, so one test's line would silence the next test's assertion on it.
+    _log_install_detection_once.cache_clear()
+    return tmp_path
 
 
 @pytest.fixture
