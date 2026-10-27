@@ -69,6 +69,16 @@ test.describe('star rating', () => {
   // short-form test below).
   test.use({ viewport: { width: 1920, height: 1080 } })
 
+  // Which form the strip shows depends on the tile width, so pin the grid the
+  // widths above were measured on. The size is a server-side preference and the
+  // suite shares one backend: grid-browse leaves the slider at an extreme.
+  test.beforeEach(async ({ apiContext }) => {
+    const res = await apiContext.patch('/api/v1/users/me/config', {
+      data: { thumbnail_size_level: 3, thumbnail_mode: 'square' },
+    })
+    expect(res.ok()).toBe(true)
+  })
+
   test('sets a rating that persists across a reload (§6)', async ({
     page,
     grid,
