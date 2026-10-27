@@ -2,8 +2,8 @@
 // printed under it, a typed value is pinned without renaming its choice, and
 // Start is refused, with its reason on screen, until the run can be queued.
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import { mount, flushPromises } from "@vue/test-utils";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { mount, flushPromises, enableAutoUnmount } from "@vue/test-utils";
 import { setActivePinia, createPinia } from "pinia";
 
 vi.mock("../../api/training", () => ({
@@ -176,6 +176,12 @@ beforeEach(() => {
   });
   training.createTrainingJob.mockResolvedValue({ id: 1 });
 });
+
+// A test's dialog and its store's debounced resolve must not outlive it: a
+// new Pinia does not stop the old store's timer, and on a slow runner it
+// fired inside the next test (#2220).
+enableAutoUnmount(afterEach);
+afterEach(() => useTrainingStore().$dispose());
 
 describe("TrainLoraDialog", () => {
   it("opened on a set under a person, trains them on that set first (#2124)", async () => {
