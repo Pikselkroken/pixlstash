@@ -820,8 +820,9 @@ These get skipped and that is exactly why a UI looks cheap.
   the active sidebar row, a focused group, a selected tab or table row take `--active-bar` (edge
   or ring) and `--active-wash`, the lifted olive at 0.20 in dark and the deep olive at
   0.16 in light. The justified picture grid is the exception (#2162): a selected
-  tile takes only a 2px `--active-bar` outline in the 2px gutter round it, no wash,
-  so a run of selected photos stays countable. **No olive text or icon on an olive wash:** the selected item's label,
+  tile takes a 2px `--active-bar` outline in the 2px gutter round it and a glow
+  fading inwards from that edge, no flat wash, so a run of selected photos stays
+  countable. **No olive text or icon on an olive wash:** the selected item's label,
   icon and count take `--active-text`, the surface's own ink (7.5 - 11.2:1 at rest).
   **Olive marks, words stay text:** a current value, a selected tab and an active bar
   button keep olive on their check, underline or glyph (`--selected-ink`, lifted in

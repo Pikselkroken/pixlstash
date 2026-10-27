@@ -130,13 +130,15 @@ test.describe('justified grid', () => {
           shadow: s.boxShadow,
         }
       })
-      expect(ring).toEqual({
+      const { shadow, ...outline } = ring
+      expect(outline).toEqual({
         width: '2px',
         style: 'solid',
         offset: '0px',
         wash: 'rgba(0, 0, 0, 0)',
-        shadow: 'none',
       })
+      // The glow comes in from the edge: an inset, blurred olive shadow.
+      expect(shadow).toMatch(/^rgb\(.+\) 0px 0px 12px 2px inset$/)
 
       const { cards, box } = await measure(page)
       const own = cards[index]
