@@ -104,6 +104,9 @@ const routes = [
   // shelf, so the old path redirects rather than 404s - it was published.
   { path: "/training-runs", redirect: "/models/runs" },
   { path: "/ref-folder/:id", name: "ref-folder", component: App },
+  // Import folders lost their sidebar view to the Inbox. The path was
+  // published, so it lands there rather than on the catch-all's home.
+  { path: "/import-folder/:id", redirect: "/inbox" },
   // Catch-all: redirect unknown paths to home
   { path: "/:pathMatch(.*)*", redirect: "/" },
 ];
