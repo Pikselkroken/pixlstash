@@ -3971,9 +3971,12 @@ async function handleCreateSetFromMenu({ characterId = null, name = "" } = {}) {
   createSetOpen.value = true;
 }
 
+// The ids stay as captured at the click: the row promised those N pictures.
+// `saved` reads them before the editor's `close`, so closing can drop them.
 function handleCreateSetClose() {
   createSetOpen.value = false;
   createSetDraft.value = null;
+  pendingCreateSetPictureIds = [];
 }
 
 async function handleCreateSetSaved(savedSet) {
