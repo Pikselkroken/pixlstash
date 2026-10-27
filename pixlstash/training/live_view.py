@@ -20,6 +20,7 @@ import statistics
 from datetime import datetime
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.sqlite_uri import sqlite_file_uri
 
 logger = get_logger(__name__)
 
@@ -226,7 +227,9 @@ def read_trainer_info(sqlite_db_path: str, job_uuid: str) -> str:
     It lives in the per-job ``Job`` table ai-toolkit writes, not on the hub row.
     """
     try:
-        conn = sqlite3.connect(f"file:{sqlite_db_path}?mode=ro", uri=True, timeout=2.0)
+        conn = sqlite3.connect(
+            sqlite_file_uri(sqlite_db_path, read_only=True), uri=True, timeout=2.0
+        )
     except sqlite3.Error as exc:
         logger.debug("No trainer job row in %s: %s", sqlite_db_path, exc)
         return ""
@@ -249,7 +252,9 @@ def read_step_times(loss_db_path: str) -> list[tuple[int, float]]:
     The same read-only, WAL-aware open the adapter uses for the loss curve.
     """
     try:
-        conn = sqlite3.connect(f"file:{loss_db_path}?mode=ro", uri=True, timeout=2.0)
+        conn = sqlite3.connect(
+            sqlite_file_uri(loss_db_path, read_only=True), uri=True, timeout=2.0
+        )
     except sqlite3.Error as exc:
         logger.debug("No step times in %s: %s", loss_db_path, exc)
         return []

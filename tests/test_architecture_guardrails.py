@@ -3590,3 +3590,67 @@ def test_plugin_check_is_imported_only_by_the_cli():
         if "plugin_check" in path.read_text(encoding="utf-8")
     }
     assert mentions == {"pixlstash/cli.py", "pixlstash/plugin_check.py"}
+
+
+# ---------------------------------------------------------------------------
+# Guardrail: SQLite connection strings come from utils/sqlite_uri (#2210)
+# ---------------------------------------------------------------------------
+
+_SQLITE_PREFIXES = ("file:", "sqlite:///")
+
+
+def _hand_built_sqlite_strings(source: str) -> list[int]:
+    """Return the line of every SQLite URI or URL built by pasting a path in.
+
+    A raw path in ``file:{path}`` or ``sqlite:///{path}`` is cut short at a
+    ``?`` or ``#`` in a folder name. Caught as an f-string, ``+`` or ``%``.
+    """
+    hits = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.JoinedStr):
+            parts = node.values
+            if (
+                len(parts) > 1
+                and isinstance(parts[0], ast.Constant)
+                and parts[0].value in _SQLITE_PREFIXES
+                and isinstance(parts[1], ast.FormattedValue)
+            ):
+                hits.append(node.lineno)
+        elif (
+            isinstance(node, ast.BinOp)
+            and isinstance(node.op, (ast.Add, ast.Mod))
+            and isinstance(node.left, ast.Constant)
+            and isinstance(node.left.value, str)
+            and node.left.value.startswith(_SQLITE_PREFIXES)
+        ):
+            hits.append(node.lineno)
+    return hits
+
+
+def test_sqlite_connection_strings_are_built_by_the_helper():
+    """Every SQLite URI and SQLAlchemy URL under ``pixlstash/`` is percent-encoded."""
+    helper = PIXLSTASH_DIR / "utils" / "sqlite_uri.py"
+    offenders = [
+        f"  {path.relative_to(REPO_ROOT)}:{lineno}"
+        for path in sorted(PIXLSTASH_DIR.rglob("*.py"))
+        if path != helper
+        for lineno in _hand_built_sqlite_strings(path.read_text("utf-8"))
+    ]
+    assert not offenders, (
+        "Build SQLite connection strings with pixlstash.utils.sqlite_uri "
+        "(sqlite_file_uri / sqlite_url); a raw path breaks on '?' or '#':\n"
+        + "\n".join(offenders)
+    )
+
+
+def test_sqlite_connection_string_guardrail_has_teeth():
+    planted = [
+        'u = f"file:{p}?mode=ro"',
+        'u = f"sqlite:///{p}"',
+        'u = "sqlite:///" + p',
+        'u = "file:%s?mode=ro" % p',
+    ]
+    for snippet in planted:
+        assert _hand_built_sqlite_strings(snippet), snippet
+    assert not _hand_built_sqlite_strings("u = sqlite_file_uri(p, read_only=True)")
+    assert not _hand_built_sqlite_strings('u = f"template-file:{name}".encode()')

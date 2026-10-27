@@ -34,6 +34,7 @@ from pixlstash.training.backend import (
 )
 from pixlstash.training.config_render import render_job_config
 from pixlstash.utils.atomic_write import write_json_atomic
+from pixlstash.utils.sqlite_uri import sqlite_file_uri
 
 logger = get_logger(__name__)
 
@@ -888,7 +889,7 @@ class LocalAiToolkit(TrainerBackend):
         if not os.path.exists(handle.loss_db_path):
             return [], None
 
-        uri = f"file:{handle.loss_db_path}?mode=ro"
+        uri = sqlite_file_uri(handle.loss_db_path, read_only=True)
         last_exc: sqlite3.Error | None = None
         for attempt in range(_SQLITE_READ_RETRIES):
             try:

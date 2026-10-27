@@ -15,6 +15,7 @@ import uuid
 import pytest
 
 from pixlstash.hub.db import HUB_FILE_MODE, HubDatabase
+from pixlstash.hub.engine import HubEngine
 from pixlstash.hub.registry import (
     ActiveLibraryError,
     LibraryError,
@@ -128,6 +129,21 @@ def registry(hub):
 class TestHubDatabase:
     def test_created_at_current_schema_version(self, hub):
         assert read_schema_version(hub.connection) == CURRENT_SCHEMA_VERSION
+
+    def test_engine_opens_a_hub_in_a_folder_with_uri_characters(self, tmp_path):
+        folder = tmp_path / "odd #1?%"
+        folder.mkdir()
+        path = str(folder / "hub.db")
+        HubDatabase(path).close()
+
+        engine = HubEngine(path)
+        try:
+            with engine.engine.connect() as conn:
+                version = conn.exec_driver_sql("SELECT version FROM schema_version")
+                assert version.scalar() == CURRENT_SCHEMA_VERSION
+        finally:
+            engine.close()
+        assert os.listdir(tmp_path) == ["odd #1?%"]
 
     def test_created_owner_only(self, tmp_path):
         path = str(tmp_path / "hub.db")
@@ -706,6 +722,20 @@ class TestRelocate:
         assert relocated.uuid == library.uuid
         assert relocated.path == os.path.realpath(moved_to)
         assert _token_rows(hub, library.uuid) == 1
+
+    def test_relocate_into_a_folder_with_uri_characters(self, registry, tmp_path):
+        """``?`` and ``#`` cut a raw ``file:`` URI short, so the vault check
+        opened a stray file beside the folder and refused a real vault (#2210)."""
+        library = registry.attach(make_vault_folder(tmp_path, "plain"))
+        moved_to = os.path.join(str(tmp_path), "odd #1?%")
+        shutil.move(library.path, moved_to)
+
+        relocated = registry.relocate(library.id, moved_to)
+
+        assert relocated.uuid == library.uuid
+        assert relocated.path == os.path.realpath(moved_to)
+        strays = [n for n in os.listdir(tmp_path) if not n.startswith("hub.db")]
+        assert strays == ["odd #1?%"]
 
     def test_relocate_to_an_occupied_path_is_refused(self, registry, tmp_path):
         first = registry.attach(make_vault_folder(tmp_path, "first"))

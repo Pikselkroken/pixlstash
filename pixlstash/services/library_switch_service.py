@@ -50,6 +50,7 @@ from pixlstash.hub.bootstrap import (
 from pixlstash.routes.pictures import clear_stats_cache
 from pixlstash.routes.pictures._anomaly import clear_anomaly_region_cache
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.sqlite_uri import sqlite_file_uri
 
 if TYPE_CHECKING:
     from pixlstash.server import Server
@@ -125,7 +126,9 @@ def assert_vault_not_newer(vault_path: str) -> None:
     import sqlite3
 
     try:
-        conn = sqlite3.connect(f"file:{vault_path}?mode=ro", uri=True, timeout=5)
+        conn = sqlite3.connect(
+            sqlite_file_uri(vault_path, read_only=True), uri=True, timeout=5
+        )
     except sqlite3.Error as exc:
         raise LibrarySwitchError(f"{vault_path} could not be opened: {exc}") from exc
 

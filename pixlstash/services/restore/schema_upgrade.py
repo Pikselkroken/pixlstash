@@ -22,6 +22,7 @@ from pixlstash.database import create_configured_engine
 from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.portable_identity import sanitize_vault_file
+from pixlstash.utils.sqlite_uri import sqlite_url
 from pixlstash.utils.snapshot_compression import (
     materialize_snapshot,
     snapshot_scratch_dir,
@@ -115,7 +116,8 @@ def _alembic_config(sqlalchemy_url: str = "") -> Config:
     config = Config(str(alembic_ini))
     config.set_main_option("script_location", str(migrations_dir))
     if sqlalchemy_url:
-        config.set_main_option("sqlalchemy.url", sqlalchemy_url)
+        # ConfigParser interpolates ``%``; a percent-encoded URL must escape it.
+        config.set_main_option("sqlalchemy.url", sqlalchemy_url.replace("%", "%%"))
     return config
 
 
@@ -274,7 +276,7 @@ class SchemaUpgradeMixin:
             return None
 
         try:
-            config = _alembic_config(f"sqlite:///{tmp_snapshot}")
+            config = _alembic_config(sqlite_url(tmp_snapshot))
             with _ALEMBIC_UPGRADE_LOCK:
                 command.upgrade(config, "head")
             # The upgraded scratch is the only file eligible for a live swap.

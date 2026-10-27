@@ -15,6 +15,7 @@ import time
 from contextlib import closing
 
 import pytest
+from alembic import command
 
 from pixlstash.database import (
     SQLITE_BUSY_TIMEOUT_S,
@@ -22,6 +23,13 @@ from pixlstash.database import (
     VaultDatabase,
     create_configured_engine,
 )
+from pixlstash.services.restore.schema_upgrade import _alembic_config
+from pixlstash.utils.sqlite_uri import sqlite_url
+
+# A folder name with every character a SQLite URI or SQLAlchemy URL reserves,
+# plus the space and ``%`` that percent-encoding and Alembic's ConfigParser
+# then have to survive (#2210).
+URI_HOSTILE_FOLDER = "odd #1?%"
 
 
 @pytest.fixture
@@ -223,3 +231,33 @@ def test_custom_sql_functions_are_registered_on_every_variant(tmp_path, kwargs):
                 assert isinstance(conn.exec_driver_sql(sql).scalar(), float), sql
     finally:
         engine.dispose()
+
+
+def test_vault_opens_and_migrates_in_a_folder_with_uri_characters(tmp_path):
+    """A raw path was cut at ``?``: the vault was created beside the folder,
+    under a truncated name, and the real file was left without Alembic."""
+    folder = tmp_path / URI_HOSTILE_FOLDER
+    folder.mkdir()
+    db = VaultDatabase(str(folder / "vault.db"))
+    try:
+        assert _pragma(db._engine, "journal_mode") == "wal"
+    finally:
+        db.close()
+
+    assert os.listdir(tmp_path) == [URI_HOSTILE_FOLDER]
+    with closing(sqlite3.connect(folder / "vault.db")) as probe:
+        assert probe.execute("SELECT version_num FROM alembic_version").fetchone()
+
+
+def test_snapshot_upgrade_url_survives_uri_characters(tmp_path):
+    """The snapshot upgrader hands Alembic a URL, which env.py builds an engine
+    from; both the ConfigParser and SQLAlchemy's URL parser must pass it intact."""
+    folder = tmp_path / URI_HOSTILE_FOLDER
+    folder.mkdir()
+    snapshot = folder / "snapshot.sqlite"
+
+    command.upgrade(_alembic_config(sqlite_url(snapshot)), "head")
+
+    assert os.listdir(tmp_path) == [URI_HOSTILE_FOLDER]
+    with closing(sqlite3.connect(snapshot)) as probe:
+        assert probe.execute("SELECT version_num FROM alembic_version").fetchone()
