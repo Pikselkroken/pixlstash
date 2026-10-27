@@ -67,7 +67,7 @@ the real data at the revision the installed app reads. A copied library that
 another branch already migrated past this checkout is migrated back down on the
 copy, using that branch's migration files from a local or `origin` branch (the
 hub has no downgrades, so a hub ahead of the checkout still refuses).
-`run --keep-data` reuses the last copy, to restart without losing a test's
+`run --keep-data` reuses the last finished copy, to restart without losing a test's
 state; a refresh refuses while another dev run holds the copy. Model, reference
 and import folders are shared with the real app, not copied: delete-after-import
 is switched off for import and model folders in the copy, but deleting or

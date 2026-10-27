@@ -35,7 +35,8 @@ Refuses to refresh while another dev run is using the copy.
 Usage:
     python scripts/desktop_dev_scratch.py [--keep]
 
-Prints the scratch directory. ``--keep`` reuses an existing copy as it is.
+Prints the scratch directory. ``--keep`` reuses the last copy as it is, if
+that refresh finished; a half-made one can still name real folders.
 """
 
 from __future__ import annotations
@@ -72,6 +73,8 @@ COPY_SUFFIX = ".pixlstash-dev-scratch"
 # Inside SCRATCH_DIR: the library copies the last refresh made, for the next
 # one to remove.
 COPIES_FILE = "library-copies.json"
+# Inside SCRATCH_DIR: written last, so only a finished refresh is ever kept.
+COMPLETE_FILE = "refresh-complete"
 _SQLITE_SIDECARS = ("-wal", "-shm", "-journal")
 # Files the backend writes in place rather than by write-and-rename: through a
 # hard link that would rewrite the real file. All are caches.
@@ -377,14 +380,24 @@ def refresh(real_dir: str, scratch_dir: str) -> None:
         write_json_atomic(config_path, config)
 
 
+def prepare(real_dir: str, scratch_dir: str, *, keep: bool = False) -> None:
+    """Refresh *scratch_dir*, unless *keep* and the last refresh finished."""
+    complete = os.path.join(scratch_dir, COMPLETE_FILE)
+    if keep and os.path.isfile(complete):
+        return
+    refresh(real_dir, scratch_dir)
+    Path(complete).touch()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument(
-        "--keep", action="store_true", help="Reuse an existing scratch copy."
+        "--keep",
+        action="store_true",
+        help="Reuse the last scratch copy, if that refresh finished.",
     )
     args = parser.parse_args()
-    if not (args.keep and os.path.isdir(SCRATCH_DIR)):
-        refresh(REAL_DIR, SCRATCH_DIR)
+    prepare(REAL_DIR, SCRATCH_DIR, keep=args.keep)
     print(SCRATCH_DIR)
 
 

@@ -293,3 +293,22 @@ def test_downgrade_opens_a_vault_whose_folder_name_has_uri_characters(tmp_path):
         assert conn.execute("SELECT version_num FROM alembic_version").fetchall() == [
             (head,)
         ]
+
+
+def test_keep_never_reuses_a_refresh_that_did_not_finish(tmp_path):
+    scratch_mod = _load_module()
+    real_dir, _library_dir = _make_real_data(tmp_path)
+    scratch_dir = tmp_path / "scratch"
+    # What a refresh that died before relocating leaves: the real registrations.
+    scratch_dir.mkdir()
+    (scratch_dir / "hub.db").write_bytes((real_dir / "hub.db").read_bytes())
+
+    scratch_mod.prepare(str(real_dir), str(scratch_dir), keep=True)
+
+    copy = tmp_path / "pictures" / ".library.pixlstash-dev-scratch"
+    assert _registered_paths(str(scratch_dir / "hub.db")) == [str(copy)]
+
+    # A finished one is kept as it is.
+    (copy / "made-by-the-dev-run.png").write_bytes(b"kept")
+    scratch_mod.prepare(str(real_dir), str(scratch_dir), keep=True)
+    assert (copy / "made-by-the-dev-run.png").exists()

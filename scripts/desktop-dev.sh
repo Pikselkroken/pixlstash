@@ -9,7 +9,7 @@
 #
 # `run` never opens the real data: it refreshes a scratch copy of the desktop
 # app's hub and libraries (scripts/desktop_dev_scratch.py) and runs on that.
-# `run --keep-data` reuses the last copy, to restart without losing a test's
+# `run --keep-data` reuses the last finished copy, to restart without losing a test's
 # state.
 #
 # The interpreter is PIXLSTASH_DEV_BACKEND if set, otherwise the first .venv
