@@ -525,9 +525,9 @@ grid* can be tight (it is the user's work), the *controls around it* stay calm.
 **Alignment is most of what reads as polished.** Things that belong to the same row
 share a baseline; columns of controls share a left edge. The shell lines the sidebar
 header, toolbar, and stats header to one horizontal band and you respect that band
-everywhere. The band height is `--bar-height` (48px) in the browser; the desktop
-Electron shell compresses the sidebar header to 36px — see the overrides in
-`style.css`. The title bar above the band is `--titlebar-h` (40px) in both
+everywhere. At desktop width the band is `--toolbar-height` (36px) in both shells,
+and the sidebar's header slot takes it through `--sidebar-slot-h`, so the
+sidebar's top rule continues the toolbar's. The title bar above the band is `--titlebar-h` (40px) in both
 shells: the switch's 32px track with 4px above and below (#2158). (Heads-up: the per-component action-bar heights still drift — 34 / 36 /
 40 / 48 / 56px across `ImageGrid`, `ImageOverlay`, and the selection bar. The **three
 view toolbars are the one settled group**: the grid, Duplicates and model-shelf bars
