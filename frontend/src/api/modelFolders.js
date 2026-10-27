@@ -44,6 +44,12 @@ export const SOURCE_KIND = "source";
  */
 export const DOWNLOADS_KIND = "downloads";
 
+/**
+ * PixlStash's own roots: its downloads, InsightFace, the HuggingFace cache.
+ * Declared rather than scanned; a rescan re-reads them from their index.
+ */
+export const BUILTIN_KIND = "foreign";
+
 /** The folder kinds a caller may register (`managed`/`foreign` are ours). */
 export const CREATABLE_KINDS = ["user", "source", DOWNLOADS_KIND];
 

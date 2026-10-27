@@ -396,7 +396,9 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
         });
       }
       // `skipped` means a source folder, which carries no scan control at all,
-      // so there is nothing to watch and nothing to say.
+      // so there is nothing to watch and nothing to say. `declared` (one of
+      // PixlStash's own roots, re-read before the answer) is watched like a
+      // scan: its `last_checked` has already moved, so the next poll lands it.
       if (body?.status === "skipped") return;
       scanning.value = new Map(scanning.value).set(id, {
         startedAt: Date.now(),

@@ -9132,6 +9132,16 @@ cannot cost the shelf the other two, and every failure is logged and swallowed:
 a machine that has never run face detection has no InsightFace directory, and one
 that has downloaded nothing through the library has no cache. Both are normal.
 
+**A rescan of one of these roots is its declaration again**
+(`builtin_caches.redeclare_model_root`). Until it was, `POST
+/model-folders/{id}/rescan` answered `skipped` for them and the frontend's
+Rescan all left them out, so a repo deleted from the HuggingFace cache stayed
+`present` through every rescan until the next restart. It runs in the request
+(an index read, not a walk) and answers `declared`; it waits up to 5 s for
+`SHELF_IO_LOCK`, because a relocation repoints the row's path and a declaration
+at the old path would re-create the row there. A move holding the slot longer is
+a 409.
+
 **Where the folder is: one accessor, and a location that can be recorded (#905,
 closing #112).** `builtin_models.builtin_model_dir()` is the single answer, and
 the declaration, `inference/engine.py` and `tasks/image_embedding_task.py` all

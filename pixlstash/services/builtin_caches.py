@@ -53,7 +53,9 @@ from pixlstash.services.builtin_models import (
     MOVABLE_FIXED,
     STATE_NOT_DOWNLOADED,
     DeclaredEntry,
+    declare_builtin_models,
     declare_folder,
+    is_builtin_model_dir,
 )
 from pixlstash.services.model_features import (
     FEATURE_CHECKPOINT,
@@ -388,3 +390,37 @@ def declare_huggingface_cache(hub, folder_path: str) -> Optional[int]:
             )
         )
     return declare_folder(hub, folder_path, entries, movable=MOVABLE_FIXED)
+
+
+def redeclare_model_root(hub, folder_path: str) -> Optional[int]:
+    """Re-read one root PixlStash declares, which is what a rescan of it means.
+
+    The scanner skips these folders, so before this the declaration ran only at
+    start-up: a repo deleted from the HuggingFace cache stayed ``present`` on
+    the shelf, through any number of rescans, until the server restarted.
+
+    Recognised by path, as the start-up declaration resolves them, because
+    :func:`declare_folder` writes the same ``kind``/``owner`` for all three.
+
+    Args:
+        hub: The open hub database.
+        folder_path: A ``model_folder.path`` owned by PixlStash.
+
+    Returns:
+        The ``model_folder.id``, or None when the path is none of the three
+        roots or its declaration could not be written.
+    """
+    cache = huggingface_cache_dir()
+    if cache and os.path.realpath(folder_path) == os.path.realpath(cache):
+        return declare_huggingface_cache(hub, folder_path)
+    if is_insightface_models_dir(folder_path):
+        return declare_insightface_packs(hub, folder_path)
+    if is_builtin_model_dir(folder_path):
+        return declare_builtin_models(hub, folder_path)
+    logger.warning(
+        "Model folder %r is owned by PixlStash but is none of the roots it "
+        "declares (the HuggingFace cache, InsightFace, its own downloads); a "
+        "rescan has nothing to re-read there.",
+        folder_path,
+    )
+    return None
