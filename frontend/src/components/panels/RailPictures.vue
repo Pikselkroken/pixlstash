@@ -189,7 +189,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { isReadOnly } from "../../utils/apiClient";
 import { listPicturesByIds, pictureThumbnailUrl } from "../../api/pictures";
 import { formatModelSize } from "../../utils/modelShelf.js";
@@ -237,6 +237,7 @@ const {
   aggregatedPredictions,
   fetchSelectedImageTags,
   fetchSelectedImagePredictions,
+  refreshSelectionTags,
   removeTagFromAll,
   addTagToRemaining,
   addTagsToAll,
@@ -316,11 +317,15 @@ const adding = ref(false);
 const newTag = ref("");
 const addInputRef = ref(null);
 
+// The input renders only in the open, loaded section: "+" on a collapsed one
+// opens it, and the input takes focus whenever it mounts, so a "+" pressed
+// while tags are still being read lands there too.
 function beginAdd() {
   adding.value = true;
   newTag.value = "";
-  nextTick(() => addInputRef.value?.focus());
+  tagsCollapsed.value = false;
 }
+watch(addInputRef, (input) => input?.focus());
 
 // An Enter pressed while the add is still out would send it again.
 const committingAdd = ref(false);
@@ -353,7 +358,7 @@ async function pasteClipboard() {
       tag: tagClipboard.clipboardTags.join(", "),
       pictureIds: result.pictureIds,
     });
-    await fetchSelectedImageTags();
+    await refreshSelectionTags();
   }
 }
 </script>

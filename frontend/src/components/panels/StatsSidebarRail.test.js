@@ -32,7 +32,11 @@ import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
 import { SCRAPHEAP_PICTURES_ID } from "../../stores/useViewStore";
 import { useSelectionTags } from "../../composables/useSelectionTags";
-import { addPictureTag, confirmTagPrediction } from "../../api/tags";
+import {
+  addPictureTag,
+  confirmTagPrediction,
+  listTagPredictions,
+} from "../../api/tags";
 
 enableAutoUnmount(afterEach);
 
@@ -78,7 +82,7 @@ async function flush() {
   }
 }
 
-function mountRail(props = {}) {
+function mountRail(props = {}, options = {}) {
   return mount(StatsSidebar, {
     props: {
       viewName: "All Pictures",
@@ -86,6 +90,7 @@ function mountRail(props = {}) {
       ...props,
     },
     global: { stubs: STUBS },
+    ...options,
   });
 }
 
@@ -433,5 +438,29 @@ describe("adding a tag to several", () => {
     expect(wrapper.emitted("tags-applied")).toEqual([
       [{ tag: "rain", pictureIds: [7, 8, 9], action: "add" }],
     ]);
+  });
+
+  it("re-reads the rejected tags too: an add confirms a rejected one", async () => {
+    const wrapper = mountRail();
+    await select(wrapper, [7, 8, 9]);
+    await wrapper.find('[aria-label="Add a tag to all 3"]').trigger("click");
+    const input = wrapper.find(".rail-pictures__input");
+    await input.setValue("rain");
+    listTagPredictions.mockClear();
+    await input.trigger("keydown", { key: "Enter" });
+    await flush();
+    expect(listTagPredictions.mock.calls.map(([id]) => id)).toEqual([7, 8, 9]);
+  });
+
+  it("opens a collapsed Tags section and focuses the field", async () => {
+    const wrapper = mountRail({}, { attachTo: document.body });
+    await select(wrapper, [7, 8, 9]);
+    await wrapper.find('[aria-label="Collapse Tags"]').trigger("click");
+    expect(wrapper.find(".rail-pictures__zone").exists()).toBe(false);
+    await wrapper.find('[aria-label="Add a tag to all 3"]').trigger("click");
+    await flush();
+    const input = wrapper.find(".rail-pictures__input");
+    expect(input.exists()).toBe(true);
+    expect(document.activeElement).toBe(input.element);
   });
 });

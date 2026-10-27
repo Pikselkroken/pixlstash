@@ -484,6 +484,7 @@ const {
   aggregatedPredictions,
   fetchSelectedImageTags,
   fetchSelectedImagePredictions,
+  refreshSelectionTags,
   removeTagFromAll,
   addTagToRemaining,
   addTagsToAll,
@@ -803,7 +804,7 @@ async function pasteClipboard() {
         tag: tagClipboard.clipboardTags.join(", "),
         pictureIds: result.pictureIds,
       });
-      await fetchSelectedImageTags();
+      await refreshSelectionTags();
     }
   } finally {
     pasteLoading.value = false;

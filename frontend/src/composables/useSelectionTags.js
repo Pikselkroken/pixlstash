@@ -127,6 +127,16 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
     }
   }
 
+  // A tag edit moves rejections too: adding a tag the tagger had rejected
+  // confirms it, and removing one records the reject (label_ledger), so every
+  // gesture re-reads both lists.
+  function refreshSelectionTags() {
+    return Promise.all([
+      fetchSelectedImageTags(),
+      fetchSelectedImagePredictions(),
+    ]);
+  }
+
   const totalWithTagData = computed(() => fetchedTagData.value.length);
 
   const tagFrequency = computed(() => {
@@ -271,10 +281,7 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
       if (done.length) {
         onApplied({ tag: predEntry.tag, pictureIds: done, action: "add" });
       }
-      await Promise.all([
-        fetchSelectedImageTags(),
-        fetchSelectedImagePredictions(),
-      ]);
+      await refreshSelectionTags();
     } finally {
       predActionLoading.value = predActionLoading.value.filter(
         (n) => n !== predEntry.tag,
@@ -318,7 +325,7 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
       if (done.length) {
         onApplied({ tag: tagEntry.name, pictureIds: done, action: "remove" });
       }
-      await fetchSelectedImageTags();
+      await refreshSelectionTags();
     } finally {
       tagActionLoading.value = tagActionLoading.value.filter(
         (n) => n !== tagEntry.name,
@@ -346,7 +353,7 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
       if (done.length) {
         onApplied({ tag: tagEntry.name, pictureIds: done, action: "add" });
       }
-      await fetchSelectedImageTags();
+      await refreshSelectionTags();
     } finally {
       tagActionLoading.value = tagActionLoading.value.filter(
         (n) => n !== tagEntry.name,
@@ -399,7 +406,7 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
     if (done.length) {
       onApplied({ tag: tags.join(", "), pictureIds: done, action: "add" });
     }
-    await fetchSelectedImageTags();
+    await refreshSelectionTags();
     return done.length === ids.length;
   }
 
@@ -423,6 +430,7 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
     aggregatedPredictions,
     fetchSelectedImageTags,
     fetchSelectedImagePredictions,
+    refreshSelectionTags,
     removeTagFromAll,
     addTagToRemaining,
     addTagsToAll,
