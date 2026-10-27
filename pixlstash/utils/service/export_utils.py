@@ -1,5 +1,6 @@
 """ZIP generation and export functionality for pictures and features."""
 
+import hashlib
 import json
 import logging
 import os
@@ -1120,6 +1121,7 @@ class ExportUtils:
             "picture_ids": [pic.id for pic in pics],
             "caption_mode": caption_mode_d,
             "trigger_word": trigger,
+            "items": ExportUtils._training_dataset_items(dest_dir, pics),
         }
         logger.info(
             "Built training dataset in %s: %d images, caption_mode=%s, trigger=%r",
@@ -1129,6 +1131,51 @@ class ExportUtils:
             trigger,
         )
         return manifest
+
+    @staticmethod
+    def _training_dataset_items(dest_dir: str, pics) -> list[dict]:
+        """What the trainer was given, read back from the files just written.
+
+        One item per picture that has a file in *dest_dir*, in dataset order:
+        its ``file_name``, the ``sha256`` of those bytes and the ``caption``
+        file's text (None when none was written). A picture skipped because
+        its source was missing has no file and no item. Training datasets are
+        never named from the originals, so picture *n* is ``image_<n>``.
+
+        Args:
+            dest_dir: The dataset directory the writer filled.
+            pics: The pictures in the order the writer numbered them.
+
+        Returns:
+            The items the dataset snapshot records (#2123).
+        """
+        image_by_stem = {}
+        for name in os.listdir(dest_dir):
+            stem, ext = os.path.splitext(name)
+            if ext.lower() != ".txt":
+                image_by_stem[stem] = name
+        items = []
+        for idx, pic in enumerate(pics, start=1):
+            stem = f"image_{idx:05d}"
+            file_name = image_by_stem.get(stem)
+            if file_name is None:
+                continue
+            with open(os.path.join(dest_dir, file_name), "rb") as fh:
+                sha256 = hashlib.file_digest(fh, "sha256").hexdigest()
+            caption = None
+            caption_path = os.path.join(dest_dir, f"{stem}.txt")
+            if os.path.isfile(caption_path):
+                with open(caption_path, encoding="utf-8") as fh:
+                    caption = fh.read().removesuffix("\n")
+            items.append(
+                {
+                    "picture_id": pic.id,
+                    "file_name": file_name,
+                    "sha256": sha256,
+                    "caption": caption,
+                }
+            )
+        return items
 
     @staticmethod
     def generate_zip(server, request, task_id, export_tasks, background_data):

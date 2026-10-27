@@ -7,6 +7,7 @@ HTTP route of its own.
 
 import gc
 import glob
+import hashlib
 import json
 import os
 import shutil
@@ -126,6 +127,19 @@ def test_build_training_dataset_from_set(env):
         assert set(manifest["picture_ids"]) == set(pic_ids)
 
         _assert_pairs(dest_dir, expected_count=2, trigger_word="mychar")
+
+        # The snapshot items (#2123) are the files written, read back: each
+        # picture's own file, the sha256 of its bytes and its caption.
+        items = manifest["items"]
+        assert [item["picture_id"] for item in items] == manifest["picture_ids"]
+        for item in items:
+            path = os.path.join(dest_dir, item["file_name"])
+            with open(path, "rb") as fh:
+                assert item["sha256"] == hashlib.sha256(fh.read()).hexdigest()
+            stem = os.path.splitext(item["file_name"])[0]
+            with open(os.path.join(dest_dir, f"{stem}.txt"), encoding="utf-8") as fh:
+                assert item["caption"] == fh.read().rstrip("\n")
+            assert item["caption"].startswith("mychar")
 
 
 def test_build_training_dataset_from_character(env):

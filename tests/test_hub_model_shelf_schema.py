@@ -27,7 +27,7 @@ import time
 import pytest
 
 from pixlstash.auth import COMFYUI_SCOPE
-from pixlstash.hub import training_runs
+from pixlstash.hub import dataset_snapshots, training_runs
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.schema import (
     CURRENT_DATA_VERSION,
@@ -1597,3 +1597,87 @@ class TestTrainingRunStore:
             == "run-done"
         )
         assert training_runs.get_run(store, "lib-a", done) is None
+
+
+def _snapshot(store, library_uuid, run_uuid, captions):
+    return dataset_snapshots.record_snapshot(
+        store,
+        library_uuid=library_uuid,
+        run_uuid=run_uuid,
+        set_id=3,
+        character_id=None,
+        trigger_word="ohwx",
+        caption_mode="tags",
+        items=[
+            {
+                "picture_id": index + 10,
+                "file_name": f"image_{index + 1:05d}.png",
+                "sha256": f"{index:064x}",
+                "caption": caption,
+            }
+            for index, caption in enumerate(captions)
+        ],
+    )
+
+
+def _snapshot_rows(store):
+    return (
+        store.fetchone("SELECT COUNT(*) FROM dataset_snapshot")[0],
+        store.fetchone("SELECT COUNT(*) FROM dataset_snapshot_item")[0],
+    )
+
+
+class TestDatasetSnapshotStore:
+    """A run names one frozen record of its dataset, scoped to its library."""
+
+    def test_a_snapshot_is_recorded_in_order_and_the_run_names_it(self, store):
+        run = _new_run(store, "lib-a", "run-a")
+        snapshot_id = _snapshot(store, "lib-a", "run-a", ["ohwx, a", None])
+
+        assert training_runs.get_run(store, "lib-a", run)["dataset_snapshot_id"] == (
+            snapshot_id
+        )
+        snapshot = dataset_snapshots.get_snapshot(store, "lib-a", snapshot_id)
+        assert snapshot["image_count"] == 2
+        assert snapshot["set_id"] == 3
+        assert [item["caption"] for item in snapshot["items"]] == ["ohwx, a", None]
+        assert [item["picture_id"] for item in snapshot["items"]] == [10, 11]
+        assert dataset_snapshots.get_snapshot(store, "lib-b", snapshot_id) is None
+
+    def test_a_rebuilt_dataset_replaces_the_runs_snapshot(self, store):
+        run = _new_run(store, "lib-a", "run-a")
+        first = _snapshot(store, "lib-a", "run-a", ["one", "two", "three"])
+        second = _snapshot(store, "lib-a", "run-a", ["only"])
+
+        assert second != first
+        assert training_runs.get_run(store, "lib-a", run)["dataset_snapshot_id"] == (
+            second
+        )
+        assert dataset_snapshots.get_snapshot(store, "lib-a", first) is None
+        assert _snapshot_rows(store) == (1, 1)
+
+    def test_another_librarys_run_cannot_be_given_a_snapshot(self, store):
+        _new_run(store, "lib-b", "run-b")
+        with pytest.raises(LookupError):
+            _snapshot(store, "lib-a", "run-b", ["x"])
+        assert _snapshot_rows(store) == (0, 0)
+
+    def test_deleting_the_run_deletes_its_snapshot_and_no_other(self, store):
+        gone = _new_run(store, "lib-a", "run-gone")
+        _new_run(store, "lib-a", "run-kept")
+        _snapshot(store, "lib-a", "run-gone", ["a", "b"])
+        kept = _snapshot(store, "lib-a", "run-kept", ["c"])
+        training_runs.update_run(store, "run-gone", status="completed")
+
+        assert training_runs.delete_run(store, "lib-a", gone, only_finished=True)
+        assert _snapshot_rows(store) == (1, 1)
+        assert dataset_snapshots.get_snapshot(store, "lib-a", kept) is not None
+
+    def test_a_refused_delete_keeps_the_snapshot(self, store):
+        live = _new_run(store, "lib-a", "run-live")
+        _snapshot(store, "lib-a", "run-live", ["a"])
+
+        assert (
+            training_runs.delete_run(store, "lib-a", live, only_finished=True) is None
+        )
+        assert _snapshot_rows(store) == (1, 1)

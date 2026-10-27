@@ -14,22 +14,27 @@ refused unless ``allow_remote_host_ops`` is set. Handlers carry no inline owner
 or scope checks.
 """
 
+import hashlib
 import json
 import math
 import os
 import re
 import shutil
+import tempfile
+import zipfile
 from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
 import psutil
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlmodel import select
+from starlette.background import BackgroundTask
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Character, User
-from pixlstash.hub import training_runs
+from pixlstash.hub import dataset_snapshots, training_runs
 from pixlstash.hub.db import now_iso
 from pixlstash.pixl_logging import get_logger
 from pixlstash.resources.arbiter import arbiter
@@ -200,6 +205,16 @@ def _telemetry(job: dict, lease: dict | None, resolution: dict) -> dict:
         },
         "paging": paging,
     }
+
+
+def _sha256_of(path: str) -> str | None:
+    """The sha256 of a file's bytes, or None when it cannot be read."""
+    try:
+        with open(path, "rb") as fh:
+            return hashlib.file_digest(fh, "sha256").hexdigest()
+    except OSError as exc:
+        logger.warning("Could not read %s to check its sha256: %s", path, exc)
+        return None
 
 
 def _epoch_iso(seconds: float | None) -> str | None:
@@ -420,6 +435,20 @@ def create_router(server) -> APIRouter:
         completed_at: Optional[datetime] = Field(
             default=None, description="UTC timestamp when the run finished."
         )
+        dataset_snapshot_id: Optional[int] = Field(
+            default=None,
+            description=(
+                "The frozen record of what the run trained on, once its dataset "
+                "is built (GET /training/jobs/{job_id}/snapshot)."
+            ),
+        )
+        model_ids: list[int] = Field(
+            default_factory=list,
+            description=(
+                "The shelf models (LoRAs) this run made. Listing a set's runs "
+                "with ?set_id= names the LoRAs trained from that set."
+            ),
+        )
 
     class JobDetailResponse(BaseModel):
         """Full detail for a single job."""
@@ -480,6 +509,49 @@ def create_router(server) -> APIRouter:
         )
         completed_at: Optional[datetime] = Field(
             default=None, description="UTC timestamp when the run finished."
+        )
+        dataset_snapshot_id: Optional[int] = Field(
+            default=None, description="The run's dataset snapshot, once built."
+        )
+        model_ids: list[int] = Field(
+            default_factory=list, description="The shelf models this run made."
+        )
+
+    class SnapshotItemResponse(BaseModel):
+        """One picture as the trainer was given it."""
+
+        position: int = Field(..., description="Order in the dataset, from 0.")
+        picture_id: Optional[int] = Field(
+            default=None,
+            description="The picture it came from; may since have been deleted.",
+        )
+        file_name: str = Field(..., description="The file's name in the dataset.")
+        sha256: str = Field(..., description="sha256 of the file's bytes.")
+        caption: Optional[str] = Field(
+            default=None, description="The caption as written; null if none."
+        )
+
+    class SnapshotResponse(BaseModel):
+        """What a run trained on, frozen when its dataset was built (#2123)."""
+
+        id: int = Field(..., description="Primary key of the snapshot.")
+        job_id: int = Field(..., description="The run it was taken for.")
+        set_id: Optional[int] = Field(default=None, description="Source set.")
+        character_id: Optional[int] = Field(
+            default=None, description="Source character."
+        )
+        trigger_word: Optional[str] = Field(
+            default=None, description="The word every caption leads with."
+        )
+        caption_mode: Optional[str] = Field(
+            default=None, description="How the captions were written."
+        )
+        image_count: int = Field(..., description="Number of items.")
+        created_at: Optional[datetime] = Field(
+            default=None, description="UTC time the snapshot was taken."
+        )
+        items: list[SnapshotItemResponse] = Field(
+            default_factory=list, description="The items, in dataset order."
         )
 
     class JobStatusResponse(BaseModel):
@@ -857,7 +929,22 @@ def create_router(server) -> APIRouter:
             for preset in presets.list_presets()
         ]
 
-    def _job_to_summary(job: dict) -> dict:
+    def _models_by_run(run_ids: list[int]) -> dict[int, list[int]]:
+        """The shelf models each run made, by run id (one query for the lot)."""
+        if not run_ids:
+            return {}
+        marks = ", ".join("?" for _ in run_ids)
+        rows = server.vault.hub.fetchall(
+            "SELECT id, training_run_id FROM model "
+            f"WHERE training_run_id IN ({marks}) ORDER BY id",
+            tuple(run_ids),
+        )
+        models: dict[int, list[int]] = {}
+        for row in rows:
+            models.setdefault(row["training_run_id"], []).append(row["id"])
+        return models
+
+    def _job_to_summary(job: dict, model_ids: list[int]) -> dict:
         return _redact_host_paths(
             {
                 "id": job["id"],
@@ -874,6 +961,8 @@ def create_router(server) -> APIRouter:
                 "started_at": job["started_at"],
                 "completed_at": job["completed_at"],
                 "run_name": _run_name(job),
+                "dataset_snapshot_id": job["dataset_snapshot_id"],
+                "model_ids": model_ids,
             }
         )
 
@@ -1129,6 +1218,7 @@ def create_router(server) -> APIRouter:
             "created_at": job["created_at"],
             "started_at": job["started_at"],
             "completed_at": job["completed_at"],
+            "dataset_snapshot_id": job["dataset_snapshot_id"],
         }
 
     def _scope(set_id, character_id) -> tuple[Optional[int], Optional[int]]:
@@ -1352,7 +1442,8 @@ def create_router(server) -> APIRouter:
         runs = training_runs.list_runs(
             hub, library_uuid, set_id=set_id, character_id=character_id
         )
-        return [_job_to_summary(run) for run in runs]
+        models = _models_by_run([run["id"] for run in runs])
+        return [_job_to_summary(run, models.get(run["id"], [])) for run in runs]
 
     @router.get(
         "/training/jobs/{job_id}",
@@ -1407,6 +1498,8 @@ def create_router(server) -> APIRouter:
                 "created_at": job["created_at"],
                 "started_at": job["started_at"],
                 "completed_at": job["completed_at"],
+                "dataset_snapshot_id": job["dataset_snapshot_id"],
+                "model_ids": _models_by_run([job["id"]]).get(job["id"], []),
             }
         )
 
@@ -1527,6 +1620,129 @@ def create_router(server) -> APIRouter:
             applied,
         )
         return {"job_id": job_id, "cover_step": payload.step, "applied": applied}
+
+    def _snapshot_of(job_id: int) -> tuple[dict, dict]:
+        """One run of the open library and its dataset snapshot, or a 404."""
+        hub, library_uuid = _store()
+        job = training_runs.get_run(hub, library_uuid, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Training job not found")
+        snapshot_id = job["dataset_snapshot_id"]
+        snapshot = (
+            dataset_snapshots.get_snapshot(hub, library_uuid, snapshot_id)
+            if snapshot_id is not None
+            else None
+        )
+        if snapshot is None:
+            raise HTTPException(
+                status_code=404, detail="This run has no dataset snapshot."
+            )
+        return job, snapshot
+
+    @router.get(
+        "/training/jobs/{job_id}/snapshot",
+        summary="What a training job trained on",
+        response_model=SnapshotResponse,
+        description=(
+            "The dataset snapshot taken when the job's dataset was built: one "
+            "item per picture the trainer was given, with its file name, the "
+            "sha256 of those bytes and its caption as written. It is not "
+            "re-read from the library, so later tag edits and deletes do not "
+            "change it. Returns 404 for an unknown job and for one whose "
+            "dataset is not built yet. Owner-only."
+        ),
+    )
+    def get_training_job_snapshot(job_id: int, request: Request):
+        _ensure_secure(request)
+        job, snapshot = _snapshot_of(job_id)
+        return {
+            **{key: value for key, value in snapshot.items() if key != "library_uuid"},
+            "job_id": job["id"],
+        }
+
+    @router.get(
+        "/training/jobs/{job_id}/snapshot/export",
+        summary="Download what a training job trained on, as a zip",
+        response_class=FileResponse,
+        description=(
+            "A zip of the job's dataset snapshot: each image the trainer was "
+            "given with its frozen caption beside it, and snapshot.json listing "
+            "every item. An image whose dataset file is gone or no longer "
+            "matches its recorded sha256 is left out and marked so in "
+            "snapshot.json; its caption is still included. Returns 404 for an "
+            "unknown job and for one with no snapshot. Owner-only."
+        ),
+    )
+    def export_training_job_snapshot(job_id: int, request: Request):
+        _ensure_secure(request)
+        job, snapshot = _snapshot_of(job_id)
+        dataset_dir = job.get("dataset_snapshot_path") or ""
+        fd, zip_path = tempfile.mkstemp(prefix="pixlstash_snapshot_", suffix=".zip")
+        os.close(fd)
+        listed = []
+        try:
+            with zipfile.ZipFile(zip_path, "w") as archive:
+                for item in snapshot["items"]:
+                    name = item["file_name"]
+                    source = os.path.join(dataset_dir, name)
+                    included = (
+                        bool(dataset_dir)
+                        and os.path.basename(name) == name
+                        and _sha256_of(source) == item["sha256"]
+                    )
+                    if included:
+                        archive.write(source, arcname=name)
+                    if item["caption"] is not None:
+                        stem = os.path.splitext(name)[0]
+                        archive.writestr(f"{stem}.txt", f"{item['caption']}\n")
+                    listed.append({**item, "image_included": included})
+                archive.writestr(
+                    "snapshot.json",
+                    json.dumps(
+                        {
+                            "run": job["name"],
+                            "taken_at": snapshot["created_at"],
+                            "set_id": snapshot["set_id"],
+                            "character_id": snapshot["character_id"],
+                            "trigger_word": snapshot["trigger_word"],
+                            "caption_mode": snapshot["caption_mode"],
+                            "items": listed,
+                        },
+                        indent=2,
+                    ),
+                )
+        except Exception as exc:
+            try:
+                os.remove(zip_path)
+            except OSError as remove_exc:
+                logger.warning("Could not remove %s: %s", zip_path, remove_exc)
+            logger.exception(
+                "Training job id=%s: the dataset snapshot %s could not be zipped "
+                "from %s.",
+                job_id,
+                snapshot["id"],
+                dataset_dir,
+            )
+            raise HTTPException(
+                status_code=500, detail="Could not build the dataset zip."
+            ) from exc
+        left_out = sum(1 for item in listed if not item["image_included"])
+        if left_out:
+            logger.warning(
+                "Training job id=%s: %d of %d snapshot images were missing or "
+                "changed in %s and were left out of the zip.",
+                job_id,
+                left_out,
+                len(listed),
+                dataset_dir,
+            )
+        stem = re.sub(r"[^\w.-]+", "_", job["name"]).strip("._") or "training"
+        return FileResponse(
+            zip_path,
+            media_type="application/zip",
+            filename=f"{stem}_dataset.zip",
+            background=BackgroundTask(os.remove, zip_path),
+        )
 
     @router.post(
         "/training/jobs/{job_id}/cancel",

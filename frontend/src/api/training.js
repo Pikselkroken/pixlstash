@@ -6,6 +6,7 @@
 
 import { apiClient } from "../utils/apiClient";
 import { unwrap } from "../utils/unwrap";
+import { downloadExport } from "./pictures";
 
 /** The training recipes, each saying whether the saved checkout can run it. */
 export function listTrainingPresets() {
@@ -72,6 +73,14 @@ export function getTrainingJobLive(jobId) {
  */
 export function setTrainingJobCover(jobId, step) {
   return unwrap(apiClient.put(`/training/jobs/${jobId}/cover`, { step }));
+}
+
+/**
+ * What a run trained on, as a zip: its images, their frozen captions and
+ * snapshot.json. Resolves to `{ blob, filename }`.
+ */
+export function exportTrainingSnapshot(jobId) {
+  return downloadExport(`/training/jobs/${jobId}/snapshot/export`);
 }
 
 /** Request a stop; the job finishes its current step and reports `stopped`. */

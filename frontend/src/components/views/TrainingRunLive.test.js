@@ -19,10 +19,16 @@ vi.mock("vuetify/components", async (importOriginal) => ({
 const getTrainingJobLive = vi.fn();
 const setTrainingJobCover = vi.fn();
 const cancelTrainingJob = vi.fn();
+const exportTrainingSnapshot = vi.fn();
 vi.mock("../../api/training", () => ({
   getTrainingJobLive: (...args) => getTrainingJobLive(...args),
   setTrainingJobCover: (...args) => setTrainingJobCover(...args),
   cancelTrainingJob: (...args) => cancelTrainingJob(...args),
+  exportTrainingSnapshot: (...args) => exportTrainingSnapshot(...args),
+}));
+const saveFileAs = vi.fn();
+vi.mock("../../utils/downloadFile", () => ({
+  saveFileAs: (...args) => saveFileAs(...args),
 }));
 vi.mock("../../api/modelImports", () => ({
   runSampleUrl: (folderId, runName, filename) =>
@@ -125,6 +131,8 @@ beforeEach(() => {
   getTrainingJobLive.mockReset();
   setTrainingJobCover.mockReset();
   cancelTrainingJob.mockReset();
+  exportTrainingSnapshot.mockReset();
+  saveFileAs.mockReset();
 });
 
 afterEach(() => {
@@ -180,6 +188,20 @@ describe("TrainingRunLive", () => {
     expect(setTrainingJobCover).toHaveBeenCalledWith(7, 1500);
     expect(wrapper.findAll(".trl-step")[6].text()).toContain("Cover");
     expect(wrapper.findAll(".trl-step")[3].text()).not.toContain("Cover");
+  });
+
+  it("exports the frozen dataset once the run has one", async () => {
+    const before = await open(payload({ dataset_snapshot_id: null }));
+    expect(before.find(".trl-export").exists()).toBe(false);
+
+    const blob = new Blob(["zip"]);
+    exportTrainingSnapshot.mockResolvedValue({ blob, filename: "run_dataset.zip" });
+    saveFileAs.mockResolvedValue(true);
+    const wrapper = await open(payload({ dataset_snapshot_id: 4 }));
+    await wrapper.find(".trl-export").trigger("click");
+    await flushPromises();
+    expect(exportTrainingSnapshot).toHaveBeenCalledWith(7);
+    expect(saveFileAs).toHaveBeenCalledWith(blob, "run_dataset.zip");
   });
 
   it("says when the machine is short of RAM to start", async () => {

@@ -6254,6 +6254,13 @@ sent as null reads "Unknown" over a dashed track, never 0. The page polls
 `GET /training/jobs/{id}/live` every 2 s while the run is live and the tab is
 visible, and stops once it has ended.
 
+**Export dataset** sits under the *Trained on* strip once the run's payload
+names a `dataset_snapshot_id` (#2123): a ghost `AppButton` that fetches
+`GET /training/jobs/{id}/snapshot/export` and hands the zip to `saveFileAs`.
+It exports the frozen record, not the set as it is now: the captions as
+recorded, and each image from the run's dataset folder only while its bytes
+still match the recorded sha256 (`snapshot.json` marks any left out).
+
 #### Registering the folders the shelf reads
 
 The registry is **Settings › Models** (`settings/ModelFoldersSection.vue`); the

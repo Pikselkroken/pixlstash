@@ -15,17 +15,20 @@ this file backs.
 """
 
 import gc
+import hashlib
+import io
 import json
 import os
 import shutil
 import sqlite3
 import sys
 import tempfile
+import zipfile
 
 import pytest
 from fastapi.testclient import TestClient
 
-from pixlstash.hub import training_runs
+from pixlstash.hub import dataset_snapshots, training_runs
 from pixlstash.resources.arbiter import Tenant, arbiter
 from pixlstash.routes.training import _redact_host_paths
 from pixlstash.training import preset_updates, presets
@@ -754,6 +757,123 @@ def test_live_and_cover_refuse_a_read_token():
         assert owner.get(f"/training/jobs/{job_id}/live").status_code == 200
         r = owner.put(f"/training/jobs/{job_id}/cover", json={"step": 3000})
         assert r.status_code == 200, r.text
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_runs_snapshot_reads_back_and_exports_what_it_trained_on():
+    """The snapshot is the frozen record (#2123): the zip holds each image whose
+    bytes still match, every frozen caption, and says which image it left out.
+    The set's runs name the LoRAs they made."""
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        hub = server.vault.hub
+        set_id = _make_picture_set(owner)
+        job_id, job_uuid = _seed_job(server, set_id=set_id, name="My run")
+        bare_id, _ = _seed_job(server, set_id=set_id, name="bare")
+
+        dataset = os.path.join(temp_dir.name, "datasets", f"pixlstash-{job_uuid}")
+        os.makedirs(dataset)
+        kept, changed = b"KEPT_BYTES", b"ORIGINAL_BYTES"
+        for name, data in (("image_00001.png", kept), ("image_00002.png", changed)):
+            with open(os.path.join(dataset, name), "wb") as fh:
+                fh.write(data)
+        training_runs.update_run(hub, job_uuid, dataset_snapshot_path=dataset)
+        dataset_snapshots.record_snapshot(
+            hub,
+            library_uuid=server.vault.library_uuid,
+            run_uuid=job_uuid,
+            set_id=set_id,
+            character_id=None,
+            trigger_word="ohwx",
+            caption_mode="tags",
+            items=[
+                {
+                    "picture_id": 7,
+                    "file_name": "image_00001.png",
+                    "sha256": hashlib.sha256(kept).hexdigest(),
+                    "caption": "ohwx, red hat",
+                },
+                {
+                    "picture_id": 8,
+                    "file_name": "image_00002.png",
+                    "sha256": hashlib.sha256(changed).hexdigest(),
+                    "caption": "ohwx, blue coat",
+                },
+            ],
+        )
+        # The dataset folder changes after the run: that image no longer matches.
+        with open(os.path.join(dataset, "image_00002.png"), "wb") as fh:
+            fh.write(b"EDITED_LATER")
+        with hub.transaction() as conn:
+            # A model no run made, first, so no LoRA id equals its run's id.
+            conn.execute(
+                "INSERT INTO model (file_kind, filename, sha256, provenance) "
+                "VALUES ('checkpoint', 'base.safetensors', 'beef', 'scanned')"
+            )
+            lora_id = conn.execute(
+                "INSERT INTO model (file_kind, kind, filename, sha256, provenance, "
+                "training_run_id) VALUES ('adapter', 'lora', 'my_run.safetensors', "
+                "'feed', 'trained', ?)",
+                (job_id,),
+            ).lastrowid
+
+        r = owner.get(f"/training/jobs/{job_id}/snapshot")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["job_id"] == job_id
+        assert body["image_count"] == 2
+        assert [item["caption"] for item in body["items"]] == [
+            "ohwx, red hat",
+            "ohwx, blue coat",
+        ]
+        assert "library_uuid" not in body
+
+        r = owner.get(f"/training/jobs/{job_id}/snapshot/export")
+        assert r.status_code == 200, r.text
+        assert "My_run_dataset.zip" in r.headers["content-disposition"]
+        with zipfile.ZipFile(io.BytesIO(r.content)) as archive:
+            assert sorted(archive.namelist()) == [
+                "image_00001.png",
+                "image_00001.txt",
+                "image_00002.txt",
+                "snapshot.json",
+            ]
+            assert archive.read("image_00001.png") == kept
+            assert archive.read("image_00002.txt") == b"ohwx, blue coat\n"
+            listed = json.loads(archive.read("snapshot.json"))
+        assert [item["image_included"] for item in listed["items"]] == [True, False]
+        assert listed["trigger_word"] == "ohwx"
+
+        # The set links to the LoRAs trained from it, and the run to its snapshot.
+        rows = {
+            row["id"]: row
+            for row in owner.get("/training/jobs", params={"set_id": set_id}).json()
+        }
+        assert rows[job_id]["model_ids"] == [lora_id]
+        assert rows[job_id]["dataset_snapshot_id"] == body["id"]
+        assert rows[bare_id]["model_ids"] == []
+        detail = owner.get(f"/training/jobs/{job_id}").json()
+        assert detail["model_ids"] == [lora_id]
+        live = owner.get(f"/training/jobs/{job_id}/live").json()
+        assert live["dataset_snapshot_id"] == body["id"]
+
+        # A run with no snapshot, and one that does not exist, answer 404.
+        assert owner.get(f"/training/jobs/{bare_id}/snapshot").status_code == 404
+        assert owner.get(f"/training/jobs/{bare_id}/snapshot/export").status_code == (
+            404
+        )
+        assert owner.get("/training/jobs/999999/snapshot").status_code == 404
+
+        # A READ token is refused both, beside the owner's positive above.
+        scoped = _scoped_client(server, read_token)
+        assert scoped.get(f"/training/jobs/{job_id}/snapshot").status_code == 403
+        r = scoped.get(f"/training/jobs/{job_id}/snapshot/export")
+        assert r.status_code == 403, r.text
+
+        # Deleting the run takes its snapshot with it.
+        assert owner.delete(f"/training/jobs/{job_id}").status_code == 200
+        assert hub.fetchone("SELECT COUNT(*) FROM dataset_snapshot")[0] == 0
     finally:
         _teardown(temp_dir, server)
 

@@ -36,7 +36,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from pixlstash.event_types import EventType
-from pixlstash.hub import training_runs
+from pixlstash.hub import dataset_snapshots, training_runs
 from pixlstash.hub.db import HubDatabase, now_iso
 from pixlstash.pixl_logging import get_logger
 from pixlstash.resources.aitoolkit_tenant import AiToolkitProbe
@@ -758,6 +758,8 @@ class TrainingService:
             dataset_snapshot_path=manifest.get("dest_dir"),
             dataset_picture_ids=json.dumps(manifest.get("picture_ids") or []),
         )
+        if not self._record_snapshot(info, manifest):
+            return  # snapshot error already recorded
 
         # 2. Wait for the arbiter: PixlStash yields the card, an idle ComfyUI
         # frees it, and the Tasks tab shows the job waiting until then.
@@ -1534,7 +1536,7 @@ class TrainingService:
 
     @staticmethod
     def _remove_tree(path: str) -> None:
-        """Remove a probe or preview pass's own folder, if it is there."""
+        """Remove a folder the service made for a run, if it is there."""
         if not os.path.isdir(path):
             return
         try:
@@ -1886,6 +1888,11 @@ class TrainingService:
             The dataset manifest, or ``None`` if the build raised (the job is
             marked ``error`` in that case).
         """
+        # A run rebuilt after a restart starts from an empty folder: the
+        # trainer reads every file in it, so a leftover from the first build
+        # would train without being in the snapshot. The folder is this run's
+        # own (``pixlstash-<uuid>``, see _run_folders).
+        self._remove_tree(dataset_dir)
         os.makedirs(dataset_dir, exist_ok=True)
         try:
             return self._dataset_builder(
@@ -1901,6 +1908,44 @@ class TrainingService:
                 info["uuid"], status="error", message="Dataset build failed"
             )
             return None
+
+    def _record_snapshot(self, info: dict, manifest: dict) -> bool:
+        """Freeze what the run is about to train on (#2123).
+
+        A run whose lineage cannot be recorded does not train: the LoRA it
+        made would name a dataset nobody can show.
+
+        Args:
+            info: Queued-job fields.
+            manifest: The dataset builder's manifest, with its ``items``.
+
+        Returns:
+            True when the snapshot is stored; False when it failed and the job
+            was marked ``error``.
+        """
+        hub, library_uuid = self._store()
+        try:
+            dataset_snapshots.record_snapshot(
+                hub,
+                library_uuid=library_uuid,
+                run_uuid=info["uuid"],
+                set_id=info.get("set_id"),
+                character_id=info.get("character_id"),
+                trigger_word=manifest.get("trigger_word"),
+                caption_mode=manifest.get("caption_mode"),
+                items=manifest.get("items") or [],
+            )
+            return True
+        except Exception:
+            logger.exception(
+                "Job %s: the dataset snapshot of %s could not be recorded",
+                info["uuid"],
+                manifest.get("dest_dir"),
+            )
+            msg = "Dataset snapshot could not be recorded"
+            self._update_job(info["uuid"], status="error", error=msg)
+            self._emit_progress(info["uuid"], status="error", message=msg)
+            return False
 
     def _make_backend(self) -> TrainerBackend:
         """Construct a trainer backend from the owner's ai-toolkit config.
