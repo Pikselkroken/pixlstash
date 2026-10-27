@@ -44,25 +44,25 @@
     <span v-else class="star-overlay__stars">
       <template v-if="stars">
       <span class="star-overlay__full">
-      <span v-for="n in max" :key="n" class="star-slot">
-        <Tooltip
-          :text="`Set rating ${n} (${n})`"
-          activator="parent"
-          :describe="false"
-        />
-        <v-icon
-          :icon="STAR"
-          :size="iconSize"
-          :color="
-            n <= dScore
-              ? 'rgba(var(--v-theme-accent))'
-              : 'rgba(var(--v-theme-on-background), 0.6)'
-          "
-          :aria-label="`Set rating ${n} (${n})`"
-          style="cursor: pointer"
-          @click.stop="handleClick(n)"
-        />
-      </span>
+        <span v-for="n in max" :key="n" class="star-slot">
+          <Tooltip
+            :text="`Set rating ${n} (${n})`"
+            activator="parent"
+            :describe="false"
+          />
+          <v-icon
+            :icon="STAR"
+            :size="iconSize"
+            :color="
+              n <= dScore
+                ? 'rgba(var(--v-theme-accent))'
+                : 'rgba(var(--v-theme-on-background), 0.6)'
+            "
+            :aria-label="`Set rating ${n} (${n})`"
+            style="cursor: pointer"
+            @click.stop="handleClick(n)"
+          />
+        </span>
       </span>
       <!-- The short form, "3★", for a host too narrow for the row: it shows
            only inside a `score-strip` size container (the grid tile's corner)
@@ -226,11 +226,12 @@ function cycleRating() {
   color: rgb(var(--v-theme-accent));
 }
 
-/* Below this the row runs into the stack count in the tile's other corner, so
-   the strip says the score as "3★". The host sets the container's em to the
-   star size: five stars and the heart are 6em, and the hairline, the pill
-   padding, a two-digit stack count and the gap to it are the 64px. Named, so
-   only a host that declares the container ever shortens. */
+/* The container is the tile's width. Below the room the full row needs beside
+   the stack count in the other corner, the strip says the score as "3★". The
+   host sets the container's em to the star size, so the threshold is in stars:
+   five stars and the heart are 6em, and the hairline, the pill padding, a
+   two-digit stack count and the gap to it are the 64px. Named, so a host that
+   passes `shortens` without declaring the container keeps the full row. */
 @container score-strip (max-width: calc(6em + 64px)) {
   .star-overlay__full {
     display: none;

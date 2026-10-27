@@ -201,6 +201,7 @@ describe("StackBadge - activation", () => {
 // start of each, enough to tell them apart.
 const ALERT = expect.stringMatching(/^svg:M12 2\.02 0\.98 21H/);
 const STACK = expect.stringMatching(/^svg:M21\.98 15\.98V3\.98/);
+const DUPLICATE = expect.stringMatching(/^svg:M11\.02 17\.02H3\.98/);
 
 function mountBadgeWithGlyph(props = {}) {
   return mount(StackBadge, {
@@ -221,6 +222,11 @@ describe("StackBadge: the mixed-stack flag (design D5)", () => {
     expect(wrapper.find(".sbico").attributes("icon")).toEqual(ALERT);
     // The count is still there: the flag adds a fact, it does not replace one.
     expect(wrapper.find(".sbcount").text()).toBe("4");
+  });
+
+  it("draws an unresolved group with the duplicate glyph", () => {
+    const wrapper = mountBadgeWithGlyph({ count: 4, unresolved: true });
+    expect(wrapper.find(".sbico").attributes("icon")).toEqual(DUPLICATE);
   });
 
   it("is a plain count when it is not flagged", () => {
