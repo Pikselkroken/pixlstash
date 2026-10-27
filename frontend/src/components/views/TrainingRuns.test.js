@@ -591,6 +591,23 @@ describe("staying current without moving the ground", () => {
     expect(boxes[1].element.checked).toBe(true);
   });
 
+  it("offers no import once a re-read of the folder fails", async () => {
+    // The error hides the grid; the pill and its delete warning must not stay
+    // behind it, importing runs the failed read could not confirm.
+    const wrapper = await openWith([run()]);
+    await tick(wrapper, "Clementine");
+    expect(importBtn(wrapper)).toBeDefined();
+
+    listRuns.mockRejectedValue(new Error("gone"));
+    window.dispatchEvent(new Event("focus"));
+    await settle(wrapper);
+
+    expect(wrapper.find("[role='alert']").exists()).toBe(true);
+    expect(wrapper.find(".selbar-float").exists()).toBe(false);
+    expect(importBtn(wrapper)).toBeUndefined();
+    expect(wrapper.find(".tr-warning").exists()).toBe(false);
+  });
+
   it("drops only the runs that are gone, keeping the rest ticked", async () => {
     const wrapper = await openWith([run(), run("Foxglove"), run("Hazel")]);
     await tick(wrapper, "Clementine");
