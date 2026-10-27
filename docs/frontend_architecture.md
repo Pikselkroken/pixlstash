@@ -6538,7 +6538,11 @@ position the server confirmed.
 In the Workflows workspace the left column is `WorkflowsSidebar.vue`, not
 `SideBar`: `App.vue` mounts it on `isWorkflowsView` and keeps `SideBar` mounted
 behind a `v-show` wrapper (`display: contents`, since `SideBar` is multi-root),
-so `sidebarRef`, the importer and its drop targets stay alive.
+so `sidebarRef`, the importer and its drop targets stay alive. Like the Models
+sidebar it takes the library sidebar's width (`userPrefsStore.sidebarWidth`)
+and its right rule (`--v-theme-border`), so a workspace switch moves neither
+the edge, the toolbar nor the header slot. Neither has a docked form yet: with
+the library sidebar docked, both still draw at full width.
 
 - **Places**, one lit at a time: *All workflows*, *Favourites*
   (`filters.favouritesOnly`) and *Recently used* (`filters.recent`: a

@@ -541,7 +541,7 @@ function openRuns() {
   box-sizing: border-box;
   background: rgb(var(--v-theme-sidebar));
   color: rgb(var(--v-theme-sidebar-text));
-  border-right: 1px solid rgb(var(--v-theme-divider));
+  border-right: 1px solid rgb(var(--v-theme-border));
   font-size: var(--text-sm);
 }
 
