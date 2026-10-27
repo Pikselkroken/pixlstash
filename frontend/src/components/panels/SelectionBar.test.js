@@ -51,7 +51,7 @@ const TooltipStub = {
 const atePresses = vi.fn();
 const AteStub = {
   name: "AddToEntityControl",
-  props: ["type", "label", "keyHint", "disabled", "subjectIds"],
+  props: ["type", "label", "keyHint", "disabled", "subjectIds", "allowCreate"],
   setup() {
     return { press: () => atePresses() };
   },
@@ -169,6 +169,16 @@ describe("SelectionBar - the verbs on the selection (#2160)", () => {
       id: 7,
       name: "Pub nights",
     });
+  });
+
+  it("offers New set… in Add to set and forwards it to the grid (#2124)", () => {
+    wrapper = mountBar();
+    const ate = wrapper.findComponent({ name: "AddToEntityControl" });
+    // An untyped stub prop reads a bare attribute as "", absent as undefined.
+    expect(ate.props("allowCreate")).not.toBeUndefined();
+    const intent = { characterId: 7, name: "Wren" };
+    ate.vm.$emit("create", intent);
+    expect(wrapper.emitted("create-set")).toEqual([[intent]]);
   });
 
   it("opens Add to set on S", () => {

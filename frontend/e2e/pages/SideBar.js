@@ -11,7 +11,9 @@ export class SideBar {
   constructor(page) {
     this.page = page
     this.setItems = page.locator('.sidebar-set-item')
-    this.characterItems = page.locator('.sidebar-character-group .sidebar-list-item')
+    this.characterItems = page.locator(
+      '.sidebar-character-group > .sidebar-list-item:not(.sidebar-set-item)',
+    )
     // The header slot's project scope and its "Limit view to" menu (#2159).
     this.scopeButton = page.getByTestId('sidebar-scope')
     this.scopeMenu = page.getByTestId('sidebar-scope-menu')

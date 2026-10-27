@@ -30,9 +30,13 @@
 .sidebar-section-header,
 .ps-row {
   box-sizing: border-box;
-  padding-left: calc(var(--space-3) + var(--depth, 0) * var(--indent-step));
+  padding-left: calc(
+    var(--row-pad, var(--space-3)) + var(--depth, 0) * var(--indent-step)
+  );
   /* Fallback on the scale, not off it. --space-3 is 8px, so this is the same
-     edge it always was, expressed in the spacing ramp. */
+     edge it always was, expressed in the spacing ramp. `--row-pad` is set only
+     by a container that insets its rows (the sidebar's tree group, #2124),
+     which takes its own inset off so the rows keep the outer column. */
   padding-right: var(--sidebar-right-edge, var(--space-3));
   border-left: 3px solid transparent;
 }

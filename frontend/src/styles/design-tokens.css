@@ -58,6 +58,19 @@
                            sidebar overrides it from its thumbnail slider. */
 
   /* ---------------------------------------------------------------------------
+     TREE - the sidebar's child sets (#2124). A guide line drops from a parent's
+     mark and elbows into each child; an expanded parent and its children sit on
+     one faintly raised group, with no rule between the parent and its
+     children (one cut the parent's first line). See
+     visual-language.md §5.1, "Child rows".
+     --------------------------------------------------------------------------- */
+  --tree-guide: rgba(var(--v-theme-on-surface), 0.3);  /* decorative: the indent
+                           and the smaller mark carry "belongs to" too, so the
+                           line need not clear 3:1 on its own */
+  --group-surface: rgba(var(--v-theme-on-surface), 0.045);
+  --group-border: rgba(var(--v-theme-on-surface), 0.1);
+
+  /* ---------------------------------------------------------------------------
      CONTROL HEIGHT - the two button dialects (buttons.md). A raised control
      (`AppButton`, and the fields beside it) is --control-h, compact
      --control-h-sm, which is also the WCAG 2.2 24px pointer floor. A flat bar

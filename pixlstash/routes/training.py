@@ -29,11 +29,10 @@ import psutil
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
-from sqlmodel import select
 from starlette.background import BackgroundTask
 
 from pixlstash.database import DBPriority
-from pixlstash.db_models import Character, User
+from pixlstash.db_models import Character, PictureSet, User
 from pixlstash.hub import dataset_snapshots, training_runs
 from pixlstash.hub.db import now_iso
 from pixlstash.pixl_logging import get_logger
@@ -41,6 +40,7 @@ from pixlstash.resources.arbiter import arbiter
 from pixlstash.resources.ledger import ledger
 from pixlstash.resources.ledger import ram as read_ram
 from pixlstash.services.model_folder_scanner import SOURCE_FOLDER_KIND
+from pixlstash.services.picture_set_tree import owning_character_id
 from pixlstash.services.training_service import handle_for_run
 from pixlstash.training import (
     ai_toolkit_install,
@@ -734,6 +734,13 @@ def create_router(server) -> APIRouter:
         all_count: int = Field(
             ..., description="Pictures a run of every picture of it would hold."
         )
+        child_set: Optional[dict] = Field(
+            default=None,
+            description=(
+                "The set asked for when it sits under this character rather than "
+                "being its reference set: { id, name, count }."
+            ),
+        )
 
     class DatasetResponse(BaseModel):
         """What a run of the set or character would train on, and its checks."""
@@ -768,6 +775,13 @@ def create_router(server) -> APIRouter:
             description="Pictures showing a face named as another character.",
         )
         character: Optional[DatasetCharacter] = None
+        parent_set_id: Optional[int] = Field(
+            default=None,
+            description=(
+                "The set this set sits under, if any: with no character, a "
+                "concept LoRA's dataset (#2124)."
+            ),
+        )
 
     class ResolveResponse(BaseModel):
         """What a run would use on this machine, before it is queued."""
@@ -1224,9 +1238,10 @@ def create_router(server) -> APIRouter:
     def _scope(set_id, character_id) -> tuple[Optional[int], Optional[int]]:
         """The set the pictures come from and the character the run is filed under.
 
-        A set, a character, or a character with its own reference set. A
-        reference set given alone is filed under its character, so the LoRA
-        shows up there.
+        A set, a character, or a character with one of its own sets. A
+        reference set, or a set under a person (directly or through other
+        sets), given alone is filed under that person, so the LoRA shows up
+        there.
         """
         if set_id is None and character_id is None:
             raise HTTPException(
@@ -1236,18 +1251,13 @@ def create_router(server) -> APIRouter:
         if set_id is None:
             return None, character_id
 
-        def owner_of(session):
-            return session.exec(
-                select(Character.id).where(Character.reference_picture_set_id == set_id)
-            ).first()
-
-        owner = server.vault.db.run_task(owner_of)
+        owner = server.vault.db.run_task(owning_character_id, set_id)
         if character_id is not None and owner != character_id:
             raise HTTPException(
                 status_code=400,
                 detail=(
                     "A set_id and a character_id together must name that "
-                    "character's reference set."
+                    "character's reference set or a set under that character."
                 ),
             )
         return set_id, owner
@@ -2141,6 +2151,11 @@ def create_router(server) -> APIRouter:
         facts = ExportUtils.training_facts(
             server, set_id=set_id, character_id=character_id
         )
+        scoped_set = (
+            server.vault.db.run_task(lambda session: session.get(PictureSet, set_id))
+            if set_id is not None
+            else None
+        )
         character = None
         if character_id is not None:
             row = server.vault.db.run_task(
@@ -2155,13 +2170,14 @@ def create_router(server) -> APIRouter:
             def count(**scope):
                 return ExportUtils.count_training_pictures(server, **scope)
 
+            is_child = set_id is not None and set_id != ref
             character = {
                 "id": row.id,
                 "name": row.name,
                 "reference_set_id": ref,
                 "reference_count": (
                     facts["count"]
-                    if set_id is not None
+                    if set_id is not None and not is_child
                     else (count(set_id=ref) if ref is not None else 0)
                 ),
                 "all_count": (
@@ -2169,12 +2185,20 @@ def create_router(server) -> APIRouter:
                     if set_id is None
                     else count(character_id=character_id)
                 ),
+                "child_set": None,
             }
+            if is_child:
+                character["child_set"] = {
+                    "id": set_id,
+                    "name": scoped_set.name if scoped_set is not None else "",
+                    "count": facts["count"],
+                }
         return {
             "set_id": set_id,
             "character_id": character_id,
             "min_pictures": MIN_PICTURES,
             "character": character,
+            "parent_set_id": scoped_set.parent_set_id if scoped_set else None,
             **facts,
         }
 

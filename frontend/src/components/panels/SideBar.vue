@@ -74,6 +74,13 @@ import {
 } from "../../utils/projectMembership.js";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import {
+  ancestorsOf,
+  buildSetTree,
+  flattenBranch,
+  treeGuideX,
+  treeSpacerWidth,
+} from "../../utils/setTree.js";
+import {
   SET_COLORS,
   SET_ICON_CATEGORIES,
   ICON_CARDS,
@@ -85,6 +92,7 @@ import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useSetTreeExpansion } from "../../composables/useSetTreeExpansion";
 import { useRoute } from "vue-router";
 import { useDedupStore, scopeKey } from "../../stores/useDedupStore";
 import { useMovesStore } from "../../stores/useMovesStore";
@@ -229,6 +237,11 @@ const labelRefs = new Map();
 const labelObservers = new Map();
 
 const dragOverSet = ref(null);
+
+// Which parents in the People and Sets trees are open (#2124), kept in
+// localStorage so the tree's shape survives a reload.
+const { expandedTreeKeys, toggleTreeKey, expandTreeKeys } =
+  useSetTreeExpansion();
 
 function selectProjectNode(p) {
   // Explicit entry click → navigate. Unlike a tab switch, clicking a specific
@@ -1641,6 +1654,128 @@ const visibleSets = computed(() => {
   );
 });
 
+// --- Child sets (#2124): People and Sets as trees ---
+// The docked rail stays flat; only the expanded list nests.
+const setTree = computed(() =>
+  buildSetTree(
+    visibleSets.value,
+    visibleCharacters.value.map((c) => c.id),
+  ),
+);
+
+function isTreeOpen(key) {
+  return expandedTreeKeys.value.has(key);
+}
+
+function branchRows(children) {
+  return flattenBranch(children, setTree.value.bySet, (id) =>
+    isTreeOpen(`s:${id}`),
+  );
+}
+
+/** A person's open branch: their child sets, or nothing while collapsed. */
+const treeRowsByCharacter = computed(() => {
+  const out = new Map();
+  for (const [charId, kids] of setTree.value.byCharacter) {
+    out.set(charId, isTreeOpen(`c:${charId}`) ? branchRows(kids) : []);
+  }
+  return out;
+});
+
+/** The Sets section: each top-level set followed by its open branch. */
+const setSectionGroups = computed(() =>
+  setTree.value.roots.map((root) => {
+    const kids = setTree.value.bySet.get(Number(root.id)) ?? [];
+    const open = kids.length > 0 && isTreeOpen(`s:${root.id}`);
+    return {
+      root,
+      open,
+      rows: [
+        { set: root, level: 0, last: true, rails: [], childCount: kids.length, expanded: open },
+        ...(open ? branchRows(kids) : []),
+      ],
+    };
+  }),
+);
+
+function characterChildCount(charId) {
+  return setTree.value.byCharacter.get(Number(charId))?.length ?? 0;
+}
+
+function childSetsLabel(n) {
+  return n === 1 ? "1 set" : `${n} sets`;
+}
+
+/** Open the branch that holds the selected set, so the selection is never hidden. */
+watch(
+  () => [...selectedSetIdSet.value, visibleSets.value.length > 0],
+  () => {
+    const ids = [...selectedSetIdSet.value];
+    const keys = [];
+    for (const id of ids) {
+      const { setIds, characterId } = ancestorsOf(id, visibleSets.value);
+      keys.push(...setIds.map((sid) => `s:${sid}`));
+      if (characterId != null) keys.push(`c:${characterId}`);
+    }
+    if (keys.length) expandTreeKeys(keys);
+  },
+  { immediate: true },
+);
+
+/**
+ * Open a parent the moment it gains a set that did not exist before, so a set
+ * just made inside a person or set (from the picker or the menu) is on screen,
+ * not behind a closed chevron. The first list is the baseline, not news.
+ *
+ * "Did not exist" is judged against every set, not the scoped tree: a project
+ * switch brings existing sets into view, and judged against the tree those
+ * read as new and opened every parent.
+ */
+let knownSetIds = null;
+watch(setTree, (tree) => {
+  const now = new Map();
+  for (const [id, kids] of tree.byCharacter) now.set(`c:${id}`, kids);
+  for (const [id, kids] of tree.bySet) now.set(`s:${id}`, kids);
+  if (knownSetIds) {
+    const keys = [];
+    for (const [key, kids] of now) {
+      if (kids.some((kid) => !knownSetIds.has(Number(kid.id)))) {
+        keys.push(key);
+        if (key.startsWith("s:")) {
+          const { setIds, characterId } = ancestorsOf(
+            Number(key.slice(2)),
+            visibleSets.value,
+          );
+          keys.push(...setIds.map((sid) => `s:${sid}`));
+          if (characterId != null) keys.push(`c:${characterId}`);
+        }
+      }
+    }
+    if (keys.length) expandTreeKeys(keys);
+  }
+  // The baseline is taken once both lists have arrived: people landing after
+  // the sets would otherwise move every person's sets under them at once and
+  // read as news, opening them all.
+  if (entityLists.has("sets") && entityLists.has("characters")) {
+    knownSetIds = new Set(pictureSets.value.map((s) => Number(s.id)));
+  }
+});
+
+/** ArrowRight opens a parent row, ArrowLeft closes it; the rest is the row's. */
+function onTreeRowKeydown(key, childCount, event) {
+  if (childCount > 0 && event.key === "ArrowRight" && !isTreeOpen(key)) {
+    event.preventDefault();
+    toggleTreeKey(key);
+    return;
+  }
+  if (childCount > 0 && event.key === "ArrowLeft" && isTreeOpen(key)) {
+    event.preventDefault();
+    toggleTreeKey(key);
+    return;
+  }
+  activateOnEnterOrSpace(event);
+}
+
 // --- Similarity Character Dropdown State ---
 const SIMILARITY_SORT_KEY = "CHARACTER_LIKENESS"; // Adjust if backend uses a different key
 const DATE_SORT_KEY = "DATE";
@@ -1773,9 +1908,27 @@ const sidebarIsNarrow = computed(
     (sidebarDragWidth.value ?? sidebarWidthModel.value ?? 240) < 150,
 );
 
+/** The mark of a tree row: the setting at the top level, the child size below. */
+function treeMarkPx(level) {
+  return level > 0 ? treeKidThumbPx.value : sidebarThumbnailSizeModel.value;
+}
+
+/**
+ * A child set's mark: a fixed 0.6 of the setting, so every size in the tree
+ * (marks, row heights, guide positions) grows in step with the one slider.
+ * 16px is the floor a set glyph stays legible at.
+ */
+const treeKidThumbPx = computed(() =>
+  Math.max(16, Math.round(sidebarThumbnailSizeModel.value * 0.6)),
+);
+
 const sidebarThumbStyle = computed(() => {
   const style = {
     "--sidebar-thumb-size": `${sidebarThumbnailSizeModel.value}px`,
+    // The media list pins its places rows at 20px; People and Sets take the
+    // thumbnail-size setting for their top-level rows (#2124).
+    "--sidebar-entity-thumb": `${sidebarThumbnailSizeModel.value}px`,
+    "--tree-kid-thumb": `${treeKidThumbPx.value}px`,
     "--sidebar-font-scale": sidebarFontScale.value,
   };
   // Apply the resized width only when expanded; docked width is driven by the
@@ -2534,10 +2687,94 @@ async function toggleSetLock(set) {
   }
 }
 
+// --- Child sets (#2124): New set inside…, Move out of… ---
+
+// Sets nest three levels at most, counting the person or top-level set; the
+// server refuses deeper (picture_set_tree.MAX_DEPTH).
+const MAX_SET_DEPTH = 2;
+const SET_DEPTH_REASON =
+  "Sets nest three levels deep at most, counting the person or top-level set.";
+
+/**
+ * How far below its person or top-level set a set sits (0 at the top). A
+ * chain that stops at a parent outside the list (another scope) counts as
+ * full, so the menu never offers a create the server would refuse.
+ */
+function setDepth(set) {
+  const { setIds, characterId, resolved } = ancestorsOf(
+    set?.id,
+    pictureSets.value,
+  );
+  if (!resolved) return MAX_SET_DEPTH;
+  return setIds.length + (characterId != null ? 1 : 0);
+}
+
+/** Whether a set sits under anything, listed here or not. */
+function setHasParent(set) {
+  return set?.parent_set_id != null || set?.parent_character_id != null;
+}
+
+/** The display name of the set or person a set sits under, or "". */
+function setParentName(set) {
+  if (set?.parent_set_id != null) {
+    return (
+      pictureSets.value.find((s) => s.id === set.parent_set_id)?.name ?? ""
+    );
+  }
+  if (set?.parent_character_id != null) {
+    return (
+      sortedCharacters.value.find((c) => c.id === set.parent_character_id)
+        ?.name ?? ""
+    );
+  }
+  return "";
+}
+
+/**
+ * Open the set editor for a new set under a set or a person. The child joins
+ * its parent's projects, so it shows where the parent does.
+ */
+function createChildSet({ setId = null, characterId = null, name = "" }) {
+  closeSidebarCtxMenu();
+  const parent =
+    setId != null
+      ? pictureSets.value.find((s) => s.id === setId)
+      : sortedCharacters.value.find((c) => c.id === characterId);
+  const projectIds = parent ? getEntityProjectIds(parent) : [];
+  setEditorSet.value = {
+    ...(projectIds.length ? { project_ids: projectIds } : {}),
+    ...nextSetAppearance(nonReferenceSets.value),
+    parent_set_id: setId,
+    parent_character_id: characterId,
+    parent_name: name || parent?.name || "",
+  };
+  setEditorOpen.value = true;
+}
+
+async function moveSetToTop(set) {
+  closeSidebarCtxMenu();
+  if (!set?.id) return;
+  try {
+    await patchPictureSet(set.id, {
+      parent_set_id: null,
+      parent_character_id: null,
+    });
+    refreshSidebar();
+  } catch (e) {
+    console.error("Failed to move the set out of its parent", e);
+    noticeStore.error(
+      `Couldn't move ${set.name} out. ${errorDetail(e) || "Please try again."}`,
+      { key: "set-move-out" },
+    );
+  }
+}
+
 // Tooltip on the Delete entry when a set is locked (set-scoped; the store's
 // lockReason is picture-scoped for the grid/overlay).
 const SET_LOCK_REASON =
   "This set is locked. Unlock it first (Unlock set) to delete it.";
+const SET_LOCK_MOVE_REASON =
+  "This set is locked. Unlock it first (Unlock set) to move it.";
 
 // Tooltip on the lock indicator shown on a locked set row (expanded row icon and
 // the collapsed-dock/flyout variants). Single-sourced so every set-row surface
@@ -5191,7 +5428,14 @@ defineExpose({
               <div
                 v-for="char in visibleCharacters"
                 :key="char.id"
-                class="sidebar-character-group"
+                :class="[
+                  'sidebar-character-group',
+                  {
+                    'sidebar-tree-group':
+                      characterChildCount(char.id) &&
+                      isTreeOpen(`c:${char.id}`),
+                  },
+                ]"
               >
                 <div
                   :class="[
@@ -5222,7 +5466,18 @@ defineExpose({
                   @click="
                     selectCharacter(char.id, char.name || 'Character', $event)
                   "
-                  @keydown="activateOnEnterOrSpace"
+                  :aria-expanded="
+                    characterChildCount(char.id)
+                      ? String(isTreeOpen(`c:${char.id}`))
+                      : undefined
+                  "
+                  @keydown="
+                    onTreeRowKeydown(
+                      `c:${char.id}`,
+                      characterChildCount(char.id),
+                      $event,
+                    )
+                  "
                   @contextmenu.prevent="
                     openSidebarCtxMenu('character', char, $event)
                   "
@@ -5238,6 +5493,28 @@ defineExpose({
                   <Tooltip
                     :text="`${char.name || 'Character'} (Ctrl/Cmd + click to multi-select)`"
                     activator="parent"
+                  />
+                  <button
+                    v-if="characterChildCount(char.id)"
+                    type="button"
+                    class="sidebar-tree-toggle"
+                    tabindex="-1"
+                    :aria-label="`${isTreeOpen(`c:${char.id}`) ? 'Hide' : 'Show'} the sets in ${char.name}`"
+                    @click.stop="toggleTreeKey(`c:${char.id}`)"
+                  >
+                    <v-icon size="16">{{
+                      isTreeOpen(`c:${char.id}`)
+                        ? "mdi-chevron-down"
+                        : "mdi-chevron-right"
+                    }}</v-icon>
+                  </button>
+                  <span
+                    v-if="
+                      characterChildCount(char.id) && isTreeOpen(`c:${char.id}`)
+                    "
+                    class="sidebar-tree-stub"
+                    :style="{ '--tree-stub-x': treeGuideX(1) }"
+                    aria-hidden="true"
                   />
                   <span class="sidebar-list-icon">
                     <img
@@ -5274,6 +5551,11 @@ defineExpose({
                       </template>
                       <span>{{ char.name }}</span>
                     </Tooltip>
+                    <span
+                      v-if="characterChildCount(char.id)"
+                      class="sidebar-tree-sub"
+                      >{{ childSetsLabel(characterChildCount(char.id)) }}</span
+                    >
                   </span>
                   <span class="sidebar-character-actions">
                     <Tooltip
@@ -5296,6 +5578,173 @@ defineExpose({
                       <span>{{ categoryCounts[char.id] ?? "" }}</span>
                     </span>
                   </span>
+                </div>
+                <div
+                  v-for="row in treeRowsByCharacter.get(Number(char.id)) ?? []"
+                  :key="`tree-${row.set.id}`"
+                  :class="[
+                    'sidebar-list-item',
+                    'sidebar-set-item',
+                    {
+                      'sidebar-tree-kid': row.level > 0,
+                      'sidebar-tree-kid--last': row.level > 0 && row.last,
+                      'sidebar-tree-kid--parent':
+                        row.level > 0 && row.childCount > 0,
+                      active:
+                        selectedSetIdSet.has(row.set.id) &&
+                        selectionOwnsHighlight,
+                      droppable: dragOverSet === row.set.id && !dropRejected,
+                      'not-droppable':
+                        dragOverSet === row.set.id && dropRejected,
+                    },
+                  ]"
+                  :style="{
+                    '--tree-x': treeGuideX(row.level),
+                    '--tree-spacer': treeSpacerWidth(row.level),
+                  }"
+                  :ref="(el) => registerSetRef(row.set.id, el)"
+                  role="button"
+                  tabindex="0"
+                  :aria-pressed="
+                    selectedSetIdSet.has(row.set.id) && selectionOwnsHighlight
+                      ? 'true'
+                      : 'false'
+                  "
+                  :aria-expanded="row.childCount ? String(row.expanded) : undefined"
+                  @click="
+                    selectSet(row.set.id, row.set.name || 'Picture Set', $event)
+                  "
+                  @keydown="
+                    onTreeRowKeydown(`s:${row.set.id}`, row.childCount, $event)
+                  "
+                  @contextmenu.prevent="
+                    openSidebarCtxMenu('set', row.set, $event)
+                  "
+                  @dragover="dragOverSetItem(row.set.id, $event)"
+                  @dragleave="dragLeaveSetItem($event)"
+                  @drop.prevent="handleDropOnSet(row.set.id, $event)"
+                >
+                  <Tooltip
+                    :text="`${row.set.name || 'Picture Set'} (Ctrl/Cmd + click to multi-select)`"
+                    activator="parent"
+                  />
+                  <button
+                    v-if="row.childCount"
+                    type="button"
+                    class="sidebar-tree-toggle"
+                    tabindex="-1"
+                    :aria-label="`${row.expanded ? 'Hide' : 'Show'} the sets in ${row.set.name}`"
+                    @click.stop="toggleTreeKey(`s:${row.set.id}`)"
+                  >
+                    <v-icon size="16">{{
+                      row.expanded ? "mdi-chevron-down" : "mdi-chevron-right"
+                    }}</v-icon>
+                  </button>
+                  <span
+                    v-if="row.level > 0"
+                    class="sidebar-tree-spacer"
+                    aria-hidden="true"
+                  >
+                    <span
+                      v-for="level in row.rails"
+                      :key="level"
+                      class="sidebar-tree-rail"
+                      :style="{ '--tree-x': treeGuideX(level) }"
+                    />
+                  </span>
+                  <span
+                    v-if="row.expanded"
+                    :class="[
+                      'sidebar-tree-stub',
+                      { 'sidebar-tree-stub--kid': row.level > 0 },
+                    ]"
+                    :style="{ '--tree-stub-x': treeGuideX(row.level + 1) }"
+                    aria-hidden="true"
+                  />
+                  <span
+                    :class="[
+                      'sidebar-list-icon',
+                      { 'sidebar-tree-mark': row.level > 0 },
+                    ]"
+                  >
+                    <v-icon
+                      v-if="row.set.set_icon && row.set.set_icon !== ICON_CARDS"
+                      :size="treeMarkPx(row.level) - 4"
+                      :color="row.set.set_color || undefined"
+                      >{{ row.set.set_icon }}</v-icon
+                    >
+                    <img
+                      v-else-if="hasSetThumbnail(row.set)"
+                      :src="getSetThumbnail(row.set.id)"
+                      alt=""
+                      class="sidebar-set-thumb-image"
+                      :width="treeMarkPx(row.level)"
+                      :height="treeMarkPx(row.level)"
+                      :style="
+                        row.set.set_color
+                          ? {
+                              filter: row.level
+                                ? `drop-shadow(0 0 2px ${row.set.set_color}) drop-shadow(0 0 1px ${row.set.set_color})`
+                                : `drop-shadow(0 0 3px ${row.set.set_color}) drop-shadow(0 0 8px ${row.set.set_color})`,
+                            }
+                          : {}
+                      "
+                      @load="handleSetThumbnailLoad(row.set.id)"
+                      @error="handleSetThumbnailError(row.set.id)"
+                    />
+                    <v-icon v-else :size="treeMarkPx(row.level) - 4"
+                      >mdi-image-album</v-icon
+                    >
+                  </span>
+                  <span class="sidebar-list-label">
+                    <Tooltip
+                      location="top"
+                      :disabled="!labelNeedsTooltip(`set-${row.set.id}`)"
+                      :describe="false"
+                    >
+                      <template #activator="{ props }">
+                        <span
+                          v-bind="
+                            withRef(props, (el) =>
+                              registerLabelRef(`set-${row.set.id}`, el),
+                            )
+                          "
+                          class="sidebar-list-label-text"
+                          >{{ row.set.name }}</span
+                        >
+                      </template>
+                      <span>{{ row.set.name }}</span>
+                    </Tooltip>
+                    <span v-if="row.childCount" class="sidebar-tree-sub">{{
+                      childSetsLabel(row.childCount)
+                    }}</span>
+                  </span>
+                  <Tooltip v-if="row.set.locked" :text="SET_LOCKED_ROW_TITLE">
+                    <template #activator="{ props: tipProps }">
+                      <v-icon
+                        v-bind="tipProps"
+                        class="sidebar-lock-icon"
+                        size="11"
+                        >mdi-lock-outline</v-icon
+                      >
+                    </template>
+                  </Tooltip>
+                  <Tooltip
+                    v-if="sharedSetIds.has(row.set.id)"
+                    text="Has active share links"
+                  >
+                    <template #activator="{ props: tipProps }">
+                      <v-icon
+                        v-bind="tipProps"
+                        class="sidebar-shared-icon"
+                        size="11"
+                        >mdi-link-variant</v-icon
+                      >
+                    </template>
+                  </Tooltip>
+                  <span class="sidebar-list-count">{{
+                    row.set.picture_count ?? 0
+                  }}</span>
                 </div>
               </div>
             </div>
@@ -5342,92 +5791,154 @@ defineExpose({
                   >Click the + button to add one.</span
                 >
               </div>
-              <template v-for="pset in visibleSets" :key="pset.id">
+              <div
+                v-for="group in setSectionGroups"
+                :key="group.root.id"
+                :class="[
+                  { 'sidebar-tree-group': group.open },
+                ]"
+              >
                 <div
+                  v-for="row in group.rows"
+                  :key="`tree-${row.set.id}`"
                   :class="[
                     'sidebar-list-item',
                     'sidebar-set-item',
                     {
+                      'sidebar-tree-kid': row.level > 0,
+                      'sidebar-tree-kid--last': row.level > 0 && row.last,
+                      'sidebar-tree-kid--parent':
+                        row.level > 0 && row.childCount > 0,
                       active:
-                        selectedSetIdSet.has(pset.id) &&
+                        selectedSetIdSet.has(row.set.id) &&
                         selectionOwnsHighlight,
-                      droppable: dragOverSet === pset.id && !dropRejected,
+                      droppable: dragOverSet === row.set.id && !dropRejected,
                       'not-droppable':
-                        dragOverSet === pset.id && dropRejected,
+                        dragOverSet === row.set.id && dropRejected,
                     },
                   ]"
-                  :ref="(el) => registerSetRef(pset.id, el)"
+                  :style="{
+                    '--tree-x': treeGuideX(row.level),
+                    '--tree-spacer': treeSpacerWidth(row.level),
+                  }"
+                  :ref="(el) => registerSetRef(row.set.id, el)"
                   role="button"
                   tabindex="0"
                   :aria-pressed="
-                    selectedSetIdSet.has(pset.id) && selectionOwnsHighlight
+                    selectedSetIdSet.has(row.set.id) && selectionOwnsHighlight
                       ? 'true'
                       : 'false'
                   "
+                  :aria-expanded="row.childCount ? String(row.expanded) : undefined"
                   @click="
-                    selectSet(pset.id, pset.name || 'Picture Set', $event)
+                    selectSet(row.set.id, row.set.name || 'Picture Set', $event)
                   "
-                  @keydown="activateOnEnterOrSpace"
+                  @keydown="
+                    onTreeRowKeydown(`s:${row.set.id}`, row.childCount, $event)
+                  "
                   @contextmenu.prevent="
-                    openSidebarCtxMenu('set', pset, $event)
+                    openSidebarCtxMenu('set', row.set, $event)
                   "
-                  @dragover="dragOverSetItem(pset.id, $event)"
+                  @dragover="dragOverSetItem(row.set.id, $event)"
                   @dragleave="dragLeaveSetItem($event)"
-                  @drop.prevent="handleDropOnSet(pset.id, $event)"
+                  @drop.prevent="handleDropOnSet(row.set.id, $event)"
                 >
                   <Tooltip
-                    :text="`${pset.name || 'Picture Set'} (Ctrl/Cmd + click to multi-select)`"
+                    :text="`${row.set.name || 'Picture Set'} (Ctrl/Cmd + click to multi-select)`"
                     activator="parent"
                   />
-                  <span class="sidebar-list-icon">
+                  <button
+                    v-if="row.childCount"
+                    type="button"
+                    class="sidebar-tree-toggle"
+                    tabindex="-1"
+                    :aria-label="`${row.expanded ? 'Hide' : 'Show'} the sets in ${row.set.name}`"
+                    @click.stop="toggleTreeKey(`s:${row.set.id}`)"
+                  >
+                    <v-icon size="16">{{
+                      row.expanded ? "mdi-chevron-down" : "mdi-chevron-right"
+                    }}</v-icon>
+                  </button>
+                  <span
+                    v-if="row.level > 0"
+                    class="sidebar-tree-spacer"
+                    aria-hidden="true"
+                  >
+                    <span
+                      v-for="level in row.rails"
+                      :key="level"
+                      class="sidebar-tree-rail"
+                      :style="{ '--tree-x': treeGuideX(level) }"
+                    />
+                  </span>
+                  <span
+                    v-if="row.expanded"
+                    :class="[
+                      'sidebar-tree-stub',
+                      { 'sidebar-tree-stub--kid': row.level > 0 },
+                    ]"
+                    :style="{ '--tree-stub-x': treeGuideX(row.level + 1) }"
+                    aria-hidden="true"
+                  />
+                  <span
+                    :class="[
+                      'sidebar-list-icon',
+                      { 'sidebar-tree-mark': row.level > 0 },
+                    ]"
+                  >
                     <v-icon
-                      v-if="pset.set_icon && pset.set_icon !== ICON_CARDS"
-                      size="16"
-                      :color="pset.set_color || undefined"
-                      >{{ pset.set_icon }}</v-icon
+                      v-if="row.set.set_icon && row.set.set_icon !== ICON_CARDS"
+                      :size="treeMarkPx(row.level) - 4"
+                      :color="row.set.set_color || undefined"
+                      >{{ row.set.set_icon }}</v-icon
                     >
                     <img
-                      v-else-if="hasSetThumbnail(pset)"
-                      :src="getSetThumbnail(pset.id)"
+                      v-else-if="hasSetThumbnail(row.set)"
+                      :src="getSetThumbnail(row.set.id)"
                       alt=""
-                      class="sidebar-set-thumb-image sidebar-set-thumb-image--large"
-                      width="20"
-                      height="20"
+                      class="sidebar-set-thumb-image"
+                      :width="treeMarkPx(row.level)"
+                      :height="treeMarkPx(row.level)"
                       :style="
-                        pset.set_color
+                        row.set.set_color
                           ? {
-                              filter: `drop-shadow(0 0 3px ${pset.set_color}) drop-shadow(0 0 8px ${pset.set_color})`,
+                              filter: row.level
+                                ? `drop-shadow(0 0 2px ${row.set.set_color}) drop-shadow(0 0 1px ${row.set.set_color})`
+                                : `drop-shadow(0 0 3px ${row.set.set_color}) drop-shadow(0 0 8px ${row.set.set_color})`,
                             }
                           : {}
                       "
-                      @load="handleSetThumbnailLoad(pset.id)"
-                      @error="handleSetThumbnailError(pset.id)"
+                      @load="handleSetThumbnailLoad(row.set.id)"
+                      @error="handleSetThumbnailError(row.set.id)"
                     />
-                    <v-icon v-else size="16"
+                    <v-icon v-else :size="treeMarkPx(row.level) - 4"
                       >mdi-image-album</v-icon
                     >
                   </span>
                   <span class="sidebar-list-label">
                     <Tooltip
                       location="top"
-                      :disabled="!labelNeedsTooltip(`set-${pset.id}`)"
+                      :disabled="!labelNeedsTooltip(`set-${row.set.id}`)"
                       :describe="false"
                     >
                       <template #activator="{ props }">
                         <span
                           v-bind="
                             withRef(props, (el) =>
-                              registerLabelRef(`set-${pset.id}`, el),
+                              registerLabelRef(`set-${row.set.id}`, el),
                             )
                           "
                           class="sidebar-list-label-text"
-                          >{{ pset.name }}</span
+                          >{{ row.set.name }}</span
                         >
                       </template>
-                      <span>{{ pset.name }}</span>
+                      <span>{{ row.set.name }}</span>
                     </Tooltip>
+                    <span v-if="row.childCount" class="sidebar-tree-sub">{{
+                      childSetsLabel(row.childCount)
+                    }}</span>
                   </span>
-                  <Tooltip v-if="pset.locked" :text="SET_LOCKED_ROW_TITLE">
+                  <Tooltip v-if="row.set.locked" :text="SET_LOCKED_ROW_TITLE">
                     <template #activator="{ props: tipProps }">
                       <v-icon
                         v-bind="tipProps"
@@ -5438,7 +5949,7 @@ defineExpose({
                     </template>
                   </Tooltip>
                   <Tooltip
-                    v-if="sharedSetIds.has(pset.id)"
+                    v-if="sharedSetIds.has(row.set.id)"
                     text="Has active share links"
                   >
                     <template #activator="{ props: tipProps }">
@@ -5451,10 +5962,10 @@ defineExpose({
                     </template>
                   </Tooltip>
                   <span class="sidebar-list-count">{{
-                    pset.picture_count ?? 0
+                    row.set.picture_count ?? 0
                   }}</span>
                 </div>
-              </template>
+              </div>
             </div>
           </div>
           <!-- The scoped project's attached files, which used to sit under
@@ -5856,7 +6367,22 @@ defineExpose({
           "
         >
           <v-icon class="ctx-icon">mdi-school-outline</v-icon>
-          <span class="ctx-label-text">Train LoRA</span>
+          <span class="ctx-label-text">Train LoRA…</span>
+        </button>
+        <button
+          class="ctx-item"
+          :disabled="isReadOnly"
+          @click="
+            createChildSet({
+              characterId: sidebarCtxCharacter.id,
+              name: sidebarCtxCharacter.name,
+            })
+          "
+        >
+          <v-icon class="ctx-icon">mdi-folder-plus-outline</v-icon>
+          <span class="ctx-label-text"
+            >New set in "{{ sidebarCtxCharacter.name }}"…</span
+          >
         </button>
         <button
           class="ctx-item"
@@ -5905,6 +6431,47 @@ defineExpose({
         </button>
       </template>
       <template v-if="sidebarCtxSet">
+        <!-- A LoRA dataset is a set (#2124): training it and filing a new set
+             under it lead the menu. -->
+        <button
+          class="ctx-item"
+          :disabled="isReadOnly"
+          @click="
+            emit('train-lora', {
+              type: 'set',
+              id: sidebarCtxSet.id,
+              name: sidebarCtxSet.name,
+            });
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon class="ctx-icon">mdi-school-outline</v-icon>
+          <span class="ctx-label-text">Train LoRA…</span>
+        </button>
+        <button
+          class="ctx-item"
+          :disabled="isReadOnly || setDepth(sidebarCtxSet) >= MAX_SET_DEPTH"
+          :class="{
+            'ctx-item--disabled': setDepth(sidebarCtxSet) >= MAX_SET_DEPTH,
+          }"
+          @click="
+            createChildSet({
+              setId: sidebarCtxSet.id,
+              name: sidebarCtxSet.name,
+            })
+          "
+        >
+          <Tooltip
+            :text="
+              setDepth(sidebarCtxSet) >= MAX_SET_DEPTH ? SET_DEPTH_REASON : ''
+            "
+            activator="parent"
+          />
+          <v-icon class="ctx-icon">mdi-folder-plus-outline</v-icon>
+          <span class="ctx-label-text"
+            >New set inside "{{ sidebarCtxSet.name }}"…</span
+          >
+        </button>
         <!-- Hidden on a locked set: adding to it is refused, and an action
              that cannot complete is worse than one that is not offered. -->
         <button
@@ -5980,21 +6547,6 @@ defineExpose({
         >
           <v-icon class="ctx-icon">mdi-share-variant-outline</v-icon>
           <span class="ctx-label-text">Share "{{ sidebarCtxSet.name }}"</span>
-        </button>
-        <button
-          class="ctx-item"
-          :disabled="isReadOnly"
-          @click="
-            emit('train-lora', {
-              type: 'set',
-              id: sidebarCtxSet.id,
-              name: sidebarCtxSet.name,
-            });
-            closeSidebarCtxMenu();
-          "
-        >
-          <v-icon class="ctx-icon">mdi-school-outline</v-icon>
-          <span class="ctx-label-text">Train LoRA</span>
         </button>
         <button
           class="ctx-item"
@@ -6165,6 +6717,28 @@ defineExpose({
         >
           <v-icon class="ctx-icon">mdi-link-variant-off</v-icon>
           Remove all shares
+        </button>
+        <!-- A locked set refuses the move, so it is greyed with the reason
+             rather than offered and then refused. -->
+        <button
+          v-if="setHasParent(sidebarCtxSet)"
+          class="ctx-item"
+          :disabled="isReadOnly || sidebarCtxSet.locked"
+          :class="{ 'ctx-item--disabled': sidebarCtxSet.locked }"
+          @click="moveSetToTop(sidebarCtxSet)"
+        >
+          <Tooltip
+            :text="sidebarCtxSet.locked ? SET_LOCK_MOVE_REASON : ''"
+            activator="parent"
+          />
+          <v-icon class="ctx-icon">mdi-arrow-top-left</v-icon>
+          <!-- A parent outside the current scope is not listed, so it has no
+               name to give; the set still moves. -->
+          <span class="ctx-label-text">{{
+            setParentName(sidebarCtxSet)
+              ? `Move out of "${setParentName(sidebarCtxSet)}"`
+              : "Move to the top level"
+          }}</span>
         </button>
         <button
           class="ctx-item"

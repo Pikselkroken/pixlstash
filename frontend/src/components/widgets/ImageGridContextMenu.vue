@@ -353,11 +353,13 @@
               v-bind="tipProps"
               type="set"
               placement="right"
+              allow-create
               :subject-ids="selectedImageIds"
               :disabled="!selectedImageIds.length || !!groupingLockReason"
               :readonly="isReadOnly"
               :locked-set-ids="lockedSetIds"
               @added="emit('added-to-set', $event)"
+              @create="delegateWith('create-set', $event)"
             />
           </template>
         </Tooltip>
@@ -909,6 +911,7 @@ const emit = defineEmits([
   "add-to-character",
   "remove-from-character",
   "create-character",
+  "create-set",
   "set-project",
   "remove-from-stack",
   "dissolve-stacks",

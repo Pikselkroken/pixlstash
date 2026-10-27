@@ -95,6 +95,49 @@ describe("openForScope", () => {
     expect(store.effectiveSubject).toBe(null);
     expect(store.triggerWord).toBe("pubnights");
   });
+
+  it("trains a set under a person as a character LoRA of them, on that set (#2124)", async () => {
+    const child = { id: 12, name: "LoRA v3", count: 32 };
+    training.getTrainingDataset.mockImplementation(async (params) =>
+      params.set_id === 12
+        ? dataset({
+            set_id: 12,
+            character_id: 4,
+            count: 32,
+            character: { ...GRANDAD, child_set: child },
+          })
+        : dataset({ character_id: 4, count: 140, character: GRANDAD }),
+    );
+    const store = useTrainingStore();
+    await store.openForScope({ type: "set", id: 12, name: "LoRA v3" });
+
+    expect(training.getTrainingDataset).toHaveBeenCalledTimes(1);
+    expect(store.trainOn).toBe("set");
+    expect(store.scopePayload).toEqual({ set_id: 12, character_id: 4 });
+    expect(store.effectiveSubject).toBe("person");
+    expect(store.triggerWord).toBe("grandad");
+    expect(store.pictureCount).toBe(32);
+
+    // Every picture of the person, and back: the set is still offered.
+    await store.setTrainOn("all");
+    expect(store.pictureCount).toBe(140);
+    expect(store.childSet).toEqual(child);
+    await store.setTrainOn("set");
+    expect(training.getTrainingDataset).toHaveBeenLastCalledWith({
+      set_id: 12,
+      character_id: 4,
+    });
+  });
+
+  it("starts a set under a set on A thing, a concept LoRA (#2124)", async () => {
+    training.getTrainingDataset.mockResolvedValue(
+      dataset({ set_id: 13, count: 30, parent_set_id: 9 }),
+    );
+    const store = useTrainingStore();
+    await store.openForScope({ type: "set", id: 13, name: "Neon concept v1" });
+    expect(store.character).toBe(null);
+    expect(store.subject).toBe("thing");
+  });
 });
 
 describe("pins", () => {
