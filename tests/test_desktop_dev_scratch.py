@@ -229,6 +229,31 @@ def test_a_lock_naming_a_recycled_pid_does_not_block_the_refresh(tmp_path):
     assert not (scratch_dir / "SingletonLock").exists()
 
 
+@pytest.mark.skipif(not os.path.isdir("/proc/self"), reason="needs /proc")
+def test_a_recycled_pid_with_an_unreadable_environment_is_not_in_use(
+    tmp_path, monkeypatch
+):
+    # A recycled pid now held by a non-dumpable process of the same user
+    # (ssh-agent, gpg-agent): kill(pid, 0) succeeds, its environ cannot be read.
+    scratch_mod = _load_module()
+    scratch_dir = tmp_path / "scratch"
+    scratch_dir.mkdir()
+    pid = os.getpid()
+    (scratch_dir / "SingletonLock").symlink_to(f"example-host-{pid}")
+    real_open = open
+    refused = []
+
+    def guarded_open(path, *args, **kwargs):
+        if path == f"/proc/{pid}/environ":
+            refused.append(path)
+            raise PermissionError(13, "Permission denied", path)
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(scratch_mod, "open", guarded_open, raising=False)
+    assert scratch_mod._in_use(str(scratch_dir)) is False
+    assert refused, "the environ read never happened, so nothing was tested"
+
+
 def test_down_revisions_reads_every_form_a_migration_uses():
     scratch_mod = _load_module()
     plain = 'down_revision = "0135_a"\n'
