@@ -1418,6 +1418,7 @@ import {
 import CharacterEditor from "../editors/CharacterEditor.vue";
 import PictureSetEditor from "../editors/PictureSetEditor.vue";
 import { nextSetAppearance } from "../../utils/setAppearance.js";
+import { getEntityProjectIds } from "../../utils/projectMembership.js";
 import {
   getPictureSet,
   addPictureToSet,
@@ -3945,7 +3946,7 @@ let pendingCreateSetPictureIds = [];
  */
 async function handleCreateSetFromMenu({ characterId = null, name = "" } = {}) {
   pendingCreateSetPictureIds = selectedImageIds.value.slice();
-  const [projects, sets] = await Promise.all([
+  const [projects, sets, person] = await Promise.all([
     listProjects().catch((e) => {
       console.warn("Couldn't list projects for the set editor", e);
       return [];
@@ -3954,17 +3955,31 @@ async function handleCreateSetFromMenu({ characterId = null, name = "" } = {}) {
       console.warn("Couldn't list sets to pick a new set's icon and colour", e);
       return [];
     }),
+    characterId == null
+      ? Promise.resolve(null)
+      : getCharacter(characterId).catch((e) => {
+          console.warn(
+            `Couldn't read person ${characterId} for the new set's projects; it starts in the open project`,
+            e,
+          );
+          return null;
+        }),
   ]);
   createPersonProjects.value = Array.isArray(projects) ? projects : [];
   const userSets = (Array.isArray(sets) ? sets : []).filter(
     (s) => !s?.reference_character,
   );
+  // A set under a person joins the person's projects, so it shows wherever
+  // they do (as SideBar.createChildSet does); otherwise the open project.
+  const personProjectIds = person ? getEntityProjectIds(person) : [];
   createSetDraft.value = {
     ...nextSetAppearance(userSets),
-    ...(projectStore.projectViewMode === "project" &&
-    projectStore.selectedProjectId != null
-      ? { project_id: projectStore.selectedProjectId }
-      : {}),
+    ...(personProjectIds.length
+      ? { project_ids: personProjectIds }
+      : projectStore.projectViewMode === "project" &&
+          projectStore.selectedProjectId != null
+        ? { project_id: projectStore.selectedProjectId }
+        : {}),
     parent_character_id: characterId,
     parent_name: name,
   };
