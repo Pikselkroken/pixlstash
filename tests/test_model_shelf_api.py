@@ -5069,6 +5069,28 @@ def test_a_move_relocates_the_file_and_the_row(shelf_env, move_folders):
     ]
 
 
+def test_a_move_into_a_subfolder_lands_there_and_says_so(shelf_env, move_folders):
+    """``destination_subpath`` reaches the mover and comes back in the status."""
+    (move_folders.destination_dir / "Lora").mkdir()
+    r = shelf_env.owner.post(
+        f"{API}/model-moves",
+        json={
+            "destination_folder_id": move_folders.destination_id,
+            "destination_subpath": "Lora",
+            "items": [
+                {"folder_id": move_folders.source_id, "relpath": "moving.safetensors"}
+            ],
+        },
+    )
+    assert r.status_code == 202, r.text
+    assert r.json()["destination_subpath"] == "Lora"
+
+    body = _await_move(shelf_env)
+    assert body["destination_subpath"] == "Lora"
+    assert [item["status"] for item in body["results"]] == ["moved"]
+    assert (move_folders.destination_dir / "Lora" / "moving.safetensors").exists()
+
+
 def test_a_move_is_refused_before_the_first_byte_when_it_cannot_work(
     shelf_env, move_folders
 ):

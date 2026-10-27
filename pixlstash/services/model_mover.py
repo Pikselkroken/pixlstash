@@ -102,6 +102,7 @@ from __future__ import annotations
 import errno
 import hashlib
 import os
+import posixpath
 import shutil
 import sqlite3
 import threading
@@ -206,12 +207,18 @@ class MovePlan:
 
     destination_folder_id: int
     destination_path: str
+    """The directory the files land in: the folder's path, or the subdirectory
+    of it that ``destination_subpath`` names."""
     moves: list[PlannedMove]
     bytes_to_copy: int
     """Total size of the cross-device moves only, samples directories included;
     a rename copies nothing."""
+    destination_subpath: str = ""
+    """POSIX, relative to the folder, ``""`` for its root."""
+    flatten: bool = True
+    """False for a relocation, which recreates its tree under the target."""
     skipped: list["MoveOutcome"] = field(default_factory=list)
-    """Items already in the destination folder: nothing to do, but still
+    """Items already in the destination directory: nothing to do, but still
     *reported*. Dropping them silently left a caller unable to reconcile the
     items it asked for against the results it got back."""
 
@@ -247,6 +254,35 @@ class MoveReport:
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def subpath_segments(subpath: str) -> list[str]:
+    """Split a destination subpath into its segments, refusing anything not plain.
+
+    ``""`` is the folder's root. Anything else is a relative POSIX path with no
+    empty, ``.`` or ``..`` segment and no backslash, the same rule the folder
+    listing applies to its ``path``, so the tree can only offer what a move
+    accepts. ``resolve_path_within`` still has the final word on the disk: it is
+    what refuses a symlink that leads out of the folder.
+    """
+    if subpath == "":
+        return []
+    segments = subpath.split("/")
+    if "\\" in subpath or any(segment in ("", ".", "..") for segment in segments):
+        raise MoveRefused(
+            f"{subpath!r} is not a folder inside the destination: name it "
+            "relative to the folder, with '/' between the parts."
+        )
+    return segments
+
+
+def relpath_dir(relpath: str) -> str:
+    """The POSIX directory of a stored ``relpath``, ``""`` at the folder root.
+
+    The scanner stores relpaths with ``os.sep``, so on Windows they carry
+    backslashes; a subpath arrives with ``/``. Both are compared in this form.
+    """
+    return posixpath.dirname(relpath.replace(os.sep, "/"))
 
 
 def same_device(source_path: str, destination_dir: str) -> bool:
@@ -721,6 +757,7 @@ class ModelMover:
         items: list[tuple[int, str]],
         destination_folder_id: int,
         *,
+        destination_subpath: str = "",
         flatten: bool = True,
         relocating: bool = False,
     ) -> MovePlan:
@@ -732,7 +769,15 @@ class ModelMover:
                 already gives the client for every copy of every row.
             destination_folder_id: Where they go. Must be registered, and must
                 be a folder that is catalogued in place: a ``source`` folder is
-                an ai-toolkit output root, taken *from*, never written into.
+                an ai-toolkit output root, taken *from*, never written into. It
+                must also be unlocked (``movable='per_item'``): the managed
+                store, the HuggingFace cache and the InsightFace packs relocate
+                as a whole or not at all, so nothing is dropped into them either.
+            destination_subpath: The directory inside that folder to land in,
+                POSIX and relative, ``""`` for its root. It must already exist:
+                a move never creates a directory the owner did not make, so a
+                typo cannot scatter models into a new folder ComfyUI does not
+                look in.
             flatten: True - the default, and what dropping files onto a folder
                 means - lands every file at its basename. False keeps each
                 file's ``relpath`` verbatim, subdirectories and all, which is
@@ -772,13 +817,60 @@ class ModelMover:
                 "output root or the Downloads folder. Pick a folder the shelf "
                 "catalogues.",
             )
-        destination_path = destination["path"]
-        if not os.path.isdir(destination_path):
+        if destination["movable"] != "per_item" and not relocating:
             raise MoveRefused(
-                f"Destination folder {destination_path} is not a readable "
+                "That folder is locked: PixlStash's own store, the HuggingFace "
+                "cache and the InsightFace packs are not rearranged one file at "
+                "a time, so nothing is moved into them either.",
+                status_code=409,
+            )
+        if not os.path.isdir(destination["path"]):
+            raise MoveRefused(
+                f"Destination folder {destination['path']} is not a readable "
                 "directory right now, so nothing was moved.",
                 status_code=409,
             )
+        segments = subpath_segments(destination_subpath)
+        for depth in range(1, len(segments) + 1):
+            # The folder listing never offers a link, a junction or a dot-name,
+            # and the scanner does not walk through a link, so a file moved
+            # through one would be registered at a path no rescan finds.
+            here = os.path.join(destination["path"], *segments[:depth])
+            is_junction = getattr(os.path, "isjunction", lambda _path: False)
+            if (
+                segments[depth - 1].startswith(".")
+                or os.path.islink(here)
+                or is_junction(here)
+            ):
+                raise MoveRefused(
+                    f"{destination_subpath!r} goes through a link or a hidden "
+                    "folder, which the shelf does not move into."
+                )
+        if segments and relocating:
+            # A relocation moves a whole folder to a new root; landing it inside
+            # a subdirectory of the target would register paths the relocated
+            # folder never had.
+            raise MoveRefused("A relocation cannot target a subfolder.")
+        try:
+            destination_path = resolve_path_within(destination["path"], *segments)
+        except ValueError as exc:
+            logger.error(
+                "Refusing to move into %r under %s: it resolves outside the "
+                "folder (%s).",
+                destination_subpath,
+                destination["path"],
+                exc,
+            )
+            raise MoveRefused(
+                f"{destination_subpath!r} is outside the destination folder."
+            ) from exc
+        if not os.path.isdir(destination_path):
+            raise MoveRefused(
+                f"There is no folder {destination_subpath!r} in the destination. "
+                "Create it first; a move does not make folders.",
+                status_code=409,
+            )
+        subpath = "/".join(segments)
 
         moves: list[PlannedMove] = []
         skipped: list[MoveOutcome] = []
@@ -788,7 +880,9 @@ class ModelMover:
                 folder_id,
                 relpath,
                 destination_folder_id,
+                destination["path"],
                 destination_path,
+                subpath,
                 flatten=flatten,
                 relocating=relocating,
             )
@@ -798,7 +892,7 @@ class ModelMover:
                         folder_id,
                         relpath,
                         STATUS_SKIPPED,
-                        "Already in the destination folder.",
+                        "Already in that folder.",
                     )
                 )
                 continue
@@ -835,6 +929,8 @@ class ModelMover:
         return MovePlan(
             destination_folder_id=destination_folder_id,
             destination_path=destination_path,
+            destination_subpath=subpath,
+            flatten=flatten,
             moves=moves,
             bytes_to_copy=bytes_to_copy,
             skipped=skipped,
@@ -846,6 +942,8 @@ class ModelMover:
         relpath: str,
         destination_folder_id: int,
         destination_path: str,
+        destination_dir: str,
+        subpath: str,
         *,
         flatten: bool,
         relocating: bool = False,
@@ -892,12 +990,18 @@ class ModelMover:
                 "rather than relocating anything.",
                 status_code=409,
             )
-        if folder_id == destination_folder_id:
+        if folder_id == destination_folder_id and relpath_dir(relpath) == subpath:
             # Not an error: the shelf lets a user drop a mixed selection onto a
             # folder, and the files already in it are simply nothing to do. The
             # caller still hears about them - ``plan`` turns this ``None`` into
             # a ``skipped`` outcome - because an item that vanishes between the
             # request and the results is one the client cannot account for.
+            #
+            # **The directory, not just the folder.** Comparing folder ids alone
+            # skipped a LoRA at the root of a StabilityMatrix ``Models`` folder
+            # dropped onto ``Models/Lora``: same registered folder, so "already
+            # there", and the move did nothing (#2204). A file is already there
+            # only when it sits directly in the directory it is being moved to.
             return None
 
         try:
@@ -935,7 +1039,11 @@ class ModelMover:
         # refuses the taken name as well, but this is where the refusal is a 4xx
         # naming the file rather than a failed item on a worker thread. Asserted
         # at both ends in ``tests/test_model_move.py``.
-        destination_relpath = os.path.basename(relpath) if flatten else relpath
+        destination_relpath = (
+            os.path.join(*subpath.split("/"), os.path.basename(relpath))
+            if flatten
+            else relpath
+        )
         try:
             resolved_destination = resolve_path_within(
                 destination_path, destination_relpath
@@ -972,7 +1080,9 @@ class ModelMover:
             destination_path=resolved_destination,
             sha256=row["sha256"],
             size=int(os.path.getsize(source_path)),
-            same_device=same_device(source_path, destination_path),
+            # Against the directory the file lands in, not the folder root: a
+            # drive mounted at a subfolder is another device under one folder.
+            same_device=same_device(source_path, destination_dir),
         )
 
     def _check_destination_free(
@@ -1104,8 +1214,11 @@ class ModelMover:
             )
         try:
             # ``flatten=False`` moves a tree, so the destination subdirectory
-            # may not exist yet. A no-op for the flattened case.
-            os.makedirs(os.path.dirname(move.destination_path), exist_ok=True)
+            # may not exist yet. A flattened move never makes one: a subfolder
+            # removed since the plan fails the file (the write finds no
+            # directory) rather than being quietly recreated.
+            if not plan.flatten:
+                os.makedirs(os.path.dirname(move.destination_path), exist_ok=True)
             if move.same_device and delete_source:
                 return self._rename(move, plan)
             return self._copy_verify_repoint_unlink(

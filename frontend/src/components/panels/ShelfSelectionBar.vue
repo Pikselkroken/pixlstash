@@ -132,7 +132,7 @@
       :tooltip="moveTitle"
       @click="emit('move')"
     >
-      Move
+      Move to…
     </AppBarButton>
 
     <!-- Favourite leads the verbs (#1578): a heart and its H, the same verb the
@@ -252,7 +252,6 @@ import {
   deletableModels,
   formatModelSize,
   hideModelsVerb,
-  movableCopies,
   trashName,
 } from "../../utils/modelShelf";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
@@ -643,10 +642,12 @@ const assignTitle = computed(() => {
  * NAS and another on this disk IS movable - its present copy is. What the
  * button acts on and what the tooltip counts are the same list, and the view
  * recomputes it for the dialog rather than this being handed up, because a drop
- * onto a folder header has to reach the same list without a selection.
+ * onto a folder header has to reach the same list without a selection. In a
+ * folder view, only the copy in the open folder counts (#2204), as in the
+ * dialog.
  */
 const movable = computed(
-  () => movableCopies(store.selectedRows, foldersById.value).items,
+  () => store.movableSelection(foldersById.value).items,
 );
 
 /**

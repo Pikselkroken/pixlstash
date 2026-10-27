@@ -13,12 +13,15 @@
     <div
       v-for="node in nodes"
       :key="node.key"
-      class="ps-row mft-row"
-      :class="{
-        'mft-row--drive': node.kind === 'drive',
-        active: isSelected(node),
-        'mft-row--off': node.disabled,
-      }"
+      class="ps-row mft-row model-drop-target"
+      :class="[
+        {
+          'mft-row--drive': node.kind === 'drive',
+          active: isSelected(node),
+          'mft-row--off': node.disabled,
+        },
+        drop.dropClass(node.key),
+      ]"
       :style="{ '--depth': node.level - 1 }"
       role="treeitem"
       :aria-level="node.level"
@@ -33,6 +36,9 @@
       :data-path="node.path"
       @click="activate(node)"
       @focus="focusedKey = node.key"
+      @dragover="onDragOver($event, node)"
+      @dragleave="drop.onDragLeave($event, node.key)"
+      @drop="onDrop($event, node)"
     >
       <span
         class="ps-row-glyph mft-twist"
@@ -90,6 +96,7 @@ import { computed, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
 import { DOWNLOADS_KIND, SOURCE_KIND } from "../../api/modelFolders";
+import { useModelCopyDrop } from "../../composables/useModelCopyDrop";
 import {
   basename,
   useModelFoldersStore,
@@ -104,6 +111,9 @@ import { formatModelSize } from "../../utils/modelShelf";
  * lists everything under it. `pick` (a destination, for moving models) cannot
  * choose a locked folder, nor any row `disabled` refuses, and reads the same
  * `selected` back so the parent owns the choice.
+ *
+ * In `browse` the rows also take model rows dragged off the shelf (#2204): a
+ * drop asks for the Move dialog, pre-chosen to that folder.
  */
 const props = defineProps({
   mode: {
@@ -302,6 +312,24 @@ function activate(node) {
     path: node.path,
     locked: node.locked,
   });
+}
+
+const drop = useModelCopyDrop();
+
+/** Where a drop on this row lands: null for a drive, which is no place. */
+function dropDestination(node) {
+  if (node.kind === "drive") return null;
+  return { folderId: node.folderId, path: node.path, locked: node.locked };
+}
+
+function onDragOver(event, node) {
+  if (props.mode === "browse") {
+    drop.onDragOver(event, node.key, dropDestination(node));
+  }
+}
+
+function onDrop(event, node) {
+  if (props.mode === "browse") drop.onDrop(event, dropDestination(node));
 }
 
 /** Row elements by key, for the arrows to move focus to. */

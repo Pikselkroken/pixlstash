@@ -52,7 +52,9 @@ import {
   quantFromFilename,
   fileKindLabel,
   hideModelsVerb,
+  inFolderScopeOf,
   locationState,
+  movableCopies,
   presentCopies,
   SHELF_TYPES,
   shelfTypeOf,
@@ -3513,6 +3515,107 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     shellRequest.value = { what, el, at: (shellAsks += 1) };
   }
 
+  // ── Moving: cut, paste and drag (#2204) ──────────────────────────────────
+
+  /**
+   * The copies `Ctrl X` holds, as {@link movableCopies} gives them, plus
+   * `ids`, the model ids whose rows draw dimmed. Null when nothing is cut.
+   */
+  const cutCopies = shallowRef(null);
+  /** The copies being dragged off the rows, or null: what a drop target asks. */
+  const dragCopies = shallowRef(null);
+  /** The tip under the pointer while a drag is over a folder: `{x, y, text}`. */
+  const dropTip = shallowRef(null);
+  /**
+   * A move a drop asked for, `{copies, destination, at}`. The Folders tree is
+   * in the sidebar and the Move dialog in `ModelShelf`, so a drop asks here
+   * the way the sidebar asks for a dialog (`requestShell`).
+   */
+  const moveRequest = shallowRef(null);
+  let moveAsks = 0;
+
+  /**
+   * The selection's copies that can move. In a folder view, only the copy in
+   * the open folder: that is the file the reader is looking at.
+   *
+   * @param {Map<number, Object>|null} foldersById - for the locked folders.
+   */
+  function movableSelection(foldersById = null) {
+    return movableCopies(
+      selectedRows.value,
+      foldersById,
+      place.value === "folder" ? folderScope.value : null,
+    );
+  }
+
+  /**
+   * `Ctrl X`: hold the selection's movable copies for a paste.
+   *
+   * @param {Map<number, Object>|null} foldersById
+   * @returns {boolean} whether anything was cut.
+   */
+  function cutSelection(foldersById = null) {
+    const copies = movableSelection(foldersById);
+    if (!copies.items.length) {
+      cutCopies.value = null;
+      return false;
+    }
+    const ids = new Set();
+    for (const row of selectedRows.value) {
+      ids.add(row.id);
+      for (const id of row.memberIds ?? []) ids.add(id);
+    }
+    cutCopies.value = { ...copies, ids };
+    return true;
+  }
+
+  function clearCut() {
+    cutCopies.value = null;
+  }
+
+  /**
+   * The cut as it stands now: only the copies still `present` at the key they
+   * were cut at, on a model that was cut. A copy moved or deleted since drops
+   * out, and so does a different file that has since taken its path.
+   *
+   * @returns {{items: Array, totalBytes: number,
+   *   bytesByFolderId: Map<number, number>}|null}
+   */
+  function liveCut() {
+    const cut = cutCopies.value;
+    if (!cut) return null;
+    const key = (loc) => `${Number(loc.folder_id)}\u0000${loc.relpath}`;
+    const wanted = new Set(cut.items.map(key));
+    const items = [];
+    const bytesByFolderId = new Map();
+    let totalBytes = 0;
+    for (const row of rows.value) {
+      if (!cut.ids.has(row.id)) continue;
+      for (const loc of row.locations ?? []) {
+        if (loc?.state !== "present" || !wanted.delete(key(loc))) continue;
+        const bytes = Number(row.file_size) || 0;
+        const folderId = Number(loc.folder_id);
+        items.push({ folder_id: loc.folder_id, relpath: loc.relpath });
+        bytesByFolderId.set(folderId, (bytesByFolderId.get(folderId) || 0) + bytes);
+        totalBytes += bytes;
+      }
+    }
+    return { items, totalBytes, bytesByFolderId };
+  }
+
+  /** Whether a model's row draws as cut. */
+  function isCut(id) {
+    return cutCopies.value?.ids.has(id) ?? false;
+  }
+
+  /**
+   * @param {Object} copies - from {@link movableCopies}.
+   * @param {{folderId: number, path: string}} destination
+   */
+  function requestMove(copies, destination) {
+    moveRequest.value = { copies, destination, at: (moveAsks += 1) };
+  }
+
   /** True once the sets are read, so "in no set" is an answer, not a guess. */
   const setsKnown = computed(() => setsLoaded.value && !setsError.value);
 
@@ -3583,15 +3686,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   function inFolderScope(row) {
     const scope = folderScope.value;
     if (scope == null) return true;
-    return (row.locations ?? []).some((loc) => {
-      if (Number(loc?.folder_id) !== scope.folderId) return false;
-      const relpath = String(loc?.relpath ?? "").replace(/\\/g, "/");
-      const dir = relpath.includes("/")
-        ? relpath.slice(0, relpath.lastIndexOf("/"))
-        : "";
-      if (!scope.locked) return dir === scope.path;
-      return !scope.path || dir === scope.path || dir.startsWith(`${scope.path}/`);
-    });
+    return (row.locations ?? []).some((loc) => inFolderScopeOf(loc, scope));
   }
 
   /** Under All models' Type and Base model picks, when any is made. */
@@ -4672,6 +4767,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     unseenArrivals.value = false;
     selectedIds.value = new Set();
     verbRequest.value = null;
+    cutCopies.value = null;
+    dragCopies.value = null;
+    dropTip.value = null;
+    moveRequest.value = null;
     anchorId.value = null;
     anchorOccurrence.value = null;
     loaded.value = false;
@@ -4870,5 +4969,15 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     pickedCardKeys,
     shellRequest,
     requestShell,
+    cutCopies,
+    dragCopies,
+    dropTip,
+    moveRequest,
+    movableSelection,
+    cutSelection,
+    clearCut,
+    liveCut,
+    isCut,
+    requestMove,
   };
 });

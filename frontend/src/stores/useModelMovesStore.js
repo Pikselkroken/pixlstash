@@ -253,6 +253,9 @@ export const useModelMovesStore = defineStore("modelMoves", () => {
     // a run that lost files holds the panel until it is read.
     if (results.some((r) => r.status === "failed")) failure.value = receipt;
     else useNoticeStore().push({ level: "success", text: receipt });
+    // The folder listings count models per directory, and a move into a
+    // subfolder changes those counts under rows that are open.
+    useModelFoldersStore().reloadDirs();
     try {
       await Promise.all([
         useModelShelfStore().fetchRows(),
@@ -279,12 +282,13 @@ export const useModelMovesStore = defineStore("modelMoves", () => {
    *
    * @param {number} destinationFolderId
    * @param {Array<{folder_id: number, relpath: string}>} items
+   * @param {string} [destinationSubpath] - a directory inside the folder.
    * @returns {Promise<boolean>} true when the job was accepted.
    */
-  async function start(destinationFolderId, items) {
+  async function start(destinationFolderId, items, destinationSubpath = "") {
     if (busy.value || !items?.length) return false;
     return begin(
-      () => startModelMove(destinationFolderId, items),
+      () => startModelMove(destinationFolderId, items, destinationSubpath),
       "Could not start that move.",
     );
   }

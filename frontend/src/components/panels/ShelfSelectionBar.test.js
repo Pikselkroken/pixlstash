@@ -217,7 +217,7 @@ describe("the selection bar", () => {
     for (const button of verbs) expect(name(button)).toBeTruthy();
 
     const before = name(verb(wrapper, "move"));
-    expect(before).toBe("Move");
+    expect(before).toBe("Move to…");
     selectRows([row(2, "missing")]);
     await wrapper.vm.$nextTick();
     expect(name(verb(wrapper, "move"))).toBe(before);
@@ -227,7 +227,7 @@ describe("the selection bar", () => {
     selectRows([row(1, "present")]);
     const wrapper = mount(ShelfSelectionBar, globalOpts);
     expect(verb(wrapper, "assign").text()).toBe("Assign");
-    expect(verb(wrapper, "move").text()).toBe("Move");
+    expect(verb(wrapper, "move").text()).toBe("Move to…");
     const favourite = verb(wrapper, "favourite");
     expect(favourite.text()).toContain("Favourite");
     expect(favourite.find("kbd").text()).toBe("H");

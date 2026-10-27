@@ -45,3 +45,18 @@ describe("ShortcutsDialog: the stack reorder keys", () => {
     ]);
   });
 });
+
+describe("ShortcutsDialog: the shelf's cut and paste (#2204)", () => {
+  it("lists cut, paste and putting a cut back", () => {
+    vi.stubGlobal("navigator", { userAgent: "Mozilla/5.0 (X11; Linux x86_64)" });
+    const wrapper = mount(ShortcutsDialog, {
+      props: { modelValue: true },
+      global: { plugins: [createPinia()], stubs: { AppDialog: AppDialogStub } },
+    });
+    const rows = wrapper
+      .findAll("tr")
+      .filter((row) => row.text().includes("On Models"))
+      .map((row) => row.find("td").text());
+    expect(rows).toEqual(["Ctrl+X", "Ctrl+V", "Esc"]);
+  });
+});

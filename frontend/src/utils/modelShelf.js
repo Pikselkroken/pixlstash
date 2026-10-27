@@ -1150,8 +1150,9 @@ export function importReceipt(report) {
  * - **PixlStash's own folder.** Those files are ours, declared rather than
  *   scanned, and every engine loader looks for them at a fixed path - moving
  *   one out breaks the tagger and re-downloads it on the next run.
- * - **An `external` folder.** The HuggingFace cache and insightface's store are
- *   shared with other software. Taking a file out of one is not ours to do.
+ * - **A locked folder** (`movable` other than `per_item`). The HuggingFace
+ *   cache and the InsightFace packs are shared with other software or move
+ *   only as a whole. Taking a file out of one is not ours to do.
  *
  * Per COPY and not per model: `model_file`'s primary key is
  * `(folder_id, relpath)`, so a model registered in three folders offers three
@@ -1169,23 +1170,32 @@ export function importReceipt(report) {
  * has to net out the copies already sitting on it (#894). It is deliberately
  * kept off `items`, which is posted to `/model-moves` verbatim.
  *
+ * In a folder view (#2204) only the copy in the open folder moves: a model
+ * with a second copy elsewhere is selected there as "this file", and taking
+ * the other copy along would move a file the reader cannot see.
+ *
  * @param {Array<Object>} rows - shelf rows, each with `locations`.
  * @param {Map<number, Object>|null} foldersById - `model_folder.id` to the
- *   folder row, for the two folder-level exclusions. Omitted, only the
- *   `present` rule applies.
+ *   folder row, for the folder-level exclusions. Omitted, only the `present`
+ *   rule applies.
+ * @param {{folderId: number, path: string, locked?: boolean}|null} [scope] -
+ *   the open folder, or null for every copy.
  * @returns {{items: Array<{folder_id: number, relpath: string}>,
  *   totalBytes: number, bytesByFolderId: Map<number, number>}}
  */
-export function movableCopies(rows, foldersById = null) {
+export function movableCopies(rows, foldersById = null, scope = null) {
   const items = [];
   const bytesByFolderId = new Map();
   let totalBytes = 0;
   for (const row of Array.isArray(rows) ? rows : []) {
     for (const loc of row?.locations || []) {
       if (loc?.state !== "present") continue;
+      if (scope && !inFolderScopeOf(loc, scope)) continue;
       const folder = foldersById?.get(Number(loc.folder_id));
       if (folder?.owner === "pixlstash") continue;
-      if (folder?.movable === "external") continue;
+      // A locked folder (the lock in the Folders tree): files do not leave it
+      // one at a time, and the server refuses them.
+      if (folder?.movable && folder.movable !== "per_item") continue;
       const bytes = Number(row.file_size) || 0;
       const folderId = Number(loc.folder_id);
       items.push({ folder_id: loc.folder_id, relpath: loc.relpath });
@@ -1197,6 +1207,85 @@ export function movableCopies(rows, foldersById = null) {
     }
   }
   return { items, totalBytes, bytesByFolderId };
+}
+
+/**
+ * The private drag type of model copies dragged off the shelf's rows (#2204).
+ * Its own type, so the window's file importer can tell a row dropped short of
+ * a folder from a file dropped in from outside.
+ */
+export const MODEL_COPIES_TYPE = "application/x-pixlstash-model-copies";
+
+/**
+ * The POSIX directory of a copy's `relpath`, `""` at its folder's root. The
+ * scanner stores relpaths with the host's separator.
+ *
+ * @param {string} relpath
+ * @returns {string}
+ */
+export function relpathDir(relpath) {
+  const posix = String(relpath ?? "").replace(/\\/g, "/");
+  const at = posix.lastIndexOf("/");
+  return at < 0 ? "" : posix.slice(0, at);
+}
+
+/**
+ * Whether a copy is in an open folder: directly in it, or anywhere under a
+ * locked one, which cannot be browsed into.
+ *
+ * @param {{folder_id: number, relpath: string}} loc
+ * @param {{folderId: number, path?: string, locked?: boolean}} scope
+ * @returns {boolean}
+ */
+export function inFolderScopeOf(loc, scope) {
+  if (Number(loc?.folder_id) !== Number(scope.folderId)) return false;
+  const dir = relpathDir(loc?.relpath);
+  const path = scope.path ?? "";
+  if (!scope.locked) return dir === path;
+  return !path || dir === path || dir.startsWith(`${path}/`);
+}
+
+/**
+ * Whether every copy is already directly in a destination, so a move there
+ * would do nothing: the server skips such a copy rather than moving it.
+ *
+ * @param {Array<{folder_id: number, relpath: string}>} items
+ * @param {{folderId: number, path?: string}} destination
+ * @returns {boolean}
+ */
+export function allAlreadyIn(items, destination) {
+  const scope = { folderId: destination.folderId, path: destination.path };
+  return items.length > 0 && items.every((item) => inFolderScopeOf(item, scope));
+}
+
+/**
+ * What a move does on disk: a rename on one drive, or a copy that hands the
+ * other drives their bytes back. For the drop tip and the Move dialog.
+ *
+ * Measured on the drive (`device_id`), as `model_mover.same_device` measures
+ * it. A drive that could not be measured is never guessed as "same".
+ *
+ * @param {{bytesByFolderId: Map<number, number>}} copies - from
+ *   {@link movableCopies}.
+ * @param {number} destinationFolderId
+ * @param {Map<number, Object>} deviceByFolderId - from the folders store.
+ * @returns {{how: "rename"|"copy"|"unknown", freed: number,
+ *   drives: Array<string>}} `freed` is what leaves the other drives, and
+ *   `drives` names them.
+ */
+export function moveMechanism(copies, destinationFolderId, deviceByFolderId) {
+  const target = deviceByFolderId?.get(Number(destinationFolderId));
+  if (!target?.device_id) return { how: "unknown", freed: 0, drives: [] };
+  let freed = 0;
+  const drives = new Set();
+  for (const [folderId, bytes] of copies?.bytesByFolderId ?? []) {
+    const device = deviceByFolderId.get(Number(folderId));
+    if (device?.device_id === target.device_id) continue;
+    freed += bytes;
+    drives.add(device?.label || device?.mount_point || "the other drive");
+  }
+  if (!drives.size) return { how: "rename", freed: 0, drives: [] };
+  return { how: "copy", freed, drives: [...drives] };
 }
 
 /**

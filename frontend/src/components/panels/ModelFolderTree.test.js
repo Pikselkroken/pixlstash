@@ -13,6 +13,7 @@ vi.mock("../../api/modelFolders", async (importOriginal) => ({
 
 import ModelFolderTree from "./ModelFolderTree.vue";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
+import { useModelShelfStore } from "../../stores/useModelShelfStore";
 
 const FOLDERS = [
   { id: 1, path: "/home/me/StabilityMatrix/Models", kind: "user", movable: "per_item" },
@@ -202,3 +203,71 @@ describe("ModelFolderTree", () => {
     wrapper.unmount();
   });
 });
+
+describe("ModelFolderTree as a drop target (#2204)", () => {
+  const TYPE = "application/x-pixlstash-model-copies";
+
+  function drag(el, type) {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    event.dataTransfer = { types: [TYPE], dropEffect: "" };
+    el.element.dispatchEvent(event);
+    return event;
+  }
+
+  it("takes dragged model rows on a folder and refuses a drive, a locked folder and their own folder", async () => {
+    const shelf = useModelShelfStore();
+    const copies = {
+      items: [{ folder_id: 1, relpath: "alice.safetensors" }],
+      totalBytes: 10,
+      bytesByFolderId: new Map([[1, 10]]),
+    };
+    shelf.dragCopies = copies;
+    const wrapper = mountTree();
+    await flushPromises();
+    await item(wrapper, 1).find(".mft-twist").trigger("click");
+    await flushPromises();
+
+    const lora = item(wrapper, 1, "Lora");
+    const over = drag(lora, "dragover");
+    await flushPromises();
+    expect(over.defaultPrevented).toBe(true);
+    expect(lora.classes()).toContain("drop-ring");
+    // Same drive: the tip says rename, and names where they go.
+    expect(shelf.dropTip.text).toContain("Move to Models/Lora");
+    expect(shelf.dropTip.text).toContain("Renamed");
+
+    for (const refused of [
+      wrapper.find('[data-key="drive:d1"]'),
+      item(wrapper, 2),
+      item(wrapper, 1),
+    ]) {
+      // Each refused drop ends that drag; the next is a new one.
+      shelf.dragCopies = copies;
+      const event = drag(refused, "dragover");
+      await flushPromises();
+      expect(event.defaultPrevented).toBe(false);
+      expect(refused.classes()).toContain("not-droppable");
+      drag(refused, "drop");
+      expect(shelf.moveRequest).toBe(null);
+    }
+
+    shelf.dragCopies = copies;
+    drag(lora, "drop");
+    expect(shelf.moveRequest.destination).toEqual({ folderId: 1, path: "Lora" });
+    expect(shelf.moveRequest.copies).toBe(copies);
+    expect(shelf.dragCopies).toBe(null);
+    wrapper.unmount();
+  });
+
+  it("takes no drop in pick mode", async () => {
+    useModelShelfStore().dragCopies = {
+      items: [{ folder_id: 1, relpath: "Lora/alice.safetensors" }],
+      bytesByFolderId: new Map(),
+    };
+    const wrapper = mountTree({ mode: "pick" });
+    await flushPromises();
+    expect(drag(item(wrapper, 1), "dragover").defaultPrevented).toBe(false);
+    wrapper.unmount();
+  });
+});
+
