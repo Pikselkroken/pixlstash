@@ -320,6 +320,8 @@ describe("the Tasks deep link over a selection", () => {
     await flush();
     expect(wrapper.find(".rail-picture").exists()).toBe(false);
     expect(wrapper.find("button.inspector-tab--active").text()).toBe("Tasks");
+    // The picture is still selected in the grid, so the rail can still clear it.
+    expect(wrapper.find(".rail-clear").exists()).toBe(true);
 
     await select(wrapper, [8]);
     expect(wrapper.find(".rail-picture").exists()).toBe(true);

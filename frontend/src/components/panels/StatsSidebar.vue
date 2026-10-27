@@ -1081,7 +1081,7 @@ watch(
         {{ head.title }}
       </h2>
       <AppButton
-        v-if="railMode !== 'none'"
+        v-if="selectedIds.length"
         class="rail-clear"
         variant="ghost"
         size="sm"
