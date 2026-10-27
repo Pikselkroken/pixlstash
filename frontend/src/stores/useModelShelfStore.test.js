@@ -971,6 +971,23 @@ describe("the view is remembered", () => {
     expect(store.view.sortKey).toBe("name");
   });
 
+  it("keeps a remembered list grouping, and migrates one from before it existed", () => {
+    // A blob that carries its own listGroupBy keeps it, whatever groupBy says.
+    window.localStorage.setItem(
+      "pixlstash:modelShelfView",
+      JSON.stringify({ v: 2, groupBy: "base_model", listGroupBy: "none" }),
+    );
+    expect(useModelShelfStore().view.listGroupBy).toBe("none");
+
+    // One from before #2168 carries none: its list grouping is its groupBy.
+    setActivePinia(createPinia());
+    window.localStorage.setItem(
+      "pixlstash:modelShelfView",
+      JSON.stringify({ v: 2, groupBy: "base_model" }),
+    );
+    expect(useModelShelfStore().view.listGroupBy).toBe("base_model");
+  });
+
   it("falls back to the defaults on a blob from another schema", () => {
     window.localStorage.setItem(
       "pixlstash:modelShelfView",

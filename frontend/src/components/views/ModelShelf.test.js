@@ -422,9 +422,10 @@ describe("a row with nothing in its header", () => {
     // says so in words rather than leaving a cell that reads as a gap. The date
     // is the exception and deliberately so: it is a FIGURE, like the size
     // beside it, and a figure nobody recorded is left blank rather than
-    // dashed - this fixture carries no `added_at`.
+    // dashed - this fixture carries no `added_at`. Sets is blank too until the
+    // sets are read, which this mount never asks for.
     const cells = row.findAll(".shelf-col").map((s) => textOf(s));
-    expect(cells).toEqual(["LoRA", "not set", "342.1 MB", "", "–"]);
+    expect(cells).toEqual(["LoRA", "not set", "342.1 MB", "", ""]);
   });
 
   it("takes the quant postfix out of the name and puts it on a chip", async () => {
@@ -4531,6 +4532,21 @@ describe("the list's Type, favourite and Sets columns (#2168)", () => {
     wrapper.unmount();
   });
 
+  it("opens the Sets place, not just the grid, for a new set from a checkpoint", async () => {
+    const wrapper = await mountShelf([adapter({ id: 1, file_kind: "checkpoint" })]);
+    const store = useModelShelfStore();
+    const create = vi.spyOn(store, "createHandMadeSet").mockResolvedValue(null);
+    store.setPlace("all");
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+    wrapper.findComponent({ name: "ShelfSelectionBar" }).vm.$emit("new-set");
+    await flushPromises();
+    expect(create).toHaveBeenCalled();
+    expect(store.place).toBe("sets");
+    expect(store.view.groupBy).toBe("workflow_set");
+    wrapper.unmount();
+  });
+
   it("counts the sets a row is in, and dashes a row that is in none", async () => {
     const wrapper = await mountShelf([
       adapter({ id: 1 }),
@@ -4541,6 +4557,10 @@ describe("the list's Type, favourite and Sets columns (#2168)", () => {
       ...store.workflowSets,
       handMade: [{ id: 10, name: "Kit", members: [{ id: 1, on_shelf: true }] }],
     };
+    await wrapper.vm.$nextTick();
+    // Until the sets are read the column says nothing, not "in none".
+    expect(wrapper.findAll(".shelf-row")[1].find(".shelf-col--sets").text()).toBe("");
+    store.setsLoaded = true;
     await wrapper.vm.$nextTick();
     const rows = wrapper.findAll(".shelf-row");
     expect(rows[0].find(".shelf-col--sets").text()).toBe("1");

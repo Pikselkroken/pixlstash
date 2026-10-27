@@ -846,8 +846,14 @@ function storedView() {
   ) {
     view.listGroupBy = axisOf(parsed.listGroupBy);
   }
-  // A list grouping remembered from before #2168 is the list's grouping now.
-  if (view.groupBy !== GRID_GROUP_BY) view.listGroupBy = view.groupBy;
+  // A list grouping remembered from before #2168 is the list's grouping now:
+  // a migration, so only for a blob that carries no `listGroupBy` of its own.
+  if (
+    !GROUP_BY_KEYS.includes(axisOf(parsed.listGroupBy)) &&
+    view.groupBy !== GRID_GROUP_BY
+  ) {
+    view.listGroupBy = view.groupBy;
+  }
   if (TRAY_VIEWS.includes(parsed.trayView)) view.trayView = parsed.trayView;
   if (typeof parsed.favouritesFirst === "boolean") {
     view.favouritesFirst = parsed.favouritesFirst;

@@ -785,9 +785,9 @@
                          well not be, and it is the string the reader pastes into
                          a ComfyUI node - so it is monospaced and it is always
                          there rather than living in a tooltip. What IS in the
-                         tooltip is the folder: the header names it only under
-                         `groupBy: 'folder'`, so on every other axis this line is
-                         the one place left that can say where the file is. The
+                         tooltip is the folder: no header names it since the
+                         folder grouping went (#2168), so this line is the one
+                         place in the list that can say where the file is. The
                          file's SHA-256 follows the paths (`modelFileTitle`). -->
                     <span class="shelf-row-file">
                       <Tooltip
@@ -2036,7 +2036,9 @@ async function saveSetName(name) {
 async function newSetWithCheckpoint() {
   const row = store.selectedRows[0];
   if (!row) return;
-  if (!isSetGrid.value) store.setView({ groupBy: "workflow_set" });
+  // The Sets place, not just the grid's axis, so the sidebar lights Sets and
+  // the list's narrowing lets go of the grid.
+  if (!isSetGrid.value) store.setPlace("sets");
   await store.createHandMadeSet({
     members: [{ model_id: row.id, slot: "checkpoint" }],
   });
@@ -3906,6 +3908,8 @@ function typeLabel(row) {
  * @returns {number|string}
  */
 function setsCell(row) {
+  // Blank until the sets are read: a dash would say "in none" for every row.
+  if (!store.setsKnown) return "";
   return store.setMembership.get(row.id)?.length || "\u2013";
 }
 

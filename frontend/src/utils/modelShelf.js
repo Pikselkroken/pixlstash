@@ -976,16 +976,12 @@ export function copyPath(copy) {
 /**
  * Where a row's copies sit, one path per line, each saying what is there.
  *
- * The folder is only on screen under `groupBy: 'folder'`, where the header
- * names it. Group by base model or by feature - or not at all, which is the
- * default - and the shelf stops saying where anything is, which is the first
- * question of a reader with the same adapter on two disks. So the file line
- * carries the answer as its tooltip on every axis, including `folder`, where
- * the header names the folder but nothing names the SUBDIRECTORY under it.
+ * No list header names a folder (the folder grouping went in #2168), and
+ * where a file is is the first question of a reader with the same adapter on
+ * two disks, so the file line carries the answer as its tooltip.
  *
  * Every copy, not the first: a model registered in two folders is one row, and
- * naming one of its homes would read as naming its only one. Under `folder` the
- * store hands this ONE copy, because that draw stands for one copy.
+ * naming one of its homes would read as naming its only one.
  *
  * Each path is {@link copyPath}'s. A copy missing either half is skipped rather than half-named: both are
  * NOT NULL on the wire, so this is a broken row, and `a.st` on its own answers

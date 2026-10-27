@@ -716,7 +716,10 @@ const accessibleName = computed(() => {
 .msc__mark-chip {
   display: inline-flex;
   align-items: center;
-  flex-shrink: 0;
+  /* Chips give way, their names ellipsing, so the +N after them is never the
+     thing the row's clip cuts off. */
+  flex-shrink: 1;
+  min-width: 0;
   gap: var(--space-2);
   max-width: calc(var(--space-6) * 5);
   height: var(--tag-h-xs);
@@ -753,11 +756,13 @@ const accessibleName = computed(() => {
 /* A fact is a small bordered chip, as the design draws it: base model, size,
    last used. Tabular figures keep a size column from jittering. */
 .msc__fact {
-  display: inline-flex;
-  align-items: center;
+  /* Block, not flex, so a base model too long for a narrow card ellipses
+     rather than pushing the size and last-used chips out of the clip. */
+  display: inline-block;
   flex-shrink: 0;
   box-sizing: border-box;
   height: var(--tag-h-xs);
+  line-height: calc(var(--tag-h-xs) - 2px);
   padding: 0 var(--space-2);
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-sm);
@@ -765,6 +770,13 @@ const accessibleName = computed(() => {
   font-size: var(--text-2xs);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.msc__fact:first-child {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .msc__row--facts {
