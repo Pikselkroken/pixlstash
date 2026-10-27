@@ -64,6 +64,21 @@ function filledStars(starIcons) {
 }
 
 test.describe('star rating', () => {
+  // Wide enough that a grid tile holds the full row of stars: on the default
+  // 1280px window the tiles are narrow and the strip says "3★" instead (the
+  // short-form test below).
+  test.use({ viewport: { width: 1920, height: 1080 } })
+
+  // Which form the strip shows depends on the tile width, so pin the grid the
+  // widths above were measured on. The size is a server-side preference and the
+  // suite shares one backend: grid-browse leaves the slider at an extreme.
+  test.beforeEach(async ({ apiContext }) => {
+    const res = await apiContext.patch('/api/v1/users/me/config', {
+      data: { thumbnail_size_level: 3, thumbnail_mode: 'square' },
+    })
+    expect(res.ok()).toBe(true)
+  })
+
   test('sets a rating that persists across a reload (§6)', async ({
     page,
     grid,
@@ -110,7 +125,7 @@ test.describe('star rating', () => {
     await grid.waitForThumbnailLoaded()
 
     const card = grid.thumbnails.nth(1)
-    const gridStars = card.locator('.star-overlay--compact .v-icon')
+    const gridStars = card.locator('.star-overlay--compact .star-overlay__full .v-icon')
 
     // The compact star badge is a hover affordance on the thumbnail.
     await card.hover()
@@ -138,7 +153,7 @@ test.describe('star rating', () => {
     await page.reload()
     await grid.waitForThumbnailLoaded()
     const cardAfter = grid.thumbnails.nth(1)
-    const gridStarsAfter = cardAfter.locator('.star-overlay--compact .v-icon')
+    const gridStarsAfter = cardAfter.locator('.star-overlay--compact .star-overlay__full .v-icon')
     await cardAfter.hover()
     await expect.poll(() => filledStars(gridStarsAfter)).toBe(GRID_RATING)
 
@@ -166,7 +181,7 @@ test.describe('star rating', () => {
     await page.goto('/')
     await grid.waitForThumbnailLoaded()
     const card = grid.card(pictureId)
-    const stars = card.locator('.star-overlay--compact .v-icon')
+    const stars = card.locator('.star-overlay--compact .star-overlay__full .v-icon')
     await card.hover()
     await expect(stars.first()).toBeVisible()
 
@@ -201,5 +216,36 @@ test.describe('star rating', () => {
     await card.hover()
     await expect.poll(() => filledStars(stars)).toBe(GRID_RATING)
     await page.unroute('**/api/v1/pictures/thumbnails')
+  })
+
+  // A narrow tile has no room for the row, so the strip shortens to the score
+  // and one star, and a click there steps the rating.
+  test('a narrow grid tile shows the short "3★" form and steps the rating', async ({
+    page,
+    grid,
+    overlay,
+    apiContext,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 720 })
+    await grid.goto()
+    await grid.waitForThumbnailLoaded()
+    await overlay.openFromGrid(grid.thumbnails.nth(3))
+    const pictureId = openPictureId(page)
+    await resetScore(apiContext, pictureId)
+
+    await page.goto('/')
+    await grid.waitForThumbnailLoaded()
+    const card = grid.card(pictureId)
+    const short = card.locator('.star-overlay__short')
+    await card.hover()
+    await expect(short).toBeVisible()
+    await expect(card.locator('.star-overlay__full')).toBeHidden()
+    // Unrated is the bare star, no numeral.
+    await expect(short).toHaveText('')
+
+    const written = scoreWritten(page)
+    await short.click()
+    await written
+    await expect(short).toHaveText('1')
   })
 })
