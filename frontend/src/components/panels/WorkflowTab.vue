@@ -1921,7 +1921,8 @@ const missingCheckpointFile = computed(
  * `GET …/model-swap?replacing=` per model row, keyed `kind:file`: the shelf
  * models that go with the workflow's checkpoint and that the file's loader
  * can load (`replacements`), and why there are none (`replacements_reason`).
- * Read for every row, missing or not: each is a picker (#1850).
+ * Read for every row, missing or not: the answer feeds a missing row's
+ * automatic fix and every row's kind offer, not a list to pick from (#2165).
  */
 const replacementsByFile = ref({});
 

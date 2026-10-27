@@ -146,8 +146,11 @@ function onSegKeydown(event) {
   }
   event.preventDefault();
   if (props.busy) return;
+  // Read before asking: a parent that flips the row in place would otherwise
+  // have turned `fixed` already, and focus would stay where it was.
+  const wasFixed = fixed.value;
   emit("toggle-pin");
-  (fixed.value ? eachRunOpt : pinnedOpt).value?.focus();
+  (wasFixed ? eachRunOpt : pinnedOpt).value?.focus();
 }
 
 const choosing = computed(() => !fixed.value && Boolean(props.options?.length));

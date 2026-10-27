@@ -1,6 +1,7 @@
 // One row of the Workflow tab's Parameters panel: what its name says.
 
 import { describe, it, expect } from "vitest";
+import { reactive } from "vue";
 import { mount } from "@vue/test-utils";
 
 import WorkflowDefaultRow from "./WorkflowDefaultRow.vue";
@@ -91,5 +92,24 @@ describe("a parameter row's Each run | Pinned switch", () => {
     await wrapper.setProps({ busy: true });
     await eachRun.trigger("keydown", { key: "ArrowLeft" });
     expect(wrapper.emitted("toggle-pin")).toHaveLength(1);
+  });
+
+  // Focus goes to the side the arrow asked for, whenever the parent flips the
+  // row: after a write (the Workflow tab's) or at once, in place.
+  it.each([
+    ["after a write", () => {}],
+    ["at once, in place", (row) => (row.pinned = !row.pinned)],
+  ])("hands focus to the side asked for when the parent flips the row %s", async (_, flip) => {
+    const row = reactive({ ...ROW, pinned: true });
+    const wrapper = mount(WorkflowDefaultRow, {
+      props: { row, "onToggle-pin": () => flip(row) },
+      attachTo: document.body,
+      global: { stubs: { Tooltip: true, "v-icon": true } },
+    });
+    const eachRun = wrapper.find("[data-testid='wfdef-each-run']");
+    eachRun.element.focus();
+    await eachRun.trigger("keydown", { key: "ArrowRight" });
+    expect(document.activeElement).toBe(wrapper.find("[data-testid='wfdef-pinned']").element);
+    wrapper.unmount();
   });
 });
