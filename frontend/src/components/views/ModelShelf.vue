@@ -38,7 +38,6 @@
          menu and the shortcuts. No `Models` title: the title bar's segment and
          the sidebar already name the view. -->
     <div class="shelf-toolbar">
-
       <!-- An open run's status, Stop and back arrow (TrainingRunLive teleports
            them here): the design puts run status in the shelf's own bar. -->
       <div v-if="runOpen" id="shelf-run-bar" class="shelf-run-bar"></div>
@@ -3867,7 +3866,7 @@ const offlineMountPaths = computed(() =>
 );
 
 /**
- * The count under the title.
+ * The count at the toolbar's start.
  *
  * Under folder grouping a model with copies in two folders is drawn under both,
  * so the group counts add up to more than the shelf holds. Both numbers are

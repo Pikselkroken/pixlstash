@@ -4486,8 +4486,7 @@ and moved the one pair of controls that means the same thing in every view.
 `rgb(var(--v-theme-toolbar))` with `toolbar-text` ink, and takes the queue's
 split inset `0 var(--space-3) 0 var(--space-5)` — right pinned to the grid's so
 the app-wide tail is a fixed anchor, left at the shelf's own content gutter.
-`.shelf-sub` takes the queue's `.qsub` size and alpha (the bar no longer
-carries a `.shelf-title`). `Toolbar.test.js` reads the CSS block of all three
+`.shelf-sub`, the count, takes the queue's `.qsub` size and alpha. `Toolbar.test.js` reads the CSS block of all three
 selectors and asserts the shared recipe, the equal right inset, exactly one
 `background` declaration painting `toolbar`, and the identity type matching the
 queue's; jsdom computes no layout, so the coupling is what is pinned. **Fine
