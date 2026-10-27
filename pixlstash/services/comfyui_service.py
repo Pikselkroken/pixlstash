@@ -2721,9 +2721,10 @@ def _comfyui_device(devices) -> tuple[str | None, int | None]:
         return _SHARED_MEMORY_DEVICES[first["type"]], None
     name = _DEVICE_NAME_RE.match(str(first.get("name") or "").strip()).group(1)
     total = first.get("vram_total")
-    # JSON allows NaN and Infinity, which int() refuses.
-    finite = isinstance(total, (int, float)) and math.isfinite(total)
-    vram_mb = int(total) // (1024 * 1024) if finite else None
+    # JSON allows NaN and Infinity, which int() refuses; a size at or below
+    # zero is an error state, not a card.
+    known = isinstance(total, (int, float)) and math.isfinite(total) and total > 0
+    vram_mb = int(total) // (1024 * 1024) if known else None
     return name or None, vram_mb or None
 
 
