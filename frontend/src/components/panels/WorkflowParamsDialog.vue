@@ -12,7 +12,7 @@
     @close="emit('close')"
   >
     <div class="wfp-tools">
-      <input
+      <AppInput
         v-model="filter"
         class="wfp-filter"
         type="search"
@@ -85,6 +85,7 @@ import { computed, ref } from "vue";
 import { parameterTitle } from "../../utils/workflowPins";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
+import AppInput from "../widgets/AppInput.vue";
 import WorkflowDefaultRow from "./WorkflowDefaultRow.vue";
 
 const props = defineProps({
@@ -142,14 +143,6 @@ const shownCount = computed(() =>
 .wfp-filter {
   flex: 1;
   min-width: 0;
-  height: var(--control-h);
-  padding: 0 var(--space-3);
-  border: 1px solid rgb(var(--v-theme-divider));
-  border-radius: var(--radius-sm);
-  background: rgba(var(--v-theme-on-surface), 0.06);
-  color: inherit;
-  font: inherit;
-  font-size: var(--text-sm);
 }
 
 .wfp-hint,

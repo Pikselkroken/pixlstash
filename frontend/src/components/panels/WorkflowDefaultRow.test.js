@@ -4,6 +4,7 @@ import { describe, it, expect } from "vitest";
 import { reactive } from "vue";
 import { mount } from "@vue/test-utils";
 
+import Segmented from "../widgets/Segmented.vue";
 import WorkflowDefaultRow from "./WorkflowDefaultRow.vue";
 
 const ROW = {
@@ -76,6 +77,15 @@ describe("a parameter row's Each run | Pinned switch", () => {
     expect(pinned.emitted("toggle-pin")).toBeUndefined();
     await pinned.find("[data-testid='wfdef-each-run']").trigger("click");
     expect(pinned.emitted("toggle-pin")).toHaveLength(1);
+  });
+
+  it("is the app's Segmented, with the olive side on the current state", () => {
+    // Pick-one is Segmented wherever there is room (docs/design/buttons.md).
+    const wrapper = mountRow({ row: { ...ROW, pinned: false } });
+    const seg = wrapper.findComponent(Segmented);
+    expect(seg.exists()).toBe(true);
+    expect(seg.props("modelValue")).toBe("pinned");
+    expect(wrapper.find("[data-testid='wfdef-pinned']").classes()).toContain("seg__opt--on");
   });
 
   it("is one tab stop on the checked side, and an arrow picks the other side", async () => {

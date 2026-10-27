@@ -246,9 +246,11 @@ async function remove(lora, removed) {
   width: var(--space-9);
   height: var(--control-h-sm);
   padding: 0 var(--space-2);
-  border: 1px solid rgb(var(--v-theme-divider));
+  /* AppInput's ground and border. The field stays WorkflowStrengthInput,
+     which keeps a half-typed number through a re-render; AppInput would not. */
+  border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-sm);
-  background: rgba(var(--v-theme-on-surface), 0.06);
+  background: rgb(var(--v-theme-input-background));
   color: inherit;
   font: inherit;
   font-size: var(--text-sm);

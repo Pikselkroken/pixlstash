@@ -55,45 +55,19 @@
         @click="emit('reset')"
       />
     </span>
-    <!-- Each run or Pinned: a two-way switch, the pin toggle's own path. The
-         pressed side is the state; the other side asks for the change. A
-         radio group, so the pair reads as one setting to a keyboard. -->
-    <span
+    <!-- Each run or Pinned: the pin toggle's own path, as the app's pick-one
+         control. The dialog is wide enough for the full Segmented, so this is
+         not a compact site (docs/design/buttons.md, "Pick one"). Segmented
+         owns the roving tab stop and moves focus before it asks, so focus
+         follows the arrow whenever the parent flips the row. -->
+    <Segmented
       class="wfdef-seg"
-      role="radiogroup"
+      :options="segOptions"
+      :model-value="fixed ? 'pinned' : 'each'"
       :aria-label="`${fieldName}: when it is set`"
       data-testid="wfdef-seg"
-      @keydown="onSegKeydown"
-    >
-      <!-- One tab stop, on the checked side; the arrows pick the other one,
-           as a radio group's do. -->
-      <button
-        ref="eachRunOpt"
-        type="button"
-        role="radio"
-        class="wfdef-seg-opt"
-        :aria-checked="fixed ? 'false' : 'true'"
-        :tabindex="fixed ? -1 : 0"
-        :disabled="busy"
-        data-testid="wfdef-each-run"
-        @click="fixed && emit('toggle-pin')"
-      >
-        Each run
-      </button>
-      <button
-        ref="pinnedOpt"
-        type="button"
-        role="radio"
-        class="wfdef-seg-opt"
-        :aria-checked="fixed ? 'true' : 'false'"
-        :tabindex="fixed ? 0 : -1"
-        :disabled="busy"
-        data-testid="wfdef-pinned"
-        @click="!fixed && emit('toggle-pin')"
-      >
-        Pinned
-      </button>
-    </span>
+      @update:model-value="emit('toggle-pin')"
+    />
   </div>
 </template>
 
@@ -103,11 +77,12 @@
 // or every run uses the workflow's value. `row.pinned` means set each run; the
 // switch's Pinned side is its inverse, `fixed`.
 
-import { computed, ref } from "vue";
+import { computed } from "vue";
 
 import { parameterTitle } from "../../utils/workflowPins";
 import AppButton from "../widgets/AppButton.vue";
 import AppSelect from "../widgets/AppSelect.vue";
+import Segmented from "../widgets/Segmented.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 
 const props = defineProps({
@@ -136,22 +111,11 @@ const fieldName = computed(() =>
 );
 const fixed = computed(() => !props.row.pinned);
 
-const eachRunOpt = ref(null);
-const pinnedOpt = ref(null);
-
-/** Any arrow picks the other side of the pair, and focus goes with it. */
-function onSegKeydown(event) {
-  if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
-    return;
-  }
-  event.preventDefault();
-  if (props.busy) return;
-  // Read before asking: a parent that flips the row in place would otherwise
-  // have turned `fixed` already, and focus would stay where it was.
-  const wasFixed = fixed.value;
-  emit("toggle-pin");
-  (wasFixed ? eachRunOpt : pinnedOpt).value?.focus();
-}
+/** The switch's two sides; a write out for the row holds both. */
+const segOptions = computed(() => [
+  { id: "each", label: "Each run", disabled: props.busy, testid: "wfdef-each-run" },
+  { id: "pinned", label: "Pinned", disabled: props.busy, testid: "wfdef-pinned" },
+]);
 
 const choosing = computed(() => !fixed.value && Boolean(props.options?.length));
 
@@ -218,9 +182,10 @@ function onChange(event) {
   min-width: 0;
   height: var(--control-h);
   padding: 0 var(--space-3);
-  border: 1px solid rgb(var(--v-theme-divider));
+  /* AppInput's ground and border, so the dialog's fields read as one family. */
+  border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-sm);
-  background: rgba(var(--v-theme-on-surface), 0.06);
+  background: rgb(var(--v-theme-input-background));
   font-size: var(--text-sm);
 }
 
@@ -287,39 +252,8 @@ function onChange(event) {
   width: var(--control-h-sm);
 }
 
-/* The switch: two segments in one bordered track, the pressed one filled. */
+/* The switch is the app's Segmented; the row only keeps it from stretching. */
 .wfdef-seg {
   flex: none;
-  display: inline-flex;
-  height: var(--control-h-sm);
-  padding: var(--space-1);
-  border: 1px solid rgb(var(--v-theme-divider));
-  border-radius: var(--radius-sm);
-}
-
-.wfdef-seg-opt {
-  padding: 0 var(--space-2);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: none;
-  font: inherit;
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-  cursor: pointer;
-}
-
-.wfdef-seg-opt[aria-checked="true"] {
-  background: rgba(var(--v-theme-on-surface), 0.12);
-  color: rgb(var(--v-theme-on-surface));
-}
-
-.wfdef-seg-opt:focus-visible {
-  outline: var(--focus-width) solid var(--focus-stroke);
-  outline-offset: calc(-1 * var(--focus-width));
-}
-
-.wfdef-seg-opt:disabled {
-  opacity: var(--opacity-disabled);
-  cursor: default;
 }
 </style>
