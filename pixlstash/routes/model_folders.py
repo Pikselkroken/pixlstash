@@ -78,15 +78,19 @@ import os
 import sqlite3
 import threading
 import time
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Body, HTTPException, Request
+from fastapi import APIRouter, Body, HTTPException, Query, Request
 from platformdirs import user_config_dir
 from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services.builtin_caches import huggingface_cache_dir
+from pixlstash.services.builtin_caches import (
+    huggingface_cache_dir,
+    redeclare_model_root,
+)
 from pixlstash.services.builtin_models import BUILTIN_OWNER
 from pixlstash.services import comfyui_link_service
 from pixlstash.services.comfyui_service import comfyui_model_roots
@@ -102,6 +106,7 @@ from pixlstash.services.managed_model_store import (
     relocatable_identity,
 )
 from pixlstash.services.model_folder_scanner import (
+    _LIKE_ESCAPE,
     DOWNLOADS_FOLDER_KIND,
     SHELF_MODEL_SUFFIXES,
     TAKEN_FROM_KINDS,
@@ -112,7 +117,7 @@ from pixlstash.tasks.base_task import TaskStatus
 from pixlstash.tasks.model_folder_scan_task import ModelFolderScanTask
 from pixlstash.utils.adapter_header import FILE_ENGINE
 from pixlstash.utils.host_path_utils import is_absolute_host_path, normalize_host_path
-from pixlstash.utils.path_utils import path_is_within
+from pixlstash.utils.path_utils import path_is_within, resolve_path_within
 from pixlstash.utils.reference_folder_validator import (
     data_folder_conflict_detail,
     validate_reference_folder_accessible,
@@ -145,6 +150,11 @@ DEFAULT_ELIGIBLE_KINDS = ("user", MANAGED_KIND)
 # workflow names a missing file exactly while it is downloading, and `curl -O`
 # writes straight to the final name; the Downloads intake waits the same way.
 PICK_UP_SETTLE_S = 10.0
+
+# How long a rescan of a PixlStash-owned folder waits for the shelf's I/O slot.
+# Long enough to queue behind the other declarations one Rescan all fires at
+# once, short enough to answer a running move with a 409 rather than a hang.
+_REDECLARE_WAIT_S = 5.0
 
 # The most recent scan submitted for each folder, whatever state it ended in.
 # One entry per registered folder, dropped when the folder is forgotten, so it
@@ -515,6 +525,139 @@ class ModelFolderDeviceListResponse(BaseModel):
     devices: list[ModelFolderDeviceResponse]
 
 
+class ModelFolderDirResponse(BaseModel):
+    """One subdirectory of the listed directory."""
+
+    model_config = ConfigDict(extra="allow")
+
+    name: str = Field(description="The directory's name, as it sits on disk.")
+    path: str = Field(
+        description=(
+            "POSIX path of this directory relative to the folder, ready to pass "
+            "back as the next `path`. The bare name when the listed path is the "
+            "folder root."
+        )
+    )
+    model_count: int = Field(
+        description=(
+            "Distinct models with a `present` copy anywhere under this directory, "
+            "however deep."
+        )
+    )
+    bytes: int = Field(
+        description=(
+            "Sum of the sizes of the `present` copies under this directory, "
+            "recursively. A model held twice inside it counts twice."
+        )
+    )
+    has_dirs: bool = Field(
+        description=(
+            "Whether this directory holds at least one subdirectory the tree "
+            "would show, so the client knows to draw an expand arrow before it "
+            "asks."
+        )
+    )
+
+
+class ModelFolderDirsResponse(BaseModel):
+    """Body of ``GET /model-folders/{folder_id}/dirs``."""
+
+    model_config = ConfigDict(extra="allow")
+
+    folder_id: int
+    path: str = Field(
+        description=(
+            "The directory listed, normalised: POSIX, relative to the folder, "
+            "empty for the folder root."
+        )
+    )
+    locked: bool = Field(
+        description=(
+            "True when the folder is not browsable (managed store, HuggingFace "
+            "cache, InsightFace packs, source and downloads folders). Then `dirs` "
+            "is empty and the folder's disk is not read; the counts still come "
+            "from the database."
+        )
+    )
+    model_count: int = Field(
+        description="Distinct models with a `present` copy under `path`, recursively."
+    )
+    bytes: int = Field(
+        description="Sum of the `present` copies' sizes under `path`, recursively."
+    )
+    dirs: list[ModelFolderDirResponse] = Field(
+        default_factory=list,
+        description="The subdirectories of `path`, sorted case-insensitively by name.",
+    )
+
+
+_SAMPLES_SUFFIX = "_samples"
+
+
+@dataclass
+class _Subtree:
+    """The `present` copies counted under one directory, recursively."""
+
+    model_ids: set[int] = field(default_factory=set)
+    bytes: int = 0
+
+
+def _subpath_segments(raw: str) -> list[str]:
+    """Split a ``path`` query value into segments, refusing anything not plain.
+
+    ``""`` is the folder root. Every other value must be a relative POSIX path
+    with no empty, ``.`` or ``..`` segment, so a leading or trailing slash is
+    refused too. ``resolve_path_within`` still has the final word on the disk;
+    this is the belt for the path string itself.
+    """
+    if raw == "":
+        return []
+    segments = raw.split("/")
+    if any(segment in ("", ".", "..") for segment in segments):
+        raise HTTPException(
+            status_code=400,
+            detail="path must be a relative folder path with no empty, '.' or '..' segments.",
+        )
+    return segments
+
+
+def _is_samples_dir_of(name: str, sample_stems: set[str]) -> bool:
+    """Whether *name* is the ``<stem>_samples`` directory of a model beside it."""
+    return (
+        name.endswith(_SAMPLES_SUFFIX) and name[: -len(_SAMPLES_SUFFIX)] in sample_stems
+    )
+
+
+def _offered_dir(entry: os.DirEntry, sample_stems: set[str]) -> bool:
+    """Whether the tree shows *entry* as a subdirectory.
+
+    Dot-names, symlinks and Windows junctions (``DirEntry.is_junction``, 3.12+;
+    a junction is not a symlink to ``is_symlink``) are never offered. A bind
+    mount is a directory to every API here and is offered, as the scanner walks
+    it. A ``<stem>_samples`` directory is
+    hidden beside a model whose filename stem is ``<stem>``: its previews belong
+    to that model and are not a folder of their own.
+    """
+    if entry.name.startswith("."):
+        return False
+    if entry.is_symlink() or getattr(entry, "is_junction", lambda: False)():
+        return False
+    if not entry.is_dir(follow_symlinks=False):
+        return False
+    return not _is_samples_dir_of(entry.name, sample_stems)
+
+
+def _has_offered_dir(directory: str, sample_stems: set[str]) -> bool:
+    """Whether *directory* holds at least one offered subdirectory.
+
+    Raises:
+        OSError: When the directory cannot be listed. The caller decides what
+            that means for its answer.
+    """
+    with os.scandir(directory) as entries:
+        return any(_offered_dir(entry, sample_stems) for entry in entries)
+
+
 class ModelFolderDeleteResponse(BaseModel):
     """Body of ``DELETE /model-folders/{folder_id}``."""
 
@@ -537,9 +680,10 @@ class ModelFolderRescanResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     status: str = Field(
-        description="`started`, `already_running`, or `skipped` - for a `source` folder, "
-        "which holds runs rather than models, and for a built-in folder, "
-        "whose rows are declared rather than scanned."
+        description="`started`, `already_running`, `declared` - a built-in folder, whose "
+        "rows are declared rather than scanned and were re-read before this "
+        "answered - or `skipped`, for a `source` folder, which holds runs "
+        "rather than models, and for a built-in folder that could not be read."
     )
     id: int
     task_id: Optional[str] = Field(
@@ -1092,6 +1236,152 @@ def create_router(server) -> APIRouter:
             existing.shelf_bytes += shelf_bytes.get(folder_id, 0)
         return ModelFolderDeviceListResponse(devices=devices)
 
+    def _present_copies(folder_id: int, prefix: str) -> list:
+        """Every `present` copy under *prefix*, in one query.
+
+        ``prefix`` is the listed directory's relpath with a trailing ``os.sep``,
+        escaped for LIKE. ``""`` reads the whole folder, and then no LIKE is run.
+        """
+        sql = (
+            "SELECT mf.relpath AS relpath, mf.model_id AS model_id, "
+            "COALESCE(m.file_size, 0) AS file_size "
+            "FROM model_file mf JOIN model m ON m.id = mf.model_id "
+            "WHERE mf.model_folder_id = ? AND mf.state = 'present'"
+        )
+        if not prefix:
+            return server.hub.fetchall(sql, (folder_id,))
+        return server.hub.fetchall(
+            sql + " AND mf.relpath LIKE ? ESCAPE '\\'",
+            (folder_id, prefix.translate(_LIKE_ESCAPE) + "%"),
+        )
+
+    @router.get(
+        "/model-folders/{folder_id}/dirs",
+        summary="List one directory level of a model folder",
+        description=(
+            "The subdirectories of one directory inside a registered folder, one "
+            "level per call, so the models tree opens lazily.\n\n"
+            "`path` is POSIX and relative to the folder; leave it empty for the "
+            "root. Every directory carries the `present` models under it, "
+            "recursively. Empty directories are listed. Dot-names, symlinks and a "
+            "`<stem>_samples` directory beside its model are not.\n\n"
+            "A locked folder answers `locked: true` with no `dirs`, and its disk "
+            "is not read; the counts still come from the database."
+        ),
+        tags=["model_shelf"],
+        response_model=ModelFolderDirsResponse,
+    )
+    def list_model_folder_dirs(
+        folder_id: int,
+        request: Request,
+        path: str = Query(
+            "",
+            description="Directory to list, relative to the folder. Empty is the root.",
+        ),
+    ):
+        server.auth.ensure_secure_when_required(request)
+        folder = _fetch_folder(folder_id)
+        segments = _subpath_segments(path)
+        subpath = "/".join(segments)
+        prefix = subpath.replace("/", os.sep) + os.sep if segments else ""
+        locked = folder["movable"] != "per_item"
+
+        directory = ""
+        if not locked:
+            try:
+                directory = resolve_path_within(folder["path"], *segments)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail="path must stay within the model folder.",
+                ) from exc
+            if not os.path.isdir(directory):
+                raise HTTPException(
+                    status_code=404,
+                    detail="No such directory in this model folder.",
+                )
+
+        # One pass over the folder's present copies, bucketed by the first
+        # segment below the listed directory. A copy with no further separator
+        # is a file directly in it, which feeds the samples rule.
+        totals = _Subtree()
+        here_stems: set[str] = set()
+        children: dict[str, _Subtree] = {}
+        child_stems: dict[str, set[str]] = {}
+        for row in _present_copies(folder_id, prefix):
+            relpath = row["relpath"]
+            # LIKE folds ASCII case, so `Alpha/` would match a listing of
+            # `alpha/`; the exact prefix is checked here.
+            if not relpath.startswith(prefix):
+                continue
+            model_id = int(row["model_id"])
+            size = int(row["file_size"])
+            totals.model_ids.add(model_id)
+            totals.bytes += size
+            head, separator, tail = relpath[len(prefix) :].partition(os.sep)
+            if not separator:
+                here_stems.add(os.path.splitext(head)[0])
+                continue
+            child = children.setdefault(head, _Subtree())
+            child.model_ids.add(model_id)
+            child.bytes += size
+            if os.sep not in tail:
+                child_stems.setdefault(head, set()).add(os.path.splitext(tail)[0])
+
+        dirs: list[ModelFolderDirResponse] = []
+        if not locked:
+            try:
+                with os.scandir(directory) as entries:
+                    offered = sorted(
+                        (e for e in entries if _offered_dir(e, here_stems)),
+                        key=lambda e: (e.name.casefold(), e.name),
+                    )
+            except OSError as exc:
+                logger.warning(
+                    "Could not list model folder %s at %r (%s): %s",
+                    folder_id,
+                    subpath,
+                    directory,
+                    exc,
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail="Could not read this directory.",
+                ) from exc
+            for entry in offered:
+                child = children.get(entry.name, _Subtree())
+                try:
+                    has_dirs = _has_offered_dir(
+                        entry.path, child_stems.get(entry.name, set())
+                    )
+                except OSError as exc:
+                    logger.warning(
+                        "Could not look inside %s for subdirectories (%s); "
+                        "reporting has_dirs as false, so the tree offers no "
+                        "expand on it.",
+                        entry.path,
+                        exc,
+                    )
+                    has_dirs = False
+                dirs.append(
+                    ModelFolderDirResponse(
+                        name=entry.name,
+                        path=f"{subpath}/{entry.name}" if subpath else entry.name,
+                        model_count=len(child.model_ids),
+                        bytes=child.bytes,
+                        has_dirs=has_dirs,
+                    )
+                )
+
+        return ModelFolderDirsResponse(
+            folder_id=folder_id,
+            path=subpath,
+            locked=locked,
+            model_count=len(totals.model_ids),
+            bytes=totals.bytes,
+            dirs=dirs,
+        )
+
     @router.post(
         "/model-folders",
         summary="Register a model folder",
@@ -1312,6 +1602,47 @@ def create_router(server) -> APIRouter:
             status="success", id=folder_id, tombstoned_files=tombstoned
         )
 
+    def _redeclare(folder_id: int) -> ModelFolderRescanResponse:
+        """Re-run the declaration of a folder PixlStash owns, in the request.
+
+        Milliseconds, so not a task: the HuggingFace cache's index read
+        measured 0.01 s against 116 GB. It still waits for the shelf's I/O
+        slot, because relocating one of these roots repoints this row's path,
+        and a declaration at the old path would re-create the row there. A
+        sibling declaration from the same Rescan all holds the slot for
+        milliseconds and is waited out; a move holds it for minutes and is a
+        409.
+        """
+        if not SHELF_IO_LOCK.acquire(timeout=_REDECLARE_WAIT_S):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Another model move, import or rescan is holding the "
+                    "shelf. Rescan this folder once it has finished."
+                ),
+            )
+        try:
+            # Read again under the slot: a relocation may have repointed it.
+            path = _fetch_folder(folder_id)["path"]
+            try:
+                declared = redeclare_model_root(server.hub, path)
+            except (sqlite3.Error, OSError) as exc:
+                logger.error(
+                    "Could not re-declare model folder %s (id=%s): %s. Its rows "
+                    "keep the state the last declaration gave them.",
+                    path,
+                    folder_id,
+                    exc,
+                )
+                raise HTTPException(
+                    status_code=500, detail="Could not re-read that folder."
+                ) from exc
+        finally:
+            SHELF_IO_LOCK.release()
+        return ModelFolderRescanResponse(
+            status="skipped" if declared is None else "declared", id=folder_id
+        )
+
     @router.post(
         "/model-folders/{folder_id}/rescan",
         summary="Rescan a registered model folder",
@@ -1322,7 +1653,10 @@ def create_router(server) -> APIRouter:
             "Watch it two ways: live file progress in `GET /workers/progress` "
             "under `workers.ModelFolderScanTask`, and the outcome in this "
             "folder's `scan_status` from `GET /model-folders`. A `source` folder "
-            "is skipped: it is taken from, never catalogued in place."
+            "is skipped: it is taken from, never catalogued in place. A folder "
+            "PixlStash owns (its downloads, InsightFace, the HuggingFace cache) "
+            "is re-declared from its index before this answers: no task, and a "
+            "409 while a move or an import is running."
         ),
         status_code=202,
         tags=["model_shelf"],
@@ -1331,12 +1665,15 @@ def create_router(server) -> APIRouter:
     def rescan_model_folder(folder_id: int, request: Request):
         server.auth.ensure_secure_when_required(request)
         folder = _fetch_folder(folder_id)
-        if folder["kind"] in TAKEN_FROM_KINDS or folder["owner"] == BUILTIN_OWNER:
-            # A source folder holds runs to import, not models to catalogue. A
-            # built-in folder is DECLARED, and pointing the scanner at it would
-            # be actively wrong: it yields only `.safetensors` and sweeps what it
-            # did not see to `missing`, so it would mark the ONNX tagger and both
-            # `.pth` scorers missing on every pass.
+        if folder["owner"] == BUILTIN_OWNER:
+            # A built-in folder is DECLARED, and pointing the scanner at it
+            # would be actively wrong: it yields only `.safetensors` and sweeps
+            # what it did not see to `missing`, so it would mark the ONNX tagger
+            # and both `.pth` scorers missing on every pass. Its rescan is the
+            # declaration again, which reads an index rather than the files.
+            return _redeclare(folder_id)
+        if folder["kind"] in TAKEN_FROM_KINDS:
+            # A source folder holds runs to import, not models to catalogue.
             return ModelFolderRescanResponse(status="skipped", id=folder_id)
 
         status, task_id = queue_model_folder_scan(

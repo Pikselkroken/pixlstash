@@ -35,7 +35,7 @@
 22. [Tiered Duplicate Detection](#22-tiered-duplicate-detection)
 23. [Opt-in telemetry](#23-opt-in-telemetry-the-install-id-and-the-consent-flags)
 24. [Folder structure: read, commit, layout and moves](#24-folder-structure-read-commit-layout-and-moves) — incl. [24.1 The folder-structure read](#241-the-folder-structure-read), [24.2 The folder-structure commit](#242-the-folder-structure-commit), [24.3 The library layout](#243-the-library-layout), [24.4 The layout and the move engine](#244-the-layout-and-the-move-engine), [24.5 Reconciling moves made outside PixlStash](#245-reconciling-moves-made-outside-pixlstash)
-25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Picking up a model that landed after the scan (#1985)](#2513-picking-up-a-model-that-landed-after-the-scan-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116), [25.17 Sample prompts written from the dataset (#2117)](#2517-sample-prompts-written-from-the-dataset-2117), [25.18 Watching a run live (#2118)](#2518-watching-a-run-live-2118), [25.19 The Train dialog's preview: dataset checks and resolve (#2119)](#2519-the-train-dialogs-preview-dataset-checks-and-resolve-2119), [25.20 Checking memory and speed, and learning from runs (#2120)](#2520-checking-memory-and-speed-and-learning-from-runs-2120), [25.21 Recipe updates from pixlstash.dev (#2122)](#2521-recipe-updates-from-pixlstashdev-2122), [25.22 Dataset snapshots: what a LoRA was trained on (#2123)](#2522-dataset-snapshots-what-a-lora-was-trained-on-2123)
+25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Picking up a model that landed after the scan (#1985)](#2513-picking-up-a-model-that-landed-after-the-scan-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116), [25.17 Sample prompts written from the dataset (#2117)](#2517-sample-prompts-written-from-the-dataset-2117), [25.18 Watching a run live (#2118)](#2518-watching-a-run-live-2118), [25.19 The Train dialog's preview: dataset checks and resolve (#2119)](#2519-the-train-dialogs-preview-dataset-checks-and-resolve-2119), [25.20 Checking memory and speed, and learning from runs (#2120)](#2520-checking-memory-and-speed-and-learning-from-runs-2120), [25.21 Recipe updates from pixlstash.dev (#2122)](#2521-recipe-updates-from-pixlstashdev-2122), [25.22 Dataset snapshots: what a LoRA was trained on (#2123)](#2522-dataset-snapshots-what-a-lora-was-trained-on-2123), [25.23 Browsing a model folder by directory (#2203)](#2523-browsing-a-model-folder-by-directory-2203)
 26. [Prompt match](#26-prompt-match)
 
 ---
@@ -401,6 +401,8 @@ Add/remove user tags; bulk clear; confirm or reject model-predicted tags (`TagPr
 ### `projects.py`, `picture_sets.py`, `stacks.py`
 Standard CRUD; set/stack membership management; stack reordering.
 
+**Child sets (#2124).** A picture set may sit under one parent: another set (`PictureSet.parent_set_id`) or a person (`parent_character_id`), never both. Both are plain indexed ids rather than foreign keys, like `Picture.pending_character_id`, so a fresh database and an upgraded one (`0137_add_picture_set_parent`) have the same schema. The rules live in [`services/picture_set_tree.py`](../pixlstash/services/picture_set_tree.py), which the set routes, the character delete and training share: `validate_parent` refuses both parents, a missing one (404), a non-integer, a set becoming its own ancestor, and nesting past three levels counting the person or top-level set (`MAX_DEPTH = 2` below it, owner ruling; a moved set's own children count, so a set with a child cannot go under a child set). Data nested deeper before the limit still loads and can be moved out; `lift_children` moves a deleted parent's children to the top level, called by the set delete and by the character delete for both the person and its reference set (SQLite reuses ids, so a child left pointing at a deleted parent would turn up under whatever is created next); `owning_character_id` names the person a set is of: the nearest person up the chain, met either as a set's reference owner or through `parent_character_id`. The parent is a home, not a constraint: membership is unchanged, a child's pictures need not be in its parent, and a parent's count is its own. A locked set refuses a move (423), as it refuses any other edit of its own fields; deleting its parent still lifts it, because a parent id left naming a deleted row would name whatever is created next with that id. `narrow_project_fields` nulls both parent ids for a scoped token. The writes are on the existing owner-only `POST` / `PATCH /picture_sets`, so the authz registry is unchanged.
+
 ### `dedup.py`
 The vault-wide near-duplicate sweep, **dry run only** (v1.9 Lane E). `GET /dedup/sweep/policy` returns the server's default confidence policy plus the bounds and closed vocabularies a client should build its controls from; `POST /dedup/sweep/dry-run` resolves every near-duplicate group in the vault under a supplied policy and returns the plan behind "N groups auto-collapse, M need review". Both are `owner_only` (a vault-wide aggregate cannot be narrowed to a share token's scope without leaking out-of-scope counts — the same reasoning as `tag_health`), and neither writes anything. All logic lives in [services/dedup_sweep_service.py](../pixlstash/services/dedup_sweep_service.py); the handlers only translate the request body into a `SweepPolicy` and serialise the `SweepReport`. Execution (applying a plan) and the auto-at-import policy are later work; the dry-run planner already accepts an optional `operation_batch_id` so a future apply step can correlate a plan with the operation-log batch that undoes it.
 
@@ -617,6 +619,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/model-folders/pick-up                                                 | model_shelf     | Find and register model files that landed after the last scan |
 | PATCH  | /api/v1/model-folders/{folder_id}                                             | model_shelf     | Update a registered model folder                              |
 | DELETE | /api/v1/model-folders/{folder_id}                                             | model_shelf     | Forget a registered model folder                              |
+| GET    | /api/v1/model-folders/{folder_id}/dirs                                        | model_shelf     | List one directory level of a model folder                    |
 | POST   | /api/v1/model-folders/{folder_id}/relocate                                    | model_shelf     | Move a folder PixlStash owns to another location              |
 | POST   | /api/v1/model-folders/{folder_id}/rescan                                      | model_shelf     | Rescan a registered model folder                              |
 | GET    | /api/v1/model-folders/{folder_id}/runs                                        | model_shelf     | List the training runs in an ai-toolkit output folder         |
@@ -1754,8 +1757,10 @@ owner's and is kept, with a warning when transformers would read it as false.
 
 **Searching.** On Metal only, search queries are encoded on CPU copies of CLIP
 and SBERT (`inference/cpu_query_encoders.py`), loaded in
-`Vault._create_engine` before the engine is assigned to `Vault._engine` and kept
-resident (#1774). Every query encode goes through
+`Vault._create_engine` before the engine is assigned to `Vault._engine`. The
+idle sweep releases them once no search has used them for 180 s, and the next
+search reloads them inside `query_services()` (#1774). Every query encode goes
+through
 `InferenceEngine.query_services()`, which also lets one run at a time on every
 host. The full reasoning and its costs are in that document, under "Searching:
 the CPU copies".
@@ -9132,6 +9137,16 @@ cannot cost the shelf the other two, and every failure is logged and swallowed:
 a machine that has never run face detection has no InsightFace directory, and one
 that has downloaded nothing through the library has no cache. Both are normal.
 
+**A rescan of one of these roots is its declaration again**
+(`builtin_caches.redeclare_model_root`). Until it was, `POST
+/model-folders/{id}/rescan` answered `skipped` for them and the frontend's
+Rescan all left them out, so a repo deleted from the HuggingFace cache stayed
+`present` through every rescan until the next restart. It runs in the request
+(an index read, not a walk) and answers `declared`; it waits up to 5 s for
+`SHELF_IO_LOCK`, because a relocation repoints the row's path and a declaration
+at the old path would re-create the row there. A move holding the slot longer is
+a 409.
+
 **Where the folder is: one accessor, and a location that can be recorded (#905,
 closing #112).** `builtin_models.builtin_model_dir()` is the single answer, and
 the declaration, `inference/engine.py` and `tasks/image_embedding_task.py` all
@@ -11600,6 +11615,8 @@ under the character (`training_run.character_id`) while the builder reads the
 set's pictures (`_gather_export_pictures` takes the set first), and its subject
 defaults to a person. `TrainingService.enqueue` needs at least one of the two.
 
+**A set under a person (#2124).** `_scope` files a set under its person whether it is the reference set or a child set at either level below them (`picture_set_tree.owning_character_id`: the reference owner, else the nearest person up the parent chain), so a run of a person's LoRA dataset is filed under them and its subject is a person. The builder still reads only the set's own pictures, since a set takes precedence over a character in `_gather_export_pictures`. The dataset reply's `character.child_set` (`{ id, name, count }`) names that set when it is not the reference set, and `reference_count` then counts the reference set rather than echoing the child's count. `parent_set_id` names the set a set sits under; with no character that is a concept's dataset, and the dialog starts it on "A thing".
+
 ### 25.20 Checking memory and speed, and learning from runs (#2120)
 
 A recipe's `vram_mb` / `ram_mb` are research seeds. Once a setup has run on this
@@ -11794,6 +11811,57 @@ holds.
 The set links to its LoRAs through the runs: `GET /training/jobs?set_id=` lists
 each run with `model_ids`, the shelf models carrying its `training_run_id`, and
 `dataset_snapshot_id`.
+
+### 25.23 Browsing a model folder by directory (#2203)
+
+The models sidebar browses a registered folder as a tree. `GET
+/api/v1/model-folders/{folder_id}/dirs?path=<subpath>` lists **one directory
+level per call**, so each expand is one request and no route reads a folder
+whole. The response carries the listed path's own recursive counts and, per
+child, its counts and a `has_dirs` flag that says whether to draw an expand
+arrow before it is asked.
+
+- **Addressing.** `path` is POSIX and relative to the registered folder; `""`
+  is the root. Every segment is refused with 400 if it is empty, `.` or `..`,
+  which also catches a leading or trailing slash. The survivors go through
+  `resolve_path_within` (`pixlstash/utils/path_utils.py`), which realpaths the
+  result, so a traversal or a symlink that leaves the folder is a 400 too. The
+  response echoes the normalised path, and each child's `path` is ready to send
+  back as the next `path`.
+- **The disk is read, not the scanner's records.** The listing is
+  `os.scandir` on the directory. The scanner records model files, not
+  directories, so an empty directory exists only on disk and the design's "read
+  what the scanner recorded" would have hidden it. A missing path or a file is
+  404. A directory that cannot be listed is logged with the folder id, the path
+  and the error, and answers 409.
+- **What the tree offers.** Dot-names, symlinks and Windows junctions
+  (`DirEntry.is_junction`, Python 3.12+) are skipped, and non-directories too.
+  A bind mount is a plain directory to every API here and is offered, as the
+  scanner walks it: it is the owner's own mount inside their own folder. Names sort case-insensitively. A `<stem>_samples` directory is
+  hidden when a `present` model file directly in the same directory has the stem
+  `<stem>`: its previews belong to that model (see 25.7). The same rule decides
+  `has_dirs` for each child, using the child's own direct files.
+- **Locked folders.** A folder whose `movable` is not `per_item` answers
+  `locked: true` with `dirs: []`, and its disk is not touched. That is the managed
+  store, the HuggingFace cache, the InsightFace packs and the source and downloads
+  folders. The counts still come from the database.
+- **Counts.** `model_count` is the number of distinct `model_id`s with a `present`
+  copy under the path, and `bytes` the sum of `model.file_size` over those copies
+  (null as 0). Both are recursive. One query selects the folder's `present` rows,
+  narrowed for a subpath by `relpath LIKE <prefix>% ESCAPE '\'`, with the prefix
+  escaped by the scanner's `_LIKE_ESCAPE` as the missing sweep does. SQLite's LIKE
+  folds ASCII case, so the exact prefix is checked again in Python. The rows are
+  then bucketed by their first segment below the prefix. A copy inside a hidden
+  directory still counts toward its ancestors' totals, because the totals describe
+  what the database holds beneath the path, not what the tree shows.
+- **`has_dirs`.** One `os.scandir` peek per visible child, applying the same
+  filters with that child's direct-file stems from the rows already read. A child
+  that cannot be peeked answers `has_dirs: false` and is logged as a warning.
+- **Authority.** `LOCAL_OWNER_ONLY` (§16.3), not `owner_only`: the route reports
+  directory names PixlStash never registered, the authority
+  `GET /api/v1/models/{model_id}/samples` already exercises. The templated path is
+  covered by the `/api/v1/model-folders/` prefix in `READ_BLOCKED_GET_PREFIXES`,
+  and the registry entry is what enforces the tier.
 
 ## 26. Prompt match
 

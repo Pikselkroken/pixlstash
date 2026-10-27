@@ -2618,7 +2618,9 @@ class Vault:
         """Unload every model PixlStash holds, whatever ``keep_models_in_memory`` says.
 
         The engine's services, tagger plugins, face detection and the embedding
-        models, then a malloc_trim. Runs on the GPU worker, queued by
+        models, then a malloc_trim. The one exception is the CPU query encoders
+        on Metal, kept while a search is encoding or used them in the last
+        ``IDLE_UNLOAD_S`` (``InferenceEngine.close``). Runs on the GPU worker, queued by
         :meth:`_unload_models_on_worker`: unloading under a running caption
         batch makes it return nothing for every picture in it, and on Metal
         the flush at the end kills the process beside a running model.

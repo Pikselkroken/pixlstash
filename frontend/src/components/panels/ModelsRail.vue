@@ -213,6 +213,10 @@ import { useRoute } from "vue-router";
 import { VIcon } from "vuetify/components";
 
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
+import {
+  basename,
+  useModelFoldersStore,
+} from "../../stores/useModelFoldersStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { formatModelSize, shelfTypeMark } from "../../utils/modelShelf";
@@ -240,6 +244,7 @@ import ModelsRailSet from "./ModelsRailSet.vue";
 import TasksPanel, { tasksTabFor } from "./TasksPanel.vue";
 
 const store = useModelShelfStore();
+const foldersStore = useModelFoldersStore();
 const sidebarStore = useSidebarStore();
 const tasksStore = useTasksStore();
 const runsStore = useTrainingRunsStore();
@@ -354,7 +359,19 @@ const title = computed(() => {
     runs: false,
     place: store.place,
     sidebarFilter: store.sidebarFilter,
+    folderName: openFolderName.value,
   });
+});
+
+/** The open folder's own name: its last segment, else the registered folder's. */
+const openFolderName = computed(() => {
+  const scope = store.folderScope;
+  if (!scope) return "";
+  if (scope.path) return scope.path.split("/").pop();
+  const folder = foldersStore.folders.find(
+    (one) => Number(one.id) === scope.folderId,
+  );
+  return folder ? folder.tool || basename(folder.path) || folder.path : "";
 });
 
 function clearSelection() {

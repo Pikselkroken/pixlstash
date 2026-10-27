@@ -1,6 +1,6 @@
 /* The row system lives in SideBar.global.css, NOT here. Scoped rules cannot
-   reach a child component's internals, and FolderTreeNode renders rows of the
-   same family. See docs/design/visual-language.md §5.1. */
+   reach a child component's internals. See docs/design/visual-language.md
+   §5.1. */
 
 .sidebar-collections-help-row {
   display: flex;
@@ -75,6 +75,184 @@
   min-width: 0;
 }
 
+/* ---------------------------------------------------------------------------
+   PEOPLE AND SETS AS TREES (#2124). Their top-level rows take the thumbnail
+   size setting again (the places rows above stay at 20px); a child set is a
+   compact row hung off its parent's mark by a guide line that elbows into the
+   last child. An open parent and its children become one raised group. See
+   visual-language.md §5.1, "Child rows".
+
+   Geometry, all from the row's padding edge: `--tree-row-start` is where a
+   depth-1 row's content begins; a child's spacer (`--tree-spacer`) puts its
+   mark under its parent's name; `--tree-x` is where its guide falls inside
+   that spacer. The template computes both per level (utils/setTree.js).
+   --------------------------------------------------------------------------- */
+.sidebar-media-list .sidebar-section-scroll {
+  --sidebar-thumb-size: var(--sidebar-entity-thumb, 20px);
+  --tree-row-start: calc(var(--row-pad, var(--space-3)) + var(--indent-step));
+}
+
+.sidebar-media-list .sidebar-section-scroll .sidebar-list-item {
+  position: relative;
+  height: auto;
+  min-height: max(
+    var(--control-h-bar),
+    calc(var(--sidebar-thumb-size) + var(--space-3))
+  );
+}
+
+.sidebar-media-list .sidebar-section-scroll .sidebar-tree-kid {
+  min-height: max(
+    var(--control-h),
+    calc(var(--tree-kid-thumb) + var(--space-3))
+  );
+}
+
+/* The chevron sits in the gutter left of the mark, which every depth-1 row
+   already leaves empty, so a person's first child set moves nothing. */
+.sidebar-tree-toggle {
+  position: absolute;
+  top: 50%;
+  left: var(--row-pad, var(--space-3));
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--gutter-glyph);
+  height: var(--gutter-glyph);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: rgb(var(--v-theme-sidebar-text));
+  cursor: pointer;
+}
+
+.sidebar-tree-toggle:hover {
+  background: var(--hover-wash);
+}
+
+/* A child's caret sits in its own slot, just before its mark, where its
+   parent's guide line meets it. */
+.sidebar-tree-kid > .sidebar-tree-toggle {
+  /* Over the spacer, which follows it and would otherwise take its clicks. */
+  z-index: var(--z-raised);
+  left: calc(
+    var(--tree-row-start) + var(--tree-spacer) - var(--gutter-glyph)
+  );
+}
+
+.sidebar-tree-spacer {
+  position: relative;
+  flex: none;
+  align-self: stretch;
+  width: var(--tree-spacer);
+}
+
+.sidebar-tree-spacer::before,
+.sidebar-tree-rail {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--tree-x);
+  border-left: 1px solid var(--tree-guide);
+}
+
+.sidebar-tree-spacer::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: var(--tree-x);
+  right: var(--space-1);
+  border-top: 1px solid var(--tree-guide);
+}
+
+.sidebar-tree-kid--last .sidebar-tree-spacer::before {
+  bottom: 50%;
+  right: var(--space-1);
+  border-bottom: 1px solid var(--tree-guide);
+  border-bottom-left-radius: var(--radius-sm);
+}
+
+.sidebar-tree-kid--last .sidebar-tree-spacer::after {
+  display: none;
+}
+
+/* With a caret in the slot the line runs into the slot until it meets the
+   chevron, which an MDI glyph draws from about 5px into its 16px box. Ending
+   at the slot's edge left the line hanging short of the caret. */
+.sidebar-tree-kid--parent .sidebar-tree-spacer::after,
+.sidebar-tree-kid--parent.sidebar-tree-kid--last .sidebar-tree-spacer::before {
+  right: calc(var(--gutter-glyph) - var(--space-2));
+}
+
+/* The line from an open parent's mark down to its row's bottom edge, where
+   its first child's guide picks it up. */
+.sidebar-tree-stub {
+  position: absolute;
+  left: calc(var(--tree-row-start) + var(--tree-stub-x));
+  top: calc(50% + var(--sidebar-thumb-size) / 2);
+  bottom: 0;
+  border-left: 1px solid var(--tree-guide);
+  pointer-events: none;
+}
+
+.sidebar-tree-stub--kid {
+  top: calc(50% + var(--tree-kid-thumb) / 2);
+}
+
+/* Two classes, so it outranks the later `.sidebar-list-icon` width (the
+   top-level mark's); a wider box centred the glyph off its guide. */
+.sidebar-list-icon.sidebar-tree-mark {
+  width: var(--tree-kid-thumb);
+  height: var(--tree-kid-thumb);
+}
+
+.sidebar-tree-mark .sidebar-set-thumb-image {
+  width: var(--tree-kid-thumb);
+  height: var(--tree-kid-thumb);
+  border-radius: var(--radius-sm);
+}
+
+/* "2 sets" under a parent's name, so the chevron is not the only hint. */
+.sidebar-tree-sub {
+  display: block;
+  font-size: var(--text-xs);
+  line-height: var(--leading-tight);
+  color: rgba(
+    var(--v-theme-sidebar-text),
+    var(--opacity-text-secondary)
+  );
+}
+
+/* An open parent and its children: one block. Rows inside take the group's
+   inset off their padding, so every mark, name and count stays on the column
+   of the rows outside it. Scoped under the section so it outranks the later
+   `.sidebar-character-group` rule. */
+.sidebar-section-scroll .sidebar-tree-group {
+  --tree-group-inset: var(--space-2);
+  --row-pad: calc(var(--space-3) - var(--tree-group-inset));
+  /* Restated here, not inherited: a custom property is computed where it is
+     declared, so the section's --tree-row-start was built from the section's
+     own padding and put every stub and caret in a group 5px off its line. */
+  --tree-row-start: calc(var(--row-pad) + var(--indent-step));
+  --sidebar-right-edge: calc(var(--space-3) - var(--tree-group-inset));
+  /* Not the 100% `.sidebar-character-group` carries: with the margin that
+     pushes the counts past the rail's edge. */
+  width: auto;
+  margin: 0 var(--space-2) var(--space-2);
+  padding-bottom: var(--space-2);
+  background: var(--group-surface);
+  /* An inset outline, not a border: it takes no room, so opening a parent
+     does not move it, and nothing pokes above the section, whose sideways
+     clip would cut the top edge off. */
+  outline: 1px solid var(--group-border);
+  outline-offset: -1px;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
 .sidebar-section-add {
   display: inline-flex;
   align-items: center;
@@ -136,21 +314,6 @@
 
 .sidebar-section-scroll::-webkit-scrollbar-track {
   background: rgba(var(--v-theme-shadow), 0.15);
-}
-
-/* The two folder section bands' caret, at the far right AFTER the actions. */
-.sidebar-project-tree-expand-indicator {
-  flex-shrink: 0;
-  opacity: 0.5;
-  color: inherit;
-  transform: rotate(-90deg);
-  transition:
-    transform 0.15s,
-    opacity 0.12s;
-}
-
-.sidebar-project-tree-expand-indicator.expanded {
-  transform: rotate(0deg);
 }
 
 .sidebar-project-tree-files {
@@ -298,7 +461,9 @@
   /* Rescale the type ramp for the whole sidebar in one place, driven by
      --sidebar-font-scale (set from the thumbnail size in the inline style;
      defaults to 1 = unchanged). Every sidebar text rule uses these tokens, so
-     this scales them all at once. Values mirror docs/design/design-tokens.css. */
+     this scales them all at once, except the header slot (SidebarScopeSlot),
+     which keeps the ramp size like the other workspaces' slots. Values mirror
+     docs/design/design-tokens.css. */
   --sidebar-font-scale: 1;
   --text-2xs: calc(0.6875rem * var(--sidebar-font-scale));
   --text-xs: calc(0.75rem * var(--sidebar-font-scale));
@@ -831,12 +996,6 @@
   box-shadow: none;
 }
 
-.sidebar-set-thumb-image--large {
-  width: var(--sidebar-thumb-size);
-  height: var(--sidebar-thumb-size);
-  border-radius: var(--sidebar-item-radius);
-}
-
 .sidebar-list-item:hover .sidebar-character-thumb,
 .sidebar-list-item:hover .sidebar-set-thumb-image {
   transform: scale(1.04);
@@ -960,8 +1119,7 @@
 }
 
 /* Under ~150px there isn't room for the per-entry image counts - drop them. */
-.sidebar--narrow .sidebar-list-count,
-.sidebar--narrow .sidebar-folder-count-badge {
+.sidebar--narrow .sidebar-list-count {
   display: none;
 }
 
@@ -1061,170 +1219,6 @@
     min-width: 44px;
     min-height: 44px;
   }
-}
-
-/* ── Reference Folders panel ──────────────────────────────── */
-.sidebar-folders-loading {
-  display: flex;
-  justify-content: center;
-  padding: var(--space-7);
-}
-
-.sidebar-folders-list {
-  flex: 0 0 auto;
-  overflow-y: visible;
-  overflow-x: hidden;
-  padding: var(--space-1) 0;
-  scrollbar-color: rgb(var(--v-theme-accent)) rgba(var(--v-theme-shadow), 0.15);
-}
-
-/* Add folder button in the folders tab needs no bottom divider - section headers do that job */
-
-.sidebar-folder-section-header {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: 28px;
-  cursor: pointer;
-  color: rgb(var(--v-theme-sidebar-text));
-  background: transparent;
-  border-top: 1px solid rgba(var(--v-theme-border), 0.22);
-  border-bottom: 1px solid rgba(var(--v-theme-border), 0.2);
-  user-select: none;
-  transition:
-    background 0.12s,
-    color 0.12s;
-}
-
-.sidebar-folder-section-header:first-child {
-  border-top: none;
-}
-
-.sidebar-folder-section-header:hover {
-  background: var(--hover-wash);
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-folder-section-title {
-  flex: 1 1 auto;
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: inherit;
-}
-
-.sidebar-folder-section-edit-btn {
-  width: 22px;
-  justify-content: flex-end;
-  flex-shrink: 0;
-  opacity: 0.66;
-  cursor: pointer;
-  color: rgb(var(--v-theme-sidebar-text));
-  transition:
-    opacity 0.15s,
-    color 0.15s;
-}
-
-.sidebar-folder-section-edit-btn:hover {
-  opacity: 1;
-}
-
-.sidebar-folder-root {
-  display: flex;
-  flex-direction: column;
-}
-
-.sidebar-folder-root-row {
-  font-size: var(--text-sm);
-}
-
-/* .sidebar-folder-row and its states, .sidebar-folder-children and
-   .sidebar-folder-label live in SideBar.global.css: FolderTreeNode renders them
-   too, and a scoped rule cannot reach into a child component. */
-
-.sidebar-folder-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  flex-shrink: 0;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.15s;
-}
-
-.sidebar-folder-row:hover .sidebar-folder-actions,
-.sidebar-folder-row:focus-within .sidebar-folder-actions,
-.sidebar-folder-row.active .sidebar-folder-actions {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.sidebar-folder-action-btn {
-  width: 22px;
-  height: 22px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-sm);
-  color: inherit;
-  opacity: 0.72;
-}
-
-.sidebar-folder-action-btn:hover {
-  background: var(--hover-wash);
-  opacity: 1;
-}
-
-/* The folder glyph and badge rules also live in SideBar.global.css, for the
-   same reason. */
-
-.sidebar-folder-status--active {
-  color: rgb(var(--v-theme-sidebar-text));
-  cursor: pointer;
-  border-radius: var(--radius-sm);
-  transition:
-    color 0.15s,
-    opacity 0.15s;
-}
-
-.sidebar-folder-status--active:hover {
-  color: rgb(var(--v-theme-sidebar-text));
-  opacity: 1;
-}
-
-.sidebar-folder-status--pending_mount {
-  color: rgb(var(--v-theme-surface-warning));
-}
-
-.sidebar-folder-status--scanning {
-  color: rgb(var(--v-theme-sidebar-text));
-  display: flex;
-  align-items: center;
-}
-
-.sidebar-folder-status--mount_error {
-  color: rgb(var(--v-theme-surface-error));
-}
-
-.sidebar-folder-loading-row {
-  display: flex;
-  justify-content: center;
-  padding: var(--space-3);
-}
-
-.sidebar-folder-empty-row {
-  padding: var(--space-2) var(--space-3);
-  font-size: var(--text-xs);
-  color: rgb(var(--v-theme-sidebar-text));
-  font-style: italic;
-}
-
-.sidebar-folder-error-row {
-  color: rgba(var(--v-theme-surface-error), 0.8);
 }
 
 /* ── Sidebar context menu ────────────────────────────── */
@@ -1405,115 +1399,11 @@
   z-index: var(--z-raised);
 }
 
-.folder-type-subtitle {
-  margin: 0;
-  font-size: var(--text-sm);
-  color: rgba(var(--v-theme-on-surface), 0.62);
-}
-
 .share-dialog-hint {
   margin: 0;
   font-size: var(--text-base);
   line-height: var(--leading-body);
   color: rgba(var(--v-theme-on-surface), 0.85);
-}
-
-.folder-type-options {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.folder-type-option {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
-  width: 100%;
-  border: 1px solid rgba(var(--v-theme-border), 0.35);
-  border-radius: var(--radius-md);
-  background: rgba(var(--v-theme-surface), 0.4);
-  padding: var(--space-3) var(--space-4);
-  text-align: left;
-  color: rgb(var(--v-theme-on-surface));
-}
-
-.folder-type-option:hover {
-  background: var(--hover-wash);
-}
-
-.folder-type-option-text {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.folder-type-option-text strong {
-  font-size: var(--text-base);
-  font-weight: var(--weight-semibold);
-}
-
-.folder-type-option-text small {
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-surface), 0.62);
-}
-
-.relocate-path-block {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.relocate-path-label {
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  opacity: 0.68;
-  text-transform: uppercase;
-}
-
-.relocate-path-value {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  border-radius: var(--radius-sm);
-  background: rgba(var(--v-theme-surface-variant), 0.35);
-  padding: var(--space-3) var(--space-3);
-  font-family: var(--font-mono);
-  font-size: var(--text-sm);
-}
-
-.relocate-destination-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.relocate-destination-input {
-  flex: 1;
-  min-width: 0;
-}
-
-.relocate-browse-btn {
-  flex-shrink: 0;
-}
-
-.relocate-warning {
-  font-size: var(--text-sm);
-  line-height: var(--leading-snug);
-  color: rgba(var(--v-theme-on-surface), 0.72);
-}
-
-.relocate-error {
-  font-size: var(--text-sm);
-  color: rgb(var(--v-theme-surface-error));
-  background: rgba(var(--v-theme-error), 0.08);
-  border: 1px solid rgba(var(--v-theme-surface-error), 0.22);
-  border-radius: var(--radius-sm);
-  padding: var(--space-3) var(--space-3);
-}
-
-.relocate-result {
-  font-size: var(--text-sm);
-  color: rgb(var(--v-theme-on-surface));
 }
 
 /* A fixed destination rendered as a real button rather than a clickable div,
@@ -1532,21 +1422,10 @@
   text-align: center;
 }
 
-/* v1.11 Phase 3: the "finish organising" resume row. Accented rather than the
-   plain sidebar-text color of an ordinary folder row, because it names
-   unfinished work the owner asked to come back to, not a settled folder. */
-.sidebar-mapping-resume-row {
+/* The "finish organising" resume row. Accented rather than the plain
+   sidebar-text colour of an ordinary row, because it names unfinished work the
+   owner asked to come back to. */
+.sidebar-mapping-resume-row,
+.sidebar-mapping-resume-row .v-icon {
   color: rgb(var(--v-theme-accent));
-}
-
-.sidebar-mapping-resume-icon {
-  flex-shrink: 0;
-}
-
-.sidebar-mapping-resume-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--text-sm);
 }

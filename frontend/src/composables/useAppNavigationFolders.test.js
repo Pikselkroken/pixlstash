@@ -1,7 +1,7 @@
 // A folder click and what the URL says afterwards.
 //
 // The sidebar's folder tree emits `{referenceFolderId, pathPrefix, label}` for
-// EVERY node - `FolderTreeNode.vue` requires the `rfId` - so a subfolder click
+// EVERY node, `rfId` included, so a subfolder click
 // and its folder's root click differ only in `pathPrefix`. The route builder
 // keyed off the id alone, so both pushed `/ref-folder/5` and the subfolder
 // vanished from the URL: a reload or a shared link landed one level up, on the

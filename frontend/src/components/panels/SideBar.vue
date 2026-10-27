@@ -17,13 +17,9 @@ import ProjectEditor from "../editors/ProjectEditor.vue";
 import ProjectFiles from "./ProjectFiles.vue";
 import SidebarScopeSlot from "./SidebarScopeSlot.vue";
 import UserSettingsDialog from "../settings/UserSettingsDialog.vue";
-import FolderTreeNode from "../editors/FolderTreeNode.vue";
-import FolderEditor from "../editors/FolderEditor.vue";
-import FolderBrowser from "../editors/FolderBrowser.vue";
 import AppButton from "../widgets/AppButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import AppDialog from "../widgets/AppDialog.vue";
-import AppInput from "../widgets/AppInput.vue";
 import FolderMappingWizard from "../folders/FolderMappingWizard.vue";
 import { useFolderMappingStore } from "../../stores/useFolderMappingStore";
 import { useLibrariesStore } from "../../stores/useLibrariesStore";
@@ -54,12 +50,6 @@ import { deleteProject, getProjectSummary } from "../../api/projects";
 import {
   listReferenceFolders,
   listImportFolders,
-  deleteFolder,
-  browseFilesystem,
-  // Aliased: this component's own click handler is also called
-  // relocateReferenceFolder.
-  relocateReferenceFolder as requestFolderRelocate,
-  movePicturesToReferenceFolder,
 } from "../../api/folders";
 import { getPictureCount } from "../../api/pictures";
 import { getSharedResourceIds, revokeTokensByResource } from "../../api/users";
@@ -84,6 +74,13 @@ import {
 } from "../../utils/projectMembership.js";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import {
+  ancestorsOf,
+  buildSetTree,
+  flattenBranch,
+  treeGuideX,
+  treeSpacerWidth,
+} from "../../utils/setTree.js";
+import {
   SET_COLORS,
   SET_ICON_CATEGORIES,
   ICON_CARDS,
@@ -95,7 +92,7 @@ import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
-import { useSidebarExpansion } from "../../composables/useSidebarExpansion";
+import { useSetTreeExpansion } from "../../composables/useSetTreeExpansion";
 import { useRoute } from "vue-router";
 import { useDedupStore, scopeKey } from "../../stores/useDedupStore";
 import { useMovesStore } from "../../stores/useMovesStore";
@@ -241,18 +238,10 @@ const labelObservers = new Map();
 
 const dragOverSet = ref(null);
 
-// Which folder sections and folders are open - hydrated from and written back
-// to localStorage by the composable, so the shape of the sidebar survives a
-// reload. The folder headers default to expanded; the folder tree to
-// collapsed. (People and Sets no longer collapse, #2159.)
-const {
-  referenceFoldersCollapsed,
-  importFoldersCollapsed,
-  expandedFolderIds, // reference-folder id (number) or subfolder path (string)
-  toggleReferenceFoldersSection,
-  toggleImportFoldersSection,
-  toggleFolderExpanded,
-} = useSidebarExpansion();
+// Which parents in the People and Sets trees are open (#2124), kept in
+// localStorage so the tree's shape survives a reload.
+const { expandedTreeKeys, toggleTreeKey, expandTreeKeys } =
+  useSetTreeExpansion();
 
 function selectProjectNode(p) {
   // Explicit entry click → navigate. Unlike a tab switch, clicking a specific
@@ -306,14 +295,13 @@ const allPicturesLastProjectId = ref(null);
 const lastUsedProjectId = ref(null); // remembers last selected project for auto-select
 const projectEditorOpen = ref(false);
 const projectMenuOpen = ref(false);
-const projectMenuSection = ref(null); // 'projects' | 'folders' | null
+const projectMenuSection = ref(null); // 'projects' | null
 const projectMenuSubPos = ref({ top: 0, left: 0 });
 const projectMenuRef = ref(null);
 const collapsedProjectBtnRef = ref(null);
 const collapsedProjectMenuRef = ref(null);
 const collapsedProjectSubMenuRef = ref(null);
 const collapsedProjectsMenuTriggerRef = ref(null);
-const collapsedFoldersMenuTriggerRef = ref(null);
 const collapsedProjectMenuPos = ref({ top: 0, left: 0 });
 
 const dockedScrollRef = ref(null);
@@ -349,15 +337,11 @@ let loraCheckEpoch = 0;
 const setCtxIconMenuOpen = ref(false);
 const setCtxColorMenuOpen = ref(false);
 const setCtxAppearanceMenuPos = ref({ top: 0, left: 0, openUp: false });
-const sidebarCtxFolder = ref(null); // reference folder object or null
-const sidebarCtxFolderScopePath = ref(null); // null means the reference folder root
-const sidebarCtxImportFolder = ref(null); // import folder object or null
 const sidebarCtxProject = ref(null); // { id, name } or null
 const sidebarCtxAllPictures = ref(false); // true when ctx opened from All Pictures row
 const sidebarCtxScrapheap = ref(false); // true when ctx opened from the Scrapheap row
 const sidebarCtxDeleteIds = ref([]); // character IDs to delete via context menu
-// Right-click on a section HEADER (not an item): 'people' | 'sets' |
-// 'reference-folders' | 'import-folders', or null. Offers the "create/add" action.
+// Right-click on a section HEADER (not an item): 'people' | 'sets', or null. Offers the "create/add" action.
 const sidebarCtxHeader = ref(null);
 // Right-click on empty/uncovered sidebar space: offers the view toggles
 // (auto-hide, dock mode).
@@ -494,26 +478,13 @@ const settingsDialogOpen = ref(false);
 // Nav entry the settings dialog should land on. Set by `openSettingsDialog(tab)`
 // so a caller can deep-link (e.g. the scrapheap header's "change" link).
 const settingsDialogInitialTab = ref("");
-// --- Reference Folders (Folders tab) ---
-// The docked rail's mode. The expanded list shows folders as a section of
-// its own, so there it no longer switches anything (#2159).
-const sidebarPrimaryTab = ref("library"); // 'library' | 'folders'
-// Whether the folder rows are on screen: the expanded list's Folders section,
-// or the docked rail in its Folders mode. Owner only, in both.
-const foldersShown = computed(
-  () =>
-    !isReadOnly.value &&
-    (!sidebarStore.effectiveDocked || sidebarPrimaryTab.value === "folders"),
-);
+// --- Reference and import folders ---
+// The sidebar no longer lists them, but a folder view is still reached by URL
+// (an old link, Back, a library insight), and it needs the folder's label and
+// first-scan state. Owner only.
+const foldersWanted = computed(() => !isReadOnly.value);
 const referenceFolders = ref([]);
-const referenceFoldersLoading = ref(false);
 const importFolders = ref([]);
-const importFoldersLoading = ref(false);
-const inDocker = ref(false);
-const referenceFoldersImageRoot = ref(null);
-// expandedFolderIds / referenceFoldersCollapsed / importFoldersCollapsed are
-// persisted - see useSidebarExpansion() at the top of this component.
-const folderBrowseCache = ref({}); // keyed by path → { entries, loading, image_count }
 const selectedFolderKey = ref(null); // 'rf-{id}' | 'path-{path}' | 'if-{id}' | null
 const selectedFolderReferenceId = ref(null); // numeric reference-folder id or null
 /** The absolute folder path the selection is filtering on, or null. The row key
@@ -524,16 +495,8 @@ const selectedFolderPath = ref(null);
     URL carries this rather than the absolute path so the owner's folder tree is
     not in the address bar or the browser history (#1206 item 9). */
 const selectedFolderSubPath = ref(null);
-const dragOverReferenceTargetKey = ref(null);
 
-// Reference folder editor state
-const referenceFolderEditorOpen = ref(false);
-const referenceFolderEditorFolder = ref(null); // null = create, object = edit
-
-// v1.11 Phase 3: adding a new reference folder goes through the mapping
-// wizard instead of the plain editor - see `openReferenceFolderEditor` below.
-// The editor is unchanged for *editing* an already-registered one (sync
-// toggles, sidecar suffixes), which the wizard has no opinion about.
+// Adding a folder goes through the mapping wizard.
 const mappingStore = useFolderMappingStore();
 const librariesStore = useLibrariesStore();
 
@@ -756,29 +719,6 @@ const pendingForThisLibrary = computed(() => {
     ? entry
     : null;
 });
-const importFolderEditorOpen = ref(false);
-const importFolderEditorFolder = ref(null); // null = create, object = edit
-const addFolderTypeDialogOpen = ref(false);
-const referenceFolderRelocateOpen = ref(false);
-const referenceFolderRelocateFolder = ref(null);
-const referenceFolderRelocateDestination = ref("");
-const referenceFolderRelocateBrowseOpen = ref(false);
-const referenceFolderRelocateLoading = ref(false);
-const referenceFolderRelocateError = ref("");
-const referenceFolderRelocateResult = ref("");
-
-function openAddFolderTypeDialog() {
-  addFolderTypeDialogOpen.value = true;
-}
-
-function chooseFolderType(type) {
-  addFolderTypeDialogOpen.value = false;
-  if (type === "import") {
-    openImportFolderEditor();
-    return;
-  }
-  openReferenceFolderEditor();
-}
 
 /**
  * The empty library's "Choose a folder…" / "Import them…".
@@ -818,25 +758,9 @@ async function chooseLibraryFolder() {
       return;
     }
   }
-  openReferenceFolderEditor();
-}
-
-function openReferenceFolderEditor(rf = null) {
-  if (rf === null) {
-    // Adding a folder is "Add a library" now: a folder indexed in place as
-    // the library's own storage. This used to open the mapping wizard in
-    // reference mode, which, pointed at the library root, registered the
-    // whole library as one reference folder.
-    openFolderMappingWizard();
-    return;
-  }
-  referenceFolderEditorFolder.value = rf;
-  referenceFolderEditorOpen.value = true;
-}
-
-function closeReferenceFolderEditor() {
-  referenceFolderEditorOpen.value = false;
-  referenceFolderEditorFolder.value = null;
+  // Adding a folder is "Add a library": a folder indexed in place as the
+  // library's own storage.
+  openFolderMappingWizard();
 }
 
 // The wizard's open state is the store's, so Settings › Libraries and the
@@ -1021,215 +945,6 @@ async function _offerLoosePictures() {
   }
 }
 
-function pathParent(path) {
-  const raw = String(path || "");
-  if (!raw || raw === "/") return "/";
-  const trimmed = raw.replace(/[\\/]+$/, "");
-  if (/^[A-Za-z]:$/.test(trimmed)) return `${trimmed}\\`;
-  const match = trimmed.match(/^(.*)[\\/][^\\/]+$/);
-  if (!match) return "/";
-  const parent = match[1];
-  if (/^[A-Za-z]:$/.test(parent)) return `${parent}\\`;
-  return parent || "/";
-}
-
-function openReferenceFolderRelocateDialog(folder) {
-  if (!folder || inDocker.value) return;
-  referenceFolderRelocateFolder.value = folder;
-  referenceFolderRelocateDestination.value = "";
-  referenceFolderRelocateError.value = "";
-  referenceFolderRelocateResult.value = "";
-  referenceFolderRelocateOpen.value = true;
-}
-
-function closeReferenceFolderRelocateDialog() {
-  if (referenceFolderRelocateLoading.value) return;
-  referenceFolderRelocateOpen.value = false;
-  referenceFolderRelocateFolder.value = null;
-  referenceFolderRelocateDestination.value = "";
-  referenceFolderRelocateError.value = "";
-  referenceFolderRelocateResult.value = "";
-}
-
-const referenceFolderRelocateInitialPath = computed(() =>
-  pathParent(referenceFolderRelocateFolder.value?.folder || ""),
-);
-
-const relocationRegisteredPaths = computed(() => {
-  const currentId = Number(referenceFolderRelocateFolder.value?.id);
-  return referenceFolders.value
-    .filter((rf) => Number(rf.id) !== currentId)
-    .map((rf) => rf.folder.replace(/[\\/]+$/, ""));
-});
-
-async function relocateReferenceFolder() {
-  const folder = referenceFolderRelocateFolder.value;
-  const destination = referenceFolderRelocateDestination.value.trim();
-  if (!folder?.id || !destination) return;
-  referenceFolderRelocateLoading.value = true;
-  referenceFolderRelocateError.value = "";
-  referenceFolderRelocateResult.value = "";
-  try {
-    const data = await requestFolderRelocate(folder.id, destination);
-    await fetchReferenceFolders();
-    folderBrowseCache.value = {};
-    browseExpandedFolders();
-    emit("images-moved", {
-      imageIds: data?.moved_picture_ids || [],
-      kind: "reference-folder",
-      refresh: true,
-    });
-    referenceFolderRelocateResult.value = `Moved ${data?.moved_entry_count ?? 0} item${data?.moved_entry_count === 1 ? "" : "s"} and updated ${data?.rewritten_count ?? 0} picture path${data?.rewritten_count === 1 ? "" : "s"}.`;
-  } catch (error) {
-    referenceFolderRelocateError.value =
-      errorDetail(error) || error?.message || "Relocation failed.";
-  } finally {
-    referenceFolderRelocateLoading.value = false;
-  }
-}
-
-function openImportFolderEditor(folder = null) {
-  importFolderEditorFolder.value = folder ?? null;
-  importFolderEditorOpen.value = true;
-}
-
-function closeImportFolderEditor() {
-  importFolderEditorOpen.value = false;
-  importFolderEditorFolder.value = null;
-}
-
-function showDockerRestartPrompt() {
-  // Informational outcome, not a decision - a notice, not a blocking dialog.
-  // Sticky (no auto-dismiss) because it asks the user to go and do something.
-  noticeStore.push({
-    level: "info",
-    text: "Docker: restart the PixlStash container with the new folder mount, then reopen PixlStash.",
-    timeout: 0,
-    key: "docker-restart-prompt",
-  });
-}
-
-async function referenceFolderSaved(savedFolder = null) {
-  const createdNewFolder = !referenceFolderEditorFolder.value?.id;
-  closeReferenceFolderEditor();
-  await fetchReferenceFolders();
-  if (savedFolder?.relocation) {
-    const relocation = savedFolder.relocation;
-    const issues =
-      Number(relocation.missing_count || 0) +
-      Number(relocation.unmatched_count || 0);
-    const issueText = issues
-      ? ` ${issues} item${issues === 1 ? "" : "s"} need attention.`
-      : "";
-    // A partial outcome (some items may need attention) reads as `warning`;
-    // a clean relocation is a plain success.
-    const relocationText = `Reference folder relocated - rewrote ${relocation.rewritten_count || 0} image path${relocation.rewritten_count === 1 ? "" : "s"}.${issueText}`;
-    if (issues) {
-      noticeStore.warning(relocationText, { key: "reference-relocated" });
-    } else {
-      noticeStore.success(relocationText, { key: "reference-relocated" });
-    }
-  }
-  // A newly added folder may be active-but-unscanned, so ensure polling runs.
-  _startFolderStatusPoll();
-  if (inDocker.value && createdNewFolder) {
-    showDockerRestartPrompt();
-  }
-}
-
-async function referenceFolderDeleted() {
-  closeReferenceFolderEditor();
-  // If we were browsing this folder, clear the selection. The editor's delete
-  // button is the other way into #1206 item 12 - same leak, different entry.
-  clearFolderSelection();
-  emit("select-folder", null);
-  sidebarStore.folderScanning = false;
-  await fetchReferenceFolders();
-}
-
-async function importFolderSaved() {
-  const createdNewFolder = !importFolderEditorFolder.value?.id;
-  closeImportFolderEditor();
-  await fetchImportFolders();
-  if (inDocker.value && createdNewFolder) {
-    showDockerRestartPrompt();
-  }
-
-  // If a new import folder was just created, navigate to it so the user
-  // sees the "scanning" state rather than whatever was previously shown.
-  if (createdNewFolder) {
-    const newFolder = importFolders.value.reduce(
-      (best, entry) => (!best || entry.id > best.id ? entry : best),
-      null,
-    );
-    if (newFolder) {
-      selectedFolderKey.value = `if-${newFolder.id}`;
-      emit("select-folder", {
-        importSourceFolder: newFolder.folder,
-        importFolderId: newFolder.id,
-        label: newFolder.label || newFolder.folder,
-      });
-      sidebarStore.folderScanning = Boolean(newFolder.last_checked == null);
-      return;
-    }
-  }
-
-  if (!selectedFolderKey.value?.startsWith("if-")) return;
-  const selectedId = _folderId(selectedFolderKey.value.slice(3));
-  if (selectedId == null) return;
-  const selectedImportFolder = importFolders.value.find(
-    (entry) => Number(entry.id) === selectedId,
-  );
-  if (!selectedImportFolder) {
-    clearFolderSelection();
-    emit("select-folder", null);
-    sidebarStore.folderScanning = false;
-    return;
-  }
-  emit("select-folder", {
-    importSourceFolder: selectedImportFolder.folder,
-    importFolderId: selectedImportFolder.id,
-    label: selectedImportFolder.label || selectedImportFolder.folder,
-  });
-}
-
-async function importFolderDeleted() {
-  const deletedId = Number(importFolderEditorFolder.value?.id);
-  closeImportFolderEditor();
-  if (
-    Number.isFinite(deletedId) &&
-    selectedFolderKey.value === `if-${deletedId}`
-  ) {
-    clearFolderSelection();
-    emit("select-folder", null);
-    sidebarStore.folderScanning = false;
-  }
-  await fetchImportFolders();
-}
-
-const registeredFolderPaths = computed(() =>
-  referenceFolders.value.map((rf) => rf.folder.replace(/\/$/, "")),
-);
-
-const registeredImportFolderPaths = computed(() =>
-  importFolders.value.map((entry) => entry.folder.replace(/\/$/, "")),
-);
-
-const selectedReferenceFolderForHeader = computed(() => {
-  const id = _folderId(selectedFolderReferenceId.value);
-  if (id == null) return null;
-  return (
-    referenceFolders.value.find((folder) => Number(folder.id) === id) || null
-  );
-});
-
-const selectedImportFolderForHeader = computed(() => {
-  if (!selectedFolderKey.value?.startsWith("if-")) return null;
-  const id = _folderId(selectedFolderKey.value.slice(3));
-  if (id == null) return null;
-  return importFolders.value.find((entry) => Number(entry.id) === id) || null;
-});
-
 // Whether the currently selected reference folder is actively being scanned
 // for the first time (active but never completed a pass).
 const selectedFolderScanning = computed(() => {
@@ -1252,153 +967,43 @@ watch(selectedFolderScanning, (val) => {
 });
 
 const collapsedProjectBtnTitle = computed(() => {
-  if (sidebarPrimaryTab.value === "folders") {
-    if (!selectedFolderKey.value) return "Folders";
-    if (selectedFolderKey.value.startsWith("rf-")) {
-      const id = _folderId(selectedFolderKey.value.slice(3));
-      const rf = referenceFolders.value.find((f) => f.id === id);
-      return rf ? rf.label || rf.folder : "Folder";
-    }
-    if (selectedFolderKey.value.startsWith("if-")) {
-      const id = _folderId(selectedFolderKey.value.slice(3));
-      const imf = importFolders.value.find((f) => Number(f.id) === id);
-      return imf ? imf.label || imf.folder : "Folder";
-    }
-    return "Folder";
-  }
   if (projectViewMode.value === "global") return "Global (all projects)";
   if (selectedProjectId.value === null) return "No project";
   return selectedProjectObj.value?.name ?? "Project";
 });
 
 async function fetchReferenceFolders() {
-  referenceFoldersLoading.value = true;
   try {
     const body = await listReferenceFolders();
     referenceFolders.value = body?.folders ?? [];
     entityNames.mergeRefFolderLabels(referenceFolders.value);
-    inDocker.value = Boolean(body?.in_docker);
-    referenceFoldersImageRoot.value = body?.image_root ?? null;
-    // In non-Docker mode we eagerly browse roots so we know which have
-    // subdirectories (controls whether the expand chevron is shown).
-    if (!inDocker.value) {
-      referenceFolders.value.forEach((rf) => browseFolderPath(rf.folder, true));
-      // Subfolders expanded in an earlier session start out with no listing of
-      // their own, so the restored tree would render them empty.
-      browseExpandedFolderPaths();
-    }
     // If any folder is still pending, start polling for status updates.
-    if (foldersShown.value) {
+    if (foldersWanted.value) {
       _startFolderStatusPoll();
     }
   } catch (e) {
     console.error("Failed to fetch reference folders:", e);
-  } finally {
-    referenceFoldersLoading.value = false;
   }
 }
 
 async function fetchImportFolders() {
-  importFoldersLoading.value = true;
   try {
     const body = await listImportFolders();
     importFolders.value = body?.folders ?? [];
     entityNames.mergeImportFolderLabels(importFolders.value);
-    if (foldersShown.value) {
+    if (foldersWanted.value) {
       _startFolderStatusPoll();
     }
   } catch (e) {
     console.error("Failed to fetch import folders:", e);
-  } finally {
-    importFoldersLoading.value = false;
   }
-}
-
-/**
- * Fetch a listing for every subfolder the user has expanded. Their entries live
- * in `folderBrowseCache`, which is per-session: a tree restored from a previous
- * session (or re-rendered after the cache was dropped) has the nodes but not
- * their children until they are browsed again.
- */
-function browseExpandedFolderPaths() {
-  for (const key of expandedFolderIds.value) {
-    if (typeof key === "string") void browseFolderPath(key, true);
-  }
-}
-
-/** Re-browse everything currently expanded, after the browse cache is cleared. */
-function browseExpandedFolders() {
-  for (const rf of referenceFolders.value) {
-    if (expandedFolderIds.value.has(rf.id)) {
-      void browseFolderPath(rf.folder, true);
-    }
-  }
-  browseExpandedFolderPaths();
-}
-
-async function browseFolderPath(path, prefetchChildren = false) {
-  if (inDocker.value) {
-    // Filesystem browse is intentionally disabled in Docker mode.
-    return;
-  }
-  const cached = folderBrowseCache.value[path];
-  if (cached) {
-    if (prefetchChildren && !cached.loading && !cached.error) {
-      const childEntries = cached.entries ?? [];
-      childEntries.forEach((entry) => {
-        void browseFolderPath(entry.path, false);
-      });
-    }
-    return;
-  }
-  folderBrowseCache.value = {
-    ...folderBrowseCache.value,
-    [path]: { entries: [], loading: true, image_count: null },
-  };
-  try {
-    const listing = await browseFilesystem(path);
-    const entries = listing?.entries ?? [];
-    const imageCount = Number(listing?.image_count);
-    folderBrowseCache.value = {
-      ...folderBrowseCache.value,
-      [path]: {
-        entries,
-        loading: false,
-        image_count: Number.isFinite(imageCount) ? imageCount : null,
-      },
-    };
-    if (prefetchChildren && entries.length > 0) {
-      entries.forEach((entry) => {
-        void browseFolderPath(entry.path, false);
-      });
-    }
-  } catch {
-    folderBrowseCache.value = {
-      ...folderBrowseCache.value,
-      [path]: { entries: [], loading: false, image_count: null, error: true },
-    };
-  }
-}
-
-
-
-/* Whether a reference-folder row can disclose children, i.e. whether its
-   chevron is drawn. The slot is reserved either way (`.sidebar-row-glyph`), so
-   this only decides visibility and never the row's left edge. Not browsable in
-   Docker, and not-yet-browsed counts as "can", so the affordance is there
-   before the first browse returns. */
-function referenceFolderCanDisclose(rf) {
-  if (inDocker.value) return false;
-  const cached = folderBrowseCache.value[rf.folder];
-  if (!cached || cached.loading) return true;
-  return (cached.entries?.length ?? 0) > 0;
 }
 
 /**
  * The sidebar's current selection, said the way a ROUTE says it.
  *
  * The sidebar's own key identifies a row, so a subfolder's is
- * `path-<absolute path>` (`FolderTreeNode.vue`); the route only ever names the
+ * `path-<absolute path>`; the route only ever names the
  * folder the row sits in. These two are what let the watcher below compare the
  * two spellings without either of them having to change: this is the folder,
  * `selectedFolderPath` is which folder inside it. An equality test on the row
@@ -1440,24 +1045,7 @@ function handleFolderNodeSelect(key, payload) {
   sidebarStore.folderScanning = selectedFolderScanning.value;
 }
 
-async function handleFolderNodeToggle(path) {
-  if (inDocker.value) {
-    return;
-  }
-  if (expandedFolderIds.value.has(path)) {
-    toggleFolderExpanded(path);
-    return;
-  }
-  await browseFolderPath(path, true);
-  const cached = folderBrowseCache.value[path];
-  const childCount = cached?.entries?.length ?? 0;
-  if (cached?.error || childCount === 0) {
-    return;
-  }
-  toggleFolderExpanded(path);
-}
-
-// Poll for folder status updates while the Folders tab is open.
+// Poll for folder status updates for the owner.
 // Keeps polling while any reference folder is transitioning/retrying
 // (pending, mount_error, or first active scan) OR any import folder has not
 // completed its first scan yet (last_checked === null).
@@ -1484,12 +1072,6 @@ async function _pollFolderStatus() {
     ]);
     const folders = referenceBody?.folders ?? [];
     const updatedImportFolders = importBody?.folders ?? [];
-    // Detect folders whose first scan just completed so we can refresh
-    // the browse cache (image counts were zero before).
-    const justScanned = referenceFolders.value.filter((rf) => {
-      const updated = folders.find((f) => f.id === rf.id);
-      return updated && rf.last_scanned == null && updated.last_scanned != null;
-    });
     // Merge status + last_scanned updates into existing list.
     referenceFolders.value = referenceFolders.value.map((rf) => {
       const updated = folders.find((f) => f.id === rf.id);
@@ -1501,19 +1083,6 @@ async function _pollFolderStatus() {
     for (const f of folders) {
       if (!referenceFolders.value.find((rf) => rf.id === f.id)) {
         referenceFolders.value = [...referenceFolders.value, f];
-        if (!inDocker.value) {
-          browseFolderPath(f.folder, true);
-        }
-      }
-    }
-    // Refresh browse cache for folders whose initial scan just finished.
-    if (!inDocker.value) {
-      for (const rf of justScanned) {
-        // Evict stale cache entry so browseFolderPath re-fetches.
-        const next = { ...folderBrowseCache.value };
-        delete next[rf.folder];
-        folderBrowseCache.value = next;
-        browseFolderPath(rf.folder, true);
       }
     }
 
@@ -1547,7 +1116,7 @@ onBeforeUnmount(() => _stopFolderStatusPoll());
 
 // After the poll's timer is declared: `immediate` starts it during setup.
 watch(
-  foldersShown,
+  foldersWanted,
   (shown) => {
     if (shown) {
       fetchReferenceFolders();
@@ -1560,19 +1129,8 @@ watch(
   { immediate: true },
 );
 
-function selectFoldersTab() {
-  // Stateless tab switch: only change which list the sidebar shows. Do NOT
-  // emit select-* / navigate / clear the grid's selection - switching a tab
-  // must leave the current view intact so the user can drag pictures from it
-  // onto entries in this tab.
-  sidebarPrimaryTab.value = "folders";
-  projectViewMode.value = "global";
-}
-
 function selectLibraryTab(mode) {
-  // Stateless tab switch (see selectFoldersTab): sidebar-display only, no
-  // navigation and no grid-filter mutation.
-  sidebarPrimaryTab.value = "library";
+  // Sidebar-display only: no navigation and no grid-filter mutation.
   if (mode === "project") {
     switchToProjectView();
   } else {
@@ -1747,13 +1305,6 @@ function openProjectMenu({ focusFirst = false } = {}) {
   if (sidebarStore.effectiveDocked && collapsedProjectBtnRef.value) {
     const rect = collapsedProjectBtnRef.value.getBoundingClientRect();
     collapsedProjectMenuPos.value = _flyoutPos(rect);
-    if (
-      referenceFolders.value.length === 0 &&
-      importFolders.value.length === 0
-    ) {
-      fetchReferenceFolders();
-      fetchImportFolders();
-    }
   }
   projectMenuSection.value = null;
   projectMenuOpen.value = true;
@@ -1794,18 +1345,12 @@ function openProjectSubMenu(section, event, focusFirst = false) {
   }
 }
 
-function focusProjectSubMenuTrigger(section) {
-  const trigger =
-    section === "projects"
-      ? collapsedProjectsMenuTriggerRef.value
-      : collapsedFoldersMenuTriggerRef.value;
-  nextTick(() => trigger?.focus());
-}
-
 function closeProjectSubMenu({ restoreFocus = false } = {}) {
   const section = projectMenuSection.value;
   projectMenuSection.value = null;
-  if (restoreFocus && section) focusProjectSubMenuTrigger(section);
+  if (restoreFocus && section) {
+    nextTick(() => collapsedProjectsMenuTriggerRef.value?.focus());
+  }
 }
 
 function onProjectMenuKeydown(event) {
@@ -1849,22 +1394,6 @@ function selectGlobalFromProjectMenu() {
 function selectProjectFromProjectMenu(project) {
   selectLibraryTab("project");
   selectProjectNode(project);
-  closeProjectMenu({ restoreFocus: true });
-}
-
-function openAddFolderFromProjectMenu() {
-  closeProjectMenu();
-  openAddFolderTypeDialog();
-}
-
-function selectFolderFromProjectMenu(folder, kind) {
-  selectFoldersTab();
-  handleFolderNodeSelect(`${kind === "reference" ? "rf" : "if"}-${folder.id}`, {
-    ...(kind === "reference"
-      ? { referenceFolderId: folder.id, pathPrefix: folder.folder }
-      : { importSourceFolder: folder.folder, importFolderId: folder.id }),
-    label: folder.label || folder.folder,
-  });
   closeProjectMenu({ restoreFocus: true });
 }
 
@@ -2125,6 +1654,128 @@ const visibleSets = computed(() => {
   );
 });
 
+// --- Child sets (#2124): People and Sets as trees ---
+// The docked rail stays flat; only the expanded list nests.
+const setTree = computed(() =>
+  buildSetTree(
+    visibleSets.value,
+    visibleCharacters.value.map((c) => c.id),
+  ),
+);
+
+function isTreeOpen(key) {
+  return expandedTreeKeys.value.has(key);
+}
+
+function branchRows(children) {
+  return flattenBranch(children, setTree.value.bySet, (id) =>
+    isTreeOpen(`s:${id}`),
+  );
+}
+
+/** A person's open branch: their child sets, or nothing while collapsed. */
+const treeRowsByCharacter = computed(() => {
+  const out = new Map();
+  for (const [charId, kids] of setTree.value.byCharacter) {
+    out.set(charId, isTreeOpen(`c:${charId}`) ? branchRows(kids) : []);
+  }
+  return out;
+});
+
+/** The Sets section: each top-level set followed by its open branch. */
+const setSectionGroups = computed(() =>
+  setTree.value.roots.map((root) => {
+    const kids = setTree.value.bySet.get(Number(root.id)) ?? [];
+    const open = kids.length > 0 && isTreeOpen(`s:${root.id}`);
+    return {
+      root,
+      open,
+      rows: [
+        { set: root, level: 0, last: true, rails: [], childCount: kids.length, expanded: open },
+        ...(open ? branchRows(kids) : []),
+      ],
+    };
+  }),
+);
+
+function characterChildCount(charId) {
+  return setTree.value.byCharacter.get(Number(charId))?.length ?? 0;
+}
+
+function childSetsLabel(n) {
+  return n === 1 ? "1 set" : `${n} sets`;
+}
+
+/** Open the branch that holds the selected set, so the selection is never hidden. */
+watch(
+  () => [...selectedSetIdSet.value, visibleSets.value.length > 0],
+  () => {
+    const ids = [...selectedSetIdSet.value];
+    const keys = [];
+    for (const id of ids) {
+      const { setIds, characterId } = ancestorsOf(id, visibleSets.value);
+      keys.push(...setIds.map((sid) => `s:${sid}`));
+      if (characterId != null) keys.push(`c:${characterId}`);
+    }
+    if (keys.length) expandTreeKeys(keys);
+  },
+  { immediate: true },
+);
+
+/**
+ * Open a parent the moment it gains a set that did not exist before, so a set
+ * just made inside a person or set (from the picker or the menu) is on screen,
+ * not behind a closed chevron. The first list is the baseline, not news.
+ *
+ * "Did not exist" is judged against every set, not the scoped tree: a project
+ * switch brings existing sets into view, and judged against the tree those
+ * read as new and opened every parent.
+ */
+let knownSetIds = null;
+watch(setTree, (tree) => {
+  const now = new Map();
+  for (const [id, kids] of tree.byCharacter) now.set(`c:${id}`, kids);
+  for (const [id, kids] of tree.bySet) now.set(`s:${id}`, kids);
+  if (knownSetIds) {
+    const keys = [];
+    for (const [key, kids] of now) {
+      if (kids.some((kid) => !knownSetIds.has(Number(kid.id)))) {
+        keys.push(key);
+        if (key.startsWith("s:")) {
+          const { setIds, characterId } = ancestorsOf(
+            Number(key.slice(2)),
+            visibleSets.value,
+          );
+          keys.push(...setIds.map((sid) => `s:${sid}`));
+          if (characterId != null) keys.push(`c:${characterId}`);
+        }
+      }
+    }
+    if (keys.length) expandTreeKeys(keys);
+  }
+  // The baseline is taken once both lists have arrived: people landing after
+  // the sets would otherwise move every person's sets under them at once and
+  // read as news, opening them all.
+  if (entityLists.has("sets") && entityLists.has("characters")) {
+    knownSetIds = new Set(pictureSets.value.map((s) => Number(s.id)));
+  }
+});
+
+/** ArrowRight opens a parent row, ArrowLeft closes it; the rest is the row's. */
+function onTreeRowKeydown(key, childCount, event) {
+  if (childCount > 0 && event.key === "ArrowRight" && !isTreeOpen(key)) {
+    event.preventDefault();
+    toggleTreeKey(key);
+    return;
+  }
+  if (childCount > 0 && event.key === "ArrowLeft" && isTreeOpen(key)) {
+    event.preventDefault();
+    toggleTreeKey(key);
+    return;
+  }
+  activateOnEnterOrSpace(event);
+}
+
 // --- Similarity Character Dropdown State ---
 const SIMILARITY_SORT_KEY = "CHARACTER_LIKENESS"; // Adjust if backend uses a different key
 const DATE_SORT_KEY = "DATE";
@@ -2177,8 +1828,7 @@ const _dockRowH = computed(() => sidebarThumbnailSizeModel.value + 4);
 const _DOCK_DIV = 3; // divider height (1px + 2px margins)
 const _addBtn = computed(() => (isReadOnly.value ? 0 : 1)); // extra [+] row when editable
 const setsCollapsed = computed(() => {
-  if (!sidebarStore.effectiveDocked || sidebarPrimaryTab.value === "folders")
-    return false;
+  if (!sidebarStore.effectiveDocked) return false;
   const h = _dockRowH.value;
   const charCount = visibleCharacters.value.length;
   const setCount = visibleSets.value.length;
@@ -2190,8 +1840,7 @@ const setsCollapsed = computed(() => {
   return fixedH + charH + setDividerH + allSetsH > dockedScrollHeight.value;
 });
 const charsCollapsed = computed(() => {
-  if (!sidebarStore.effectiveDocked || sidebarPrimaryTab.value === "folders")
-    return false;
+  if (!sidebarStore.effectiveDocked) return false;
   if (!setsCollapsed.value) return false;
   const h = _dockRowH.value;
   const charCount = visibleCharacters.value.length;
@@ -2205,10 +1854,6 @@ const charsCollapsed = computed(() => {
     fixedH + charH + setDividerH + collapsedSetH > dockedScrollHeight.value
   );
 });
-
-const sidebarFolderChildIconSize = computed(() =>
-  Math.round(sidebarThumbnailSizeModel.value * 0.5),
-);
 
 const dateFormatModel = computed({
   get: () => userPrefsStore.dateFormat ?? "locale",
@@ -2263,9 +1908,27 @@ const sidebarIsNarrow = computed(
     (sidebarDragWidth.value ?? sidebarWidthModel.value ?? 240) < 150,
 );
 
+/** The mark of a tree row: the setting at the top level, the child size below. */
+function treeMarkPx(level) {
+  return level > 0 ? treeKidThumbPx.value : sidebarThumbnailSizeModel.value;
+}
+
+/**
+ * A child set's mark: a fixed 0.6 of the setting, so every size in the tree
+ * (marks, row heights, guide positions) grows in step with the one slider.
+ * 16px is the floor a set glyph stays legible at.
+ */
+const treeKidThumbPx = computed(() =>
+  Math.max(16, Math.round(sidebarThumbnailSizeModel.value * 0.6)),
+);
+
 const sidebarThumbStyle = computed(() => {
   const style = {
     "--sidebar-thumb-size": `${sidebarThumbnailSizeModel.value}px`,
+    // The media list pins its places rows at 20px; People and Sets take the
+    // thumbnail-size setting for their top-level rows (#2124).
+    "--sidebar-entity-thumb": `${sidebarThumbnailSizeModel.value}px`,
+    "--tree-kid-thumb": `${treeKidThumbPx.value}px`,
     "--sidebar-font-scale": sidebarFontScale.value,
   };
   // Apply the resized width only when expanded; docked width is driven by the
@@ -2673,59 +2336,6 @@ function clearFolderSelection() {
   selectedFolderSubPath.value = null;
 }
 
-async function deleteReferenceFolderById(id) {
-  const folder = referenceFolders.value.find((rf) => rf.id === id);
-  if (!folder) return;
-  const folderLabel = folder.label || folder.folder;
-  if (!window.confirm(`Remove reference folder "${folderLabel}"?`)) return;
-  try {
-    await deleteFolder("reference", id);
-    // On the FOLDER, not on the row key. A selected SUBfolder's key is
-    // `path-<abs path>` (crossing 1 in the map above), so matching `rf-<id>`
-    // saw only the root row: deleting the folder from under a selected
-    // subfolder left the highlight, `selectedFolderReferenceId` and the
-    // scanning light on a folder that no longer exists (#1206 item 12). The
-    // import-folder branch below is the shape this now copies - all four
-    // pieces of the selection, not just the key.
-    if (_folderId(selectedFolderReferenceId.value) === id) {
-      clearFolderSelection();
-      emit("select-folder", null);
-      sidebarStore.folderScanning = false;
-    }
-    await fetchReferenceFolders();
-  } catch (e) {
-    console.error("Failed to remove reference folder", e);
-    noticeStore.error(
-      `Couldn't remove that reference folder. ${noticeDetail(e)}`,
-      { key: "reference-folder-remove" },
-    );
-  }
-}
-
-async function deleteImportFolderById(id) {
-  const folder = importFolders.value.find((entry) => entry.id === id);
-  if (!folder) return;
-  const folderLabel = folder.label || folder.folder;
-  if (!window.confirm(`Remove import folder "${folderLabel}"?`)) return;
-  try {
-    await deleteFolder("import", id);
-    if (selectedFolderKey.value === `if-${id}`) {
-      clearFolderSelection();
-      emit("select-folder", null);
-      sidebarStore.folderScanning = false;
-    }
-    await fetchImportFolders();
-  } catch (e) {
-    console.error("Failed to remove import folder", e);
-    noticeStore.error(
-      `Couldn't remove that import folder. ${noticeDetail(e)}`,
-      {
-        key: "import-folder-remove",
-      },
-    );
-  }
-}
-
 /** Context-menu target types that can be scoped for a duplicate scan. */
 const DEDUP_SCOPE_TYPES = {
   character: {
@@ -2738,11 +2348,6 @@ const DEDUP_SCOPE_TYPES = {
     scope: "project",
     icon: "mdi-briefcase-outline",
     noun: "in this project",
-  },
-  folder: {
-    scope: "folder",
-    icon: "mdi-folder-outline",
-    noun: "in this folder",
   },
 };
 
@@ -2865,8 +2470,6 @@ function findDuplicatesIn(type, item) {
 }
 
 function openSidebarCtxMenu(type, item, event) {
-  if (isReadOnly.value && (type === "folder" || type === "import-folder"))
-    return;
   // Warm the duplicate count for the object under the cursor, so the menu's
   // "Find duplicates in..." row can carry a number rather than open a queue
   // that turns out to be empty. A scoped count reuses cached hashes and is
@@ -2880,15 +2483,12 @@ function openSidebarCtxMenu(type, item, event) {
   // per-item branches below never have to clear them.
   sidebarCtxHeader.value = null;
   sidebarCtxEmpty.value = false;
-  // A right-click on a section header ('people' | 'sets' | 'reference-folders' |
-  // 'import-folders') or on empty sidebar space is not tied to a specific item,
-  // so clear every item target and short-circuit.
+  // A right-click on a section header ('people' | 'sets') or on empty sidebar
+  // space is not tied to a specific item, so clear every item target and
+  // short-circuit.
   if (type === "header" || type === "empty") {
     sidebarCtxCharacter.value = null;
     sidebarCtxSet.value = null;
-    sidebarCtxFolder.value = null;
-    sidebarCtxFolderScopePath.value = null;
-    sidebarCtxImportFolder.value = null;
     sidebarCtxProject.value = null;
     sidebarCtxAllPictures.value = false;
     sidebarCtxDeleteIds.value = [];
@@ -2902,9 +2502,6 @@ function openSidebarCtxMenu(type, item, event) {
   if (type === "scrapheap") {
     sidebarCtxCharacter.value = null;
     sidebarCtxSet.value = null;
-    sidebarCtxFolder.value = null;
-    sidebarCtxFolderScopePath.value = null;
-    sidebarCtxImportFolder.value = null;
     sidebarCtxProject.value = null;
     sidebarCtxAllPictures.value = false;
     sidebarCtxScrapheap.value = true;
@@ -2917,9 +2514,6 @@ function openSidebarCtxMenu(type, item, event) {
   if (type === "character") {
     sidebarCtxCharacter.value = item;
     sidebarCtxSet.value = null;
-    sidebarCtxFolder.value = null;
-    sidebarCtxFolderScopePath.value = null;
-    sidebarCtxImportFolder.value = null;
     sidebarCtxProject.value = null;
     sidebarCtxAllPictures.value = false;
     const numId = Number(item.id);
@@ -2937,49 +2531,16 @@ function openSidebarCtxMenu(type, item, event) {
     if (type === "set") {
       sidebarCtxCharacter.value = null;
       sidebarCtxSet.value = item;
-      sidebarCtxFolder.value = null;
-      sidebarCtxFolderScopePath.value = null;
-      sidebarCtxImportFolder.value = null;
-      sidebarCtxProject.value = null;
-      sidebarCtxAllPictures.value = false;
-    } else if (type === "folder") {
-      sidebarCtxCharacter.value = null;
-      sidebarCtxSet.value = null;
-      sidebarCtxFolder.value = item;
-      sidebarCtxFolderScopePath.value = null;
-      sidebarCtxImportFolder.value = null;
-      sidebarCtxProject.value = null;
-      sidebarCtxAllPictures.value = false;
-    } else if (type === "folder-path") {
-      sidebarCtxCharacter.value = null;
-      sidebarCtxSet.value = null;
-      sidebarCtxFolder.value = item?.folder || null;
-      sidebarCtxFolderScopePath.value = item?.path || null;
-      sidebarCtxImportFolder.value = null;
-      sidebarCtxProject.value = null;
-      sidebarCtxAllPictures.value = false;
-    } else if (type === "import-folder") {
-      sidebarCtxCharacter.value = null;
-      sidebarCtxSet.value = null;
-      sidebarCtxFolder.value = null;
-      sidebarCtxFolderScopePath.value = null;
-      sidebarCtxImportFolder.value = item;
       sidebarCtxProject.value = null;
       sidebarCtxAllPictures.value = false;
     } else if (type === "project") {
       sidebarCtxCharacter.value = null;
       sidebarCtxSet.value = null;
-      sidebarCtxFolder.value = null;
-      sidebarCtxFolderScopePath.value = null;
-      sidebarCtxImportFolder.value = null;
       sidebarCtxProject.value = item;
       sidebarCtxAllPictures.value = false;
     } else if (type === "all-pictures") {
       sidebarCtxCharacter.value = null;
       sidebarCtxSet.value = null;
-      sidebarCtxFolder.value = null;
-      sidebarCtxFolderScopePath.value = null;
-      sidebarCtxImportFolder.value = null;
       sidebarCtxProject.value = null;
       sidebarCtxAllPictures.value = true;
     }
@@ -3126,10 +2687,94 @@ async function toggleSetLock(set) {
   }
 }
 
+// --- Child sets (#2124): New set inside…, Move out of… ---
+
+// Sets nest three levels at most, counting the person or top-level set; the
+// server refuses deeper (picture_set_tree.MAX_DEPTH).
+const MAX_SET_DEPTH = 2;
+const SET_DEPTH_REASON =
+  "Sets nest three levels deep at most, counting the person or top-level set.";
+
+/**
+ * How far below its person or top-level set a set sits (0 at the top). A
+ * chain that stops at a parent outside the list (another scope) counts as
+ * full, so the menu never offers a create the server would refuse.
+ */
+function setDepth(set) {
+  const { setIds, characterId, resolved } = ancestorsOf(
+    set?.id,
+    pictureSets.value,
+  );
+  if (!resolved) return MAX_SET_DEPTH;
+  return setIds.length + (characterId != null ? 1 : 0);
+}
+
+/** Whether a set sits under anything, listed here or not. */
+function setHasParent(set) {
+  return set?.parent_set_id != null || set?.parent_character_id != null;
+}
+
+/** The display name of the set or person a set sits under, or "". */
+function setParentName(set) {
+  if (set?.parent_set_id != null) {
+    return (
+      pictureSets.value.find((s) => s.id === set.parent_set_id)?.name ?? ""
+    );
+  }
+  if (set?.parent_character_id != null) {
+    return (
+      sortedCharacters.value.find((c) => c.id === set.parent_character_id)
+        ?.name ?? ""
+    );
+  }
+  return "";
+}
+
+/**
+ * Open the set editor for a new set under a set or a person. The child joins
+ * its parent's projects, so it shows where the parent does.
+ */
+function createChildSet({ setId = null, characterId = null, name = "" }) {
+  closeSidebarCtxMenu();
+  const parent =
+    setId != null
+      ? pictureSets.value.find((s) => s.id === setId)
+      : sortedCharacters.value.find((c) => c.id === characterId);
+  const projectIds = parent ? getEntityProjectIds(parent) : [];
+  setEditorSet.value = {
+    ...(projectIds.length ? { project_ids: projectIds } : {}),
+    ...nextSetAppearance(nonReferenceSets.value),
+    parent_set_id: setId,
+    parent_character_id: characterId,
+    parent_name: name || parent?.name || "",
+  };
+  setEditorOpen.value = true;
+}
+
+async function moveSetToTop(set) {
+  closeSidebarCtxMenu();
+  if (!set?.id) return;
+  try {
+    await patchPictureSet(set.id, {
+      parent_set_id: null,
+      parent_character_id: null,
+    });
+    refreshSidebar();
+  } catch (e) {
+    console.error("Failed to move the set out of its parent", e);
+    noticeStore.error(
+      `Couldn't move ${set.name} out. ${errorDetail(e) || "Please try again."}`,
+      { key: "set-move-out" },
+    );
+  }
+}
+
 // Tooltip on the Delete entry when a set is locked (set-scoped; the store's
 // lockReason is picture-scoped for the grid/overlay).
 const SET_LOCK_REASON =
   "This set is locked. Unlock it first (Unlock set) to delete it.";
+const SET_LOCK_MOVE_REASON =
+  "This set is locked. Unlock it first (Unlock set) to move it.";
 
 // Tooltip on the lock indicator shown on a locked set row (expanded row icon and
 // the collapsed-dock/flyout variants). Single-sourced so every set-row surface
@@ -3948,65 +3593,6 @@ function leftDropRow(event) {
   return !row.contains(event.relatedTarget);
 }
 
-function handleReferenceFolderDragOver(folderId, scopePath, event) {
-  const verdict = acceptDrop(event, ["pictures"]);
-  if (verdict === "ignore") return;
-  dropRejected.value = verdict === "reject";
-  dragOverReferenceTargetKey.value = scopePath
-    ? `path-${scopePath}`
-    : `rf-${folderId}`;
-}
-
-function handleReferenceFolderDragLeave(folderId, scopePath, event) {
-  if (event && !leftDropRow(event)) return;
-  const key = scopePath ? `path-${scopePath}` : `rf-${folderId}`;
-  if (dragOverReferenceTargetKey.value === key) {
-    dragOverReferenceTargetKey.value = null;
-  }
-}
-
-async function handleReferenceFolderDrop(folderId, scopePath, event) {
-  dragOverReferenceTargetKey.value = null;
-  const imageIds = readDraggedImageIds(event);
-  if (!imageIds.length) return;
-  try {
-    const data = await movePicturesToReferenceFolder(folderId, imageIds, {
-      destinationSubpath: scopePath,
-    });
-    await fetchReferenceFolders();
-    folderBrowseCache.value = {};
-    browseExpandedFolders();
-    emit("images-moved", {
-      imageIds: data?.moved_picture_ids || imageIds,
-      kind: "reference-folder",
-      refresh: true,
-    });
-  } catch (e) {
-    const detail = e?.response?.data?.detail;
-    const failures = detail?.failures || [];
-    if (failures.length) {
-      const first = failures[0];
-      console.error("Failed to move images", e);
-      noticeStore.error(
-        `Couldn't move ${failures.length} image${failures.length === 1 ? "" : "s"}. ${first.reason || "Please try again."}`,
-        { key: "images-move" },
-      );
-      return;
-    }
-    console.error("Failed to move images", e);
-    noticeStore.error(
-      `Couldn't move those images. ${detail?.message || detail || e?.message || "Please try again."}`,
-      { key: "images-move" },
-    );
-  }
-}
-
-function handleReferenceFolderNodeContext({ rfId, path, label, event }) {
-  const folder = referenceFolders.value.find((rf) => rf.id === rfId);
-  if (!folder) return;
-  openSidebarCtxMenu("folder-path", { folder, path, label }, event);
-}
-
 
 async function onCharacterDrop(characterId, event) {
   dragOverCharacter.value = null;
@@ -4474,7 +4060,6 @@ watch(
       return;
     }
 
-    sidebarPrimaryTab.value = "folders";
     await fetchReferenceFolders();
     await fetchImportFolders();
 
@@ -4599,16 +4184,6 @@ function openCurrentSelectionEditor() {
 defineExpose({
   refreshSidebar,
   openSettingsDialog,
-  // Reached from the empty library's "Choose a folder…", which is the first
-  // thing pointing anyone at reference folders - they have always worked and
-  // were a sidebar accessory nobody was sent to.
-  //
-  // The reference editor DIRECTLY, not `openAddFolderTypeDialog`. That chooser
-  // offers "Import folder - watch for new files and import them
-  // automatically", which copies files in; the button that gets here promises
-  // "Nothing is moved" one screen earlier, so routing through the chooser would
-  // have the release's headline claim falsified by the next click.
-  openReferenceFolderEditor,
   chooseLibraryFolder,
   offerLoosePictures,
   startLocalImport,
@@ -4668,150 +4243,11 @@ defineExpose({
       (value) => emit('update:check-for-updates', value)
     "
   />
-  <FolderEditor
-    type="reference"
-    :open="referenceFolderEditorOpen"
-    :folder="referenceFolderEditorFolder"
-    :in-docker="inDocker"
-    :docker-variant="props.dockerVariant"
-    :registered-paths="registeredFolderPaths"
-    :registered-folders="referenceFolders"
-    :registered-sibling-folders="importFolders"
-    :image-root="referenceFoldersImageRoot"
-    @close="closeReferenceFolderEditor"
-    @saved="referenceFolderSaved"
-    @deleted="referenceFolderDeleted"
-    @relocate="openReferenceFolderRelocateDialog"
-  />
   <FolderMappingWizard
     :open="mappingStore.wizardOpen"
     :resume="mappingStore.wizardResume"
     @close="mappingStore.closeWizard()"
     @committed="folderMappingWizardCommitted"
-  />
-  <FolderEditor
-    type="import"
-    :open="importFolderEditorOpen"
-    :folder="importFolderEditorFolder"
-    :in-docker="inDocker"
-    :docker-variant="props.dockerVariant"
-    :registered-paths="registeredImportFolderPaths"
-    :registered-folders="importFolders"
-    :registered-sibling-folders="referenceFolders"
-    :image-root="referenceFoldersImageRoot"
-    @close="closeImportFolderEditor"
-    @saved="importFolderSaved"
-    @deleted="importFolderDeleted"
-  />
-
-  <AppDialog
-    :open="addFolderTypeDialogOpen"
-    title="Add folder"
-    size="sm"
-    @close="addFolderTypeDialogOpen = false"
-  >
-    <div class="folder-type-options">
-      <p class="folder-type-subtitle">Choose folder type</p>
-      <button
-        class="folder-type-option"
-        @click="chooseFolderType('reference')"
-      >
-        <v-icon size="18">mdi-folder-network-outline</v-icon>
-        <span class="folder-type-option-text">
-          <strong>Reference folder</strong>
-          <small>Browse and filter existing files in place.</small>
-        </span>
-      </button>
-      <button class="folder-type-option" @click="chooseFolderType('import')">
-        <v-icon size="18">mdi-folder-download-outline</v-icon>
-        <span class="folder-type-option-text">
-          <strong>Import folder</strong>
-          <small>Watch for new files and import them automatically.</small>
-        </span>
-      </button>
-    </div>
-    <template #footer>
-      <AppButton variant="secondary" @click="addFolderTypeDialogOpen = false">
-        Cancel
-      </AppButton>
-    </template>
-  </AppDialog>
-
-  <AppDialog
-    :open="referenceFolderRelocateOpen"
-    title="Relocate reference folder"
-    :persistent="referenceFolderRelocateLoading"
-    @close="closeReferenceFolderRelocateDialog"
-  >
-    <div class="relocate-path-block">
-      <div class="relocate-path-label">Current folder</div>
-      <div
-        class="relocate-path-value"
-        :title="referenceFolderRelocateFolder?.folder"
-      >
-        {{ referenceFolderRelocateFolder?.folder }}
-      </div>
-    </div>
-    <div class="relocate-path-block">
-      <div class="relocate-path-label">Destination folder</div>
-      <div class="relocate-destination-row">
-        <AppInput
-          v-model="referenceFolderRelocateDestination"
-          readonly
-          mono
-          aria-label="Destination folder"
-          placeholder="Choose an empty folder"
-          class="relocate-destination-input"
-        />
-        <AppButton
-          icon-only
-          icon-left="folder-open-outline"
-          class="relocate-browse-btn"
-          tooltip="Choose destination folder"
-          @click="referenceFolderRelocateBrowseOpen = true"
-        />
-      </div>
-    </div>
-    <div class="relocate-warning">
-      This moves every file and subfolder from the current reference folder
-      into the destination folder, then updates PixlStash to use the new
-      location. The destination must be empty.
-    </div>
-    <div v-if="referenceFolderRelocateError" class="relocate-error">
-      {{ referenceFolderRelocateError }}
-    </div>
-    <div v-if="referenceFolderRelocateResult" class="relocate-result">
-      {{ referenceFolderRelocateResult }}
-    </div>
-    <template #footer>
-      <AppButton
-        variant="secondary"
-        :disabled="referenceFolderRelocateLoading"
-        @click="closeReferenceFolderRelocateDialog"
-      >
-        {{ referenceFolderRelocateResult ? "Close" : "Cancel" }}
-      </AppButton>
-      <AppButton
-        v-if="!referenceFolderRelocateResult"
-        variant="primary"
-        :loading="referenceFolderRelocateLoading"
-        :disabled="!referenceFolderRelocateDestination"
-        @click="relocateReferenceFolder"
-      >
-        Move files and relocate
-      </AppButton>
-    </template>
-  </AppDialog>
-
-  <FolderBrowser
-    :open="referenceFolderRelocateBrowseOpen"
-    :initial-path="referenceFolderRelocateInitialPath"
-    :registered-paths="relocationRegisteredPaths"
-    :image-root="referenceFoldersImageRoot"
-    already-registered-label="Already a reference folder"
-    allow-create-folder
-    @select="(path) => (referenceFolderRelocateDestination = path)"
-    @close="referenceFolderRelocateBrowseOpen = false"
   />
 
   <aside
@@ -4836,11 +4272,10 @@ defineExpose({
     >
       <Tooltip text="Drag to resize sidebar" activator="parent" />
     </div>
-    <!-- The docked counterpart of the Global / Projects / Folders tab strip
-         below, and gated on `scopedResourceType` for the same reason it is:
-         a share token scoped to a character, a picture or a set can read no
-         project list at all, so its Projects flyout is an empty box and its
-         Folders flyout is owner-only. Without this the two sidebar widths
+    <!-- The docked counterpart of the Global / Projects scope slot below,
+         and gated on `scopedResourceType` for the same reason it is: a share
+         token scoped to a character, a picture or a set can read no project
+         list at all, so its Projects flyout is an empty box. Without this the two sidebar widths
          disagreed: the expanded one omitted the switcher, the docked one
          still offered it. -->
     <div
@@ -4870,11 +4305,7 @@ defineExpose({
             :describe="false"
           />
           <v-icon size="20">{{
-            sidebarPrimaryTab === "folders"
-              ? "mdi-folder-outline"
-              : projectViewMode === "global"
-                ? "mdi-earth"
-                : "mdi-briefcase-outline"
+            projectViewMode === "global" ? "mdi-earth" : "mdi-briefcase-outline"
           }}</v-icon>
         </button>
       </div>
@@ -4900,7 +4331,7 @@ defineExpose({
             tabindex="-1"
             class="ctx-item"
             :aria-current="
-              projectViewMode === 'global' && sidebarPrimaryTab !== 'folders'
+              projectViewMode === 'global'
                 ? 'page'
                 : undefined
             "
@@ -4911,7 +4342,7 @@ defineExpose({
             <span class="ctx-label-text">Global</span>
             <v-icon
               v-if="
-                projectViewMode === 'global' && sidebarPrimaryTab !== 'folders'
+                projectViewMode === 'global'
               "
               class="ctx-check"
               >mdi-check</v-icon
@@ -4929,7 +4360,7 @@ defineExpose({
             class="ctx-item sidebar-project-menu-has-sub"
             :class="{ 'sub-open': projectMenuSection === 'projects' }"
             :aria-current="
-              projectViewMode === 'project' && sidebarPrimaryTab !== 'folders'
+              projectViewMode === 'project'
                 ? 'true'
                 : undefined
             "
@@ -4947,28 +4378,6 @@ defineExpose({
             <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
           </button>
 
-          <!-- Folders row → flyout submenu on hover or click -->
-          <button
-            ref="collapsedFoldersMenuTriggerRef"
-            type="button"
-            role="menuitem"
-            tabindex="-1"
-            class="ctx-item sidebar-project-menu-has-sub"
-            :class="{ 'sub-open': projectMenuSection === 'folders' }"
-            :aria-current="sidebarPrimaryTab === 'folders' ? 'true' : undefined"
-            data-project-submenu="folders"
-            aria-haspopup="menu"
-            :aria-expanded="projectMenuSection === 'folders'"
-            aria-controls="sidebar-project-submenu"
-            @mouseenter="openProjectSubMenu('folders', $event)"
-            @click.stop="
-              openProjectSubMenu('folders', $event, $event.detail === 0)
-            "
-          >
-            <v-icon class="ctx-icon">mdi-folder-outline</v-icon>
-            <span class="ctx-label-text">Folders</span>
-            <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
-          </button>
         </div>
       </Teleport>
 
@@ -4985,7 +4394,7 @@ defineExpose({
           class="ctx-menu sidebar-collapsed-project-submenu"
           role="menu"
           :aria-label="
-            projectMenuSection === 'projects' ? 'Projects' : 'Library folders'
+            'Projects'
           "
           :style="{
             top: projectMenuSubPos.top + 'px',
@@ -5035,91 +4444,6 @@ defineExpose({
               >
             </button>
           </template>
-
-          <!-- Folders submenu -->
-          <template v-if="projectMenuSection === 'folders'">
-            <button
-              v-if="!isReadOnly"
-              type="button"
-              role="menuitem"
-              tabindex="-1"
-              class="ctx-item"
-              @click="openAddFolderFromProjectMenu"
-            >
-              <v-icon class="ctx-icon">mdi-plus</v-icon>
-              <span class="ctx-label-text">Add folder</span>
-            </button>
-            <div
-              v-if="referenceFolders.length"
-              class="section-label ctx-label"
-              role="presentation"
-            >
-              Reference Folders
-            </div>
-            <button
-              v-for="rf in referenceFolders"
-              :key="'rf-' + rf.id"
-              type="button"
-              role="menuitem"
-              tabindex="-1"
-              class="ctx-item"
-              :aria-current="
-                sidebarPrimaryTab === 'folders' &&
-                selectedFolderKey === 'rf-' + rf.id &&
-                !isDuplicatesView
-                  ? 'page'
-                  : undefined
-              "
-              @click="selectFolderFromProjectMenu(rf, 'reference')"
-            >
-              <v-icon class="ctx-icon">mdi-folder-network-outline</v-icon>
-              <span class="ctx-label-text">{{ rf.label || rf.folder }}</span>
-              <v-icon
-                v-if="
-                  sidebarPrimaryTab === 'folders' &&
-                  selectedFolderKey === 'rf-' + rf.id &&
-                  !isDuplicatesView
-                "
-                class="ctx-check"
-                >mdi-check</v-icon
-              >
-            </button>
-            <div
-              v-if="importFolders.length"
-              class="section-label ctx-label"
-              role="presentation"
-            >
-              Import Folders
-            </div>
-            <button
-              v-for="imf in importFolders"
-              :key="'if-' + imf.id"
-              type="button"
-              role="menuitem"
-              tabindex="-1"
-              class="ctx-item"
-              :aria-current="
-                sidebarPrimaryTab === 'folders' &&
-                selectedFolderKey === 'if-' + imf.id &&
-                !isDuplicatesView
-                  ? 'page'
-                  : undefined
-              "
-              @click="selectFolderFromProjectMenu(imf, 'import')"
-            >
-              <v-icon class="ctx-icon">mdi-folder-open-outline</v-icon>
-              <span class="ctx-label-text">{{ imf.label || imf.folder }}</span>
-              <v-icon
-                v-if="
-                  sidebarPrimaryTab === 'folders' &&
-                  selectedFolderKey === 'if-' + imf.id &&
-                  !isDuplicatesView
-                "
-                class="ctx-check"
-                >mdi-check</v-icon
-              >
-            </button>
-          </template>
         </div>
       </Teleport>
     </div>
@@ -5150,7 +4474,6 @@ defineExpose({
           @contextmenu.prevent="openSidebarCtxMenu('empty', null, $event)"
         >
           <div
-            v-if="sidebarPrimaryTab !== 'folders'"
             :class="[
               'sidebar-collapsed-row',
               { active: isAllPicturesRowActive },
@@ -5178,7 +4501,6 @@ defineExpose({
             </button>
           </div>
           <div
-            v-if="sidebarPrimaryTab !== 'folders'"
             class="sidebar-collapsed-divider"
           ></div>
 
@@ -5186,7 +4508,6 @@ defineExpose({
           <template
             v-if="
               visibleCharacters.length &&
-              sidebarPrimaryTab !== 'folders' &&
               !charsCollapsed
             "
           >
@@ -5271,8 +4592,7 @@ defineExpose({
           <div
             v-else-if="
               !visibleCharacters.length &&
-              !isReadOnly &&
-              sidebarPrimaryTab !== 'folders'
+              !isReadOnly
             "
             class="sidebar-collapsed-row"
           >
@@ -5297,7 +4617,7 @@ defineExpose({
           </div>
           <div
             v-else-if="
-              visibleCharacters.length && sidebarPrimaryTab !== 'folders'
+              visibleCharacters.length
             "
             :class="[
               'sidebar-collapsed-row',
@@ -5454,15 +4774,13 @@ defineExpose({
           <!-- Picture Sets: individual dock buttons when space allows, flyout menu when space is tight -->
           <div
             v-if="
-              (visibleSets.length || !isReadOnly) &&
-              sidebarPrimaryTab !== 'folders'
+              (visibleSets.length || !isReadOnly)
             "
             class="sidebar-collapsed-divider"
           ></div>
           <template
             v-if="
               visibleSets.length &&
-              sidebarPrimaryTab !== 'folders' &&
               !setsCollapsed
             "
           >
@@ -5568,8 +4886,7 @@ defineExpose({
           <div
             v-else-if="
               !visibleSets.length &&
-              !isReadOnly &&
-              sidebarPrimaryTab !== 'folders'
+              !isReadOnly
             "
             class="sidebar-collapsed-row"
           >
@@ -5597,7 +4914,7 @@ defineExpose({
             </div>
           </div>
           <div
-            v-else-if="visibleSets.length && sidebarPrimaryTab !== 'folders'"
+            v-else-if="visibleSets.length"
             :class="[
               'sidebar-collapsed-row',
               'sidebar-collapsed-row--has-flyout',
@@ -5904,7 +5221,7 @@ defineExpose({
       </template>
       <template v-else>
         <!-- One list in every scope (#2159): places, then Review, then the
-             People / Sets / Folders sections, all on 32px rows. The project
+             People / Sets sections, all on 32px rows. The project
              scope in the header slot narrows the grid, the counts and the
              People and Sets lists; it no longer swaps this list for a tree. -->
         <div
@@ -6111,7 +5428,14 @@ defineExpose({
               <div
                 v-for="char in visibleCharacters"
                 :key="char.id"
-                class="sidebar-character-group"
+                :class="[
+                  'sidebar-character-group',
+                  {
+                    'sidebar-tree-group':
+                      characterChildCount(char.id) &&
+                      isTreeOpen(`c:${char.id}`),
+                  },
+                ]"
               >
                 <div
                   :class="[
@@ -6142,7 +5466,18 @@ defineExpose({
                   @click="
                     selectCharacter(char.id, char.name || 'Character', $event)
                   "
-                  @keydown="activateOnEnterOrSpace"
+                  :aria-expanded="
+                    characterChildCount(char.id)
+                      ? String(isTreeOpen(`c:${char.id}`))
+                      : undefined
+                  "
+                  @keydown="
+                    onTreeRowKeydown(
+                      `c:${char.id}`,
+                      characterChildCount(char.id),
+                      $event,
+                    )
+                  "
                   @contextmenu.prevent="
                     openSidebarCtxMenu('character', char, $event)
                   "
@@ -6158,6 +5493,28 @@ defineExpose({
                   <Tooltip
                     :text="`${char.name || 'Character'} (Ctrl/Cmd + click to multi-select)`"
                     activator="parent"
+                  />
+                  <button
+                    v-if="characterChildCount(char.id)"
+                    type="button"
+                    class="sidebar-tree-toggle"
+                    tabindex="-1"
+                    :aria-label="`${isTreeOpen(`c:${char.id}`) ? 'Hide' : 'Show'} the sets in ${char.name}`"
+                    @click.stop="toggleTreeKey(`c:${char.id}`)"
+                  >
+                    <v-icon size="16">{{
+                      isTreeOpen(`c:${char.id}`)
+                        ? "mdi-chevron-down"
+                        : "mdi-chevron-right"
+                    }}</v-icon>
+                  </button>
+                  <span
+                    v-if="
+                      characterChildCount(char.id) && isTreeOpen(`c:${char.id}`)
+                    "
+                    class="sidebar-tree-stub"
+                    :style="{ '--tree-stub-x': treeGuideX(1) }"
+                    aria-hidden="true"
                   />
                   <span class="sidebar-list-icon">
                     <img
@@ -6194,6 +5551,11 @@ defineExpose({
                       </template>
                       <span>{{ char.name }}</span>
                     </Tooltip>
+                    <span
+                      v-if="characterChildCount(char.id)"
+                      class="sidebar-tree-sub"
+                      >{{ childSetsLabel(characterChildCount(char.id)) }}</span
+                    >
                   </span>
                   <span class="sidebar-character-actions">
                     <Tooltip
@@ -6216,6 +5578,173 @@ defineExpose({
                       <span>{{ categoryCounts[char.id] ?? "" }}</span>
                     </span>
                   </span>
+                </div>
+                <div
+                  v-for="row in treeRowsByCharacter.get(Number(char.id)) ?? []"
+                  :key="`tree-${row.set.id}`"
+                  :class="[
+                    'sidebar-list-item',
+                    'sidebar-set-item',
+                    {
+                      'sidebar-tree-kid': row.level > 0,
+                      'sidebar-tree-kid--last': row.level > 0 && row.last,
+                      'sidebar-tree-kid--parent':
+                        row.level > 0 && row.childCount > 0,
+                      active:
+                        selectedSetIdSet.has(row.set.id) &&
+                        selectionOwnsHighlight,
+                      droppable: dragOverSet === row.set.id && !dropRejected,
+                      'not-droppable':
+                        dragOverSet === row.set.id && dropRejected,
+                    },
+                  ]"
+                  :style="{
+                    '--tree-x': treeGuideX(row.level),
+                    '--tree-spacer': treeSpacerWidth(row.level),
+                  }"
+                  :ref="(el) => registerSetRef(row.set.id, el)"
+                  role="button"
+                  tabindex="0"
+                  :aria-pressed="
+                    selectedSetIdSet.has(row.set.id) && selectionOwnsHighlight
+                      ? 'true'
+                      : 'false'
+                  "
+                  :aria-expanded="row.childCount ? String(row.expanded) : undefined"
+                  @click="
+                    selectSet(row.set.id, row.set.name || 'Picture Set', $event)
+                  "
+                  @keydown="
+                    onTreeRowKeydown(`s:${row.set.id}`, row.childCount, $event)
+                  "
+                  @contextmenu.prevent="
+                    openSidebarCtxMenu('set', row.set, $event)
+                  "
+                  @dragover="dragOverSetItem(row.set.id, $event)"
+                  @dragleave="dragLeaveSetItem($event)"
+                  @drop.prevent="handleDropOnSet(row.set.id, $event)"
+                >
+                  <Tooltip
+                    :text="`${row.set.name || 'Picture Set'} (Ctrl/Cmd + click to multi-select)`"
+                    activator="parent"
+                  />
+                  <button
+                    v-if="row.childCount"
+                    type="button"
+                    class="sidebar-tree-toggle"
+                    tabindex="-1"
+                    :aria-label="`${row.expanded ? 'Hide' : 'Show'} the sets in ${row.set.name}`"
+                    @click.stop="toggleTreeKey(`s:${row.set.id}`)"
+                  >
+                    <v-icon size="16">{{
+                      row.expanded ? "mdi-chevron-down" : "mdi-chevron-right"
+                    }}</v-icon>
+                  </button>
+                  <span
+                    v-if="row.level > 0"
+                    class="sidebar-tree-spacer"
+                    aria-hidden="true"
+                  >
+                    <span
+                      v-for="level in row.rails"
+                      :key="level"
+                      class="sidebar-tree-rail"
+                      :style="{ '--tree-x': treeGuideX(level) }"
+                    />
+                  </span>
+                  <span
+                    v-if="row.expanded"
+                    :class="[
+                      'sidebar-tree-stub',
+                      { 'sidebar-tree-stub--kid': row.level > 0 },
+                    ]"
+                    :style="{ '--tree-stub-x': treeGuideX(row.level + 1) }"
+                    aria-hidden="true"
+                  />
+                  <span
+                    :class="[
+                      'sidebar-list-icon',
+                      { 'sidebar-tree-mark': row.level > 0 },
+                    ]"
+                  >
+                    <v-icon
+                      v-if="row.set.set_icon && row.set.set_icon !== ICON_CARDS"
+                      :size="treeMarkPx(row.level) - 4"
+                      :color="row.set.set_color || undefined"
+                      >{{ row.set.set_icon }}</v-icon
+                    >
+                    <img
+                      v-else-if="hasSetThumbnail(row.set)"
+                      :src="getSetThumbnail(row.set.id)"
+                      alt=""
+                      class="sidebar-set-thumb-image"
+                      :width="treeMarkPx(row.level)"
+                      :height="treeMarkPx(row.level)"
+                      :style="
+                        row.set.set_color
+                          ? {
+                              filter: row.level
+                                ? `drop-shadow(0 0 2px ${row.set.set_color}) drop-shadow(0 0 1px ${row.set.set_color})`
+                                : `drop-shadow(0 0 3px ${row.set.set_color}) drop-shadow(0 0 8px ${row.set.set_color})`,
+                            }
+                          : {}
+                      "
+                      @load="handleSetThumbnailLoad(row.set.id)"
+                      @error="handleSetThumbnailError(row.set.id)"
+                    />
+                    <v-icon v-else :size="treeMarkPx(row.level) - 4"
+                      >mdi-image-album</v-icon
+                    >
+                  </span>
+                  <span class="sidebar-list-label">
+                    <Tooltip
+                      location="top"
+                      :disabled="!labelNeedsTooltip(`set-${row.set.id}`)"
+                      :describe="false"
+                    >
+                      <template #activator="{ props }">
+                        <span
+                          v-bind="
+                            withRef(props, (el) =>
+                              registerLabelRef(`set-${row.set.id}`, el),
+                            )
+                          "
+                          class="sidebar-list-label-text"
+                          >{{ row.set.name }}</span
+                        >
+                      </template>
+                      <span>{{ row.set.name }}</span>
+                    </Tooltip>
+                    <span v-if="row.childCount" class="sidebar-tree-sub">{{
+                      childSetsLabel(row.childCount)
+                    }}</span>
+                  </span>
+                  <Tooltip v-if="row.set.locked" :text="SET_LOCKED_ROW_TITLE">
+                    <template #activator="{ props: tipProps }">
+                      <v-icon
+                        v-bind="tipProps"
+                        class="sidebar-lock-icon"
+                        size="11"
+                        >mdi-lock-outline</v-icon
+                      >
+                    </template>
+                  </Tooltip>
+                  <Tooltip
+                    v-if="sharedSetIds.has(row.set.id)"
+                    text="Has active share links"
+                  >
+                    <template #activator="{ props: tipProps }">
+                      <v-icon
+                        v-bind="tipProps"
+                        class="sidebar-shared-icon"
+                        size="11"
+                        >mdi-link-variant</v-icon
+                      >
+                    </template>
+                  </Tooltip>
+                  <span class="sidebar-list-count">{{
+                    row.set.picture_count ?? 0
+                  }}</span>
                 </div>
               </div>
             </div>
@@ -6262,92 +5791,154 @@ defineExpose({
                   >Click the + button to add one.</span
                 >
               </div>
-              <template v-for="pset in visibleSets" :key="pset.id">
+              <div
+                v-for="group in setSectionGroups"
+                :key="group.root.id"
+                :class="[
+                  { 'sidebar-tree-group': group.open },
+                ]"
+              >
                 <div
+                  v-for="row in group.rows"
+                  :key="`tree-${row.set.id}`"
                   :class="[
                     'sidebar-list-item',
                     'sidebar-set-item',
                     {
+                      'sidebar-tree-kid': row.level > 0,
+                      'sidebar-tree-kid--last': row.level > 0 && row.last,
+                      'sidebar-tree-kid--parent':
+                        row.level > 0 && row.childCount > 0,
                       active:
-                        selectedSetIdSet.has(pset.id) &&
+                        selectedSetIdSet.has(row.set.id) &&
                         selectionOwnsHighlight,
-                      droppable: dragOverSet === pset.id && !dropRejected,
+                      droppable: dragOverSet === row.set.id && !dropRejected,
                       'not-droppable':
-                        dragOverSet === pset.id && dropRejected,
+                        dragOverSet === row.set.id && dropRejected,
                     },
                   ]"
-                  :ref="(el) => registerSetRef(pset.id, el)"
+                  :style="{
+                    '--tree-x': treeGuideX(row.level),
+                    '--tree-spacer': treeSpacerWidth(row.level),
+                  }"
+                  :ref="(el) => registerSetRef(row.set.id, el)"
                   role="button"
                   tabindex="0"
                   :aria-pressed="
-                    selectedSetIdSet.has(pset.id) && selectionOwnsHighlight
+                    selectedSetIdSet.has(row.set.id) && selectionOwnsHighlight
                       ? 'true'
                       : 'false'
                   "
+                  :aria-expanded="row.childCount ? String(row.expanded) : undefined"
                   @click="
-                    selectSet(pset.id, pset.name || 'Picture Set', $event)
+                    selectSet(row.set.id, row.set.name || 'Picture Set', $event)
                   "
-                  @keydown="activateOnEnterOrSpace"
+                  @keydown="
+                    onTreeRowKeydown(`s:${row.set.id}`, row.childCount, $event)
+                  "
                   @contextmenu.prevent="
-                    openSidebarCtxMenu('set', pset, $event)
+                    openSidebarCtxMenu('set', row.set, $event)
                   "
-                  @dragover="dragOverSetItem(pset.id, $event)"
+                  @dragover="dragOverSetItem(row.set.id, $event)"
                   @dragleave="dragLeaveSetItem($event)"
-                  @drop.prevent="handleDropOnSet(pset.id, $event)"
+                  @drop.prevent="handleDropOnSet(row.set.id, $event)"
                 >
                   <Tooltip
-                    :text="`${pset.name || 'Picture Set'} (Ctrl/Cmd + click to multi-select)`"
+                    :text="`${row.set.name || 'Picture Set'} (Ctrl/Cmd + click to multi-select)`"
                     activator="parent"
                   />
-                  <span class="sidebar-list-icon">
+                  <button
+                    v-if="row.childCount"
+                    type="button"
+                    class="sidebar-tree-toggle"
+                    tabindex="-1"
+                    :aria-label="`${row.expanded ? 'Hide' : 'Show'} the sets in ${row.set.name}`"
+                    @click.stop="toggleTreeKey(`s:${row.set.id}`)"
+                  >
+                    <v-icon size="16">{{
+                      row.expanded ? "mdi-chevron-down" : "mdi-chevron-right"
+                    }}</v-icon>
+                  </button>
+                  <span
+                    v-if="row.level > 0"
+                    class="sidebar-tree-spacer"
+                    aria-hidden="true"
+                  >
+                    <span
+                      v-for="level in row.rails"
+                      :key="level"
+                      class="sidebar-tree-rail"
+                      :style="{ '--tree-x': treeGuideX(level) }"
+                    />
+                  </span>
+                  <span
+                    v-if="row.expanded"
+                    :class="[
+                      'sidebar-tree-stub',
+                      { 'sidebar-tree-stub--kid': row.level > 0 },
+                    ]"
+                    :style="{ '--tree-stub-x': treeGuideX(row.level + 1) }"
+                    aria-hidden="true"
+                  />
+                  <span
+                    :class="[
+                      'sidebar-list-icon',
+                      { 'sidebar-tree-mark': row.level > 0 },
+                    ]"
+                  >
                     <v-icon
-                      v-if="pset.set_icon && pset.set_icon !== ICON_CARDS"
-                      size="16"
-                      :color="pset.set_color || undefined"
-                      >{{ pset.set_icon }}</v-icon
+                      v-if="row.set.set_icon && row.set.set_icon !== ICON_CARDS"
+                      :size="treeMarkPx(row.level) - 4"
+                      :color="row.set.set_color || undefined"
+                      >{{ row.set.set_icon }}</v-icon
                     >
                     <img
-                      v-else-if="hasSetThumbnail(pset)"
-                      :src="getSetThumbnail(pset.id)"
+                      v-else-if="hasSetThumbnail(row.set)"
+                      :src="getSetThumbnail(row.set.id)"
                       alt=""
-                      class="sidebar-set-thumb-image sidebar-set-thumb-image--large"
-                      width="20"
-                      height="20"
+                      class="sidebar-set-thumb-image"
+                      :width="treeMarkPx(row.level)"
+                      :height="treeMarkPx(row.level)"
                       :style="
-                        pset.set_color
+                        row.set.set_color
                           ? {
-                              filter: `drop-shadow(0 0 3px ${pset.set_color}) drop-shadow(0 0 8px ${pset.set_color})`,
+                              filter: row.level
+                                ? `drop-shadow(0 0 2px ${row.set.set_color}) drop-shadow(0 0 1px ${row.set.set_color})`
+                                : `drop-shadow(0 0 3px ${row.set.set_color}) drop-shadow(0 0 8px ${row.set.set_color})`,
                             }
                           : {}
                       "
-                      @load="handleSetThumbnailLoad(pset.id)"
-                      @error="handleSetThumbnailError(pset.id)"
+                      @load="handleSetThumbnailLoad(row.set.id)"
+                      @error="handleSetThumbnailError(row.set.id)"
                     />
-                    <v-icon v-else size="16"
+                    <v-icon v-else :size="treeMarkPx(row.level) - 4"
                       >mdi-image-album</v-icon
                     >
                   </span>
                   <span class="sidebar-list-label">
                     <Tooltip
                       location="top"
-                      :disabled="!labelNeedsTooltip(`set-${pset.id}`)"
+                      :disabled="!labelNeedsTooltip(`set-${row.set.id}`)"
                       :describe="false"
                     >
                       <template #activator="{ props }">
                         <span
                           v-bind="
                             withRef(props, (el) =>
-                              registerLabelRef(`set-${pset.id}`, el),
+                              registerLabelRef(`set-${row.set.id}`, el),
                             )
                           "
                           class="sidebar-list-label-text"
-                          >{{ pset.name }}</span
+                          >{{ row.set.name }}</span
                         >
                       </template>
-                      <span>{{ pset.name }}</span>
+                      <span>{{ row.set.name }}</span>
                     </Tooltip>
+                    <span v-if="row.childCount" class="sidebar-tree-sub">{{
+                      childSetsLabel(row.childCount)
+                    }}</span>
                   </span>
-                  <Tooltip v-if="pset.locked" :text="SET_LOCKED_ROW_TITLE">
+                  <Tooltip v-if="row.set.locked" :text="SET_LOCKED_ROW_TITLE">
                     <template #activator="{ props: tipProps }">
                       <v-icon
                         v-bind="tipProps"
@@ -6358,7 +5949,7 @@ defineExpose({
                     </template>
                   </Tooltip>
                   <Tooltip
-                    v-if="sharedSetIds.has(pset.id)"
+                    v-if="sharedSetIds.has(row.set.id)"
                     text="Has active share links"
                   >
                     <template #activator="{ props: tipProps }">
@@ -6371,10 +5962,10 @@ defineExpose({
                     </template>
                   </Tooltip>
                   <span class="sidebar-list-count">{{
-                    pset.picture_count ?? 0
+                    row.set.picture_count ?? 0
                   }}</span>
                 </div>
-              </template>
+              </div>
             </div>
           </div>
           <!-- The scoped project's attached files, which used to sit under
@@ -6389,402 +5980,32 @@ defineExpose({
             <ProjectFiles :projectId="scopedProjectObj.id" compact />
           </div>
 
-          <!-- Folders were a tab beside Global and Projects. A folder is a
-               place too, so it is a section of the one list now. Owner only,
-               as the tab was. -->
-          <template v-if="!isReadOnly">
-          <div class="sidebar-section-header">
-            <span class="sidebar-section-title">Folders</span>
-            <span class="sidebar-header-actions">
-              <button
-                type="button"
-                class="sidebar-section-add"
-                aria-label="Add folder"
-                @click.stop="openAddFolderTypeDialog()"
-              >
-                <Tooltip text="Add folder" activator="parent" :describe="false" />
-                <v-icon size="16">mdi-plus</v-icon>
-              </button>
-            </span>
-          </div>
-          <div
-            v-if="referenceFoldersLoading || importFoldersLoading"
-            class="sidebar-folders-loading"
+          <!-- A pending folder read for this library: the wizard's way back
+               in. -->
+          <button
+            v-if="pendingForThisLibrary && !isReadOnly"
+            type="button"
+            class="sidebar-list-item sidebar-mapping-resume-row"
+            @click="openPendingMapping"
           >
-            <v-progress-circular indeterminate size="24" />
-          </div>
-          <div
-            v-else-if="
-              referenceFolders.length === 0 && importFolders.length === 0
-            "
-            class="sidebar-collections-help-row"
-          >
-            <span class="sidebar-collections-help"
-              >Click the + button to add one.</span
-            >
-          </div>
-          <div
-            v-else
-            class="sidebar-folders-list"
-            :style="{
-              '--sidebar-folder-child-icon-size':
-                sidebarFolderChildIconSize + 'px',
-            }"
-          >
-            <div
-              v-if="referenceFolders.length"
-              class="sidebar-folder-section-header sidebar-folder-section-header--ref"
-              @click="toggleReferenceFoldersSection()"
-              @contextmenu.prevent.stop="
-                openSidebarCtxMenu('header', 'reference-folders', $event)
+            <Tooltip
+              :text="
+                pendingForThisLibrary.taskId
+                  ? 'The scan is kept - reopening this does not re-scan'
+                  : 'Reopening this starts scanning that folder'
               "
+              activator="parent"
+            />
+            <span class="sidebar-list-icon"
+              ><v-icon size="16">mdi-map-marker-path</v-icon></span
             >
-              <div class="sidebar-folder-section-title">Reference folders</div>
-              <Tooltip
-                v-if="selectedReferenceFolderForHeader"
-                text="Edit selected reference folder"
-              >
-                <template #activator="{ props: tipProps }">
-                  <v-icon
-                    v-bind="tipProps"
-                    size="13"
-                    class="sidebar-folder-section-edit-btn"
-                    @click.stop="
-                      openReferenceFolderEditor(
-                        selectedReferenceFolderForHeader,
-                      )
-                    "
-                  >
-                    mdi-pencil-outline
-                  </v-icon>
-                </template>
-              </Tooltip>
-              <v-icon
-                class="sidebar-project-tree-expand-indicator"
-                :class="{ expanded: !referenceFoldersCollapsed }"
-                size="14"
-                >mdi-chevron-down</v-icon
-              >
-            </div>
-            <div
-              v-if="pendingForThisLibrary"
-              class="sidebar-folder-row sidebar-mapping-resume-row"
-              @click="openPendingMapping"
+            <span class="sidebar-list-label"
+              ><span class="sidebar-list-label-text"
+                >Finish organising
+                {{ pendingForThisLibrary.label || pendingForThisLibrary.path }}…</span
+              ></span
             >
-              <Tooltip
-                :text="
-                  pendingForThisLibrary.taskId
-                    ? 'The scan is kept - reopening this does not re-scan'
-                    : 'Reopening this starts scanning that folder'
-                "
-                activator="parent"
-              />
-              <v-icon size="16" class="sidebar-mapping-resume-icon"
-                >mdi-map-marker-path</v-icon
-              >
-              <span class="sidebar-mapping-resume-label">
-                Finish organising
-                {{ pendingForThisLibrary.label || pendingForThisLibrary.path }}…
-              </span>
-            </div>
-            <div
-              v-for="rf in referenceFolders"
-              v-show="!referenceFoldersCollapsed"
-              :key="rf.id"
-              class="sidebar-folder-root"
-            >
-              <div
-                class="sidebar-folder-row sidebar-folder-root-row"
-                :class="{
-                  active: selectedFolderKey === 'rf-' + rf.id,
-                  droppable:
-                    dragOverReferenceTargetKey === 'rf-' + rf.id &&
-                    !dropRejected,
-                  'not-droppable':
-                    dragOverReferenceTargetKey === 'rf-' + rf.id &&
-                    dropRejected,
-                }"
-                @contextmenu.prevent="openSidebarCtxMenu('folder', rf, $event)"
-                @dragover="
-                  !inDocker &&
-                  handleReferenceFolderDragOver(rf.id, null, $event)
-                "
-                @dragleave="
-                  !inDocker &&
-                  handleReferenceFolderDragLeave(rf.id, null, $event)
-                "
-                @drop.prevent="
-                  !inDocker && handleReferenceFolderDrop(rf.id, null, $event)
-                "
-                @click="
-                  if (!inDocker) {
-                    if (!expandedFolderIds.has(rf.id))
-                      toggleFolderExpanded(rf.id);
-                    browseFolderPath(rf.folder, true);
-                  }
-                  handleFolderNodeSelect('rf-' + rf.id, {
-                    referenceFolderId: rf.id,
-                    pathPrefix: rf.folder,
-                    label: rf.label || rf.folder,
-                  });
-                "
-              >
-                <Tooltip
-                  :text="
-                    inDocker
-                      ? rf.folder
-                      : `${rf.folder} - drop dragged reference images here to move them`
-                  "
-                  activator="parent"
-                />
-                <v-icon
-                  size="16"
-                  class="sidebar-row-glyph sidebar-folder-chevron"
-                  :class="{
-                    'sidebar-row-glyph--empty': !referenceFolderCanDisclose(rf),
-                  }"
-                  @click.stop="
-                    if (!inDocker) {
-                      toggleFolderExpanded(rf.id);
-                      browseFolderPath(rf.folder, true);
-                    }
-                  "
-                >
-                  {{
-                    expandedFolderIds.has(rf.id)
-                      ? "mdi-chevron-down"
-                      : "mdi-chevron-right"
-                  }}
-                </v-icon>
-                <v-icon size="16" class="sidebar-row-glyph sidebar-folder-icon"
-                  >mdi-folder-network-outline</v-icon
-                >
-                <span class="sidebar-folder-label">{{
-                  rf.label || rf.folder
-                }}</span>
-                <span
-                  v-if="!inDocker"
-                  class="sidebar-folder-actions"
-                  @click.stop
-                >
-                  <button
-                    type="button"
-                    class="sidebar-folder-action-btn"
-                    aria-label="Relocate folder and move files"
-                    @click="openReferenceFolderRelocateDialog(rf)"
-                  >
-                    <Tooltip
-                      text="Relocate folder and move files"
-                      activator="parent"
-                      :describe="false"
-                    />
-                    <v-icon size="13">mdi-folder-move-outline</v-icon>
-                  </button>
-                  <button
-                    type="button"
-                    class="sidebar-folder-action-btn"
-                    aria-label="Edit folder settings"
-                    @click="openReferenceFolderEditor(rf)"
-                  >
-                    <Tooltip
-                      text="Edit folder settings"
-                      activator="parent"
-                      :describe="false"
-                    />
-                    <v-icon size="13">mdi-pencil-outline</v-icon>
-                  </button>
-                </span>
-                <span
-                  v-if="rf.status === 'mount_error'"
-                  class="sidebar-folder-status-badge sidebar-folder-status--mount_error"
-                >
-                  <Tooltip
-                    :text="
-                      inDocker
-                        ? 'Mount error - check Docker volume'
-                        : 'Folder not accessible'
-                    "
-                    activator="parent"
-                  />
-                  <v-icon size="12">mdi-alert-circle-outline</v-icon>
-                </span>
-                <span
-                  v-else-if="rf.status === 'pending_mount'"
-                  class="sidebar-folder-status-badge sidebar-folder-status--pending_mount"
-                >
-                  <Tooltip
-                    :text="
-                      inDocker
-                        ? 'Pending restart - restart server to mount'
-                        : 'Scan pending - will start automatically'
-                    "
-                    activator="parent"
-                  />
-                  <v-icon size="12">mdi-clock-outline</v-icon>
-                </span>
-                <span
-                  v-else-if="rf.status === 'active' && rf.last_scanned == null"
-                  class="sidebar-folder-status-badge sidebar-folder-status--scanning"
-                >
-                  <Tooltip text="Scanning…" activator="parent" />
-                  <v-progress-circular indeterminate size="10" width="1.5" />
-                </span>
-                <span
-                  v-else-if="
-                    folderBrowseCache[rf.folder]?.loading ||
-                    (folderBrowseCache[rf.folder]?.image_count ?? 0) > 0
-                  "
-                  class="sidebar-folder-count-badge"
-                >
-                  <Tooltip text="Direct images in folder" activator="parent" />
-                  {{
-                    folderBrowseCache[rf.folder]?.loading
-                      ? "..."
-                      : (folderBrowseCache[rf.folder]?.image_count ?? 0)
-                  }}
-                </span>
-              </div>
-              <div
-                v-if="!inDocker && expandedFolderIds.has(rf.id)"
-                class="sidebar-folder-children"
-              >
-                <div
-                  v-if="folderBrowseCache[rf.folder]?.loading"
-                  class="sidebar-folder-loading-row"
-                >
-                  <v-progress-circular indeterminate size="14" />
-                </div>
-                <template v-else>
-                  <template
-                    v-for="entry in folderBrowseCache[rf.folder]?.entries ?? []"
-                    :key="entry.path"
-                  >
-                    <FolderTreeNode
-                      :entry="entry"
-                      :rf-id="rf.id"
-                      :depth="1"
-                      :selected-folder-key="selectedFolderKey"
-                      :folder-browse-cache="folderBrowseCache"
-                      :expanded-folder-ids="expandedFolderIds"
-                      :drop-target-key="dragOverReferenceTargetKey"
-                      :drop-rejected="dropRejected"
-                      @select="handleFolderNodeSelect"
-                      @toggle="handleFolderNodeToggle"
-                      @drag-over="
-                        ({ rfId, path, event }) =>
-                          handleReferenceFolderDragOver(rfId, path, event)
-                      "
-                      @drag-leave="
-                        ({ rfId, path, event }) =>
-                          handleReferenceFolderDragLeave(rfId, path, event)
-                      "
-                      @drop="
-                        ({ rfId, path, event }) =>
-                          handleReferenceFolderDrop(rfId, path, event)
-                      "
-                      @context="handleReferenceFolderNodeContext"
-                    />
-                  </template>
-                  <div
-                    v-if="folderBrowseCache[rf.folder]?.error"
-                    class="sidebar-folder-empty-row sidebar-folder-error-row"
-                  >
-                    <v-icon size="13">mdi-alert-circle-outline</v-icon> Cannot
-                    browse (Docker mode or permission error)
-                  </div>
-                </template>
-              </div>
-            </div>
-
-            <div
-              v-if="importFolders.length"
-              class="sidebar-folder-section-header sidebar-folder-section-header--import"
-              @click="toggleImportFoldersSection()"
-              @contextmenu.prevent.stop="
-                openSidebarCtxMenu('header', 'import-folders', $event)
-              "
-            >
-              <div class="sidebar-folder-section-title">Import folders</div>
-              <Tooltip
-                v-if="selectedImportFolderForHeader"
-                text="Edit selected import folder"
-              >
-                <template #activator="{ props: tipProps }">
-                  <v-icon
-                    v-bind="tipProps"
-                    size="13"
-                    class="sidebar-folder-section-edit-btn"
-                    @click.stop="
-                      openImportFolderEditor(selectedImportFolderForHeader)
-                    "
-                  >
-                    mdi-pencil-outline
-                  </v-icon>
-                </template>
-              </Tooltip>
-              <v-icon
-                class="sidebar-project-tree-expand-indicator"
-                :class="{ expanded: !importFoldersCollapsed }"
-                size="14"
-                >mdi-chevron-down</v-icon
-              >
-            </div>
-            <div
-              v-for="importFolder in importFolders"
-              v-show="!importFoldersCollapsed"
-              :key="importFolder.id"
-              class="sidebar-folder-root"
-            >
-              <div
-                class="sidebar-folder-row sidebar-folder-root-row"
-                :class="{
-                  active: selectedFolderKey === 'if-' + importFolder.id,
-                }"
-                @contextmenu.prevent="
-                  openSidebarCtxMenu('import-folder', importFolder, $event)
-                "
-                @click="
-                  handleFolderNodeSelect('if-' + importFolder.id, {
-                    importSourceFolder: importFolder.folder,
-                    importFolderId: importFolder.id,
-                    label: importFolder.label || importFolder.folder,
-                  })
-                "
-              >
-                <Tooltip :text="importFolder.folder" activator="parent" />
-                <v-icon
-                  size="16"
-                  class="sidebar-row-glyph sidebar-row-glyph--empty sidebar-folder-chevron"
-                >
-                  mdi-chevron-right
-                </v-icon>
-                <v-icon size="16" class="sidebar-row-glyph sidebar-folder-icon"
-                  >mdi-folder-download-outline</v-icon
-                >
-                <span class="sidebar-folder-label">
-                  {{ importFolder.label || importFolder.folder }}
-                </span>
-                <span
-                  v-if="importFolder.delete_after_import"
-                  class="sidebar-folder-status-badge sidebar-folder-status--pending_mount"
-                >
-                  <Tooltip
-                    text="Delete source file after successful import"
-                    activator="parent"
-                  />
-                  <v-icon size="12">mdi-delete-outline</v-icon>
-                </span>
-                <span class="sidebar-folder-count-badge">
-                  <Tooltip
-                    text="Imported pictures from folder"
-                    activator="parent"
-                  />
-                  {{ importFolder.picture_count ?? 0 }}
-                </span>
-              </div>
-            </div>
-          </div>
-          </template>
+          </button>
           <!-- In a project's scope the People and Sets "+" open these: make
                a new one in the project, or tick existing ones in or out. -->
           <Teleport to="body">
@@ -7146,7 +6367,22 @@ defineExpose({
           "
         >
           <v-icon class="ctx-icon">mdi-school-outline</v-icon>
-          <span class="ctx-label-text">Train LoRA</span>
+          <span class="ctx-label-text">Train LoRA…</span>
+        </button>
+        <button
+          class="ctx-item"
+          :disabled="isReadOnly"
+          @click="
+            createChildSet({
+              characterId: sidebarCtxCharacter.id,
+              name: sidebarCtxCharacter.name,
+            })
+          "
+        >
+          <v-icon class="ctx-icon">mdi-folder-plus-outline</v-icon>
+          <span class="ctx-label-text"
+            >New set in "{{ sidebarCtxCharacter.name }}"…</span
+          >
         </button>
         <button
           class="ctx-item"
@@ -7195,6 +6431,47 @@ defineExpose({
         </button>
       </template>
       <template v-if="sidebarCtxSet">
+        <!-- A LoRA dataset is a set (#2124): training it and filing a new set
+             under it lead the menu. -->
+        <button
+          class="ctx-item"
+          :disabled="isReadOnly"
+          @click="
+            emit('train-lora', {
+              type: 'set',
+              id: sidebarCtxSet.id,
+              name: sidebarCtxSet.name,
+            });
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon class="ctx-icon">mdi-school-outline</v-icon>
+          <span class="ctx-label-text">Train LoRA…</span>
+        </button>
+        <button
+          class="ctx-item"
+          :disabled="isReadOnly || setDepth(sidebarCtxSet) >= MAX_SET_DEPTH"
+          :class="{
+            'ctx-item--disabled': setDepth(sidebarCtxSet) >= MAX_SET_DEPTH,
+          }"
+          @click="
+            createChildSet({
+              setId: sidebarCtxSet.id,
+              name: sidebarCtxSet.name,
+            })
+          "
+        >
+          <Tooltip
+            :text="
+              setDepth(sidebarCtxSet) >= MAX_SET_DEPTH ? SET_DEPTH_REASON : ''
+            "
+            activator="parent"
+          />
+          <v-icon class="ctx-icon">mdi-folder-plus-outline</v-icon>
+          <span class="ctx-label-text"
+            >New set inside "{{ sidebarCtxSet.name }}"…</span
+          >
+        </button>
         <!-- Hidden on a locked set: adding to it is refused, and an action
              that cannot complete is worse than one that is not offered. -->
         <button
@@ -7270,21 +6547,6 @@ defineExpose({
         >
           <v-icon class="ctx-icon">mdi-share-variant-outline</v-icon>
           <span class="ctx-label-text">Share "{{ sidebarCtxSet.name }}"</span>
-        </button>
-        <button
-          class="ctx-item"
-          :disabled="isReadOnly"
-          @click="
-            emit('train-lora', {
-              type: 'set',
-              id: sidebarCtxSet.id,
-              name: sidebarCtxSet.name,
-            });
-            closeSidebarCtxMenu();
-          "
-        >
-          <v-icon class="ctx-icon">mdi-school-outline</v-icon>
-          <span class="ctx-label-text">Train LoRA</span>
         </button>
         <button
           class="ctx-item"
@@ -7456,6 +6718,28 @@ defineExpose({
           <v-icon class="ctx-icon">mdi-link-variant-off</v-icon>
           Remove all shares
         </button>
+        <!-- A locked set refuses the move, so it is greyed with the reason
+             rather than offered and then refused. -->
+        <button
+          v-if="setHasParent(sidebarCtxSet)"
+          class="ctx-item"
+          :disabled="isReadOnly || sidebarCtxSet.locked"
+          :class="{ 'ctx-item--disabled': sidebarCtxSet.locked }"
+          @click="moveSetToTop(sidebarCtxSet)"
+        >
+          <Tooltip
+            :text="sidebarCtxSet.locked ? SET_LOCK_MOVE_REASON : ''"
+            activator="parent"
+          />
+          <v-icon class="ctx-icon">mdi-arrow-top-left</v-icon>
+          <!-- A parent outside the current scope is not listed, so it has no
+               name to give; the set still moves. -->
+          <span class="ctx-label-text">{{
+            setParentName(sidebarCtxSet)
+              ? `Move out of "${setParentName(sidebarCtxSet)}"`
+              : "Move to the top level"
+          }}</span>
+        </button>
         <button
           class="ctx-item"
           :disabled="isReadOnly"
@@ -7582,89 +6866,6 @@ defineExpose({
           Delete
         </button>
       </template>
-      <template v-if="sidebarCtxFolder && !isReadOnly">
-        <button
-          v-if="!isReadOnly && !sidebarCtxFolderScopePath"
-          class="ctx-item"
-          :disabled="duplicateCountFor('folder', sidebarCtxFolder) === 0"
-          @click="findDuplicatesIn('folder', sidebarCtxFolder)"
-        >
-          <v-icon class="ctx-icon">{{
-            duplicateCountFor("folder", sidebarCtxFolder) === 0
-              ? "mdi-check"
-              : "mdi-content-duplicate"
-          }}</v-icon>
-          <span class="ctx-label-text">{{
-            duplicateCountFor("folder", sidebarCtxFolder) === 0
-              ? "No duplicates in this folder"
-              : "Find duplicates in this folder"
-          }}</span>
-          <span
-            v-if="duplicateCountFor('folder', sidebarCtxFolder)"
-            class="ctx-meta"
-            >{{ duplicateCountFor("folder", sidebarCtxFolder) }}</span
-          >
-        </button>
-        <div
-          v-if="!isReadOnly && !sidebarCtxFolderScopePath"
-          class="ctx-sep"
-        ></div>
-        <button
-          v-if="!inDocker && !sidebarCtxFolderScopePath"
-          class="ctx-item"
-          @click="
-            openReferenceFolderRelocateDialog(sidebarCtxFolder);
-            closeSidebarCtxMenu();
-          "
-        >
-          <v-icon class="ctx-icon">mdi-folder-move-outline</v-icon>
-          Relocate
-        </button>
-        <button
-          v-if="!sidebarCtxFolderScopePath"
-          class="ctx-item"
-          @click="
-            openReferenceFolderEditor(sidebarCtxFolder);
-            closeSidebarCtxMenu();
-          "
-        >
-          <v-icon class="ctx-icon">mdi-pencil</v-icon>
-          Edit
-        </button>
-        <button
-          v-if="!sidebarCtxFolderScopePath"
-          class="ctx-item ctx-item--danger"
-          @click="
-            deleteReferenceFolderById(sidebarCtxFolder.id);
-            closeSidebarCtxMenu();
-          "
-        >
-          <v-icon class="ctx-icon">mdi-trash-can-outline</v-icon>
-          Remove
-        </button>
-      </template>
-      <template v-if="sidebarCtxImportFolder && !isReadOnly">
-        <button
-          class="ctx-item"
-          @click="
-            openImportFolderEditor(sidebarCtxImportFolder);
-            closeSidebarCtxMenu();
-          "
-        >
-          <v-icon class="ctx-icon">mdi-pencil</v-icon>
-          Edit
-        </button>
-        <button
-          class="ctx-item ctx-item--danger"
-          @click="
-            deleteImportFolderById(sidebarCtxImportFolder.id);
-            closeSidebarCtxMenu();
-          "
-        >
-          <v-icon class="ctx-icon">mdi-trash-can-outline</v-icon>
-          Remove
-        </button>
-      </template>
       <!-- ── Section-header menus (right-click a section's title) ── -->
       <template v-if="sidebarCtxHeader === 'people'">
         <button
@@ -7690,32 +6891,6 @@ defineExpose({
         >
           <v-icon class="ctx-icon">mdi-image-album</v-icon>
           Create set
-        </button>
-      </template>
-      <template v-if="sidebarCtxHeader === 'reference-folders'">
-        <button
-          class="ctx-item"
-          :disabled="isReadOnly"
-          @click="
-            openReferenceFolderEditor();
-            closeSidebarCtxMenu();
-          "
-        >
-          <v-icon class="ctx-icon">mdi-folder-plus-outline</v-icon>
-          Add folder
-        </button>
-      </template>
-      <template v-if="sidebarCtxHeader === 'import-folders'">
-        <button
-          class="ctx-item"
-          :disabled="isReadOnly"
-          @click="
-            openImportFolderEditor();
-            closeSidebarCtxMenu();
-          "
-        >
-          <v-icon class="ctx-icon">mdi-folder-plus-outline</v-icon>
-          Add folder
         </button>
       </template>
       <!-- ── Empty-space menu (right-click uncovered sidebar area) ── -->

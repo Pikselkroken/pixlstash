@@ -7,7 +7,11 @@
 
 import { computed } from "vue";
 
-import { DOWNLOADS_KIND, MANAGED_KIND } from "../api/modelFolders";
+import {
+  BUILTIN_KIND,
+  DOWNLOADS_KIND,
+  MANAGED_KIND,
+} from "../api/modelFolders";
 import { useLibrariesStore } from "../stores/useLibrariesStore";
 import { useModelFoldersStore } from "../stores/useModelFoldersStore";
 import { useModelMovesStore } from "../stores/useModelMovesStore";
@@ -58,7 +62,7 @@ export function useModelFolderGates() {
 
   const remoteReason = computed(() => (canManage.value ? "" : REMOTE_REASON));
 
-  /** Docker takes a host path this UI has no way to ask for (`FolderEditor`'s job). */
+  /** Docker takes a host path this UI has no way to ask for. */
   const addReason = computed(
     () => remoteReason.value || (librariesStore.inDocker ? DOCKER_REASON : ""),
   );
@@ -67,9 +71,17 @@ export function useModelFolderGates() {
     return store.scanningIds.has(folder.id);
   }
 
-  /** A source folder is taken from, never catalogued, so its scan is a no-op. */
+  /**
+   * A source folder is taken from, never catalogued, so its scan is a no-op.
+   * PixlStash's own roots (the HuggingFace cache among them) are re-read from
+   * their index, which is how a repo deleted from the cache leaves the shelf.
+   */
   function canScan(folder) {
-    return folder.kind === "user" || folder.kind === MANAGED_KIND;
+    return (
+      folder.kind === "user" ||
+      folder.kind === MANAGED_KIND ||
+      folder.kind === BUILTIN_KIND
+    );
   }
 
   /** Only what the owner associated can be disassociated. */

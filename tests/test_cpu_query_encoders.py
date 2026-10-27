@@ -14,7 +14,9 @@ Directions asserted, because each is its own regression:
 * a CUDA or CPU host must not pay for a second model;
 * the copies load before the Vault publishes its engine, so no other model
   load runs beside them;
-* two query encodes never run at once, on any host.
+* two query encodes never run at once, on any host;
+* the idle sweep releases the copies only when no search has used them lately
+  and none is encoding, and the next search reloads them itself.
 
 No weights load. The services are stubs, except where a test says otherwise.
 """
@@ -24,8 +26,11 @@ import types
 
 import pytest
 
+import pixlstash.inference.cpu_query_encoders as cpu_query_encoders_module
 from pixlstash.inference.cpu_query_encoders import (
+    IDLE_UNLOAD_S,
     LOAD_FAILED_DETAIL,
+    RELOAD_FAILED_DETAIL,
     CpuQueryEncoders,
     CpuQueryEncodersNotReadyError,
     build_cpu_query_encoders,
@@ -56,6 +61,10 @@ class _RecordingService:
         if not self.loads:
             raise RuntimeError(f"{self.label}: no weights on disk")
         self.loaded = True
+
+    def unload(self):
+        self.calls.append(("unload", None))
+        self.loaded = False
 
     def encode(self, texts):
         self.calls.append(("encode", tuple(texts)))
@@ -356,16 +365,126 @@ def test_the_lazy_engine_build_also_loads_the_copies_first(monkeypatch):
     assert stand_in._engine is engine
 
 
-def test_closing_the_engine_keeps_the_copies_loaded():
-    """They load once, before the engine is published, and nothing reloads them
-    afterwards: releasing them under the idle sweep would leave every later
-    search refused (#1774 tracks doing that properly)."""
+# ---------------------------------------------------------------------------
+# Released by the idle sweep, reloaded by the next search
+# ---------------------------------------------------------------------------
+
+
+class _Clock:
+    """Stands in for the encoders module's ``time.monotonic``."""
+
+    def __init__(self, now):
+        self.now = now
+
+    def __call__(self):
+        return self.now
+
+
+def _closable_engine(monkeypatch, now=10_000.0):
+    """``_engine(with_cpu_copies=True)`` that ``close()`` can run on, with a
+    clock the test moves. Nothing has searched yet."""
+    clock = _Clock(now)
+    monkeypatch.setattr(
+        cpu_query_encoders_module, "time", types.SimpleNamespace(monotonic=clock)
+    )
     engine = _engine(with_cpu_copies=True)
     engine.wd14_service = engine.pixlstash_tagger_service = None
     engine.florence_service = None
     engine.lifecycle = types.SimpleNamespace(aggressive_unload=lambda **_: None)
+    return engine, clock
+
+
+def test_closing_the_engine_releases_unused_copies_and_a_search_reloads_them(
+    monkeypatch,
+):
+    """With "keep models in memory" off this is the ~0.7 GB the owner gets
+    back. The search after it must work, not answer 503."""
+    engine, _clock = _closable_engine(monkeypatch)
 
     engine.close()
 
-    assert engine.query_encoders.is_loaded()
+    assert not engine.query_encoders.is_loaded(), "the idle sweep kept the copies"
+    assert not engine._query_lock.locked(), "close() kept the query lock"
     assert TextEmbeddingWorkflow(engine).encode_query("a cat") == ["cpu-sbert"]
+    assert engine.query_encoders.is_loaded()
+    assert engine.sbert_service.calls == [], "the reload fell back to the device"
+
+
+def test_a_recent_search_keeps_the_copies_through_the_sweep(monkeypatch):
+    """A text search encodes SBERT and CLIP in two calls, and the sweep comes
+    round every few minutes whatever the owner is doing. Releasing right after
+    a search would cost the next one a reload, every interval."""
+    engine, clock = _closable_engine(monkeypatch)
+    workflow = TextEmbeddingWorkflow(engine)
+    workflow.encode_query("a cat")
+
+    clock.now += IDLE_UNLOAD_S - 1
+    engine.close()
+    assert engine.query_encoders.is_loaded(), "released while still in use"
+    assert not engine._query_lock.locked(), "close() kept the query lock"
+
+    clock.now += 1
+    engine.close()
+    assert not engine.query_encoders.is_loaded(), "never released once idle"
+
+
+def test_the_sweep_never_waits_for_or_releases_under_a_running_encode(monkeypatch):
+    """``close()`` runs on the GPU worker, or on the event loop when there is
+    no worker: it must not block on a search, and dropping the model under an
+    encode is the race the services' own locks exist for."""
+    engine, clock = _closable_engine(monkeypatch)
+    clock.now += IDLE_UNLOAD_S * 10
+    sbert = engine.query_encoders._sbert_service
+    inside = threading.Event()
+    release = threading.Event()
+    real_encode = sbert.encode
+
+    def slow_encode(texts):
+        inside.set()
+        release.wait(timeout=10)
+        return real_encode(texts)
+
+    sbert.encode = slow_encode
+    search = threading.Thread(
+        target=TextEmbeddingWorkflow(engine).encode_query, args=("a cat",)
+    )
+    search.start()
+    try:
+        assert inside.wait(timeout=5), "the encode never started"
+        closer = threading.Thread(target=engine.close)
+        closer.start()
+        closer.join(timeout=2)
+        assert not closer.is_alive(), "close() waited for the search"
+        assert engine.query_encoders.is_loaded(), "released under a running encode"
+    finally:
+        release.set()
+        search.join(timeout=5)
+
+
+def test_a_failed_reload_refuses_that_search_and_the_next_one_retries(monkeypatch):
+    """Nothing waits on a reload that settled without loading: the search that
+    asked for it gets a 503 at once, and the next search simply loads again."""
+    engine, _clock = _closable_engine(monkeypatch)
+    engine.close()
+    clip = engine.query_encoders._clip_service
+    clip.loads = False
+
+    with pytest.raises(CpuQueryEncodersNotReadyError, match=RELOAD_FAILED_DETAIL):
+        TextEmbeddingWorkflow(engine).encode_query("a cat")
+    assert engine.sbert_service.calls == [], "fell back to the accelerator"
+
+    clip.loads = True
+    assert TextEmbeddingWorkflow(engine).encode_query("a cat") == ["cpu-sbert"]
+
+
+def test_a_pair_that_never_loaded_is_not_retried_on_a_search():
+    """The first load is the one that does the racy imports, and it runs alone.
+    Retrying it on a search thread, beside the worker's loads, is the import
+    race again, so a start-up failure stays a refusal until a restart."""
+    encoders = _pair(sbert_loads=False)
+    encoders.load()
+    encoders._sbert_service.loads = True
+
+    with pytest.raises(CpuQueryEncodersNotReadyError, match=LOAD_FAILED_DETAIL):
+        encoders.services()
+    assert encoders._sbert_service.calls == [("ensure_ready", None)]

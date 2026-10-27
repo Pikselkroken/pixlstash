@@ -478,6 +478,15 @@ Findings to honour:
   drive a ghost, so it carries a 1px `outline` at 4.24 / 5.67 rather than relying on a
   colour step. A meter's own frame is a legitimate substitute for a fill boundary; a
   line *between two fills* is not.
+- **The drive meter's empty part is `--drive-meter-track`, an ink tint, not
+  `--track-trough`.** The trough is a black tint made as the well of the segmented
+  track, which draws its edge with a ring; under the 3px drive meter it measured 1.17:1 (dark) / 1.25:1 (light) off the
+  chrome and the free space vanished. The ink at 40% lightens in dark and darkens in
+  light, and clears 2.3:1 against both the chrome and the `surface-<status>` fill;
+  3:1 on both sides does not fit. Gated by `frontend/src/utils/contrastAudit.js`.
+  It is measured for the status fills only. In dark the track is about as light as the
+  olive and teal fills (roughly 1.2:1 apart), so a meter filled with those needs its
+  own measurement, not this token.
 - **The `on-<status>` values, on their solid fill, identical in both themes:**
   `on-error` #f7f1ea 5.40 · `on-warning` #1b1b1b 6.99 · `on-success` #f7f1ea 4.57 ·
   `on-info` #f7f1ea 6.68.
@@ -623,6 +632,8 @@ label at `--opacity-disabled`. The dimmed label is what explains the blank slot.
 Keep the slot reserved so the caption does not shift when the first child
 arrives, and **keep the group's own add action at full strength and operable**,
 because it is the only way out of the empty state.
+
+**Child rows (#2124).** The sidebar's child sets are the one tree whose levels differ in size, so three values carry "belongs to" together, each too weak alone in a column of faces: the indent (a child's caret slot and then its mark hang just past the centre of its parent's mark, so a child's caret sits where its parent's line meets it: under the parent's name, as the general rule above has it, cost a whole parent mark per level and was ruled too deep here), the smaller mark (0.6 of the parent's), and a guide line (`--tree-guide`, on-surface at 30%) that drops from the parent's mark, ticks into each child and ends in an elbow (`--radius-sm`) at the last. An open parent and its children sit on one group (`--group-surface`, on-surface at 4.5%, with a `--group-border` of 10% and `--radius-md`), with no rule between the parent and its children: one crossed the parent's line where it leaves the mark. Closed rows get no separators: the open group's box is the grouping. Rows inside a group take its inset off through `--row-pad`, never a per-type `padding-left`, so every column outside it continues through it. The guide is decorative, not a meaningful graphical object: the indent and the size still say it with the line gone, so it need not reach 3:1. Every size follows the thumbnail-size setting in one proportion; nothing in the tree has a fixed pixel size of its own.
 
 **Scoped CSS does not cross a component boundary.** A row rendered by a child
 component gets none of the parent's scoped rules, so a recursive tree component must

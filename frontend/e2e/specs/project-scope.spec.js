@@ -41,11 +41,26 @@ test.describe('the sidebar project scope', () => {
     await expect(sidebar.scopeButton).toContainText('Not in a project')
   })
 
-  test('draws every list row at one height', async ({ page }) => {
+  test('draws places at 32px and People and Sets at the thumbnail size', async ({ page }) => {
     const heights = await page
-      .locator('.sidebar-media-list .sidebar-list-item')
+      .locator('.sidebar-media-list .sidebar-list-item:not(.sidebar-section-scroll *)')
       .evaluateAll((rows) => rows.map((r) => r.getBoundingClientRect().height))
     expect(heights.length).toBeGreaterThan(0)
     for (const h of heights) expect(h).toBe(32)
+
+    // People and Sets take the thumbnail-size setting S at the top level
+    // (#2124): one height, S plus --space-3, never under the 32px places.
+    const { thumb, entityHeights } = await page.evaluate(() => {
+      const section = document.querySelector('.sidebar-media-list .sidebar-section-scroll')
+      const rows = document.querySelectorAll(
+        '.sidebar-media-list .sidebar-section-scroll .sidebar-list-item:not(.sidebar-tree-kid)',
+      )
+      return {
+        thumb: parseFloat(getComputedStyle(section).getPropertyValue('--sidebar-thumb-size')),
+        entityHeights: [...rows].map((r) => r.getBoundingClientRect().height),
+      }
+    })
+    expect(entityHeights.length).toBeGreaterThan(0)
+    for (const h of entityHeights) expect(h).toBe(Math.max(32, thumb + 8))
   })
 })

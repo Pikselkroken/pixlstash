@@ -46,6 +46,7 @@ from pixlstash.db_models import (
 )
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.picture_set_tree import lift_children
 from pixlstash.services.project_membership_service import (
     character_project_ids,
     reconcile_entity_projects_change,
@@ -1219,6 +1220,9 @@ def create_router(server) -> APIRouter:
                     .where(Picture.pending_character_id == character_id)
                     .values(pending_character_id=None)
                 )
+                # Deleting a person never deletes a set: its child sets move to
+                # the top level with their pictures (#2124).
+                lift_children(session, character_id=character_id)
                 session.commit()
                 session.delete(character)
                 session.commit()
@@ -1236,6 +1240,7 @@ def create_router(server) -> APIRouter:
 
                 reference_set = session.get(PictureSet, reference_set_id)
                 if reference_set is not None:
+                    lift_children(session, set_id=reference_set_id)
                     session.delete(reference_set)
                 session.commit()
 

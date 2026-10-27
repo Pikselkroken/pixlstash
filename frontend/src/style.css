@@ -126,6 +126,19 @@ body {
   /* The track against the canvas is only 1.11:1, so a nearly-empty drive would
      draw a ghost. This frames it instead of inferring the edge. 5.67:1. */
   --band-meter-edge: rgba(var(--v-theme-on-background), 0.6);
+  /* The 3px drive meter's empty part (library picker, models sidebar slot).
+     Not `--track-trough`: that black tint is made as the segmented track's
+     well, whose edge is a ring, and on its own it sat at 1.17:1 off the chrome here and 1.25:1 in light, so
+     the free space vanished. An INK tint instead, which lightens in dark and
+     darkens in light, the way the design system draws a meter's free part.
+
+     It sits between the canvas and the `surface-<status>` fill, and that
+     range is too narrow for 3:1 on both sides (light tops out at 2.43 each).
+     40% is the value that keeps both adjacencies above 2.3, in both themes:
+       dark  on #23282f  canvas 3.18  fills 2.35 - 2.36
+       light on #f0ede9  canvas 2.36  fills 2.56 - 2.65
+     Gated by contrastAudit.js, which reads the alpha from here. */
+  --drive-meter-track: rgba(var(--v-theme-on-surface), 0.4);
 }
 .v-theme--pixlStashLight {
   /* See the note on the dark theme above. */
@@ -169,6 +182,8 @@ body {
   --band-meter-free-low: rgba(var(--v-theme-warning), 0.55);
   /* Track against canvas is 1.22:1 here. Frame, don't infer. 4.24:1. */
   --band-meter-edge: rgba(var(--v-theme-on-background), 0.6);
+  /* See the dark block: the same ink tint, which darkens here. */
+  --drive-meter-track: rgba(var(--v-theme-on-surface), 0.4);
 }
 
 /* ---------------------------------------------------------------------------

@@ -102,7 +102,10 @@ describe("with one ComfyUI saved", () => {
     const { wrapper } = await mountSlot();
     expect(probeComfyui).toHaveBeenCalledWith(LOCAL);
     expect(slot(wrapper).text()).toContain("This PC");
-    expect(slot(wrapper).text()).toContain("Connected · RTX 4090 · 24 GB");
+    expect(slot(wrapper).text()).toContain("RTX 4090 · 24 GB");
+    // The green dot says Connected; the slot's one line has no room for it.
+    expect(slot(wrapper).text()).not.toContain("Connected");
+    expect(slot(wrapper).find(".wcs-dot").attributes("data-state")).toBe("connected");
     expect(slot(wrapper).attributes("aria-label")).toBe("ComfyUI: This PC, Connected");
     expect(menu(wrapper).text()).toContain("Run on");
     expect(menu(wrapper).text()).toContain("127.0.0.1:8188 · RTX 4090 · 24 GB");

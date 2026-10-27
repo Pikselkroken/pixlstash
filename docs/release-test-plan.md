@@ -308,21 +308,13 @@ one page).
 
 ## 9. Folder Management (Reference + Import)
 
-Use two test folders: `reference_test/` (≥2 pre-existing images) and
-`import_test/` (empty, add 1 image mid-test).
+The sidebar no longer lists or adds folders: adding a folder is **Add a
+library**. Reference and import folders made by an earlier release keep working
+in the backend. Use a library that already has one of each.
 
-### 9.1 pip / native install
-
-- [ ] Sidebar **Folders** → Add folder → **Reference folder** → `reference_test/` — created with no error, no pending-restart badge, scanning starts automatically
-- [ ] Clicking the reference folder shows its pictures in the grid
-- [ ] Add an **Import folder** → `import_test/`; copy a new image into it while running — it appears in the grid automatically
-- [ ] Remove the reference folder — the entry disappears and its indexed pictures leave the grid
-
-### 9.2 Docker install
-
-- [ ] In Docker mode, folder browsing is unavailable and manual path entry is required
-- [ ] Saving a new reference/import folder prompts for a container restart with an updated mount; the folder shows pending-restart status until then
-- [ ] After restart the folder transitions to active (or mount-error if invalid); a new file in the mounted `import_test/` is picked up automatically
+- [ ] The sidebar shows no Folders section, expanded or docked, and the docked library menu offers only Global and Projects
+- [ ] The reference folder's pictures are still in All Pictures
+- [ ] Copy a new image into the import folder while running — it still appears in the grid automatically
 
 ---
 

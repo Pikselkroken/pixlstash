@@ -378,9 +378,16 @@ class InferenceEngine:
     def close(self) -> None:
         """Unload all models and release GPU/CPU memory.
 
-        The CPU query encoders are deliberately kept: they load once, before the
-        engine is published, and go when the engine does (#1774).
+        The CPU query encoders go too, unless a search used them in the last
+        ``IDLE_UNLOAD_S`` or is encoding now: the lock is only tried, so this
+        never waits for a search (it runs on the GPU worker, or inline from
+        the event loop when there is none). The next search reloads them.
         """
+        if self.query_encoders is not None and self._query_lock.acquire(blocking=False):
+            try:
+                self.query_encoders.unload_if_idle()
+            finally:
+                self._query_lock.release()
         self.lifecycle.aggressive_unload(
             clip_service=self.clip_service,
             wd14_service=self.wd14_service,
@@ -408,7 +415,8 @@ class InferenceEngine:
         holding the writer.
 
         Raises:
-            CpuQueryEncodersNotReadyError: The CPU copies failed to load.
+            CpuQueryEncodersNotReadyError: The CPU copies failed to load, or to
+                reload after the idle sweep released them.
         """
         with self._query_lock:
             if self.query_encoders is None:

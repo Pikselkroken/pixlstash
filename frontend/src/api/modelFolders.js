@@ -44,6 +44,12 @@ export const SOURCE_KIND = "source";
  */
 export const DOWNLOADS_KIND = "downloads";
 
+/**
+ * PixlStash's own roots: its downloads, InsightFace, the HuggingFace cache.
+ * Declared rather than scanned; a rescan re-reads them from their index.
+ */
+export const BUILTIN_KIND = "foreign";
+
 /** The folder kinds a caller may register (`managed`/`foreign` are ours). */
 export const CREATABLE_KINDS = ["user", "source", DOWNLOADS_KIND];
 
@@ -87,6 +93,27 @@ export async function listModelFolders() {
 export async function listModelFolderDevices() {
   const body = await unwrap(apiClient.get(`${MODEL_FOLDERS_URL}/devices`));
   return Array.isArray(body?.devices) ? body.devices : [];
+}
+
+/**
+ * One level of a registered folder's subdirectories, for the Folders tree.
+ *
+ * Lazy by design: the tree asks once per expand. Read from the disk, so an
+ * empty directory is listed; its counts are the `present` copies under it,
+ * recursively. A folder the owner does not lay out (the managed store, the
+ * HuggingFace cache) answers `locked: true` with no `dirs`.
+ *
+ * @param {number|string} id - the registered folder.
+ * @param {string} [path=""] - POSIX, relative to the folder; `""` is its root.
+ * @returns {Promise<Object>} `{folder_id, path, locked, model_count, bytes,
+ *   dirs: [{name, path, model_count, bytes, has_dirs}]}`.
+ */
+export async function listModelFolderDirs(id, path = "") {
+  return unwrap(
+    apiClient.get(`${MODEL_FOLDERS_URL}/${encodeURIComponent(id)}/dirs`, {
+      params: { path },
+    }),
+  );
 }
 
 /**

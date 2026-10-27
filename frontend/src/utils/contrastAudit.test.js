@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, it, expect } from 'vitest'
 import {
   auditContrast,
@@ -7,6 +10,8 @@ import {
   readThemeColors,
   toHex,
 } from './contrastAudit.js'
+
+const HERE = dirname(fileURLToPath(import.meta.url))
 
 // Regression gate for the 2026-07-26 palette incident: deepening the status
 // hues in one pass broke `dark-surface-<status>`, which is a FOREGROUND family
@@ -136,8 +141,24 @@ describe('main.js status tokens', () => {
     // 2 themes x (4 levels x (fill label + notice rail + 3 status-text grounds
     // + dark-chrome text + dark-chrome rail) + 2 selected-ink grounds
     // + 4 teal pairs: the Save label, the ink on the rail and on the unsaved
-    // wash, the dot on dark chrome) = 68.
-    // Guards against a loop silently skipping a family.
-    expect(auditContrast(themes)).toHaveLength(68)
+    // wash, the dot on dark chrome + 3 drive-meter grounds x (track + 3 fills))
+    // = 92. Guards against a loop silently skipping a family.
+    expect(auditContrast(themes)).toHaveLength(92)
+  })
+
+  it('draws every drive meter on the audited track', () => {
+    // The audit measures `--drive-meter-track`; a bar that drifts back to
+    // another track would leave it green while the free space vanishes again.
+    for (const [file, rule] of [
+      ['../components/TitleBarLibraryPicker.vue', '.tlp-bar'],
+      ['../components/panels/ModelFolderTree.vue', '.mft-bar'],
+      ['../components/views/ModelShelf.vue', '.shelf-status-bar'],
+    ]) {
+      const source = readFileSync(resolve(HERE, file), 'utf8')
+      const body = source.slice(source.indexOf(`${rule} {`)).split('}')[0]
+      expect(body, `${rule} in ${file}`).toContain(
+        'background: var(--drive-meter-track);',
+      )
+    }
   })
 })

@@ -138,6 +138,7 @@
       @add-to-character="handleAddToCharacter"
       @remove-from-character="handleRemoveFromCharacter"
       @create-character="handleCreateCharacterFromMenu"
+      @create-set="handleCreateSetFromMenu"
       @set-project="handleSetProjectForSelected"
       @remove-from-stack="removeSelectedFromStack"
       @dissolve-stacks="dissolveSelectedStacks"
@@ -207,6 +208,15 @@
       :projects="createPersonProjects"
       @close="handleCreatePersonClose"
       @saved="handleCreatePersonSaved"
+    />
+    <!-- ── New set from the selection (#2124): the Set picker's "New set in
+         <Person>…" and "New set…". Grid-local for the same reason. -->
+    <PictureSetEditor
+      :open="createSetOpen"
+      :set="createSetDraft"
+      :projects="createPersonProjects"
+      @close="handleCreateSetClose"
+      @saved="handleCreateSetSaved"
     />
 
     <!-- ── Revoke picture shares confirm dialog ───────────────── -->
@@ -1023,6 +1033,7 @@
               <div
                 v-if="isThumbnailReady(img.id) && img.thumbnail"
                 class="thumbnail-top-right-badges"
+                :style="{ '--star-size': `${badgeIconSizes.star}px` }"
               >
                 <StarRatingOverlay
                   v-if="gridStore.showStars || (!isReadOnly && !isScrapheapView)"
@@ -1034,9 +1045,9 @@
                   :icon-size="badgeIconSizes.star"
                   :compact="true"
                   :stars="gridStore.showStars"
+                  shortens
                   :favouritable="!isReadOnly && !isScrapheapView"
                   :favourite="Boolean(img.favourite)"
-                  :style="{ '--star-size': `${badgeIconSizes.star}px` }"
                   @set-score="setScore(img, $event)"
                   @toggle-favourite="toggleFavourite([img.id])"
                 />
@@ -1195,6 +1206,7 @@
           @clear-selection="clearSelection"
           @favourite="toggleFavourite(selectedImageIds)"
           @added-to-set="handleOverlayAddedToSet"
+          @create-set="handleCreateSetFromMenu"
           @remove-from-group="removeFromGroup"
           @keep-cover-only="openKeepCoverOnly"
           @delete-selected="deleteSelected"
@@ -1404,10 +1416,14 @@ import {
   nextFreeCharacterName,
 } from "../../utils/characterCreateFlow.js";
 import CharacterEditor from "../editors/CharacterEditor.vue";
+import PictureSetEditor from "../editors/PictureSetEditor.vue";
+import { nextSetAppearance } from "../../utils/setAppearance.js";
+import { getEntityProjectIds } from "../../utils/projectMembership.js";
 import {
   getPictureSet,
   addPictureToSet,
   bulkAddPicturesToSet,
+  listPictureSets,
   removePictureFromSet,
 } from "../../api/pictureSets";
 import { getSharedPictureIds, revokeTokensByResource } from "../../api/users";
@@ -3917,6 +3933,96 @@ async function handleCreatePersonSaved(savedCharacter) {
     );
     emit("refresh-sidebar");
   }
+}
+
+// ── New set from the selection (#2124) ───────────────────────────────────────
+const createSetOpen = ref(false);
+const createSetDraft = ref(null);
+let pendingCreateSetPictureIds = [];
+
+/**
+ * The Set picker's create row: name a new set (under the person it was asked
+ * for, if any) in the set editor, then file the captured selection into it.
+ */
+async function handleCreateSetFromMenu({ characterId = null, name = "" } = {}) {
+  pendingCreateSetPictureIds = selectedImageIds.value.slice();
+  const [projects, sets, person] = await Promise.all([
+    listProjects().catch((e) => {
+      console.warn("Couldn't list projects for the set editor", e);
+      return [];
+    }),
+    listPictureSets().catch((e) => {
+      console.warn("Couldn't list sets to pick a new set's icon and colour", e);
+      return [];
+    }),
+    characterId == null
+      ? Promise.resolve(null)
+      : getCharacter(characterId).catch((e) => {
+          console.warn(
+            `Couldn't read person ${characterId} for the new set's projects; it starts in the open project`,
+            e,
+          );
+          return null;
+        }),
+  ]);
+  createPersonProjects.value = Array.isArray(projects) ? projects : [];
+  const userSets = (Array.isArray(sets) ? sets : []).filter(
+    (s) => !s?.reference_character,
+  );
+  // A set under a person joins the person's projects, so it shows wherever
+  // they do (as SideBar.createChildSet does); otherwise the open project.
+  const personProjectIds = person ? getEntityProjectIds(person) : [];
+  createSetDraft.value = {
+    ...nextSetAppearance(userSets),
+    ...(personProjectIds.length
+      ? { project_ids: personProjectIds }
+      : projectStore.projectViewMode === "project" &&
+          projectStore.selectedProjectId != null
+        ? { project_ids: [projectStore.selectedProjectId] }
+        : {}),
+    parent_character_id: characterId,
+    parent_name: name,
+  };
+  createSetOpen.value = true;
+}
+
+// The ids stay as captured at the click: the row promised those N pictures.
+// `saved` reads them before the editor's `close`, so closing can drop them.
+function handleCreateSetClose() {
+  createSetOpen.value = false;
+  createSetDraft.value = null;
+  pendingCreateSetPictureIds = [];
+}
+
+async function handleCreateSetSaved(savedSet) {
+  const ids = pendingCreateSetPictureIds;
+  pendingCreateSetPictureIds = [];
+  const name = savedSet?.name || "the new set";
+  if (savedSet?.id == null || !ids.length) {
+    emit("refresh-sidebar");
+    return;
+  }
+  try {
+    // One bulk call: one operation-log entry and one Undo.
+    await bulkAddPicturesToSet(savedSet.id, ids);
+    noticeStore.success(
+      `Created ${name}, added ${ids.length} picture${ids.length === 1 ? "" : "s"}.`,
+      { key: "create-set-add" },
+    );
+    operationStore.refresh();
+    handleOverlayAddedToSet({
+      pictureIds: ids,
+      setId: savedSet.id,
+      action: "added",
+    });
+  } catch (e) {
+    console.error("Failed to add the selection to the new set", e);
+    noticeStore.error(
+      `Created ${name}, but couldn't add the selection. ${errorDetail(e)}`,
+      { key: "create-set-add" },
+    );
+  }
+  emit("refresh-sidebar");
 }
 
 function handleRemoveFromCharacter(payload) {

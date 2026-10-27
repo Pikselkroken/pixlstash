@@ -230,7 +230,7 @@ function manageLibraries() {
   height: 3px;
   overflow: hidden;
   border-radius: var(--radius-pill);
-  background: var(--track-trough);
+  background: var(--drive-meter-track);
 }
 
 .tlp-bar > span {

@@ -726,7 +726,7 @@ export const manual = {
   'ScreenshotOverlap.jpg': 'Boolean Overlap mode — needs ≥2 selected people with shared pictures',
   'ScreenshotOverlapNew.jpg': 'Boolean set operations — needs ≥2 selected entities',
   'ScreenshotMutuallyExclusive.jpg': 'Mutually-exclusive tag setup — needs a specific tag fixture',
-  'ScreenshotReferenceFolders.jpg': 'demo-data has no reference folders to show (Folders tab would be empty)',
+  'ScreenshotReferenceFolders.jpg': 'the sidebar no longer lists reference folders',
   'ScreenshotReferenceFoldersNew.jpg': 'demo-data has no reference folders',
   'FaceLikenessSearch.jpg': 'Face-likeness search — needs a face-search fixture + indexed faces',
   'MultiLikenessSearch.jpg': 'Multi-face likeness search — needs a face-search fixture',

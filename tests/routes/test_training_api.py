@@ -1434,6 +1434,49 @@ def test_dataset_counts_and_checks_and_knows_a_reference_set():
         assert out["character"]["all_count"] == 3
         assert out["character"]["reference_count"] == _PICTURES["count"]
 
+        # A set under the person, or under a set under the person, is theirs:
+        # a character LoRA trained on that set's pictures (#2124).
+        r = owner.post(
+            "/picture_sets", json={"name": "LoRA v3", "parent_character_id": char_id}
+        )
+        child_id = r.json()["picture_set"]["id"]
+        r = owner.post("/picture_sets", json={"name": "v3b", "parent_set_id": child_id})
+        grandchild_id = r.json()["picture_set"]["id"]
+        for sid, name in ((child_id, "LoRA v3"), (grandchild_id, "v3b")):
+            r = owner.get("/training/dataset", params={"set_id": sid})
+            assert r.status_code == 200, r.text
+            out = r.json()
+            assert (out["set_id"], out["character_id"]) == (sid, char_id)
+            assert out["character"]["child_set"] == {
+                "id": sid,
+                "name": name,
+                "count": 3,
+            }
+            assert out["character"]["reference_count"] == _PICTURES["count"]
+        r = owner.get(
+            "/training/dataset", params={"set_id": child_id, "character_id": char_id}
+        )
+        assert r.status_code == 200, r.text
+        # A set under the person's reference set is theirs too.
+        r = owner.post(
+            "/picture_sets", json={"name": "ref kid", "parent_set_id": ref_id}
+        )
+        ref_kid = r.json()["picture_set"]["id"]
+        r = owner.get("/training/dataset", params={"set_id": ref_kid})
+        assert r.json()["character_id"] == char_id
+        assert r.json()["character"]["child_set"]["id"] == ref_kid
+        # The reference set itself is not a child set.
+        r = owner.get("/training/dataset", params={"set_id": ref_id})
+        assert r.json()["character"]["child_set"] is None
+        # A set under an ordinary set is a concept's: no character.
+        r = owner.post("/picture_sets", json={"name": "Neon", "parent_set_id": set_id})
+        concept_id = r.json()["picture_set"]["id"]
+        r = owner.get("/training/dataset", params={"set_id": concept_id})
+        assert r.json()["character"] is None
+        assert r.json()["parent_set_id"] == set_id
+        r = owner.get("/training/dataset", params={"set_id": set_id})
+        assert r.json()["parent_set_id"] is None
+
         # A character that does not exist is a 404, not a 500.
         r = owner.get("/training/dataset", params={"character_id": 9999})
         assert r.status_code == 404, r.text

@@ -166,10 +166,12 @@
               label="Add to set"
               key-hint="S"
               float-menu
+              allow-create
               :subject-ids="selectedImageIds"
               :disabled="!!groupingLockReason"
               :locked-set-ids="lockedSetsStore.lockedSetIds"
               @added="$emit('added-to-set', $event)"
+              @create="$emit('create-set', $event)"
             />
           </template>
         </Tooltip>
@@ -432,6 +434,7 @@ const emit = defineEmits([
   "clear-selection",
   "favourite",
   "added-to-set",
+  "create-set",
   "remove-from-group",
   "keep-cover-only",
   "delete-selected",

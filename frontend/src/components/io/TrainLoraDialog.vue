@@ -594,7 +594,12 @@ const subtitle = computed(() => {
 const trainOnOptions = computed(() => {
   const ch = character.value;
   if (!ch) return [];
+  // Opened on a set under the person (#2124): that set first.
+  const child = store.childSet;
   return [
+    ...(child
+      ? [{ id: "set", label: `${child.name} · ${formatCount(child.count)}` }]
+      : []),
     {
       id: "reference",
       label: `Reference set · ${formatCount(ch.reference_count)}`,

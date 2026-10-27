@@ -15,6 +15,7 @@ import { computed, onMounted, watch } from "vue";
 import AppButton from "../widgets/AppButton.vue";
 import WorkflowsComfyuiSlot from "./WorkflowsComfyuiSlot.vue";
 import { useFilterStore } from "../../stores/useFilterStore";
+import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { useWorkflowTemplatesStore } from "../../stores/useWorkflowTemplatesStore";
 import { isReadOnly } from "../../utils/apiClient";
@@ -24,6 +25,10 @@ const emit = defineEmits(["open-settings"]);
 const store = useWorkflowsStore();
 const tpl = useWorkflowTemplatesStore();
 const filterStore = useFilterStore();
+const userPrefsStore = useUserPrefsStore();
+
+// The library sidebar's width, so switching workspace does not move the edge.
+const width = computed(() => userPrefsStore.sidebarWidth ?? 240);
 
 // The list is read once per session and the server keeps its own copy of
 // ComfyUI's, so this is one cheap read, not a ComfyUI round trip per visit. It
@@ -108,7 +113,7 @@ function pickFacet(key, id) {
 </script>
 
 <template>
-  <div class="workflows-sidebar">
+  <div class="workflows-sidebar" :style="{ width: `${width}px` }">
     <!-- A shared view cannot read the owner's ComfyUI address, so it would
          always read as not set up. -->
     <WorkflowsComfyuiSlot
@@ -204,10 +209,10 @@ function pickFacet(key, id) {
 </template>
 
 <style scoped>
-/* The shell is SideBar's: 240px, the sidebar ground, its own column. */
+/* The shell is SideBar's: its width and right rule, the sidebar ground, its
+   own column. */
 .workflows-sidebar {
   box-sizing: border-box;
-  width: 240px;
   height: 100%;
   min-height: 0;
   max-height: 100%;
@@ -216,6 +221,7 @@ function pickFacet(key, id) {
   flex-direction: column;
   background: rgb(var(--v-theme-sidebar));
   color: rgb(var(--v-theme-sidebar-text));
+  border-right: 1px solid rgb(var(--v-theme-border));
 }
 
 /* The list takes the room and scrolls; the footer below it does not. */

@@ -504,6 +504,10 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     64 = 63 + 1 with ``PUT /training/ai-toolkit/config``, which stores the checkout
     and its Python (the trainer's argv[0]) out of ``PATCH /users/me/config``, so the
     gate, not the PATCH handler, carries the locality rule (review F2).
+    65 = 64 + 1 with ``GET /model-folders/{folder_id}/dirs``, which lists one
+    directory level inside a registered folder and names subdirectories PixlStash
+    never registered: ``models/{model_id}/samples``' authority, so the tier, not
+    the ``owner_only`` the shelf's reads carry.
 
     Arithmetic, not judgement."""
     loopback = {
@@ -518,7 +522,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 9, sorted(loopback)
-    assert len(local) == 64, sorted(local)
+    assert len(local) == 65, sorted(local)
 
 
 # ===========================================================================

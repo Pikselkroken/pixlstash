@@ -43,23 +43,58 @@
          collapse the strip to its heart (a favourite at rest on a grid tile). -->
     <span v-else class="star-overlay__stars">
       <template v-if="stars">
-      <span v-for="n in max" :key="n" class="star-slot">
+      <span class="star-overlay__full">
+        <span v-for="n in max" :key="n" class="star-slot">
+          <Tooltip
+            :text="`Set rating ${n} (${n})`"
+            activator="parent"
+            :describe="false"
+          />
+          <v-icon
+            :icon="STAR"
+            :size="iconSize"
+            :color="
+              n <= dScore
+                ? 'rgba(var(--v-theme-accent))'
+                : 'rgba(var(--v-theme-on-background), 0.6)'
+            "
+            :aria-label="`Set rating ${n} (${n})`"
+            style="cursor: pointer"
+            @click.stop="handleClick(n)"
+          />
+        </span>
+      </span>
+      <!-- The short form, "3★", for a host too narrow for the row: it shows
+           only inside a `score-strip` size container (the grid tile's corner)
+           below the width the row needs. Unrated is the bare uncoloured star.
+           A click steps the rating, as number mode does. -->
+      <span
+        v-if="shortens"
+        class="star-overlay__short star-slot"
+        @click.stop="cycleRating()"
+      >
         <Tooltip
-          :text="`Set rating ${n} (${n})`"
+          :text="
+            dScore > 0 ? `Rated ${dScore} - click to change` : 'Click to rate'
+          "
           activator="parent"
           :describe="false"
         />
+        <span v-if="dScore > 0" class="star-overlay__short-n">{{
+          dScore
+        }}</span>
         <v-icon
           :icon="STAR"
           :size="iconSize"
           :color="
-            n <= dScore
+            dScore > 0
               ? 'rgba(var(--v-theme-accent))'
               : 'rgba(var(--v-theme-on-background), 0.6)'
           "
-          :aria-label="`Set rating ${n} (${n})`"
+          :aria-label="
+            dScore > 0 ? `Rated ${dScore} - click to change` : 'Click to rate'
+          "
           style="cursor: pointer"
-          @click.stop="handleClick(n)"
         />
       </span>
       <span
@@ -115,6 +150,8 @@ const props = defineProps({
   numberMode: { type: Boolean, default: false },
   /** Draw the stars. Off, a favouritable strip is its heart alone. */
   stars: { type: Boolean, default: true },
+  /** Also render the "3★" short form, which a `score-strip` container shows when narrow. */
+  shortens: { type: Boolean, default: false },
   /** End the strip with the favourite heart. */
   favouritable: { type: Boolean, default: false },
   /** Is this picture a favourite now? */
@@ -169,9 +206,40 @@ function cycleRating() {
   border-radius: var(--radius-sm);
 }
 
-.star-overlay__stars {
+.star-overlay__stars,
+.star-overlay__full {
   display: inline-flex;
   align-items: center;
+}
+
+.star-overlay__short {
+  display: none;
+  cursor: pointer;
+}
+
+.star-overlay__short-n {
+  margin-right: var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: rgb(var(--v-theme-accent));
+}
+
+/* The container is the tile's width. Below the room the full row needs beside
+   the stack count in the other corner, the strip says the score as "3★". The
+   host sets the container's em to the star size, so the threshold is in stars:
+   five stars and the heart are 6em, and the hairline, the pill padding, a
+   two-digit stack count and the gap to it are the 64px. Named, so a host that
+   passes `shortens` without declaring the container keeps the full row. */
+@container score-strip (max-width: calc(6em + 64px)) {
+  .star-overlay__full {
+    display: none;
+  }
+
+  .star-overlay__short {
+    display: inline-flex;
+  }
 }
 
 /* The hairline between the score and the heart: the strip says two things. */

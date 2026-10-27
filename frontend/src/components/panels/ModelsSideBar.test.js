@@ -1,6 +1,6 @@
-// The Models workspace sidebar (#2168): the folder slot narrows the list and
-// the counts, the places and the Type / Base rows drive the shelf store, and
-// the Add band asks the shelf for its dialogs.
+// The Models workspace sidebar (#2168, #2203): the Model folders slot opens
+// Manage model folders, the places and the Folders tree drive the shelf store,
+// and the Add band asks the shelf for its dialogs.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
@@ -17,6 +17,14 @@ vi.mock("../../api/modelFolders", async (importOriginal) => ({
   ...(await importOriginal()),
   listModelFolders: vi.fn(async () => FOLDERS),
   listModelFolderDevices: vi.fn(async () => DEVICES),
+  listModelFolderDirs: vi.fn(async (id, path) => ({
+    folder_id: id,
+    path,
+    locked: false,
+    model_count: 2,
+    bytes: 0,
+    dirs: [],
+  })),
 }));
 
 vi.mock("../../api/modelShelf", async (importOriginal) => ({
@@ -58,9 +66,9 @@ import { useTasksStore } from "../../stores/useTasksStore";
 import { useTrainingStore } from "../../stores/useTrainingStore";
 
 const FOLDERS = [
-  { id: 1, path: "/home/me/ComfyUI/models", kind: "user", present_bytes: 9e9 },
-  { id: 2, path: "/home/me/archive/loras", kind: "user", present_bytes: 3e8 },
-  { id: 3, path: "/home/me/ai-toolkit/output", kind: "source", present_bytes: 0 },
+  { id: 1, path: "/home/me/ComfyUI/models", kind: "user", movable: "per_item", present_bytes: 9e9 },
+  { id: 2, path: "/home/me/archive/loras", kind: "user", movable: "per_item", present_bytes: 3e8 },
+  { id: 3, path: "/home/me/ai-toolkit/output", kind: "source", movable: "external", present_bytes: 0 },
 ];
 const DEVICES = [
   {
@@ -72,7 +80,9 @@ const DEVICES = [
   },
 ];
 
-const at = (folderId) => [{ folder_id: folderId, state: "present" }];
+const at = (folderId) => [
+  { folder_id: folderId, relpath: "m.safetensors", state: "present" },
+];
 const ROWS = [
   { id: 1, file_kind: "checkpoint", base_model: "Flux.1 dev", locations: at(1), sha256: "a" },
   { id: 2, file_kind: "adapter", kind: "lora", base_model: "Flux.1 dev", locations: at(2), sha256: "b" },
@@ -112,65 +122,93 @@ const countOf = (wrapper, attr, value) =>
   row(wrapper, attr, value).find(".msb-count").text();
 
 describe("ModelsSideBar", () => {
-  it("lists the shelf's folders with their size and drive, not ai-toolkit's", async () => {
+  it("keeps the slot as one Model folders button that opens Manage", async () => {
     const wrapper = mountBar();
     await flushPromises();
-    const ids = wrapper
-      .findAll(".msb-folder")
+    const slot = wrapper.find('[data-testid="models-folder-slot"]');
+    // ai-toolkit's root is taken from, not catalogued: two folders, one drive.
+    expect(slot.text()).toContain("Model folders");
+    expect(slot.text()).toContain("1 drive · 2 folders");
+    await slot.trigger("click");
+    expect(store.shellRequest.what).toBe("manage-folders");
+    expect(store.shellRequest.el).toBe(slot.element);
+  });
+
+  it("has no Limit to folder menu and no Type or Base model rows", async () => {
+    const wrapper = mountBar();
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("Limit to folder");
+    // Folders and Training are the only sections under the places.
+    expect(wrapper.findAll("h3").map((one) => one.text())).toEqual([
+      "Folders",
+      "Training",
+    ]);
+    expect(wrapper.find("[data-type]").exists()).toBe(false);
+    expect(wrapper.find("[data-base]").exists()).toBe(false);
+  });
+
+  it("draws the Folders tree between the places and Training", async () => {
+    const wrapper = mountBar();
+    await flushPromises();
+    const html = wrapper.html();
+    const tree = html.indexOf('data-testid="model-folder-tree"');
+    expect(tree).toBeGreaterThan(html.indexOf('data-place="loose"'));
+    expect(tree).toBeLessThan(html.indexOf('data-place="runs"'));
+    const folders = wrapper
+      .findAll('[role="treeitem"][data-folder-id]')
       .map((one) => one.attributes("data-folder-id"));
-    expect(ids).toEqual(["all", "1", "2"]);
-    const archive = wrapper.find('[data-folder-id="2"]');
-    expect(archive.text()).toContain("/home/me/archive/loras");
-    expect(archive.text()).toContain("50.0 GB free");
-    expect(wrapper.find(".msb-slot-name").text()).toBe("All folders");
+    expect(folders).toEqual(["1", "2"]);
   });
 
-  it("narrows the counts to the chosen folder and leaves the set grid", async () => {
+  it("opens a folder from the tree and lights it, not a place", async () => {
     const wrapper = mountBar();
     await flushPromises();
-    expect(countOf(wrapper, "place", "all")).toBe("3");
-    expect(countOf(wrapper, "type", "lora")).toBe("1");
-
-    await wrapper.find('[data-folder-id="1"]').trigger("click");
-
-    expect(store.folderScope).toBe(1);
-    expect(store.place).toBe("all");
-    expect(countOf(wrapper, "place", "all")).toBe("2");
-    expect(countOf(wrapper, "type", "lora")).toBe("0");
-    expect(store.visibleRows.map((one) => one.id).sort()).toEqual([1, 3]);
-    expect(wrapper.find(".msb-slot-name").text()).toBe("models");
+    await wrapper.find('[role="treeitem"][data-folder-id="2"]').trigger("click");
+    expect(store.place).toBe("folder");
+    expect(store.folderScope).toEqual({ folderId: 2, path: "", locked: false });
+    expect(store.visibleRows.map((one) => one.id)).toEqual([2]);
+    const lit = wrapper.find('[role="treeitem"][data-folder-id="2"]');
+    expect(lit.attributes("aria-selected")).toBe("true");
+    expect(row(wrapper, "place", "all").attributes("aria-current")).toBe(
+      undefined,
+    );
+    // All models leaves the folder.
+    await row(wrapper, "place", "all").trigger("click");
+    expect(store.folderScope).toBe(null);
+    expect(
+      wrapper
+        .find('[role="treeitem"][data-folder-id="2"]')
+        .attributes("aria-selected"),
+    ).toBe("false");
   });
 
-  it("lets go of a folder that is no longer registered", async () => {
-    store.setFolderScope(99);
-    expect(store.folderScope).toBe(99);
+  it("re-reads the open folder listings when the shelf refetches", async () => {
+    const { listModelFolderDirs } = await import("../../api/modelFolders");
+    mountBar();
+    await flushPromises();
+    listModelFolderDirs.mockClear();
+    store.rows = [...ROWS];
+    await flushPromises();
+    expect(listModelFolderDirs.mock.calls.map((call) => call[0]).sort()).toEqual([
+      1, 2,
+    ]);
+  });
+
+  it("leaves Training runs for the list when a folder is opened", async () => {
+    route.name = "models-runs";
     const wrapper = mountBar();
+    await flushPromises();
+    await wrapper.find('[role="treeitem"][data-folder-id="1"]').trigger("click");
+    expect(push).toHaveBeenCalledWith({ name: "models" });
+  });
+
+  it("closes a folder that is no longer registered", async () => {
+    store.setFolderScope({ folderId: 99, path: "" });
+    expect(store.place).toBe("folder");
+    mountBar();
     await flushPromises();
     expect(store.folderScope).toBe(null);
-    expect(wrapper.find(".msb-slot-name").text()).toBe("All folders");
-    expect(countOf(wrapper, "place", "all")).toBe("3");
-  });
-
-  it("hands focus back to the folder slot after a pick", async () => {
-    const wrapper = mount(ModelsSideBar, {
-      attachTo: document.body,
-      global: {
-        stubs: {
-          "v-icon": true,
-          Tooltip: true,
-          AiToolkitIcon: true,
-          "v-menu": {
-            template: "<div><slot name='activator' :props='{}' /><slot /></div>",
-          },
-        },
-      },
-    });
-    await flushPromises();
-    await wrapper.find('[data-folder-id="2"]').trigger("click");
-    expect(document.activeElement).toBe(
-      wrapper.find('[data-testid="models-folder-slot"]').element,
-    );
-    wrapper.unmount();
+    expect(store.place).toBe("all");
   });
 
   it("counts In no set yet once the sets are read", async () => {
@@ -194,29 +232,6 @@ describe("ModelsSideBar", () => {
     );
   });
 
-  it("toggles a Type row as the one sidebar filter", async () => {
-    const wrapper = mountBar();
-    await flushPromises();
-    await row(wrapper, "type", "vae").trigger("click");
-    expect(store.sidebarFilter).toEqual({ axis: "type", key: "vae" });
-    expect(store.place).toBe("all");
-    expect(store.visibleRows.map((one) => one.id)).toEqual([3]);
-    expect(row(wrapper, "type", "vae").attributes("aria-current")).toBe("page");
-    // No place lights while a Type row does.
-    expect(row(wrapper, "place", "all").attributes("aria-current")).toBe(
-      undefined,
-    );
-    await row(wrapper, "type", "vae").trigger("click");
-    expect(store.sidebarFilter).toBe(null);
-  });
-
-  it("filters by a base model row", async () => {
-    const wrapper = mountBar();
-    await flushPromises();
-    await row(wrapper, "base", "SDXL").trigger("click");
-    expect(store.visibleRows.map((one) => one.id)).toEqual([3]);
-  });
-
   it("asks the shelf for its dialogs", async () => {
     const wrapper = mountBar();
     await flushPromises();
@@ -224,26 +239,10 @@ describe("ModelsSideBar", () => {
     const byText = (text) => items.find((one) => one.text().includes(text));
     await byText("Add file…").trigger("click");
     expect(store.shellRequest.what).toBe("add-file");
-    await byText("Manage model folders…").trigger("click");
-    expect(store.shellRequest.what).toBe("manage-folders");
+    await byText("Add folder…").trigger("click");
+    expect(store.shellRequest.what).toBe("add-folder");
     // ai-toolkit's root is registered, so the band does not offer to set it.
     expect(byText("Set ai-toolkit output folder…")).toBe(undefined);
-  });
-
-  it("leaves Training runs for the list when a Type or Base row is picked", async () => {
-    route.name = "models-runs";
-    const wrapper = mountBar();
-    await flushPromises();
-    await row(wrapper, "type", "lora").trigger("click");
-    expect(store.sidebarFilter).toEqual({ axis: "type", key: "lora" });
-    expect(push).toHaveBeenCalledWith({ name: "models" });
-    // Picked again from the runs page it is shown, not taken back.
-    push.mockClear();
-    await row(wrapper, "type", "lora").trigger("click");
-    expect(store.sidebarFilter).toEqual({ axis: "type", key: "lora" });
-    expect(push).toHaveBeenCalledWith({ name: "models" });
-    await row(wrapper, "base", "SDXL").trigger("click");
-    expect(store.sidebarFilter).toEqual({ axis: "base", key: "SDXL" });
   });
 
   it("opens Training runs as a route and lights it there", async () => {
