@@ -6144,6 +6144,10 @@ describe("the Tasks deep link (#2165)", () => {
     sidebar.showTasksTab();
     await flush(wrapper);
     expect(sidebar.tasksPillRequest).toBe(before + 1);
+    // The rail stays where it was: Workflow lit and Run… under it, not a tab
+    // that no longer exists with nothing lit and no footer.
+    expect(wrapper.find("button.inspector-tab--active").text()).toBe("Workflow");
+    expect(wrapper.find(".wftab-foot").exists()).toBe(true);
   });
 });
 

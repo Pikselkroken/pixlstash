@@ -629,7 +629,7 @@ watch(
 
 // The sidebar's amber Add workflow: the same file picker the empty state opens.
 watch(
-  () => useWorkflowsStore().addRequest,
+  () => store.addRequest,
   () => fileInput.value?.click(),
 );
 

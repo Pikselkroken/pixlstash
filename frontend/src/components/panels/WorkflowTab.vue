@@ -1393,15 +1393,6 @@ const route = useRoute();
 const router = useRouter();
 
 const tab = ref("workflow");
-// A deep link to the Tasks tab, from a notice or a banner (`showTasksTab`).
-// This rail is the one a run is usually started from, so it is the one the
-// toast's *Show* has to land on.
-watch(
-  () => sidebarStore.tasksTabRequest,
-  () => {
-    tab.value = "tasks";
-  },
-);
 // A double-click on a card that opened this rail (`showCardInInspector`).
 watch(
   () => sidebarStore.cardTabRequest,
