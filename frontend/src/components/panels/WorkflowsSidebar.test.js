@@ -24,6 +24,7 @@ vi.mock("../../api/comfyui", () => ({
 
 import WorkflowsSidebar from "./WorkflowsSidebar.vue";
 import { useFilterStore } from "../../stores/useFilterStore";
+import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useWorkflowsStore, RECENT_DAYS } from "../../stores/useWorkflowsStore";
 import { useWorkflowTemplatesStore } from "../../stores/useWorkflowTemplatesStore";
 import { sessionContext } from "../../utils/apiClient";
@@ -146,6 +147,17 @@ beforeEach(() => {
   listTemplates.mockReset();
   listTemplates.mockResolvedValue(listing(["a", "b"]));
   addTemplates.mockReset();
+});
+
+describe("frame", () => {
+  // The library sidebar can be dragged wider or narrower; a rail fixed at its
+  // default moved the edge, the toolbar and the header slot on every switch.
+  it("takes the library sidebar's width", async () => {
+    const { wrapper } = await mountSidebar();
+    useUserPrefsStore().sidebarWidth = 300;
+    await flushPromises();
+    expect(wrapper.element.style.width).toBe("300px");
+  });
 });
 
 describe("places", () => {
