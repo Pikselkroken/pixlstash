@@ -18,8 +18,9 @@ from urllib.parse import quote
 def sqlite_file_uri(path, *, read_only: bool = False) -> str:
     """Return a SQLite ``file:`` URI naming *path*, for ``connect(uri=True)``.
 
-    Only the reserved characters are encoded; ``/``, ``\\`` and ``:`` stay as
-    they are, so a Windows drive path keeps the shape SQLite already accepted
+    Everything but ASCII letters, digits, ``_.-~`` and the separators ``/``,
+    ``\\`` and ``:`` is percent-encoded, and SQLite decodes it again. Keeping
+    the separators means a Windows drive path keeps the shape SQLite already accepted
     (``file:C:\\...``) and a UNC path does not grow a URI authority, which
     SQLite refuses. A POSIX absolute path gets an explicit empty authority so
     a path starting with ``//`` cannot be read as a host.

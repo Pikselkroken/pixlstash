@@ -3603,7 +3603,8 @@ def _hand_built_sqlite_strings(source: str) -> list[int]:
     """Return the line of every SQLite URI or URL built by pasting a path in.
 
     A raw path in ``file:{path}`` or ``sqlite:///{path}`` is cut short at a
-    ``?`` or ``#`` in a folder name. Caught as an f-string, ``+`` or ``%``.
+    ``?`` or ``#`` in a folder name. Caught as an f-string, ``+``, ``%`` or
+    ``str.format``.
     """
     hits = []
     for node in ast.walk(ast.parse(source)):
@@ -3612,10 +3613,19 @@ def _hand_built_sqlite_strings(source: str) -> list[int]:
             if (
                 len(parts) > 1
                 and isinstance(parts[0], ast.Constant)
-                and parts[0].value in _SQLITE_PREFIXES
+                and parts[0].value.startswith(_SQLITE_PREFIXES)
                 and isinstance(parts[1], ast.FormattedValue)
             ):
                 hits.append(node.lineno)
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "format"
+            and isinstance(node.func.value, ast.Constant)
+            and isinstance(node.func.value.value, str)
+            and node.func.value.value.startswith(_SQLITE_PREFIXES)
+        ):
+            hits.append(node.lineno)
         elif (
             isinstance(node, ast.BinOp)
             and isinstance(node.op, (ast.Add, ast.Mod))
@@ -3649,6 +3659,9 @@ def test_sqlite_connection_string_guardrail_has_teeth():
         'u = f"sqlite:///{p}"',
         'u = "sqlite:///" + p',
         'u = "file:%s?mode=ro" % p',
+        'u = f"file://{p}"',
+        'u = f"sqlite:////{p}"',
+        'u = "file:{}?mode=ro".format(p)',
     ]
     for snippet in planted:
         assert _hand_built_sqlite_strings(snippet), snippet
