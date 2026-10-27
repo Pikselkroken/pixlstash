@@ -15,9 +15,13 @@
     @click.stop="emit('activate')"
   >
     <Tooltip :text="title" activator="parent" :describe="false" />
-    <v-icon v-if="showsGlyph" class="sbico" size="14" :style="glyphStyle">{{
-      glyph
-    }}</v-icon>
+    <v-icon
+      v-if="showsGlyph"
+      class="sbico"
+      size="14"
+      :icon="glyph"
+      :style="glyphStyle"
+    />
     <span v-if="showsCount" class="sbcount">{{ label }}</span>
   </button>
 </template>
@@ -51,6 +55,16 @@
 
 import { computed } from "vue";
 import Tooltip from "./Tooltip.vue";
+
+// Paths, not font glyphs: a font glyph's baseline snaps to the device pixel
+// grid, which at a fractional display scale sits it high in the pill beside a
+// centred count (as StarRatingOverlay). Traced from the MDI font.
+const STACK =
+  "svg:M21.98 15.98V3.98Q21.98 3.19 21.4 2.6Q20.81 2.02 20.02 2.02H8.02Q7.17 2.02 6.59 2.6Q6 3.19 6 3.98V15.98Q6 16.83 6.59 17.41Q7.17 18 8.02 18H20.02Q20.81 18 21.4 17.41Q21.98 16.83 21.98 15.98ZM11.02 12 13.03 14.72 15.98 11.02 20.02 15.98H8.02ZM2.02 6V20.02Q2.02 20.81 2.6 21.4Q3.19 21.98 3.98 21.98H18V20.02H3.98V6Z";
+const DUPLICATE =
+  "svg:M11.02 17.02H3.98Q3.19 17.02 2.6 16.43Q2.02 15.84 2.02 15V3Q2.02 2.16 2.6 1.57Q3.19 0.98 3.98 0.98H15.98V3H3.98V15H11.02V12.98L15 15.98L11.02 18.98ZM18.98 21V6.98H8.02V12.98H6V6.98Q6 6.19 6.59 5.6Q7.17 5.02 8.02 5.02H18.98Q19.83 5.02 20.41 5.6Q21 6.19 21 6.98V21Q21 21.84 20.41 22.43Q19.83 23.02 18.98 23.02H8.02Q7.17 23.02 6.59 22.43Q6 21.84 6 21V18.98H8.02V21Z";
+const ALERT =
+  "svg:M12 2.02 0.98 21H23.02ZM12 6 19.55 18.98H4.45ZM11.02 9.98V14.02H12.98V9.98ZM11.02 15.98V18H12.98V15.98Z";
 
 const props = defineProps({
   /** How many pictures this tile stands for. Below 2 there is nothing to say. */
@@ -134,8 +148,8 @@ const glyphStyle = computed(() =>
 );
 
 const glyph = computed(() => {
-  if (variant.value === "flagged") return "mdi-alert-outline";
-  return props.unresolved ? "mdi-content-duplicate" : "mdi-image-multiple";
+  if (variant.value === "flagged") return ALERT;
+  return props.unresolved ? DUPLICATE : STACK;
 });
 
 // The dense inversion. Both are always in the accessible name below, so

@@ -1050,11 +1050,17 @@
   pointer-events: auto;
 }
 
-/* Top-right: the score strip, ending in the favourite heart */
+/* Top-right: the score strip, ending in the favourite heart. It spans the tile
+   (pointer-inert, so the top-left badges stay pressable) to be the size
+   container that shortens the strip to "3★" on a narrow tile. Its em is the
+   star size, so StarRatingOverlay's query can count the row in stars. */
 .thumbnail-top-right-badges {
   position: absolute;
   top: 2px;
   right: 2px;
+  left: 2px;
+  container: score-strip / inline-size;
+  font-size: var(--star-size);
   display: flex;
   flex-direction: column;
   align-items: flex-end;

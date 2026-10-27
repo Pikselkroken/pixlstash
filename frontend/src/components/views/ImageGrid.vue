@@ -1023,6 +1023,7 @@
               <div
                 v-if="isThumbnailReady(img.id) && img.thumbnail"
                 class="thumbnail-top-right-badges"
+                :style="{ '--star-size': `${badgeIconSizes.star}px` }"
               >
                 <StarRatingOverlay
                   v-if="gridStore.showStars || (!isReadOnly && !isScrapheapView)"
@@ -1034,9 +1035,9 @@
                   :icon-size="badgeIconSizes.star"
                   :compact="true"
                   :stars="gridStore.showStars"
+                  shortens
                   :favouritable="!isReadOnly && !isScrapheapView"
                   :favourite="Boolean(img.favourite)"
-                  :style="{ '--star-size': `${badgeIconSizes.star}px` }"
                   @set-score="setScore(img, $event)"
                   @toggle-favourite="toggleFavourite([img.id])"
                 />
