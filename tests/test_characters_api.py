@@ -10,6 +10,7 @@ import tempfile
 from fastapi.testclient import TestClient
 
 from pixlstash.db_models import Face, Picture
+from pixlstash.routes.characters import _face_thumbnail_crop_box
 from pixlstash.server import Server
 from tests.utils import upload_pictures_and_wait
 
@@ -470,6 +471,26 @@ def _thumbnail_bytes(client, char_id):
     resp = client.get(f"/characters/{char_id}/thumbnail")
     assert resp.status_code == 200, resp.text
     return hashlib.sha256(resp.content).hexdigest()
+
+
+def test_thumbnail_crop_undoes_the_stored_face_box_padding():
+    """The avatar crops the detector's face, not the padded box faces are stored
+    with, so the face fills the thumbnail instead of sitting small in it."""
+    # 256 * 1.25 = 320 is already a multiple of 64: the crop is the raw box.
+    raw = [400, 300, 656, 556]
+    stored = Face.expand_face_bbox(raw, 1000, 1000, 0.25)
+    assert stored == [368, 268, 688, 588]
+    assert _face_thumbnail_crop_box(stored, 1000, 1000) == tuple(raw)
+
+    # 128 * 1.25 = 160 rounds up to 192: tighter than stored, the face still whole.
+    raw = [200, 200, 328, 328]
+    stored = Face.expand_face_bbox(raw, 1000, 1000, 0.25)
+    x1, y1, x2, y2 = _face_thumbnail_crop_box(stored, 1000, 1000)
+    assert x2 - x1 < stored[2] - stored[0]
+    assert x1 <= raw[0] and y1 <= raw[1] and x2 >= raw[2] and y2 >= raw[3]
+
+    # Degenerate box: nothing to crop.
+    assert _face_thumbnail_crop_box([10, 10, 10, 40], 100, 100) is None
 
 
 def test_pinned_thumbnail_picture_overrides_the_automatic_choice():

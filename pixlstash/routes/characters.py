@@ -54,6 +54,7 @@ from pixlstash.services.project_membership_service import (
 from pixlstash.services.layout_move_service import rename_entity_folders
 from pixlstash.services.set_lock_service import locked_picture_ids
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
+from pixlstash.tasks.face_extraction_task import CROP_EXPAND_SCALE
 from pixlstash.routes.pictures import FaceListResponse
 from pixlstash.utils.library_layout import Facet
 from pixlstash.utils.field_allowlist import (
@@ -103,6 +104,54 @@ def _on_frame_0(face) -> bool:
     GIF has a box measured on another frame.
     """
     return (getattr(face, "frame_index", 0) or 0) == 0
+
+
+def _face_thumbnail_crop_box(bbox, image_width: int, image_height: int):
+    """The square a character's thumbnail is cropped to, or ``None``.
+
+    A stored face box is the detector's box grown by ``CROP_EXPAND_SCALE`` and
+    rounded up to 64 px (``Face.expand_face_bbox``), so cropping it as-is shows
+    the face small inside hair and background. Shrinking it back by the same
+    scale gets the detector's own face box, about centred on the stored one.
+    """
+    x1, y1, x2, y2 = [float(v) for v in bbox]
+    x1 = max(0.0, min(float(image_width - 1), x1))
+    y1 = max(0.0, min(float(image_height - 1), y1))
+    x2 = max(0.0, min(float(image_width), x2))
+    y2 = max(0.0, min(float(image_height), y2))
+    if x2 <= x1 or y2 <= y1:
+        return None
+    side = max(x2 - x1, y2 - y1) / CROP_EXPAND_SCALE
+    cx = (x1 + x2) / 2.0
+    cy = (y1 + y2) / 2.0
+    new_x1 = cx - side / 2.0
+    new_x2 = cx + side / 2.0
+    new_y1 = cy - side / 2.0
+    new_y2 = cy + side / 2.0
+    if new_x1 < 0:
+        new_x2 -= new_x1
+        new_x1 = 0.0
+    if new_x2 > image_width:
+        shift = new_x2 - image_width
+        new_x1 -= shift
+        new_x2 = float(image_width)
+    if new_y1 < 0:
+        new_y2 -= new_y1
+        new_y1 = 0.0
+    if new_y2 > image_height:
+        shift = new_y2 - image_height
+        new_y1 -= shift
+        new_y2 = float(image_height)
+    new_x1 = max(0.0, min(float(image_width - 1), new_x1))
+    new_y1 = max(0.0, min(float(image_height - 1), new_y1))
+    new_x2 = max(0.0, min(float(image_width), new_x2))
+    new_y2 = max(0.0, min(float(image_height), new_y2))
+    return (
+        int(round(new_x1)),
+        int(round(new_y1)),
+        int(round(new_x2)),
+        int(round(new_y2)),
+    )
 
 
 def _may_learn_a_project_scoped_count(visible_projects: set[int] | None) -> bool:
@@ -1393,10 +1442,9 @@ def create_router(server) -> APIRouter:
         require_servable_field(Character, field, CHARACTER_EXTRA_SERVABLE_FIELDS)
 
         if field == "thumbnail":
-            # 9, not 8: the crop became WebP. The new file name already forces
-            # the re-render; the bump keeps the metadata honest. (8 added
-            # ``pinned_picture_id``.)
-            thumbnail_cache_version = 9
+            # 10: the crop is tightened to the detector's face box. (9 made it
+            # WebP; 8 added ``pinned_picture_id``.)
+            thumbnail_cache_version = 10
             cache_dir = os.path.join(server.vault.image_root, "tmp", "face_thumbnails")
             os.makedirs(cache_dir, exist_ok=True)
             cache_path = resolve_path_within(
@@ -1588,49 +1636,12 @@ def create_router(server) -> APIRouter:
                 raise HTTPException(
                     status_code=404, detail="Failed to crop face thumbnail"
                 )
-            image_width, image_height = image.size
-            x1, y1, x2, y2 = [float(v) for v in bbox]
-            x1 = max(0.0, min(float(image_width - 1), x1))
-            y1 = max(0.0, min(float(image_height - 1), y1))
-            x2 = max(0.0, min(float(image_width), x2))
-            y2 = max(0.0, min(float(image_height), y2))
-            if x2 <= x1 or y2 <= y1:
+            crop_box = _face_thumbnail_crop_box(bbox, *image.size)
+            if crop_box is None:
                 raise HTTPException(
                     status_code=404, detail="Failed to crop face thumbnail"
                 )
-            side = max(x2 - x1, y2 - y1)
-            cx = (x1 + x2) / 2.0
-            cy = (y1 + y2) / 2.0
-            new_x1 = cx - side / 2.0
-            new_x2 = cx + side / 2.0
-            new_y1 = cy - side / 2.0
-            new_y2 = cy + side / 2.0
-            if new_x1 < 0:
-                new_x2 -= new_x1
-                new_x1 = 0.0
-            if new_x2 > image_width:
-                shift = new_x2 - image_width
-                new_x1 -= shift
-                new_x2 = float(image_width)
-            if new_y1 < 0:
-                new_y2 -= new_y1
-                new_y1 = 0.0
-            if new_y2 > image_height:
-                shift = new_y2 - image_height
-                new_y1 -= shift
-                new_y2 = float(image_height)
-            new_x1 = max(0.0, min(float(image_width - 1), new_x1))
-            new_y1 = max(0.0, min(float(image_height - 1), new_y1))
-            new_x2 = max(0.0, min(float(image_width), new_x2))
-            new_y2 = max(0.0, min(float(image_height), new_y2))
-            crop = image.crop(
-                (
-                    int(round(new_x1)),
-                    int(round(new_y1)),
-                    int(round(new_x2)),
-                    int(round(new_y2)),
-                )
-            )
+            crop = image.crop(crop_box)
             # 256, not 64: the in-app consumer is a 24 px ModelMark, but this
             # is the only character image the API serves, and a picker that
             # renders it in a ~150 px HiDPI grid cell had nothing else to ask
