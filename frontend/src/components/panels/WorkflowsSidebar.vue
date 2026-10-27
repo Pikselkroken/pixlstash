@@ -224,12 +224,13 @@ function pickFacet(key, id) {
   border-right: 1px solid rgb(var(--v-theme-border));
 }
 
-/* The list takes the room and scrolls; the footer below it does not. */
+/* The list takes the room and scrolls; the footer below it does not. No top
+   padding: the first row meets the slot's rule, as the Media list's does. */
 .workflows-sidebar__list {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--space-2) 0;
+  padding: 0 0 var(--space-2);
 }
 
 /* A 32px row, as the sidebar's own rows are. The 3px rail is always present
@@ -257,6 +258,12 @@ function pickFacet(key, id) {
 
 .wfs-row:hover {
   background: var(--hover-wash);
+}
+
+/* Inset, as the Media rows' is: the list clips an outer ring at its edges. */
+.wfs-row:focus-visible {
+  box-shadow: var(--focus-ring-inset);
+  outline: none;
 }
 
 /* Selected is the olive wash and rail; the words keep the surface's ink. */
