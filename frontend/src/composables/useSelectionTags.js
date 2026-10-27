@@ -363,9 +363,11 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
     const missingIds = candidates.filter(
       (id) => !tagEntry.tagsByImageId.has(id),
     );
+    // One gesture, one undo step, as with the siblings.
+    const batchId = newOperationBatchId();
     try {
       const done = await fanOut(missingIds, (id) =>
-        addPictureTag(id, tagEntry.name),
+        addPictureTag(id, tagEntry.name, { batchId }),
       );
       if (done.length) {
         onApplied({ tag: tagEntry.name, pictureIds: done, action: "add" });
@@ -415,16 +417,26 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
    */
   async function addTagsToAll(tags) {
     const ids = pictureIds();
-    if (!ids.length || !tags.length) return false;
-    tagError.value = "";
-    const done = await fanOut(ids, (id) =>
-      Promise.all(tags.map((tag) => addPictureTag(id, tag))),
-    );
-    if (done.length) {
-      onApplied({ tag: tags.join(", "), pictureIds: done, action: "add" });
+    // An Enter pressed while the same add is still out would send it again.
+    const key = tags.join(", ");
+    if (!ids.length || !tags.length || tagActionLoading.value.includes(key)) {
+      return false;
     }
-    await refreshSelectionTags();
-    return done.length === ids.length;
+    tagActionLoading.value = [...tagActionLoading.value, key];
+    tagError.value = "";
+    const batchId = newOperationBatchId();
+    try {
+      const done = await fanOut(ids, (id) =>
+        Promise.all(tags.map((tag) => addPictureTag(id, tag, { batchId }))),
+      );
+      if (done.length) {
+        onApplied({ tag: key, pictureIds: done, action: "add" });
+      }
+      await refreshSelectionTags();
+      return done.length === ids.length;
+    } finally {
+      tagActionLoading.value = tagActionLoading.value.filter((n) => n !== key);
+    }
   }
 
   return {

@@ -327,19 +327,9 @@ function beginAdd() {
 }
 watch(addInputRef, (input) => input?.focus());
 
-// An Enter pressed while the add is still out would send it again.
-const committingAdd = ref(false);
-
 async function commitAdd() {
-  if (committingAdd.value) return;
   const tags = splitTagText(newTag.value);
-  if (!tags.length) return;
-  committingAdd.value = true;
-  try {
-    if (await addTagsToAll(tags)) newTag.value = "";
-  } finally {
-    committingAdd.value = false;
-  }
+  if (tags.length && (await addTagsToAll(tags))) newTag.value = "";
 }
 
 const tagClipboard = useTagClipboardStore();

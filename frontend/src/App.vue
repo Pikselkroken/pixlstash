@@ -1003,6 +1003,7 @@ defineExpose({
         <StatsSidebar v-else
           :view-name="activeCategoryLabel"
           :pictures="railPictures"
+          :covered="lightboxOpen"
           :score-of="(card) => gridContainer?.scoreOf(card) ?? card.score ?? 0"
           @set-score="(card, n) => gridContainer?.setScore(card, n)"
           @toggle-favourite="(ids) => gridContainer?.toggleFavourite(ids)"

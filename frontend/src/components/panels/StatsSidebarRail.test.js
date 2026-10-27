@@ -323,6 +323,20 @@ describe("keys for chips selected in the rail", () => {
   });
 });
 
+describe("under the lightbox", () => {
+  it("drops its copies of the lightbox's panels until the lightbox closes", async () => {
+    const wrapper = mountRail();
+    await select(wrapper, [7]);
+    expect(wrapper.find(".rail-picture").exists()).toBe(true);
+    await wrapper.setProps({ covered: true });
+    expect(wrapper.find(".rail-picture").exists()).toBe(false);
+    await select(wrapper, [7, 8]);
+    expect(wrapper.find(".rail-pictures").exists()).toBe(false);
+    await wrapper.setProps({ covered: false });
+    expect(wrapper.find(".rail-pictures").exists()).toBe(true);
+  });
+});
+
 describe("the Tasks deep link over a selection", () => {
   it("shows the Tasks tab until the selection next changes", async () => {
     const wrapper = mountRail();
@@ -429,6 +443,27 @@ describe("the selection's tag reads", () => {
     expect(tagged).toHaveLength(104);
     expect(tagged).toContain(105);
     expect(tagged).not.toContain(1);
+    bulkFetchTags.mockReset().mockResolvedValue([]);
+  });
+
+  it("add as one undo step: every request shares one batch id", async () => {
+    bulkFetchTags.mockResolvedValue([
+      { id: 1, tags: [{ id: 900, tag: "rain" }] },
+      { id: 2, tags: [] },
+      { id: 3, tags: [] },
+    ]);
+    const tags = useSelectionTags(() => [1, 2, 3]);
+    await tags.fetchSelectedImageTags();
+    const batchesOf = () =>
+      new Set(addPictureTag.mock.calls.map(([, , opts]) => opts?.batchId));
+    addPictureTag.mockClear();
+    await tags.addTagToRemaining(tags.tagsOnSome.value[0]);
+    expect(addPictureTag).toHaveBeenCalledTimes(2);
+    expect([...batchesOf()]).toEqual([expect.any(String)]);
+    addPictureTag.mockClear();
+    await tags.addTagsToAll(["sun", "sea"]);
+    expect(addPictureTag).toHaveBeenCalledTimes(6);
+    expect([...batchesOf()]).toEqual([expect.any(String)]);
     bulkFetchTags.mockReset().mockResolvedValue([]);
   });
 });

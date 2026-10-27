@@ -80,6 +80,11 @@ const props = defineProps({
   pictures: { type: Array, default: () => [] },
   /** The rating a tile shows for a card (a guest's own, when read-only). */
   scoreOf: { type: Function, default: (card) => card?.score || 0 },
+  /**
+   * The lightbox lies over the rail. Its panels are the ones the rail would
+   * show, so the rail's copies go rather than sit live (and focusable) under it.
+   */
+  covered: { type: Boolean, default: false },
 });
 
 // What the rail does to a picture goes through the grid's own paths (App.vue
@@ -1114,7 +1119,7 @@ watch(
     </template>
 
     <RailPicture
-      v-if="railMode === 'one'"
+      v-if="railMode === 'one' && !covered"
       v-model:image="oneImage"
       v-model:faces="oneFaces"
       :picture-id="oneId"
@@ -1129,12 +1134,12 @@ watch(
       @refresh="refreshOne"
     />
     <RailPictures
-      v-else-if="railMode === 'many'"
+      v-else-if="railMode === 'many' && !covered"
       :ids="selectedIds"
       :cards="pictures"
       @tags-applied="emit('tags-applied', $event)"
     />
-    <template v-else>
+    <template v-else-if="railMode === 'none'">
     <div v-if="loading && !stats" class="stats-loading">
       <v-progress-circular indeterminate size="24" width="2" color="primary" />
     </div>
