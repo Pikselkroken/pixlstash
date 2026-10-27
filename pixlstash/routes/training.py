@@ -1664,6 +1664,7 @@ def create_router(server) -> APIRouter:
         "/training/jobs/{job_id}/snapshot/export",
         summary="Download what a training job trained on, as a zip",
         response_class=FileResponse,
+        responses={200: {"content": {"application/zip": {}}}},
         description=(
             "A zip of the job's dataset snapshot: each image the trainer was "
             "given with its frozen caption beside it, and snapshot.json listing "
