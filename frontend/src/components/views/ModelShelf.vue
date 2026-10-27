@@ -1646,7 +1646,6 @@ function openMove(rows) {
   moveOpen.value = items.length > 0;
 }
 
-
 async function closeMove() {
   const returnTo = moveInvoker.value;
   moveOpen.value = false;

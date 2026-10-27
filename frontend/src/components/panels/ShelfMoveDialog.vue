@@ -103,15 +103,6 @@ const props = defineProps({
   items: { type: Array, default: () => [] },
   /** Bytes the move will shift, for the summary. */
   totalBytes: { type: Number, default: 0 },
-  /**
-   * The destination a drop already chose, or null when a button opened this.
-   *
-   * Seeded into the select rather than skipping it: a drop still gets the
-   * numbers and the Move press, so a 438 GB copy is never one slip of the
-   * pointer away from starting, and the destination is still correctable
-   * without starting the gesture again.
-   */
-  destinationFolderId: { type: Number, default: null },
 });
 const emit = defineEmits(["close"]);
 
@@ -212,12 +203,8 @@ watch(
   async (open) => {
     if (!open) return;
     working.value = false;
-    const dropped = destinations.value.find(
-      (f) => f.id === props.destinationFolderId,
-    );
     const managed = destinations.value.find((f) => f.kind === "managed");
-    destinationId.value =
-      dropped?.id ?? managed?.id ?? destinations.value[0]?.id ?? null;
+    destinationId.value = managed?.id ?? destinations.value[0]?.id ?? null;
     await nextTick();
     firstFieldEl.value?.focus();
   },

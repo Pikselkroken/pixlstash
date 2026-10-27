@@ -213,6 +213,22 @@ describe("ModelsSideBar", () => {
     expect(byText("Set ai-toolkit output folder…")).toBe(undefined);
   });
 
+  it("leaves Training runs for the list when a Type or Base row is picked", async () => {
+    route.name = "models-runs";
+    const wrapper = mountBar();
+    await flushPromises();
+    await row(wrapper, "type", "lora").trigger("click");
+    expect(store.sidebarFilter).toEqual({ axis: "type", key: "lora" });
+    expect(push).toHaveBeenCalledWith({ name: "models" });
+    // Picked again from the runs page it is shown, not taken back.
+    push.mockClear();
+    await row(wrapper, "type", "lora").trigger("click");
+    expect(store.sidebarFilter).toEqual({ axis: "type", key: "lora" });
+    expect(push).toHaveBeenCalledWith({ name: "models" });
+    await row(wrapper, "base", "SDXL").trigger("click");
+    expect(store.sidebarFilter).toEqual({ axis: "base", key: "SDXL" });
+  });
+
   it("opens Training runs as a route and lights it there", async () => {
     const wrapper = mountBar();
     await flushPromises();

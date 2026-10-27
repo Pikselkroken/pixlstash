@@ -139,7 +139,7 @@
         :aria-current="row.active ? 'page' : undefined"
         :aria-pressed="row.active ? 'true' : 'false'"
         :data-type="row.key"
-        @click="store.setSidebarFilter('type', row.key)"
+        @click="pickFilter('type', row.key)"
       >
         <TypeMark class="ps-row-glyph" :mark="row.mark" :tint="row.tint" />
         <span class="msb-label">{{ row.label }}</span>
@@ -157,7 +157,7 @@
           :aria-current="row.active ? 'page' : undefined"
           :aria-pressed="row.active ? 'true' : 'false'"
           :data-base="row.key"
-          @click="store.setSidebarFilter('base', row.key)"
+          @click="pickFilter('base', row.key)"
         >
           <v-icon size="16" class="ps-row-glyph" aria-hidden="true"
             >mdi-layers-outline</v-icon
@@ -490,6 +490,16 @@ const baseRows = computed(() =>
     active: !onRuns.value && isPicked("base", key),
   })),
 );
+
+/**
+ * Pick a Type or Base model row. From Training runs it goes to the list it
+ * narrows; a row already picked there is shown rather than taken back, since
+ * it is not lit on that page and a click on it reads as "show me these".
+ */
+function pickFilter(axis, key) {
+  if (!(onRuns.value && isPicked(axis, key))) store.setSidebarFilter(axis, key);
+  if (onRuns.value) router.push({ name: "models" });
+}
 
 function openRuns() {
   if (!onRuns.value) router.push({ name: "models-runs" });
