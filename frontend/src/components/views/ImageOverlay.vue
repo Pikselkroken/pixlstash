@@ -2802,8 +2802,8 @@ function handleKeydown(e) {
     ) {
       // The step is the key's whole job: left to its default, Chromium also
       // scrolls the last-clicked scroller (the filmstrip) 40px, after the
-      // strip has centred the picture.
-      e.preventDefault();
+      // strip has centred the picture. A text field keeps its caret.
+      if (!isEditableElement(e.target)) e.preventDefault();
       if (["ArrowLeft", "Left", "ArrowUp", "Up"].includes(e.key))
         showPrevImage();
       else showNextImage();
