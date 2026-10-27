@@ -192,6 +192,10 @@ function onTriggerContext(event) {
 
 <style scoped>
 .scope-slot {
+  /* A header like the Workflows and Models slots, so its name keeps the
+     ramp's own size where SideBar.css scales the sidebar's type with the
+     thumbnails. */
+  --text-base: 0.875rem;
   flex-shrink: 0;
   height: var(--sidebar-slot-h);
   box-sizing: border-box;
@@ -215,9 +219,7 @@ function onTriggerContext(event) {
   border: 0;
   background: transparent;
   color: rgb(var(--v-theme-sidebar-text));
-  font-family: inherit;
-  font-size: var(--text-base);
-  font-weight: var(--weight-semibold);
+  font: inherit;
   text-align: left;
   cursor: pointer;
 }
@@ -232,8 +234,9 @@ function onTriggerContext(event) {
   outline: none;
 }
 
-/* Any project / Not in a project: a neutral tile, and the name at secondary
-   strength, since neither narrows to something with a colour of its own. */
+/* Any project / Not in a project: a neutral tile, since neither narrows to
+   something with a colour of its own. A project stands out by its tile and
+   tint, not by a dimmer name. */
 .scope-tile {
   display: inline-flex;
   align-items: center;
@@ -256,10 +259,9 @@ function onTriggerContext(event) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.scope-slot:not(.scope-slot--project) .scope-name {
-  opacity: var(--opacity-text-secondary);
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  line-height: 1.2;
 }
 
 .scope-chevron {
