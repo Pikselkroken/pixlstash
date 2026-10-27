@@ -135,7 +135,7 @@ const open = computed(() => props.modelValue);
         </tr>
         <tr>
           <td><kbd>S</kbd></td>
-          <td>Open selection menu</td>
+          <td>Add selected images to a set</td>
         </tr>
         <tr>
           <td><kbd>Home</kbd> / <kbd>End</kbd></td>

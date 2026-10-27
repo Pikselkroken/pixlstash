@@ -3,7 +3,7 @@
 //
 // The route stays the SINGLE SOURCE OF TRUTH for what the grid shows (see
 // frontend_architecture.md §2 "Key Design Principles" and the Phase 0 pin specs
-// `route-as-truth.spec.js` / `stateless-tabs.spec.js`). This store is merely the
+// `route-as-truth.spec.js` / `project-scope.spec.js`). This store is merely the
 // route's parsed reflection: it never pushes a route and never decides
 // navigation. Route *pushing* stays in App.vue (`pushAppRoute` /
 // `pushRouteForCurrentSelection`), where the nav handlers live.
@@ -180,6 +180,9 @@ function characterLabelFor(charId) {
  * modes, the difference base, the category label); everything else is written
  * on every route tick.
  */
+/** `?project=` value naming the pictures in no project (see parseRouteView). */
+export const NOT_IN_PROJECT_QUERY = "none";
+
 function baseView(name) {
   return {
     name,
@@ -225,9 +228,13 @@ export function parseRouteView(route) {
   view.folderFilter = parseFolderPath(query.path);
   if (view.folderFilter) view.clearFolderFilter = false;
   view.faceFilter = parseFaceFilter(query.face);
+  // "Not in a project" (#2159) has no project route of its own, so it rides
+  // as `?project=none` on All media, a person or a set.
+  const notInProject = query.project === NOT_IN_PROJECT_QUERY;
 
   if (name === "all-pictures") {
     view.characterLabel = "All Pictures";
+    if (notInProject) view.projectViewMode = "project";
     return view;
   }
 
@@ -248,6 +255,7 @@ export function parseRouteView(route) {
       view.selectedProjectId = parseProjectId(params.projectId);
     } else {
       view.characterLabel = characterLabelFor(charId);
+      if (notInProject) view.projectViewMode = "project";
     }
     return view;
   }
@@ -263,6 +271,8 @@ export function parseRouteView(route) {
       view.projectViewMode = "project";
       view.selectedProjectId = parseProjectId(params.projectId);
       view.characterLabel = "All Pictures";
+    } else if (notInProject) {
+      view.projectViewMode = "project";
     }
     return view;
   }

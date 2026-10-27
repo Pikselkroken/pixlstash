@@ -72,11 +72,14 @@
               <button
                 class="edit-sec-act edit-sec-act--clear"
                 type="button"
-                aria-keyshortcuts="Escape"
+                :aria-keyshortcuts="paint.tool.value ? undefined : 'Escape'"
                 @click="paint.clear()"
               >
                 Clear
-                <kbd class="edit-kbd" aria-hidden="true">Esc</kbd>
+                <!-- With a tool in hand Esc puts the tool down first. -->
+                <kbd v-if="!paint.tool.value" class="edit-kbd" aria-hidden="true"
+                  >Esc</kbd
+                >
               </button>
             </span>
           </div>

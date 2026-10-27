@@ -2,12 +2,6 @@
    reach a child component's internals, and FolderTreeNode renders rows of the
    same family. See docs/design/visual-language.md §5.1. */
 
-.sidebar-section-divider {
-  height: 1px;
-  background: rgba(var(--v-theme-border), 0.2);
-  margin: var(--space-1) 0;
-}
-
 .sidebar-collections-help-row {
   display: flex;
   align-items: center;
@@ -22,124 +16,6 @@
   color: rgb(var(--v-theme-sidebar-text));
 }
 
-.sidebar-view-header {
-  display: flex;
-  align-items: stretch;
-  flex-shrink: 0;
-  /* Fixed 36px so the tabs' bottom edge aligns with the 36px toolbar's, regardless
-     of the sidebar font scaling. min-height:0 defeats the flex default
-     (min-height:auto) - without it the tab content pushes this past its set height
-     (the toolbar, a plain block, isn't subject to that). Re-pin --text-xs (the only
-     ramp token the tabs use) to its literal value so the tab labels are exempt from
-     --sidebar-font-scale and the height never drifts. */
-  height: 36px;
-  min-height: 0;
-  box-sizing: border-box;
-  padding: 0 var(--space-3);
-  border-bottom: 1px solid rgb(var(--v-theme-divider));
-  --text-xs: 0.75rem;
-}
-
-.sidebar-view-tabs-row {
-  display: flex;
-  align-items: stretch;
-  flex: 1;
-  min-width: 0;
-  padding: 0;
-  position: relative;
-  z-index: var(--z-raised);
-  gap: 0;
-  background: transparent;
-  border-bottom: none;
-  /* Query container for the progressive tab-label collapse (see the @container
-     rules below). Sits on the tabs row - not the header - so the thresholds
-     measure the space actually left for the tabs after the pin button. */
-  container: sidebartabs / inline-size;
-}
-
-.sidebar-view-tabs {
-  display: flex;
-  align-items: stretch;
-  gap: 0;
-  flex: 1;
-  min-width: 0;
-}
-
-.sidebar-view-tab {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-2);
-  padding: 0 var(--space-2);
-  /* Equal widths that can shrink; labels are dropped (icon-only) when the sidebar
-     is narrow, so the tabs always stay on one line and the header height (and its
-     alignment with the toolbar) never changes. */
-  flex: 1 1 0;
-  min-width: 0;
-  overflow: hidden;
-  border-radius: 0;
-  border-bottom: 2px solid transparent;
-  /* Overlap the header's 1px bottom border so the active underline sits on it. */
-  margin-bottom: -1px;
-  font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.02em;
-  color: rgba(var(--v-theme-sidebar-text), 0.55);
-  transition:
-    color 0.15s,
-    border-color 0.15s;
-  white-space: nowrap;
-  position: relative;
-}
-
-.sidebar-view-tab .v-icon {
-  color: inherit;
-}
-
-/* Tab text label - shown whole or not at all (no ellipsis). It's dropped in two
-   stages by the @container rules below as the header narrows. */
-.sidebar-view-tab-label {
-  white-space: nowrap;
-}
-
-/* Stage 1 - the non-selected tabs shed their text and shrink to their icon, so
-   the selected tab keeps its label and takes the freed space. */
-@container sidebartabs (max-width: 205px) {
-  .sidebar-view-tab:not(.active) .sidebar-view-tab-label {
-    display: none;
-  }
-  .sidebar-view-tab:not(.active) {
-    flex: 0 1 auto;
-  }
-  .sidebar-view-tab.active {
-    flex: 1 1 auto;
-  }
-}
-
-/* Stage 2 - too tight even for the selected label: every tab is icon-only and
-   the three share the row equally again. */
-@container sidebartabs (max-width: 115px) {
-  .sidebar-view-tab.active .sidebar-view-tab-label {
-    display: none;
-  }
-  .sidebar-view-tab:not(.active),
-  .sidebar-view-tab.active {
-    flex: 1 1 0;
-  }
-}
-
-/* Olive marks, words stay text: the underline is the selection, the label ink. */
-.sidebar-view-tab.active {
-  background: transparent;
-  color: rgb(var(--v-theme-sidebar-text));
-  border-bottom-color: var(--selected-ink);
-}
-
-.sidebar-view-tab:hover {
-  background: var(--hover-wash);
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
 .sidebar-tab-panel {
   margin: 0;
   padding: 0;
@@ -147,6 +23,89 @@
   display: flex;
   flex-direction: column;
   background: transparent;
+}
+
+/* ---------------------------------------------------------------------------
+   THE MEDIA LIST (#2159): one 32px row height for every place, person, set
+   and section head, whatever the thumbnail-size setting (which still sizes
+   the docked rail). People wear a 20px round avatar and sets a 16px glyph.
+   The project wash comes in inline from `scopeWashStyle`.
+   --------------------------------------------------------------------------- */
+.sidebar-media-list {
+  --sidebar-thumb-size: 20px;
+  flex: 1 0 auto;
+  padding-bottom: var(--space-2);
+}
+
+.sidebar-media-list .sidebar-list-item {
+  min-height: 0;
+  height: var(--control-h-bar);
+  padding-top: 0;
+  padding-bottom: 0;
+  font-size: var(--text-base);
+}
+
+.sidebar-media-list .sidebar-list-icon {
+  margin-right: var(--space-3);
+}
+
+.sidebar-media-list .sidebar-character-thumb {
+  border-radius: var(--radius-pill);
+  object-fit: cover;
+}
+
+/* Section heads: the uppercase label, with the section's "+" at the right
+   edge (visual-language.md, "The section label"). */
+.sidebar-media-list .sidebar-section-header {
+  min-height: 0;
+  height: var(--control-h-bar);
+  margin-top: var(--space-3);
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+/* Type comes from .sidebar-section-header; at full ink, since a structural
+   label must not be dimmer than the rows it heads (visual-language.md §5.1). */
+.sidebar-section-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar-media-list .sidebar-header-actions {
+  min-width: 0;
+}
+
+.sidebar-section-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: rgb(var(--v-theme-sidebar-text));
+  cursor: pointer;
+}
+
+.sidebar-section-add:hover {
+  background: var(--hover-wash);
+}
+
+/* The footer band: the sidebar's one amber action, at the bar height. */
+.sidebar-footer-band {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  height: var(--sidebar-band-h);
+  box-sizing: border-box;
+  padding: 0 var(--space-3);
+  border-top: 1px solid rgb(var(--v-theme-divider));
+}
+
+.sidebar-import-btn {
+  height: var(--control-h-bar);
 }
 
 .sidebar-section-block {
@@ -179,116 +138,7 @@
   background: rgba(var(--v-theme-shadow), 0.15);
 }
 
-.sidebar-no-projects-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-5);
-  padding: var(--space-8) var(--space-6);
-  text-align: center;
-}
-
-.sidebar-no-projects-icon {
-  opacity: 0.35;
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-no-projects-text {
-  font-size: var(--text-base);
-  color: rgb(var(--v-theme-sidebar-text));
-  margin: 0;
-  line-height: 1.5;
-}
-
-/* Project tree (Projects tab flat tree) */
-.sidebar-project-tree-add {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-3);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.02em;
-  color: rgb(var(--v-theme-sidebar-text));
-  cursor: pointer;
-  border-left: 3px solid transparent;
-  border-bottom: 1px solid rgba(var(--v-theme-border), 0.22);
-  transition:
-    color 0.12s,
-    background 0.12s;
-}
-
-.sidebar-project-tree-add:hover {
-  color: rgb(var(--v-theme-sidebar-text));
-  background: var(--hover-wash);
-}
-
-.sidebar-project-tree-node {
-  display: flex;
-  flex-direction: column;
-  margin-bottom: var(--space-3);
-  border-top: 1px solid rgba(var(--v-theme-border), 0.22);
-}
-
-.sidebar-project-tree-node:first-child {
-  border-top: none;
-}
-
-.sidebar-project-tree-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: 28px;
-  cursor: pointer;
-  border-bottom: 1px solid rgba(var(--v-theme-border), 0.2);
-  border-radius: 0;
-  background: transparent;
-  transition:
-    background 0.12s,
-    color 0.12s,
-    border-color 0.12s;
-  color: rgb(var(--v-theme-sidebar-text));
-  position: relative;
-}
-
-.sidebar-project-tree-row:hover {
-  background: var(--hover-wash);
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-project-tree-row.active {
-  background: var(--active-wash);
-  color: var(--active-text);
-  border-left-color: var(--active-bar);
-  border-radius: 0;
-}
-
-/* Drop-target highlight (drag pictures onto a project to assign them) -
-   mirrors .sidebar-list-item.droppable used by character/set rows. */
-.sidebar-project-tree-row.droppable {
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
-}
-
-.sidebar-project-tree-row.active:hover {
-  background:
-    linear-gradient(var(--hover-wash), var(--hover-wash)), var(--active-wash);
-  color: var(--active-text);
-}
-
-/* Drop-target highlight while dragging a character/set onto a project */
-.sidebar-project-tree-row.project-move-target,
-.sidebar-project-tree-subsection.project-move-target {
-  background: var(--active-wash);
-  outline: 2px dashed var(--active-bar);
-  outline-offset: -2px;
-  border-radius: var(--radius-sm);
-}
-
-/* Still used by the two Folders-tab section bands, whose caret sits at the far
-   right AFTER the actions. That is a self-consistent band pattern, unlike the
-   project row's old mid-row caret, so it is left alone. */
+/* The two folder section bands' caret, at the far right AFTER the actions. */
 .sidebar-project-tree-expand-indicator {
   flex-shrink: 0;
   opacity: 0.5;
@@ -301,151 +151,6 @@
 
 .sidebar-project-tree-expand-indicator.expanded {
   transform: rotate(0deg);
-}
-
-.sidebar-project-tree-row:hover .sidebar-project-tree-expand-indicator {
-  opacity: 0.9;
-}
-
-/* The project's disclosure, in the leading glyph column like every other
-   collapsible row here. It swaps glyph rather than rotating one, so a single
-   mechanism expresses disclosure across the sidebar. */
-.sidebar-project-tree-chevron {
-  color: inherit;
-}
-
-/* ---------------------------------------------------------------------------
-   NOTHING IN THIS COLUMN IS DIMMED. Rank comes from size, weight, tracking and
-   indent; every structural label and every caret sits at the row's own colour.
-
-   Two failed attempts are why this is spelled out. Dimming the caption to 0.7
-   made it the quietest thing in the column, between a full-strength project
-   above and full-strength names below: a header must never be quieter than the
-   rows it heads, or the hierarchy inverts. And when only the caption was
-   dimmed, its caret was not, so the caret read brighter than its own label
-   while the project's read much dimmer than its own.
-
-   The rule that survives both: a caret takes its row's colour and never carries
-   its own opacity. `SideBarRowSystem.test.js` enforces it. This also keeps a
-   selected project following `--active-text`, which an explicit colour here
-   would break.
-   --------------------------------------------------------------------------- */
-
-.sidebar-project-tree-name-group {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  overflow: hidden;
-}
-
-/* Two ramp steps above the section captions nested under it. Rank is carried by
-   TYPE, depth by indent. When a project and a section caption were set
-   identically, indentation had to signal both, which is what forced the step up
-   to 24px and pushed names off the end of the rail. The separation is size and
-   tracking rather than emphasis, because the only thing below a caption is
-   content, and dimming a header under its own content inverts the hierarchy. */
-.sidebar-project-tree-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--text-sm);
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.sidebar-project-tree-actions {
-  display: none;
-  align-items: center;
-  gap: var(--space-1);
-  flex-shrink: 0;
-}
-
-.sidebar-project-tree-row:hover .sidebar-project-tree-actions {
-  display: flex;
-}
-
-.sidebar-project-tree-action-btn {
-  opacity: 0.55;
-  cursor: pointer;
-  color: inherit;
-  transition: opacity 0.12s;
-}
-
-.sidebar-project-tree-action-btn:hover {
-  opacity: 1;
-}
-
-.sidebar-project-tree-action-btn--danger:hover {
-  color: rgb(var(--v-theme-surface-error));
-}
-
-/* Sub-sections under an expanded project */
-.sidebar-project-tree-subsection {
-  display: flex;
-  flex-direction: column;
-}
-
-.sidebar-project-tree-subheader {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  --depth: 1;
-  padding-top: var(--space-1);
-  padding-bottom: var(--space-1);
-  padding-right: var(--sidebar-header-action-right-edge) !important;
-  min-height: 24px;
-  cursor: pointer;
-  color: rgb(var(--v-theme-sidebar-text));
-  transition: color 0.12s;
-  user-select: none;
-}
-
-.sidebar-project-tree-subheader:hover {
-  background: var(--hover-wash);
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-project-tree-sub-chevron {
-  flex-shrink: 0;
-  color: inherit;
-}
-
-/* A caption for the list beneath it, one rank below the project. Subordinate by
-   size and tracking, never by being dimmer than the rows it heads. */
-.sidebar-project-tree-subheader-label {
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: inherit;
-  flex: 1;
-}
-
-/* A caption with nothing under it is not a disclosure. The row goes inert and
-   dims, which is what explains the empty chevron slot; the slot itself stays
-   reserved so the caption does not shift when the first entity arrives. The
-   `+` action deliberately does NOT inherit the fade and stays operable: it is
-   the only way out of the empty state. */
-.sidebar-project-tree-subheader--empty {
-  cursor: default;
-}
-
-.sidebar-project-tree-subheader--empty:hover {
-  background: transparent;
-}
-
-.sidebar-project-tree-subheader--empty .sidebar-project-tree-subheader-label {
-  opacity: var(--opacity-disabled, 0.38);
-}
-
-/* Child items sit one step under their sub-section header, which is itself one
-   step under the project row. Depth, not a hardcoded inset. */
-.sidebar-project-tree-child {
-  --depth: 2;
 }
 
 .sidebar-project-tree-files {
@@ -822,39 +527,6 @@
   color: rgb(var(--v-theme-sidebar-text));
 }
 
-.sidebar-section-header--collapsible {
-  cursor: pointer;
-  user-select: none;
-}
-
-.sidebar-section-toggle {
-  display: flex;
-  flex: 1 1 auto;
-  align-items: center;
-  align-self: stretch;
-  min-width: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  letter-spacing: inherit;
-  text-transform: inherit;
-  cursor: pointer;
-}
-
-.sidebar-section-header--collapsible:hover {
-  background: var(--hover-wash);
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-section-chevron {
-  margin-right: var(--space-2);
-  flex-shrink: 0;
-  color: rgb(var(--v-theme-sidebar-text));
-  transition: transform 0.15s;
-}
-
 .sidebar-list-item {
   display: flex;
   align-items: center;
@@ -888,7 +560,6 @@
 /* Inset, not the global outline: these rows run edge to edge in the sidebar or
    a menu, so an outer ring with its gap is clipped on both sides. Everything
    else here (the dock's icons, header actions) takes the global ring. */
-.sidebar-section-toggle:focus-visible,
 .sidebar-list-item:focus-visible {
   box-shadow: var(--focus-ring-inset);
   outline: none;
@@ -1042,10 +713,6 @@
    fade (the one legal fade, visual-language.md §11) drops the row's own
    content back. Shared by character/set rows, project rows and folder rows. */
 
-.sidebar-header-spacer {
-  flex: 1 1 auto;
-}
-
 .sidebar-header-actions {
   display: flex;
   align-items: center;
@@ -1091,10 +758,6 @@
 }
 
 /* Top-level nav rows (All Pictures, Scrapheap) - slightly larger than --fixed */
-.sidebar-list-icon--toplevel {
-  width: min(var(--sidebar-thumb-size), 26px) !important;
-  height: min(var(--sidebar-thumb-size), 26px) !important;
-}
 
 .sidebar-list-icon .v-icon,
 .sidebar-list-icon svg,
@@ -1344,98 +1007,6 @@
   z-index: var(--z-raised);
 }
 
-.add-character-inline {
-  color: rgb(var(--v-theme-sidebar-text)) !important;
-  font-size: var(--text-md);
-  cursor: pointer;
-  background: transparent;
-  border: 0;
-  padding: 0;
-  border-radius: var(--radius-sm);
-  width: 22px;
-  height: 22px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition:
-    background 0.15s,
-    color 0.15s;
-}
-
-.add-character-inline:hover {
-  background: var(--hover-wash);
-}
-
-.clear-selection-inline {
-  color: rgb(var(--v-theme-sidebar-text)) !important;
-  font-size: var(--text-base);
-  cursor: pointer;
-  background: transparent;
-  border: none;
-  padding: 0;
-  border-radius: var(--radius-sm);
-  width: 22px;
-  height: 22px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 22px;
-  transition: background 0.15s;
-}
-
-.clear-selection-inline:hover {
-  background: var(--hover-wash);
-}
-
-.edit-character-inline,
-.edit-set-inline {
-  color: rgb(var(--v-theme-sidebar-text)) !important;
-  font-size: var(--text-md);
-  cursor: pointer;
-  background: transparent;
-  border: 0;
-  padding: 0;
-  border-radius: var(--radius-sm);
-  width: 22px;
-  height: 22px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 22px;
-  transition:
-    background 0.15s,
-    color 0.15s;
-}
-
-.edit-character-inline:hover,
-.edit-set-inline:hover {
-  background: var(--hover-wash);
-}
-
-.delete-character-inline {
-  color: rgb(var(--v-theme-sidebar-text)) !important;
-  font-size: var(--text-md);
-  cursor: pointer;
-  background: transparent;
-  border: 0;
-  padding: 0;
-  border-radius: var(--radius-sm);
-  width: 22px;
-  height: 22px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 22px;
-  transition:
-    background 0.15s,
-    color 0.15s;
-}
-
-.delete-character-inline:hover {
-  background: rgba(var(--v-theme-error), 0.15);
-  color: rgb(var(--v-theme-surface-error)) !important;
-}
-
 /* Items within People/Sets sit one step under their section header, which puts
    the thumbnail directly below the header's label. */
 .sidebar-section-scroll .sidebar-list-item {
@@ -1447,31 +1018,8 @@
 }
 
 /* All-pictures row: same compact height as regular items */
-.sidebar-all-pictures-row {
-  padding-top: 0;
-  display: flex;
-  align-items: stretch;
-  width: 100%;
-  transition: outline 0.12s;
-}
 
 /* Keep All Pictures / Scrapheap rows compact but slightly prominent */
-.sidebar-all-pictures-row .sidebar-list-item {
-  min-height: calc(min(var(--sidebar-thumb-size), 22px) + 6px) !important;
-  padding-top: var(--space-2) !important;
-  padding-bottom: var(--space-2) !important;
-  font-size: var(--text-sm);
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.02em;
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-all-pictures-row .sidebar-list-item {
-  flex: 1 1 0;
-  width: 0;
-  min-width: 0;
-  overflow: hidden;
-}
 
 .sidebar-inline-notice {
   position: fixed;
@@ -1499,12 +1047,6 @@
     min-height: 48px;
   }
 
-  .sidebar-all-pictures-row .sidebar-list-item {
-    min-height: 48px;
-    padding-top: var(--space-3);
-    padding-bottom: var(--space-3);
-  }
-
   .sidebar-list-icon {
     width: var(--sidebar-thumb-size);
     height: var(--sidebar-thumb-size);
@@ -1513,15 +1055,6 @@
   .sidebar-character-thumb {
     width: var(--sidebar-thumb-size);
     height: var(--sidebar-thumb-size);
-  }
-
-  .add-character-inline,
-  .delete-character-inline,
-  .edit-character-inline,
-  .edit-set-inline,
-  .clear-selection-inline {
-    width: 36px;
-    height: 36px;
   }
 
   .sidebar-header-actions .v-icon {
@@ -1546,9 +1079,6 @@
 }
 
 /* Add folder button in the folders tab needs no bottom divider - section headers do that job */
-.sidebar-tab-panel > .sidebar-project-tree-add {
-  border-bottom: none;
-}
 
 .sidebar-folder-section-header {
   display: flex;

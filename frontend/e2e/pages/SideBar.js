@@ -4,21 +4,21 @@ import { expect } from '@playwright/test'
  * The left sidebar (SideBar.vue) — navigation that filters the grid by picture
  * set (§7), project (§8), and character/person (§9). Thin wrapper around the
  * stable selectors verified in source: .sidebar-set-item, the character rows in
- * .sidebar-character-group, the "Projects" .sidebar-view-tab, and the project
- * tree's .sidebar-project-tree-row. Per-row counts live in .sidebar-list-count.
+ * .sidebar-character-group, and the project scope in the header slot
+ * (SidebarScopeSlot.vue, #2159). Per-row counts live in .sidebar-list-count.
  */
 export class SideBar {
   constructor(page) {
     this.page = page
     this.setItems = page.locator('.sidebar-set-item')
     this.characterItems = page.locator('.sidebar-character-group .sidebar-list-item')
-    this.projectsTab = page.locator('.sidebar-view-tab', { hasText: 'Projects' }).first()
-    // The other two stateless view tabs (SideBar.vue .sidebar-view-tab row):
-    // switching between Global / Projects / Folders is sidebar-display only and
-    // must never push a route or move the grid (see the stateless-tabs spec).
-    this.globalTab = page.locator('.sidebar-view-tab', { hasText: 'Global' }).first()
-    this.foldersTab = page.locator('.sidebar-view-tab', { hasText: 'Folders' }).first()
-    this.projectRows = page.locator('.sidebar-project-tree-row')
+    // The header slot's project scope and its "Limit view to" menu (#2159).
+    this.scopeButton = page.getByTestId('sidebar-scope')
+    this.scopeMenu = page.getByTestId('sidebar-scope-menu')
+    // The menu's project rows: every radio item but Any / Not in a project.
+    this.scopeProjects = this.scopeMenu
+      .getByRole('menuitemradio')
+      .filter({ hasNotText: /^(Any project|Not in a project)/ })
     // Right-click context menu (teleported to <body>) and the trailing lock
     // indicator that a set row renders when the set is locked (SideBar.vue:
     // .sidebar-lock-icon on a .sidebar-set-item).
@@ -47,10 +47,19 @@ export class SideBar {
     return items.first()
   }
 
-  /** Switch the sidebar to the Projects tree and wait for it to render. */
-  async openProjectsTab() {
-    await this.projectsTab.click()
-    await expect(this.projectRows.first()).toBeVisible()
+  /** Open the project scope menu and wait for its rows. */
+  async openScopeMenu() {
+    await this.scopeButton.click()
+    await expect(this.scopeMenu).toBeVisible()
+  }
+
+  /** Limit the view to the first project in the scope menu. */
+  async chooseFirstProject() {
+    await this.openScopeMenu()
+    const project = this.scopeProjects.first()
+    await expect(project).toBeVisible()
+    await project.click()
+    await expect(this.scopeMenu).toBeHidden()
   }
 
   /** Right-click a set row to open the sidebar context menu. */

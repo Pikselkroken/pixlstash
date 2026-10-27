@@ -454,7 +454,9 @@
 }
 
 /* A tile sits flush against its neighbours (a 2px seam, or none in compact
-   mode), so the gapped global outline would land on them. The ring is the inset
+   mode), so the gapped global outline (2px stroke plus a 2px gap) would land
+   on them. The justified selection ring further down fits because it has no
+   gap: its stroke is exactly the seam. The ring is the inset
    form, on the container's overlay layer (the hover glow's `::after`),
    because in justified and compact modes the image covers the whole card. */
 .image-card:focus-visible {
@@ -809,6 +811,26 @@
 .image-grid--justified .selection-overlay,
 .image-grid--justified .image-card--ghost .thumbnail-container::before {
   border-radius: 0;
+}
+
+/* Justified selection (#2162): an olive outline drawn OUTSIDE the tile, in the
+   JUSTIFIED_ROW_GAP gutter it exactly fills, and a glow from that edge fading
+   inwards, so the middle of the photo stays clear. A flat wash or a hard inset
+   edge reads five selected tiles in a row as one olive block; the ring in the
+   gutter and the fading edge keep every selected tile its own shape, and since
+   the gutter is the ring's width it never lands on a neighbour. The grid's
+   edge padding is the same gutter, so the outermost tiles are not clipped. */
+.image-grid--justified .selection-overlay {
+  background: none;
+  box-shadow: inset 0 0 var(--space-4) var(--space-2) var(--active-bar);
+  outline: var(--space-1) solid var(--active-bar);
+}
+
+/* The keyboard cursor's inset olive ring would read as a selection beside the
+   ring above, on a tile Ctrl+Arrow left unselected. The focus ring (ink) still
+   marks the cursor, since the cursor is the focused card. */
+.image-grid--justified .image-card-cursor .thumbnail-img {
+  outline: none;
 }
 
 .thumbnail-card-new {

@@ -171,8 +171,11 @@ export function useVirtualScroll(
   // the NEW layout - the user keeps looking at the same picture.
   function remeasureJustifiedWidth() {
     const rect = gridContainer.value?.getBoundingClientRect?.();
+    // The container carries a JUSTIFIED_ROW_GAP edge gutter on each side
+    // (ImageGrid's gridContainerStyle); rows pack inside it.
     const measured = Math.floor(
-      rect?.width ?? scrollWrapper.value?.clientWidth ?? 0,
+      (rect?.width ?? scrollWrapper.value?.clientWidth ?? 0) -
+        2 * JUSTIFIED_ROW_GAP,
     );
     if (!(measured > 0) || measured === justifiedContainerWidth.value) return;
 
@@ -382,8 +385,11 @@ export function useVirtualScroll(
         Math.min(idx, layout.itemScaledWidths.length - 1),
       );
       const row = rowOfIndex(layout.rowStarts, clampedIdx);
+      // Rows paint one edge gutter below their offset, and a selected card's
+      // ring takes one gutter each side: the offset is the ring's top, and its
+      // bottom is two gutters past the card's height.
       itemTop = layout.rowOffsets[row];
-      itemBottom = itemTop + layout.rowHeights[row];
+      itemBottom = itemTop + layout.rowHeights[row] + 2 * JUSTIFIED_ROW_GAP;
     } else {
       const cols = Math.max(1, gridStore.columns || 1);
       const row = Math.floor(idx / cols);

@@ -47,9 +47,15 @@ CREATE TABLE IF NOT EXISTS Job (
   speed_string    TEXT    NOT NULL DEFAULT '',
   stop            INTEGER NOT NULL DEFAULT 0,
   return_to_queue INTEGER NOT NULL DEFAULT 0,
-  save_now        INTEGER NOT NULL DEFAULT 0
+  save_now        INTEGER NOT NULL DEFAULT 0,
+  sample_now      INTEGER NOT NULL DEFAULT 0
 );
 """
+# Flags added since a job.db could have been created, for a table that exists.
+_LATER_JOB_FLAGS = ("sample_now",)
+
+# The trainer's CUDA allocator setting, unless the owner set their own.
+_ALLOC_CONF = "expandable_segments:True"
 
 # The metric key the trainer uses for the training loss (SEAM.md §progress).
 _LOSS_METRIC_KEY = "loss/loss"
@@ -311,6 +317,12 @@ class LocalAiToolkit(TrainerBackend):
         env["CUDA_VISIBLE_DEVICES"] = spec.gpu_ids
         env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
         set_env_keys = ["AITK_JOB_ID", "CUDA_VISIBLE_DEVICES", "CUDA_DEVICE_ORDER"]
+        if not env.get("PYTORCH_ALLOC_CONF") and not env.get("PYTORCH_CUDA_ALLOC_CONF"):
+            # Without it a VAE encode needing one large block fails beside
+            # gigabytes reserved but split (Krea 2 at 1024 on a 32 GB card).
+            # The old name, because torch before 2.9 reads no other.
+            env["PYTORCH_CUDA_ALLOC_CONF"] = _ALLOC_CONF
+            set_env_keys.append("PYTORCH_CUDA_ALLOC_CONF")
         if spec.hf_token:
             env["HF_TOKEN"] = spec.hf_token
             set_env_keys.append("HF_TOKEN")
@@ -769,6 +781,14 @@ class LocalAiToolkit(TrainerBackend):
         conn = sqlite3.connect(sqlite_db_path, timeout=30.0)
         try:
             conn.execute(_JOB_TABLE_SQL)
+            # A pass re-prepares in the same work dir, so a job.db made by an
+            # older PixlStash lacks what the trainer now polls every step.
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(Job)")}
+            for flag in _LATER_JOB_FLAGS:
+                if flag not in columns:
+                    conn.execute(
+                        f"ALTER TABLE Job ADD COLUMN {flag} INTEGER NOT NULL DEFAULT 0"
+                    )
             conn.execute(
                 "INSERT OR REPLACE INTO Job (id, status) VALUES (?, 'queued')",
                 (job_id,),

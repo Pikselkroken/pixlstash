@@ -926,8 +926,17 @@ def test_list_presets_offers_only_what_the_saved_checkout_can_run(tmp_path):
         repo = _fake_checkout(str(tmp_path / "kit"))
         _save_checkout(owner, repo, sys.executable)
         r = owner.get("/training/presets")
-        entry = next(item for item in r.json() if item["id"] == "zimage-turbo")
-        assert entry["offered"] is True
+        listed = r.json()
+        # The dialog preselects the first offered recipe: the default leads.
+        assert listed[0]["id"] == "zimage-turbo"
+        assert listed[0]["offered"] is True
+        # A checkout without their model code lists the others, not offered.
+        others = {item["id"]: item["offered"] for item in listed[1:]}
+        assert others == {
+            "chroma1-base": False,
+            "flux2-klein-9b-base": False,
+            "krea2-raw": False,
+        }
     finally:
         _teardown(temp_dir, server)
 
@@ -1108,7 +1117,20 @@ def test_resolve_previews_the_run_and_every_recipes_fit():
                 "label": "Z-Image Turbo",
                 "offered": True,
                 "verdict": "fits",
-            }
+            },
+            *(
+                {
+                    "id": pid,
+                    "label": label,
+                    "offered": False,
+                    "verdict": "needs_checkout",
+                }
+                for pid, label in (
+                    ("chroma1-base", "Chroma1 Base"),
+                    ("flux2-klein-9b-base", "FLUX.2 Klein 9B Base"),
+                    ("krea2-raw", "Krea 2 Raw"),
+                )
+            ),
         ]
         assert server.vault.training_service.enqueue_calls == []
 
