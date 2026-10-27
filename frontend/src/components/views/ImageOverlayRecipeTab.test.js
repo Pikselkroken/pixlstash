@@ -789,10 +789,51 @@ describe("the lightbox Edit tab", () => {
   it("favourites on H with the Edit tab open, and no tool takes the key", async () => {
     const wrapper = await openOn(7, undefined, configured);
     await wrapper.findAll(".inspector-tab")[2].trigger("click");
-    wrapper.vm.paint.setTool("brush");
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: "h" }));
-    expect(wrapper.vm.paint.tool.value).toBe("brush");
+    const press = () =>
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "h" }));
+    press();
+    expect(wrapper.vm.paint.tool.value).toBeNull();
     expect(wrapper.emitted("apply-favourite")?.[0]?.[1]).toBe(true);
+    wrapper.vm.paint.setTool("brush");
+    press();
+    expect(wrapper.vm.paint.tool.value).toBe("brush");
+    expect(wrapper.emitted("apply-favourite")?.[1]?.[1]).toBe(false);
+  });
+
+  it("puts the crop tool down once the crop is sent", async () => {
+    const wrapper = await openOn(7, undefined, configured);
+    await wrapper.findAll(".inspector-tab")[2].trigger("click");
+    wrapper.vm.paint.setTool("crop");
+    wrapper.vm.paint.setCropBox([0, 0, 0.5, 0.5]);
+    wrapper.vm.applyCrop([0, 0, 0.5, 0.5]);
+    expect(wrapper.emitted("run-plugin")?.[0]?.[0].pluginName).toBe("crop");
+    expect(wrapper.vm.paint.tool.value).toBeNull();
+  });
+
+  it("hides the face boxes while the Paint tools are out", async () => {
+    const wrapper = await openOn(
+      7,
+      [{ id: 7, tags: [], format: "png" }],
+      configured,
+    );
+    const img = wrapper.find(".overlay-img");
+    for (const [property, value] of [
+      ["complete", true],
+      ["naturalWidth", 800],
+      ["naturalHeight", 600],
+      ["clientWidth", 400],
+      ["clientHeight", 300],
+    ]) {
+      Object.defineProperty(img.element, property, { configurable: true, value });
+    }
+    await img.trigger("load");
+    wrapper.vm.showFaceBbox = true;
+    await flush();
+    expect(wrapper.find(".face-bbox-empty").exists()).toBe(true);
+    await wrapper.findAll(".inspector-tab")[2].trigger("click");
+    expect(wrapper.find(".face-bbox-empty").exists()).toBe(false);
+    await wrapper.findAll(".inspector-tab")[0].trigger("click");
+    expect(wrapper.find(".face-bbox-empty").exists()).toBe(true);
   });
 
   it("leaves the pointer to the pan with no tool held", async () => {

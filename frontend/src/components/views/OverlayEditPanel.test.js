@@ -766,6 +766,20 @@ const RECT = { tool: "rect", mode: "new", box: [0, 0, 0.5, 1] };
 const INPAINT = { id: "fill", name: "Fill", type: "inpaint", type_label: "Inpaint" };
 
 describe("the Edit tab with the Paint tools", () => {
+  it("wears Esc on Clear only while no tool is in hand", async () => {
+    listWorkflowCards.mockResolvedValue({ cards: [...CARDS, INPAINT] });
+    const paint = fakePaint([RECT]);
+    const wrapper = await mountPanel({ paint });
+    const clear = () => wrapper.find(".edit-sec-act--clear");
+    expect(clear().find("kbd").exists()).toBe(true);
+    expect(clear().attributes("aria-keyshortcuts")).toBe("Escape");
+    // A held tool takes the first Escape: Clear must not promise it.
+    paint.tool.value = "brush";
+    await flush();
+    expect(clear().find("kbd").exists()).toBe(false);
+    expect(clear().attributes("aria-keyshortcuts")).toBeUndefined();
+  });
+
   it("sends the selection with the run, on an inpaint workflow", async () => {
     listWorkflowCards.mockResolvedValue({ cards: [...CARDS, INPAINT] });
     const paint = fakePaint();
