@@ -56,6 +56,8 @@ screenshot as evidence for or against a row. The **Open** rows are not built.
 | Option rows take no fill: a leading radio on every row, olive when selected, words in `--text` | **Approved** 2026-09-23 |
 | Option rows draw no option icon: the radio is the row's one glyph | **Approved** 2026-09-24 |
 | Segmented track: trough, inset ring, concentric corners | **Approved** 2026-09-12 |
+| Pick one in a compact space: the selected side takes `--active-wash` instead of the solid olive fill, only where the full `Segmented` does not fit, with the reason written at the site | **Approved** 2026-10-27 |
+| Fields take `AppInput`'s ground and border (`input-background`, `border`), never an ink wash | **Approved** 2026-10-27 |
 | Popovers adopting the 28px control | **Approved** 2026-10-04 |
 | Menus: one surface, one 32px row, one hover wash | **Approved** 2026-09-12 |
 | `.tbm` is a panel, not a menu, and keeps `--radius-lg` | **Approved** 2026-09-12 |
@@ -557,6 +559,14 @@ server so its length is not knowable from the source.
   `.rs-dialog-order-btn`, `.remix-seg-btn`, `.dc-zv`, `.shelf-viewseg`, the
   `v-btn-toggle`, and the shelf's folder-layout and group-by rows.
 - **`OptionRows`** for sort by, and only sort by.
+
+**Where the full `Segmented` does not fit** (2026-10-27), and only there, a
+compact switch may mark its selected side with `--active-wash` and full ink
+instead of the solid olive fill: still olive, so it still reads as chosen, but
+small enough for a dense row. It is the exception, not a second size of the
+same control: the site carries a comment saying why the full one does not fit,
+and anywhere there is room takes `Segmented` (the Workflows rail's Edit
+parameters dialog, #2165, has room and does).
 
 **The track is a trough, not an outlined box.** Filled with `--input-bg` and
 outlined with `--border` it measured **1.04:1** and **1.15:1** against the
