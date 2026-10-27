@@ -987,7 +987,7 @@ def test_read_version(server):
     assert data["install_type"] in set(Server.INSTALL_TYPES)
 
 
-def test_read_version_install_type_docker(server, monkeypatch):
+def test_read_version_install_type_docker(server, monkeypatch, isolate_the_machine):
     """The env flag makes /version report the reliable ``docker`` signal."""
     monkeypatch.setenv("PIXLSTASH_IN_DOCKER", "1")
     monkeypatch.delenv("PIXLSTASH_INSTALL_TYPE", raising=False)
@@ -997,7 +997,9 @@ def test_read_version_install_type_docker(server, monkeypatch):
     assert response.json()["install_type"] == "docker"
 
 
-def test_read_version_install_type_pip_default(server, monkeypatch):
+def test_read_version_install_type_pip_default(
+    server, monkeypatch, isolate_the_machine
+):
     """With no docker signals and no override, the default is ``pip``."""
     monkeypatch.delenv("PIXLSTASH_IN_DOCKER", raising=False)
     monkeypatch.delenv("PIXLSTASH_INSTALL_TYPE", raising=False)
@@ -1010,7 +1012,7 @@ def test_read_version_install_type_pip_default(server, monkeypatch):
     assert response.json()["install_type"] == "pip"
 
 
-def test_read_version_install_type_override(server, monkeypatch):
+def test_read_version_install_type_override(server, monkeypatch, isolate_the_machine):
     """A valid PIXLSTASH_INSTALL_TYPE override wins over docker detection."""
     # Even with the docker flag set, an explicit override takes precedence so an
     # installer (e.g. the Windows build) can declare "other".
@@ -1022,7 +1024,7 @@ def test_read_version_install_type_override(server, monkeypatch):
     assert response.json()["install_type"] == "other"
 
 
-def test_read_version_install_type_electron(server, monkeypatch):
+def test_read_version_install_type_electron(server, monkeypatch, isolate_the_machine):
     """The Electron desktop app declares its channel via the override env var."""
     monkeypatch.delenv("PIXLSTASH_IN_DOCKER", raising=False)
     monkeypatch.setenv("PIXLSTASH_INSTALL_TYPE", "electron")
@@ -1032,7 +1034,9 @@ def test_read_version_install_type_electron(server, monkeypatch):
     assert response.json()["install_type"] == "electron"
 
 
-def test_read_version_install_type_invalid_override_ignored(server, monkeypatch):
+def test_read_version_install_type_invalid_override_ignored(
+    server, monkeypatch, isolate_the_machine
+):
     """An invalid override is ignored and detection falls back to docker."""
     monkeypatch.setenv("PIXLSTASH_INSTALL_TYPE", "garbage")
     monkeypatch.setenv("PIXLSTASH_IN_DOCKER", "1")

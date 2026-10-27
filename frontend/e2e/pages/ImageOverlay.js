@@ -95,6 +95,17 @@ export class ImageOverlay {
       await this.railToggle.click()
     }
     await expect(this.pane).not.toHaveClass(/inspector--collapsed/)
+    // The class flips at once but the rail slides open, and the grid's rail,
+    // which shares the flag, slides with it: a box read before both land
+    // measures a rail a pixel wide.
+    await this.page.evaluate(() =>
+      Promise.all(
+        document
+          .getAnimations()
+          .filter((a) => a instanceof CSSTransition)
+          .map((a) => a.finished.catch(() => null)),
+      ),
+    )
   }
 
   /** The toolbar's rail toggle, in the grid toolbar's place. */
