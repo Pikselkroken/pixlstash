@@ -78,10 +78,11 @@ import os
 import sqlite3
 import threading
 import time
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Body, HTTPException, Request
+from fastapi import APIRouter, Body, HTTPException, Query, Request
 from platformdirs import user_config_dir
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -105,6 +106,7 @@ from pixlstash.services.managed_model_store import (
     relocatable_identity,
 )
 from pixlstash.services.model_folder_scanner import (
+    _LIKE_ESCAPE,
     DOWNLOADS_FOLDER_KIND,
     SHELF_MODEL_SUFFIXES,
     TAKEN_FROM_KINDS,
@@ -115,7 +117,7 @@ from pixlstash.tasks.base_task import TaskStatus
 from pixlstash.tasks.model_folder_scan_task import ModelFolderScanTask
 from pixlstash.utils.adapter_header import FILE_ENGINE
 from pixlstash.utils.host_path_utils import is_absolute_host_path, normalize_host_path
-from pixlstash.utils.path_utils import path_is_within
+from pixlstash.utils.path_utils import path_is_within, resolve_path_within
 from pixlstash.utils.reference_folder_validator import (
     data_folder_conflict_detail,
     validate_reference_folder_accessible,
@@ -521,6 +523,134 @@ class ModelFolderDeviceListResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     devices: list[ModelFolderDeviceResponse]
+
+
+class ModelFolderDirResponse(BaseModel):
+    """One subdirectory of the listed directory."""
+
+    model_config = ConfigDict(extra="allow")
+
+    name: str = Field(description="The directory's name, as it sits on disk.")
+    path: str = Field(
+        description=(
+            "POSIX path of this directory relative to the folder, ready to pass "
+            "back as the next `path`. The bare name when the listed path is the "
+            "folder root."
+        )
+    )
+    model_count: int = Field(
+        description=(
+            "Distinct models with a `present` copy anywhere under this directory, "
+            "however deep."
+        )
+    )
+    bytes: int = Field(
+        description=(
+            "Sum of the sizes of the `present` copies under this directory, "
+            "recursively. A model held twice inside it counts twice."
+        )
+    )
+    has_dirs: bool = Field(
+        description=(
+            "Whether this directory holds at least one subdirectory the tree "
+            "would show, so the client knows to draw an expand arrow before it "
+            "asks."
+        )
+    )
+
+
+class ModelFolderDirsResponse(BaseModel):
+    """Body of ``GET /model-folders/{folder_id}/dirs``."""
+
+    model_config = ConfigDict(extra="allow")
+
+    folder_id: int
+    path: str = Field(
+        description=(
+            "The directory listed, normalised: POSIX, relative to the folder, "
+            "empty for the folder root."
+        )
+    )
+    locked: bool = Field(
+        description=(
+            "True when the folder is not browsable (managed store, HuggingFace "
+            "cache, InsightFace packs, source and downloads folders). Then `dirs` "
+            "is empty and the folder's disk is not read; the counts still come "
+            "from the database."
+        )
+    )
+    model_count: int = Field(
+        description="Distinct models with a `present` copy under `path`, recursively."
+    )
+    bytes: int = Field(
+        description="Sum of the `present` copies' sizes under `path`, recursively."
+    )
+    dirs: list[ModelFolderDirResponse] = Field(
+        default_factory=list,
+        description="The subdirectories of `path`, sorted case-insensitively by name.",
+    )
+
+
+_SAMPLES_SUFFIX = "_samples"
+
+
+@dataclass
+class _Subtree:
+    """The `present` copies counted under one directory, recursively."""
+
+    model_ids: set[int] = field(default_factory=set)
+    bytes: int = 0
+
+
+def _subpath_segments(raw: str) -> list[str]:
+    """Split a ``path`` query value into segments, refusing anything not plain.
+
+    ``""`` is the folder root. Every other value must be a relative POSIX path
+    with no empty, ``.`` or ``..`` segment, so a leading or trailing slash is
+    refused too. ``resolve_path_within`` still has the final word on the disk;
+    this is the belt for the path string itself.
+    """
+    if raw == "":
+        return []
+    segments = raw.split("/")
+    if any(segment in ("", ".", "..") for segment in segments):
+        raise HTTPException(
+            status_code=400,
+            detail="path must be a relative folder path with no empty, '.' or '..' segments.",
+        )
+    return segments
+
+
+def _is_samples_dir_of(name: str, sample_stems: set[str]) -> bool:
+    """Whether *name* is the ``<stem>_samples`` directory of a model beside it."""
+    return (
+        name.endswith(_SAMPLES_SUFFIX) and name[: -len(_SAMPLES_SUFFIX)] in sample_stems
+    )
+
+
+def _offered_dir(entry: os.DirEntry, sample_stems: set[str]) -> bool:
+    """Whether the tree shows *entry* as a subdirectory.
+
+    Dot-names and symlinks are never offered. A ``<stem>_samples`` directory is
+    hidden beside a model whose filename stem is ``<stem>``: its previews belong
+    to that model and are not a folder of their own.
+    """
+    if entry.name.startswith("."):
+        return False
+    if entry.is_symlink() or not entry.is_dir(follow_symlinks=False):
+        return False
+    return not _is_samples_dir_of(entry.name, sample_stems)
+
+
+def _has_offered_dir(directory: str, sample_stems: set[str]) -> bool:
+    """Whether *directory* holds at least one offered subdirectory.
+
+    Raises:
+        OSError: When the directory cannot be listed. The caller decides what
+            that means for its answer.
+    """
+    with os.scandir(directory) as entries:
+        return any(_offered_dir(entry, sample_stems) for entry in entries)
 
 
 class ModelFolderDeleteResponse(BaseModel):
@@ -1100,6 +1230,151 @@ def create_router(server) -> APIRouter:
             existing.folder_ids.append(folder_id)
             existing.shelf_bytes += shelf_bytes.get(folder_id, 0)
         return ModelFolderDeviceListResponse(devices=devices)
+
+    def _present_copies(folder_id: int, prefix: str) -> list:
+        """Every `present` copy under *prefix*, in one query.
+
+        ``prefix`` is the listed directory's relpath with a trailing ``os.sep``,
+        escaped for LIKE. ``""`` reads the whole folder, and then no LIKE is run.
+        """
+        sql = (
+            "SELECT mf.relpath AS relpath, mf.model_id AS model_id, "
+            "COALESCE(m.file_size, 0) AS file_size "
+            "FROM model_file mf JOIN model m ON m.id = mf.model_id "
+            "WHERE mf.model_folder_id = ? AND mf.state = 'present'"
+        )
+        if not prefix:
+            return server.hub.fetchall(sql, (folder_id,))
+        return server.hub.fetchall(
+            sql + " AND mf.relpath LIKE ? ESCAPE '\\'",
+            (folder_id, prefix.translate(_LIKE_ESCAPE) + "%"),
+        )
+
+    @router.get(
+        "/model-folders/{folder_id}/dirs",
+        summary="List one directory level of a model folder",
+        description=(
+            "The subdirectories of one directory inside a registered folder, one "
+            "level per call, so the models tree opens lazily.\n\n"
+            "`path` is POSIX and relative to the folder; leave it empty for the "
+            "root. Every directory carries the `present` models under it, "
+            "recursively. Empty directories are listed. Dot-names, symlinks and a "
+            "`<stem>_samples` directory beside its model are not.\n\n"
+            "A locked folder answers `locked: true` with no `dirs`, and its disk "
+            "is not read; the counts still come from the database."
+        ),
+        tags=["model_shelf"],
+        response_model=ModelFolderDirsResponse,
+    )
+    def list_model_folder_dirs(
+        folder_id: int,
+        request: Request,
+        path: str = Query(
+            "",
+            description="Directory to list, relative to the folder. Empty is the root.",
+        ),
+    ):
+        server.auth.ensure_secure_when_required(request)
+        folder = _fetch_folder(folder_id)
+        segments = _subpath_segments(path)
+        subpath = "/".join(segments)
+        prefix = subpath.replace("/", os.sep) + os.sep if segments else ""
+        locked = folder["movable"] != "per_item"
+
+        directory = ""
+        if not locked:
+            try:
+                directory = resolve_path_within(folder["path"], *segments)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail="path must stay within the model folder.",
+                ) from exc
+            if not os.path.isdir(directory):
+                raise HTTPException(
+                    status_code=404,
+                    detail="No such directory in this model folder.",
+                )
+
+        # One pass over the folder's present copies, bucketed by the first
+        # segment below the listed directory. A copy with no further separator
+        # is a file directly in it, which feeds the samples rule.
+        totals = _Subtree()
+        here_stems: set[str] = set()
+        children: dict[str, _Subtree] = {}
+        child_stems: dict[str, set[str]] = {}
+        for row in _present_copies(folder_id, prefix):
+            relpath = row["relpath"]
+            # LIKE folds ASCII case, so `Alpha/` would match a listing of
+            # `alpha/`; the exact prefix is checked here.
+            if not relpath.startswith(prefix):
+                continue
+            model_id = int(row["model_id"])
+            size = int(row["file_size"])
+            totals.model_ids.add(model_id)
+            totals.bytes += size
+            head, separator, tail = relpath[len(prefix) :].partition(os.sep)
+            if not separator:
+                here_stems.add(os.path.splitext(head)[0])
+                continue
+            child = children.setdefault(head, _Subtree())
+            child.model_ids.add(model_id)
+            child.bytes += size
+            if os.sep not in tail:
+                child_stems.setdefault(head, set()).add(os.path.splitext(tail)[0])
+
+        dirs: list[ModelFolderDirResponse] = []
+        if not locked:
+            try:
+                with os.scandir(directory) as entries:
+                    offered = sorted(
+                        (e for e in entries if _offered_dir(e, here_stems)),
+                        key=lambda e: (e.name.casefold(), e.name),
+                    )
+            except OSError as exc:
+                logger.warning(
+                    "Could not list model folder %s at %r (%s): %s",
+                    folder_id,
+                    subpath,
+                    directory,
+                    exc,
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail="Could not read this directory.",
+                ) from exc
+            for entry in offered:
+                child = children.get(entry.name, _Subtree())
+                try:
+                    has_dirs = _has_offered_dir(
+                        entry.path, child_stems.get(entry.name, set())
+                    )
+                except OSError as exc:
+                    logger.info(
+                        "Could not look inside %s for subdirectories (%s); "
+                        "reporting has_dirs as false for it.",
+                        entry.path,
+                        exc,
+                    )
+                    has_dirs = False
+                dirs.append(
+                    ModelFolderDirResponse(
+                        name=entry.name,
+                        path=f"{subpath}/{entry.name}" if subpath else entry.name,
+                        model_count=len(child.model_ids),
+                        bytes=child.bytes,
+                        has_dirs=has_dirs,
+                    )
+                )
+
+        return ModelFolderDirsResponse(
+            folder_id=folder_id,
+            path=subpath,
+            locked=locked,
+            model_count=len(totals.model_ids),
+            bytes=totals.bytes,
+            dirs=dirs,
+        )
 
     @router.post(
         "/model-folders",
