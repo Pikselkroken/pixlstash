@@ -595,16 +595,24 @@ function removeSelectedOrLast() {
   selectionSize.value = 0;
 }
 
-function close() {
+/**
+ * Close the field. `returnFocus` puts focus back on the resting field, for a
+ * close the field itself made (Enter, Esc, a recent search); never after a
+ * focusout, where the user has already moved focus elsewhere.
+ */
+function close(returnFocus = false) {
   open.value = false;
   selectionSize.value = 0;
   listDismissedFor.value = null;
+  if (returnFocus) {
+    nextTick(() => rootRef.value?.querySelector(".stf-rest")?.focus());
+  }
 }
 
 function runTextSearch() {
   searchStore.commitSearch();
   inputRef.value?.blur();
-  close();
+  close(true);
 }
 
 function applyRecent(item) {
@@ -685,7 +693,7 @@ function onKeydown(event) {
       listDismissedFor.value = searchStore.searchInput;
     } else {
       field.blur();
-      close();
+      close(true);
     }
   }
 }

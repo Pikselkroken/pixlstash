@@ -284,6 +284,26 @@ describe("SearchTokenField", () => {
     expect(wrapper.find("input.stf-input").exists()).toBe(false);
   });
 
+  // Opened from code (F), so a close it makes itself hands focus back to the
+  // resting field rather than dropping it to the body.
+  it.each([
+    ["Escape", ""],
+    ["Enter", "rain"],
+  ])("%s returns focus to the resting field", async (key, text) => {
+    wrapper = mount(SearchTokenField, {
+      attachTo: document.body,
+      global: { stubs: { "v-icon": true } },
+    });
+    await wrapper.vm.focus();
+    await flushPromises();
+    if (text) await type(text);
+    await press(key);
+    await flushPromises();
+    expect(document.activeElement).toBe(
+      wrapper.find("button.stf-rest").element,
+    );
+  });
+
   it("Escape with text hides the list first, then Tab moves focus", async () => {
     await mountField();
     await type("look");
