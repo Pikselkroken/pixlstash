@@ -94,6 +94,93 @@ def test_watch_folder():
                 assert empty_filtered.status_code == 200
                 assert empty_filtered.json() == []
 
+                _assert_inbox_round_trip(client, pictures_dir, pictures)
+
+
+def _assert_inbox_round_trip(client, folder, pictures):
+    """What a watch folder brings in waits in the Inbox until it is looked at."""
+    ids = sorted(pic.id for pic in pictures)
+    assert all(pic.unseen for pic in pictures)
+
+    def unseen_ids():
+        listed = client.get(
+            f"{API_PREFIX}/pictures", params={"fields": "grid", "unseen": "1"}
+        )
+        assert listed.status_code == 200, listed.text
+        return sorted(row["id"] for row in listed.json())
+
+    assert unseen_ids() == ids
+    (row,) = client.get(f"{API_PREFIX}/import-folders").json()["folders"]
+    assert row["unseen_count"] == len(ids)
+    assert row["last_imported_at"] is not None
+    assert row["missing"] is False
+
+    inbox = client.get(f"{API_PREFIX}/import-folders/inbox").json()
+    assert inbox["total"] == len(ids)
+    assert inbox["folder_count"] == 1
+    (batch,) = inbox["batches"]
+    assert batch["import_source_folder"] == folder
+    assert batch["count"] == len(ids)
+
+    # Rating a picture is looking at it: it leaves the Inbox, not the library.
+    rated = client.post(
+        f"{API_PREFIX}/pictures/apply-scores",
+        json={"scores": {str(ids[0]): 4}, "only_unscored": False},
+    )
+    assert rated.status_code == 200, rated.text
+    assert unseen_ids() == ids[1:]
+
+    refused = client.post(f"{API_PREFIX}/import-folders/inbox/seen", json={})
+    assert refused.status_code == 400
+    assert unseen_ids() == ids[1:]
+
+    # A batch outside the Inbox's arrival times marks nothing.
+    missed = client.post(
+        f"{API_PREFIX}/import-folders/inbox/seen",
+        json={
+            "import_source_folder": folder,
+            "until": "2000-01-01T00:00:00+00:00",
+        },
+    )
+    assert missed.json() == {"marked": 0}
+
+    marked = client.post(
+        f"{API_PREFIX}/import-folders/inbox/seen",
+        json={
+            "import_source_folder": folder,
+            "since": batch["first_imported_at"],
+            "until": batch["last_imported_at"],
+        },
+    )
+    assert marked.status_code == 200, marked.text
+    assert marked.json() == {"marked": len(ids) - 1}
+    assert unseen_ids() == []
+    assert client.get(f"{API_PREFIX}/import-folders/inbox").json()["total"] == 0
+    everything = client.get(f"{API_PREFIX}/pictures", params={"fields": "grid"})
+    assert sorted(row["id"] for row in everything.json()) == ids
+
+
+def test_inbox_batches_split_on_an_hour_gap_newest_first():
+    from datetime import datetime, timedelta, timezone
+
+    from pixlstash.routes.import_folders import _group_into_batches
+
+    t0 = datetime(2026, 10, 1, 12, tzinfo=timezone.utc)
+    rows = [
+        ("/home/me/a", t0),
+        ("/home/me/a", t0 + timedelta(minutes=59)),
+        ("/home/me/a", t0 + timedelta(minutes=59 + 61)),
+        ("/home/me/b", t0 + timedelta(minutes=30)),
+    ]
+    batches = _group_into_batches(rows, {"/home/me/a": "Renders"})
+    assert [(b.label, b.count) for b in batches] == [
+        ("Renders", 1),
+        ("Renders", 2),
+        ("b", 1),
+    ]
+    assert batches[1].first_imported_at == t0
+    assert batches[1].last_imported_at == t0 + timedelta(minutes=59)
+
 
 def test_watch_folder_delete_after_import():
     """Test watch folder delete_after_import removes source files after import."""

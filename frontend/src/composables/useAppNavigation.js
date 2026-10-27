@@ -284,11 +284,10 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
         });
         return;
       }
-      if (f.importFolderId != null) {
+      if (f.inbox) {
         pushAppRoute({
-          name: "import-folder",
-          params: { id: String(f.importFolderId) },
-          query: folderQuery,
+          name: "inbox",
+          query: f.importSourceFolder ? { folder: f.importSourceFolder } : {},
         });
         return;
       }
@@ -458,7 +457,8 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
         (MODEL_SHELF_ROUTES.includes(name) ||
           WORKFLOW_ROUTES.includes(name) ||
           name === "insights" ||
-          name === "moves")
+          name === "moves" ||
+          name === "inbox")
       )
         replaceAppRoute({ name: "all-pictures" });
     },
@@ -493,6 +493,20 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
   /** Open the reconciliation queue for moves made outside PixlStash. */
   function handleSelectMoves() {
     pushAppRoute({ name: "moves" });
+  }
+
+  // The Inbox is the grid narrowed to what import folders brought in and the
+  // owner has not looked at. Owner-only like Moves (GET /import-folders/inbox).
+  const isInboxView = computed(
+    () => !isReadOnly.value && route.name === "inbox",
+  );
+
+  /**
+   * Open the Inbox, or one import folder's part of it.
+   * @param {string|null} folder - an import folder's path, or null for all.
+   */
+  function handleSelectInbox(folder = null) {
+    pushAppRoute({ name: "inbox", query: folder ? { folder } : {} });
   }
 
   /**
@@ -565,9 +579,11 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
     isModelsView,
     isInsightsView,
     isMovesView,
+    isInboxView,
     isWorkflowsView,
     handleSelectInsights,
     handleSelectMoves,
+    handleSelectInbox,
     handleInsightAction,
     handleSelectCharacter,
     handleSelectSet,

@@ -295,6 +295,8 @@ class PredicateFilter(BaseModel):
     # ``startswith`` behaviour.
     file_path_prefix_children_only: bool = True
     import_source_folder: Optional[str] = None
+    # The Inbox: only pictures an import folder brought in that are not seen.
+    unseen_only: bool = False
 
     # --- scope / lifecycle flags ---
     include_deleted: bool = False
@@ -417,6 +419,9 @@ class PredicateFilter(BaseModel):
 
         if self.import_source_folder:
             preds.append(Picture.import_source_folder == self.import_source_folder)
+
+        if self.unseen_only:
+            preds.append(Picture.unseen.is_(True))
 
         if self.format:
             preds.append(Picture.format.in_(self.format))
@@ -677,4 +682,5 @@ class PredicateFilter(BaseModel):
             file_path_prefix=qp.get("file_path_prefix") or None,
             file_path_prefix_children_only=children_only,
             import_source_folder=qp.get("import_source_folder") or None,
+            unseen_only=is_truthy_flag(qp.get("unseen")),
         )

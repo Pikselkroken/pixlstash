@@ -400,6 +400,11 @@ class PictureListFilters:
         import_source_folder: str | None = Query(
             None, description="Filter by import source folder."
         ),
+        unseen: bool = Query(
+            False,
+            description="Only pictures in the Inbox: brought in by an import "
+            "folder and not looked at yet.",
+        ),
         id: list[str] = Query(
             default=[], description="Restrict to specific picture ids (repeatable)."
         ),
@@ -734,6 +739,11 @@ def select_pictures_for_listing(
     # key that is not a Picture column, so the filter would do nothing at all.
     unscored = is_truthy_flag(query_params.pop("unscored", None))
     favourite_only = is_truthy_flag(query_params.pop("favourite", None))
+    # The Inbox. Back in as a real bool, under the column's name, so every
+    # ``Picture.find(**query_params)`` site filters on it: the raw "1" would
+    # reach the Boolean column as a string.
+    if is_truthy_flag(query_params.pop("unseen", None)):
+        query_params["unseen"] = True
     smart_score_bucket = query_params.pop("smart_score_bucket", None) or None
     resolution_bucket = query_params.pop("resolution_bucket", None) or None
     project_id_raw = query_params.pop("project_id", None)

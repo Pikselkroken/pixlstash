@@ -132,8 +132,18 @@ export function useGridFetch(
   const filePathPrefixFilter = computed(
     () => selectionStore.selectedFolderFilter?.pathPrefix ?? null,
   );
-  const importSourceFolderFilter = computed(
+  // The Inbox narrows to one folder through the facet; the Filter menu's
+  // "Imported from" narrows any view. The facet is the view, so the filter
+  // menu's own counts start from it and not from the filter.
+  const importSourceFolderFacet = computed(
     () => selectionStore.selectedFolderFilter?.importSourceFolder ?? null,
+  );
+  const importSourceFolderFilter = computed(
+    () => importSourceFolderFacet.value ?? filterStore.importedFromFilter ?? null,
+  );
+  // The Inbox: only what import folders brought in that is not seen yet.
+  const inboxFilter = computed(() =>
+    Boolean(selectionStore.selectedFolderFilter?.inbox),
   );
 
   // ============================================================
@@ -224,6 +234,7 @@ export function useGridFetch(
       referenceFolderIdFilter: referenceFolderIdFilter.value ?? null,
       filePathPrefixFilter: filePathPrefixFilter.value ?? null,
       importSourceFolderFilter: importSourceFolderFilter.value ?? null,
+      inboxFilter: inboxFilter.value,
       noCharacterFilter: filterStore.noCharacterFilter ?? false,
       noSetFilter: filterStore.noSetFilter ?? false,
       applyTagFilter: userPrefsStore.applyTagFilter ?? false,
@@ -477,6 +488,7 @@ export function useGridFetch(
     if (importSourceFolderFilter.value != null) {
       params.append("import_source_folder", importSourceFolderFilter.value);
     }
+    if (inboxFilter.value) params.append("unseen", "1");
     if (filterStore.faceBboxFilter != null) {
       params.append("face_filter", filterStore.faceBboxFilter);
     }
@@ -539,9 +551,10 @@ export function useGridFetch(
     if (filePathPrefixFilter.value != null) {
       params.append("file_path_prefix", filePathPrefixFilter.value);
     }
-    if (importSourceFolderFilter.value != null) {
-      params.append("import_source_folder", importSourceFolderFilter.value);
+    if (importSourceFolderFacet.value != null) {
+      params.append("import_source_folder", importSourceFolderFacet.value);
     }
+    if (inboxFilter.value) params.append("unseen", "1");
     if (userPrefsStore.applyTagFilter) {
       params.append("apply_tag_filter", "true");
     }
@@ -1103,6 +1116,7 @@ export function useGridFetch(
             String(importSourceFolderFilter.value),
           );
         }
+        if (inboxFilter.value) _charP.set("unseen", "1");
         // Filter params
         if (filePathPrefixFilter.value != null) {
           _charP.set("file_path_prefix", String(filePathPrefixFilter.value));

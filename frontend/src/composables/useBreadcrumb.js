@@ -102,11 +102,8 @@ export function useBreadcrumb() {
           { label: "Folders" },
           { label: entityNames.refFolderLabels[params.id] ?? "Folder" },
         ];
-      case "import-folder":
-        return [
-          { label: "Folders" },
-          { label: entityNames.importFolderLabels[params.id] ?? "Folder" },
-        ];
+      case "inbox":
+        return [{ label: "Review" }, { label: "Inbox" }];
       default:
         return [];
     }

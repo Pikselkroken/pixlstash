@@ -43,7 +43,7 @@
         <span class="tbm-label">Picture</span>
         <template v-for="k in PICTURE_KINDS" :key="k.id">
           <button
-            v-if="k.id !== 'sharing' || !isReadOnly"
+            v-if="pictureKindShown(k.id)"
             :ref="(el) => (rowRefs[k.id] = el)"
             class="fm-row"
             type="button"
@@ -364,6 +364,7 @@ import { listComfyuiLoras, listComfyuiModels } from "../../api/pictures";
 import { listWorkflowCards, workflowCoverUrl } from "../../api/workflows";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useGridStore } from "../../stores/useGridStore";
+import { useImportFoldersStore } from "../../stores/useImportFoldersStore";
 import { PIL_IMAGE_EXTENSIONS, VIDEO_EXTENSIONS } from "../../utils/media.js";
 import { useCascadeMenu } from "../../composables/useCascadeMenu";
 import {
@@ -395,12 +396,19 @@ const props = defineProps({
 
 const store = useFilterStore();
 const gridStore = useGridStore();
+const importFoldersStore = useImportFoldersStore();
 
 const PICTURE_KINDS = [
   { id: "media", label: "Media", icon: "mdi-image-multiple-outline" },
   { id: "faces", label: "Faces", icon: "mdi-face-recognition" },
   { id: "stacks", label: "Stacks", icon: "mdi-layers-outline" },
   { id: "sharing", label: "Sharing", icon: "mdi-share-variant-outline" },
+  // Everything one import folder ever brought in, not only the Inbox's new.
+  {
+    id: "importedFrom",
+    label: "Imported from",
+    icon: "mdi-folder-download-outline",
+  },
 ];
 const CONTENT_KINDS = [
   { id: "score", label: "Score", icon: "mdi-star-outline" },
@@ -461,7 +469,29 @@ const PICK_ONE = {
     ],
     params: () => "shared_only=true",
   },
+  importedFrom: {
+    title: "Imported from",
+    anyLabel: "Any",
+    field: "importedFromFilter",
+    off: null,
+    get options() {
+      return importFoldersStore.folders.map((folder) => ({
+        id: folder.folder,
+        label: folder.label || folder.folder,
+        icon: "mdi-folder-download-outline",
+      }));
+    },
+    params: (id) => filterParams([["import_source_folder", id]]),
+  },
 };
+
+// Sharing and Imported from are the owner's: a share token has neither.
+function pictureKindShown(id) {
+  if (id === "sharing") return !isReadOnly.value;
+  if (id === "importedFrom")
+    return !isReadOnly.value && importFoldersStore.hasFolders;
+  return true;
+}
 
 const STAR_ROWS = [0, 1, 2, 3, 4, 5];
 
@@ -510,6 +540,7 @@ const KIND_OF_CHIP = {
   Faces: "faces",
   Stacks: "stacks",
   Sharing: "sharing",
+  "Imported from": "importedFrom",
   "Has tag": "tags",
   "Lacks tag": "tags",
   "Missing tag": "confidence",
@@ -542,6 +573,7 @@ watch(
     if (!isOpen) return;
     reset();
     loadLists();
+    if (!isReadOnly.value) importFoldersStore.refresh();
   },
   { immediate: true },
 );

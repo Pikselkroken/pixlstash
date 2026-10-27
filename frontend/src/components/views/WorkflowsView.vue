@@ -1072,11 +1072,12 @@ function openInspectorFromTab() {
   );
 }
 
+// Everything the folder ever brought in: the library, Imported from it.
 function openWatchedFolder() {
-  const id = watchedFolder.value?.id;
-  if (id != null) {
-    router.push({ name: "import-folder", params: { id: String(id) } });
-  }
+  const folder = watchedFolder.value?.folder;
+  if (!folder) return;
+  filterStore.importedFromFilter = folder;
+  router.push({ name: "all-pictures" });
 }
 
 // ── Selection ─────────────────────────────────────────────────────────────

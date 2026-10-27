@@ -424,6 +424,14 @@ class Picture(SQLModel, table=True):
     # finder's only query is "anything due yet?" against a table where the
     # answer is almost always no.
     layout_check_due_at: Optional[float] = Field(default=None, index=True)
+    # In the Inbox: brought in by an import folder and not looked at yet. Set
+    # by ``WatchFolderImportTask`` and cleared by the first recorded edit of the
+    # picture (``operation_log_service``), by opening it, or by Mark seen. Never
+    # set by any other way in, so pictures imported by hand never queue up.
+    unseen: bool = Field(
+        default=False,
+        sa_column=Column("unseen", Boolean, nullable=False, server_default="0"),
+    )
     # Absolute path to the import-folder root that produced this picture.
     # NULL for pictures imported through other workflows.
     import_source_folder: Optional[str] = Field(
@@ -687,6 +695,14 @@ class Picture(SQLModel, table=True):
             # ``IS 1``, the form the filter compiles to: SQLite only uses a
             # partial index whose WHERE matches the query's term.
             sqlite_where=text("favourite IS 1"),
+        ),
+        # The Inbox: a queue the owner works down, so it is small next to the
+        # library and only its rows are indexed, like the favourites.
+        Index(
+            "ix_picture_unseen",
+            "unseen",
+            "id",
+            sqlite_where=text("unseen IS 1"),
         ),
     )
 

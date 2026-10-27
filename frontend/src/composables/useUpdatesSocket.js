@@ -16,6 +16,7 @@ import { useOperationStore } from "../stores/useOperationStore";
 import { useSnapshotsStore } from "../stores/useSnapshotsStore";
 import { useDedupStore } from "../stores/useDedupStore";
 import { useMovesStore } from "../stores/useMovesStore";
+import { useImportFoldersStore } from "../stores/useImportFoldersStore";
 import { useNoticeStore } from "../stores/useNoticeStore";
 import { useTasksStore } from "../stores/useTasksStore";
 import { useWorkflowsStore } from "../stores/useWorkflowsStore";
@@ -148,6 +149,7 @@ export function useUpdatesSocket({
   const snapshotsStore = useSnapshotsStore();
   const dedupStore = useDedupStore();
   const movesStore = useMovesStore();
+  const importFoldersStore = useImportFoldersStore();
   const noticeStore = useNoticeStore();
   const workflowsStore = useWorkflowsStore();
   const modelShelfStore = useModelShelfStore();
@@ -360,6 +362,9 @@ export function useUpdatesSocket({
         payload?.type === "pictures_changed" ||
         payload?.type === "picture_imported";
       if (isPictureChange) {
+        // An arrival from an import folder, or a rating or Mark seen that took
+        // one out of the Inbox: the sidebar count and the Inbox header follow.
+        if (!isReadOnly.value) importFoldersStore.refreshSoon();
         // LIKENESS_GROUPS reorders the whole grid wholesale, so a targeted op
         // can't reconcile it - keep the existing wsTagUpdate signal that lets the
         // grid re-rank in place. (Imports still flow through the normal path.)

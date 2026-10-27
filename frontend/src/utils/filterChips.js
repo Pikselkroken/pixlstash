@@ -268,6 +268,17 @@ export function filterChips(store, { allPicturesView = true } = {}) {
       store.sharedOnlyFilter = false;
     });
   }
+  if (store.importedFromFilter) {
+    // The folder's last component, which is what the owner calls it; the path
+    // can be a Windows one while the browser showing it is not.
+    const leaf = String(store.importedFromFilter)
+      .replace(/[/\\]+$/, "")
+      .split(/[/\\]/)
+      .pop();
+    push("imported-from", "Imported from", leaf || store.importedFromFilter, () => {
+      store.importedFromFilter = null;
+    });
+  }
 
   const score = scoreChipValue(
     store.minScoreFilter,

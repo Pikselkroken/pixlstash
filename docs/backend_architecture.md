@@ -428,6 +428,36 @@ The same module also serves the **v1.9 tiered Duplicates queue** — `GET /dedup
 ### `reference_folders.py`, `import_folders.py`, `filesystem.py`
 CRUD for reference / import folders; filesystem browsing for picker dialogs.
 
+**What an import folder brings in waits in the Inbox.** `WatchFolderImportTask`
+sets `picture.unseen` on every picture it creates; no other way in sets it, and
+migration `0138_add_picture_unseen` leaves every existing picture seen. A
+picture leaves the Inbox (it never leaves the library) three ways:
+
+- **A recorded edit that reviews it.** `operation_log_service.run_recorded_metadata_task`
+  clears `unseen`, inside the same transaction, on every picture whose diff
+  touches a review facet (`_REVIEW_FACETS`: tags and tag-review decisions,
+  caption, score, favourite, set / project / person membership). Stacking, the
+  scrapheap, rotating and file moves do not count. `unseen` is not a facet, so
+  an undo does not put a picture back.
+- **Opening it.** The frontend calls `POST /import-folders/inbox/seen` with the
+  picture's id when the lightbox shows it, only while the Inbox holds anything.
+- **Mark seen.** `POST /import-folders/inbox/seen` takes `{all: true}`, or
+  `picture_ids`, or `import_source_folder` with optional `since` / `until`
+  (one batch). An empty body is a 400, so nothing marks the whole Inbox by
+  omission.
+
+`GET /import-folders/inbox` groups the unseen, live pictures by
+`import_source_folder` and then into batches (`_group_into_batches`: a gap of
+more than `INBOX_BATCH_GAP`, an hour, between two arrivals from one folder
+starts a new one), newest batch first, with `total` and `folder_count`.
+`GET /import-folders` adds, per folder, `unseen_count`, `last_imported_at` (its
+newest picture's arrival) and `missing` (the folder is not on disk). The grid
+narrows to the Inbox with `unseen=1` on the listing, count and stats routes:
+`_listing.py` puts it back into `query_params` as a real bool, so the column
+fall-through of `Picture.find(**query_params)` compares a boolean, and
+`PredicateFilter.unseen_only` carries it for the stats sidebar. Both new routes
+are `OWNER_ONLY`; the GET is also on `READ_BLOCKED_GET_PATHS`.
+
 ### `comfyui.py`
 List and import workflow files; read the workflow a picture carries. Running one is `routes/workflows.py` since #1410.
 

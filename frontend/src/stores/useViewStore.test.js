@@ -133,9 +133,22 @@ describe("parseRouteView", () => {
       selectedCharacter: "ALL",
       characterLabel: "All Pictures",
     });
+  });
+
+  it("reads the Inbox, and one folder's part of it, as a folder facet", () => {
+    expect(parseRouteView(routeOf("inbox"))).toMatchObject({
+      clearFolderFilter: false,
+      folderKey: null,
+      folderFilter: { inbox: true, importSourceFolder: null, label: "Inbox" },
+    });
     expect(
-      parseRouteView(routeOf("import-folder", { id: "5" })).folderKey,
-    ).toBe("if-5");
+      parseRouteView(routeOf("inbox", {}, { folder: "/home/me/renders" }))
+        .folderFilter,
+    ).toEqual({
+      inbox: true,
+      importSourceFolder: "/home/me/renders",
+      label: "Inbox",
+    });
   });
 
   it("carries a folder path on any grid route, and names the folder by its leaf", () => {

@@ -49,7 +49,6 @@ import { getFolderStructureCommitStatus } from "../../api/folderStructure";
 import { deleteProject, getProjectSummary } from "../../api/projects";
 import {
   listReferenceFolders,
-  listImportFolders,
 } from "../../api/folders";
 import { getPictureCount } from "../../api/pictures";
 import { getSharedResourceIds, revokeTokensByResource } from "../../api/users";
@@ -96,6 +95,7 @@ import { useSetTreeExpansion } from "../../composables/useSetTreeExpansion";
 import { useRoute } from "vue-router";
 import { useDedupStore, scopeKey } from "../../stores/useDedupStore";
 import { useMovesStore } from "../../stores/useMovesStore";
+import { useImportFoldersStore } from "../../stores/useImportFoldersStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useSortStore } from "../../stores/useSortStore";
@@ -135,6 +135,7 @@ function noticeDetail(e) {
 
 const dedupStore = useDedupStore();
 const movesStore = useMovesStore();
+const importFoldersStore = useImportFoldersStore();
 const modelShelfStore = useModelShelfStore();
 
 // Store-direct (Phase 3): the sidebar reads the selection, sort, project and
@@ -200,6 +201,8 @@ const READ_ONLY_INSIGHTS_HINT =
 // movesStore.hasAnyPending, which itself never becomes true for a read-only
 // session because nothing here ever calls GET /moves/pending for one.
 const isMovesView = computed(() => route.name === "moves");
+// The Inbox row: what import folders brought in and nobody has looked at yet.
+const isInboxView = computed(() => route.name === "inbox");
 
 const props = defineProps({
   backendUrl: { type: String, default: () => API_BASE_URL },
@@ -211,6 +214,7 @@ const emit = defineEmits([
   "select-duplicates",
   "select-insights",
   "select-moves",
+  "select-inbox",
   "select-character",
   "select-set",
   "train-lora",
@@ -484,8 +488,7 @@ const settingsDialogInitialTab = ref("");
 // first-scan state. Owner only.
 const foldersWanted = computed(() => !isReadOnly.value);
 const referenceFolders = ref([]);
-const importFolders = ref([]);
-const selectedFolderKey = ref(null); // 'rf-{id}' | 'path-{path}' | 'if-{id}' | null
+const selectedFolderKey = ref(null); // 'rf-{id}' | 'path-{path}' | null
 const selectedFolderReferenceId = ref(null); // numeric reference-folder id or null
 /** The absolute folder path the selection is filtering on, or null. The row key
     above cannot carry it: a folder ROOT row's key is `rf-{id}`. */
@@ -506,13 +509,13 @@ const librariesStore = useLibrariesStore();
 // of these compared with `===` as though they were one thing. They are not, and
 // none of them is redundant - they carry different information. The map:
 //
-//   1. Row key      `selectedFolderKey`: `rf-<id>` | `if-<id>` | `path-<path>`.
+//   1. Row key      `selectedFolderKey`: `rf-<id>` | `path-<path>`.
 //      Identifies a ROW, which is why a subfolder needs its own path in it.
 //      Written only by `handleFolderNodeSelect`.
-//   2. Route key    `viewStore.activeFolderKey`: `rf-<id>` | `if-<id>`.
+//   2. Route key    `viewStore.activeFolderKey`: `rf-<id>`.
 //      Identifies a FOLDER. Never `path-`: a route has no row.
 //   3. Route path   `?path=`. A URL - any separator spelling, and editable.
-//      On an `rf-`/`if-` route it is now RELATIVE to the folder the id names
+//      On an `rf-` route it is now RELATIVE to the folder the id names
 //      (#1206 item 9: the id already says where the folder is, so repeating the
 //      owner's absolute path only put their folder tree in the address bar and
 //      the browser history). An ABSOLUTE one is still read, because links and
@@ -948,14 +951,6 @@ async function _offerLoosePictures() {
 // Whether the currently selected reference folder is actively being scanned
 // for the first time (active but never completed a pass).
 const selectedFolderScanning = computed(() => {
-  if (selectedFolderKey.value?.startsWith("if-")) {
-    const id = _folderId(selectedFolderKey.value.slice(3));
-    if (id == null) return false;
-    const importFolder = importFolders.value.find(
-      (entry) => Number(entry.id) === id,
-    );
-    return Boolean(importFolder && importFolder.last_checked == null);
-  }
   const id = _folderId(selectedFolderReferenceId.value);
   if (id == null) return false;
   const rf = referenceFolders.value.find((f) => f.id === id);
@@ -986,19 +981,6 @@ async function fetchReferenceFolders() {
   }
 }
 
-async function fetchImportFolders() {
-  try {
-    const body = await listImportFolders();
-    importFolders.value = body?.folders ?? [];
-    entityNames.mergeImportFolderLabels(importFolders.value);
-    if (foldersWanted.value) {
-      _startFolderStatusPoll();
-    }
-  } catch (e) {
-    console.error("Failed to fetch import folders:", e);
-  }
-}
-
 /**
  * The sidebar's current selection, said the way a ROUTE says it.
  *
@@ -1012,10 +994,7 @@ async function fetchImportFolders() {
  */
 const selectedFolderRouteKey = computed(() => {
   const id = _folderId(selectedFolderReferenceId.value);
-  if (id != null) return `rf-${id}`;
-  return selectedFolderKey.value?.startsWith("if-")
-    ? selectedFolderKey.value
-    : null;
+  return id != null ? `rf-${id}` : null;
 });
 
 function handleFolderNodeSelect(key, payload) {
@@ -1047,31 +1026,22 @@ function handleFolderNodeSelect(key, payload) {
 
 // Poll for folder status updates for the owner.
 // Keeps polling while any reference folder is transitioning/retrying
-// (pending, mount_error, or first active scan) OR any import folder has not
-// completed its first scan yet (last_checked === null).
+// (pending, mount_error, or first active scan).
 let _folderStatusPollTimer = null;
 
 function _anyFolderNeedsPolling() {
-  const referenceNeedsPolling = referenceFolders.value.some(
+  return referenceFolders.value.some(
     (rf) =>
       rf.status === "pending_mount" ||
       rf.status === "mount_error" ||
       (rf.status === "active" && rf.last_scanned == null),
   );
-  const importNeedsPolling = importFolders.value.some(
-    (entry) => entry.last_checked == null,
-  );
-  return referenceNeedsPolling || importNeedsPolling;
 }
 
 async function _pollFolderStatus() {
   try {
-    const [referenceBody, importBody] = await Promise.all([
-      listReferenceFolders(),
-      listImportFolders(),
-    ]);
+    const referenceBody = await listReferenceFolders();
     const folders = referenceBody?.folders ?? [];
-    const updatedImportFolders = importBody?.folders ?? [];
     // Merge status + last_scanned updates into existing list.
     referenceFolders.value = referenceFolders.value.map((rf) => {
       const updated = folders.find((f) => f.id === rf.id);
@@ -1085,9 +1055,6 @@ async function _pollFolderStatus() {
         referenceFolders.value = [...referenceFolders.value, f];
       }
     }
-
-    // Refresh import-folder counts and first-scan state.
-    importFolders.value = updatedImportFolders;
 
     // Stop polling when nothing is still transitioning.
     if (!_anyFolderNeedsPolling()) {
@@ -1120,7 +1087,6 @@ watch(
   (shown) => {
     if (shown) {
       fetchReferenceFolders();
-      fetchImportFolders();
       _startFolderStatusPoll();
     } else {
       _stopFolderStatusPoll();
@@ -3836,6 +3802,8 @@ onMounted(() => {
 // owner-only and the row it would feed is hidden for them regardless.
 onMounted(() => {
   if (!isReadOnly.value) movesStore.fetchPending();
+  // The Inbox row's count, and whether the row shows at all.
+  if (!isReadOnly.value) importFoldersStore.refresh();
 });
 
 function onSidebarCtxOutside(event) {
@@ -3999,7 +3967,7 @@ watch(
 );
 
 // Sync the sidebar's folder highlight with the active route.
-// When App.vue navigates to /ref-folder/:id or /import-folder/:id it passes
+// When App.vue navigates to /ref-folder/:id it passes
 // the matching key via the activeFolderKey prop so we can switch to the
 // folders tab and emit the correct filter payload.
 //
@@ -4061,7 +4029,6 @@ watch(
     }
 
     await fetchReferenceFolders();
-    await fetchImportFolders();
 
     // Guard: user may have navigated away - or to a sibling subfolder, which
     // moves only the query - while the fetches were in flight.
@@ -4080,16 +4047,6 @@ watch(
           referenceFolderId: folder.id,
           pathPrefix: sub ? sub.pathPrefix : folder.folder,
           label: sub ? sub.label : folder.label || folder.folder,
-        });
-      }
-    } else if (newKey.startsWith("if-")) {
-      const id = parseInt(newKey.slice(3), 10);
-      const folder = importFolders.value.find((f) => f.id === id);
-      if (folder) {
-        handleFolderNodeSelect(newKey, {
-          importSourceFolder: folder.folder,
-          importFolderId: folder.id,
-          label: folder.label || folder.folder,
         });
       }
     }
@@ -5295,6 +5252,24 @@ defineExpose({
           <div class="sidebar-section-header" role="presentation">
             <span class="sidebar-section-title">Review</span>
           </div>
+          <!-- The Inbox: what import folders brought in that has not been
+               looked at. Only once an import folder exists; caught up, it
+               stays with a 0 as the other Review rows do. -->
+          <button
+            v-if="!isReadOnly && importFoldersStore.hasFolders"
+            type="button"
+            :class="['sidebar-list-item', { active: isInboxView }]"
+            :aria-current="isInboxView ? 'page' : undefined"
+            @click="emit('select-inbox')"
+          >
+            <span class="sidebar-list-icon"
+              ><v-icon size="16">mdi-inbox-arrow-down-outline</v-icon></span
+            >
+            <span class="sidebar-list-label">Inbox</span>
+            <span class="sidebar-list-count">{{
+              importFoldersStore.unseenCount.toLocaleString()
+            }}</span>
+          </button>
           <!-- `aria-disabled`, not `disabled`: a read-only session must still
                be able to focus the row and read the title that explains why
                it is inert. The click guard stays. -->

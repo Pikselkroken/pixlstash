@@ -234,6 +234,7 @@ const {
   isWorkflowsView,
   handleSelectInsights,
   handleSelectMoves,
+  handleSelectInbox,
   handleInsightAction,
   handleSelectCharacter,
   handleSelectSet,
@@ -864,6 +865,7 @@ defineExpose({
             @select-character="handleSelectCharacter"
             @select-insights="handleSelectInsights"
             @select-moves="handleSelectMoves"
+            @select-inbox="handleSelectInbox()"
             @select-duplicates="handleSelectDuplicates"
             @select-set="handleSelectSet"
             @select-folder="handleSelectFolder"
