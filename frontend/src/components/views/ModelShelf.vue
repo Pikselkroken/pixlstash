@@ -348,11 +348,16 @@
         data-testid="shelf-folders"
       >
         <li v-for="dir in subfolders" :key="dir.path">
+          <!-- Each one takes model rows dropped on it (#2204). -->
           <button
             type="button"
-            class="shelf-folder"
+            class="shelf-folder model-drop-target"
+            :class="folderDrop.dropClass(dir.path)"
             :data-path="dir.path"
             @click="openSubfolder(dir.path)"
+            @dragover="folderDrop.onDragOver($event, dir.path, subfolderDestination(dir))"
+            @dragleave="folderDrop.onDragLeave($event, dir.path)"
+            @drop="folderDrop.onDrop($event, subfolderDestination(dir))"
           >
             <v-icon size="16" class="shelf-folder-glyph" aria-hidden="true"
               >mdi-folder-outline</v-icon
@@ -676,7 +681,9 @@
                     'shelf-row--selected': store.isSelected(row.id),
                     'shelf-row--offline': row.locState === 'unreachable',
                     'shelf-row--broken': BROKEN_STATES.has(row.locState),
+                    'shelf-row--cut': store.isCut(row.id),
                   }"
+                  :draggable="store.isSelected(row.id) ? 'true' : undefined"
                   role="row"
                   aria-level="1"
                   :aria-expanded="
@@ -687,6 +694,8 @@
                   :tabindex="row.rowKey === rovingRowKey ? 0 : -1"
                   :data-row-key="row.rowKey"
                   @click="pickRow(row, $event)"
+                  @dragstart="onRowDragStart($event, row.id)"
+                  @dragend="onRowDragEnd"
                   @contextmenu.prevent="openRowMenu(row, $event)"
                   @keydown="onRowKeydown(row, $event)"
                   @focus="focusedRowKey = row.rowKey"
@@ -1058,7 +1067,11 @@
                     class="shelf-row shelf-row--member"
                     :class="{
                       'shelf-row--selected': store.isSelected(member.id),
+                      'shelf-row--cut': store.isCut(member.id),
                     }"
+                    :draggable="
+                      store.isSelected(member.id) ? 'true' : undefined
+                    "
                     role="row"
                     aria-level="2"
                     aria-keyshortcuts="Shift+F10"
@@ -1066,6 +1079,8 @@
                     :tabindex="memberKey(row, member) === rovingRowKey ? 0 : -1"
                     :data-row-key="memberKey(row, member)"
                     @click="pickMember(row, member, $event)"
+                    @dragstart="onRowDragStart($event, member.id)"
+                    @dragend="onRowDragEnd"
                     @contextmenu.prevent="openMemberMenu(row, member, $event)"
                     @keydown="onMemberKeydown(row, member, $event)"
                     @focus="focusedRowKey = memberKey(row, member)"
@@ -1223,8 +1238,11 @@
       :open="moveOpen"
       :items="moveItems"
       :total-bytes="moveBytes"
+      :initial-destination="moveDestination"
+      @started="onMoveStarted"
       @close="closeMove"
     />
+    <ModelDropTip />
 
     <!-- The shipped host-path picker again, in its file mode. A server-side
          picker rather than an `<input type=file>`: the file is on the machine
@@ -1294,6 +1312,8 @@ import KindMenu from "../widgets/KindMenu.vue";
 import ShelfEditDialog from "../panels/ShelfEditDialog.vue";
 import MergeCopiesDialog from "../panels/MergeCopiesDialog.vue";
 import ShelfMoveDialog from "../panels/ShelfMoveDialog.vue";
+import ModelDropTip from "../panels/ModelDropTip.vue";
+import { useModelCopyDrop } from "../../composables/useModelCopyDrop";
 import ModelWorksWithDialog from "../panels/ModelWorksWithDialog.vue";
 import ModelSetGrid from "./ModelSetGrid.vue";
 import InspectorEdgeTab from "../widgets/InspectorEdgeTab.vue";
@@ -1374,6 +1394,7 @@ import {
   modelName,
   GROUP_BY_LABELS,
   modelVersion,
+  MODEL_COPIES_TYPE,
   movableCopies,
   quantBadge,
   triggerChip,
@@ -1729,6 +1750,10 @@ async function openLocation() {
 const moveOpen = ref(false);
 const moveItems = ref([]);
 const moveBytes = ref(0);
+/** `{folderId, path}` a drop or a paste chose, or null from Move to…. */
+const moveDestination = ref(null);
+/** True when the open dialog is pasting what Ctrl X cut. */
+const moveFromCut = ref(false);
 const moveInvoker = shallowRef(null);
 
 /** `model_folder.id` to the folder row, for `movableCopies`' folder rules. */
@@ -1782,21 +1807,105 @@ async function dismissMoveFailure() {
  * @param {Array<Object>} rows - shelf rows.
  */
 function openMove(rows) {
-  const { items, totalBytes } = movableCopies(rows, foldersById.value);
-  if (!items.length) return;
+  // In a folder view only the copy in the open folder: the file on screen.
+  showMove(
+    movableCopies(
+      rows,
+      foldersById.value,
+      inFolder.value ? store.folderScope : null,
+    ),
+  );
+}
+
+/**
+ * Open the dialog for copies already worked out.
+ *
+ * @param {{items: Array, totalBytes: number}} copies
+ * @param {{folderId: number, path: string}|null} [destination] - pre-chosen.
+ * @param {boolean} [fromCut] - pasting what Ctrl X cut.
+ */
+function showMove(copies, destination = null, fromCut = false) {
+  if (!copies?.items?.length) return;
   moveInvoker.value =
     document.activeElement instanceof HTMLElement
       ? document.activeElement
       : null;
-  moveItems.value = items;
-  moveBytes.value = totalBytes;
-  moveOpen.value = items.length > 0;
+  moveItems.value = copies.items;
+  moveBytes.value = copies.totalBytes;
+  moveDestination.value = destination;
+  moveFromCut.value = fromCut;
+  moveOpen.value = true;
+}
+
+// A folder in the sidebar's tree took a drop: the tree asks, the shelf owns
+// the dialog.
+watch(
+  () => store.moveRequest,
+  (request) => {
+    if (request) showMove(request.copies, request.destination);
+  },
+);
+
+/** A paste's cut is spent once its move starts; the rows stop drawing dim. */
+function onMoveStarted() {
+  if (moveFromCut.value) store.clearCut();
+}
+
+// ── Drag and cut (#2204) ─────────────────────────────────────────────────
+
+/**
+ * A selected row picks up the selection's movable copies. An unselected row
+ * does not drag at all (it is not `draggable`), so a click-drag never moves
+ * what the reader did not choose.
+ */
+function onRowDragStart(event, id) {
+  const copies = store.isSelected(id)
+    ? store.movableSelection(foldersById.value)
+    : null;
+  if (!copies?.items.length) {
+    event.preventDefault();
+    return;
+  }
+  store.dragCopies = copies;
+  event.dataTransfer.setData(MODEL_COPIES_TYPE, JSON.stringify(copies.items));
+  event.dataTransfer.effectAllowed = "move";
+}
+
+function onRowDragEnd() {
+  store.dragCopies = null;
+  store.dropTip = null;
+}
+
+const folderDrop = useModelCopyDrop();
+
+/** A subfolder row of the open folder, as a drop destination. */
+function subfolderDestination(dir) {
+  return {
+    folderId: store.folderScope.folderId,
+    path: dir.path,
+    locked: false,
+  };
+}
+
+/** Ctrl V: the cut copies into the open folder, through the dialog. */
+function pasteCut() {
+  const { folderId, path, locked } = store.folderScope;
+  if (locked) {
+    useNoticeStore().push({
+      level: "info",
+      text: "That folder is locked, so nothing can be moved into it.",
+    });
+    return;
+  }
+  showMove(store.cutCopies, { folderId, path }, true);
 }
 
 async function closeMove() {
   const returnTo = moveInvoker.value;
   moveOpen.value = false;
   moveInvoker.value = null;
+  moveDestination.value = null;
+  moveFromCut.value = false;
   await nextTick();
   (returnTo?.isConnected ? returnTo : rootEl.value)?.focus();
 }
@@ -1950,6 +2059,31 @@ function onShelfKeydown(event) {
     !event.altKey &&
     !event.shiftKey &&
     String(event.key).toLowerCase() === "a";
+  // Ctrl X cuts the selection's movable copies, Ctrl V pastes them into the
+  // open folder through the Move dialog (#2204). Inside a text field the guard
+  // hands both back, so cutting text still cuts text.
+  const clip =
+    (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey
+      ? String(event.key).toLowerCase()
+      : "";
+  if (clip === "x" || clip === "v") {
+    if (!shelfOwnsTheKey(event) || event.repeat) return;
+    if (clip === "x") {
+      if (!ownSelection.value.length) return;
+      event.preventDefault();
+      if (!store.cutSelection(foldersById.value)) {
+        useNoticeStore().push({
+          level: "info",
+          text: "None of these files can be moved: they are missing, offline or in a locked folder.",
+        });
+      }
+      return;
+    }
+    if (!store.cutCopies || !inFolder.value) return;
+    event.preventDefault();
+    pasteCut();
+    return;
+  }
   // F2 is let through for a selected hand-made set, whose pill and menu
   // advertise it; a row's own F2 is handled on the row.
   const renamesSet = event.key === "F2" && store.selectedSets.length > 0;
@@ -1974,6 +2108,12 @@ function onShelfKeydown(event) {
     // way, or declining would hand it to the native select-all. On the set grid
     // it takes the owner's own sets as well as the models.
     store.selectVisible();
+    return;
+  }
+  // Escape first puts back a cut, one undo per press.
+  if (event.key === "Escape" && store.cutCopies) {
+    event.preventDefault();
+    store.clearCut();
     return;
   }
   // Selected hand-made SETS (#1520) answer the same two keys with the set
@@ -5009,6 +5149,11 @@ button.shelf-head-cell:hover {
 .shelf-row--selected {
   background: var(--active-wash);
   box-shadow: var(--selection-edge);
+}
+
+/* Cut, waiting for a paste (#2204): the file manager's dim. */
+.shelf-row--cut > * {
+  opacity: var(--opacity-disabled);
 }
 
 /* ── The three kinds of absence ────────────────────────────────────────────

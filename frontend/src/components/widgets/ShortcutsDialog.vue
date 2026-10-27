@@ -17,7 +17,8 @@ const userPrefs = useUserPrefsStore();
 // way - a macOS reader was being taught `Ctrl+A` for a chord their keyboard
 // spells `⌘A`, and the shelf's own keycap now reports the platform.
 const undoKeyHintKeys = undoKeyHint();
-// The stack reorder keys, spelled as the Edit stack menu spells them.
+// The stack reorder keys, spelled as the Edit stack menu spells them, and the
+// shelf's cut and paste (#2204), which take the same modifier.
 const stackModKey = isApplePlatform() ? "⌘" : "Ctrl";
 const redoKeyHintKeys = redoKeyHint();
 const selectAllKeyHintKeys = selectAllKeyHint();
@@ -132,6 +133,18 @@ const open = computed(() => props.modelValue);
         <tr>
           <td><kbd>Esc</kbd></td>
           <td>Clear selection</td>
+        </tr>
+        <tr :class="{ 'shortcut-disabled': isReadOnly }">
+          <td><kbd>{{ stackModKey }}</kbd>+<kbd>X</kbd></td>
+          <td>On Models: cut the selected models, to move them</td>
+        </tr>
+        <tr :class="{ 'shortcut-disabled': isReadOnly }">
+          <td><kbd>{{ stackModKey }}</kbd>+<kbd>V</kbd></td>
+          <td>On Models, in a folder: move the cut models into it</td>
+        </tr>
+        <tr>
+          <td><kbd>Esc</kbd></td>
+          <td>On Models: put back what was cut</td>
         </tr>
         <tr>
           <td><kbd>S</kbd></td>

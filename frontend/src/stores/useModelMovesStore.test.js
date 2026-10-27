@@ -22,11 +22,12 @@ vi.mock("../api/modelMoves", () => ({
 // this suite does not drag the whole shelf and folder registry in behind them.
 const fetchRows = vi.fn();
 const refreshFolders = vi.fn();
+const reloadDirs = vi.fn();
 vi.mock("./useModelShelfStore", () => ({
   useModelShelfStore: () => ({ fetchRows }),
 }));
 vi.mock("./useModelFoldersStore", () => ({
-  useModelFoldersStore: () => ({ refresh: refreshFolders }),
+  useModelFoldersStore: () => ({ refresh: refreshFolders, reloadDirs }),
 }));
 
 import { moveReceipt, useModelMovesStore } from "./useModelMovesStore";
@@ -54,6 +55,7 @@ beforeEach(() => {
   cancelModelMove.mockReset();
   fetchRows.mockReset().mockResolvedValue(undefined);
   refreshFolders.mockReset().mockResolvedValue(undefined);
+  reloadDirs.mockReset();
 });
 
 describe("starting a move", () => {
@@ -64,6 +66,12 @@ describe("starting a move", () => {
     expect(await store.start(2, ITEMS)).toBe(true);
     expect(await store.start(3, ITEMS)).toBe(false);
     expect(startModelMove).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends the subfolder it was given (#2204)", async () => {
+    const store = useModelMovesStore();
+    await store.start(2, ITEMS, "Lora/sdxl");
+    expect(startModelMove).toHaveBeenCalledWith(2, ITEMS, "Lora/sdxl");
   });
 
   it("reports a refusal as a notice and stays idle", async () => {
@@ -99,6 +107,8 @@ describe("watching one to its end", () => {
     expect(useNoticeStore().notices.at(-1).text).toBe("Moved 2 files.");
     expect(fetchRows).toHaveBeenCalledTimes(1);
     expect(refreshFolders).toHaveBeenCalledTimes(1);
+    // The open folder listings count models per directory.
+    expect(reloadDirs).toHaveBeenCalledTimes(1);
 
     // The second reading sees the same finished job. Reporting it again is how
     // a completed move announces itself forever.
@@ -205,6 +215,8 @@ describe("watching one to its end", () => {
     expect(useNoticeStore().notices.at(-1).text).toBe("Moved 2 files.");
     expect(fetchRows).toHaveBeenCalledTimes(1);
     expect(refreshFolders).toHaveBeenCalledTimes(1);
+    // The open folder listings count models per directory.
+    expect(reloadDirs).toHaveBeenCalledTimes(1);
 
     // And then it stops: a loop that outlives its job keeps a timer and a
     // request per second going for the rest of the session.

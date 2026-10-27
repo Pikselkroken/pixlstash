@@ -5683,13 +5683,53 @@ end the loop on the first failed reading, losing the receipt and both refreshes
 for a move that actually completed. `watching` is cleared by the reading that
 reported the finish and by nothing else, so it is what the loop tests.
 
-**One way in, one dialog.** The selection pill's Move and the row menu's *Move to…* both call
-`openMove`, which resolves the selection to copies and opens `ShelfMoveDialog`. The dialog states
-the move in files, bytes and rename-versus-copy before anything starts. Its destination is a native
-select that starts empty, so nothing is pre-selected and a copy is never one slip of the pointer
-away. There is no drag onto the list, its folder headers or a drive: the shelf has no drop target
-for model files, so the dialog opens from the verb only. There is no undo behind a move, which is
-why the dialog is the confirmation.
+**Four ways in, one dialog (#2204).** Every gesture ends in `ShelfMoveDialog`,
+which states the move in files, bytes and rename-versus-copy before anything
+starts. There is no undo behind a move, which is why the dialog is the
+confirmation, a drop included.
+
+- **Move to…**, on the selection pill and in the row menu, calls `openMove`. The
+  dialog opens with **nothing chosen**: the destination is always the reader's
+  own pick. (It used to pre-select the managed store, which takes no moves now.)
+- **Drag.** A *selected* row is `draggable` (an unselected one is not, so a
+  click-drag never moves what was not chosen) and carries the selection's
+  movable copies under the private type `application/x-pixlstash-model-copies`
+  (`MODEL_COPIES_TYPE`). `store.dragCopies` holds them for the drag, because a
+  drop target cannot read `dataTransfer` data before the drop. Folders tree rows
+  (in `browse` mode) and the folder view's subfolder rows take the drop, through
+  `useModelCopyDrop`: a drive row, a locked folder and the folder every dragged
+  copy is already in refuse with the shared `.not-droppable` hatch; a folder
+  that takes it draws `.drop-ring`, the ink focus stroke inset over the hover
+  wash (not olive, the selection, nor amber, an action). `ModelDropTip` follows
+  the pointer with the destination, rename or copy, and what the other drive
+  gets back (`moveMechanism`, on `device_id` as the server's `same_device`
+  measures it). It is its own component so the drag's pointer moves repaint the
+  tip and never the shelf. The drop does not move anything: it calls
+  `store.requestMove`, and `ModelShelf` (which owns the dialog; the tree is in
+  the sidebar) opens it with that folder pre-chosen and focus on **Move**, so
+  Enter confirms.
+- **Cut and paste**, in `onShelfKeydown`. `Ctrl X` holds the selection's
+  movable copies in `store.cutCopies`, and those rows draw at
+  `--opacity-disabled` until the paste. `Ctrl V` in a folder view opens the
+  dialog pre-chosen to the open folder; outside a folder it does nothing, and a
+  locked folder says so. `Esc` puts the cut back before it clears a selection,
+  one undo per press. The cut is spent when the pasted move starts. All three
+  keys are in the shortcuts dialog, and inside a text field the guard hands them
+  back, so cutting text still cuts text.
+
+**The window's importer ignores the drag.** `useWindowFileImport` takes only a
+drag whose `types` carry `Files` and not the private type, so a row dropped
+short of a folder is never an import, even on the desktop shell, which fills
+`dataTransfer.files` for in-page drags.
+
+**The destination is any folder or subfolder, picked in the tree.** The dialog
+holds `ModelFolderTree` in `pick` mode, which shows each drive's free space and
+refuses locked folders and the folder every chosen copy is already in. The pick
+is `{folderId, path}` and goes to the server as `destination_folder_id` and
+`destination_subpath`; the backend's skip rule (backend §25.24) skips only a
+copy already directly in that directory, so a root file moves into `Lora` of
+its own folder. When the move finishes, the open folder listings are re-read
+(`reloadDirs`) with the rows and the folders.
 
 **`movableCopies` is the single gate**, per COPY rather than per model, because
 `model_file`'s key is `(folder_id, relpath)` and a model catalogued in three
@@ -5697,8 +5737,12 @@ folders offers three of them. It drops three things: a copy that is not
 `present` (there are no bytes to move — `missing` is a fact, `unreachable` is
 the absence of one, and neither has a file to read), a copy in PixlStash's own
 folder (declared rather than scanned, and every engine loader looks for them at
-a fixed path), and a copy in an `external` folder (the HuggingFace cache and
-insightface's store are shared with other software).
+a fixed path), and a copy in a locked folder (`movable` other than `per_item`:
+the HuggingFace cache and the InsightFace packs are shared with other software
+or move only as a whole). **In a folder view it takes only the copy in the open
+folder** (`store.movableSelection`, used by the pill, the keys and the drag
+alike): a model with a second copy elsewhere is "this file" there, and moving
+the other copy too would move a file the reader cannot see.
 
 **The list is `inert` while a move runs, not merely dimmed.** A move repoints
 `model_file` rows underneath it, so a verb pressed mid-move acts on a location

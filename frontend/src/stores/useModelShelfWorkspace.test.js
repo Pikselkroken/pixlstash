@@ -199,6 +199,72 @@ describe("the open folder", () => {
   });
 });
 
+describe("moving: cut, and the open folder's copy (#2204)", () => {
+  // One model with a copy at the root of folder 1 and one in its `Lora`.
+  const TWICE = {
+    id: 5,
+    file_kind: "adapter",
+    kind: "lora",
+    file_size: 300,
+    added_at: ago(1),
+    sha256: "e",
+    locations: [
+      { folder_id: 1, relpath: "dup.safetensors", state: "present" },
+      { folder_id: 1, relpath: "Lora\\dup.safetensors", state: "present" },
+    ],
+  };
+
+  beforeEach(() => {
+    store.rows = [...ROWS, TWICE];
+  });
+
+  it("moves only the copy in the open folder, and every copy elsewhere", () => {
+    store.setFolderScope({ folderId: 1, path: "Lora" });
+    store.selectedIds = new Set([5]);
+    expect(store.movableSelection().items).toEqual([
+      { folder_id: 1, relpath: "Lora\\dup.safetensors" },
+    ]);
+    store.setPlace("all");
+    store.selectedIds = new Set([5]);
+    expect(store.movableSelection().items).toHaveLength(2);
+  });
+
+  it("holds a cut until it is cleared, and marks its rows", () => {
+    store.setFolderScope({ folderId: 1, path: "" });
+    store.selectedIds = new Set([5]);
+    expect(store.cutSelection()).toBe(true);
+    expect(store.cutCopies.items).toEqual([
+      { folder_id: 1, relpath: "dup.safetensors" },
+    ]);
+    expect(store.cutCopies.totalBytes).toBe(300);
+    expect(store.isCut(5)).toBe(true);
+    expect(store.isCut(1)).toBe(false);
+    store.clearCut();
+    expect(store.cutCopies).toBe(null);
+    expect(store.isCut(5)).toBe(false);
+  });
+
+  it("cuts nothing when no selected copy can move", () => {
+    store.rows = [
+      { ...TWICE, locations: [{ folder_id: 1, relpath: "x", state: "missing" }] },
+    ];
+    store.setPlace("all");
+    store.selectedIds = new Set([5]);
+    expect(store.cutSelection()).toBe(false);
+    expect(store.cutCopies).toBe(null);
+  });
+
+  it("forgets the cut, the drag and a pending drop with the session", () => {
+    store.setPlace("all");
+    store.selectedIds = new Set([5]);
+    store.cutSelection();
+    store.requestMove({ items: [] }, { folderId: 1, path: "" });
+    store.resetForSession();
+    expect(store.cutCopies).toBe(null);
+    expect(store.moveRequest).toBe(null);
+  });
+});
+
 describe("type bands", () => {
   it("bands by the sidebar's Type order, Other last", () => {
     // A text encoder sorts before VAEs by name and after them by Type.

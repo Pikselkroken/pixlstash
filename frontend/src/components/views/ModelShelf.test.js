@@ -4506,6 +4506,100 @@ describe("the open folder and All models' strip (#2203)", () => {
     return { wrapper, store };
   }
 
+  describe("moving into a folder (#2204)", () => {
+    const LOOSE = { folder_id: 1, relpath: "loose.safetensors" };
+    const dialog = (wrapper) => wrapper.findComponent({ name: "ShelfMoveDialog" });
+    const press = (key) => {
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", { key, ctrlKey: key !== "Escape", bubbles: true }),
+      );
+      return flushPromises();
+    };
+
+    async function selectLoose() {
+      const opened = await openFolder();
+      document.body.appendChild(opened.wrapper.element);
+      opened.store.toggleSelected(1);
+      await flushPromises();
+      return opened;
+    }
+
+    it("cuts with Ctrl X and pastes into the open folder with Ctrl V", async () => {
+      const { wrapper, store } = await selectLoose();
+      await press("x");
+      expect(store.cutCopies.items).toEqual([LOOSE]);
+      expect(wrapper.find(".shelf-row--cut").exists()).toBe(true);
+
+      store.setFolderScope({ folderId: 1, path: "Lora" });
+      await flushPromises();
+      await press("v");
+      expect(dialog(wrapper).props("open")).toBe(true);
+      expect(dialog(wrapper).props("items")).toEqual([LOOSE]);
+      expect(dialog(wrapper).props("initialDestination")).toEqual({
+        folderId: 1,
+        path: "Lora",
+      });
+      // The cut is spent once the move it pasted starts.
+      dialog(wrapper).vm.$emit("started");
+      expect(store.cutCopies).toBe(null);
+      wrapper.unmount();
+    });
+
+    it("puts a cut back with Escape, and pastes nothing outside a folder", async () => {
+      const { wrapper, store } = await selectLoose();
+      await press("x");
+      await press("Escape");
+      expect(store.cutCopies).toBe(null);
+      expect(store.selectedRows.map((row) => row.id)).toEqual([1]);
+
+      await press("x");
+      store.setPlace("all");
+      await flushPromises();
+      await press("v");
+      expect(dialog(wrapper).props("open")).toBe(false);
+      wrapper.unmount();
+    });
+
+    it("opens the dialog pre-chosen when selected rows are dropped on a subfolder", async () => {
+      const { wrapper } = await selectLoose();
+      const setData = vi.fn();
+      const start = new Event("dragstart", { bubbles: true, cancelable: true });
+      start.dataTransfer = { setData, effectAllowed: "" };
+      wrapper.find(".shelf-row").element.dispatchEvent(start);
+      expect(setData).toHaveBeenCalledWith(
+        "application/x-pixlstash-model-copies",
+        JSON.stringify([LOOSE]),
+      );
+
+      const target = wrapper.find(".shelf-folder[data-path='Lora']");
+      const types = ["application/x-pixlstash-model-copies"];
+      const over = new Event("dragover", { bubbles: true, cancelable: true });
+      over.dataTransfer = { types, dropEffect: "" };
+      target.element.dispatchEvent(over);
+      await flushPromises();
+      expect(over.defaultPrevented).toBe(true);
+      expect(target.classes()).toContain("drop-ring");
+
+      const drop = new Event("drop", { bubbles: true, cancelable: true });
+      drop.dataTransfer = { types };
+      target.element.dispatchEvent(drop);
+      await flushPromises();
+      expect(dialog(wrapper).props("open")).toBe(true);
+      expect(dialog(wrapper).props("items")).toEqual([LOOSE]);
+      expect(dialog(wrapper).props("initialDestination")).toEqual({
+        folderId: 1,
+        path: "Lora",
+      });
+      wrapper.unmount();
+    });
+
+    it("does not drag a row that is not selected", async () => {
+      const { wrapper } = await openFolder();
+      expect(wrapper.find(".shelf-row").attributes("draggable")).toBeUndefined();
+      wrapper.unmount();
+    });
+  });
+
   it("lists the open folder's subfolders first, with a folders and models count", async () => {
     const { wrapper } = await openFolder();
     const rows = wrapper.findAll("[data-testid='shelf-folders'] .shelf-folder");

@@ -36,6 +36,8 @@ import {
   locationState,
   modelName,
   movableCopies,
+  moveMechanism,
+  allAlreadyIn,
   offlineFolders,
   stackReceipt,
   unstackReceipt,
@@ -1216,6 +1218,53 @@ describe("modelVersion", () => {
   });
 });
 
+describe("moveMechanism", () => {
+  const devices = new Map([
+    [1, { device_id: "d1", label: "Fast" }],
+    [2, { device_id: "d1", label: "Fast" }],
+    [3, { device_id: "d2", label: "Slow" }],
+    [4, { device_id: null }],
+  ]);
+  const copies = (entries) => ({ bytesByFolderId: new Map(entries) });
+
+  it("is a rename when every copy is on the destination's drive", () => {
+    expect(moveMechanism(copies([[1, 500]]), 2, devices)).toEqual({
+      how: "rename",
+      freed: 0,
+      drives: [],
+    });
+  });
+
+  it("is a copy that frees the other drive's bytes", () => {
+    expect(moveMechanism(copies([[1, 500], [3, 200]]), 2, devices)).toEqual({
+      how: "copy",
+      freed: 200,
+      drives: ["Slow"],
+    });
+  });
+
+  it("never guesses an unmeasured drive as the same one", () => {
+    expect(moveMechanism(copies([[1, 500]]), 4, devices).how).toBe("unknown");
+  });
+});
+
+describe("allAlreadyIn", () => {
+  it("is true only when every copy sits directly in the destination", () => {
+    const items = [
+      { folder_id: 1, relpath: "Lora/a.st" },
+      { folder_id: 1, relpath: "Lora/b.st" },
+    ];
+    expect(allAlreadyIn(items, { folderId: 1, path: "Lora" })).toBe(true);
+    expect(allAlreadyIn(items, { folderId: 1, path: "" })).toBe(false);
+    expect(
+      allAlreadyIn([...items, { folder_id: 1, relpath: "c.st" }], {
+        folderId: 1,
+        path: "Lora",
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("movableCopies", () => {
   const folders = new Map([
     [1, { id: 1, kind: "user", movable: "per_item" }],
@@ -1300,6 +1349,23 @@ describe("movableCopies", () => {
       folders,
     );
     expect(items).toEqual([]);
+  });
+
+  it("takes only the copy in the open folder (#2204)", () => {
+    // A model with a second copy elsewhere is "this file" in a folder view.
+    const row = locRow([
+      { folder_id: 1, relpath: "Lora\\a.st", state: "present" },
+      { folder_id: 1, relpath: "a.st", state: "present" },
+      { folder_id: 4, relpath: "Lora/a.st", state: "present" },
+    ]);
+    const { items } = movableCopies([row], folders, {
+      folderId: 1,
+      path: "Lora",
+    });
+    expect(items).toEqual([{ folder_id: 1, relpath: "Lora\\a.st" }]);
+    expect(
+      movableCopies([row], folders, { folderId: 1, path: "" }).items,
+    ).toEqual([{ folder_id: 1, relpath: "a.st" }]);
   });
 
   it("applies only the present rule when no folder map is given", () => {
