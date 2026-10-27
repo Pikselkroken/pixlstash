@@ -7,6 +7,7 @@ import { setActivePinia, createPinia } from "pinia";
 
 import WorkflowTemplatesPanel from "./WorkflowTemplatesPanel.vue";
 import { startModelDownload } from "../../api/modelDownloads";
+import { useFilterStore } from "../../stores/useFilterStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { sessionContext } from "../../utils/apiClient";
 import { useWorkflowTemplatesStore } from "../../stores/useWorkflowTemplatesStore";
@@ -26,6 +27,8 @@ describe("WorkflowTemplatesPanel", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     setActivePinia(createPinia());
+    useFilterStore().comfyuiConfigured = true;
+    useFilterStore().comfyuiConfigRead = true;
     listTemplates.mockReset();
   });
   afterEach(() => vi.useRealTimers());
@@ -52,6 +55,70 @@ describe("WorkflowTemplatesPanel", () => {
     wrapper.unmount();
     await vi.advanceTimersByTimeAsync(30_000);
     expect(listTemplates).toHaveBeenCalledTimes(3);
+  });
+});
+
+// No ComfyUI set up (#2166): the grid says where templates come from, even
+// when the default address answers with a list.
+describe("WorkflowTemplatesPanel with no ComfyUI set up", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    useFilterStore().comfyuiConfigRead = true;
+    listTemplates.mockReset();
+    listTemplates.mockResolvedValue({
+      reachable: true,
+      templates: [{ key: "default/a", title: "A", files: [] }],
+    });
+  });
+
+  async function mounted() {
+    await useWorkflowTemplatesStore().fetchTemplates();
+    return mount(WorkflowTemplatesPanel, {
+      props: { columnMin: 240, columnGap: 16 },
+      global: {
+        stubs: {
+          "v-menu": true,
+          "v-icon": true,
+          Tooltip: true,
+          WorkflowTemplateCard: true,
+          ComfyuiIcon: true,
+        },
+      },
+    });
+  }
+
+  it("explains templates and offers Set up ComfyUI, with no list", async () => {
+    const wrapper = await mounted();
+    const empty = wrapper.find('[data-testid="wtp-not-set-up"]');
+    expect(empty.text()).toContain("Templates come from ComfyUI");
+    expect(wrapper.find(".wtp-row").exists()).toBe(false);
+    expect(wrapper.find('[data-testid="wtp-unreachable"]').exists()).toBe(false);
+    await empty.find("button").trigger("click");
+    expect(wrapper.emitted("open-settings")).toEqual([["comfyui"]]);
+    expect(empty.find("button").text()).toBe("Set up ComfyUI");
+  });
+
+  it("does not claim none is set up before the config is read", async () => {
+    useFilterStore().comfyuiConfigRead = false;
+    const wrapper = await mounted();
+    expect(wrapper.find('[data-testid="wtp-not-set-up"]').exists()).toBe(false);
+  });
+
+  it("lists as before once one is set up", async () => {
+    useFilterStore().comfyuiConfigured = true;
+    const wrapper = await mounted();
+    expect(wrapper.find('[data-testid="wtp-not-set-up"]').exists()).toBe(false);
+    expect(wrapper.find(".wtp-row").exists()).toBe(true);
+  });
+
+  it("never reads as unset in a shared view, which cannot read the config", async () => {
+    sessionContext.value = { scope: "READ" };
+    try {
+      const wrapper = await mounted();
+      expect(wrapper.find('[data-testid="wtp-not-set-up"]').exists()).toBe(false);
+    } finally {
+      sessionContext.value = null;
+    }
   });
 });
 
@@ -131,6 +198,8 @@ describe("WorkflowTemplatesPanel card menu", () => {
 
   beforeEach(() => {
     setActivePinia(createPinia());
+    useFilterStore().comfyuiConfigured = true;
+    useFilterStore().comfyuiConfigRead = true;
     listTemplates.mockReset();
     startModelDownload.mockReset();
   });

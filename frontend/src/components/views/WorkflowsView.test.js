@@ -243,6 +243,9 @@ const cursorKey = (wrapper) =>
 
 beforeEach(() => {
   setActivePinia(createPinia());
+  // The Templates place lists only with a ComfyUI set up (#2166).
+  useFilterStore().comfyuiConfigured = true;
+  useFilterStore().comfyuiConfigRead = true;
   // Both rails' open flags are persisted; a test that closes the inspector
   // must not hand the next one a closed inspector.
   window.localStorage.clear();
@@ -456,6 +459,7 @@ describe("the cursor survives the list being rebuilt", () => {
 describe("the empty state", () => {
   it("offers the two routes in that do not need a connection", async () => {
     listWorkflowCards.mockResolvedValue({ cards: [], one_offs: 0, hidden: 0 });
+    useFilterStore().comfyuiConfigured = false;
     const wrapper = mountView();
     await flush();
     expect(wrapper.find(".wfv-empty__title").text()).toBe("Nothing found yet");

@@ -1612,8 +1612,53 @@ def test_the_probe_recognises_comfyui_and_normalises_the_address(
         "detail": None,
         # system_stats carried no argv, so whether it listens is not known.
         "listens_on_network": None,
+        # ...nor devices, so neither is the card.
+        "gpu": None,
+        "vram_mb": None,
     }
     assert asked == ["https://comfy.example.com:8188/system_stats"]
+
+
+@pytest.mark.parametrize(
+    "device, gpu, vram_mb",
+    [
+        (
+            {
+                "name": "cuda:0 NVIDIA GeForce RTX 4090 : cudaMallocAsync",
+                "type": "cuda",
+                "vram_total": 25_757_220_864,
+            },
+            "NVIDIA GeForce RTX 4090",
+            24_564,
+        ),
+        ({"name": "mps", "type": "mps", "vram_total": 0}, "Apple silicon", None),
+        # JSON allows these; int() refuses them.
+        (
+            {"name": "cuda:0 X : a", "type": "cuda", "vram_total": float("nan")},
+            "X",
+            None,
+        ),
+        (
+            {"name": "cuda:0 X : a", "type": "cuda", "vram_total": float("inf")},
+            "X",
+            None,
+        ),
+        ({"name": None, "type": "cuda", "vram_total": "24"}, None, None),
+        ({"name": "cuda:0 X : a", "type": "cuda", "vram_total": -(2**34)}, "X", None),
+        # vram_total is the machine's RAM on the CPU, not a card's memory.
+        ({"name": "cpu", "type": "cpu", "vram_total": 68_719_476_736}, "CPU", None),
+    ],
+)
+def test_the_probe_names_the_card_comfyui_runs_on(
+    workflow_env, monkeypatch, device, gpu, vram_mb
+):
+    """The Workflows sidebar's ComfyUI slot reads the card from the probe."""
+    _system_stats_answer(monkeypatch, (200, {"system": {}, "devices": [device]}))
+    r = workflow_env.owner.post(
+        f"{API}/comfyui/probe", json={"url": "http://127.0.0.1:8188/"}
+    )
+    assert r.status_code == 200, r.text
+    assert (r.json()["gpu"], r.json()["vram_mb"]) == (gpu, vram_mb)
 
 
 @pytest.mark.parametrize(

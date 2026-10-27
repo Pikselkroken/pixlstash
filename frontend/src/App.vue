@@ -844,7 +844,10 @@ defineExpose({
                the app's, and a switch back to Media neither refetches nor
                loses its scroll. A wrapper, since SideBar has several roots and
                v-show on it would not reach them. -->
-          <WorkflowsSidebar v-if="isWorkflowsView" />
+          <WorkflowsSidebar
+            v-if="isWorkflowsView"
+            @open-settings="openSettingsDialog"
+          />
           <ModelsSideBar v-else-if="isModelsView" />
           <div
             v-show="!isWorkflowsView && !isModelsView"

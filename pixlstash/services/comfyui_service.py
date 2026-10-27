@@ -13,6 +13,7 @@ function itself and in ``docs/backend_architecture.md`` §15. Preserve it exactl
 
 import ipaddress
 import json
+import math
 import mimetypes
 import ntpath
 import os
@@ -2632,11 +2633,12 @@ def probe_comfyui(url: str, timeout: float = 2.0) -> dict:
     address the browser can reach and the server cannot is no use.
 
     Returns:
-        ``{"reachable", "url", "version", "detail", "listens_on_network"}``:
-        ``url`` normalised, ``version`` ComfyUI's own when it reports one,
-        ``detail`` the reason when not reachable, written for the person who
-        typed the address, ``listens_on_network`` from
-        :func:`comfyui_listens_on_network` (None when not known).
+        ``{"reachable", "url", "version", "detail", "listens_on_network",
+        "gpu", "vram_mb"}``: ``url`` normalised, ``version`` ComfyUI's own when
+        it reports one, ``detail`` the reason when not reachable, written for
+        the person who typed the address, ``listens_on_network`` from
+        :func:`comfyui_listens_on_network` (None when not known), ``gpu`` and
+        ``vram_mb`` from :func:`_comfyui_device` (None when not known).
 
     Raises:
         ValueError: *url* is not an http(s) URL with a host.
@@ -2649,6 +2651,8 @@ def probe_comfyui(url: str, timeout: float = 2.0) -> dict:
         "version": None,
         "detail": None,
         "listens_on_network": None,
+        "gpu": None,
+        "vram_mb": None,
     }
     try:
         # A redirect is not ComfyUI answering: it is another host's address.
@@ -2692,7 +2696,36 @@ def probe_comfyui(url: str, timeout: float = 2.0) -> dict:
     result["reachable"] = True
     result["version"] = str(version) if version else None
     result["listens_on_network"] = comfyui_listens_on_network(system.get("argv"))
+    result["gpu"], result["vram_mb"] = _comfyui_device(stats.get("devices"))
     return result
+
+
+# ComfyUI names a device "cuda:0 NVIDIA GeForce RTX 4090 : cudaMallocAsync":
+# the torch device first, the allocator last.
+_SHARED_MEMORY_DEVICES = {"cpu": "CPU", "mps": "Apple silicon"}
+_DEVICE_NAME_RE = re.compile(r"^(?:\w+:\d+\s+)?(.*?)(?:\s+:\s+\S+)?$")
+
+
+def _comfyui_device(devices) -> tuple[str | None, int | None]:
+    """The card ComfyUI runs on, from ``/system_stats`` ``devices``.
+
+    ``(name, vram_mb)`` of the first device, the name without the torch device
+    and the allocator; no size for a ComfyUI on the CPU or Apple silicon, whose
+    ``vram_total`` is the machine's RAM; ``(None, None)`` when not listed.
+    """
+    first = devices[0] if isinstance(devices, list) and devices else None
+    if not isinstance(first, dict):
+        return None, None
+    # Both report the machine's RAM as vram_total.
+    if first.get("type") in _SHARED_MEMORY_DEVICES:
+        return _SHARED_MEMORY_DEVICES[first["type"]], None
+    name = _DEVICE_NAME_RE.match(str(first.get("name") or "").strip()).group(1)
+    total = first.get("vram_total")
+    # JSON allows NaN and Infinity, which int() refuses; a size at or below
+    # zero is an error state, not a card.
+    known = isinstance(total, (int, float)) and math.isfinite(total) and total > 0
+    vram_mb = int(total) // (1024 * 1024) if known else None
+    return name or None, vram_mb or None
 
 
 def comfyui_folder_paths(base_url: str):

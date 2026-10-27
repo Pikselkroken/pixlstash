@@ -1764,6 +1764,10 @@ class ComfyUIProbeResponse(BaseModel):
     detail: Optional[str] = None
     # Whether ComfyUI's --listen lets other computers reach it; None unknown.
     listens_on_network: Optional[bool] = None
+    # The card ComfyUI runs on ("NVIDIA GeForce RTX 4090", "CPU") and its
+    # memory in MB; None unknown.
+    gpu: Optional[str] = None
+    vram_mb: Optional[int] = None
 
 
 class ComfyUILinkStatus(BaseModel):

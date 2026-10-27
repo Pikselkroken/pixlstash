@@ -23,8 +23,10 @@ vi.mock("../../api/comfyui", () => ({
 }));
 
 import WorkflowsSidebar from "./WorkflowsSidebar.vue";
+import { useFilterStore } from "../../stores/useFilterStore";
 import { useWorkflowsStore, RECENT_DAYS } from "../../stores/useWorkflowsStore";
 import { useWorkflowTemplatesStore } from "../../stores/useWorkflowTemplatesStore";
+import { sessionContext } from "../../utils/apiClient";
 
 const DAY = 24 * 60 * 60 * 1000;
 const daysAgo = (days) => new Date(Date.now() - days * DAY).toISOString();
@@ -99,19 +101,25 @@ function listing(names, extra = {}) {
 }
 
 const LABEL_KEY = "pixlstash:workflowTemplatesSeen";
+const STUBS = { "v-icon": true, WorkflowsComfyuiSlot: true };
 
-async function mountSidebar() {
+async function mountSidebar({ configured = true, configRead = true } = {}) {
   const pinia = createPinia();
   setActivePinia(pinia);
   const store = useWorkflowsStore();
   const templates = useWorkflowTemplatesStore();
+  const filterStore = useFilterStore();
+  filterStore.comfyuiConfigured = configured;
+  filterStore.comfyuiConfigRead = configRead;
+  filterStore.comfyuiUrl = configured ? "http://127.0.0.1:8188/" : "";
   await store.fetchCards();
+  // The header slot has its own suite (WorkflowsComfyuiSlot.test.js).
   const wrapper = mount(WorkflowsSidebar, {
-    global: { plugins: [pinia], stubs: { "v-icon": true } },
+    global: { plugins: [pinia], stubs: STUBS },
     attachTo: document.body,
   });
   await flushPromises();
-  return { wrapper, store, templates };
+  return { wrapper, store, templates, filterStore };
 }
 
 /** The button whose label is `label` (the row's text, count excluded). */
@@ -250,13 +258,42 @@ describe("the Templates row", () => {
     expect(templatesRow(wrapper).find(".wfs-new").exists()).toBe(false);
   });
 
+  it("shows a dash and no new pill with no ComfyUI set up, whatever the default address serves", async () => {
+    const { wrapper } = await mountSidebar({ configured: false });
+    expect(templatesRow(wrapper).find(".wfs-row__count").text()).toBe("–");
+    expect(templatesRow(wrapper).find(".wfs-new").exists()).toBe(false);
+  });
+
+  it("shows nothing rather than a dash before the config is read", async () => {
+    const { wrapper } = await mountSidebar({ configured: false, configRead: false });
+    expect(templatesRow(wrapper).find(".wfs-row__count").text()).toBe("");
+  });
+
+  it("does not read the list again when the config's first read names the address", async () => {
+    const { filterStore } = await mountSidebar({ configured: false, configRead: false });
+    filterStore.comfyuiConfigured = true;
+    filterStore.comfyuiUrl = "http://127.0.0.1:8188/";
+    filterStore.comfyuiConfigRead = true;
+    await flushPromises();
+    expect(listTemplates).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads the list again, past the server's keep, when the address changes", async () => {
+    const { filterStore } = await mountSidebar();
+    expect(listTemplates).toHaveBeenCalledTimes(1);
+    filterStore.comfyuiUrl = "http://192.0.2.20:8188/";
+    await flushPromises();
+    expect(listTemplates).toHaveBeenCalledTimes(2);
+    expect(listTemplates).toHaveBeenLastCalledWith({ refresh: true });
+  });
+
   it("reads the list once when the rail mounts, and not again on a later visit", async () => {
     const { wrapper } = await mountSidebar();
     expect(listTemplates).toHaveBeenCalledTimes(1);
     // App.vue mounts the rail with v-if, so each visit to /workflows is a new mount.
     const pinia = wrapper.vm.$pinia;
     wrapper.unmount();
-    mount(WorkflowsSidebar, { global: { plugins: [pinia], stubs: { "v-icon": true } } });
+    mount(WorkflowsSidebar, { global: { plugins: [pinia], stubs: STUBS } });
     await flushPromises();
     expect(listTemplates).toHaveBeenCalledTimes(1);
   });
@@ -384,5 +421,22 @@ describe("the favourites chip", () => {
     const { store } = await mountSidebar();
     store.setFilters({ favouritesOnly: true });
     expect(store.filterChips.some((chip) => chip.key === "favourites")).toBe(false);
+  });
+});
+
+describe("the ComfyUI header slot", () => {
+  it("is drawn for the owner", async () => {
+    const { wrapper } = await mountSidebar();
+    expect(wrapper.findComponent({ name: "WorkflowsComfyuiSlot" }).exists()).toBe(true);
+  });
+
+  it("is not drawn in a shared view, which cannot read the owner's ComfyUI", async () => {
+    sessionContext.value = { scope: "READ" };
+    try {
+      const { wrapper } = await mountSidebar();
+      expect(wrapper.findComponent({ name: "WorkflowsComfyuiSlot" }).exists()).toBe(false);
+    } finally {
+      sessionContext.value = null;
+    }
   });
 });
