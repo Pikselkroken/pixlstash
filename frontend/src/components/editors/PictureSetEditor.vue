@@ -1,7 +1,7 @@
 <template>
   <AppDialog
     :open="open"
-    :title="isExistingSet ? 'Edit picture set' : 'New picture set'"
+    :title="dialogTitle"
     size="lg"
     @close="emit('close')"
   >
@@ -265,7 +265,8 @@ const projectSelection = computed({
   },
 });
 
-const emit = defineEmits(["close", "refresh-sidebar"]);
+// `saved` carries the created set, for a host that files pictures into it.
+const emit = defineEmits(["close", "refresh-sidebar", "saved"]);
 
 // Tooltip on every field disabled by the lock. The set editor is set-scoped, so
 // this reason is about the set (the store's picture-scoped lockReason is for
@@ -297,6 +298,12 @@ const isLockedSet = ref(false);
 // Drives the title and would drive a width branch if this editor had one; both
 // columns are populated on create, so it is only the title here.
 const isExistingSet = ref(false);
+
+const dialogTitle = computed(() => {
+  if (isExistingSet.value) return "Edit picture set";
+  const parentName = props.set?.parent_name;
+  return parentName ? `New set in ${parentName}` : "New picture set";
+});
 
 // Bumped on every open, to key the adapter tray (see the template).
 const openCount = ref(0);
@@ -349,6 +356,14 @@ watch(
         set_icon: newSet.set_icon ?? ICON_CARDS,
         set_color: newSet.set_color ?? SET_COLORS[0].value,
         locked: !!newSet.locked,
+        // A new child set (#2124) is created under the parent it was asked
+        // for; an existing set moves only through the menu's Move out of….
+        ...(newSet.id
+          ? {}
+          : {
+              parent_set_id: newSet.parent_set_id ?? null,
+              parent_character_id: newSet.parent_character_id ?? null,
+            }),
       };
     } else {
       localSet.value = {
@@ -395,12 +410,14 @@ function handleKeydown(event) {
 async function saveSetFromEditor(setData) {
   try {
     const opts = { baseUrl: props.backendUrl };
+    let saved = null;
     if (setData.id) {
       await patchPictureSet(setData.id, setData, opts);
     } else {
-      await createPictureSet(setData, opts);
+      saved = (await createPictureSet(setData, opts))?.picture_set ?? null;
     }
 
+    if (saved) emit("saved", saved);
     emit("close");
     emit("refresh-sidebar");
   } catch (e) {

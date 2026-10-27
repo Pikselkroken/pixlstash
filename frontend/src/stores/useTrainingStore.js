@@ -62,7 +62,10 @@ export const useTrainingStore = defineStore("training", () => {
   const dataset = ref(null); // GET /training/dataset
   const datasetLoading = ref(false);
   const datasetError = ref("");
-  const trainOn = ref("all"); // a character's pictures: "reference" | "all"
+  // A character's pictures: "reference" | "all", or "set" for a set under the
+  // person (#2124), which `childSet` keeps across the dataset re-reads.
+  const trainOn = ref("all");
+  const childSet = ref(null); // { id, name, count } or null
   // Opened from the Models workspace, which has no set or person in view: the
   // dialog leads with a Train on picker, and Start lands on Training runs.
   const pickable = ref(false);
@@ -139,6 +142,9 @@ export const useTrainingStore = defineStore("training", () => {
   const scopePayload = computed(() => {
     const ch = character.value;
     if (ch) {
+      if (trainOn.value === "set" && childSet.value) {
+        return { set_id: childSet.value.id, character_id: ch.id };
+      }
       if (trainOn.value === "reference" && ch.reference_set_id != null) {
         return { set_id: ch.reference_set_id, character_id: ch.id };
       }
@@ -182,6 +188,7 @@ export const useTrainingStore = defineStore("training", () => {
     effort.value = "standard";
     fit.value = "auto";
     trainOn.value = "all";
+    childSet.value = null;
     pins.value = {};
     defaultPrompts.value = [];
     prompts.value = [];
@@ -202,11 +209,22 @@ export const useTrainingStore = defineStore("training", () => {
     // Closed or reopened on something else while the read was out.
     if (seq !== openSeq || !trainDialogOpen.value) return;
     const ch = character.value;
-    if (!ch) return;
-    // Opened from a reference set, or from a person: the trigger word is
-    // the person's name either way.
+    if (!ch) {
+      // A set under another set is a concept's dataset (#2124): it starts on
+      // "A thing", and the owner can still say it is a style.
+      if (dataset.value?.parent_set_id != null && subject.value == null) {
+        subject.value = "thing";
+      }
+      return;
+    }
+    // Opened from a reference set, a set under a person, or a person: the
+    // trigger word is the person's name every time.
     triggerWord.value = triggerFromName(ch.name);
-    if (dataset.value.set_id != null) {
+    if (ch.child_set) {
+      // A set under the person: a character LoRA of them, trained on the set.
+      childSet.value = ch.child_set;
+      trainOn.value = "set";
+    } else if (dataset.value.set_id != null) {
       trainOn.value = "reference";
     } else if (ch.reference_count > 0) {
       trainOn.value = "reference";
@@ -657,6 +675,7 @@ export const useTrainingStore = defineStore("training", () => {
     scopeId.value = null;
     scopeName.value = "";
     trainOn.value = "all";
+    childSet.value = null;
     dataset.value = null;
     plan.value = null;
     pins.value = {};
@@ -677,6 +696,7 @@ export const useTrainingStore = defineStore("training", () => {
     datasetLoading,
     datasetError,
     trainOn,
+    childSet,
     pickable,
     openToPick,
     pickScope,

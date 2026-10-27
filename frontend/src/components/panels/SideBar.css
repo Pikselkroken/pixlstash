@@ -75,6 +75,171 @@
   min-width: 0;
 }
 
+/* ---------------------------------------------------------------------------
+   PEOPLE AND SETS AS TREES (#2124). Their top-level rows take the thumbnail
+   size setting again (the places rows above stay at 20px); a child set is a
+   compact row hung off its parent's mark by a guide line that elbows into the
+   last child. An open parent and its children become one raised group. See
+   visual-language.md §5.1, "Child rows".
+
+   Geometry, all from the row's padding edge: `--tree-row-start` is where a
+   depth-1 row's content begins; a child's spacer (`--tree-spacer`) puts its
+   mark under its parent's name; `--tree-x` is where its guide falls inside
+   that spacer. The template computes both per level (utils/setTree.js).
+   --------------------------------------------------------------------------- */
+.sidebar-media-list .sidebar-section-scroll {
+  --sidebar-thumb-size: var(--sidebar-entity-thumb, 20px);
+  --tree-row-start: calc(var(--row-pad, var(--space-3)) + var(--indent-step));
+}
+
+.sidebar-media-list .sidebar-section-scroll .sidebar-list-item {
+  position: relative;
+  height: auto;
+  min-height: max(
+    var(--control-h-bar),
+    calc(var(--sidebar-thumb-size) + var(--space-3))
+  );
+}
+
+.sidebar-media-list .sidebar-section-scroll .sidebar-tree-kid {
+  min-height: max(
+    var(--control-h),
+    calc(var(--tree-kid-thumb) + var(--space-3))
+  );
+}
+
+/* The chevron sits in the gutter left of the mark, which every depth-1 row
+   already leaves empty, so a person's first child set moves nothing. */
+.sidebar-tree-toggle {
+  position: absolute;
+  top: 50%;
+  left: var(--row-pad, var(--space-3));
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--gutter-glyph);
+  height: var(--gutter-glyph);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: rgb(var(--v-theme-sidebar-text));
+  cursor: pointer;
+}
+
+.sidebar-tree-toggle:hover {
+  background: var(--hover-wash);
+}
+
+.sidebar-tree-spacer {
+  position: relative;
+  flex: none;
+  align-self: stretch;
+  width: var(--tree-spacer);
+}
+
+.sidebar-tree-spacer::before,
+.sidebar-tree-rail {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--tree-x);
+  border-left: 1px solid var(--tree-guide);
+}
+
+.sidebar-tree-spacer::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: var(--tree-x);
+  right: var(--space-1);
+  border-top: 1px solid var(--tree-guide);
+}
+
+.sidebar-tree-kid--last .sidebar-tree-spacer::before {
+  bottom: 50%;
+  right: var(--space-1);
+  border-bottom: 1px solid var(--tree-guide);
+  border-bottom-left-radius: var(--radius-sm);
+}
+
+.sidebar-tree-kid--last .sidebar-tree-spacer::after {
+  display: none;
+}
+
+/* The line from an open parent's mark down to its row's bottom edge, where
+   its first child's guide picks it up. */
+.sidebar-tree-stub {
+  position: absolute;
+  left: calc(var(--tree-row-start) + var(--tree-stub-x));
+  top: calc(50% + var(--sidebar-thumb-size) / 2);
+  bottom: 0;
+  border-left: 1px solid var(--tree-guide);
+  pointer-events: none;
+}
+
+.sidebar-tree-stub--kid {
+  top: calc(50% + var(--tree-kid-thumb) / 2);
+}
+
+.sidebar-tree-mark {
+  width: var(--tree-kid-thumb);
+  height: var(--tree-kid-thumb);
+}
+
+.sidebar-tree-mark .sidebar-set-thumb-image {
+  width: var(--tree-kid-thumb);
+  height: var(--tree-kid-thumb);
+  border-radius: var(--radius-sm);
+}
+
+/* "2 sets" under a parent's name, so the chevron is not the only hint. */
+.sidebar-tree-sub {
+  display: block;
+  font-size: var(--text-xs);
+  line-height: var(--leading-tight);
+  color: rgba(
+    var(--v-theme-sidebar-text),
+    var(--opacity-text-secondary)
+  );
+}
+
+/* An open parent and its children: one block. Rows inside take the group's
+   inset off their padding, so every mark, name and count stays on the column
+   of the rows outside it. Scoped under the section so it outranks the later
+   `.sidebar-character-group` rule. */
+.sidebar-section-scroll .sidebar-tree-group {
+  --tree-group-inset: calc(var(--space-2) + 1px);
+  --row-pad: calc(var(--space-3) - var(--tree-group-inset));
+  --sidebar-right-edge: calc(var(--space-3) - var(--tree-group-inset));
+  /* Not the 100% `.sidebar-character-group` carries: with the margin that
+     pushes the counts past the rail's edge. */
+  width: auto;
+  margin: var(--space-2);
+  padding-bottom: var(--space-2);
+  background: var(--group-surface);
+  border: 1px solid var(--group-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.sidebar-tree-group > .sidebar-list-item:first-child {
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
+}
+
+/* Plain neighbouring rows: a hairline from the name column, so the marks
+   still read as one clean column. */
+.sidebar-tree-plain + .sidebar-tree-plain > .sidebar-list-item:first-child::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: calc(var(--tree-row-start) + var(--sidebar-thumb-size) + var(--space-3));
+  right: var(--space-4);
+  border-top: 1px solid rgb(var(--v-theme-divider));
+}
+
 .sidebar-section-add {
   display: inline-flex;
   align-items: center;

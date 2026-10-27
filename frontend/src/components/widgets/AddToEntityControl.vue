@@ -94,67 +94,111 @@
               >Create "{{ trimmedQuery }}"…</span
             >
           </button>
-          <div v-else-if="filteredItems.length === 0" class="ate-empty">
+          <div v-else-if="listedCount === 0" class="ate-empty">
             {{ config.emptyText }}
           </div>
           <!-- Only the entity rows are the listbox. The loading / empty / create
                states above are not options and must stay outside it, or a screen
-               reader counts them as choosable entries. -->
+               reader counts them as choosable entries. A pinned person's block
+               (#2124) is its own small listbox, so the person's name labels its
+               rows. -->
           <div
-            :id="listboxId"
-            role="listbox"
-            :aria-label="config.listLabel"
-            :aria-multiselectable="isMultiSelect ? 'true' : undefined"
+            v-for="group in listGroups"
+            :key="group.key"
+            :class="{ 'ate-pin': group.pinned }"
           >
+            <div v-if="group.pinned" class="ate-pin-head">
+              <img
+                class="ate-pin-avatar"
+                :src="characterThumbnailUrl(pinnedPerson.id)"
+                alt=""
+              />
+              <span class="ate-pin-text">
+                <span class="ate-pin-name">{{ pinnedPerson.name }}</span>
+                <span class="ate-pin-sub">this person</span>
+              </span>
+            </div>
+            <div v-else-if="group.label" class="ate-section-label">
+              {{ group.label }}
+            </div>
+            <div
+              :id="group.pinned ? undefined : listboxId"
+              role="listbox"
+              :aria-label="group.listLabel || config.listLabel"
+              :aria-multiselectable="isMultiSelect ? 'true' : undefined"
+            >
+              <button
+                v-for="item in group.items"
+                :key="item.key"
+                :class="[
+                  'ate-item',
+                  'ctx-item',
+                  {
+                    'ate-item--disabled ctx-item--disabled': isItemDisabled(item),
+                    'ate-item--checked':
+                      !isFace && getItemState(item) === 'checked',
+                  },
+                ]"
+                type="button"
+                role="option"
+                :aria-selected="getAriaSelected(item)"
+                :disabled="isItemDisabled(item)"
+                @click.stop="toggleItem(item)"
+              >
+                <Tooltip
+                  v-if="isItemLocked(item)"
+                  text="This set is locked"
+                  activator="parent"
+                />
+                <v-icon class="ate-item-check ctx-icon">
+                  {{ getItemGlyph(item) }}
+                </v-icon>
+                <span class="ate-item-name ctx-label-text">{{ item.name }}</span>
+                <!-- Partial membership is carried as text folded into the
+                     accessible name ("Vacation 2024, partially applied"), which
+                     is announced far more reliably than aria-checked="mixed" on
+                     an option. -->
+                <span
+                  v-if="!isFace && getItemState(item) === 'partial'"
+                  class="visually-hidden"
+                  >, partially applied</span
+                >
+                <span v-if="isSet" class="ate-item-meta">
+                  <v-icon
+                    v-if="isItemLocked(item)"
+                    size="14"
+                    class="ate-item-lock"
+                    >mdi-lock-outline</v-icon
+                  >
+                  <span v-else-if="isLastUsedItem(item)" class="ate-item-shortcut"
+                    ><Tooltip
+                      text="Press A to add to this set"
+                      activator="parent"
+                    />A</span
+                  >
+                </span>
+              </button>
+            </div>
             <button
-              v-for="item in filteredItems"
-              :key="item.key"
+              v-if="group.pinned && canCreateSet"
               :class="[
                 'ate-item',
                 'ctx-item',
-                {
-                  'ate-item--disabled ctx-item--disabled': isItemDisabled(item),
-                  'ate-item--checked':
-                    !isFace && getItemState(item) === 'checked',
-                },
+                'ate-item--create',
+                { 'ate-item--disabled ctx-item--disabled': createDisabled },
               ]"
               type="button"
-              role="option"
-              :aria-selected="getAriaSelected(item)"
-              :disabled="isItemDisabled(item)"
-              @click.stop="toggleItem(item)"
+              :disabled="createDisabled"
+              @click.stop="requestCreateSet"
             >
-              <Tooltip
-                v-if="isItemLocked(item)"
-                text="This set is locked"
-                activator="parent"
-              />
-              <v-icon class="ate-item-check ctx-icon">
-                {{ getItemGlyph(item) }}
-              </v-icon>
-              <span class="ate-item-name ctx-label-text">{{ item.name }}</span>
-              <!-- Partial membership is carried as text folded into the
-                   accessible name ("Vacation 2024, partially applied"), which
-                   is announced far more reliably than aria-checked="mixed" on
-                   an option. -->
-              <span
-                v-if="!isFace && getItemState(item) === 'partial'"
-                class="visually-hidden"
-                >, partially applied</span
-              >
-              <span v-if="isSet" class="ate-item-meta">
-                <v-icon
-                  v-if="isItemLocked(item)"
-                  size="14"
-                  class="ate-item-lock"
-                  >mdi-lock-outline</v-icon
-                >
-                <span v-else-if="isLastUsedItem(item)" class="ate-item-shortcut"
-                  ><Tooltip
-                    text="Press A to add to this set"
-                    activator="parent"
-                  />A</span
-                >
+              <v-icon class="ate-item-check ctx-icon">mdi-folder-plus-outline</v-icon>
+              <span class="ate-item-name ctx-label-text ate-pin-text">
+                <span class="ate-pin-name">New set in {{ pinnedPerson.name }}…</span>
+                <span class="ate-pin-sub">{{
+                  normalisedPictureIds.length === 1
+                    ? "1 picture"
+                    : `${normalisedPictureIds.length} pictures`
+                }}</span>
               </span>
             </button>
           </div>
@@ -164,6 +208,22 @@
              only): sits below the scrolling list so it stays visible however
              long the list is. Creation itself is the host's job; this only
              emits "create". -->
+        <div v-if="canCreateSet && !pinnedPerson" class="ate-create-pinned">
+          <button
+            :class="[
+              'ate-item',
+              'ctx-item',
+              'ate-item--create',
+              { 'ate-item--disabled ctx-item--disabled': createDisabled },
+            ]"
+            type="button"
+            :disabled="createDisabled"
+            @click.stop="requestCreateSet"
+          >
+            <v-icon class="ate-item-check ctx-icon">mdi-folder-plus-outline</v-icon>
+            <span class="ate-item-name ctx-label-text">New set…</span>
+          </button>
+        </div>
         <div v-if="canCreate" class="ate-create-pinned">
           <button
             :class="[
@@ -215,8 +275,11 @@ import {
   getCharacterMembership,
   addCharacterFaces,
   removeCharacterFaces,
+  characterThumbnailUrl,
 } from "../../api/characters";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
+import { useSelectionStore } from "../../stores/useSelectionStore";
+import { ancestorsOf } from "../../utils/setTree.js";
 import { errorDetail } from "../../utils/apiError";
 import { API_BASE_URL } from "../../utils/apiClient";
 import Tooltip from "./Tooltip.vue";
@@ -275,11 +338,13 @@ const props = defineProps({
   // Ids of locked sets. A locked set can't take or drop members, so its row is
   // greyed and unselectable here (membership in *unlocked* sets is unaffected).
   lockedSetIds: { type: Object, default: () => new Set() },
-  // Opt-in create affordance (character type only): the pinned "New person…"
-  // row, the no-match Create "query"… row, and Enter-on-no-match. Off by
-  // default because only hosts that handle the "create" event may show it; a
-  // visible row that does nothing would be worse than no affordance. Enabled
-  // only by ImageGridContextMenu (#645).
+  // Opt-in create affordance. Characters: the pinned "New person…" row, the
+  // no-match Create "query"… row, and Enter-on-no-match (#645). Sets: "New set
+  // in <Person>…" in the pinned person's block, else "New set…", emitting
+  // `create` with `{ characterId, name }` (#2124). Off by default because only
+  // hosts that handle the "create" event may show it; a visible row that does
+  // nothing would be worse than no affordance. Enabled only by
+  // ImageGridContextMenu.
   allowCreate: { type: Boolean, default: false },
   // Opt-in: teleport the menu to <body> and position it against the viewport
   // instead of rendering it in place.
@@ -559,6 +624,7 @@ const items = computed(() => {
         key: String(s.id),
         name: s.name,
         count: s.picture_count ?? null,
+        parentCharacterId: s.parent_character_id ?? null,
       }));
   }
   if (isProject.value) {
@@ -596,6 +662,64 @@ const filteredItems = computed(() => {
       .includes(needle),
   );
 });
+
+// --- The current person's block (#2124, set type only) ---
+// When the view is a person, or a set under one, that person's child sets and
+// "New set in <Person>…" are pinned above every other set, and search filters
+// only the rest, so filing into a person's sets is one click however large the
+// library. On a view with no person, a selection that shows one person and no
+// other stands in for it.
+const selectionStore = useSelectionStore();
+const soleSelectionPersonId = ref(null);
+
+const viewPersonId = computed(() => {
+  const viewed = Number(selectionStore.selectedCharacter);
+  if (Number.isFinite(viewed) && viewed > 0) return viewed;
+  const setIds = selectionStore.selectedSetIds ?? [];
+  if (setIds.length !== 1) return null;
+  return ancestorsOf(setIds[0], entityLists.pictureSets).characterId;
+});
+
+const pinnedPerson = computed(() => {
+  if (!isSet.value) return null;
+  const id = viewPersonId.value ?? soleSelectionPersonId.value;
+  if (id == null) return null;
+  return entityLists.characters.find((c) => Number(c.id) === id) ?? null;
+});
+
+const pinnedItems = computed(() =>
+  pinnedPerson.value
+    ? items.value.filter(
+        (item) => Number(item.parentCharacterId) === Number(pinnedPerson.value.id),
+      )
+    : [],
+);
+
+/** The list as groups: the pinned person's block, then everything else. */
+const listGroups = computed(() => {
+  if (!pinnedPerson.value) {
+    return [{ key: "all", pinned: false, items: filteredItems.value }];
+  }
+  const pinnedKeys = new Set(pinnedItems.value.map((item) => item.key));
+  return [
+    {
+      key: "person",
+      pinned: true,
+      items: pinnedItems.value,
+      listLabel: `${pinnedPerson.value.name}'s sets`,
+    },
+    {
+      key: "others",
+      pinned: false,
+      label: "Other sets",
+      items: filteredItems.value.filter((item) => !pinnedKeys.has(item.key)),
+    },
+  ];
+});
+
+const listedCount = computed(() =>
+  listGroups.value.reduce((sum, group) => sum + group.items.length, 0),
+);
 
 // --- Item state helpers ---
 // A set frozen by the lock cannot gain or lose members.
@@ -683,6 +807,8 @@ function isLastUsedItem(item) {
 // the host; this component only announces the intent, carrying the typed
 // query.
 const canCreate = computed(() => listsPeople.value && props.allowCreate);
+// Sets: "New set in <Person>…" in the pinned block, else a plain "New set…".
+const canCreateSet = computed(() => isSet.value && props.allowCreate);
 
 const trimmedQuery = computed(() => searchQuery.value.trim());
 
@@ -699,6 +825,16 @@ const showEmptyCreateRow = computed(
     filteredItems.value.length === 0 &&
     trimmedQuery.value.length > 0,
 );
+
+function requestCreateSet() {
+  if (!canCreateSet.value || createDisabled.value) return;
+  const person = pinnedPerson.value;
+  closeMenu();
+  emit("create", {
+    characterId: person ? Number(person.id) : null,
+    name: person?.name ?? "",
+  });
+}
 
 function requestCreate() {
   if (!canCreate.value || createDisabled.value) return;
@@ -773,6 +909,11 @@ function openMenu() {
   // already on screen from the store's cache, and revalidating on open is the
   // only invalidation a share/scoped session gets (the ws stream is owner-only).
   entityLists.refresh(entityKind.value, { baseUrl: baseUrl.value });
+  // The pinned person block names a person, so a set list needs the people too;
+  // once is enough, since nothing on it is a membership.
+  if (isSet.value && !entityLists.has("characters")) {
+    entityLists.refresh("characters", { baseUrl: baseUrl.value });
+  }
   fetchMembers();
   sizeMenu();
   window.addEventListener("resize", sizeMenu);
@@ -926,6 +1067,7 @@ async function fetchMembers() {
     // whole rather than leaking one of its halves.
     membersById.value = next.members;
     if (next.withFaces) picturesWithFaces.value = next.withFaces;
+    if (isSet.value) soleSelectionPersonId.value = next.solePerson ?? null;
     membershipLoaded.value = true;
   } catch (e) {
     if (requestKey !== normalisedIdsKey.value) return;
@@ -951,7 +1093,32 @@ async function readSetMembers(ids) {
       (Array.isArray(memberIds) ? memberIds : []).map(String),
     );
   });
-  return { members, withFaces: null };
+  return { members, withFaces: null, solePerson: await soleSelectionPerson(ids) };
+}
+
+/**
+ * The one person every selected picture shows, when no other person is in
+ * any of them; null otherwise. Not asked when the view names a person, nor by
+ * a host that cannot create the set (the block's reason to exist).
+ */
+async function soleSelectionPerson(ids) {
+  if (viewPersonId.value != null || !props.allowCreate) return null;
+  try {
+    const data = (await getCharacterMembership(ids, apiOpts.value)) ?? {};
+    const people = Object.entries(data.character_assignments ?? {}).filter(
+      ([, picIds]) => (picIds ?? []).length > 0,
+    );
+    if (people.length !== 1) return null;
+    const [charId, picIds] = people[0];
+    const shown = new Set(picIds.map(String));
+    return ids.every((id) => shown.has(String(id))) ? Number(charId) : null;
+  } catch (e) {
+    console.warn(
+      `[AddToEntityControl] could not read who ${ids.length} picture(s) show; the set list opens without a pinned person:`,
+      e,
+    );
+    return null;
+  }
 }
 
 async function readProjectMembers(ids) {
@@ -1577,6 +1744,68 @@ defineExpose({
 
 /* Pinned create row: separated from the scrolling list by a hairline so it
    reads as an action, not another list entry. */
+/* The current person's block (#2124): their sets on the sidebar's raised
+   group surface, pinned above "Other sets" and never filtered away. */
+.ate-pin {
+  margin: 0 var(--space-2) var(--space-2);
+  padding: var(--space-1) 0;
+  background: var(--group-surface);
+  border: 1px solid var(--group-border);
+  border-radius: var(--radius-md);
+}
+
+.ate-menu.force-dark .ate-pin {
+  background: rgba(var(--v-theme-on-dark-surface), 0.045);
+  border-color: rgba(var(--v-theme-on-dark-surface), 0.1);
+}
+
+.ate-pin-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--control-h-bar);
+  padding: 0 var(--space-3);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.ate-pin-avatar {
+  width: var(--entity-thumb);
+  height: var(--entity-thumb);
+  flex: none;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+}
+
+/* The flyout is a fixed 185px, so a second line carries the small print and
+   the name keeps the width. */
+.ate-pin-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: var(--leading-tight);
+}
+
+.ate-pin-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ate-pin-sub {
+  font-size: var(--text-xs);
+  font-weight: 400;
+  opacity: var(--opacity-text-secondary);
+}
+
+.ate-section-label {
+  padding: var(--space-2) var(--space-4) var(--space-1);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .ate-create-pinned {
   flex: 0 0 auto;
   margin-top: var(--space-1);

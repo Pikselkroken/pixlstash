@@ -178,6 +178,26 @@ beforeEach(() => {
 });
 
 describe("TrainLoraDialog", () => {
+  it("opened on a set under a person, trains them on that set first (#2124)", async () => {
+    const { wrapper } = await openDialog(
+      { type: "set", id: 12, name: "LoRA v3" },
+      dataset({
+        set_id: 12,
+        count: 32,
+        character: { ...GRANDAD, child_set: { id: 12, name: "LoRA v3", count: 32 } },
+      }),
+    );
+    expect(wrapper.find('[data-testid="tld-lead"]').text()).toContain(
+      "Character LoRA of Grandad",
+    );
+    const seg = wrapper.find(".seg").findAll("button").map((b) => b.text());
+    expect(seg).toEqual([
+      "LoRA v3 · 32",
+      "Reference set · 24",
+      "Every picture of Grandad · 140",
+    ]);
+  });
+
   it("leads with the person and prints what each choice set", async () => {
     const { wrapper } = await openDialog(
       { type: "character", id: 4, name: "Grandad" },
