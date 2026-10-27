@@ -5995,16 +5995,22 @@ function _justifiedItemGeometry(img, localIdx) {
   return {
     width: layout.itemScaledWidths[globalIdx],
     cardHeight: layout.rowHeights[row],
+    fullRow: !layout.lastRowPartial || row < layout.rowHeights.length - 1,
   };
 }
 
 function getJustifiedCardStyle(img, localIdx) {
   const geo = _justifiedItemGeometry(img, localIdx);
   if (!geo) return null;
+  // A full row's packed widths sum to the FLOORED container width, so a
+  // fractional column would leave its right edge short by up to 1px. Growing
+  // each card by its own width hands that remainder out in proportion to the
+  // aspect ratio; flex-grow never moves a line break, which is decided by the
+  // basis alone. The partial last row stays at its natural widths.
   return {
     width: `${geo.width}px`,
     height: `${geo.cardHeight}px`,
-    flex: "0 0 auto",
+    flex: geo.fullRow ? `${geo.width} 0 ${geo.width}px` : "0 0 auto",
   };
 }
 
@@ -6017,7 +6023,10 @@ function getJustifiedThumbStyle(img, localIdx) {
 
 // Container style for the two layout modes. Square keeps the original CSS
 // grid; justified switches to flex-wrap (via the class) with the packing gap
-// bound inline so JS arithmetic and CSS can never drift.
+// bound inline so JS arithmetic and CSS can never drift. The same gap runs
+// round the edges: it is the gutter a selected tile's outline is drawn in, so
+// the outermost tiles need it as much as their neighbours do.
+// useVirtualScroll subtracts it from the measured width.
 const gridContainerStyle = computed(() => {
   const base = { position: "relative", ...badgeCssVars.value };
   if (isJustifiedMode.value) {
@@ -6025,6 +6034,7 @@ const gridContainerStyle = computed(() => {
       ...base,
       columnGap: `${JUSTIFIED_ROW_GAP}px`,
       rowGap: `${JUSTIFIED_ROW_GAP}px`,
+      padding: `${JUSTIFIED_ROW_GAP}px !important`,
     };
   }
   return {
