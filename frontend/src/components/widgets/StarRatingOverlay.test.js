@@ -23,12 +23,13 @@ describe("StarRatingOverlay favourite heart", () => {
   it("ends the strip with an outline heart that turns red when on", async () => {
     const wrapper = mountStrip({ favouritable: true });
     const heart = wrapper.find(".star-overlay__heart");
-    expect(heart.text()).toBe("mdi-heart-outline");
+    // The MDI outline heart's path; the filled one starts at its bottom tip.
+    expect(heart.attributes("icon")).toMatch(/^svg:M12\.1,18\.55L/);
     expect(heart.classes()).not.toContain("star-overlay__heart--on");
     expect(wrapper.classes()).not.toContain("star-overlay--fav-on");
 
     await wrapper.setProps({ favourite: true });
-    expect(heart.text()).toBe("mdi-heart");
+    expect(heart.attributes("icon")).toMatch(/^svg:M12,21\.35L/);
     expect(heart.attributes("aria-pressed")).toBe("true");
     expect(heart.classes()).toContain("star-overlay__heart--on");
     // The host collapses a favourite's strip to its heart off this class.
@@ -40,6 +41,19 @@ describe("StarRatingOverlay favourite heart", () => {
     await wrapper.find(".star-overlay__heart").trigger("click");
     expect(wrapper.emitted("toggle-favourite")).toHaveLength(1);
     expect(wrapper.emitted("set-score")).toBeUndefined();
+  });
+
+  // A font glyph's baseline snaps to the device pixel grid and sits off centre
+  // in the pill at a fractional scale; a path is placed with its box.
+  it("draws every glyph as a path, never from the icon font", () => {
+    for (const props of [{ favouritable: true }, { numberMode: true }]) {
+      const icons = mountStrip(props).findAll("v-icon");
+      expect(icons.length).toBeGreaterThan(0);
+      for (const icon of icons) {
+        expect(icon.attributes("icon")).toMatch(/^svg:M/);
+        expect(icon.text()).toBe("");
+      }
+    }
   });
 
   it("keeps the heart when the stars are switched off", () => {
