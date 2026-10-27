@@ -4900,10 +4900,12 @@ neither edge moves on a workspace switch.
   label. In the folder view only, and never in a locked folder (its files cannot
   be dragged out to fix it), a copy whose Type ComfyUI loads but that sits
   outside every folder loading it (`isMisplaced`, recursive, case kept as the
-  disk spells it) gets *ComfyUI does not list it here* on its filename line,
+  disk spells it, and only for a kind ComfyUI loads from somewhere on the
+  shelf, so there is a folder to drag it to) gets *ComfyUI does not list it here* on its filename line,
   and a note above the list counts them and offers *Select them*
   (`store.selectRows`). The drop tip adds the ComfyUI name a move changes
-  (`comfyuiNameWords`, from `comfyuiName` before and after; `movableCopies`
+  (`comfyuiNameWords`, from `comfyuiName` before and after, the read's
+  `prefix` in front when the registered folder sits inside ComfyUI's; `movableCopies`
   carries each copy's Type in `kinds`, since the move route refuses extra
   fields on its items). **With `known` false, none of it is drawn**: no marks,
   no lines, no note, nothing about ComfyUI in the tip.

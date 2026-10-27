@@ -1320,6 +1320,22 @@ describe("where ComfyUI loads from (#2205)", () => {
     expect(isMisplaced(at(2, "Lora/Neon.safetensors"), "lora", reads)).toBe(true);
     // A file of no Type ComfyUI loads is never misplaced.
     expect(isMisplaced(at(1, "x.onnx"), "", reads)).toBe(false);
+    // Nor one whose Type ComfyUI loads only from folders off the shelf: there
+    // is nowhere on the shelf to drag it to.
+    expect(isMisplaced(at(1, "4x.pth"), "upscaler", reads)).toBe(false);
+  });
+
+  it("puts a registered folder's own path inside ComfyUI's in front of the name", () => {
+    // Registered `.../checkpoints/Flux`, ComfyUI reading `.../checkpoints`.
+    const inside = {
+      known: true,
+      reads: [
+        { folder_id: 3, subpath: "", prefix: "Flux", category: "checkpoints", kind: "checkpoint" },
+      ],
+    };
+    expect(comfyuiName(at(3, "Dev/Big.safetensors"), "checkpoint", inside)).toBe(
+      "Flux/Dev/Big.safetensors",
+    );
   });
 
   it("guesses nothing while where ComfyUI loads from is not known", () => {

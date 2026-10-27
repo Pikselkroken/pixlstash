@@ -12,6 +12,7 @@ vi.mock("../../api/modelFolders", async (importOriginal) => ({
 }));
 
 import ModelFolderTree from "./ModelFolderTree.vue";
+import { comfyuiNameWords } from "../../composables/useModelCopyDrop";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 
@@ -359,5 +360,41 @@ describe("ModelFolderTree and where ComfyUI loads from (#2205)", () => {
     dragOver(item(wrapper, 1, "Lora/flux"));
     expect(shelf.dropTip.text).not.toContain("ComfyUI");
     wrapper.unmount();
+  });
+});
+
+describe("comfyuiNameWords (#2205)", () => {
+  const reads = {
+    known: true,
+    reads: [{ folder_id: 1, subpath: "Lora", category: "loras", kind: "lora" }],
+  };
+  const copies = (...relpaths) => ({
+    items: relpaths.map((relpath) => ({ folder_id: 1, relpath })),
+    kinds: new Map(relpaths.map((relpath) => [`1\u0000${relpath}`, "lora"])),
+  });
+
+  it("counts the other copies whose name changes", () => {
+    expect(
+      comfyuiNameWords(
+        copies("Lora/a.st", "Lora/b.st", "Lora/c.st"),
+        { folderId: 1, path: "Lora/flux" },
+        reads,
+      ),
+    ).toBe("ComfyUI: a.st → flux/a.st (and 2 more)");
+  });
+
+  it("says when ComfyUI stops listing them, and nothing when no name changes", () => {
+    expect(
+      comfyuiNameWords(copies("Lora/a.st", "Lora/b.st"), { folderId: 1, path: "" }, reads),
+    ).toBe("ComfyUI will no longer list a.st (and 1 more)");
+    expect(
+      comfyuiNameWords(copies("x/a.st"), { folderId: 1, path: "y" }, reads),
+    ).toBe("");
+    expect(
+      comfyuiNameWords(copies("Lora/a.st"), { folderId: 1, path: "" }, {
+        ...reads,
+        known: false,
+      }),
+    ).toBe("");
   });
 });

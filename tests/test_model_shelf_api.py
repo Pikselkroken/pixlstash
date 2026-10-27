@@ -11204,16 +11204,25 @@ def test_comfyui_reads_match_each_category_to_a_registered_folder(
     assert r.json() == {
         "known": True,
         "reads": [
+            # ComfyUI names a file here `models/<relpath>`: the prefix.
             {
                 "folder_id": 1,
                 "subpath": "",
+                "prefix": "models",
                 "category": "diffusion_models",
                 "kind": "checkpoint",
             },
-            {"folder_id": 1, "subpath": "Lora", "category": "loras", "kind": "lora"},
+            {
+                "folder_id": 1,
+                "subpath": "Lora",
+                "prefix": "",
+                "category": "loras",
+                "kind": "lora",
+            },
             {
                 "folder_id": 1,
                 "subpath": "StableDiffusion/SDXL",
+                "prefix": "",
                 "category": "checkpoints",
                 "kind": "checkpoint",
             },

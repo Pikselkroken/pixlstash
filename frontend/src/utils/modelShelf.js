@@ -1285,9 +1285,9 @@ export function comfyuiReadFor(loc, kind, reads) {
 }
 
 /**
- * Whether ComfyUI's own loaders cannot see a copy: it is of a kind ComfyUI
- * loads and sits outside every folder ComfyUI loads that kind from. Always
- * false when where ComfyUI looks is not known, so nothing is guessed.
+ * Whether ComfyUI's own loaders cannot see a copy: ComfyUI loads its kind
+ * from some folder on the shelf, and it sits outside every one. Always false
+ * when where ComfyUI looks is not known, so nothing is guessed.
  *
  * @param {{folder_id: number, relpath: string}} loc
  * @param {string} kind - a {@link SHELF_TYPES} key; `""` is never misplaced.
@@ -1295,7 +1295,9 @@ export function comfyuiReadFor(loc, kind, reads) {
  * @returns {boolean}
  */
 export function isMisplaced(loc, kind, reads) {
-  if (!reads?.known || !SHELF_TYPES.some((type) => type.key === kind)) {
+  // Only a kind ComfyUI loads from somewhere on the shelf: otherwise there is
+  // no folder to drag it into, and "ComfyUI does not list it" would be noise.
+  if (!reads?.known || !reads.reads?.some((read) => read.kind === kind)) {
     return false;
   }
   return comfyuiReadFor(loc, kind, reads) == null;
@@ -1303,7 +1305,9 @@ export function isMisplaced(loc, kind, reads) {
 
 /**
  * What ComfyUI calls a copy in its loader's list: its path under the folder
- * it is loaded from, `flux/x.safetensors`, or null when it is not listed.
+ * it is loaded from, `flux/x.safetensors`, or null when it is not listed. A
+ * registered folder inside ComfyUI's carries its own path as the read's
+ * `prefix`.
  *
  * @param {{folder_id: number, relpath: string}} loc
  * @param {string} kind
@@ -1314,7 +1318,8 @@ export function comfyuiName(loc, kind, reads) {
   const read = comfyuiReadFor(loc, kind, reads);
   if (!read) return null;
   const posix = String(loc.relpath ?? "").replace(/\\/g, "/");
-  return read.subpath ? posix.slice(read.subpath.length + 1) : posix;
+  const name = read.subpath ? posix.slice(read.subpath.length + 1) : posix;
+  return read.prefix ? `${read.prefix}/${name}` : name;
 }
 
 /**

@@ -4646,6 +4646,19 @@ describe("the open folder and All models' strip (#2203)", () => {
       wrapper.unmount();
     });
 
+    it("says nothing about a locked folder, whose files cannot be dragged out", async () => {
+      getComfyuiReads.mockResolvedValue(READS);
+      const { wrapper, store } = await openFolder();
+      expect(wrapper.find("[data-testid='shelf-row-nolist']").exists()).toBe(true);
+      // Reopening the same folder is a no-op, so leave it first.
+      store.setPlace("all");
+      store.setFolderScope({ folderId: 1, path: "", locked: true });
+      await flushPromises();
+      expect(wrapper.find("[data-testid='shelf-row-nolist']").exists()).toBe(false);
+      expect(wrapper.find("[data-testid='shelf-misplaced-note']").exists()).toBe(false);
+      wrapper.unmount();
+    });
+
     it("treats a refused read as unknown", async () => {
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       getComfyuiReads.mockRejectedValue({ response: { status: 403 } });

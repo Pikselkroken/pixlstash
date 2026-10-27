@@ -11942,7 +11942,7 @@ people and the rest of the model's curation come with it.
 A model in a folder ComfyUI does not load its kind from is invisible to
 ComfyUI's own loaders, while PixlStash's digest loaders still find it, so
 nothing would say so. `GET /api/v1/model-folders/comfyui-reads` answers
-`{known, reads: [{folder_id, subpath, category, kind}]}`, which the shelf turns
+`{known, reads: [{folder_id, subpath, prefix, category, kind}]}`, which the shelf turns
 into a Type mark on each folder ComfyUI loads from and a line on each misplaced
 model.
 
@@ -11954,8 +11954,9 @@ model.
 - **Matching** (`comfyui_reads`, `routes/model_folders.py`). Each category path
   and each registered folder are realpathed. A path inside a folder reads from
   that subdirectory (`subpath`, POSIX, spelled as the disk spells it); a folder
-  inside a path is read whole (`subpath ""`). ComfyUI loads recursively, so a
-  read covers everything under it.
+  inside a path is read whole (`subpath ""`), and `prefix` is its path under
+  ComfyUI's folder, which ComfyUI puts in front of the file's name. ComfyUI
+  loads recursively, so a read covers everything under it.
 - **Categories to shelf Types** (`COMFYUI_CATEGORY_KINDS`): `loras` is `lora`;
   `checkpoints`, `diffusion_models` and `unet` are `checkpoint`, because the
   shelf files a bare diffusion model as one (`_ROLE_FOLDERS` in
@@ -11965,10 +11966,15 @@ model.
 - **`known` is false whenever no read lands in a registered folder**: no ComfyUI
   set, not on this computer, unreachable (logged), or none of its folders on the
   shelf. Without it every file would read as misplaced; the client draws no mark
-  and no line at all then.
+  and no line at all then. PixlStash in Docker beside a ComfyUI on the host is
+  the same case: the container's paths are not ComfyUI's, so nothing matches.
+  The client also calls a model misplaced only when some folder loading its
+  kind is on the shelf, so a kind ComfyUI loads only from elsewhere is left
+  alone.
 - **Authority.** `LOCAL_OWNER_ONLY` (§16.3), the tier of 25.23: the subpaths
-  name directories PixlStash never registered. A remote owner is refused and
-  the client treats that as `known: false`. Untemplated, so it is also on
+  name directories PixlStash never registered. A remote owner is refused unless
+  `allow_remote_host_ops` is set, and the client treats a refusal as
+  `known: false`. Untemplated, so it is also on
   `READ_BLOCKED_GET_PATHS`.
 
 ## 26. Prompt match

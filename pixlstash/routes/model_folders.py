@@ -607,6 +607,14 @@ class ComfyuiReadResponse(BaseModel):
             "loads from everything under it."
         )
     )
+    prefix: str = Field(
+        default="",
+        description=(
+            "POSIX path of the registered folder under ComfyUI's own folder when "
+            "the folder sits inside it, else empty. ComfyUI names a file by its "
+            "path under its own folder, so this goes in front of it."
+        ),
+    )
     category: str = Field(description="ComfyUI's name for it, e.g. `loras`.")
     kind: str = Field(
         description=(
@@ -661,7 +669,7 @@ def comfyui_reads(folders: list[dict], folder_paths) -> list[dict]:
         folder_paths: ComfyUI's ``/internal/folder_paths`` answer.
 
     Returns:
-        ``{folder_id, subpath, category, kind}`` per match, sorted.
+        ``{folder_id, subpath, prefix, category, kind}`` per match, sorted.
     """
     if not isinstance(folder_paths, dict):
         return []
@@ -675,14 +683,21 @@ def comfyui_reads(folders: list[dict], folder_paths) -> list[dict]:
             real = os.path.realpath(path)
             for folder_id, root in roots:
                 if path_is_within(real, root):
-                    sub = os.path.relpath(real, root).replace(os.sep, "/")
-                    reads.add((folder_id, "" if sub == "." else sub, category, kind))
+                    sub = _posix_relpath(real, root)
+                    reads.add((folder_id, sub, "", category, kind))
                 elif path_is_within(root, real):
-                    reads.add((folder_id, "", category, kind))
+                    prefix = _posix_relpath(root, real)
+                    reads.add((folder_id, "", prefix, category, kind))
     return [
-        {"folder_id": f, "subpath": s, "category": c, "kind": k}
-        for f, s, c, k in sorted(reads)
+        {"folder_id": f, "subpath": s, "prefix": p, "category": c, "kind": k}
+        for f, s, p, c, k in sorted(reads)
     ]
+
+
+def _posix_relpath(path: str, base: str) -> str:
+    """*path* under *base*, POSIX, ``""`` for *base* itself."""
+    rel = os.path.relpath(path, base).replace(os.sep, "/")
+    return "" if rel == "." else rel
 
 
 _SAMPLES_SUFFIX = "_samples"
