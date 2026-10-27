@@ -627,6 +627,39 @@ describe("a picked training run (#2169)", () => {
     expect(wrapper.find('[data-testid="mrr-stop"]').exists()).toBe(false);
   });
 
+  it("polls again when the tab is looked at after being hidden", async () => {
+    vi.useFakeTimers();
+    let state = "visible";
+    const spy = vi
+      .spyOn(document, "visibilityState", "get")
+      .mockImplementation(() => state);
+    try {
+      getTrainingJobLive.mockResolvedValue({ ...liveJob, rows: [] });
+      routeState.name = "models-runs";
+      const runsStore = useTrainingRunsStore();
+      runsStore.jobs = [liveJob];
+      runsStore.chosen = ["job:u7"];
+      const wrapper = mount(ModelsRail, { global: { stubs } });
+      mounted.push(wrapper);
+      await vi.advanceTimersByTimeAsync(0);
+      state = "hidden";
+      await vi.advanceTimersByTimeAsync(4000);
+      const whileHidden = getTrainingJobLive.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(getTrainingJobLive.mock.calls.length).toBe(whileHidden);
+
+      state = "visible";
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(getTrainingJobLive.mock.calls.length).toBe(whileHidden + 1);
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(getTrainingJobLive.mock.calls.length).toBe(whileHidden + 2);
+    } finally {
+      spy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("leaves no poll behind when it goes while a read is out", async () => {
     vi.useFakeTimers();
     try {

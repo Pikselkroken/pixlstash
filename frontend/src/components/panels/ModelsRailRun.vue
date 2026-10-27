@@ -301,6 +301,14 @@ function schedule() {
   }, POLL_MS);
 }
 
+// `schedule` lets the chain end while the tab is hidden; looking at it again
+// brings the figures up to date and starts it again.
+function onVisible() {
+  if (document.visibilityState === "visible" && current.value.live) {
+    load().then(schedule);
+  }
+}
+
 watch(
   () => props.card.key,
   () => {
@@ -315,9 +323,11 @@ onMounted(() => {
   lists.refresh("characters");
   lists.refresh("sets");
   load().then(schedule);
+  document.addEventListener("visibilitychange", onVisible);
 });
 
 onBeforeUnmount(() => {
+  document.removeEventListener("visibilitychange", onVisible);
   disposed = true;
   generation += 1;
   clearTimeout(timer);

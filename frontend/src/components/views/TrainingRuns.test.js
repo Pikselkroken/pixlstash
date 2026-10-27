@@ -212,6 +212,21 @@ describe("drawing the grid", () => {
     expect(importBtn(wrapper).attributes("disabled")).toBeUndefined();
   });
 
+  it("lets go of a folder's failure once the folder is forgotten", async () => {
+    listRuns.mockRejectedValue(new Error("gone"));
+    const folders = useModelFoldersStore();
+    folders.folders = FOLDERS;
+    folders.loaded = true;
+    const wrapper = mount(TrainingRuns, globalOpts);
+    mounted.push(wrapper);
+    await settle(wrapper);
+    expect(useTrainingRunsStore().error).not.toBe("");
+    useModelFoldersStore().folders = [FOLDERS[1]];
+    await settle(wrapper);
+    expect(useTrainingRunsStore().error).toBe("");
+    expect(wrapper.find("[role='alert']").exists()).toBe(false);
+  });
+
   it("offers the way out when no output folder is set", async () => {
     const wrapper = await openWith([], [FOLDERS[1]]);
     expect(wrapper.text()).toContain("No ai-toolkit output folder is set");

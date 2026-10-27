@@ -197,6 +197,8 @@ export const useTrainingRunsStore = defineStore("trainingRuns", () => {
     const current = () => gen === generation;
     if (sourceId == null) {
       runs.value = [];
+      // A failure was about the root that is gone.
+      error.value = "";
       // This read is over, and it owns the flag as much as any other: an
       // in-flight one is now stale and will decline to clear it.
       loading.value = false;
@@ -282,6 +284,11 @@ export const useTrainingRunsStore = defineStore("trainingRuns", () => {
     () => {
       runs.value = [];
       clearSelection();
+      // Explicitly, not left to the `single` watcher: a run of the same name
+      // under the new root must start with every checkpoint, not the old
+      // run's picks.
+      chosenSteps.value = [];
+      stepsFilledFor = "";
       if (asked.value) loadRuns();
     },
   );
