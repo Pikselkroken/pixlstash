@@ -86,7 +86,10 @@ from platformdirs import user_config_dir
 from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services.builtin_caches import huggingface_cache_dir
+from pixlstash.services.builtin_caches import (
+    huggingface_cache_dir,
+    redeclare_model_root,
+)
 from pixlstash.services.builtin_models import BUILTIN_OWNER
 from pixlstash.services import comfyui_link_service
 from pixlstash.services.comfyui_service import comfyui_model_roots
@@ -145,6 +148,11 @@ DEFAULT_ELIGIBLE_KINDS = ("user", MANAGED_KIND)
 # workflow names a missing file exactly while it is downloading, and `curl -O`
 # writes straight to the final name; the Downloads intake waits the same way.
 PICK_UP_SETTLE_S = 10.0
+
+# How long a rescan of a PixlStash-owned folder waits for the shelf's I/O slot.
+# Long enough to queue behind the other declarations one Rescan all fires at
+# once, short enough to answer a running move with a 409 rather than a hang.
+_REDECLARE_WAIT_S = 5.0
 
 # The most recent scan submitted for each folder, whatever state it ended in.
 # One entry per registered folder, dropped when the folder is forgotten, so it
@@ -537,9 +545,10 @@ class ModelFolderRescanResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     status: str = Field(
-        description="`started`, `already_running`, or `skipped` - for a `source` folder, "
-        "which holds runs rather than models, and for a built-in folder, "
-        "whose rows are declared rather than scanned."
+        description="`started`, `already_running`, `declared` - a built-in folder, whose "
+        "rows are declared rather than scanned and were re-read before this "
+        "answered - or `skipped`, for a `source` folder, which holds runs "
+        "rather than models, and for a built-in folder that could not be read."
     )
     id: int
     task_id: Optional[str] = Field(
@@ -1312,6 +1321,47 @@ def create_router(server) -> APIRouter:
             status="success", id=folder_id, tombstoned_files=tombstoned
         )
 
+    def _redeclare(folder_id: int) -> ModelFolderRescanResponse:
+        """Re-run the declaration of a folder PixlStash owns, in the request.
+
+        Milliseconds, so not a task: the HuggingFace cache's index read
+        measured 0.01 s against 116 GB. It still waits for the shelf's I/O
+        slot, because relocating one of these roots repoints this row's path,
+        and a declaration at the old path would re-create the row there. A
+        sibling declaration from the same Rescan all holds the slot for
+        milliseconds and is waited out; a move holds it for minutes and is a
+        409.
+        """
+        if not SHELF_IO_LOCK.acquire(timeout=_REDECLARE_WAIT_S):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Another model move, import or rescan is holding the "
+                    "shelf. Rescan this folder once it has finished."
+                ),
+            )
+        try:
+            # Read again under the slot: a relocation may have repointed it.
+            path = _fetch_folder(folder_id)["path"]
+            try:
+                declared = redeclare_model_root(server.hub, path)
+            except (sqlite3.Error, OSError) as exc:
+                logger.error(
+                    "Could not re-declare model folder %s (id=%s): %s. Its rows "
+                    "keep the state the last declaration gave them.",
+                    path,
+                    folder_id,
+                    exc,
+                )
+                raise HTTPException(
+                    status_code=500, detail="Could not re-read that folder."
+                ) from exc
+        finally:
+            SHELF_IO_LOCK.release()
+        return ModelFolderRescanResponse(
+            status="skipped" if declared is None else "declared", id=folder_id
+        )
+
     @router.post(
         "/model-folders/{folder_id}/rescan",
         summary="Rescan a registered model folder",
@@ -1322,7 +1372,10 @@ def create_router(server) -> APIRouter:
             "Watch it two ways: live file progress in `GET /workers/progress` "
             "under `workers.ModelFolderScanTask`, and the outcome in this "
             "folder's `scan_status` from `GET /model-folders`. A `source` folder "
-            "is skipped: it is taken from, never catalogued in place."
+            "is skipped: it is taken from, never catalogued in place. A folder "
+            "PixlStash owns (its downloads, InsightFace, the HuggingFace cache) "
+            "is re-declared from its index before this answers: no task, and a "
+            "409 while a move or an import is running."
         ),
         status_code=202,
         tags=["model_shelf"],
@@ -1331,12 +1384,15 @@ def create_router(server) -> APIRouter:
     def rescan_model_folder(folder_id: int, request: Request):
         server.auth.ensure_secure_when_required(request)
         folder = _fetch_folder(folder_id)
-        if folder["kind"] in TAKEN_FROM_KINDS or folder["owner"] == BUILTIN_OWNER:
-            # A source folder holds runs to import, not models to catalogue. A
-            # built-in folder is DECLARED, and pointing the scanner at it would
-            # be actively wrong: it yields only `.safetensors` and sweeps what it
-            # did not see to `missing`, so it would mark the ONNX tagger and both
-            # `.pth` scorers missing on every pass.
+        if folder["owner"] == BUILTIN_OWNER:
+            # A built-in folder is DECLARED, and pointing the scanner at it
+            # would be actively wrong: it yields only `.safetensors` and sweeps
+            # what it did not see to `missing`, so it would mark the ONNX tagger
+            # and both `.pth` scorers missing on every pass. Its rescan is the
+            # declaration again, which reads an index rather than the files.
+            return _redeclare(folder_id)
+        if folder["kind"] in TAKEN_FROM_KINDS:
+            # A source folder holds runs to import, not models to catalogue.
             return ModelFolderRescanResponse(status="skipped", id=folder_id)
 
         status, task_id = queue_model_folder_scan(

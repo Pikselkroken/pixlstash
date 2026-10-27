@@ -3875,6 +3875,83 @@ def test_rescan_skips_a_source_folder(shelf_env, tmp_path):
     assert r.json()["status"] == "skipped"
 
 
+def test_rescanning_the_huggingface_cache_drops_a_deleted_repo(
+    shelf_env, tmp_path, monkeypatch
+):
+    """The cache is declared, never scanned, so its rescan is the declaration
+    again. Before it was, a repo deleted from the cache stayed `present` through
+    every rescan until the server restarted."""
+    import huggingface_hub
+
+    cache = tmp_path / "hf-rescan"
+    cache.mkdir()
+    monkeypatch.setenv(builtin_caches.HUGGINGFACE_CACHE_DIR_ENV, str(cache))
+
+    def _repo(name, size):
+        return SimpleNamespace(
+            repo_id=f"org/{name}",
+            repo_type="model",
+            repo_path=str(cache / f"models--org--{name}"),
+            size_on_disk=size,
+            revisions=(),
+        )
+
+    repos = [_repo("keep", 100), _repo("drop", 32_000)]
+    monkeypatch.setattr(
+        huggingface_hub,
+        "scan_cache_dir",
+        lambda _path: SimpleNamespace(repos=list(repos)),
+    )
+    folder_id = builtin_caches.declare_huggingface_cache(
+        shelf_env.server.hub, str(cache)
+    )
+
+    def _states():
+        return {
+            row["relpath"]: row["state"]
+            for row in shelf_env.server.hub.fetchall(
+                "SELECT relpath, state FROM model_file WHERE model_folder_id = ?",
+                (folder_id,),
+            )
+        }
+
+    try:
+        assert _states() == {
+            "models--org--keep": "present",
+            "models--org--drop": "present",
+        }
+        repos.pop()
+
+        # A move holds the slot: refused rather than declared under it.
+        monkeypatch.setattr(model_folders_routes, "_REDECLARE_WAIT_S", 0.01)
+        with SHELF_IO_LOCK:
+            r = shelf_env.owner.post(f"{API}/model-folders/{folder_id}/rescan")
+        assert r.status_code == 409, r.text
+        assert _states()["models--org--drop"] == "present"
+
+        r = shelf_env.owner.post(f"{API}/model-folders/{folder_id}/rescan")
+        assert r.status_code == 202, r.text
+        assert (r.json()["status"], r.json()["task_id"]) == ("declared", None)
+        assert _states() == {
+            "models--org--keep": "present",
+            "models--org--drop": "missing",
+        }
+    finally:
+        rows = shelf_env.server.hub.fetchall(
+            "SELECT model_id FROM model_file WHERE model_folder_id = ?", (folder_id,)
+        )
+        with shelf_env.server.hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model_file SET state = 'missing' WHERE model_folder_id = ?",
+                (folder_id,),
+            )
+        model_shelf_service.forget_models(
+            shelf_env.server.hub, [int(row["model_id"]) for row in rows]
+        )
+        with shelf_env.server.hub.transaction() as conn:
+            conn.execute("DELETE FROM model_folder WHERE id = ?", (folder_id,))
+
+
 def test_one_downloads_folder_is_taken_from_and_never_scanned(shelf_env, tmp_path):
     """The Downloads folder is watched, not catalogued: its models are moved
     into the default folder, so a scan or a destination there means nothing."""

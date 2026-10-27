@@ -21,6 +21,7 @@ vi.mock("../../api/modelFolders", () => ({
   MANAGED_KIND: "managed",
   SOURCE_KIND: "source",
   DOWNLOADS_KIND: "downloads",
+  BUILTIN_KIND: "foreign",
   CREATABLE_KINDS: ["user", "source", "downloads"],
   listModelFolders: (...a) => listModelFolders(...a),
   createModelFolder: (...a) => createModelFolder(...a),
@@ -326,7 +327,9 @@ describe("Rescan all", () => {
     ]);
     await byText(wrapper, "Rescan all").trigger("click");
     const ids = rescanModelFolder.mock.calls.map((c) => c[0]).sort();
-    expect(ids).toEqual([1, 2]);
+    // The HuggingFace cache too: a repo deleted from it leaves the shelf only
+    // when its index is read again.
+    expect(ids).toEqual([1, 2, 6]);
   });
 
   it("counts the scans down and takes no second click while they start", async () => {
