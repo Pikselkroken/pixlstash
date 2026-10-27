@@ -94,7 +94,7 @@
               >Create "{{ trimmedQuery }}"…</span
             >
           </button>
-          <div v-else-if="listedCount === 0" class="ate-empty">
+          <div v-else-if="!pinnedPerson && listedCount === 0" class="ate-empty">
             {{ config.emptyText }}
           </div>
           <!-- Only the entity rows are the listbox. The loading / empty / create
@@ -120,6 +120,14 @@
             </div>
             <div v-else-if="group.label" class="ate-section-label">
               {{ group.label }}
+            </div>
+            <!-- A search the person's sets survive can still empty the rest;
+                 say so under its heading rather than leave it bare. -->
+            <div
+              v-if="group.label && !group.items.length && !isLoading"
+              class="ate-empty"
+            >
+              {{ config.emptyText }}
             </div>
             <div
               :id="group.pinned ? pinnedListboxId : listboxId"
@@ -1090,18 +1098,22 @@ async function fetchMembers() {
 }
 
 async function readSetMembers(ids) {
-  const data =
-    (await getPictureSetMembership(ids, {
+  // Side by side: the person read must not hold up the rows' membership.
+  const [read, solePerson] = await Promise.all([
+    getPictureSetMembership(ids, {
       ...apiOpts.value,
       includeDeleted: props.includeDeletedMembers ?? false,
-    })) ?? {};
+    }),
+    soleSelectionPerson(ids),
+  ]);
+  const data = read ?? {};
   const members = {};
   Object.entries(data).forEach(([setId, memberIds]) => {
     members[String(setId)] = new Set(
       (Array.isArray(memberIds) ? memberIds : []).map(String),
     );
   });
-  return { members, withFaces: null, solePerson: await soleSelectionPerson(ids) };
+  return { members, withFaces: null, solePerson };
 }
 
 /**

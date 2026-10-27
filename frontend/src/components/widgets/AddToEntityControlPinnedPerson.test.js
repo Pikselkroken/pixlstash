@@ -99,6 +99,8 @@ describe("the pinned person block", () => {
       .findAll('[role="listbox"]')
       .filter((lb) => !lb.element.closest(".ate-pin"));
     expect(others.flatMap(names)).toEqual([]);
+    // The emptied rest says so under its heading.
+    expect(wrapper.find(".ate-section-label + .ate-empty").text()).toBe("No sets found");
     wrapper.unmount();
   });
 
