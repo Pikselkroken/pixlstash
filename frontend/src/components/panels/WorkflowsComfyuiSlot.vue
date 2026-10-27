@@ -36,10 +36,12 @@
           <ComfyuiIcon :size="12" />
           <span class="wcs-dot" :data-state="state"></span>
         </span>
+        <!-- One line: the green dot says Connected, so the card takes its
+             place; any other status is still spelled out. -->
         <span class="wcs-id">
           <span class="wcs-name">{{ instance.name }}</span>
           <span class="wcs-sub">{{
-            [instance.status, instance.gpu].filter(Boolean).join(" · ")
+            state === "connected" ? instance.gpu : instance.status
           }}</span>
         </span>
         <v-icon size="16" class="wcs-chev" aria-hidden="true"
@@ -374,10 +376,12 @@ function settings() {
   flex: 1;
   min-width: 0;
   display: flex;
-  flex-direction: column;
+  align-items: baseline;
+  gap: var(--space-2);
 }
 
 .wcs-name {
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -388,6 +392,9 @@ function settings() {
 }
 
 .wcs-sub {
+  /* The card gives way before the name does. */
+  flex: 0 100 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
