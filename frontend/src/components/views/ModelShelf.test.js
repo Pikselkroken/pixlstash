@@ -4558,6 +4558,8 @@ describe("the open folder and All models' strip (#2203)", () => {
     expect(
       textOf(wrapper.find("[data-testid='shelf-folders-error']")),
     ).toContain("Subfolders could not be read");
+    // An unread listing does not let the empty line claim there are none.
+    expect(textOf(wrapper)).toContain("No models directly in this folder.");
     warn.mockRestore();
     wrapper.unmount();
   });

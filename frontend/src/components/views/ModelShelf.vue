@@ -3640,7 +3640,13 @@ const emptyPlaceLine = computed(() => {
   if (store.place === "recent") return "Nothing was added in the last 30 days.";
   if (store.place === "loose") return "Every model is in a set.";
   if (inFolder.value) {
-    return subfolders.value.length
+    // The models are known from the shelf; only "directly" waits on the
+    // listing. Until it has answered, the line claims no more than is known.
+    const { folderId, path } = store.folderScope;
+    const listing = foldersStore.dirListings.get(
+      foldersStore.dirsKey(folderId, path),
+    )?.listing;
+    return !listing || subfolders.value.length
       ? "No models directly in this folder."
       : "No models in this folder.";
   }

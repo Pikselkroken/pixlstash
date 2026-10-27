@@ -135,6 +135,8 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
    */
   const dirListings = ref(new Map());
   const dirsInFlight = new Map();
+  /** Per key, the newest request: only it may write its answer. */
+  const dirsLatest = new Map();
 
   /** The cache key for one listing. */
   function dirsKey(id, path = "") {
@@ -155,10 +157,14 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
     const key = dirsKey(id, path);
     const known = dirListings.value.get(key);
     if (!force && known?.listing) return known.listing;
-    if (dirsInFlight.has(key)) return dirsInFlight.get(key);
+    // A forced read supersedes one in flight: that one may have left before
+    // the scan or move that asked for this.
+    if (!force && dirsInFlight.has(key)) return dirsInFlight.get(key);
     const startedAt = epoch;
+    const ticket = {};
+    dirsLatest.set(key, ticket);
     const put = (entry) => {
-      if (startedAt !== epoch) return;
+      if (startedAt !== epoch || dirsLatest.get(key) !== ticket) return;
       dirListings.value = new Map(dirListings.value).set(key, entry);
     };
     put({ loading: true, listing: known?.listing ?? null, error: "" });
@@ -176,7 +182,9 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
         });
         return null;
       })
-      .finally(() => dirsInFlight.delete(key));
+      .finally(() => {
+        if (dirsInFlight.get(key) === request) dirsInFlight.delete(key);
+      });
     dirsInFlight.set(key, request);
     return request;
   }
