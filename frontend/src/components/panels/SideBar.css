@@ -298,7 +298,9 @@
   /* Rescale the type ramp for the whole sidebar in one place, driven by
      --sidebar-font-scale (set from the thumbnail size in the inline style;
      defaults to 1 = unchanged). Every sidebar text rule uses these tokens, so
-     this scales them all at once. Values mirror docs/design/design-tokens.css. */
+     this scales them all at once, except the header slot (SidebarScopeSlot),
+     which keeps the ramp size like the other workspaces' slots. Values mirror
+     docs/design/design-tokens.css. */
   --sidebar-font-scale: 1;
   --text-2xs: calc(0.6875rem * var(--sidebar-font-scale));
   --text-xs: calc(0.75rem * var(--sidebar-font-scale));
