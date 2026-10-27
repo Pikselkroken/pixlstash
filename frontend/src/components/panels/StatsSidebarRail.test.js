@@ -5,6 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { enableAutoUnmount, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
+import { ref } from "vue";
 
 const getPictureStats = vi.fn();
 const getPictureMetadata = vi.fn();
@@ -98,6 +99,13 @@ function mountRail(props = {}, options = {}) {
 async function select(wrapper, ids) {
   useSelectionStore().selectedImageIds = ids;
   await wrapper.setProps({ pictures: ids.map((id) => CARDS[id]) });
+  await flush();
+}
+
+/** Select several, then wait out RailPictures' 250 ms settle and the read. */
+async function selectAndRead(wrapper, ids) {
+  await select(wrapper, ids);
+  await new Promise((resolve) => setTimeout(resolve, 260));
   await flush();
 }
 
@@ -364,6 +372,24 @@ describe("the selection's tag reads", () => {
     bulkFetchTags.mockReset().mockResolvedValue([]);
   });
 
+  it("read as loading, not as the new selection's tags, until it is read", async () => {
+    bulkFetchTags.mockResolvedValue([
+      { id: 1, tags: [{ id: 9, tag: "old" }] },
+      { id: 2, tags: [] },
+    ]);
+    const ids = ref([1, 2]);
+    const tags = useSelectionTags(() => ids.value);
+    await tags.fetchSelectedImageTags();
+    expect(tags.tagDataLoading.value).toBe(false);
+    // Before any read goes out (the rail waits for the selection to settle).
+    ids.value = [3, 4];
+    expect(tags.tagDataLoading.value).toBe(true);
+    bulkFetchTags.mockImplementation(() => new Promise(() => {}));
+    void tags.fetchSelectedImageTags();
+    expect(tags.fetchedTagData.value).toEqual([]);
+    bulkFetchTags.mockReset().mockResolvedValue([]);
+  });
+
   it("report a partial failure and still refresh for what changed", async () => {
     bulkFetchTags.mockResolvedValue([
       { id: 1, tags: [] },
@@ -426,7 +452,7 @@ describe("the face crop", () => {
 describe("adding a tag to several", () => {
   it("sends it once for a double Enter, as an add", async () => {
     const wrapper = mountRail();
-    await select(wrapper, [7, 8, 9]);
+    await selectAndRead(wrapper, [7, 8, 9]);
     await wrapper.find('[aria-label="Add a tag to all 3"]').trigger("click");
     const input = wrapper.find(".rail-pictures__input");
     await input.setValue("rain");
@@ -442,7 +468,7 @@ describe("adding a tag to several", () => {
 
   it("re-reads the rejected tags too: an add confirms a rejected one", async () => {
     const wrapper = mountRail();
-    await select(wrapper, [7, 8, 9]);
+    await selectAndRead(wrapper, [7, 8, 9]);
     await wrapper.find('[aria-label="Add a tag to all 3"]').trigger("click");
     const input = wrapper.find(".rail-pictures__input");
     await input.setValue("rain");
@@ -454,7 +480,7 @@ describe("adding a tag to several", () => {
 
   it("opens a collapsed Tags section and focuses the field", async () => {
     const wrapper = mountRail({}, { attachTo: document.body });
-    await select(wrapper, [7, 8, 9]);
+    await selectAndRead(wrapper, [7, 8, 9]);
     await wrapper.find('[aria-label="Collapse Tags"]').trigger("click");
     expect(wrapper.find(".rail-pictures__zone").exists()).toBe(false);
     await wrapper.find('[aria-label="Add a tag to all 3"]').trigger("click");

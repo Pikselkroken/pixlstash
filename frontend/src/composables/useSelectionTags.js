@@ -33,7 +33,10 @@ export const MAX_TAG_FETCH = 100;
  */
 export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
   const fetchedTagData = ref([]);
-  const tagDataLoading = ref(false);
+  const tagReadOut = ref(false);
+  // The pictures `fetchedTagData` was read for. Rows of another selection
+  // are not this one's tags, so until they are replaced they read as loading.
+  const tagDataReadFor = ref("");
   const tagDataCapped = ref(false);
   const fetchedPredictionData = ref([]);
   const predictionLoading = ref(false);
@@ -52,18 +55,29 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
       .filter((id) => Number.isFinite(id) && id > 0);
   }
 
+  const tagDataLoading = computed(
+    () =>
+      tagReadOut.value ||
+      tagDataReadFor.value !== pictureIds().slice(0, MAX_TAG_FETCH).join(","),
+  );
+
   async function fetchSelectedImageTags() {
     const ids = pictureIds();
     tagDataCapped.value = ids.length > MAX_TAG_FETCH;
     const toFetch = ids.slice(0, MAX_TAG_FETCH);
+    const readFor = toFetch.join(",");
     if (!toFetch.length) {
       tagRead += 1;
       fetchedTagData.value = [];
-      tagDataLoading.value = false;
+      tagDataReadFor.value = readFor;
+      tagReadOut.value = false;
       return;
     }
     const mine = (tagRead += 1);
-    if (!fetchedTagData.value.length) tagDataLoading.value = true;
+    // A re-read of the same pictures (after a gesture) keeps its rows on
+    // screen; another selection's rows go.
+    if (tagDataReadFor.value !== readFor) fetchedTagData.value = [];
+    if (!fetchedTagData.value.length) tagReadOut.value = true;
     try {
       const rows = await bulkFetchTags(toFetch);
       if (mine !== tagRead) return;
@@ -72,7 +86,10 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
       console.warn("Couldn't read the selected pictures' tags", e);
       if (mine === tagRead) fetchedTagData.value = [];
     } finally {
-      if (mine === tagRead) tagDataLoading.value = false;
+      if (mine === tagRead) {
+        tagDataReadFor.value = readFor;
+        tagReadOut.value = false;
+      }
     }
   }
 
