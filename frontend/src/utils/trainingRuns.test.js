@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { progressOf, stepsOf } from "./trainingRuns.js";
+import { jobStatus, progressOf, stepsOf } from "./trainingRuns.js";
 
 const saved = (...steps) => ({
   checkpoints: steps.map((step) => ({ filename: `r_${step}`, step })),
@@ -35,5 +35,15 @@ describe("a run's steps", () => {
     const card = { live: false, job: null, run: saved(500) };
     expect(stepsOf(card)).toBe("500 steps");
     expect(progressOf(card)).toBeNull();
+  });
+});
+
+describe("a run's status", () => {
+  it("says a run stopped before its first step is stopped, without a step", () => {
+    expect(jobStatus({ status: "stopped", step: null })).toBe("Stopped");
+    expect(jobStatus({ status: "stopped", step: 800 })).toBe("Stopped at step 800");
+    expect(jobStatus({ status: "running", step: null, total_steps: 10 })).toBe(
+      "Training 0 / 10",
+    );
   });
 });

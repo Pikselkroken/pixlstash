@@ -24,12 +24,15 @@ export function jobStatus(job) {
       return "Waiting for the GPU";
     case "running":
       return job.total_steps
-        ? `Training ${job.step.toLocaleString()} / ${job.total_steps.toLocaleString()}`
+        ? `Training ${(job.step ?? 0).toLocaleString()} / ${job.total_steps.toLocaleString()}`
         : "Setting up";
     case "stopping":
       return "Stopping";
     case "stopped":
-      return `Stopped at step ${job.step.toLocaleString()}`;
+      // A run stopped before it reported a step has none to name.
+      return job.step != null
+        ? `Stopped at step ${job.step.toLocaleString()}`
+        : "Stopped";
     case "error":
       return "Failed";
     default:
