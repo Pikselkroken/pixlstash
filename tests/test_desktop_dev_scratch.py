@@ -83,9 +83,13 @@ def test_refresh_copies_the_data_and_never_points_at_the_real_library(tmp_path):
     (real_dir / "server-config.json").write_text(
         json.dumps({"image_root": str(library_dir)})
     )
+    # The hub's icon store: workflow thumbnails and model icons.
+    (real_dir / "icons").mkdir()
+    (real_dir / "icons" / "thumb.webp").write_bytes(b"icon")
 
     scratch_mod.refresh(str(real_dir), str(scratch_dir))
 
+    assert (scratch_dir / "icons" / "thumb.webp").read_bytes() == b"icon"
     copy = tmp_path / "pictures" / ".library.pixlstash-dev-scratch"
     assert _registered_paths(str(scratch_dir / "hub.db")) == [str(copy)]
     assert sorted(_registered_paths(str(real_dir / "hub.db"))) == [

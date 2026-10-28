@@ -57,7 +57,8 @@ puts the worktree first on `PYTHONPATH` so the backend runs the worktree's code
 even when the venv has another checkout installed editable.
 
 `desktop-dev.sh run` never opens the real data. Each run it refreshes a scratch
-copy (`scripts/desktop_dev_scratch.py`): the app's settings and hub go to
+copy (`scripts/desktop_dev_scratch.py`): the app's settings, hub and the hub's
+`icons/` store (workflow thumbnails and model icons) go to
 `~/.config/pixlstash-desktop-dev-scratch`, and every library is copied into a
 hidden `.<folder>.pixlstash-dev-scratch` beside it, its `vault.db` copied and its
 pictures hard-linked (the caches the backend writes in place, `tmp/` and the
