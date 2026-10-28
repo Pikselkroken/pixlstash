@@ -252,13 +252,6 @@ describe("nothing picked", () => {
     expect([...store.selectedMissingKeys]).toEqual(["missing:flux1-dev.safetensors"]);
   });
 
-  it("names the sidebar's type filter as the view", async () => {
-    const { wrapper, store } = await mountRail();
-    store.setSidebarFilter("type", "lora");
-    await wrapper.vm.$nextTick();
-    expect(title(wrapper)).toBe("LoRAs");
-  });
-
   it("has no picker: the old list and its search are gone", async () => {
     const { wrapper } = await mountRail();
     expect(wrapper.find('[role="listbox"]').exists()).toBe(false);

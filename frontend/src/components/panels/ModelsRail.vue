@@ -355,7 +355,6 @@ const title = computed(() => {
   return viewName({
     runs: false,
     place: store.place,
-    sidebarFilter: store.sidebarFilter,
     folderName: openFolderName.value,
   });
 });

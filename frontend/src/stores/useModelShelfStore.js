@@ -1139,11 +1139,6 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    */
   const place = ref(view.groupBy === GRID_GROUP_BY ? "sets" : "all");
   /**
-   * All models' Type and Base model strip (#2203), `{type, base}` with either
-   * null, or null when neither is picked. The two combine: "every FLUX LoRA".
-   */
-  const sidebarFilter = ref(null);
-  /**
    * The open folder of the Folders tree, `{folderId, path, locked}`, or null.
    * `path` is POSIX under the registered folder, `""` its root. The view is
    * one level, as a file manager's is; a `locked` folder (one PixlStash or
@@ -3423,7 +3418,6 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     // through `setPlace` must not leave the sidebar describing another view.
     if (view.groupBy === GRID_GROUP_BY && place.value !== "sets") {
       place.value = "sets";
-      sidebarFilter.value = null;
       folderScope.value = null;
     } else if (view.groupBy !== GRID_GROUP_BY && place.value === "sets") {
       place.value = "all";
@@ -3757,17 +3751,6 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     return (row.locations ?? []).some((loc) => inFolderScopeOf(loc, scope));
   }
 
-  /** Under All models' Type and Base model picks, when any is made. */
-  function inSidebarFilter(row) {
-    const picked = sidebarFilter.value;
-    if (!picked) return true;
-    if (picked.type && shelfTypeOf(row) !== picked.type) return false;
-    return (
-      !picked.base ||
-      (baseModelKey(row) || BASE_MODEL_UNASSIGNED) === picked.base
-    );
-  }
-
   /**
    * The open place's own narrowing, per file. Favourites is not here: a run is
    * a favourite by its cover, so `visibleRows` asks it of the folded row.
@@ -3782,9 +3765,9 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     return true;
   }
 
-  /** Is this row in the sidebar's view: place, Type/Base pick and folder. */
+  /** Is this row in the sidebar's view: place and folder. */
   function inSidebarView(row) {
-    return inFolderScope(row) && inSidebarFilter(row) && inPlace(row);
+    return inFolderScope(row) && inPlace(row);
   }
 
   /** Rows matching `keep`, folded as the list folds them. */
@@ -3810,36 +3793,6 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     };
   });
 
-  /** Models per Type, by {@link SHELF_TYPES} key: the strip's counts. */
-  const typeCounts = computed(() => {
-    const counts = Object.fromEntries(SHELF_TYPES.map((type) => [type.key, 0]));
-    for (const row of scopedCount()) {
-      const type = shelfTypeOf(row);
-      if (type) counts[type] += 1;
-    }
-    return counts;
-  });
-
-  /**
-   * The strip's Base model menu: `[{key, n}]`, most models first, the unset
-   * bucket last. Folded keys, as the `Show` facet uses, so one base is one row.
-   */
-  const baseCounts = computed(() => {
-    const counts = new Map();
-    for (const row of scopedCount()) {
-      const key = baseModelKey(row) || BASE_MODEL_UNASSIGNED;
-      counts.set(key, (counts.get(key) ?? 0) + 1);
-    }
-    return [...counts.entries()]
-      .map(([key, n]) => ({ key, n }))
-      .sort(
-        (a, b) =>
-          (a.key === BASE_MODEL_UNASSIGNED) - (b.key === BASE_MODEL_UNASSIGNED) ||
-          b.n - a.n ||
-          a.key.localeCompare(b.key),
-      );
-  });
-
   /** Moving through the sidebar starts a new look: nothing stays selected. */
   function clearEverySelection() {
     clearSelection();
@@ -3849,9 +3802,9 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
 
   /**
    * Open a place. Sets takes the grid; every other place takes the list under
-   * its own remembered grouping. A place clears the Type/Base picks and the
-   * open folder, as the sidebar lights one row at a time: picking All models
-   * is how a folder is left.
+   * its own remembered grouping. A place clears the open folder, as the
+   * sidebar lights one row at a time: picking All models is how a folder is
+   * left.
    *
    * @param {string} next - one of {@link SHELF_PLACES}, bar `folder`, which
    *   {@link setFolderScope} opens.
@@ -3859,34 +3812,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   function setPlace(next) {
     if (!SHELF_PLACES.includes(next) || next === "folder") return;
     place.value = next;
-    sidebarFilter.value = null;
     folderScope.value = null;
     clearEverySelection();
     const axis = next === "sets" ? GRID_GROUP_BY : view.listGroupBy;
     if (view.groupBy !== axis) setView({ groupBy: axis });
-  }
-
-  /** Off the set grid onto the list, for a narrowing the grid does not take. */
-  function leaveSetGrid() {
-    if (place.value === "sets") {
-      place.value = "all";
-      if (view.groupBy !== view.listGroupBy) setView({ groupBy: view.listGroupBy });
-    }
-  }
-
-  /**
-   * Pick a Type or a Base model on All models' strip, keeping the other axis;
-   * the same key again, or null, takes that axis back.
-   *
-   * @param {"type"|"base"} axis
-   * @param {string|null} key - a {@link SHELF_TYPES} key or a folded base model.
-   */
-  function setSidebarFilter(axis, key) {
-    const picked = sidebarFilter.value ?? { type: null, base: null };
-    const next = { ...picked, [axis]: key == null || picked[axis] === key ? null : key };
-    sidebarFilter.value = next.type || next.base ? next : null;
-    clearEverySelection();
-    if (sidebarFilter.value) leaveSetGrid();
   }
 
   /**
@@ -3914,7 +3843,6 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     }
     place.value = "folder";
     folderScope.value = next;
-    sidebarFilter.value = null;
     clearEverySelection();
     if (view.groupBy !== view.listGroupBy) setView({ groupBy: view.listGroupBy });
   }
@@ -5084,14 +5012,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     setView,
     setColumnWidth,
     place,
-    sidebarFilter,
     folderScope,
     setPlace,
-    setSidebarFilter,
     setFolderScope,
     placeCounts,
-    typeCounts,
-    baseCounts,
     setMembership,
     setsKnown,
     isRecentRow,

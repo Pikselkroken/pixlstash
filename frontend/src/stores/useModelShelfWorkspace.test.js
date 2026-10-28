@@ -1,6 +1,5 @@
-// The shelf store's Models workspace section (#2168, #2203): places, All
-// models' Type and Base picks, the open folder, the type bands and set
-// membership.
+// The shelf store's Models workspace section (#2168, #2203): places, the
+// open folder, the type bands and set membership.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
@@ -100,10 +99,8 @@ describe("places", () => {
 describe("the place follows the grid", () => {
   it("keeps the place in step with a groupBy written outside setPlace", () => {
     store.setPlace("favourites");
-    store.setSidebarFilter("type", "lora");
     store.setView({ groupBy: GRID_GROUP_BY });
     expect(store.place).toBe("sets");
-    expect(store.sidebarFilter).toBe(null);
     store.setView({ groupBy: "none" });
     expect(store.place).toBe("all");
     // A place opened the ordinary way keeps its own name.
@@ -111,40 +108,6 @@ describe("the place follows the grid", () => {
     expect(store.place).toBe("recent");
     store.setView({ sortKey: "name" });
     expect(store.place).toBe("recent");
-  });
-});
-
-describe("All models' Type and Base picks", () => {
-  it("narrows by a Type and takes it back on a second pick", () => {
-    store.setPlace("sets");
-    store.setSidebarFilter("type", "lora");
-    expect(store.place).toBe("all");
-    expect(ids()).toEqual([2]);
-    store.setSidebarFilter("type", "lora");
-    expect(store.sidebarFilter).toBe(null);
-    expect(ids()).toEqual([1, 2, 3, 4]);
-  });
-
-  it("combines a Type with a Base model, and drops one without the other", () => {
-    store.setPlace("all");
-    store.setSidebarFilter("base", "Flux.1 dev");
-    expect(ids()).toEqual([1, 2]);
-    store.setSidebarFilter("type", "checkpoint");
-    expect(store.sidebarFilter).toEqual({ type: "checkpoint", base: "Flux.1 dev" });
-    expect(ids()).toEqual([1]);
-    // Both must hold: no VAE here is a Flux one.
-    store.setSidebarFilter("type", "vae");
-    expect(ids()).toEqual([]);
-    store.setSidebarFilter("type", null);
-    expect(store.sidebarFilter).toEqual({ type: null, base: "Flux.1 dev" });
-    expect(ids()).toEqual([1, 2]);
-  });
-
-  it("counts every model, whatever folder was last open", () => {
-    store.setFolderScope({ folderId: 2, path: "" });
-    expect(store.placeCounts.all).toBe(4);
-    expect(store.typeCounts.lora).toBe(1);
-    expect(store.typeCounts.checkpoint).toBe(1);
   });
 });
 
@@ -177,10 +140,13 @@ describe("the open folder", () => {
     expect(ids()).toEqual([1, 2, 3, 4]);
   });
 
-  it("clears the Type and Base picks, and a place clears it", () => {
-    store.setSidebarFilter("type", "vae");
+  it("leaves the place counts over every model", () => {
+    store.setFolderScope({ folderId: 2, path: "" });
+    expect(store.placeCounts.all).toBe(4);
+  });
+
+  it("is cleared by a place", () => {
     store.setFolderScope({ folderId: 1, path: "Lora" });
-    expect(store.sidebarFilter).toBe(null);
     store.setPlace("recent");
     expect(store.folderScope).toBe(null);
     expect(ids()).toEqual([1, 4]);

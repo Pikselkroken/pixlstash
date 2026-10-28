@@ -4925,15 +4925,11 @@ neither edge moves on a workspace switch.
   carries each copy's Type in `kinds`, since the move route refuses extra
   fields on its items). **With `known` false, none of it is drawn**: no marks,
   no lines, no note, nothing about ComfyUI in the tip.
-- **All models' strip.** Type and Base model are no longer sidebar rows: on
-  All models only, a strip under the toolbar holds a Type `Segmented` (All,
-  then every `SHELF_TYPES` entry with a count, zero counts left out so a
-  ControlNet appears when the library has one) and a Base model menu. They
-  combine: `store.sidebarFilter` is `{type, base}` (either null), or null when
-  neither is picked; `setSidebarFilter(axis, key)` sets one axis and keeps the
-  other, the same key or null taking it back. Type keys are `SHELF_TYPES`
-  (`shelfTypeOf`: every adapter algorithm is a LoRA).
-- **Counts** (`placeCounts`, `typeCounts`, `baseCounts`) are over every
+- **Type and Base model are the toolbar's Filter.** They are neither sidebar
+  rows nor a strip of their own: the strip All models once carried under the
+  toolbar repeated the Filter panel's Type and Base model lists and was
+  removed.
+- **Counts** (`placeCounts`) are over every
   offered row, stacks folded as the list folds them: a folder is a place now,
   not a scope over the others. *Sets* counts the cards.
 - **The sidebar owns no dialog.** *Add models ▾* (the sidebar's amber
