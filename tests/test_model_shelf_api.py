@@ -36,6 +36,7 @@ import itertools
 import json
 import os
 import re
+import stat
 import sys
 import tempfile
 import threading
@@ -11589,6 +11590,32 @@ def test_a_symlinked_directory_inside_is_removed_as_a_link(
     assert (outside / "theirs.safetensors").read_bytes() == b"o" * 999, (
         "the removal reached through the link"
     )
+
+
+def test_a_junction_is_listed_as_a_link_and_never_walked(tmp_path, monkeypatch):
+    """Without ``os.path.isjunction`` (Python 3.11), a junction is told by its
+    reparse tag. Simulated here: a directory whose ``lstat`` carries the tag."""
+    (tmp_path / "junction").mkdir()
+    (tmp_path / "junction" / "theirs.txt").write_bytes(b"not ours")
+    junction = str(tmp_path / "junction")
+    real_lstat = os.lstat
+
+    def lstat(path, *args, **kwargs):
+        if os.fspath(path) == junction:
+            return SimpleNamespace(
+                st_mode=stat.S_IFDIR,
+                st_size=0,
+                st_mtime_ns=0,
+                st_reparse_tag=model_files_routes._JUNCTION_TAG,
+            )
+        return real_lstat(path, *args, **kwargs)
+
+    monkeypatch.delattr(os.path, "isjunction", raising=False)
+    monkeypatch.setattr(os, "lstat", lstat)
+    listing = model_files_routes._folder_listing(str(tmp_path))
+    assert [(relpath, link) for relpath, _size, _mtime, link in listing] == [
+        ("junction", True)
+    ]
 
 
 def test_a_folder_removal_through_a_link_is_refused(shelf_env, old_folder, tmp_path):

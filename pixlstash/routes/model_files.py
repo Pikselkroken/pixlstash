@@ -72,6 +72,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import stat
 from typing import Optional, Union
 
 from fastapi import APIRouter, Body, HTTPException, Request
@@ -426,8 +427,10 @@ class RemoveFolderPlanResponse(BaseModel):
     )
     models: list[dict] = Field(
         description=(
-            "Each model with a present copy under it: `id`, `name`, and "
-            "`elsewhere`, true when a present copy outside keeps it on the shelf."
+            "Every model with a row under it, whatever the row's state: `id`, "
+            "`name`, and `elsewhere`, true when a present copy outside keeps it "
+            "on the shelf. One whose only row here is `missing` leaves the shelf "
+            "too, so it is listed and weighed."
         )
     )
     breaks: dict = Field(
@@ -472,10 +475,25 @@ class RemoveFolderResponse(BaseModel):
     trash_name: str = Field(default=TRASH_NAME)
 
 
+# The reparse tag of a Windows junction. ``stat`` names it only on Windows.
+_JUNCTION_TAG = getattr(stat, "IO_REPARSE_TAG_MOUNT_POINT", 0xA0000003)
+
+
 def _is_link(path: str) -> bool:
-    """A symbolic link, or a Windows junction, which ``islink`` does not see."""
-    is_junction = getattr(os.path, "isjunction", lambda _path: False)
-    return os.path.islink(path) or is_junction(path)
+    """A symbolic link, or a Windows junction, which ``islink`` does not see.
+
+    The junction test is what ``os.path.isjunction`` does on 3.12, spelled out
+    so 3.11 gets it too: without it a junction is walked into, and one pointing
+    at its own ancestor never ends. Only the junction tag counts, not every
+    reparse point: a cloud placeholder directory is one too, and pruning it
+    would hide files the removal still takes.
+
+    Raises:
+        OSError: *path* cannot be read, which the caller answers as a refusal.
+    """
+    if os.path.islink(path):
+        return True
+    return getattr(os.lstat(path), "st_reparse_tag", 0) == _JUNCTION_TAG
 
 
 def _raise_walk_error(error: OSError) -> None:
