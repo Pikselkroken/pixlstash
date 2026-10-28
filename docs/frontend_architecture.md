@@ -6761,7 +6761,12 @@ the library sidebar docked, both still draw at full width.
   so a count never narrows to zero under its own neighbour), toggling
   `filters.type` / `filters.checkpoint`. Places are not chips (the lit row
   says which is on, and the Filter menu has no Favourites box any more);
-  facets and the Filter menu's filters are.
+  facets and the Filter menu's filters are. A Type row carries one MDI glyph
+  per served type (`TYPE_ICONS`, a generic one for a type it does not know);
+  a Base model row draws the card strip's `ModelMark` tile (`named`, from the
+  same `markRow()` payload in `utils/workflowCard.js`), with its version and
+  role pills hidden because the label already says them. Every row's glyph
+  slot is `--entity-thumb` wide, so all the labels start at one x.
 - **The header slot is the ComfyUI connection** (`WorkflowsComfyuiSlot.vue`,
   #2166). It stays empty until the config is read
   (`filterStore.comfyuiConfigRead`), so a saved address never flashes the
