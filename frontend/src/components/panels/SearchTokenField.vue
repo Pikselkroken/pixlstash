@@ -137,17 +137,17 @@
                 >{{ row.parts[0] }}<b class="stf-row-match">{{ row.parts[1] }}</b
                 >{{ row.parts[2] }}</span
               >
-              <span v-if="row.count != null" class="stf-row-meta">{{
-                formatCount(row.count)
-              }}</span>
+              <span
+                v-if="row.count != null"
+                class="stf-row-meta stf-row-meta--count"
+                >{{ formatCount(row.count) }}
+                {{ row.count === 1 ? "picture" : "pictures" }}</span
+              >
               <span v-else-if="row.where" class="stf-row-meta">{{
                 row.where
               }}</span>
               <span v-if="index === currentIndex" class="stf-row-keys">
                 <kbd>Tab</kbd>
-                <template v-if="row.opposite"
-                  ><kbd>⇧Tab</kbd> {{ row.oppositeLabel }}</template
-                >
               </span>
             </div>
           </template>
@@ -155,7 +155,7 @@
         <div class="stf-foot">
           <span><kbd>↵</kbd> search words</span>
           <span><kbd>Tab</kbd> add filter</span>
-          <span><kbd>⇧Tab</kbd> lacks</span>
+          <span><kbd>⇧Tab</kbd> without tag</span>
           <span><kbd>⌫</kbd> remove</span>
           <span><kbd>Esc</kbd> close</span>
         </div>
@@ -369,7 +369,6 @@ function tagEntries() {
       count,
       apply: () => addTag("has", tag),
       opposite: () => addTag("lacks", tag),
-      oppositeLabel: "lacks",
     }));
 }
 
@@ -952,8 +951,13 @@ defineExpose({ focus });
   color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
   white-space: nowrap;
 }
+/* A count sits beside the name it counts; the Tab key stays at the right. */
+.stf-row-meta--count {
+  margin-left: 0;
+}
 .stf-row--words .stf-row-keys,
-.stf-row-label + .stf-row-keys {
+.stf-row-label + .stf-row-keys,
+.stf-row-meta--count + .stf-row-keys {
   margin-left: auto;
 }
 .stf-foot {
