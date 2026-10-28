@@ -122,7 +122,15 @@
 // NOT <select>, which is a fixed-choice control whose type-ahead must not
 // swallow decision keys; selects are blurred after every change). Session keys
 // are delegated to the session view, which owns the consistency guard.
-import { computed, nextTick, onMounted, onUnmounted, provide, ref } from "vue";
+import {
+  computed,
+  nextTick,
+  onMounted,
+  onUnmounted,
+  provide,
+  ref,
+  watch,
+} from "vue";
 import ReviewRail from "../reviews/ReviewRail.vue";
 import TagHealthBoard from "../reviews/TagHealthBoard.vue";
 import ReviewSessionView from "../reviews/ReviewSessionView.vue";
@@ -157,6 +165,23 @@ const dialog = ref(null); // { preset, initialScope } | null
 const shortcutsOpen = ref(false);
 const tagApplyOpen = ref(false);
 const tagApplyRef = ref(null);
+
+// The tag panel opens from code (T, or a card's Tag manually), so nothing
+// hands focus back when it closes: it goes back to whatever had it, the
+// button that opened it, rather than dropping to <body>. Read before the
+// panel renders and its field takes focus.
+let tagApplyReturnFocus = null;
+watch(tagApplyOpen, (open) => {
+  if (open) {
+    tagApplyReturnFocus = document.activeElement;
+    return;
+  }
+  const el = tagApplyReturnFocus;
+  tagApplyReturnFocus = null;
+  if (el instanceof HTMLElement && el !== document.body && el.isConnected) {
+    nextTick(() => el.focus({ preventScroll: true }));
+  }
+});
 
 provide("rs-backend-url", props.backendUrl);
 

@@ -347,3 +347,51 @@ describe("ReviewSessionsOverlay - Ctrl+Z is no longer dead", () => {
     w.unmount();
   });
 });
+
+// ── The tag panel hands focus back ──────────────────────────────────────────
+// It opens from code (T, or a card's Tag manually), so nothing would return
+// focus when Esc in its field closes it: focus would drop to <body>.
+
+describe("ReviewSessionsOverlay - the tag panel", () => {
+  it("returns focus to what had it when Esc in its field closes it", async () => {
+    const TagsStub = {
+      name: "RailTags",
+      emits: ["leave"],
+      setup(_props, { emit }) {
+        return () =>
+          h("input", {
+            class: "tags-stub",
+            onVnodeMounted: ({ el }) => el.focus(),
+            onKeydown: () => emit("leave"),
+          });
+      },
+    };
+    const store = useReviewSessionsStore();
+    const w = mount(ReviewSessionsOverlay, {
+      ...overlayOpts,
+      global: {
+        ...overlayOpts.global,
+        stubs: { ...overlayOpts.global.stubs, RailTags: TagsStub },
+      },
+    });
+    await flushPromises();
+    seedWithHistory(store);
+    await nextTick();
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+    try {
+      trigger.focus();
+      press("t");
+      await flushPromises();
+      const field = w.find(".tags-stub");
+      expect(document.activeElement).toBe(field.element);
+      await field.trigger("keydown", { key: "Escape" });
+      await flushPromises();
+      expect(w.find(".tags-stub").exists()).toBe(false);
+      expect(document.activeElement).toBe(trigger);
+    } finally {
+      trigger.remove();
+      w.unmount();
+    }
+  });
+});
