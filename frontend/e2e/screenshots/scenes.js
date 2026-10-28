@@ -150,7 +150,7 @@ async function readyGrid(grid) {
   await grid.page.waitForTimeout(900) // let lazy thumbnails paint
 }
 
-/** Open the detail overlay from the first grid thumbnail, robustly. */
+/** Open the lightbox from the first grid thumbnail, robustly. */
 async function openLightbox({ grid, lightbox, page }) {
   const card = grid.thumbnails.first()
   await card.scrollIntoViewIfNeeded()
@@ -224,7 +224,7 @@ export const scenes = [
   {
     id: 'face-detection',
     assets: ['ScreenshotImageOverlay2.jpg'],
-    title: 'Face detection in the overlay',
+    title: 'Face detection in the lightbox',
     async setup({ grid, lightbox, sidebar }) {
       await readyGrid(grid)
       await filterToPerson(sidebar)

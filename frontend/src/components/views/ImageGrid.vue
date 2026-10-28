@@ -3401,7 +3401,7 @@ function errorDetail(err, fallback = "Please try again.") {
 // grid's keyboard shortcuts and native drag must go inert while it is open.
 // Authoritative source: the store ref the Toolbar sets true and App.vue's
 // close handler sets false (NOT the retired local reviewOverlayOpen ref).
-const reviewOverlayOpen = computed(() => reviewSessionsStore.lightboxOpen);
+const reviewOverlayOpen = computed(() => reviewSessionsStore.overlayOpen);
 
 // ── Breadcrumb (current-view path) ──────────────────────────────────────
 // The trail logic lives in useBreadcrumb. It renders here in both shells: the

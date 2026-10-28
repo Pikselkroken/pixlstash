@@ -73,7 +73,7 @@ export class Lightbox {
     )
   }
 
-  /** Open the overlay by clicking a grid thumbnail (first by default). */
+  /** Open the lightbox by clicking a grid thumbnail (first by default). */
   async openFromGrid(cardLocator) {
     const target = cardLocator ?? this.page.locator('.thumbnail-card').first()
     // The grid re-renders on picture websocket events, and the e2e backend runs

@@ -12,6 +12,7 @@ import { useUserPrefsStore } from "../../stores/useUserPrefsStore.js";
 import { useSelectionStore } from "../../stores/useSelectionStore.js";
 import { useProjectStore } from "../../stores/useProjectStore.js";
 import { useSortStore } from "../../stores/useSortStore.js";
+import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore.js";
 
 vi.mock("../../utils/apiClient", async () => {
   const { ref: makeRef, computed: makeComputed } = await import("vue");
@@ -204,5 +205,19 @@ describe("grid open gesture", () => {
     wrapper.vm.handleThumbnailDblClick(IMG, click());
     vi.advanceTimersByTime(600);
     expect(hints()).toHaveLength(0);
+  });
+});
+
+// The review board is a separate overlay from the lightbox, and the grid's keys
+// and drag go inert under it through the REVIEW store's own flag. The keyboard
+// and drag-drop tests inject that flag as a mock ref, so only a real store can
+// show the grid still reads it.
+describe("grid under the review board", () => {
+  it("follows the review store's overlayOpen", () => {
+    const wrapper = mountGrid();
+    const reviews = useReviewSessionsStore();
+    expect(wrapper.vm.reviewOverlayOpen).toBe(false);
+    reviews.overlayOpen = true;
+    expect(wrapper.vm.reviewOverlayOpen).toBe(true);
   });
 });
