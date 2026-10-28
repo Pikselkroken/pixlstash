@@ -1100,7 +1100,7 @@ describe("the column widths", () => {
     }
     expect(store.view.columnWidths).toEqual({
       kind: 64,
-      base: 84,
+      base: 140,
       size: 74,
       date: 96,
       sets: 56,
@@ -1118,7 +1118,7 @@ describe("the column widths", () => {
     const store = useModelShelfStore();
     expect(store.view.columnWidths).toEqual({
       kind: 64,
-      base: 84,
+      base: 140,
       size: 90,
       date: 96,
       sets: 56,
@@ -1156,6 +1156,18 @@ describe("the column widths", () => {
     });
   });
 
+  it("drops a Base width stored before its default widened, and only that", () => {
+    // Every view change below version 3 wrote the old 84px default into the
+    // blob, so the stored figure says nothing about a drag.
+    window.localStorage.setItem(
+      "pixlstash:modelShelfView",
+      JSON.stringify({ v: 2, columnWidths: { kind: 120, base: 84 } }),
+    );
+    const store = useModelShelfStore();
+    expect(store.view.columnWidths.base).toBe(140);
+    expect(store.view.columnWidths.kind).toBe(120);
+  });
+
   it("takes the defaults from a blob written before columns could be dragged", () => {
     // Per field rather than behind a schema bump, for the reason the folder
     // layout is: that blob is still a perfectly good remembered sort.
@@ -1167,7 +1179,7 @@ describe("the column widths", () => {
     expect(store.view.sortKey).toBe("name");
     expect(store.view.columnWidths).toEqual({
       kind: 64,
-      base: 84,
+      base: 140,
       size: 74,
       date: 96,
       sets: 56,

@@ -159,7 +159,7 @@ const VIEW_KEY = "pixlstash:modelShelfView";
  * discards: leave its version out of that table and it falls through to the
  * defaults whole.
  */
-const VIEW_SCHEMA_VERSION = 2;
+const VIEW_SCHEMA_VERSION = 3;
 
 /**
  * Per stored version, the `view` fields a read must NOT take from it.
@@ -167,8 +167,12 @@ const VIEW_SCHEMA_VERSION = 2;
  * A blob at version 1 predates the set grid, so its `groupBy` is not evidence of
  * a choice - `none` was the only thing it could say. Everything else it holds is
  * still exactly what the reader set.
+ *
+ * Below version 3 the Base column defaulted to 84px, too narrow for most labels,
+ * and every view change wrote that default into the blob - so a stored `base`
+ * width is not evidence of a drag either.
  */
-const VIEW_MIGRATIONS = { 1: ["groupBy"] };
+const VIEW_MIGRATIONS = { 1: ["groupBy", "baseWidth"], 2: ["baseWidth"] };
 
 /**
  * Ceiling on remembered collapsed groups, per axis, oldest dropped.
@@ -221,9 +225,10 @@ export const TRAY_VIEWS = ["grid", "list"];
 /**
  * The four data columns the reader can resize, and what each starts at.
  *
- * The first three figures are the resolved design's own
+ * `kind` and `size` are the resolved design's own
  * (ui_kits/app/model-shelf.html, row anatomy) and were fixed widths in the
- * stylesheet until the header strip gave them a grip. The Name column is
+ * stylesheet until the header strip gave them a grip. `base` was the kit's 84px
+ * too, which ellipsised nearly every label; 140px holds the common ones whole. The Name column is
  * deliberately absent: it is the flexible track that takes whatever the others
  * leave, so it has no width of its own to remember.
  *
@@ -237,7 +242,7 @@ export const TRAY_VIEWS = ["grid", "list"];
 export const COLUMN_KEYS = ["kind", "base", "size", "date", "sets"];
 
 /** @type {Record<string, number>} */
-export const DEFAULT_COLUMN_WIDTHS = { kind: 64, base: 84, size: 74, date: 96, sets: 56 };
+export const DEFAULT_COLUMN_WIDTHS = { kind: 64, base: 140, size: 74, date: 96, sets: 56 };
 
 /**
  * The floor each column is held above, per column rather than one figure.
@@ -877,6 +882,7 @@ function storedView() {
   // still a valid remembered sort, and a width edited by hand in devtools is
   // not a reason to hand back a shelf whose Size column is 4,000px wide.
   for (const key of COLUMN_KEYS) {
+    if (key === "base" && stale.includes("baseWidth")) continue;
     const width = clampColumnWidth(key, parsed.columnWidths?.[key]);
     if (width !== null) view.columnWidths[key] = width;
   }

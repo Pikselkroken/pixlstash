@@ -1046,17 +1046,29 @@
                         >not set</span
                       >
                       <!-- A value we inferred rather than one the file or a
-                           person stated. The same tag the name column uses for
-                           the file's own string, with its own word: "from
-                           filename" there already means "verbatim". -->
-                      <span
+                           person stated. Under the label rather than beside it,
+                           so a narrow column ellipsises neither, and a button:
+                           pointing at it turns "guessed" into "confirm", and
+                           clicking writes the guess as the owner's answer. -->
+                      <button
                         v-if="baseModelCell(row).guess"
-                        class="shelf-name-tag"
-                        ><Tooltip
+                        type="button"
+                        class="shelf-name-tag shelf-base-guess"
+                        :aria-label="`Guessed: confirm ${baseModelCell(row).text} as the base model`"
+                        :tabindex="row.rowKey === rovingRowKey ? 0 : -1"
+                        @click.stop="confirmBaseModel(row)"
+                        @dblclick.stop
+                        @keydown.enter.space.stop
+                      >
+                        <Tooltip
                           :text="baseModelCell(row).guess"
                           activator="parent"
-                        />guessed</span
-                      >
+                        /><span class="shelf-base-guess-word">guessed</span
+                        ><span class="shelf-base-guess-confirm"
+                          ><v-icon size="12" aria-hidden="true">mdi-check</v-icon
+                          >confirm</span
+                        >
+                      </button>
                     </template>
                   </span>
                   <span role="gridcell" class="shelf-col shelf-col--size">{{
@@ -3640,6 +3652,18 @@ async function commitBaseModel(restoreFocus = false) {
 }
 
 /**
+ * Accept a guessed base model as it stands.
+ *
+ * Writes the label the cell shows, which the server records as the owner's
+ * own answer, so the tag goes and a rescan cannot guess over it.
+ */
+async function confirmBaseModel(row) {
+  await store.editModelIds(row.memberIds ?? [row.id], {
+    base_model: baseModelCell(row).text,
+  });
+}
+
+/**
  * File a row as the kind its Kind menu picked (#1962).
  *
  * Any pick is a person deciding what the file is, so the server stops the
@@ -5607,12 +5631,52 @@ button.shelf-head-cell:hover {
   width: var(--shelf-col-base);
 }
 
-/* A guessed value carries a tag, and the tag is the part that must survive a
-   narrow column: the label ellipsises, the tag keeps its width. */
-.shelf-col--base:has(.shelf-name-tag) {
+/* A guessed value carries its tag UNDER the label, as the name carries its
+   filename, so the tag never takes the label's width. */
+.shelf-col--base:has(.shelf-base-guess) {
   display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+/* A column item is as wide as its text unless held, and held is what lets
+   `.shelf-base-text` ellipsise rather than clip at the column edge. */
+.shelf-col--base:has(.shelf-base-guess) .shelf-base-text {
+  max-width: 100%;
+}
+
+/* Smaller than the name column's tag: it is a note on the value, not a label
+   of its own, so it drops the caps and the tracking. */
+.shelf-base-guess {
+  display: inline-flex;
+  align-items: center;
+  font-family: inherit;
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-snug);
+  letter-spacing: normal;
+  text-transform: none;
+  cursor: pointer;
+}
+
+.shelf-base-guess-confirm {
+  display: none;
   align-items: center;
   gap: var(--space-2);
+}
+
+.shelf-base-guess:hover,
+.shelf-base-guess:focus-visible {
+  border-color: rgb(var(--v-theme-accent));
+}
+
+.shelf-base-guess:hover .shelf-base-guess-word,
+.shelf-base-guess:focus-visible .shelf-base-guess-word {
+  display: none;
+}
+
+.shelf-base-guess:hover .shelf-base-guess-confirm,
+.shelf-base-guess:focus-visible .shelf-base-guess-confirm {
+  display: inline-flex;
 }
 
 .shelf-base-text {

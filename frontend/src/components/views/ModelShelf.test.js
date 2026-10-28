@@ -748,6 +748,27 @@ describe("editing a base model in place", () => {
     expect(edit).toHaveBeenCalledWith([7], { base_model: null });
   });
 
+  it("confirms a guess with one click, writing the label it shows", async () => {
+    const wrapper = await mountShelf([
+      adapter({
+        id: 7,
+        base_model: "sdxl",
+        base_model_canonical: "SDXL 1.0",
+        base_model_source: "declared_fuzzy",
+      }),
+      adapter({ id: 8 }),
+    ]);
+    const store = useModelShelfStore();
+    const edit = vi.spyOn(store, "editModelIds").mockResolvedValue(true);
+
+    const tags = wrapper.findAll(".shelf-base-guess");
+    // Only the guessed row offers it; a stated base model is already decided.
+    expect(tags).toHaveLength(1);
+    await tags[0].trigger("click");
+    expect(edit).toHaveBeenCalledWith([7], { base_model: "SDXL 1.0" });
+    expect(store.isSelected(7)).toBe(false);
+  });
+
   it("clears the column with an explicit null rather than an empty string", async () => {
     const wrapper = await mountShelf([adapter({ id: 7 })]);
     const store = useModelShelfStore();
@@ -1539,19 +1560,19 @@ describe("resizing the columns", () => {
   it("widens the column the grip belongs to, and remembers it", async () => {
     const wrapper = await mountShelf([adapter()]);
     const store = useModelShelfStore();
-    expect(store.view.columnWidths.base).toBe(84);
+    expect(store.view.columnWidths.base).toBe(140);
 
     await drag(wrapper, gripOf(wrapper, "base"), 240, 200);
-    expect(store.view.columnWidths.base).toBe(124);
+    expect(store.view.columnWidths.base).toBe(180);
     // The variable the rows read, not a per-cell style: one declaration, so a
     // heading and the cells under it cannot drift apart.
     expect(
       wrapper.find(".shelf").element.style.getPropertyValue("--shelf-col-base"),
-    ).toBe("124px");
+    ).toBe("180px");
     expect(
       JSON.parse(window.localStorage.getItem("pixlstash:modelShelfView"))
         .columnWidths.base,
-    ).toBe(124);
+    ).toBe(180);
   });
 
   it("stops widening where the Name track would go under its floor", async () => {
@@ -1569,19 +1590,19 @@ describe("resizing the columns", () => {
     );
 
     await drag(wrapper, gripOf(wrapper, "base"), 400, 0);
-    expect(store.view.columnWidths.base).toBe(144);
+    expect(store.view.columnWidths.base).toBe(200);
 
     // The separator ANNOUNCES that limit rather than the store's absolute
-    // ceiling: a reader told the maximum is 400 and stopped at 144 has been
-    // told the wrong thing about the control in their hand. 204 because the
+    // ceiling: a reader told the maximum is 400 and stopped at 200 has been
+    // told the wrong thing about the control in their hand. 260 because the
     // stubbed track never shrinks - it is the live measurement that is being
     // asserted here, not the arithmetic.
-    expect(gripOf(wrapper, "base").attributes("aria-valuemax")).toBe("204");
+    expect(gripOf(wrapper, "base").attributes("aria-valuemax")).toBe("260");
 
     // And a panel with nothing left to give still lets the column back down:
     // the measurement is a ceiling, so a request to narrow passes untouched.
     await drag(wrapper, gripOf(wrapper, "base"), 0, 40);
-    expect(store.view.columnWidths.base).toBe(104);
+    expect(store.view.columnWidths.base).toBe(160);
   });
 
   it("holds a column at its floor rather than letting it vanish", async () => {
@@ -1612,14 +1633,14 @@ describe("resizing the columns", () => {
 
     await fire(wrapper, grip, "pointerdown", 220);
     await fire(wrapper, grip, "pointermove", 200);
-    expect(store.view.columnWidths.base).toBe(104);
+    expect(store.view.columnWidths.base).toBe(160);
 
     // The release happened somewhere else. The next move arrives with nothing
     // held down, and that is the drag over.
     await fire(wrapper, grip, "pointermove", 160, 0);
-    expect(store.view.columnWidths.base).toBe(104);
+    expect(store.view.columnWidths.base).toBe(160);
     await fire(wrapper, grip, "pointermove", 20, 0);
-    expect(store.view.columnWidths.base).toBe(104);
+    expect(store.view.columnWidths.base).toBe(160);
   });
 
   it("refuses a secondary button on any device, a pen's barrel included", async () => {
@@ -1703,7 +1724,7 @@ describe("resizing the columns", () => {
     await fire(wrapper, grip, "pointermove", 220);
     await fire(wrapper, grip, "pointermove", 210);
     await fire(wrapper, grip, "pointermove", 200);
-    expect(useModelShelfStore().view.columnWidths.base).toBe(114);
+    expect(useModelShelfStore().view.columnWidths.base).toBe(170);
     expect(write).not.toHaveBeenCalled();
 
     await fire(wrapper, grip, "pointerup", 200, 0);
@@ -1711,7 +1732,7 @@ describe("resizing the columns", () => {
     expect(
       JSON.parse(window.localStorage.getItem("pixlstash:modelShelfView"))
         .columnWidths.base,
-    ).toBe(114);
+    ).toBe(170);
     write.mockRestore();
   });
 });

@@ -844,7 +844,7 @@ export function baseModelCell(row) {
         : "Guessed from the filename. Nothing in the file says this.";
     return {
       text: canonical,
-      guess: `${how} Double-click or press Shift+F2 to correct it.`,
+      guess: `${how} Click to confirm it; double-click the label or press Shift+F2 to correct it.`,
     };
   }
   return { text: row?.base_model || canonical, guess: null };
