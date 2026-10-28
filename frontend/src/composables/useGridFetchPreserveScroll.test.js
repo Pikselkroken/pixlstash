@@ -3,8 +3,8 @@
 // Symptom this guards: you scroll down, open an image, remove a tag, press ESC, and
 // the grid is blank until you touch the scroll wheel.
 //
-// Mechanism: closing the overlay flushes a deferred refresh
-// (pendingOverlayGridRefresh → debouncedFetchAllGridImages). A NON-preserving fetch
+// Mechanism: closing the lightbox flushes a deferred refresh
+// (pendingLightboxGridRefresh → debouncedFetchAllGridImages). A NON-preserving fetch
 // resets visibleStart/visibleEnd to the top of the list, but nothing resets
 // scrollTop. The virtualiser then renders the first screenful of cards while the
 // viewport is still parked further down, so the user sees empty space. Any scroll
@@ -17,7 +17,7 @@
 // and `document.querySelectorAll('.image-card').length` returned 164.
 //
 // The non-deferred siblings of this refresh always set preserveScrollOnNextFetch
-// before fetching; the overlay-deferred path did not. These tests pin the window
+// before fetching; the lightbox-deferred path did not. These tests pin the window
 // arithmetic from useGridFetch so the two branches cannot drift apart again.
 
 import { describe, it, expect } from "vitest";

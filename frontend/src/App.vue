@@ -1041,7 +1041,7 @@ defineExpose({
                   gridStore.visibleRangeLabel = $event
                 "
                 @update:match-count="gridStore.matchCount = $event"
-                @update:overlay-open="lightboxOpen = $event"
+                @update:lightbox-open="lightboxOpen = $event"
                 @open-duplicates="handleSelectDuplicates({})"
                 @open-settings="openSettingsDialog"
                 @open-import="openImportDialog"
@@ -1098,10 +1098,10 @@ defineExpose({
           @update-description="
             (id, text) => gridContainer?.updateDescriptionForImage(id, text)
           "
-          @overlay-change="(change) => gridContainer?.handleOverlayChange(change)"
+          @lightbox-change="(change) => gridContainer?.handleLightboxChange(change)"
           @tags-applied="(change) => gridContainer?.handleTagsApplied(change)"
         />
-        <!-- ImageOverlay teleports here: it lies over the centre column and
+        <!-- Lightbox teleports here: it lies over the centre column and
              the rail, and draws its own inspector where the rail is. -->
         <div :id="LIGHTBOX_HOST_ID" class="lightbox-host"></div>
         </div>

@@ -39,7 +39,7 @@ for a decision before something happens. The line is not "how bad is it" — it 
 | `RestoreConfirmDialog` | **stays a dialog** | Consent before a mutation. |
 | Post-purge snapshot privacy notice (`frontend_architecture.md` §"Post-purge privacy notice") | **stays a dialog** | Enumerates a variable-length snapshot list and routes to Settings. A notice is one sentence. |
 | `LockedDeleteNoticeDialog` | **becomes a notice** (`warning`) | Purely informational, reports an outcome already committed, one "Got it" button. Its own header says it is a dialog only because no notice host exists. `title` + `body` collapse to one sentence; `hint` becomes the action. |
-| The 31 native `alert()` calls across 8 files (`ImageGrid`, `ImageOverlay`, `SideBar`, `CharacterEditor`, `PictureSetEditor`, `OverlayDescriptionPanel`, `useGridDragDrop`, `useStackOrdering`) | **become notices** | A native `alert()` is unstyled, blocking, steals focus, and cannot be dismissed by anything but a click. It is the anti-pattern this surface replaces. `alert("Failed to restore scrapheap.")` (`ImageGrid.vue:4046`) is the model case. |
+| The 31 native `alert()` calls across 8 files (`ImageGrid`, `Lightbox`, `SideBar`, `CharacterEditor`, `PictureSetEditor`, `LightboxDescriptionPanel`, `useGridDragDrop`, `useStackOrdering`) | **become notices** | A native `alert()` is unstyled, blocking, steals focus, and cannot be dismissed by anything but a click. It is the anti-pattern this surface replaces. `alert("Failed to restore scrapheap.")` (`ImageGrid.vue:4046`) is the model case. |
 | The silent `catch` blocks in `ImageGrid.vue` (`:3061`, `:3081`, `:4049`, `:6389`, and the `console.error`-only ones at `:4708`, `:4721`) | **become notices** (`error`) | A failure the user is never told about is the bug the store was written to fix. |
 
 **The one-sentence rule.** A notice is a single sentence, ≤ 120 characters, plus at
@@ -124,7 +124,7 @@ for. A transient message must never displace it.
 The host spans the full viewport width and centres on the viewport. It does **not** track
 the sidebar or the stats panel.
 
-- The host is global. It has to render on the login screen, over `ImageOverlay`, over
+- The host is global. It has to render on the login screen, over `Lightbox`, over
   `ReviewSessionsOverlay` and inside Settings — none of which have a grid column to
   centre on. One stable anchor beats a conditional one.
 - Bottom-centre is already the app's transient-status position (the selection pill).
@@ -162,7 +162,7 @@ footprint*.** Above 600px the breadcrumb is outside that footprint and contribut
 
 ### 2.5 Over the lightbox and other dark surfaces
 
-`ImageOverlay` is a deliberately-dark surface (`dark-surface` / `on-dark-surface`, its
+`Lightbox` is a deliberately-dark surface (`dark-surface` / `on-dark-surface`, its
 own z-index 1000–5000). A white `surface` card floating on it is legible but reads as
 foreign chrome. The host takes a modifier in any `dark-surface` context:
 
@@ -340,8 +340,8 @@ shipped components had exactly that, and the fix would have broken them:
 
 | Site | Fill | Before | After the naive fix | Resolution |
 |---|---|---|---|---|
-| `ImageOverlay .overlay-comfy-warning` | `rgba(warning, .2)` on the lightbox | 11.38 / 12.99 | **1.41 / 1.33** | tint → `dark-surface-warning`, text → `on-dark-surface` (9.18 / 10.51) |
-| `ImageOverlay .overlay-comfy-error` | `rgba(error, .2)` on the lightbox | 12.92 / 13.89 | 12.92 / **1.24** | same (9.89 / 11.24); the class went with the lightbox's I2I menu in #1406, the rule did not |
+| `Lightbox .lightbox-comfy-warning` | `rgba(warning, .2)` on the lightbox | 11.38 / 12.99 | **1.41 / 1.33** | tint → `dark-surface-warning`, text → `on-dark-surface` (9.18 / 10.51) |
+| `Lightbox .lightbox-comfy-error` | `rgba(error, .2)` on the lightbox | 12.92 / 13.89 | 12.92 / **1.24** | same (9.89 / 11.24); the class went with the lightbox's I2I menu in #1406, the rule did not |
 | `SideBar .sidebar-error-bubble` | `rgba(error, .8)` | 3.73 / 4.94 | 3.73 / **3.49** | fill made solid (4.86 / 4.68) |
 | `ProjectFiles .pf-file-delete:hover` | `rgba(error, .8)` | 3.59 / 4.94 | 3.59 / **3.49** | fill made solid (4.86 / 4.68) |
 
@@ -386,7 +386,7 @@ Arithmetic for every pair in both themes is enforced by
 `frontend/src/utils/contrastAudit.test.js`; `npm run audit:contrast` prints the table.
 
 The eleven `success` declarations moved onto it, as did the notice host's `--on-dark`
-variant (§2.5) and the two `ImageOverlay` chips above. **Not** migrated: the ~40
+variant (§2.5) and the two `Lightbox` chips above. **Not** migrated: the ~40
 `error`-on-dark-surface declarations in the review overlay, which measure 3.12:1 with
 the light theme's `error` — a **pre-existing** failure unrelated to this change, and a
 mechanical migration large enough to want its own eyeball pass. Logged in §10.
@@ -797,9 +797,9 @@ The original findings, kept for the evidence:
    `success` (`#4caf50`) and `info` (`#2196F3`) are the unmodified Material 500s in both
    themes. As a foreground on the light canvas they measure 2.59:1 and 2.88:1 — both
    below the 3:1 UI floor. This is why §3.2 keeps status hue out of the glyph.
-8. **31 native `alert()` calls** across `ImageGrid.vue`, `ImageOverlay.vue`,
+8. **31 native `alert()` calls** across `ImageGrid.vue`, `Lightbox.vue`,
    `SideBar.vue`, `CharacterEditor.vue`, `PictureSetEditor.vue`,
-   `OverlayDescriptionPanel.vue`, `useGridDragDrop.js` and `useStackOrdering.js`. Each is
+   `LightboxDescriptionPanel.vue`, `useGridDragDrop.js` and `useStackOrdering.js`. Each is
    an unstyled, blocking, focus-stealing OS dialog inside a design-system app.
 9. **`DeleteForeverDialog.vue` uses the filled `mdi-alert`** where the rest of the app
     uses the outline family.
@@ -919,7 +919,7 @@ exists to stop.
 10. With `prefers-reduced-motion: reduce`, cards cross-fade with no vertical travel and
     the stack does not slide on reflow.
 11. Open the lightbox and push a notice: the `--on-dark` variant renders, above the
-    overlay chrome.
+    lightbox chrome.
 12. No hardcoded hex, no `rgba(0,0,0,…)`, no `em` font-size, no off-grid spacing, and no
     radius outside the four steps anywhere in the new component.
 
@@ -927,8 +927,8 @@ exists to stop.
 
 13. Every text/glyph on a **solid** status fill is legible in both themes. The sites are
     `TitleBar .tb-close:hover`, `AppButton --danger`, `ProgressOverlay __abort`,
-    `EmptyScrapHeap .delete-btn`, `SelectionBar .remove-btn`, `ImageOverlay
-    .overlay-draw-cancel`, `ImageGrid`'s touch-select tick, `SideBar .sidebar-error-bubble`,
+    `EmptyScrapHeap .delete-btn`, `SelectionBar .remove-btn`, `Lightbox
+    .lightbox-draw-cancel`, `ImageGrid`'s touch-select tick, `SideBar .sidebar-error-bubble`,
     `ProjectFiles .pf-file-delete:hover`, and the `variant="elevated"/"flat"` `color="error"`
     buttons in `RestoreConfirmDialog` and `FolderEditor`. **In dark mode these all flip
     from white to near-black text** — that is the fix, not a regression.

@@ -103,7 +103,7 @@ const emit = defineEmits([
   "set-score",
   "toggle-favourite",
   "update-description",
-  "overlay-change",
+  "lightbox-change",
   "tags-applied",
 ]);
 
@@ -176,7 +176,7 @@ function closeRail() {
   sidebarStore.toggleStats();
   nextTick(() =>
     [...document.querySelectorAll(".tb-stats-btn")]
-      .find((el) => !el.closest(".overlay-topbar-sidebar-toggle"))
+      .find((el) => !el.closest(".lightbox-topbar-sidebar-toggle"))
       ?.focus(),
   );
 }
@@ -1211,7 +1211,7 @@ watch(
       @set-score="(n) => oneCard && emit('set-score', oneCard, n)"
       @toggle-favourite="emit('toggle-favourite', [oneId])"
       @update-description="(id, text) => emit('update-description', id, text)"
-      @overlay-change="emit('overlay-change', $event)"
+      @lightbox-change="emit('lightbox-change', $event)"
       @tags-applied="emit('tags-applied', $event)"
       @refresh="refreshOne"
     />

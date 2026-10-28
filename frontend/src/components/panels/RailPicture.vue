@@ -90,7 +90,7 @@
       @tags-applied="emit('tags-applied', $event)"
     />
 
-    <OverlayDescriptionPanel
+    <LightboxDescriptionPanel
       class="rail-picture__desc"
       :image="image"
       :locked="locked"
@@ -149,7 +149,7 @@ import FacesPanel from "../widgets/FacesPanel.vue";
 import SectionHeader from "../widgets/SectionHeader.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
 import Tooltip from "../widgets/Tooltip.vue";
-import OverlayDescriptionPanel from "../views/OverlayDescriptionPanel.vue";
+import LightboxDescriptionPanel from "../views/LightboxDescriptionPanel.vue";
 import RailTags from "./RailTags.vue";
 
 const props = defineProps({
@@ -170,7 +170,7 @@ const emit = defineEmits([
   "toggle-favourite",
   "tags-applied",
   "update-description",
-  "overlay-change",
+  "lightbox-change",
   "update:image",
   "update:faces",
   "refresh",
@@ -279,7 +279,7 @@ function replaceFace(faceId, patch) {
     "update:faces",
     props.faces.map((f) => (f.id === faceId ? { ...f, ...patch } : f)),
   );
-  emit("overlay-change", {
+  emit("lightbox-change", {
     imageId: Number(props.pictureId),
     fields: { faces: true },
   });

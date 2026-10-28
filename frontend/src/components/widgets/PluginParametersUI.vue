@@ -296,7 +296,7 @@ function emitValue() {
   opacity: 0.9;
 }
 
-.overlay-comfy-field-label {
+.lightbox-comfy-field-label {
   font-size: var(--text-2xs);
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -321,7 +321,7 @@ function emitValue() {
   padding: 0 var(--space-3);
 }
 
-.overlay-comfy-select {
+.lightbox-comfy-select {
   width: 100%;
   background: rgba(var(--v-theme-shadow), 0.45);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
@@ -332,7 +332,7 @@ function emitValue() {
 }
 
 /* On the dark overlay: the global ring's width and gap, that ground's ink. */
-.overlay-comfy-select:focus-visible {
+.lightbox-comfy-select:focus-visible {
   outline-color: rgb(var(--v-theme-on-dark-surface));
 }
 

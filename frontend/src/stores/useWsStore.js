@@ -47,7 +47,7 @@ export const useWsStore = defineStore("ws", () => {
   const wsSmartScoreUpdate = ref({ key: 0, pictureIds: [] });
   // Signals a DetectionTask (Segment) finished for the given pictures. The grid
   // treats `detections` as a card-content field and refreshes the card in place,
-  // but that refresh is deferred while the lightbox is open, and the overlay
+  // but that refresh is deferred while the lightbox is open, and the lightbox
   // fetches its boxes from /pictures/{id}/detections rather than from the card.
   // Without this signal an open overlay kept showing the pre-segment boxes until
   // it was closed and reopened.
@@ -57,7 +57,7 @@ export const useWsStore = defineStore("ws", () => {
   const wsTextUpdate = ref({ key: 0, pictureIds: [] });
   // Signals the given pictures were TURNED (`orientation`): an in-place rotate,
   // or the undo/redo of one. The grid's card refresh for this is deferred while
-  // the lightbox is open (§9.1), and the overlay builds its `<img>` URL from
+  // the lightbox is open (§9.1), and the lightbox builds its `<img>` URL from
   // `orientation`, which none of its other signals re-read - so without this the
   // open lightbox kept showing the picture the wrong way up until it was closed
   // and reopened. Deliberately narrower than `pixels`, which a thumbnail

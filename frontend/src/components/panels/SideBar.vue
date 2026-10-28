@@ -2736,7 +2736,7 @@ async function moveSetToTop(set) {
 }
 
 // Tooltip on the Delete entry when a set is locked (set-scoped; the store's
-// lockReason is picture-scoped for the grid/overlay).
+// lockReason is picture-scoped for the grid/lightbox).
 const SET_LOCK_REASON =
   "This set is locked. Unlock it first (Unlock set) to delete it.";
 const SET_LOCK_MOVE_REASON =

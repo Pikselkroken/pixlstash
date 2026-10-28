@@ -11,7 +11,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test, expect } from '../fixtures/test.js'
 import { GridPage } from '../pages/GridPage.js'
-import { ImageOverlay } from '../pages/ImageOverlay.js'
+import { Lightbox } from '../pages/Lightbox.js'
 import { SettingsDialog } from '../pages/SettingsDialog.js'
 import { SideBar } from '../pages/SideBar.js'
 import { scenes, manual, sceneForAsset } from './scenes.js'
@@ -56,7 +56,7 @@ function ctxFor(page) {
   return {
     page,
     grid: new GridPage(page),
-    overlay: new ImageOverlay(page),
+    lightbox: new Lightbox(page),
     settings: new SettingsDialog(page),
     sidebar: new SideBar(page),
   }
@@ -65,7 +65,7 @@ function ctxFor(page) {
 test.describe('reproduce website screenshots', () => {
   // Match the look of the original site shots: dark theme + a denser grid.
   // (Stars/face-box grid overlays are left off here — their click.stop handlers
-  // intercept thumbnail clicks; the overlay scenes toggle face boxes
+  // intercept thumbnail clicks; the lightbox scenes toggle face boxes
   // themselves.) Persisted server-side for the owner, so every later capture
   // inherits it. Runs first by file order (workers: 1).
   test('appearance: dark theme + density', async ({ apiContext }) => {

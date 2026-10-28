@@ -307,10 +307,10 @@ test.describe('notice surface', () => {
 
   test('takes the --on-dark variant over the lightbox and paints above it', async ({
     notices,
-    overlay,
+    lightbox,
   }) => {
-    await overlay.openFromGrid()
-    await expect(overlay.root).toBeVisible()
+    await lightbox.openFromGrid()
+    await expect(lightbox.root).toBeVisible()
 
     await notices.push({ level: 'error', text: 'Description save failed.' })
     const card = notices.onlyCard()
@@ -327,7 +327,7 @@ test.describe('notice surface', () => {
     // than by comparing z-index strings across stacking contexts.
     expect(await notices.isTopmostAtCentre(card)).toBe(true)
 
-    await overlay.close()
+    await lightbox.close()
     await expect(notices.host).not.toHaveClass(/notice-host--on-dark/)
     // Closing the lightbox must not take the notice with it.
     await expect(card).toBeVisible()

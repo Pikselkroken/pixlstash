@@ -625,7 +625,7 @@ function handleSelectionMenuHotkey(event) {
   // (A tooltip is an overlay too, so only menus and dialogs count.)
   if (
     document.querySelector(
-      ".image-overlay, .v-menu.v-overlay--active, .v-dialog.v-overlay--active",
+      ".lightbox, .v-menu.v-overlay--active, .v-dialog.v-overlay--active",
     )
   ) {
     return;
@@ -773,7 +773,7 @@ function openPluginPanel() {
     selectedPluginName.value = String(pluginOptions.value[0].name);
   }
   // nextTick lets any in-progress Vue render cycle complete (e.g. a context
-  // menu closing on the same tick) before we open the overlay.
+  // menu closing on the same tick) before we open the lightbox.
   nextTick(() => {
     pluginMenuOpen.value = true;
   });

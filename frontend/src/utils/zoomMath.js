@@ -1,6 +1,6 @@
 // Pure zoom arithmetic for the continuous cursor-anchored wheel model shared
 // by every zoom surface (the "zoom family": Compare's blink-zoom, the
-// lightbox's ImageOverlay, and any surface added later).
+// lightbox's Lightbox, and any surface added later).
 //
 // The wheel means ZOOM for the whole gesture (owner requirement): wheel over
 // a candidate opens the zoom and continued wheeling keeps magnifying, one
@@ -12,7 +12,7 @@
 //
 // Two anchor solvers share one equation, one per pan transport:
 // `anchorZoomScroll` for a scroll-container surface (Compare) and
-// `anchorZoomOffset` for a translate+scale transform surface (ImageOverlay).
+// `anchorZoomOffset` for a translate+scale transform surface (Lightbox).
 
 /**
  * How hard one unit of wheel delta zooms. A standard 100-delta notch works
@@ -130,7 +130,7 @@ export function anchorZoomScroll({
 /**
  * The transform-space twin of `anchorZoomScroll`, for a surface whose pan
  * transport is a `translate(offset) scale(…)` transform on a container-centred
- * image (ImageOverlay) rather than a scroll container.
+ * image (Lightbox) rather than a scroll container.
  *
  * Same equation, different variable: with the image centred in the container,
  * a point p (natural px, measured from the image centre) renders at

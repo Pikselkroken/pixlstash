@@ -12,7 +12,7 @@
          content. The box, the collapse, the tab band and the key/value grid
          live here; a pane owns only what it says. -->
     <!-- The lightbox keeps its pane mounted while closed: the panels hold
-         editing state and refs the overlay reaches into as it opens. -->
+         editing state and refs the lightbox reaches into as it opens. -->
     <div
       v-if="open || lightbox"
       v-show="open"
@@ -113,7 +113,7 @@ defineProps({
   /** The active tab's `value`. */
   modelValue: { type: String, default: "" },
   /**
-   * The image overlay's pane: dark in both themes, and a fixed-height column
+   * The image lightbox's pane: dark in both themes, and a fixed-height column
    * whose sections bound and scroll themselves instead of the pane scrolling.
    * Its tab band carries the on-dark inks below, added when the lightbox
    * became the first pane here to need `tabs` (#1313).

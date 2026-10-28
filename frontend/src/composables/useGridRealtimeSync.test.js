@@ -16,8 +16,8 @@ function makeHarness(overrides = {}) {
     refreshSmartScoreForImage: vi.fn(),
     removeImagesById: vi.fn(),
     isImagesLoading: vi.fn(() => false),
-    isOverlayOpen: vi.fn(() => overrides.overlayOpen === true),
-    markOverlayDeferredRefresh: vi.fn(),
+    isLightboxOpen: vi.fn(() => overrides.lightboxOpen === true),
+    markLightboxDeferredRefresh: vi.fn(),
     hasPendingGridImages: vi.fn(() => overrides.pendingGridImages === true),
   };
   const wsStore = {
@@ -381,7 +381,7 @@ describe("useGridRealtimeSync - card-content-only updates (detections)", () => {
   });
 
   it("detections update while overlay open -> deferred, no immediate refresh", () => {
-    const h = makeHarness({ overlayOpen: true });
+    const h = makeHarness({ lightboxOpen: true });
     const res = h.sync.handleMessage({
       type: "pictures_changed",
       source: "ui",
@@ -391,9 +391,9 @@ describe("useGridRealtimeSync - card-content-only updates (detections)", () => {
       fields: ["detections"],
     });
     expect(res.action).toBe("targeted");
-    expect(res.reason).toBe("card-content-refresh-overlay-deferred");
+    expect(res.reason).toBe("card-content-refresh-lightbox-deferred");
     expect(h.grid.refreshGridImage).not.toHaveBeenCalled();
-    expect(h.grid.markOverlayDeferredRefresh).toHaveBeenCalledTimes(1);
+    expect(h.grid.markLightboxDeferredRefresh).toHaveBeenCalledTimes(1);
   });
 
   it("mixed fields (detections + a view field) follow the OLD path, not the new branch", () => {
@@ -512,7 +512,7 @@ describe("useGridRealtimeSync: stack-facet updates (stack_count)", () => {
   it("defers a stack-time reorder while the lightbox is open", () => {
     const h = makeHarness({
       selectedSort: "STACK_UPDATED_AT",
-      overlayOpen: true,
+      lightboxOpen: true,
     });
     const res = h.sync.handleMessage({
       type: "pictures_changed",
@@ -523,9 +523,9 @@ describe("useGridRealtimeSync: stack-facet updates (stack_count)", () => {
     });
 
     expect(res.action).toBe("deferred");
-    expect(res.reason).toBe("stack-time-sort-changed-overlay-deferred");
+    expect(res.reason).toBe("stack-time-sort-changed-lightbox-deferred");
     expect(h.reload).not.toHaveBeenCalled();
-    expect(h.grid.markOverlayDeferredRefresh).toHaveBeenCalledTimes(1);
+    expect(h.grid.markLightboxDeferredRefresh).toHaveBeenCalledTimes(1);
   });
 
   it("a large batch stays one read, never an escalated reload", () => {
@@ -547,7 +547,7 @@ describe("useGridRealtimeSync: stack-facet updates (stack_count)", () => {
   });
 
   it("defers under an open overlay, like every other grid mutation", () => {
-    const h = makeHarness({ overlayOpen: true });
+    const h = makeHarness({ lightboxOpen: true });
     const res = h.sync.handleMessage({
       type: "pictures_changed",
       source: "ui",
@@ -557,9 +557,9 @@ describe("useGridRealtimeSync: stack-facet updates (stack_count)", () => {
       fields: ["stack_count"],
     });
     expect(res.action).toBe("targeted");
-    expect(res.reason).toBe("stack-facet-refresh-overlay-deferred");
+    expect(res.reason).toBe("stack-facet-refresh-lightbox-deferred");
     expect(h.grid.refreshStackFacets).not.toHaveBeenCalled();
-    expect(h.grid.markOverlayDeferredRefresh).toHaveBeenCalledTimes(1);
+    expect(h.grid.markLightboxDeferredRefresh).toHaveBeenCalledTimes(1);
   });
 
   it("mixed fields follow the OLD path: a lifted score still needs its sort", () => {
@@ -593,9 +593,9 @@ describe("useGridRealtimeSync: stack-facet updates (stack_count)", () => {
   });
 });
 
-describe("useGridRealtimeSync - pills deferred while the overlay is open", () => {
-  it("external sort-affecting update defers to overlay close, raises no pill", () => {
-    const h = makeHarness({ selectedSort: "SMART_SCORE", overlayOpen: true });
+describe("useGridRealtimeSync - pills deferred while the lightbox is open", () => {
+  it("external sort-affecting update defers to lightbox close, raises no pill", () => {
+    const h = makeHarness({ selectedSort: "SMART_SCORE", lightboxOpen: true });
     const res = h.sync.handleMessage({
       type: "pictures_changed",
       source: "external",
@@ -605,13 +605,13 @@ describe("useGridRealtimeSync - pills deferred while the overlay is open", () =>
       fields: ["smart_score"],
     });
     expect(res.action).toBe("targeted");
-    expect(res.reason).toBe("external-updated-sort-affecting-overlay-deferred");
+    expect(res.reason).toBe("external-updated-sort-affecting-lightbox-deferred");
     expect(h.wsStore.addSortChangedExternalIds).not.toHaveBeenCalled();
-    expect(h.grid.markOverlayDeferredRefresh).toHaveBeenCalledTimes(1);
+    expect(h.grid.markLightboxDeferredRefresh).toHaveBeenCalledTimes(1);
   });
 
-  it("external add defers to overlay close, no New-pictures pill", () => {
-    const h = makeHarness({ overlayOpen: true });
+  it("external add defers to lightbox close, no New-pictures pill", () => {
+    const h = makeHarness({ lightboxOpen: true });
     const res = h.sync.handleMessage({
       type: "picture_imported",
       source: "external",
@@ -619,13 +619,13 @@ describe("useGridRealtimeSync - pills deferred while the overlay is open", () =>
       picture_ids: [20, 21],
     });
     expect(res.action).toBe("targeted");
-    expect(res.reason).toBe("external-added-overlay-deferred");
+    expect(res.reason).toBe("external-added-lightbox-deferred");
     expect(h.wsStore.addPendingExternalImportIds).not.toHaveBeenCalled();
-    expect(h.grid.markOverlayDeferredRefresh).toHaveBeenCalledTimes(1);
+    expect(h.grid.markLightboxDeferredRefresh).toHaveBeenCalledTimes(1);
   });
 
-  it("foreign-ui add defers to overlay close instead of inserting live", () => {
-    const h = makeHarness({ overlayOpen: true });
+  it("foreign-ui add defers to lightbox close instead of inserting live", () => {
+    const h = makeHarness({ lightboxOpen: true });
     const res = h.sync.handleMessage({
       type: "pictures_changed",
       source: "ui",
@@ -634,13 +634,13 @@ describe("useGridRealtimeSync - pills deferred while the overlay is open", () =>
       change_kind: "added",
     });
     expect(res.action).toBe("targeted");
-    expect(res.reason).toBe("foreign-ui-added-overlay-deferred");
+    expect(res.reason).toBe("foreign-ui-added-lightbox-deferred");
     expect(h.grid.insertGridImagesById).not.toHaveBeenCalled();
-    expect(h.grid.markOverlayDeferredRefresh).toHaveBeenCalledTimes(1);
+    expect(h.grid.markLightboxDeferredRefresh).toHaveBeenCalledTimes(1);
   });
 
-  it("still raises the pill for the same event when no overlay is open", () => {
-    const h = makeHarness({ selectedSort: "SMART_SCORE", overlayOpen: false });
+  it("still raises the pill for the same event when no lightbox is open", () => {
+    const h = makeHarness({ selectedSort: "SMART_SCORE", lightboxOpen: false });
     const res = h.sync.handleMessage({
       type: "pictures_changed",
       source: "external",
@@ -651,11 +651,11 @@ describe("useGridRealtimeSync - pills deferred while the overlay is open", () =>
     });
     expect(res.action).toBe("pill");
     expect(h.wsStore.addSortChangedExternalIds).toHaveBeenCalledWith([30]);
-    expect(h.grid.markOverlayDeferredRefresh).not.toHaveBeenCalled();
+    expect(h.grid.markLightboxDeferredRefresh).not.toHaveBeenCalled();
   });
 
-  it("external removal is NOT deferred while overlay open (no stale 404 card)", () => {
-    const h = makeHarness({ overlayOpen: true });
+  it("external removal is NOT deferred while lightbox open (no stale 404 card)", () => {
+    const h = makeHarness({ lightboxOpen: true });
     const res = h.sync.handleMessage({
       type: "pictures_changed",
       source: "external",
@@ -670,7 +670,7 @@ describe("useGridRealtimeSync - pills deferred while the overlay is open", () =>
 });
 
 describe("useGridRealtimeSync - empty-id untargetable changes (restore-all)", () => {
-  it("empty-id external add -> reload when the overlay is closed", () => {
+  it("empty-id external add -> reload when the lightbox is closed", () => {
     const h = makeHarness();
     const res = h.sync.handleMessage({
       type: "pictures_changed",
@@ -685,8 +685,8 @@ describe("useGridRealtimeSync - empty-id untargetable changes (restore-all)", ()
     expect(h.wsStore.addPendingExternalImportIds).not.toHaveBeenCalled();
   });
 
-  it("empty-id external add -> deferred (no reload) when the overlay is open", () => {
-    const h = makeHarness({ overlayOpen: true });
+  it("empty-id external add -> deferred (no reload) when the lightbox is open", () => {
+    const h = makeHarness({ lightboxOpen: true });
     const res = h.sync.handleMessage({
       type: "pictures_changed",
       source: "external",
@@ -695,9 +695,9 @@ describe("useGridRealtimeSync - empty-id untargetable changes (restore-all)", ()
       picture_ids: [],
     });
     expect(res.action).toBe("deferred");
-    expect(res.reason).toBe("external-untargetable-empty-ids-overlay-deferred");
+    expect(res.reason).toBe("external-untargetable-empty-ids-lightbox-deferred");
     expect(h.reload).not.toHaveBeenCalled();
-    expect(h.grid.markOverlayDeferredRefresh).toHaveBeenCalledTimes(1);
+    expect(h.grid.markLightboxDeferredRefresh).toHaveBeenCalledTimes(1);
   });
 
   it("empty-id foreign-ui add -> reload (other tabs reflect a restore-all)", () => {
@@ -769,8 +769,8 @@ describe("useGridRealtimeSync - batch update fetch-storm cap", () => {
     expect(h.grid.refreshGridImage).toHaveBeenCalledTimes(THRESHOLD);
   });
 
-  it("foreign-ui updated with >threshold ids -> deferred when overlay open", () => {
-    const h = makeHarness({ overlayOpen: true });
+  it("foreign-ui updated with >threshold ids -> deferred when lightbox open", () => {
+    const h = makeHarness({ lightboxOpen: true });
     const res = h.sync.handleMessage({
       type: "pictures_changed",
       source: "ui",
@@ -780,9 +780,9 @@ describe("useGridRealtimeSync - batch update fetch-storm cap", () => {
       picture_ids: manyIds,
     });
     expect(res.action).toBe("deferred");
-    expect(res.reason).toBe("foreign-ui-updated-too-large-overlay-deferred");
+    expect(res.reason).toBe("foreign-ui-updated-too-large-lightbox-deferred");
     expect(h.reload).not.toHaveBeenCalled();
-    expect(h.grid.markOverlayDeferredRefresh).toHaveBeenCalledTimes(1);
+    expect(h.grid.markLightboxDeferredRefresh).toHaveBeenCalledTimes(1);
     expect(h.grid.refreshGridImage).not.toHaveBeenCalled();
   });
 });
@@ -802,8 +802,8 @@ function makeCoalescingHarness(overrides = {}) {
     refreshSmartScoreForImage: vi.fn(),
     removeImagesById: vi.fn(),
     isImagesLoading: vi.fn(() => false),
-    isOverlayOpen: vi.fn(() => overrides.overlayOpen === true),
-    markOverlayDeferredRefresh: vi.fn(),
+    isLightboxOpen: vi.fn(() => overrides.lightboxOpen === true),
+    markLightboxDeferredRefresh: vi.fn(),
     hasPendingGridImages: vi.fn(() => overrides.pendingGridImages === true),
   };
   const wsStore = {
@@ -1052,11 +1052,11 @@ describe("useGridRealtimeSync - restored (scrapheap comeback)", () => {
     expect(h.reload).toHaveBeenCalled();
   });
 
-  it("defers under an open overlay rather than restructuring the filmstrip", () => {
-    const h = makeHarness({ overlayOpen: true });
+  it("defers under an open lightbox rather than restructuring the filmstrip", () => {
+    const h = makeHarness({ lightboxOpen: true });
     const res = h.sync.handleMessage(restored({ origin_client_id: MY_ID }));
     expect(res.action).toBe("targeted");
-    expect(h.grid.markOverlayDeferredRefresh).toHaveBeenCalled();
+    expect(h.grid.markLightboxDeferredRefresh).toHaveBeenCalled();
     expect(h.grid.insertGridImagesById).not.toHaveBeenCalled();
   });
 
@@ -1153,7 +1153,7 @@ describe("useGridRealtimeSync - a rotate's pixels changed", () => {
   // sibling takes, it has nothing to keep off the frozen filmstrip. Deferring it
   // queued a whole-grid refetch for every lightbox close after a rotate.
   it("repaints the card under an open overlay instead of deferring", () => {
-    const h = makeHarness({ overlayOpen: true });
+    const h = makeHarness({ lightboxOpen: true });
     const res = h.sync.handleMessage({
       type: "pictures_changed",
       source: "ui",
@@ -1164,16 +1164,16 @@ describe("useGridRealtimeSync - a rotate's pixels changed", () => {
     });
     expect(res.reason).toBe("card-content-rotate");
     expect(h.grid.applyRotatedCards).toHaveBeenCalledWith([16]);
-    expect(h.grid.markOverlayDeferredRefresh).not.toHaveBeenCalled();
+    expect(h.grid.markLightboxDeferredRefresh).not.toHaveBeenCalled();
     expect(h.reload).not.toHaveBeenCalled();
   });
 
   // ...but not when a fetch has already parked a whole list for close.
-  // `closeOverlay` assigns `pendingGridImages` wholesale and clears the
+  // `closeLightbox` assigns `pendingGridImages` wholesale and clears the
   // deferral flags with it, so an in-place write made now is discarded with
   // nothing queued to repair it. Defer instead and let close refetch.
-  it("defers under an open overlay when a grid snapshot is waiting for close", () => {
-    const h = makeHarness({ overlayOpen: true, pendingGridImages: true });
+  it("defers under an open lightbox when a grid snapshot is waiting for close", () => {
+    const h = makeHarness({ lightboxOpen: true, pendingGridImages: true });
     const res = h.sync.handleMessage({
       type: "pictures_changed",
       source: "ui",
@@ -1184,7 +1184,7 @@ describe("useGridRealtimeSync - a rotate's pixels changed", () => {
     });
     expect(res.reason).toBe("card-content-rotate-pending-snapshot-deferred");
     expect(h.grid.applyRotatedCards).not.toHaveBeenCalled();
-    expect(h.grid.markOverlayDeferredRefresh).toHaveBeenCalledTimes(1);
+    expect(h.grid.markLightboxDeferredRefresh).toHaveBeenCalledTimes(1);
   });
 
   // ROTATE_MAX_IDS is 200 and MAX_TARGETED_UPDATE is 50. That cap is written
@@ -1206,7 +1206,7 @@ describe("useGridRealtimeSync - a rotate's pixels changed", () => {
     expect(res.reason).toBe("card-content-rotate");
     expect(h.grid.applyRotatedCards).toHaveBeenCalledWith(ids);
     expect(h.reload).not.toHaveBeenCalled();
-    expect(h.grid.markOverlayDeferredRefresh).not.toHaveBeenCalled();
+    expect(h.grid.markLightboxDeferredRefresh).not.toHaveBeenCalled();
   });
 
   // A byte rewrite that turned nothing: the thumbnail regeneration task, and
@@ -1216,8 +1216,8 @@ describe("useGridRealtimeSync - a rotate's pixels changed", () => {
   // is background work rather than a gesture waiting to land, so under an open
   // lightbox it keeps the ordinary deferral rather than running the applier's
   // forced re-read and blocking decode once per batch for a whole import.
-  it("defers a non-turn byte rewrite under an open overlay", () => {
-    const h = makeHarness({ overlayOpen: true });
+  it("defers a non-turn byte rewrite under an open lightbox", () => {
+    const h = makeHarness({ lightboxOpen: true });
     const res = h.sync.handleMessage({
       type: "pictures_changed",
       source: "ui",
@@ -1225,9 +1225,9 @@ describe("useGridRealtimeSync - a rotate's pixels changed", () => {
       change_kind: "updated",
       fields: ["pixels"],
     });
-    expect(res.reason).toBe("card-content-bytes-overlay-deferred");
+    expect(res.reason).toBe("card-content-bytes-lightbox-deferred");
     expect(h.grid.applyRotatedCards).not.toHaveBeenCalled();
-    expect(h.grid.markOverlayDeferredRefresh).toHaveBeenCalledTimes(1);
+    expect(h.grid.markLightboxDeferredRefresh).toHaveBeenCalledTimes(1);
   });
 
   it("still repaints a non-turn byte rewrite with no overlay open", () => {

@@ -167,7 +167,7 @@ const open = computed(() => props.modelValue);
           <td>Scroll image grid</td>
         </tr>
         <tr>
-          <td colspan="2" class="shortcuts-section">Image overlay</td>
+          <td colspan="2" class="shortcuts-section">Lightbox</td>
         </tr>
         <tr>
           <td><kbd>←</kbd> <kbd>→</kbd></td>
@@ -215,15 +215,15 @@ const open = computed(() => props.modelValue);
         </tr>
         <tr>
           <td><kbd>Esc</kbd></td>
-          <td>Close overlay</td>
+          <td>Close lightbox</td>
         </tr>
         <tr>
           <td>Middle click</td>
-          <td>Close overlay</td>
+          <td>Close lightbox</td>
         </tr>
         <tr>
           <td>Click outside the picture</td>
-          <td>Close overlay</td>
+          <td>Close lightbox</td>
         </tr>
         <tr>
           <td colspan="2" class="shortcuts-section">General</td>

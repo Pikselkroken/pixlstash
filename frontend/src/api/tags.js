@@ -81,7 +81,7 @@ export async function bulkFetchTags(pictureIds) {
  * @param {number|string} pictureId
  * @param {string} tag
  * @param {Object} [options]
- * @param {string} [options.batchId] - gesture batch id; the overlay's chip
+ * @param {string} [options.batchId] - gesture batch id; the lightbox's chip
  *   delete shares one with the reject that follows it, so both are undone by a
  *   single Ctrl+Z.
  * @returns {Promise<Object>} the response body.

@@ -65,9 +65,9 @@ export function useGridFetch(
     scrollWrapper,
     preserveScrollOnNextFetch,
     pendingScrollTop,
-    overlayOpen,
+    lightboxOpen,
     pendingGridImages,
-    pendingOverlayGridRefresh,
+    pendingLightboxGridRefresh,
     visibleStart,
     visibleEnd,
     divisibleViewWindow,
@@ -932,16 +932,16 @@ export function useGridFetch(
             : rows;
       } else {
         fetchMode = "stream";
-        // Overlay open: the streaming path rebuilds a placeholder grid and
+        // Lightbox open: the streaming path rebuilds a placeholder grid and
         // re-fills allGridImages from the (now possibly narrower) filter query,
         // which would drop the picture being viewed out of the grid mid-session.
         // Unlike the id-list/search modes below, streaming writes allGridImages
-        // through its own return paths and never reaches the shared overlayOpen
-        // guard. Defer the whole reconcile to overlay close instead.
-        if (overlayOpen.value) {
-          pendingOverlayGridRefresh.value = true;
+        // through its own return paths and never reaches the shared lightboxOpen
+        // guard. Defer the whole reconcile to lightbox close instead.
+        if (lightboxOpen.value) {
+          pendingLightboxGridRefresh.value = true;
           // We started the sort progress bar above but are deferring this fetch
-          // to overlay-close, so it will never reach the completion below.
+          // to lightbox-close, so it will never reach the completion below.
           // Dismiss the bar now, otherwise "Sorting by …" is stranded forever.
           if (isSortedFetch && options?.showProgress === true)
             completeSmartScoreProgress(loadId, 0, false);
@@ -1517,12 +1517,12 @@ export function useGridFetch(
       hasLoadedOnce.value = true;
       const newImages = mapGridImages(images);
       resetThumbnailState();
-      if (overlayOpen.value) {
-        // Don't replace allGridImages while the overlay is open - the filmstrip
+      if (lightboxOpen.value) {
+        // Don't replace allGridImages while the lightbox is open - the filmstrip
         // and prev/next navigation read from it directly. Store the fetched
-        // result and apply it once the overlay closes.
+        // result and apply it once the lightbox closes.
         pendingGridImages.value = newImages;
-        pendingOverlayGridRefresh.value = true;
+        pendingLightboxGridRefresh.value = true;
       } else {
         allGridImages.value = newImages;
       }
@@ -1603,9 +1603,9 @@ export function useGridFetch(
       }
       fetchError = e;
       imagesError.value = e.message;
-      // Don't wipe the grid on a transient error while the overlay is open -
-      // the user would see the grid flash empty behind the overlay.
-      if (!overlayOpen.value) {
+      // Don't wipe the grid on a transient error while the lightbox is open -
+      // the user would see the grid flash empty behind the lightbox.
+      if (!lightboxOpen.value) {
         allGridImages.value = [];
       }
       lastFetchError.value = { key: fetchKey, at: Date.now() };

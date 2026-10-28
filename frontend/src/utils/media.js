@@ -474,8 +474,8 @@ export function buildMediaUrl({ backendUrl, image, format } = {}) {
   return `${backendUrl}/pictures/${image.id}.${ext}${cacheBuster}`;
 }
 
-export function getOverlayFormat(overlayImage) {
-  return MediaFormat(overlayImage) || "png";
+export function getLightboxFormat(lightboxImage) {
+  return MediaFormat(lightboxImage) || "png";
 }
 
 export function isFileDrag(dataTransfer) {

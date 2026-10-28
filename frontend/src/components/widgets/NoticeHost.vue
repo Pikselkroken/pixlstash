@@ -6,7 +6,7 @@
  * Placement (§2.2): fixed, bottom-centre of the app viewport, spanning the full
  * width and centring on it - deliberately NOT tracking the sidebar or stats
  * panel, because the host also has to render on the login screen, over
- * ImageOverlay, over ReviewSessionsOverlay and inside Settings, none of which
+ * Lightbox, over ReviewSessionsOverlay and inside Settings, none of which
  * have a grid column to centre on. One stable anchor beats a conditional one.
  *
  * The column is `pointer-events: none` so it never eats clicks aimed at the grid

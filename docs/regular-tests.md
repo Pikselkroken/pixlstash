@@ -91,12 +91,12 @@ shrinks as automated coverage grows.
 The spec asserts the thumbnail URL shape before extracting its picture ID, so
 missing or placeholder sources fail with the actual `src` in the diagnostic.
 
-## Picture Detail (ImageOverlay) — `overlay.spec.js` (plan §4)
+## Picture Detail (Lightbox) — `lightbox.spec.js` (plan §4)
 | Test | Covers | Status |
 |------|--------|--------|
 | opens from a thumbnail and closes with the button | Overlay open/close lifecycle | ✅ |
-| navigates next/previous with arrow keys | →/← move between grid images in the overlay | ✅ |
-| closes with Escape | Escape dismisses the overlay | ✅ |
+| navigates next/previous with arrow keys | →/← move between grid images in the lightbox | ✅ |
+| closes with Escape | Escape dismisses the lightbox | ✅ |
 
 ## Faces — `faces.spec.js` (plan §10)
 | Test | Covers | Status |
@@ -111,7 +111,7 @@ missing or placeholder sources fail with the actual `src` in the diagnostic.
 ## Tags — `tags.spec.js` (plan §5)
 | Test | Covers | Status |
 |------|--------|--------|
-| adds and removes a tag in the overlay | Add a tag via the inline input; remove it via its ✕ button (chip appears/disappears with no reload) | ✅ |
+| adds and removes a tag in the lightbox | Add a tag via the inline input; remove it via its ✕ button (chip appears/disappears with no reload) | ✅ |
 
 ## Star rating — `rating.spec.js` (plan §6)
 | Test | Covers | Status |
@@ -184,7 +184,7 @@ missing or placeholder sources fail with the actual `src` in the diagnostic.
 |------|--------|--------|
 | lists restore points with a restore action (list-only) | Settings → Snapshots lists ≥1 restore point, each offering a Restore action (rollback itself is **not** clicked — it would rewrite the shared DB) | ✅ |
 
-## Grid live-update — `grid-own-change-no-pill.spec.js`, `grid-external-change-pill.spec.js`, `grid-injection.spec.js`, `grid-overlay-deferral.spec.js` (plan §19)
+## Grid live-update — `grid-own-change-no-pill.spec.js`, `grid-external-change-pill.spec.js`, `grid-injection.spec.js`, `grid-lightbox-deferral.spec.js` (plan §19)
 WebSocket-driven grid refresh and the two pills. The e2e harness simulates an
 *external* change by sending requests with **no `X-Client-Id`**, and *own*
 changes by driving the UI / sending the tab's own client id; floods are fired
@@ -198,7 +198,7 @@ fixes for [#499](https://github.com/Pikselkroken/pixlstash/issues/499) and
 | external change raises the right pill | No-client-id mutation → external; add → "New pictures", update → "View changed externally"; click loads it (§19.2) | ✅ |
 | injection: own-origin suppressed, external add raises pill | `ws-event` injection with matching origin is suppressed; external `added` raises "New pictures" (§19.1/§19.2) | ✅ |
 | flood is coalesced | 100 external events → bounded number of grid refetches, not one per id (§19.3, #500) | ✅ |
-| overlay defers external changes | External change while overlay open → no pill; deferred reconcile on close (§19.4) | ✅ |
+| lightbox defers external changes | External change while lightbox open → no pill; deferred reconcile on close (§19.4) | ✅ |
 
 ## Review Sessions — `review-board.spec.js`, `review-session.spec.js` (plan §20)
 
@@ -206,7 +206,7 @@ The tag-review redesign: a tag-health board (landing), first-class review
 sessions in a rail, and binary/pair decision cards. Drives the real backend.
 The board is served from the `tag_health` cache, so the board spec's
 `beforeEach` builds it through the API (`POST /api/v1/tag_health/rebuild`, poll
-`GET /api/v1/tag_health` until `building=false`) before opening the overlay —
+`GET /api/v1/tag_health` until `building=false`) before opening the lightbox —
 the new-review dialog's tag chips ARE the health rows, so the cache must exist.
 Page object: `e2e/pages/ReviewSessions.js` (`reviews` fixture). The fixture
 vault's real CLIP embeddings produce live suspects (probed: shirt/smile/hand 3,
@@ -318,7 +318,7 @@ Tracked so they aren't forgotten — weighted by blast radius:
   most of these become e2e specs.
 - **Grid live-update — manual-only paths (plan §19).** The four `grid-*` specs
   cover the deterministic core (own vs external, pill choice, flood coalescing,
-  overlay deferral). These are **not yet automated** and stay manual:
+  lightbox deferral). These are **not yet automated** and stay manual:
   - *Real bulk work with background workers ON (§19.3, #500)* — the e2e backend
     runs `disable_background_workers: true`, so worker tag/quality/smart-score
     events never fire. The injection spec proves frontend coalescing under a

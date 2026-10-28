@@ -82,7 +82,7 @@ body {
 .lightbox-host {
   display: contents;
 }
-/* The lightbox's full screen (ImageOverlay, F): the picture takes the whole
+/* The lightbox's full screen (Lightbox, F): the picture takes the whole
    screen, so the title bar and everything in the file manager beside the
    workspace (the sidebar, its hover trigger and its scrim) are taken out. */
 :root.lightbox-fullscreen .titlebar,

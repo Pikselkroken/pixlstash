@@ -338,19 +338,19 @@ describe("character assignment redo grid reconciliation", () => {
     wrapper.unmount();
   });
 
-  it("defers the redo refetch while the overlay is open", async () => {
+  it("defers the redo refetch while the lightbox is open", async () => {
     characterHasPicture = false;
     const store = primeRedo();
     const wrapper = mountGrid(42);
     await flushPromises();
-    wrapper.vm.$.setupState.overlayOpen = true;
+    wrapper.vm.$.setupState.lightboxOpen = true;
     apiGet.mockClear();
 
     await store.redo();
     await flushPromises();
 
     expect(gridQueryCount()).toBe(0);
-    expect(wrapper.vm.$.setupState.pendingOverlayGridRefresh).toBe(true);
+    expect(wrapper.vm.$.setupState.pendingLightboxGridRefresh).toBe(true);
     expect(wrapper.vm.allGridImages).toEqual([]);
     wrapper.unmount();
   });

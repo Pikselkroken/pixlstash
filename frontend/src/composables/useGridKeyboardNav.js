@@ -34,7 +34,7 @@ export function useGridKeyboardNav(
     allGridImages,
     rowHeight,
     visibleStart,
-    overlayOpen,
+    lightboxOpen,
     reviewOverlayOpen,
     showSelectionBar,
     searchResultsActive,
@@ -58,7 +58,7 @@ export function useGridKeyboardNav(
     clearSearchQuery,
     scrollCursorIntoView,
     focusCursor = () => {},
-    openOverlay,
+    openLightbox,
     deleteSelected,
     selectionBarRef,
     applyScoresForSelection,
@@ -154,7 +154,7 @@ export function useGridKeyboardNav(
    */
   function moveCursorStackMember(where) {
     if (isReadOnly.value || cursorIdx.value === null) return false;
-    if (overlayOpen.value || reviewOverlayOpen?.value) return false;
+    if (lightboxOpen.value || reviewOverlayOpen?.value) return false;
     const img = allGridImages.value[cursorIdx.value];
     if (img?.id == null || !getOpenStackPlace(img)) return false;
     if (!moveStackMember(img.id, where)) return true;
@@ -258,7 +258,7 @@ export function useGridKeyboardNav(
     ) {
       return;
     }
-    if (overlayOpen.value) return; // Ignore if the lightbox overlay is open
+    if (lightboxOpen.value) return; // Ignore if the lightbox is open
     // The Review Sessions overlay is a modal review surface with its own
     // keyboard handler; it stays mounted over the grid and only consumes the
     // keys it handles, so grid shortcuts (Delete/Backspace, scoring digits,
@@ -471,13 +471,13 @@ export function useGridKeyboardNav(
         }
       }
     } else if (event.key === "Enter") {
-      // Enter: open overlay for cursor image
+      // Enter: open lightbox for cursor image
       if (cursorIdx.value !== null) {
         event.preventDefault();
         if (isGhosted(cursorIdx.value)) return;
         const cursorImg = allGridImages.value[cursorIdx.value];
         if (cursorImg && cursorImg.id) {
-          openOverlay(cursorImg);
+          openLightbox(cursorImg);
         }
       }
     } else if (event.key === "g" || event.key === "G") {
@@ -521,7 +521,7 @@ export function useGridKeyboardNav(
       !event.ctrlKey &&
       !event.metaKey &&
       !event.altKey &&
-      !overlayOpen.value &&
+      !lightboxOpen.value &&
       !isReadOnly.value &&
       !isScrapheap()
     ) {
@@ -550,7 +550,7 @@ export function useGridKeyboardNav(
       pasteOnSelection(selectedImageIds.value.slice());
     } else if (
       (hoveredImageIdx.value !== null || selectedImageIds.value.length > 0) &&
-      !overlayOpen.value &&
+      !lightboxOpen.value &&
       !isReadOnly.value &&
       starRating(event) !== null
     ) {

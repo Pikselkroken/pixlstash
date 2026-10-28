@@ -8,7 +8,7 @@ import { test, expect } from '../fixtures/test.js'
 // the thing the layout exists to achieve, in a browser with real box metrics.
 //
 // The assertion is `scrollHeight === clientHeight` on `.app-dialog__body` — the
-// same shape as `overlay-tag-list-scroll.spec.js`. Navigation and dialog-open
+// same shape as `lightbox-tag-list-scroll.spec.js`. Navigation and dialog-open
 // only; nothing here mutates the fixture library.
 
 const VIEWPORT = { width: 1280, height: 800 }

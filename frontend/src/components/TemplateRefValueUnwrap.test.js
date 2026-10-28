@@ -9,7 +9,7 @@
 // silently does nothing and a warning goes to the console.
 //
 // It has shipped twice (BehaviourSection.vue in #1253, ImageGrid.vue's
-// @update:overlayImageId handler in #1256), it looks correct to anyone used to
+// @update:lightboxImageId handler in #1256), it looks correct to anyone used to
 // writing `.value` in script, and no linter here flags it. So the invariant is
 // asserted against the compiler's own output over the whole component tree
 // rather than by eye, per component.
@@ -99,8 +99,8 @@ describe("no component writes .value on an auto-unwrapped ref", () => {
   });
 
   it("compiles no `.value.value =`", () => {
-    // ImageGrid.vue's @update:overlayImageId handler shipped one of these and
-    // the overlay stopped following a ComfyUI run to its new picture.
+    // ImageGrid.vue's @update:lightboxImageId handler shipped one of these and
+    // the lightbox stopped following a ComfyUI run to its new picture.
     const offenders = components
       .filter((c) => c.code && VALUE_WRITE.test(c.code))
       .map((c) => c.path);

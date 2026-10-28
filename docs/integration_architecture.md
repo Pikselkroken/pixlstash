@@ -1278,7 +1278,7 @@ the two sides have agreed:
    of one model read identically.
 
    `GET /pictures/{id}/recipe`'s `model_slots` carry the same `quant` under
-   the same rules, so the overlay and the card agree; its `name` stays RAW
+   the same rules, so the lightbox and the card agree; its `name` stays RAW
    there, because it is the model shelf lookup's own key and what the chip's
    hover text shows.
 2. **Two layers reach the client: a workflow and a recipe.** An entry is a
@@ -1911,7 +1911,7 @@ of them the origin makes no difference to what has to happen:
 - **Card-content fields** (`detections`, `pixels`) → never a pill and never a
   reshuffle. `detections` takes a targeted per-card `refreshGridImage`; `pixels`
   takes `applyRotatedCards` instead, and is the one card op that is **not**
-  deferred under an open overlay. See §8.3.
+  deferred under an open lightbox. See §8.3.
 - **Stack facets** (`stack_count`) → **one batched** `refreshStackFacets(ids)`
   read for the whole event, never a pill, never a reshuffle, and never the
   per-card path: `stack_count` is derived per stack by the listing endpoint and
@@ -1956,7 +1956,7 @@ the boxes and the text drawn in the file's own coordinate space. Its
 `wsOrientationUpdate` signal therefore fires on `orientation`, not on `pixels`.
 
 **Naming the turn is what removed the guesswork.** An earlier revision of this
-feature raised the overlay's signal on `pixels` and inferred the turn by
+feature raised the lightbox's signal on `pixels` and inferred the turn by
 comparing the orientation before and after a metadata read. That was wrong three
 ways: the read can be discarded by the shared request-id counter (leaving the
 lightbox stale with no retry, i.e. #1419 again), navigating away and back
@@ -1971,13 +1971,13 @@ can coalesce into one watcher flush, which cannot happen to a socket-driven ref
 (one write per `ws.onmessage`, one macrotask each, Vue's pre-flush queue drained
 on the microtask between).
 
-**A TURN's applier runs under an open overlay**, unlike every other deferred op
+**A TURN's applier runs under an open lightbox**, unlike every other deferred op
 in §9.1 of the frontend document: `applyRotatedCards` is fields-only — it writes
 the shape and bitmap of cards already present and never inserts, removes or
 reorders, a turned photo having nowhere to move to — so there is no
 restructuring to keep off the frozen filmstrip, and deferring it only queued a
-whole-grid refetch for overlay close. The exception is a grid list already
-parked for close (`pendingGridImages`): that branch of `closeOverlay` assigns
+whole-grid refetch for lightbox close. The exception is a grid list already
+parked for close (`pendingGridImages`): that branch of `closeLightbox` assigns
 wholesale and clears the deferral flags with it, so an in-place write made then
 is discarded with nothing queued to repair it, and the turn defers after all.
 
@@ -1993,11 +1993,11 @@ Escalating it sent the tab that *issued* a 51–200 picture rotate
 (`ROTATE_MAX_IDS` is 200) into a whole-library reload of a change it had already
 applied optimistically.
 
-**The overlay must survive that write.** `applyRotatedCards` replaces the
+**The lightbox must survive that write.** `applyRotatedCards` replaces the
 `allGridImages` array, and the lightbox re-seeds its open card from the sequence
 frozen at open whenever that prop moves - so without care an undo turns the
 picture and the grid's own repaint turns it straight back (#1419). Two things
-stop it, both on the frontend: `fetchOverlayMetadata` patches that snapshot's
+stop it, both on the frontend: `fetchLightboxMetadata` patches that snapshot's
 `orientation`, and the re-seed preserves `orientation` / `pixel_sha` for rows
 the patch cannot reach, exactly as the metadata merge excepts the same two
 fields from local-wins. See `frontend_architecture.md` §9.1.
@@ -2116,7 +2116,7 @@ The **Segment** action runs Florence-2 object detection over the selected pictur
       "label": "dog", "bbox": [x1, y1, x2, y2], "score": null,
       "source": "florence2:od" } ]
   ```
-  `bbox` is pixel `xyxy` in the **original** picture coordinate space (same convention as faces). `score` is `null` for Florence (it emits no per-box confidence). The overlay (`ImageOverlay.vue`) renders these as a toggleable layer next to the face-bbox layer.
+  `bbox` is pixel `xyxy` in the **original** picture coordinate space (same convention as faces). `score` is `null` for Florence (it emits no per-box confidence). The overlay (`Lightbox.vue`) renders these as a toggleable layer next to the face-bbox layer.
 - **Export sidecar** (`GET /api/v1/pictures/export?bbox_mode=…`, FULL exports only): writes a per-image `{stem}.json` into the ZIP. `bbox_mode=none` (default) writes nothing. Two formats:
   - `bbox_mode=coco-json` — a COCO-subset sidecar (pixel `xyxy`), written *alongside* the `.txt` caption. Boxes and `width`/`height` scale to match the exported image when a reduced `resolution` is selected.
     ```json
@@ -3767,7 +3767,7 @@ Text read out of a picture is its own data: never `description`, never tags.
 - `box` is in fractions of the picture **as displayed** (EXIF orientation applied), so the overlay draws it without knowing the pixel size.
 - `matched` is computed server-side with the rule search uses (`database.ocr_word_matches`: no edits under five letters, one under nine, two beyond, never on the first letter), so the Text tab and the result pill never disagree about "C0FFEE" matching "coffee". Words are marked only when the whole query matched the picture (every word), the same test that sets `text_match`. Omit `query` when no search is active.
 - `pending` means the picture is not in the scrapheap, its `text_score` qualifies and it has not been read yet; `none` covers both "not worth reading" and "read, nothing found".
-- A finished read emits `pictures_changed` with `fields: ["ocr_text"]`. The field affects no sort or filter, so the grid ignores it; the open overlay refetches.
+- A finished read emits `pictures_changed` with `fields: ["ocr_text"]`. The field affects no sort or filter, so the grid ignores it; the open lightbox refetches.
 - Ranking: a text match adds `OCR_TEXT_MATCH_WEIGHT` (0.35) to the combined score and nothing otherwise, so a page of words gains nothing on a search its words do not answer. The SPA searches with `threshold=0.1`; at the route's own default of 0.5 a picture matched by its text alone (0.35) is filtered out, so an API caller wanting text-only matches must pass a lower threshold. `text_match` is computed only for the rows a search returns. `tests/test_ocr_text.py` holds the queries that must not match known text-heavy pictures.
 - The result pill's *All · In text* switch filters on `text_match` client-side; nothing is refetched and nothing is remembered.
 

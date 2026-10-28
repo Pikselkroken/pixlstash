@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { GridPage } from '../pages/GridPage.js'
-import { ImageOverlay } from '../pages/ImageOverlay.js'
+import { Lightbox } from '../pages/Lightbox.js'
 import { SettingsDialog } from '../pages/SettingsDialog.js'
 import { SideBar } from '../pages/SideBar.js'
 import { ShareDialog } from '../pages/ShareDialog.js'
@@ -201,8 +201,8 @@ export const test = base.extend({
   grid: async ({ page }, use) => {
     await use(new GridPage(page))
   },
-  overlay: async ({ page }, use) => {
-    await use(new ImageOverlay(page))
+  lightbox: async ({ page }, use) => {
+    await use(new Lightbox(page))
   },
   settings: async ({ page }, use) => {
     await use(new SettingsDialog(page))

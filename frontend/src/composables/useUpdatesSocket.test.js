@@ -602,8 +602,8 @@ describe("useUpdatesSocket: text read from a picture (#1197)", () => {
 });
 
 // The wire that carries an undo of a rotate from the socket to the open
-// lightbox. Without it the overlay's watcher is never triggered at all, and
-// nothing that tests the overlay by setting its prop would notice (#1419).
+// lightbox. Without it the lightbox's watcher is never triggered at all, and
+// nothing that tests the lightbox by setting its prop would notice (#1419).
 describe("useUpdatesSocket: a picture was turned (#1419)", () => {
   it("signals the lightbox with the pictures that were turned", () => {
     connect();
@@ -621,7 +621,7 @@ describe("useUpdatesSocket: a picture was turned (#1419)", () => {
   // producers rewrite a file's bytes without turning it: the thumbnail
   // regeneration task (`["pixels"]`, up to 64 ids a batch, streaming for the
   // length of an import) and the layout move route and its task
-  // (`["file_path", "pixels"]`). The overlay's <img> URL is built from the
+  // (`["file_path", "pixels"]`). The lightbox's <img> URL is built from the
   // picture id, the format and the orientation, so none of them touch it.
   it("stays put for a thumbnail regeneration, which turns nothing", () => {
     connect();

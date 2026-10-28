@@ -1,10 +1,10 @@
 import { test, expect } from '../fixtures/test.js'
 
-// Release plan §6 — Star rating. Set a rating in the ImageOverlay, confirm the
+// Release plan §6 — Star rating. Set a rating in the Lightbox, confirm the
 // stars fill, then reload and reopen the same picture to prove the score round-
 // tripped to the backend and persisted. The grid test drives the compact star
 // widget on a thumbnail card and asserts the same score shows in the overlay —
-// the grid↔overlay sync half of §6. It uses the second card so the two tests
+// the grid↔lightbox sync half of §6. It uses the second card so the two tests
 // never write to the same picture.
 //
 // Both tests force the target picture's score to 0 through the API before
@@ -82,20 +82,20 @@ test.describe('star rating', () => {
   test('sets a rating that persists across a reload (§6)', async ({
     page,
     grid,
-    overlay,
+    lightbox,
     apiContext,
   }) => {
     await grid.goto()
-    await overlay.openFromGrid()
+    await lightbox.openFromGrid()
 
     await resetScore(apiContext, openPictureId(page))
     await page.reload()
-    await expect(overlay.root).toBeVisible({ timeout: 15_000 })
-    await expect.poll(() => overlay.filledStarCount()).toBe(0)
+    await expect(lightbox.root).toBeVisible({ timeout: 15_000 })
+    await expect.poll(() => lightbox.filledStarCount()).toBe(0)
 
     const written = scoreWritten(page)
-    await overlay.setRating(RATING)
-    await expect.poll(() => overlay.filledStarCount()).toBe(RATING)
+    await lightbox.setRating(RATING)
+    await expect.poll(() => lightbox.filledStarCount()).toBe(RATING)
     // Only the UI is proven so far; wait for the write before reloading.
     await written
 
@@ -103,22 +103,22 @@ test.describe('star rating', () => {
     // restores the overlay on the same picture. The rating must survive the
     // round-trip to the backend.
     await page.reload()
-    await expect(overlay.root).toBeVisible({ timeout: 15_000 })
-    await expect.poll(() => overlay.filledStarCount()).toBe(RATING)
+    await expect(lightbox.root).toBeVisible({ timeout: 15_000 })
+    await expect.poll(() => lightbox.filledStarCount()).toBe(RATING)
   })
 
   test('a grid star click saves, survives a reload, and matches the overlay (§6)', async ({
     page,
     grid,
-    overlay,
+    lightbox,
     apiContext,
   }) => {
     await grid.goto()
     await grid.waitForThumbnailLoaded()
 
-    // The card carries no picture id, so learn it from the overlay's URL, then
+    // The card carries no picture id, so learn it from the lightbox's URL, then
     // reset that picture's score before driving the grid widget.
-    await overlay.openFromGrid(grid.thumbnails.nth(1))
+    await lightbox.openFromGrid(grid.thumbnails.nth(1))
     await resetScore(apiContext, openPictureId(page))
 
     await page.goto('/')
@@ -158,8 +158,8 @@ test.describe('star rating', () => {
     await expect.poll(() => filledStars(gridStarsAfter)).toBe(GRID_RATING)
 
     // The overlay for the same picture shows the same filled-star count.
-    await overlay.openFromGrid(cardAfter)
-    await expect.poll(() => overlay.filledStarCount()).toBe(GRID_RATING)
+    await lightbox.openFromGrid(cardAfter)
+    await expect.poll(() => lightbox.filledStarCount()).toBe(GRID_RATING)
   })
 
   // A thumbnail batch copies the cards it covers before its request and used
@@ -169,12 +169,12 @@ test.describe('star rating', () => {
   test('a grid rating survives a thumbnail batch that was in flight (§6)', async ({
     page,
     grid,
-    overlay,
+    lightbox,
     apiContext,
   }) => {
     await grid.goto()
     await grid.waitForThumbnailLoaded()
-    await overlay.openFromGrid(grid.thumbnails.nth(2))
+    await lightbox.openFromGrid(grid.thumbnails.nth(2))
     const pictureId = openPictureId(page)
     await resetScore(apiContext, pictureId)
 
@@ -223,13 +223,13 @@ test.describe('star rating', () => {
   test('a narrow grid tile shows the short "3★" form and steps the rating', async ({
     page,
     grid,
-    overlay,
+    lightbox,
     apiContext,
   }) => {
     await page.setViewportSize({ width: 1280, height: 720 })
     await grid.goto()
     await grid.waitForThumbnailLoaded()
-    await overlay.openFromGrid(grid.thumbnails.nth(3))
+    await lightbox.openFromGrid(grid.thumbnails.nth(3))
     const pictureId = openPictureId(page)
     await resetScore(apiContext, pictureId)
 

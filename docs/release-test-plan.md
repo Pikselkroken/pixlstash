@@ -28,7 +28,7 @@ plan; legacy § numbers are still cited in spec titles):
 | §3.1–3.3 Grid display, sort, search | `grid.spec.js`, `grid-browse.spec.js` |
 | §3.5 Context menu opens/lists actions | `context-menu.spec.js` |
 | §4 Selection ▾ / context-menu parity (was #403) | `menu-parity.spec.js` |
-| §4 ImageOverlay open/navigate/close | `overlay.spec.js` |
+| §4 Lightbox open/navigate/close | `lightbox.spec.js` |
 | §5 Tags add/remove | `tags.spec.js` |
 | §6 Star rating — overlay persist + grid stars + grid↔overlay sync | `rating.spec.js` |
 | §7/§8/§9 Set/project/character navigation & filtering | `entities.spec.js`, `set-operations.spec.js`, `set-locking.spec.js` |
@@ -36,7 +36,7 @@ plan; legacy § numbers are still cited in spec titles):
 | §11 Stack expand/collapse | `stacks.spec.js` (badge click + visual stacking order stay manual) |
 | §14 Predictions — delete drops to prediction chip, Confirm restores | `tag-predictions.spec.js` (generation after import stays manual) |
 | §15 Export — selection ZIP contents + set ZIP count | `export.spec.js` |
-| §19.1/19.4 Live-update own-change silence, pill choice, flood coalescing, overlay deferral | `grid-own-change-no-pill.spec.js`, `grid-external-change-pill.spec.js`, `grid-injection.spec.js`, `grid-overlay-deferral.spec.js` |
+| §19.1/19.4 Live-update own-change silence, pill choice, flood coalescing, overlay deferral | `grid-own-change-no-pill.spec.js`, `grid-external-change-pill.spec.js`, `grid-injection.spec.js`, `grid-lightbox-deferral.spec.js` |
 | §20.1 Tag-health board; §20.3/20.4 review create + binary decide + Escape | `review-board.spec.js`, `review-session.spec.js` |
 | §0.5 From source (Linux) | CI `e2e` job (pip install, `npm run build`, boots server, logs in, renders grid) |
 
@@ -288,7 +288,7 @@ Requires a live ComfyUI server.
 
 ## 7. Image Plugins
 
-Visual-judgement checks (apply via the ImageOverlay):
+Visual-judgement checks (apply via the Lightbox):
 
 - [ ] **Blur/Sharpen**: blur level 5 — result is visibly blurrier
 - [ ] **Brightness/Contrast**: +2 brightness — result is visibly brighter

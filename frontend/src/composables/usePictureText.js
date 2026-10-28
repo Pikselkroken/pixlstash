@@ -3,7 +3,7 @@
 //
 // The tab and the selection are shared between two surfaces that do not own
 // each other (the sidebar's word list and the boxes drawn over the picture),
-// so they live here and ImageOverlay hands them to both.
+// so they live here and Lightbox hands them to both.
 
 import { computed, ref, watch } from "vue";
 import { getPictureText, readPictureText } from "../api/pictures";
@@ -103,7 +103,7 @@ export function usePictureText({ pictureId, getSearchQuery }) {
 
   const text = ref(NO_TEXT);
   // The tab for the picture on screen, and the one the user last picked. The
-  // second is carried from picture to picture for the overlay's lifetime and
+  // second is carried from picture to picture for the lightbox's lifetime and
   // deliberately never persisted.
   const chosenTab = ref(DESCRIPTION_TAB);
   let lastPickedTab = DESCRIPTION_TAB;

@@ -195,7 +195,7 @@
   white-space: nowrap;
 }
 
-/* ── On a dark ground (lightbox / overlay chrome) ───────────────────────
+/* ── On a dark ground (lightbox chrome) ───────────────────────
    The `dark-surface` family stays dark in both themes, so a menu opened over
    it cannot take the theme's own values. Put `.ctx-menu--on-dark` on the menu
    root; teleported rows keep the plain `.ctx-*` classes. */

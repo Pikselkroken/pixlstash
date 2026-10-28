@@ -346,7 +346,7 @@ describe("Edit stack in a read-only session", () => {
 describe("the lightbox menu", () => {
   it("offers the order rows and nothing that takes the stack apart", async () => {
     const wrapper = mountContextMenu({
-      overlayMode: true,
+      lightboxMode: true,
       selectedImageIds: ["11"],
       contextImage: { id: "11" },
       stackEdit: SECOND_OF_FOUR,
@@ -376,7 +376,7 @@ describe("the Edit stack submenu and the keyboard", () => {
 describe("the lightbox menu with nothing to order", () => {
   it("has no Edit stack row rather than an empty submenu", () => {
     const wrapper = mountContextMenu({
-      overlayMode: true,
+      lightboxMode: true,
       selectedImageIds: ["11"],
       contextImage: { id: "11" },
       stackEdit: { kind: "collapsed", count: 4 },

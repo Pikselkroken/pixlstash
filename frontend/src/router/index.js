@@ -52,8 +52,8 @@ import App from "../App.vue";
 //                                  as an id, for the folders that
 //                                  have no id of their own (a subfolder, or a
 //                                  folder an insight points at).
-//   ?overlay=<pictureId>         → Open ImageOverlay for that picture
-//   ?from=<path>                 → Where closing that overlay goes, for the
+//   ?overlay=<pictureId>         → Open Lightbox for that picture
+//   ?from=<path>                 → Where closing that lightbox goes, for the
 //                                  destinations that replace the grid the
 //                                  lightbox lives in. Its producer is the
 //                                  Workflows grid's COVER TILES (#1455): a
@@ -61,7 +61,7 @@ import App from "../App.vue";
 //                                  library route, and the close comes back to
 //                                  /workflows. The shelf's picture tiles were
 //                                  the first producer and went with the shelf
-//                                  in F1b; anything else opening the overlay
+//                                  in F1b; anything else opening the lightbox
 //                                  sends no `from`, and its close takes the
 //                                  absent branch - stay put, drop ?overlay=.
 //                                  **F7's "Show all N pictures" deliberately
@@ -73,7 +73,7 @@ import App from "../App.vue";
 //                                  would send the first close back to
 //                                  /workflows and out of the 184 pictures the
 //                                  reader just asked to browse.
-//                                  (see utils/overlayRoute.js)
+//                                  (see utils/lightboxRoute.js)
 //   ?review=board                → Open the tag-review overlay on the health board
 //   ?review=<reviewId>           → …on that review (open session or archived receipt)
 //   ?review_project=<id>         → Board scope: project

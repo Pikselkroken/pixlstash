@@ -36,8 +36,8 @@ export function useGridScoring({
   visibleEnd,
   renderBuffer,
   imagesLoading,
-  overlayOpen,
-  pendingOverlayGridRefresh,
+  lightboxOpen,
+  pendingLightboxGridRefresh,
   preserveScrollOnNextFetch,
   skipNextWsRefresh,
   gridContainer,
@@ -453,11 +453,11 @@ export function useGridScoring({
     // (the backend has no character context to compute it there). gridImageSortKey
     // therefore falls through to `score` and would splice the card at the wrong
     // position. Fall back to a full refetch, which DOES recompute likeness - or,
-    // under an open overlay, defer it (the overlay-open deferral contract, §9.1)
+    // under an open lightbox, defer it (the lightbox-open deferral contract, §9.1)
     // so we never restructure the filmstrip mid-view.
     if (isCharacterLikenessSortActive()) {
-      if (overlayOpen.value) {
-        pendingOverlayGridRefresh.value = true;
+      if (lightboxOpen.value) {
+        pendingLightboxGridRefresh.value = true;
         return;
       }
       preserveScrollOnNextFetch.value = true;
@@ -671,17 +671,17 @@ export function useGridScoring({
       });
 
       if (isScoreSortActive()) {
-        if (overlayOpen.value) {
-          // Reordering the grid while the overlay is open would break the
-          // filmstrip. Defer the reposition until the overlay closes.
-          pendingOverlayGridRefresh.value = true;
+        if (lightboxOpen.value) {
+          // Reordering the grid while the lightbox is open would break the
+          // filmstrip. Defer the reposition until the lightbox closes.
+          pendingLightboxGridRefresh.value = true;
         } else {
           repositionImageByScore(imageId, newScore);
         }
       }
       if (isCharacterLikenessSortActive()) {
-        if (overlayOpen.value) {
-          pendingOverlayGridRefresh.value = true;
+        if (lightboxOpen.value) {
+          pendingLightboxGridRefresh.value = true;
           return;
         }
         preserveScrollOnNextFetch.value = true;
@@ -689,8 +689,8 @@ export function useGridScoring({
         return;
       }
       if (isSmartScoreSortActive()) {
-        if (overlayOpen.value) {
-          pendingOverlayGridRefresh.value = true;
+        if (lightboxOpen.value) {
+          pendingLightboxGridRefresh.value = true;
           return;
         }
         preserveScrollOnNextFetch.value = true;
@@ -739,7 +739,7 @@ export function useGridScoring({
   // Drawn at once and put back with a notice if the server refuses. The WS
   // echo is skipped like a score's: the change is already on the cards.
   // Resolves false when nothing was stored, so a caller holding its own copy
-  // (the overlay) can put its heart back too.
+  // (the lightbox) can put its heart back too.
   async function setFavourite(imageIds, on) {
     const keys = new Set(
       (imageIds ?? []).map((id) => getPictureId(id)).filter((id) => id !== null),

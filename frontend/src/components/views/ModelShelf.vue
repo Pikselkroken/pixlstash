@@ -2193,7 +2193,7 @@ function shelfOwnsTheKey(event) {
   }
   if (
     reviewSessionsStore.overlayOpen ||
-    document.querySelector(".v-overlay--active:not(.v-tooltip), .image-overlay")
+    document.querySelector(".v-overlay--active:not(.v-tooltip), .lightbox")
   ) {
     return false;
   }
