@@ -219,6 +219,17 @@ describe("Remove", () => {
     wrapper.unmount();
   });
 
+  it("a remove already sent cannot be cancelled", async () => {
+    comfyui.removeComfyuiConnection.mockReturnValue(new Promise(() => {}));
+    const wrapper = mountTable();
+    await menuItem(wrapper, "pc", "remove").trigger("click");
+    await byTestId(wrapper, "comfyui-remove-confirm-button").trigger("click");
+    await byTestId(wrapper, "comfyui-remove-cancel").trigger("click");
+    await byTestId(wrapper, "comfyui-remove-cancel").trigger("keydown", { key: "Escape" });
+    expect(byTestId(wrapper, "comfyui-remove-confirm").exists()).toBe(true);
+    wrapper.unmount();
+  });
+
   it("keeps the row, and says why, when its key cannot be revoked", async () => {
     comfyui.removeComfyuiConnection.mockRejectedValue({
       response: { status: 500, data: { detail: "The connection's key could not be revoked" } },

@@ -327,6 +327,8 @@ function askRemove(row) {
 }
 
 function cancelRemove(row) {
+  // The request cannot be called back once sent: the row would go anyway.
+  if (removing.value) return;
   confirmingRemove.value = null;
   removeError.value = "";
   focusMore(row.id);
@@ -696,6 +698,7 @@ function onMenuKey(event, row) {
                     <AppButton
                       variant="secondary"
                       autofocus
+                      :disabled="removing"
                       data-testid="comfyui-remove-cancel"
                       @click="cancelRemove(row)"
                       @keydown.esc.prevent="cancelRemove(row)"
