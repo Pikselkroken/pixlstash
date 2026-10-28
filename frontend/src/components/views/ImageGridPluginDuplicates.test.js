@@ -67,10 +67,16 @@ import ImageGrid from "./ImageGrid.vue";
 /** Keyed by plugin name - what `POST /pictures/plugins/{name}` answers. */
 let pluginResponses = {};
 
+const showRunResult = vi.fn();
+
 function mountGrid() {
   const wrapper = mount(ImageGrid, {
     shallow: true,
     global: {
+      // The lightbox, as far as a finished filter run reaches into it.
+      stubs: {
+        ImageOverlay: { template: "<div />", methods: { showRunResult } },
+      },
       config: {
         compilerOptions: { isCustomElement: (tag) => tag.startsWith("v-") },
       },
@@ -81,11 +87,16 @@ function mountGrid() {
 }
 
 /** Emit what SelectionBar/ImageOverlay emit, and let the run settle. */
-async function runPlugin(wrapper, pluginName, pictureIds = [42]) {
+async function runPlugin(wrapper, pluginName, pictureIds = [42], extra = {}) {
   // Let the mount's own registry fetch land first, so the run reads the same
   // plugin list the menus do.
   for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
-  wrapper.vm.handlePluginRunRequest({ pluginName, pictureIds, parameters: {} });
+  wrapper.vm.handlePluginRunRequest({
+    pluginName,
+    pictureIds,
+    parameters: {},
+    ...extra,
+  });
   for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
 }
 
@@ -118,6 +129,7 @@ beforeEach(() => {
     return { data: {} };
   });
   pluginResponses = {};
+  showRunResult.mockReset();
 });
 
 describe("ImageGrid - plugin run whose output already exists", () => {
@@ -239,6 +251,44 @@ describe("ImageGrid - plugin run whose output already exists", () => {
 
     expect(notices()).toHaveLength(1);
     expect(notices()[0].count).toBe(2);
+    wrapper.unmount();
+  });
+});
+
+// The lightbox's filter menu asks for its result as a before / after; the
+// lightbox opens it only while the reader is still on the source picture.
+describe("ImageGrid - a filter run from the lightbox", () => {
+  beforeEach(() => {
+    pluginResponses.blur = { status: "success", created_picture_ids: [9] };
+  });
+
+  it("opens the result over the source picture", async () => {
+    const wrapper = mountGrid();
+    wrapper.vm.overlayOpen = true;
+    await runPlugin(wrapper, "blur", [42], { compare: true });
+
+    expect(showRunResult).toHaveBeenCalledWith("9", 42, null);
+    expect(wrapper.vm.overlayImageId).not.toBe("9");
+    wrapper.unmount();
+  });
+
+  it("only moves to the result of a run on several pictures", async () => {
+    const wrapper = mountGrid();
+    wrapper.vm.overlayOpen = true;
+    await runPlugin(wrapper, "blur", [42, 43], { compare: true });
+
+    expect(showRunResult).not.toHaveBeenCalled();
+    expect(wrapper.vm.overlayImageId).toBe("9");
+    wrapper.unmount();
+  });
+
+  it("only moves to the result for any other run", async () => {
+    const wrapper = mountGrid();
+    wrapper.vm.overlayOpen = true;
+    await runPlugin(wrapper, "blur");
+
+    expect(showRunResult).not.toHaveBeenCalled();
+    expect(wrapper.vm.overlayImageId).toBe("9");
     wrapper.unmount();
   });
 });

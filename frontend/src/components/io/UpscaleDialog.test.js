@@ -29,6 +29,7 @@ import UpscaleDialog from "./UpscaleDialog.vue";
 import { useUpscaleStore } from "../../stores/useUpscaleStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useTasksStore } from "../../stores/useTasksStore";
+import { useRunDialogStore } from "../../stores/useRunDialogStore";
 
 const AppDialogStub = {
   name: "AppDialog",
@@ -119,6 +120,22 @@ describe("UpscaleDialog", () => {
     expect(useNoticeStore().notices.map((n) => n.text)).toContain(
       "Started 1 upscale in ComfyUI.",
     );
+  });
+
+  it("hands its runs to the grid to follow, as a Run popup does", async () => {
+    // Followed with the one picture: the lightbox on it opens the result over
+    // it, before / after.
+    const prompts = [{ run_id: "r1", prompt_id: "p1" }];
+    upscalePictures.mockResolvedValue({ status: "success", runs: 1, prompts });
+    preflightUpscale.mockResolvedValue({ pictures: [picture(7)] });
+    const { wrapper } = await open([7]);
+    await wrapper.find("[data-testid=upscale-submit]").trigger("click");
+    await flushPromises();
+    expect(useRunDialogStore().startedRun).toEqual({
+      prompts,
+      pictureIds: [7],
+      pictureId: 7,
+    });
   });
 
   it("stays open and says why when the upscale is refused", async () => {
