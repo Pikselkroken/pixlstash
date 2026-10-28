@@ -7,10 +7,12 @@ is the downgrade a development build needs, without any migration running
 backwards.
 
 Copied: every ``*.json`` beside ``server-config.json``, the ``training-presets``
-folder, a consistent snapshot of ``hub.db``, and every registered library. A
-library is copied into a hidden ``.<name>.pixlstash-dev-scratch`` folder beside
-it: its ``vault.db`` snapshotted, every other file hard-linked, which costs no
-disk space but needs the copy on the library's own filesystem. A picture is
+folder, the hub's ``icons`` store (workflow thumbnails and model icons, which
+every card otherwise draws broken), a consistent snapshot of ``hub.db``, and
+every registered library. A library is copied into a hidden
+``.<name>.pixlstash-dev-scratch`` folder beside it: its ``vault.db``
+snapshotted, every other file hard-linked, which costs no disk space but needs
+the copy on the library's own filesystem. A picture is
 rewritten by writing a new file and renaming it over the old one, so that never
 reaches the original; the few caches written in place instead (``tmp/`` and the
 ``_watermarked``/``_oriented`` twins) are left out, and the dev run regenerates
@@ -65,6 +67,7 @@ import pixlstash
 from pixlstash.hub.bootstrap import known_vault_revisions
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.registry import VAULT_FILENAME, LibraryRegistry
+from pixlstash.services.model_icons import ICON_DIRNAME
 from pixlstash.utils.atomic_write import write_json_atomic
 
 REAL_DIR = user_config_dir("pixlstash-desktop", roaming=True)
@@ -377,9 +380,10 @@ def refresh(real_dir: str, scratch_dir: str) -> None:
     os.makedirs(scratch_dir, mode=0o700)
     for path in glob.glob(os.path.join(real_dir, "*.json")):
         shutil.copy2(path, scratch_dir)
-    presets = os.path.join(real_dir, "training-presets")
-    if os.path.isdir(presets):
-        shutil.copytree(presets, os.path.join(scratch_dir, "training-presets"))
+    for folder in ("training-presets", ICON_DIRNAME):
+        source = os.path.join(real_dir, folder)
+        if os.path.isdir(source):
+            shutil.copytree(source, os.path.join(scratch_dir, folder))
     real_hub = os.path.join(real_dir, "hub.db")
     # No hub means the dev run gets the first-run wizard; the config below is
     # still rewritten, since start-up would otherwise register image_root.
