@@ -46,6 +46,7 @@ _ROOM_24GB = {"vram_mb": 22_800, "ram_mb": 60_000}
 _ROOM_16GB = {"vram_mb": 14_900, "ram_mb": 60_000}
 _PICTURES = {"count": 24}
 _COUNT_TRAINING_PICTURES = ExportUtils.count_training_pictures
+_TRAINING_COUNTS = ExportUtils.training_counts
 
 
 class _FakeTrainingService:
@@ -175,12 +176,17 @@ def _setup(checkout=True):
     ExportUtils.count_training_pictures = staticmethod(
         lambda server, **kwargs: _PICTURES["count"]
     )
+    ExportUtils.training_counts = staticmethod(
+        lambda server, **kwargs: (_PICTURES["count"], _PICTURES.get("clips", 0))
+    )
 
     return temp_dir, client, server, read_token
 
 
 def _teardown(temp_dir, server):
     ExportUtils.count_training_pictures = staticmethod(_COUNT_TRAINING_PICTURES)
+    ExportUtils.training_counts = staticmethod(_TRAINING_COUNTS)
+    _PICTURES.pop("clips", None)
     server.close()
     temp_dir.cleanup()
     gc.collect()
@@ -1057,8 +1063,12 @@ def test_list_presets_offers_only_what_the_saved_checkout_can_run(tmp_path):
             "chroma1-base": False,
             "flux2-klein-9b-base": False,
             "krea2-raw": False,
+            "minimax-h3-image": False,
+            "minimax-h3-motion": False,
             "moss-image-base": False,
         }
+        # Only the motion recipe trains on the set's clips.
+        assert [item["id"] for item in listed if item["clips"]] == ["minimax-h3-motion"]
     finally:
         _teardown(temp_dir, server)
 
@@ -1297,6 +1307,8 @@ def test_resolve_previews_the_run_and_every_recipes_fit():
                     ("chroma1-base", "Chroma1 Base"),
                     ("flux2-klein-9b-base", "FLUX.2 Klein 9B Base"),
                     ("krea2-raw", "Krea 2 Raw"),
+                    ("minimax-h3-image", "MiniMax H3 · image"),
+                    ("minimax-h3-motion", "MiniMax H3 · motion"),
                     ("moss-image-base", "MOSS-Image Base"),
                 )
             ),
@@ -1403,11 +1415,13 @@ def test_dataset_counts_and_checks_and_knows_a_reference_set():
     ExportUtils.training_facts = staticmethod(
         lambda server, **scope: {
             "count": 3,
+            "clips": 2,
             "untagged": 1,
             "near_duplicates": 2,
             "other_people": 0,
         }
     )
+    _PICTURES["clips"] = 1
     try:
         set_id = _make_picture_set(owner)
         r = owner.get("/training/dataset", params={"set_id": set_id})
@@ -1429,12 +1443,21 @@ def test_dataset_counts_and_checks_and_knows_a_reference_set():
         assert out["character"]["reference_set_id"] == ref_id
         assert out["character"]["reference_count"] == 3
         assert out["character"]["all_count"] == _PICTURES["count"]
+        # The clips a clip recipe adds ride beside each count.
+        assert (out["character"]["reference_clips"], out["character"]["all_clips"]) == (
+            2,
+            1,
+        )
 
         r = owner.get("/training/dataset", params={"character_id": char_id})
         out = r.json()
         assert out["set_id"] is None
         assert out["character"]["all_count"] == 3
         assert out["character"]["reference_count"] == _PICTURES["count"]
+        assert (out["character"]["all_clips"], out["character"]["reference_clips"]) == (
+            2,
+            1,
+        )
 
         # A set under the person, or under a set under the person, is theirs:
         # a character LoRA trained on that set's pictures (#2124).
@@ -1453,6 +1476,7 @@ def test_dataset_counts_and_checks_and_knows_a_reference_set():
                 "id": sid,
                 "name": name,
                 "count": 3,
+                "clips": 2,
             }
             assert out["character"]["reference_count"] == _PICTURES["count"]
         r = owner.get(
@@ -1733,6 +1757,22 @@ def test_create_job_refuses_a_set_with_no_pictures():
         assert r.status_code == 422, r.text
         assert "no pictures" in r.text
         assert server.vault.training_service.enqueue_calls == []
+
+        # A set of clips alone: the motion recipe counts the clips a stills
+        # recipe leaves out, so it gets past the empty-set refusal.
+        ExportUtils.count_training_pictures = staticmethod(
+            lambda server, clips=False, **kwargs: 3 if clips else 0
+        )
+        repo = _fake_checkout(
+            os.path.join(temp_dir.name, "h3kit"), archs=("minimax_h3",)
+        )
+        _save_checkout(owner, repo, sys.executable)
+        body = {"set_id": set_id, "name": "x", "trigger_word": "tw"}
+        for preset, empty in (("minimax-h3-image", True), ("minimax-h3-motion", False)):
+            r = owner.post(
+                "/training/jobs", json={**body, "subject": "thing", "preset": preset}
+            )
+            assert ("no pictures" in r.text) is empty, (preset, r.text)
     finally:
         _teardown(temp_dir, server)
 

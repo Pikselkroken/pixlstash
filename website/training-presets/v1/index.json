@@ -23,6 +23,20 @@
       "min_pixlstash": "1.13.0"
     },
     {
+      "id": "minimax-h3-image",
+      "version": 1,
+      "file": "minimax-h3-image.json",
+      "sha256": "9ff76dd0ae860714a7062932a26acaae57ba77b4854497a12a702308bba587a5",
+      "min_pixlstash": "1.13.0"
+    },
+    {
+      "id": "minimax-h3-motion",
+      "version": 1,
+      "file": "minimax-h3-motion.json",
+      "sha256": "0685359570d6ca70c5ac0e13688030d4b1c13b9c6141fa239973cdbec6bcc6f5",
+      "min_pixlstash": "1.13.0"
+    },
+    {
       "id": "moss-image-base",
       "version": 1,
       "file": "moss-image-base.json",

@@ -7,6 +7,9 @@ export const TRIGGER_TOKEN = "{{TRIGGER_WORD}}";
 
 export const PROMPTS_KEY = "sample.samples[*].prompt";
 
+/** Whether a clip recipe's run learns the clips' sound: the dialog's Sound choice. */
+export const AUDIO_KEY = "datasets[*].do_audio";
+
 export const SUBJECT_LABELS = {
   person: "A person",
   style: "A style",
@@ -93,6 +96,10 @@ const KEY_LABELS = {
   "datasets[*].flip_x": "Mirror pictures",
   "network.conv": "Conv rank",
   "network.conv_alpha": "Conv alpha",
+  "datasets[*].do_audio": "Learn the sound",
+  "train.audio_loss_multiplier": "Sound weight",
+  "sample.num_frames": "Sample frames",
+  "sample.fps": "Sample frame rate",
 };
 
 /** The sizes the "Train at sizes" chips offer (all multiples of 16). */

@@ -1894,12 +1894,16 @@ class TrainingService:
         # own (``pixlstash-<uuid>``, see _run_folders).
         self._remove_tree(dataset_dir)
         os.makedirs(dataset_dir, exist_ok=True)
+        # The clips go in when the job's own locked config reads video: the
+        # config it renders, not a recipe looked up again, which may be gone.
+        locked = self._load_pending_spec(info["uuid"]).get("locked") or {}
         try:
             return self._dataset_builder(
                 dest_dir=dataset_dir,
                 set_id=info.get("set_id"),
                 character_id=info.get("character_id"),
                 trigger_word=info.get("trigger_word"),
+                clips=presets.reads_video(locked),
             )
         except Exception:
             logger.exception("Job %s: dataset build failed", info["uuid"])

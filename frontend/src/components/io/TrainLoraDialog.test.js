@@ -358,6 +358,122 @@ describe("TrainLoraDialog", () => {
   });
 });
 
+describe("a recipe that trains on clips (#2179)", () => {
+  const AUDIO = "datasets[*].do_audio";
+
+  beforeEach(() => {
+    training.listTrainingPresets.mockResolvedValue([
+      { id: "zimage-turbo", label: "Z-Image Turbo", offered: true, clips: false },
+      { id: "minimax-h3-motion", label: "MiniMax H3 · motion", offered: true, clips: true },
+    ]);
+    training.resolveTraining.mockImplementation(async (body) => {
+      const out = plan();
+      if (body.preset === "minimax-h3-motion") {
+        const sound = body.pins?.[AUDIO] ?? true;
+        out.resolution.values[AUDIO] = {
+          value: sound,
+          source: AUDIO in (body.pins || {}) ? "pinned" : "model",
+        };
+        out.derived[AUDIO] = { value: true, source: "model" };
+        out.resolution.values["model.quantize"] = { value: true, source: "gpu" };
+      }
+      return out;
+    });
+  });
+
+  it("counts the clips, asks about their sound, and pins the answer", async () => {
+    const { wrapper, store } = await openDialog(
+      { type: "character", id: 4, name: "Grandad" },
+      dataset({ count: 20, clips: 4 }),
+    );
+    // A stills recipe leaves the clips out, says so, and asks nothing.
+    expect(store.pictureCount).toBe(20);
+    expect(wrapper.find('[data-testid="tld-checks"]').text()).toContain(
+      "4 video clips are left out",
+    );
+    expect(wrapper.find('[data-testid="tld-sound"]').exists()).toBe(false);
+
+    store.selectedPreset = "minimax-h3-motion";
+    await store.resolvePlan();
+    await flushPromises();
+    expect(store.pictureCount).toBe(24);
+    expect(training.resolveTraining).toHaveBeenCalledWith(
+      expect.objectContaining({ preset: "minimax-h3-motion", picture_count: 24 }),
+    );
+    expect(wrapper.find('[data-testid="tld-checks"]').exists()).toBe(false);
+    const sound = wrapper.find('[data-testid="tld-sound"]');
+    expect(sound.text()).toContain("learns how they sound");
+
+    const silent = sound.findAll("button").find((b) => b.text() === "Picture only");
+    await silent.trigger("click");
+    expect(store.pins[AUDIO]).toBe(false);
+    await store.resolvePlan();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="tld-sound"]').text()).toContain(
+      "without their soundtrack",
+    );
+    // Picking the recipe's own answer again is no pin.
+    const on = wrapper
+      .find('[data-testid="tld-sound"]')
+      .findAll("button")
+      .find((b) => b.text() === "Learn the sound too");
+    await on.trigger("click");
+    expect(AUDIO in store.pins).toBe(false);
+
+    // H3 ships 8-bit only: best quality cannot mean full precision there.
+    store.fit = "best_quality";
+    await store.resolvePlan();
+    await flushPromises();
+    expect(wrapper.text()).toContain("weights come in 8-bit already");
+    expect(wrapper.text()).not.toContain("full precision");
+  });
+
+  it("drops the Sound answer when a stills recipe is picked", async () => {
+    const { store } = await openDialog(
+      { type: "character", id: 4, name: "Grandad" },
+      dataset({ count: 20, clips: 4 }),
+    );
+    store.selectedPreset = "minimax-h3-motion";
+    await flushPromises();
+    store.setPin(AUDIO, false);
+    store.selectedPreset = "zimage-turbo";
+    await flushPromises();
+    expect(AUDIO in store.allPins).toBe(false);
+  });
+
+  it("explains a set of clips alone to a stills recipe, and counts them for a clip one", async () => {
+    const { wrapper, store } = await openDialog(
+      { type: "character", id: 4, name: "Grandad" },
+      dataset({
+        count: 0,
+        clips: 3,
+        character: { ...GRANDAD, reference_count: 0, reference_clips: 3, all_clips: 5 },
+      }),
+    );
+    expect(wrapper.find('[data-testid="tld-checks"]').text()).toContain(
+      "no still pictures to train on. This set's 3 video clips train only with a motion recipe",
+    );
+    store.selectedPreset = "minimax-h3-motion";
+    await store.resolvePlan();
+    await flushPromises();
+    expect(wrapper.text()).toContain("Reference set · 3");
+    expect(wrapper.text()).toContain("Every picture of Grandad · 145");
+  });
+
+  it("says a clip recipe on a set without clips learns no motion", async () => {
+    const { wrapper, store } = await openDialog(
+      { type: "character", id: 4, name: "Grandad" },
+      dataset({ count: 20, clips: 0 }),
+    );
+    store.selectedPreset = "minimax-h3-motion";
+    await store.resolvePlan();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="tld-checks"]').text()).toContain(
+      "no video clips here",
+    );
+  });
+});
+
 describe("opened from the Models workspace (#2169)", () => {
   it("asks what to train on, then reads the pick as if opened on it", async () => {
     const wrapper = mount(TrainLoraDialog, globalOpts);

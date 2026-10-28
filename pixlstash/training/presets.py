@@ -394,6 +394,25 @@ def offered(preset: dict, architectures: list[str]) -> bool:
     return preset["requires_arch"] in architectures
 
 
+def trains_clips(preset: dict) -> bool:
+    """Whether *preset*'s dataset holds the set's video clips beside its stills."""
+    return reads_video(to_patch(preset["locked"]))
+
+
+def reads_video(patch: dict) -> bool:
+    """Whether a job-config *patch* (``to_patch`` shape) has ai-toolkit read video.
+
+    ai-toolkit reads a dataset as video when it pulls more than one frame
+    (``num_frames`` above 1, or ``auto_frame_count``), and it then takes clips
+    and stills alike; otherwise it reads stills only.
+    """
+    process = ((patch.get("config") or {}).get("process") or [{}])[0]
+    dataset = (process.get("datasets") or [{}])[0]
+    return bool(dataset.get("auto_frame_count")) or (
+        int(dataset.get("num_frames") or 1) > 1
+    )
+
+
 def to_patch(values: dict) -> dict:
     """Turn flat ``{key: value}`` into the nested ``config.process[0]`` patch.
 

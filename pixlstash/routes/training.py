@@ -660,6 +660,13 @@ def create_router(server) -> APIRouter:
                 "that is not offered cannot be queued."
             ),
         )
+        clips: bool = Field(
+            default=False,
+            description=(
+                "Whether the recipe trains on the set's video clips as well as "
+                "its stills; every other recipe leaves clips out."
+            ),
+        )
 
     class PresetUpdateItem(BaseModel):
         """A recipe a check replaced with a newer version from pixlstash.dev."""
@@ -731,8 +738,14 @@ def create_router(server) -> APIRouter:
         reference_count: int = Field(
             0, description="Pictures a run of the reference set would hold."
         )
+        reference_clips: int = Field(
+            0, description="Video clips a clip recipe adds to reference_count."
+        )
         all_count: int = Field(
             ..., description="Pictures a run of every picture of it would hold."
+        )
+        all_clips: int = Field(
+            0, description="Video clips a clip recipe adds to all_count."
         )
         child_set: Optional[dict] = Field(
             default=None,
@@ -757,7 +770,15 @@ def create_router(server) -> APIRouter:
                 "the one whose reference set set_id is."
             ),
         )
-        count: int = Field(..., description="Pictures the dataset would hold.")
+        count: int = Field(..., description="Still pictures the dataset would hold.")
+        clips: int = Field(
+            default=0,
+            description=(
+                "Video clips a recipe that trains on clips adds to count; "
+                "every other recipe leaves them out. The checks below cover "
+                "the stills."
+            ),
+        )
         min_pictures: int = Field(
             ..., description="Below this many pictures the dialog warns."
         )
@@ -939,6 +960,7 @@ def create_router(server) -> APIRouter:
                 "base_model": preset["locked"]["model.name_or_path"],
                 "requires_arch": preset["requires_arch"],
                 "offered": presets.offered(preset, architectures),
+                "clips": presets.trains_clips(preset),
             }
             for preset in presets.list_presets()
         ]
@@ -1348,7 +1370,10 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
         picture_count = ExportUtils.count_training_pictures(
-            server, set_id=set_id, character_id=character_id
+            server,
+            set_id=set_id,
+            character_id=character_id,
+            clips=presets.trains_clips(preset),
         )
         if picture_count == 0:
             raise HTTPException(
@@ -2167,24 +2192,25 @@ def create_router(server) -> APIRouter:
                 )
             ref = row.reference_picture_set_id
 
-            def count(**scope):
-                return ExportUtils.count_training_pictures(server, **scope)
+            def counts(**scope):
+                return ExportUtils.training_counts(server, **scope)
 
             is_child = set_id is not None and set_id != ref
+            asked = (facts["count"], facts["clips"])
+            reference = (
+                asked
+                if set_id is not None and not is_child
+                else (counts(set_id=ref) if ref is not None else (0, 0))
+            )
+            every = asked if set_id is None else counts(character_id=character_id)
             character = {
                 "id": row.id,
                 "name": row.name,
                 "reference_set_id": ref,
-                "reference_count": (
-                    facts["count"]
-                    if set_id is not None and not is_child
-                    else (count(set_id=ref) if ref is not None else 0)
-                ),
-                "all_count": (
-                    facts["count"]
-                    if set_id is None
-                    else count(character_id=character_id)
-                ),
+                "reference_count": reference[0],
+                "reference_clips": reference[1],
+                "all_count": every[0],
+                "all_clips": every[1],
                 "child_set": None,
             }
             if is_child:
@@ -2192,6 +2218,7 @@ def create_router(server) -> APIRouter:
                     "id": set_id,
                     "name": scoped_set.name if scoped_set is not None else "",
                     "count": facts["count"],
+                    "clips": facts["clips"],
                 }
         return {
             "set_id": set_id,

@@ -11507,22 +11507,32 @@ A run's parameters come from a versioned recipe and this machine's memory, never
 from the owner reading an ai-toolkit config. A recipe is a JSON file in
 `pixlstash/data/training-presets/`, loaded and schema-checked by
 `pixlstash/training/presets.py` (`validate_preset`; a broken file fails at load
-and in `tests/training/test_presets.py`). Five ship (#2121, #2180): Z-Image
-Turbo (`DEFAULT_PRESET`), Krea 2 Raw, FLUX.2 Klein 9B Base, Chroma1 Base and
-MOSS-Image Base. `list_presets` puts the default first, because the Train dialog
-preselects the first recipe the checkout can run. All five render over the same
-passthrough template. The four newer recipes lock
-`datasets[*].cache_latents_to_disk`: Krea 2's VAE, encoding every step, measured
-5 GB above training. Krea 2's 8-bit profiles are `measured` (the probe's own
-shape, on a 32 GB card). Klein's, Chroma's and MOSS's are `derived` seeds,
-scaled by what Krea 2's derivation missed. The probe (§25.20) measures each
-setup on the owner's machine before its first run. Chroma has no profile below
-8-bit: ai-toolkit's Chroma cannot offload layers and quantises on the GPU. MOSS
-needs ai-toolkit 0.13.28 or later (Base support and the fresh-cache tokenizer
-fix). The gate reads only the `moss_image` folder: a checkout before 0.13.27
-lists the recipe as not offered, and a 0.13.27 checkout, which has the folder,
-is offered it and fails when ai-toolkit loads the model. Its 9B text encoder is larger than its
-transformer, so its offload profile offloads the text encoder too. The trainer is launched with
+and in `tests/training/test_presets.py`). Seven ship (#2121, #2179, #2180):
+Z-Image Turbo (`DEFAULT_PRESET`), Krea 2 Raw, FLUX.2 Klein 9B Base, Chroma1
+Base, MOSS-Image Base and MiniMax H3 in two modes, image and motion.
+`list_presets` puts the default first, because the Train dialog preselects the
+first recipe the checkout can run. All seven render over the same passthrough
+template. The six newer recipes lock `datasets[*].cache_latents_to_disk`: Krea
+2's VAE, encoding every step, measured 5 GB above training. Krea 2's 8-bit
+profiles are `measured` (the probe's own shape, on a 32 GB card). Klein's,
+Chroma's and MOSS's are `derived` seeds, scaled by what Krea 2's derivation
+missed. The probe (§25.20) measures each setup on the owner's machine before
+its first run. Chroma has no profile below 8-bit: ai-toolkit's Chroma cannot
+offload layers and quantises on the GPU. MOSS needs ai-toolkit 0.13.28 or later
+(Base support and the fresh-cache tokenizer fix). The gate reads only the
+`moss_image` folder: a checkout before 0.13.27 lists the recipe as not offered,
+and a 0.13.27 checkout, which has the folder, is offered it and fails when
+ai-toolkit loads the model. Its 9B text encoder is larger than its transformer,
+so its offload profile offloads the text encoder too. MiniMax H3 is
+guidance-distilled and ships pre-quantised (int8 ConvRot transformer, nvfp4 text
+encoder), so both modes lock ai-toolkit's distillation handling (the training
+adapter and contrastive guidance) and write the `convrot8` / `nvfp4` qtypes its
+files already hold. Their 60%-offload profile is `measured` on a 32 GB card;
+without offloading, and with 30%, the transformer ran out of memory there, so
+the no-offload tier is a `derived` one for 40 GB cards. Image mode trains stills
+as single frames; motion mode trains clips (below) at 512 and, when the owner
+keeps the Train dialog's *Sound* choice on, their audio (`datasets[*].do_audio`).
+The trainer is launched with
 `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` unless the owner set an
 allocator config (`SEAM.md`). Without it, Krea 2 failed every step on a 32 GB
 card, 5 GB short of a block while 5 GB sat reserved and split. Its parts:
@@ -11584,7 +11594,28 @@ measurement instead of the seed (§25.20).
 
 Resolution happens once, at `POST /training/jobs`, against the pictures the
 dataset would hold then (`ExportUtils.count_training_pictures`, the same
-selection the dataset builder writes). The rendered config is the template, the
+selection the dataset builder writes).
+
+**Clip datasets (#2179).** The builder leaves a set's video clips out unless
+the run's recipe trains on them: `presets.trains_clips` is true when its locked
+dataset keys make ai-toolkit read the dataset as video (`num_frames` above 1 or
+`auto_frame_count`), and ai-toolkit then reads clips and stills alike. The
+count at enqueue and `GET /training/presets` (`clips`) ask it; the builder
+(`TrainingService._build_dataset`) asks the same of the job's own locked config
+(`presets.reads_video`), so a recipe gone since the job was queued changes
+nothing. A clip is
+copied as it is, captioned like a still; ai-toolkit cuts its frames. The only
+clip recipe is MiniMax H3's motion mode, which locks 24 fps and
+`auto_frame_count`, so each clip trains at its real length snapped down to the
+video VAE's `17n + 5` frames (5, 22, 39, ... 107 is about 4.5 s) and its sound
+stays in step. Nothing caps a clip's length: a long clip trains every frame,
+and its memory grows with it. An animated GIF is a still here (`is_video_file`
+goes by extension), so it trains as one frame. The sample prompts are still
+written from the stills' captions only. `GET /training/dataset` gives each
+character count's clips beside it (`reference_clips`, `all_clips`,
+`child_set.clips`), and the probe fingerprints a clip run's sound and preview
+length (`measurements.CLIP_FINGERPRINT_KEYS`, named only when a recipe
+resolves them, so other recipes keep their measurements). The rendered config is the template, the
 resolved values (checked by `validate_tunables`) and the locked keys merged
 last; placeholders are substituted after the merge, so a recipe's prompts get
 the trigger word.
@@ -11684,7 +11715,8 @@ reads that change nothing:
 
 - **`GET /training/dataset?set_id|character_id`**, once per scope:
   `ExportUtils.training_facts` counts the pictures the dataset would hold (the
-  builder's own selection) and the checks the dialog warns on: pictures with no
+  builder's own selection), the video `clips` a clip recipe adds to them
+  (§25.16), and the checks the dialog warns on, over the stills: pictures with no
   tags (the captions are the tags, so they train on the trigger word alone),
   pictures with a near copy (`near_pairs_in_bucket` at the dedup default
   threshold over the dataset's perceptual hashes; stacked duplicates are

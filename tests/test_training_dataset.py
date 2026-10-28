@@ -229,6 +229,33 @@ def test_build_training_dataset_skips_videos(env):
         # No .mp4 leaked into the dataset.
         assert not glob.glob(os.path.join(dest_dir, "*.mp4"))
 
+    # A recipe that trains on clips gets the clip as it is, captioned like a
+    # still, and the count it resolves against includes it.
+    with tempfile.TemporaryDirectory() as dest_dir:
+        manifest = ExportUtils.build_training_dataset(
+            server,
+            dest_dir=dest_dir,
+            set_id=set_id,
+            trigger_word="mychar",
+            clips=True,
+        )
+        assert manifest["picture_ids"] == [img_id, video_pic_id]
+        assert (
+            ExportUtils.count_training_pictures(server, set_id=set_id, clips=True) == 2
+        )
+        [clip] = glob.glob(os.path.join(dest_dir, "*.mp4"))
+        with open(clip, "rb") as fh:
+            assert fh.read() == b"\x00\x00\x00\x18ftypmp42"
+        with open(os.path.splitext(clip)[0] + ".txt", encoding="utf-8") as fh:
+            assert fh.read().startswith("mychar")
+        assert [i["picture_id"] for i in manifest["items"]] == [img_id, video_pic_id]
+
+    # The Train dialog's facts count the stills and say how many clips a
+    # clip recipe would add.
+    facts = ExportUtils.training_facts(server, set_id=set_id)
+    assert (facts["count"], facts["clips"]) == (1, 1)
+    assert ExportUtils.training_counts(server, set_id=set_id) == (1, 1)
+
 
 def test_build_training_dataset_no_trigger_word(env):
     client, server = env
@@ -341,6 +368,7 @@ def test_training_facts_count_untagged_near_copies_and_other_people(env):
     facts = ExportUtils.training_facts(server, set_id=set_id, character_id=grandad)
     assert facts == {
         "count": 3,
+        "clips": 0,
         "untagged": 1,
         "near_duplicates": 2,
         "other_people": 1,

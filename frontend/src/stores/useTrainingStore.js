@@ -20,6 +20,7 @@ import { DEFAULT_TIMEOUTS, useNoticeStore } from "./useNoticeStore";
 import { onSessionReset } from "../utils/apiClient";
 import { useSidebarStore } from "./useSidebarStore";
 import {
+  AUDIO_KEY,
   PROMPTS_KEY,
   displayPrompt,
   promptFromDisplay,
@@ -129,7 +130,16 @@ export const useTrainingStore = defineStore("training", () => {
 
   /** The character the run is filed under, or null for an ordinary set. */
   const character = computed(() => dataset.value?.character || null);
-  const pictureCount = computed(() => dataset.value?.count ?? 0);
+  /** Whether the chosen recipe trains on the set's video clips too. */
+  const presetClips = computed(
+    () => !!presets.value.find((p) => p.id === selectedPreset.value)?.clips,
+  );
+  /** What the run trains on: the stills, and the clips when the recipe takes them. */
+  const pictureCount = computed(
+    () =>
+      (dataset.value?.count ?? 0) +
+      (presetClips.value ? dataset.value?.clips ?? 0 : 0),
+  );
   const displayName = computed(
     () => character.value?.name || scopeName.value || "",
   );
@@ -453,6 +463,11 @@ export const useTrainingStore = defineStore("training", () => {
       if (trainDialogOpen.value) resolveSoon();
     },
   );
+  // The clips' sound is asked only of a clip recipe; switching to one that
+  // trains on stills drops the answer instead of sending it unseen.
+  watch(presetClips, (clips) => {
+    if (!clips && AUDIO_KEY in pins.value) unpin([AUDIO_KEY]);
+  });
   watch(
     () => [trainDialogOpen.value, effectiveSubject.value, dataset.value],
     () => {
@@ -706,6 +721,7 @@ export const useTrainingStore = defineStore("training", () => {
     openToPick,
     pickScope,
     character,
+    presetClips,
     pictureCount,
     displayName,
     scopePayload,

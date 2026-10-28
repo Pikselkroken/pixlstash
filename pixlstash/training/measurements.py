@@ -61,6 +61,10 @@ FINGERPRINT_KEYS = (
     "sample.sample_steps",
 )
 
+#: Keys only clip recipes resolve. Named only when present, so a recipe
+#: without them keeps the fingerprints it was measured under.
+CLIP_FINGERPRINT_KEYS = ("datasets[*].do_audio", "sample.num_frames")
+
 #: The phase whose peak is the preview need; every other phase is training's.
 PREVIEW_PHASE = "previews"
 
@@ -95,6 +99,7 @@ def fingerprint(preset: dict, values: dict, *, commit: str | None, device: str |
         "max_bucket": max(sizes, default=0),
         "effective_batch": batch,
         **{key: values.get(key) for key in FINGERPRINT_KEYS},
+        **{key: values[key] for key in CLIP_FINGERPRINT_KEYS if key in values},
     }
     blob = json.dumps(named, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:32]

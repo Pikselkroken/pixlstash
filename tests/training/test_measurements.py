@@ -55,6 +55,32 @@ def test_fingerprint_follows_what_moves_memory_and_speed_only():
         assert changed != base
 
 
+def test_a_clip_recipe_fingerprints_its_sound_and_preview_length():
+    """Sound and preview length move a motion run's memory; a recipe that
+    resolves neither keeps the key it was measured under."""
+    motion = presets.get_preset("minimax-h3-motion")
+    values = presets.resolved_values(
+        presets.resolve(
+            motion,
+            subject="person",
+            effort="standard",
+            fit="auto",
+            picture_count=24,
+            vram_mb=100_000,
+            ram_mb=None,
+        )
+    )
+
+    def key(**changes):
+        return measurements.fingerprint(
+            motion, {**values, **changes}, commit="abc123", device="Test GPU"
+        )
+
+    assert key(**{"datasets[*].do_audio": False}) != key()
+    assert key(**{"sample.num_frames": 107}) != key()
+    assert "datasets[*].do_audio" not in _values()
+
+
 def test_peaks_keep_the_highest_figure_per_phase():
     peaks: dict = {}
     measurements.note_peak(peaks, "training", 9000, 12000)

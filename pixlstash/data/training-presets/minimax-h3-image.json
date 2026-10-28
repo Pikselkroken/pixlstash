@@ -1,0 +1,147 @@
+{
+  "id": "minimax-h3-image",
+  "version": 1,
+  "label": "MiniMax H3 · image",
+  "requires_arch": "minimax_h3",
+  "template": "zimage-turbo-lora",
+  "divisibility": 32,
+  "locked": {
+    "model.arch": "minimax_h3",
+    "model.name_or_path": "Comfy-Org/MiniMax-H3",
+    "model.assistant_lora_path": "ostris/minimax_h3_training_adapter/minimax_h3_training_adapter_v1.safetensors",
+    "train.do_guidance_loss": true,
+    "train.guidance_loss_target": 3.5,
+    "train.bypass_guidance_embedding": false,
+    "network.network_kwargs.ignore_if_contains": [
+      "adaln_proj"
+    ],
+    "datasets[*].cache_latents_to_disk": true,
+    "train.noise_scheduler": "flowmatch",
+    "sample.sampler": "flowmatch"
+  },
+  "defaults": {
+    "datasets[*].resolution": [
+      512,
+      768,
+      1024
+    ],
+    "train.timestep_type": "shift",
+    "train.optimizer": "adamw8bit",
+    "train.batch_size": 1,
+    "save.save_every": 250,
+    "sample.sample_every": 250
+  },
+  "inference_target": "base",
+  "preview": {
+    "base": {
+      "sample.sample_steps": 28,
+      "sample.guidance_scale": 1,
+      "sample.width": 1024,
+      "sample.height": 1024
+    }
+  },
+  "subject": {
+    "person": {
+      "datasets[*].caption_dropout_rate": 0.05,
+      "train.content_or_style": "balanced"
+    },
+    "style": {
+      "datasets[*].caption_dropout_rate": 0.05,
+      "train.content_or_style": "style"
+    },
+    "thing": {
+      "datasets[*].caption_dropout_rate": 0.05,
+      "train.content_or_style": "balanced"
+    }
+  },
+  "effort": {
+    "gentle": {
+      "steps_per_picture": 40,
+      "min_steps": 800,
+      "max_steps": 1500,
+      "train.lr": 8e-05,
+      "network.linear": 16
+    },
+    "standard": {
+      "steps_per_picture": 60,
+      "min_steps": 1000,
+      "max_steps": 2000,
+      "train.lr": 0.0001,
+      "network.linear": 16
+    },
+    "strong": {
+      "steps_per_picture": 80,
+      "min_steps": 1500,
+      "max_steps": 3000,
+      "train.lr": 0.0001,
+      "network.linear": 32
+    }
+  },
+  "fit": {
+    "auto": [
+      "q8_low_vram",
+      "q8_offload_60"
+    ],
+    "save_memory": [
+      "q8_offload_60"
+    ],
+    "best_quality": [
+      "q8_low_vram"
+    ]
+  },
+  "hardware_profiles": {
+    "q8_low_vram": {
+      "label": "8-bit model · loaded one part at a time",
+      "vram_mb": 36000,
+      "ram_mb": 56000,
+      "max_bucket": 1024,
+      "max_rank": 32,
+      "max_batch": 1,
+      "evidence": "derived",
+      "settings": {
+        "model.quantize": true,
+        "model.quantize_te": true,
+        "model.low_vram": true,
+        "model.layer_offloading": false,
+        "model.layer_offloading_transformer_percent": 1.0,
+        "model.layer_offloading_text_encoder_percent": 1.0,
+        "train.cache_text_embeddings": true,
+        "model.qtype": "convrot8",
+        "model.qtype_te": "nvfp4"
+      }
+    },
+    "q8_offload_60": {
+      "label": "8-bit model · 60% of layers in RAM",
+      "vram_mb": 18900,
+      "ram_mb": 56000,
+      "max_bucket": 1024,
+      "max_rank": 32,
+      "max_batch": 1,
+      "evidence": "measured",
+      "settings": {
+        "model.quantize": true,
+        "model.quantize_te": true,
+        "model.low_vram": true,
+        "model.layer_offloading": true,
+        "model.layer_offloading_transformer_percent": 0.6,
+        "model.layer_offloading_text_encoder_percent": 0.6,
+        "train.cache_text_embeddings": true,
+        "model.qtype": "convrot8",
+        "model.qtype_te": "nvfp4"
+      }
+    }
+  },
+  "sources": {
+    "locked": "ai-toolkit ui/src/app/jobs/new/options.tsx (minimax_h3): the Comfy-Org/MiniMax-H3 repack (pruned int8 ConvRot transformer about 21 GB, nvfp4 Qwen3-VL-32B text encoder about 16 GB, about 43 GB with the video and audio VAEs), downloaded into the checkout's models folder on first load. H3 is guidance-distilled, so the recipe keeps ai-toolkit's default distillation handling: the ostris training adapter merged into the weights and contrastive guidance (do_guidance_loss, target 3.5), and the adaln_proj layers left out of the LoRA. Latents are cached",
+    "divisibility": "minimax_h3.py get_bucket_divisibility: 16 for the VAE x 2 for the patch size",
+    "defaults": "ai-toolkit UI defaults for minimax_h3 (timestep shift, adamw8bit, lr 1e-4, rank 16). Image mode trains stills as single frames (num_frames 1), so a set's clips are left out",
+    "preview.base": "minimax_h3.py model notes: guidance-distilled, keep guidance at 1; 28 steps as ai-toolkit samples; a single frame renders an image",
+    "subject": "heuristic, as for Z-Image Turbo: ai-toolkit's own caption dropout default is 0.0; content_or_style per jobs/process/BaseSDTrainProcess.py",
+    "effort": "ai-toolkit's MiniMax-H3 defaults (lr 1e-4, rank 16); the adapter's notes say it breaks down over long runs, so the step ranges stay under 3000. No source gives a steps-per-picture rule",
+    "hardware_profiles": "measured on an RTX 5090 (32 GB) with this recipe rendered by PixlStash: 4 updates at 1024 (and 6 over 512/768/1024), rank 16, batch 1, a save and 1024 previews at 28 steps; the trainer's processes read every 0.25 s by nvidia-smi and their resident memory. vram_mb and ram_mb are the highest peak outside previews x1.1, as a measurement on the owner's machine is admitted (training/measurements.py NEED_MARGIN). About 2.2 s per update at 1024, 11-18 s a preview",
+    "hardware_profiles.q8_offload_60": "measured: peaks 17.2 GB encoding captions and 17.0 GB training at 1024, 16.4 GB previewing; 69.1 GB resident while the weights load, 45-54 GB after",
+    "hardware_profiles.q8_low_vram.vram_mb": "derived: ran out of memory on the 32 GB card moving the 21 GB transformer onto the GPU, about 29.5 GB in use; 30% of layers in RAM also ran out there (27.7 GB measured, with the text encoder still resident). Seeded at 36 GB (a 40 GB card, less its margin) for the transformer, LoRA state and 1024 activations",
+    "hardware_profiles.*.max_rank, max_batch": "rank 32 is derived from the rank 16 measurement (rank 16 LoRA state is about 0.2 GB); batch 1 as measured",
+    "hardware_profiles.*.ram_mb": "measured, outside loading: the trainer's resident memory peaked at 50.9 GB after the weights were in, x1.1. While they load it reads 69.1 GB, but that includes the mapped weight files: both runs loaded with about 65 GB of RAM available, so the loading peak is left out of the seed"
+  }
+}
