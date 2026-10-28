@@ -1069,6 +1069,10 @@ Models. An open rail keeps its tab.) The handle:
   or drops focus. It goes at once when its label empties (the selection was
   cleared), so there is no unlabelled handle. Closing the rail shows nothing
   until the next selection.
+- **The full-screen lightbox is the one hover cue.** It has no toolbar toggle
+  on screen and its picture is the selection, so the pointer arriving in the
+  right 48px is its nudge: the tab comes out (and bounces) and still opens only
+  on a click.
 - **Click only**, never hover: the content's scrollbar is on that edge. It is a
   `<button>` in the Tab order, named `Show inspector: <name>`, and opening from
   it persists (it is the same act as the toolbar toggle) and puts focus on the

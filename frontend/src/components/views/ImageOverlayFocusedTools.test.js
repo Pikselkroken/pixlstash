@@ -324,6 +324,30 @@ describe("full screen", () => {
     expect(exit.text()).toContain("Esc");
   });
 
+  it("brings the edge tab out at the right edge", async () => {
+    const wrapper = await openMeasured();
+    press("f");
+    await flush();
+    const tab = wrapper.find('[data-testid="inspector-edge-tab"]');
+    const shell = wrapper.find(".overlay-shell");
+    const moveTo = async (clientX) => {
+      shell.element.dispatchEvent(
+        new MouseEvent("mousemove", { bubbles: true, clientX, clientY: 300 }),
+      );
+      await flush();
+    };
+    await moveTo(window.innerWidth / 2);
+    expect(tab.isVisible()).toBe(false);
+    await moveTo(window.innerWidth - 10);
+    expect(tab.isVisible()).toBe(true);
+    // One arrival, one nudge: moving about inside the zone is not another.
+    const nudges = wrapper.vm.edgeTabNudge;
+    await moveTo(window.innerWidth - 20);
+    expect(wrapper.vm.edgeTabNudge).toBe(nudges);
+    await tab.trigger("click");
+    expect(wrapper.vm.inspectorShown).toBe(true);
+  });
+
   it("I calls the inspector back over the full-screen picture", async () => {
     const wrapper = await openMeasured();
     press("f");
