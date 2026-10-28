@@ -797,49 +797,20 @@
             >
               <template v-if="image && !isReadOnly" #actions>
                 <button
-                  v-if="faceAssignItems.length"
+                  v-if="faceAssignItems.length || !isMobile"
+                  ref="facesPencilRef"
                   class="section-meta-btn"
                   :class="{ 'section-meta-btn--on': namingFaces }"
                   type="button"
-                  aria-label="Name the faces"
-                  :aria-pressed="namingFaces ? 'true' : 'false'"
+                  aria-label="Edit faces"
+                  aria-haspopup="dialog"
+                  aria-controls="overlay-faces-panel"
+                  :aria-expanded="namingFaces ? 'true' : 'false'"
                   @click.stop="namingFaces = !namingFaces"
                 >
-                  <Tooltip text="Name the faces" activator="parent" :describe="false" />
+                  <Tooltip text="Edit faces" activator="parent" :describe="false" />
                   <v-icon size="16">mdi-pencil-outline</v-icon>
                 </button>
-                <v-menu v-if="!isMobile" location="bottom end">
-                  <template #activator="{ props: faceMenuProps }">
-                    <button
-                      v-bind="faceMenuProps"
-                      class="section-meta-btn"
-                      type="button"
-                      aria-label="More face actions"
-                    >
-                      <Tooltip
-                        text="More face actions"
-                        activator="parent"
-                        :describe="false"
-                      />
-                      <v-icon size="16">mdi-dots-horizontal</v-icon>
-                    </button>
-                  </template>
-                  <div
-                    class="ctx-menu ctx-menu--on-dark"
-                    role="menu"
-                    aria-label="Faces"
-                  >
-                    <button
-                      class="ctx-item"
-                      role="menuitem"
-                      type="button"
-                      @click="beginDrawMode('face')"
-                    >
-                      <v-icon class="ctx-icon">mdi-account-plus</v-icon>
-                      Draw a face box
-                    </button>
-                  </div>
-                </v-menu>
               </template>
             </SectionHeader>
             <template v-if="!facesCollapsed">
@@ -867,63 +838,38 @@
                   }}</span>
                 </div>
               </div>
-              <div
-                v-if="namingFaces && faceAssignItems.length"
-                class="face-assign-grid"
-              >
-                <div
-                  v-for="face in faceAssignItems"
-                  :key="face.faceKey"
-                  class="face-assign-card"
-                >
-                  <div class="face-assign-row">
-                    <div class="face-assign-thumb">
-                      <div
-                        class="face-assign-crop"
-                        :style="getFaceThumbStyle(face, face.faceIdx)"
-                      ></div>
-                    </div>
-                    <div class="face-assign-meta">
-                      <div
-                        class="face-assign-label"
-                        :style="{ color: faceBoxColor(face.faceIdx) }"
-                      >
-                        {{ face.label }}
-                      </div>
-                      <!-- A native <select> cannot carry the create row's
-                           highlight: macOS Chrome and Safari draw select
-                           popups as OS menus that ignore option colour. This
-                           is the same menu language as the rest of the app
-                           (AddToEntityControl's force-dark skin), in its
-                           single-select face mode. Face mode picks one person
-                           for one face, so it has no subject list to compute a
-                           tri-state across and passes an empty one. -->
-                      <div class="face-assign-person">
-                        <AddToEntityControl
-                          :ref="(el) => setFaceMenuRef(face.faceKey, el)"
-                          type="face"
-                          allow-create
-                          float-menu
-                          :subject-ids="[]"
-                          :force-dark="true"
-                          :face-id="face.id"
-                          :assigned-character-id="face.character_id"
-                          :assigned-character-name="faceAssignedName(face)"
-                          :readonly="isReadOnly"
-                          :disabled="!face.id || isReadOnly"
-                          @assign="handleFaceAssign(face, $event)"
-                          @unassign="unassignFaceCharacter(face)"
-                          @create="openCreatePersonForFace(face, $event)"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
               <div v-if="!faceAssignItems.length" class="face-assign-empty">
                 No faces detected
               </div>
             </template>
+            <!-- The pencil's panel: a person picker per face, over the
+                 sidebar rather than pushing Tags down. -->
+            <FacesPanel
+              v-if="namingFaces && image && !isReadOnly"
+              id="overlay-faces-panel"
+              ref="facesPanelRef"
+              class="overlay-faces-panel"
+              on-dark
+              allow-create
+              :rows="facePanelRows"
+              :anchor="facesPencilRef"
+              @close="closeFacesPanel"
+              @hover="(row) => (hoveredFaceIdx = row ? row.face.faceIdx : null)"
+              @assign="(row, payload) => handleFaceAssign(row.face, payload)"
+              @unassign="(row) => unassignFaceCharacter(row.face)"
+              @create="(row, query) => openCreatePersonForFace(row.face, query)"
+            >
+              <template v-if="!isMobile" #footer>
+                <AppButton
+                  size="sm"
+                  on-dark
+                  icon-left="vector-square-plus"
+                  @click="drawFaceFromPanel"
+                >
+                  Draw a face box
+                </AppButton>
+              </template>
+            </FacesPanel>
           </div>
 
           <OverlayTagsPanel
@@ -1241,6 +1187,7 @@ import { bareDigit } from "../../utils/shortcutKeys";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
+import FacesPanel from "../widgets/FacesPanel.vue";
 import AppInspector from "../widgets/AppInspector.vue";
 import InspectorEdgeTab from "../widgets/InspectorEdgeTab.vue";
 import CharacterEditor from "../editors/CharacterEditor.vue";
@@ -4022,8 +3969,22 @@ const shiftHeld = ref(false);
 const hoveredFaceIdx = ref(null);
 const pictureFaceIdx = ref(null);
 const hoveredTagLabel = ref(null);
-// The pencil on Faces: the person menus for every face at once.
+// The pencil on Faces: the panel of person pickers, one per face.
 const namingFaces = ref(false);
+const facesPencilRef = ref(null);
+const facesPanelRef = ref(null);
+
+function closeFacesPanel() {
+  // A press in the new-person dialog a face row opened lands outside the
+  // panel; the panel stays so focus can return to that row's picker.
+  if (createPersonOpen.value) return;
+  namingFaces.value = false;
+}
+
+function drawFaceFromPanel() {
+  namingFaces.value = false;
+  beginDrawMode("face");
+}
 // Shift means "add" to the selection tools, so boxes stand down while they
 // are out, as the face boxes always did.
 const boxesAll = computed(() => shiftHeld.value && !paintActive.value);
@@ -5376,15 +5337,6 @@ function faceAssignedName(face) {
   return known?.displayName || `Character ${face.character_id}`;
 }
 
-// Per-face menu instances, so focus can return to the one that opened the
-// dialog. A plain Map (not a ref): nothing renders from it.
-const faceMenuRefs = new Map();
-
-function setFaceMenuRef(key, el) {
-  if (el) faceMenuRefs.set(key, el);
-  else faceMenuRefs.delete(key);
-}
-
 // ── Create a person from a face row (#645) ───────────────────────────────────
 // The face id and the invoking select are captured at flow start so they
 // survive the dialog: on save the new person is assigned to exactly that face,
@@ -5453,7 +5405,7 @@ function restoreCreatePersonFocus() {
   const key = createPersonFaceKey;
   createPersonFaceKey = null;
   if (key == null) return;
-  nextTick(() => faceMenuRefs.get(key)?.focusTrigger?.());
+  nextTick(() => facesPanelRef.value?.focusRow(key));
 }
 
 function handleCreatePersonClose() {
@@ -5694,6 +5646,19 @@ const faceAssignItems = computed(() => {
     label: `Face ${idx + 1}`,
   }));
 });
+
+const facePanelRows = computed(() =>
+  faceAssignItems.value.map((face) => ({
+    key: face.faceKey,
+    id: face.id,
+    characterId: face.character_id,
+    name: faceAssignedName(face),
+    label: face.label,
+    hue: faceBoxColor(face.faceIdx),
+    cropStyle: getFaceThumbStyle(face, face.faceIdx, 36),
+    face,
+  })),
+);
 
 const sortedCharacters = computed(() => {
   const list = Array.isArray(characters.value) ? characters.value : [];

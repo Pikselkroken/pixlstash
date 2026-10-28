@@ -560,9 +560,13 @@ describe("the faces", () => {
     expect(wrapper.findAll(".rail-face")).toHaveLength(4);
     expect(wrapper.find(".rail-face__name").exists()).toBe(false);
     expect(wrapper.find(".rail-face__more").text()).toBe("+2");
-    // The menu has a row, and a picker, for every one of them.
+    // The panel has a row, and a picker, for every one of them.
     await wrapper.find('[aria-label="Edit faces"]').trigger("click");
-    expect(wrapper.findAll(".rail-faces__row")).toHaveLength(5);
+    expect(wrapper.findAll(".faces-panel__row")).toHaveLength(5);
+    expect(wrapper.find(".faces-panel__count").text()).toBe("5");
+    // The pencil shuts it again.
+    await wrapper.find('[aria-label="Edit faces"]').trigger("click");
+    expect(wrapper.find(".faces-panel").exists()).toBe(false);
   });
 });
 

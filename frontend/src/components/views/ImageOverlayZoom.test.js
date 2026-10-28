@@ -621,7 +621,7 @@ describe("ImageOverlay zoom - overlays ride the transform", () => {
     const wrapper = await openMeasured();
     press("z"); // 100%, centred: css scale 2, offset 0
     await wrapper.vm.$nextTick();
-    // The faces menu's Draw a face box (its menu is stubbed here).
+    // The faces panel's Draw a face box.
     wrapper.vm.beginDrawMode("face");
     await wrapper.vm.$nextTick();
     const layer = wrapper.find(".overlay-draw-layer");

@@ -26,7 +26,7 @@
         alt=""
         draggable="false"
       />
-      <div ref="peopleRef" class="rail-faces" :class="{ 'rail-faces--compact': compact }">
+      <div class="rail-faces" :class="{ 'rail-faces--compact': compact }">
         <button
           v-for="(face, idx) in shownFaces"
           :key="face.id ?? `face-${idx}`"
@@ -34,6 +34,7 @@
           :class="{ 'rail-face--unknown': face.character_id == null }"
           type="button"
           :aria-label="`Face ${idx + 1}: ${faceName(face)}`"
+          :aria-controls="facesPanelId"
           @click="openFaces(face.id)"
         >
           <Tooltip v-if="compact" :text="faceName(face)" activator="parent" :describe="false" />
@@ -48,15 +49,18 @@
           class="rail-face"
           type="button"
           :aria-label="`${moreFaces} more faces`"
+          :aria-controls="facesPanelId"
           @click="openFaces(null)"
         >
           <span class="rail-face__crop rail-face__more">+{{ moreFaces }}</span>
         </button>
         <button
           v-if="!isReadOnly"
+          ref="pencilRef"
           class="rail-ib"
           type="button"
           aria-label="Edit faces"
+          :aria-controls="facesPanelId"
           :aria-expanded="facesOpen ? 'true' : 'false'"
           @click="openFaces(null)"
         >
@@ -64,43 +68,18 @@
           <v-icon size="16">mdi-pencil-outline</v-icon>
         </button>
       </div>
-      <!-- One menu for every face, a character picker each. Drawn in the
-           rail rather than as a Vuetify menu: the pickers float their own
-           lists over the page, and a Vuetify menu reads a click in one as a
-           click outside and closes under it. -->
-      <div
+      <FacesPanel
         v-if="facesOpen"
-        ref="facesMenuRef"
-        class="rail-faces__menu ctx-menu"
-        role="group"
-        aria-label="Faces"
-        @keydown.esc.stop.prevent="facesOpen = false"
-      >
-        <p v-if="!faces.length" class="rail-picture__empty">No faces detected</p>
-        <div
-          v-for="(face, idx) in faces"
-          :key="face.id ?? `row-${idx}`"
-          class="rail-faces__row"
-          :class="{ 'rail-faces__row--on': face.id != null && face.id === focusFaceId }"
-        >
-          <span
-            class="rail-face__crop"
-            :style="{ ...faceCropStyle(face, 36), '--ring': faceBoxColor(idx) }"
-          ></span>
-          <AddToEntityControl
-            type="face"
-            float-menu
-            :subject-ids="[]"
-            :face-id="face.id"
-            :assigned-character-id="face.character_id"
-            :assigned-character-name="personName(face.character_id)"
-            :readonly="isReadOnly"
-            :disabled="!face.id || isReadOnly"
-            @assign="assignFace(face, $event)"
-            @unassign="unassignFace(face)"
-          />
-        </div>
-      </div>
+        :id="facesPanelId"
+        class="rail-faces__panel"
+        :rows="faceRows"
+        :anchor="pencilRef"
+        :focus-key="focusFaceId"
+        :readonly="isReadOnly"
+        @close="facesOpen = false"
+        @assign="(row, payload) => assignFace(row.face, payload)"
+        @unassign="(row) => unassignFace(row.face)"
+      />
     </div>
 
     <RailTags
@@ -148,7 +127,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, ref, useId, watch } from "vue";
 import { isReadOnly } from "../../utils/apiClient";
 import {
   openPictureLocation,
@@ -166,7 +145,7 @@ import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
-import AddToEntityControl from "../widgets/AddToEntityControl.vue";
+import FacesPanel from "../widgets/FacesPanel.vue";
 import SectionHeader from "../widgets/SectionHeader.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
 import Tooltip from "../widgets/Tooltip.vue";
@@ -263,10 +242,23 @@ function faceCropStyle(face, size) {
 
 const facesOpen = ref(false);
 const focusFaceId = ref(null);
-const peopleRef = ref(null);
-const facesMenuRef = ref(null);
+const pencilRef = ref(null);
+const facesPanelId = useId();
 
-/** A face (its row in focus) or the edit button: the one faces menu. */
+const faceRows = computed(() =>
+  props.faces.map((face, idx) => ({
+    key: face.id ?? `row-${idx}`,
+    id: face.id,
+    characterId: face.character_id,
+    name: personName(face.character_id),
+    label: `Face ${idx + 1}`,
+    hue: faceBoxColor(idx),
+    cropStyle: faceCropStyle(face, 36),
+    face,
+  })),
+);
+
+/** A face (its row in focus) or the edit button: the one faces panel. */
 function openFaces(faceId) {
   if (facesOpen.value && faceId === focusFaceId.value) {
     facesOpen.value = false;
@@ -276,32 +268,12 @@ function openFaces(faceId) {
   facesOpen.value = true;
 }
 
-// A click anywhere else closes it, except in a picker's own floating list.
-function onOutsidePointer(e) {
-  const t = e.target;
-  if (
-    facesMenuRef.value?.contains(t) ||
-    peopleRef.value?.contains(t) ||
-    (t instanceof Element && t.closest(".ate-menu"))
-  ) {
-    return;
-  }
-  facesOpen.value = false;
-}
-watch(facesOpen, (open) => {
-  if (open) document.addEventListener("pointerdown", onOutsidePointer, true);
-  else document.removeEventListener("pointerdown", onOutsidePointer, true);
-});
 watch(
   () => props.pictureId,
   () => {
     facesOpen.value = false;
   },
 );
-onBeforeUnmount(() =>
-  document.removeEventListener("pointerdown", onOutsidePointer, true),
-);
-
 function replaceFace(faceId, patch) {
   emit(
     "update:faces",
@@ -565,33 +537,12 @@ const properties = computed(() => {
   color: rgb(var(--v-theme-on-surface));
 }
 
-.rail-faces__menu {
+.rail-faces__panel {
   position: absolute;
-  top: calc(100% + var(--space-2));
+  top: calc(100% + var(--space-3));
   left: 0;
   right: 0;
   z-index: var(--z-dropdown);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  padding: var(--space-2);
-}
-
-.rail-faces__row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2);
-  border-radius: var(--radius-sm);
-}
-
-.rail-faces__row--on {
-  background: var(--hover-wash);
-}
-
-.rail-faces__row :deep(.ate) {
-  flex: 1;
-  min-width: 0;
 }
 
 /* The lightbox's fields sit on a dark wash over the picture; on the rail they
@@ -604,12 +555,6 @@ const properties = computed(() => {
 .rail-picture__section {
   display: flex;
   flex-direction: column;
-}
-
-.rail-picture__empty {
-  margin: 0;
-  padding: var(--space-2);
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .rail-picture__props {

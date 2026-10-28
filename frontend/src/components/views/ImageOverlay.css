@@ -761,49 +761,6 @@
   gap: var(--space-2);
 }
 
-.face-assign-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-2);
-  margin-top: var(--space-2);
-  max-height: 210px;
-  overflow-y: auto;
-  padding-right: var(--space-1);
-  /* Same treatment as the two tag lists in OverlayTagsPanel: this sidebar's
-     three scroll regions share one bar, keyed to the dark surface. */
-  scrollbar-gutter: stable;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(var(--v-theme-on-dark-surface), 0.4) transparent;
-}
-
-.face-assign-grid:hover {
-  scrollbar-color: rgba(var(--v-theme-on-dark-surface), 0.55) transparent;
-}
-
-.face-assign-card {
-  background: rgba(var(--v-theme-on-dark-surface), 0.06);
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.12);
-  border-radius: var(--radius-md);
-  padding: 3px;
-}
-
-.face-assign-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.face-assign-thumb {
-  border-radius: 2px;
-  flex: 0 0 auto;
-  width: 36px;
-  height: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-}
-
 .face-assign-crop {
   border-radius: 2px;
   border: 1px solid transparent;
@@ -813,54 +770,17 @@
   margin: 0 auto;
 }
 
-.face-assign-meta {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  min-width: 0;
-  flex: 1;
+/* The Edit faces panel hangs under the section's header, over Tags. */
+.sidebar-section--faces {
+  position: relative;
 }
 
-.face-assign-label {
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.9);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* The person menu's trigger keeps the exact look and metrics of the <select>
-   it replaced. Only the trigger: the menu rows themselves stay at the shared
-   menu row's --text-sm rather than inheriting this row's --text-2xs. */
-.face-assign-person {
-  width: 100%;
-}
-
-.face-assign-person :deep(.ate) {
-  width: 100%;
-}
-
-.face-assign-person :deep(.ate-btn) {
-  width: 100%;
-  background: rgba(var(--v-theme-shadow), 0.45);
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.15);
-  color: rgb(var(--v-theme-on-dark-surface));
-  border-radius: var(--radius-md);
-  padding: 1px var(--space-2);
-  font-size: var(--text-2xs);
-  height: 22px;
-}
-
-.face-assign-person :deep(.ate-label) {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  text-align: left;
-}
-
-.face-assign-person :deep(.ate-btn:disabled) {
-  opacity: 0.6;
+.overlay-faces-panel {
+  position: absolute;
+  top: calc(var(--control-h-bar) + var(--space-3));
+  left: 0;
+  right: 0;
+  z-index: var(--z-dropdown);
 }
 
 .face-assign-empty {
