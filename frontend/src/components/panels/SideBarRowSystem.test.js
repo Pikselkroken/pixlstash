@@ -179,3 +179,23 @@ describe("optional glyphs keep their box", () => {
     }
   });
 });
+
+describe("a hovered row's thumbnail stays put", () => {
+  it("no thumbnail rule moves or zooms the picture", () => {
+    // A 4% hover zoom on a 20px picture resampled it and made it flutter.
+    // Hover is the row's wash (visual-language.md §11), not the picture.
+    const thumbs = [
+      ".sidebar-character-thumb",
+      ".sidebar-set-thumb-image",
+      ".sidebar-collapsed-flyout-thumb",
+    ];
+    for (const rule of code(scopedCss).split("}")) {
+      // The last two parts, so a rule nested in @media keeps its selector.
+      const parts = rule.split("{");
+      if (parts.length < 2) continue;
+      const [sel, body] = parts.slice(-2);
+      if (!thumbs.some((t) => sel.includes(t))) continue;
+      expect(body, sel.trim()).not.toMatch(/transform|scale|translate|zoom/);
+    }
+  });
+});
