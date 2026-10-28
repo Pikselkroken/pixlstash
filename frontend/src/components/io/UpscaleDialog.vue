@@ -68,7 +68,8 @@ import { errorDetail } from "../../utils/apiError";
 import { isReadOnly } from "../../utils/apiClient";
 
 // Offered when the shelf has no RealESRGAN: by this name the server finds its
-// link in ComfyUI's template list (POST /model-downloads).
+// link in the committed template list (POST /model-downloads), and its
+// tensors file it as an upscaler wherever it lands (`has_upscaler_markers`).
 const REALESRGAN_FILE = "RealESRGAN_x4plus.safetensors";
 // Five thumbnails fit the sm dialog's width; past that, four and a "+n".
 const MAX_THUMBS = 5;
