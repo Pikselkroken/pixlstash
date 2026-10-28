@@ -101,6 +101,8 @@
         </Tooltip>
         <span class="overlay-topbar-spacer"></span>
 
+        <!-- Set and Project float their menus (`float-menu`): the topbar
+             scrolls sideways, so it clips anything drawn in place below it. -->
         <Tooltip
           v-if="image && !isReadOnly"
           :text="stackGroupingLockReason || ''"
@@ -109,6 +111,7 @@
             <AddToEntityControl
               v-bind="withRef(setTipProps, (el) => (addToSetControlRef = el))"
               type="set"
+              float-menu
               :key="addToSetControlKey"
               :subject-ids="[image.id]"
               :include-deleted-members="true"
@@ -126,6 +129,7 @@
             <AddToEntityControl
               v-bind="projectTipProps"
               type="project"
+              float-menu
               :subject-ids="[image.id]"
               :include-deleted-members="true"
               :expand-stacks="false"
@@ -1657,7 +1661,7 @@ function onFullscreenChange() {
 /** A menu opened from the bar (Set, Project) keeps it down. */
 function barMenuOpen() {
   return !!document.querySelector(
-    ".v-overlay--active.v-menu, .add-to-set.open, .add-to-project.open",
+    ".v-overlay--active.v-menu, .overlay-topbar .ate.open",
   );
 }
 
@@ -3496,8 +3500,7 @@ function handleWheelActivity() {
 function handleOverlayPointerDown(event) {
   menuWasOpenOnPointerDown = !!(
     document.querySelector(".v-overlay--active") ||
-    document.querySelector(".add-to-set.open") ||
-    document.querySelector(".add-to-project.open") ||
+    document.querySelector(".image-overlay .ate.open") ||
     // Our own right-click context menu (teleported to <body>). It closes itself
     // on this pointerdown, so it must be detected now, not at click time.
     document.querySelector(".image-ctx-menu") ||
