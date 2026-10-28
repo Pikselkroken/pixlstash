@@ -126,6 +126,11 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
       filterStore.noCharacterFilter = false;
       filterStore.noSetFilter = false;
     }
+    // Favourites and Scrapheap are both places: going from one to the other
+    // must not carry Favourites' filter into the heap.
+    if (charId === SCRAPHEAP_PICTURES_ID) {
+      filterStore.favouriteOnlyFilter = false;
+    }
     wsStore.clearPendingExternalImportIds();
     wsStore.clearSortChangedExternalIds();
     selectionStore.selectedSet = null;
