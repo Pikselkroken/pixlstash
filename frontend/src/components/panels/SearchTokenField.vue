@@ -137,7 +137,9 @@
                 >{{ row.parts[0] }}<b class="stf-row-match">{{ row.parts[1] }}</b
                 >{{ row.parts[2] }}</span
               >
-              <span v-if="row.count != null" class="stf-row-meta"
+              <span
+                v-if="row.count != null"
+                class="stf-row-meta stf-row-meta--count"
                 >{{ formatCount(row.count) }}
                 {{ row.count === 1 ? "picture" : "pictures" }}</span
               >
@@ -949,8 +951,13 @@ defineExpose({ focus });
   color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
   white-space: nowrap;
 }
+/* A count sits beside the name it counts; the Tab key stays at the right. */
+.stf-row-meta--count {
+  margin-left: 0;
+}
 .stf-row--words .stf-row-keys,
-.stf-row-label + .stf-row-keys {
+.stf-row-label + .stf-row-keys,
+.stf-row-meta--count + .stf-row-keys {
   margin-left: auto;
 }
 .stf-foot {
