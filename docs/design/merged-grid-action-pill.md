@@ -220,7 +220,8 @@ the status run goes below `--text-sm`.**
 ### Added
 
 **The query string.** Verified: nothing on screen today names what was searched —
-`SearchResultBar` never shows it, the toolbar popover is closed, and only
+`SearchResultBar` never shows it, the toolbar search field names it only in
+its resting summary, and only
 `bar-btn--active` hints a search is live. A recognition-over-recall failure worth
 fixing while the pill is rebuilt. Truncate to ~24 chars, full string in `title`.
 
@@ -608,7 +609,7 @@ user no signal it opens anything. Add both, plus `aria-keyshortcuts="S"`.
 
 | Key | Action | Change |
 |---|---|---|
-| `F` | Open the search popover (toolbar) | unchanged |
+| `F` | Focus the toolbar search field | unchanged |
 | `Esc` | The 4-step ladder in §6.1 | behaviour unchanged; the keycap now moves |
 | `Del` / `Backspace` | Delete selected | unchanged |
 | `S` | Add to set (#2160; it used to toggle the selection menu) | changed |

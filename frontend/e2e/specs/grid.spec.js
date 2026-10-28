@@ -36,19 +36,19 @@ test.describe('image grid', () => {
     await expect(overlay).toBeHidden()
   })
 
-  test('opens the search menu with the F shortcut', async ({ page }) => {
+  test('focuses the search field with the F shortcut', async ({ page }) => {
     await page.goto('/')
     await expect(page.locator('.thumbnail-card').first()).toBeVisible({
       timeout: 15_000,
     })
 
-    // Search is an icon-trigger popover in the grid toolbar (it replaced the old
-    // full-screen search popup). The "F" shortcut opens it and focuses the field.
+    // Search is the toolbar field itself. The "F" shortcut widens it, drops
+    // its list and puts the caret in it.
     await page.keyboard.press('f')
 
-    const panel = page.locator('.gb-search-panel')
+    const panel = page.locator('.stf-drop')
     await expect(panel).toBeVisible()
-    await expect(panel.locator('input')).toBeFocused()
+    await expect(page.locator('input.stf-input')).toBeFocused()
 
     await page.keyboard.press('Escape')
     await expect(panel).toBeHidden()

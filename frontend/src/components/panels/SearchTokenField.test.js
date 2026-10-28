@@ -1,7 +1,9 @@
-// The toolbar search field: tokens are the Has / Lacks tag filters, typing
-// lists tags and a words search, and pasted comma text makes tokens.
+// The toolbar search field: tokens are every active filter, typing lists
+// every Filter menu entry by name, Enter searches the words, Tab adds the
+// highlighted filter and Shift+Tab its opposite, and pasted comma text makes
+// tokens.
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { ref } from "vue";
 import { mount, flushPromises } from "@vue/test-utils";
@@ -19,6 +21,16 @@ vi.mock("../../api/tags", () => ({
   listTags: vi.fn(),
   removePictureTag: vi.fn(),
 }));
+vi.mock("../../api/pictures", () => ({
+  listComfyuiModels: vi.fn(),
+  listComfyuiLoras: vi.fn(),
+}));
+vi.mock("../../api/workflows", () => ({ listWorkflowCards: vi.fn() }));
+vi.mock("../../api/folders", () => ({
+  getInbox: vi.fn().mockResolvedValue({ total: 0, batches: [] }),
+  listImportFolders: vi.fn().mockResolvedValue([]),
+  markInboxSeen: vi.fn(),
+}));
 vi.mock("../../api/pictureSets", () => ({
   addPictureToSet: vi.fn(),
   getPictureSetMembership: vi.fn(),
@@ -35,6 +47,8 @@ vi.mock("../../stores/useEntityListsStore", () => ({
 
 import SearchTokenField from "./SearchTokenField.vue";
 import { listTags } from "../../api/tags";
+import { listComfyuiLoras, listComfyuiModels } from "../../api/pictures";
+import { listWorkflowCards } from "../../api/workflows";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useSearchStore } from "../../stores/useSearchStore";
 import { useTagClipboardStore } from "../../stores/useTagClipboardStore";
@@ -49,17 +63,40 @@ const VOCABULARY = [
 
 let wrapper;
 
+let clock = 0;
+
 beforeEach(() => {
   setActivePinia(createPinia());
   vi.mocked(listTags).mockResolvedValue(VOCABULARY);
+  vi.mocked(listComfyuiModels).mockResolvedValue([
+    { value: "greyscaleXL.safetensors", name: null },
+  ]);
+  vi.mocked(listComfyuiLoras).mockResolvedValue([
+    { value: "greyscale-film-v2.safetensors", name: null },
+  ]);
+  vi.mocked(listWorkflowCards).mockResolvedValue({ cards: [] });
+  // Past the shared list's 30 s cache, so each test reads its own mocks.
+  clock += 60_000;
+  vi.spyOn(Date, "now").mockReturnValue(clock);
 });
 
-async function mountField() {
+afterEach(() => {
+  vi.restoreAllMocks();
+  wrapper?.unmount();
+});
+
+async function mountField(props = {}) {
   wrapper = mount(SearchTokenField, {
+    props,
     global: { stubs: { "v-icon": true } },
   });
+  await wrapper.vm.focus();
   await flushPromises();
   return wrapper;
+}
+
+function optionTexts() {
+  return wrapper.findAll('[role="option"]').map((o) => o.text());
 }
 
 function input() {
@@ -72,44 +109,110 @@ async function type(text) {
 }
 
 async function press(key, mods = {}) {
-  await input().trigger("keydown", { key, ...mods });
+  const event = new KeyboardEvent("keydown", {
+    key,
+    cancelable: true,
+    ...mods,
+  });
+  input().element.dispatchEvent(event);
   await flushPromises();
+  return event;
 }
 
 describe("SearchTokenField", () => {
-  it("typing lists matching tags with their counts, first row highlighted", async () => {
+  it("rests as a field, and opens with the caret in it", async () => {
+    wrapper = mount(SearchTokenField, {
+      global: { stubs: { "v-icon": true } },
+    });
+    expect(wrapper.find("input.stf-input").exists()).toBe(false);
+    await wrapper.find("button.stf-rest").trigger("click");
+    await flushPromises();
+    expect(wrapper.find("input.stf-input").exists()).toBe(true);
+    expect(wrapper.emitted("update:open")[0]).toEqual([true]);
+  });
+
+  it("lists the words search first, then matching tags with their counts", async () => {
     await mountField();
     await type("look");
-    const options = wrapper.findAll('[role="option"]');
-    const text = options.map((o) => o.text());
-    expect(text[0]).toContain("looking at viewer");
-    expect(text[0]).toContain("1204");
-    expect(text[1]).toContain("looking back");
-    expect(options[0].attributes("aria-selected")).toBe("true");
+    const text = optionTexts();
+    expect(text[0]).toContain("Search descriptions and text for “look”");
+    expect(text[1]).toContain("looking at viewer");
+    expect(text[1]).toContain("1,204");
+    expect(text[2]).toContain("looking back");
+    const highlighted = wrapper.find('[aria-selected="true"]');
+    expect(highlighted.text()).toContain("looking at viewer");
     expect(input().attributes("aria-activedescendant")).toBe(
       "search-token-option-0",
     );
-    expect(text.at(-1)).toContain("Search descriptions and text for “look”");
   });
 
-  it("Enter on the highlighted tag adds a Has filter and clears the text", async () => {
+  it("finds any filter by name, under the Filter menu's kinds", async () => {
+    await mountField();
+    await type("gre");
+    const sections = wrapper.findAll(".stf-sec").map((s) => s.text());
+    expect(sections).toEqual(["Checkpoint", "LoRA"]);
+    expect(wrapper.text()).toContain("greyscale-film-v2");
+    expect(wrapper.text()).toContain("Content › LoRA");
+
+    await type("fa");
+    const kinds = wrapper.findAll(".stf-sec").map((s) => s.text());
+    expect(kinds).toEqual(["Faces", "Show", "Problems"]);
+    expect(wrapper.text()).toContain("Has face");
+    expect(wrapper.text()).toContain("Favourites only");
+    expect(wrapper.text()).toContain("Face tags, no face");
+  });
+
+  it("Enter searches the words, whichever row is highlighted", async () => {
     await mountField();
     await type("look");
     await press("Enter");
+    const search = useSearchStore();
+    expect(search.searchQuery).toBe("look");
+    expect(useFilterStore().tagFilter).toEqual([]);
+    expect(wrapper.find("input.stf-input").exists()).toBe(false);
+  });
+
+  it("Tab on the highlighted tag adds a Has filter and clears the text", async () => {
+    await mountField();
+    await type("look");
+    const event = await press("Tab");
     const filters = useFilterStore();
     expect(filters.tagFilter).toEqual(["looking at viewer"]);
     expect(filters.tagRejectedFilter).toEqual([]);
     expect(useSearchStore().searchInput).toBe("");
-    expect(wrapper.text()).toContain("looking at viewer");
+    expect(event.defaultPrevented).toBe(true);
+    expect(wrapper.find(".stf-token").text()).toContain("looking at viewer");
   });
 
-  it("Shift+Enter adds a Lacks filter", async () => {
+  it("Shift+Tab adds a Lacks filter", async () => {
     await mountField();
     const filters = useFilterStore();
     await type("look");
-    await press("Enter", { shiftKey: true });
+    await press("Tab", { shiftKey: true });
     expect(filters.tagRejectedFilter).toEqual(["looking at viewer"]);
     expect(filters.tagFilter).toEqual([]);
+  });
+
+  it("Tab adds any kind of filter; one with no opposite does the same on Shift+Tab", async () => {
+    await mountField();
+    const filters = useFilterStore();
+    await type("has fa");
+    await press("Tab", { shiftKey: true });
+    expect(filters.faceBboxFilter).toBe("with_face");
+    await type("greyscale-film");
+    await press("Tab");
+    expect(filters.comfyuiLoraFilter).toEqual(["greyscale-film-v2.safetensors"]);
+    // Both show as tokens, as the strip shows them.
+    const tokens = wrapper.findAll(".stf-token").map((t) => t.text());
+    expect(tokens.join(" ")).toContain("has face");
+    expect(tokens.join(" ")).toContain("greyscale-film-v2");
+  });
+
+  it("Tab with nothing to add moves focus as usual", async () => {
+    await mountField();
+    await type("zzqx");
+    const event = await press("Tab");
+    expect(event.defaultPrevented).toBe(false);
   });
 
   it("adding Has moves the same tag out of Lacks, and a Has tag is not listed again", async () => {
@@ -117,22 +220,11 @@ describe("SearchTokenField", () => {
     const filters = useFilterStore();
     filters.tagRejectedFilter = ["umbrella"];
     await type("umb");
-    await press("Enter");
+    await press("Tab");
     expect(filters.tagFilter).toEqual(["umbrella"]);
     expect(filters.tagRejectedFilter).toEqual([]);
     await type("umb");
-    const again = wrapper.findAll('[role="option"]').map((o) => o.text());
-    expect(again.some((t) => t.includes("umbrella"))).toBe(false);
-  });
-
-  it("Ctrl+Enter runs a text search and adds no token", async () => {
-    await mountField();
-    await type("look");
-    await press("Enter", { ctrlKey: true });
-    const search = useSearchStore();
-    expect(search.searchQuery).toBe("look");
-    expect(useFilterStore().tagFilter).toEqual([]);
-    expect(wrapper.emitted("close")).toBeTruthy();
+    expect(optionTexts().some((t) => t.includes("umbrella"))).toBe(false);
   });
 
   it("pasting comma text makes one Has token per item", async () => {
@@ -147,17 +239,18 @@ describe("SearchTokenField", () => {
     expect(useFilterStore().tagFilter).toEqual(["rain", "umbrella"]);
   });
 
-  it("Backspace in an empty field removes the last token", async () => {
+  it("Backspace in an empty field removes the last token, of any kind", async () => {
     await mountField();
     const filters = useFilterStore();
     filters.tagFilter = ["rain"];
-    filters.tagRejectedFilter = ["blurry background"];
+    filters.comfyuiModelFilter = ["greyscaleXL.safetensors"];
+    await flushPromises();
     await press("Backspace");
-    expect(filters.tagRejectedFilter).toEqual([]);
+    expect(filters.comfyuiModelFilter).toEqual([]);
     expect(filters.tagFilter).toEqual(["rain"]);
   });
 
-  it("clicking a token copies that tag", async () => {
+  it("clicking a tag token copies that tag", async () => {
     await mountField();
     const store = useTagClipboardStore();
     const copy = vi.spyOn(store, "copyTags").mockResolvedValue();
@@ -166,5 +259,75 @@ describe("SearchTokenField", () => {
     await wrapper.find(".stf-token-body").trigger("mousedown");
     await wrapper.find(".stf-token-body").trigger("click");
     expect(copy).toHaveBeenCalledWith(["rain"]);
+  });
+
+  it("an empty field lists recent searches; a click runs one, Tab leaves", async () => {
+    const search = useSearchStore();
+    search.addToSearchHistory("red hair");
+    await mountField();
+    expect(wrapper.find(".stf-sec").text()).toBe("Recent");
+    const tab = await press("Tab");
+    expect(tab.defaultPrevented).toBe(false);
+    expect(search.searchQuery).toBe("");
+    await wrapper.find('[role="option"]').trigger("click");
+    expect(search.searchQuery).toBe("red hair");
+  });
+
+  it("closes when focus leaves it, and Escape closes an empty field", async () => {
+    await mountField();
+    await input().trigger("focusout", { relatedTarget: document.body });
+    expect(wrapper.find("input.stf-input").exists()).toBe(false);
+    expect(wrapper.emitted("update:open").at(-1)).toEqual([false]);
+
+    await wrapper.vm.focus();
+    await press("Escape");
+    expect(wrapper.find("input.stf-input").exists()).toBe(false);
+  });
+
+  // Opened from code (F), so a close it makes itself hands focus back to the
+  // resting field rather than dropping it to the body.
+  it.each([
+    ["Escape", ""],
+    ["Enter", "rain"],
+  ])("%s returns focus to the resting field", async (key, text) => {
+    wrapper = mount(SearchTokenField, {
+      attachTo: document.body,
+      global: { stubs: { "v-icon": true } },
+    });
+    await wrapper.vm.focus();
+    await flushPromises();
+    if (text) await type(text);
+    await press(key);
+    await flushPromises();
+    expect(document.activeElement).toBe(
+      wrapper.find("button.stf-rest").element,
+    );
+  });
+
+  it("Escape with text hides the list first, then Tab moves focus", async () => {
+    await mountField();
+    await type("look");
+    await press("Escape");
+    expect(wrapper.find(".stf-drop").exists()).toBe(false);
+    expect(wrapper.find("input.stf-input").exists()).toBe(true);
+    const tab = await press("Tab");
+    expect(tab.defaultPrevented).toBe(false);
+    expect(useFilterStore().tagFilter).toEqual([]);
+  });
+
+  it("names its filters to a screen reader at rest, Lacks as lacks", async () => {
+    const filters = useFilterStore();
+    filters.tagFilter = ["rain"];
+    filters.tagRejectedFilter = ["umbrella"];
+    wrapper = mount(SearchTokenField, {
+      global: { stubs: { "v-icon": true } },
+    });
+    const rest = wrapper.find("button.stf-rest");
+    expect(rest.text()).toContain("rain · lacks umbrella");
+    expect(rest.attributes("aria-label")).toBe("Search");
+    const description = wrapper.find(
+      `#${rest.attributes("aria-describedby")}`,
+    );
+    expect(description.text()).toBe("rain · lacks umbrella");
   });
 });

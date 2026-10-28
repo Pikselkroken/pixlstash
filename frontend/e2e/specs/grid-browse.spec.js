@@ -57,14 +57,15 @@ test.describe('grid browsing', () => {
     await expect(grid.searchOverlay).toBeHidden()
     await expect(grid.thumbnails).toHaveCount(0)
 
-    // Reopen: the term is now in the history; clearing it restores all.
+    // Reopen and empty the field: the term is now in the history; Enter on
+    // the empty field clears the search and restores all.
     await grid.searchButton.click()
     await expect(grid.searchOverlay).toBeVisible()
+    await grid.searchInput.fill('')
     await expect(
       grid.searchHistoryChips.filter({ hasText: nonsense }).first(),
     ).toBeVisible()
 
-    await grid.searchInput.fill('')
     await page.keyboard.press('Enter')
     await expect(grid.thumbnails.first()).toBeVisible()
     await expect.poll(() => grid.thumbnails.count()).toBeGreaterThan(0)
