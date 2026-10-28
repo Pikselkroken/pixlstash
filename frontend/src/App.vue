@@ -610,6 +610,8 @@ const noticeOnDark = computed(() => lightboxOpen.value);
 // Workflows and Models nudge: a NEW selection shows the edge tab and flashes
 // the rail toggle's glyph, both only while the rail is closed. Not while the
 // lightbox is up: stepping through it is not choosing, and it covers the tab.
+// "New" means it holds a picture the last one did not: a delete or a
+// deselect that only shrinks the selection is not news.
 const isGridView = computed(
   () =>
     !isDuplicatesView.value &&
@@ -619,9 +621,11 @@ const isGridView = computed(
     !isWorkflowsView.value,
 );
 watch(
-  () => selectionStore.selectedImageIds.map(String).sort().join("\n"),
-  (identity) => {
-    if (identity && isGridView.value && !lightboxOpen.value) {
+  () => selectionStore.selectedImageIds,
+  (ids, previous) => {
+    if (!isGridView.value || lightboxOpen.value) return;
+    const before = new Set((previous ?? []).map(String));
+    if (ids.some((id) => !before.has(String(id)))) {
       sidebarStore.inspectorNudge += 1;
     }
   },

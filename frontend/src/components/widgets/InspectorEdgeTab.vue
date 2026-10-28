@@ -54,8 +54,8 @@ const emit = defineEmits(["open"]);
 
 // A cue, not a fixture: the tab says a selection is waiting behind the closed
 // rail and then gets out of the way. Hovered or focused when the time is up,
-// it stays until the pointer or focus leaves, so it never vanishes under a
-// click or drops focus to `body`.
+// it stays until the pointer or focus leaves, so the timer never takes it
+// from under a click or from under focus.
 const HIDE_AFTER_MS = 5000;
 const shown = ref(false);
 const el = ref(null);
