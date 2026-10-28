@@ -138,6 +138,27 @@ describe("openForScope", () => {
     expect(store.character).toBe(null);
     expect(store.subject).toBe("thing");
   });
+
+  it("asks the server nothing once disposed with a resolve pending (#2220)", async () => {
+    vi.useFakeTimers();
+    try {
+      training.getTrainingDataset.mockResolvedValue(
+        dataset({ set_id: 40, character_id: 4, character: GRANDAD }),
+      );
+      const store = useTrainingStore();
+      await store.openForScope({ type: "character", id: 4, name: "Grandad" });
+      store.triggerWord = "grandpa";
+      await Promise.resolve();
+      expect(vi.getTimerCount()).toBe(2);
+      const promptCalls = training.getTrainingSamplePrompts.mock.calls.length;
+      store.$dispose();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(training.resolveTraining).not.toHaveBeenCalled();
+      expect(training.getTrainingSamplePrompts).toHaveBeenCalledTimes(promptCalls);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("pins", () => {

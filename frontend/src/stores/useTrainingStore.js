@@ -684,7 +684,12 @@ export const useTrainingStore = defineStore("training", () => {
   }
 
   const unsubscribeSessionReset = onSessionReset(resetForSession);
-  onScopeDispose(() => unsubscribeSessionReset());
+  onScopeDispose(() => {
+    unsubscribeSessionReset();
+    // Closed, a disposed store's pending and in-flight work asks the server
+    // nothing later (#2220).
+    closeDialog();
+  });
 
   return {
     // dialog: scope
