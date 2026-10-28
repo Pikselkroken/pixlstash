@@ -363,6 +363,7 @@ watch(
           :open="dialogOpen"
           first
           @update:comfyui-configured="emit('update:comfyui-configured', $event)"
+          @open-tab="settingsTab = $event"
         />
       </div>
       <div

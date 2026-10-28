@@ -30,6 +30,8 @@ from pixlstash.routes.model_folders import register_comfyui_model_folders
 from pixlstash.utils.path_utils import LibraryRootsUnavailable
 from pixlstash.utils.sql_chunking import chunked
 from pixlstash.services import (
+    comfyui_connections,
+    comfyui_link_service,
     config_service,
     library_settings_service,
     scrapheap_service,
@@ -620,6 +622,29 @@ def create_router(server) -> APIRouter:
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+        def _refuse_orphaning_a_link(user, value) -> None:
+            """A linked current connection keeps its address (#2194).
+
+            Clearing it would drop the connection with its key still live, and
+            a new address would leave the key bound to the old one. Switching
+            to another listed address leaves the key alone.
+            """
+            current = comfyui_connections.current_id(user)
+            if not comfyui_link_service.link_record(server, current):
+                return
+            if value not in ("", None, "null") and comfyui_connections.is_listed(
+                user, str(value).strip()
+            ):
+                return
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "The current ComfyUI is linked with its own key. Remove the "
+                    "connection or edit its address in Settings › ComfyUI, which "
+                    "revokes the key first."
+                ),
+            )
+
         def preview_patch(session: Session, user_id: int):
             """Validate the patch and work out which tag weights would change.
 
@@ -632,6 +657,8 @@ def create_router(server) -> APIRouter:
             if user is None:
                 raise HTTPException(status_code=404, detail="User not found")
 
+            if isinstance(patch_data, dict) and "comfyui_url" in patch_data:
+                _refuse_orphaning_a_link(user, patch_data["comfyui_url"])
             old_penalised_tags = _resolved_penalised_tags(
                 user.smart_score_penalised_tags
             )

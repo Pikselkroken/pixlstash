@@ -1,9 +1,9 @@
 """The ComfyUI instances the owner can run workflows on (#2167).
 
 ``user.comfyui_connections`` is a JSON list of ``{"id", "name", "url",
-"status", "gpu", "vram_mb"}``, the last three what the newest probe of that
-address said (``status`` ``"connected"``, ``"offline"``, or null when never
-asked). ``user.comfyui_url`` stays the address everything submits to, so the
+"status", "gpu", "vram_mb", "nodes"}``, the last four what the newest probe of
+that address said (``status`` ``"connected"``, ``"offline"``, or null when never
+asked; ``nodes`` whether the ComfyUI-PixlStash nodes can open a workflow there). ``user.comfyui_url`` stays the address everything submits to, so the
 current connection is the entry with that address and switching is a
 ``comfyui_url`` PATCH: every reader of ``comfyui_url`` follows the switch.
 
@@ -36,6 +36,11 @@ def _key(url: str | None) -> str:
     return (url or "").strip().rstrip("/").lower()
 
 
+def is_listed(user, url: str | None) -> bool:
+    """Whether *url* is a connection's address, however it is spelled."""
+    return bool(_key(url)) and any(_key(e["url"]) == _key(url) for e in read(user))
+
+
 def default_name(url: str) -> str:
     """ "This PC" for a loopback address, else its host."""
     host = urlsplit(url).hostname or ""
@@ -50,6 +55,7 @@ def _entry(entry_id: str, name: str, url: str) -> dict:
         "status": None,
         "gpu": None,
         "vram_mb": None,
+        "nodes": None,
     }
 
 
@@ -65,6 +71,8 @@ def _whole(stored: dict) -> dict:
         stored["vram_mb"], bool
     ):
         entry["vram_mb"] = stored["vram_mb"]
+    if isinstance(stored.get("nodes"), bool):
+        entry["nodes"] = stored["nodes"]
     return entry
 
 
@@ -92,6 +100,21 @@ def read(user) -> list[dict]:
         )
     url = getattr(user, "comfyui_url", None)
     return [_entry(SAVED_ADDRESS_ID, default_name(url), url)] if url else []
+
+
+def is_readable(user) -> bool:
+    """Whether the stored list is a JSON list, or not stored yet.
+
+    ``read`` falls back to the saved address alone otherwise, which is not the
+    whole list: nothing may be revoked on its say-so.
+    """
+    raw = getattr(user, "comfyui_connections", None)
+    if raw is None:
+        return True
+    try:
+        return isinstance(json.loads(raw), list)
+    except (ValueError, TypeError):
+        return False
 
 
 def current_id(user) -> str | None:
@@ -144,11 +167,79 @@ def set_url(user, new: str | None) -> None:
     elif current is not None:
         if current["name"] == default_name(current["url"]):
             current["name"] = default_name(new)
-        current.update(url=new, status=None, gpu=None, vram_mb=None)
+        current.update(url=new, status=None, gpu=None, vram_mb=None, nodes=None)
     else:
         entries.append(_entry(secrets.token_hex(4), default_name(new), new))
     user.comfyui_url = new
     _store(user, entries)
+
+
+def _listed(entries: list[dict], connection_id: str) -> dict:
+    entry = next((e for e in entries if e["id"] == connection_id), None)
+    if entry is None:
+        raise LookupError(f"No ComfyUI connection {connection_id!r}.")
+    return entry
+
+
+def rename(user, connection_id: str, name: str) -> bool:
+    """Name the connection *name*, trimmed; names need not be unique.
+
+    Raises:
+        LookupError: no connection has that id.
+        ValueError: the name is blank or longer than 120 characters.
+    """
+    name = (name or "").strip()
+    if not 1 <= len(name) <= 120:
+        raise ValueError("A connection name is 1 to 120 characters.")
+    entries = read(user)
+    entry = _listed(entries, connection_id)
+    if entry["name"] == name:
+        return False
+    entry["name"] = name
+    _store(user, entries)
+    return True
+
+
+def set_address(user, connection_id: str, url: str) -> bool:
+    """Move the connection to *url* (already normalised).
+
+    What the old address's probe said is forgotten, a name made from the old
+    address follows the new one, and ``comfyui_url`` follows a current row.
+    The same address in another spelling changes nothing.
+
+    Raises:
+        LookupError: no connection has that id.
+        ValueError: another connection already has *url*.
+    """
+    entries = read(user)
+    entry = _listed(entries, connection_id)
+    if _key(entry["url"]) == _key(url):
+        return False
+    if any(_key(e["url"]) == _key(url) for e in entries):
+        raise ValueError(f"Another connection already has the address {url}.")
+    if _key(user.comfyui_url) == _key(entry["url"]):
+        user.comfyui_url = url
+    if entry["name"] == default_name(entry["url"]):
+        entry["name"] = default_name(url)
+    entry.update(url=url, status=None, gpu=None, vram_mb=None, nodes=None)
+    _store(user, entries)
+    return True
+
+
+def remove(user, connection_id: str) -> bool:
+    """Drop the connection; a current one hands over as clearing the address does.
+
+    Raises:
+        LookupError: no connection has that id.
+    """
+    entries = read(user)
+    entry = _listed(entries, connection_id)
+    if _key(user.comfyui_url) == _key(entry["url"]):
+        set_url(user, None)
+    else:
+        entries.remove(entry)
+        _store(user, entries)
+    return True
 
 
 def record_probe(user, answer: dict) -> bool:
@@ -161,6 +252,7 @@ def record_probe(user, answer: dict) -> bool:
         "status": "connected" if answer.get("reachable") else "offline",
         "gpu": answer.get("gpu"),
         "vram_mb": answer.get("vram_mb"),
+        "nodes": answer.get("can_open_workflows"),
     }
     for entry in entries:
         if _key(entry["url"]) == _key(answer.get("url")):

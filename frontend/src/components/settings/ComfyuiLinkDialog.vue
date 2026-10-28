@@ -1,13 +1,15 @@
 <script setup>
-// Links the saved ComfyUI to this library: `POST /comfyui/link` mints a
-// token for the PixlStash nodes only and writes it, with PixlStash's URL, into
-// ComfyUI's settings. It posts the moment the dialog opens and renders the reply's four
-// steps; a step that failed or needs the person carries its fix inline.
+// Links one ComfyUI connection to this library with its own key (#2194):
+// `POST /comfyui/connections/{id}/link` mints a token for the PixlStash nodes
+// only and writes it, with PixlStash's URL, into that ComfyUI's settings. A
+// ComfyUI on this computer is linked the moment the dialog opens; one on
+// another computer first asks "Link <name>?" with the exposure notice. It
+// renders the reply's four steps; a step that failed or needs the person
+// carries its fix inline.
 //
 // When the nodes are missing and the reply says `can_install_pack`, the nodes
-// step offers to install the copy PixlStash ships, then polls
-// `GET /comfyui/pixlstash-node` until ComfyUI is back with them loaded and
-// links again by itself.
+// step offers to install the copy PixlStash ships, then probes that ComfyUI
+// until it is back with them loaded and links again by itself.
 //
 // When the reply says other computers can reach this ComfyUI (`exposure`), a
 // notice under the steps says what that lets them do and how to stop it.
@@ -17,9 +19,9 @@
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { VIcon, VProgressCircular } from "vuetify/components";
 import {
-  getPixlstashNode,
   installComfyuiPack,
-  linkComfyui,
+  linkComfyuiConnection,
+  probeComfyui,
 } from "../../api/comfyui";
 import { errorMessage } from "../../utils/apiError";
 import {
@@ -33,6 +35,8 @@ import ComfyuiLinkLibraries from "./ComfyuiLinkLibraries.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
+  // The connection to link: `{id, name, url}`.
+  connection: { type: Object, default: null },
 });
 
 const emit = defineEmits(["close"]);
@@ -69,6 +73,19 @@ const showManual = ref(false);
 // The older copies the last install moved to the trash. Kept apart from
 // `install` so the automatic re-link after the install does not wipe the list.
 const replaced = ref([]);
+
+// "Link <name>?" before anything is asked of a ComfyUI on another computer.
+const confirming = ref(false);
+const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "[::1]"];
+const offThisComputer = computed(() => {
+  try {
+    const hostname = new URL(props.connection?.url).hostname.toLowerCase();
+    return !LOOPBACK_HOSTS.includes(hostname);
+  } catch {
+    return false;
+  }
+});
+const name = computed(() => props.connection?.name || "ComfyUI");
 
 const linked = computed(() => reply.value?.linked === true);
 const canInstall = computed(() => reply.value?.can_install_pack === true);
@@ -144,7 +161,7 @@ async function link() {
   requestError.value = "";
   restartError.value = "";
   try {
-    reply.value = await linkComfyui();
+    reply.value = await linkComfyuiConnection(props.connection.id);
   } catch (e) {
     reply.value = null;
     requestError.value = errorMessage(e, "Could not link ComfyUI.");
@@ -164,7 +181,9 @@ function stopPolling() {
   pollRun += 1;
 }
 
-// While ComfyUI restarts the GET fails or answers null; both mean "not yet".
+// While ComfyUI restarts the probe fails or answers null; both mean "not yet".
+// The probe, not `GET /comfyui/pixlstash-node`, which asks the current
+// connection whichever row is being linked.
 function pollForNodes() {
   stopPolling();
   const run = pollRun;
@@ -172,7 +191,8 @@ function pollForNodes() {
   const tick = async () => {
     let loaded = false;
     try {
-      loaded = (await getPixlstashNode())?.can_open_workflows === true;
+      loaded =
+        (await probeComfyui(props.connection.url))?.can_open_workflows === true;
     } catch (e) {
       console.debug("ComfyUI not answering yet while it restarts:", e);
     }
@@ -195,7 +215,9 @@ async function installPack() {
   replaced.value = [];
   const run = pollRun;
   try {
-    const got = await installComfyuiPack();
+    const got = await installComfyuiPack({
+      connectionId: props.connection.id,
+    });
     if (run !== pollRun) return;
     install.value = {
       phase: "waiting",
@@ -241,18 +263,37 @@ watch(
       return;
     }
     reply.value = null;
+    requestError.value = "";
     replaced.value = [];
-    link();
+    confirming.value = offThisComputer.value;
+    if (!confirming.value) link();
   },
   { immediate: true },
 );
+
+function confirmLink() {
+  confirming.value = false;
+  link();
+}
 
 onBeforeUnmount(stopPolling);
 </script>
 
 <template>
-  <AppDialog :open="open" title="Connect ComfyUI" @close="emit('close')">
+  <AppDialog
+    :open="open"
+    :title="confirming ? `Link ${name}?` : `Link ${name}`"
+    @close="emit('close')"
+  >
+    <div v-if="confirming" class="cl-confirm" data-testid="comfyui-link-confirm">
+      <p class="cl-fix__text">
+        {{ name }} gets its own key, which works only from its address. Every
+        other connection keeps its own.
+      </p>
+      <ComfyuiExposureNotice exposure="other_computer" />
+    </div>
     <ol
+      v-else
       class="cl-steps"
       role="status"
       :aria-busy="pending ? 'true' : 'false'"
@@ -435,8 +476,24 @@ onBeforeUnmount(stopPolling);
     </div>
 
     <template #footer>
+      <template v-if="confirming">
+        <AppButton
+          variant="secondary"
+          data-testid="comfyui-link-close"
+          @click="emit('close')"
+        >
+          Cancel
+        </AppButton>
+        <AppButton
+          variant="primary"
+          data-testid="comfyui-link-confirm-link"
+          @click="confirmLink"
+        >
+          Link
+        </AppButton>
+      </template>
       <AppButton
-        v-if="linked"
+        v-else-if="linked"
         variant="primary"
         data-testid="comfyui-link-done"
         @click="emit('close')"
@@ -517,6 +574,12 @@ onBeforeUnmount(stopPolling);
 .cl-step--not_run .cl-step__name {
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
   font-weight: var(--weight-regular);
+}
+
+.cl-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
 }
 
 .cl-libraries,

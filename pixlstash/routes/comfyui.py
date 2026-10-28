@@ -19,6 +19,7 @@ from typing import Literal, Optional
 
 from pixlstash.db_models import (
     Picture,
+    User,
 )
 from pixlstash.hub import (
     workflow_cards,
@@ -122,6 +123,7 @@ from pixlstash.services.comfyui_service import (
     PACK_OPENS_WORKFLOWS,
     PACK_SAVES_BACK,
     PIXLSTASH_CHECKPOINT_LOADER,
+    comfyui_can_open_workflows,
     comfyui_pixlstash_scripts,
     library_ids_named,
     normalize_comfyui_url,
@@ -1770,6 +1772,30 @@ class ComfyUIProbeResponse(BaseModel):
     # memory in MB; None unknown.
     gpu: Optional[str] = None
     vram_mb: Optional[int] = None
+    # Whether the ComfyUI-PixlStash nodes can open a workflow there; None when
+    # ComfyUI did not answer or did not list its extensions.
+    can_open_workflows: Optional[bool] = None
+
+
+class ComfyUILinkStatus(BaseModel):
+    """A connection's live ComfyUI link, if any."""
+
+    linked: bool
+    comfyui_url: Optional[str] = None
+    pixlstash_url: Optional[str] = None
+    where: Optional[str] = None
+    linked_at: Optional[str] = None
+    # The address the link token works from (None: a link made before #1810,
+    # whose token works from anywhere), and the last other address it was
+    # refused from since start-up.
+    bound_address: Optional[str] = None
+    refused_from: Optional[str] = None
+    # "other_computer", "listening" or None: see comfyui_link_service.exposure.
+    exposure: Optional[str] = None
+    # The key's row in the token list, and whether it works in every library
+    # or only one: `PUT /users/me/token/{token_id}/libraries` changes that.
+    token_id: Optional[int] = None
+    all_libraries: bool = False
 
 
 class ComfyUIConnection(BaseModel):
@@ -1783,6 +1809,17 @@ class ComfyUIConnection(BaseModel):
     )
     gpu: Optional[str] = None
     vram_mb: Optional[int] = None
+    nodes: Optional[bool] = Field(
+        None,
+        description=(
+            "Whether the newest probe found the ComfyUI-PixlStash nodes able to "
+            "open a workflow; null when not known."
+        ),
+    )
+    link: ComfyUILinkStatus = Field(
+        default_factory=lambda: ComfyUILinkStatus(linked=False),
+        description="This connection's own link key, if it is linked.",
+    )
 
 
 class ComfyUIConnectionList(BaseModel):
@@ -1802,25 +1839,11 @@ class ComfyUIConnectionCreate(BaseModel):
     name: Optional[str] = Field(None, max_length=120)
 
 
-class ComfyUILinkStatus(BaseModel):
-    """The live ComfyUI link, if any."""
+class ComfyUIConnectionUpdate(BaseModel):
+    """A new name or address for a connection; either may be left out."""
 
-    linked: bool
-    comfyui_url: Optional[str] = None
-    pixlstash_url: Optional[str] = None
-    where: Optional[str] = None
-    linked_at: Optional[str] = None
-    # The address the link token works from (None: a link made before #1810,
-    # whose token works from anywhere), and the last other address it was
-    # refused from since start-up.
-    bound_address: Optional[str] = None
-    refused_from: Optional[str] = None
-    # "other_computer", "listening" or None: see comfyui_link_service.exposure.
-    exposure: Optional[str] = None
-    # The key's row in the token list, and whether it works in every library
-    # or only one: `PUT /users/me/token/{token_id}/libraries` changes that.
-    token_id: Optional[int] = None
-    all_libraries: bool = False
+    name: Optional[str] = Field(None, min_length=1, max_length=120)
+    url: Optional[str] = Field(None, min_length=1, max_length=2048)
 
 
 class ComfyUILinkStep(BaseModel):
@@ -2364,18 +2387,47 @@ def create_router(server) -> APIRouter:
             "opens_runs": PACK_OPENS_RUNS in scripts,
         }
 
+    def _connection_or_404(user, connection_id: str) -> dict:
+        entry = next(
+            (e for e in comfyui_connections.read(user) if e["id"] == connection_id),
+            None,
+        )
+        if entry is None:
+            raise HTTPException(
+                status_code=404, detail=f"No ComfyUI connection {connection_id!r}."
+            )
+        return entry
+
+    def _current_connection(user) -> Optional[dict]:
+        current = comfyui_connections.current_id(user)
+        return _connection_or_404(user, current) if current else None
+
+    def _address(request: Request, connection_id: Optional[str]) -> Optional[str]:
+        """The connection's address, or ``comfyui_url`` with none named."""
+        user = server.auth.get_user_for_request(request)
+        if connection_id:
+            return _connection_or_404(user, connection_id)["url"]
+        return getattr(user, "comfyui_url", None) if user else None
+
     @router.get(
         "/comfyui/link",
-        summary="Whether ComfyUI is linked to PixlStash",
+        summary="Whether the current ComfyUI is linked to PixlStash",
+        description=(
+            "The link of the connection runs go to. Every connection's own "
+            "link is in `GET /comfyui/connections`."
+        ),
         response_model=ComfyUILinkStatus,
     )
     def get_comfyui_link(request: Request):
         server.auth.ensure_secure_when_required(request)
-        return comfyui_link_service.link_status(server)
+        user = server.auth.get_user_for_request(request)
+        return comfyui_link_service.link_status(
+            server, comfyui_connections.current_id(user)
+        )
 
     @router.post(
         "/comfyui/link",
-        summary="Link the saved ComfyUI with a ComfyUI-only token",
+        summary="Link the current ComfyUI with a ComfyUI-only token",
         description=(
             "For a ComfyUI on this computer or the local network, from a local "
             "owner: mints a token that reaches only the routes the "
@@ -2388,16 +2440,17 @@ def create_router(server) -> APIRouter:
             "why a step needs the person. A ComfyUI on the local network needs "
             "remote access on with HTTPS. `exposure` says whether other "
             "computers can reach that ComfyUI. The token covers the open "
-            "library; `PUT /users/me/token/{token_id}/libraries` widens it."
+            "library; `PUT /users/me/token/{token_id}/libraries` widens it. "
+            "Acts on the current connection; "
+            "`POST /comfyui/connections/{connection_id}/link` links any."
         ),
         response_model=ComfyUILinkResponse,
     )
     def link_comfyui(request: Request):
         server.auth.ensure_secure_when_required(request)
-        user = server.auth.get_user_for_request(request)
-        saved = getattr(user, "comfyui_url", None) if user else None
-        reply = comfyui_link_service.link(server, request, saved)
-        reply["can_install_pack"] = _can_install_pack(saved)
+        connection = _current_connection(server.auth.get_user_for_request(request))
+        reply = comfyui_link_service.link(server, request, connection)
+        reply["can_install_pack"] = _can_install_pack((connection or {}).get("url"))
         return reply
 
     def _can_install_pack(saved: Optional[str]) -> bool:
@@ -2422,9 +2475,15 @@ def create_router(server) -> APIRouter:
         ),
         response_model=ComfyUIPackInstallResponse,
     )
-    def install_comfyui_pack(request: Request):
-        user = server.auth.get_user_for_request(request)
-        saved = getattr(user, "comfyui_url", None) if user else None
+    def install_comfyui_pack(
+        request: Request,
+        connection_id: Optional[str] = Query(
+            None,
+            max_length=64,
+            description="The connection to act on; the current one when left out.",
+        ),
+    ):
+        saved = _address(request, connection_id)
         try:
             return comfyui_pack_service.install(saved)
         except comfyui_pack_service.PackInstallRefused as exc:
@@ -2444,9 +2503,16 @@ def create_router(server) -> APIRouter:
         ),
         response_model=ComfyUINodePackInstallResponse,
     )
-    def install_node_pack(pack_id: str, request: Request):
-        user = server.auth.get_user_for_request(request)
-        saved = getattr(user, "comfyui_url", None) if user else None
+    def install_node_pack(
+        pack_id: str,
+        request: Request,
+        connection_id: Optional[str] = Query(
+            None,
+            max_length=64,
+            description="The connection to act on; the current one when left out.",
+        ),
+    ):
+        saved = _address(request, connection_id)
         try:
             return node_pack_install_service.install(saved, pack_id)
         except node_pack_install_service.UnknownPack as exc:
@@ -2464,9 +2530,16 @@ def create_router(server) -> APIRouter:
         ),
         response_model=ComfyUINodePackResponse,
     )
-    def get_node_pack(pack_id: str, request: Request):
-        user = server.auth.get_user_for_request(request)
-        saved = getattr(user, "comfyui_url", None) if user else None
+    def get_node_pack(
+        pack_id: str,
+        request: Request,
+        connection_id: Optional[str] = Query(
+            None,
+            max_length=64,
+            description="The connection to act on; the current one when left out.",
+        ),
+    ):
+        saved = _address(request, connection_id)
         try:
             return {"loaded": node_pack_install_service.loaded(saved, pack_id)}
         except node_pack_install_service.UnknownPack as exc:
@@ -2474,12 +2547,15 @@ def create_router(server) -> APIRouter:
 
     @router.delete(
         "/comfyui/link",
-        summary="Unlink ComfyUI and revoke its token",
+        summary="Unlink the current ComfyUI and revoke its token",
         response_model=ComfyUILinkStatus,
     )
     def unlink_comfyui(request: Request):
         server.auth.ensure_secure_when_required(request)
-        return comfyui_link_service.unlink(server, request)
+        user = server.auth.get_user_for_request(request)
+        return comfyui_link_service.unlink(
+            server, request, comfyui_connections.current_id(user)
+        )
 
     @router.post(
         "/comfyui/probe",
@@ -2501,6 +2577,11 @@ def create_router(server) -> APIRouter:
             answer = probe_comfyui(payload.url)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        answer["can_open_workflows"] = (
+            comfyui_can_open_workflows(answer["url"].rstrip("/"))
+            if answer["reachable"]
+            else None
+        )
         # A listed connection keeps its newest answer for the Run on menu.
         if getattr(server, "hub_engine", None) is not None:
             try:
@@ -2521,7 +2602,10 @@ def create_router(server) -> APIRouter:
 
     def _connection_list(user) -> dict:
         return {
-            "connections": comfyui_connections.read(user),
+            "connections": [
+                {**e, "link": comfyui_link_service.link_status(server, e["id"])}
+                for e in comfyui_connections.read(user)
+            ],
             "current": comfyui_connections.current_id(user),
         }
 
@@ -2530,8 +2614,9 @@ def create_router(server) -> APIRouter:
         summary="List the ComfyUI connections",
         description=(
             "Every ComfyUI the owner can run on, with what its newest probe "
-            "said, and `current`, the one at `comfyui_url` that runs go to. "
-            "Switching is a `comfyui_url` PATCH of `/users/me/config`."
+            "said and its own link key, and `current`, the one at "
+            "`comfyui_url` that runs go to. Switching is a `comfyui_url` PATCH "
+            "of `/users/me/config`."
         ),
         response_model=ComfyUIConnectionList,
     )
@@ -2569,6 +2654,152 @@ def create_router(server) -> APIRouter:
             server, server.auth.require_user_id(request), change
         )
         return _connection_list(user)
+
+    def _unlink_then(request: Request, connection_id: str, then, *, kept, doing):
+        """Revoke the connection's key, then run *then*, under one hold of the
+        link lock. A revoke that fails is a 500 saying what was *kept*; a
+        failure of *then* after the key went is logged and raised as it is."""
+        try:
+            return comfyui_link_service.unlink(
+                server, request, connection_id, then=then
+            )
+        except Exception as exc:
+            if not comfyui_link_service.link_record(server, connection_id):
+                logger.exception(
+                    "Revoked the link key of ComfyUI connection %s, then could not %s.",
+                    connection_id,
+                    doing,
+                )
+                raise
+            logger.exception(
+                "Could not revoke the link key of ComfyUI connection %s; %s.",
+                connection_id,
+                kept,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=f"The connection's key could not be revoked, so {kept}: {exc}",
+            ) from exc
+
+    @router.patch(
+        "/comfyui/connections/{connection_id}",
+        summary="Rename a ComfyUI connection or change its address",
+        description=(
+            "A new address is normalised as `POST /comfyui/probe` does and is "
+            "not probed here. Moving a linked connection revokes its key first, "
+            "since the key is bound to the old address; link it again at the new "
+            "one. 400 for an address that is not http(s) with a host, 404 for "
+            "no such connection, 409 when another connection has the address."
+        ),
+        response_model=ComfyUIConnectionList,
+    )
+    def update_comfyui_connection(
+        connection_id: str,
+        request: Request,
+        payload: ComfyUIConnectionUpdate = Body(...),
+    ):
+        server.auth.ensure_secure_when_required(request)
+        require_hub(server, "No hub is attached to keep ComfyUI connections in.")
+        if payload.name is not None and not payload.name.strip():
+            raise HTTPException(status_code=400, detail="A name cannot be blank.")
+        url = None
+        if payload.url is not None:
+            try:
+                url = normalize_comfyui_url(payload.url)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        user = server.auth.get_user_for_request(request)
+        before = _connection_or_404(user, connection_id)
+
+        def change(user) -> bool:
+            renamed = payload.name is not None and comfyui_connections.rename(
+                user, connection_id, payload.name
+            )
+            moved = url is not None and comfyui_connections.set_address(
+                user, connection_id, url
+            )
+            return renamed or moved
+
+        # Tried on a copy first, so a refused change revokes no key.
+        trial = User(**user.model_dump())
+        try:
+            change(trial)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        user_id = server.auth.require_user_id(request)
+        if _connection_or_404(trial, connection_id)["url"] != before["url"]:
+            # Revoked and moved under one hold of the link lock, so a link
+            # waiting on it finds the new address and not a key's old one.
+            user = _unlink_then(
+                request,
+                connection_id,
+                lambda: comfyui_connections.save(server, user_id, change),
+                kept="its address was not changed",
+                doing="move it",
+            )
+        else:
+            user = comfyui_connections.save(server, user_id, change)
+        return _connection_list(user)
+
+    @router.delete(
+        "/comfyui/connections/{connection_id}",
+        summary="Remove a ComfyUI connection, revoking its key",
+        description=(
+            "A linked connection's key is revoked first; if that fails the "
+            "connection stays (500). Clearing the key from ComfyUI's settings "
+            "is best effort. Removing the current connection hands runs to the "
+            "first one left. 404 for no such connection."
+        ),
+        response_model=ComfyUIConnectionList,
+    )
+    def remove_comfyui_connection(connection_id: str, request: Request):
+        server.auth.ensure_secure_when_required(request)
+        require_hub(server, "No hub is attached to keep ComfyUI connections in.")
+        _connection_or_404(server.auth.get_user_for_request(request), connection_id)
+        user_id = server.auth.require_user_id(request)
+
+        def drop():
+            return comfyui_connections.save(
+                server,
+                user_id,
+                lambda user: comfyui_connections.remove(user, connection_id),
+            )
+
+        # Revoked and removed under one hold of the link lock, so a link
+        # waiting on it cannot record a key for the removed connection.
+        user = _unlink_then(
+            request, connection_id, drop, kept="it was kept", doing="remove it"
+        )
+        return _connection_list(user)
+
+    @router.post(
+        "/comfyui/connections/{connection_id}/link",
+        summary="Link one ComfyUI connection with its own ComfyUI-only key",
+        description=(
+            "`POST /comfyui/link` for this connection at its own address, "
+            "current or not. Only this connection's earlier key is replaced; "
+            "every other connection keeps its own. 404 for no such connection."
+        ),
+        response_model=ComfyUILinkResponse,
+    )
+    def link_comfyui_connection(connection_id: str, request: Request):
+        server.auth.ensure_secure_when_required(request)
+        connection = _connection_or_404(
+            server.auth.get_user_for_request(request), connection_id
+        )
+        reply = comfyui_link_service.link(server, request, connection)
+        reply["can_install_pack"] = _can_install_pack(connection["url"])
+        return reply
+
+    @router.delete(
+        "/comfyui/connections/{connection_id}/link",
+        summary="Unlink one ComfyUI connection and revoke its key",
+        response_model=ComfyUILinkStatus,
+    )
+    def unlink_comfyui_connection(connection_id: str, request: Request):
+        server.auth.ensure_secure_when_required(request)
+        _connection_or_404(server.auth.get_user_for_request(request), connection_id)
+        return comfyui_link_service.unlink(server, request, connection_id)
 
     @router.post(
         "/comfyui/workflows/{workflow_name}/card",

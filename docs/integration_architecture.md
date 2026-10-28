@@ -1554,6 +1554,30 @@ refuses a run of it with the `ui_format` reason all the same.
 `drafts=true`, which ComfyUI-PixlStash does from #2000 on: then `draft: true`,
 `workflow: null` and the template as `editor`.
 
+### 2.3b The ComfyUI connections contract (#2167, #2194)
+
+Every ComfyUI the owner can run on is a connection, and each one linked to the
+ComfyUI-PixlStash nodes has **its own key**, kept when the owner switches.
+Switching is still a `comfyui_url` PATCH of `/users/me/config`, which Run on
+and Settings' radio both send.
+
+| Route | Policy | Answers |
+|---|---|---|
+| `GET /comfyui/connections` | `owner_only` | `{connections: [{id, name, url, status, gpu, vram_mb, nodes, link}], current}`. `status`, `gpu`, `vram_mb` and `nodes` are what the newest probe of that address said (`nodes`: whether the ComfyUI-PixlStash nodes can open a workflow there; null when not known). `link` is that connection's own link in `GET /comfyui/link`'s shape, `{linked: false, …}` when it has none. |
+| `POST /comfyui/connections` | `owner_only` | Adds `{url, name?}` without switching; the list. |
+| `PATCH /comfyui/connections/{id}` | `local_owner_only` | `{name?, url?}`; the list. A new `url` on a linked connection revokes its key first and leaves it unlinked (the client opens the Link dialog on it next). 400 bad address or blank name, 404 unknown id, 409 address taken. |
+| `DELETE /comfyui/connections/{id}` | `local_owner_only` | Revokes the key first, then removes; the list. A current connection hands Run on to the first one left. 500 with the reason, and the row kept, when the key cannot be revoked. |
+| `POST /comfyui/connections/{id}/link` | `local_owner_only` | `POST /comfyui/link`'s reply for that connection at its own address, current or not. |
+| `DELETE /comfyui/connections/{id}/link` | `local_owner_only` | Unlinks that connection: `{linked: false}`. |
+| `GET`/`POST`/`DELETE /comfyui/link` | unchanged | The same, for the current connection. The frontend no longer calls them. |
+| `POST /comfyui/probe` | `owner_only` | Gains `can_open_workflows` (null when ComfyUI did not answer), recorded on the listed connection as `nodes`. |
+| `POST /comfyui/pack/install`, `GET /comfyui/node-packs/{id}`, `POST /comfyui/node-packs/{id}/install` | unchanged | Take an optional `?connection_id=`, defaulting to the current connection. |
+
+`PATCH /users/me/config` answers **409** to a `comfyui_url` that would clear
+or re-address a linked current connection, since its key would be left
+without a connection or bound to the old address; switching to another listed
+address passes.
+
 ### 2.4 The `/libraries` contract
 
 Six routes, and the split between them is a locality split rather than a

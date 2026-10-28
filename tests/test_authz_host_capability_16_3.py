@@ -519,6 +519,12 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     makes a directory inside a registered folder and ``POST
     /model-folders/{folder_id}/dirs/move`` moves or renames one, repointing the
     rows under it, which is ``POST /model-moves``' authority.
+    80 = 71 + 9 with ``PATCH`` and ``DELETE /comfyui/connections/{connection_id}``
+    and ``POST`` and ``DELETE /comfyui/connections/{connection_id}/link``
+    (#2194): each connection keeps its own link key, so these link, unlink,
+    move and remove one connection, revoking its key and writing into that
+    ComfyUI's settings on this server's network, as ``POST`` and ``DELETE
+    /comfyui/link`` do. Renaming rides on the PATCH, so it is local too.
 
     Arithmetic, not judgement."""
     loopback = {
@@ -533,7 +539,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 9, sorted(loopback)
-    assert len(local) == 67, sorted(local)
+    assert len(local) == 71, sorted(local)
 
 
 # ===========================================================================

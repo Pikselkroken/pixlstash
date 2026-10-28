@@ -1,14 +1,12 @@
-// Settings › ComfyUI: connecting, and the ComfyUI-PixlStash node pack line.
+// Settings › ComfyUI (#2194): with no connection, today's detect / found /
+// address card; with connections, the table of them, each with its own key.
 //
-// No address is ever saved that the backend has not proven reachable. Pack
-// status: only a definite answer is shown; no ComfyUI, or one that cannot be
-// asked, shows nothing.
+// No address is ever saved that the backend has not proven reachable.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 
 vi.mock("vuetify/components", () => ({
-  VCard: { template: "<div><slot /></div>" },
   VDialog: {
     props: ["modelValue"],
     emits: ["update:modelValue"],
@@ -16,36 +14,39 @@ vi.mock("vuetify/components", () => ({
   },
   VIcon: { template: "<i />" },
   VProgressCircular: { template: "<i />" },
-  VSwitch: {
-    props: ["modelValue", "disabled"],
-    emits: ["update:modelValue"],
+  VMenu: {
+    props: ["modelValue"],
     template:
-      '<button role="switch" :aria-checked="String(!!modelValue)" :disabled="disabled" @click="$emit(\'update:modelValue\', !modelValue)" />',
+      '<div><slot name="activator" :props="{}" /><slot /></div>',
+  },
+  VSwitch: { template: "<i />" },
+  VTooltip: {
+    setup:
+      (_p, { slots }) =>
+      () =>
+        slots.activator?.({ props: {} }),
   },
 }));
 
-const config = vi.hoisted(() => ({
-  getUserConfig: vi.fn(),
-  patchUserConfig: vi.fn(),
-}));
+const config = vi.hoisted(() => ({ patchUserConfig: vi.fn() }));
 vi.mock("../../api/config", () => config);
 const comfyui = vi.hoisted(() => ({
-  getPixlstashNode: vi.fn(),
+  listComfyuiConnections: vi.fn(),
+  addComfyuiConnection: vi.fn(),
   probeComfyui: vi.fn(),
-  getComfyuiLink: vi.fn(),
-  linkComfyui: vi.fn(),
-  unlinkComfyui: vi.fn(),
+  linkComfyuiConnection: vi.fn(),
+  installComfyuiPack: vi.fn(),
+  updateComfyuiConnection: vi.fn(),
+  removeComfyuiConnection: vi.fn(),
+  unlinkComfyuiConnection: vi.fn(),
 }));
 vi.mock("../../api/comfyui", () => comfyui);
-const users = vi.hoisted(() => ({ setTokenLibraries: vi.fn() }));
-vi.mock("../../api/users", () => users);
-const libraries = vi.hoisted(() => ({ libraries: [], canManage: true }));
+vi.mock("../../api/users", () => ({ setTokenLibraries: vi.fn() }));
 vi.mock("../../stores/useLibrariesStore", () => ({
-  useLibrariesStore: () => libraries,
+  useLibrariesStore: () => ({ libraries: [], canManage: true }),
 }));
-vi.mock("../../stores/useFilterStore", () => ({
-  useFilterStore: () => ({ comfyuiUrl: "" }),
-}));
+const filter = vi.hoisted(() => ({ comfyuiUrl: "" }));
+vi.mock("../../stores/useFilterStore", () => ({ useFilterStore: () => filter }));
 vi.mock("../../stores/useUserPrefsStore", () => ({
   useUserPrefsStore: () => ({ dateFormat: "iso" }),
 }));
@@ -53,103 +54,25 @@ vi.mock("../../stores/useUserPrefsStore", () => ({
 import ComfyuiHostSection from "./ComfyuiHostSection.vue";
 import ComfyuiLinkDialog from "./ComfyuiLinkDialog.vue";
 
+const UNLINKED = { linked: false };
+const entry = (id, name, url, extra = {}) => ({
+  id,
+  name,
+  url,
+  status: null,
+  gpu: null,
+  vram_mb: null,
+  nodes: null,
+  link: UNLINKED,
+  ...extra,
+});
+const list = (connections, current) => ({ connections, current });
+
 async function mountPane() {
   const wrapper = mount(ComfyuiHostSection, { props: { open: true } });
   await flushPromises();
   return wrapper;
 }
-
-const NOT_LINKED = {
-  linked: false,
-  comfyui_url: null,
-  pixlstash_url: null,
-  where: null,
-  linked_at: null,
-};
-const LINKED = {
-  linked: true,
-  comfyui_url: "http://127.0.0.1:8188/",
-  pixlstash_url: "http://127.0.0.1:9537/",
-  where: "this_computer",
-  linked_at: "2026-10-06T09:30:00Z",
-  bound_address: "127.0.0.1",
-  refused_from: null,
-  exposure: null,
-};
-
-const status = (wrapper) => wrapper.find('[data-testid="comfyui-pack-status"]');
-
-beforeEach(() => {
-  config.getUserConfig.mockReset();
-  config.patchUserConfig.mockReset();
-  config.patchUserConfig.mockResolvedValue({});
-  comfyui.getPixlstashNode.mockReset();
-  comfyui.probeComfyui.mockReset();
-  comfyui.getComfyuiLink.mockReset();
-  comfyui.linkComfyui.mockReset();
-  comfyui.unlinkComfyui.mockReset();
-  comfyui.getComfyuiLink.mockResolvedValue(NOT_LINKED);
-  comfyui.linkComfyui.mockReturnValue(new Promise(() => {}));
-  comfyui.unlinkComfyui.mockResolvedValue({ linked: false });
-  config.getUserConfig.mockResolvedValue({
-    comfyui_url: "http://127.0.0.1:8188/",
-  });
-});
-
-describe("ComfyUI-PixlStash status line", () => {
-  it("says installed when ComfyUI has the pack", async () => {
-    comfyui.getPixlstashNode.mockResolvedValue({ can_open_workflows: true });
-    const line = status(await mountPane());
-    expect(line.text()).toBe("ComfyUI-PixlStash node pack: installed.");
-  });
-
-  it("says not found, with the install link, when ComfyUI lacks it", async () => {
-    comfyui.getPixlstashNode.mockResolvedValue({ can_open_workflows: false });
-    const line = status(await mountPane());
-    expect(line.text()).toContain("not found, or too old");
-    expect(line.text()).toContain("then restart ComfyUI");
-    const link = line.find("a");
-    expect(link.attributes("href")).toBe(
-      "https://github.com/Pikselkroken/ComfyUI-PixlStash",
-    );
-    expect(link.attributes("target")).toBe("_blank");
-  });
-
-  it("says nothing when ComfyUI cannot be asked", async () => {
-    comfyui.getPixlstashNode.mockResolvedValue({ can_open_workflows: null });
-    expect(status(await mountPane()).exists()).toBe(false);
-  });
-
-  it("says nothing when asking fails", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    comfyui.getPixlstashNode.mockRejectedValue(new Error("offline"));
-    expect(status(await mountPane()).exists()).toBe(false);
-  });
-
-  it("keeps the newest answer when an older one lands late", async () => {
-    let answerFirst;
-    comfyui.getPixlstashNode
-      .mockReturnValueOnce(new Promise((r) => (answerFirst = r)))
-      .mockResolvedValueOnce({ can_open_workflows: true });
-    const wrapper = await mountPane();
-    await wrapper.setProps({ open: false });
-    await wrapper.setProps({ open: true });
-    await flushPromises();
-    answerFirst({ can_open_workflows: false });
-    await flushPromises();
-    expect(status(wrapper).text()).toBe(
-      "ComfyUI-PixlStash node pack: installed.",
-    );
-  });
-
-  it("asks nothing while no ComfyUI is configured", async () => {
-    config.getUserConfig.mockResolvedValue({ comfyui_url: null });
-    comfyui.probeComfyui.mockResolvedValue({ reachable: false, url: "x" });
-    const wrapper = await mountPane();
-    expect(comfyui.getPixlstashNode).not.toHaveBeenCalled();
-    expect(status(wrapper).exists()).toBe(false);
-  });
-});
 
 // The backend's probe: answers for exactly the URLs in `up`, normalised.
 function probeAnswers(up = {}) {
@@ -173,10 +96,23 @@ async function fillAddress(wrapper, { scheme, host, port }) {
   await flushPromises();
 }
 
+beforeEach(() => {
+  vi.clearAllMocks();
+  filter.comfyuiUrl = "";
+  comfyui.listComfyuiConnections.mockResolvedValue(list([], null));
+  comfyui.linkComfyuiConnection.mockReturnValue(new Promise(() => {}));
+  config.patchUserConfig.mockResolvedValue({});
+});
+
 describe("connecting ComfyUI", () => {
+  // Saving makes the address the one connection; the table lists it.
   beforeEach(() => {
-    config.getUserConfig.mockResolvedValue({ comfyui_url: null });
-    comfyui.getPixlstashNode.mockResolvedValue({ can_open_workflows: true });
+    config.patchUserConfig.mockImplementation(async ({ comfyui_url }) => {
+      comfyui.listComfyuiConnections.mockResolvedValue(
+        list([entry("saved", "This PC", comfyui_url)], "saved"),
+      );
+      return { config: { comfyui_url } };
+    });
   });
 
   it("finds ComfyUI on 8188 first and offers it", async () => {
@@ -199,7 +135,7 @@ describe("connecting ComfyUI", () => {
       comfyui_url: "http://127.0.0.1:8188/",
     });
     expect(wrapper.emitted("update:comfyui-configured")).toEqual([[true]]);
-    expect(byTestId(wrapper, "comfyui-connected-url").text()).toBe(
+    expect(byTestId(wrapper, "comfyui-connection-saved").text()).toContain(
       "http://127.0.0.1:8188/",
     );
   });
@@ -250,7 +186,7 @@ describe("connecting ComfyUI", () => {
     expect(config.patchUserConfig).toHaveBeenCalledWith({
       comfyui_url: "http://comfy-box.local:8189/",
     });
-    expect(byTestId(wrapper, "comfyui-connected-url").text()).toBe(
+    expect(byTestId(wrapper, "comfyui-connection-saved").text()).toContain(
       "http://comfy-box.local:8189/",
     );
   });
@@ -279,330 +215,77 @@ describe("connecting ComfyUI", () => {
       comfyui_url: "https://comfy.example.com/",
     });
   });
-
-  it("asks the saved address before saying Connected", async () => {
-    config.getUserConfig.mockResolvedValue({
-      comfyui_url: "https://comfy.example.com/",
-    });
-    let answer;
-    comfyui.probeComfyui.mockReturnValue(new Promise((r) => (answer = r)));
-    const wrapper = await mountPane();
-    expect(comfyui.probeComfyui).toHaveBeenCalledWith(
-      "https://comfy.example.com/",
-    );
-    expect(byTestId(wrapper, "comfyui-connected-url").text()).toBe(
-      "https://comfy.example.com/",
-    );
-    expect(wrapper.text()).toContain("Checking");
-    expect(wrapper.text()).not.toContain("Connected");
-    answer({ reachable: true, url: "https://comfy.example.com/" });
-    await flushPromises();
-    expect(wrapper.text()).toContain("Connected");
-    expect(wrapper.text()).not.toContain("Checking");
-  });
-
-  it("says Not answering when the saved address does not answer on load", async () => {
-    config.getUserConfig.mockResolvedValue({
-      comfyui_url: "http://127.0.0.1:8188/",
-    });
-    probeAnswers({});
-    const wrapper = await mountPane();
-    expect(wrapper.text()).toContain("Not answering");
-    expect(wrapper.text()).toContain("No answer at http://127.0.0.1:8188/");
-    expect(wrapper.text()).not.toContain("Connected");
-  });
-
-  it("drops a load-time answer that lands after a newer save", async () => {
-    // The saved address's probe answers only after the person has
-    // disconnected and connected the ComfyUI found on this computer.
-    config.getUserConfig.mockResolvedValue({
-      comfyui_url: "http://127.0.0.1:8188/",
-    });
-    let late;
-    comfyui.probeComfyui
-      .mockReturnValueOnce(new Promise((r) => (late = r)))
-      .mockResolvedValue({
-        reachable: true,
-        url: "http://comfy-box.local:8189/",
-      });
-    const wrapper = await mountPane();
-    await byTestId(wrapper, "comfyui-disconnect").trigger("click");
-    await flushPromises();
-    await byTestId(wrapper, "comfyui-connect-found").trigger("click");
-    await flushPromises();
-    expect(wrapper.text()).toContain("Connected");
-    late({ reachable: false, url: "http://127.0.0.1:8188/", detail: "down" });
-    await flushPromises();
-    expect(wrapper.text()).toContain("Connected");
-    expect(wrapper.text()).not.toContain("Not answering");
-  });
-
-  it.each(["[::1]", "::1"])(
-    "wraps an IPv6 host typed as %s in one pair of brackets",
-    async (typed) => {
-      probeAnswers({ "http://[::1]:8188/": "http://[::1]:8188/" });
-      const wrapper = await mountPane();
-      await fillAddress(wrapper, { host: typed, port: "8188" });
-      expect(comfyui.probeComfyui).toHaveBeenLastCalledWith(
-        "http://[::1]:8188/",
-      );
-      expect(config.patchUserConfig).toHaveBeenCalledWith({
-        comfyui_url: "http://[::1]:8188/",
-      });
-    },
-  );
-
-  it("disconnect clears the saved URL", async () => {
-    config.getUserConfig.mockResolvedValue({
-      comfyui_url: "http://127.0.0.1:8188/",
-    });
-    probeAnswers({});
-    const wrapper = await mountPane();
-    await byTestId(wrapper, "comfyui-disconnect").trigger("click");
-    await flushPromises();
-    expect(config.patchUserConfig).toHaveBeenCalledWith({ comfyui_url: null });
-    expect(wrapper.emitted("update:comfyui-configured")).toEqual([[false]]);
-  });
-
-  it("disconnect shows the connection that takes over when another is saved", async () => {
-    const box = "http://192.0.2.20:8188/";
-    config.getUserConfig.mockResolvedValue({ comfyui_url: "http://127.0.0.1:8188/" });
-    probeAnswers({});
-    const wrapper = await mountPane();
-    config.getUserConfig.mockResolvedValue({ comfyui_url: box });
-    config.patchUserConfig.mockResolvedValue({ config: { comfyui_url: box } });
-    await byTestId(wrapper, "comfyui-disconnect").trigger("click");
-    await flushPromises();
-    expect(wrapper.emitted("update:comfyui-configured")).toBeUndefined();
-    expect(comfyui.probeComfyui).toHaveBeenLastCalledWith(box);
-  });
 });
 
-it("says why when the saved address cannot be read, instead of hiding the card", async () => {
-  vi.spyOn(console, "warn").mockImplementation(() => {});
-  config.getUserConfig.mockRejectedValue(new Error("server down"));
-  const wrapper = await mountPane();
-  expect(wrapper.find(".cf-card").exists()).toBe(true);
-  expect(wrapper.find('[role="alert"]').text()).toContain("server down");
-});
+describe("the table of connections", () => {
+  const PC = entry("pc", "This PC", "http://127.0.0.1:8188/", {
+    status: "connected",
+    nodes: true,
+    link: { linked: true, linked_at: "2026-10-03T09:00:00Z", bound_address: "127.0.0.1" },
+  });
+  const BOX = entry("box", "Render box", "http://192.0.2.20:8188/");
 
-describe("linking ComfyUI", () => {
   beforeEach(() => {
-    comfyui.getPixlstashNode.mockResolvedValue({ can_open_workflows: true });
+    comfyui.listComfyuiConnections.mockResolvedValue(list([PC, BOX], "pc"));
   });
 
-  it("says Not linked and offers Link as the one primary action", async () => {
+  it("lists every connection, the current one checked, and probes nothing", async () => {
     const wrapper = await mountPane();
-    expect(comfyui.getComfyuiLink).toHaveBeenCalled();
-    expect(byTestId(wrapper, "comfyui-access-value").text()).toBe("Not linked");
-    const linkBtn = byTestId(wrapper, "comfyui-link");
-    expect(linkBtn.classes()).toContain("app-btn--primary");
-    expect(wrapper.findAll(".app-btn--primary")).toHaveLength(1);
-    expect(wrapper.text()).toContain(
-      "The key cannot delete, change settings or make tokens.",
-    );
-    expect(byTestId(wrapper, "comfyui-disconnect-note").exists()).toBe(false);
+    expect(byTestId(wrapper, "comfyui-connection-pc").text()).toContain("This PC");
+    expect(byTestId(wrapper, "comfyui-connection-box").text()).toContain("Render box");
+    expect(byTestId(wrapper, "comfyui-run-on-pc").element.checked).toBe(true);
+    expect(byTestId(wrapper, "comfyui-run-on-box").element.checked).toBe(false);
+    // Wrong if the empty-state search ran behind a populated list.
+    expect(comfyui.probeComfyui).not.toHaveBeenCalled();
+    expect(byTestId(wrapper, "comfyui-probing").exists()).toBe(false);
   });
 
-  it("warns before linking a ComfyUI on the network, not one on this computer", async () => {
-    config.getUserConfig.mockResolvedValue({
-      comfyui_url: "http://comfy-box.local:8188/",
-    });
-    const onNetwork = await mountPane();
-    expect(byTestId(onNetwork, "comfyui-exposure-notice").text()).toContain(
-      "Link it only on a network you trust",
-    );
-    config.getUserConfig.mockResolvedValue({
-      comfyui_url: "http://127.0.0.1:8188/",
-    });
-    const local = await mountPane();
-    expect(byTestId(local, "comfyui-exposure-notice").exists()).toBe(false);
-  });
-
-  it("warns before linking a ComfyUI here that was started with --listen", async () => {
-    comfyui.probeComfyui.mockResolvedValue({
-      reachable: true,
-      url: "http://127.0.0.1:8188/",
-      listens_on_network: true,
-    });
+  it("shows Linked with its date, and Link on an unlinked row", async () => {
     const wrapper = await mountPane();
-    expect(byTestId(wrapper, "comfyui-exposure-notice").text()).toContain(
-      "restart it without --listen",
-    );
+    expect(byTestId(wrapper, "comfyui-linked-pc").exists()).toBe(true);
+    expect(byTestId(wrapper, "comfyui-connection-pc").text()).toContain("2026-10-03");
+    expect(byTestId(wrapper, "comfyui-link-box").exists()).toBe(true);
+    expect(byTestId(wrapper, "comfyui-link-pc").exists()).toBe(false);
   });
 
-  it("keeps warning once linked when other computers can reach ComfyUI", async () => {
-    comfyui.getComfyuiLink.mockResolvedValue({ ...LINKED, exposure: "listening" });
+  it("Link opens the Link dialog on that row, and closing reads the list again", async () => {
     const wrapper = await mountPane();
-    expect(byTestId(wrapper, "comfyui-exposure-notice").exists()).toBe(true);
-    expect(byTestId(wrapper, "comfyui-relink").exists()).toBe(false);
-  });
-
-  it("Check again clears the warning once ComfyUI stops listening on the network", async () => {
-    comfyui.getComfyuiLink.mockResolvedValue({ ...LINKED, exposure: "listening" });
-    comfyui.probeComfyui.mockResolvedValue({
-      reachable: true,
-      url: "http://127.0.0.1:8188/",
-      listens_on_network: true,
-    });
-    const wrapper = await mountPane();
-    expect(byTestId(wrapper, "comfyui-exposure-notice").exists()).toBe(true);
-    comfyui.probeComfyui.mockResolvedValue({
-      reachable: true,
-      url: "http://127.0.0.1:8188/",
-      listens_on_network: false,
-    });
-    await byTestId(wrapper, "comfyui-check-again").trigger("click");
+    await byTestId(wrapper, "comfyui-link-box").trigger("click");
     await flushPromises();
-    expect(byTestId(wrapper, "comfyui-exposure-notice").exists()).toBe(false);
-  });
-
-  it("offers Link again when ComfyUI's key was refused from another address", async () => {
-    comfyui.getComfyuiLink.mockResolvedValue({
-      ...LINKED,
-      where: "local_network",
-      bound_address: "192.0.2.4",
-      refused_from: "192.0.2.7",
-    });
-    const wrapper = await mountPane();
-    const said = byTestId(wrapper, "comfyui-key-refused").text();
-    expect(said).toContain("refused ComfyUI's key from 192.0.2.7");
-    expect(said).toContain("only works from 192.0.2.4");
-    const relink = byTestId(wrapper, "comfyui-relink");
-    expect(relink.classes()).toContain("app-btn--primary");
-    await relink.trigger("click");
+    const dialog = wrapper.findComponent(ComfyuiLinkDialog);
+    expect(dialog.props("connection")).toMatchObject({ id: "box", url: BOX.url });
+    const reads = comfyui.listComfyuiConnections.mock.calls.length;
+    dialog.vm.$emit("close");
     await flushPromises();
-    expect(comfyui.linkComfyui).toHaveBeenCalledTimes(1);
+    expect(wrapper.findComponent(ComfyuiLinkDialog).exists()).toBe(false);
+    expect(comfyui.listComfyuiConnections.mock.calls.length).toBe(reads + 1);
   });
 
-  it("offers Link again, quietly, for a link made before keys were bound", async () => {
-    comfyui.getComfyuiLink.mockResolvedValue({ ...LINKED, bound_address: null });
+  it("Add connection opens the new-connection dialog", async () => {
     const wrapper = await mountPane();
-    expect(byTestId(wrapper, "comfyui-key-unbound").exists()).toBe(true);
-    expect(byTestId(wrapper, "comfyui-relink").classes()).not.toContain(
-      "app-btn--primary",
+    await byTestId(wrapper, "comfyui-add-connection").trigger("click");
+    expect(wrapper.text()).toContain("New ComfyUI connection");
+  });
+
+  it("the Link keys note opens Account › API Tokens", async () => {
+    const wrapper = await mountPane();
+    expect(byTestId(wrapper, "comfyui-link-keys-note").text()).toContain(
+      "its own key",
     );
+    await byTestId(wrapper, "comfyui-open-tokens").trigger("click");
+    expect(wrapper.emitted("open-tab")).toEqual([["account"]]);
   });
 
-  it("Check again reads the link again", async () => {
-    comfyui.getComfyuiLink.mockResolvedValue(LINKED);
-    const wrapper = await mountPane();
-    expect(byTestId(wrapper, "comfyui-key-refused").exists()).toBe(false);
-    comfyui.getComfyuiLink.mockResolvedValue({
-      ...LINKED,
-      refused_from: "192.0.2.7",
-    });
-    await byTestId(wrapper, "comfyui-check-again").trigger("click");
-    await flushPromises();
-    expect(byTestId(wrapper, "comfyui-key-refused").exists()).toBe(true);
-  });
-
-  it("offers Use in every library for a linked key, with more than one library", async () => {
-    comfyui.getComfyuiLink.mockResolvedValue({ ...LINKED, token_id: 7 });
-    libraries.libraries = [{ uuid: "a" }];
-    expect(byTestId(await mountPane(), "comfyui-link-every-library").exists()).toBe(
-      false,
-    );
-    libraries.libraries = [{ uuid: "a" }, { uuid: "b" }];
-    expect(byTestId(await mountPane(), "comfyui-link-every-library").exists()).toBe(
-      true,
-    );
-    libraries.libraries = [];
-  });
-
-  it("says what the key reaches with the date when linked, with no primary", async () => {
-    comfyui.getComfyuiLink.mockResolvedValue(LINKED);
-    const wrapper = await mountPane();
-    expect(byTestId(wrapper, "comfyui-access-value").text()).toBe(
-      "PixlStash nodes only · linked 2026-10-06",
-    );
-    expect(byTestId(wrapper, "comfyui-link").exists()).toBe(false);
-    expect(wrapper.findAll(".app-btn--primary")).toHaveLength(0);
-    expect(byTestId(wrapper, "comfyui-disconnect-note").text()).toContain(
-      "removes PixlStash's key from ComfyUI",
-    );
-  });
-
-  it("shows no Access row when the link cannot be read", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    comfyui.getComfyuiLink.mockRejectedValue(new Error("403"));
-    const wrapper = await mountPane();
-    expect(byTestId(wrapper, "comfyui-access").exists()).toBe(false);
-  });
-
-  it("Link opens the dialog, which posts at once", async () => {
-    const wrapper = await mountPane();
-    expect(comfyui.linkComfyui).not.toHaveBeenCalled();
-    await byTestId(wrapper, "comfyui-link").trigger("click");
-    await flushPromises();
-    expect(comfyui.linkComfyui).toHaveBeenCalledTimes(1);
-    expect(byTestId(wrapper, "comfyui-link-steps").exists()).toBe(true);
-  });
-
-  it("Disconnect revokes the link before clearing the URL", async () => {
-    comfyui.getComfyuiLink.mockResolvedValue(LINKED);
-    probeAnswers({});
-    const order = [];
-    comfyui.unlinkComfyui.mockImplementation(async () => {
-      order.push("unlink");
-      return { linked: false };
-    });
-    config.patchUserConfig.mockImplementation(async () => {
-      order.push("clear");
-      return {};
-    });
-    const wrapper = await mountPane();
-    await byTestId(wrapper, "comfyui-disconnect").trigger("click");
-    await flushPromises();
-    expect(order).toEqual(["unlink", "clear"]);
-    expect(config.patchUserConfig).toHaveBeenCalledWith({ comfyui_url: null });
-  });
-
-  it("Disconnect still clears the URL when revoking fails, and says the key is live", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    comfyui.getComfyuiLink.mockResolvedValue(LINKED);
-    comfyui.unlinkComfyui.mockRejectedValue(new Error("revoke failed"));
+  it("removing the last connection goes back to looking for ComfyUI", async () => {
+    comfyui.listComfyuiConnections.mockResolvedValue(list([BOX], "box"));
+    comfyui.removeComfyuiConnection.mockResolvedValue(list([], null));
     probeAnswers({});
     const wrapper = await mountPane();
-    await byTestId(wrapper, "comfyui-disconnect").trigger("click");
+    await byTestId(wrapper, "comfyui-menu-remove").trigger("click");
+    await byTestId(wrapper, "comfyui-remove-confirm-button").trigger("click");
     await flushPromises();
-    expect(config.patchUserConfig).toHaveBeenCalledWith({ comfyui_url: null });
+    expect(comfyui.removeComfyuiConnection).toHaveBeenCalledWith("box");
     expect(wrapper.emitted("update:comfyui-configured")).toEqual([[false]]);
-    expect(wrapper.text()).toContain("revoke failed");
-    expect(wrapper.text()).toContain("delete it under Account › API Tokens");
-  });
-
-  it("closing the link dialog returns focus to Link ComfyUI", async () => {
-    const wrapper = mount(ComfyuiHostSection, {
-      props: { open: true },
-      attachTo: document.body,
-    });
-    await flushPromises();
-    await byTestId(wrapper, "comfyui-link").trigger("click");
-    await flushPromises();
-    wrapper.findComponent(ComfyuiLinkDialog).vm.$emit("close");
-    await flushPromises();
-    expect(document.activeElement).toBe(byTestId(wrapper, "comfyui-link").element);
-    wrapper.unmount();
-  });
-
-  it("Disconnect revokes when the link status could not be read", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    comfyui.getComfyuiLink.mockRejectedValue(new Error("server busy"));
-    probeAnswers({});
-    const wrapper = await mountPane();
-    await byTestId(wrapper, "comfyui-disconnect").trigger("click");
-    await flushPromises();
-    expect(comfyui.unlinkComfyui).toHaveBeenCalled();
-    expect(config.patchUserConfig).toHaveBeenCalledWith({ comfyui_url: null });
-  });
-
-  it("Disconnect does not call DELETE when not linked", async () => {
-    probeAnswers({});
-    const wrapper = await mountPane();
-    await byTestId(wrapper, "comfyui-disconnect").trigger("click");
-    await flushPromises();
-    expect(comfyui.unlinkComfyui).not.toHaveBeenCalled();
-    expect(config.patchUserConfig).toHaveBeenCalledWith({ comfyui_url: null });
+    expect(byTestId(wrapper, "comfyui-host").exists()).toBe(true);
   });
 });
