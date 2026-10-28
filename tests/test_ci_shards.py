@@ -831,6 +831,45 @@ def test_sweep_stays_informational_and_release_prep_only(workflow):
     )
 
 
+_DRAFT_SKIP = (
+    "(github.event_name != 'pull_request' || !github.event.pull_request.draft)"
+)
+
+
+def test_draft_prs_skip_the_heavy_gate_and_run_it_when_ready(workflow):
+    """Draft PRs run the cheap jobs; marking one ready runs the gate (#2035).
+
+    Without ``ready_for_review`` in the trigger types, ``gh pr ready`` starts
+    nothing and the gate never runs on a PR that was opened as a draft. Each
+    heavy job states the clause itself: ``backend`` and the sweep carry
+    ``!cancelled()``, which runs them even when ``warm_models`` was skipped.
+    """
+    # PyYAML reads the bare key `on` as True.
+    types = workflow[True]["pull_request"]["types"]
+    assert "ready_for_review" in types and "synchronize" in types, types
+
+    jobs = workflow["jobs"]
+    # Whole-string equality: a substring check passes with `|| ... draft` added.
+    expected = {
+        "warm_models": f"${{{{ {_DRAFT_SKIP} }}}}",
+        "warm_models_windows": f"${{{{ {_DRAFT_SKIP} }}}}",
+        "backend_windows": f"${{{{ {_DRAFT_SKIP} }}}}",
+        "backend": f"${{{{ !cancelled() && {_DRAFT_SKIP} }}}}",
+    }
+    for name, condition in expected.items():
+        assert jobs[name].get("if") == condition, (
+            f"`{name}` must skip on draft PRs: {jobs[name].get('if')!r}"
+        )
+    # The sweep ANDs its release-prep gate on after the draft clause.
+    assert jobs["backend_release_sweep"]["if"].startswith(
+        f"${{{{ !cancelled() && {_DRAFT_SKIP} && ("
+    ), jobs["backend_release_sweep"]["if"]
+    for name in ("checks", "e2e"):
+        assert "draft" not in jobs[name].get("if", ""), (
+            f"`{name}` is cheap and must keep running on drafts"
+        )
+
+
 def test_each_job_uses_the_sharding_mode_it_needs(workflow):
     """The gate deals round-robin; the sweep runs contiguous blocks.
 

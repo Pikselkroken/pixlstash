@@ -29,7 +29,15 @@ on:
       - 'rc-prep-**'
     tags:
       - 'v*'
+  # A draft PR runs `checks` and `e2e` only; the backend shards and their
+  # warming jobs wait for `ready_for_review` (#2035). While a PR goes round the
+  # AI review, each push is superseded by the next fix long before the ~25 min
+  # gate reports, so a draft's gate run is ~200 runner-minutes cancelled. Agents
+  # open PRs as drafts and `gh pr ready` once a review round finds nothing.
+  # Nothing is a required check here (see the note above `e2e`), so the skipped
+  # jobs on a draft cannot stand in for a green gate.
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   # Lets release-prep force the informational full-suite sweep on demand (the
   # single-process sweep job below keys off this event).
   workflow_dispatch:
@@ -165,6 +173,8 @@ jobs:
   warm_models:
     name: warm model cache
     runs-on: ubuntu-latest
+    # Draft PRs skip the gate; see `on: pull_request`.
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     # See the `backend` job for the rationale and the read-only token
     # requirement. Absent on fork PRs by design; the prefetch then runs
     # anonymously, which one sequential job is far more likely to survive than
@@ -361,6 +371,7 @@ jobs:
   warm_models_windows:
     name: warm model cache (Windows)
     runs-on: windows-latest
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     # Only a `push` can save this cache (see the save step), so only a `push`
     # runs the prefetch — and a run that never fetches has no use for the
     # token. Scoping it this way keeps the secret out of the environment on
@@ -420,8 +431,11 @@ jobs:
     # `!cancelled()` keeps the ordering and drops the veto: if warming breaks,
     # the shards still run, still report red or green on their own merits, and
     # `warm model cache` is the red check that says why they were slow.
+    #
+    # `!cancelled()` also overrides the skip a draft gives `warm_models`, so the
+    # draft clause has to be stated here too, not inherited.
     needs: warm_models
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     strategy:
       # Every shard must report: one shard failing tells you nothing about the
       # other seven, and a partial picture costs another full round trip.
@@ -733,7 +747,7 @@ jobs:
   # ---------------------------------------------------------------------------
   backend_release_sweep:
     name: backend-full block ${{ matrix.shard }} (informational, release-prep only)
-    if: ${{ !cancelled() && (startsWith(github.head_ref || github.ref_name, 'rc-prep') || startsWith(github.head_ref || github.ref_name, 'release') || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (startsWith(github.head_ref || github.ref_name, 'rc-prep') || startsWith(github.head_ref || github.ref_name, 'release') || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
     # Same reason as the gate: read the model cache, never fill it, and never
     # let a failed warming job silently skip the sweep instead of running it.
@@ -970,6 +984,7 @@ jobs:
     # exists to absorb. On the warm path this costs the shards a checkout and a
     # cache restore they were doing anyway.
     needs: warm_models_windows
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     runs-on: windows-latest
     strategy:
       fail-fast: false
