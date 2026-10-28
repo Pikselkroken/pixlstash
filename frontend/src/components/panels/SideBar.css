@@ -972,7 +972,6 @@
   border: none;
   display: inline-block;
   filter: none;
-  transition: transform 0.12s ease;
 }
 
 .sidebar-set-thumb-image {
@@ -985,7 +984,6 @@
   box-shadow: none;
   display: block;
   box-sizing: border-box;
-  transition: transform 0.12s ease;
 }
 
 .sidebar-set-thumb-image--collapsed {
@@ -994,11 +992,6 @@
   margin: 0;
   border: none;
   box-shadow: none;
-}
-
-.sidebar-list-item:hover .sidebar-character-thumb,
-.sidebar-list-item:hover .sidebar-set-thumb-image {
-  transform: scale(1.04);
 }
 
 .sidebar-collapsed-item {
