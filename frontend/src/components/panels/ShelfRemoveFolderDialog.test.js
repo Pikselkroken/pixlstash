@@ -147,7 +147,17 @@ describe("ShelfRemoveFolderDialog", () => {
     await flushPromises();
     expect(confirmButton().text()).toBe("Permanently delete");
     expect(nameField().exists()).toBe(true);
-    expect(confirmButton().attributes("disabled")).toBeDefined();
+
+    // Clicked with Shift still held and no name typed: it asks for the name.
+    // Then Shift is let go, as anyone does to type, and the field stays.
+    expect(confirmButton().attributes("disabled")).toBeUndefined();
+    await confirmButton().trigger("click", { shiftKey: true });
+    await flushPromises();
+    expect(removals()).toEqual([]);
+    window.dispatchEvent(new KeyboardEvent("keyup", { key: "Shift", shiftKey: false }));
+    await flushPromises();
+    expect(nameField().exists()).toBe(true);
+    expect(document.activeElement).toBe(nameField().element);
 
     await nameField().setValue("old");
     await confirmButton().trigger("click", { shiftKey: true });

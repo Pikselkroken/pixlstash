@@ -223,11 +223,15 @@ const confirmLabel = computed(() =>
   shiftHeld.value ? "Permanently delete" : `Move folder to ${trash}`,
 );
 
+// Gated on the breaks only, never on the tracked Shift: a Shift-click with no
+// name typed must reach `confirm`, which opens the field and keeps it open.
+// Gating it here would leave the field visible only while Shift is held, and
+// a name typed with Shift held is in capitals.
 const canConfirm = computed(
   () =>
     !working.value &&
     !!facts.value.fingerprint &&
-    (!(hasBreaks.value || shiftHeld.value) || nameOk.value),
+    (!hasBreaks.value || nameOk.value),
 );
 
 /** Close, unless the removal is in flight and could not be stopped. */
