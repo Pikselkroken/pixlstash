@@ -345,6 +345,14 @@ const close = () => desktop?.windowClose?.();
   -webkit-app-region: no-drag;
 }
 
+/* Electron never delivers a click on a drag region to the page, so an open
+   Vuetify menu (the library picker, the tasks popover, any v-menu elsewhere)
+   would not see one there as a click outside and would stay open. Give the
+   strip back to the page while one is up: the click lands and closes it. */
+:root:has(.v-menu.v-overlay--active) .titlebar--desktop {
+  -webkit-app-region: no-drag;
+}
+
 .titlebar-start {
   display: flex;
   align-items: center;
