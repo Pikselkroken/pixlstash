@@ -379,7 +379,12 @@ describe("the Checkpoint filter's labels", () => {
     const store = useWorkflowsStore();
     await store.fetchCards();
     expect(store.filterOptions.checkpoints).toEqual([
-      { id: "juggernautXL_v9", label: "Juggernaut XL", count: 1 },
+      {
+        id: "juggernautXL_v9",
+        label: "Juggernaut XL",
+        count: 1,
+        mark: expect.objectContaining({ filename: "juggernautXL_v9", display_name: "Juggernaut XL" }),
+      },
     ]);
   });
 });

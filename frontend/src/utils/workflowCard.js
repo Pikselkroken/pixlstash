@@ -440,6 +440,29 @@ export function modelDisplayName(model) {
 }
 
 /**
+ * A payload slot as the shelf row `ModelMark` reads. Both base-model spellings,
+ * because `baseModelKey` prefers the folded one: passing only the raw would
+ * colour the same model differently here and on the shelf. The card's strip
+ * and the Workflows sidebar's Base model rows both draw through this, so one
+ * model wears one mark in both.
+ */
+export function markRow(model) {
+  return {
+    display_name: model.title,
+    filename: model.name,
+    base_model: model.base_model,
+    base_model_folded: model.base_model_folded,
+    icon_sha256: model.icon,
+    mark: model.mark,
+    mark_tab: model.mark_tab,
+    mark_colors: model.mark_colors,
+    mark_icon: model.mark_icon,
+    mark_letters: model.mark_letters,
+    mark_band: model.mark_band,
+  };
+}
+
+/**
  * The base models as a row prints them, `A + B`, each spelling once: two
  * files under one shelf title read as that title, not `T + T`. `label` maps a
  * model to its text and defaults to `modelDisplayName`.

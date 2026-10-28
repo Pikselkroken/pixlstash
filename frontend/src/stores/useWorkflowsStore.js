@@ -13,7 +13,11 @@ import {
   WORKFLOW_SOURCE_LABELS,
   workflowFilterChips,
 } from "../utils/filterChips";
-import { baseModels, modelDisplayName } from "../utils/workflowCard";
+import {
+  baseModels,
+  markRow,
+  modelDisplayName,
+} from "../utils/workflowCard";
 import { onSessionReset } from "../utils/apiClient";
 import { errorMessage } from "../utils/apiError";
 import { favouritesFirst, useFavouritesStore } from "./useFavouritesStore";
@@ -354,7 +358,9 @@ export const useWorkflowsStore = defineStore("workflows", () => {
    */
   const filterOptions = computed(() => {
     const types = new Map();
-    // file name → { count, label }: filtered by file, shown by shelf name.
+    // file name → { count, label, mark }: filtered by file, shown by shelf
+    // name, drawn by the first card's payload of it (the mark is the file's,
+    // so any card's copy draws the same one).
     const checkpoints = new Map();
     let imported = 0;
     let ghosts = 0;
@@ -375,6 +381,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
         const seen = checkpoints.get(model.name) ?? {
           count: 0,
           label: modelDisplayName(model),
+          mark: markRow(model),
         };
         seen.count += 1;
         checkpoints.set(model.name, seen);
@@ -390,7 +397,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
       ghosts,
       types: [...types.values()].sort((a, b) => b.count - a.count),
       checkpoints: [...checkpoints.entries()]
-        .map(([id, { count, label }]) => ({ id, label, count }))
+        .map(([id, { count, label, mark }]) => ({ id, label, count, mark }))
         .sort((a, b) => b.count - a.count || a.id.localeCompare(b.id)),
       sources: [
         {

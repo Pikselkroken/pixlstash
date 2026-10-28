@@ -23,6 +23,7 @@ vi.mock("../../api/comfyui", () => ({
 }));
 
 import WorkflowsSidebar from "./WorkflowsSidebar.vue";
+import ModelMark from "../widgets/ModelMark.vue";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useWorkflowsStore, RECENT_DAYS } from "../../stores/useWorkflowsStore";
@@ -104,7 +105,7 @@ function listing(names, extra = {}) {
 const LABEL_KEY = "pixlstash:workflowTemplatesSeen";
 const STUBS = { "v-icon": true, WorkflowsComfyuiSlot: true };
 
-async function mountSidebar({ configured = true, configRead = true } = {}) {
+async function mountSidebar({ configured = true, configRead = true, stubs = STUBS } = {}) {
   const pinia = createPinia();
   setActivePinia(pinia);
   const store = useWorkflowsStore();
@@ -116,7 +117,7 @@ async function mountSidebar({ configured = true, configRead = true } = {}) {
   await store.fetchCards();
   // The header slot has its own suite (WorkflowsComfyuiSlot.test.js).
   const wrapper = mount(WorkflowsSidebar, {
-    global: { plugins: [pinia], stubs: STUBS },
+    global: { plugins: [pinia], stubs },
     attachTo: document.body,
   });
   await flushPromises();
@@ -237,6 +238,56 @@ describe("facets", () => {
     await row(wrapper, "flux1-dev.safetensors").trigger("click");
     expect(store.filters.checkpoint).toBe("flux1-dev.safetensors");
     expect(row(wrapper, "flux1-dev.safetensors").attributes("aria-current")).toBe("page");
+  });
+
+  // An icon is a name in a font: the glyph slot carries the name as its text.
+  it("gives each Type row its own glyph, and an unknown type the generic one", async () => {
+    listWorkflowCards.mockResolvedValue({
+      cards: [...CARDS, card({ id: "auto:4", type: "relight", type_label: "Relight" })],
+    });
+    const { wrapper } = await mountSidebar({
+      stubs: { ...STUBS, "v-icon": { template: "<i><slot /></i>" } },
+    });
+    const glyph = (label) => row(wrapper, label).find(".wfs-row__glyph").text();
+    expect(glyph("Text to Image")).toBe("mdi-text-box-outline");
+    expect(glyph("Upscale")).toBe("mdi-magnify-plus-outline");
+    expect(glyph("Relight")).toBe("mdi-sitemap-outline");
+  });
+
+  // The rail draws the card strip's tile, so a row and the cards it narrows
+  // to wear one mark: the same payload, named, from the card's own model.
+  it("draws each Base model row with that model's card mark", async () => {
+    listWorkflowCards.mockResolvedValue({
+      cards: [
+        card({
+          id: "auto:1",
+          models: [
+            {
+              name: "flux1-dev.safetensors",
+              title: "FLUX.1 dev",
+              kind: "checkpoint",
+              mark: ["FLUX.1", "dev"],
+              mark_colors: ["#333333"],
+              mark_icon: "flux",
+              mark_band: true,
+            },
+          ],
+        }),
+      ],
+    });
+    const { wrapper } = await mountSidebar();
+    const glyph = row(wrapper, "FLUX.1 dev").find(".wfs-row__glyph");
+    const mark = glyph.findComponent(ModelMark);
+    expect(mark.props("named")).toBe(true);
+    expect(mark.props("row")).toMatchObject({
+      filename: "flux1-dev.safetensors",
+      mark: ["FLUX.1", "dev"],
+      mark_colors: ["#333333"],
+      mark_icon: "flux",
+      mark_band: true,
+    });
+    // The release tile itself, not the generated initials it falls back to.
+    expect(glyph.find(".mmark-named--release").exists()).toBe(true);
   });
 
   it("picking a facet while Templates is on goes back to the grid", async () => {

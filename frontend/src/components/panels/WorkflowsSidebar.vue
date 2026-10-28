@@ -13,6 +13,7 @@
  */
 import { computed, onMounted, watch } from "vue";
 import AppButton from "../widgets/AppButton.vue";
+import ModelMark from "../widgets/ModelMark.vue";
 import WorkflowsComfyuiSlot from "./WorkflowsComfyuiSlot.vue";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
@@ -82,9 +83,22 @@ const showNew = computed(
     tpl.newCount > 0,
 );
 
+// One glyph per type the server serves (`_TYPE_LABELS` in
+// routes/workflows.py). A type this build does not know takes the generic
+// graph rather than an empty slot.
+const TYPE_ICONS = {
+  txt2img: "mdi-text-box-outline",
+  img2img: "mdi-image-sync-outline",
+  inpaint: "mdi-brush-outline",
+  outpaint: "mdi-arrow-expand-all",
+  upscale: "mdi-magnify-plus-outline",
+  video: "mdi-video-outline",
+};
+
 const typeRows = computed(() =>
   store.filterOptions.types.map((option) => ({
     ...option,
+    icon: TYPE_ICONS[option.id] ?? "mdi-sitemap-outline",
     lit: !tpl.shown && store.filters.type === option.id,
   })),
 );
@@ -133,7 +147,7 @@ function pickFacet(key, id) {
         :aria-current="place.lit ? 'page' : undefined"
         @click="pickPlace(place.id)"
       >
-        <v-icon size="16" class="wfs-row__glyph" aria-hidden="true">{{
+        <v-icon class="wfs-row__glyph" aria-hidden="true">{{
           place.icon
         }}</v-icon>
         <span class="wfs-row__label">{{ place.label }}</span>
@@ -152,7 +166,7 @@ function pickFacet(key, id) {
         :aria-current="tpl.shown ? 'page' : undefined"
         @click="pickTemplates"
       >
-        <v-icon size="16" class="wfs-row__glyph" aria-hidden="true"
+        <v-icon class="wfs-row__glyph" aria-hidden="true"
           >mdi-shape-outline</v-icon
         >
         <span class="wfs-row__label">Templates</span>
@@ -172,7 +186,9 @@ function pickFacet(key, id) {
         :aria-current="option.lit ? 'page' : undefined"
         @click="pickFacet('type', option.id)"
       >
-        <span class="wfs-row__glyph" aria-hidden="true"></span>
+        <v-icon class="wfs-row__glyph" aria-hidden="true">{{
+          option.icon
+        }}</v-icon>
         <span class="wfs-row__label">{{ option.label }}</span>
         <span class="wfs-row__count">{{ option.count }}</span>
       </button>
@@ -187,9 +203,11 @@ function pickFacet(key, id) {
         :aria-current="option.lit ? 'page' : undefined"
         @click="pickFacet('checkpoint', option.id)"
       >
-        <v-icon size="16" class="wfs-row__glyph" aria-hidden="true"
-          >mdi-layers-triple-outline</v-icon
-        >
+        <!-- The card strip's tile for this model, so a row and the cards it
+             narrows to wear the same mark. Hidden: the label names it. -->
+        <span class="wfs-row__glyph" aria-hidden="true">
+          <ModelMark :row="option.mark" named />
+        </span>
         <span class="wfs-row__label">{{ option.label }}</span>
         <span class="wfs-row__count">{{ option.count }}</span>
       </button>
@@ -279,13 +297,24 @@ function pickFacet(key, id) {
     linear-gradient(var(--hover-wash), var(--hover-wash)), var(--active-wash);
 }
 
+/* The entity slot on every row, not only on the Base model rows that fill
+   it, so every label in the rail starts at one x. A glyph centres in it at
+   the glyph size, set here rather than by `v-icon`'s `size`, which writes the
+   width inline and would shrink the slot back to the glyph. */
 .wfs-row__glyph {
   flex: none;
-  width: 16px;
-  height: 16px;
+  width: var(--entity-thumb);
+  height: var(--entity-thumb);
+  font-size: var(--gutter-glyph);
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+
+/* The row prints the model's name, version included; at the rail's 24px the
+   tile's version and role pills would cover most of the glyph they label. */
+.wfs-row__glyph :deep(.mmark-version) {
+  display: none;
 }
 
 .wfs-row__label {
