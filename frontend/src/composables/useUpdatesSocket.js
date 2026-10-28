@@ -267,9 +267,9 @@ export function useUpdatesSocket({
       gridContainer.value?.refreshSmartScoreForImage?.(id),
     removeImagesById: (ids) => gridContainer.value?.removeImagesById?.(ids),
     isImagesLoading: () => gridContainer.value?.isImagesLoading?.() ?? false,
-    isOverlayOpen: () => gridContainer.value?.isOverlayOpen?.() ?? false,
-    markOverlayDeferredRefresh: () =>
-      gridContainer.value?.markOverlayDeferredRefresh?.(),
+    isLightboxOpen: () => gridContainer.value?.isLightboxOpen?.() ?? false,
+    markLightboxDeferredRefresh: () =>
+      gridContainer.value?.markLightboxDeferredRefresh?.(),
   };
 
   function fullGridReload() {
@@ -372,7 +372,7 @@ export function useUpdatesSocket({
         const pictureIds = Array.isArray(payload.picture_ids)
           ? payload.picture_ids
           : [];
-        // Signal the open lightbox to re-fetch its card's smart_score. The overlay
+        // Signal the open lightbox to re-fetch its card's smart_score. The lightbox
         // always displays the score (independent of grid sort), so this fires for
         // any smart_score change regardless of the current sort and regardless of
         // origin - matching on picture id + field, not origin, so it covers both
@@ -411,7 +411,7 @@ export function useUpdatesSocket({
           // a moved file leaves it untouched, while a turn moves the
           // `?v=o<n>` AND invalidates the boxes and the text drawn in the
           // file's own coordinate space. The grid's own card refresh for this
-          // is deferred under an open overlay (§9.1), so the lightbox needs a
+          // is deferred under an open lightbox (§9.1), so the lightbox needs a
           // signal of its own to turn without being closed and reopened.
           if (changedFields.includes("orientation")) {
             const nextKey = (wsStore.wsOrientationUpdate?.key || 0) + 1;
@@ -451,7 +451,7 @@ export function useUpdatesSocket({
         // grid in place. A tag change from outside (background tagging, another
         // tab) must not reshuffle the user's filtered view - the grid raises a
         // click-to-refresh pill instead (see ImageGrid's wsTagUpdate watcher).
-        // The flag rides on wsTagUpdate; the overlay still refreshes its open
+        // The flag rides on wsTagUpdate; the lightbox still refreshes its open
         // card's tags for any origin.
         const isOwn = !!(
           payload.origin_client_id &&

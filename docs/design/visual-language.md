@@ -538,7 +538,7 @@ everywhere. At desktop width the band is `--toolbar-height` (36px) in both shell
 and the sidebar's header slot takes it through `--sidebar-slot-h`, so the
 sidebar's top rule continues the toolbar's. The title bar above the band is `--titlebar-h` (40px) in both
 shells: the switch's 32px track with 4px above and below (#2158). (Heads-up: the per-component action-bar heights still drift — 34 / 36 /
-40 / 48 / 56px across `ImageGrid`, `ImageOverlay`, and the selection bar. The **three
+40 / 48 / 56px across `ImageGrid`, `Lightbox`, and the selection bar. The **three
 view toolbars are the one settled group**: the grid, Duplicates and model-shelf bars
 all sit at 36px, pinned to each other by a guardrail rather than to this token
 (`toolbar-responsive-decisions.md` Amendment #5) — so no view toolbar honours
@@ -884,7 +884,7 @@ These get skipped and that is exactly why a UI looks cheap.
   row. The spinner already says "working", so `AppButton` has no loading-text
   prop. No live region on the button either, because the
   outcome is announced by the notice surface and a second announcer would
-  double-speak, the same reason `OverlayActionReceipt` has none.
+  double-speak, the same reason `LightboxActionReceipt` has none.
   **The spinner keeps spinning under `prefers-reduced-motion`.** The global reset
   in `design-tokens.css` would freeze it into a static broken ring that reads as a
   rendering fault, and a spinner is a status readout rather than decoration, which
@@ -976,7 +976,7 @@ token pair, and the opacity is what keeps it a hint rather than a second label. 
 `aria-keyshortcuts` on the button itself.
 
 The full-width bar that appears above the grid to act on a context — the bulk
-**selection bar**, the image-overlay top bar, and the new **Trash restore/purge
+**selection bar**, the lightbox top bar, and the new **Trash restore/purge
 bar** — is one pattern. It reuses the grid; only the bar changes.
 
 - **Anatomy:** a left cluster (a count or title: "12 selected", "Trash") and a right
@@ -992,7 +992,7 @@ bar** — is one pattern. It reuses the grid; only the bar changes.
   owns `--floating-bottom-h` for the notice stack (`notice-surface.md` §2.2). Whether
   it converges on the full-width pattern or stays a pill is the **One band** open item
   below; until that is decided, the pill is the reference for **floating** contextual
-  actions and the overlay top bar is the reference for the full-width one.
+  actions and the lightbox top bar is the reference for the full-width one.
 - **Action weight:** the primary/affirmative action (Restore) is a `primary` button;
   a destructive action (Purge / Delete forever) is `error`, kept visually distinct,
   and **always behind a confirm** — deletion is irreversible and must never be a

@@ -271,7 +271,7 @@ async function copyCommand(command) {
   // can be denied too. Claiming "Copied" then leaves the user pasting whatever
   // was on the clipboard before, and this command is the one thing on the
   // screen nobody can retype from memory. The shared notice surface owns the
-  // failure, as it does for the identical copy in OverlayDescriptionPanel.
+  // failure, as it does for the identical copy in LightboxDescriptionPanel.
   noticeStore.error(
     "Couldn't copy the command. Select the text and press Ctrl+C, or Command-C on a Mac.",
     { key: "libraries-cli-copy" },

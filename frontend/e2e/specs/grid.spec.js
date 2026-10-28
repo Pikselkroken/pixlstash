@@ -15,25 +15,25 @@ test.describe('image grid', () => {
     await expect.poll(() => cards.count()).toBeGreaterThan(0)
   })
 
-  test('opens and closes the image overlay', async ({ page }) => {
+  test('opens and closes the image lightbox', async ({ page }) => {
     await page.goto('/')
 
-    const overlay = page.locator('.image-overlay')
+    const lightbox = page.locator('.lightbox')
     // The grid re-renders on picture websocket events (the e2e backend's
     // thumbnail-upgrade job emits a steady stream of them), which can swap the
     // card out between the actionability check and the click, swallowing it.
-    // Retry until the overlay is actually up. This spec deliberately avoids
-    // page objects (the retry is inline rather than borrowing ImageOverlay),
+    // Retry until the lightbox is actually up. This spec deliberately avoids
+    // page objects (the retry is inline rather than borrowing Lightbox),
     // which is unrelated to importing `test` from the shared fixtures file
     // above — that import is only for the production-network block.
     await expect(async () => {
       await page.locator('.thumbnail-card').first().dblclick()
-      await expect(overlay).toBeVisible({ timeout: 2_000 })
+      await expect(lightbox).toBeVisible({ timeout: 2_000 })
     }).toPass({ timeout: 30_000 })
 
     // Close via the toolbar's way back to the grid.
-    await overlay.locator('.overlay-back').click()
-    await expect(overlay).toBeHidden()
+    await lightbox.locator('.lightbox-back').click()
+    await expect(lightbox).toBeHidden()
   })
 
   test('focuses the search field with the F shortcut', async ({ page }) => {

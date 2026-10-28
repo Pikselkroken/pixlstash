@@ -1,7 +1,7 @@
 // A failed run is shown on its workflow through three lines of wiring that no
 // component test can see missing: the socket's event reaching the store, the
 // store's entry reaching the card, and a part-queued batch's reason reaching a
-// notice (#1839). Asserted against the SOURCE, as OverlaySignalsAreWired does:
+// notice (#1839). Asserted against the SOURCE, as LightboxSignalsAreWired does:
 // each is a line of template or a call in `App.vue`, and mounting the app to
 // check one binding would cost more than the bug does.
 

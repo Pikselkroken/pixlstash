@@ -6,7 +6,7 @@
 // your saved recipe X" banner cannot say one thing while the recipe's own
 // picture count says another.
 //
-// The pair was two private copies inside `OverlayRecipePanel` first, and the
+// The pair was two private copies inside `LightboxRecipePanel` first, and the
 // bug that moved it here was exactly the one a second copy invites: the banner
 // keyed on every LoRA the picture named while the save dropped the ones the
 // model shelf could not digest, so a saved recipe never matched the picture it

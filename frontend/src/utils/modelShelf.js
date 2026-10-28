@@ -205,7 +205,7 @@ export function deriveModelName(filename) {
  *
  * **The display copy lives here and not in the API**, the way slot kinds
  * already do: the backend serves the id, one map turns it into words, and the
- * shelf row, the workflow card, its ⓘ list and the recipe overlay all read the
+ * shelf row, the workflow card, its ⓘ list and the lightbox's recipe all read the
  * same one rather than each inventing a spelling.
  *
  * `fp8_e4m3` and `fp8_e5m2` deliberately share the label `FP8`: the variant is
@@ -692,7 +692,7 @@ export function adapterKindLabel(kind) {
  *
  * Not a new icon family. Where the product already marks a feature, that mark
  * is the one used here and it is not re-drawn somewhere else: the face from
- * `ImageOverlay` and the toolbar, the SHAPE from the same two - it is what
+ * `Lightbox` and the toolbar, the SHAPE from the same two - it is what
  * "Object boxes" and "Detect objects" wear, so `detector` takes it and the
  * catch-all does not - the tag, the star and the caption box from the operation
  * log's icon rules. The two features nothing else in the app marks take glyphs

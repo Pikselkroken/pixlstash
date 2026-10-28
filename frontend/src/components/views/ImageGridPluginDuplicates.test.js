@@ -75,7 +75,7 @@ function mountGrid() {
     global: {
       // The lightbox, as far as a finished filter run reaches into it.
       stubs: {
-        ImageOverlay: { template: "<div />", methods: { showRunResult } },
+        Lightbox: { template: "<div />", methods: { showRunResult } },
       },
       config: {
         compilerOptions: { isCustomElement: (tag) => tag.startsWith("v-") },
@@ -86,7 +86,7 @@ function mountGrid() {
   return wrapper;
 }
 
-/** Emit what SelectionBar/ImageOverlay emit, and let the run settle. */
+/** Emit what SelectionBar/Lightbox emit, and let the run settle. */
 async function runPlugin(wrapper, pluginName, pictureIds = [42], extra = {}) {
   // Let the mount's own registry fetch land first, so the run reads the same
   // plugin list the menus do.
@@ -264,31 +264,31 @@ describe("ImageGrid - a filter run from the lightbox", () => {
 
   it("opens the result over the source picture", async () => {
     const wrapper = mountGrid();
-    wrapper.vm.overlayOpen = true;
+    wrapper.vm.lightboxOpen = true;
     await runPlugin(wrapper, "blur", [42], { compare: true });
 
     expect(showRunResult).toHaveBeenCalledWith("9", 42, null);
-    expect(wrapper.vm.overlayImageId).not.toBe("9");
+    expect(wrapper.vm.lightboxImageId).not.toBe("9");
     wrapper.unmount();
   });
 
   it("only moves to the result of a run on several pictures", async () => {
     const wrapper = mountGrid();
-    wrapper.vm.overlayOpen = true;
+    wrapper.vm.lightboxOpen = true;
     await runPlugin(wrapper, "blur", [42, 43], { compare: true });
 
     expect(showRunResult).not.toHaveBeenCalled();
-    expect(wrapper.vm.overlayImageId).toBe("9");
+    expect(wrapper.vm.lightboxImageId).toBe("9");
     wrapper.unmount();
   });
 
   it("only moves to the result for any other run", async () => {
     const wrapper = mountGrid();
-    wrapper.vm.overlayOpen = true;
+    wrapper.vm.lightboxOpen = true;
     await runPlugin(wrapper, "blur");
 
     expect(showRunResult).not.toHaveBeenCalled();
-    expect(wrapper.vm.overlayImageId).toBe("9");
+    expect(wrapper.vm.lightboxImageId).toBe("9");
     wrapper.unmount();
   });
 });

@@ -258,7 +258,7 @@
 
   /* The design system's Tag xs height (`components/core/Tag.jsx`: xs 18px, sm
      --control-h-sm, md --control-h). It is the dense chip: the workflow card's
-     rows, and the overlay/filmstrip metadata the DS names. Named here rather
+     rows, and the lightbox/filmstrip metadata the DS names. Named here rather
      than spelled in each component so the three chip heights stay three. */
   --tag-h-xs: 18px;
 
@@ -291,7 +291,7 @@
 
   /* Contextual action bar / toolbar band - the full-width bar that holds a count
      + actions above the content area (selection bar, Trash restore/purge bar,
-     overlay top bar). One height so these bands align. Desktop chrome compresses
+     lightbox top bar). One height so these bands align. Desktop chrome compresses
      it (see `--titlebar-h` and the desktop overrides in style.css). */
   --bar-height: 48px;
 

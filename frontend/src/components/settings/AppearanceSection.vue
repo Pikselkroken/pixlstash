@@ -323,7 +323,7 @@ async function clearGuestSession() {
 
     <SettingsSection
       title="Chip size"
-      desc="How large tag chips read in the picture overlay and the tag dialog."
+      desc="How large tag chips read in the lightbox and the tag dialog."
     >
       <Segmented
         full

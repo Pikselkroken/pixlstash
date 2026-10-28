@@ -6,7 +6,7 @@
 //
 // Runs against the demo-data library (varied photos, populated people/projects/
 // sets) in a forced dark theme, rendered as the desktop app (title bar + window
-// controls) — see capture.spec.js. ctx = { page, grid, overlay, settings,
+// controls) — see capture.spec.js. ctx = { page, grid, lightbox, settings,
 // sidebar, api }.
 import { cpSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -151,14 +151,14 @@ async function readyGrid(grid) {
 }
 
 /** Open the detail overlay from the first grid thumbnail, robustly. */
-async function openOverlay({ grid, overlay, page }) {
+async function openLightbox({ grid, lightbox, page }) {
   const card = grid.thumbnails.first()
   await card.scrollIntoViewIfNeeded()
   await card.dblclick()
-  if (await overlay.root.isVisible().catch(() => false)) return
+  if (await lightbox.root.isVisible().catch(() => false)) return
   await page.waitForTimeout(400)
   await grid.thumbnailImages.first().dblclick({ force: true }).catch(() => {})
-  await expect(overlay.root).toBeVisible()
+  await expect(lightbox.root).toBeVisible()
 }
 
 /** Filter the grid to the first person who actually has pictures. */
@@ -210,32 +210,32 @@ export const scenes = [
     },
   },
   {
-    id: 'image-overlay',
+    id: 'lightbox',
     assets: ['ScreenshotImageOverlay.jpg'],
-    title: 'Picture inspection overlay',
-    async setup({ grid, overlay }) {
+    title: 'Picture inspection lightbox',
+    async setup({ grid, lightbox }) {
       await readyGrid(grid)
-      await openOverlay({ grid, overlay, page: grid.page })
-      await expect(overlay.mainImage).toBeVisible()
+      await openLightbox({ grid, lightbox, page: grid.page })
+      await expect(lightbox.mainImage).toBeVisible()
       await grid.page.waitForTimeout(600)
-      return overlay.root
+      return lightbox.root
     },
   },
   {
     id: 'face-detection',
     assets: ['ScreenshotImageOverlay2.jpg'],
     title: 'Face detection in the overlay',
-    async setup({ grid, overlay, sidebar }) {
+    async setup({ grid, lightbox, sidebar }) {
       await readyGrid(grid)
       await filterToPerson(sidebar)
-      await openOverlay({ grid, overlay, page: grid.page })
-      await expect(overlay.mainImage).toBeVisible()
+      await openLightbox({ grid, lightbox, page: grid.page })
+      await expect(lightbox.mainImage).toBeVisible()
       // Pointing at a face's chip draws its box for the shot.
-      if (await overlay.faceChips.count()) {
-        await overlay.faceChips.first().hover().catch(() => {})
+      if (await lightbox.faceChips.count()) {
+        await lightbox.faceChips.first().hover().catch(() => {})
       }
       await grid.page.waitForTimeout(600)
-      return overlay.root
+      return lightbox.root
     },
   },
   {
@@ -347,7 +347,7 @@ export const scenes = [
     title: 'Desktop Backend settings — NVIDIA CUDA acceleration available',
     // Show the Backend tab on an NVIDIA machine: the CUDA overlay is offered
     // with an "Install (recommended)" action (the post-install "active" state
-    // can't be shown without a real overlay download).
+    // can't be shown without a real lightbox download).
     bridge: { accelerators: cudaAccelerators },
     async setup({ grid, settings, page }) {
       await readyGrid(grid)
@@ -556,15 +556,15 @@ export const scenes = [
     id: 'tagging',
     assets: ['ScreenshotTagging.jpg'],
     title: 'Tag autocompletion',
-    async setup({ grid, overlay, page }) {
+    async setup({ grid, lightbox, page }) {
       await readyGrid(grid)
-      await openOverlay({ grid, overlay, page })
-      await expect(overlay.mainImage).toBeVisible()
-      await overlay.addTagButton.click()
-      await expect(overlay.tagInput).toBeVisible()
-      await overlay.tagInput.fill('su')
+      await openLightbox({ grid, lightbox, page })
+      await expect(lightbox.mainImage).toBeVisible()
+      await lightbox.addTagButton.click()
+      await expect(lightbox.tagInput).toBeVisible()
+      await lightbox.tagInput.fill('su')
       await page.waitForTimeout(600)
-      return overlay.root
+      return lightbox.root
     },
   },
   {

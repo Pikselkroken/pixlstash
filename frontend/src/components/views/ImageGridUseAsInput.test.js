@@ -6,7 +6,7 @@
 // because the obvious rule is the wrong one here. `handleImageContextMenu`
 // keeps a selection the right-clicked picture is already part of, which is
 // right in the GRID where the selection is on screen. It is wrong in the
-// lightbox: `openOverlay` never touches `selectedImageIds`, so the selection
+// lightbox: `openLightbox` never touches `selectedImageIds`, so the selection
 // is invisible, and both ways in name exactly one picture. Handing the popup
 // an unseen 50-picture selection from a control whose tooltip says "this
 // picture" is the regression this file exists to catch.
@@ -134,18 +134,18 @@ describe("using the lightbox picture as a workflow's input", () => {
 
   it("closes the lightbox, which the popup would otherwise open behind", () => {
     const wrapper = mountGrid();
-    wrapper.vm.overlayOpen = true;
-    wrapper.vm.overlayImageId = 42;
+    wrapper.vm.lightboxOpen = true;
+    wrapper.vm.lightboxImageId = 42;
 
     wrapper.vm.runWorkflowOnPicture(42);
 
-    expect(wrapper.vm.overlayOpen).toBe(false);
+    expect(wrapper.vm.lightboxOpen).toBe(false);
   });
 
   it("falls back to NOTHING with no picture, never to the hidden selection", () => {
     const wrapper = mountGrid();
     const runDialog = useRunDialogStore();
-    wrapper.vm.overlayImageId = 7;
+    wrapper.vm.lightboxImageId = 7;
     wrapper.vm.selectedImageIds = [11, 12];
 
     // Seeded with something recognisable first: `source` is null on a fresh
@@ -175,14 +175,14 @@ describe("leaving the grid with the lightbox up", () => {
   // with the lightbox open. App mirrors the flag to hide the rail's picture
   // panels under the lightbox, so a close nobody reports blanks the rail.
   it("tells App the lightbox closed", async () => {
-    const onOverlayOpen = vi.fn();
-    const wrapper = mountGrid({ "onUpdate:overlayOpen": onOverlayOpen });
-    wrapper.vm.overlayOpen = true;
+    const onLightboxOpen = vi.fn();
+    const wrapper = mountGrid({ "onUpdate:lightboxOpen": onLightboxOpen });
+    wrapper.vm.lightboxOpen = true;
     await nextTick();
-    expect(onOverlayOpen).toHaveBeenLastCalledWith(true);
+    expect(onLightboxOpen).toHaveBeenLastCalledWith(true);
 
     wrapper.unmount();
 
-    expect(onOverlayOpen).toHaveBeenLastCalledWith(false);
+    expect(onLightboxOpen).toHaveBeenLastCalledWith(false);
   });
 });

@@ -300,7 +300,7 @@ const props = defineProps({
   // wrong for it. It lists people with radio glyphs plus an Unassigned row and
   // performs NO writes of its own, emitting `assign` / `unassign` so the host
   // keeps its face-level API calls. It lives here rather than in a local
-  // overlay menu because the `.ate-*` skin is scoped to this file, and one
+  // lightbox menu because the `.ate-*` skin is scoped to this file, and one
   // create rule has to serve both call sites.
   type: { type: String, required: true },
   backendUrl: { type: String, default: () => API_BASE_URL },
@@ -572,7 +572,7 @@ function sizeMenu() {
     // Floating: the menu no longer moves with its parent, so POSITION is
     // recomputed here too, not just height. This runs on open and on the
     // resize / capture-phase scroll listeners openMenu() already registers;
-    // capture phase is what catches the overlay sidebar scrolling, since the
+    // capture phase is what catches the lightbox sidebar scrolling, since the
     // scrolling ancestor is not the window.
     const anchor = rootRef.value?.getBoundingClientRect();
     if (!anchor) return;
@@ -1529,7 +1529,7 @@ defineExpose({
 
 /* The stand-alone trigger. In flyout mode `.ate-btn` is a `.ctx-item` row, so
    none of these reach it: `:where` keeps the specificity the host overrides
-   (ImageOverlay's face row, the shelf menu) were written against. */
+   (Lightbox's face row, the shelf menu) were written against. */
 :where(.ate:not(.ate--flyout)) .ate-btn {
   background-color: rgba(var(--v-theme-surface), 0.85);
   color: rgb(var(--v-theme-on-surface));

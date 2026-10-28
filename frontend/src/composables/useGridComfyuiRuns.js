@@ -25,7 +25,7 @@ const COMPLETE_TAIL_MS = 1200;
 
 /**
  * @param {Object} grid
- * @param {import("vue").Ref<boolean>} grid.overlayOpen
+ * @param {import("vue").Ref<boolean>} grid.lightboxOpen
  * @param {import("vue").Ref<Array>} grid.allGridImages
  * @param {import("vue").Ref<Array>} grid.lastFetchedGridImages
  * @param {(img: Object) => ?string} grid.getPictureStackId
@@ -40,7 +40,7 @@ const COMPLETE_TAIL_MS = 1200;
  *   started run, `{prompts, pictureId}`.
  */
 export function useGridComfyuiRuns({
-  overlayOpen,
+  lightboxOpen,
   allGridImages,
   lastFetchedGridImages,
   getPictureStackId,
@@ -118,8 +118,8 @@ export function useGridComfyuiRuns({
    * lightbox is open (inserts wait for it to close). The lightbox takes the
    * step itself, since only it knows what the reader is on now.
    */
-  async function moveOverlayToResult(sourceId) {
-    if (sourceId == null || !unref(overlayOpen)) return;
+  async function moveLightboxToResult(sourceId) {
+    if (sourceId == null || !unref(lightboxOpen)) return;
     try {
       let stackId = getPictureStackId(findImage(sourceId));
       if (!stackId) {
@@ -130,7 +130,7 @@ export function useGridComfyuiRuns({
       // Not stacked with its source: the new picture is one of its own.
       if (!stackId) return;
       const members = await listStackPictures(stackId);
-      if (!unref(overlayOpen)) return;
+      if (!unref(lightboxOpen)) return;
       const newest = selectNewestStackMember(
         Array.isArray(members) ? members : [],
       );
@@ -153,7 +153,7 @@ export function useGridComfyuiRuns({
     if (outcome?.status === "failed") {
       failure ||= String(outcome.message || "").trim() || "ComfyUI failed";
     } else {
-      void moveOverlayToResult(pictureId);
+      void moveLightboxToResult(pictureId);
     }
     refreshSidebar?.();
     if (next.size) return;

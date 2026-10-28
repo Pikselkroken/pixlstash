@@ -2,7 +2,7 @@
 //
 // The largest resource in the app. Seeded here with the reads whose call sites
 // have already migrated; the counts, scores, thumbnails, and export endpoints
-// join it as the grid and overlay move over.
+// join it as the grid and lightbox move over.
 
 import {
   apiClient,

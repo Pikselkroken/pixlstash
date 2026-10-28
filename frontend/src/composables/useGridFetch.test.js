@@ -15,7 +15,7 @@ import {
 } from "../api/pictures";
 
 // Mock the pictures API module so streaming-path tests can control the count
-// and stream responses. The overlay-defer test below returns before any
+// and stream responses. The lightbox-defer test below returns before any
 // network call, so the mock is inert there.
 vi.mock("../api/pictures", () => ({
   getPictureCount: vi.fn(),
@@ -27,12 +27,12 @@ vi.mock("../api/pictures", () => ({
   listPicturesByIds: vi.fn(),
 }));
 
-// Build a minimal harness for useGridFetch. Covers the overlay-defer path
+// Build a minimal harness for useGridFetch. Covers the lightbox-defer path
 // (returns before any network call) and the streaming path (count + stream
 // mocked above). Sort, selection and filter state come from the stores;
 // `storeOverrides` writes them.
 function makeHarness({
-  overlayOpen = false,
+  lightboxOpen = false,
   selectedSort = "DATE_TAKEN",
   storeOverrides = {},
 } = {}) {
@@ -48,9 +48,9 @@ function makeHarness({
     scrollWrapper: ref(null),
     preserveScrollOnNextFetch: ref(false),
     pendingScrollTop: ref(null),
-    overlayOpen: ref(overlayOpen),
+    lightboxOpen: ref(lightboxOpen),
     pendingGridImages: ref(null),
-    pendingOverlayGridRefresh: ref(false),
+    pendingLightboxGridRefresh: ref(false),
     visibleStart: ref(0),
     visibleEnd: ref(0),
     divisibleViewWindow: ref(40),
@@ -112,14 +112,14 @@ function makeHarness({
 describe("useGridFetch sort-progress lifecycle", () => {
   it("dismisses the sort progress bar when a sorted fetch is deferred for an open overlay", async () => {
     const { grid, refs, startSmartScoreProgress, completeSmartScoreProgress } =
-      makeHarness({ overlayOpen: true });
+      makeHarness({ lightboxOpen: true });
 
     await grid.fetchAllGridImages({ force: true, showProgress: true });
 
     // The bar was started…
     expect(startSmartScoreProgress).toHaveBeenCalledTimes(1);
-    // …the refresh was deferred to overlay-close…
-    expect(refs.pendingOverlayGridRefresh.value).toBe(true);
+    // …the refresh was deferred to lightbox-close…
+    expect(refs.pendingLightboxGridRefresh.value).toBe(true);
     // …and crucially the bar was dismissed instead of being stranded forever.
     expect(completeSmartScoreProgress).toHaveBeenCalledTimes(1);
   });

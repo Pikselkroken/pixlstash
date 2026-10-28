@@ -48,7 +48,7 @@ function makeNav({
     allGridImages: ref(images),
     rowHeight: ref(128),
     visibleStart: ref(0),
-    overlayOpen: ref(false),
+    lightboxOpen: ref(false),
     reviewOverlayOpen: ref(reviewOverlayOpen),
     showSelectionBar: ref(showSelectionBar),
     searchResultsActive: ref(searchResultsActive),
@@ -65,7 +65,7 @@ function makeNav({
     isScrapheap: () => scrapheap,
   };
 
-  const openOverlay = vi.fn();
+  const openLightbox = vi.fn();
   const clearSearchQuery = vi.fn();
   const focusCursor = vi.fn();
   const toggleFavourite = vi.fn();
@@ -74,7 +74,7 @@ function makeNav({
     clearSearchQuery,
     scrollCursorIntoView: vi.fn(),
     focusCursor,
-    openOverlay,
+    openLightbox,
     deleteSelected,
     selectionBarRef: ref({ openTagInput: vi.fn() }),
     applyScoresForSelection,
@@ -105,7 +105,7 @@ function makeNav({
     deps,
     deleteSelected,
     applyScoresForSelection,
-    openOverlay,
+    openLightbox,
     clearSearchQuery,
     focusCursor,
     toggleFavourite,
@@ -327,13 +327,13 @@ describe("useGridKeyboardNav - ghosted tiles", () => {
   });
 
   it("does not open the lightbox on a ghost the cursor was already sitting on", () => {
-    const { handleKeyDown, openOverlay } = makeNav({
+    const { handleKeyDown, openLightbox } = makeNav({
       images: NINE_IMAGES,
       cursorIdx: 2,
       ghostedIndexes: [2],
     });
     handleKeyDown(keyEvent({ key: "Enter" }));
-    expect(openOverlay).not.toHaveBeenCalled();
+    expect(openLightbox).not.toHaveBeenCalled();
   });
 
   it("does not toggle selection with Space on a ghost under the cursor", () => {

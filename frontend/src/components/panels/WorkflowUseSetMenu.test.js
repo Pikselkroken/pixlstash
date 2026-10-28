@@ -33,7 +33,7 @@ import { useTasksStore } from "../../stores/useTasksStore";
 // Vuetify is not installed in the test app, so `v-menu` is stubbed with the
 // two behaviours the component relies on: the activator's click toggles it,
 // and the rows are in the page only while it is open. `afterEnter` is the
-// overlay's own event, emitted by hand where a test needs the menu "drawn".
+// lightbox's own event, emitted by hand where a test needs the menu "drawn".
 const VMenuStub = {
   name: "VMenu",
   props: { modelValue: { type: Boolean, default: false } },

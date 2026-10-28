@@ -756,19 +756,19 @@ def test_dedicated_picture_faces_route_projects_the_row(env):
         r.json(), where="owner picture faces", expect_picture_id=pic_a
     )
 
-    # The three fields the SPA actually reads (ImageOverlay.vue).
-    overlay = [
+    # The three fields the SPA actually reads (Lightbox.vue).
+    lightbox = [
         f
         for f in faces
         if f["frame_index"] == 0 and isinstance(f["bbox"], list) and len(f["bbox"]) == 4
     ]
-    assert overlay, (
-        f"no face survives the overlay's own filter "
+    assert lightbox, (
+        f"no face survives the lightbox's own filter "
         f"(frame_index == 0 and a 4-element bbox), so the box would never render: "
         f"{faces}"
     )
     assert any(f["character_id"] is not None for f in faces), (
-        f"character_id is never populated, so the overlay's name lookup is "
+        f"character_id is never populated, so the lightbox's name lookup is "
         f"untested here: {faces}"
     )
 

@@ -86,10 +86,10 @@ pruned fixture lands, then activates automatically.
 ```
 e2e/
   fixtures/test.js   extended `test` — apiContext (ALL token), credentials,
-                     grid/overlay/settings page-object fixtures, and
+                     grid/lightbox/settings page-object fixtures, and
                      loginToFreshSession() for the isolated logout spec
   pages/             thin page objects (locators + actions, no assertions):
-                     GridPage, ImageOverlay, SettingsDialog
+                     GridPage, Lightbox, SettingsDialog
   specs/             one file per release-test-plan section:
                      grid.spec.js (smoke), auth (§1), grid-browse (§3),
                      overlay (§4), faces (§10), stacks (§11)
@@ -111,7 +111,7 @@ checklist shrinks as coverage grows.
   across specs in a run), so keep mutations additive/idempotent. The logout
   spec mints an isolated session (`loginToFreshSession`) because the backend
   tracks sessions in-memory and logout would otherwise pop the shared session.
-- Stable selectors in use: `.thumbnail-card` (grid cell), `.image-overlay` /
-  `.overlay-back` (lightbox), `.search-overlay` (search), `.mdi-magnify`
+- Stable selectors in use: `.thumbnail-card` (grid cell), `.lightbox` /
+  `.lightbox-back` (lightbox), `.search-overlay` (search), `.mdi-magnify`
   (toolbar search button).
 ```

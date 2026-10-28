@@ -56,7 +56,7 @@ const STUBS = {
   "v-progress-circular": true,
   Tooltip: { props: ["text"], template: '<span class="tip" :data-text="text" />' },
   StatsHistogram: true,
-  OverlayDescriptionPanel: true,
+  LightboxDescriptionPanel: true,
   AddToEntityControl: true,
   TasksPanel: true,
 };
@@ -217,7 +217,7 @@ describe("the rail's head row", () => {
   it("closes the rail, keeps the selection and focuses the grid's toggle", async () => {
     // The lightbox's toggle comes first, so a first-match query would win it.
     document.body.innerHTML = `
-      <span class="overlay-topbar-sidebar-toggle">
+      <span class="lightbox-topbar-sidebar-toggle">
         <button class="tb-stats-btn" id="lightbox-toggle"></button>
       </span>
       <button class="tb-stats-btn" id="grid-toggle"></button>

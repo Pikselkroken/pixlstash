@@ -22,11 +22,11 @@
 
       <!-- ════════════════════════════════════════════════════════════
            OVERLAY (lightbox) MODE - a restricted, dark-surface action
-           set that strictly COMPLEMENTS the overlay chrome. Everything
+           set that strictly COMPLEMENTS the lightbox chrome. Everything
            else the grid menu offers is already reachable from the
            lightbox chrome or is multi-select-only, so it is hidden here.
            ════════════════════════════════════════════════════════════ -->
-      <template v-if="overlayMode">
+      <template v-if="lightboxMode">
         <button
           v-if="contextImage?.id"
           class="ctx-item"
@@ -35,11 +35,11 @@
           @click="onAction('save-picture')"
         >
           <Tooltip
-            :text="`Save this ${overlayMediaNoun} to your device (${saveShortcutHint})`"
+            :text="`Save this ${lightboxMediaNoun} to your device (${saveShortcutHint})`"
             activator="parent"
           />
           <v-icon class="ctx-icon">mdi-download</v-icon>
-          <span>Save {{ overlayMediaNoun }}</span>
+          <span>Save {{ lightboxMediaNoun }}</span>
           <span class="ctx-shortcut" aria-hidden="true">{{ saveShortcutHint }}</span>
         </button>
         <button
@@ -49,11 +49,11 @@
           @click="onAction('save-picture-as')"
         >
           <Tooltip
-            :text="`Choose where to save this ${overlayMediaNoun}`"
+            :text="`Choose where to save this ${lightboxMediaNoun}`"
             activator="parent"
           />
           <v-icon class="ctx-icon">mdi-content-save-edit-outline</v-icon>
-          Save {{ overlayMediaNoun }} as…
+          Save {{ lightboxMediaNoun }} as…
         </button>
         <!-- The slot form, so the reason span below keeps `aria-describedby`:
              a parent-activated tip would overwrite it. -->
@@ -72,7 +72,7 @@
               :aria-describedby="
                 contextImage?.copyAvailable === true
                   ? undefined
-                  : overlayCopyReasonId
+                  : lightboxCopyReasonId
               "
               @click="onAction('copy-picture')"
             >
@@ -86,7 +86,7 @@
         </Tooltip>
         <span
           v-if="contextImage?.id && contextImage?.copyAvailable !== true"
-          :id="overlayCopyReasonId"
+          :id="lightboxCopyReasonId"
           class="visually-hidden"
         >
           {{ copyPictureTitle }}
@@ -178,7 +178,7 @@
             Reverse image search
           </button>
           <!-- 4. Use this picture as the input of another workflow (#1406).
-               Acts on the overlay picture and closes the lightbox, which the
+               Acts on the lightbox picture and closes the lightbox, which the
                popup would otherwise open behind.
 
                The name is true again since #1457: `POST /workflows/run` fills
@@ -867,21 +867,21 @@ const props = defineProps({
   contextImage: { type: Object, default: null },
   contextClickedFace: { type: Object, default: null },
   isShared: { type: Boolean, default: false },
-  // Overlay (lightbox) mode: renders the restricted overlay action set,
+  // Lightbox mode: renders the restricted lightbox action set,
   // applies the dark-surface skin, and enables keyboard focus management
   // (auto-focus first item, arrow roving, focus-return to the invoker on close).
-  overlayMode: { type: Boolean, default: false },
+  lightboxMode: { type: Boolean, default: false },
 });
 
 // The dark-surface skin is tied to overlay invocation - the menu renders over
 // the dark lightbox there and nowhere else.
-const onDark = computed(() => props.overlayMode);
-const isOverlayVideo = computed(() => props.contextImage?.mediaKind === "video");
-const overlayMediaNoun = computed(() =>
-  isOverlayVideo.value ? "video" : "picture",
+const onDark = computed(() => props.lightboxMode);
+const isLightboxVideo = computed(() => props.contextImage?.mediaKind === "video");
+const lightboxMediaNoun = computed(() =>
+  isLightboxVideo.value ? "video" : "picture",
 );
 const copyPictureLabel = computed(() =>
-  isOverlayVideo.value ? "Copy current frame" : "Copy picture",
+  isLightboxVideo.value ? "Copy current frame" : "Copy picture",
 );
 const saveShortcutHint = computed(() =>
   isApplePlatform() ? "⌘S" : "Ctrl+S",
@@ -901,8 +901,8 @@ const copyPictureTitle = computed(() =>
     : props.contextImage?.copyUnavailableReason ||
       "This picture is not ready to copy.",
 );
-const overlayCopyReasonId = computed(
-  () => `overlay-copy-reason-${props.contextImage?.id ?? "media"}`,
+const lightboxCopyReasonId = computed(
+  () => `lightbox-copy-reason-${props.contextImage?.id ?? "media"}`,
 );
 
 const emit = defineEmits([
@@ -1159,7 +1159,7 @@ async function clampPosition() {
 
 // Element focused before the menu opened, so Escape / an action can return
 // focus to the invoker (e.g. the lightbox media) instead of dropping it to
-// document.body. Only tracked in overlay mode (grid right-click keeps its
+// document.body. Only tracked in lightbox mode (grid right-click keeps its
 // mouse-driven, focus-neutral behaviour).
 let previouslyFocused = null;
 
@@ -1187,7 +1187,7 @@ watch(
   (val) => {
     if (val) {
       clampPosition();
-      if (props.overlayMode) {
+      if (props.lightboxMode) {
         previouslyFocused =
           document.activeElement instanceof HTMLElement
             ? document.activeElement
@@ -1201,7 +1201,7 @@ watch(
       findFacesSubmenuOpen.value = false;
       restoreSubmenuOpen.value = false;
       moveSubmenuOpen.value = false;
-      if (props.overlayMode && previouslyFocused) {
+      if (props.lightboxMode && previouslyFocused) {
         try {
           previouslyFocused.focus();
         } catch {
@@ -1217,14 +1217,14 @@ watch(
 // Roving focus for keyboard users: Up/Down move between enabled items, Home/End
 // jump to the ends. Only fires while focus is inside the menu, so the grid menu
 // (never auto-focused) is unaffected. Every keystroke handled here also stops
-// bubbling so it never reaches the overlay's window-level key handler - which
+// bubbling so it never reaches the lightbox's window-level key handler - which
 // would otherwise navigate prev/next on arrows or toggle chrome on Space while
 // the user is driving the menu. (Escape is intercepted earlier, in the
 // capture-phase document handler.)
 async function onMenuKeydown(event) {
   // Inside an open Add-to flyout the control owns the keyboard (it has to: with
   // `floatMenu` its menu is teleported and never bubbles here at all). Only stop
-  // the keystroke from leaking to the overlay's global handlers.
+  // the keystroke from leaking to the lightbox's global handlers.
   if (event.target?.closest?.(".ate-menu")) {
     event.stopPropagation();
     return;
@@ -1245,7 +1245,7 @@ async function onMenuKeydown(event) {
     return;
   }
   if (
-    props.overlayMode &&
+    props.lightboxMode &&
     (event.ctrlKey || event.metaKey) &&
     !event.altKey &&
     !event.shiftKey &&
@@ -1279,7 +1279,7 @@ async function onMenuKeydown(event) {
       items[next]?.focus();
     }
   }
-  // Keep menu keystrokes from leaking to global (overlay) handlers. Native
+  // Keep menu keystrokes from leaking to global (lightbox) handlers. Native
   // button activation (Enter / Space → click) is a default action, unaffected
   // by stopping propagation.
   event.stopPropagation();

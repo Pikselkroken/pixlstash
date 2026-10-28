@@ -387,7 +387,7 @@ describe("ImageGrid - rotate in place", () => {
   });
 
   it("refreshes the tile when the lightbox reports a bytes change", async () => {
-    // The overlay owns its own picture and rotates it directly; `overlay-change`
+    // The lightbox owns its own picture and rotates it directly; `lightbox-change`
     // with `fields.pixels` is how the card behind it learns to re-read.
     const wrapper = mountGrid();
     await wrapper.vm.$nextTick();
@@ -395,7 +395,7 @@ describe("ImageGrid - rotate in place", () => {
     const before = thumbnailOf(wrapper);
 
     thumbnailVersion = "1200x1600o6";
-    wrapper.vm.handleOverlayChange({ imageId: 42, fields: { pixels: true } });
+    wrapper.vm.handleLightboxChange({ imageId: 42, fields: { pixels: true } });
     await flushRotate();
 
     expect(thumbnailOf(wrapper)).not.toBe(before);

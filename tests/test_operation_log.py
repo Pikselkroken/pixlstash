@@ -1901,7 +1901,7 @@ def test_removing_a_tag_chip_end_to_end_is_fully_undoable(client, server):
 def test_removing_a_tag_chip_with_a_gesture_batch_id_is_one_undo_step(client, server):
     """The fix: one user gesture, one history step, one Ctrl+Z.
 
-    The overlay stamps both requests of the chip delete with the same
+    The lightbox stamps both requests of the chip delete with the same
     ``X-Operation-Batch-Id``. They still record two operations - the log stays a
     faithful record of what happened - but they share a batch, and undoing the
     newest reverts the whole batch, so a single Ctrl+Z brings the tag back AND

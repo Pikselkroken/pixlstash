@@ -202,8 +202,8 @@ async function gridHandleSaved(savedCharacter, pending, notices) {
   );
 }
 
-/** Reproduces ImageOverlay.handleCreatePersonSaved's assignment branch. */
-async function overlayHandleSaved(savedCharacter, faceId, notices) {
+/** Reproduces Lightbox.handleCreatePersonSaved's assignment branch. */
+async function lightboxHandleSaved(savedCharacter, faceId, notices) {
   const characterId = savedCharacter?.id;
   const name = savedCharacter?.name || "person";
   if (characterId == null || faceId == null) {
@@ -262,7 +262,7 @@ describe("overlay flow: the face is actually assigned", () => {
     const { payload } = await saveThroughEditor();
     const notices = noticeSpies();
 
-    await overlayHandleSaved(payload, 4, notices);
+    await lightboxHandleSaved(payload, 4, notices);
 
     expect(addCharacterFacesByFaceId).toHaveBeenCalledWith(99, [4], {});
     expect(notices.success).toHaveBeenCalledWith(
@@ -275,7 +275,7 @@ describe("overlay flow: the face is actually assigned", () => {
     // Characterises what the hosts used to receive. Kept so the regression is
     // described, not merely prevented.
     const notices = noticeSpies();
-    await overlayHandleSaved(CREATED_ENVELOPE, 4, notices);
+    await lightboxHandleSaved(CREATED_ENVELOPE, 4, notices);
     expect(addCharacterFacesByFaceId).not.toHaveBeenCalled();
     expect(notices.error).toHaveBeenCalled();
   });

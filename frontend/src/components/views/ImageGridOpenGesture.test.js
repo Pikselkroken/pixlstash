@@ -1,7 +1,7 @@
 // #2138: in the grid a click selects and a double-click opens, unless the
 // user picked "Single click" in Settings > Appearance > Mouse. The first plain
 // click in double-click mode explains the change once. Mounts the real grid the
-// way ImageGridOverlayCloseReturn.test.js does and drives its handlers.
+// way ImageGridLightboxCloseReturn.test.js does and drives its handlers.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mount } from "@vue/test-utils";
@@ -134,20 +134,20 @@ describe("grid open gesture", () => {
   it("double-click mode: a click selects without opening, a double-click opens", () => {
     const wrapper = mountGrid();
     wrapper.vm.handleThumbnailClick(IMG, 0, click());
-    expect(wrapper.vm.overlayOpen).toBe(false);
+    expect(wrapper.vm.lightboxOpen).toBe(false);
     expect(wrapper.vm.selectedImageIds).toEqual([41]);
     wrapper.vm.handleThumbnailDblClick(IMG, click());
-    expect(wrapper.vm.overlayOpen).toBe(true);
+    expect(wrapper.vm.lightboxOpen).toBe(true);
   });
 
   it("single-click mode: a click opens, and the double-click stays inert", () => {
     useUserPrefsStore().gridOpenGesture = "single";
     const wrapper = mountGrid();
     wrapper.vm.handleThumbnailClick(IMG, 0, click());
-    expect(wrapper.vm.overlayOpen).toBe(true);
-    wrapper.vm.closeOverlay();
+    expect(wrapper.vm.lightboxOpen).toBe(true);
+    wrapper.vm.closeLightbox();
     wrapper.vm.handleThumbnailDblClick(IMG, click());
-    expect(wrapper.vm.overlayOpen).toBe(false);
+    expect(wrapper.vm.lightboxOpen).toBe(false);
   });
 
   it("a modified or touch-select double-click does not open", () => {
@@ -156,7 +156,7 @@ describe("grid open gesture", () => {
     wrapper.vm.handleThumbnailDblClick(IMG, click({ shiftKey: true }));
     wrapper.vm.touchSelectMode = true;
     wrapper.vm.handleThumbnailDblClick(IMG, click());
-    expect(wrapper.vm.overlayOpen).toBe(false);
+    expect(wrapper.vm.lightboxOpen).toBe(false);
   });
 
   it("the first plain click explains the change once, with a Settings action", () => {
@@ -181,12 +181,12 @@ describe("grid open gesture", () => {
   it("a double-click while the lightbox is already up neither reopens it nor hints", () => {
     const wrapper = mountGrid();
     wrapper.vm.handleThumbnailClick(IMG, 0, click());
-    wrapper.vm.openOverlay(IMG);
-    wrapper.vm.overlayInitialExpandedStackIds = ["sentinel"];
+    wrapper.vm.openLightbox(IMG);
+    wrapper.vm.lightboxInitialExpandedStackIds = ["sentinel"];
     wrapper.vm.handleThumbnailDblClick(IMG, click());
     vi.advanceTimersByTime(600);
-    // openOverlay re-captures this; untouched means it did not run again.
-    expect(wrapper.vm.overlayInitialExpandedStackIds).toEqual(["sentinel"]);
+    // openLightbox re-captures this; untouched means it did not run again.
+    expect(wrapper.vm.lightboxInitialExpandedStackIds).toEqual(["sentinel"]);
     expect(hints()).toHaveLength(0);
   });
 

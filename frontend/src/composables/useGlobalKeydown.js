@@ -84,17 +84,17 @@ export function useGlobalKeydown({
     if (reviewSessionsStore.overlayOpen) return;
     // The LIGHTBOX owns the keyboard too, with its own undo binding and its own
     // receipt. This used to be enforced implicitly by listener order - the
-    // overlay mounted before App, ran first, and stopImmediatePropagation()
+    // lightbox mounted before App, ran first, and stopImmediatePropagation()
     // silenced this handler - but the Duplicates view unmounts and remounts the
-    // grid (and the overlay inside it), which re-registers their listeners
+    // grid (and the lightbox inside it), which re-registers their listeners
     // AFTER this one and silently flips that order. The result was one Ctrl+Z
-    // running TWO undos: this handler's, then the overlay's, which the
+    // running TWO undos: this handler's, then the lightbox's, which the
     // operation store's busy-queue happily executed as a queued second step.
     // Ownership is therefore stated here explicitly, on the same DOM signal the
-    // overlay renders (`.image-overlay` is v-if'd on open), not on ordering.
+    // lightbox renders (`.lightbox` is v-if'd on open), not on ordering.
     if (
       typeof document !== "undefined" &&
-      document.querySelector(".image-overlay") != null
+      document.querySelector(".lightbox") != null
     ) {
       return;
     }
@@ -149,11 +149,11 @@ export function useGlobalKeydown({
     // press one card rather than a wall.
     //
     // The lightbox is NOT covered by that last guard and never was:
-    // `isModalOverlayOpen()` looks for a Vuetify scrim, and `.image-overlay`
-    // renders its own. The lightbox is excluded by the explicit `.image-overlay`
+    // `isModalOverlayOpen()` looks for a Vuetify scrim, and `.lightbox`
+    // renders its own. The lightbox is excluded by the explicit `.lightbox`
     // check at the top of this handler (listener ORDER used to do it, until the
     // Duplicates view's grid remount flipped it - see that comment). Undo works
-    // in the lightbox through its own key handler plus `OverlayActionReceipt`,
+    // in the lightbox through its own key handler plus `LightboxActionReceipt`,
     // fitted to that surface's GUI per the owner's ruling.
     if (
       (e.ctrlKey || e.metaKey) &&

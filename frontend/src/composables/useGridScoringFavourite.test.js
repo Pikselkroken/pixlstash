@@ -38,8 +38,8 @@ function makeHarness() {
     visibleEnd: ref(3),
     renderBuffer: ref(0),
     imagesLoading: ref(false),
-    overlayOpen: ref(false),
-    pendingOverlayGridRefresh: ref(false),
+    lightboxOpen: ref(false),
+    pendingLightboxGridRefresh: ref(false),
     preserveScrollOnNextFetch: ref(false),
     skipNextWsRefresh: ref(false),
     gridContainer: ref(null),
@@ -83,7 +83,7 @@ describe("favouriting from the grid", () => {
     expect(h.hearts()).toEqual([true, false, true]);
   });
 
-  // The overlay holds its own copy of the heart and reverts it on false.
+  // The lightbox holds its own copy of the heart and reverts it on false.
   it("says whether the change was stored", async () => {
     const h = makeHarness();
     expect(await h.scoring.setFavourite([2], true)).toBe(true);

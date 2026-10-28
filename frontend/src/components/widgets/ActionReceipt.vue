@@ -57,7 +57,7 @@ const props = defineProps({
 
 // The receipt contract - wording, glyphs, keycaps, the drain window, the
 // hover/focus/hidden-tab pause and the focus-preserving action - is shared with
-// the lightbox's own narration (`OverlayActionReceipt.vue`). This surface owns
+// the lightbox's own narration (`LightboxActionReceipt.vue`). This surface owns
 // the single app-wide live region; the lightbox's does not announce.
 const {
   store,

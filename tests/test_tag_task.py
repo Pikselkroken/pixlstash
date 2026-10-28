@@ -82,7 +82,7 @@ def test_add_tags_bulk_skips_missing_picture_ids(tmp_path):
 def test_add_tags_bulk_honours_human_labels(tmp_path):
     """The tagger must not drop a human-confirmed tag nor re-apply a rejected one.
 
-    Regression for the ImageOverlay re-tag bug: a manually-confirmed 'watermark'
+    Regression for the Lightbox re-tag bug: a manually-confirmed 'watermark'
     (POS, outside the model vocabulary) vanished after a regenerate because the
     fresh tagger pass rewrote the Tag table from model output alone.
     """

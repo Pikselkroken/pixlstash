@@ -34,7 +34,7 @@ function listed(...runs) {
 
 function mountRuns(overrides = {}) {
   const grid = {
-    overlayOpen: ref(false),
+    lightboxOpen: ref(false),
     allGridImages: ref([]),
     lastFetchedGridImages: ref([]),
     getPictureStackId: (img) => (img?.stack_id != null ? String(img.stack_id) : null),
@@ -168,7 +168,7 @@ describe("the lightbox's progress", () => {
   // would be a guess. The Edit tab gets a sentence that says what happened.
   it("says a run the backend no longer knows was lost, not finished", async () => {
     getRunOutcome.mockRejectedValue({ response: { status: 404 } });
-    const { progress, follow, grid } = mountRuns({ overlayOpen: ref(true) });
+    const { progress, follow, grid } = mountRuns({ lightboxOpen: ref(true) });
     follow({ prompts: [{ prompt_id: "p-1" }], pictureId: 7 });
     await listed();
     expect(progress.value).toMatchObject({
@@ -222,7 +222,7 @@ describe("the step to the new picture", () => {
     getPictureMetadata.mockResolvedValue({ stack_id: 5 });
     listStackPictures.mockResolvedValue([{ id: 7 }, { id: 31 }]);
     const runs = mountRuns({
-      overlayOpen: ref(true),
+      lightboxOpen: ref(true),
       lastFetchedGridImages: ref([{ id: 7 }]),
     });
     await finishRunOn(runs, 7);
@@ -244,7 +244,7 @@ describe("the step to the new picture", () => {
 
   it("offers nothing when the stack has no newer member, or the run was not stacked", async () => {
     const grid = {
-      overlayOpen: ref(true),
+      lightboxOpen: ref(true),
       lastFetchedGridImages: ref([{ id: 7, stack_id: 5 }]),
     };
     listStackPictures.mockResolvedValue([{ id: 3 }, { id: 7 }]);
@@ -254,7 +254,7 @@ describe("the step to the new picture", () => {
     scope.stop();
 
     getPictureMetadata.mockResolvedValue({ stack_id: null });
-    const unstacked = mountRuns({ overlayOpen: ref(true) });
+    const unstacked = mountRuns({ lightboxOpen: ref(true) });
     await finishRunOn(unstacked, 7);
     expect(unstacked.grid.showRunResult).not.toHaveBeenCalled();
   });
@@ -262,7 +262,7 @@ describe("the step to the new picture", () => {
   it("stays put for a run with no source picture, and for one that failed", async () => {
     listStackPictures.mockResolvedValue([{ id: 7 }, { id: 31 }]);
     const grid = {
-      overlayOpen: ref(true),
+      lightboxOpen: ref(true),
       lastFetchedGridImages: ref([{ id: 7, stack_id: 5 }]),
     };
     // The Edit tab's run: handed on without a picture, so the lightbox stays.

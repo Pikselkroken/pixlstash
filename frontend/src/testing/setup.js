@@ -34,13 +34,13 @@ if (typeof Element !== "undefined" && !Element.prototype.scrollIntoView) {
 // HTMLCanvasElement's getContext() method: without installing the canvas npm
 // package" through the virtual console and then returns null. Three components
 // call it - ImageGrid measures label widths, StatsSidebar draws its sparklines,
-// ImageOverlay encodes a PNG - so a full run reported it ~67 times, every one
+// Lightbox encodes a PNG - so a full run reported it ~67 times, every one
 // of them noise about a capability this environment is never going to have.
 //
 // Returning null is exactly what jsdom returns after reporting it, so every
 // caller's `if (!ctx)` branch behaves as before and only the report is gone. A
 // suite that needs a drawable context replaces this for its own lifetime, the
-// way `ImageOverlayMediaActions.test.js` already does.
+// way `LightboxMediaActions.test.js` already does.
 //
 // WHAT THIS IS NOT. It is not a fix for the teardown flake, and must not be
 // read as one (#1446). Vitest forwards every worker console write to the main

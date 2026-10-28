@@ -118,7 +118,7 @@ under a white label.
 > the same bug elsewhere, all fixed: `.sidebar-inline-notice` (the old `8522` row, moved;
 > `rgba(secondary, .75)` → solid, 3.35 → 4.91:1 over the light sidebar), `.sidebar-new-tag`
 > (`rgba(primary, .7)` → solid, 2.86 → 4.86:1 light), `.overlay-close` and
-> `.overlay-comfy-run` (`.7` / `.8` → solid), the move-to-project menu
+> `.lightbox-comfy-run` (`.7` / `.8` → solid), the move-to-project menu
 > (`on-tertiary` on a 38% teal mix, 1.72:1 light → `sidebar-text`, 8.15:1), the chart
 > counts in `StatsHistogram` and `StatsSidebar` (`on-primary` at .85 on a 50 – 85%
 > fill, under 2:1 light at rest → `on-surface`), and `.tbm-toggle-end`, which set `on-primary`

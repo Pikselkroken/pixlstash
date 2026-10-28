@@ -73,7 +73,7 @@
  *
  * Keys follow the tag field as far as the tag field goes - Arrow highlights,
  * Tab fills, and the highlighted row wears the same TAB hint - and then add the
- * two it has no answer for. `OverlayTagsPanel`'s list has no open state at all:
+ * two it has no answer for. `LightboxTagsPanel`'s list has no open state at all:
  * it is simply visible whenever the input holds a prefix that matches, inside a
  * panel that is itself a mode. This field lives on a row and inside a dialog
  * that both own Escape, so it needs one: ArrowDown opens the menu, Escape
@@ -281,7 +281,7 @@ defineExpose({
 <style scoped>
 /* The tag field's treatment, repeated on purpose: two completion menus that
    looked different would be two things to learn. The values below are copied
-   from `OverlayTagsPanel.vue` along with the reasons they are off-token. */
+   from `LightboxTagsPanel.vue` along with the reasons they are off-token. */
 .bmi-menu {
   position: fixed;
   max-height: 240px;
