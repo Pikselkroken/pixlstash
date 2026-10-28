@@ -1,6 +1,4 @@
 import os
-import subprocess
-import sys
 from collections import defaultdict, deque
 from datetime import datetime
 
@@ -30,6 +28,8 @@ from pixlstash.scoring import (
     get_smart_score_penalised_tags_from_request,
     prepare_smart_score_inputs,
 )
+from pixlstash.utils.host_open import open_in_file_manager
+from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.quality.smart_score_utils import SmartScoreUtils
 from pixlstash.utils.serialization_utils import safe_model_dict
 from pixlstash.services import plugin_service
@@ -855,7 +855,7 @@ def register_routes(router, server):
         "/pictures/{id}/open-location",
         include_in_schema=False,
         summary="Open picture location",
-        description="Opens the containing folder of a reference picture in the OS file manager.",
+        description="Opens the containing folder of a picture in the OS file manager.",
         response_model=OpenLocationResponse,
     )
     def open_picture_location(id: str):
@@ -872,19 +872,17 @@ def register_routes(router, server):
         if not file_path:
             raise HTTPException(status_code=404, detail="Picture not found")
 
-        folder = os.path.dirname(file_path)
+        # A library picture's path is relative to the library; a reference
+        # picture's is already absolute.
+        folder = os.path.dirname(
+            ImageUtils.resolve_picture_path(server.vault.image_root, file_path)
+        )
         if not os.path.isdir(folder):
             raise HTTPException(status_code=404, detail="Location not found on disk")
 
-        try:
-            if sys.platform.startswith("win"):
-                os.startfile(folder)
-            elif sys.platform == "darwin":
-                subprocess.run(["open", folder], check=False)
-            else:
-                subprocess.run(["xdg-open", folder], check=False)
-        except Exception as exc:
-            logger.warning("Failed to open folder %s: %s", folder, exc)
+        # The shared opener reads xdg-open's exit status, so a host with no
+        # desktop is a refusal rather than an "ok" that opened nothing.
+        if not open_in_file_manager(folder):
             raise HTTPException(status_code=500, detail="Failed to open location")
 
         return {"status": "ok"}
