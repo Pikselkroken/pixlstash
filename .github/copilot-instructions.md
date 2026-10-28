@@ -312,11 +312,6 @@ about the branch you are going to build on next.
 checks), and every push to a ready PR re-runs the whole gate. This repo once had 13 PRs open
 at once and opened 47 in a day. Runner time is a budget.
 
-0. **Open an agent PR as a draft** (`gh pr create --draft`). A draft runs
-   `checks` and `e2e` but not the backend shards; take it through the AI
-   review rounds, then `gh pr ready` once a round has nothing to fix or the
-   owner says land it. That run is the one to wait for before merging: no
-   check is required, so nothing stops a merge on a draft's green (#2035).
 1. **A CI failure on a PR is fixed on that PR's branch**, whatever the cause (a
    stale map, another PR's merge, an unrelated flake). The fix turns it green in
    the run it was already spending; a second PR spends a second run and leaves
