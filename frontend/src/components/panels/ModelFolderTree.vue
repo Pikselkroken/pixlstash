@@ -211,6 +211,7 @@ import {
   blockedAttrs,
   useModelFolderGates,
 } from "../../composables/useModelFolderGates";
+import { startFolderRemove } from "../../composables/useModelFolderRemove";
 import { errorMessage } from "../../utils/apiError";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import { driveFullness } from "../../utils/libraryChrome";
@@ -283,7 +284,6 @@ const drop = useModelCopyDrop();
 const folderDrop = useFolderDrop();
 
 const SEPARATOR = "separator";
-const REMOVE_REASON = "Removing a folder is not available yet.";
 
 const isLocked = (folder) => folder.movable !== "per_item";
 const nodeKey = (folderId, path) => `f:${folderId}:${path}`;
@@ -529,7 +529,7 @@ function menuFor(node) {
       icon: "mdi-minus-circle-outline",
       shortcut: "Del",
       danger: true,
-      reason: REMOVE_REASON,
+      reason: busy,
     },
   ];
 }
@@ -563,6 +563,7 @@ function act(key, node) {
   if (key === "new") startNew(node);
   else if (key === "rename") startRename(node);
   else if (key === "move") shelf.requestFolderMove(sourceOf(node));
+  else if (key === "remove") void startFolderRemove(sourceOf(node));
   else if (key === "stop") {
     shelf.requestShell("manage-folders", rowEls.get(node.key) ?? null);
   }
@@ -597,6 +598,11 @@ function verbKey(event, node) {
   }
   if (event.key === "F2" && !chord && !event.shiftKey && !event.altKey) {
     return verbFor(node, "rename");
+  }
+  // Delete, with or without Shift: the dialog asks either way, and its own
+  // button reads Shift for a permanent delete. Never the shelf's file delete.
+  if (event.key === "Delete" && !chord && !event.altKey) {
+    return verbFor(node, "remove");
   }
   if ((event.key === "F10" && event.shiftKey) || event.key === "ContextMenu") {
     const trigger = rowEls.get(node.key);

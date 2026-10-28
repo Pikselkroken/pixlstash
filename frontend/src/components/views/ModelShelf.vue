@@ -1310,6 +1310,14 @@
       :plan="folderMovePlan"
       @close="closeFolderMove"
     />
+    <!-- A folder the Folders tree asked to remove, holding files (#2207). -->
+    <ShelfRemoveFolderDialog
+      :open="folderRemoveOpen"
+      :source="folderRemoveSource"
+      :plan="folderRemovePlan"
+      @move-models="moveModelsOutFirst"
+      @close="closeFolderRemove"
+    />
     <ModelDropTip />
 
     <!-- The shipped host-path picker again, in its file mode. A server-side
@@ -1381,6 +1389,7 @@ import ShelfEditDialog from "../panels/ShelfEditDialog.vue";
 import MergeCopiesDialog from "../panels/MergeCopiesDialog.vue";
 import ShelfMoveDialog from "../panels/ShelfMoveDialog.vue";
 import FolderMoveDialog from "../panels/FolderMoveDialog.vue";
+import ShelfRemoveFolderDialog from "../panels/ShelfRemoveFolderDialog.vue";
 import ModelDropTip from "../panels/ModelDropTip.vue";
 import { useModelCopyDrop } from "../../composables/useModelCopyDrop";
 import ModelWorksWithDialog from "../panels/ModelWorksWithDialog.vue";
@@ -1983,6 +1992,42 @@ async function closeFolderMove() {
   (returnTo?.isConnected ? returnTo : rootEl.value)?.focus();
 }
 
+/** The folder removal dialog: the tree asked, with the dry run read (#2207). */
+const folderRemoveOpen = ref(false);
+const folderRemoveSource = ref({ folderId: 0, path: "", name: "" });
+const folderRemovePlan = shallowRef(null);
+const folderRemoveInvoker = shallowRef(null);
+
+watch(
+  () => store.folderRemoveRequest,
+  (request) => {
+    if (!request) return;
+    folderRemoveInvoker.value =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    folderRemoveSource.value = request.source;
+    folderRemovePlan.value = request.plan;
+    folderRemoveOpen.value = true;
+  },
+);
+
+/** Close the removal dialog and give the focus back to what opened it. */
+async function closeFolderRemove() {
+  const returnTo = folderRemoveInvoker.value;
+  folderRemoveOpen.value = false;
+  folderRemoveInvoker.value = null;
+  folderRemovePlan.value = null;
+  await nextTick();
+  (returnTo?.isConnected ? returnTo : rootEl.value)?.focus();
+}
+
+/** *Move the models out first…*: the move dialog, on the folder's copies. */
+async function moveModelsOutFirst(copies) {
+  await closeFolderRemove();
+  showMove(copies);
+}
+
 // ── Drag and cut (#2204) ─────────────────────────────────────────────────
 
 /**
@@ -2124,12 +2169,14 @@ function shelfOwnsTheKey(event) {
   // idea of "shown". So Ctrl+A builds a selection the reader can see, and Delete
   // opens the confirmation for rows they can point at.
   // The Folders tree (#2206) is in the sidebar, and its F2, Ctrl+Shift+N and
-  // Delete belong to the folder under the focus. Delete here would be a file
-  // deletion, so this must step aside even with no selection to delete.
+  // Delete belong to the folder under the focus: Delete there is Remove
+  // folder (#2207). Here it would be a file deletion, so this must step aside
+  // even with no selection to delete.
   if (isInFoldersTree(event)) return false;
   if (
     moveOpen.value ||
     folderMoveOpen.value ||
+    folderRemoveOpen.value ||
     addSourceOpen.value ||
     addFileOpen.value ||
     thumbnailPickerOpen.value ||

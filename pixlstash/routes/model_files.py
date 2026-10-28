@@ -69,11 +69,13 @@ and an import take, so nothing can be copying into a folder this is emptying.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 from typing import Optional
 
 from fastapi import APIRouter, Body, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from send2trash import TrashPermissionError, send2trash
 
@@ -85,6 +87,11 @@ from pixlstash.services.comfyui_recipe_service import (
 from pixlstash.services.managed_model_store import (
     deletes_unclaimed_files,
     find_default_folder,
+)
+from pixlstash.services.model_dir_mover import (
+    model_folder_row,
+    rows_under,
+    subpath_prefix,
 )
 from pixlstash.services.model_folder_scanner import (
     DOWNLOADS_FOLDER_KIND,
@@ -104,10 +111,12 @@ from pixlstash.services.model_mover import (
     file_digest,
     publish_no_clobber,
     require_space,
+    resolve_subfolder,
     samples_relpath,
 )
 from pixlstash.services.model_shelf_service import (
     MAX_MODELS_PER_EDIT,
+    folder_removal_consequences,
     purge_deleted_models,
 )
 from pixlstash.utils.adapter_header import FILE_ENGINE
@@ -347,6 +356,170 @@ class MergeCopiesResponse(BaseModel):
     refused: list[DeleteRefusal] = Field(
         description="Models left alone, each with a reason. Same vocabulary as the delete."
     )
+
+
+class RemoveFolderRequest(BaseModel):
+    """Body of ``POST /model-folders/{folder_id}/dirs/remove``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(
+        description=(
+            "The directory to remove, POSIX and relative to the folder "
+            "(`loras/old`). Empty, the registered folder itself, is a 400."
+        )
+    )
+    permanent: bool = Field(
+        default=False,
+        description=(
+            "False (the default) moves the directory to this machine's trash as "
+            "one entry, which restores whole. True deletes it, with no undo."
+        ),
+    )
+    dry_run: bool = Field(
+        default=False,
+        description=(
+            "Read only: answer every file it holds, the models among them, what "
+            "breaks outside it and a `fingerprint`, and remove nothing."
+        ),
+    )
+    expect: Optional[str] = Field(
+        default=None,
+        description=(
+            "The dry run's `fingerprint`. Required to remove: when the directory "
+            "no longer matches it the answer is 409 and nothing is removed, so "
+            "nothing goes that the owner was not shown."
+        ),
+    )
+
+
+class RemoveFolderFile(BaseModel):
+    """One entry the removal takes."""
+
+    model_config = ConfigDict(extra="allow")
+
+    relpath: str = Field(description="POSIX, relative to the directory removed.")
+    size: int = Field(description="Bytes on disk; a link's own size, not its target's.")
+    model_id: Optional[int] = Field(
+        description="The model this file is a present copy of; null when the shelf does not list it."
+    )
+    link: bool = Field(
+        description=(
+            "A symbolic link (or junction). The link goes; what it points at stays."
+        )
+    )
+
+
+class RemoveFolderPlanResponse(BaseModel):
+    """What removing a directory would take and break: the answer to ``dry_run``."""
+
+    model_config = ConfigDict(extra="allow")
+
+    dry_run: bool = True
+    folder_id: int
+    path: str
+    name: str
+    file_count: int
+    bytes: int
+    files: list[RemoveFolderFile] = Field(
+        description="Every file under it, largest first, links included and never followed."
+    )
+    models: list[dict] = Field(
+        description=(
+            "Each model with a present copy under it: `id`, `name`, and "
+            "`elsewhere`, true when a present copy outside keeps it on the shelf."
+        )
+    )
+    breaks: dict = Field(
+        description=(
+            "`people`, `sets` (picture sets) and `workflows` that lose a model "
+            "with no present copy outside the directory, each `{id, name, "
+            "models}`. Empty lists when nothing outside it breaks."
+        )
+    )
+    pictures: int = Field(
+        description="Kept pictures in this library made with one of those models."
+    )
+    copies: list[dict] = Field(
+        description=(
+            "The present copies under it as `POST /model-moves` takes them: "
+            "`folder_id`, `relpath` (as `locations[].relpath`), `model_id` and "
+            "`size`. What *Move the models out first* moves."
+        )
+    )
+    fingerprint: str = Field(
+        description="Over every file's (relpath, size, mtime). Send it back as `expect`."
+    )
+    trash_name: str = Field(default=TRASH_NAME)
+
+
+class RemoveFolderResponse(BaseModel):
+    """Body of a completed folder removal."""
+
+    model_config = ConfigDict(extra="allow")
+
+    dry_run: bool = False
+    folder_id: int
+    path: str
+    files_removed: int
+    removed_models: list[int] = Field(
+        description="Models whose last copy went, so they left the shelf, ascending."
+    )
+    permanent: bool
+    trash_name: str = Field(default=TRASH_NAME)
+
+
+def _is_link(path: str) -> bool:
+    """A symbolic link, or a Windows junction, which ``islink`` does not see."""
+    is_junction = getattr(os.path, "isjunction", lambda _path: False)
+    return os.path.islink(path) or is_junction(path)
+
+
+def _raise_walk_error(error: OSError) -> None:
+    # ``os.walk`` skips an unreadable directory silently by default, and a
+    # listing short by one directory would let the removal take files the
+    # dialog never showed.
+    raise error
+
+
+def _folder_listing(path: str) -> list[tuple[str, int, int, bool]]:
+    """``(posix relpath, size, mtime_ns, is_link)`` of every entry under *path*.
+
+    **Links are never followed.** A link to a directory is listed as an entry of
+    its own and pruned from the walk, so what it points at is neither listed nor
+    fingerprinted; the trash and ``rmtree`` both remove the link and leave its
+    target. Pruned by hand rather than left to ``followlinks=False`` because
+    ``os.walk`` does not treat a Windows junction as a link.
+
+    Raises:
+        OSError: a directory under *path* could not be read.
+    """
+    entries: list[tuple[str, int, int, bool]] = []
+    for root, dirs, names in os.walk(path, onerror=_raise_walk_error):
+        links = [name for name in dirs if _is_link(os.path.join(root, name))]
+        dirs[:] = [name for name in dirs if name not in links]
+        for name in names + links:
+            full = os.path.join(root, name)
+            stat = os.lstat(full)
+            entries.append(
+                (
+                    os.path.relpath(full, path).replace(os.sep, "/"),
+                    int(stat.st_size),
+                    int(stat.st_mtime_ns),
+                    name in links or os.path.islink(full),
+                )
+            )
+    return entries
+
+
+def _fingerprint(listing: list[tuple[str, int, int, bool]]) -> str:
+    """One digest over every entry's ``(relpath, size, mtime)``, order-free."""
+    digest = hashlib.sha256()
+    for relpath, size, mtime, _link in sorted(listing):
+        digest.update(
+            f"{relpath}\0{size}\0{mtime}\n".encode("utf-8", "surrogateescape")
+        )
+    return digest.hexdigest()
 
 
 def _contained_path(folder_path: str, relpath: str) -> str:
@@ -1389,6 +1562,229 @@ def create_router(server) -> APIRouter:
             dry_run=payload.dry_run,
             comfyui_reads=[ComfyUIReadsCopy(**item) for item in reads],
             refused=[DeleteRefusal(**item) for item in refused],
+        )
+
+    def _removal_target(folder_id: int, path: str) -> tuple[dict, str, str]:
+        """``(folder, subpath, absolute path)`` of a directory that may go.
+
+        The folder move's refusals, plus the delete's: a locked folder, the
+        registered root, a link or dot-name on the way, and a registered folder
+        inside it, and a folder whose files the shelf does not unlink.
+        """
+        try:
+            folder = model_folder_row(server.hub, folder_id, "model")
+            if not deletes_unclaimed_files(folder["kind"], folder["path"]):
+                raise MoveRefused(
+                    "PixlStash does not delete files from that folder.",
+                    status_code=409,
+                )
+            subpath, target = resolve_subfolder(folder["path"], path)
+        except MoveRefused as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        if not subpath:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "That is the registered folder itself. Stop watching it from "
+                    "Manage model folders instead."
+                ),
+            )
+        if not os.path.isdir(target):
+            raise HTTPException(
+                status_code=404,
+                detail=f"There is no folder {subpath!r} in that model folder.",
+            )
+        for row in server.hub.fetchall("SELECT id, path FROM model_folder"):
+            if path_is_within(row["path"], target):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"{row['path']} is a registered model folder inside "
+                        f"{subpath!r}. Stop watching it first."
+                    ),
+                )
+        return folder, subpath, target
+
+    def _read_folder(target: str, subpath: str) -> list[tuple[str, int, int, bool]]:
+        try:
+            return _folder_listing(target)
+        except OSError as exc:
+            logger.error(
+                "Could not read every file in %s before removing it: %s", target, exc
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Could not read everything in {subpath!r} "
+                    f"({exc.strerror or exc}), so nothing was removed."
+                ),
+            ) from exc
+
+    @router.post(
+        "/model-folders/{folder_id}/dirs/remove",
+        summary="Remove a directory inside a model folder",
+        description=(
+            "Moves a directory inside a registered folder to this machine's "
+            f"{TRASH_NAME.lower()} as one entry, or deletes it with "
+            "`permanent=true`, then drops the shelf rows under it and the models "
+            "left with no copy. `dry_run=true` reads only: every file under it "
+            "(largest first, with `model_id` null for files the shelf does not "
+            "list), its models, what `breaks` outside it (people, picture sets and "
+            "workflows losing a model with no present copy elsewhere), the "
+            "`pictures` made with those models and a `fingerprint`. The removal "
+            "takes that fingerprint as `expect` and answers 409 when the "
+            "directory changed since. Links inside are removed as links; what "
+            "they point at is never touched. Refused for the registered folder "
+            "itself (400), a locked folder or one PixlStash does not delete from, "
+            "or a registered folder inside it (409)."
+        ),
+        tags=["model_shelf"],
+        response_model=RemoveFolderResponse,
+        responses={200: {"model": RemoveFolderPlanResponse}},
+    )
+    def remove_model_folder_dir(
+        folder_id: int, request: Request, payload: RemoveFolderRequest = Body(...)
+    ):
+        server.auth.ensure_secure_when_required(request)
+        if payload.dry_run:
+            folder, subpath, target = _removal_target(folder_id, payload.path)
+            listing = _read_folder(target, subpath)
+            rows = rows_under(server.hub.fetchall, folder_id, subpath)
+            prefix = len(subpath_prefix(subpath))
+            copies: dict[str, int] = {}
+            present: list[dict] = []
+            inside: dict[int, set[tuple[int, str]]] = {}
+            for row in rows:
+                if row["state"] != STATE_PRESENT:
+                    continue
+                copies[row["relpath"][prefix:].replace(os.sep, "/")] = int(
+                    row["model_id"]
+                )
+                present.append(
+                    {
+                        "folder_id": folder_id,
+                        "relpath": row["relpath"],
+                        "model_id": int(row["model_id"]),
+                        "size": int(row["file_size"]),
+                    }
+                )
+                inside.setdefault(int(row["model_id"]), set()).add(
+                    (folder_id, row["relpath"])
+                )
+            consequences = folder_removal_consequences(server.hub, server.vault, inside)
+            files = sorted(
+                (
+                    RemoveFolderFile(
+                        relpath=relpath,
+                        size=size,
+                        model_id=copies.get(relpath),
+                        link=link,
+                    )
+                    for relpath, size, _mtime, link in listing
+                ),
+                key=lambda entry: (-entry.size, entry.relpath),
+            )
+            return JSONResponse(
+                status_code=200,
+                content=RemoveFolderPlanResponse(
+                    folder_id=folder_id,
+                    path=subpath,
+                    name=subpath.rsplit("/", 1)[-1],
+                    file_count=len(listing),
+                    bytes=sum(size for _relpath, size, _mtime, _link in listing),
+                    files=files,
+                    models=consequences["models"],
+                    breaks=consequences["breaks"],
+                    pictures=consequences["pictures"],
+                    copies=present,
+                    fingerprint=_fingerprint(listing),
+                ).model_dump(),
+            )
+
+        if not payload.expect:
+            raise HTTPException(
+                status_code=400,
+                detail="Read the folder with dry_run first and send its fingerprint as expect.",
+            )
+        # The slot a move, an import, an add and a file delete take: a move
+        # copying into this directory, or out of it, would race the removal.
+        if not SHELF_IO_LOCK.acquire(blocking=False):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "A move or an import is already running. Removing a folder "
+                    "out from under it would leave rows naming files neither of "
+                    "us put there."
+                ),
+            )
+        try:
+            _folder, subpath, target = _removal_target(folder_id, payload.path)
+            listing = _read_folder(target, subpath)
+            if _fingerprint(listing) != payload.expect:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"{subpath!r} changed since it was read, so nothing was "
+                        "removed. Look at it again."
+                    ),
+                )
+            try:
+                if payload.permanent:
+                    # ``rmtree`` unlinks a link inside rather than descending
+                    # into it, and ``resolve_subfolder`` has refused a link as
+                    # the target itself.
+                    shutil.rmtree(target)
+                else:
+                    # The directory whole: one trash entry, which restores whole.
+                    send2trash(target)
+            except TrashPermissionError as exc:
+                logger.error("Could not move %s to the %s: %s", target, TRASH_NAME, exc)
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"This drive has no {TRASH_NAME} PixlStash can use, so "
+                        "nothing was removed. Hold Shift to delete it permanently."
+                    ),
+                ) from exc
+            except OSError as exc:
+                logger.error(
+                    "Removing %s (permanent=%s) failed: %s. Whatever went is "
+                    "marked missing by the folder's next scan.",
+                    target,
+                    payload.permanent,
+                    exc,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Could not remove {subpath!r}: {exc.strerror or exc}",
+                ) from exc
+            # Re-read after the bytes went, so a row a scan added meanwhile goes
+            # too rather than naming a file that is not there.
+            emptied: dict[int, list[tuple[int, str]]] = {}
+            for row in rows_under(server.hub.fetchall, folder_id, subpath):
+                emptied.setdefault(int(row["model_id"]), []).append(
+                    (folder_id, row["relpath"])
+                )
+            purged = purge_deleted_models(server.hub, emptied)
+        finally:
+            SHELF_IO_LOCK.release()
+
+        logger.info(
+            "Removed %s from model folder %s (%d file(s) %s, %d model(s) left the "
+            "shelf).",
+            subpath,
+            folder_id,
+            len(listing),
+            "deleted" if payload.permanent else "trashed",
+            len(purged),
+        )
+        return RemoveFolderResponse(
+            folder_id=folder_id,
+            path=subpath,
+            files_removed=len(listing),
+            removed_models=purged,
+            permanent=payload.permanent,
         )
 
     return router

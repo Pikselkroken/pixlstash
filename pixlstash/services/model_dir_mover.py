@@ -126,7 +126,8 @@ class _CopyCancelled(Exception):
     """
 
 
-def _folder(hub: HubDatabase, folder_id: int, role: str) -> dict:
+def model_folder_row(hub: HubDatabase, folder_id: int, role: str) -> dict:
+    """The registered folder, refused unless its contents are rearranged per item."""
     row = hub.fetchone(
         "SELECT id, path, kind, movable FROM model_folder WHERE id = ?", (folder_id,)
     )
@@ -142,12 +143,12 @@ def _folder(hub: HubDatabase, folder_id: int, role: str) -> dict:
     return dict(row)
 
 
-def _prefix(subpath: str) -> str:
+def subpath_prefix(subpath: str) -> str:
     """A directory's stored relpath prefix: the scanner stores ``os.sep``."""
     return subpath.replace("/", os.sep) + os.sep
 
 
-def _rows_under(fetchall, folder_id: int, subpath: str) -> list:
+def rows_under(fetchall, folder_id: int, subpath: str) -> list:
     """Every ``model_file`` row under *subpath*, whatever its state.
 
     *fetchall* is ``hub.fetchall``, or the transaction's own reader, so the same
@@ -156,7 +157,7 @@ def _rows_under(fetchall, folder_id: int, subpath: str) -> list:
     LIKE folds ASCII case, so ``Flux/`` would match a listing of ``flux/``; the
     exact prefix is checked here, as the folder listing does.
     """
-    prefix = _prefix(subpath)
+    prefix = subpath_prefix(subpath)
     rows = fetchall(
         "SELECT mf.relpath AS relpath, mf.model_id AS model_id, mf.state AS state, "
         "m.sha256 AS sha256, COALESCE(m.file_size, 0) AS file_size "
@@ -255,7 +256,7 @@ def plan_directory_move(
             destination, a registered folder inside the source or a stale row
             at the target; 507 when a cross-drive copy would not fit.
     """
-    source_folder = _folder(hub, folder_id, "source")
+    source_folder = model_folder_row(hub, folder_id, "source")
     source_subpath, source_path = resolve_subfolder(source_folder["path"], subpath)
     if not source_subpath:
         raise MoveRefused(
@@ -267,7 +268,7 @@ def plan_directory_move(
             f"There is no folder {source_subpath!r} in that model folder.",
             status_code=404,
         )
-    destination_folder = _folder(hub, destination_folder_id, "destination")
+    destination_folder = model_folder_row(hub, destination_folder_id, "destination")
     parent_subpath, parent_path = resolve_subfolder(
         destination_folder["path"], destination_subpath
     )
@@ -309,7 +310,7 @@ def plan_directory_move(
                 status_code=409,
             )
 
-    stale = _rows_under(hub.fetchall, destination_folder_id, new_subpath)
+    stale = rows_under(hub.fetchall, destination_folder_id, new_subpath)
     if stale:
         raise MoveRefused(
             f"{stale[0]['relpath']} is still registered in the destination with "
@@ -325,7 +326,7 @@ def plan_directory_move(
             sha256=row["sha256"],
             size=int(row["file_size"]),
         )
-        for row in _rows_under(hub.fetchall, folder_id, source_subpath)
+        for row in rows_under(hub.fetchall, folder_id, source_subpath)
     ]
     files, total = _disk_usage(source_path)
     same_drive = same_device(source_path, parent_path)
@@ -367,10 +368,10 @@ def _repoint(hub: HubDatabase, plan: DirectoryMovePlan) -> int:
         RepointLost: An UPDATE moved no row. The transaction rolls back.
         sqlite3.Error: A racing writer took a destination key.
     """
-    old_prefix = _prefix(plan.source_subpath)
-    new_prefix = _prefix(plan.destination_subpath)
+    old_prefix = subpath_prefix(plan.source_subpath)
+    new_prefix = subpath_prefix(plan.destination_subpath)
     with hub.transaction() as conn:
-        rows = _rows_under(
+        rows = rows_under(
             lambda sql, params: conn.execute(sql, params).fetchall(),
             plan.source_folder_id,
             plan.source_subpath,
@@ -408,7 +409,7 @@ def _refuse_if_taken(plan: DirectoryMovePlan) -> None:
 
 def _verify(plan: DirectoryMovePlan, copy_root: str) -> None:
     """Check every catalogued file in the copy against what the hub says it is."""
-    old_prefix = _prefix(plan.source_subpath)
+    old_prefix = subpath_prefix(plan.source_subpath)
     for entry in plan.catalogued:
         copied = os.path.join(copy_root, entry.relpath[len(old_prefix) :])
         if not os.path.isfile(copied):

@@ -8,11 +8,13 @@ import { createPinia, setActivePinia } from "pinia";
 const listModelFolderDirs = vi.fn();
 const createModelFolderDir = vi.fn();
 const moveModelFolderDir = vi.fn();
+const removeModelFolderDir = vi.fn();
 vi.mock("../../api/modelFolders", async (importOriginal) => ({
   ...(await importOriginal()),
   listModelFolderDirs: (...args) => listModelFolderDirs(...args),
   createModelFolderDir: (...args) => createModelFolderDir(...args),
   moveModelFolderDir: (...args) => moveModelFolderDir(...args),
+  removeModelFolderDir: (...args) => removeModelFolderDir(...args),
 }));
 // The move job's watch is not under test here; its reads stay off the wire.
 vi.mock("../../api/modelMoves", () => ({
@@ -489,6 +491,7 @@ describe("the folder verbs (#2206)", () => {
     useLibrariesStore().canManage = true;
     createModelFolderDir.mockReset();
     moveModelFolderDir.mockReset();
+    removeModelFolderDir.mockReset();
   });
 
   afterEach(() => {
@@ -496,6 +499,7 @@ describe("the folder verbs (#2206)", () => {
     useModelMovesStore().resetForSession();
     useModelFoldersStore().resetForSession();
     useModelShelfStore().folderMoveRequest = null;
+    useModelShelfStore().folderRemoveRequest = null;
   });
 
   async function openLora() {
@@ -506,7 +510,7 @@ describe("the folder verbs (#2206)", () => {
     return wrapper;
   }
 
-  it("gives a subfolder New folder, Move, Rename, a rule, and a Remove that says it is not available", async () => {
+  it("gives a subfolder New folder, Move, Rename, a rule, and Remove", async () => {
     const wrapper = await openLora();
     expect(item(wrapper, 1, "Lora").find('[data-testid="model-folder-more"]').exists()).toBe(true);
     rightClick(item(wrapper, 1, "Lora"));
@@ -516,8 +520,8 @@ describe("the folder verbs (#2206)", () => {
     expect(menu(wrapper).find('[data-verb="rename"]').text()).toContain("F2");
     expect(menu(wrapper).find('[data-verb="new"]').text()).toContain("Ctrl Shift N");
     const remove = menu(wrapper).find('[data-verb="remove"]');
-    expect(remove.attributes("aria-disabled")).toBe("true");
-    expect(wrapper.html()).toContain("Removing a folder is not available yet.");
+    expect(remove.attributes("aria-disabled")).not.toBe("true");
+    expect(remove.text()).toContain("Del");
     wrapper.unmount();
   });
 
@@ -791,6 +795,63 @@ describe("the folder verbs (#2206)", () => {
       await flushPromises();
       expect(field(wrapper).attributes("aria-label")).toBe("New folder in Lora");
       expect(seen).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("keydown", seen);
+    }
+    wrapper.unmount();
+  });
+
+  // #2207. An empty folder has nothing to show, so it goes at once.
+  it("removes an empty folder at once, with the dry run's fingerprint and no dialog", async () => {
+    const wrapper = await openLora();
+    removeModelFolderDir.mockImplementation(async (id, body) =>
+      body.dryRun
+        ? { file_count: 0, files: [], fingerprint: "fp-empty", name: "VAE" }
+        : { files_removed: 0, removed_models: [], permanent: false, trash_name: "Trash" },
+    );
+    rightClick(item(wrapper, 1, "VAE"));
+    await flushPromises();
+    await menu(wrapper).find('[data-verb="remove"]').trigger("click");
+    await flushPromises();
+    expect(removeModelFolderDir.mock.calls).toEqual([
+      [1, { path: "VAE", dryRun: true }],
+      [1, { path: "VAE", permanent: false, expect: "fp-empty" }],
+    ]);
+    expect(useModelShelfStore().folderRemoveRequest).toBe(null);
+    wrapper.unmount();
+  });
+
+  it("asks the shelf for the dialog when the folder holds files", async () => {
+    const wrapper = await openLora();
+    const read = { file_count: 2, files: [], fingerprint: "fp", name: "VAE" };
+    removeModelFolderDir.mockResolvedValue(read);
+    rightClick(item(wrapper, 1, "VAE"));
+    await flushPromises();
+    await menu(wrapper).find('[data-verb="remove"]').trigger("click");
+    await flushPromises();
+    expect(removeModelFolderDir).toHaveBeenCalledTimes(1);
+    const request = useModelShelfStore().folderRemoveRequest;
+    expect(request.source).toEqual({ folderId: 1, path: "VAE", name: "VAE" });
+    expect(request.plan).toBe(read);
+    wrapper.unmount();
+  });
+
+  // Del on a row is the folder's, even with models selected on the shelf: it
+  // never reaches the window, where the shelf's file delete listens.
+  it("takes Del on a focused row as Remove folder, with models selected", async () => {
+    const wrapper = await openLora();
+    useModelShelfStore().selectedIds = new Set([1, 2]);
+    removeModelFolderDir.mockResolvedValue({ file_count: 3, files: [], fingerprint: "fp", name: "Lora" });
+    const seen = vi.fn();
+    window.addEventListener("keydown", seen);
+    try {
+      item(wrapper, 1, "Lora").element.focus();
+      await item(wrapper, 1, "Lora").trigger("keydown", { key: "Delete" });
+      await item(wrapper, 1, "Lora").trigger("keydown", { key: "Delete", shiftKey: true });
+      await flushPromises();
+      expect(seen).not.toHaveBeenCalled();
+      expect(removeModelFolderDir).toHaveBeenCalledWith(1, { path: "Lora", dryRun: true });
+      expect(useModelShelfStore().folderRemoveRequest.source.path).toBe("Lora");
     } finally {
       window.removeEventListener("keydown", seen);
     }

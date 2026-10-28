@@ -527,6 +527,9 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     move and remove one connection, revoking its key and writing into that
     ComfyUI's settings on this server's network, as ``POST`` and ``DELETE
     /comfyui/link`` do. Renaming rides on the PATCH, so it is local too.
+    72 = 71 + 1 with ``POST /model-folders/{folder_id}/dirs/remove``, which
+    trashes or deletes a directory inside a registered folder:
+    ``POST /model-files/delete``' authority over a subtree.
 
     Arithmetic, not judgement."""
     loopback = {
@@ -541,7 +544,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 9, sorted(loopback)
-    assert len(local) == 71, sorted(local)
+    assert len(local) == 72, sorted(local)
 
 
 # ===========================================================================
