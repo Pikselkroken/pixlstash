@@ -12,15 +12,25 @@ from pixlstash.db_models import (
     TAG_SENTINEL_LIKE_PATTERN,
     Tag,
 )
+from pixlstash.task_runner import TaskCancelledError
 
-from .base_task_finder import SimpleMissingFinder
+from .base_task_finder import BaseDeferringFinder, SimpleMissingFinder
 from .text_embedding_task import TextEmbeddingTask
 
 
-class MissingTextEmbeddingFinder(SimpleMissingFinder):
-    """Find a batch of pictures missing text embeddings and create a TextEmbeddingTask."""
+class MissingTextEmbeddingFinder(SimpleMissingFinder, BaseDeferringFinder):
+    """Find a batch of pictures missing text embeddings and create a TextEmbeddingTask.
+
+    A task that fails defers its pictures for the rest of the session
+    (:class:`BaseDeferringFinder`), as ``MissingOcrFinder`` does, so an encoder
+    that cannot load is not handed the same batch every planner cycle; a
+    restart retries them.
+    """
 
     EMBEDDING_BATCH_SIZE = 32
+    _IDS_PARAM = "picture_ids"
+    _TRANSIENT = (TaskCancelledError,)
+    _WHAT = "Embedding the text of pictures"
 
     def __init__(
         self,
@@ -73,8 +83,10 @@ class MissingTextEmbeddingFinder(SimpleMissingFinder):
                 ),
             )
         query = query.order_by(Picture.id)
-        query = query.limit(limit)
-        return session.exec(query).all()
+        query = query.limit(limit + len(self._deferred))
+        return [
+            pic for pic in session.exec(query).all() if pic.id not in self._deferred
+        ]
 
     def _create_task(self, pictures: list):
         return TextEmbeddingTask(

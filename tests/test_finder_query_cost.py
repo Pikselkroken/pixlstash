@@ -819,6 +819,30 @@ def test_text_embedding_waits_per_picture_for_tags_and_description(tmp_path):
         assert _text_candidates(vault, _TextEngine()) == {described, tags_pending}
 
 
+def test_a_failed_text_embedding_batch_is_not_handed_out_again(tmp_path):
+    """An encoder that cannot load must not get the same batch every cycle."""
+    from types import SimpleNamespace
+
+    from pixlstash.task_runner import TaskCancelledError
+    from pixlstash.tasks.missing_text_embedding_finder import (
+        MissingTextEmbeddingFinder,
+    )
+
+    with Vault(image_root=str(tmp_path)) as vault:
+        described, tags_pending, _, _ = _seed_text_stage(vault, tmp_path)
+        finder = MissingTextEmbeddingFinder(vault.db, lambda: _TextEngine())
+
+        def candidates():
+            rows = vault.db.run_immediate_read_task(finder._fetch_candidates, 64)
+            return {p.id for p in rows}
+
+        task = SimpleNamespace(params={"picture_ids": [described]})
+        finder.on_task_complete(task, TaskCancelledError("stopped"))
+        assert candidates() == {described, tags_pending}
+        finder.on_task_complete(task, ImportError("huggingface-hub mismatch"))
+        assert candidates() == {tags_pending}
+
+
 _LIKENESS_PROBE = "picture.size_bin_index is null"
 
 
