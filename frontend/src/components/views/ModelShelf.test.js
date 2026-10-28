@@ -4502,7 +4502,7 @@ describe("a row the owner has marked in a set", () => {
 });
 
 
-describe("the open folder and All models' strip (#2203)", () => {
+describe("the open folder (#2203)", () => {
   const FOLDER = {
     id: 1,
     path: "/home/me/StabilityMatrix/Models",
@@ -4780,26 +4780,11 @@ describe("the open folder and All models' strip (#2203)", () => {
     wrapper.unmount();
   });
 
-  it("draws the strip on All models only, Types with no models left out", async () => {
-    const wrapper = await mountShelf([
-      adapter({ id: 1 }),
-      adapter({ id: 2, sha256: "b".repeat(64), base_model: "sdxl" }),
-    ]);
+  it("draws no folder path outside a folder", async () => {
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
     const store = useModelShelfStore();
-    store.setPlace("all");
-    await flushPromises();
-    const strip = wrapper.find("[data-testid='shelf-strip']");
-    expect(strip.exists()).toBe(true);
-    const types = strip.findAll("[role='radio']").map((one) => one.text());
-    expect(types).toEqual(["All 2", "LoRAs 2"]);
-    await strip.find("[data-testid='shelf-strip-type-lora']").trigger("click");
-    expect(store.sidebarFilter).toEqual({ type: "lora", base: null });
-    await strip.find("[data-base='sdxl']").trigger("click");
-    expect(store.sidebarFilter).toEqual({ type: "lora", base: "sdxl" });
-    expect(store.visibleRows.map((row) => row.id)).toEqual([2]);
     store.setPlace("favourites");
     await flushPromises();
-    expect(wrapper.find("[data-testid='shelf-strip']").exists()).toBe(false);
     expect(wrapper.find("[data-testid='shelf-breadcrumb']").exists()).toBe(false);
     wrapper.unmount();
   });

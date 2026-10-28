@@ -171,69 +171,6 @@
       </div>
     </div>
 
-    <!-- All models' Type and Base model strip (#2203): what kind, where the
-         sidebar now answers where. The two combine. -->
-    <div
-      v-if="isShelfTab && store.place === 'all'"
-      class="shelf-strip"
-      data-testid="shelf-strip"
-    >
-      <span class="section-label" aria-hidden="true">Type</span>
-      <Segmented
-        :options="typeOptions"
-        :model-value="store.sidebarFilter?.type ?? 'all'"
-        aria-label="Type"
-        @update:model-value="
-          (key) => store.setSidebarFilter('type', key === 'all' ? null : key)
-        "
-      />
-      <v-menu
-        v-if="store.baseCounts.length"
-        v-model="baseMenuOpen"
-        location="bottom start"
-        :offset="4"
-      >
-        <template #activator="{ props: menuProps }">
-          <AppBarButton
-            v-bind="menuProps"
-            class="shelf-strip-base"
-            prefix="Base"
-            chevron
-            aria-haspopup="menu"
-            :open="baseMenuOpen"
-            :active="Boolean(store.sidebarFilter?.base)"
-            data-testid="shelf-strip-base"
-            ><span class="bar-btn-value">{{ baseLabel }}</span></AppBarButton
-          >
-        </template>
-        <div
-          class="ctx-menu"
-          role="menu"
-          aria-label="Base model"
-          tabindex="-1"
-          @keydown="onMenuKeydown"
-        >
-          <button
-            v-for="option in baseOptions"
-            :key="option.key ?? 'any'"
-            type="button"
-            class="ctx-item"
-            role="menuitemradio"
-            :aria-checked="option.checked ? 'true' : 'false'"
-            :data-base="option.key ?? 'any'"
-            @click="store.setSidebarFilter('base', option.key)"
-          >
-            <v-icon v-if="option.checked" class="ctx-icon" aria-hidden="true"
-              >mdi-check</v-icon
-            >
-            <span v-else class="ctx-icon" aria-hidden="true"></span>
-            <span class="ctx-label-text">{{ option.label }}</span>
-            <span class="ctx-meta">{{ option.count }}</span>
-          </button>
-        </div>
-      </v-menu>
-    </div>
-
     <!-- The SECONDARY route into the thumbnail verb, kept rather than removed:
          any file on disk worked before the picker existed, and taking that away
          would be a regression on a shipped feature. It is reached from inside
@@ -1413,14 +1350,12 @@ import AppButton from "../widgets/AppButton.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import TypeMark from "../widgets/TypeMark.vue";
-import Segmented from "../widgets/Segmented.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
 import StackEdgeTicks from "../widgets/StackEdgeTicks.vue";
 import { useConfirm } from "../../composables/useConfirm";
 import { addModelFile } from "../../api/modelFiles";
 import { getPictureThumbnailBlob } from "../../api/pictures";
 import {
-  BASE_MODEL_UNASSIGNED,
   fetchModelCompanions,
   openModelLocation,
 } from "../../api/modelShelf";
@@ -1451,7 +1386,6 @@ import { errorDetail } from "../../utils/apiError";
 import { formatUserDate, formatUserDay } from "../../utils/utils";
 import { isTypingTarget } from "../../utils/dom.js";
 import { driveFullness } from "../../utils/libraryChrome";
-import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import {
   adapterKindLabel,
   capabilityLabel,
@@ -3961,45 +3895,6 @@ const breadcrumb = computed(() => {
   return crumbs;
 });
 
-// ── All models' strip ────────────────────────────────────────────────────
-
-/** All, then each Type the shelf has: a zero-count Type is not offered. */
-const typeOptions = computed(() => [
-  {
-    id: "all",
-    label: `All ${store.placeCounts.all.toLocaleString()}`,
-    testid: "shelf-strip-type-all",
-  },
-  ...SHELF_TYPES.filter(
-    (type) =>
-      store.typeCounts[type.key] || store.sidebarFilter?.type === type.key,
-  ).map((type) => ({
-    id: type.key,
-    label: `${type.label} ${(store.typeCounts[type.key] ?? 0).toLocaleString()}`,
-    testid: `shelf-strip-type-${type.key}`,
-  })),
-]);
-
-const baseMenuOpen = ref(false);
-const baseName = (key) =>
-  key === BASE_MODEL_UNASSIGNED ? "Base model not set" : key;
-const baseLabel = computed(() =>
-  store.sidebarFilter?.base ? baseName(store.sidebarFilter.base) : "Any",
-);
-const baseOptions = computed(() => [
-  {
-    key: null,
-    label: "Any base model",
-    count: "",
-    checked: !store.sidebarFilter?.base,
-  },
-  ...store.baseCounts.map(({ key, n }) => ({
-    key,
-    label: baseName(key),
-    count: n.toLocaleString(),
-    checked: store.sidebarFilter?.base === key,
-  })),
-]);
 const NO_MODELS_LINE =
   "No models found. PixlStash lists what it finds in the model folders registered on this machine.";
 /** What an empty place says in its own words; Show's own empty state is above. */
@@ -4935,18 +4830,6 @@ watch(
 .shelf-crumbs-sep {
   flex: none;
   opacity: var(--opacity-text-secondary);
-}
-
-/* All models' Type and Base model strip, under the toolbar. */
-.shelf-strip {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  min-height: var(--sidebar-slot-h);
-  padding: var(--space-2) var(--space-5);
-  overflow-x: auto;
-  border-bottom: 1px solid rgb(var(--v-theme-divider));
 }
 
 /* An open folder's subfolders, ahead of its models. */
