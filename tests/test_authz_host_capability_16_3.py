@@ -1226,7 +1226,8 @@ def test_open_location_resolves_a_library_picture_against_the_library(
 
         def _run(argv, **kw):
             if argv[0] in ("open", "xdg-open"):
-                return opened.append(argv[-1])
+                opened.append(argv[-1])
+                return subprocess.CompletedProcess(argv, 0)
             return real_run(argv, **kw)
 
         monkeypatch.setattr(subprocess, "run", _run)

@@ -84,7 +84,7 @@
       <dl v-if="!propertiesCollapsed" class="rail-picture__props">
         <template v-for="row in properties" :key="row.label">
           <dt>{{ row.label }}</dt>
-          <dd v-if="row.label === 'File' && !isReadOnly" class="rail-picture__file">
+          <dd v-if="row.folder && !isReadOnly" class="rail-picture__file">
             <span>{{ row.value }}</span>
             <button
               type="button"
@@ -344,7 +344,8 @@ const properties = computed(() => {
   const rows = [];
   const file =
     img.original_file_name || String(img.file_path || "").split(/[\\/]/).pop();
-  if (file) rows.push({ label: "File", value: file });
+  // Shown in its folder only when there is a stored path to open.
+  if (file) rows.push({ label: "File", value: file, folder: !!img.file_path });
   if (img.width && img.height) {
     rows.push({ label: "Dimensions", value: `${img.width} × ${img.height}` });
   }

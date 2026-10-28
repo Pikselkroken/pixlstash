@@ -68,6 +68,7 @@ const DETAILS = {
     id: 7,
     description: "A woman with red hair walking in the rain, neon behind her.",
     original_file_name: "IMG_2291.jpg",
+    file_path: "2026/10/a1.jpg",
     created_at: "2026-10-12T21:14:00Z",
     tags: [],
   },
