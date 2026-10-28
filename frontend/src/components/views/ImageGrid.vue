@@ -6194,6 +6194,12 @@ const overlayOpen = ref(false);
 // has to travel up; `isOverlayOpen()` on the imperative API is a getter, not a
 // reactive signal, and cannot drive a binding.
 watch(overlayOpen, (isOpen) => emit("update:overlay-open", isOpen));
+// The lightbox goes with the grid, and the watch above cannot say so: the
+// Recipe tab's links leave for Workflows or Models with it still up. Unsaid,
+// App keeps it "open" and the rail hides its picture panels for good.
+onUnmounted(() => {
+  if (overlayOpen.value) emit("update:overlay-open", false);
+});
 const overlayImageId = ref(null);
 
 // ---- Overlay route tracking ----
