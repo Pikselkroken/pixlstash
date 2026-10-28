@@ -273,6 +273,25 @@ describe("OverlayTagsPanel - selecting and copying rejected tags", () => {
     );
   });
 
+  it("a selected rejected chip later added in another case removes the tag as spelt", async () => {
+    const { removeTagEverywhere } = await import("../../api/tags");
+    removeTagEverywhere.mockClear();
+    const wrapper = await mountWithRejected();
+    await rejected(wrapper)[0].trigger("click");
+    await wrapper.setProps({
+      image: { ...image(), tags: [...image().tags, { id: 4, tag: "Hand" }] },
+    });
+    await wrapper.vm.removeSelection();
+    await vi.waitFor(() =>
+      expect(removeTagEverywhere.mock.calls.map((c) => c[1])).toEqual(["Hand"]),
+    );
+    expect(wrapper.emitted("update-tags").at(-1)[0].map((t) => t.tag)).toEqual([
+      "rain",
+      "umbrella",
+      "yellow raincoat",
+    ]);
+  });
+
   it("with only rejected chips selected, Delete removes nothing and keeps them", async () => {
     const { removeTagEverywhere } = await import("../../api/tags");
     removeTagEverywhere.mockClear();

@@ -1165,11 +1165,15 @@ async function pasteClipboard() {
   if (result?.pictureIds.length) await refreshTags();
 }
 
-/** The selected chips that are this picture's tags, not rejected ones. */
+/**
+ * The selected chips that are this picture's tags, not rejected ones, spelt as
+ * the tag is: removal matches the label exactly.
+ */
 function selectedTagLabels() {
-  return selectedLabels.value.filter((l) =>
-    confirmedTagNames.value.has(l.trim().toLowerCase()),
-  );
+  const keys = new Set(selectedLabels.value.map((l) => l.trim().toLowerCase()));
+  return allImageTags.value
+    .map((t) => tagLabel(t))
+    .filter((l) => keys.has(l.trim().toLowerCase()));
 }
 
 /** "Remove tag", or for a selected chip, what its x removes: the selection. */
