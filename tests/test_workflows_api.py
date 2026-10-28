@@ -3842,8 +3842,10 @@ def test_a_link_that_waited_on_a_remove_records_no_key(
             real_lock.release()
             return False
 
-    monkeypatch.setattr(comfyui_link_service, "_LINK_LOCK", RemovedWhileWaiting())
-    r = workflow_env.owner.post(f"{API}/comfyui/connections/{second}/link")
+    # Only for this request: the fixture's teardown removes connections too.
+    with monkeypatch.context() as m:
+        m.setattr(comfyui_link_service, "_LINK_LOCK", RemovedWhileWaiting())
+        r = workflow_env.owner.post(f"{API}/comfyui/connections/{second}/link")
     assert r.status_code == 200, r.text
     reply = r.json()
     assert reply["linked"] is False
