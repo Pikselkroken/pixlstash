@@ -36,6 +36,7 @@ vi.mock("../../api/pictures", () => ({ resetPicturesTags: vi.fn() }));
 
 import RailTags from "./RailTags.vue";
 import { useTagClipboardStore } from "../../stores/useTagClipboardStore";
+import { useSidebarStore } from "../../stores/useSidebarStore";
 
 enableAutoUnmount(afterEach);
 
@@ -253,6 +254,25 @@ describe("one picture's tags", () => {
     await rejected[0].find(".rail-chip__x").trigger("click");
     await flush();
     expect(confirmTagPrediction.mock.calls[0].slice(0, 2)).toEqual([5, "woman"]);
+  });
+
+  it("drop the last picture's confidences when this one's read fails", async () => {
+    const wrapper = await mountTags([5]);
+    expect(tint(wrapper, "photo")).toBe(0.9);
+    listTagPredictions.mockRejectedValue(new Error("offline"));
+    await wrapper.setProps({ ids: [6] });
+    await flush();
+    expect(tint(wrapper, "photo")).toBe(1);
+    expect(chip(wrapper, "photo").find(".tip").attributes("data-text")).toBe(
+      "Added by hand",
+    );
+  });
+
+  it("take T on a locked picture, so the next T still works", async () => {
+    const sidebar = useSidebarStore();
+    sidebar.tagFieldPending = true;
+    await mountTags([5], { locked: true, takesTagKey: true });
+    expect(sidebar.tagFieldPending).toBe(false);
   });
 
   it("are read-only on a locked picture", async () => {

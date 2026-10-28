@@ -632,9 +632,11 @@ function onKey(event) {
 watch(
   () => props.takesTagKey && sidebarStore.tagFieldPending,
   (pending) => {
-    if (!pending || readOnly.value) return;
+    if (!pending) return;
+    // Taken even where there is no field to focus (a locked picture), or
+    // the next T would set a flag that is already set and change nothing.
     sidebarStore.tagFieldPending = false;
-    focus();
+    if (!readOnly.value) focus();
   },
   { immediate: true },
 );

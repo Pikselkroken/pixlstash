@@ -177,7 +177,14 @@ let titleCanvas = null;
 function measureTitle(text) {
   titleCanvas ??= document.createElement("canvas").getContext("2d");
   if (!titleCanvas || !titleRef.value) return 0;
-  titleCanvas.font = getComputedStyle(titleRef.value).font;
+  // Longhands, not `font`: not every engine serialises the shorthand.
+  const style = getComputedStyle(titleRef.value);
+  titleCanvas.font = [
+    style.fontStyle,
+    style.fontWeight,
+    style.fontSize,
+    style.fontFamily,
+  ].join(" ");
   return titleCanvas.measureText(text).width;
 }
 const shownTitle = computed(() =>

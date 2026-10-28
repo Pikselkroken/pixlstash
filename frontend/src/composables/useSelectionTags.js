@@ -57,6 +57,7 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
   // since changed is dropped rather than shown under the new one.
   let tagRead = 0;
   let predictionRead = 0;
+  let confidenceFor = null;
 
   function pictureIds() {
     return (Array.isArray(selectedIds()) ? selectedIds() : [])
@@ -112,8 +113,12 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
     // One picture reads every status: its accepted predictions are the
     // confidence its chips are tinted by. Several read only the rejected.
     const one = ids.length === 1;
+    // Another picture's confidences go now, not when this read lands: a read
+    // that fails must leave none rather than the last picture's. A re-read
+    // of the same picture keeps its tint on screen meanwhile.
+    if (!one || confidenceFor !== ids[0]) confidenceByTag.value = new Map();
+    confidenceFor = one ? ids[0] : null;
     if (!ids.length) {
-      confidenceByTag.value = new Map();
       fetchedPredictionData.value = [];
       predictionReadFailed.value = false;
       predictionLoading.value = false;
@@ -147,8 +152,6 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
                     )
                     .map((p) => [p.tag.trim().toLowerCase(), p.confidence]),
                 );
-              } else if (!one && mine === predictionRead) {
-                confidenceByTag.value = new Map();
               }
               const threshold = Number(payload?.meta?.acceptance_threshold);
               if (mine === predictionRead) {
