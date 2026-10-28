@@ -14,7 +14,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 import { setActivePinia, createPinia } from "pinia";
-import { ref } from "vue";
+import { nextTick, ref } from "vue";
 import { useSelectionStore } from "../../stores/useSelectionStore.js";
 import { useProjectStore } from "../../stores/useProjectStore.js";
 import { useSortStore } from "../../stores/useSortStore.js";
@@ -61,7 +61,7 @@ vi.mock("vue-router", () => ({
 
 import ImageGrid from "./ImageGrid.vue";
 
-function mountGrid() {
+function mountGrid(props = {}) {
   const selectionStore = useSelectionStore();
   const projectStore = useProjectStore();
   const sortStore = useSortStore();
@@ -95,7 +95,7 @@ function mountGrid() {
         },
       },
     },
-    props: { backendUrl: "/api/v1" },
+    props: { backendUrl: "/api/v1", ...props },
   });
 }
 
@@ -167,5 +167,22 @@ describe("using the lightbox picture as a workflow's input", () => {
     wrapper.vm.runWorkflowOnSelection();
 
     expect(runDialog.source.pictureIds).toEqual([11, 12, 13]);
+  });
+});
+
+describe("leaving the grid with the lightbox up", () => {
+  // The Recipe tab's links go to Workflows or Models, which unmounts the grid
+  // with the lightbox open. App mirrors the flag to hide the rail's picture
+  // panels under the lightbox, so a close nobody reports blanks the rail.
+  it("tells App the lightbox closed", async () => {
+    const onOverlayOpen = vi.fn();
+    const wrapper = mountGrid({ "onUpdate:overlayOpen": onOverlayOpen });
+    wrapper.vm.overlayOpen = true;
+    await nextTick();
+    expect(onOverlayOpen).toHaveBeenLastCalledWith(true);
+
+    wrapper.unmount();
+
+    expect(onOverlayOpen).toHaveBeenLastCalledWith(false);
   });
 });
