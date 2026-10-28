@@ -27,6 +27,7 @@ thing that differs.
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -44,6 +45,7 @@ from pixlstash.db_models.character import Character
 from pixlstash.db_models.picture_set import PictureSet
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.builtin_models import HASH_PENDING_SQL
+from pixlstash.services.civitai_lookup import LookupUnavailable, lookup_base_model
 from pixlstash.services.model_features import (
     FEATURE_CAPTIONER,
     FEATURE_DETECTOR,
@@ -82,8 +84,10 @@ from pixlstash.utils.adapter_header import (
 )
 from pixlstash.utils.known_base_models import (
     COMPANION_LAYOUTS,
+    SOURCE_CIVITAI,
     SOURCE_DECLARED,
     SOURCE_FILENAME,
+    SOURCE_RANK,
     SOURCE_USER,
     family_of,
     fold,
@@ -2452,6 +2456,152 @@ def update_models(hub, ids: list[int], changes: dict) -> list[int]:
                     ],
                 )
     return sorted(existing)
+
+
+#: Seconds between two Civitai requests in one lookup, so a selection of a
+#: hundred is not a burst.
+CIVITAI_PAUSE_SECONDS = 0.25
+
+#: Seconds one lookup may spend asking before the rest go back unasked. A
+#: per-request timeout bounds each socket wait, not a slow answer, so without
+#: this a hundred slow answers would hold the owner's request for minutes.
+CIVITAI_BUDGET_SECONDS = 90
+
+# The sources a Civitai answer may replace: only those it outranks, as the
+# scanner replaces only what it outranks. Not `user` (a cleared base model is
+# `base_model NULL, source 'user'`, the owner's "none of these") and not
+# `declared` (a header can name the model through `modelspec.architecture`
+# with no `ss_base_model_version`, leaving `base_model` NULL).
+_LOOKUP_REPLACEABLE = tuple(s for s in SOURCE_RANK if rank(s) < rank(SOURCE_CIVITAI))
+
+# The write's guard: the eligibility the read already checked, asked again in
+# the UPDATE so a *Set base model* landing mid-batch still wins.
+_LOOKUP_FILLABLE_SQL = (
+    "base_model IS NULL AND (base_model_source IS NULL OR base_model_source "
+    f"IN ({', '.join('?' * len(_LOOKUP_REPLACEABLE))}))"
+)
+
+
+def fill_base_models_online(hub, ids: list[int], lookup=lookup_base_model) -> dict:
+    """Fill empty base models from Civitai, by each file's SHA-256.
+
+    Only a row with no ``base_model``, no ruling from the owner, a hash, and a
+    ``file_kind`` of adapter or checkpoint is asked about; every other id comes
+    back under ``skipped`` with a reason and costs no request. A hit is written
+    with source ``civitai`` (:data:`SOURCE_RANK`), under the same predicate, in
+    its own short transaction: the hub is never held across a network call.
+    The first :class:`LookupUnavailable` stops the batch, and that row and
+    every one after it come back under ``not_asked``.
+
+    Args:
+        hub: The open hub database.
+        ids: ``model.id`` values the owner selected.
+        lookup: Hash to base-model label, or ``None`` for a miss. Injectable so
+            tests never reach the network.
+
+    Returns:
+        ``{filled: [{id, base_model}], not_found: [id], skipped: [{id,
+        reason}], not_asked: [id]}``. ``reason`` is one of ``owner_set``,
+        ``already_set``, ``no_hash``, ``not_a_model`` or ``unknown_id``.
+    """
+    ids = list(dict.fromkeys(ids))
+    if not ids:
+        return {"filled": [], "not_found": [], "skipped": [], "not_asked": []}
+    placeholders = ", ".join("?" for _ in ids)
+    rows = {
+        int(row["id"]): row
+        for row in hub.fetchall(
+            "SELECT id, sha256, file_kind, base_model, base_model_source "
+            f"FROM model WHERE id IN ({placeholders})",
+            tuple(ids),
+        )
+    }
+    filled, not_found, skipped, not_asked = [], [], [], []
+    eligible = []
+    for model_id in ids:
+        row = rows.get(model_id)
+        if row is None:
+            reason = "unknown_id"
+        elif row["base_model"] is not None:
+            reason = "already_set"
+        elif row["base_model_source"] == SOURCE_USER:
+            reason = "owner_set"
+        elif rank(row["base_model_source"]) > rank(SOURCE_CIVITAI):
+            reason = "already_set"
+        elif row["file_kind"] not in (FILE_ADAPTER, FILE_CHECKPOINT):
+            reason = "not_a_model"
+        elif not row["sha256"]:
+            reason = "no_hash"
+        else:
+            eligible.append((model_id, row["sha256"]))
+            continue
+        skipped.append({"id": model_id, "reason": reason})
+
+    started = time.monotonic()
+    for position, (model_id, sha256) in enumerate(eligible):
+        if time.monotonic() - started > CIVITAI_BUDGET_SECONDS:
+            not_asked = [model_id for model_id, _ in eligible[position:]]
+            break
+        if position:
+            time.sleep(CIVITAI_PAUSE_SECONDS)
+        try:
+            label = lookup(sha256)
+        except LookupUnavailable:
+            not_asked = [model_id for model_id, _ in eligible[position:]]
+            break
+        except ValueError:
+            # Every writer stores a lowercase hexdigest, so this is a row
+            # something else wrote. Not sent, and not worth failing the batch.
+            logger.warning(
+                "Model %s has a sha256 that is not lowercase hex (%r); not "
+                "asking Civitai about it.",
+                model_id,
+                sha256[:12],
+            )
+            skipped.append({"id": model_id, "reason": "no_hash"})
+            continue
+        if label is None:
+            not_found.append(model_id)
+            continue
+        with hub.transaction() as conn:
+            written = conn.execute(
+                "UPDATE model SET base_model = ?, base_model_canonical = ?, "
+                f"base_model_source = ? WHERE id = ? AND {_LOOKUP_FILLABLE_SQL}",
+                (label, fold(label), SOURCE_CIVITAI, model_id, *_LOOKUP_REPLACEABLE),
+            ).rowcount
+            # Lost to a write that landed mid-batch: say whose, read in the
+            # same transaction so it is the write that beat this one.
+            winner = (
+                None
+                if written
+                else conn.execute(
+                    "SELECT base_model_source FROM model WHERE id = ?", (model_id,)
+                ).fetchone()
+            )
+        if written:
+            filled.append({"id": model_id, "base_model": label})
+        elif winner is None:
+            skipped.append({"id": model_id, "reason": "unknown_id"})
+        elif winner["base_model_source"] == SOURCE_USER:
+            skipped.append({"id": model_id, "reason": "owner_set"})
+        else:
+            skipped.append({"id": model_id, "reason": "already_set"})
+
+    logger.info(
+        "Civitai base-model lookup over %d model(s): %d filled, %d not on "
+        "Civitai, %d skipped, %d not asked.",
+        len(ids),
+        len(filled),
+        len(not_found),
+        len(skipped),
+        len(not_asked),
+    )
+    return {
+        "filled": filled,
+        "not_found": not_found,
+        "skipped": skipped,
+        "not_asked": not_asked,
+    }
 
 
 def forget_models(hub, ids: list[int]) -> tuple[list[int], list[dict]]:

@@ -24,6 +24,7 @@ import {
   listAdapters,
   listBaseModelCompletions,
   listCheckpoints,
+  lookupBaseModelsOnline,
   markWorkflowSetSeen,
   mergeWorkflowSets,
   removeWorkflowSetMembers,
@@ -461,6 +462,24 @@ export function forgetReceipt(gone, kept, vanished = 0, engines = 0) {
       : "Nothing to forget.";
   }
   return [`Forgot ${modelCount(gone)}.`, ...notes].join(" ");
+}
+
+/**
+ * Say what a Civitai lookup filled, what it could not, and why.
+ *
+ * @param {Object} body - the route's receipt.
+ * @returns {string}
+ */
+export function lookupReceipt(body) {
+  const filled = body?.filled?.length ?? 0;
+  const missing = body?.not_found?.length ?? 0;
+  const skipped = body?.skipped?.length ?? 0;
+  const notAsked = body?.not_asked?.length ?? 0;
+  const parts = [`Filled ${modelCount(filled)}`];
+  if (missing) parts.push(`${missing} not on Civitai`);
+  if (skipped) parts.push(`${skipped} left alone`);
+  if (notAsked) parts.push(`${notAsked} not asked (Civitai stopped answering)`);
+  return parts.join(" · ");
 }
 
 /**
@@ -4361,6 +4380,51 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     }
   }
 
+  /** True while a Civitai lookup is in flight; the verb waits for it. */
+  const lookupBusy = ref(false);
+
+  /**
+   * Ask Civitai for the base models of *ids*, then say what it filled.
+   *
+   * The caller owns the confirmation: this is the one shelf call that leaves
+   * the machine, and the prompt is what says so.
+   *
+   * @param {number[]} ids - the eligible models (`lookupEligible`).
+   * @returns {Promise<boolean>} true when the call was made at all.
+   */
+  async function lookupBaseModels(ids) {
+    const notices = useNoticeStore();
+    // One at a time: a second press would queue up to 100 more requests.
+    if (!ids.length || lookupBusy.value) return false;
+    lookupBusy.value = true;
+    notices.push({
+      level: "info",
+      text: `Looking up ${ids.length === 1 ? "1 base model" : `${ids.length} base models`} on Civitai…`,
+    });
+    try {
+      const body = await lookupBaseModelsOnline(ids);
+      if (body?.filled?.length) invalidateBaseModelCompletions();
+      await fetchRows();
+      notices.push({
+        level: body?.not_asked?.length
+          ? "warning"
+          : body?.filled?.length
+            ? "success"
+            : "info",
+        text: lookupReceipt(body),
+      });
+      return true;
+    } catch (err) {
+      notices.push({
+        level: "error",
+        text: errorDetail(err) || "Could not look those base models up.",
+      });
+      return false;
+    } finally {
+      lookupBusy.value = false;
+    }
+  }
+
   /**
    * Delete the selection from disk, then say what went and what did not.
    *
@@ -4900,6 +4964,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     editSelected,
     editModelIds,
     forgetSelected,
+    lookupBaseModels,
+    lookupBusy,
     deleteSelected,
     mergeCopies,
     setIconOnSelected,

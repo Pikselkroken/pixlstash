@@ -1037,7 +1037,11 @@
                         v-if="baseModelCell(row).text"
                         class="shelf-base-text"
                         @dblclick.stop="startBaseModelEdit(row)"
-                        >{{ baseModelCell(row).text }}</span
+                        ><Tooltip
+                          v-if="baseModelCell(row).note"
+                          :text="baseModelCell(row).note"
+                          activator="parent"
+                        />{{ baseModelCell(row).text }}</span
                       >
                       <span
                         v-else
@@ -1454,6 +1458,7 @@ import {
   fileKindLabel,
   undeletableNotice,
   baseModelCell,
+  lookupEligible,
   trashName,
   formatModelSize,
   modelDate,
@@ -1634,6 +1639,27 @@ async function confirmForget() {
     danger: true,
   });
   if (ok) await store.forgetSelected();
+}
+
+/**
+ * Confirm, then ask Civitai for the selection's empty base models.
+ *
+ * Not `danger`: nothing is destroyed. The prompt is the consent for the one
+ * shelf verb that leaves the machine, so it names the host and what is sent.
+ */
+async function confirmLookupBaseModel() {
+  const ids = store.selectedModels.filter(lookupEligible).map((row) => row.id);
+  if (!ids.length) return;
+  const ok = await confirm({
+    title:
+      ids.length === 1
+        ? "Look up 1 base model on Civitai?"
+        : `Look up ${ids.length} base models on Civitai?`,
+    message:
+      "PixlStash sends only each file's SHA-256 hash to civitai.com. Files are not uploaded, and base models you set yourself are never changed.",
+    confirmLabel: "Look up on Civitai",
+  });
+  if (ok) await store.lookupBaseModels(ids);
 }
 
 // Set while the delete prompt is being prepared or shown. The companions read
@@ -4096,6 +4122,7 @@ const verbListeners = {
   "hide-models": () => store.toggleHiddenModels(store.selectedModels),
   rename: startRenameSelected,
   "set-base-model": () => (editVerb.value = "base-model"),
+  "lookup-base-model": confirmLookupBaseModel,
   "set-kind": () => (editVerb.value = "kind"),
   "set-trigger-words": () => (editVerb.value = "trigger-words"),
   stack: confirmStack,

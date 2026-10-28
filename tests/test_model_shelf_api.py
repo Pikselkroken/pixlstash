@@ -75,6 +75,7 @@ from pixlstash.services.model_kind_suggestions import (
 )
 from pixlstash.server import Server
 from pixlstash.services import builtin_caches, builtin_models, comfyui_service
+from pixlstash.services import civitai_lookup
 from pixlstash.services import model_downloads
 from pixlstash.services import model_shelf_service, model_workflow_sets
 from pixlstash.services.model_folder_scanner import ModelFolderScanner
@@ -101,6 +102,7 @@ _SHELF_ROUTES = (
     ("GET", "/api/v1/models/base-models"),
     ("POST", "/api/v1/models/companions"),
     ("PUT", "/api/v1/models/hidden"),
+    ("POST", "/api/v1/models/base-model-lookup"),
     ("GET", "/api/v1/favourites"),
     ("PUT", "/api/v1/favourites"),
     ("GET", "/api/v1/models/workflow-sets"),
@@ -7198,6 +7200,8 @@ def test_the_verb_routes_are_owner_only_in_both_directions(shelf_env):
     calls = (
         ("PATCH", f"{API}/models", {"json": {"ids": [alice], "base_model": "SDXL"}}),
         ("POST", f"{API}/models/forget", {"json": {"ids": [alice]}}),
+        # Alice has a base model, so the owner's call asks Civitai nothing.
+        ("POST", f"{API}/models/base-model-lookup", {"json": {"ids": [alice]}}),
     )
 
     token = mint_read_token(shelf_env.owner, "verb probe")
@@ -7893,6 +7897,12 @@ def test_a_checkpoint_named_after_its_base_model_is_matched_by_name(shelf_env):
         rows = shelf_env.owner.get(f"{API}/checkpoints").json()["checkpoints"]
         return next(r for r in rows if r["id"] == huge)["matched_name"]
 
+    assert matched() == "FLUX.1 dev"
+    # Civitai's answer for these bytes is not a guess either (#1517).
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET base_model_source = 'civitai' WHERE id = ?", (huge,)
+        )
     assert matched() == "FLUX.1 dev"
     with shelf_env.server.hub.transaction() as conn:
         conn.execute(
@@ -11510,3 +11520,256 @@ def test_comfyui_reads_are_local_owner_only_and_refuse_share_tokens(
     r = shelf_env.owner.get(_READS, headers=_xff("8.8.8.8"))
     assert r.status_code == 403, r.text
     assert "allow_remote_host_ops" in r.text, r.text
+
+
+# ===========================================================================
+# POST /models/base-model-lookup - empty base models from Civitai (#1517)
+# ===========================================================================
+
+
+@pytest.fixture
+def no_civitai_pause(monkeypatch):
+    monkeypatch.setattr(model_shelf_service, "CIVITAI_PAUSE_SECONDS", 0)
+
+
+def _base_model_columns(shelf_env, model_id) -> tuple:
+    row = shelf_env.server.hub.fetchone(
+        "SELECT base_model, base_model_canonical, base_model_source FROM model "
+        "WHERE id = ?",
+        (model_id,),
+    )
+    return tuple(row)
+
+
+def test_lookup_fills_only_an_empty_row_nobody_ruled_on(shelf_env, no_civitai_pause):
+    ids = shelf_env.model_ids
+    hub = shelf_env.server.hub
+    noname, dana = ids["sd_xl_noname.safetensors"], ids["dana.safetensors"]
+    # The owner's "none of these": base_model NULL, source `user`.
+    model_shelf_service.update_models(hub, [dana], {"base_model": None})
+    # A header that names the model only through `modelspec.architecture`.
+    declared = _add_model(shelf_env, "checkpoint", "spec.safetensors", _h("spec"))
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET base_model_canonical = 'SDXL 1.0', "
+            "base_model_source = 'declared' WHERE id = ?",
+            (declared,),
+        )
+    engine = _add_model(shelf_env, "engine", "tagger.onnx", _h("engine"))
+    asked = []
+
+    def lookup(sha256):
+        asked.append(sha256)
+        return "SDXL 1.0"
+
+    selection = [
+        noname,
+        dana,
+        ids["alice.safetensors"],
+        ids["mystery.safetensors"],
+        ids["huge_unhashed.safetensors"],
+        declared,
+        engine,
+        999999,
+    ]
+    result = model_shelf_service.fill_base_models_online(hub, selection, lookup)
+
+    assert asked == [ADAPTER_NO_BASE], "a row that was not eligible was asked about"
+    assert result["filled"] == [{"id": noname, "base_model": "SDXL 1.0"}]
+    assert result["skipped"] == [
+        {"id": dana, "reason": "owner_set"},
+        {"id": ids["alice.safetensors"], "reason": "already_set"},
+        {"id": ids["mystery.safetensors"], "reason": "not_a_model"},
+        {"id": ids["huge_unhashed.safetensors"], "reason": "no_hash"},
+        {"id": declared, "reason": "already_set"},
+        {"id": engine, "reason": "not_a_model"},
+        {"id": 999999, "reason": "unknown_id"},
+    ]
+    assert result["not_found"] == [] and result["not_asked"] == []
+    assert _base_model_columns(shelf_env, noname) == ("SDXL 1.0", "SDXL 1.0", "civitai")
+    assert _base_model_columns(shelf_env, dana) == (None, None, "user")
+    assert _base_model_columns(shelf_env, declared) == (None, "SDXL 1.0", "declared")
+    assert _base_model_columns(shelf_env, ids["alice.safetensors"])[0] == "SDXL 1.0"
+
+
+@pytest.mark.parametrize("owner_value", [None, "Pony"])
+def test_an_owner_ruling_landing_during_the_lookup_wins(
+    shelf_env, no_civitai_pause, owner_value
+):
+    """The write repeats the eligibility: a clear (`None`) is the case only the
+    `<> 'user'` guard catches, since the base model is still NULL after it."""
+    hub = shelf_env.server.hub
+    noname = shelf_env.model_ids["sd_xl_noname.safetensors"]
+
+    def lookup(sha256):
+        model_shelf_service.update_models(hub, [noname], {"base_model": owner_value})
+        return "Flux.1 dev"
+
+    result = model_shelf_service.fill_base_models_online(hub, [noname], lookup)
+
+    assert result["filled"] == []
+    assert result["skipped"] == [{"id": noname, "reason": "owner_set"}]
+    assert _base_model_columns(shelf_env, noname) == (
+        owner_value,
+        model_shelf_service.fold(owner_value),
+        "user",
+    )
+
+
+def test_a_header_identification_landing_during_the_lookup_wins(
+    shelf_env, no_civitai_pause
+):
+    hub = shelf_env.server.hub
+    noname = shelf_env.model_ids["sd_xl_noname.safetensors"]
+
+    def lookup(sha256):
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model SET base_model_canonical = 'SDXL 1.0', "
+                "base_model_source = 'declared' WHERE id = ?",
+                (noname,),
+            )
+        return "Pony"
+
+    result = model_shelf_service.fill_base_models_online(hub, [noname], lookup)
+
+    assert result["skipped"] == [{"id": noname, "reason": "already_set"}], (
+        "a header that won the race was reported as the owner's ruling"
+    )
+    assert _base_model_columns(shelf_env, noname) == (None, "SDXL 1.0", "declared")
+
+
+def test_the_first_unreachable_answer_stops_the_batch(shelf_env, no_civitai_pause):
+    ids = shelf_env.model_ids
+    third = _add_model(shelf_env, "checkpoint", "third.safetensors", _h("third"))
+    selection = [ids["sd_xl_noname.safetensors"], ids["dana.safetensors"], third]
+    asked = []
+
+    def lookup(sha256):
+        asked.append(sha256)
+        if len(asked) == 2:
+            raise civitai_lookup.LookupUnavailable("HTTP 503")
+        return None
+
+    result = model_shelf_service.fill_base_models_online(
+        shelf_env.server.hub, selection, lookup
+    )
+
+    assert asked == [ADAPTER_NO_BASE, ADAPTER_NO_BASE_2], "it kept asking"
+    assert result["not_found"] == [selection[0]]
+    assert result["not_asked"] == selection[1:]
+    assert result["filled"] == [] and result["skipped"] == []
+
+
+def test_a_spent_time_budget_stops_the_batch(shelf_env, monkeypatch):
+    monkeypatch.setattr(model_shelf_service, "CIVITAI_BUDGET_SECONDS", -1)
+    selection = [
+        shelf_env.model_ids["sd_xl_noname.safetensors"],
+        shelf_env.model_ids["dana.safetensors"],
+    ]
+    asked = []
+
+    result = model_shelf_service.fill_base_models_online(
+        shelf_env.server.hub, selection, asked.append
+    )
+
+    assert asked == [] and result["not_asked"] == selection
+
+
+def test_a_civitai_answer_reaches_the_companion_ladder(shelf_env, no_civitai_pause):
+    hub = shelf_env.server.hub
+    noname = shelf_env.model_ids["sd_xl_noname.safetensors"]
+    dana = shelf_env.model_ids["dana.safetensors"]
+    labels = {ADAPTER_NO_BASE: "sdxl", ADAPTER_NO_BASE_2: "Brand New Base"}
+    model_shelf_service.fill_base_models_online(hub, [noname, dana], labels.get)
+
+    rows = {
+        row["id"]: row
+        for row in hub.fetchall(
+            "SELECT id, base_model, base_model_canonical, base_model_source "
+            "FROM model WHERE id IN (?, ?)",
+            (noname, dana),
+        )
+    }
+    assert model_shelf_service.known_base_model(rows[noname]) == "SDXL 1.0"
+    # A label PixlStash does not know is stored verbatim and still answers.
+    assert rows[dana]["base_model_canonical"] is None
+    assert model_shelf_service.known_base_model(rows[dana]) == "Brand New Base"
+
+
+def test_a_header_declaration_replaces_civitai_and_a_filename_does_not(
+    shelf_env, no_civitai_pause
+):
+    hub = shelf_env.server.hub
+    noname = shelf_env.model_ids["sd_xl_noname.safetensors"]
+    model_shelf_service.fill_base_models_online(hub, [noname], lambda _: "SDXL 1.0")
+
+    def scan_finds(canonical, source):
+        record = SimpleNamespace(
+            base_model_canonical=canonical, base_model_source=source
+        )
+        with hub.transaction() as conn:
+            ModelFolderScanner._write_identification(conn, noname, record)
+        return _base_model_columns(shelf_env, noname)[1:]
+
+    assert scan_finds("Pony Diffusion V6 XL", "filename") == ("SDXL 1.0", "civitai")
+    assert scan_finds("Illustrious", "declared") == ("Illustrious", "declared")
+
+
+def _civitai_answers(monkeypatch, status=200, body=None):
+    """Stand in for civitai.com; nothing in this module reaches the network."""
+    sent = []
+
+    def get(url, **kwargs):
+        sent.append(url)
+        return SimpleNamespace(status_code=status, json=lambda: body)
+
+    monkeypatch.setattr(civitai_lookup.requests, "get", get)
+    return sent
+
+
+def test_the_lookup_route_fills_and_answers_with_the_receipt(
+    shelf_env, monkeypatch, no_civitai_pause
+):
+    sent = _civitai_answers(monkeypatch, body={"baseModel": " Illustrious "})
+    digest = hashlib.sha256(b"a lora nobody named").hexdigest()
+    lora = _add_model(shelf_env, "adapter", "plain.safetensors", digest, kind="lora")
+    alice = shelf_env.model_ids["alice.safetensors"]
+    # The seed's readable stand-in hashes are not hex, as no real row's is.
+    not_hex = shelf_env.model_ids["sd_xl_noname.safetensors"]
+
+    r = shelf_env.owner.post(
+        f"{API}/models/base-model-lookup", json={"ids": [lora, alice, not_hex]}
+    )
+
+    assert r.status_code == 200, r.text
+    assert r.json() == {
+        "filled": [{"id": lora, "base_model": "Illustrious"}],
+        "not_found": [],
+        "skipped": [
+            {"id": alice, "reason": "already_set"},
+            {"id": not_hex, "reason": "no_hash"},
+        ],
+        "not_asked": [],
+    }
+    assert sent == [civitai_lookup.CIVITAI_BY_HASH.format(sha256=digest)]
+    assert _base_model_columns(shelf_env, lora)[0] == "Illustrious"
+
+
+def test_the_lookup_route_refuses_what_it_must_not_ask_about(
+    shelf_env, monkeypatch, no_civitai_pause
+):
+    sent = _civitai_answers(monkeypatch, body={"baseModel": "SDXL 1.0"})
+    noname = shelf_env.model_ids["sd_xl_noname.safetensors"]
+    engine = _add_model(shelf_env, "engine", "tagger.onnx", _h("engine"))
+    path = f"{API}/models/base-model-lookup"
+
+    r = shelf_env.owner.post(path, json={"ids": list(range(1, 102))})
+    assert r.status_code == 422, r.text
+    r = shelf_env.owner.post(path, json={"ids": [noname, engine]})
+    assert r.status_code == 409, r.text
+    monkeypatch.setenv("PIXLSTASH_DEMO_MODE", "1")
+    r = shelf_env.owner.post(path, json={"ids": [noname]})
+    assert r.status_code == 409, r.text
+    assert sent == [], "a refused call still asked Civitai"
+    assert _base_model_columns(shelf_env, noname)[0] is None

@@ -147,6 +147,22 @@ export async function setAdapterAttachments(sha256, attachments) {
 }
 
 /**
+ * Fill empty base models from Civitai, by each file's SHA-256 (#1517).
+ *
+ * The shelf's one outbound verb, so its caller confirms first. The server asks
+ * only about adapters and checkpoints with no base model and no ruling from
+ * the owner, and answers with a receipt rather than failing on the rest.
+ *
+ * @param {Array<number>} ids - hub `model.id` values, at most 100.
+ * @returns {Promise<{filled: Array<{id: number, base_model: string}>,
+ *   not_found: Array<number>, skipped: Array<{id: number, reason: string}>,
+ *   not_asked: Array<number>}>}
+ */
+export async function lookupBaseModelsOnline(ids) {
+  return unwrap(apiClient.post("/models/base-model-lookup", { ids }));
+}
+
+/**
  * Forget models whose files are gone.
  *
  * The one shelf call that destroys curation, so its caller confirms first. The

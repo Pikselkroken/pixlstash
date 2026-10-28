@@ -559,6 +559,9 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # constraints would reject) and that is a data check, not a scope one.
     ("PATCH", "/api/v1/models"): RoutePolicy(_OWNER),
     ("POST", "/api/v1/models/forget"): RoutePolicy(_OWNER),
+    # Look up empty base models on Civitai (#1517): writes the same curated
+    # column as Set base model, and sends only each file's SHA-256 outbound.
+    ("POST", "/api/v1/models/base-model-lookup"): RoutePolicy(_OWNER),
     # Which models the active library hides: a hub row per library, the shelf's
     # tier, the owner's own view of their shelf (as the set hide below).
     ("PUT", "/api/v1/models/hidden"): RoutePolicy(_OWNER),

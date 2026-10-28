@@ -830,8 +830,9 @@ const GUESSED_BASE_SOURCES = new Set([
  * read from, for the tag's tooltip.
  *
  * @param {Object} row - a row from `/adapters` or `/checkpoints`.
- * @returns {{text: string, guess: string|null}} `text` is `""` when nothing
- *   is recorded; `guess` is the tooltip copy for a guessed value, else null.
+ * @returns {{text: string, guess: string|null, note?: string}} `text` is `""`
+ *   when nothing is recorded; `guess` is the tooltip copy for a guessed value,
+ *   else null; `note` says a value came from Civitai, which is not a guess.
  */
 export function baseModelCell(row) {
   const canonical = row?.base_model_canonical || "";
@@ -847,7 +848,38 @@ export function baseModelCell(row) {
       guess: `${how} Click to confirm it; double-click the label or press Shift+F2 to correct it.`,
     };
   }
+  if (source === "civitai") {
+    return {
+      text: row?.base_model || canonical,
+      guess: null,
+      note: "From Civitai, matched by file hash. Double-click or press Shift+F2 to correct it.",
+    };
+  }
   return { text: row?.base_model || canonical, guess: null };
+}
+
+/** How many models one Civitai lookup may ask about; the route's own cap. */
+export const MAX_BASE_MODEL_LOOKUP = 100;
+
+/**
+ * Whether Look up base model on Civitai would ask about this model.
+ *
+ * Mirrors the server's eligibility, which stays the authority: an adapter or
+ * checkpoint, hashed, with no base model, that the owner has not cleared
+ * (a cleared base model is null with source `user`) and whose header does not
+ * already name one (source `declared`, which outranks Civitai).
+ *
+ * @param {Object} row - a model row from `/adapters` or `/checkpoints`.
+ * @returns {boolean}
+ */
+export function lookupEligible(row) {
+  return (
+    (row?.file_kind === "adapter" || row?.file_kind === "checkpoint") &&
+    Boolean(row.sha256) &&
+    row.base_model == null &&
+    row.base_model_source !== "user" &&
+    row.base_model_source !== "declared"
+  );
 }
 
 // The rail keeps its palette entry's HUE and pins saturation and lightness, the

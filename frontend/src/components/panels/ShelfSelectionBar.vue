@@ -252,6 +252,8 @@ import {
   deletableModels,
   formatModelSize,
   hideModelsVerb,
+  lookupEligible,
+  MAX_BASE_MODEL_LOOKUP,
   trashName,
 } from "../../utils/modelShelf";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
@@ -275,6 +277,7 @@ const props = defineProps({
 const emit = defineEmits([
   "rename",
   "set-base-model",
+  "lookup-base-model",
   "set-kind",
   "set-trigger-words",
   "stack",
@@ -623,6 +626,27 @@ const triggerable = computed(
       (row) => row.file_kind === "adapter" || row.file_kind === "unknown",
     ),
 );
+
+/**
+ * The selected models Look up base model on Civitai would ask Civitai about.
+ * Listed always, disabled with its reason when none would be, like Set trigger
+ * words above; over the route's cap it says so rather than sending part.
+ */
+const lookupIds = computed(() =>
+  store.selectedModels.filter(lookupEligible).map((row) => row.id),
+);
+
+const lookupTitle = computed(() => {
+  const eligible = lookupIds.value.length;
+  if (store.lookupBusy) return "A lookup is already running";
+  if (!eligible) {
+    return "Only adapters and checkpoints with no base model and a file hash can be looked up";
+  }
+  if (eligible > MAX_BASE_MODEL_LOOKUP) {
+    return `Look up at most ${MAX_BASE_MODEL_LOOKUP} at a time; ${eligible} selected have no base model`;
+  }
+  return "";
+});
 
 const assignTitle = computed(() => {
   const total = store.selectedModels.length;
@@ -993,6 +1017,8 @@ const verbHandlers = computed(() => ({
   assignableIds: assignableIds.value,
   assignable: assignable.value.length > 0,
   membership: membership.value,
+  lookupable: lookupIds.value.length > 0 && !lookupTitle.value,
+  lookupTitle: lookupTitle.value,
   triggerable: triggerable.value,
   triggerTitle: triggerable.value
     ? ""
@@ -1194,6 +1220,12 @@ const VerbItems = (props) => {
     item("mdi-cube-outline", "Set base model…", {
       verb: "set-base-model",
       on: () => props.onVerb("set-base-model"),
+    }),
+    item("mdi-cloud-search-outline", "Look up base model on Civitai…", {
+      verb: "lookup-base-model",
+      on: () => props.onVerb("lookup-base-model"),
+      disabled: !props.lookupable,
+      title: props.lookupTitle,
     }),
     item("mdi-shape-outline", "Set kind…", {
       verb: "set-kind",
