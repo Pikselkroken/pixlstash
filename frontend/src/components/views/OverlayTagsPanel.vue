@@ -207,31 +207,32 @@
           </div>
         </div>
       </div>
-      <div
-        v-if="selectedLabels.length"
-        class="tag-selection-bar"
-        role="toolbar"
-        aria-label="Selected tags"
-      >
-        <span class="tag-selection-count" role="status"
-          >{{ selectedLabels.length }} selected</span
-        >
-        <button type="button" class="tag-selection-btn" @click="copySelection">
-          <Tooltip text="Copy (Ctrl+C)" activator="parent" :describe="false" />
-          <v-icon size="14">mdi-content-copy</v-icon>
-          Copy
-        </button>
-        <button
-          type="button"
-          class="tag-selection-btn tag-selection-btn--icon"
-          aria-label="Clear selection"
-          @click="clearSelection"
-        >
-          <Tooltip text="Clear selection (Esc)" activator="parent" :describe="false" />
-          <v-icon size="14">mdi-selection-off</v-icon>
-        </button>
-      </div>
     </template>
+    <!-- Outside the collapse: rejected chips select too, under a collapsed Tags. -->
+    <div
+      v-if="selectedLabels.length"
+      class="tag-selection-bar"
+      role="toolbar"
+      aria-label="Selected tags"
+    >
+      <span class="tag-selection-count" role="status"
+        >{{ selectedLabels.length }} selected</span
+      >
+      <button type="button" class="tag-selection-btn" @click="copySelection">
+        <Tooltip text="Copy (Ctrl+C)" activator="parent" :describe="false" />
+        <v-icon size="14">mdi-content-copy</v-icon>
+        Copy
+      </button>
+      <button
+        type="button"
+        class="tag-selection-btn tag-selection-btn--icon"
+        aria-label="Clear selection"
+        @click="clearSelection"
+      >
+        <Tooltip text="Clear selection (Esc)" activator="parent" :describe="false" />
+        <v-icon size="14">mdi-selection-off</v-icon>
+      </button>
+    </div>
   </div>
 
   <div
@@ -243,7 +244,23 @@
       label="Rejected tags"
       :count="nearMissPredictions.length"
       on-dark
-    />
+    >
+      <template #actions>
+        <button
+          class="section-meta-btn"
+          type="button"
+          aria-label="Copy all rejected tags"
+          @click.stop="copyLabels(nearMissPredictions.map((p) => p.tag))"
+        >
+          <Tooltip
+            text="Copy all rejected tags"
+            activator="parent"
+            :describe="false"
+          />
+          <v-icon size="16">mdi-content-copy</v-icon>
+        </button>
+      </template>
+    </SectionHeader>
     <div
       v-show="!nearMissesCollapsed"
       class="tag-drop-zone tag-drop-zone--predictions"
@@ -254,6 +271,7 @@
       @dragenter.prevent="handleDragOver('rejected', null)"
       @dragleave="handleDragLeave('rejected', null)"
       @drop.prevent="handleDropOnRejectedTags"
+      @click.self="clearSelection"
     >
       <span
         v-for="pred in nearMissPredictions"
@@ -262,11 +280,14 @@
           'overlay-tag',
           predictionClassForTag(pred.tag),
           'overlay-tag--prediction',
+          { 'overlay-tag--selected': isSelected(pred.tag) },
         ]"
         :style="{ '--pred-confidence': pred.confidence }"
         :draggable="!readOnly"
         @dragstart="startTagDrag(pred.tag, 'rejected', null, $event)"
         @dragend="clearTagDrag"
+        @click="onChipClick(pred.tag)"
+        @contextmenu="onChipContextMenu(pred.tag, $event)"
       >
         <Tooltip :text="rejectedTagTitle(pred)" activator="parent" />
         {{ pred.tag }}
@@ -1144,9 +1165,16 @@ async function pasteClipboard() {
   if (result?.pictureIds.length) await refreshTags();
 }
 
+/** The selected chips that are this picture's tags, not rejected ones. */
+function selectedTagLabels() {
+  return selectedLabels.value.filter((l) =>
+    confirmedTagNames.value.has(l.trim().toLowerCase()),
+  );
+}
+
 /** "Remove tag", or for a selected chip, what its x removes: the selection. */
 function removeLabel(tag) {
-  const n = selectedLabels.value.length;
+  const n = selectedTagLabels().length;
   if (n > 1 && isSelected(tagLabel(tag))) return `Remove ${n} selected tags (Del)`;
   return "Remove tag";
 }
@@ -1157,10 +1185,13 @@ function onRemoveClick(tag) {
   else void removeAllTag(tag);
 }
 
-/** A selected chip's x, or Delete with chips selected: one batch for all. */
+/**
+ * A selected chip's x, or Delete with chips selected: one batch for all. A
+ * selected rejected chip is only there to copy; it is never removed.
+ */
 async function removeSelection() {
-  if (readOnly.value || !selectedLabels.value.length) return;
-  const labels = [...selectedLabels.value];
+  const labels = selectedTagLabels();
+  if (readOnly.value || !labels.length) return;
   clearSelection();
   await removeTagsFromPicture(labels);
 }
