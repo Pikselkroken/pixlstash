@@ -6,11 +6,30 @@
   <AppDialog
     :open="open"
     :title="title"
+    :subtitle="sizeText"
     size="sm"
     @close="upscale.close()"
     @accept="submit"
   >
-    <UpscaleChoice :size="size" :disabled="sending" />
+    <div class="upd-thumbs" data-testid="upscale-thumbs">
+      <img
+        v-for="id in shownIds"
+        :key="id"
+        class="upd-thumb"
+        :src="pictureThumbnailUrl(id)"
+        alt=""
+      />
+      <span v-if="moreCount" class="upd-thumb upd-more">+{{ moreCount }}</span>
+    </div>
+    <UpscaleChoice :disabled="sending" />
+    <p v-if="offerRealEsrgan" class="upd-get" data-testid="upscale-get-model">
+      <template v-if="realEsrganBusy"
+        >Downloading RealESRGAN: the Tasks tab shows how far.</template
+      >
+      <button v-else type="button" class="upd-link" @click="getRealEsrgan">
+        Download RealESRGAN x4, a general-purpose upscaler
+      </button>
+    </p>
     <p
       v-if="again.length"
       class="upd-warn"
@@ -42,8 +61,17 @@ import UpscaleChoice from "./UpscaleChoice.vue";
 import { useUpscaleStore } from "../../stores/useUpscaleStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useTasksStore } from "../../stores/useTasksStore";
+import { pictureThumbnailUrl } from "../../api/pictures";
 import { preflightUpscale, upscalePictures } from "../../api/workflows";
+import { downloadModels } from "../../composables/useModelDownloads";
 import { errorDetail } from "../../utils/apiError";
+import { isReadOnly } from "../../utils/apiClient";
+
+// Offered when the shelf has no RealESRGAN: by this name the server finds its
+// link in ComfyUI's template list (POST /model-downloads).
+const REALESRGAN_FILE = "RealESRGAN_x4plus.safetensors";
+// Five thumbnails fit the sm dialog's width; past that, four and a "+n".
+const MAX_THUMBS = 5;
 
 const upscale = useUpscaleStore();
 const notices = useNoticeStore();
@@ -54,6 +82,12 @@ const count = computed(() => upscale.pictureIds?.length || 0);
 const title = computed(() =>
   count.value === 1 ? "Upscale picture" : `Upscale ${count.value} pictures`,
 );
+
+const shownIds = computed(() => {
+  const ids = upscale.pictureIds || [];
+  return ids.length > MAX_THUMBS ? ids.slice(0, MAX_THUMBS - 1) : ids;
+});
+const moreCount = computed(() => count.value - shownIds.value.length);
 
 /** The preflight's `{picture_id, width, height, upscaled}` per picture. */
 const pictures = ref([]);
@@ -83,6 +117,51 @@ const size = computed(() => {
   return sizes.size === 1 && first?.width && first?.height
     ? { width: first.width, height: first.height }
     : null;
+});
+
+/** "→ 2048 × 2048" beside the title, once the size is known. */
+const sizeText = computed(() => {
+  if (!size.value) return "";
+  const { width, height } = size.value;
+  const by = upscale.factor;
+  return `→ ${Math.round(width * by)} × ${Math.round(height * by)}`;
+});
+
+const realEsrgan = computed(() =>
+  (upscale.models || []).find((m) =>
+    /realesrgan/i.test(`${m.name} ${m.filename || ""}`),
+  ),
+);
+const offerRealEsrgan = computed(
+  () => !isReadOnly.value && upscale.models !== null && !realEsrgan.value,
+);
+const starting = ref(false);
+// Set by the link, so the model it fetched is the one picked once it lands.
+const pickRealEsrgan = ref(false);
+const realEsrganBusy = computed(
+  () => starting.value || tasks.runningDownloadFiles.has(REALESRGAN_FILE),
+);
+
+async function getRealEsrgan() {
+  starting.value = true;
+  try {
+    pickRealEsrgan.value = (await downloadModels([REALESRGAN_FILE])) > 0;
+  } finally {
+    starting.value = false;
+  }
+}
+
+// A landed download may be an upscaler: read the shelf again.
+watch(
+  () => tasks.downloadsLanded,
+  () => upscale.loadModels(),
+);
+
+watch(realEsrgan, (found) => {
+  if (found && pickRealEsrgan.value) {
+    pickRealEsrgan.value = false;
+    upscale.setModel(found.sha256);
+  }
 });
 
 /** The pictures already upscaled in their own run: not skipped, but said. */
@@ -132,6 +211,46 @@ async function submit() {
 </script>
 
 <style scoped>
+.upd-thumbs {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.upd-thumb {
+  width: 64px;
+  height: 64px;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  display: block;
+}
+
+.upd-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  box-sizing: border-box;
+  border: 1px solid rgb(var(--v-theme-border));
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.upd-get {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.upd-link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+}
+
 .upd-warn {
   display: flex;
   align-items: flex-start;
