@@ -247,7 +247,11 @@ import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
-import { formatKeyHint, selectAllKeyHint } from "../../utils/shortcutHints";
+import {
+  formatKeyHint,
+  isApplePlatform,
+  selectAllKeyHint,
+} from "../../utils/shortcutHints";
 import {
   deletableModels,
   formatModelSize,
@@ -287,6 +291,8 @@ const emit = defineEmits([
   "set-icon",
   "clear-icons",
   "move",
+  "cut",
+  "paste",
   "merge-copies",
   "open-location",
   "works-with",
@@ -307,6 +313,7 @@ const moves = useModelMovesStore();
 // is - the same job the `Esc` cap next to Clear does. Read once at setup: the
 // platform cannot change under a mounted component.
 const selectAllHint = formatKeyHint(selectAllKeyHint());
+const modKey = isApplePlatform() ? "⌘" : "Ctrl";
 
 const countMenuOpen = ref(false);
 const assignMenuOpen = ref(false);
@@ -675,6 +682,20 @@ const movable = computed(
 );
 
 /**
+ * Paste, while something is cut: into the open folder, so only in a folder
+ * view. Anywhere else it says where a paste can go instead.
+ */
+const pasteTitle = computed(() => {
+  if (store.place !== "folder" || !store.folderScope) {
+    return "Open a folder to paste into it, or right-click a folder in Folders";
+  }
+  if (store.folderScope.locked) {
+    return "That folder is locked, so nothing can be moved into it";
+  }
+  return "";
+});
+
+/**
  * Whether the selection is one model with the same bytes on the disk twice.
  *
  * `copies` is the row's own count of `present` locations, carried by the store
@@ -1037,6 +1058,14 @@ const verbHandlers = computed(() => ({
       : "Take out of this run",
   movable: movable.value.length > 0 && !moves.busy,
   moveTitle: moveTitle.value,
+  cuttable: movable.value.length > 0,
+  cutTitle: movable.value.length
+    ? "Pick them up, then paste them into a folder"
+    : "Only files that are actually on this machine can be moved",
+  pastable: Boolean(store.cutCopies),
+  pasteTitle: pasteTitle.value,
+  cutKbd: formatKeyHint([modKey, "X"]),
+  pasteKbd: formatKeyHint([modKey, "V"]),
   mergeable: mergeable.value,
   mergeTitle: mergeTitle.value,
   openable: openable.value,
@@ -1279,6 +1308,23 @@ const VerbItems = (props) => {
           disabled: !props.movable,
           title: props.moveTitle,
         }),
+    // Cut and paste, the keyboard's move (#2204), listed where Move to… is.
+    item("mdi-content-cut", "Cut", {
+      verb: "cut",
+      on: () => props.onVerb("cut"),
+      disabled: !props.cuttable,
+      title: props.cutTitle,
+      kbd: props.cutKbd,
+    }),
+    props.pastable
+      ? item("mdi-content-paste", "Paste", {
+          verb: "paste",
+          on: () => props.onVerb("paste"),
+          disabled: Boolean(props.pasteTitle),
+          title: props.pasteTitle,
+          kbd: props.pasteKbd,
+        })
+      : null,
     // Listed always and disabled with its reason, like the two run verbs above:
     // a reader whose shelf has no duplicates on screen is the one who most needs
     // to learn that the verb exists and what it acts on. NOT the danger

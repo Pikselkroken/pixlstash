@@ -4638,9 +4638,179 @@ describe("the open folder and All models' strip (#2203)", () => {
       wrapper.unmount();
     });
 
-    it("does not drag a row that is not selected", async () => {
-      const { wrapper } = await openFolder();
-      expect(wrapper.find(".shelf-row").attributes("draggable")).toBeUndefined();
+    it("drags an unselected row alone, selecting it first", async () => {
+      const { wrapper, store } = await openFolder();
+      expect(store.selectedRows).toEqual([]);
+      const row = wrapper.find(".shelf-row");
+      expect(row.attributes("draggable")).toBe("true");
+      const setData = vi.fn();
+      const start = new Event("dragstart", { bubbles: true, cancelable: true });
+      start.dataTransfer = { setData, effectAllowed: "" };
+      row.element.dispatchEvent(start);
+      expect(start.defaultPrevented).toBe(false);
+      expect(store.selectedRows.map((one) => one.id)).toEqual([1]);
+      expect(setData).toHaveBeenCalledWith(
+        "application/x-pixlstash-model-copies",
+        JSON.stringify([LOOSE]),
+      );
+      wrapper.unmount();
+    });
+
+    it("cuts and pastes from the row menu", async () => {
+      const { wrapper, store } = await selectLoose();
+      const bar = wrapper.findComponent({ name: "ShelfSelectionBar" });
+      const verb = (name) => bar.findAll(`.ctx-item[data-verb='${name}']`);
+      // Paste is listed only while something is cut.
+      expect(verb("paste").length).toBe(0);
+      await verb("cut")[0].trigger("click");
+      expect(store.cutCopies.items).toEqual([LOOSE]);
+
+      store.setFolderScope({ folderId: 1, path: "Lora" });
+      await flushPromises();
+      expect(verb("paste")[0].attributes("disabled")).toBeUndefined();
+      await verb("paste")[0].trigger("click");
+      await flushPromises();
+      expect(dialog(wrapper).props("open")).toBe(true);
+      expect(dialog(wrapper).props("initialDestination")).toEqual({
+        folderId: 1,
+        path: "Lora",
+      });
+      dialog(wrapper).vm.$emit("started");
+      expect(store.cutCopies).toBe(null);
+      wrapper.unmount();
+    });
+
+    it("disables the menu's Paste outside a folder, and says why", async () => {
+      const { wrapper, store } = await selectLoose();
+      await press("x");
+      store.setPlace("all");
+      await flushPromises();
+      const paste = wrapper
+        .findComponent({ name: "ShelfSelectionBar" })
+        .find(".ctx-item[data-verb='paste']");
+      expect(paste.attributes("disabled")).toBeDefined();
+      expect(tip(paste)).toContain("Open a folder to paste into it");
+      wrapper.unmount();
+    });
+
+    it("pastes into a subfolder with Ctrl V on it, or Paste here in its menu", async () => {
+      const { wrapper, store } = await selectLoose();
+      await press("x");
+      const vae = wrapper.find(".shelf-folder[data-path='VAE']");
+      vae.element.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "v", ctrlKey: true, bubbles: true }),
+      );
+      await flushPromises();
+      expect(dialog(wrapper).props("open")).toBe(true);
+      expect(dialog(wrapper).props("initialDestination")).toEqual({
+        folderId: 1,
+        path: "VAE",
+      });
+      dialog(wrapper).vm.$emit("close");
+      await flushPromises();
+
+      const lora = wrapper.find(".shelf-folder[data-path='Lora']");
+      const menu = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+      lora.element.dispatchEvent(menu);
+      expect(menu.defaultPrevented).toBe(true);
+      await wrapper
+        .find("[data-testid='shelf-folder-menu'] [data-verb='paste']")
+        .trigger("click");
+      await flushPromises();
+      expect(dialog(wrapper).props("open")).toBe(true);
+      expect(dialog(wrapper).props("initialDestination")).toEqual({
+        folderId: 1,
+        path: "Lora",
+      });
+
+      // With nothing cut, a subfolder keeps the platform's own menu.
+      store.clearCut();
+      const plain = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+      lora.element.dispatchEvent(plain);
+      expect(plain.defaultPrevented).toBe(false);
+      wrapper.unmount();
+    });
+
+    it("refuses a paste into a locked folder, and a cut that has gone since", async () => {
+      const { wrapper, store } = await selectLoose();
+      await press("x");
+      expect(store.pasteCut({ folderId: 1, path: "VAE", locked: true })).toBe(false);
+      expect(useNoticeStore().notices.at(-1).text).toBe(
+        "That folder is locked, so nothing can be moved into it.",
+      );
+      expect(store.cutCopies).not.toBe(null);
+
+      store.cutCopies = { ...store.cutCopies, ids: new Set([999]) };
+      expect(store.pasteCut({ folderId: 1, path: "VAE" })).toBe(false);
+      expect(useNoticeStore().notices.at(-1).text).toBe(
+        "What you cut has moved or gone since, so there is nothing to paste.",
+      );
+      expect(store.cutCopies).toBe(null);
+      await flushPromises();
+      expect(dialog(wrapper).props("open")).toBe(false);
+      wrapper.unmount();
+    });
+
+    it("opens a subfolder's menu from the keyboard while something is cut", async () => {
+      const { wrapper } = await selectLoose();
+      const vae = wrapper.find(".shelf-folder[data-path='VAE']");
+      const key = () => {
+        const event = new KeyboardEvent("keydown", {
+          key: "F10",
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+        });
+        vae.element.dispatchEvent(event);
+        return event;
+      };
+      expect(key().defaultPrevented).toBe(false);
+      await press("x");
+      expect(key().defaultPrevented).toBe(true);
+      await wrapper
+        .find("[data-testid='shelf-folder-menu'] [data-verb='paste']")
+        .trigger("click");
+      await flushPromises();
+      expect(dialog(wrapper).props("initialDestination")).toEqual({
+        folderId: 1,
+        path: "VAE",
+      });
+      wrapper.unmount();
+    });
+
+    it("refuses to drag an unmovable row without touching the selection", async () => {
+      listModelFolders.mockResolvedValue([FOLDER]);
+      const wrapper = await mountShelf([
+        adapter({ id: 1, locations: at("loose.safetensors") }),
+        adapter({
+          id: 2,
+          sha256: "b".repeat(64),
+          locations: [{ ...at("gone.safetensors")[0], state: "missing" }],
+        }),
+      ]);
+      const store = useModelShelfStore();
+      await flushPromises();
+      store.toggleSelected(1);
+      await flushPromises();
+      const gone = wrapper
+        .findAll(".shelf-row[data-row-key]")
+        .find((one) => !one.classes("shelf-row--selected"));
+      const start = new Event("dragstart", { bubbles: true, cancelable: true });
+      start.dataTransfer = { setData: vi.fn(), effectAllowed: "" };
+      gone.element.dispatchEvent(start);
+      expect(start.defaultPrevented).toBe(true);
+      expect(store.selectedRows.map((one) => one.id)).toEqual([1]);
+      wrapper.unmount();
+    });
+
+    it("refuses a paste into the folder the cut files are already in", async () => {
+      const { wrapper } = await selectLoose();
+      await press("x");
+      await press("v");
+      expect(dialog(wrapper).props("open")).toBe(false);
+      expect(useNoticeStore().notices.at(-1).text).toBe(
+        "What you cut is already in that folder.",
+      );
       wrapper.unmount();
     });
   });

@@ -5815,9 +5815,11 @@ confirmation, a drop included.
 - **Move to…**, on the selection pill and in the row menu, calls `openMove`. The
   dialog opens with **nothing chosen**: the destination is always the reader's
   own pick. (It used to pre-select the managed store, which takes no moves now.)
-- **Drag.** A *selected* row is `draggable` (an unselected one is not, so a
-  click-drag never moves what was not chosen) and carries the selection's
-  movable copies under the private type `application/x-pixlstash-model-copies`
+- **Drag.** Every row of the shelf list is `draggable` (the set grid's cards
+  are not). Dragging an unselected row makes it the selection first, alone, as
+  a file manager does, unless it has nothing movable, when it refuses before
+  touching the selection; the drag carries the
+  selection's movable copies under the private type `application/x-pixlstash-model-copies`
   (`MODEL_COPIES_TYPE`). `store.dragCopies` holds them for the drag, because a
   drop target cannot read `dataTransfer` data before the drop. Folders tree rows
   (in `browse` mode) and the folder view's subfolder rows take the drop, through
@@ -5832,14 +5834,24 @@ confirmation, a drop included.
   `store.requestMove`, and `ModelShelf` (which owns the dialog; the tree is in
   the sidebar) opens it with that folder pre-chosen and focus on **Move**, so
   Enter confirms.
-- **Cut and paste**, in `onShelfKeydown`. `Ctrl X` holds the selection's
-  movable copies in `store.cutCopies`, and those rows draw at
-  `--opacity-disabled` until the paste. `Ctrl V` in a folder view opens the
-  dialog pre-chosen to the open folder; outside a folder it does nothing, and a
-  locked folder says so. `Esc` puts the cut back before it clears a selection,
-  one undo per press. The cut is spent when the pasted move starts. All three
-  keys are in the shortcuts dialog, and inside a text field the guard hands them
-  back, so cutting text still cuts text.
+- **Cut and paste**, from the keyboard and from the menus. `Ctrl X`, or
+  **Cut** in the row menu and the pill's `⋯`, holds the selection's movable
+  copies in `store.cutCopies`, and those rows draw at `--opacity-disabled`
+  until the paste. A paste lands in a folder, and every way in ends in
+  `store.pasteCut(destination)`, which refuses a locked folder, a cut that has
+  since moved or gone, and a folder every cut file is already in, and otherwise
+  calls `store.requestMove` with `fromCut` so the dialog opens pre-chosen:
+  `Ctrl V` or **Paste** in the row menu (the open folder, so only in a folder
+  view; the menu entry shows only while something is cut and says why it is
+  disabled elsewhere), `Ctrl V` on a focused subfolder row of the folder view
+  or **Paste here** in its menu (right-click, Shift+F10 or the Menu key; that
+  subfolder), and `Ctrl V` on a
+  focused Folders tree row or **Paste here** at the top of its menu (that
+  folder; a locked one, which has no menu, says why it refuses). `Esc` puts the
+  cut back before it clears a selection, one undo per press. The cut is spent
+  when the pasted move starts. All three keys are in the shortcuts dialog, and
+  inside a text field the guard hands them back, so cutting text still cuts
+  text.
 
 **The window's importer ignores the drag.** `useWindowFileImport` takes only a
 drag whose `types` carry `Files` and not the private type, so a row dropped

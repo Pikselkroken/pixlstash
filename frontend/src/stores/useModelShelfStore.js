@@ -43,6 +43,7 @@ import { errorDetail } from "../utils/apiError";
 import {
   adapterKindKey,
   adapterKindLabel,
+  allAlreadyIn,
   baseModelKey,
   collapseStacks,
   capabilityIcon,
@@ -3657,9 +3658,53 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   /**
    * @param {Object} copies - from {@link movableCopies}.
    * @param {{folderId: number, path: string}} destination
+   * @param {boolean} [fromCut] - a paste: the cut is spent once it starts.
    */
-  function requestMove(copies, destination) {
-    moveRequest.value = { copies, destination, at: (moveAsks += 1) };
+  function requestMove(copies, destination, fromCut = false) {
+    moveRequest.value = { copies, destination, fromCut, at: (moveAsks += 1) };
+  }
+
+  /**
+   * Paste the cut into a folder: the Move dialog, pre-chosen to it. One rule
+   * for every way in - `Ctrl V` and *Paste* in the row menu (the open folder),
+   * and *Paste here* or `Ctrl V` on a folder row - so each refuses the same
+   * way: a locked folder, a cut that has since moved or gone, and a folder
+   * every cut file is already in.
+   *
+   * @param {{folderId: number, path?: string, locked?: boolean}} destination
+   * @returns {boolean} whether the dialog was asked for.
+   */
+  function pasteCut(destination) {
+    const notices = useNoticeStore();
+    if (destination.locked) {
+      notices.push({
+        level: "info",
+        text: "That folder is locked, so nothing can be moved into it.",
+      });
+      return false;
+    }
+    const copies = liveCut();
+    if (!copies?.items.length) {
+      clearCut();
+      notices.push({
+        level: "info",
+        text: "What you cut has moved or gone since, so there is nothing to paste.",
+      });
+      return false;
+    }
+    const target = {
+      folderId: Number(destination.folderId),
+      path: destination.path ?? "",
+    };
+    if (allAlreadyIn(copies.items, target)) {
+      notices.push({
+        level: "info",
+        text: "What you cut is already in that folder.",
+      });
+      return false;
+    }
+    requestMove(copies, target, true);
+    return true;
   }
 
   /**
@@ -5113,5 +5158,6 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     liveCut,
     isCut,
     requestMove,
+    pasteCut,
   };
 });
