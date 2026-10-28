@@ -1095,6 +1095,18 @@
   background: var(--scrim-photo-strong);
 }
 
+/* The heart's SVG spans the pill's side padding, so a lone heart and its pill
+   are one box and snap to the same device pixels; the SVG centres its path in
+   it. Sized to the glyph, at a fractional display scale the two snapped apart
+   and the heart sat off centre (up to 0.7 device px measured at 1.1 and 1.2).
+   Pointer-inert, so the click target stays the glyph's own box and the padding
+   still reaches the card. */
+.thumbnail-top-right-badges > .star-overlay :deep(.star-overlay__heart svg) {
+  width: calc(100% + 2 * var(--space-2));
+  margin-inline: calc(-1 * var(--space-2));
+  pointer-events: none;
+}
+
 /* A favourite at rest is the same strip collapsed to its heart: same pill,
    padding, glyph and height. Under the pointer only the stars move, sliding
    out to the left, so the heart never moves under the pointer. Reduced motion
