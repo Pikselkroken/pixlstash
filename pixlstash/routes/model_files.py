@@ -448,7 +448,10 @@ class RemoveFolderPlanResponse(BaseModel):
         )
     )
     fingerprint: str = Field(
-        description="Over every file's (relpath, size, mtime). Send it back as `expect`."
+        description=(
+            "Over every file's (relpath, size, mtime) and every shelf row's "
+            "(relpath, model_id, state) under it. Send it back as `expect`."
+        )
     )
     trash_name: str = Field(default=TRASH_NAME)
 
@@ -512,12 +515,24 @@ def _folder_listing(path: str) -> list[tuple[str, int, int, bool]]:
     return entries
 
 
-def _fingerprint(listing: list[tuple[str, int, int, bool]]) -> str:
-    """One digest over every entry's ``(relpath, size, mtime)``, order-free."""
+def _fingerprint(listing: list[tuple[str, int, int, bool]], rows: list) -> str:
+    """One digest over every entry's ``(relpath, size, mtime)`` and every shelf
+    row under the directory's ``(relpath, model_id, state)``, order-free.
+
+    The rows are in it because the removal purges by them: a scan that
+    registers a file or changes a row's state since the dry run leaves the
+    bytes alone, and the dialog would not have weighed that model.
+    """
     digest = hashlib.sha256()
     for relpath, size, mtime, _link in sorted(listing):
         digest.update(
             f"{relpath}\0{size}\0{mtime}\n".encode("utf-8", "surrogateescape")
+        )
+    for relpath, model_id, state in sorted(
+        (row["relpath"], int(row["model_id"]), row["state"]) for row in rows
+    ):
+        digest.update(
+            f"row\0{relpath}\0{model_id}\0{state}\n".encode("utf-8", "surrogateescape")
         )
     return digest.hexdigest()
 
@@ -1701,7 +1716,7 @@ def create_router(server) -> APIRouter:
                     breaks=consequences["breaks"],
                     pictures=consequences["pictures"],
                     copies=present,
-                    fingerprint=_fingerprint(listing),
+                    fingerprint=_fingerprint(listing, rows),
                 ).model_dump(),
             )
 
@@ -1724,7 +1739,8 @@ def create_router(server) -> APIRouter:
         try:
             _folder, subpath, target = _removal_target(folder_id, payload.path)
             listing = _read_folder(target, subpath)
-            if _fingerprint(listing) != payload.expect:
+            rows = rows_under(server.hub.fetchall, folder_id, subpath)
+            if _fingerprint(listing, rows) != payload.expect:
                 raise HTTPException(
                     status_code=409,
                     detail=(

@@ -12182,7 +12182,9 @@ list (previews, notes, sidecars) go too.
   lists them as entries of their own, largest first, each with the `model_id`
   of the `present` row naming it or null. An unreadable directory is a 409
   rather than a short listing. `fingerprint` is a SHA-256 over every entry's
-  `(relpath, size, mtime)`.
+  `(relpath, size, mtime)` and every `model_file` row under it as
+  `(relpath, model_id, state)`: the purge acts on the rows, and a scan can
+  change them without touching a byte.
 - **`breaks`** is `model_shelf_service.folder_removal_consequences`. A model
   breaks something only when every `present` copy of it is inside the
   directory. Every model with a row under it counts, whatever the row's state,

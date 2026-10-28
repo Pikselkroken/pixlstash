@@ -11498,6 +11498,19 @@ def test_a_stale_fingerprint_is_a_409_and_removes_nothing(
     assert (old_folder / "old" / "lost.safetensors").exists()
     assert list(fake_trash.iterdir()) == []
 
+    # A row that changes with the bytes left alone (a scan marking a copy
+    # missing, or registering a file) is a change too: the purge acts on rows.
+    plan = _plan_removal(shelf_env)
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model_file SET state = 'missing' WHERE model_folder_id = 1"
+        )
+    r = shelf_env.owner.post(
+        _REMOVE, json={"path": "old", "expect": plan["fingerprint"]}
+    )
+    assert r.status_code == 409, r.text
+    assert (old_folder / "old" / "lost.safetensors").exists()
+
     missing = shelf_env.owner.post(_REMOVE, json={"path": "old"})
     assert missing.status_code == 400, missing.text
     assert (old_folder / "old").is_dir(), "a removal without a fingerprint went ahead"
