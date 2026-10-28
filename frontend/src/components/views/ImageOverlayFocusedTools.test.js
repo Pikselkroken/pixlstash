@@ -180,7 +180,6 @@ describe("the lightbox toolbar is navigation, filing and view", () => {
     const bar = wrapper.find(".overlay-topbar");
     for (const gone of [
       '[aria-label="Face boxes"]',
-      '[aria-label="Object detection boxes"]',
       '[aria-label="Draw a face box"]',
       '[aria-keyshortcuts="["]',
       '[data-testid="overlay-upscale"]',
@@ -188,13 +187,14 @@ describe("the lightbox toolbar is navigation, filing and view", () => {
     ]) {
       expect(bar.find(gone).exists(), gone).toBe(false);
     }
+    expect(bar.find(".overlay-segmentation-btn").exists()).toBe(true);
     expect(bar.find(".zoom-btn").exists()).toBe(true);
     expect(bar.find(".overlay-compare-btn").exists()).toBe(true);
     expect(bar.find(".overlay-fullscreen-btn").exists()).toBe(true);
   });
 });
 
-describe("boxes are drawn while asked about, never left on", () => {
+describe("boxes are drawn while asked about or switched on", () => {
   it("draws none until asked", async () => {
     const wrapper = await openMeasured();
     expect(wrapper.findAll(".face-bbox-overlay").length).toBe(2);
@@ -247,6 +247,29 @@ describe("boxes are drawn while asked about, never left on", () => {
     await flush();
     expect(shownBoxes(wrapper)).toEqual([]);
     input.remove();
+  });
+
+  it("keeps the detection boxes on while Segmentation boxes is pressed", async () => {
+    const wrapper = await openMeasured();
+    const toggle = wrapper.find(".overlay-segmentation-btn");
+    expect(toggle.attributes("aria-pressed")).toBe("false");
+    await toggle.trigger("click");
+    await flush();
+    expect(toggle.attributes("aria-pressed")).toBe("true");
+    expect(shownBoxes(wrapper)).toEqual(["dragon"]);
+    await toggle.trigger("click");
+    await flush();
+    expect(shownBoxes(wrapper)).toEqual([]);
+  });
+
+  it("presses Segmentation boxes when a Segment run starts", async () => {
+    const wrapper = await openMeasured();
+    wrapper.vm.showSegmentation();
+    await flush();
+    expect(
+      wrapper.find(".overlay-segmentation-btn").attributes("aria-pressed"),
+    ).toBe("true");
+    expect(shownBoxes(wrapper)).toEqual(["dragon"]);
   });
 
   it("rings a face's crop while the face on the picture is pointed at", async () => {

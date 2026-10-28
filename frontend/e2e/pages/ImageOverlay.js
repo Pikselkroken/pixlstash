@@ -16,7 +16,7 @@ export class ImageOverlay {
     this.prev = page.locator('.overlay-nav-left')
     this.facesSection = page.locator('.sidebar-section--faces')
     this.faceCrops = page.locator('.face-assign-crop')
-    // There are no box switches: pointing at a face's chip draws its box.
+    // Face boxes have no switch: pointing at a face's chip draws its box.
     this.faceChips = page.locator('.face-chip')
     // The pane is the app's right rail: it opens and shuts with the grid's.
     this.pane = page.locator('.image-overlay .overlay-sidebar')

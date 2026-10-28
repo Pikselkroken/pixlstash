@@ -138,6 +138,17 @@
             />
           </template>
         </Tooltip>
+        <!-- Segmentation boxes stay on while this is pressed; starting a
+             Segment run presses it (`showSegmentation`). -->
+        <AppBarButton
+          v-if="image"
+          class="overlay-segmentation-btn"
+          icon="shape-outline"
+          tooltip="Segmentation boxes"
+          :active="showDetections"
+          :aria-pressed="showDetections ? 'true' : 'false'"
+          @click.stop="showDetections = !showDetections"
+        />
         <!-- Compare two pictures Ctrl-clicked in the filmstrip. Shown greyed
              until there are two: the tip says how to pick them. -->
         <AppBarButton
@@ -373,9 +384,10 @@
                   </div>
                 </template>
               </template>
-              <!-- No box switches: a box is drawn while the reader asks about
-                   what it outlines (a face crop or a detected tag pointed at
-                   in Info), every box while Shift is held, and the face boxes
+              <!-- A box is drawn while the reader asks about what it outlines
+                   (a face crop or a detected tag pointed at in Info), every
+                   box while Shift is held, the detection boxes while the
+                   Segmentation boxes toggle is pressed, and the face boxes
                    while one is being drawn. Out of the way while a selection
                    is being painted. -->
               <template v-if="overlayReady && !paintActive">
@@ -386,6 +398,12 @@
                   class="face-bbox-empty"
                 >
                   No faces or objects found
+                </div>
+                <div
+                  v-else-if="showDetections && !detectionBboxes.length"
+                  class="face-bbox-empty"
+                >
+                  No objects found
                 </div>
                 <div
                   v-for="(face, idx) in faceBboxes"
@@ -403,7 +421,11 @@
                 </div>
                 <div
                   v-for="(det, idx) in detectionBboxes"
-                  v-show="boxesAll || detectionMatchesTag(det, hoveredTagLabel)"
+                  v-show="
+                    boxesAll ||
+                    showDetections ||
+                    detectionMatchesTag(det, hoveredTagLabel)
+                  "
                   :key="`det-${idx}`"
                   class="face-bbox-overlay"
                   :style="getOverlayBoxStyle(det.bbox, detectionBoxColor(det))"
@@ -4012,10 +4034,10 @@ const filmstripCanvasWindow = computed(() => filmstripCanvasData.value.items);
 
 // ── Boxes on demand ────────────────────────────────────────────────────────
 //
-// No box switches: a box is drawn while the reader asks about what it
-// outlines, and never left on. Pointing at a face crop in Info draws that
-// face's box; pointing at a tag the object detector found draws its box;
-// holding Shift draws every box. Pointing at a face on the picture rings its
+// A box is drawn while the reader asks about what it outlines. Pointing at a
+// face crop in Info draws that face's box; pointing at a tag the object
+// detector found draws its box; holding Shift draws every box. The one switch
+// is the toolbar's Segmentation boxes, which keeps the detection boxes on. Pointing at a face on the picture rings its
 // crop in Info.
 const FACE_CHIP_SIZE = 42;
 const shiftHeld = ref(false);
@@ -4027,6 +4049,8 @@ const namingFaces = ref(false);
 // Shift means "add" to the selection tools, so boxes stand down while they
 // are out, as the face boxes always did.
 const boxesAll = computed(() => shiftHeld.value && !paintActive.value);
+// The toolbar's Segmentation boxes toggle: every detection box, left on.
+const showDetections = ref(false);
 
 /** The labels the object detector found, folded for matching against tags. */
 const detectionLabels = computed(
@@ -6052,6 +6076,10 @@ defineExpose({
   copyMedia,
   showRunResult,
   moveStackMember,
+  // A Segment run started: press the toggle so its boxes show when they land.
+  showSegmentation: () => {
+    showDetections.value = true;
+  },
 });
 </script>
 <style scoped src="./ImageOverlay.css"></style>

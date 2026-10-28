@@ -8410,6 +8410,7 @@ async function confirmSegment() {
   // field), and the overlay reconciles too if open.
   try {
     await detectPictures(ids, segmentPrompt.value.trim());
+    imageOverlayRef.value?.showSegmentation();
     // Nudge the tasks poller so the activity light / Tasks-tab pulse appear
     // within one poll RTT instead of up to the 5 s idle interval later.
     tasksStore.nudge();
