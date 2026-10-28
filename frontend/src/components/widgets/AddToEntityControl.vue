@@ -361,11 +361,10 @@ const props = defineProps({
   // clips or scrolls: the grid context menu is itself fixed and teleported,
   // and SelectionMenu has no clipping ancestor. It is NOT true in the
   // overlay's topbar, which scrolls sideways and so clips to its own band, nor
-  // inside the overlay's Faces panel, where `.overlay-sidebar` is
-  // `overflow: hidden` and `.face-assign-grid` is `overflow-y: auto`: an
-  // absolutely positioned menu there is both clipped AND inflates the
-  // scroller's extent, which is the spurious scrollbar this prop exists to
-  // remove.
+  // inside the Faces panel (`FacesPanel`), whose body is `overflow-y: auto`
+  // inside an `overflow: hidden` sidebar: an absolutely positioned menu there
+  // is both clipped AND inflates the scroller's extent, which is the spurious
+  // scrollbar this prop exists to remove.
   //
   // Host layout, not entity type, decides this, which is why it is a prop and
   // not tied to `type === "face"`. Incompatible with `placement="right"`: the

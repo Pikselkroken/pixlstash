@@ -290,13 +290,65 @@ describe("boxes are drawn while asked about or switched on", () => {
     );
   });
 
-  it("draws a face box from the faces menu", async () => {
+  it("edits faces in a panel over the sidebar, not an inline grid", async () => {
     const wrapper = await openMeasured();
+    const section = wrapper.find(".sidebar-section--faces");
+    expect(section.find('[aria-label="More face actions"]').exists()).toBe(false);
+    await section.find('[aria-label="Edit faces"]').trigger("click");
+    const panel = section.find(".faces-panel");
+    expect(panel.exists()).toBe(true);
+    expect(panel.classes()).toContain("faces-panel--on-dark");
+    expect(panel.findAll(".faces-panel__row")).toHaveLength(1);
+    // Pointing at a row draws its face's box, as its crop does.
+    await panel.find(".faces-panel__row").trigger("mouseenter");
+    expect(shownBoxes(wrapper)).toEqual(["Face 1"]);
+    await panel.find(".faces-panel__row").trigger("mouseleave");
+    expect(shownBoxes(wrapper)).toEqual([]);
+  });
+
+  it("keeps the panel while a face row's new-person dialog is up", async () => {
+    const wrapper = await openMeasured();
+    await wrapper.find('[aria-label="Edit faces"]').trigger("click");
+    wrapper
+      .find(".faces-panel")
+      .findComponent({ name: "AddToEntityControl" })
+      .vm.$emit("create", "Ranger");
+    await flush();
+    // A press in the dialog is outside the panel; the row it came from must
+    // still be there for focus to return to.
+    document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    await flush();
+    expect(wrapper.find(".faces-panel").exists()).toBe(true);
+  });
+
+  it("Escape shuts the faces panel, not the lightbox, wherever focus is", async () => {
+    const wrapper = await openMeasured();
+    await wrapper.find('[aria-label="Edit faces"]').trigger("click");
+    document.activeElement?.blur();
+    press("Escape");
+    await flush();
+    expect(wrapper.find(".faces-panel").exists()).toBe(false);
+    expect(wrapper.emitted("close")).toBeUndefined();
+  });
+
+  it("shuts the faces panel on a step to the next picture", async () => {
+    const wrapper = await openMeasured();
+    await wrapper.find('[aria-label="Edit faces"]').trigger("click");
+    press("ArrowRight");
+    await flush();
+    await flush();
+    expect(wrapper.find(".faces-panel").exists()).toBe(false);
+  });
+
+  it("draws a face box from the faces panel's footer", async () => {
+    const wrapper = await openMeasured();
+    await wrapper.find('[aria-label="Edit faces"]').trigger("click");
     const draw = wrapper
-      .findAll(".sidebar-section--faces .ctx-item")
+      .findAll(".faces-panel .tbm-footer button")
       .find((item) => item.text().includes("Draw a face box"));
     await draw.trigger("click");
     expect(wrapper.find(".overlay-draw-layer").exists()).toBe(true);
+    expect(wrapper.find(".faces-panel").exists()).toBe(false);
   });
 });
 

@@ -1481,8 +1481,7 @@ defineExpose({
 }
 
 /* Secondary list: cap it so a long rejection set cannot push Metadata out of
-   the sidebar, and scroll the remainder. Mirrors `.face-assign-grid`, which
-   already bounds-and-scrolls the Faces section of this same sidebar. */
+   the sidebar, and scroll the remainder. */
 .tag-drop-zone--predictions {
   gap: var(--space-2);
   /* ~4 chip rows: a 11px/1.2 chip is ~17px, plus the --space-2 row gap and the

@@ -908,8 +908,8 @@ These get skipped and that is exactly why a UI looks cheap.
   the only signal that a bounded list continues, so it stays visible rather than
   fading until hover, and the track stays transparent so it does not draw a second
   line next to an existing border. Reference: the four scroll regions of the image
-  overlay sidebar (`.tag-list`, `.tag-drop-zone--predictions`, `.face-assign-grid`,
-  and the description `textarea`).
+  overlay sidebar (`.tag-list`, `.tag-drop-zone--predictions`, the Faces panel's
+  `.faces-panel__body`, and the description `textarea`).
 
 ---
 
