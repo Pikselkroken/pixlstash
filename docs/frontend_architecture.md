@@ -4865,7 +4865,13 @@ neither edge moves on a workspace switch.
   folder view cannot read (404, 409, a remote owner's 403) says so in a banner
   over the list rather than reading as "no subfolders". Every registered
   folder's own level is read once on mount, for its count and whether it has
-  any subfolders. A **locked** folder (`movable !== "per_item"`: the managed
+  any subfolders. A registered folder is **named by
+  `useModelFoldersStore().labelByFolderId`**, which the breadcrumb, the rail,
+  the drop tip and the drop-target chooser read too: its tool, else its last
+  segment, and where two would share that name (every StabilityMatrix
+  folder), the shortest path tail no namesake shares, with the tool after it
+  when it has one: `Lora (StabilityMatrix)`. A
+  **locked** folder (`movable !== "per_item"`: the managed
   store, the HuggingFace cache, the InsightFace packs) shows a lock and never
   expands. **Rows are flat**, carrying `aria-level`, under one `role="tree"`
   rather than nested `group`s: the roving tabindex walks one list (Up/Down,

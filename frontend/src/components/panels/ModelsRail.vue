@@ -213,10 +213,7 @@ import { useRoute } from "vue-router";
 import { VIcon } from "vuetify/components";
 
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
-import {
-  basename,
-  useModelFoldersStore,
-} from "../../stores/useModelFoldersStore";
+import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { formatModelSize, shelfTypeMark } from "../../utils/modelShelf";
@@ -368,10 +365,7 @@ const openFolderName = computed(() => {
   const scope = store.folderScope;
   if (!scope) return "";
   if (scope.path) return scope.path.split("/").pop();
-  const folder = foldersStore.folders.find(
-    (one) => Number(one.id) === scope.folderId,
-  );
-  return folder ? folder.tool || basename(folder.path) || folder.path : "";
+  return foldersStore.labelByFolderId.get(scope.folderId) ?? "";
 });
 
 function clearSelection() {

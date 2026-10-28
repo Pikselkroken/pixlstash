@@ -107,10 +107,7 @@ import { VIcon } from "vuetify/components";
 
 import { DOWNLOADS_KIND, SOURCE_KIND } from "../../api/modelFolders";
 import { useModelCopyDrop } from "../../composables/useModelCopyDrop";
-import {
-  basename,
-  useModelFoldersStore,
-} from "../../stores/useModelFoldersStore";
+import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { driveFullness } from "../../utils/libraryChrome";
 import {
   comfyuiLoadsTitle,
@@ -154,8 +151,6 @@ const expanded = ref(new Set());
 const closedDrives = ref(new Set());
 
 const isLocked = (folder) => folder.movable !== "per_item";
-const folderName = (folder) =>
-  folder.tool || basename(folder.path) || folder.path;
 const nodeKey = (folderId, path) => `f:${folderId}:${path}`;
 const count = (n) => (n == null ? "" : Number(n).toLocaleString());
 
@@ -275,7 +270,7 @@ const nodes = computed(() => {
         kind: "folder",
         folderId: Number(folder.id),
         path: "",
-        name: folderName(folder),
+        name: foldersStore.labelByFolderId.get(Number(folder.id)) ?? "",
         level: 2,
         locked: isLocked(folder),
       });

@@ -16,7 +16,7 @@
 
 import { onMounted, onUnmounted, readonly, ref } from "vue";
 import { listAdapters, listCheckpoints } from "../api/modelShelf";
-import { basename, useModelFoldersStore } from "../stores/useModelFoldersStore";
+import { useModelFoldersStore } from "../stores/useModelFoldersStore";
 import { SUPPORT_KINDS } from "../stores/useModelShelfStore";
 import { isFileDrag, isInternalImageDrag } from "../utils/media.js";
 
@@ -128,12 +128,12 @@ export async function resolveModelDropFolder(el, fileLabel) {
     .sort((a, b) => b[1] - a[1])
     .map(([id, count]) => ({
       id,
-      label: `${basename(eligible.get(id).path)} - beside ${count === 1 ? "1 of its models" : `${count} of its models`}`,
+      label: `${foldersStore.labelByFolderId.get(id)} - beside ${count === 1 ? "1 of its models" : `${count} of its models`}`,
     }));
   if (defaultFolder) {
     options.push({
       id: defaultId,
-      label: `${basename(defaultFolder.path)} - your default folder`,
+      label: `${foldersStore.labelByFolderId.get(defaultId)} - your default folder`,
     });
   }
   return ask(fileLabel, options);

@@ -1405,10 +1405,7 @@ import {
   MIN_COLUMN_WIDTHS,
   useModelShelfStore,
 } from "../../stores/useModelShelfStore";
-import {
-  basename,
-  useModelFoldersStore,
-} from "../../stores/useModelFoldersStore";
+import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useOperationStore } from "../../stores/useOperationStore";
@@ -3798,7 +3795,7 @@ const breadcrumb = computed(() => {
   if (openDriveName.value) crumbs.push({ label: openDriveName.value });
   crumbs.push({
     label: folder
-      ? folder.tool || basename(folder.path) || folder.path
+      ? (foldersStore.labelByFolderId.get(Number(folder.id)) ?? "Folder")
       : "Folder",
     go: parts.length ? () => openSubfolder("") : null,
   });

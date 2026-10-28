@@ -9,7 +9,7 @@
 import { ref } from "vue";
 
 import {
-  basename,
+  folderLabels,
   useModelFoldersStore,
 } from "../stores/useModelFoldersStore";
 import { useModelShelfStore } from "../stores/useModelShelfStore";
@@ -24,12 +24,8 @@ import {
 
 /** "Models/Lora": the registered folder's name, then the subfolder. */
 export function destinationName(folders, destination) {
-  const folder = folders.find(
-    (one) => Number(one.id) === Number(destination.folderId),
-  );
-  const root = folder
-    ? folder.tool || basename(folder.path) || folder.path
-    : "that folder";
+  const root =
+    folderLabels(folders).get(Number(destination.folderId)) ?? "that folder";
   return destination.path ? `${root}/${destination.path}` : root;
 }
 
