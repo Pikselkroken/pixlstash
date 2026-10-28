@@ -882,8 +882,7 @@ These get skipped and that is exactly why a UI looks cheap.
   `aria-keyshortcuts` target, so mutating it mid-flight renames the control under
   a screen reader, and a longer word resizes the button and reflows the action
   row. The spinner already says "working", so `AppButton` has no loading-text
-  prop. (`TbTagPanel`'s hand-rolled "Applying..." predates the primitive: drift
-  to converge, not precedent.) No live region on the button either, because the
+  prop. No live region on the button either, because the
   outcome is announced by the notice surface and a second announcer would
   double-speak, the same reason `OverlayActionReceipt` has none.
   **The spinner keeps spinning under `prefers-reduced-motion`.** The global reset

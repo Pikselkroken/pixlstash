@@ -33,7 +33,9 @@ test.describe('selection rail', () => {
     await grid.waitForLoaded()
 
     await grid.selectCards(1)
-    // One picture: named by what it shows, never by its file name.
+    // One picture: named by what it shows, never by its file name, which is
+    // a property, folded until asked for.
+    await rail.getByRole('button', { name: 'Expand Properties' }).click()
     const file = rail
       .locator('.rail-picture__props dt', { hasText: 'File' })
       .locator('xpath=following-sibling::dd[1]')
@@ -66,7 +68,7 @@ test.describe('selection rail', () => {
     await expect(rail.locator('.rail-picture__props')).toHaveCount(0)
 
     // Clear hands the rail back to the view.
-    await rail.getByRole('button', { name: 'Clear' }).click()
+    await rail.getByRole('button', { name: 'Clear the selection · Esc' }).click()
     await expect(title).toHaveText('All Pictures')
   })
 
@@ -100,10 +102,40 @@ test.describe('selection rail', () => {
     await grid.thumbnails.nth(1).click({ modifiers: ['ControlOrMeta'] })
     await expect(title).not.toHaveText(/^(|2 pictures|1 picture)$/)
     const name = (await title.textContent()).trim()
-    await grid.statsSidebar.getByRole('button', { name: 'Clear' }).click()
+    await grid.statsSidebar.getByRole('button', { name: 'Clear the selection · Esc' }).click()
     await grid.statsToggle.click()
     await expect(grid.statsContent).toHaveCount(0)
     await grid.selectCards(1)
-    await expect(tab).toHaveAttribute('aria-label', `Show stats: ${name}`)
+    // The head may cut its title at a word ("…"); the tab names it whole.
+    const shown = name.replace(/…$/, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    await expect(tab).toHaveAttribute(
+      'aria-label',
+      new RegExp(`^Show stats: ${shown}`),
+    )
+  })
+
+  test('T puts the caret in the rail tag field, Enter tags them all', async ({
+    page,
+    grid,
+  }) => {
+    await grid.goto()
+    // T opens a shut rail too.
+    if ((await grid.statsContent.count()) > 0) await grid.statsToggle.click()
+    await grid.selectCards(2)
+    await page.locator('body').press('t')
+    const field = grid.statsSidebar.getByRole('combobox', {
+      name: 'Add a tag to all 2',
+    })
+    await expect(field).toBeFocused()
+    const tag = `e2e rail ${Date.now()}`
+    await page.keyboard.type(tag)
+    await page.keyboard.press('Enter')
+    // The field stays for the next tag; the chip is on both, at full tint.
+    await expect(field).toBeFocused()
+    await expect(field).toHaveValue('')
+    const chip = grid.statsSidebar.locator(`.rail-chip[data-tag="${tag}"]`)
+    await expect(chip).toBeVisible()
+    await chip.getByRole('button', { name: `Remove ${tag} from 2` }).click()
+    await expect(chip).toHaveCount(0)
   })
 })

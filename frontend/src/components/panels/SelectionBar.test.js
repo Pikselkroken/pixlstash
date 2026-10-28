@@ -77,7 +77,6 @@ function mountBar(props = {}) {
         AddToEntityControl: AteStub,
         TbExportPanel: TbExportPanelStub,
         SelectionMenu: true,
-        TbTagPanel: true,
         PluginParametersUI: true,
       },
     },

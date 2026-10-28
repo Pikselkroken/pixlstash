@@ -6,8 +6,9 @@ import { dedupeDetections } from "../utils/media.js";
 /**
  * What the rail's head calls one picture (#2161).
  *
- * Its description's first clause; with no description yet, who is in it and
- * when; and only then its file name. Files mostly have random names, so the
+ * Its description's first sentence without a leading "A", "An" or "The"
+ * ("Elderly man with white hair…", cut to fit by `fitWords`); with no
+ * description yet, who is in it and when; and only then its file name. Files mostly have random names, so the
  * file name is the last resort and never shown while the details are still
  * being read.
  *
@@ -21,8 +22,10 @@ export function pictureTitle(image, people, formatDate) {
   if (!image) return { title: "", full: "" };
   const description = String(image.description || "").trim();
   if (description && !isDescriptionSentinel(image.description)) {
-    const clause = description.split(/[.,;:!?\n]/)[0].trim() || description;
-    return { title: clause, full: description };
+    const sentence = description.split(/[.!?\n]/)[0].trim() || description;
+    const bare = sentence.replace(/^(a|an|the)\s+/i, "") || sentence;
+    const title = bare.charAt(0).toUpperCase() + bare.slice(1);
+    return { title, full: description };
   }
   const when = image.created_at ? formatDate(image.created_at) : "";
   const byline = [people.join(", "), when].filter(Boolean).join(" · ");
@@ -33,6 +36,28 @@ export function pictureTitle(image, people, formatDate) {
       .split(/[\\/]/)
       .pop();
   return { title: file, full: file };
+}
+
+/**
+ * Cut text after the last whole word that fits, with an ellipsis there.
+ *
+ * CSS `text-overflow` cuts mid-word ("white hair a…"); a title reads better
+ * cut where a word ends ("white hair…").
+ *
+ * @param {string} text
+ * @param {number} width - the room there is, in px.
+ * @param {(text: string) => number} measure - a string's width in px.
+ * @returns {string} the text, whole when it fits; a single word too long
+ *   for the room comes back with its ellipsis, for CSS to trim further.
+ */
+export function fitWords(text, width, measure) {
+  if (!text || !(width > 0) || measure(text) <= width) return text;
+  const words = text.split(/\s+/);
+  for (let count = words.length - 1; count > 1; count -= 1) {
+    const cut = `${words.slice(0, count).join(" ").replace(/[\s,;:–—-]+$/, "")}…`;
+    if (measure(cut) <= width) return cut;
+  }
+  return `${words[0]}…`;
 }
 
 /**

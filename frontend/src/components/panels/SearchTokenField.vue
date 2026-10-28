@@ -165,7 +165,7 @@
 </template>
 
 <script>
-// What the list searches, shared by every mount for ~30 s, as TbTagPanel
+// What the list searches, shared by every mount for ~30 s, as RailTags
 // shares its tag list: the tag vocabulary, the checkpoints and LoRAs pictures
 // record, and the owner's workflows.
 const catalogCache = {

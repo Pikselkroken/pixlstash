@@ -1,78 +1,122 @@
 <template>
-  <!-- One selected picture in the grid's rail (#2161): the preview, the
-       tile's own rating strip, then the lightbox's own Description and Tags
-       panels and the picture's faces and properties. The panels are the
-       lightbox's, so an edit here is the same edit there; they are drawn for
-       the lightbox's dark surface, and `.rail-picture` hands them this
-       theme's inks instead. -->
+  <!-- One selected picture in the grid's rail, tag-first: who it is (the
+       tile's rating strip, a small thumbnail and its faces), the tag field T
+       focuses with its tags and rejected tags, then the lightbox's own
+       Description panel, which takes the room left, and Properties. The grid
+       already shows the picture big; the rail only says which one it is. -->
   <div class="rail-picture">
-    <div class="rail-picture__preview">
+    <div class="rail-id">
+      <!-- The same strip as the grid tile: five stars, a hairline, the heart.
+           It rates and favourites through the grid's own paths (App.vue), so
+           the tile and the rail cannot disagree. -->
+      <div class="rail-picture__strip">
+        <StarRatingOverlay
+          :score="score"
+          icon-size="18"
+          :favouritable="favouritable"
+          :favourite="Boolean(card?.favourite)"
+          @set-score="emit('set-score', $event)"
+          @toggle-favourite="emit('toggle-favourite')"
+        />
+      </div>
       <img
         v-if="thumbnailUrl"
+        class="rail-id__thumb"
         :src="thumbnailUrl"
         alt=""
         draggable="false"
       />
-    </div>
-    <!-- The same strip as the grid tile: five stars, a hairline, the heart.
-         It rates and favourites through the grid's own paths (App.vue), so
-         the tile and the rail cannot disagree. -->
-    <div class="rail-picture__strip">
-      <StarRatingOverlay
-        :score="score"
-        icon-size="20"
-        :favouritable="favouritable"
-        :favourite="Boolean(card?.favourite)"
-        @set-score="emit('set-score', $event)"
-        @toggle-favourite="emit('toggle-favourite')"
-      />
+      <div ref="peopleRef" class="rail-faces" :class="{ 'rail-faces--compact': compact }">
+        <button
+          v-for="(face, idx) in shownFaces"
+          :key="face.id ?? `face-${idx}`"
+          class="rail-face"
+          :class="{ 'rail-face--unknown': face.character_id == null }"
+          type="button"
+          :aria-label="`Face ${idx + 1}: ${faceName(face)}`"
+          @click="openFaces(face.id)"
+        >
+          <Tooltip v-if="compact" :text="faceName(face)" activator="parent" :describe="false" />
+          <span
+            class="rail-face__crop"
+            :style="{ ...faceCropStyle(face, cropSize), '--ring': faceBoxColor(idx) }"
+          ></span>
+          <span v-if="!compact" class="rail-face__name">{{ faceName(face) }}</span>
+        </button>
+        <button
+          v-if="moreFaces"
+          class="rail-face"
+          type="button"
+          :aria-label="`${moreFaces} more faces`"
+          @click="openFaces(null)"
+        >
+          <span class="rail-face__crop rail-face__more">+{{ moreFaces }}</span>
+        </button>
+        <button
+          v-if="!isReadOnly"
+          class="rail-ib"
+          type="button"
+          aria-label="Edit faces"
+          :aria-expanded="facesOpen ? 'true' : 'false'"
+          @click="openFaces(null)"
+        >
+          <Tooltip text="Edit faces" activator="parent" :describe="false" />
+          <v-icon size="16">mdi-pencil-outline</v-icon>
+        </button>
+      </div>
+      <!-- One menu for every face, a character picker each. Drawn in the
+           rail rather than as a Vuetify menu: the pickers float their own
+           lists over the page, and a Vuetify menu reads a click in one as a
+           click outside and closes under it. -->
+      <div
+        v-if="facesOpen"
+        ref="facesMenuRef"
+        class="rail-faces__menu ctx-menu"
+        role="group"
+        aria-label="Faces"
+        @keydown.esc.stop.prevent="facesOpen = false"
+      >
+        <p v-if="!faces.length" class="rail-picture__empty">No faces detected</p>
+        <div
+          v-for="(face, idx) in faces"
+          :key="face.id ?? `row-${idx}`"
+          class="rail-faces__row"
+          :class="{ 'rail-faces__row--on': face.id != null && face.id === focusFaceId }"
+        >
+          <span
+            class="rail-face__crop"
+            :style="{ ...faceCropStyle(face, 36), '--ring': faceBoxColor(idx) }"
+          ></span>
+          <AddToEntityControl
+            type="face"
+            float-menu
+            :subject-ids="[]"
+            :face-id="face.id"
+            :assigned-character-id="face.character_id"
+            :assigned-character-name="personName(face.character_id)"
+            :readonly="isReadOnly"
+            :disabled="!face.id || isReadOnly"
+            @assign="assignFace(face, $event)"
+            @unassign="unassignFace(face)"
+          />
+        </div>
+      </div>
     </div>
 
+    <RailTags
+      :ids="[pictureId]"
+      :locked="locked"
+      :lock-note="lockNote"
+      takes-tag-key
+      @tags-applied="emit('tags-applied', $event)"
+    />
+
     <OverlayDescriptionPanel
+      class="rail-picture__desc"
       :image="image"
       :locked="locked"
       :lock-note="lockNote"
       @update-description="onDescriptionUpdated"
-    />
-
-    <section class="rail-picture__section" aria-label="Faces">
-      <SectionHeader
-        v-model:collapsed="facesCollapsed"
-        label="Faces"
-        :count="faces.length || null"
-        on-dark
-      />
-      <template v-if="!facesCollapsed">
-        <ul v-if="faces.length" class="rail-faces">
-          <li v-for="(face, idx) in faces" :key="face.id ?? `face-${idx}`">
-            <span class="rail-faces__crop" :style="faceCropStyle(face)"></span>
-            <AddToEntityControl
-              type="face"
-              float-menu
-              :subject-ids="[]"
-              :face-id="face.id"
-              :assigned-character-id="face.character_id"
-              :assigned-character-name="personName(face.character_id)"
-              :readonly="isReadOnly"
-              :disabled="!face.id || isReadOnly"
-              @assign="assignFace(face, $event)"
-              @unassign="unassignFace(face)"
-            />
-          </li>
-        </ul>
-        <p v-else class="rail-picture__empty">No faces detected</p>
-      </template>
-    </section>
-
-    <OverlayTagsPanel
-      ref="tagsPanelRef"
-      :image="image"
-      :locked="locked"
-      :lock-note="lockNote"
-      @update-tags="onTagsUpdated"
-      @overlay-change="emit('overlay-change', $event)"
-      @add-tag="(id, tag) => emit('add-tag', id, tag)"
-      @request-metadata-refresh="emit('refresh')"
     />
 
     <section class="rail-picture__section" aria-label="Properties">
@@ -104,7 +148,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { isReadOnly } from "../../utils/apiClient";
 import {
   openPictureLocation,
@@ -114,7 +158,7 @@ import {
   addCharacterFacesByFaceId,
   removeCharacterFacesByFaceId,
 } from "../../api/characters";
-import { formatUserDate } from "../../utils/utils.js";
+import { faceBoxColor, formatUserDate } from "../../utils/utils.js";
 import { formatModelSize } from "../../utils/modelShelf.js";
 import { errorDetail } from "../../utils/apiError";
 import { useSectionCollapse } from "../../composables/useSectionCollapse";
@@ -127,7 +171,7 @@ import SectionHeader from "../widgets/SectionHeader.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import OverlayDescriptionPanel from "../views/OverlayDescriptionPanel.vue";
-import OverlayTagsPanel from "../views/OverlayTagsPanel.vue";
+import RailTags from "./RailTags.vue";
 
 const props = defineProps({
   pictureId: { type: [Number, String], required: true },
@@ -145,7 +189,7 @@ const props = defineProps({
 const emit = defineEmits([
   "set-score",
   "toggle-favourite",
-  "add-tag",
+  "tags-applied",
   "update-description",
   "overlay-change",
   "update:image",
@@ -158,8 +202,9 @@ const lockedSetsStore = useLockedSetsStore();
 const noticeStore = useNoticeStore();
 const userPrefsStore = useUserPrefsStore();
 
-const facesCollapsed = useSectionCollapse("faces");
-const propertiesCollapsed = useSectionCollapse("properties");
+const propertiesCollapsed = useSectionCollapse("properties", {
+  defaultCollapsed: true,
+});
 
 const locked = computed(() => lockedSetsStore.isLocked(props.pictureId));
 const lockNote = computed(() => lockedSetsStore.lockReason(props.pictureId));
@@ -173,14 +218,25 @@ function personName(characterId) {
   return namesStore.characterNames[characterId] || `Person ${characterId}`;
 }
 
-const FACE_CROP = 32; // px, the crop's box: --control-h-bar
+const faceName = (face) => personName(face.character_id) || "Unknown";
+
+// ── Faces ────────────────────────────────────────────────────────────────────
+// Four or more drop their names, step down and end in a "+N" tile.
+const CROWD = 4;
+const compact = computed(() => props.faces.length >= CROWD);
+const cropSize = computed(() => (compact.value ? 32 : 42)); // px
+const shownFaces = computed(() =>
+  compact.value ? props.faces.slice(0, CROWD - 1) : props.faces,
+);
+const moreFaces = computed(() => props.faces.length - shownFaces.value.length);
 
 // The face, cut from the thumbnail: it keeps the picture's aspect, so the
 // detector's full-size box scales onto it.
-function faceCropStyle(face) {
+function faceCropStyle(face, size) {
   const width = Number(props.image?.width || props.card?.width || 0);
   const height = Number(props.image?.height || props.card?.height || 0);
-  if (!width || !height || !thumbnailUrl.value) return {};
+  const box = { width: `${size}px`, height: `${size}px` };
+  if (!width || !height || !thumbnailUrl.value) return box;
   // Clamped to the picture first: a detector box can run past its edges.
   const clampX = (v) => Math.max(0, Math.min(Number(v) || 0, width));
   const clampY = (v) => Math.max(0, Math.min(Number(v) || 0, height));
@@ -194,15 +250,57 @@ function faceCropStyle(face) {
   // so the longer side is trimmed rather than the box left part-empty.
   const faceW = Math.max(1, x2 - x1);
   const faceH = Math.max(1, y2 - y1);
-  const scale = FACE_CROP / Math.min(faceW, faceH);
-  const left = x1 * scale - (FACE_CROP - faceW * scale) / 2;
-  const top = y1 * scale - (FACE_CROP - faceH * scale) / 2;
+  const scale = size / Math.min(faceW, faceH);
+  const left = x1 * scale - (size - faceW * scale) / 2;
+  const top = y1 * scale - (size - faceH * scale) / 2;
   return {
+    ...box,
     backgroundImage: `url(${thumbnailUrl.value})`,
     backgroundSize: `${Math.round(width * scale)}px ${Math.round(height * scale)}px`,
     backgroundPosition: `${Math.round(-left)}px ${Math.round(-top)}px`,
   };
 }
+
+const facesOpen = ref(false);
+const focusFaceId = ref(null);
+const peopleRef = ref(null);
+const facesMenuRef = ref(null);
+
+/** A face (its row in focus) or the edit button: the one faces menu. */
+function openFaces(faceId) {
+  if (facesOpen.value && faceId === focusFaceId.value) {
+    facesOpen.value = false;
+    return;
+  }
+  focusFaceId.value = faceId;
+  facesOpen.value = true;
+}
+
+// A click anywhere else closes it, except in a picker's own floating list.
+function onOutsidePointer(e) {
+  const t = e.target;
+  if (
+    facesMenuRef.value?.contains(t) ||
+    peopleRef.value?.contains(t) ||
+    (t instanceof Element && t.closest(".ate-menu"))
+  ) {
+    return;
+  }
+  facesOpen.value = false;
+}
+watch(facesOpen, (open) => {
+  if (open) document.addEventListener("pointerdown", onOutsidePointer, true);
+  else document.removeEventListener("pointerdown", onOutsidePointer, true);
+});
+watch(
+  () => props.pictureId,
+  () => {
+    facesOpen.value = false;
+  },
+);
+onBeforeUnmount(() =>
+  document.removeEventListener("pointerdown", onOutsidePointer, true),
+);
 
 function replaceFace(faceId, patch) {
   emit(
@@ -264,63 +362,6 @@ async function showInFolder() {
   }
 }
 
-// ── Keys for selected chips ─────────────────────────────────────────────────
-// Chips selected in Tags take Escape, Delete and Ctrl+C here as they do in the
-// lightbox, and ahead of the grid: a click on a chip leaves focus on the page,
-// where the grid's Delete would send the picture itself to the Scrapheap.
-const tagsPanelRef = ref(null);
-
-function isEditable(el) {
-  return (
-    el instanceof HTMLElement &&
-    (el.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName))
-  );
-}
-
-function onChipKeydown(e) {
-  const panel = tagsPanelRef.value;
-  if (!panel?.hasSelection || e.altKey || e.repeat || isEditable(e.target)) {
-    return;
-  }
-  // The lightbox or a dialog over the grid owns the keys while it is open.
-  // A menu has no scrim but owns Escape too, so any active overlay counts,
-  // except a tooltip, which is an overlay as well and owns no keys.
-  if (
-    document.querySelector(
-      ".image-overlay, .v-overlay--active:not(.v-tooltip)",
-    )
-  ) {
-    return;
-  }
-  const command = e.ctrlKey || e.metaKey;
-  let act = null;
-  if (e.key === "Escape" && !command) {
-    act = () => panel.clearSelection();
-  } else if ((e.key === "Delete" || e.key === "Backspace") && !command) {
-    act = () => {
-      if (!isReadOnly.value && !locked.value) void panel.removeSelection();
-    };
-  } else if (command && !e.shiftKey && e.key?.toLowerCase() === "c") {
-    // Selected text copies as text, as it does in the lightbox.
-    const text = window.getSelection?.();
-    if (text && !text.isCollapsed && text.toString()) return;
-    act = () => void panel.copySelection();
-  }
-  if (!act) return;
-  e.preventDefault();
-  e.stopImmediatePropagation();
-  act();
-}
-
-onMounted(() => window.addEventListener("keydown", onChipKeydown, true));
-onBeforeUnmount(() =>
-  window.removeEventListener("keydown", onChipKeydown, true),
-);
-
-function onTagsUpdated(tags) {
-  if (props.image) emit("update:image", { ...props.image, tags });
-}
-
 function onDescriptionUpdated(imageId, description) {
   if (props.image) emit("update:image", { ...props.image, description });
   emit("update-description", imageId, description);
@@ -367,8 +408,9 @@ const properties = computed(() => {
 </script>
 
 <style scoped>
-/* The lightbox's panels ink themselves for its always-dark surface. Here they
-   sit on the rail, so each dark-surface ink is handed this theme's own. */
+/* The lightbox's Description panel inks itself for its always-dark surface.
+   Here it sits on the rail, so each dark-surface ink is handed this theme's
+   own. */
 .rail-picture {
   --v-theme-dark-surface: var(--v-theme-sidebar);
   --v-theme-on-dark-surface: var(--v-theme-on-surface);
@@ -383,27 +425,34 @@ const properties = computed(() => {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+  /* At least the rail's height: the Description panel grows into what is
+     left, so a long caption reads whole on a tall window. */
+  min-height: 100%;
   font-size: var(--text-xs);
 }
 
-.rail-picture__preview {
-  display: flex;
-  justify-content: center;
-  height: 160px;
-  border-radius: var(--radius-md);
-  background: rgba(var(--v-theme-on-surface), 0.06);
-  overflow: hidden;
-}
-
-.rail-picture__preview img {
-  max-width: 100%;
-  height: 100%;
-  object-fit: contain;
+/* Identity: the rating on the first line, full width; the thumbnail and its
+   faces on the second, so neither line leaves the rail's right side empty. */
+.rail-id {
+  position: relative;
+  display: grid;
+  grid-template-columns: 60px minmax(0, 1fr);
+  column-gap: var(--space-4);
+  row-gap: var(--space-3);
+  align-items: center;
 }
 
 .rail-picture__strip {
+  grid-column: 1 / -1;
   display: flex;
-  justify-content: flex-end;
+}
+
+.rail-id__thumb {
+  width: 60px;
+  height: 60px;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  object-position: top center;
 }
 
 /* The heart is a clickable VIcon, and Vuetify stamps the theme class on it,
@@ -421,6 +470,130 @@ const properties = computed(() => {
   background: var(--hover-wash);
 }
 
+.rail-faces {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  grid-column: 2;
+}
+
+/* A face is a picture with its name under it, as in the lightbox's face
+   grid: a crop ringed in the hue the lightbox draws round that face. */
+.rail-face {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 44px;
+  max-width: 64px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgb(var(--v-theme-on-surface));
+  font: inherit;
+  cursor: pointer;
+}
+
+.rail-faces--compact .rail-face {
+  min-width: 32px;
+}
+
+.rail-face__crop {
+  flex: none;
+  border-radius: var(--radius-sm);
+  background-color: rgba(var(--v-theme-on-surface), 0.06);
+  background-repeat: no-repeat;
+  box-shadow: 0 0 0 2px var(--ring, transparent);
+}
+
+.rail-face--unknown .rail-face__crop {
+  box-shadow: none;
+  outline: 1px dashed
+    rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  outline-offset: 1px;
+}
+
+.rail-face__name {
+  max-width: 64px;
+  overflow: hidden;
+  font-size: var(--text-2xs);
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-face--unknown .rail-face__name {
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.rail-face__more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.rail-face:focus-visible,
+.rail-ib:focus-visible {
+  outline: var(--focus-width) solid var(--focus-stroke);
+  outline-offset: var(--focus-offset);
+}
+
+.rail-ib {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-h);
+  height: var(--control-h);
+  margin-left: calc(-1 * var(--space-2));
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  cursor: pointer;
+}
+
+.rail-ib:hover {
+  background: var(--hover-wash);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.rail-faces__menu {
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  left: 0;
+  right: 0;
+  z-index: var(--z-dropdown);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2);
+}
+
+.rail-faces__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+}
+
+.rail-faces__row--on {
+  background: var(--hover-wash);
+}
+
+.rail-faces__row :deep(.ate) {
+  flex: 1;
+  min-width: 0;
+}
+
 /* The lightbox's fields sit on a dark wash over the picture; on the rail they
    are this surface's quiet field, as a stat tile is. */
 .rail-picture :deep(.description-editor textarea),
@@ -435,31 +608,8 @@ const properties = computed(() => {
 
 .rail-picture__empty {
   margin: 0;
+  padding: var(--space-2);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-}
-
-.rail-faces {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.rail-faces li {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.rail-faces__crop {
-  flex: none;
-  width: var(--control-h-bar);
-  height: var(--control-h-bar);
-  border-radius: var(--radius-sm);
-  background-color: rgba(var(--v-theme-on-surface), 0.06);
-  background-repeat: no-repeat;
 }
 
 .rail-picture__props {
