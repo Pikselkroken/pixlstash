@@ -1144,11 +1144,13 @@ defineExpose({
       class="shortcuts-fab"
       :class="{
         'shortcuts-fab--above-bar': multiSelectBarShown,
-        'shortcuts-fab--stats-open': isWorkflowsView
-          ? sidebarStore.workflowInspectorOpen
-          : isModelsView
-            ? sidebarStore.modelsRailOpen
-            : sidebarStore.statsOpen,
+        'shortcuts-fab--stats-open': lightboxOpen
+          ? sidebarStore.lightboxRailOpen
+          : isWorkflowsView
+            ? sidebarStore.workflowInspectorOpen
+            : isModelsView
+              ? sidebarStore.modelsRailOpen
+              : sidebarStore.statsOpen,
       }"
       type="button"
       :disabled="librarySwitchOverlayOpen"

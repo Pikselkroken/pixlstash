@@ -228,11 +228,11 @@
             </button>
           </div>
         </v-menu>
-        <!-- The grid's own rail toggle, in the grid's place: one rail, one
-             open flag, so opening a picture never opens or shuts it. -->
+        <!-- The grid's rail toggle, in the grid's place, driving the
+             lightbox's own open flag (`lightboxRailOpen`). -->
         <span v-if="!fullscreen" class="overlay-topbar-sidebar-toggle">
           <span class="bar-separator" aria-hidden="true"></span>
-          <TbGlobalActions rail-name="Picture details" />
+          <TbGlobalActions rail="lightbox" rail-name="Picture details" />
         </span>
         <template v-else>
           <span class="bar-separator" aria-hidden="true"></span>
@@ -743,8 +743,8 @@
       />
       </div>
       <!-- The shared inspector (shell contract rule 8), in its lightbox
-           variant: dark in both themes. It stands where the right rail stands
-           and opens and shuts with it, so a picture opening never moves it. -->
+           variant: dark in both themes. It stands where the right rail stands,
+           with its own open flag (default open), not the rail's. -->
       <AppInspector
         v-model="sidebarTab"
         class="overlay-sidebar"
@@ -1445,12 +1445,13 @@ function handleTagsUpdate(newTagsArray) {
     image.value = { ...image.value, tags: newTagsArray };
   }
 }
-// The pane IS the right rail while a picture is open (#2163): it opens and
-// shuts with the stats rail's own flag, so opening a picture never moves it.
-// A shortcut that needs the pane (T, the grid's *Edit…*) opens it the way a
-// deep link does, without persisting the reader's choice (`showTasksTab`).
+// The pane stands where the right rail stands (#2163) but keeps its own open
+// flag, default open: a reader who keeps the grid's stats rail shut still
+// wants a picture's details beside it. A shortcut that needs the pane (T, the
+// grid's *Edit…*) opens it for the moment (`openSidebar`), without persisting
+// the reader's choice; S and the toolbar toggle persist it.
 const sidebarStore = useSidebarStore();
-const sidebarOpen = computed(() => sidebarStore.statsOpen);
+const sidebarOpen = computed(() => sidebarStore.lightboxRailOpen);
 // In full screen the inspector is gone until asked for (I, or the edge tab),
 // and asking does not touch the rail's own remembered flag. (Full screen
 // itself is set up with the chrome below.)
@@ -1461,7 +1462,7 @@ const inspectorShown = computed(() =>
 );
 function openSidebar() {
   if (fullscreen.value) fullscreenInspector.value = true;
-  else sidebarStore.statsOpen = true;
+  else sidebarStore.lightboxRailOpen = true;
 }
 
 // ── Info | Recipe (#1313) ──────────────────────────────────────────────────
@@ -3612,7 +3613,7 @@ function beginTagEntry() {
 // the full-screen inspector's, which nothing remembers.
 function toggleSidebar() {
   if (fullscreen.value) fullscreenInspector.value = !fullscreenInspector.value;
-  else sidebarStore.toggleStats();
+  else sidebarStore.toggleLightboxRail();
   handleUserActivity();
 }
 

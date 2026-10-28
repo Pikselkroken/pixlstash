@@ -39,6 +39,11 @@ const WORKFLOW_INSPECTOR_KEY = "pixlstash:workflowInspectorOpen";
 // selection, so nothing opens it on the reader's behalf.
 const MODELS_RAIL_KEY = "pixlstash:modelsRailOpen";
 
+// The lightbox's inspector (Info | Recipe | Edit). Its own flag, not the stats
+// rail's: a reader who keeps the grid uncluttered still wants a picture's
+// details beside it, so it defaults OPEN and is then however they left it.
+const LIGHTBOX_RAIL_KEY = "pixlstash:lightboxRailOpen";
+
 // Width: full sidebar vs. narrow icon dock. Set in Settings → Appearance.
 const SIDEBAR_DOCKED_KEY = "pixlstash:sidebarDocked";
 
@@ -54,6 +59,7 @@ export const useSidebarStore = defineStore("sidebar", () => {
   const statsOpen = ref(loadFlag(STATS_KEY, false));
   const workflowInspectorOpen = ref(loadFlag(WORKFLOW_INSPECTOR_KEY, true));
   const modelsRailOpen = ref(loadFlag(MODELS_RAIL_KEY, false));
+  const lightboxRailOpen = ref(loadFlag(LIGHTBOX_RAIL_KEY, true));
   // Bumped by whichever screen owns a selection-describing inspector when its
   // selection changes to something NEW. The closed-inspector edge tab and the
   // rail toggle's glyph both play their one-shot nudge on it. A counter, like
@@ -123,6 +129,11 @@ export const useSidebarStore = defineStore("sidebar", () => {
 
   function toggleModelsRail() {
     setModelsRailOpen(!modelsRailOpen.value);
+  }
+
+  function toggleLightboxRail() {
+    lightboxRailOpen.value = !lightboxRailOpen.value;
+    saveFlag(LIGHTBOX_RAIL_KEY, lightboxRailOpen.value);
   }
 
   // A deep link's "show me": opened, not persisted (see `showTasksTab`).
@@ -196,6 +207,7 @@ export const useSidebarStore = defineStore("sidebar", () => {
     statsOpen,
     workflowInspectorOpen,
     modelsRailOpen,
+    lightboxRailOpen,
     inspectorNudge,
     tasksTabRequest,
     tasksPillRequest,
@@ -212,6 +224,7 @@ export const useSidebarStore = defineStore("sidebar", () => {
     openWorkflowInspector,
     setModelsRailOpen,
     toggleModelsRail,
+    toggleLightboxRail,
     showTasksTab,
     showCardInInspector,
     requestTagField,

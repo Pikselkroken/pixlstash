@@ -180,8 +180,8 @@ async function openOn(
 
 beforeEach(() => {
   setActivePinia(createPinia());
-  // The pane is the right rail, open here unless a test says otherwise.
-  useSidebarStore().statsOpen = true;
+  // The pane, open here unless a test says otherwise.
+  useSidebarStore().lightboxRailOpen = true;
   picturesWithARecipe = new Set([7]);
   pendingRecipe = null;
   recipeRefusal = null;
@@ -412,12 +412,25 @@ describe("the lightbox and the task list", () => {
   });
 });
 
-// The pane is the right rail (#2163): one open flag with the grid's, so
-// opening a picture neither opens nor shuts it.
+// The pane stands where the right rail stands (#2163) but has its own open
+// flag, default open, which the grid's stats rail neither sets nor follows.
 describe("the lightbox rail", () => {
-  it("opens and shuts with the grid's rail", async () => {
+  it("is open on a fresh install, with the grid's rail shut", async () => {
+    window.localStorage.removeItem("pixlstash:lightboxRailOpen");
+    window.localStorage.removeItem("pixlstash:statsSidebarOpen");
+    setActivePinia(createPinia());
     const sidebar = useSidebarStore();
-    sidebar.statsOpen = false;
+    expect(sidebar.statsOpen).toBe(false);
+    const wrapper = await openOn(7);
+    expect(wrapper.find(".overlay-sidebar").classes()).not.toContain(
+      "inspector--collapsed",
+    );
+  });
+
+  it("opens and shuts on its own flag, kept, leaving the grid's alone", async () => {
+    const sidebar = useSidebarStore();
+    sidebar.lightboxRailOpen = false;
+    sidebar.statsOpen = true;
     const wrapper = await openOn(7);
     const pane = () => wrapper.find(".overlay-sidebar");
     expect(pane().classes()).toContain("inspector--collapsed");
@@ -425,13 +438,20 @@ describe("the lightbox rail", () => {
     await wrapper
       .find(".overlay-topbar-sidebar-toggle .tb-stats-btn")
       .trigger("click");
-    expect(sidebar.statsOpen).toBe(true);
+    expect(sidebar.lightboxRailOpen).toBe(true);
     expect(pane().classes()).not.toContain("inspector--collapsed");
+    expect(window.localStorage.getItem("pixlstash:lightboxRailOpen")).toBe(
+      "true",
+    );
 
     // S is the same toggle.
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "s" }));
     await flush();
-    expect(sidebar.statsOpen).toBe(false);
+    expect(sidebar.lightboxRailOpen).toBe(false);
+    expect(window.localStorage.getItem("pixlstash:lightboxRailOpen")).toBe(
+      "false",
+    );
+    expect(sidebar.statsOpen).toBe(true);
   });
 
   it("leaves Escape to a menu open beside it, such as the title bar's", async () => {
@@ -464,8 +484,11 @@ describe("the lightbox rail", () => {
   });
 
   it("opens for T, which needs the tag field, without keeping it open", async () => {
+    window.localStorage.removeItem("pixlstash:lightboxRailOpen");
+    window.localStorage.removeItem("pixlstash:statsSidebarOpen");
+    setActivePinia(createPinia());
     const sidebar = useSidebarStore();
-    sidebar.statsOpen = false;
+    sidebar.lightboxRailOpen = false;
     const beginAddTag = vi.fn();
     const wrapper = mount(ImageOverlay, {
       props: { open: true, initialImageId: 7, allImages: [{ id: 7, tags: [] }] },
@@ -482,14 +505,13 @@ describe("the lightbox rail", () => {
     await flush();
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "t" }));
     await flush();
-    expect(sidebar.statsOpen).toBe(true);
+    expect(sidebar.lightboxRailOpen).toBe(true);
+    expect(sidebar.statsOpen).toBe(false);
     expect(beginAddTag).toHaveBeenCalledTimes(1);
     expect(wrapper.find(".overlay-sidebar").classes()).not.toContain(
       "inspector--collapsed",
     );
-    expect(window.localStorage.getItem("pixlstash:statsSidebarOpen")).not.toBe(
-      "true",
-    );
+    expect(window.localStorage.getItem("pixlstash:lightboxRailOpen")).toBeNull();
   });
 });
 
