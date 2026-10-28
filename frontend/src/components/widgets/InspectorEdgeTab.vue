@@ -37,8 +37,9 @@ const props = defineProps({
   /** What the closed inspector would describe: a name, `3 workflows`, or "". */
   label: { type: String, default: "" },
   /**
-   * A counter the host bumps on each NEW selection; each bump shows the tab
-   * and bounces it once.
+   * A counter the host bumps on each NEW selection (the full-screen lightbox:
+   * on the pointer arriving at the right edge); each bump shows the tab and
+   * bounces it once.
    */
   nudge: { type: Number, default: 0 },
   /**

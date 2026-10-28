@@ -655,10 +655,12 @@
 
         <!-- The closed inspector's edge tab (the app's standard handle),
              naming the tab it reopens on. With every tool in the inspector,
-             closing it is the everyday focus view. -->
+             closing it is the everyday focus view. In full screen the
+             pointer at the right edge brings it out. -->
         <InspectorEdgeTab
           v-if="edgeTabShown"
           :label="edgeTabLabel"
+          :nudge="edgeTabNudge"
           :name="`Show picture details: ${edgeTabLabel}`"
           @open="openInspectorFromEdge"
         />
@@ -1594,7 +1596,8 @@ const chromeRevealTimestamp = ref(0);
 // full screen): the title bar and the sidebar go (App.css, keyed on
 // FULLSCREEN_CLASS), and so do the toolbar, the filmstrip and the inspector.
 // Pointing at the top 48px brings the toolbar down, ending in a labelled way
-// out; I or the edge tab brings the inspector back. Esc leaves full screen
+// out; pointing at the right 48px brings out the edge tab, and I or the edge
+// tab brings the inspector back. Esc leaves full screen
 // before it leaves the lightbox. Space still hides the chrome in a window.
 const FULLSCREEN_CLASS = "lightbox-fullscreen";
 const FULLSCREEN_EDGE_PX = 48;
@@ -1606,6 +1609,9 @@ const fullscreenBarShown = ref(false);
 const fullscreenNotice = ref(false);
 // The pointer has rested: the stage's arrows and the cursor fade.
 const fullscreenIdle = ref(false);
+// Bumped as the pointer arrives at the right edge: the edge tab shows on it.
+const edgeTabNudge = ref(0);
+let pointerAtRightEdge = false;
 // The notice is said once a visit.
 let fullscreenNoticeSaid = false;
 let fullscreenBarTimer = null;
@@ -1641,6 +1647,7 @@ function onFullscreenChange() {
   fullscreen.value = on;
   document.documentElement.classList.toggle(FULLSCREEN_CLASS, on);
   fullscreenInspector.value = false;
+  pointerAtRightEdge = false;
   hideFullscreenBar();
   clearTimeout(fullscreenNoticeTimer);
   fullscreenNotice.value = false;
@@ -1691,6 +1698,13 @@ function noteFullscreenPointer(event) {
   } else if (fullscreenBarShown.value && !fullscreenBarTimer) {
     scheduleFullscreenBarHide(FULLSCREEN_BAR_LINGER_MS);
   }
+  // Tracked only while the tab is up for it, so closing the inspector with the
+  // pointer in the zone still counts as an arrival on the next move.
+  const atRight =
+    edgeTabShown.value &&
+    event.clientX >= window.innerWidth - FULLSCREEN_EDGE_PX;
+  if (atRight && !pointerAtRightEdge) edgeTabNudge.value += 1;
+  pointerAtRightEdge = atRight;
 }
 
 function noteFullscreenActivity() {
