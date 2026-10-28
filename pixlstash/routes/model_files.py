@@ -72,7 +72,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
-from typing import Optional
+from typing import Optional, Union
 
 from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -1639,8 +1639,9 @@ def create_router(server) -> APIRouter:
             "or a registered folder inside it (409)."
         ),
         tags=["model_shelf"],
-        response_model=RemoveFolderResponse,
-        responses={200: {"model": RemoveFolderPlanResponse}},
+        # Both answers are a 200, so the schema names both: the plan for
+        # `dry_run`, the receipt otherwise.
+        response_model=Union[RemoveFolderResponse, RemoveFolderPlanResponse],
     )
     def remove_model_folder_dir(
         folder_id: int, request: Request, payload: RemoveFolderRequest = Body(...)
