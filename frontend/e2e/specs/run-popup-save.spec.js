@@ -187,7 +187,7 @@ async function stubWorkflow(page, world = {}) {
       second: null,
       /** Fields a save's answer carries besides the version: `still_waiting`, `not_kept`. */
       saveExtra: {},
-      /** ComfyUI configured, so the toolbar offers Generate. */
+      /** ComfyUI configured, so the sidebar offers "Create with LoRA…". */
       comfyui: false,
       /**
        * The poll's finished runs (#2050), or null to leave the poll alone.
@@ -229,10 +229,17 @@ async function stubWorkflow(page, world = {}) {
       }
       if (path === "/adapters" && method === "GET") {
         // The popup asks for the LoRAs, and again for the files of no known
-        // kind; a person's own are among the first.
-        const adapters = url.searchParams.get("file_kind")
-          ? []
-          : [...STYLE_LORAS, ...now.people.map((entry) => entry.lora)];
+        // kind; a person's own are among the first. Asked for one person's,
+        // as "Create with LoRA…" does, it is theirs alone.
+        const fileKind = url.searchParams.get("file_kind");
+        const characterId = Number(url.searchParams.get("character_id"));
+        const adapters = characterId
+          ? fileKind === "adapter"
+            ? now.people.filter((entry) => entry.id === characterId).map((entry) => entry.lora)
+            : []
+          : fileKind
+            ? []
+            : [...STYLE_LORAS, ...now.people.map((entry) => entry.lora)];
         return json(route, { adapters });
       }
       if (path === "/recipes" && method === "GET") return json(route, []);
@@ -405,7 +412,9 @@ async function stubWorkflow(page, world = {}) {
   return net;
 }
 
-const dialog = (page) => page.locator(".app-dialog").filter({ hasText: "Run workflow" });
+// "Create with LoRA" is the same popup, opened from a person or set.
+const dialog = (page) =>
+  page.locator(".app-dialog").filter({ hasText: /Run workflow|Create with LoRA/ });
 const band = (page) => dialog(page).getByTestId("rund-band");
 const triggerLine = (page) => dialog(page).getByTestId("rund-trigger");
 const tile = (page, name) =>
@@ -1301,8 +1310,11 @@ test.describe("the picker moves to another workflow", () => {
       comfyui: true,
       second: { name: "Landscape, golden hour" },
     });
+    // A run with no picture behind it and the picker unset: a person's
+    // "Create with LoRA…".
     await page.goto("/");
-    await page.getByRole("button", { name: "Generate new pictures with a ComfyUI workflow" }).click();
+    await page.getByText("Ada", { exact: true }).click({ button: "right" });
+    await page.getByRole("button", { name: "Create with LoRA…" }).click();
     await expect(dialog(page)).toBeVisible();
     const picker = dialog(page).getByRole("combobox", { name: "Workflow" });
     await picker.selectOption(WF);

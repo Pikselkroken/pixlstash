@@ -503,19 +503,18 @@ describe("Toolbar - browse only (#2160)", () => {
     expect(left.lastElementChild.classList.contains("tb-overflow")).toBe(true);
   });
 
-  // A rule marks a semantic boundary: the lens run | Generate. With nothing
-  // after the lens run, the rule would stand boxed at its end, so it goes
-  // with Generate.
-  it("draws the one rule only when Generate follows it", () => {
+  // Generate left the bar, and with it the rule that marked the lens run |
+  // Generate boundary: nothing follows the lens run for it to separate.
+  it("offers no Generate and draws no rule, even with ComfyUI set up", () => {
     const filterStore = useFilterStore();
     filterStore.comfyuiConfigured = true;
-    const withGenerate = mountToolbar();
-    const separators = withGenerate.findAll(".bar-separator");
-    expect(separators).toHaveLength(1);
-    expect(separators[0].classes()).not.toContain("tb-fold-700");
-
-    filterStore.comfyuiConfigured = false;
-    expect(mountToolbar().findAll(".bar-separator")).toHaveLength(0);
+    const wrapper = mountToolbar();
+    expect(wrapper.findAll(".selection-bar-left .bar-separator")).toHaveLength(
+      0,
+    );
+    expect(
+      wrapper.find('button[aria-label^="Generate new pictures"]').exists(),
+    ).toBe(false);
   });
 
   it("keeps the tail and the ⋯ in a read-only session", () => {
@@ -542,42 +541,7 @@ describe("Toolbar - the ⋯ overflow mirrors its controls", () => {
     const wrapper = mountToolbar();
     const panel = await openOverflow(wrapper);
     const labels = panel.findAll(".ctx-item").map((b) => b.text());
-    expect(labels).toEqual(["Generate with ComfyUI…", "View options…"]);
-  });
-
-  // The rail panel this used to open is gone (v1.12 F5); the entry stays and
-  // opens the Run popup instead. Without a door here, starting a run with
-  // nothing selected meant navigating to Workflows first - every other entry
-  // point is selection-scoped or needs a picture open.
-  it("opens the Run popup with no selection, picker unset", async () => {
-    const filterStore = useFilterStore();
-    filterStore.comfyuiConfigured = true;
-    const wrapper = mountToolbar();
-    const { useRunDialogStore } = await import("../../stores/useRunDialogStore");
-    const runDialog = useRunDialogStore();
-
-    await wrapper
-      .find('button[aria-label^="Generate new pictures"]')
-      .trigger("click");
-
-    expect(runDialog.source).toMatchObject({
-      kind: "card",
-      pickWorkflow: true,
-    });
-    // No pictures, so the card is the run's own source and the popup picks
-    // where the output is filed.
-    expect(runDialog.source.pictureIds).toEqual([]);
-  });
-
-  it("hides the entry entirely when ComfyUI is not configured", async () => {
-    const wrapper = mountToolbar();
-    const panel = await openOverflow(wrapper);
-    expect(panel.findAll(".ctx-item").map((b) => b.text())).not.toContain(
-      "Generate with ComfyUI…",
-    );
-    expect(
-      wrapper.find('button[aria-label^="Generate new pictures"]').exists(),
-    ).toBe(false);
+    expect(labels).toEqual(["View options…"]);
   });
 
   it("keeps the rail toggle as a visible control", () => {
