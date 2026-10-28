@@ -11056,6 +11056,12 @@ answer:
   names `upscaler`, which the ComfyUI-PixlStash Upscale Model Loader fetches
   by digest; hub data version 18 re-files the `.safetensors` ones already
   shelved there, and the `.pth` ones arrive with the next scan. A
+  `.safetensors` RRDBNet (`has_upscaler_markers`: a top-level
+  `conv_first.weight`, `conv_body.weight` and `conv_last.weight`, BasicSR's
+  Real-ESRGAN layout) is an `upscaler` in any folder, so the
+  `RealESRGAN_x4plus.safetensors` the Upscale dialog downloads into a flat
+  folder reaches its model list; rows already shelved as `unknown` are not
+  re-filed. A
   `.safetensors` VAE is told by its tensors the way a ControlNet is
   (`has_vae_markers`: a top-level `encoder.conv_in.weight` and
   `decoder.conv_in.weight`, or `encoder.conv1.weight` and

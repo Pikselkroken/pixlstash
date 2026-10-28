@@ -37,6 +37,7 @@ from pixlstash.utils.adapter_header import (
     describe_adapter,
     has_adapter_markers,
     has_controlnet_markers,
+    has_upscaler_markers,
     has_vae_markers,
 )
 from pixlstash.utils.model_utils import (
@@ -227,6 +228,32 @@ class TestFileClassification:
     def test_anything_less_than_a_whole_top_level_vae_is_not_one(self, names):
         assert not has_vae_markers(names)
         assert classify_model_file(names, 40_000_000) == FILE_UNKNOWN
+
+    def test_an_rrdbnet_is_an_upscaler_in_any_folder(self, tmp_path):
+        # RealESRGAN_x4plus.safetensors as the Upscale dialog downloads it,
+        # into a flat folder: the tensors at its top level (the file's own
+        # names, a few of its 702).
+        folder = tmp_path / "Downloads"
+        folder.mkdir()
+        path = _write_safetensors(
+            folder / "RealESRGAN_x4plus.safetensors",
+            {
+                "conv_first.weight": _tensor([64, 3, 3, 3]),
+                "body.0.rdb1.conv1.weight": _tensor([32, 64, 3, 3]),
+                "conv_body.weight": _tensor([64, 64, 3, 3]),
+                "conv_up1.weight": _tensor([64, 64, 3, 3]),
+                "conv_hr.weight": _tensor([64, 64, 3, 3]),
+                "conv_last.weight": _tensor([3, 64, 3, 3]),
+            },
+        )
+        info = describe_adapter(path)
+        assert info is not None
+        assert info.file_kind == FILE_UPSCALER
+
+    def test_part_of_an_rrdbnet_is_not_an_upscaler(self):
+        names = ["conv_first.weight", "conv_last.weight"]
+        assert not has_upscaler_markers(names)
+        assert classify_model_file(names, 16_000_000) == FILE_UNKNOWN
 
     @pytest.mark.parametrize(
         "header",
