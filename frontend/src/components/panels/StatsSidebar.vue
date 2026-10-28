@@ -169,6 +169,18 @@ const head = computed(() => {
 // The grid's closed-rail edge tab names the selection the way this head does.
 defineExpose({ head });
 
+// The same act as the toolbar toggle, so it persists. The button goes with
+// the rail, so focus moves to the grid toolbar's toggle rather than dropping
+// to `body`; the lightbox mounts a toggle of its own, which is not that one.
+function closeRail() {
+  sidebarStore.toggleStats();
+  nextTick(() =>
+    [...document.querySelectorAll(".tb-stats-btn")]
+      .find((el) => !el.closest(".overlay-topbar-sidebar-toggle"))
+      ?.focus(),
+  );
+}
+
 // The head cuts its title after the last whole word that fits, which CSS
 // cannot do: it measures the title in the head's own font.
 const titleRef = ref(null);
@@ -1131,7 +1143,8 @@ watch(
   >
     <!-- One head row on the toolbar's line (#2161): what the rail is about -
          the view, the one picture, or how many - and, while anything is
-         selected, Esc's keycap and the selection-off icon that clears it. -->
+         selected, Esc's keycap and the selection-off icon that clears it.
+         The close button always ends the row. -->
     <template #head>
       <h2 ref="titleRef" class="rail-title" data-testid="rail-title">
         <Tooltip
@@ -1154,6 +1167,15 @@ watch(
           @click="selectionStore.selectedImageIds = []"
         />
       </template>
+      <AppButton
+        class="rail-close"
+        variant="ghost"
+        size="sm"
+        icon-left="close"
+        icon-only
+        tooltip="Close this panel"
+        @click="closeRail"
+      />
     </template>
     <template v-if="railMode === 'none' && stats" #lead>
       <div class="stats-tiles">
@@ -1879,7 +1901,8 @@ watch(
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
-.rail-clear {
+.rail-clear,
+.rail-close {
   flex: none;
 }
 

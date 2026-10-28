@@ -202,6 +202,36 @@ describe("the rail's head row", () => {
     await flush();
     expect(title(wrapper)).toBe("All Pictures");
   });
+
+  it("ends in a close button, with or without a selection", async () => {
+    const wrapper = mountRail();
+    await flush();
+    let buttons = wrapper.findAll(".inspector-head button");
+    expect(buttons.map((b) => b.classes("rail-close"))).toEqual([true]);
+    await select(wrapper, [7, 8, 9]);
+    buttons = wrapper.findAll(".inspector-head button");
+    expect(buttons.at(-1).classes()).toContain("rail-close");
+    expect(buttons.at(-2).classes()).toContain("rail-clear");
+  });
+
+  it("closes the rail, keeps the selection and focuses the grid's toggle", async () => {
+    // The lightbox's toggle comes first, so a first-match query would win it.
+    document.body.innerHTML = `
+      <span class="overlay-topbar-sidebar-toggle">
+        <button class="tb-stats-btn" id="lightbox-toggle"></button>
+      </span>
+      <button class="tb-stats-btn" id="grid-toggle"></button>
+      <div id="rail"></div>`;
+    const wrapper = mountRail({}, { attachTo: "#rail" });
+    await select(wrapper, [7, 8, 9]);
+    await wrapper.find(".rail-close").trigger("click");
+    await flush();
+    expect(useSidebarStore().statsOpen).toBe(false);
+    expect(useSelectionStore().selectedImageIds).toEqual([7, 8, 9]);
+    expect(document.activeElement?.id).toBe("grid-toggle");
+    wrapper.unmount();
+    document.body.innerHTML = "";
+  });
 });
 
 describe("the rail's rating strip", () => {
