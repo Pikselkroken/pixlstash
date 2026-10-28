@@ -137,17 +137,19 @@
                 >{{ row.parts[0] }}<b class="stf-row-match">{{ row.parts[1] }}</b
                 >{{ row.parts[2] }}</span
               >
-              <span v-if="row.count != null" class="stf-row-meta">{{
-                formatCount(row.count)
-              }}</span>
+              <span v-if="row.count != null" class="stf-row-meta"
+                >{{ formatCount(row.count) }}
+                {{ row.count === 1 ? "picture" : "pictures" }}</span
+              >
               <span v-else-if="row.where" class="stf-row-meta">{{
                 row.where
               }}</span>
               <span v-if="index === currentIndex" class="stf-row-keys">
-                <kbd>Tab</kbd>
-                <template v-if="row.opposite"
-                  ><kbd>⇧Tab</kbd> {{ row.oppositeLabel }}</template
-                >
+                <template v-if="row.opposite">
+                  <kbd>Tab</kbd> {{ row.applyLabel }} <kbd>⇧Tab</kbd>
+                  {{ row.oppositeLabel }}
+                </template>
+                <kbd v-else>Tab</kbd>
               </span>
             </div>
           </template>
@@ -155,7 +157,7 @@
         <div class="stf-foot">
           <span><kbd>↵</kbd> search words</span>
           <span><kbd>Tab</kbd> add filter</span>
-          <span><kbd>⇧Tab</kbd> lacks</span>
+          <span><kbd>⇧Tab</kbd> without tag</span>
           <span><kbd>⌫</kbd> remove</span>
           <span><kbd>Esc</kbd> close</span>
         </div>
@@ -367,9 +369,11 @@ function tagEntries() {
       label: tag,
       icon: "mdi-tag-outline",
       count,
+      // Plain words for Has and Lacks: the hint says what Tab and ⇧Tab show.
       apply: () => addTag("has", tag),
+      applyLabel: "with",
       opposite: () => addTag("lacks", tag),
-      oppositeLabel: "lacks",
+      oppositeLabel: "without",
     }));
 }
 

@@ -59,6 +59,7 @@ const VOCABULARY = [
   { tag: "rain", count: 310 },
   { tag: "umbrella", count: 150 },
   { tag: "blurry background", count: 77 },
+  { tag: "puddle", count: 1 },
 ];
 
 let wrapper;
@@ -137,13 +138,25 @@ describe("SearchTokenField", () => {
     const text = optionTexts();
     expect(text[0]).toContain("Search descriptions and text for “look”");
     expect(text[1]).toContain("looking at viewer");
-    expect(text[1]).toContain("1,204");
+    expect(text[1]).toContain("1,204 pictures");
     expect(text[2]).toContain("looking back");
     const highlighted = wrapper.find('[aria-selected="true"]');
     expect(highlighted.text()).toContain("looking at viewer");
+    // The keys say what they show, not the filter's internal name.
+    expect(highlighted.find(".stf-row-keys").text()).toMatch(
+      /^Tab\s+with\s+⇧Tab\s+without$/,
+    );
     expect(input().attributes("aria-activedescendant")).toBe(
       "search-token-option-0",
     );
+  });
+
+  it("says what the count counts, one picture as one, and what ⇧Tab adds", async () => {
+    await mountField();
+    await type("pud");
+    expect(optionTexts()[1]).toContain("1 picture");
+    expect(optionTexts()[1]).not.toContain("1 pictures");
+    expect(wrapper.find(".stf-foot").text()).toContain("⇧Tab without tag");
   });
 
   it("finds any filter by name, under the Filter menu's kinds", async () => {
