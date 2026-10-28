@@ -207,6 +207,9 @@
             {{ t.label }}
           </button>
           <span v-else>{{ t.label }}</span>
+          <span v-if="many" class="visually-hidden"
+            >, on {{ t.count }} of {{ totalWithTagData }}</span
+          >
           <button
             v-if="!readOnly"
             class="rail-chip__x"
@@ -215,7 +218,7 @@
               many ? `Remove ${t.label} from ${t.count}` : `Remove ${t.label}`
             "
             :disabled="tagActionLoading.includes(t.name)"
-            @click="removeTagFromAll(t)"
+            @click="removeAndReject(t)"
           >
             <v-icon size="12">mdi-close</v-icon>
           </button>
@@ -291,7 +294,7 @@ const listSerial = { n: 0 };
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { isReadOnly } from "../../utils/apiClient";
+import { isReadOnly, newOperationBatchId } from "../../utils/apiClient";
 import { listTags } from "../../api/tags";
 import { listTaggers } from "../../api/taggers";
 import { resetPicturesTags } from "../../api/pictures";
@@ -368,6 +371,7 @@ const {
   addTagToRemaining,
   addTagsToAll,
   confirmPredictionOnAll,
+  rejectTagOnAll,
 } = useSelectionTags(() => props.ids, {
   onApplied: (payload) => emit("tags-applied", payload),
 });
@@ -451,6 +455,16 @@ const hiddenSingles = computed(
 const shownApplied = computed(() =>
   showSingles.value ? applied.value : applied.value.filter((t) => !folds(t)),
 );
+
+/**
+ * ×, as in the lightbox: the tag goes and the tagger is told it was wrong,
+ * one gesture, so one undo step.
+ */
+async function removeAndReject(t) {
+  const batchId = newOperationBatchId();
+  await removeTagFromAll(t, { batchId });
+  await rejectTagOnAll(t, { batchId });
+}
 
 function chipTip(t) {
   if (many.value) {
@@ -563,14 +577,16 @@ async function commit() {
   // comma-separated text (a prompt pasted in) being one tag per item.
   const active = suggestionsOpen.value && suggestions.value[suggestionIndex.value];
   if (active) fill(active);
-  const tags = splitTagText(draft.value);
+  const sent = draft.value;
+  const tags = splitTagText(sent);
   if (!tags.length || !n.value) return;
-  if (await addTagsToAll(tags)) {
-    draft.value = "";
-    dismissedFor.value = null;
-    retagNote.value = "";
-    void fetchLibrary({ force: true });
-  }
+  // Empty at once, so the next tag can be typed while this one is written;
+  // a failed add gives its text back unless something new was typed.
+  draft.value = "";
+  dismissedFor.value = null;
+  retagNote.value = "";
+  if (await addTagsToAll(tags)) void fetchLibrary({ force: true });
+  else if (!draft.value) draft.value = sent;
 }
 
 function onKey(event) {

@@ -1229,7 +1229,6 @@
           @open-stack="openSelectedStack"
           @create-stacks-from-groups="createStacksFromSelectedGroups"
           @run-plugin="handlePluginRunRequest"
-          @tags-applied="handleTagsApplied"
           @auto-tag="handleAutoTag"
           @generate-description="handleGenerateDescription"
           @reverse-image-search="handleReverseImageSearch"

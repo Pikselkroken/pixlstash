@@ -510,7 +510,7 @@ const properties = computed(() => {
 
 .rail-face--unknown .rail-face__crop {
   box-shadow: none;
-  outline: 1.5px dashed
+  outline: 1px dashed
     rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
   outline-offset: 1px;
 }

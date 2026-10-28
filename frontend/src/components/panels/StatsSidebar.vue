@@ -116,6 +116,9 @@ const selectedIds = computed(() => selectionStore.selectedImageIds);
 const tasksOverSelection = ref(false);
 watch(selectedIds, () => {
   tasksOverSelection.value = false;
+  // A T that no tag field took (the rail was under the lightbox) is spent:
+  // it must not take the caret when some later selection mounts one.
+  sidebarStore.tagFieldPending = false;
 });
 const railMode = computed(() => {
   const n = selectedIds.value.length;

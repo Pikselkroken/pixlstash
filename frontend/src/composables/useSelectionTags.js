@@ -5,6 +5,7 @@ import {
   bulkFetchTags,
   confirmTagPrediction,
   listTagPredictions,
+  rejectTagPrediction,
   removePictureTag,
 } from "../api/tags";
 import { errorDetail } from "../utils/apiError";
@@ -401,6 +402,34 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
   }
 
   /**
+   * Record the human NEG for a tag on every picture it was just removed from.
+   *
+   * @param {Object} tagEntry - the aggregated tag row (`name`, `tagsByImageId`).
+   * @param {Object} [options]
+   * @param {string} [options.batchId] - the gesture batch id of the removal this
+   *   reject belongs to.
+   */
+  async function rejectTagOnAll(tagEntry, { batchId } = {}) {
+    const imageIds = [...tagEntry.tagsByImageId.keys()];
+    // A second drop of the same tag while the first is still out would
+    // record every NEG twice.
+    if (!imageIds.length || tagActionLoading.value.includes(tagEntry.name)) {
+      return;
+    }
+    tagActionLoading.value = [...tagActionLoading.value, tagEntry.name];
+    try {
+      await fanOut(imageIds, (id) =>
+        rejectTagPrediction(id, tagEntry.name, { batchId }),
+      );
+      await fetchSelectedImagePredictions();
+    } finally {
+      tagActionLoading.value = tagActionLoading.value.filter(
+        (n) => n !== tagEntry.name,
+      );
+    }
+  }
+
+  /**
    * Add these tags to every selected picture.
    *
    * @param {Array<string>} tags
@@ -462,5 +491,6 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
     addTagToRemaining,
     addTagsToAll,
     confirmPredictionOnAll,
+    rejectTagOnAll,
   };
 }

@@ -421,7 +421,6 @@ const emit = defineEmits([
   "open-stack",
   "create-stacks-from-groups",
   "run-plugin",
-  "tags-applied",
   "auto-tag",
   "generate-description",
   "reverse-image-search",

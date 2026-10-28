@@ -11,12 +11,14 @@ const listTagPredictions = vi.fn();
 const addPictureTag = vi.fn(async () => ({}));
 const removePictureTag = vi.fn(async () => ({}));
 const confirmTagPrediction = vi.fn(async () => ({}));
+const rejectTagPrediction = vi.fn(async () => ({}));
 vi.mock("../../api/tags", () => ({
   bulkFetchTags: (...a) => bulkFetchTags(...a),
   listTagPredictions: (...a) => listTagPredictions(...a),
   addPictureTag: (...a) => addPictureTag(...a),
   removePictureTag: (...a) => removePictureTag(...a),
   confirmTagPrediction: (...a) => confirmTagPrediction(...a),
+  rejectTagPrediction: (...a) => rejectTagPrediction(...a),
   listTags: vi.fn(async () => [
     { tag: "filing cabinet", count: 3 },
     { tag: "film grain", count: 412 },
@@ -67,7 +69,12 @@ const tint = (wrapper, name) =>
 
 beforeEach(() => {
   setActivePinia(createPinia());
-  for (const fn of [addPictureTag, removePictureTag, confirmTagPrediction]) {
+  for (const fn of [
+    addPictureTag,
+    removePictureTag,
+    confirmTagPrediction,
+    rejectTagPrediction,
+  ]) {
     fn.mockClear();
   }
   listTagPredictions.mockReset().mockResolvedValue({
@@ -101,7 +108,7 @@ describe("several pictures' tags", () => {
     expect(names()).toEqual(["watermark", "man", "photo", "desk"]);
   });
 
-  it("add a part-tinted tag to the rest on a click, and × removes it from all", async () => {
+  it("add a part-tinted tag to the rest on a click; × removes and rejects it on all", async () => {
     const wrapper = await mountTags([1, 2, 3]);
     await chip(wrapper, "photo").find(".rail-chip__label").trigger("click");
     await flush();
@@ -118,6 +125,33 @@ describe("several pictures' tags", () => {
       [2, 21],
       [3, 31],
     ]);
+    // As the lightbox's ×: the tagger is told, in the same undo step.
+    expect(rejectTagPrediction.mock.calls.map(([id, tag]) => [id, tag])).toEqual([
+      [1, "man"],
+      [2, "man"],
+      [3, "man"],
+    ]);
+    const batches = new Set(
+      [...removePictureTag.mock.calls, ...rejectTagPrediction.mock.calls].map(
+        ([, , opts]) => opts?.batchId,
+      ),
+    );
+    expect([...batches]).toEqual([expect.any(String)]);
+  });
+
+  it("take the next tag while the last is still being written", async () => {
+    let finish;
+    addPictureTag.mockImplementation(() => new Promise((r) => (finish = r)));
+    const wrapper = await mountTags([1, 2, 3]);
+    const input = wrapper.find(".rail-tags__input");
+    await input.setValue("rain");
+    await input.trigger("keydown", { key: "Enter" });
+    expect(input.element.value).toBe("");
+    await input.setValue("se");
+    finish({});
+    await flush();
+    expect(input.element.value).toBe("se");
+    addPictureTag.mockReset().mockResolvedValue({});
   });
 
   it("say who gets a typed tag, and complete it from the library", async () => {
@@ -221,7 +255,7 @@ describe("one picture's tags", () => {
     expect(confirmTagPrediction.mock.calls[0].slice(0, 2)).toEqual([5, "woman"]);
   });
 
-  it("are only shown on a locked picture", async () => {
+  it("are read-only on a locked picture", async () => {
     const wrapper = await mountTags([5], { locked: true, lockNote: "Locked" });
     expect(wrapper.find(".rail-tags__input").exists()).toBe(false);
     expect(wrapper.find(".rail-chip__x").exists()).toBe(false);

@@ -162,7 +162,7 @@ const histLabel = computed(() =>
   flex: 0 1 auto;
   width: 100%;
   min-height: 2px;
-  border-radius: 2px 2px 0 0;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
   background: rgb(var(--v-theme-tertiary));
 }
 
