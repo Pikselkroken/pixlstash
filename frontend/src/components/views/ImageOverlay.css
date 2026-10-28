@@ -688,7 +688,8 @@
 
 /* The faces as named crops, in each face's identity hue. An unnamed face is
    dashed and muted; the one pointed at on the picture draws its one border
-   heavier, never a second ring outside it. */
+   heavier, never a second ring outside it. The border hugs the crop itself;
+   the square box round it only holds the place. */
 .face-chips {
   display: flex;
   flex-wrap: wrap;
@@ -712,24 +713,29 @@
   align-items: center;
   justify-content: center;
   overflow: hidden;
+}
+
+.face-chip-crop .face-assign-crop {
   border-radius: var(--radius-sm);
   border: 1.5px solid var(--face-hue);
   transition: border-width var(--dur-1) var(--ease-standard);
 }
 
-/* The crop's own hue border would be a second line inside the chip's. */
-.face-chip-crop .face-assign-crop {
-  border: 0;
+.face-chip--unnamed .face-chip-crop {
+  opacity: var(--opacity-text-secondary);
 }
 
-.face-chip--unnamed .face-chip-crop {
+.face-chip--unnamed .face-assign-crop {
   border-style: dashed;
-  opacity: var(--opacity-text-secondary);
 }
 
 .face-chip:hover .face-chip-crop,
 .face-chip--ringed .face-chip-crop {
   opacity: 1;
+}
+
+.face-chip:hover .face-assign-crop,
+.face-chip--ringed .face-assign-crop {
   border-width: 2px;
 }
 
