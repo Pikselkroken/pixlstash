@@ -883,13 +883,14 @@ describe("the closed inspector", () => {
     expect(edgeTab(wrapper).exists()).toBe(true);
   });
 
-  it("names one workflow, counts several, and is a bare handle for none", async () => {
+  it("names one workflow, counts several, and hides for none", async () => {
     const wrapper = await closedGrid();
     expect(tabLabel(wrapper)).toBe("");
-    expect(edgeTab(wrapper).attributes("aria-label")).toBe("Show inspector");
+    expect(edgeTab(wrapper).isVisible()).toBe(false);
 
     await wrapper.findAll(".wfv-row")[0].trigger("click");
     await flush();
+    expect(edgeTab(wrapper).isVisible()).toBe(true);
     expect(tabLabel(wrapper)).toBe("a");
     expect(edgeTab(wrapper).attributes("aria-label")).toBe(
       "Show inspector: a",

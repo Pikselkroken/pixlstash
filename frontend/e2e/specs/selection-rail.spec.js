@@ -69,4 +69,30 @@ test.describe('selection rail', () => {
     await rail.getByRole('button', { name: 'Clear' }).click()
     await expect(title).toHaveText('All Pictures')
   })
+
+  // Closed, the rail says a selection is waiting behind it and then gets out
+  // of the way (visual-language "Closed inspector").
+  test('closed, shows an edge tab on a new selection that hides again', async ({
+    page,
+    grid,
+  }) => {
+    await grid.goto()
+    if ((await grid.statsContent.count()) > 0) await grid.statsToggle.click()
+    await expect(grid.statsContent).toHaveCount(0)
+    const tab = page.getByTestId('inspector-edge-tab')
+    await expect(tab).toBeHidden()
+
+    await grid.selectCards(1)
+    await expect(tab).toBeVisible()
+    await expect(tab).toHaveAttribute('aria-label', /^Show stats: \S/)
+    await expect(tab).toBeHidden({ timeout: 8000 })
+
+    await grid.thumbnails.nth(1).click({ modifiers: ['ControlOrMeta'] })
+    await expect(tab).toBeVisible()
+    await expect(tab).toHaveAttribute('aria-label', 'Show stats: 2 pictures')
+    await tab.click()
+    await expect(grid.statsContent).toHaveCount(1)
+    await expect(tab).toHaveCount(0)
+    await expect(page.locator('.stats-sidebar :focus')).toHaveCount(1)
+  })
 })

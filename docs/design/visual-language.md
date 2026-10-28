@@ -1046,7 +1046,9 @@ out around it from the first paint. The Models rail lists the shelf rather than
 describing a selection and starts closed, but closed it wears the same handle:
 it names the shelf's selection and takes the same nudge, and with nothing
 selected it is the same tab reading `All models`, without the selection stripe,
-which also bounces when a card's tray opens. Closed, it is **never re-opened by itself**
+which also bounces when a card's tray opens. The Media grid's stats rail
+inspects the grid's selection (#2161) and wears the same handle: it names the
+one picture the way the rail's head does, or `N pictures`. Closed, it is **never re-opened by itself**
 — opening the docked rail takes a column away under the pointer — so the
 closed state has to say what it is hiding. (The reader can still ask for it
 from the content: a **double-click on a card**, a workflow card or a Models set
@@ -1055,19 +1057,26 @@ Models. An open rail keeps its tab.) The handle:
 
 | Part | Value |
 |---|---|
-| Width · max height | 34px · 260px, label ellipsised; a 20×52 chevron handle when nothing is selected (Workflows) |
+| Width · max height | 34px · 260px, label ellipsised |
 | Label | `writing-mode: vertical-rl`, `--text-sm`, `--weight-medium`, chevron-left above it. One item: its name. Several: `N workflows` (on Models: `N models`, `N sets`, `N missing models`, or `N selected` for a mix) |
 | Surface | `--panel`, `--border` on all but the right edge, `--elevation-2` |
 | Corners | `--radius-md`, left corners only |
 | Selection stripe | 3px `--active-bar` on the left edge; none on a label that names no selection (`plain`) |
 | Placement | the content's right edge, vertically centred, `--z-floating` |
 
+- **A cue, not a fixture.** The handle shows on a nudge and goes again 5s
+  later; a new nudge restarts the 5s. With the pointer or focus on it, it stays
+  until they leave and goes 5s after that, so it never vanishes under a click
+  or drops focus. It goes at once when its label empties (the selection was
+  cleared), so there is no unlabelled handle. Closing the rail shows nothing
+  until the next selection.
 - **Click only**, never hover: the content's scrollbar is on that edge. It is a
   `<button>` in the Tab order, named `Show inspector: <name>`, and opening from
   it persists (it is the same act as the toolbar toggle) and puts focus on the
-  inspector's active tab. While it shows, the content reserves its width on
-  that edge, so a click on a card's edge never lands on it; the scrollbar
-  still runs under it.
+  inspector's active tab. While the rail is closed, Workflows and Models
+  reserve the tab's width on that edge, so a click on a card's edge never
+  lands on it; the scrollbar still runs under it. The Media grid reserves
+  nothing: its rail starts closed, so a gutter would be permanent.
 - **Nudge on a new selection, never on the same one again.** Over
   `--dur-attention` the tab bounces left (0 → −16 → 0 → −7 → 0 → −2 → 0px) and
   the rail toggle's glyph turns `--selected-ink` and fades back — **glyph colour

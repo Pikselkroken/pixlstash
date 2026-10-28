@@ -65,6 +65,7 @@ import RestoreConfirmDialog from "./components/widgets/RestoreConfirmDialog.vue"
 import TelemetryConsentDialog from "./components/dialogs/TelemetryConsentDialog.vue";
 import ImageGrid from "./components/views/ImageGrid.vue";
 import StatsSidebar from "./components/panels/StatsSidebar.vue";
+import InspectorEdgeTab from "./components/widgets/InspectorEdgeTab.vue";
 import NoticeHost from "./components/widgets/NoticeHost.vue";
 import ShortcutsDialog from "./components/widgets/ShortcutsDialog.vue";
 import ConfirmDialog from "./components/widgets/ConfirmDialog.vue";
@@ -183,6 +184,7 @@ const gridContainer = ref(null);
 const sidebarRef = ref(null);
 const mainAreaRef = ref(null);
 const gridWrapperRef = ref(null);
+const statsSidebarRef = ref(null);
 
 // --- Local UI state ---
 const shortcutsDialogOpen = ref(false);
@@ -602,6 +604,51 @@ watch(
 const lightboxOpen = ref(false);
 const noticeOnDark = computed(() => lightboxOpen.value);
 
+// ── The grid's closed stats rail (visual-language "Closed inspector") ─────
+//
+// The stats rail inspects the grid's selection (#2161), so it takes the
+// Workflows and Models nudge: a NEW selection shows the edge tab and flashes
+// the rail toggle's glyph, both only while the rail is closed. Not while the
+// lightbox is up: stepping through it is not choosing, and it covers the tab.
+const isGridView = computed(
+  () =>
+    !isDuplicatesView.value &&
+    !isModelsView.value &&
+    !isInsightsView.value &&
+    !isMovesView.value &&
+    !isWorkflowsView.value,
+);
+watch(
+  () => selectionStore.selectedImageIds.map(String).sort().join("\n"),
+  (identity) => {
+    if (identity && isGridView.value && !lightboxOpen.value) {
+      sidebarStore.inspectorNudge += 1;
+    }
+  },
+);
+
+/** What the closed rail would describe: the rail's own head, or `N pictures`. */
+const statsEdgeTabLabel = computed(() => {
+  const count = selectionStore.selectedImageIds.length;
+  if (count > 1) return `${count.toLocaleString()} pictures`;
+  if (count === 0) return "";
+  return statsSidebarRef.value?.head?.title || "1 picture";
+});
+
+// The same act as the toolbar toggle, so it persists. The tab unmounts as the
+// rail opens, so focus goes into the rail (its active tab, or Clear when a
+// selection hides the tabs) rather than dropping to `body`.
+function openStatsFromTab() {
+  sidebarStore.toggleStats();
+  nextTick(() =>
+    document
+      .querySelector(
+        ".stats-sidebar .inspector-tab--active, .stats-sidebar .rail-clear",
+      )
+      ?.focus(),
+  );
+}
+
 function openImportDialog() {
   photosDialogOpen.value = true;
 }
@@ -1001,6 +1048,17 @@ defineExpose({
                 @confirm-export-zip="confirmExportZip"
                 @confirm-export-folder="confirmExportFolder"
               />
+              <InspectorEdgeTab
+                v-if="isGridView && !sidebarStore.statsOpen && !lightboxOpen"
+                :label="statsEdgeTabLabel"
+                :nudge="sidebarStore.inspectorNudge"
+                :name="
+                  statsEdgeTabLabel
+                    ? `Show stats: ${statsEdgeTabLabel}`
+                    : 'Show stats'
+                "
+                @open="openStatsFromTab"
+              />
             </div>
           </div>
         </main>
@@ -1026,6 +1084,7 @@ defineExpose({
         <WorkflowTab v-else-if="isWorkflowsView" />
         <ModelsRail v-else-if="isModelsView" />
         <StatsSidebar v-else
+          ref="statsSidebarRef"
           :view-name="activeCategoryLabel"
           :pictures="railPictures"
           :covered="lightboxOpen"
