@@ -311,13 +311,16 @@
         data-testid="shelf-folders"
       >
         <li v-for="dir in subfolders" :key="dir.path">
-          <!-- Each one takes model rows dropped on it (#2204). -->
+          <!-- Each one takes model rows dropped on it (#2204), and a paste
+               from its menu or Ctrl V on it. -->
           <button
             type="button"
             class="shelf-folder model-drop-target"
             :class="folderDrop.dropClass(dir.path)"
             :data-path="dir.path"
             @click="openSubfolder(dir.path)"
+            @contextmenu="openSubfolderMenu(dir, $event)"
+            @keydown="onSubfolderKeydown(dir, $event)"
             @dragover="folderDrop.onDragOver($event, dir.path, subfolderDestination(dir))"
             @dragleave="folderDrop.onDragLeave($event, dir.path)"
             @drop="folderDrop.onDrop($event, subfolderDestination(dir))"
@@ -348,6 +351,36 @@
           </button>
         </li>
       </ul>
+      <!-- A subfolder's menu: Paste here, while something is cut. -->
+      <v-menu
+        v-model="subfolderMenu.contextOpen.value"
+        :target="subfolderMenu.contextAt.value"
+        location="bottom end"
+        origin="top start"
+        :offset="2"
+      >
+        <div
+          class="ctx-menu"
+          role="menu"
+          tabindex="-1"
+          data-testid="shelf-folder-menu"
+          @keydown="onMenuKeydown"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            class="ctx-item"
+            data-verb="paste"
+            @click="pasteIntoSubfolder"
+          >
+            <v-icon class="ctx-icon" aria-hidden="true"
+              >mdi-content-paste</v-icon
+            >
+            <span class="ctx-label-text">Paste here</span>
+            <span class="ctx-shortcut">{{ pasteKeyHint }}</span>
+          </button>
+        </div>
+      </v-menu>
       <!-- The set grid, ahead of every row-list state: its groups OVERLAP, so
            it is a different screen rather than a banded version of this one. It
            still reads `visibleRows`, so Show and the filters keep applying. -->
@@ -659,7 +692,7 @@
                     'shelf-row--broken': BROKEN_STATES.has(row.locState),
                     'shelf-row--cut': store.isCut(row.id),
                   }"
-                  :draggable="store.isSelected(row.id) ? 'true' : undefined"
+                  draggable="true"
                   role="row"
                   aria-level="1"
                   :aria-expanded="
@@ -670,7 +703,7 @@
                   :tabindex="row.rowKey === rovingRowKey ? 0 : -1"
                   :data-row-key="row.rowKey"
                   @click="pickRow(row, $event)"
-                  @dragstart="onRowDragStart($event, row.id)"
+                  @dragstart="onRowDragStart($event, row)"
                   @dragend="onRowDragEnd"
                   @contextmenu.prevent="openRowMenu(row, $event)"
                   @keydown="onRowKeydown(row, $event)"
@@ -1066,9 +1099,7 @@
                       'shelf-row--selected': store.isSelected(member.id),
                       'shelf-row--cut': store.isCut(member.id),
                     }"
-                    :draggable="
-                      store.isSelected(member.id) ? 'true' : undefined
-                    "
+                    draggable="true"
                     role="row"
                     aria-level="2"
                     aria-keyshortcuts="Shift+F10"
@@ -1076,7 +1107,7 @@
                     :tabindex="memberKey(row, member) === rovingRowKey ? 0 : -1"
                     :data-row-key="memberKey(row, member)"
                     @click="pickMember(row, member, $event)"
-                    @dragstart="onRowDragStart($event, member.id)"
+                    @dragstart="onRowDragStart($event, member)"
                     @dragend="onRowDragEnd"
                     @contextmenu.prevent="openMemberMenu(row, member, $event)"
                     @keydown="onMemberKeydown(row, member, $event)"
@@ -1329,6 +1360,8 @@ import FolderMoveDialog from "../panels/FolderMoveDialog.vue";
 import ShelfRemoveFolderDialog from "../panels/ShelfRemoveFolderDialog.vue";
 import ModelDropTip from "../panels/ModelDropTip.vue";
 import { useModelCopyDrop } from "../../composables/useModelCopyDrop";
+import { useContextMenuAt } from "../../composables/useContextMenuAt";
+import { formatKeyHint, isApplePlatform } from "../../utils/shortcutHints";
 import ModelWorksWithDialog from "../panels/ModelWorksWithDialog.vue";
 import ModelSetGrid from "./ModelSetGrid.vue";
 import InspectorEdgeTab from "../widgets/InspectorEdgeTab.vue";
@@ -1884,7 +1917,9 @@ function showMove(copies, destination = null, fromCut = false) {
 watch(
   () => store.moveRequest,
   (request) => {
-    if (request) showMove(request.copies, request.destination);
+    if (request) {
+      showMove(request.copies, request.destination, Boolean(request.fromCut));
+    }
   },
 );
 
@@ -1965,15 +2000,24 @@ async function moveModelsOutFirst(copies) {
 // ── Drag and cut (#2204) ─────────────────────────────────────────────────
 
 /**
- * A selected row picks up the selection's movable copies. An unselected row
- * does not drag at all (it is not `draggable`), so a click-drag never moves
- * what the reader did not choose.
+ * A row picks up the selection's movable copies. An unselected row is made the
+ * selection first, alone, as a file manager does: what is dragged is what is
+ * under the pointer. The drop only opens the Move dialog, so nothing moves on
+ * a stray drag either way.
  */
-function onRowDragStart(event, id) {
-  const copies = store.isSelected(id)
-    ? store.movableSelection(foldersById.value)
-    : null;
-  if (!copies?.items.length) {
+function onRowDragStart(event, row) {
+  if (!store.isSelected(row.id)) {
+    // A row that cannot move refuses here, before it takes the selection: a
+    // stray drag on an offline row must not drop forty selected ones.
+    const scope = inFolder.value ? store.folderScope : null;
+    if (!movableCopies([row], foldersById.value, scope).items.length) {
+      event.preventDefault();
+      return;
+    }
+    store.selectFromClick(row.id, {}, orderedRowIds.value);
+  }
+  const copies = store.movableSelection(foldersById.value);
+  if (!copies.items.length) {
     event.preventDefault();
     return;
   }
@@ -1998,26 +2042,54 @@ function subfolderDestination(dir) {
   };
 }
 
-/** Ctrl V: the cut copies into the open folder, through the dialog. */
+/** Ctrl X and the menu's Cut: hold the selection's movable copies. */
+function cutSelected() {
+  if (!store.cutSelection(foldersById.value)) {
+    useNoticeStore().push({
+      level: "info",
+      text: "None of these files can be moved: they are missing, offline or in a locked folder.",
+    });
+  }
+}
+
+/** Ctrl V and the menu's Paste: the cut copies into the open folder. */
 function pasteCut() {
-  const { folderId, path, locked } = store.folderScope;
-  if (locked) {
-    useNoticeStore().push({
-      level: "info",
-      text: "That folder is locked, so nothing can be moved into it.",
-    });
-    return;
-  }
-  const copies = store.liveCut();
-  if (!copies?.items.length) {
-    store.clearCut();
-    useNoticeStore().push({
-      level: "info",
-      text: "What you cut has moved or gone since, so there is nothing to paste.",
-    });
-    return;
-  }
-  showMove(copies, { folderId, path }, true);
+  store.pasteCut(store.folderScope);
+}
+
+const pasteKeyHint = formatKeyHint([isApplePlatform() ? "⌘" : "Ctrl", "V"]);
+const subfolderMenu = useContextMenuAt();
+/** The subfolder whose menu is open, and its button. */
+const subfolderMenuDir = shallowRef(null);
+let subfolderMenuTrigger = null;
+
+/** Right-click a subfolder: Paste here while something is cut, else nothing. */
+function openSubfolderMenu(dir, event) {
+  if (!store.cutCopies) return;
+  event.preventDefault();
+  subfolderMenuDir.value = dir;
+  subfolderMenuTrigger = event.currentTarget;
+  subfolderMenu.openContextMenu(event.clientX, event.clientY, event.currentTarget);
+}
+
+/** The Menu key or Shift+F10 on a subfolder: the same menu, under it. */
+function onSubfolderKeydown(dir, event) {
+  if (!isMenuKey(event) || !store.cutCopies) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const box = event.currentTarget.getBoundingClientRect();
+  subfolderMenuDir.value = dir;
+  subfolderMenuTrigger = event.currentTarget;
+  subfolderMenu.openContextMenu(box.left + 24, box.bottom, event.currentTarget);
+}
+
+function pasteIntoSubfolder() {
+  subfolderMenu.contextOpen.value = false;
+  // Focus back on the subfolder first, so the Move dialog returns it there
+  // rather than to the menu row it is about to lose.
+  subfolderMenuTrigger?.focus?.();
+  const dir = subfolderMenuDir.value;
+  if (dir) store.pasteCut(subfolderDestination(dir));
 }
 
 async function closeMove() {
@@ -2198,17 +2270,16 @@ function onShelfKeydown(event) {
     if (clip === "x") {
       if (!ownSelection.value.length) return;
       event.preventDefault();
-      if (!store.cutSelection(foldersById.value)) {
-        useNoticeStore().push({
-          level: "info",
-          text: "None of these files can be moved: they are missing, offline or in a locked folder.",
-        });
-      }
+      cutSelected();
       return;
     }
     if (!store.cutCopies || !inFolder.value) return;
     event.preventDefault();
-    pasteCut();
+    // On a subfolder of the open folder, into that subfolder.
+    const dirPath = event.target?.closest?.(".shelf-folder")?.dataset.path;
+    const dir = dirPath && subfolders.value.find((one) => one.path === dirPath);
+    if (dir) store.pasteCut(subfolderDestination(dir));
+    else pasteCut();
     return;
   }
   // F2 is let through for a selected hand-made set, whose pill and menu
@@ -4072,6 +4143,8 @@ const verbListeners = {
   "make-cover": makeCover,
   "remove-from-stack": confirmRemoveFromStack,
   move: () => openMove(store.selectedRows),
+  cut: cutSelected,
+  paste: pasteCut,
   "merge-copies": openMergeCopies,
   "open-location": openLocation,
   "set-icon": pickIcon,

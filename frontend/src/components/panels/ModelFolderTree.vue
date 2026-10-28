@@ -216,10 +216,12 @@ import { errorMessage } from "../../utils/apiError";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import { driveFullness } from "../../utils/libraryChrome";
 import {
+  allAlreadyIn,
   comfyuiLoadsTitle,
   comfyuiMarks,
   formatModelSize,
 } from "../../utils/modelShelf";
+import { isApplePlatform } from "../../utils/shortcutHints";
 import {
   basename,
   useModelFoldersStore,
@@ -284,6 +286,7 @@ const drop = useModelCopyDrop();
 const folderDrop = useFolderDrop();
 
 const SEPARATOR = "separator";
+const PASTE_KEY = `${isApplePlatform() ? "⌘" : "Ctrl"} V`;
 
 const isLocked = (folder) => folder.movable !== "per_item";
 const nodeKey = (folderId, path) => `f:${folderId}:${path}`;
@@ -488,8 +491,26 @@ function menuFor(node) {
   if (props.mode !== "browse") return [];
   if (node.kind === "drive" || node.locked) return [];
   const busy = gates.folderVerbReason({ id: node.folderId });
+  // Models cut on the shelf (Ctrl X or Cut) land here, through the Move
+  // dialog. Listed only while something is cut, first: it is why the reader
+  // opened this menu.
+  const paste = shelf.cutCopies
+    ? [
+        {
+          key: "paste",
+          label: "Paste here",
+          icon: "mdi-content-paste",
+          shortcut: PASTE_KEY,
+          reason: allAlreadyIn(shelf.cutCopies.items, node)
+            ? "What you cut is already in this folder"
+            : "",
+        },
+        SEPARATOR,
+      ]
+    : [];
   if (node.path === "") {
     return [
+      ...paste,
       {
         key: "new",
         label: "New folder",
@@ -508,6 +529,7 @@ function menuFor(node) {
     ];
   }
   return [
+    ...paste,
     {
       key: "new",
       label: "New folder",
@@ -563,7 +585,8 @@ function onMoreClick(event, node) {
  * the Delete that asked, for an empty folder, which goes without a dialog.
  */
 function act(key, node, options = {}) {
-  if (key === "new") startNew(node);
+  if (key === "paste") shelf.pasteCut(dropDestination(node));
+  else if (key === "new") startNew(node);
   else if (key === "rename") startRename(node);
   else if (key === "move") shelf.requestFolderMove(sourceOf(node));
   else if (key === "remove") void startFolderRemove(sourceOf(node), options);
@@ -581,6 +604,9 @@ function runEntry(entry) {
     return;
   }
   contextOpen.value = false;
+  // A paste opens the Move dialog, which returns focus to what held it: the
+  // row, not the menu row about to go.
+  if (entry.key === "paste") rowEls.get(node.key)?.focus();
   act(entry.key, node);
 }
 
@@ -591,6 +617,20 @@ function runEntry(entry) {
  */
 function verbKey(event, node) {
   const chord = event.ctrlKey || event.metaKey;
+  // Ctrl V pastes what the shelf cut into this folder. A locked folder offers
+  // no menu, so it is asked directly and says why it refuses.
+  if (
+    chord &&
+    !event.shiftKey &&
+    !event.altKey &&
+    String(event.key).toLowerCase() === "v" &&
+    shelf.cutCopies &&
+    node.kind !== "drive"
+  ) {
+    if (verbFor(node, "paste")) return true;
+    shelf.pasteCut(dropDestination(node));
+    return true;
+  }
   if (
     chord &&
     event.shiftKey &&

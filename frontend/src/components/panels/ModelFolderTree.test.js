@@ -550,6 +550,57 @@ describe("the folder verbs (#2206)", () => {
     wrapper.unmount();
   });
 
+  it("leads a folder's menu with Paste here while models are cut, and pastes there", async () => {
+    const shelf = useModelShelfStore();
+    const paste = vi.spyOn(shelf, "pasteCut").mockReturnValue(true);
+    shelf.cutCopies = {
+      items: [{ folder_id: 1, relpath: "Lora/alice.safetensors" }],
+      ids: new Set([1]),
+    };
+    const wrapper = await openLora();
+    rightClick(item(wrapper, 1, "VAE"));
+    await flushPromises();
+    expect(verbs(wrapper)).toEqual(["paste", "new", "move", "rename", "remove"]);
+    expect(menu(wrapper).find('[data-verb="paste"]').text()).toContain("Ctrl V");
+    await menu(wrapper).find('[data-verb="paste"]').trigger("click");
+    expect(paste).toHaveBeenCalledWith({ folderId: 1, path: "VAE", locked: false });
+
+    // The folder the cut files are already in says so, and pastes nothing.
+    paste.mockClear();
+    rightClick(item(wrapper, 1, "Lora"));
+    await flushPromises();
+    const refused = menu(wrapper).find('[data-verb="paste"]');
+    expect(refused.attributes("aria-disabled")).toBe("true");
+    await refused.trigger("click");
+    expect(paste).not.toHaveBeenCalled();
+    wrapper.unmount();
+    shelf.cutCopies = null;
+  });
+
+  it("pastes with Ctrl V on a folder row, a locked one included, and only while models are cut", async () => {
+    const shelf = useModelShelfStore();
+    const paste = vi.spyOn(shelf, "pasteCut").mockReturnValue(true);
+    const wrapper = await openLora();
+    const ctrlV = async (el) => {
+      el.element.focus();
+      await el.trigger("keydown", { key: "v", ctrlKey: true });
+    };
+    await ctrlV(item(wrapper, 1, "VAE"));
+    expect(paste).not.toHaveBeenCalled();
+
+    shelf.cutCopies = {
+      items: [{ folder_id: 1, relpath: "Lora/alice.safetensors" }],
+      ids: new Set([1]),
+    };
+    await ctrlV(item(wrapper, 1, "VAE"));
+    expect(paste).toHaveBeenLastCalledWith({ folderId: 1, path: "VAE", locked: false });
+    // A locked folder has no menu; the store refuses it with its reason.
+    await ctrlV(item(wrapper, 2));
+    expect(paste).toHaveBeenLastCalledWith({ folderId: 2, path: "", locked: true });
+    wrapper.unmount();
+    shelf.cutCopies = null;
+  });
+
   it("offers no menu in pick mode, where the rows only choose", async () => {
     const wrapper = mountTree({ mode: "pick" });
     await flushPromises();
