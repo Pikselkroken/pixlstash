@@ -62,7 +62,8 @@ const props = defineProps({
   rail: {
     type: String,
     default: "stats",
-    validator: (value) => ["stats", "workflows", "models"].includes(value),
+    validator: (value) =>
+      ["stats", "workflows", "models", "lightbox"].includes(value),
   },
 });
 
@@ -74,12 +75,15 @@ const railOpen = computed(() =>
     ? sidebarStore.workflowInspectorOpen
     : props.rail === "models"
       ? sidebarStore.modelsRailOpen
-      : sidebarStore.statsOpen,
+      : props.rail === "lightbox"
+        ? sidebarStore.lightboxRailOpen
+        : sidebarStore.statsOpen,
 );
 
 function toggleRail() {
   if (props.rail === "workflows") sidebarStore.toggleWorkflowInspector();
   else if (props.rail === "models") sidebarStore.toggleModelsRail();
+  else if (props.rail === "lightbox") sidebarStore.toggleLightboxRail();
   else sidebarStore.toggleStats();
 }
 

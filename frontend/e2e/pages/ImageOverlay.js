@@ -18,7 +18,7 @@ export class ImageOverlay {
     this.faceCrops = page.locator('.face-assign-crop')
     // Face boxes have no switch: pointing at a face's chip draws its box.
     this.faceChips = page.locator('.face-chip')
-    // The pane is the app's right rail: it opens and shuts with the grid's.
+    // The pane stands where the right rail stands, on its own open flag.
     this.pane = page.locator('.image-overlay .overlay-sidebar')
     this.railToggle = page.locator('.image-overlay .tb-stats-btn')
     // Every box is in the DOM; only the ones asked about are visible.
@@ -91,15 +91,14 @@ export class ImageOverlay {
     await this.openRail()
   }
 
-  /** Open the rail if it is shut. Its open flag is the grid's, and remembered. */
+  /** Open the rail if it is shut. Its open flag is its own, and remembered. */
   async openRail() {
     if (await this.pane.evaluate((el) => el.classList.contains('inspector--collapsed'))) {
       await this.railToggle.click()
     }
     await expect(this.pane).not.toHaveClass(/inspector--collapsed/)
-    // The class flips at once but the rail slides open, and the grid's rail,
-    // which shares the flag, slides with it: a box read before both land
-    // measures a rail a pixel wide.
+    // The class flips at once but the rail slides open: a box read before it
+    // lands measures a rail a pixel wide.
     await this.page.evaluate(() =>
       Promise.all(
         document

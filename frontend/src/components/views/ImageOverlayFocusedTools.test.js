@@ -153,7 +153,7 @@ let fullscreenElement = null;
 
 beforeEach(() => {
   setActivePinia(createPinia());
-  useSidebarStore().statsOpen = true;
+  useSidebarStore().lightboxRailOpen = true;
   // jsdom has no Fullscreen API: a stand-in that answers as a browser does.
   fullscreenElement = null;
   Object.defineProperty(document, "fullscreenElement", {
@@ -313,7 +313,7 @@ describe("full screen", () => {
     expect(wrapper.find(".overlay-fullscreen-notice").exists()).toBe(true);
     // The inspector goes too, without touching the rail's remembered flag.
     expect(wrapper.vm.inspectorShown).toBe(false);
-    expect(useSidebarStore().statsOpen).toBe(true);
+    expect(useSidebarStore().lightboxRailOpen).toBe(true);
   });
 
   it("Esc leaves full screen first and the lightbox second", async () => {

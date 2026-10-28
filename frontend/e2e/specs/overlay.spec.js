@@ -38,16 +38,29 @@ test.describe('image overlay', () => {
 
   // The lightbox opens inside the frame (#2163): over the centre column and in
   // the rail's place, never over the title bar or the sidebar.
-  test('moves nothing outside the centre column', async ({ page, overlay }) => {
+  test('moves nothing outside the centre column', async ({ page, grid, overlay }) => {
     const box = (selector) =>
       page.locator(selector).first().evaluate((el) => {
         const r = el.getBoundingClientRect()
         return { x: r.x, y: r.y, w: r.width, h: r.height }
       })
     await overlay.openFromGrid()
-    // The rail is open (the page object opens it); close the lightbox to
-    // measure the frame as the grid draws it.
+    // The pane is open (the page object opens it); close the lightbox and open
+    // the grid's rail, which has its own flag, to measure the frame as the
+    // grid draws it.
     await overlay.close()
+    if ((await grid.statsToggle.getAttribute('aria-pressed')) !== 'true') {
+      await grid.statsToggle.click()
+    }
+    await expect(grid.statsToggle).toHaveAttribute('aria-pressed', 'true')
+    await page.evaluate(() =>
+      Promise.all(
+        document
+          .getAnimations()
+          .filter((a) => a instanceof CSSTransition)
+          .map((a) => a.finished.catch(() => null)),
+      ),
+    )
     const titleBar = await box('.titlebar')
     const sidebar = await box('.sidebar-shell')
     const rail = await box('.stats-sidebar')
