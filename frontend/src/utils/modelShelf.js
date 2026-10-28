@@ -866,7 +866,8 @@ export const MAX_BASE_MODEL_LOOKUP = 100;
  *
  * Mirrors the server's eligibility, which stays the authority: an adapter or
  * checkpoint, hashed, with no base model, that the owner has not cleared
- * (a cleared base model is null with source `user`).
+ * (a cleared base model is null with source `user`) and whose header does not
+ * already name one (source `declared`, which outranks Civitai).
  *
  * @param {Object} row - a model row from `/adapters` or `/checkpoints`.
  * @returns {boolean}
@@ -875,8 +876,9 @@ export function lookupEligible(row) {
   return (
     (row?.file_kind === "adapter" || row?.file_kind === "checkpoint") &&
     Boolean(row.sha256) &&
-    !row.base_model &&
-    row.base_model_source !== "user"
+    row.base_model == null &&
+    row.base_model_source !== "user" &&
+    row.base_model_source !== "declared"
   );
 }
 

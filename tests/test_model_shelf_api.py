@@ -7898,6 +7898,12 @@ def test_a_checkpoint_named_after_its_base_model_is_matched_by_name(shelf_env):
         return next(r for r in rows if r["id"] == huge)["matched_name"]
 
     assert matched() == "FLUX.1 dev"
+    # Civitai's answer for these bytes is not a guess either (#1517).
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET base_model_source = 'civitai' WHERE id = ?", (huge,)
+        )
+    assert matched() == "FLUX.1 dev"
     with shelf_env.server.hub.transaction() as conn:
         conn.execute(
             "UPDATE model SET base_model_source = 'filename_fuzzy' WHERE id = ?",
@@ -11541,6 +11547,14 @@ def test_lookup_fills_only_an_empty_row_nobody_ruled_on(shelf_env, no_civitai_pa
     noname, dana = ids["sd_xl_noname.safetensors"], ids["dana.safetensors"]
     # The owner's "none of these": base_model NULL, source `user`.
     model_shelf_service.update_models(hub, [dana], {"base_model": None})
+    # A header that names the model only through `modelspec.architecture`.
+    declared = _add_model(shelf_env, "checkpoint", "spec.safetensors", _h("spec"))
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET base_model_canonical = 'SDXL 1.0', "
+            "base_model_source = 'declared' WHERE id = ?",
+            (declared,),
+        )
     engine = _add_model(shelf_env, "engine", "tagger.onnx", _h("engine"))
     asked = []
 
@@ -11554,6 +11568,7 @@ def test_lookup_fills_only_an_empty_row_nobody_ruled_on(shelf_env, no_civitai_pa
         ids["alice.safetensors"],
         ids["mystery.safetensors"],
         ids["huge_unhashed.safetensors"],
+        declared,
         engine,
         999999,
     ]
@@ -11566,12 +11581,14 @@ def test_lookup_fills_only_an_empty_row_nobody_ruled_on(shelf_env, no_civitai_pa
         {"id": ids["alice.safetensors"], "reason": "already_set"},
         {"id": ids["mystery.safetensors"], "reason": "not_a_model"},
         {"id": ids["huge_unhashed.safetensors"], "reason": "no_hash"},
+        {"id": declared, "reason": "already_set"},
         {"id": engine, "reason": "not_a_model"},
         {"id": 999999, "reason": "unknown_id"},
     ]
     assert result["not_found"] == [] and result["not_asked"] == []
     assert _base_model_columns(shelf_env, noname) == ("SDXL 1.0", "SDXL 1.0", "civitai")
     assert _base_model_columns(shelf_env, dana) == (None, None, "user")
+    assert _base_model_columns(shelf_env, declared) == (None, "SDXL 1.0", "declared")
     assert _base_model_columns(shelf_env, ids["alice.safetensors"])[0] == "SDXL 1.0"
 
 
@@ -11597,6 +11614,26 @@ def test_an_owner_ruling_landing_during_the_lookup_wins(
         model_shelf_service.fold(owner_value),
         "user",
     )
+
+
+def test_a_header_identification_landing_during_the_lookup_wins(
+    shelf_env, no_civitai_pause
+):
+    hub = shelf_env.server.hub
+    noname = shelf_env.model_ids["sd_xl_noname.safetensors"]
+
+    def lookup(sha256):
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model SET base_model_canonical = 'SDXL 1.0', "
+                "base_model_source = 'declared' WHERE id = ?",
+                (noname,),
+            )
+        return "Pony"
+
+    model_shelf_service.fill_base_models_online(hub, [noname], lookup)
+
+    assert _base_model_columns(shelf_env, noname) == (None, "SDXL 1.0", "declared")
 
 
 def test_the_first_unreachable_answer_stops_the_batch(shelf_env, no_civitai_pause):

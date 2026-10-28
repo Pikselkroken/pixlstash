@@ -603,6 +603,8 @@ describe("Look up base model on Civitai", () => {
       row(1, "present"),
       // The owner's "none of these": a ruling, not a blank to fill.
       row(2, "present", { base_model: null, base_model_source: "user" }),
+      // A header naming it through modelspec outranks Civitai.
+      row(5, "present", { base_model: null, base_model_source: "declared" }),
       row(3, "present", { base_model: null, sha256: null }),
       row(4, "present", { base_model: null, file_kind: "vae" }),
     ]);

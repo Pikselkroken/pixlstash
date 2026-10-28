@@ -177,6 +177,7 @@ from pixlstash.utils.adapter_header import (
 from pixlstash.utils.host_open import open_in_file_manager
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.known_base_models import (
+    SOURCE_CIVITAI,
     SOURCE_DECLARED,
     SOURCE_FILENAME,
     SOURCE_USER,
@@ -926,7 +927,8 @@ class BaseModelLookupSkip(BaseModel):
     id: int
     reason: str = Field(
         description=(
-            "`already_set` (the row has a base model), `owner_set` (the owner "
+            "`already_set` (the row has a base model, or its header names "
+            "one), `owner_set` (the owner "
             "cleared it, which is a ruling, or set one while the lookup ran), "
             "`not_a_model` (not an adapter or a checkpoint), `no_hash` (not "
             "hashed yet, so there is nothing to ask with) or `unknown_id`."
@@ -2116,7 +2118,7 @@ def _matched_name(row: dict) -> Optional[str]:
         row["file_kind"] != FILE_CHECKPOINT
         or not canonical
         or row["base_model_source"]
-        not in (SOURCE_USER, SOURCE_DECLARED, SOURCE_FILENAME)
+        not in (SOURCE_USER, SOURCE_DECLARED, SOURCE_CIVITAI, SOURCE_FILENAME)
         or not row["filename"]
     ):
         return None

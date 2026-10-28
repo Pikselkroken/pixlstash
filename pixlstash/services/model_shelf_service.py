@@ -87,6 +87,7 @@ from pixlstash.utils.known_base_models import (
     SOURCE_CIVITAI,
     SOURCE_DECLARED,
     SOURCE_FILENAME,
+    SOURCE_RANK,
     SOURCE_USER,
     family_of,
     fold,
@@ -2466,12 +2467,18 @@ CIVITAI_PAUSE_SECONDS = 0.25
 #: this a hundred slow answers would hold the owner's request for minutes.
 CIVITAI_BUDGET_SECONDS = 90
 
+# The sources a Civitai answer may replace: only those it outranks, as the
+# scanner replaces only what it outranks. Not `user` (a cleared base model is
+# `base_model NULL, source 'user'`, the owner's "none of these") and not
+# `declared` (a header can name the model through `modelspec.architecture`
+# with no `ss_base_model_version`, leaving `base_model` NULL).
+_LOOKUP_REPLACEABLE = tuple(s for s in SOURCE_RANK if rank(s) < rank(SOURCE_CIVITAI))
+
 # The write's guard: the eligibility the read already checked, asked again in
-# the UPDATE so a *Set base model* landing mid-batch still wins. A
-# cleared base model is `base_model NULL, source 'user'`: the owner's "none of
-# these", which a lookup must leave alone as surely as a typed value.
+# the UPDATE so a *Set base model* landing mid-batch still wins.
 _LOOKUP_FILLABLE_SQL = (
-    "base_model IS NULL AND (base_model_source IS NULL OR base_model_source <> ?)"
+    "base_model IS NULL AND (base_model_source IS NULL OR base_model_source "
+    f"IN ({', '.join('?' * len(_LOOKUP_REPLACEABLE))}))"
 )
 
 
@@ -2519,6 +2526,8 @@ def fill_base_models_online(hub, ids: list[int], lookup=lookup_base_model) -> di
             reason = "already_set"
         elif row["base_model_source"] == SOURCE_USER:
             reason = "owner_set"
+        elif rank(row["base_model_source"]) > rank(SOURCE_CIVITAI):
+            reason = "already_set"
         elif row["file_kind"] not in (FILE_ADAPTER, FILE_CHECKPOINT):
             reason = "not_a_model"
         elif not row["sha256"]:
@@ -2558,7 +2567,7 @@ def fill_base_models_online(hub, ids: list[int], lookup=lookup_base_model) -> di
             written = conn.execute(
                 "UPDATE model SET base_model = ?, base_model_canonical = ?, "
                 f"base_model_source = ? WHERE id = ? AND {_LOOKUP_FILLABLE_SQL}",
-                (label, fold(label), SOURCE_CIVITAI, model_id, SOURCE_USER),
+                (label, fold(label), SOURCE_CIVITAI, model_id, *_LOOKUP_REPLACEABLE),
             ).rowcount
         if written:
             filled.append({"id": model_id, "base_model": label})
