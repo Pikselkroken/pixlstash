@@ -53,6 +53,7 @@ const answers = reactive({});
 const testing = reactive({});
 const menuOpen = reactive({});
 const moreButtons = {};
+const radios = {};
 // The row being renamed or re-addressed: `{id, kind: "name" | "address"}`.
 const editing = ref(null);
 const nameField = ref("");
@@ -151,6 +152,9 @@ async function switchTo(row) {
       `Could not switch Run on to ${row.name}: ${errorMessage(e, "the server did not answer.")}` +
         (before ? ` ${before.name} is still current.` : ""),
     );
+    // The remount took the focused radio with it; keep focus in the group.
+    await nextTick();
+    radios[before?.id ?? row.id]?.focus();
   }
 }
 
@@ -399,6 +403,7 @@ function onMenuKey(event, row) {
               <td class="cct-rad">
                 <input
                   :key="radioKey"
+                  :ref="(el) => (radios[row.id] = el)"
                   type="radio"
                   name="comfyui-run-on"
                   class="cct-radio"

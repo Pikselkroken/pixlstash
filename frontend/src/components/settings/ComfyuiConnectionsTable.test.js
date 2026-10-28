@@ -130,10 +130,13 @@ describe("Run on", () => {
     config.patchUserConfig.mockRejectedValue(new Error("server busy"));
     const wrapper = mountTable();
     const radio = byTestId(wrapper, "comfyui-run-on-box");
+    radio.element.focus();
     radio.element.checked = true;
     await radio.trigger("change");
     await flushPromises();
     expect(byTestId(wrapper, "comfyui-run-on-pc").element.checked).toBe(true);
+    // The remounted radios keep focus: on the one still current.
+    expect(document.activeElement).toBe(byTestId(wrapper, "comfyui-run-on-pc").element);
     expect(byTestId(wrapper, "comfyui-run-on-box").element.checked).toBe(false);
     expect(byTestId(wrapper, "comfyui-table-error").text()).toContain(
       "This PC is still current",
