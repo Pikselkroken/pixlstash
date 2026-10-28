@@ -32,8 +32,7 @@ on:
   # A draft PR runs `checks` and `e2e` only; the backend shards and their
   # warming jobs wait for `ready_for_review` (#2035). While a PR goes round the
   # AI review, each push is superseded by the next fix long before the ~25 min
-  # gate reports, so a draft's gate run is ~200 runner-minutes cancelled. Agents
-  # open PRs as drafts and `gh pr ready` once a review round finds nothing.
+  # gate reports, so a draft's gate run is ~200 runner-minutes cancelled.
   # Nothing is a required check here (see the note above `e2e`), so the skipped
   # jobs on a draft cannot stand in for a green gate.
   pull_request:
