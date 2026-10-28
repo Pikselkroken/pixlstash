@@ -46,6 +46,7 @@ from pixlstash.hub.registry import VAULT_FILENAME, Library
 from pixlstash.utils.media_files import is_supported_media_file
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.system_utils import space_shortfall
+from pixlstash.utils.sqlite_uri import sqlite_file_uri
 from pixlstash.hub.bootstrap import known_vault_revisions, newer_library_message
 from pixlstash.services.portable_identity import (
     PortableIdentityScrubError,
@@ -143,7 +144,9 @@ def _open_guarded_source(
     except TrustedSQLiteLocationError as exc:
         raise BackupError(f"Could not securely open {label} {path}: {exc}") from exc
     try:
-        conn = sqlite3.connect(f"file:{guard.path}?mode=ro", uri=True, timeout=30)
+        conn = sqlite3.connect(
+            sqlite_file_uri(guard.path, read_only=True), uri=True, timeout=30
+        )
         conn.row_factory = sqlite3.Row
         guard.verify_after_open()
     except Exception as exc:

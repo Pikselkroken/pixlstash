@@ -31,6 +31,7 @@ from typing import Optional
 from pixlstash.hub.db import HubDatabase
 from pixlstash.startup_permissions import mkdir_private
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.sqlite_uri import sqlite_file_uri
 
 logger = get_logger(__name__)
 
@@ -275,7 +276,9 @@ def validate_vault_folder(folder: str, *, filename: str = VAULT_FILENAME) -> str
         )
 
     try:
-        conn = sqlite3.connect(f"file:{vault_path}?mode=ro", uri=True, timeout=5)
+        conn = sqlite3.connect(
+            sqlite_file_uri(vault_path, read_only=True), uri=True, timeout=5
+        )
     except sqlite3.Error as exc:
         logger.error("Could not open vault %s read-only: %s", vault_path, exc)
         raise NotAVaultError(f"{vault_path} could not be opened: {exc}") from exc
@@ -337,7 +340,9 @@ def read_vault_uuid(folder: str) -> Optional[str]:
     if not os.path.isfile(vault_path):
         return None
     try:
-        conn = sqlite3.connect(f"file:{vault_path}?mode=ro", uri=True, timeout=5)
+        conn = sqlite3.connect(
+            sqlite_file_uri(vault_path, read_only=True), uri=True, timeout=5
+        )
     except sqlite3.Error as exc:
         logger.warning("Could not read the fingerprint of %s: %s", vault_path, exc)
         return None
@@ -387,7 +392,9 @@ def read_vault_folder_roots(folder: str) -> list[str]:
     if vault_path is None:
         return []
     try:
-        conn = sqlite3.connect(f"file:{vault_path}?mode=ro", uri=True, timeout=5)
+        conn = sqlite3.connect(
+            sqlite_file_uri(vault_path, read_only=True), uri=True, timeout=5
+        )
         try:
             tables = {
                 row[0]

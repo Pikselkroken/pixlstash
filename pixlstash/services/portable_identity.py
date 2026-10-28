@@ -11,6 +11,7 @@ import time
 from datetime import datetime, timezone
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.sqlite_uri import sqlite_file_uri
 from pixlstash.utils.snapshot_compression import (
     compress_snapshot,
     is_compressed,
@@ -107,7 +108,9 @@ def _verify_identity_free_file(path: str) -> None:
     if not stat.S_ISREG(info.st_mode):
         raise PortableIdentityScrubError(f"Identity-free proof requires a file: {path}")
     try:
-        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=30)
+        conn = sqlite3.connect(
+            sqlite_file_uri(path, read_only=True), uri=True, timeout=30
+        )
         try:
             integrity = conn.execute("PRAGMA integrity_check").fetchone()
             if not integrity or integrity[0] != "ok":

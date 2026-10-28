@@ -1,0 +1,64 @@
+"""Build SQLite connection strings from filesystem paths without parsing them.
+
+A path pasted raw into a connection string is cut short by any character the
+string's grammar reserves. In a SQLite ``file:`` URI ``?`` starts the query and
+``#`` the fragment; SQLAlchemy's URL parser also splits on ``?``. A library
+folder named ``odd #1?`` then opened a truncated path, created a stray file
+beside the folder, and left the real vault unmigrated (#2210).
+
+Every SQLite open that goes through a URI or a SQLAlchemy URL builds it here.
+``tests/test_architecture_guardrails.py`` fails the build on a hand-built
+``f"file:{...}"`` or ``f"sqlite:///{...}"`` anywhere else under ``pixlstash/``.
+"""
+
+import os
+from urllib.parse import quote
+
+from sqlalchemy.engine import URL
+
+
+def sqlite_file_uri(path, *, read_only: bool = False) -> str:
+    """Return a SQLite ``file:`` URI naming *path*, for ``connect(uri=True)``.
+
+    Everything but ASCII letters, digits, ``_.-~`` and the separators ``/``,
+    ``\\`` and ``:`` is percent-encoded, and SQLite decodes it again. Keeping
+    the separators means a Windows drive path keeps the shape SQLite already accepted
+    (``file:C:\\...``) and a UNC path does not grow a URI authority, which
+    SQLite refuses. A POSIX absolute path gets an explicit empty authority so
+    a path starting with ``//`` cannot be read as a host.
+
+    Args:
+        path: Filesystem path to the database, absolute or relative to the
+            current directory.
+        read_only: Append ``mode=ro``.
+
+    Returns:
+        The URI string.
+    """
+    quoted = quote(os.path.abspath(os.fspath(path)), safe="/\\:")
+    if quoted.startswith("/"):
+        quoted = "//" + quoted
+    uri = f"file:{quoted}"
+    return f"{uri}?mode=ro" if read_only else uri
+
+
+def sqlite_url(path) -> URL:
+    """Return a SQLAlchemy URL object for the SQLite database at *path*.
+
+    An object, never a string: nothing parses it, so the path reaches
+    ``sqlite3.connect`` as a plain filename with no character reserved. A
+    string cannot be made safe across versions, because SQLAlchemy 2.1
+    percent-decodes the database part of a URL it parses and 2.0 does not.
+    The engine is otherwise what ``sqlite:///<path>`` gave: a file database,
+    so ``QueuePool`` and ``check_same_thread=False``.
+
+    Alembic gets it through ``config.attributes["sqlalchemy_url"]``
+    (``migrations/env.py``), not ``set_main_option``, which takes a string.
+
+    Args:
+        path: Filesystem path to the database.
+
+    Returns:
+        The URL.
+    """
+    return URL.create("sqlite", database=os.path.abspath(os.fspath(path)))

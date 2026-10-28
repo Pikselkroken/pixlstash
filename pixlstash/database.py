@@ -33,6 +33,7 @@ import numpy as np
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.tag_reset_registry import TagResetRegistry
+from pixlstash.utils.sqlite_uri import sqlite_url
 from pixlstash.utils.unprocessable_image_registry import UnprocessableImageRegistry
 
 # These imports are necessary to register the models with SQLModel
@@ -913,7 +914,7 @@ def create_configured_engine(
         A configured SQLAlchemy ``Engine``.
     """
     engine = create_engine(
-        f"sqlite:///{db_path}",
+        sqlite_url(db_path),
         echo=echo,
         connect_args={"timeout": SQLITE_BUSY_TIMEOUT_S},
     )
@@ -962,7 +963,7 @@ def _run_migrations(connection, db_path: str, db_exists: bool) -> None:
 
     config = Config(str(alembic_ini))
     config.set_main_option("script_location", str(migrations_dir))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+    config.attributes["sqlalchemy_url"] = sqlite_url(db_path)
     # The registered-library opener has already validated this exact
     # connection. Alembic must use it rather than reopening the path and giving
     # a replacement database migration authority.

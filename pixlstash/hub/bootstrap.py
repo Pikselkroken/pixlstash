@@ -24,6 +24,7 @@ from typing import Callable, Optional
 from pixlstash.hub.db import HubDatabase, default_hub_path
 from pixlstash.hub.engine import HubEngine
 from pixlstash.utils.media_files import has_media_files
+from pixlstash.utils.sqlite_uri import sqlite_file_uri
 from pixlstash.hub.registry import (
     Library,
     LibraryError,
@@ -354,7 +355,9 @@ def _legacy_owner_present(vault_path: str) -> bool:
     if not os.path.isfile(vault_path):
         return False
     try:
-        vault = sqlite3.connect(f"file:{vault_path}?mode=ro", uri=True, timeout=5)
+        vault = sqlite3.connect(
+            sqlite_file_uri(vault_path, read_only=True), uri=True, timeout=5
+        )
     except sqlite3.Error as exc:
         logger.warning(
             "Could not open %s to check for a legacy owner (%s); not offering "
@@ -557,7 +560,9 @@ def prepare_legacy_identity(hub: HubDatabase, folder: str) -> Library:
                 "reauthorize it."
             )
     try:
-        vault = sqlite3.connect(f"file:{vault_path}?mode=ro", uri=True, timeout=5)
+        vault = sqlite3.connect(
+            sqlite_file_uri(vault_path, read_only=True), uri=True, timeout=5
+        )
     except sqlite3.Error as exc:
         raise HubBootstrapError(
             f"Could not open legacy vault {vault_path}: {exc}"
@@ -594,7 +599,9 @@ def _copy_legacy_identity_if_needed(hub: HubDatabase, library: Library) -> bool:
         )
 
     try:
-        vault = sqlite3.connect(f"file:{vault_path}?mode=ro", uri=True, timeout=5)
+        vault = sqlite3.connect(
+            sqlite_file_uri(vault_path, read_only=True), uri=True, timeout=5
+        )
     except sqlite3.Error as exc:
         raise HubBootstrapError(
             f"Could not open legacy identity database {vault_path}: {exc}"
@@ -651,7 +658,7 @@ def prevalidate_library_fingerprint(library: Library) -> None:
         return
     try:
         conn = sqlite3.connect(
-            f"file:{library.vault_path}?mode=ro", uri=True, timeout=5
+            sqlite_file_uri(library.vault_path, read_only=True), uri=True, timeout=5
         )
         try:
             row = conn.execute(
