@@ -177,12 +177,13 @@ const emit = defineEmits(["update:modelValue"]);
   overflow-y: auto;
 }
 
-/* The lightbox is dark in both themes, so its pane is a translucent
-   dark-surface over the picture rather than the theme's chrome. */
+/* The lightbox is dark in both themes, so its pane is dark too: the chrome in
+   the dark theme, the stage's dark-surface in light (`--lightbox-chrome`,
+   style.css). */
 .inspector--lightbox {
   /* Amber on a dark panel keeps the bright amber in both themes (#1413). */
   --v-theme-accent: var(--v-theme-dark-surface-accent);
-  background: rgba(var(--v-theme-dark-surface), 0.6);
+  background: rgb(var(--lightbox-chrome));
   border-left-color: rgba(var(--v-theme-on-dark-surface), 0.12);
   color: rgb(var(--v-theme-on-dark-surface));
 }
