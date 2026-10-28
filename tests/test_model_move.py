@@ -1917,6 +1917,48 @@ def test_a_file_written_into_the_source_during_the_copy_keeps_the_source(
     assert_no_dangling_rows(dir_tree["hub"])
 
 
+def test_a_file_rewritten_at_the_same_size_during_the_copy_keeps_the_source(
+    dir_tree, dir_cross_device, monkeypatch
+):
+    """Size alone cannot tell a same-size rewrite from the file that was copied,
+    so the source is kept when a file was written to after its copy began."""
+    copy2 = dir_mover_module.shutil.copy2
+    notes = dir_tree["source_dir"] / "sdxl" / "notes.txt"
+
+    def copy_then_a_job_rewrites(source, destination):
+        copied = copy2(source, destination)
+        if source == str(notes):
+            notes.write_text("trained on 41 pictures")
+            stat = notes.stat()
+            os.utime(notes, ns=(stat.st_atime_ns, stat.st_mtime_ns + 10**9))
+        return copied
+
+    monkeypatch.setattr(dir_mover_module.shutil, "copy2", copy_then_a_job_rewrites)
+    _, outcome = _move_sdxl(dir_tree)
+    assert outcome.status == STATUS_MOVED
+    assert "original was kept" in outcome.detail
+    assert notes.read_text() == "trained on 41 pictures"
+    assert_no_dangling_rows(dir_tree["hub"])
+
+
+def test_a_partial_that_appeared_after_the_plan_is_not_discarded(
+    dir_tree, dir_cross_device
+):
+    """The plan refuses a left-over partial; one that appears after it is not
+    this move's, and the failed move must not remove it."""
+    plan = plan_directory_move(
+        dir_tree["hub"], dir_tree["source_id"], "sdxl", dir_tree["destination_id"], ""
+    )
+    foreign = dir_tree["destination_dir"] / ("sdxl" + PARTIAL_SUFFIX)
+    foreign.mkdir()
+    (foreign / "theirs.txt").write_text("keep")
+    outcome = execute_directory_move(dir_tree["hub"], plan)
+    assert outcome.status == STATUS_FAILED
+    assert (foreign / "theirs.txt").read_text() == "keep"
+    assert (dir_tree["source_dir"] / "sdxl" / "alice.safetensors").is_file()
+    assert_no_dangling_rows(dir_tree["hub"])
+
+
 def test_a_file_written_after_the_final_check_is_left_not_deleted(
     dir_tree, dir_cross_device, monkeypatch
 ):

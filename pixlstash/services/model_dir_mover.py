@@ -207,6 +207,19 @@ def _tree_listing(path: str) -> dict[str, int]:
     return listing
 
 
+def _rewritten(path: str, copied_mtimes: dict[str, int]) -> bool:
+    """Whether *path* was written to after its copy began. A link is not in
+    *copied_mtimes* (``copytree`` makes it, not the copy function) and is
+    compared by size alone."""
+    if path not in copied_mtimes:
+        return False
+    try:
+        return os.lstat(path).st_mtime_ns != copied_mtimes[path]
+    except OSError as exc:
+        logger.warning("Could not stat %s after a folder copy: %s", path, exc)
+        return True
+
+
 def _same_entry(a: str, b: str) -> bool:
     """Whether two names are one directory: a case-only rename on a
     case-insensitive drive, where the target name already "exists"."""
@@ -300,7 +313,7 @@ def plan_directory_move(
     if stale:
         raise MoveRefused(
             f"{stale[0]['relpath']} is still registered in the destination with "
-            "no folder behind it. Rescan that folder first.",
+            "no folder behind it. Try again once that folder's next scan has caught up.",
             status_code=409,
         )
 
@@ -407,8 +420,8 @@ def _verify(plan: DirectoryMovePlan, copy_root: str) -> None:
             if arrived != entry.sha256:
                 raise OSError(
                     f"{entry.relpath} arrived as {arrived} but is registered as "
-                    f"{entry.sha256}; nothing was moved. Rescan the folder if the "
-                    "file changed."
+                    f"{entry.sha256}; nothing was moved. Try again once its "
+                    "folder's next scan has re-read it."
                 )
         elif os.path.getsize(copied) != os.path.getsize(
             os.path.join(plan.source_path, entry.relpath[len(old_prefix) :])
@@ -440,7 +453,7 @@ def _rename(hub: HubDatabase, plan: DirectoryMovePlan) -> None:
             logger.critical(
                 "Could not rename %s back to %s after the repoint failed. The "
                 "folder is at the new place and its rows still name the old one; "
-                "rescan both folders to re-link it.",
+                "the next scan of both folders re-links it.",
                 plan.destination_path,
                 plan.source_path,
                 exc_info=True,
@@ -456,15 +469,26 @@ def _copy(
     """The cross-drive move. Returns None when cancelled, else the detail."""
     cancelled = should_cancel or (lambda: False)
     partial = plan.destination_path + PARTIAL_SUFFIX
+    # Each source file's mtime as its copy began: a rewrite at the same size is
+    # invisible to the size comparison below, and the source is then deleted.
+    copied_mtimes: dict[str, int] = {}
 
     def copy_one(source: str, destination: str):
         if cancelled():
             raise _CopyCancelled()
+        copied_mtimes[source] = os.stat(source).st_mtime_ns
         return shutil.copy2(source, destination)
 
+    # Made before the handlers below can discard it: a tree that appeared at
+    # this name since the plan is somebody else's, and the mkdir refuses it.
+    os.mkdir(partial)
     try:
         shutil.copytree(
-            plan.source_path, partial, symlinks=True, copy_function=copy_one
+            plan.source_path,
+            partial,
+            symlinks=True,
+            copy_function=copy_one,
+            dirs_exist_ok=True,
         )
         _verify(plan, partial)
         if cancelled():
@@ -497,13 +521,14 @@ def _copy(
     # The verify covers the catalogued files the plan knew. Anything written into
     # the source since the copy began (a preview a running job saved, a download)
     # is not in the copy, so the source is removed only when every file in it
-    # arrived at the same size.
+    # arrived at the same size and none was written to since its copy began.
     source_files = _tree_listing(plan.source_path)
     copied_files = _tree_listing(plan.destination_path)
     changed = sorted(
         relpath
         for relpath, size in source_files.items()
         if copied_files.get(relpath) != size
+        or _rewritten(os.path.join(plan.source_path, relpath), copied_mtimes)
     )
     if changed:
         logger.error(

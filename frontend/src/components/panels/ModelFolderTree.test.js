@@ -8,13 +8,11 @@ import { createPinia, setActivePinia } from "pinia";
 const listModelFolderDirs = vi.fn();
 const createModelFolderDir = vi.fn();
 const moveModelFolderDir = vi.fn();
-const rescanModelFolder = vi.fn();
 vi.mock("../../api/modelFolders", async (importOriginal) => ({
   ...(await importOriginal()),
   listModelFolderDirs: (...args) => listModelFolderDirs(...args),
   createModelFolderDir: (...args) => createModelFolderDir(...args),
   moveModelFolderDir: (...args) => moveModelFolderDir(...args),
-  rescanModelFolder: (...args) => rescanModelFolder(...args),
 }));
 // The move job's watch is not under test here; its reads stay off the wire.
 vi.mock("../../api/modelMoves", () => ({
@@ -491,7 +489,6 @@ describe("the folder verbs (#2206)", () => {
     useLibrariesStore().canManage = true;
     createModelFolderDir.mockReset();
     moveModelFolderDir.mockReset();
-    rescanModelFolder.mockReset().mockResolvedValue({ status: "started" });
   });
 
   afterEach(() => {
@@ -577,7 +574,10 @@ describe("the folder verbs (#2206)", () => {
     expect(wrapper.html()).toContain("A move is already running.");
     useModelMovesStore().job = null;
 
-    await useModelFoldersStore().scan(1);
+    const folders = useModelFoldersStore();
+    folders.folders = folders.folders.map((one) =>
+      one.id === 1 ? { ...one, scan_status: "running" } : one,
+    );
     rightClick(lora());
     await flushPromises();
     expect(menu(wrapper).find('[data-verb="rename"]').attributes("aria-disabled")).toBe("true");

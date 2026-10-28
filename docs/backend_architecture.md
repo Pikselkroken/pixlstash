@@ -12102,20 +12102,23 @@ parent with `new_name`; there is no rename route. The work is
   the two syscalls since the check would replace it on POSIX; that is the
   window accepted.
 - **Another drive:** `copytree(symlinks=True)` into `<name>.pixlstash-partial`
-  beside the target, then every catalogued file in the copy is checked against
+  beside the target (made first with `mkdir`, so a tree that appeared at that
+  name after the plan is refused rather than discarded as ours), then every catalogued file in the copy is checked against
   its `sha256` (by size when nobody has hashed it yet), the partial is renamed
   into place, the rows are repointed, and only then is the source removed. A
   cancel is checked between files by the copy function, and again before the
   publication; it removes the partial and repoints nothing. A failed check or
   copy removes the partial; a failed repoint removes the published copy. The
   source is untouched in all three. The source is removed only when every file
-  in it is in the copy at the same size, and then file by file from that list
+  in it is in the copy at the same size and none was written to after its copy
+  began (its mtime, read as its copy started, so a same-size rewrite counts),
+  and then file by file from that list
   rather than with `rmtree`, so a file written into it during the copy keeps
   it, and one written after the comparison stays with its directories; that, and a source that cannot be removed, is reported in the
   item's `detail` and logged: the rows name the new copy, so what is left is a
   duplicate and never a dangling row. A crash between the publication and the
-  repoint commit is the accepted ceiling: rows naming the old place, which a
-  rescan of both folders re-links by content.
+  repoint commit is the accepted ceiling: rows naming the old place, which the
+  next scan of both folders re-links by content.
 - **Samples and other files travel with the tree**, because the whole directory
   moves; nothing per file is needed for `<stem>_samples/` (25.7).
 
