@@ -145,11 +145,7 @@
                 row.where
               }}</span>
               <span v-if="index === currentIndex" class="stf-row-keys">
-                <template v-if="row.opposite">
-                  <kbd>Tab</kbd> {{ row.applyLabel }} <kbd>⇧Tab</kbd>
-                  {{ row.oppositeLabel }}
-                </template>
-                <kbd v-else>Tab</kbd>
+                <kbd>Tab</kbd>
               </span>
             </div>
           </template>
@@ -369,11 +365,8 @@ function tagEntries() {
       label: tag,
       icon: "mdi-tag-outline",
       count,
-      // Plain words for Has and Lacks: the hint says what Tab and ⇧Tab show.
       apply: () => addTag("has", tag),
-      applyLabel: "with",
       opposite: () => addTag("lacks", tag),
-      oppositeLabel: "without",
     }));
 }
 

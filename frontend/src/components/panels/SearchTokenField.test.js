@@ -142,10 +142,8 @@ describe("SearchTokenField", () => {
     expect(text[2]).toContain("looking back");
     const highlighted = wrapper.find('[aria-selected="true"]');
     expect(highlighted.text()).toContain("looking at viewer");
-    // The keys say what they show, not the filter's internal name.
-    expect(highlighted.find(".stf-row-keys").text()).toMatch(
-      /^Tab\s+with\s+⇧Tab\s+without$/,
-    );
+    // The row carries only the Tab key; the foot says what ⇧Tab adds.
+    expect(highlighted.find(".stf-row-keys").text()).toBe("Tab");
     expect(input().attributes("aria-activedescendant")).toBe(
       "search-token-option-0",
     );
