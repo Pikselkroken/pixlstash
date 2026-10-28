@@ -11448,17 +11448,22 @@ A run's parameters come from a versioned recipe and this machine's memory, never
 from the owner reading an ai-toolkit config. A recipe is a JSON file in
 `pixlstash/data/training-presets/`, loaded and schema-checked by
 `pixlstash/training/presets.py` (`validate_preset`; a broken file fails at load
-and in `tests/training/test_presets.py`). Four ship (#2121): Z-Image Turbo
-(`DEFAULT_PRESET`), Krea 2 Raw, FLUX.2 Klein 9B Base and Chroma1 Base.
-`list_presets` puts the default first, because the Train dialog preselects the
-first recipe the checkout can run. All four render over the same passthrough
-template. The three new recipes lock `datasets[*].cache_latents_to_disk`: Krea
-2's VAE, encoding every step, measured 5 GB above training. Krea 2's 8-bit
-profiles are `measured` (the probe's own shape, on a 32 GB card). Klein's and
-Chroma's are `derived` seeds, scaled by what Krea 2's derivation missed. The
-probe (§25.20) measures each setup on the owner's machine before its first run.
-Chroma has no profile below 8-bit: ai-toolkit's Chroma cannot offload layers and
-quantises on the GPU. The trainer is launched with
+and in `tests/training/test_presets.py`). Five ship (#2121, #2180): Z-Image
+Turbo (`DEFAULT_PRESET`), Krea 2 Raw, FLUX.2 Klein 9B Base, Chroma1 Base and
+MOSS-Image Base. `list_presets` puts the default first, because the Train dialog
+preselects the first recipe the checkout can run. All five render over the same
+passthrough template. The four newer recipes lock
+`datasets[*].cache_latents_to_disk`: Krea 2's VAE, encoding every step, measured
+5 GB above training. Krea 2's 8-bit profiles are `measured` (the probe's own
+shape, on a 32 GB card). Klein's, Chroma's and MOSS's are `derived` seeds,
+scaled by what Krea 2's derivation missed. The probe (§25.20) measures each
+setup on the owner's machine before its first run. Chroma has no profile below
+8-bit: ai-toolkit's Chroma cannot offload layers and quantises on the GPU. MOSS
+needs ai-toolkit 0.13.28 or later (Base support and the fresh-cache tokenizer
+fix). The gate reads only the `moss_image` folder: a checkout before 0.13.27
+lists the recipe as not offered, and a 0.13.27 checkout, which has the folder,
+is offered it and fails when ai-toolkit loads the model. Its 9B text encoder is larger than its
+transformer, so its offload profile offloads the text encoder too. The trainer is launched with
 `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` unless the owner set an
 allocator config (`SEAM.md`). Without it, Krea 2 failed every step on a 32 GB
 card, 5 GB short of a block while 5 GB sat reserved and split. Its parts:

@@ -23,6 +23,13 @@
       "min_pixlstash": "1.13.0"
     },
     {
+      "id": "moss-image-base",
+      "version": 1,
+      "file": "moss-image-base.json",
+      "sha256": "23b3ef24261832898e89f35b3a4d1eb27dd71541f7ce70136151efa47c58f8d1",
+      "min_pixlstash": "1.13.0"
+    },
+    {
       "id": "zimage-turbo",
       "version": 1,
       "file": "zimage-turbo.json",

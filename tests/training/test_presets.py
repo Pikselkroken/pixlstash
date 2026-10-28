@@ -40,6 +40,7 @@ def test_every_shipped_preset_passes_its_schema():
         "chroma1-base",
         "flux2-klein-9b-base",
         "krea2-raw",
+        "moss-image-base",
     ]
     for preset in presets.list_presets():
         assert os.path.isfile(presets.template_path(preset))
@@ -59,6 +60,17 @@ def test_chroma_has_no_profile_below_8_bit():
         with pytest.raises(presets.NoProfileFits) as raised:
             _resolve(chroma, pins=pin)
         assert raised.value.budget == "profile"
+
+
+def test_moss_is_offered_only_by_a_checkout_with_its_model_code(tmp_path):
+    """ai-toolkit 0.12.26 has no moss_image folder, so the recipe stays listed
+    but not offered until the checkout is updated to one that has it."""
+    moss = presets.get_preset("moss-image-base")
+    root = tmp_path / "extensions_built_in" / "diffusion_models"
+    (root / "z_image").mkdir(parents=True)
+    assert not presets.offered(moss, presets.checkout_architectures(str(tmp_path)))
+    (root / "moss_image").mkdir()
+    assert presets.offered(moss, presets.checkout_architectures(str(tmp_path)))
 
 
 def test_table_keys_are_tunable_and_locked_keys_are_not():
