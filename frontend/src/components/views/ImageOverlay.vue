@@ -2338,6 +2338,8 @@ function runOverlayPlugin() {
     pictureIds: [image.value.id],
     parameters: overlayPluginParameters.value || {},
     stack: stackFilterOutputs.value,
+    // The result opens over this picture, before / after (`showRunResult`).
+    compare: true,
   });
   pluginMenuOpen.value = false;
 }

@@ -108,9 +108,10 @@ export const useRunDialogStore = defineStore("runDialog", () => {
   }
 
   /**
-   * The last run a popup started, `{prompts, pictureIds, pictureId}`, for the
-   * grid to read: it shows the run's progress in the lightbox and moves the
-   * lightbox on to the new picture. Nothing else follows a run from here.
+   * The last run a popup or the Upscale… dialog started, `{prompts,
+   * pictureIds, pictureId}`, for the grid to read: it shows the run's progress
+   * in the lightbox and moves the lightbox on to the new picture. Nothing else
+   * follows a run from here.
    */
   const startedRun = ref(null);
 

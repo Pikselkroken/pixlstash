@@ -818,6 +818,16 @@ describe("the lightbox Edit tab", () => {
     expect(wrapper.vm.paint.tool.value).toBeNull();
   });
 
+  it("asks for a filter's result as a before / after, and not a crop's", async () => {
+    const wrapper = await openOn(7, undefined, configured);
+    wrapper.vm.overlaySelectedPluginName = "blur";
+    wrapper.vm.runOverlayPlugin();
+    wrapper.vm.applyCrop([0, 0, 0.5, 0.5]);
+    const [filter, crop] = wrapper.emitted("run-plugin").map(([run]) => run);
+    expect(filter).toMatchObject({ pluginName: "blur", compare: true });
+    expect(crop.compare).toBeUndefined();
+  });
+
   it("hides the face boxes while the Paint tools are out", async () => {
     const wrapper = await openOn(
       7,

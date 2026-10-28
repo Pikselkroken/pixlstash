@@ -2013,6 +2013,8 @@ function handlePluginRunRequest(payload) {
   // Stack the derived outputs with their originals unless the caller opted out.
   // Default true keeps the historical behaviour for any other run-plugin source.
   const stack = payload?.stack !== false;
+  // The lightbox's filter menu: its result opens as a before / after.
+  const compare = payload?.compare === true && pictureIds.length === 1;
   // Build per-image captions from stored descriptions in the grid.
   const idSet = new Set(pictureIds);
   const idToDesc = new Map();
@@ -2021,7 +2023,14 @@ function handlePluginRunRequest(payload) {
     if (idSet.has(id)) idToDesc.set(id, img.description || "");
   }
   const captions = pictureIds.map((id) => idToDesc.get(id) ?? "");
-  runPluginWithParameters(pluginName, pictureIds, parameters, captions, stack);
+  runPluginWithParameters(
+    pluginName,
+    pictureIds,
+    parameters,
+    captions,
+    stack,
+    compare,
+  );
 }
 
 async function runPluginWithParameters(
@@ -2030,6 +2039,7 @@ async function runPluginWithParameters(
   parameters,
   captions,
   stack = true,
+  compare = false,
 ) {
   if (!pluginName || !Array.isArray(pictureIds) || !pictureIds.length) return;
   try {
@@ -2078,8 +2088,12 @@ async function runPluginWithParameters(
         .filter((id) => id != null);
       if (newIds.length) {
         triggerNewImageHighlight(newIds);
-        if (overlayOpen.value) {
-          moveOverlayTo(newIds[newIds.length - 1]);
+        const newest = newIds[newIds.length - 1];
+        if (overlayOpen.value && compare) {
+          // Taken only while the reader is still on the source picture.
+          imageOverlayRef.value?.showRunResult?.(newest, pictureIds[0], null);
+        } else if (overlayOpen.value) {
+          moveOverlayTo(newest);
         }
       }
     }

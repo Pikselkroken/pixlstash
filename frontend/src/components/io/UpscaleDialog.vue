@@ -62,6 +62,7 @@ import { useUpscaleStore } from "../../stores/useUpscaleStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { pictureThumbnailUrl } from "../../api/pictures";
+import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { preflightUpscale, upscalePictures } from "../../api/workflows";
 import { downloadModels } from "../../composables/useModelDownloads";
 import { errorDetail } from "../../utils/apiError";
@@ -77,6 +78,7 @@ const MAX_THUMBS = 5;
 const upscale = useUpscaleStore();
 const notices = useNoticeStore();
 const tasks = useTasksStore();
+const runDialog = useRunDialogStore();
 
 const open = computed(() => upscale.pictureIds !== null);
 const count = computed(() => upscale.pictureIds?.length || 0);
@@ -189,8 +191,10 @@ async function submit() {
   try {
     const answer = await upscalePictures(ids, upscale.body());
     upscale.close();
-    // The runs are followed in the Tasks tab, as a Run popup's are.
+    // Followed as a Run popup's runs are: the Tasks tab, and the lightbox,
+    // which opens one picture's result over it, before / after.
     tasks.nudge();
+    runDialog.started(Array.isArray(answer?.prompts) ? answer.prompts : [], ids);
     if (answer?.status === "partial") {
       notices.error(
         `Upscaled ${answer.runs} of ${ids.length} pictures. ${answer.error || ""}`,
