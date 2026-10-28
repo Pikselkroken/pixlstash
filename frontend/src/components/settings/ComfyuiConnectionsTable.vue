@@ -277,7 +277,8 @@ async function saveAddress(row) {
     // it at the new one straight away.
     const after = body.connections.find((c) => c.id === row.id);
     if (row.link.linked && !after?.link?.linked) {
-      emit("link", { ...row, url: probe.url });
+      // The server's row: a name made from the old address has followed it.
+      emit("link", after || { ...row, url: probe.url });
     } else {
       say(`${row.name} moved to ${hostPart}:${p}`);
       focusMore(row.id);
@@ -420,7 +421,7 @@ function onMenuKey(event, row) {
                     :aria-label="`Name of ${row.name}`"
                     autofocus
                     autoselect
-                    :error="editError || false"
+                    :error="!!editError"
                     :disabled="saving"
                     data-testid="comfyui-rename-field"
                     @enter="saveName(row)"

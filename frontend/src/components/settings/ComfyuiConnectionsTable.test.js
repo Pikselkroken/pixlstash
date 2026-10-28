@@ -265,6 +265,18 @@ describe("rename and edit address, in place", () => {
     wrapper.unmount();
   });
 
+  it("a refused name is said once, in the row under it", async () => {
+    const wrapper = mountTable();
+    await menuItem(wrapper, "box", "rename").trigger("click");
+    const field = byTestId(wrapper, "comfyui-rename-field").find("input");
+    await field.setValue("  ");
+    await field.trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    expect(wrapper.text().split("A name cannot be empty.").length - 1).toBe(1);
+    expect(byTestId(wrapper, "comfyui-edit-error").text()).toBe("A name cannot be empty.");
+    wrapper.unmount();
+  });
+
   it("Escape leaves the name as it was and asks nothing", async () => {
     const wrapper = mountTable();
     await menuItem(wrapper, "box", "rename").trigger("click");
@@ -338,7 +350,10 @@ describe("rename and edit address, in place", () => {
     const moved = "http://127.0.0.1:8189/";
     comfyui.probeComfyui.mockResolvedValue({ reachable: true, url: moved });
     comfyui.updateComfyuiConnection.mockResolvedValue({
-      connections: [{ ...PC, url: moved, link: { linked: false } }, BOX],
+      connections: [
+        { ...PC, url: moved, name: "127.0.0.1:8189", link: { linked: false } },
+        BOX,
+      ],
       current: "pc",
     });
     const wrapper = mountTable();
@@ -352,7 +367,7 @@ describe("rename and edit address, in place", () => {
     expect(comfyui.updateComfyuiConnection).toHaveBeenCalledWith("pc", { url: moved });
     expect(filter.comfyuiUrl).toBe(moved);
     expect(wrapper.emitted("link")).toEqual([
-      [expect.objectContaining({ id: "pc", url: moved })],
+      [expect.objectContaining({ id: "pc", url: moved, name: "127.0.0.1:8189" })],
     ]);
     wrapper.unmount();
   });
