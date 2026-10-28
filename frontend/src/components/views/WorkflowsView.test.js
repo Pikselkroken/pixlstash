@@ -968,14 +968,17 @@ describe("the closed inspector", () => {
     expect(nudgeClass(railButton(wrapper))).toBe("");
   });
 
-  // The amber busy pulse owns the glyph while anything runs.
-  it("leaves the glyph to the busy pulse while tasks run, and still bounces the tab", async () => {
+  // Running work lives in the title bar's Tasks pill, so the rail toggle has
+  // no busy pulse of its own and the flash is not held back while tasks run.
+  it("flashes the glyph and bounces the tab while tasks run, with no busy pulse", async () => {
     const wrapper = await closedGrid();
     useTasksStore().setImportRun("run-1", { status: "running" });
     await flush();
+    expect(railButton(wrapper).classes().join(" ")).not.toMatch(/busy/);
+    expect(railButton(wrapper).attributes("aria-label")).toBe("Inspector");
     await wrapper.findAll(".wfv-row")[0].trigger("click");
     await flush();
-    expect(nudgeClass(railButton(wrapper))).toBe("");
+    expect(nudgeClass(railButton(wrapper))).not.toBe("");
     expect(nudgeClass(edgeTab(wrapper))).not.toBe("");
   });
 });

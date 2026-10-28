@@ -782,7 +782,7 @@ These already exist hand-rolled; the tokens above consolidate them. Reuse the
 pattern, don't re-roll the numbers.
 
 - **Attention pulse** — a soft, looping "look here" on a live indicator. Reference:
-  `tb-stats-pulse` (Toolbar stats icon), `tm-dot-pulse` (stats). ~1.4s
+  `tm-dot-pulse` (task rows). ~1.4s
   `ease-in-out infinite`, scale + opacity. Looping cadence is contextual, so it
   lives with the pattern, not as a raw duration token.
 - **Landing pulse (one-shot)** — a single glow-and-settle when something new
@@ -1026,15 +1026,13 @@ vanish — they **fold** into the ⋯ overflow (`TbOverflowMenu`, a
   compresses to its icon rather than folding — a filter that hides is a
   filter the user forgets.
 - **State travels with the row.** A folded toggle wears `aria-pressed` and
-  the primary-token pressed colour. The right-rail toggle never folds, so its
-  pulsing amber icon (`prefers-reduced-motion` honoured) keeps background work
-  visible at every width.
+  the primary-token pressed colour. The right-rail toggle never folds.
+  Background work is the title bar's Tasks pill, not this toggle: it does not
+  pulse while tasks run.
 - **The right-rail toggle is one glyph on every screen**, `mdi-dock-right`
   (where something will appear, not what is in it), with open as its pressed
   state and never a second glyph. Its name is fixed per screen and says what
   the rail holds: *Stats and tasks*, *Inspector*, *Models and tasks*, *Stats*.
-  Busy, the tooltip leads with the count: *3 tasks running · Models and
-  tasks*.
 
 ### Closed inspector
 
@@ -1080,8 +1078,6 @@ Models. An open rail keeps its tab.) The handle:
   `--dur-attention` the tab bounces left (0 → −16 → 0 → −7 → 0 → −2 → 0px) and
   the rail toggle's glyph turns `--selected-ink` and fades back — **glyph colour
   only**, no background, ring or border, so it cannot read as the pressed state.
-  While tasks run the amber busy pulse owns that glyph and the flash is skipped;
-  the tab still bounces.
 - **Reduced motion:** neither plays. The label changing is the cue.
 - A deep link that lands on a selection (a picture's Recipe → *Open*) opens the
   inspector for that visit without persisting it.
