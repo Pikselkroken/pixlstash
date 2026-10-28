@@ -131,6 +131,45 @@ describe("Toolbar - the search field", () => {
     expect(bar.classes()).toContain("selection-bar-overlay--searching");
   });
 
+  // jsdom applies no scoped CSS, so the rules themselves are what can be
+  // pinned: the open field hides View, and touches Sort's value only inside
+  // the 700px container step, where the field would otherwise be squeezed.
+  it("keeps Sort's value visible while the search is open, wide bars only", async () => {
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync(
+      `${process.cwd()}/src/components/panels/Toolbar.vue`,
+      "utf8",
+    ).replace(/\/\*[\s\S]*?\*\//g, "");
+    // Selectors of the --searching rules, each with the at-rule it sits in.
+    const rules = [];
+    const stack = [];
+    let text = "";
+    for (const ch of source) {
+      if (ch === "{") {
+        if (text.includes("--searching")) rules.push([text, stack.at(-1)]);
+        stack.push(text.trim());
+        text = "";
+      } else if (ch === "}") {
+        stack.pop();
+        text = "";
+      } else if (ch === ";") {
+        text = "";
+      } else {
+        text += ch;
+      }
+    }
+    const sortRule = /bar-split|bar-btn-sort/;
+    const unconditional = rules.filter(([, parent]) => !parent?.startsWith("@"));
+    expect(unconditional.map(([sel]) => sel).join()).toContain(".tb-view");
+    for (const [selectors] of unconditional) {
+      expect(selectors).not.toMatch(sortRule);
+    }
+    const sortRules = rules.filter(([sel]) => sortRule.test(sel));
+    expect(sortRules.map(([, parent]) => parent)).toEqual([
+      "@container selbar (max-width: 700px)",
+    ]);
+  });
+
   it("shows a committed query and the filters as its summary", async () => {
     const { useSearchStore } = await import("../../stores/useSearchStore");
     useSearchStore().searchQuery = "red hair";

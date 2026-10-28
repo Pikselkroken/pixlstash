@@ -403,7 +403,8 @@
            after it, and its narrow-width gap-guard twin drew a double rule. -->
       <div class="selection-bar-right">
         <!-- ── Toolbar: Search. The field itself: focused, it widens in place
-             and drops its list; Sort's label and View step aside meanwhile. -->
+             and drops its list; View (and, in a bar of 700px or less, Sort's
+             value) steps aside meanwhile. -->
         <SearchTokenField
           ref="searchInputRef"
           :all-pictures-view="isAllPicturesView"
@@ -944,20 +945,27 @@ const gbCollapseAllStacksDisabled = computed(
    component boundary, so every `.bar-btn` outside this file rendered unstyled.
    Only the toolbar's own overrides stay here. */
 
-/* ── Search: while the field has focus it widens over Sort's label and View,
-   which step aside, and the right group may give so it never overflows. The
+/* ── Search: while the field has focus it widens over View, which steps
+   aside, and the right group may give so it never overflows. Sort keeps its
+   value, since the order the results come in is worth seeing while searching;
+   only in a bar of 700px or less (the overflow ladder's first step) does it
+   step aside too, so the open field is never squeezed below its rest width. The
    bar rises to the dropdown layer meanwhile, so the list it drops paints over
    the grid's floating chrome (the date pill, the selection pill). ──────── */
 .selection-bar-overlay--searching {
   z-index: var(--z-dropdown);
 }
-.selection-bar-overlay--searching .bar-split-menu,
 .selection-bar-overlay--searching .tb-view {
   display: none;
 }
 .selection-bar-overlay--searching .selection-bar-right {
   flex-shrink: 1;
   min-width: 0;
+}
+@container selbar (max-width: 700px) {
+  .selection-bar-overlay--searching .bar-split-menu {
+    display: none;
+  }
 }
 
 /* ── Sort panel ───────────────────────────────────────────────────────────── */
