@@ -99,7 +99,8 @@ onMounted(async () => {
 }
 
 /* 24px, the field's own height; a 1px inset border, so the field reads as a
-   field before it has focus. Focused, the global ring covers it. */
+   field before it has focus. Focused, the inset ring and its glow replace it
+   (the outline is off, so the global rule's ring would not show). */
 .mnf-input {
   display: block;
   width: 100%;
@@ -116,6 +117,10 @@ onMounted(async () => {
   outline: none;
   -webkit-user-select: text;
   user-select: text;
+}
+
+.mnf-input:focus-visible {
+  box-shadow: var(--focus-ring-inset);
 }
 
 .mnf-hint {
