@@ -139,6 +139,12 @@ body {
        light on #f0ede9  canvas 2.36  fills 2.56 - 2.65
      Gated by contrastAudit.js, which reads the alpha from here. */
   --drive-meter-track: rgba(var(--v-theme-on-surface), 0.4);
+  /* The lightbox's inspector (an RGB triplet, like the theme keys). Dark chrome
+     here, so the pane reads as one with the title bar and the sidebar. Its
+     inks are the dark-surface family, which hold on it: 4.34:1 (amber) to
+     12:1, within a hair of the light theme's #242628 dark-surface
+     (4.45 to 12.3:1). */
+  --lightbox-chrome: var(--v-theme-sidebar);
 }
 .v-theme--pixlStashLight {
   /* See the note on the dark theme above. */
@@ -184,6 +190,9 @@ body {
   --band-meter-edge: rgba(var(--v-theme-on-background), 0.6);
   /* See the dark block: the same ink tint, which darkens here. */
   --drive-meter-track: rgba(var(--v-theme-on-surface), 0.4);
+  /* Light chrome cannot carry the pane's dark-surface inks, so the lightbox
+     inspector stays dark here, one with the stage. */
+  --lightbox-chrome: var(--v-theme-dark-surface);
 }
 
 /* ---------------------------------------------------------------------------

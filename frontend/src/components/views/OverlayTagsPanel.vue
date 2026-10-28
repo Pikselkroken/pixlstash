@@ -1329,8 +1329,8 @@ defineExpose({
 .tag-list,
 .tag-drop-zone--predictions {
   scrollbar-width: thin;
-  /* 0.40 is the floor, not a taste call: over this panel it measures 3.28:1
-     against the surface, clearing WCAG 1.4.11's 3:1 for a UI component. The
+  /* 0.40 is the floor, not a taste call: over this panel it measures 3.19:1
+     against the dark theme's pane (3.28:1 on the light theme's), clearing WCAG 1.4.11's 3:1 for a UI component. The
      0.1-0.2 alphas used for borders in this file land near 2:1 and would make
      the bar decorative rather than perceivable. */
   scrollbar-color: rgba(var(--v-theme-on-dark-surface), 0.4) transparent;
