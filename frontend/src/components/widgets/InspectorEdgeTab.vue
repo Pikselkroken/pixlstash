@@ -2,8 +2,13 @@
   <!-- The closed inspector's handle (visual-language "Closed inspector"): a
        vertical tab on the content's right edge that names what the inspector
        would describe. Click only, never hover - the grid's scrollbar is on
-       this edge. The host mounts it only while its inspector is closed. -->
+       this edge. The host mounts it only while its inspector is closed; it
+       shows on a nudge and goes again `HIDE_AFTER_MS` later, unless the
+       pointer or focus is on it, and at once if the label empties (the
+       selection it named was cleared). -->
   <button
+    v-show="shown && label"
+    ref="el"
     class="inspector-edge-tab"
     :class="{
       'inspector-edge-tab--labelled': label,
@@ -16,6 +21,8 @@
     "
     data-testid="inspector-edge-tab"
     @click="emit('open')"
+    @mouseleave="arm"
+    @blur="arm"
   >
     <v-icon size="16" aria-hidden="true">mdi-chevron-left</v-icon>
     <span v-if="label" class="inspector-edge-tab__label">{{ label }}</span>
@@ -23,13 +30,16 @@
 </template>
 
 <script setup>
-import { ref, watch } from "vue";
+import { onBeforeUnmount, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
 const props = defineProps({
   /** What the closed inspector would describe: a name, `3 workflows`, or "". */
   label: { type: String, default: "" },
-  /** A counter the host bumps on each NEW selection; each bump bounces once. */
+  /**
+   * A counter the host bumps on each NEW selection; each bump shows the tab
+   * and bounces it once.
+   */
   nudge: { type: Number, default: 0 },
   /**
    * The label names no selection (the Models rail's "All models"): the tab is
@@ -42,6 +52,23 @@ const props = defineProps({
 
 const emit = defineEmits(["open"]);
 
+// A cue, not a fixture: the tab says a selection is waiting behind the closed
+// rail and then gets out of the way. Hovered or focused when the time is up,
+// it stays until the pointer or focus leaves, so the timer never takes it
+// from under a click or from under focus.
+const HIDE_AFTER_MS = 5000;
+const shown = ref(false);
+const el = ref(null);
+let hideTimer = 0;
+
+function arm() {
+  if (!shown.value) return;
+  clearTimeout(hideTimer);
+  hideTimer = setTimeout(() => {
+    if (!el.value?.matches(":hover, :focus")) shown.value = false;
+  }, HIDE_AFTER_MS);
+}
+
 // Two classes with identical keyframes, alternated, so a bump while the last
 // bounce is still playing restarts it rather than being swallowed.
 const parity = ref("");
@@ -49,8 +76,22 @@ watch(
   () => props.nudge,
   () => {
     parity.value = parity.value === "a" ? "b" : "a";
+    shown.value = true;
+    arm();
   },
 );
+// An emptied label ends the cue: it comes back only on the next nudge, not
+// when the host re-derives a label for the same selection.
+watch(
+  () => props.label,
+  (label) => {
+    if (label) return;
+    clearTimeout(hideTimer);
+    shown.value = false;
+  },
+);
+
+onBeforeUnmount(() => clearTimeout(hideTimer));
 </script>
 
 <style scoped>

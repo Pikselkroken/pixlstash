@@ -160,6 +160,9 @@ const head = computed(() => {
   );
 });
 
+// The grid's closed-rail edge tab names the selection the way this head does.
+defineExpose({ head });
+
 // The sections in this rail keep their own collapsed state, apart from the
 // same sections in the lightbox.
 provide(SECTION_SCOPE, "rail");
