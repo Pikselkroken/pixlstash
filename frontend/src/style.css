@@ -142,7 +142,8 @@ body {
   /* The lightbox's inspector (an RGB triplet, like the theme keys). Dark chrome
      here, so the pane reads as one with the title bar and the sidebar. Its
      inks are the dark-surface family, which hold on it: 4.34:1 (amber) to
-     12:1, the same as on the light theme's #242628 dark-surface. */
+     12:1, within a hair of the light theme's #242628 dark-surface
+     (4.45 to 12.3:1). */
   --lightbox-chrome: var(--v-theme-sidebar);
 }
 .v-theme--pixlStashLight {
