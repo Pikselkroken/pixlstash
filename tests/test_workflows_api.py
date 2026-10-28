@@ -2136,7 +2136,12 @@ def comfy_at(workflow_env, monkeypatch):
 
     yield at
     _unlink_every_connection(workflow_env)
+    # Clearing hands runs to the next listed connection, so a connection a test
+    # added would become the module's ComfyUI: remove every one instead.
+    for c in _connections(workflow_env)["connections"]:
+        workflow_env.owner.delete(f"{API}/comfyui/connections/{c['id']}")
     workflow_env.owner.patch(f"{API}/users/me/config", json={"comfyui_url": None})
+    assert workflow_env.server.auth.get_user().comfyui_url is None
 
 
 def _unlink_every_connection(workflow_env) -> None:
