@@ -5695,8 +5695,7 @@ button.shelf-head-cell:hover {
   gap: var(--space-2);
 }
 
-.shelf-base-guess:hover,
-.shelf-base-guess:focus-visible {
+.shelf-base-guess:hover {
   border-color: rgb(var(--v-theme-accent));
 }
 

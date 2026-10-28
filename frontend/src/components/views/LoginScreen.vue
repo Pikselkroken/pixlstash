@@ -230,12 +230,6 @@ const { pending: submitting, run: handleLogin } = useSubmitGuard(submitLogin);
   background: rgba(var(--v-theme-on-dark-surface), 0.16);
 }
 
-/* Dark in both themes, so the global ink ring (the theme's `on-surface`) would be
-   dark-on-dark in the light theme: keep its width and gap, take this ground's ink. */
-.login-screen :focus-visible {
-  outline-color: rgb(var(--v-theme-on-dark-surface));
-}
-
 form {
   display: flex;
   flex-direction: column;

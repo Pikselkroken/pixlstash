@@ -331,11 +331,6 @@ function emitValue() {
   font-size: var(--text-xs);
 }
 
-/* On the dark overlay: the global ring's width and gap, that ground's ink. */
-.lightbox-comfy-select:focus-visible {
-  outline-color: rgb(var(--v-theme-on-dark-surface));
-}
-
 .plugin-ui--auto .plugin-ui-input {
   border: 1px solid rgba(var(--v-theme-on-surface), 0.25);
   background: rgba(var(--v-theme-surface), 0.9);

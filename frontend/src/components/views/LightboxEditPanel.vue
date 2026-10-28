@@ -1305,10 +1305,6 @@ defineExpose({ submit });
   cursor: pointer;
 }
 
-.edit-select:focus-visible {
-  outline-color: rgb(var(--v-theme-on-dark-surface));
-}
-
 .edit-select-name {
   flex: 1;
   min-width: 0;
@@ -1351,7 +1347,6 @@ defineExpose({ submit });
   --v-theme-on-surface: var(--v-theme-on-dark-surface);
   --v-theme-surface-error: var(--v-theme-dark-surface-error);
   --hover-wash: rgba(var(--v-theme-on-dark-surface), 0.16);
-  --focus-stroke: rgb(var(--v-theme-on-dark-surface));
 }
 
 /* At the top of the list or the empty state, so the space goes below it. */

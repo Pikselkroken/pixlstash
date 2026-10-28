@@ -108,8 +108,8 @@
   color: inherit;
 }
 
-/* A folder that takes the models being dragged (#2204): the ink ring (the
-   focus stroke, inset because the rows are flush) over the hover wash. Not
+/* A folder that takes the models being dragged (#2204): the focus ring
+   (inset, because the rows are flush) over the hover wash. Not
    olive, which is the selection, and not amber, which is an action. */
 .model-drop-target.drop-ring {
   background: var(--hover-wash);

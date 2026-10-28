@@ -139,6 +139,6 @@ const summary = computed(() => {
 
 .wfstars:focus-visible {
   outline: var(--focus-width) solid var(--focus-stroke);
-  outline-offset: 2px;
+  outline-offset: var(--focus-offset);
 }
 </style>

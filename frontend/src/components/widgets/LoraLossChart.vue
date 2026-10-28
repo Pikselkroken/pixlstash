@@ -341,8 +341,6 @@ watch(
 }
 
 .lora-loss-table-toggle:focus-visible {
-  outline: var(--focus-width) solid rgb(var(--v-theme-primary));
-  outline-offset: var(--focus-offset);
   border-radius: var(--radius-sm);
 }
 

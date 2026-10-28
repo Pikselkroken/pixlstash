@@ -812,6 +812,7 @@ defineExpose({ focus });
 .stf-field:focus-within {
   outline: var(--focus-width) solid var(--focus-stroke);
   outline-offset: var(--focus-offset);
+  box-shadow: var(--focus-glow);
 }
 .stf-field {
   overflow-x: auto;

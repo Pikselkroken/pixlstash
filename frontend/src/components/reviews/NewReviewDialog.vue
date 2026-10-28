@@ -449,10 +449,6 @@ async function create() {
   flex-direction: column;
   gap: 14px;
 }
-/* Dark in both themes: the global ring's width and gap, in the on-dark ink. */
-.rs-dialog :focus-visible {
-  outline-color: rgb(var(--v-theme-on-dark-surface));
-}
 .rs-dialog-title {
   font-size: var(--text-md);
   font-weight: var(--weight-bold);
@@ -508,7 +504,6 @@ async function create() {
   --hover-wash: rgba(var(--v-theme-on-dark-surface), 0.16);
   --track-trough: rgba(var(--v-theme-scrim), 0.34);
   --track-ring: rgba(var(--v-theme-on-dark-surface), 0.4);
-  --focus-stroke: rgb(var(--v-theme-on-dark-surface));
   /* The selected fill too. The deep olive is a dark fill on a dark trough and
      the elevation that carries the second cue is invisible on near-black; the
      bright olive is the dark-theme value for exactly this, under the surface's

@@ -114,6 +114,10 @@ const pixlStashLight = {
     // theme's own surfaces - design system `--selected-ink`. A light ground
     // takes the deep olive; the dark theme lifts it.
     "selected-ink": "#567309",
+    // The keyboard focus ring and its glow (design system `--focus-stroke`,
+    // 2026-10-28): one blue in both themes and on every ground, never amber
+    // or olive. 3.3:1 at worst, on `panel`.
+    "focus-ring": "#3880eb",
     // Teal as a FOREGROUND, where it has one meaning: NOT SAVED YET (the dot
     // before a row's *Edited*, the glyph beside the count of unsaved changes,
     // the outline of *Save as new…*). The `tertiary` fill is a glyph at only
@@ -251,6 +255,8 @@ const pixlStashDark = {
     // The deep olive measures 2.72:1 on `surface`, so olive as a foreground
     // takes the lifted value here (5.37:1). See the light theme.
     "selected-ink": "#8EA604",
+    // The same blue as the light theme: the focus ring has one value.
+    "focus-ring": "#3880eb",
     // Teal as a foreground, lifted: 7.19:1 on `sidebar`, 5.63:1 on the
     // unsaved shelf's wash. See the light theme.
     "surface-tertiary": "#8fbcc6",

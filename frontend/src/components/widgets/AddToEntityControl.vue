@@ -1576,12 +1576,6 @@ defineExpose({
   );
 }
 
-/* The force-dark skin stays dark in both themes, so its focus ring is the
-   on-dark ink rather than the theme's. */
-.ate--force-dark .ate-btn:focus-visible {
-  outline-color: rgb(var(--v-theme-on-dark-surface));
-}
-
 .ate-label {
   white-space: nowrap;
 }
@@ -1684,10 +1678,7 @@ defineExpose({
 .ate-search:focus-within {
   outline: var(--focus-width) solid var(--focus-stroke);
   outline-offset: var(--focus-offset);
-}
-
-.ate-menu.force-dark .ate-search:focus-within {
-  outline-color: rgb(var(--v-theme-on-dark-surface));
+  box-shadow: var(--focus-glow);
 }
 
 .ate-search input {

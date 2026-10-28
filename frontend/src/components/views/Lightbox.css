@@ -17,8 +17,6 @@
 .lightbox-comfy-panel {
   /* Amber on a dark panel keeps the bright amber in both themes (#1413). */
   --v-theme-accent: var(--v-theme-dark-surface-accent);
-  --focus-stroke: rgb(var(--v-theme-on-dark-surface));
-  --focus-ring-inset: inset 0 0 0 var(--focus-width) var(--focus-stroke);
 }
 
 /* The centre column beside the rail, which stands where the app's rail
@@ -1081,6 +1079,7 @@
 .paint-compare:has(.paint-compare-range:focus-visible) .paint-compare-split {
   outline: var(--focus-width) solid var(--focus-stroke);
   outline-offset: var(--focus-offset);
+  box-shadow: var(--focus-glow);
 }
 
 .lightbox-draw-rect {
