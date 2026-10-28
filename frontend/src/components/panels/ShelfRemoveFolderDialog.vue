@@ -211,7 +211,11 @@ const picturesWords = computed(() => {
 const nameShown = computed(
   () => hasBreaks.value || shiftHeld.value || askedName.value || typed.value !== "",
 );
-const nameOk = computed(() => typed.value.trim() === facts.value.name);
+// Trimmed on both sides: a folder made outside the app can end in a space, and
+// a typed name that strips it must still confirm.
+const nameOk = computed(
+  () => typed.value.trim() === String(facts.value.name ?? "").trim(),
+);
 
 const typeHint = computed(() =>
   hasBreaks.value

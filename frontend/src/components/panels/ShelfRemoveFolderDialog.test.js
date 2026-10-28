@@ -140,6 +140,12 @@ describe("ShelfRemoveFolderDialog", () => {
     expect(removals()).toHaveLength(1);
   });
 
+  it("confirms a folder whose name ends in a space", async () => {
+    mountDialog(plan({ name: "old ", breaks: BREAKS }));
+    await nameField().setValue("old ");
+    expect(confirmButton().attributes("disabled")).toBeUndefined();
+  });
+
   it("turns into Permanently delete on Shift, and then asks for the name", async () => {
     removeModelFolderDir.mockResolvedValue({ ...DONE, permanent: true });
     mountDialog(plan());
