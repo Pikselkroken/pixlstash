@@ -36,6 +36,11 @@ export const PAINT_MODES = [
 /** The tools the combine mode applies to. A brush adds, an eraser takes away. */
 export const MODE_TOOLS = new Set(["wand", "rect", "ellipse", "lasso"]);
 
+/** The tools that take a size, and the size slider's ends in pixels. */
+export const SIZED_TOOLS = new Set(["brush", "eraser"]);
+export const BRUSH_MIN = 1;
+export const BRUSH_MAX = 200;
+
 const PREVIEW_DELAY_MS = 120;
 // A path point closer than this to the last one (a fraction of the picture)
 // adds nothing a mask could show, and a long stroke stays a short document.
@@ -215,6 +220,16 @@ export function usePaintSelection({ pictureId, dims }) {
     brushSize.value = Number(px);
   }
 
+  /** One step of − / +: finer at small sizes, so 1 px to 200 px is ~20 presses. */
+  function stepBrushSize(direction) {
+    const size = brushSize.value;
+    const step = size < 10 ? 1 : size < 50 ? 5 : 10;
+    brushSize.value = Math.min(
+      BRUSH_MAX,
+      Math.max(BRUSH_MIN, size + Math.sign(direction) * step),
+    );
+  }
+
   function setTolerance(value) {
     tolerance.value = Number(value);
   }
@@ -343,6 +358,7 @@ export function usePaintSelection({ pictureId, dims }) {
     end,
     cancel,
     setTool,
+    stepBrushSize,
     setMode,
     setBrushSize,
     setTolerance,

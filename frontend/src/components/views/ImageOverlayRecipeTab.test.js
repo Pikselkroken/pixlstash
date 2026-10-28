@@ -134,6 +134,7 @@ const STUBS = {
       "comfyuiProgressPercent",
       "paint",
       "applyToIds",
+      "comfyuiConfigured",
     ],
     template: "<div class='edit-stub'></div>",
   },
@@ -194,21 +195,28 @@ const recipePanel = (wrapper) =>
   wrapper.findComponent({ name: "OverlayRecipePanel" });
 
 describe("the lightbox Recipe tab follows the picture", () => {
+  // A writable session always has the Edit tab (it holds the Quick changes);
+  // read-only, the band is Info and Recipe alone, which is what this follows.
+  beforeEach(() => {
+    isReadOnly.value = true;
+  });
+
   it("is offered for a picture that has a recipe", async () => {
     const wrapper = await openOn(7);
     expect(tabLabels(wrapper)).toEqual(["Info", "Recipe"]);
   });
 
-  it("takes every tab away for a picture that has none, and keeps the band for the rating", async () => {
+  it("takes every tab away for a picture that has none, the rating heading Info", async () => {
     picturesWithARecipe = new Set();
     const wrapper = await openOn(7);
     // The regression this replaces: a tab whose whole content was "nothing
     // here was made in ComfyUI". And NOT a lone Info button either - a tab
     // band with one tab is a control with nothing to switch to.
     expect(tabLabels(wrapper)).toEqual([]);
-    // The band stays: the stars and the heart end it (#2163).
+    // The stars and the heart head Info now, not the band.
+    expect(wrapper.find(".inspector-tabs").exists()).toBe(false);
     expect(
-      wrapper.find(".inspector-tabs .overlay-rail-rating").exists(),
+      wrapper.find(".overlay-info-head .overlay-rail-rating").exists(),
     ).toBe(true);
   });
 
@@ -502,10 +510,10 @@ describe("the lightbox Edit tab", () => {
     expect(tabLabels(wrapper)).toEqual(["Info", "Edit"]);
   });
 
-  it("is absent without ComfyUI", async () => {
+  it("holds only the Quick changes without ComfyUI", async () => {
     const wrapper = await openOn(7);
-    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe"]);
-    expect(wrapper.find(".edit-stub").exists()).toBe(false);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe", "Edit"]);
+    expect(editPanel(wrapper).props("comfyuiConfigured")).toBe(false);
   });
 
   it("is absent in a read-only session", async () => {
@@ -827,7 +835,8 @@ describe("the lightbox Edit tab", () => {
       Object.defineProperty(img.element, property, { configurable: true, value });
     }
     await img.trigger("load");
-    wrapper.vm.showFaceBbox = true;
+    // Shift held asks for every box; with none found, the note says so.
+    wrapper.vm.shiftHeld = true;
     await flush();
     expect(wrapper.find(".face-bbox-empty").exists()).toBe(true);
     await wrapper.findAll(".inspector-tab")[2].trigger("click");
@@ -859,8 +868,9 @@ describe("the lightbox Edit tab", () => {
     wrapper.vm.paint.setTool("lasso");
     await flush();
     expect(wrapper.find(".paint-input-layer").exists()).toBe(true);
-    // Pressing the tool in hand puts it down, as Escape does.
-    await wrapper.find('.paint-tool[aria-label="Lasso (L)"]').trigger("click");
+    // Escape puts the tool down (the Edit tab's grid does it on a second press).
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await flush();
     expect(wrapper.vm.paint.tool.value).toBeNull();
     expect(wrapper.find(".paint-input-layer").exists()).toBe(false);
   });
@@ -1089,11 +1099,14 @@ describe("the lightbox Edit tab", () => {
     later.mockRestore();
   });
 
-  it("keeps the chrome up when the toolbox or options strip is clicked between its buttons", async () => {
+  it("keeps the chrome up when the options strip is clicked between its buttons", async () => {
     const wrapper = await openOn(7, undefined, configured);
     await wrapper.findAll(".inspector-tab")[2].trigger("click");
     const later = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1000);
-    for (const selector of [".paint-toolbox", ".paint-options"]) {
+    // The tools are in the tab now; the strip floats for a selection tool.
+    wrapper.vm.paint.setTool("rect");
+    await flush();
+    for (const selector of [".paint-options"]) {
       const strip = wrapper.find(selector);
       expect(strip.exists()).toBe(true);
       await strip.trigger("click");

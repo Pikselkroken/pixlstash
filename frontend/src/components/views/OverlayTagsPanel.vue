@@ -173,11 +173,20 @@
               @dragend="clearTagDrag"
               @click="onChipClick(tag, $event)"
               @contextmenu="onChipContextMenu(tag, $event)"
+              @mouseenter="hoverTag(tag)"
+              @mouseleave="hoverTag(null)"
             >
               <Tooltip
                 :text="predictionTitleForTag(tagLabel(tag)) || ''"
                 activator="parent"
               />
+              <v-icon
+                v-if="isBoxedTag(tag)"
+                class="overlay-tag-box"
+                size="12"
+                aria-hidden="true"
+                >mdi-vector-square</v-icon
+              >
               {{ formatSentinelTag(tagLabel(tag)) }}
               <button
                 v-if="!readOnly"
@@ -405,6 +414,9 @@ const props = defineProps({
   locked: { type: Boolean, default: false },
   // Lock-reason tooltip copy (single source from useLockedSetsStore).
   lockNote: { type: String, default: "" },
+  // Lower-cased labels the object detector found on the picture. A tag that
+  // names one carries a box glyph, and pointing at it draws that box.
+  boxedTags: { type: Set, default: () => new Set() },
 });
 
 // Compose the app-wide read-only (token capability) with the data-state lock.
@@ -416,7 +428,19 @@ const emit = defineEmits([
   "overlay-change",
   "add-tag",
   "request-metadata-refresh",
+  "hover-tag",
 ]);
+
+function isBoxedTag(tag) {
+  return props.boxedTags.has(String(tagLabel(tag)).trim().toLowerCase());
+}
+
+/** The tag pointed at, when the detector found it: the lightbox draws its box. */
+let hoveredLabel = null;
+function hoverTag(tag) {
+  hoveredLabel = tag && isBoxedTag(tag) ? tagLabel(tag) : null;
+  emit("hover-tag", hoveredLabel);
+}
 
 // ── Tag UI state ───────────────────────────────────────────────────────────
 
@@ -529,6 +553,13 @@ const allImageTags = computed(() => {
   return filterHiddenTags(dedupeTagList(getTagList(props.image?.tags)), {
     keepVisible: userVisibleHiddenTagKeys.value,
   });
+});
+
+// A chip removed under the pointer sends no mouseleave: let its box go too.
+watch(allImageTags, (tags) => {
+  if (hoveredLabel && !tags.some((tag) => tagLabel(tag) === hoveredLabel)) {
+    hoverTag(null);
+  }
 });
 
 function pinUserVisibleHiddenTag(tag) {
@@ -1245,6 +1276,12 @@ defineExpose({
   display: flex;
   flex-direction: column;
   flex: 0 0 auto;
+}
+
+/* The object detector found this one: pointing at it draws its box. */
+.overlay-tag-box {
+  margin-right: var(--space-1);
+  opacity: var(--opacity-text-secondary);
 }
 
 .section-meta-btn {

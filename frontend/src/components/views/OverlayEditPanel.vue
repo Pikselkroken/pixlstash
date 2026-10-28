@@ -3,7 +3,12 @@
        edit workflow, say what should change, run it. The lightbox stays on the
        picture; the result joins its stack and the tab says where it went. -->
   <div class="edit-pane">
-    <div v-if="loading" class="edit-note">Reading your workflows…</div>
+    <!-- No ComfyUI: nothing to run, but the picture can still be turned,
+         cropped and filtered. -->
+    <div v-if="!comfyuiConfigured" class="edit-scroll">
+      <slot name="quick-changes" />
+    </div>
+    <div v-else-if="loading" class="edit-note">Reading your workflows…</div>
     <div v-else-if="loadError" class="edit-note">{{ loadError }}</div>
 
     <div v-else-if="!cards.length" class="edit-empty">
@@ -34,6 +39,7 @@
       >
         Open Workflows
       </AppButton>
+      <slot name="quick-changes" />
     </div>
 
     <template v-else>
@@ -47,9 +53,11 @@
           on-dark
           @retry="reloadCards"
         />
-        <!-- Where the edit goes (Paint tools, the toolbox beside the
-             filmstrip). Without a selection the whole picture changes. -->
+        <!-- Where the edit goes: the mark tools head the tab, then the
+             selection's refinements. Without a selection the whole picture
+             changes. -->
         <template v-if="paint">
+          <PaintToolbox :paint="paint" />
           <div class="section-label section-label--on-dark edit-sec">
             <span>{{ hasSelection ? "Refine selection" : "Where" }}</span>
             <span v-if="hasSelection" class="edit-sec-end">
@@ -84,8 +92,8 @@
             </span>
           </div>
           <p v-if="!hasSelection" class="edit-note edit-note--lead">
-            Mark where with the tools beside the picture. Without a selection
-            the whole picture changes.
+            Mark where with the tools above. Without a selection the whole
+            picture changes.
           </p>
           <template v-else>
             <label
@@ -266,6 +274,8 @@
           Stack with the original
         </label>
 
+        <slot name="quick-changes" />
+
         <template v-if="runHere">
           <div class="section-label section-label--on-dark edit-sec">
             <span>{{ runHeading }}</span>
@@ -357,6 +367,17 @@
           </button>
           <span :id="shortcutHintId" class="edit-note">Ctrl + Enter</span>
         </div>
+        <!-- The selection's undo, which the floating toolbox used to hold. -->
+        <button
+          v-if="hasSelection"
+          type="button"
+          class="edit-link edit-undo"
+          aria-keyshortcuts="Control+Z"
+          @click="paint.undo()"
+        >
+          Undo stroke
+          <kbd class="edit-kbd" aria-hidden="true">Ctrl Z</kbd>
+        </button>
       </div>
     </template>
   </div>
@@ -405,6 +426,7 @@ import { computed, onBeforeUnmount, ref, useId, watch } from "vue";
 import { useRouter } from "vue-router";
 import RunReasonNotice from "../io/RunReasonNotice.vue";
 import AppButton from "../widgets/AppButton.vue";
+import PaintToolbox from "./PaintToolbox.vue";
 import Segmented from "../widgets/Segmented.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import {
@@ -443,6 +465,11 @@ const props = defineProps({
   paint: { type: Object, default: null },
   /** Every picture the grid's *Edit…* named, when it named several. */
   applyToIds: { type: Array, default: () => [] },
+  /**
+   * Whether this machine has a ComfyUI. Without one the tab holds only the
+   * `quick-changes` slot (rotate, crop, filters) and reads no workflows.
+   */
+  comfyuiConfigured: { type: Boolean, default: true },
 });
 
 const emit = defineEmits(["show-picture", "more-options", "running"]);
@@ -881,7 +908,7 @@ function packFixes(reason) {
 }
 
 watch(
-  () => props.active,
+  () => props.active && props.comfyuiConfigured,
   (active) => {
     if (active) void loadCards();
   },
@@ -1521,5 +1548,12 @@ defineExpose({ submit });
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+.edit-undo {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 </style>

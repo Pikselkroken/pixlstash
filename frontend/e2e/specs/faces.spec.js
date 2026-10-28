@@ -23,8 +23,9 @@ test.describe('faces', () => {
     expect(found, 'expected to find a picture with faces within 25 images').toBe(true)
     await expect(overlay.faceCrops.first()).toBeVisible()
 
-    // Enabling the toggle draws bounding boxes over the image.
-    await overlay.faceBboxToggle.click()
+    // No box until asked: pointing at the first face's chip draws its box.
+    await expect(overlay.faceBboxes.first()).toBeHidden()
+    await overlay.faceChips.first().hover()
     await expect(overlay.faceBboxes.first()).toBeVisible()
   })
 })

@@ -1,6 +1,8 @@
 <template>
-  <!-- The active tool's options, floating above the picture (the design's
-       Photoshop-style options strip). -->
+  <!-- The options of the tool in hand, floating above the picture (the
+       design's Photoshop-style options strip): a selection tool's combine
+       mode and tolerance, or crop's framings. The lightbox draws it only for
+       those; the brush's size is in the Edit tab with the tools. -->
   <div
     class="paint-options"
     role="group"
@@ -11,13 +13,7 @@
       {{ current.label }}
     </span>
 
-    <template v-if="!current">
-      <span class="paint-options-hint">
-        Choose a tool to mark where the edit goes, or crop.
-      </span>
-    </template>
-
-    <template v-else-if="isModeTool">
+    <template v-if="isModeTool">
       <Segmented
         :model-value="paint.mode.value"
         variant="icon-label"
@@ -68,26 +64,6 @@
           Crop to a new picture
         </AppButton>
       </template>
-    </template>
-
-    <template v-else>
-      <label class="paint-options-range">
-        Size
-        <input
-          :value="paint.brushSize.value"
-          type="range"
-          min="1"
-          max="200"
-          step="1"
-          @input="paint.setBrushSize($event.target.value)"
-        />
-        <output>{{ paint.brushSize.value }} px</output>
-      </label>
-      <span class="paint-options-hint">{{
-        paint.tool.value === "eraser"
-          ? "Paints the selection away"
-          : "Paints onto the selection"
-      }}</span>
     </template>
 
     <span v-if="current" class="paint-options-hint">Esc puts the tool down</span>

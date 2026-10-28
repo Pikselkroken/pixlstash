@@ -1,7 +1,16 @@
-// The Metadata section names the picture's id (#1379).
+// The Properties section (once Metadata) names the picture's id (#1379).
 
 import { describe, it, expect, vi } from "vitest";
 import { mount } from "@vue/test-utils";
+
+// Properties starts folded at the foot of Info; these tests read its rows, so
+// the remembered state opens it before the panel's module reads it.
+vi.hoisted(() => {
+  window.localStorage.setItem(
+    "pixlstash:collapsedSections",
+    JSON.stringify({ "lightbox:properties": false }),
+  );
+});
 
 vi.mock("../../utils/apiClient", () => ({ API_BASE_URL: "/api/v1" }));
 vi.mock("../../api/pictures", () => ({ openPictureLocation: vi.fn() }));
