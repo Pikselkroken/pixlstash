@@ -849,16 +849,21 @@ def test_draft_prs_skip_the_heavy_gate_and_run_it_when_ready(workflow):
     assert "ready_for_review" in types and "synchronize" in types, types
 
     jobs = workflow["jobs"]
-    for name in (
-        "warm_models",
-        "warm_models_windows",
-        "backend",
-        "backend_windows",
-        "backend_release_sweep",
-    ):
-        assert _DRAFT_SKIP in jobs[name].get("if", ""), (
+    # Whole-string equality: a substring check passes with `|| ... draft` added.
+    expected = {
+        "warm_models": f"${{{{ {_DRAFT_SKIP} }}}}",
+        "warm_models_windows": f"${{{{ {_DRAFT_SKIP} }}}}",
+        "backend_windows": f"${{{{ {_DRAFT_SKIP} }}}}",
+        "backend": f"${{{{ !cancelled() && {_DRAFT_SKIP} }}}}",
+    }
+    for name, condition in expected.items():
+        assert jobs[name].get("if") == condition, (
             f"`{name}` must skip on draft PRs: {jobs[name].get('if')!r}"
         )
+    # The sweep ANDs its release-prep gate on after the draft clause.
+    assert jobs["backend_release_sweep"]["if"].startswith(
+        f"${{{{ !cancelled() && {_DRAFT_SKIP} && ("
+    ), jobs["backend_release_sweep"]["if"]
     for name in ("checks", "e2e"):
         assert "draft" not in jobs[name].get("if", ""), (
             f"`{name}` is cheap and must keep running on drafts"
