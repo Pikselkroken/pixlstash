@@ -687,7 +687,8 @@
 }
 
 /* The faces as named crops, in each face's identity hue. An unnamed face is
-   dashed and muted; the one pointed at on the picture is ringed. */
+   dashed and muted; the one pointed at on the picture draws its one border
+   heavier, never a second ring outside it. */
 .face-chips {
   display: flex;
   flex-wrap: wrap;
@@ -713,7 +714,12 @@
   overflow: hidden;
   border-radius: var(--radius-sm);
   border: 1.5px solid var(--face-hue);
-  transition: box-shadow var(--dur-1) var(--ease-standard);
+  transition: border-width var(--dur-1) var(--ease-standard);
+}
+
+/* The crop's own hue border would be a second line inside the chip's. */
+.face-chip-crop .face-assign-crop {
+  border: 0;
 }
 
 .face-chip--unnamed .face-chip-crop {
@@ -724,7 +730,7 @@
 .face-chip:hover .face-chip-crop,
 .face-chip--ringed .face-chip-crop {
   opacity: 1;
-  box-shadow: 0 0 0 2px var(--face-hue);
+  border-width: 2px;
 }
 
 .face-chip-name {
