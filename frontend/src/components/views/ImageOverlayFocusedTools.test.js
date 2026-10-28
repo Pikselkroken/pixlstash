@@ -211,6 +211,15 @@ describe("boxes are drawn while asked about, never left on", () => {
     expect(shownBoxes(wrapper)).toEqual([]);
   });
 
+  it("lets a face's box go when the inspector shuts under the pointer", async () => {
+    const wrapper = await openMeasured();
+    await wrapper.find(".face-chip").trigger("mouseenter");
+    expect(shownBoxes(wrapper)).toEqual(["Face 1"]);
+    press("s");
+    await flush();
+    expect(shownBoxes(wrapper)).toEqual([]);
+  });
+
   it("draws a detected tag's box while the tag is pointed at", async () => {
     const wrapper = await openMeasured();
     const tags = wrapper.findComponent({ name: "OverlayTagsPanel" });

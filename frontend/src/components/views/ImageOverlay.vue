@@ -3292,6 +3292,7 @@ function handleKeydown(e) {
     fullscreenInspector.value = !fullscreenInspector.value;
   } else if (
     (e.key === "f" || e.key === "F") &&
+    !e.repeat &&
     !e.ctrlKey &&
     !e.metaKey &&
     !e.altKey
@@ -4057,9 +4058,10 @@ function onStagePointerMove(event) {
   pictureFaceIdx.value = idx >= 0 ? idx : null;
 }
 
-// A box asked about on one picture is not asked about on the next.
+// A box asked about on one picture is not asked about on the next, nor once
+// the crop or chip that asked has gone out of sight (no mouseleave comes then).
 watch(
-  () => image.value?.id,
+  () => [image.value?.id, inspectorShown.value, sidebarTab.value],
   () => {
     hoveredFaceIdx.value = null;
     pictureFaceIdx.value = null;

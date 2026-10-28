@@ -669,7 +669,7 @@
 /* A section's own verbs in its header (the Tags panel's, restated: its
    styles are scoped to it). */
 .section-meta-btn {
-  color: rgba(var(--v-theme-on-dark-surface), 0.7);
+  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
   padding: var(--space-1);
   display: inline-flex;
   align-items: center;

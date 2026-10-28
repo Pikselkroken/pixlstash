@@ -415,8 +415,10 @@ function isBoxedTag(tag) {
 }
 
 /** The tag pointed at, when the detector found it: the lightbox draws its box. */
+let hoveredLabel = null;
 function hoverTag(tag) {
-  emit("hover-tag", tag && isBoxedTag(tag) ? tagLabel(tag) : null);
+  hoveredLabel = tag && isBoxedTag(tag) ? tagLabel(tag) : null;
+  emit("hover-tag", hoveredLabel);
 }
 
 // ── Tag UI state ───────────────────────────────────────────────────────────
@@ -530,6 +532,13 @@ const allImageTags = computed(() => {
   return filterHiddenTags(dedupeTagList(getTagList(props.image?.tags)), {
     keepVisible: userVisibleHiddenTagKeys.value,
   });
+});
+
+// A chip removed under the pointer sends no mouseleave: let its box go too.
+watch(allImageTags, (tags) => {
+  if (hoveredLabel && !tags.some((tag) => tagLabel(tag) === hoveredLabel)) {
+    hoverTag(null);
+  }
 });
 
 function pinUserVisibleHiddenTag(tag) {
