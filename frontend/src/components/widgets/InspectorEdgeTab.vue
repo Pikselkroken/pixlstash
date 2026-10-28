@@ -80,6 +80,16 @@ watch(
     arm();
   },
 );
+// An emptied label ends the cue: it comes back only on the next nudge, not
+// when the host re-derives a label for the same selection.
+watch(
+  () => props.label,
+  (label) => {
+    if (label) return;
+    clearTimeout(hideTimer);
+    shown.value = false;
+  },
+);
 
 onBeforeUnmount(() => clearTimeout(hideTimer));
 </script>

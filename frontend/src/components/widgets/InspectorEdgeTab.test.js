@@ -59,10 +59,14 @@ describe("InspectorEdgeTab", () => {
     expect(tab().isVisible()).toBe(false);
   });
 
-  it("hides at once when the label empties", async () => {
+  it("hides at once when the label empties, until the next nudge", async () => {
     wrapper = mountTab();
     await wrapper.setProps({ nudge: 1 });
     await wrapper.setProps({ label: "" });
     expect(tab().isVisible()).toBe(false);
+    await wrapper.setProps({ label: "b" });
+    expect(tab().isVisible()).toBe(false);
+    await wrapper.setProps({ nudge: 2 });
+    expect(tab().isVisible()).toBe(true);
   });
 });

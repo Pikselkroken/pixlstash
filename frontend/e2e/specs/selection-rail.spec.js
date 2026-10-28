@@ -94,5 +94,16 @@ test.describe('selection rail', () => {
     await expect(grid.statsContent).toHaveCount(1)
     await expect(tab).toHaveCount(0)
     await expect(page.locator('.stats-sidebar :focus')).toHaveCount(1)
+
+    // One picture is named the way the rail's head names it, not "1 picture".
+    const title = grid.statsSidebar.getByTestId('rail-title')
+    await grid.thumbnails.nth(1).click({ modifiers: ['ControlOrMeta'] })
+    await expect(title).not.toHaveText(/^(|2 pictures|1 picture)$/)
+    const name = (await title.textContent()).trim()
+    await grid.statsSidebar.getByRole('button', { name: 'Clear' }).click()
+    await grid.statsToggle.click()
+    await expect(grid.statsContent).toHaveCount(0)
+    await grid.selectCards(1)
+    await expect(tab).toHaveAttribute('aria-label', `Show stats: ${name}`)
   })
 })
