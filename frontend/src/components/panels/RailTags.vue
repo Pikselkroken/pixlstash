@@ -60,6 +60,8 @@
             >{{ item.tag.slice(query.length) }}</span
           >
           <span class="rail-chip__n">{{ item.note }}</span>
+          <!-- The completion Tab will take, marked on the chip itself. -->
+          <kbd v-if="i === tabTarget" class="fm-kbd" aria-hidden="true">Tab</kbd>
         </span>
       </div>
       <p v-if="tagError" class="rail-tags__note rail-tags__note--error" role="alert">
@@ -543,6 +545,11 @@ const suggestionsOpen = computed(
     suggestions.value.length > 0 &&
     dismissedFor.value !== draft.value,
 );
+// Tab takes the arrowed completion, or else the first. Clamped: a refetched
+// library can shorten the list under a held index.
+const tabTarget = computed(() =>
+  Math.min(Math.max(0, suggestionIndex.value), suggestions.value.length - 1),
+);
 const activeId = computed(() =>
   suggestionsOpen.value && suggestionIndex.value >= 0
     ? `${listId}-${suggestionIndex.value}`
@@ -612,7 +619,7 @@ function onKey(event) {
     // and focus moves on (WCAG 2.1.2).
     if (!suggestionsOpen.value) return;
     event.preventDefault();
-    fill(list[Math.max(0, suggestionIndex.value)]);
+    fill(list[tabTarget.value]);
   } else if (event.key === "Escape") {
     // One layer per press: the completions, then the field. The grid's own
     // Esc (clear the selection) waits for the next press.

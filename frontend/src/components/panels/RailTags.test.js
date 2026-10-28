@@ -165,9 +165,23 @@ describe("several pictures' tags", () => {
     expect(wrapper.find(".rail-tags__to").text()).toBe("to all 3");
     const options = wrapper.findAll('[role="option"]');
     expect(options.map((o) => o.text())).toEqual([
-      "film grain412",
+      "film grain412Tab",
       "filing cabinet3",
     ]);
+    // The Tab keycap follows the arrowed completion, and back to the first.
+    const tabbed = () =>
+      wrapper.findAll('[role="option"]').map((o) => o.find("kbd").exists());
+    await input.trigger("keydown", { key: "ArrowDown" });
+    await input.trigger("keydown", { key: "ArrowDown" });
+    expect(tabbed()).toEqual([false, true]);
+    await input.trigger("keydown", { key: "Tab" });
+    expect(input.element.value).toBe("filing cabinet");
+    await input.setValue("fil");
+    await flush();
+    await input.trigger("keydown", { key: "ArrowDown" });
+    await input.trigger("keydown", { key: "ArrowUp" });
+    await input.trigger("keydown", { key: "ArrowUp" });
+    expect(tabbed()).toEqual([true, false]);
     // Tab completes and writes nothing; Enter then adds it to all.
     await input.trigger("keydown", { key: "Tab" });
     expect(input.element.value).toBe("film grain");
