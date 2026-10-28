@@ -585,6 +585,24 @@ describe("the folder verbs (#2206)", () => {
     wrapper.unmount();
   });
 
+  it("closes a name field whose row is collapsed away, so folders drag again", async () => {
+    const wrapper = await openLora();
+    rightClick(item(wrapper, 1, "Lora"));
+    await flushPromises();
+    await menu(wrapper).find('[data-verb="rename"]').trigger("click");
+    await flushPromises();
+    expect(field(wrapper).exists()).toBe(true);
+    expect(item(wrapper, 1, "Lora").attributes("draggable")).toBeUndefined();
+
+    await item(wrapper, 1).find(".mft-twist").trigger("click");
+    await flushPromises();
+    await item(wrapper, 1).find(".mft-twist").trigger("click");
+    await flushPromises();
+    expect(field(wrapper).exists()).toBe(false);
+    expect(item(wrapper, 1, "Lora").attributes("draggable")).toBe("true");
+    wrapper.unmount();
+  });
+
   it("makes a folder from its name field, and lists and focuses it where it was made", async () => {
     const wrapper = await openLora();
     createModelFolderDir.mockImplementation(async (id, body) => {

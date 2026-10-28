@@ -745,6 +745,11 @@ watch(() => moves.job, followRename);
 watch(
   nodes,
   () => {
+    // A field whose row went (its parent collapsed) is not cancellable and
+    // would keep every row from dragging, so it goes with its row.
+    if (editor.value && !nodes.value.some((n) => n.key === editor.value.key)) {
+      editor.value = null;
+    }
     const key = pendingFocusKey.value;
     if (!key || !rowEls.has(key)) return;
     pendingFocusKey.value = null;
@@ -907,7 +912,8 @@ function onKeydown(event) {
   const node = list[at];
   if (!node) return;
   // Stopped here: a verb key on a row is the tree's, and must not reach the
-  // shelf's window listeners (Delete, Escape) or the browser (Ctrl+Shift+N).
+  // shelf's window listeners (Delete, Escape). Chrome keeps Ctrl+Shift+N for
+  // itself whatever the page does.
   if (props.mode === "browse" && verbKey(event, node)) {
     event.preventDefault();
     event.stopPropagation();
