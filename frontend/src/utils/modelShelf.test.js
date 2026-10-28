@@ -766,6 +766,17 @@ describe("baseModelCell", () => {
     expect(typo.guess).toContain("Ilustrius");
   });
 
+  it("says a Civitai answer came from Civitai, without calling it a guess", () => {
+    const cell = baseModelCell({
+      base_model: "Illustrious",
+      base_model_canonical: "Illustrious XL",
+      base_model_source: "civitai",
+    });
+    expect(cell.text).toBe("Illustrious");
+    expect(cell.guess).toBeNull();
+    expect(cell.note).toMatch(/^From Civitai, matched by file hash/);
+  });
+
   it("is empty when nothing is recorded, including a cleared guess", () => {
     expect(baseModelCell({ base_model: null })).toEqual({
       text: "",

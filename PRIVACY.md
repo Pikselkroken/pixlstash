@@ -1,6 +1,6 @@
 # PixlStash Privacy Policy
 
-_Last updated: 2026-08-02_
+_Last updated: 2026-10-28_
 
 PixlStash is a self-hosted application for managing your own picture and video
 library. It is private by design: your content stays on hardware you control.
@@ -121,6 +121,18 @@ request came from to the identifier it carried.
 We store your install ID, the dates we first and last heard from it, and a
 compact record of which days it was active. Nothing else. That record is deleted
 after 400 days of silence, and only aggregate counts are ever published.
+
+## Optional base-model lookup (only when you ask)
+
+On the model shelf, **Look up base model online…** asks Civitai which base model
+the selected files were made for. It runs only when you choose it for rows you
+selected and confirm the prompt. For each selected file that has no base model
+yet, PixlStash sends that file's SHA-256 fingerprint to `civitai.com`, and
+nothing else from your library: no filename, folder, picture or account.
+Civitai sees your IP address and learns that this address holds a file with
+that fingerprint, and its own privacy policy applies to the request. The base
+model it answers with is stored on your machine; a base model you set or
+cleared yourself is never changed.
 
 ## Software downloads from third parties
 

@@ -421,7 +421,9 @@ CREATE TABLE IF NOT EXISTS model (
     weights_id            TEXT,
     -- The known base model (pixlstash.utils.known_base_models) this row was
     -- identified as, and which evidence said so: 'user' | 'declared' |
-    -- 'filename' | 'declared_fuzzy' | 'filename_fuzzy'. Unlike `family` this
+    -- 'civitai' | 'filename' | 'declared_fuzzy' | 'filename_fuzzy'. 'civitai'
+    -- is the owner's by-hash lookup, which also fills an empty base_model.
+    -- Unlike `family` this
     -- IS stored, because the shelf sorts and filters on it in SQL, so the
     -- staleness is closed at the write sites instead: a curated base_model
     -- recomputes both columns in the same UPDATE (source 'user'), and the

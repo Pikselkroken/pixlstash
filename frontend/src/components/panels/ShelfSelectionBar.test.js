@@ -589,6 +589,32 @@ describe("Set trigger words", () => {
   });
 });
 
+describe("Look up base model online", () => {
+  it("is offered on a model with no base model and emits its verb", async () => {
+    selectRows([row(1, "present"), row(2, "present", { base_model: null })]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(verb(wrapper, "lookup-base-model").attributes("disabled")).toBeUndefined();
+    await verb(wrapper, "lookup-base-model").trigger("click");
+    expect(wrapper.emitted("lookup-base-model")).toHaveLength(1);
+  });
+
+  it("stays listed, disabled with its reason, when no model would be asked about", async () => {
+    selectRows([
+      row(1, "present"),
+      // The owner's "none of these": a ruling, not a blank to fill.
+      row(2, "present", { base_model: null, base_model_source: "user" }),
+      row(3, "present", { base_model: null, sha256: null }),
+      row(4, "present", { base_model: null, file_kind: "vae" }),
+    ]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    const item = verb(wrapper, "lookup-base-model");
+    expect(item.attributes("disabled")).toBeDefined();
+    expect(tip(item)).toContain("no base model");
+    await item.trigger("click");
+    expect(wrapper.emitted("lookup-base-model")).toBeUndefined();
+  });
+});
+
 describe("the delete verb", () => {
   /**
    * Register folder 1, which every `row()` above puts its copy in.

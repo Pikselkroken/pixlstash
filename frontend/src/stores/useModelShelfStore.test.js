@@ -96,6 +96,7 @@ import {
   mergeReceipt,
   editReceipt,
   forgetReceipt,
+  lookupReceipt,
   useModelShelfStore,
 } from "./useModelShelfStore";
 import { useNoticeStore } from "./useNoticeStore";
@@ -1720,6 +1721,22 @@ describe("the receipts", () => {
       "Nothing was forgotten. 1 model still has a copy and was kept.",
     );
     expect(forgetReceipt(0, 0)).toBe("Nothing to forget.");
+  });
+
+  it("lookupReceipt adds up to the selection and says why some were not asked", () => {
+    expect(
+      lookupReceipt({
+        filled: [{ id: 1, base_model: "SDXL 1.0" }],
+        not_found: [2, 3],
+        skipped: [{ id: 4, reason: "owner_set" }],
+        not_asked: [5, 6, 7],
+      }),
+    ).toBe(
+      "Filled 1 model · not on Civitai 2 · left alone 1 · Civitai unreachable, 3 not asked",
+    );
+    expect(
+      lookupReceipt({ filled: [], not_found: [], skipped: [], not_asked: [] }),
+    ).toBe("Filled 0 models");
   });
 
   it("names the entity Assign wrote to, not its type", () => {

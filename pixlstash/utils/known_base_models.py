@@ -39,6 +39,8 @@ variant to an alias list means the normaliser was bypassed somewhere.
 normalised match from any source beats a fuzzy one from any source; within a
 tier the file's declared metadata beats its filename (:data:`SOURCE_RANK`). A
 person's value (``user``) outranks every scan, so nothing here clobbers it.
+Civitai's by-hash answer (``civitai``, written only when the owner asks for an
+online lookup) sits between a declaration and a filename match.
 
 **Containment for filenames, edit distance for declared values, never the
 reverse.** A filename is a soup of tokens (``ilxl_example_v3_fp16-000012``) where
@@ -698,16 +700,21 @@ def family_named(value: Optional[str]) -> Optional[str]:
 # Where a stored canonical label came from, highest first. The scanner writes a
 # new answer only when its source outranks the stored one, within one scan and
 # across scans alike, so a rescan can upgrade a filename guess to a declared
-# match and nothing it finds can replace what a person typed.
+# match and nothing it finds can replace what a person typed. `civitai` is
+# Civitai's answer for these exact bytes, looked up by hash when the owner asks:
+# better than any filename, but a third party's word, so the file's own header
+# still outranks it. Only the order matters; ranks are compared, never stored.
 SOURCE_USER = "user"
 SOURCE_DECLARED = "declared"
+SOURCE_CIVITAI = "civitai"
 SOURCE_FILENAME = "filename"
 SOURCE_DECLARED_FUZZY = "declared_fuzzy"
 SOURCE_FILENAME_FUZZY = "filename_fuzzy"
 
 SOURCE_RANK = {
-    SOURCE_USER: 5,
-    SOURCE_DECLARED: 4,
+    SOURCE_USER: 6,
+    SOURCE_DECLARED: 5,
+    SOURCE_CIVITAI: 4,
     SOURCE_FILENAME: 3,
     SOURCE_DECLARED_FUZZY: 2,
     SOURCE_FILENAME_FUZZY: 1,

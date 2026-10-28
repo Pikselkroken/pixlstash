@@ -26,6 +26,7 @@ import {
   forgetModels,
   listAdapters,
   listCheckpoints,
+  lookupBaseModelsOnline,
   putMemberVerdict,
   putSetVerdict,
   setAdapterAttachments,
@@ -142,6 +143,13 @@ describe("api/modelShelf the rest of the wire", () => {
     expect(apiClient.patch).toHaveBeenCalledWith("/models", {
       ids: [1, 2],
       base_model: null,
+    });
+  });
+
+  it("lookupBaseModelsOnline posts only the ids to the lookup route", async () => {
+    await lookupBaseModelsOnline([4, 5]);
+    expect(apiClient.post).toHaveBeenCalledWith("/models/base-model-lookup", {
+      ids: [4, 5],
     });
   });
 

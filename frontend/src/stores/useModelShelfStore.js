@@ -24,6 +24,7 @@ import {
   listAdapters,
   listBaseModelCompletions,
   listCheckpoints,
+  lookupBaseModelsOnline,
   markWorkflowSetSeen,
   mergeWorkflowSets,
   removeWorkflowSetMembers,
@@ -456,6 +457,24 @@ export function forgetReceipt(gone, kept, vanished = 0, engines = 0) {
       : "Nothing to forget.";
   }
   return [`Forgot ${modelCount(gone)}.`, ...notes].join(" ");
+}
+
+/**
+ * Say what a Civitai lookup filled, what it could not, and why.
+ *
+ * @param {Object} body - the route's receipt.
+ * @returns {string}
+ */
+export function lookupReceipt(body) {
+  const filled = body?.filled?.length ?? 0;
+  const missing = body?.not_found?.length ?? 0;
+  const skipped = body?.skipped?.length ?? 0;
+  const notAsked = body?.not_asked?.length ?? 0;
+  const parts = [`Filled ${modelCount(filled)}`];
+  if (missing) parts.push(`not on Civitai ${missing}`);
+  if (skipped) parts.push(`left alone ${skipped}`);
+  if (notAsked) parts.push(`Civitai unreachable, ${notAsked} not asked`);
+  return parts.join(" · ");
 }
 
 /**
@@ -4356,6 +4375,40 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   }
 
   /**
+   * Ask Civitai for the base models of *ids*, then say what it filled.
+   *
+   * The caller owns the confirmation: this is the one shelf call that leaves
+   * the machine, and the prompt is what says so.
+   *
+   * @param {number[]} ids - the eligible models (`lookupEligible`).
+   * @returns {Promise<boolean>} true when the call was made at all.
+   */
+  async function lookupBaseModels(ids) {
+    const notices = useNoticeStore();
+    if (!ids.length) return false;
+    try {
+      const body = await lookupBaseModelsOnline(ids);
+      if (body?.filled?.length) invalidateBaseModelCompletions();
+      await fetchRows();
+      notices.push({
+        level: body?.not_asked?.length
+          ? "warning"
+          : body?.filled?.length
+            ? "success"
+            : "info",
+        text: lookupReceipt(body),
+      });
+      return true;
+    } catch (err) {
+      notices.push({
+        level: "error",
+        text: errorDetail(err) || "Could not look those base models up.",
+      });
+      return false;
+    }
+  }
+
+  /**
    * Delete the selection from disk, then say what went and what did not.
    *
    * The shelf's only destructive verb. The confirmation is the view's - this
@@ -4894,6 +4947,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     editSelected,
     editModelIds,
     forgetSelected,
+    lookupBaseModels,
     deleteSelected,
     mergeCopies,
     setIconOnSelected,
