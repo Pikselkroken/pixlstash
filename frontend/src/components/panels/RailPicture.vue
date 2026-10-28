@@ -84,7 +84,19 @@
       <dl v-if="!propertiesCollapsed" class="rail-picture__props">
         <template v-for="row in properties" :key="row.label">
           <dt>{{ row.label }}</dt>
-          <dd>{{ row.value }}</dd>
+          <dd v-if="row.label === 'File' && !isReadOnly" class="rail-picture__file">
+            <span>{{ row.value }}</span>
+            <button
+              type="button"
+              class="rail-picture__folder"
+              aria-label="Show in folder"
+              @click="showInFolder"
+            >
+              <Tooltip text="Show in folder" activator="parent" />
+              <v-icon size="16">mdi-folder-open-outline</v-icon>
+            </button>
+          </dd>
+          <dd v-else>{{ row.value }}</dd>
         </template>
       </dl>
     </section>
@@ -94,7 +106,10 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { isReadOnly } from "../../utils/apiClient";
-import { pictureThumbnailUrl } from "../../api/pictures";
+import {
+  openPictureLocation,
+  pictureThumbnailUrl,
+} from "../../api/pictures";
 import {
   addCharacterFacesByFaceId,
   removeCharacterFacesByFaceId,
@@ -110,6 +125,7 @@ import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
 import SectionHeader from "../widgets/SectionHeader.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import OverlayDescriptionPanel from "../views/OverlayDescriptionPanel.vue";
 import OverlayTagsPanel from "../views/OverlayTagsPanel.vue";
 
@@ -224,6 +240,26 @@ async function unassignFace(face) {
     noticeStore.error(
       `Couldn't unassign that person. ${errorDetail(e) || e?.message || "Please try again."}`,
       { key: "rail-unassign-face" },
+    );
+  }
+}
+
+// The folder opens on the machine running PixlStash, so the reason a press
+// did nothing is worth stating: 403 is the app opened from another machine
+// (the route is loopback-only), 404 a file gone since it was imported.
+async function showInFolder() {
+  try {
+    await openPictureLocation(props.pictureId);
+  } catch (err) {
+    const status = err?.response?.status;
+    console.warn(`Failed to show picture ${props.pictureId} in its folder`, err);
+    noticeStore.warning(
+      status === 403
+        ? "A file manager opens on the machine running PixlStash, so this only works when you are sitting at it."
+        : status === 404
+          ? "That file is not where PixlStash last saw it."
+          : "Couldn't open that folder - the machine running PixlStash has no desktop file manager.",
+      { key: "rail-show-in-folder" },
     );
   }
 }
@@ -441,5 +477,37 @@ const properties = computed(() => {
   min-width: 0;
   overflow-wrap: anywhere;
   font-variant-numeric: tabular-nums;
+}
+
+.rail-picture__file {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.rail-picture__file > span {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Quiet until hovered, as a bar button is: the file name is the content. */
+.rail-picture__folder {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  cursor: pointer;
+}
+
+.rail-picture__folder:hover {
+  background: var(--hover-wash);
+  color: rgb(var(--v-theme-on-surface));
 }
 </style>

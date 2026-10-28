@@ -10,10 +10,12 @@ import { ref } from "vue";
 const getPictureStats = vi.fn();
 const getPictureMetadata = vi.fn();
 const listPictureFaces = vi.fn();
+const openPictureLocation = vi.fn();
 vi.mock("../../api/pictures", () => ({
   getPictureStats: (...args) => getPictureStats(...args),
   getPictureMetadata: (...args) => getPictureMetadata(...args),
   listPictureFaces: (...args) => listPictureFaces(...args),
+  openPictureLocation: (...args) => openPictureLocation(...args),
   listPicturesByIds: vi.fn(async () => []),
   pictureThumbnailUrl: (id) => `/thumbs/${id}.webp`,
 }));
@@ -33,6 +35,7 @@ import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
 import { SCRAPHEAP_PICTURES_ID } from "../../stores/useViewStore";
 import { useSelectionTags } from "../../composables/useSelectionTags";
+import { sessionContext } from "../../utils/apiClient";
 import {
   addPictureTag,
   confirmTagPrediction,
@@ -249,6 +252,32 @@ describe("the rail's sections", () => {
 
     await propsToggle().trigger("click");
     expect(wrapper.find(".rail-picture__props").exists()).toBe(true);
+  });
+});
+
+describe("the File property's Show in folder", () => {
+  afterEach(() => {
+    sessionContext.value = null;
+  });
+
+  it("opens the selected picture's folder", async () => {
+    openPictureLocation.mockReset().mockResolvedValue({ status: "ok" });
+    const wrapper = mountRail();
+    await select(wrapper, [7]);
+    const button = wrapper.find('.rail-picture__file button[aria-label="Show in folder"]');
+    expect(button.find(".tip").attributes("data-text")).toBe("Show in folder");
+    await button.trigger("click");
+    expect(openPictureLocation).toHaveBeenCalledWith(7);
+  });
+
+  it("is not offered in a read-only session", async () => {
+    sessionContext.value = { is_owner: false, scope: "READ" };
+    const wrapper = mountRail();
+    await select(wrapper, [7]);
+    expect(wrapper.find(".rail-picture__props").text()).toContain(
+      "IMG_2291.jpg",
+    );
+    expect(wrapper.find('[aria-label="Show in folder"]').exists()).toBe(false);
   });
 });
 

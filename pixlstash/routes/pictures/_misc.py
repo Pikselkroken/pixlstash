@@ -30,6 +30,7 @@ from pixlstash.scoring import (
     get_smart_score_penalised_tags_from_request,
     prepare_smart_score_inputs,
 )
+from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.quality.smart_score_utils import SmartScoreUtils
 from pixlstash.utils.serialization_utils import safe_model_dict
 from pixlstash.services import plugin_service
@@ -855,7 +856,7 @@ def register_routes(router, server):
         "/pictures/{id}/open-location",
         include_in_schema=False,
         summary="Open picture location",
-        description="Opens the containing folder of a reference picture in the OS file manager.",
+        description="Opens the containing folder of a picture in the OS file manager.",
         response_model=OpenLocationResponse,
     )
     def open_picture_location(id: str):
@@ -872,7 +873,11 @@ def register_routes(router, server):
         if not file_path:
             raise HTTPException(status_code=404, detail="Picture not found")
 
-        folder = os.path.dirname(file_path)
+        # A library picture's path is relative to the library; a reference
+        # picture's is already absolute.
+        folder = os.path.dirname(
+            ImageUtils.resolve_picture_path(server.vault.image_root, file_path)
+        )
         if not os.path.isdir(folder):
             raise HTTPException(status_code=404, detail="Location not found on disk")
 

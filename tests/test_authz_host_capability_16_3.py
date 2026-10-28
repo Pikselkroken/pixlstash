@@ -28,6 +28,7 @@ one-line rollback is ever taken.
 import contextlib
 import json
 import os
+import subprocess
 import sys
 import tempfile
 
@@ -48,6 +49,7 @@ from pixlstash.authz.policy import (
     validate_policy_declarations,
 )
 from pixlstash.authz.registry import ROUTE_POLICIES
+from pixlstash.db_models import Picture
 from pixlstash.route_inventory import api_endpoint_set
 from pixlstash.services import node_pack_install_service
 from tests.authz_guard import no_spa_fallback  # noqa: F401
@@ -1196,6 +1198,44 @@ def test_the_shelf_open_location_is_on_the_red_line_too():
                 f"expected the handler's no-such-model 404 past the gate, "
                 f"got {r.status_code}: {r.text}"
             )
+
+
+def test_open_location_resolves_a_library_picture_against_the_library(
+    monkeypatch,
+):
+    """A library picture stores its path relative to the library, so the
+    folder opened is the library's own sub-folder, not one relative to the
+    server's working directory (which answered 404 for every such picture).
+    The spawn is stubbed so no file manager opens on the machine running this."""
+    opened = []
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        image_root = server.vault.image_root
+        os.makedirs(os.path.join(image_root, "show-in-folder"), exist_ok=True)
+
+        def _add(session):
+            pic = Picture(file_path=os.path.join("show-in-folder", "a.png"))
+            session.add(pic)
+            session.commit()
+            return pic.id
+
+        pic_id = server.vault.db.run_task(_add)
+        # `subprocess` is one module, and the server's own background probes
+        # run through it too: only the opener is caught.
+        real_run = subprocess.run
+
+        def _run(argv, **kw):
+            if argv[0] in ("open", "xdg-open"):
+                return opened.append(argv[-1])
+            return real_run(argv, **kw)
+
+        monkeypatch.setattr(subprocess, "run", _run)
+        monkeypatch.setattr(os, "startfile", opened.append, raising=False)
+        with _enforcing(server):
+            r = owner.post(f"{API}/pictures/{pic_id}/open-location")
+        monkeypatch.undo()
+        assert r.status_code == 200, r.text
+        assert opened == [os.path.join(image_root, "show-in-folder")]
 
 
 # ---- server-config/open - the CSO Condition-1 sibling hole -----------------
