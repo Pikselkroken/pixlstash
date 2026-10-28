@@ -3577,6 +3577,20 @@ def test_a_moved_loopback_port_is_sent_to_every_linked_comfyui_here(monkeypatch)
     comfyui_link_service.reannounce(server)
     assert len(writes) == 2, "an unchanged port must not be re-sent"
 
+    # A relink while ComfyUI is being told keeps its own record and key.
+    monkeypatch.setenv("PIXLSTASH_PORT", "61003")
+    relinked = record("http://127.0.0.1:8188/", "this_computer")
+    relinked["token_public_id"] = "example-relinked"
+
+    def relink_meanwhile(url, json=None, **_):
+        if url == "http://127.0.0.1:8188/settings":
+            comfyui_link_service._save_record(server, "a", relinked)
+        return _http_answer(200, None)
+
+    monkeypatch.setattr(comfyui_link_service.requests, "post", relink_meanwhile)
+    comfyui_link_service.reannounce(server)
+    assert comfyui_link_service.link_record(server, "a") == relinked
+
 
 # ===========================================================================
 # A link key per connection (#2194)

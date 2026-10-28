@@ -927,7 +927,12 @@ def reannounce(server) -> None:
                 exc,
             )
             continue
-        _save_record(server, connection_id, {**record, "pixlstash_url": current})
+        with _LINK_LOCK:
+            # A link or unlink while ComfyUI was being told owns the record now.
+            fresh = _records(server).get(connection_id)
+            if not fresh or fresh["token_public_id"] != record["token_public_id"]:
+                continue
+            _save_record(server, connection_id, {**fresh, "pixlstash_url": current})
         logger.info(
             "Told the linked ComfyUI at %s that PixlStash is now at %s.",
             record.get("comfyui_url"),
