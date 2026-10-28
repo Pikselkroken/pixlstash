@@ -76,7 +76,9 @@ beforeEach(() => {
     confirmTagPrediction,
     rejectTagPrediction,
   ]) {
-    fn.mockClear();
+    // Reset, not cleared: a test that swaps in its own implementation
+    // cannot leave it to the next one even when it fails half-way.
+    fn.mockReset().mockResolvedValue({});
   }
   listTagPredictions.mockReset().mockResolvedValue({
     tag_predictions: [],
@@ -152,7 +154,6 @@ describe("several pictures' tags", () => {
     finish({});
     await flush();
     expect(input.element.value).toBe("se");
-    addPictureTag.mockReset().mockResolvedValue({});
   });
 
   it("say who gets a typed tag, and complete it from the library", async () => {
