@@ -67,4 +67,40 @@ test.describe('image overlay', () => {
     expect(await box('.stats-sidebar')).toEqual(rail)
     expect(await box('.sidebar-shell')).toEqual(sidebar)
   })
+
+  // The topbar scrolls sideways, so it clips everything to its own band: the
+  // Set and Project menus drew in place and showed only a sliver of search box
+  // inside the toolbar, and a focus ring outside a control lost its top and
+  // bottom edges.
+  for (const [name, ariaLabel] of [['Set', 'Set'], ['Project', 'Set project']]) {
+    test(`the ${name} menu opens over the picture, not inside the toolbar`, async ({
+      page,
+      overlay,
+    }) => {
+      await overlay.openFromGrid()
+      const bar = page.locator('.image-overlay .overlay-topbar')
+      const trigger = bar.locator(`.ate-btn[aria-label="${ariaLabel}"]`)
+      // Arrive by keyboard: a programmatic focus after the opening click is
+      // not :focus-visible, and would show no ring at all.
+      await trigger.focus()
+      await page.keyboard.press('Tab')
+      await page.keyboard.press('Shift+Tab')
+      await expect(trigger).toBeFocused()
+      // The ring is drawn inside the control, where the band cannot clip it.
+      await expect(trigger).toHaveCSS('outline-style', 'none')
+      expect(await trigger.evaluate((el) => getComputedStyle(el).boxShadow)).toContain('inset')
+
+      await trigger.click()
+      const search = page.locator('.ate-menu.open .ate-search input')
+      await expect(search).toBeFocused()
+      const barBox = await bar.boundingBox()
+      const menuBox = await page.locator('.ate-menu.open').boundingBox()
+      expect(menuBox.y + menuBox.height).toBeGreaterThan(barBox.y + barBox.height + 40)
+      // Nothing of the lightbox is painted over the menu's middle.
+      const onTop = await page.evaluate(({ x, y }) => {
+        return !!document.elementFromPoint(x, y)?.closest('.ate-menu.open')
+      }, { x: menuBox.x + menuBox.width / 2, y: menuBox.y + menuBox.height / 2 })
+      expect(onTop).toBe(true)
+    })
+  }
 })

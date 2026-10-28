@@ -60,6 +60,14 @@
   display: none;
 }
 
+/* The sideways scroll clips the band top and bottom, and a 2px-gap outline
+   round a bar-height control runs past both edges. So the toolbar's controls
+   take the inset ring, drawn on their own edge. */
+.overlay-topbar :deep(:focus-visible) {
+  outline: none;
+  box-shadow: var(--focus-ring-inset);
+}
+
 .overlay-topbar-spacer {
   flex: 1;
 }
