@@ -3,8 +3,8 @@ import { expect } from '@playwright/test'
 /**
  * The lightbox, opened inside the frame over the centre column and the right
  * rail. Selectors verified in ImageOverlay.vue: .image-overlay root,
- * .overlay-back, .overlay-nav-left/right, the face-bbox toggle (aria-label),
- * .sidebar-section--faces, .face-assign-crop, .face-bbox-overlay.
+ * .overlay-back, .overlay-nav-left/right, .sidebar-section--faces, the face
+ * chips (.face-chip, holding .face-assign-crop), .face-bbox-overlay.
  */
 export class ImageOverlay {
   constructor(page) {
@@ -16,10 +16,12 @@ export class ImageOverlay {
     this.prev = page.locator('.overlay-nav-left')
     this.facesSection = page.locator('.sidebar-section--faces')
     this.faceCrops = page.locator('.face-assign-crop')
-    this.faceBboxToggle = page.getByRole('button', { name: 'Face boxes' })
+    // There are no box switches: pointing at a face's chip draws its box.
+    this.faceChips = page.locator('.face-chip')
     // The pane is the app's right rail: it opens and shuts with the grid's.
     this.pane = page.locator('.image-overlay .overlay-sidebar')
     this.railToggle = page.locator('.image-overlay .tb-stats-btn')
+    // Every box is in the DOM; only the ones asked about are visible.
     this.faceBboxes = page.locator('.face-bbox-overlay')
     // Tags (§5) — chips, the "Add tag (T)" affordance, and the inline input.
     // Scoped to the applied-tag list (.tag-section). Removing a tag rejects its
@@ -29,7 +31,7 @@ export class ImageOverlay {
     this.tags = page.locator('.tag-section .overlay-tag')
     this.addTagButton = page.locator('.section-meta-btn[aria-label="Add tag (T)"]').first()
     this.tagInput = page.locator('.tag-add-input')
-    // Star rating (§6) — at the end of the rail's tab band. Scoped to .image-overlay so
+    // Star rating (§6) — heading the rail's Info tab. Scoped to .image-overlay so
     // it never matches the grid's .star-overlay--compact thumbnails. Filled
     // stars carry an inline colour referencing --v-theme-accent; unfilled ones
     // reference --v-theme-on-background, so filled stars are countable.

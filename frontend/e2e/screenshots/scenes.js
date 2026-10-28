@@ -230,11 +230,9 @@ export const scenes = [
       await filterToPerson(sidebar)
       await openOverlay({ grid, overlay, page: grid.page })
       await expect(overlay.mainImage).toBeVisible()
-      if (await overlay.faceBboxToggle.count()) {
-        await overlay.faceBboxToggle.click().catch(() => {})
-        if (!(await overlay.faceBboxes.count())) {
-          await overlay.faceBboxToggle.click().catch(() => {})
-        }
+      // Pointing at a face's chip draws its box for the shot.
+      if (await overlay.faceChips.count()) {
+        await overlay.faceChips.first().hover().catch(() => {})
       }
       await grid.page.waitForTimeout(600)
       return overlay.root

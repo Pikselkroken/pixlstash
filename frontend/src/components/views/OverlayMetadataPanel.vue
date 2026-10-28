@@ -2,7 +2,7 @@
   <div class="sidebar-section">
     <SectionHeader
       v-model:collapsed="metadataCollapsed"
-      label="Metadata"
+      label="Properties"
       on-dark
     />
     <template v-if="!metadataCollapsed">
@@ -47,7 +47,11 @@ const props = defineProps({
   videoDuration: { type: Number, default: null },
 });
 
-const metadataCollapsed = useSectionCollapse("metadata");
+// Folded by default at the foot of Info, as the grid rail's one-picture view
+// has it (a new key, so a section left open under the old name starts folded).
+const metadataCollapsed = useSectionCollapse("properties", {
+  defaultCollapsed: true,
+});
 
 function formatAspectRatio(width, height) {
   const gcd = (a, b) => (b === 0 ? a : gcd(b, a % b));

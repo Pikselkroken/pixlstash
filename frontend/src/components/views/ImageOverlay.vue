@@ -15,7 +15,12 @@
   >
     <div
       class="overlay-shell"
-      :class="{ 'chrome-hidden': chromeHidden, 'sidebar-open': sidebarOpen }"
+      :class="{
+        'chrome-hidden': chromeHidden,
+        'sidebar-open': inspectorShown,
+        'overlay-shell--fullscreen': fullscreen,
+        'overlay-shell--bar-down': fullscreen && fullscreenBarShown,
+      }"
       @mousemove="handleMouseActivity"
       @mousedown="handleMouseActivity"
       @click="handleOverlayClick"
@@ -96,152 +101,6 @@
         </Tooltip>
         <span class="overlay-topbar-spacer"></span>
 
-        <!-- Rotate, in place and immediately: one click is one 90° step, no
-             dialog, no direction picker and no confirmation. The safety net
-             is undo (the receipt narrates every step and offers it), which is
-             the right net for an action that is instant, lossless and
-             reversible. Greyed rather than hidden when the file cannot carry
-             a rotation every renderer agrees on: the tooltip is what teaches
-             that Filters > Rotate still makes a rotated copy. -->
-        <template v-if="image && !isReadOnly">
-          <AppBarButton
-            icon="rotate-left"
-            :tooltip="rotateLeftTitle"
-            aria-keyshortcuts="["
-            :disabled="!canRotateCurrent"
-            @click.stop="rotateCurrentImage(ROTATE_CCW)"
-          />
-          <AppBarButton
-            icon="rotate-right"
-            :tooltip="rotateRightTitle"
-            aria-keyshortcuts="]"
-            :disabled="!canRotateCurrent"
-            @click.stop="rotateCurrentImage(ROTATE_CW)"
-          />
-        </template>
-        <AppBarButton
-          icon="face-recognition"
-          tooltip="Face boxes"
-          :active="showFaceBbox"
-          :aria-pressed="showFaceBbox ? 'true' : 'false'"
-          @click.stop="toggleFaceBbox"
-        />
-        <AppBarButton
-          icon="shape-outline"
-          tooltip="Object detection boxes"
-          :active="showDetections"
-          :aria-pressed="showDetections ? 'true' : 'false'"
-          @click.stop="toggleDetections"
-        />
-        <AppBarButton
-          v-if="!isMobile && !isReadOnly"
-          icon="account-plus"
-          tooltip="Draw a face box"
-          :active="drawMode === 'face'"
-          :aria-pressed="drawMode === 'face' ? 'true' : 'false'"
-          @click.stop="beginDrawMode('face')"
-        />
-        <!-- Compare two pictures Ctrl-clicked in the filmstrip. Shown greyed
-             until there are two: the tip says how to pick them. -->
-        <AppBarButton
-          v-if="image"
-          class="overlay-compare-btn"
-          icon="compare-horizontal"
-          :tooltip="filmstripCompareReason || 'Compare the two pictures picked'"
-          :aria-disabled="filmstripCompareReason ? 'true' : undefined"
-          @click.stop="compareFilmstripPicks"
-        />
-        <!-- The zoom readout lives ON the control (owner ruling): a live
-             whole-percent of natural size beside the retained icon. The
-             label width is reserved once (5ch, tabular numerals) so the
-             toolbar never jumps as the value changes. Click semantics match
-             Z: at fit → snap to 100%, otherwise → snap to fit. -->
-        <AppBarButton
-          class="zoom-btn"
-          icon="magnify"
-          :aria-label="zoomButtonTitle"
-          :tooltip="zoomButtonTitle"
-          @click="toggleZoomSnap"
-        >
-          <span class="zoom-btn-label">{{ zoomButtonLabel }}</span>
-        </AppBarButton>
-        <!-- Upscale… (#1868): this picture, by the factor and model the Run
-             popup's added upscale remembers, stacked on top of it. -->
-        <AppBarButton
-          v-if="canUpscaleCurrent"
-          icon="arrow-expand-all"
-          data-testid="overlay-upscale"
-          :tooltip="upscaleTitle"
-          @click.stop="upscale.openFor([image.id])"
-        />
-        <v-menu
-          v-if="!isReadOnly"
-          v-model="pluginMenuOpen"
-          :close-on-content-click="false"
-          location-strategy="connected"
-          location="bottom end"
-          origin="top end"
-          transition="scale-transition"
-        >
-          <template #activator="{ props }">
-            <AppBarButton
-              v-bind="props"
-              class="overlay-comfy-activator"
-              icon="tune-variant"
-              tooltip="Filters"
-              :open="pluginMenuOpen"
-            />
-          </template>
-          <div class="overlay-comfy-panel">
-            <div class="overlay-comfy-header">Filters</div>
-            <div class="overlay-comfy-body">
-              <div
-                v-if="!overlayPluginOptions.length"
-                class="overlay-comfy-warning"
-              >
-                No filters available.
-              </div>
-              <template v-else>
-                <label class="overlay-comfy-field-label">Filters</label>
-                <select
-                  v-model="overlaySelectedPluginName"
-                  class="overlay-comfy-select"
-                >
-                  <option
-                    v-for="plugin in overlayPluginOptions"
-                    :key="plugin.name"
-                    :value="plugin.name"
-                  >
-                    {{ plugin.display_name || plugin.name }}
-                  </option>
-                </select>
-                <PluginParametersUI
-                  v-model="overlayPluginParameters"
-                  :plugin="activeOverlayPluginSchema"
-                  :show-description="true"
-                  tone="dark"
-                  input-class="overlay-comfy-select"
-                  label-class="overlay-comfy-field-label"
-                />
-                <label class="overlay-comfy-checkbox-row">
-                  <input v-model="stackFilterOutputs" type="checkbox" />
-                  <span>Stack new images with the originals</span>
-                </label>
-                <div class="overlay-comfy-actions">
-                  <button
-                    class="overlay-comfy-run"
-                    type="button"
-                    :disabled="!image || !overlaySelectedPluginName"
-                    @click.stop="runOverlayPlugin"
-                  >
-                    <v-icon size="16">mdi-play</v-icon>
-                    <span>Run</span>
-                  </button>
-                </div>
-              </template>
-            </div>
-          </div>
-        </v-menu>
         <Tooltip
           v-if="image && !isReadOnly"
           :text="stackGroupingLockReason || ''"
@@ -275,6 +134,40 @@
             />
           </template>
         </Tooltip>
+        <!-- Compare two pictures Ctrl-clicked in the filmstrip. Shown greyed
+             until there are two: the tip says how to pick them. -->
+        <AppBarButton
+          v-if="image"
+          class="overlay-compare-btn"
+          icon="compare-horizontal"
+          :tooltip="filmstripCompareReason || 'Compare the two pictures picked'"
+          :aria-disabled="filmstripCompareReason ? 'true' : undefined"
+          @click.stop="compareFilmstripPicks"
+        />
+        <!-- The zoom readout lives ON the control (owner ruling): a live
+             whole-percent of natural size beside the retained icon. The
+             label width is reserved once (5ch, tabular numerals) so the
+             toolbar never jumps as the value changes. Click semantics match
+             Z: at fit → snap to 100%, otherwise → snap to fit. -->
+        <AppBarButton
+          class="zoom-btn"
+          icon="magnify"
+          :aria-label="zoomButtonTitle"
+          :tooltip="zoomButtonTitle"
+          @click="toggleZoomSnap"
+        >
+          <span class="zoom-btn-label">{{ zoomButtonLabel }}</span>
+        </AppBarButton>
+        <!-- Full screen (F): the real one, title bar and sidebar gone. In it
+             this bar comes down from the top edge and ends in the way out. -->
+        <AppBarButton
+          v-if="!fullscreen"
+          class="overlay-fullscreen-btn"
+          icon="fullscreen"
+          tooltip="Full screen (F)"
+          aria-keyshortcuts="F"
+          @click.stop="toggleFullscreen"
+        />
         <!-- Narrow windows have no rail, so the rating comes back here as a
              menu. -->
         <v-menu
@@ -337,10 +230,23 @@
         </v-menu>
         <!-- The grid's own rail toggle, in the grid's place: one rail, one
              open flag, so opening a picture never opens or shuts it. -->
-        <span class="overlay-topbar-sidebar-toggle">
+        <span v-if="!fullscreen" class="overlay-topbar-sidebar-toggle">
           <span class="bar-separator" aria-hidden="true"></span>
           <TbGlobalActions rail-name="Picture details" />
         </span>
+        <template v-else>
+          <span class="bar-separator" aria-hidden="true"></span>
+          <AppBarButton
+            class="overlay-fullscreen-exit"
+            icon="fullscreen-exit"
+            aria-keyshortcuts="Escape"
+            tooltip="Leave full screen (Esc)"
+            @click.stop="toggleFullscreen"
+          >
+            Exit full screen
+            <kbd class="overlay-kbd" aria-hidden="true">Esc</kbd>
+          </AppBarButton>
+        </template>
       </header>
 
       <div ref="overlayMainRef" class="overlay-main">
@@ -382,9 +288,14 @@
         <div
           ref="overlayCanvasRef"
           class="overlay-canvas"
-          :class="{ 'overlay-canvas--paint': paintActive && !chromeHidden }"
+          :class="{
+            'overlay-canvas--idle': fullscreenIdle,
+            'overlay-canvas--edge-tab': edgeTabShown,
+          }"
           tabindex="0"
           aria-label="Image - right-click or press the menu key for actions"
+          @mousemove="onStagePointerMove"
+          @mouseleave="pictureFaceIdx = null"
           @touchstart="onTouchStart"
           @touchmove="onTouchMove"
           @touchend="onTouchEnd"
@@ -458,31 +369,37 @@
                   </div>
                 </template>
               </template>
-              <!-- Out of the way while a selection is being painted. -->
-              <template v-if="showFaceBbox && overlayReady && !paintActive">
-                <div v-if="faceBboxes.length === 0" class="face-bbox-empty">
-                  No bboxes found
+              <!-- No box switches: a box is drawn while the reader asks about
+                   what it outlines (a face crop or a detected tag pointed at
+                   in Info), every box while Shift is held, and the face boxes
+                   while one is being drawn. Out of the way while a selection
+                   is being painted. -->
+              <template v-if="overlayReady && !paintActive">
+                <div
+                  v-if="
+                    boxesAll && !faceBboxes.length && !detectionBboxes.length
+                  "
+                  class="face-bbox-empty"
+                >
+                  No faces or objects found
                 </div>
                 <div
                   v-for="(face, idx) in faceBboxes"
+                  v-show="boxesAll || drawMode || hoveredFaceIdx === idx"
                   :key="`face-${idx}`"
                   class="face-bbox-overlay"
-                  :style="getOverlayBoxStyle(face.bbox, faceBoxColor(idx))"
+                  :style="{
+                    ...getOverlayBoxStyle(face.bbox, faceBoxColor(idx)),
+                    borderStyle: face.character_id == null ? 'dashed' : 'solid',
+                  }"
                 >
                   <span class="face-bbox-label">
                     {{ face.character_name || `Face ${idx + 1}` }}
                   </span>
                 </div>
-              </template>
-              <template v-if="showDetections && overlayReady">
-                <div
-                  v-if="detectionBboxes.length === 0"
-                  class="face-bbox-empty"
-                >
-                  No detections found
-                </div>
                 <div
                   v-for="(det, idx) in detectionBboxes"
+                  v-show="boxesAll || detectionMatchesTag(det, hoveredTagLabel)"
                   :key="`det-${idx}`"
                   class="face-bbox-overlay"
                   :style="getOverlayBoxStyle(det.bbox, detectionBoxColor(det))"
@@ -736,14 +653,34 @@
           </div>
         </div>
 
-        <template v-if="paintActive && !chromeHidden">
-          <PaintToolbox :paint="paint" />
-          <PaintOptionsBar
-            :paint="paint"
-            :framings="cropFramingsHere"
-            @apply-crop="applyCrop"
-          />
-        </template>
+        <!-- The closed inspector's edge tab (the app's standard handle),
+             naming the tab it reopens on. With every tool in the inspector,
+             closing it is the everyday focus view. -->
+        <InspectorEdgeTab
+          v-if="edgeTabShown"
+          :label="edgeTabLabel"
+          :name="`Show picture details: ${edgeTabLabel}`"
+          @open="openInspectorFromEdge"
+        />
+        <!-- Said once on entering full screen, then gone for the visit. -->
+        <div
+          v-if="fullscreenNotice && !fullscreenBarShown"
+          class="overlay-fullscreen-notice"
+          role="status"
+        >
+          Point at the top for controls ·
+          <kbd>Esc</kbd> exits full screen
+        </div>
+
+        <!-- The tools themselves are in the Edit tab; the options of the one
+             in hand that act on the picture (combine mode, tolerance, crop
+             framings) float above it. Brush size is in the tab too. -->
+        <PaintOptionsBar
+          v-if="paintActive && !chromeHidden && paintOptionsShown"
+          :paint="paint"
+          :framings="cropFramingsHere"
+          @apply-crop="applyCrop"
+        />
 
         <!-- Right-click on a filmstrip thumb: Compare, greyed with its reason
              until two are picked. -->
@@ -813,55 +750,121 @@
         class="overlay-sidebar"
         label="Picture details"
         lightbox
-        :open="sidebarOpen"
+        :open="inspectorShown"
         :tabs="sidebarTabs"
       >
-        <!-- The rating and the heart end the tab band (#2163), the one place
-             they live while a picture is open. -->
-        <template v-if="image" #tabs-end>
-          <StarRatingOverlay
-            class="overlay-rail-rating"
-            :score="isReadOnly ? guestScore || 0 : image?.score || 0"
-            :readonly="!isReadOnly && isCurrentLocked"
-            icon-size="18"
-            :favouritable="!isReadOnly && favouritable"
-            :favourite="Boolean(image?.favourite)"
-            @set-score="setScore"
-            @toggle-favourite="toggleFavourite"
-          />
-        </template>
         <!-- `v-show`, never `v-if`: the panels hold editing state and the
              refs the overlay reaches into for its keyboard shortcuts (T
              opens the tag field, Escape cancels an edit), and unmounting the
              Info group behind the Recipe tab would take those with it. -->
         <div v-show="sidebarTab === 'info'" class="overlay-sidebar-group">
-          <OverlayDescriptionPanel
-            ref="descriptionPanelRef"
-            :image="image"
-            :locked="isCurrentLocked"
-            :lock-note="currentLockReason"
-            :text-state="pictureText.text.value.state"
-            :text-lines="pictureText.text.value.lines"
-            :active-tab="pictureText.activeTab.value"
-            :selected-words="pictureText.selectedWords.value"
-            :text-read-busy="pictureText.readAgainBusy.value"
-            @update-description="handleDescriptionUpdate"
-            @editing-finished="focusOverlayCanvas"
-            @pick-tab="pictureText.pickTab"
-            @select-word="pictureText.selectWord"
-            @clear-word-selection="pictureText.clearSelection"
-            @read-text-again="pictureText.readAgain"
-          />
+          <!-- The picture named by its description's first sentence, then
+               its rating and heart: the head of the grid rail's one-picture
+               view. -->
+          <div v-if="image" class="overlay-info-head">
+            <!-- No tip: the whole description is a section further down. -->
+            <div v-if="pictureName" class="overlay-info-name">
+              {{ pictureName }}
+            </div>
+            <StarRatingOverlay
+              class="overlay-rail-rating"
+              :score="isReadOnly ? guestScore || 0 : image?.score || 0"
+              :readonly="!isReadOnly && isCurrentLocked"
+              icon-size="18"
+              :favouritable="!isReadOnly && favouritable"
+              :favourite="Boolean(image?.favourite)"
+              @set-score="setScore"
+              @toggle-favourite="toggleFavourite"
+            />
+          </div>
 
+          <!-- The faces as named crops (the grid rail's one-picture order).
+               Pointing at a crop draws that face's box on the picture; pointing
+               at the face on the picture rings its crop here. The pencil opens
+               the person menus for all of them at once. -->
           <div class="sidebar-section sidebar-section--faces">
             <SectionHeader
               v-model:collapsed="facesCollapsed"
               label="Faces"
               :count="faceAssignItems.length || null"
               on-dark
-            />
+            >
+              <template v-if="image && !isReadOnly" #actions>
+                <button
+                  v-if="faceAssignItems.length"
+                  class="section-meta-btn"
+                  :class="{ 'section-meta-btn--on': namingFaces }"
+                  type="button"
+                  aria-label="Name the faces"
+                  :aria-pressed="namingFaces ? 'true' : 'false'"
+                  @click.stop="namingFaces = !namingFaces"
+                >
+                  <Tooltip text="Name the faces" activator="parent" :describe="false" />
+                  <v-icon size="16">mdi-pencil-outline</v-icon>
+                </button>
+                <v-menu v-if="!isMobile" location="bottom end">
+                  <template #activator="{ props: faceMenuProps }">
+                    <button
+                      v-bind="faceMenuProps"
+                      class="section-meta-btn"
+                      type="button"
+                      aria-label="More face actions"
+                    >
+                      <Tooltip
+                        text="More face actions"
+                        activator="parent"
+                        :describe="false"
+                      />
+                      <v-icon size="16">mdi-dots-horizontal</v-icon>
+                    </button>
+                  </template>
+                  <div
+                    class="ctx-menu ctx-menu--on-dark"
+                    role="menu"
+                    aria-label="Faces"
+                  >
+                    <button
+                      class="ctx-item"
+                      role="menuitem"
+                      type="button"
+                      @click="beginDrawMode('face')"
+                    >
+                      <v-icon class="ctx-icon">mdi-account-plus</v-icon>
+                      Draw a face box
+                    </button>
+                  </div>
+                </v-menu>
+              </template>
+            </SectionHeader>
             <template v-if="!facesCollapsed">
-              <div v-if="faceAssignItems.length" class="face-assign-grid">
+              <div v-if="faceAssignItems.length" class="face-chips">
+                <div
+                  v-for="face in faceAssignItems"
+                  :key="face.faceKey"
+                  class="face-chip"
+                  :class="{
+                    'face-chip--unnamed': face.character_id == null,
+                    'face-chip--ringed': pictureFaceIdx === face.faceIdx,
+                  }"
+                  :style="{ '--face-hue': faceBoxColor(face.faceIdx) }"
+                  @mouseenter="hoveredFaceIdx = face.faceIdx"
+                  @mouseleave="hoveredFaceIdx = null"
+                >
+                  <div class="face-chip-crop">
+                    <div
+                      class="face-assign-crop"
+                      :style="getFaceThumbStyle(face, face.faceIdx, FACE_CHIP_SIZE)"
+                    ></div>
+                  </div>
+                  <span class="face-chip-name">{{
+                    faceAssignedName(face) || "Unknown"
+                  }}</span>
+                </div>
+              </div>
+              <div
+                v-if="namingFaces && faceAssignItems.length"
+                class="face-assign-grid"
+              >
                 <div
                   v-for="face in faceAssignItems"
                   :key="face.faceKey"
@@ -911,7 +914,9 @@
                   </div>
                 </div>
               </div>
-              <div v-else class="face-assign-empty">No faces detected</div>
+              <div v-if="!faceAssignItems.length" class="face-assign-empty">
+                No faces detected
+              </div>
             </template>
           </div>
 
@@ -922,10 +927,30 @@
             :apply-tag-filter="applyTagFilter"
             :locked="isCurrentLocked"
             :lock-note="currentLockReason"
+            :boxed-tags="detectionLabels"
+            @hover-tag="(label) => (hoveredTagLabel = label)"
             @update-tags="handleTagsUpdate"
             @overlay-change="(payload) => emit('overlay-change', payload)"
             @add-tag="(imageId, tag) => emit('add-tag', imageId, tag)"
             @request-metadata-refresh="fetchOverlayMetadata"
+          />
+
+          <OverlayDescriptionPanel
+            ref="descriptionPanelRef"
+            :image="image"
+            :locked="isCurrentLocked"
+            :lock-note="currentLockReason"
+            :text-state="pictureText.text.value.state"
+            :text-lines="pictureText.text.value.lines"
+            :active-tab="pictureText.activeTab.value"
+            :selected-words="pictureText.selectedWords.value"
+            :text-read-busy="pictureText.readAgainBusy.value"
+            @update-description="handleDescriptionUpdate"
+            @editing-finished="focusOverlayCanvas"
+            @pick-tab="pictureText.pickTab"
+            @select-word="pictureText.selectWord"
+            @clear-word-selection="pictureText.clearSelection"
+            @read-text-again="pictureText.readAgain"
           />
 
           <OverlayMetadataPanel
@@ -962,10 +987,154 @@
           :comfyui-progress-percent="comfyuiProgressPercent"
           :paint="paint"
           :apply-to-ids="applyToIds"
+          :comfyui-configured="comfyuiConfigured"
           @show-picture="showEditResult"
           @running="(on) => (editRunning = on)"
           @more-options="(payload) => emit('edit-more-options', payload)"
-        />
+        >
+          <!-- Quick changes: what changes this picture without a workflow
+               (rotate, crop, filters) and Upscale. Rotate is one 90° step,
+               immediately, with Undo on the receipt; greyed with the reason
+               when the file cannot carry a turn every viewer agrees on. -->
+          <template #quick-changes>
+            <div class="overlay-quick">
+              <div class="section-label section-label--on-dark">
+                Quick changes
+              </div>
+              <div class="overlay-quick-actions">
+                <AppButton
+                  size="sm"
+                  variant="ghost"
+                  on-dark
+                  icon-left="rotate-left"
+                  :tooltip="rotateLeftTitle"
+                  aria-keyshortcuts="["
+                  :aria-disabled="canRotateCurrent ? undefined : 'true'"
+                  :aria-label="
+                    canRotateCurrent ? undefined : `Rotate left: ${rotateLeftTitle}`
+                  "
+                  @click.stop="rotateCurrentImage(ROTATE_CCW)"
+                >
+                  Rotate left
+                </AppButton>
+                <AppButton
+                  size="sm"
+                  variant="ghost"
+                  on-dark
+                  icon-left="rotate-right"
+                  :tooltip="rotateRightTitle"
+                  aria-keyshortcuts="]"
+                  :aria-disabled="canRotateCurrent ? undefined : 'true'"
+                  :aria-label="
+                    canRotateCurrent ? undefined : `Rotate right: ${rotateRightTitle}`
+                  "
+                  @click.stop="rotateCurrentImage(ROTATE_CW)"
+                >
+                  Rotate right
+                </AppButton>
+                <AppButton
+                  size="sm"
+                  variant="ghost"
+                  on-dark
+                  icon-left="crop"
+                  tooltip="Crop to a new picture (C)"
+                  aria-keyshortcuts="C"
+                  :aria-pressed="paint.tool.value === 'crop' ? 'true' : 'false'"
+                  @click.stop="
+                    paint.setTool(paint.tool.value === 'crop' ? null : 'crop')
+                  "
+                >
+                  Crop
+                </AppButton>
+                <!-- Upscale… (#1868): this picture, by the factor and model
+                     the Run popup's added upscale remembers, stacked on top
+                     of it. -->
+                <AppButton
+                  v-if="canUpscaleCurrent"
+                  size="sm"
+                  variant="ghost"
+                  on-dark
+                  icon-left="arrow-expand-all"
+                  data-testid="overlay-upscale"
+                  :tooltip="upscaleTitle"
+                  @click.stop="upscale.openFor([image.id])"
+                >
+                  Upscale…
+                </AppButton>
+                <v-menu
+                  v-model="pluginMenuOpen"
+                  :close-on-content-click="false"
+                  location-strategy="connected"
+                  location="bottom end"
+                  origin="top end"
+                  transition="scale-transition"
+                >
+                  <template #activator="{ props: filterMenuProps }">
+                    <AppButton
+                      v-bind="filterMenuProps"
+                      class="overlay-comfy-activator"
+                      size="sm"
+                      variant="ghost"
+                      on-dark
+                      icon-left="tune-variant"
+                    >
+                      Filters…
+                    </AppButton>
+                  </template>
+                  <div class="overlay-comfy-panel">
+                    <div class="overlay-comfy-header">Filters</div>
+                    <div class="overlay-comfy-body">
+                      <div
+                        v-if="!overlayPluginOptions.length"
+                        class="overlay-comfy-warning"
+                      >
+                        No filters available.
+                      </div>
+                      <template v-else>
+                        <label class="overlay-comfy-field-label">Filters</label>
+                        <select
+                          v-model="overlaySelectedPluginName"
+                          class="overlay-comfy-select"
+                        >
+                          <option
+                            v-for="plugin in overlayPluginOptions"
+                            :key="plugin.name"
+                            :value="plugin.name"
+                          >
+                            {{ plugin.display_name || plugin.name }}
+                          </option>
+                        </select>
+                        <PluginParametersUI
+                          v-model="overlayPluginParameters"
+                          :plugin="activeOverlayPluginSchema"
+                          :show-description="true"
+                          tone="dark"
+                          input-class="overlay-comfy-select"
+                          label-class="overlay-comfy-field-label"
+                        />
+                        <label class="overlay-comfy-checkbox-row">
+                          <input v-model="stackFilterOutputs" type="checkbox" />
+                          <span>Stack new images with the originals</span>
+                        </label>
+                        <div class="overlay-comfy-actions">
+                          <button
+                            class="overlay-comfy-run"
+                            type="button"
+                            :disabled="!image || !overlaySelectedPluginName"
+                            @click.stop="runOverlayPlugin"
+                          >
+                            <v-icon size="16">mdi-play</v-icon>
+                            <span>Run</span>
+                          </button>
+                        </div>
+                      </template>
+                    </div>
+                  </div>
+                </v-menu>
+              </div>
+            </div>
+          </template>
+        </OverlayEditPanel>
       </AppInspector>
     </div>
 
@@ -1065,7 +1234,9 @@ import { nextFreeCharacterName } from "../../utils/characterCreateFlow.js";
 import { bareDigit } from "../../utils/shortcutKeys";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
+import AppButton from "../widgets/AppButton.vue";
 import AppInspector from "../widgets/AppInspector.vue";
+import InspectorEdgeTab from "../widgets/InspectorEdgeTab.vue";
 import CharacterEditor from "../editors/CharacterEditor.vue";
 import OverlayDescriptionPanel from "./OverlayDescriptionPanel.vue";
 import OverlayFilmstrip from "./OverlayFilmstrip.vue";
@@ -1074,10 +1245,11 @@ import OverlayRecipePanel from "./OverlayRecipePanel.vue";
 import OverlayEditPanel from "./OverlayEditPanel.vue";
 import PaintLayer from "./PaintLayer.vue";
 import PaintOptionsBar from "./PaintOptionsBar.vue";
-import PaintToolbox from "./PaintToolbox.vue";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
 import {
+  MODE_TOOLS,
   PAINT_TOOLS,
+  SIZED_TOOLS,
   usePaintSelection,
 } from "../../composables/usePaintSelection";
 import { cropFramings } from "../../utils/cropFramings";
@@ -1279,8 +1451,17 @@ function handleTagsUpdate(newTagsArray) {
 // deep link does, without persisting the reader's choice (`showTasksTab`).
 const sidebarStore = useSidebarStore();
 const sidebarOpen = computed(() => sidebarStore.statsOpen);
+// In full screen the inspector is gone until asked for (I, or the edge tab),
+// and asking does not touch the rail's own remembered flag. (Full screen
+// itself is set up with the chrome below.)
+const fullscreen = ref(false);
+const fullscreenInspector = ref(false);
+const inspectorShown = computed(() =>
+  fullscreen.value ? fullscreenInspector.value : sidebarOpen.value,
+);
 function openSidebar() {
-  sidebarStore.statsOpen = true;
+  if (fullscreen.value) fullscreenInspector.value = true;
+  else sidebarStore.statsOpen = true;
 }
 
 // ── Info | Recipe (#1313) ──────────────────────────────────────────────────
@@ -1305,16 +1486,16 @@ const chosenSidebarTab = ref("info");
 const recipeTabShown = ref(false);
 // ── Edit (#1381) ───────────────────────────────────────────────────────────
 //
-// Offered whenever this machine has a ComfyUI and the session may write,
-// whether or not the picture has a recipe: a holiday photo gets Edit too. Absent
-// rather than disabled when it cannot be used, by the Recipe tab's rule, and
-// absent on a video (the design's answer: no edit workflow takes one yet).
+// Offered whenever the session may write, whether or not the picture has a
+// recipe: a holiday photo gets Edit too. It holds the picture's Quick changes
+// (rotate, crop, filters) as well as the edit workflows, so a machine without
+// a ComfyUI gets the tab with only those. Absent rather than disabled when it
+// cannot be used, by the Recipe tab's rule, and absent on a video (the
+// design's answer: no edit workflow takes one yet).
 //
 // The PANEL hangs off `editTabAvailable` alone, so stepping over a video hides
 // the tab without unmounting the typed instruction or a run in flight.
-const editTabAvailable = computed(
-  () => comfyuiConfigured.value && !isReadOnly.value,
-);
+const editTabAvailable = computed(() => !isReadOnly.value);
 const editTabShown = computed(
   () =>
     editTabAvailable.value &&
@@ -1323,7 +1504,9 @@ const editTabShown = computed(
 );
 // Upscale… on this picture (#1868): where the Edit tab can run, a picture.
 const upscale = useUpscaleStore();
-const canUpscaleCurrent = computed(() => editTabShown.value);
+const canUpscaleCurrent = computed(
+  () => editTabShown.value && comfyuiConfigured.value,
+);
 const upscaleTitle = computed(() => {
   // Before the shelf is read the model is not known: the verb alone.
   if (upscale.models === null) return "Upscale…";
@@ -1335,7 +1518,7 @@ const upscaleTitle = computed(() => {
 // second copy. A run from the grid's menus still gets the lightbox bar.
 const editRunning = ref(false);
 const editTabShowsRun = computed(
-  () => editRunning.value && sidebarOpen.value && sidebarTab.value === "edit",
+  () => editRunning.value && inspectorShown.value && sidebarTab.value === "edit",
 );
 // ── Tasks ──────────────────────────────────────────────────────────────────
 //
@@ -1404,6 +1587,129 @@ watch(
 
 const chromeHidden = ref(false);
 const chromeRevealTimestamp = ref(0);
+
+// ── Full screen (F) ────────────────────────────────────────────────────────
+//
+// The real one (the Fullscreen API, which Electron turns into the window's own
+// full screen): the title bar and the sidebar go (App.css, keyed on
+// FULLSCREEN_CLASS), and so do the toolbar, the filmstrip and the inspector.
+// Pointing at the top 48px brings the toolbar down, ending in a labelled way
+// out; I or the edge tab brings the inspector back. Esc leaves full screen
+// before it leaves the lightbox. Space still hides the chrome in a window.
+const FULLSCREEN_CLASS = "lightbox-fullscreen";
+const FULLSCREEN_EDGE_PX = 48;
+const FULLSCREEN_BAR_LINGER_MS = 1000;
+const FULLSCREEN_TAP_BAR_MS = 3000;
+const FULLSCREEN_NOTICE_MS = 3000;
+const FULLSCREEN_IDLE_MS = 2000;
+const fullscreenBarShown = ref(false);
+const fullscreenNotice = ref(false);
+// The pointer has rested: the stage's arrows and the cursor fade.
+const fullscreenIdle = ref(false);
+// The notice is said once a visit.
+let fullscreenNoticeSaid = false;
+let fullscreenBarTimer = null;
+let fullscreenNoticeTimer = null;
+let fullscreenIdleTimer = null;
+
+/** The document's own full screen, never a video's (its controls have one). */
+function documentIsFullscreen() {
+  return document.fullscreenElement === document.documentElement;
+}
+
+async function toggleFullscreen() {
+  try {
+    if (documentIsFullscreen()) await document.exitFullscreen();
+    else await document.documentElement.requestFullscreen();
+  } catch (error) {
+    console.warn(
+      `Lightbox full screen could not be ${documentIsFullscreen() ? "left" : "entered"}:`,
+      error,
+    );
+  }
+}
+
+function leaveFullscreen() {
+  if (!documentIsFullscreen()) return;
+  document.exitFullscreen().catch((error) => {
+    console.warn("Lightbox full screen could not be left on close:", error);
+  });
+}
+
+function onFullscreenChange() {
+  const on = documentIsFullscreen() && open.value;
+  fullscreen.value = on;
+  document.documentElement.classList.toggle(FULLSCREEN_CLASS, on);
+  fullscreenInspector.value = false;
+  hideFullscreenBar();
+  clearTimeout(fullscreenNoticeTimer);
+  fullscreenNotice.value = false;
+  if (on && !fullscreenNoticeSaid) {
+    fullscreenNoticeSaid = true;
+    fullscreenNotice.value = true;
+    fullscreenNoticeTimer = setTimeout(() => {
+      fullscreenNotice.value = false;
+    }, FULLSCREEN_NOTICE_MS);
+  }
+  noteFullscreenActivity();
+}
+
+/** A menu opened from the bar (Set, Project) keeps it down. */
+function barMenuOpen() {
+  return !!document.querySelector(
+    ".v-overlay--active.v-menu, .add-to-set.open, .add-to-project.open",
+  );
+}
+
+function scheduleFullscreenBarHide(ms) {
+  clearTimeout(fullscreenBarTimer);
+  fullscreenBarTimer = setTimeout(() => {
+    fullscreenBarTimer = null;
+    if (barMenuOpen()) scheduleFullscreenBarHide(ms);
+    else fullscreenBarShown.value = false;
+  }, ms);
+}
+
+function hideFullscreenBar() {
+  clearTimeout(fullscreenBarTimer);
+  fullscreenBarTimer = null;
+  fullscreenBarShown.value = false;
+}
+
+/** The bar comes down while the pointer is at the top edge or on the bar, and
+ * leaves a second after it goes. */
+function noteFullscreenPointer(event) {
+  if (!fullscreen.value) return;
+  noteFullscreenActivity();
+  const atTop =
+    event.clientY <= FULLSCREEN_EDGE_PX ||
+    !!event.target?.closest?.(".overlay-topbar");
+  if (atTop) {
+    clearTimeout(fullscreenBarTimer);
+    fullscreenBarTimer = null;
+    fullscreenBarShown.value = true;
+  } else if (fullscreenBarShown.value && !fullscreenBarTimer) {
+    scheduleFullscreenBarHide(FULLSCREEN_BAR_LINGER_MS);
+  }
+}
+
+function noteFullscreenActivity() {
+  clearTimeout(fullscreenIdleTimer);
+  fullscreenIdle.value = false;
+  if (!fullscreen.value) return;
+  fullscreenIdleTimer = setTimeout(() => {
+    fullscreenIdle.value = true;
+  }, FULLSCREEN_IDLE_MS);
+}
+
+watch(open, (isOpen) => {
+  if (isOpen) {
+    fullscreenNoticeSaid = false;
+    return;
+  }
+  leaveFullscreen();
+  namingFaces.value = false;
+});
 // The zoom family's shared core (Compare's model, adopted here): continuous
 // cursor-anchored wheel zoom, basis 1 = actual pixels, entry at fit, snap
 // stops at fit and 100%. The floor policy is `rest`: the overlay is a
@@ -2687,6 +2993,20 @@ function handleKeydown(e) {
     return;
   }
 
+  // Shift held draws every box; a capital typed into a field does not.
+  if (e.key === "Shift") {
+    if (!isTypingTarget(e.target)) shiftHeld.value = true;
+    return;
+  }
+
+  // Full screen is left before anything else Escape does, as the browser's
+  // own Escape would.
+  if (e.key === "Escape" && fullscreen.value && !isEditableElement(e.target)) {
+    e.preventDefault();
+    void toggleFullscreen();
+    return;
+  }
+
   // Keyboard access to the media context menu (Shift+F10 / ContextMenu key),
   // available regardless of chrome visibility. Suppressed while typing so the
   // native menu (paste / spellcheck) still works in the tag and description
@@ -2961,6 +3281,22 @@ function handleKeydown(e) {
     }
   } else if (e.key === "s" || e.key === "S") {
     toggleSidebar();
+  } else if (
+    (e.key === "i" || e.key === "I") &&
+    fullscreen.value &&
+    !e.ctrlKey &&
+    !e.metaKey &&
+    !e.altKey
+  ) {
+    // The inspector, called back over the full-screen picture.
+    fullscreenInspector.value = !fullscreenInspector.value;
+  } else if (
+    (e.key === "f" || e.key === "F") &&
+    !e.ctrlKey &&
+    !e.metaKey &&
+    !e.altKey
+  ) {
+    void toggleFullscreen();
   } else if (e.key === "a" || e.key === "A") {
     if (addToSetControlRef.value?.lastUsedSet?.id) {
       e.preventDefault();
@@ -2995,8 +3331,6 @@ function handleKeydown(e) {
   }
 }
 
-const showFaceBbox = ref(false);
-const showDetections = ref(false);
 const isMobile = ref(false);
 const MOBILE_BREAKPOINT = 900;
 // Teleport target, found on mount (see `onMounted`); null in a test that
@@ -3146,7 +3480,8 @@ function handleUserActivity() {
   chromeHidden.value = false;
 }
 
-function handleMouseActivity() {
+function handleMouseActivity(event) {
+  if (event) noteFullscreenPointer(event);
   if (chromeHidden.value) return; // mouse movement never reveals chrome
   if (Date.now() - lastTouchEndTime < 600) return;
   handleUserActivity();
@@ -3250,6 +3585,15 @@ function handleOverlayClick(event) {
     handleUserActivity();
     return;
   }
+  // In full screen there is no chrome left to hide: a tap does what pointing
+  // at the top does, for touch.
+  if (fullscreen.value) {
+    if (pressStart?.touch) {
+      fullscreenBarShown.value = true;
+      scheduleFullscreenBarHide(FULLSCREEN_TAP_BAR_MS);
+    }
+    return;
+  }
   chromeHidden.value = true;
 }
 
@@ -3263,10 +3607,27 @@ function beginTagEntry() {
   tagsPanelRef.value?.beginAddTag();
 }
 
-// S: the reader's own toggle, kept like the toolbar's.
+// S: the reader's own toggle, kept like the toolbar's. In full screen it is
+// the full-screen inspector's, which nothing remembers.
 function toggleSidebar() {
-  sidebarStore.toggleStats();
+  if (fullscreen.value) fullscreenInspector.value = !fullscreenInspector.value;
+  else sidebarStore.toggleStats();
   handleUserActivity();
+}
+
+const edgeTabShown = computed(
+  () => !!image.value && !inspectorShown.value && !isMobile.value,
+);
+/** What the closed inspector's edge tab names: the tab it reopens on. */
+const edgeTabLabel = computed(
+  () =>
+    sidebarTabs.value.find((tab) => tab.value === sidebarTab.value)?.label ||
+    "Info",
+);
+
+// The same act as S, so outside full screen it is remembered.
+function openInspectorFromEdge() {
+  toggleSidebar();
 }
 
 /** The pointer position relative to the zoom viewport (`.overlay-canvas`),
@@ -3631,12 +3992,87 @@ const filmstripCanvasData = computed(() => {
 
 const filmstripCanvasWindow = computed(() => filmstripCanvasData.value.items);
 
-function toggleFaceBbox() {
-  showFaceBbox.value = !showFaceBbox.value;
+// ── Boxes on demand ────────────────────────────────────────────────────────
+//
+// No box switches: a box is drawn while the reader asks about what it
+// outlines, and never left on. Pointing at a face crop in Info draws that
+// face's box; pointing at a tag the object detector found draws its box;
+// holding Shift draws every box. Pointing at a face on the picture rings its
+// crop in Info.
+const FACE_CHIP_SIZE = 42;
+const shiftHeld = ref(false);
+const hoveredFaceIdx = ref(null);
+const pictureFaceIdx = ref(null);
+const hoveredTagLabel = ref(null);
+// The pencil on Faces: the person menus for every face at once.
+const namingFaces = ref(false);
+// Shift means "add" to the selection tools, so boxes stand down while they
+// are out, as the face boxes always did.
+const boxesAll = computed(() => shiftHeld.value && !paintActive.value);
+
+/** The labels the object detector found, folded for matching against tags. */
+const detectionLabels = computed(
+  () =>
+    new Set(
+      detectionBboxes.value
+        .map((det) => String(det?.label ?? "").trim().toLowerCase())
+        .filter(Boolean),
+    ),
+);
+
+function detectionMatchesTag(det, tag) {
+  if (!tag) return false;
+  return (
+    String(det?.label ?? "").trim().toLowerCase() ===
+    String(tag).trim().toLowerCase()
+  );
 }
 
-function toggleDetections() {
-  showDetections.value = !showDetections.value;
+/** The face under the pointer on the picture, whose crop Info rings. */
+function onStagePointerMove(event) {
+  const faces = faceBboxes.value;
+  if (!faces.length || paintActive.value || drawMode.value || isPanning.value) {
+    pictureFaceIdx.value = null;
+    return;
+  }
+  const media = mediaInnerRef.value?.querySelector("img");
+  const rect = media?.getBoundingClientRect?.();
+  const inside =
+    !!rect &&
+    event.clientX >= rect.left &&
+    event.clientX <= rect.right &&
+    event.clientY >= rect.top &&
+    event.clientY <= rect.bottom;
+  const at = inside ? getDrawPoint(event) : null;
+  const idx = at
+    ? faces.findIndex(
+        (face) =>
+          isValidOverlayBBox(face.bbox) &&
+          at.x >= face.bbox[0] &&
+          at.x <= face.bbox[2] &&
+          at.y >= face.bbox[1] &&
+          at.y <= face.bbox[3],
+      )
+    : -1;
+  pictureFaceIdx.value = idx >= 0 ? idx : null;
+}
+
+// A box asked about on one picture is not asked about on the next.
+watch(
+  () => image.value?.id,
+  () => {
+    hoveredFaceIdx.value = null;
+    pictureFaceIdx.value = null;
+    hoveredTagLabel.value = null;
+  },
+);
+
+function onShiftKeyup(event) {
+  if (event.key === "Shift") shiftHeld.value = false;
+}
+
+function releaseShift() {
+  shiftHeld.value = false;
 }
 
 const drawMode = ref(null);
@@ -3656,7 +4092,6 @@ const drawModeLabel = computed(() => {
 
 function beginDrawMode(mode) {
   if (!mode) return;
-  showFaceBbox.value = true;
   drawMode.value = mode;
   drawState.value = {
     active: false,
@@ -3916,7 +4351,12 @@ const paint = usePaintSelection({
   dims: overlayDims,
 });
 const paintActive = computed(
-  () => editTabShown.value && sidebarOpen.value && sidebarTab.value === "edit",
+  () =>
+    editTabShown.value && inspectorShown.value && sidebarTab.value === "edit",
+);
+// The floating options strip, for the tools whose options act on the picture.
+const paintOptionsShown = computed(
+  () => MODE_TOOLS.has(paint.tool.value) || paint.tool.value === "crop",
 );
 
 // The pictures *Apply to* offers, from the grid's *Edit…* on a selection.
@@ -4001,9 +4441,17 @@ const PAINT_KEYS = new Map(
   PAINT_TOOLS.map((tool) => [tool.key.toLowerCase(), tool.id]),
 );
 
-/** A Paint tool's key, or I to invert. True when the key was the toolbox's. */
+/** A Paint tool's key, I to invert, or − / + for the size of the brush or
+ * eraser in hand (= is + without Shift). True when the key was the toolbox's. */
 function handlePaintKey(key) {
   const lower = String(key || "").toLowerCase();
+  if (SIZED_TOOLS.has(paint.tool.value) && ["-", "+", "="].includes(lower)) {
+    paint.stepBrushSize(lower === "-" ? -1 : 1);
+    return true;
+  }
+  // Without a ComfyUI nothing reads a selection: only crop is a tool here.
+  const keyTool = PAINT_KEYS.get(lower);
+  if (keyTool && keyTool !== "crop" && !comfyuiConfigured.value) return false;
   if (PAINT_KEYS.has(lower)) {
     paint.tool.value = PAINT_KEYS.get(lower);
     return true;
@@ -4316,6 +4764,9 @@ onMounted(() => {
   updateViewportMetrics();
   window.addEventListener("resize", updateViewportMetrics);
   window.addEventListener("keydown", handleKeydown);
+  window.addEventListener("keyup", onShiftKeyup);
+  window.addEventListener("blur", releaseShift);
+  document.addEventListener("fullscreenchange", onFullscreenChange);
   document.addEventListener("keydown", onCreatePersonKeydownCapture, true);
   window.addEventListener("pointerdown", handleOverlayPointerDown, true);
   // Mounted hooks run once App.vue's tree is in the document, so the host is
@@ -4331,6 +4782,14 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener("resize", updateViewportMetrics);
   window.removeEventListener("keydown", handleKeydown);
+  window.removeEventListener("keyup", onShiftKeyup);
+  window.removeEventListener("blur", releaseShift);
+  document.removeEventListener("fullscreenchange", onFullscreenChange);
+  leaveFullscreen();
+  document.documentElement.classList.remove(FULLSCREEN_CLASS);
+  clearTimeout(fullscreenBarTimer);
+  clearTimeout(fullscreenNoticeTimer);
+  clearTimeout(fullscreenIdleTimer);
   document.removeEventListener("keydown", onCreatePersonKeydownCapture, true);
   window.removeEventListener("pointerdown", handleOverlayPointerDown, true);
   if (overlayResizeObserver) {
@@ -4760,7 +5219,7 @@ function clearCharacterThumbnails() {
   characterThumbnails.value = {};
 }
 
-function getFaceThumbStyle(face, idx) {
+function getFaceThumbStyle(face, idx, size = FACE_THUMB_BASE) {
   const color = faceBoxColor(idx);
   const base = {
     borderColor: color,
@@ -4776,8 +5235,8 @@ function getFaceThumbStyle(face, idx) {
   if (!sourceUrl || !bbox || bbox.length !== 4) {
     return {
       ...base,
-      width: `${FACE_THUMB_BASE}px`,
-      height: `${FACE_THUMB_BASE}px`,
+      width: `${size}px`,
+      height: `${size}px`,
     };
   }
   const [x1, y1, x2, y2] = bbox;
@@ -4788,7 +5247,7 @@ function getFaceThumbStyle(face, idx) {
   const maxDim = Math.max(faceW, faceH);
   const targetMax = Math.min(
     FACE_THUMB_MAX,
-    Math.max(FACE_THUMB_MIN, FACE_THUMB_BASE),
+    Math.max(FACE_THUMB_MIN, size),
   );
   const scale = targetMax / maxDim;
   const targetW = Math.max(1, Math.round(faceW * scale));
@@ -5198,6 +5657,13 @@ onPictureSignal(textUpdate, "named", () => pictureText.refresh());
 // macrotask, and Vue drains the pre-flush queue on the microtask between them.
 onPictureSignal(orientationUpdate, "named", (id) => {
   void refreshAfterTurn(id);
+});
+
+// The Info tab names the picture by its description's first sentence.
+const pictureName = computed(() => {
+  const text = String(image.value?.description || "").trim();
+  if (!text) return "";
+  return text.split(/(?<=[.!?])\s/)[0].replace(/[.!?]+$/, "");
 });
 
 const faceAssignItems = computed(() => {

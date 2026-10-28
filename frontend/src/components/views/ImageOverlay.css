@@ -68,6 +68,56 @@
   display: contents;
 }
 
+/* ── Full screen ─────────────────────────────────────────────────────────────
+   The title bar and the sidebar are hidden by App.css. Here the toolbar leaves
+   the column and waits above the top edge, the filmstrip goes, and the
+   inspector is shut unless asked for. */
+.overlay-shell--fullscreen .overlay-column {
+  position: relative;
+}
+
+.overlay-shell--fullscreen .overlay-topbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: var(--z-floating);
+  transform: translateY(-100%);
+  transition: transform var(--dur-2) var(--ease-standard);
+  box-shadow: var(--elevation-2);
+}
+
+.overlay-shell--bar-down .overlay-topbar {
+  transform: translateY(0);
+}
+
+.overlay-shell--fullscreen .overlay-rail {
+  display: none;
+}
+
+.overlay-fullscreen-notice {
+  position: absolute;
+  top: var(--space-6);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--z-floating);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-pill);
+  background: var(--scrim-photo);
+  color: rgb(var(--v-theme-on-dark-surface));
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.overlay-fullscreen-notice kbd {
+  font-family: inherit;
+  font-size: var(--text-xs);
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+  background: rgba(var(--v-theme-on-dark-surface), 0.15);
+}
+
 .overlay-kbd {
   margin-left: var(--space-2);
   padding: 0 var(--space-2);
@@ -510,12 +560,18 @@
   right: var(--space-4);
 }
 
-/* The Paint toolbox floats at the stage's left edge: the arrow steps past it
-   (34px tools, --space-2 padding each side, a 1px border each side). */
-.overlay-canvas--paint .overlay-nav-left {
-  left: calc(
-    var(--space-3) + 34px + 2 * var(--space-2) + 2px + var(--space-3)
-  );
+/* The closed inspector's edge tab (34px) stands at the stage's right edge. */
+.overlay-canvas--edge-tab .overlay-nav-right {
+  right: calc(var(--space-4) + 34px);
+}
+
+/* Full screen, the pointer at rest: the arrows and the cursor fade. */
+.overlay-canvas.overlay-canvas--idle {
+  cursor: none;
+}
+
+.overlay-canvas.overlay-canvas--idle .overlay-nav {
+  opacity: 0;
 }
 
 .overlay-swipe-hint {
@@ -591,6 +647,110 @@
   opacity: 0.5;
   font-weight: 400;
   letter-spacing: 0.01em;
+}
+
+/* The head of Info: the picture's name, then its rating and heart. */
+.overlay-info-head {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.overlay-info-name {
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  color: rgb(var(--v-theme-on-dark-surface));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* A section's own verbs in its header (the Tags panel's, restated: its
+   styles are scoped to it). */
+.section-meta-btn {
+  color: rgba(var(--v-theme-on-dark-surface), 0.7);
+  padding: var(--space-1);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+}
+
+.section-meta-btn:hover:not(:disabled),
+.section-meta-btn--on {
+  color: rgb(var(--v-theme-on-dark-surface));
+}
+
+.section-meta-btn--on {
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
+}
+
+/* The faces as named crops, in each face's identity hue. An unnamed face is
+   dashed and muted; the one pointed at on the picture is ringed. */
+.face-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+
+.face-chip {
+  min-width: 42px;
+  max-width: 64px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.face-chip-crop {
+  width: 42px;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  border: 1.5px solid var(--face-hue);
+  transition: box-shadow var(--dur-1) var(--ease-standard);
+}
+
+.face-chip--unnamed .face-chip-crop {
+  border-style: dashed;
+  opacity: var(--opacity-text-secondary);
+}
+
+.face-chip:hover .face-chip-crop,
+.face-chip--ringed .face-chip-crop {
+  opacity: 1;
+  box-shadow: 0 0 0 2px var(--face-hue);
+}
+
+.face-chip-name {
+  max-width: 100%;
+  font-size: var(--text-2xs);
+  color: var(--face-hue);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.face-chip--unnamed .face-chip-name {
+  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
+}
+
+/* The Edit tab's Quick changes (rendered into OverlayEditPanel's slot). */
+.overlay-quick {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.overlay-quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
 }
 
 .face-assign-grid {

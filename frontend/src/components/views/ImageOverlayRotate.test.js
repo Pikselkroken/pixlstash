@@ -151,15 +151,13 @@ function rotateCalls() {
     .map(([, body]) => body);
 }
 
+// The Edit tab's Quick changes: labelled buttons, named by their label while
+// live and by the label and the refusal while greyed.
 function rotateButtons(wrapper) {
-  const buttons = wrapper.findAll("button");
+  const buttons = wrapper.findAll(".overlay-quick button");
   return {
-    left: buttons.find((b) =>
-      (b.attributes("aria-label") || "").startsWith("Rotate left"),
-    ),
-    right: buttons.find((b) =>
-      (b.attributes("aria-label") || "").startsWith("Rotate right"),
-    ),
+    left: buttons.find((b) => b.text().includes("Rotate left")),
+    right: buttons.find((b) => b.text().includes("Rotate right")),
     // A greyed control keeps the refusal as its accessible name, so find those
     // by their shortcut hint instead of by a label that is no longer "Rotate…".
     byShortcut: (key) =>
@@ -182,7 +180,7 @@ beforeEach(() => {
   }));
 });
 
-describe("ImageOverlay - the rotate buttons", () => {
+describe("ImageOverlay - the rotate buttons (Edit tab, Quick changes)", () => {
   it("sends the direction the button is labelled with, with no dialog", async () => {
     const wrapper = await openOverlay();
     const { left, right } = rotateButtons(wrapper);
@@ -206,7 +204,7 @@ describe("ImageOverlay - the rotate buttons", () => {
     const { byShortcut } = rotateButtons(wrapper);
     const left = byShortcut("[");
 
-    expect(left.attributes("disabled")).toBeDefined();
+    expect(left.attributes("aria-disabled")).toBe("true");
     // …and says why, pointing at the route that still works rather than
     // silently making a copy.
     expect(left.attributes("aria-label")).toContain("PNG and JPEG only");
@@ -225,7 +223,7 @@ describe("ImageOverlay - the rotate buttons", () => {
       tags: [],
     });
     const left = rotateButtons(wrapper).byShortcut("[");
-    expect(left.attributes("disabled")).toBeDefined();
+    expect(left.attributes("aria-disabled")).toBe("true");
     expect(left.attributes("aria-label")).toContain("Reference-folder");
   });
 });

@@ -593,13 +593,15 @@ describe("ImageOverlay zoom - the readout and the announcer", () => {
 describe("ImageOverlay zoom - overlays ride the transform", () => {
   it("face bboxes keep their layout-space position at an intermediate scale", async () => {
     const wrapper = await openMeasured();
-    await wrapper.find('[aria-label="Face boxes"]').trigger("click");
+    // Shift held draws every box.
+    press("Shift");
     await flush();
     await wrapper.vm.$nextTick();
     const boxAtFit = wrapper.find(".face-bbox-overlay");
     expect(boxAtFit.exists()).toBe(true);
     // bbox [100,100,300,200] natural → layout at fit 0.5: 50,50 100×50.
     const styleAtFit = boxAtFit.attributes("style");
+    expect(styleAtFit).not.toContain("display: none");
     expect(styleAtFit).toContain("left: 50px");
     expect(styleAtFit).toContain("top: 50px");
     expect(styleAtFit).toContain("width: 100px");
@@ -619,9 +621,9 @@ describe("ImageOverlay zoom - overlays ride the transform", () => {
     const wrapper = await openMeasured();
     press("z"); // 100%, centred: css scale 2, offset 0
     await wrapper.vm.$nextTick();
-    await wrapper
-      .find('[aria-label="Draw a face box"]')
-      .trigger("click");
+    // The faces menu's Draw a face box (its menu is stubbed here).
+    wrapper.vm.beginDrawMode("face");
+    await wrapper.vm.$nextTick();
     const layer = wrapper.find(".overlay-draw-layer");
     expect(layer.exists()).toBe(true);
     // The transformed media-inner box: 800×600 layout scaled ×2 about the

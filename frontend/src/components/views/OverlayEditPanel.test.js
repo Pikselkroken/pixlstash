@@ -759,6 +759,12 @@ function fakePaint(steps = []) {
     toggleMask: vi.fn(),
     setRefine: vi.fn(),
     clear: vi.fn(),
+    brushSize: ref(24),
+    setTool: vi.fn(),
+    setBrushSize: vi.fn(),
+    stepBrushSize: vi.fn(),
+    invert: vi.fn(),
+    undo: vi.fn(),
   });
 }
 
@@ -953,5 +959,64 @@ describe("the Edit tab with the Paint tools", () => {
     expect(wrapper.emitted("more-options")[0][0].selection).toMatchObject({
       steps: [RECT],
     });
+  });
+});
+
+describe("the Edit tab holds the tools (lightbox design C)", () => {
+  it("heads the tab with the mark tools, seven across, crop left out", async () => {
+    listWorkflowCards.mockResolvedValue({ cards: [...CARDS, INPAINT] });
+    const wrapper = await mountPanel({ paint: fakePaint() });
+    const keys = wrapper
+      .findAll(".paint-toolbox-grid .paint-tool-key")
+      .map((key) => key.text());
+    expect(keys).toEqual(["W", "R", "O", "L", "B", "E", "I"]);
+  });
+
+  it("offers a size only with a brush or eraser in hand, stepped by − and +", async () => {
+    listWorkflowCards.mockResolvedValue({ cards: [...CARDS, INPAINT] });
+    const paint = fakePaint();
+    const wrapper = await mountPanel({ paint });
+    paint.tool.value = "rect";
+    await flush();
+    expect(wrapper.find(".paint-size").exists()).toBe(false);
+    paint.tool.value = "brush";
+    await flush();
+    expect(wrapper.find(".paint-size-value").text()).toBe("24 px");
+    await wrapper.find('[aria-label="Larger brush (+)"]').trigger("click");
+    await wrapper.find('[aria-label="Smaller brush (−)"]').trigger("click");
+    expect(paint.stepBrushSize.mock.calls).toEqual([[1], [-1]]);
+  });
+
+  it("takes back a selection step from the footer", async () => {
+    listWorkflowCards.mockResolvedValue({ cards: [...CARDS, INPAINT] });
+    const paint = fakePaint([RECT]);
+    const wrapper = await mountPanel({ paint });
+    await wrapper.find(".edit-undo").trigger("click");
+    expect(paint.undo).toHaveBeenCalledTimes(1);
+  });
+
+  it("puts the Quick changes under the form", async () => {
+    listWorkflowCards.mockResolvedValue({ cards: CARDS });
+    const wrapper = mount(OverlayEditPanel, {
+      props: { pictureId: 7, active: true },
+      slots: { "quick-changes": "<p class='quick'>Rotate left</p>" },
+      global: { stubs: { AppButton: true, "v-icon": true, Tooltip: true } },
+    });
+    await flush();
+    await flush();
+    expect(wrapper.find(".edit-scroll .quick").exists()).toBe(true);
+  });
+
+  it("without ComfyUI holds only the Quick changes and reads no workflows", async () => {
+    listWorkflowCards.mockClear();
+    const wrapper = mount(OverlayEditPanel, {
+      props: { pictureId: 7, active: true, comfyuiConfigured: false },
+      slots: { "quick-changes": "<p class='quick'>Rotate left</p>" },
+      global: { stubs: { AppButton: true, "v-icon": true, Tooltip: true } },
+    });
+    await flush();
+    expect(listWorkflowCards).not.toHaveBeenCalled();
+    expect(wrapper.find(".quick").exists()).toBe(true);
+    expect(wrapper.text()).not.toContain("Run edit");
   });
 });
