@@ -4604,8 +4604,9 @@ to the next — which is the alignment #891 exists to hold. The five widths are
 custom properties (`--shelf-col-kind`, `--shelf-col-base`, `--shelf-col-size`,
 `--shelf-col-date`, `--shelf-col-sets`), **written onto the element from `view.columnWidths`** and
 declared nowhere else, so the headings, the rows and a stack's member rows all
-resolve one declaration and cannot drift apart. The first three defaults are the
-resolved design's own 64/84/74px; the date column postdates the kit, and its
+resolve one declaration and cannot drift apart. Kind and Size default to the
+resolved design's own 64/74px; Base was the kit's 84px too, which ellipsised
+nearly every label, and is 140px since view version 3; the date column postdates the kit, and its
 96px is what `ymd-jp` needs, the widest of the eight day formats — `locale`
 returns whatever the reader's browser writes, so it is the figure that keeps the
 common formats clear of the ellipsis rather than a proof against every one, and
@@ -5062,7 +5063,12 @@ other field out of a version-1 blob exactly as they read a current one, so the
 dragged column widths, the collapsed groups and the sort all survive. The first version of this
 change bumped and discarded, the convention here until now, and charged every existing reader
 their whole remembered view for a change to one field. A grouping remembered as `folder` reads
-back as `type` (`axisOf` in `storedView`). A future bump that really is a shape change still
+back as `type` (`axisOf` in `storedView`). Version 3 is the same kind of bump:
+the Base column's default went from 84px to 140px, and since every view change
+wrote the old default into the blob, a stored `base` width below version 3 is
+not evidence of a drag (a deliberate one is lost once, the price of the new
+default reaching anybody) — `{1: ["groupBy", "baseWidth"], 2: ["baseWidth"]}` drops just that
+one width. A future bump that really is a shape change still
 discards: leave its version out of that table and it falls through
 to the defaults whole.
 
@@ -5246,9 +5252,12 @@ spelling, because that is what the file actually says.
 **A guessed base model says so.** `baseModelCell()` decides the cell: the raw
 `base_model` when the file or a person stated it, the canonical label when only
 a `declared` modelspec did, and for a guess (`base_model_source` `filename`,
-`declared_fuzzy` or `filename_fuzzy`) the label with the name column's
-`shelf-name-tag` reading `guessed`, whose tooltip says what it was read from and
-how to correct it. `guessed`, not `from filename`: in the name column that tag
+`declared_fuzzy` or `filename_fuzzy`) the label with a smaller variant of the
+name column's `shelf-name-tag` under it reading `guessed`, whose tooltip says
+what it was read from and how to correct it. The tag is a button: pointing at
+or focusing it turns the word into a check and `confirm`, and clicking writes
+the shown label as `base_model`, which the server records as `user`, so the tag
+goes and no rescan guesses over it. `guessed`, not `from filename`: in the name column that tag
 already means "this is the file's own string, verbatim".
 
 All four uses had to move together. A facet list built from folded values with a
