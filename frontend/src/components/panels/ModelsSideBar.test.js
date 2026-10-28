@@ -126,9 +126,9 @@ describe("ModelsSideBar", () => {
     const wrapper = mountBar();
     await flushPromises();
     const slot = wrapper.find('[data-testid="models-folder-slot"]');
-    // ai-toolkit's root is taken from, not catalogued: two folders, one drive.
-    expect(slot.text()).toContain("Model folders");
-    expect(slot.text()).toContain("1 drive · 2 folders");
+    // Just the name: the tree below shows the drives and folders (#2203).
+    expect(slot.text()).toBe("Model folders");
+    expect(slot.attributes("aria-label")).toBe("Manage model folders");
     await slot.trigger("click");
     expect(store.shellRequest.what).toBe("manage-folders");
     expect(store.shellRequest.el).toBe(slot.element);

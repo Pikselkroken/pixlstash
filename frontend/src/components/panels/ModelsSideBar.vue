@@ -11,12 +11,13 @@
   >
     <!-- The slot the library sidebar gives the project, on the toolbar's line
          at the toolbar's height (#2203): one button that opens Manage model
-         folders. The folders themselves are the tree below. -->
+         folders. The folders themselves are the tree below, which also shows
+         the drives, so the slot carries no count of either. -->
     <button
       type="button"
       class="msb-slot"
       aria-haspopup="dialog"
-      :aria-label="`Model folders, ${slotSummary}. Manage model folders`"
+      aria-label="Manage model folders"
       data-testid="models-folder-slot"
       @click="ask('manage-folders', $event.currentTarget)"
     >
@@ -24,7 +25,6 @@
         ><v-icon size="14">mdi-folder-outline</v-icon></span
       >
       <span class="msb-slot-name">Model folders</span>
-      <span class="msb-count msb-slot-sum">{{ slotSummary }}</span>
       <v-icon size="14" class="msb-slot-chev" aria-hidden="true"
         >mdi-cog-outline</v-icon
       >
@@ -232,23 +232,6 @@ const shelfFolders = computed(() =>
   ),
 );
 
-/** "2 drives · 7 folders": what the slot's button manages. */
-const slotSummary = computed(() => {
-  const drives = new Set(
-    shelfFolders.value
-      .map((folder) => foldersStore.deviceByFolderId.get(Number(folder.id)))
-      .filter((device) => device?.device_id != null)
-      .map((device) => device.device_id),
-  ).size;
-  const n = shelfFolders.value.length;
-  return [
-    drives ? `${drives} ${drives === 1 ? "drive" : "drives"}` : "",
-    `${n} ${n === 1 ? "folder" : "folders"}`,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-});
-
 // An open folder that is no longer registered (forgotten in Manage model
 // folders) closes, or the list would sit empty under a stale breadcrumb.
 watch(
@@ -388,11 +371,6 @@ function openRuns() {
 .msb-slot-chev {
   flex-shrink: 0;
   opacity: var(--opacity-text-secondary);
-}
-
-.msb-slot-sum {
-  margin-left: 0;
-  white-space: nowrap;
 }
 
 /* No top padding: the first row meets the slot's rule, as the Media list's
