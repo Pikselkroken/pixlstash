@@ -3,6 +3,7 @@ import { defineStore } from "pinia";
 
 import {
   createModelFolder,
+  createModelFolderDir,
   DOWNLOADS_KIND,
   forgetModelFolder,
   getComfyuiReads,
@@ -465,6 +466,29 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
   }
 
   /**
+   * Make one directory inside a registered folder (#2206).
+   *
+   * Refusals throw, with the server's `detail` in the response, so the field
+   * that asked can show them under itself and stay open. Only the parent's
+   * listing is re-read here; the caller reveals the new row in the tree it
+   * owns, since the tree's open state is its own.
+   *
+   * @param {number} folderId
+   * @param {string} parentPath - POSIX, `""` for the folder's root.
+   * @param {string} name - one segment.
+   * @returns {Promise<{folder_id: number, path: string}>} the new directory.
+   */
+  async function createDir(folderId, parentPath, name) {
+    const created = await createModelFolderDir(folderId, {
+      path: parentPath,
+      name,
+    });
+    await loadDirs(folderId, parentPath, { force: true });
+    useNoticeStore().push({ level: "success", text: `Created ${name}.` });
+    return created;
+  }
+
+  /**
    * Drop everything the previous credential could see.
    *
    * The paths are host facts about this machine and the registry is owner-only,
@@ -520,6 +544,7 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
     forget,
     setDefault,
     setDownloadTarget,
+    createDir,
     resetForSession,
   };
 });

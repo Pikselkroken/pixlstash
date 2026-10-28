@@ -5,9 +5,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
+import { reactive } from "vue";
 
 const push = vi.fn();
-const route = { name: "models" };
+const route = reactive({ name: "models" });
 vi.mock("vue-router", () => ({
   useRoute: () => route,
   useRouter: () => ({ push }),
@@ -61,6 +62,7 @@ vi.mock("../../api/training", async (importOriginal) => ({
 }));
 
 import ModelsSideBar from "./ModelsSideBar.vue";
+import { useLibrariesStore } from "../../stores/useLibrariesStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useTrainingStore } from "../../stores/useTrainingStore";
@@ -89,8 +91,9 @@ const ROWS = [
   { id: 3, file_kind: "vae", base_model: "SDXL", locations: at(1), sha256: "c" },
 ];
 
-function mountBar() {
+function mountBar(options = {}) {
   return mount(ModelsSideBar, {
+    ...options,
     global: {
       stubs: {
         "v-icon": true,
@@ -180,6 +183,53 @@ describe("ModelsSideBar", () => {
         .find('[role="treeitem"][data-folder-id="2"]')
         .attributes("aria-selected"),
     ).toBe("false");
+  });
+
+  it("gives the focus back to the Folders + when its field is cancelled", async () => {
+    useLibrariesStore().canManage = true;
+    const wrapper = mountBar({ attachTo: document.body });
+    await flushPromises();
+    await wrapper.find('[role="treeitem"][data-folder-id="2"]').trigger("click");
+    const add = wrapper.find('[data-testid="models-sidebar-new-folder"]');
+    await add.trigger("click");
+    const field = wrapper.find('[data-testid="model-folder-name"]');
+    expect(field.exists()).toBe(true);
+    await field.trigger("keydown", { key: "Escape" });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="model-folder-name"]').exists()).toBe(false);
+    expect(document.activeElement).toBe(add.element);
+    wrapper.unmount();
+  });
+
+  it("keeps what was typed when the Folders + is clicked again", async () => {
+    useLibrariesStore().canManage = true;
+    const wrapper = mountBar({ attachTo: document.body });
+    await flushPromises();
+    await wrapper.find('[role="treeitem"][data-folder-id="2"]').trigger("click");
+    const add = wrapper.find('[data-testid="models-sidebar-new-folder"]');
+    await add.trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-testid="model-folder-name"]').setValue("flux");
+    add.element.focus();
+    await add.trigger("click");
+    await flushPromises();
+    const field = wrapper.find('[data-testid="model-folder-name"]');
+    expect(field.element.value).toBe("flux");
+    expect(document.activeElement).toBe(field.element);
+    wrapper.unmount();
+  });
+
+  it("closes the Folders + field when Training runs hides the open folder", async () => {
+    useLibrariesStore().canManage = true;
+    const wrapper = mountBar();
+    await flushPromises();
+    await wrapper.find('[role="treeitem"][data-folder-id="2"]').trigger("click");
+    await wrapper.find('[data-testid="models-sidebar-new-folder"]').trigger("click");
+    expect(wrapper.find('[data-testid="model-folder-name"]').exists()).toBe(true);
+    route.name = "models-runs";
+    await flushPromises();
+    expect(wrapper.find('[data-testid="model-folder-name"]').exists()).toBe(false);
+    wrapper.unmount();
   });
 
   it("re-reads the open folder listings when the shelf refetches", async () => {

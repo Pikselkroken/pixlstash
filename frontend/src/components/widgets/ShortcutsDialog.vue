@@ -146,6 +146,14 @@ const open = computed(() => props.modelValue);
           <td><kbd>Esc</kbd></td>
           <td>On Models: put back what was cut</td>
         </tr>
+        <tr :class="{ 'shortcut-disabled': isReadOnly }">
+          <td><kbd>F2</kbd></td>
+          <td>On Models, in the Folders tree: rename the folder</td>
+        </tr>
+        <tr :class="{ 'shortcut-disabled': isReadOnly }">
+          <td><kbd>{{ stackModKey }}</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd></td>
+          <td>On Models, in the Folders tree: new folder inside it</td>
+        </tr>
         <tr>
           <td><kbd>S</kbd></td>
           <td>Add selected images to a set</td>

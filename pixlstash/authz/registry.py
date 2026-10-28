@@ -682,6 +682,17 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _LOCAL,
         justification="§16.3 asks the saved ComfyUI on this computer where it loads each kind of model from and returns the subdirectories of registered model folders that match, names PixlStash never registered - the authority of model-folders/{folder_id}/dirs; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
+    # The folder verbs (#2206). Both write inside a registered host folder: the
+    # create makes one directory there, the move renames or copies a whole
+    # directory tree and repoints its rows, which is POST /model-moves' class.
+    ("POST", "/api/v1/model-folders/{folder_id}/dirs"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 creates a directory inside a registered model folder on the host - POST /filesystem/folders' mkdir authority, narrowed to one named segment contained against a folder the owner registered, and refused in Docker as that route is; takes no host path; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("POST", "/api/v1/model-folders/{folder_id}/dirs/move"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 moves or renames a directory tree inside or between registered model folders - a rename on one drive, a copy, verify and remove across drives - and repoints the model_file rows under it; POST /model-moves' write-and-unlink authority over a whole subtree, with both ends contained against registered folders; takes no host path; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
     ("POST", "/api/v1/model-folders/pick-up"): RoutePolicy(
         _LOCAL,
         justification="§16.3 walks every registered host path and registers the model files it finds by name - the background folder scan's authority, narrowed to the files named; takes no host path; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",

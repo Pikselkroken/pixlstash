@@ -110,6 +110,41 @@ def folder_name(name: str) -> str:
     return cleaned
 
 
+def refusal_for_folder_name(name: str) -> str | None:
+    """Say why *name* cannot be a folder the owner creates, or None if it can.
+
+    The refusing twin of :func:`folder_name`: the same character class and the
+    same reserved names, but a name the owner typed is refused with the reason
+    rather than rewritten, because a folder that silently becomes ``con_`` or
+    ``a_b`` is not the folder they asked for (#2206).
+
+    Args:
+        name: One path component, as typed.
+
+    Returns:
+        A sentence saying what is wrong, or None when the name is usable.
+    """
+    if not name or not name.strip():
+        return "A folder needs a name."
+    if name in (".", ".."):
+        return f"{name!r} is not a folder name."
+    if _UNSAFE_FOLDER_CHARS_RE.search(name):
+        return 'A folder name cannot contain / \\ : * ? " < > | or control characters.'
+    if name.startswith("."):
+        return "A name starting with a dot is hidden, so the tree would not show it."
+    if name != name.rstrip(". "):
+        return "A folder name cannot end with a dot or a space; Windows drops them."
+    if name != name.lstrip(" "):
+        return "A folder name cannot start with a space."
+    if name.split(".")[0].lower() in _WINDOWS_RESERVED:
+        return (
+            f"{name!r} is a name Windows reserves, so the folder could not exist there."
+        )
+    if len(name.encode("utf-8")) > 255:
+        return "That name is too long for a folder."
+    return None
+
+
 @dataclass(frozen=True)
 class Layout:
     """An ordered list of folder levels.

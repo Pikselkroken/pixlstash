@@ -1,19 +1,33 @@
 // The Folders tree (#2203): drives, registered folders and their subfolders,
 // read one level per expand, walked with the tree pattern's keys.
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 
 const listModelFolderDirs = vi.fn();
+const createModelFolderDir = vi.fn();
+const moveModelFolderDir = vi.fn();
 vi.mock("../../api/modelFolders", async (importOriginal) => ({
   ...(await importOriginal()),
   listModelFolderDirs: (...args) => listModelFolderDirs(...args),
+  createModelFolderDir: (...args) => createModelFolderDir(...args),
+  moveModelFolderDir: (...args) => moveModelFolderDir(...args),
+}));
+// The move job's watch is not under test here; its reads stay off the wire.
+vi.mock("../../api/modelMoves", () => ({
+  startModelMove: vi.fn(),
+  getModelMoveStatus: vi.fn(async () => ({ status: "idle", results: [] })),
+  cancelModelMove: vi.fn(),
+  relocateModelFolder: vi.fn(),
 }));
 
 import ModelFolderTree from "./ModelFolderTree.vue";
 import { comfyuiNameWords } from "../../composables/useModelCopyDrop";
+import { FOLDER_TYPE } from "../../composables/useModelFolderMove";
+import { useLibrariesStore } from "../../stores/useLibrariesStore";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
+import { useModelMovesStore } from "../../stores/useModelMovesStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 
 const FOLDERS = [
@@ -41,11 +55,20 @@ const LISTINGS = {
   ],
 };
 
+// The menu is a Vuetify overlay, which needs an app instance this suite does
+// not mount. The stub draws its content while open, so the rows are testable.
+const VMenuStub = {
+  props: ["modelValue", "target"],
+  template: '<div v-if="modelValue"><slot /></div>',
+};
+
 function mountTree(props = {}) {
   return mount(ModelFolderTree, {
     props,
     attachTo: document.body,
-    global: { stubs: { "v-icon": true } },
+    global: {
+      stubs: { "v-icon": true, "v-menu": VMenuStub, Tooltip: true },
+    },
   });
 }
 
@@ -415,5 +438,430 @@ describe("comfyuiNameWords (#2205)", () => {
         known: false,
       }),
     ).toBe("");
+  });
+});
+
+describe("the folder verbs (#2206)", () => {
+  const dragEvent = (type, types, extra = {}) => {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    event.dataTransfer = {
+      types,
+      dropEffect: "",
+      effectAllowed: "",
+      setData: vi.fn(),
+      ...extra,
+    };
+    return event;
+  };
+  const rightClick = (el) =>
+    el.element.dispatchEvent(
+      new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        clientX: 10,
+        clientY: 20,
+      }),
+    );
+  const menu = (wrapper) => wrapper.find('[data-testid="model-folder-menu"]');
+  const verbs = (wrapper) =>
+    menu(wrapper)
+      .findAll('[role="menuitem"]')
+      .map((one) => one.attributes("data-verb"));
+  const field = (wrapper) => wrapper.find('[data-testid="model-folder-name"]');
+  const LORA_LISTING = LISTINGS["1:Lora"];
+  // A plan the dry run answers, with its facts as the server states them.
+  const plan = (sameDrive) => ({
+    dry_run: true,
+    same_drive: sameDrive,
+    models: 21,
+    files: 25,
+    other_files: 4,
+    bytes: 4_600_000_000,
+    folder_id: 1,
+    path: "Lora",
+    destination_folder_id: 1,
+    destination_path: "VAE",
+    name: "Lora",
+  });
+  const started = { status: "running", kind: "folder", total: 1, done: 0, results: [], name: "Lora" };
+
+  beforeEach(() => {
+    useLibrariesStore().canManage = true;
+    createModelFolderDir.mockReset();
+    moveModelFolderDir.mockReset();
+  });
+
+  afterEach(() => {
+    LISTINGS["1:Lora"] = LORA_LISTING;
+    useModelMovesStore().resetForSession();
+    useModelFoldersStore().resetForSession();
+    useModelShelfStore().folderMoveRequest = null;
+  });
+
+  async function openLora() {
+    const wrapper = mountTree();
+    await flushPromises();
+    await item(wrapper, 1).find(".mft-twist").trigger("click");
+    await flushPromises();
+    return wrapper;
+  }
+
+  it("gives a subfolder New folder, Move, Rename, a rule, and a Remove that says it is not available", async () => {
+    const wrapper = await openLora();
+    expect(item(wrapper, 1, "Lora").find('[data-testid="model-folder-more"]').exists()).toBe(true);
+    rightClick(item(wrapper, 1, "Lora"));
+    await flushPromises();
+    expect(verbs(wrapper)).toEqual(["new", "move", "rename", "remove"]);
+    expect(menu(wrapper).find('[role="separator"]').exists()).toBe(true);
+    expect(menu(wrapper).find('[data-verb="rename"]').text()).toContain("F2");
+    expect(menu(wrapper).find('[data-verb="new"]').text()).toContain("Ctrl Shift N");
+    const remove = menu(wrapper).find('[data-verb="remove"]');
+    expect(remove.attributes("aria-disabled")).toBe("true");
+    expect(wrapper.html()).toContain("Removing a folder is not available yet.");
+    wrapper.unmount();
+  });
+
+  it("gives a registered root New folder and Stop watching, and no Move, Rename or Remove", async () => {
+    const wrapper = mountTree();
+    await flushPromises();
+    rightClick(item(wrapper, 1));
+    await flushPromises();
+    expect(verbs(wrapper)).toEqual(["new", "stop"]);
+    await menu(wrapper).find('[data-verb="stop"]').trigger("click");
+    expect(useModelShelfStore().shellRequest.what).toBe("manage-folders");
+    wrapper.unmount();
+  });
+
+  it("gives a locked folder its lock and no menu at all", async () => {
+    const wrapper = mountTree();
+    await flushPromises();
+    const locked = item(wrapper, 2);
+    expect(locked.find('[data-testid="model-folder-lock"]').exists()).toBe(true);
+    expect(locked.find('[data-testid="model-folder-more"]').exists()).toBe(false);
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    locked.element.dispatchEvent(event);
+    await flushPromises();
+    expect(event.defaultPrevented).toBe(false);
+    expect(menu(wrapper).exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("offers no menu in pick mode, where the rows only choose", async () => {
+    const wrapper = mountTree({ mode: "pick" });
+    await flushPromises();
+    rightClick(item(wrapper, 1));
+    await flushPromises();
+    expect(menu(wrapper).exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("refuses each verb with its reason: the remote tier, a move running, a scan", async () => {
+    const wrapper = await openLora();
+    const lora = () => item(wrapper, 1, "Lora");
+
+    useLibrariesStore().canManage = false;
+    rightClick(lora());
+    await flushPromises();
+    expect(menu(wrapper).find('[data-verb="new"]').attributes("aria-disabled")).toBe("true");
+    expect(menu(wrapper).find('[data-verb="rename"]').attributes("aria-disabled")).toBe("true");
+    expect(wrapper.html()).toContain("Only available on the machine running PixlStash");
+    useLibrariesStore().canManage = true;
+
+    useModelMovesStore().job = { ...started, status: "running" };
+    rightClick(lora());
+    await flushPromises();
+    expect(menu(wrapper).find('[data-verb="move"]').attributes("aria-disabled")).toBe("true");
+    expect(wrapper.html()).toContain("A move is already running.");
+    useModelMovesStore().job = null;
+
+    const folders = useModelFoldersStore();
+    folders.folders = folders.folders.map((one) =>
+      one.id === 1 ? { ...one, scan_status: "running" } : one,
+    );
+    rightClick(lora());
+    await flushPromises();
+    expect(menu(wrapper).find('[data-verb="rename"]').attributes("aria-disabled")).toBe("true");
+    expect(wrapper.html()).toContain("This folder is being scanned right now.");
+    wrapper.unmount();
+  });
+
+  it("closes a name field whose row is collapsed away, so folders drag again", async () => {
+    const wrapper = await openLora();
+    rightClick(item(wrapper, 1, "Lora"));
+    await flushPromises();
+    await menu(wrapper).find('[data-verb="rename"]').trigger("click");
+    await flushPromises();
+    expect(field(wrapper).exists()).toBe(true);
+    expect(item(wrapper, 1, "Lora").attributes("draggable")).toBeUndefined();
+
+    await item(wrapper, 1).find(".mft-twist").trigger("click");
+    await flushPromises();
+    await item(wrapper, 1).find(".mft-twist").trigger("click");
+    await flushPromises();
+    expect(field(wrapper).exists()).toBe(false);
+    expect(item(wrapper, 1, "Lora").attributes("draggable")).toBe("true");
+    wrapper.unmount();
+  });
+
+  it("makes a folder from its name field, and lists and focuses it where it was made", async () => {
+    const wrapper = await openLora();
+    createModelFolderDir.mockImplementation(async (id, body) => {
+      LISTINGS["1:Lora"] = [
+        ...LORA_LISTING,
+        { name: body.name, path: `Lora/${body.name}`, model_count: 0, bytes: 0, has_dirs: false },
+      ];
+      return { folder_id: id, path: `Lora/${body.name}` };
+    });
+    rightClick(item(wrapper, 1, "Lora"));
+    await flushPromises();
+    await menu(wrapper).find('[data-verb="new"]').trigger("click");
+    await flushPromises();
+    expect(field(wrapper).exists()).toBe(true);
+    expect(field(wrapper).attributes("aria-label")).toBe("New folder in Lora");
+    expect(document.activeElement).toBe(field(wrapper).element);
+
+    await field(wrapper).setValue("sdxl");
+    await field(wrapper).trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    expect(createModelFolderDir).toHaveBeenCalledWith(1, { path: "Lora", name: "sdxl" });
+    expect(field(wrapper).exists()).toBe(false);
+    expect(item(wrapper, 1, "Lora/sdxl").exists()).toBe(true);
+    expect(document.activeElement).toBe(item(wrapper, 1, "Lora/sdxl").element);
+    wrapper.unmount();
+  });
+
+  it("keeps the field open under the server's refusal, and Escape closes it without asking", async () => {
+    const wrapper = await openLora();
+    rightClick(item(wrapper, 1, "Lora"));
+    await flushPromises();
+    await menu(wrapper).find('[data-verb="new"]').trigger("click");
+    await flushPromises();
+    createModelFolderDir.mockRejectedValueOnce({
+      response: { data: { detail: "'flux' already exists there." } },
+    });
+    await field(wrapper).setValue("flux");
+    await field(wrapper).trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    expect(field(wrapper).exists()).toBe(true);
+    expect(field(wrapper).element.value).toBe("flux");
+    expect(wrapper.find('[role="alert"]').text()).toContain("already exists there");
+
+    await field(wrapper).trigger("keydown", { key: "Escape" });
+    await flushPromises();
+    expect(field(wrapper).exists()).toBe(false);
+    expect(createModelFolderDir).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
+  it("renames from F2 with the old name selected, and a refusal stays under the field", async () => {
+    const wrapper = await openLora();
+    item(wrapper, 1, "Lora").element.focus();
+    await item(wrapper, 1, "Lora").trigger("keydown", { key: "F2" });
+    await flushPromises();
+    expect(field(wrapper).element.value).toBe("Lora");
+    expect(field(wrapper).attributes("aria-label")).toBe("Rename Lora");
+
+    moveModelFolderDir.mockRejectedValueOnce({
+      response: { data: { detail: "'Lora2' already exists there." } },
+    });
+    await field(wrapper).setValue("Lora2");
+    await field(wrapper).trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    expect(moveModelFolderDir).toHaveBeenCalledWith(1, {
+      path: "Lora",
+      destinationFolderId: 1,
+      destinationPath: "",
+      newName: "Lora2",
+    });
+    expect(field(wrapper).exists()).toBe(true);
+    expect(wrapper.find('[role="alert"]').text()).toContain("already exists there");
+    wrapper.unmount();
+  });
+
+  it("leaves the reader's next field alone when an earlier create answers late", async () => {
+    const wrapper = await openLora();
+    let answer;
+    createModelFolderDir.mockReturnValueOnce(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    item(wrapper, 1, "Lora").element.focus();
+    await item(wrapper, 1, "Lora").trigger("keydown", { key: "N", ctrlKey: true, shiftKey: true });
+    await flushPromises();
+    await field(wrapper).setValue("flux2");
+    await field(wrapper).trigger("keydown", { key: "Enter" });
+    await field(wrapper).trigger("keydown", { key: "Escape" });
+    await flushPromises();
+    await item(wrapper, 1, "Lora").trigger("keydown", { key: "F2" });
+    await flushPromises();
+    expect(field(wrapper).attributes("aria-label")).toBe("Rename Lora");
+
+    answer({ folder_id: 1, path: "Lora/flux2" });
+    await flushPromises();
+    expect(field(wrapper).exists()).toBe(true);
+    expect(field(wrapper).attributes("aria-label")).toBe("Rename Lora");
+    wrapper.unmount();
+  });
+
+  it("focuses a revealed folder once the listings above it have landed", async () => {
+    const wrapper = mountTree();
+    await flushPromises();
+    // Nothing under folder 1 is loaded yet; the listings answer late.
+    const late = [];
+    listModelFolderDirs.mockImplementation(
+      (id, path) =>
+        new Promise((resolve) =>
+          late.push(() =>
+            resolve({
+              folder_id: id,
+              path,
+              locked: false,
+              model_count: 1,
+              bytes: 0,
+              dirs: LISTINGS[`${id}:${path}`] ?? [],
+            }),
+          ),
+        ),
+    );
+    wrapper.vm.reveal(1, "Lora", "Lora/flux");
+    await flushPromises();
+    late.forEach((answer) => answer());
+    await flushPromises();
+    expect(document.activeElement).toBe(item(wrapper, 1, "Lora/flux").element);
+    wrapper.unmount();
+  });
+
+  it("keeps a renamed folder open and focused once its job lands", async () => {
+    const root = LISTINGS["1:"];
+    try {
+      const wrapper = await openLora();
+      await item(wrapper, 1, "Lora").find(".mft-twist").trigger("click");
+      await flushPromises();
+      expect(keys(wrapper)).toContain("f:1:Lora/flux");
+
+      item(wrapper, 1, "Lora").element.focus();
+      await item(wrapper, 1, "Lora").trigger("keydown", { key: "F2" });
+      await flushPromises();
+      moveModelFolderDir.mockResolvedValueOnce(started);
+      await field(wrapper).setValue("Lora2");
+      await field(wrapper).trigger("keydown", { key: "Enter" });
+      await flushPromises();
+
+      // The rename lands: the server's listings now name it, the job finishes
+      // and the store re-reads what is loaded, as the poll does.
+      LISTINGS["1:"] = [{ ...root[0], name: "Lora2", path: "Lora2" }, root[1]];
+      LISTINGS["1:Lora2"] = [{ ...LORA_LISTING[0], path: "Lora2/flux" }];
+      useModelMovesStore().job = {
+        ...started,
+        status: "finished",
+        results: [{ folder_id: 1, relpath: "Lora", status: "moved", detail: null }],
+        name: "Lora2",
+      };
+      useModelFoldersStore().reloadDirs();
+      await flushPromises();
+
+      expect(keys(wrapper)).toContain("f:1:Lora2/flux");
+      expect(keys(wrapper)).not.toContain("f:1:Lora/flux");
+      expect(document.activeElement).toBe(item(wrapper, 1, "Lora2").element);
+      wrapper.unmount();
+    } finally {
+      LISTINGS["1:"] = root;
+      delete LISTINGS["1:Lora2"];
+    }
+  });
+
+  it("takes F2 and Ctrl+Shift+N on a row, so nothing reaches the shelf's window keys", async () => {
+    const wrapper = await openLora();
+    const seen = vi.fn();
+    window.addEventListener("keydown", seen);
+    try {
+      item(wrapper, 1, "Lora").element.focus();
+      await item(wrapper, 1, "Lora").trigger("keydown", { key: "F2" });
+      await flushPromises();
+      expect(field(wrapper).attributes("aria-label")).toBe("Rename Lora");
+      await field(wrapper).trigger("keydown", { key: "Escape" });
+      await flushPromises();
+
+      await item(wrapper, 1, "Lora").trigger("keydown", {
+        key: "N",
+        ctrlKey: true,
+        shiftKey: true,
+      });
+      await flushPromises();
+      expect(field(wrapper).attributes("aria-label")).toBe("New folder in Lora");
+      expect(seen).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("keydown", seen);
+    }
+    wrapper.unmount();
+  });
+
+  it("lets Move folder to… ask the shelf for the dialog on the pick step", async () => {
+    const wrapper = await openLora();
+    rightClick(item(wrapper, 1, "Lora"));
+    await flushPromises();
+    await menu(wrapper).find('[data-verb="move"]').trigger("click");
+    const request = useModelShelfStore().folderMoveRequest;
+    expect(request.source).toEqual({ folderId: 1, path: "Lora", name: "Lora" });
+    expect(request.destination).toBe(null);
+    expect(request.plan).toBe(null);
+    wrapper.unmount();
+  });
+
+  it("starts a same-drive folder drop with no dialog: the dry run, then the move", async () => {
+    const wrapper = await openLora();
+    moveModelFolderDir.mockImplementation(async (id, body) =>
+      body.dryRun ? plan(true) : started,
+    );
+    item(wrapper, 1, "Lora").element.dispatchEvent(dragEvent("dragstart", [FOLDER_TYPE]));
+    item(wrapper, 1, "VAE").element.dispatchEvent(dragEvent("drop", [FOLDER_TYPE]));
+    await flushPromises();
+    expect(moveModelFolderDir.mock.calls.map((call) => Boolean(call[1].dryRun))).toEqual([
+      true,
+      false,
+    ]);
+    expect(useModelShelfStore().folderMoveRequest).toBe(null);
+    wrapper.unmount();
+  });
+
+  it("asks first with the facts when a folder drop crosses drives", async () => {
+    const wrapper = await openLora();
+    moveModelFolderDir.mockImplementation(async (id, body) =>
+      body.dryRun ? plan(false) : started,
+    );
+    item(wrapper, 1, "Lora").element.dispatchEvent(dragEvent("dragstart", [FOLDER_TYPE]));
+    item(wrapper, 1, "VAE").element.dispatchEvent(dragEvent("drop", [FOLDER_TYPE]));
+    await flushPromises();
+    // Only the dry run: nothing moves until the dialog's Move is pressed.
+    expect(moveModelFolderDir).toHaveBeenCalledTimes(1);
+    expect(moveModelFolderDir.mock.calls[0][1].dryRun).toBe(true);
+    const request = useModelShelfStore().folderMoveRequest;
+    expect(request.source).toMatchObject({ folderId: 1, path: "Lora" });
+    expect(request.destination).toEqual({ folderId: 1, path: "VAE", locked: false });
+    expect(request.plan.same_drive).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("refuses a folder onto itself and onto its own descendant, with no ring", async () => {
+    const wrapper = await openLora();
+    await item(wrapper, 1, "Lora").find(".mft-twist").trigger("click");
+    await flushPromises();
+    item(wrapper, 1, "Lora").element.dispatchEvent(dragEvent("dragstart", [FOLDER_TYPE]));
+    for (const path of ["Lora", "Lora/flux"]) {
+      const over = dragEvent("dragover", [FOLDER_TYPE]);
+      item(wrapper, 1, path).element.dispatchEvent(over);
+      await flushPromises();
+      expect(over.defaultPrevented).toBe(false);
+      expect(item(wrapper, 1, path).classes()).toContain("not-droppable");
+      expect(item(wrapper, 1, path).classes()).not.toContain("drop-ring");
+    }
+    // A sibling takes it, with the ring.
+    const over = dragEvent("dragover", [FOLDER_TYPE]);
+    item(wrapper, 1, "VAE").element.dispatchEvent(over);
+    await flushPromises();
+    expect(over.defaultPrevented).toBe(true);
+    expect(item(wrapper, 1, "VAE").classes()).toContain("drop-ring");
+    wrapper.unmount();
   });
 });

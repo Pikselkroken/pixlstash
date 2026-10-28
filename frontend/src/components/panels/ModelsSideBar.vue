@@ -50,8 +50,38 @@
         <span class="msb-count">{{ row.count }}</span>
       </button>
 
-      <h3 class="section-label msb-head">Folders</h3>
+      <!-- The Folders heading's + makes a folder in the open one (#2206). -->
+      <div class="msb-head msb-head--action">
+        <h3 class="section-label msb-head-label">Folders</h3>
+        <button
+          type="button"
+          class="msb-add"
+          :aria-label="newFolderReason ? 'New folder, unavailable' : 'New folder'"
+          :aria-disabled="newFolderReason ? 'true' : undefined"
+          ref="newFolderButton"
+          data-testid="models-sidebar-new-folder"
+          @click="openNewFolder"
+        >
+          <Tooltip
+            :text="newFolderReason || 'New folder in the open folder'"
+            activator="parent"
+            :describe="false"
+          />
+          <v-icon size="16" aria-hidden="true">mdi-folder-plus-outline</v-icon>
+        </button>
+      </div>
+      <div v-if="newFolder" ref="newFolderRow" class="msb-new">
+        <ModelFolderNameField
+          :model-value="newFolder.name"
+          :label="`New folder in ${newFolderScopeName}`"
+          :error="newFolder.error"
+          @update:model-value="(value) => (newFolder.name = value)"
+          @submit="commitNewFolder"
+          @cancel="cancelNewFolder"
+        />
+      </div>
       <ModelFolderTree
+        ref="tree"
         :selected="onRuns || store.place !== 'folder' ? null : store.folderScope"
         @select="openFolder"
       />
@@ -158,13 +188,19 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { VIcon, VMenu } from "vuetify/components";
 
 import { DOWNLOADS_KIND, SOURCE_KIND } from "../../api/modelFolders";
-import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
+import { useModelFolderGates } from "../../composables/useModelFolderGates";
+import { errorMessage } from "../../utils/apiError";
+import {
+  basename,
+  useModelFoldersStore,
+} from "../../stores/useModelFoldersStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useTrainingRunsStore } from "../../stores/useTrainingRunsStore";
 import { useTrainingStore } from "../../stores/useTrainingStore";
@@ -174,10 +210,12 @@ import { withRef } from "../../utils/withRef.js";
 import AiToolkitIcon from "../widgets/AiToolkitIcon.vue";
 import AppButton from "../widgets/AppButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
+import ModelFolderNameField from "./ModelFolderNameField.vue";
 import ModelFolderTree from "./ModelFolderTree.vue";
 
 const store = useModelShelfStore();
 const foldersStore = useModelFoldersStore();
+const gates = useModelFolderGates();
 const tasksStore = useTasksStore();
 const runsStore = useTrainingRunsStore();
 const training = useTrainingStore();
@@ -230,6 +268,95 @@ const shelfFolders = computed(() =>
   foldersStore.folders.filter(
     (folder) => folder.kind !== SOURCE_KIND && folder.kind !== DOWNLOADS_KIND,
   ),
+);
+
+// ── New folder (#2206) ──────────────────────────────────────────────────
+
+/** The tree, to reveal a folder the field below just made. */
+const tree = ref(null);
+const newFolderButton = ref(null);
+const newFolderRow = ref(null);
+/** The field under the heading: `{folderId, path, name, error, busy}`, or null. */
+const newFolder = ref(null);
+
+/** The folder a new one is made in: the open folder, not while on Training runs. */
+const openScope = computed(() => (onRuns.value ? null : store.folderScope));
+
+/** Why the heading's + cannot make a folder right now, or "". */
+const newFolderReason = computed(() => {
+  const scope = openScope.value;
+  if (!scope) {
+    return "Open a folder first. A new folder is made inside the one open.";
+  }
+  if (scope.locked) {
+    return "This folder is locked, so nothing can be made inside it.";
+  }
+  return gates.folderVerbReason({ id: scope.folderId });
+});
+
+/** The open folder's name, for the field's label. */
+const newFolderScopeName = computed(() => {
+  const scope = openScope.value;
+  if (!scope) return "";
+  if (scope.path) return basename(scope.path);
+  return foldersStore.labelByFolderId.get(scope.folderId) || "this folder";
+});
+
+function openNewFolder() {
+  const scope = openScope.value;
+  if (newFolderReason.value) {
+    useNoticeStore().push({ level: "info", text: newFolderReason.value });
+    return;
+  }
+  // A second click keeps what was typed and goes back to it.
+  if (newFolder.value) {
+    newFolderRow.value?.querySelector("input")?.focus();
+    return;
+  }
+  newFolder.value = {
+    folderId: scope.folderId,
+    path: scope.path ?? "",
+    name: "",
+    error: "",
+    busy: false,
+  };
+}
+
+/** Close the heading's field and give the focus back to its `+`. */
+function cancelNewFolder() {
+  newFolder.value = null;
+  nextTick(() => newFolderButton.value?.focus());
+}
+
+async function commitNewFolder() {
+  const open = newFolder.value;
+  if (!open || open.busy) return;
+  open.busy = true;
+  open.error = "";
+  try {
+    const created = await foldersStore.createDir(
+      open.folderId,
+      open.path,
+      open.name,
+    );
+    // Esc while the request ran closed this field; the focus is not ours.
+    if (newFolder.value !== open) return;
+    newFolder.value = null;
+    tree.value?.reveal(open.folderId, open.path, created.path);
+  } catch (err) {
+    open.busy = false;
+    open.error = errorMessage(err, "Could not create that folder.");
+  }
+}
+
+// The field belongs to the folder it was opened in: moving the open folder
+// closes it, and so does Training runs, which hides the open folder, rather
+// than making a folder somewhere the reader is not looking.
+watch(
+  () => openScope.value,
+  () => {
+    newFolder.value = null;
+  },
 );
 
 // An open folder that is no longer registered (forgotten in Manage model
@@ -401,6 +528,11 @@ function openRuns() {
 .msb-head-label {
   flex: 1;
   margin: 0;
+}
+
+/* The field a folder is named in, under the Folders heading. */
+.msb-new {
+  padding: 0 var(--space-4) var(--space-3) var(--space-5);
 }
 
 /* The library sidebar's section + (`sidebar-section-add`). */

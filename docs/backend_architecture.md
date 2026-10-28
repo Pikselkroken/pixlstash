@@ -35,7 +35,7 @@
 22. [Tiered Duplicate Detection](#22-tiered-duplicate-detection)
 23. [Opt-in telemetry](#23-opt-in-telemetry-the-install-id-and-the-consent-flags)
 24. [Folder structure: read, commit, layout and moves](#24-folder-structure-read-commit-layout-and-moves) — incl. [24.1 The folder-structure read](#241-the-folder-structure-read), [24.2 The folder-structure commit](#242-the-folder-structure-commit), [24.3 The library layout](#243-the-library-layout), [24.4 The layout and the move engine](#244-the-layout-and-the-move-engine), [24.5 Reconciling moves made outside PixlStash](#245-reconciling-moves-made-outside-pixlstash)
-25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Folders scan themselves, and picking up a model before they do (#1985)](#2513-folders-scan-themselves-and-picking-up-a-model-before-they-do-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116), [25.17 Sample prompts written from the dataset (#2117)](#2517-sample-prompts-written-from-the-dataset-2117), [25.18 Watching a run live (#2118)](#2518-watching-a-run-live-2118), [25.19 The Train dialog's preview: dataset checks and resolve (#2119)](#2519-the-train-dialogs-preview-dataset-checks-and-resolve-2119), [25.20 Checking memory and speed, and learning from runs (#2120)](#2520-checking-memory-and-speed-and-learning-from-runs-2120), [25.21 Recipe updates from pixlstash.dev (#2122)](#2521-recipe-updates-from-pixlstashdev-2122), [25.22 Dataset snapshots: what a LoRA was trained on (#2123)](#2522-dataset-snapshots-what-a-lora-was-trained-on-2123), [25.23 Browsing a model folder by directory (#2203)](#2523-browsing-a-model-folder-by-directory-2203), [25.24 Moving into a subfolder, and when a file is already there (#2204)](#2524-moving-into-a-subfolder-and-when-a-file-is-already-there-2204), [25.25 Where ComfyUI loads each kind from (#2205)](#2525-where-comfyui-loads-each-kind-from-2205)
+25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Folders scan themselves, and picking up a model before they do (#1985)](#2513-folders-scan-themselves-and-picking-up-a-model-before-they-do-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116), [25.17 Sample prompts written from the dataset (#2117)](#2517-sample-prompts-written-from-the-dataset-2117), [25.18 Watching a run live (#2118)](#2518-watching-a-run-live-2118), [25.19 The Train dialog's preview: dataset checks and resolve (#2119)](#2519-the-train-dialogs-preview-dataset-checks-and-resolve-2119), [25.20 Checking memory and speed, and learning from runs (#2120)](#2520-checking-memory-and-speed-and-learning-from-runs-2120), [25.21 Recipe updates from pixlstash.dev (#2122)](#2521-recipe-updates-from-pixlstashdev-2122), [25.22 Dataset snapshots: what a LoRA was trained on (#2123)](#2522-dataset-snapshots-what-a-lora-was-trained-on-2123), [25.23 Browsing a model folder by directory (#2203)](#2523-browsing-a-model-folder-by-directory-2203), [25.24 Moving into a subfolder, and when a file is already there (#2204)](#2524-moving-into-a-subfolder-and-when-a-file-is-already-there-2204), [25.25 Where ComfyUI loads each kind from (#2205)](#2525-where-comfyui-loads-each-kind-from-2205), [25.26 Creating, renaming and moving a folder inside a model folder (#2206)](#2526-creating-renaming-and-moving-a-folder-inside-a-model-folder-2206)
 26. [Prompt match](#26-prompt-match)
 
 ---
@@ -651,6 +651,8 @@ Public guest scoring and shared-link endpoints.
 | PATCH  | /api/v1/model-folders/{folder_id}                                             | model_shelf     | Update a registered model folder                              |
 | DELETE | /api/v1/model-folders/{folder_id}                                             | model_shelf     | Forget a registered model folder                              |
 | GET    | /api/v1/model-folders/{folder_id}/dirs                                        | model_shelf     | List one directory level of a model folder                    |
+| POST   | /api/v1/model-folders/{folder_id}/dirs                                        | model_shelf     | Create a directory inside a model folder                      |
+| POST   | /api/v1/model-folders/{folder_id}/dirs/move                                   | model_shelf     | Move or rename a directory inside a model folder              |
 | POST   | /api/v1/model-folders/{folder_id}/relocate                                    | model_shelf     | Move a folder PixlStash owns to another location              |
 | GET    | /api/v1/model-folders/{folder_id}/runs                                        | model_shelf     | List the training runs in an ai-toolkit output folder         |
 | GET    | /api/v1/model-folders/{folder_id}/runs/{run_name}/samples/{filename}          | model_shelf     | One preview image from a training run                         |
@@ -5273,6 +5275,7 @@ The authz refactor (§16.2) moved this class off `require_user_id` and onto decl
   - **Updated 2026-10-08 (#1810, ComfyUI link from a local owner) — the locality total is now `59 = 51 local + 8 loopback`.** Re-derived from `ROUTE_POLICIES`. `POST /api/v1/comfyui/pack/install` (2026-10-06) is the 8th loopback route, missed here when it landed. `POST` and `DELETE /api/v1/comfyui/link` retarget from `owner_only` to the local tier: linking has this server push a token to whatever answers at the saved ComfyUI address on its own network, and saving that address is allowed remotely, so a remote owner could aim it. `GET /api/v1/comfyui/link` only reports and stays `owner_only`. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_49_local_7_loopback`, whose name predates both counts.
   - **Updated 2026-10-24 (#2054, installing a known node pack) — the locality total is now `66 = 57 local + 9 loopback`.** Re-derived from `ROUTE_POLICIES`. `POST /api/v1/comfyui/node-packs/{pack_id}/install` is the 9th loopback route: it has the saved ComfyUI's ComfyUI-Manager install third-party code (a pack from `node_packs.KNOWN_PACKS`, at its pinned version; nothing else comes from the caller) and restarts ComfyUI, the host-shell class, so loopback only, which `allow_remote_host_ops` cannot loosen. The ComfyUI itself may be on the local network, since Manager does the writing. `GET /api/v1/comfyui/node-packs/{pack_id}` only reports whether the pack's nodes load and is `owner_only`. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_49_local_7_loopback`.
   - **Updated 2026-10-27 (model folders scan themselves) — the locality total is now `74 = 65 local + 9 loopback`.** `POST /api/v1/model-folders/{folder_id}/rescan` leaves the local tier and the registry: a registered folder is scanned in the background (`ModelFolderScanFinder`, §25.13) and `POST /model-folders` queues its first scan, so no route walks a folder on request. The rows that cited the rescan's authority now cite the background scan's, which walks the same folders.
+  - **Updated 2026-10-28 (#2206, folder verbs in a model folder) — the locality total is now `76 = 67 local + 9 loopback`.** This change adds **+2**: `POST /api/v1/model-folders/{folder_id}/dirs` makes a directory inside a registered folder (the `POST /filesystem/folders` mkdir, narrowed to one name contained against a registered folder), and `POST /api/v1/model-folders/{folder_id}/dirs/move` moves or renames one and repoints the rows under it (`POST /model-moves`' authority over a subtree). Neither takes a host path. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_49_local_7_loopback`.
   - **Updated 2026-09-07 (PixlStash Views withdrawn, superseded by the line above) — the locality total is now `52 = 45 local + 7 loopback`.** Re-derived from `ROUTE_POLICIES`, not subtracted from the line above, which had itself gone stale twice in between (`POST /api/v1/pictures/export/folder` and `DELETE /api/v1/folder-structure/commit` both landed without re-deriving it). `GET` and `PATCH /api/v1/server-config/views` are **removed**, along with the feature behind them: the settings section was never wired into the app, so the routes were reachable only by a direct API call and nothing in the product ever set `library_settings.views_root`. Neither route was the *subject* of any assertion in `tests/test_authz_host_capability_16_3.py` — the behavioural §16.3 tests drive `GET /filesystem/browse` and `POST /pictures/{id}/open-location`, and `READ_BLOCKED_GET_PATHS` membership is **derived** from `ROUTE_POLICIES` by `test_every_untemplated_owner_class_get_is_on_the_read_blocked_belt` rather than written down — so the removal costs two counted routes and no coverage. One thing survives the feature: `ReferenceFolderScanTask` still refuses to descend a directory holding a `.pixlstash-views` marker, because the API shipped in v1.11 and a tree it published is still on disk; without the prune every link under one would be indexed as a second copy of a picture. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_45_local_7_loopback`. Arithmetic, not judgement.
 
 **Correction to the historical claim.** The compensating-control line above ("remote `ALL` blocked by `require_local_for_write`") overstates the protection for this class as it stood. The `_require_local_for_write` **method** runs only at `/login` (`auth.py` — password-login path), not per-request on these handlers; the genuine per-request control was the middleware's separate remote-`ALL`-**token** block. A remote **cookie** owner session was therefore *not* locality-gated on these endpoints at all — the exact gap the `LOCAL_OWNER_ONLY` retarget closes (a remote cookie owner is now locality-checked, and the 3 red-line routes are loopback-only).
@@ -12074,6 +12077,86 @@ model.
   `allow_remote_host_ops` is set, and the client treats a refusal as
   `known: false`. Untemplated, so it is also on
   `READ_BLOCKED_GET_PATHS`.
+
+### 25.26 Creating, renaming and moving a folder inside a model folder (#2206)
+
+Two routes give the Folders tree its verbs. Folders are never merged, and the
+registered folder itself and locked folders are never touched.
+
+**Create.** `POST /api/v1/model-folders/{folder_id}/dirs {path, name}` makes one
+empty directory and answers 201 with its POSIX path. `path` is the parent,
+resolved by `model_mover.resolve_subfolder`, the resolver a move's destination
+uses too: the 25.23 segment rules, then no link, junction or dot-name on the
+way, then `resolve_path_within`. A missing parent is 404, a locked folder 409,
+and a name already on disk (a dangling link included) 409. The name is
+**refused, not sanitised**: `refusal_for_folder_name`
+(`pixlstash/utils/library_layout.py`) returns the reason for an empty name, `.`
+or `..`, a character in `_UNSAFE_FOLDER_CHARS_RE` (a slash among them), a
+leading dot (the tree would hide it), a leading space, a trailing dot or space
+(Windows drops them), a `_WINDOWS_RESERVED` stem such as `con`, or more than 255
+bytes, and the route answers 400 with it. The route is refused in Docker, as
+`POST /filesystem/folders` is.
+
+**Move and rename: the dir job.** `POST
+/api/v1/model-folders/{folder_id}/dirs/move {path, destination_folder_id,
+destination_path, new_name?, dry_run?}` moves a directory into another directory
+of the same or another registered folder. A rename is a move into the same
+parent with `new_name`; there is no rename route. The work is
+`pixlstash/services/model_dir_mover.py`, in the two phases `ModelMover` has.
+
+- **`plan_directory_move` refuses before anything is touched:** the registered
+  root (`path: ""`) and a target inside the source (by realpath) are 400; a
+  locked folder on either side, a taken name, a missing destination directory,
+  another registered folder inside the source (`path_is_within`), a stale
+  `model_file` row already under the new prefix, and, for a cross-drive
+  move, a leftover `.pixlstash-partial` beside the target are 409; a missing source is 404; a
+  cross-drive copy that will not fit is 507 (`require_space`, 10 % headroom).
+  The new name goes through `refusal_for_folder_name` too. A case-only rename
+  on a case-insensitive drive is allowed: the target "exists" but is the same
+  directory (`os.path.samefile`).
+- **`dry_run: true`** answers 200 with what the move would do and starts
+  nothing: `same_drive`, `models` (distinct models with a `present` copy
+  under it), `files` and `bytes` (an `os.walk` of the disk, not following links),
+  `other_files` (files the shelf does not list), and the new path. The client
+  shows these facts before a cross-drive drop.
+- **One slot.** The job runs through `_start_job` in `routes/model_moves.py`
+  under `SHELF_IO_LOCK`, so it is refused with 409 while a move or an import
+  runs and is watched and cancelled through `/model-moves`. The status carries
+  `kind: "folder"` (`"files"` for model moves), one item (the directory),
+  `destination_subpath` set to its new path, and `name` and `files` (the
+  catalogued copies it carried).
+- **Same drive:** `os.rename`, then one transaction that repoints every
+  `model_file` row under the old prefix, whatever its state, to the new folder
+  and prefix. The rows are re-read inside that transaction, so a row a rescan
+  added since the plan moves too. Each UPDATE must move exactly one row
+  (`RepointLost`, as 25.24's mover requires). If the repoint fails, the
+  directory is renamed back. A rename onto an empty directory that appeared in
+  the two syscalls since the check would replace it on POSIX; that is the
+  window accepted.
+- **Another drive:** `copytree(symlinks=True)` into `<name>.pixlstash-partial`
+  beside the target (made first with `mkdir`, so a tree that appeared at that
+  name after the plan is refused rather than discarded as ours), then every catalogued file in the copy is checked against
+  its `sha256` (by size when nobody has hashed it yet), the partial is renamed
+  into place, the rows are repointed, and only then is the source removed. A
+  cancel is checked between files by the copy function, and again before the
+  publication; it removes the partial and repoints nothing. A failed check or
+  copy removes the partial; a failed repoint removes the published copy. The
+  source is untouched in all three. The source is removed only when every file
+  in it is in the copy at the same size and none was written to after its copy
+  began (its mtime, read as its copy started, so a same-size rewrite counts),
+  and then file by file from that list
+  rather than with `rmtree`, so a file written into it during the copy keeps
+  it, and one written after the comparison stays with its directories; that, and a source that cannot be removed, is reported in the
+  item's `detail` and logged: the rows name the new copy, so what is left is a
+  duplicate and never a dangling row. A crash between the publication and the
+  repoint commit is the accepted ceiling: rows naming the old place, which the
+  next scan of both folders re-links by content.
+- **Samples and other files travel with the tree**, because the whole directory
+  moves; nothing per file is needed for `<stem>_samples/` (25.7).
+
+Both routes are `LOCAL_OWNER_ONLY` (§16.3): the create is the
+`POST /filesystem/folders` mkdir narrowed to a registered folder, and the move is
+`POST /model-moves`' authority over a subtree.
 
 ## 26. Prompt match
 

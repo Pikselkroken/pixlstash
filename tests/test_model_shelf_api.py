@@ -4242,6 +4242,13 @@ _FOLDER_MUTATORS = (
         f"{API}/model-folders/pick-up",
         {"json": {"files": ["probe.safetensors"]}},
     ),
+    # The seeded folder's path is not on disk, so the local positive control
+    # answers 404 here and creates nothing.
+    (
+        "POST",
+        f"{API}/model-folders/1/dirs",
+        {"json": {"path": "", "name": "authz-probe"}},
+    ),
 )
 
 
@@ -4929,6 +4936,11 @@ _MOVE_ROUTES = (
     ("POST", f"{API}/model-moves", {"json": {"destination_folder_id": 1, "items": []}}),
     ("GET", f"{API}/model-moves", {}),
     ("DELETE", f"{API}/model-moves", {}),
+    (
+        "POST",
+        f"{API}/model-folders/1/dirs/move",
+        {"json": {"path": "probe", "destination_folder_id": 1}},
+    ),
 )
 
 
@@ -5052,7 +5064,12 @@ def test_every_move_route_is_declared_local_owner_only():
     """§16.3: the shelf's first block that writes and unlinks host files. The
     GET is on the tier too, deliberately - see the coverage-matrix rationale."""
     for method, path, _ in _MOVE_ROUTES:
-        key = (method, path.replace(API, "/api/v1"))
+        key = (
+            method,
+            path.replace(API, "/api/v1").replace(
+                "/model-folders/1/", "/model-folders/{folder_id}/"
+            ),
+        )
         assert key in ROUTE_POLICIES, f"{key} has no ROUTE_POLICIES entry"
         declared = ROUTE_POLICIES[key]
         assert declared.policy is AccessPolicy.LOCAL_OWNER_ONLY, (
@@ -11135,6 +11152,188 @@ def test_a_remote_owner_is_refused_the_folder_listing_naming_the_flag(
             config.pop("allow_remote_host_ops", None)
         else:
             config["allow_remote_host_ops"] = previous
+
+
+# ===========================================================================
+# Creating, renaming and moving a folder inside a model folder (#2206)
+# ===========================================================================
+#
+# The service half - same drive, another drive, cancel, collisions - is in
+# tests/test_model_move.py, which needs no server. These are the routes: the
+# create's refusals, the move's 202 on the shared job slot, and both tiers.
+
+
+def _create_dir(shelf_env, name: str, path: str = "", **kwargs):
+    return shelf_env.owner.post(
+        f"{API}/model-folders/1/dirs", json={"path": path, "name": name}, **kwargs
+    )
+
+
+@pytest.mark.parametrize(
+    "name, reason",
+    [
+        ("con", "Windows reserves"),
+        ("CON.txt", "Windows reserves"),
+        ("a/b", "cannot contain"),
+        ("a\\b", "cannot contain"),
+        ("..", "not a folder name"),
+        (".hidden", "hidden"),
+        ("trailing.", "cannot end with"),
+        ("trailing ", "cannot end with"),
+        ("   ", "needs a name"),
+        ("", "needs a name"),
+    ],
+)
+def test_a_folder_name_the_drive_cannot_hold_is_refused_with_the_reason(
+    shelf_env, tmp_path, name, reason
+):
+    root = tmp_path / "loras"
+    root.mkdir()
+    _seeded_folder_at(shelf_env.server, str(root))
+    r = _create_dir(shelf_env, name)
+    assert r.status_code == 400, r.text
+    assert reason in r.json()["detail"], r.text
+    assert list(root.iterdir()) == [], "a refused name still made a folder"
+
+
+def test_creating_a_folder_makes_it_and_answers_its_path(shelf_env, tmp_path):
+    root = tmp_path / "loras"
+    (root / "people").mkdir(parents=True)
+    _seeded_folder_at(shelf_env.server, str(root))
+
+    r = _create_dir(shelf_env, "flux", path="people")
+    assert r.status_code == 201, r.text
+    assert r.json() == {"folder_id": 1, "path": "people/flux"}
+    assert (root / "people" / "flux").is_dir()
+    listed = _by_name(_listing(shelf_env, path="people").json())
+    assert "flux" in listed, "the tree does not show the folder it just made"
+
+
+def test_creating_a_taken_name_is_a_conflict_and_touches_nothing(shelf_env, tmp_path):
+    root = tmp_path / "loras"
+    (root / "flux").mkdir(parents=True)
+    (root / "flux" / "keep.txt").write_text("mine")
+    os.symlink(str(tmp_path / "nowhere"), str(root / "dangling"))
+    _seeded_folder_at(shelf_env.server, str(root))
+
+    assert _create_dir(shelf_env, "flux").status_code == 409
+    assert (root / "flux" / "keep.txt").read_text() == "mine"
+    # A dangling link is a taken name, never a path to create through.
+    assert _create_dir(shelf_env, "dangling").status_code == 409
+    assert not (tmp_path / "nowhere").exists()
+
+
+def test_creating_in_a_locked_folder_is_refused(shelf_env, tmp_path):
+    root = tmp_path / "store"
+    root.mkdir()
+    _seeded_folder_at(shelf_env.server, str(root))
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute("UPDATE model_folder SET movable = 'root_only' WHERE id = 1")
+    assert _create_dir(shelf_env, "flux").status_code == 409
+    assert list(root.iterdir()) == []
+
+
+def test_creating_under_a_missing_or_escaping_parent_is_refused(shelf_env, tmp_path):
+    root = tmp_path / "loras"
+    root.mkdir()
+    (tmp_path / "outside").mkdir()
+    os.symlink(str(tmp_path / "outside"), str(root / "out"))
+    _seeded_folder_at(shelf_env.server, str(root))
+
+    assert _create_dir(shelf_env, "x", path="nope").status_code == 404
+    assert _create_dir(shelf_env, "x", path="../outside").status_code == 400
+    assert _create_dir(shelf_env, "x", path="out").status_code == 400
+    assert list((tmp_path / "outside").iterdir()) == []
+
+
+def test_creating_a_folder_is_refused_in_docker(shelf_env, tmp_path, monkeypatch):
+    root = tmp_path / "loras"
+    root.mkdir()
+    _seeded_folder_at(shelf_env.server, str(root))
+    monkeypatch.setattr(shelf_env.server, "running_in_docker", lambda: True)
+    assert _create_dir(shelf_env, "flux").status_code == 403
+    assert list(root.iterdir()) == []
+
+
+def _wait_for_move(shelf_env) -> dict:
+    for _ in range(200):
+        body = shelf_env.owner.get(f"{API}/model-moves").json()
+        if body["status"] != "running":
+            return body
+        time.sleep(0.02)
+    raise AssertionError(f"the folder move never finished: {body}")
+
+
+def test_a_folder_move_runs_on_the_move_job_and_reports_its_kind(shelf_env, tmp_path):
+    """The route end to end: 202, the shared job, ``kind: folder``, rows moved."""
+    from pixlstash.routes import model_moves
+
+    model_moves._job = None
+    root = tmp_path / "loras"
+    (root / "sdxl").mkdir(parents=True)
+    (root / "people").mkdir()
+    (root / "sdxl" / "a.safetensors").write_bytes(b"a" * 64)
+    _seeded_folder_at(shelf_env.server, str(root))
+    _set_copies(shelf_env, 1, [(os.path.join("sdxl", "a.safetensors"), 64)])
+
+    plan = shelf_env.owner.post(
+        f"{API}/model-folders/1/dirs/move",
+        json={
+            "path": "sdxl",
+            "destination_folder_id": 1,
+            "destination_path": "people",
+            "dry_run": True,
+        },
+    )
+    assert plan.status_code == 200, plan.text
+    assert plan.json()["same_drive"] is True
+    assert (plan.json()["models"], plan.json()["files"]) == (1, 1)
+    assert (root / "sdxl").is_dir(), "a dry run moved the folder"
+
+    r = shelf_env.owner.post(
+        f"{API}/model-folders/1/dirs/move",
+        json={"path": "sdxl", "destination_folder_id": 1, "destination_path": "people"},
+    )
+    assert r.status_code == 202, r.text
+    assert r.json()["kind"] == "folder"
+    # Undeclared on MoveStatusResponse, carried by its extra="allow".
+    assert (r.json()["name"], r.json()["files"]) == ("sdxl", 1)
+    body = _wait_for_move(shelf_env)
+    assert body["kind"] == "folder"
+    assert (body["name"], body["files"]) == ("sdxl", 1)
+    assert body["destination_subpath"] == "people/sdxl"
+    assert [item["status"] for item in body["results"]] == ["moved"], body
+    assert (root / "people" / "sdxl" / "a.safetensors").is_file()
+    relpaths = {
+        row["relpath"]
+        for row in shelf_env.server.hub.fetchall(
+            "SELECT relpath FROM model_file WHERE model_folder_id = 1"
+        )
+    }
+    assert relpaths == {os.path.join("people", "sdxl", "a.safetensors")}
+
+
+def test_a_folder_move_refusal_is_answered_before_the_job_starts(shelf_env, tmp_path):
+    from pixlstash.routes import model_moves
+
+    model_moves._job = None
+    root = tmp_path / "loras"
+    (root / "a" / "b").mkdir(parents=True)
+    _seeded_folder_at(shelf_env.server, str(root))
+    url = f"{API}/model-folders/1/dirs/move"
+
+    root_move = shelf_env.owner.post(url, json={"path": "", "destination_folder_id": 1})
+    assert root_move.status_code == 400, root_move.text
+    into_itself = shelf_env.owner.post(
+        url, json={"path": "a", "destination_folder_id": 1, "destination_path": "a/b"}
+    )
+    assert into_itself.status_code == 400, into_itself.text
+    bad_name = shelf_env.owner.post(
+        url, json={"path": "a", "destination_folder_id": 1, "new_name": "con"}
+    )
+    assert bad_name.status_code == 400, bad_name.text
+    assert model_moves._job is None, "a refused folder move still took the job slot"
+    assert (root / "a" / "b").is_dir()
 
 
 # ---------------------------------------------------------------------------

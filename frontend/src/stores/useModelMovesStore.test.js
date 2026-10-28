@@ -23,14 +23,26 @@ vi.mock("../api/modelMoves", () => ({
 const fetchRows = vi.fn();
 const refreshFolders = vi.fn();
 const reloadDirs = vi.fn();
+// The folder view a folder move may close (#2206).
+const shelf = { fetchRows, folderScope: null, setFolderScope: vi.fn() };
 vi.mock("./useModelShelfStore", () => ({
-  useModelShelfStore: () => ({ fetchRows }),
+  useModelShelfStore: () => shelf,
 }));
 vi.mock("./useModelFoldersStore", () => ({
   useModelFoldersStore: () => ({ refresh: refreshFolders, reloadDirs }),
+  basename: (path) => String(path || "").split(/[\\/]/).pop() || "the folder",
 }));
 
-import { moveReceipt, useModelMovesStore } from "./useModelMovesStore";
+const moveModelFolderDir = vi.fn();
+vi.mock("../api/modelFolders", () => ({
+  moveModelFolderDir: (...args) => moveModelFolderDir(...args),
+}));
+
+import {
+  folderReceipt,
+  moveReceipt,
+  useModelMovesStore,
+} from "./useModelMovesStore";
 import { useNoticeStore } from "./useNoticeStore";
 
 const ITEMS = [{ folder_id: 1, relpath: "a.safetensors" }];
@@ -49,6 +61,9 @@ function snapshot(overrides = {}) {
 
 beforeEach(() => {
   setActivePinia(createPinia());
+  moveModelFolderDir.mockReset();
+  shelf.folderScope = null;
+  shelf.setFolderScope.mockReset();
   vi.useFakeTimers();
   startModelMove.mockReset().mockResolvedValue(snapshot());
   getModelMoveStatus.mockReset().mockResolvedValue(snapshot());
@@ -434,5 +449,129 @@ describe("the move receipt", () => {
     expect(moveReceipt([{ status: "skipped" }, { status: "skipped" }])).toBe(
       "Nothing moved. 2 files were already there.",
     );
+  });
+});
+
+describe("a folder job's receipt (#2206)", () => {
+  const job = (status, extra = {}) => ({
+    kind: "folder",
+    status: "finished",
+    name: "sdxl",
+    total: 1,
+    done: 1,
+    results: [{ folder_id: 1, relpath: "Lora/sdxl", status, detail: "" }],
+    ...extra,
+  });
+
+  it("says a moved folder moved, by its name", () => {
+    expect(folderReceipt(job("moved"))).toBe("Moved sdxl.");
+  });
+
+  it("says a rename renamed it, since only a rename changes the name", () => {
+    expect(
+      folderReceipt(job("moved", { name: "sdxl2" })),
+    ).toBe("Renamed sdxl to sdxl2.");
+  });
+
+  it("names a failure with the server's reason, and the folder it left", () => {
+    const failed = job("failed");
+    failed.results[0].detail = "Not enough space on the target drive.";
+    expect(folderReceipt(failed)).toBe(
+      "Could not move sdxl: Not enough space on the target drive.",
+    );
+  });
+
+  it("says a stopped folder was left where it was", () => {
+    expect(folderReceipt(job("cancelled"))).toBe(
+      "Stopped; sdxl was left where it was.",
+    );
+  });
+
+  it("reports the finish of a folder job through the same single notice", async () => {
+    const store = useModelMovesStore();
+    moveModelFolderDir.mockResolvedValue({ ...job("moved"), status: "running" });
+    await store.moveFolder({ folderId: 1, path: "Lora/sdxl" }, { folderId: 1, path: "" });
+    getModelMoveStatus.mockResolvedValue(job("moved"));
+    await store.poll();
+    expect(useNoticeStore().notices.at(-1).text).toBe("Moved sdxl.");
+  });
+});
+
+describe("moving a folder (#2206)", () => {
+  const SOURCE = { folderId: 1, path: "Lora/sdxl" };
+  const DEST = { folderId: 1, path: "VAE" };
+
+  it("plans with a dry run and touches nothing", async () => {
+    moveModelFolderDir.mockResolvedValue({ dry_run: true, same_drive: true });
+    const store = useModelMovesStore();
+    const plan = await store.planFolder(SOURCE, DEST);
+    expect(plan.same_drive).toBe(true);
+    expect(moveModelFolderDir).toHaveBeenCalledWith(1, {
+      path: "Lora/sdxl",
+      destinationFolderId: 1,
+      destinationPath: "VAE",
+      newName: undefined,
+      dryRun: true,
+    });
+    expect(store.busy).toBe(false);
+  });
+
+  it("refuses with the server's sentence and leaves the store idle", async () => {
+    // A refusal is the answer, not a failed job: it must reach the caller, so a
+    // rename can show it under its field, and must not also be a notice.
+    moveModelFolderDir.mockRejectedValue({
+      response: { data: { detail: "'sdxl' already exists there." } },
+    });
+    const store = useModelMovesStore();
+    const notices = useNoticeStore().notices.length;
+    await expect(store.moveFolder(SOURCE, DEST, { newName: "x" })).rejects.toMatchObject({
+      response: { data: { detail: "'sdxl' already exists there." } },
+    });
+    expect(store.job).toBe(null);
+    expect(store.busy).toBe(false);
+    expect(useNoticeStore().notices.length).toBe(notices);
+  });
+
+  it("closes the open folder only when the server took the move", async () => {
+    shelf.folderScope = { folderId: 1, path: "Lora/sdxl" };
+    moveModelFolderDir.mockRejectedValueOnce({
+      response: { data: { detail: "'sdxl' already exists there." } },
+    });
+    const store = useModelMovesStore();
+    await expect(store.moveFolder(SOURCE, DEST)).rejects.toBeTruthy();
+    expect(shelf.setFolderScope).not.toHaveBeenCalled();
+
+    moveModelFolderDir.mockResolvedValueOnce({ status: "running", kind: "folder" });
+    await store.moveFolder(SOURCE, DEST);
+    expect(shelf.setFolderScope).toHaveBeenCalledWith(null);
+  });
+
+  it("refuses a second move while one runs, without asking the server", async () => {
+    const store = useModelMovesStore();
+    await store.start(2, ITEMS);
+    await expect(store.moveFolder(SOURCE, DEST)).rejects.toThrow(/already running/);
+    expect(moveModelFolderDir).not.toHaveBeenCalled();
+  });
+
+  it("sends the rename, and watches the job it returns", async () => {
+    moveModelFolderDir.mockResolvedValue({
+      status: "running",
+      kind: "folder",
+      total: 1,
+      done: 0,
+      results: [],
+      name: "sdxl2",
+    });
+    const store = useModelMovesStore();
+    await store.moveFolder(SOURCE, { folderId: 1, path: "Lora" }, { newName: "sdxl2" });
+    expect(moveModelFolderDir).toHaveBeenCalledWith(1, {
+      path: "Lora/sdxl",
+      destinationFolderId: 1,
+      destinationPath: "Lora",
+      newName: "sdxl2",
+    });
+    expect(store.kind).toBe("folder");
+    expect(store.folderName).toBe("sdxl2");
+    expect(store.running).toBe(true);
   });
 });

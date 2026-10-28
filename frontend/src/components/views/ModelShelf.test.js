@@ -252,6 +252,7 @@ const globalOpts = {
       // this suite's business.
       ShelfEditDialog: true,
       ShelfMoveDialog: true,
+      FolderMoveDialog: true,
       WorkflowSetRenameDialog: true,
       MergeCopiesDialog: true,
       ReplaceMissingDialog: true,
@@ -3402,6 +3403,26 @@ describe("Delete", () => {
     expect(confirmSpy).not.toHaveBeenCalled();
     expect(useModelShelfStore().selectedIds.size).toBe(1);
     rail.remove();
+    wrapper.unmount();
+  });
+
+  // The Folders tree (#2206) is in the sidebar, outside `.shelf`, and its
+  // Delete is Remove folder…, which is not available yet. Here it must never
+  // open a file deletion, selection or no selection.
+  it("is not the shelf's when pressed in the Folders tree", async () => {
+    const wrapper = await mountWithSelection();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const tree = document.createElement("div");
+    tree.className = "mft";
+    document.body.appendChild(tree);
+    tree.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Delete", bubbles: true }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fetchModelCompanions).not.toHaveBeenCalled();
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(useModelShelfStore().selectedIds.size).toBe(1);
+    tree.remove();
     wrapper.unmount();
   });
 
