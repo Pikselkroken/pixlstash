@@ -2461,6 +2461,11 @@ def update_models(hub, ids: list[int], changes: dict) -> list[int]:
 #: hundred is not a burst.
 CIVITAI_PAUSE_SECONDS = 0.25
 
+#: Seconds one lookup may spend asking before the rest go back unasked. A
+#: per-request timeout bounds each socket wait, not a slow answer, so without
+#: this a hundred slow answers would hold the owner's request for minutes.
+CIVITAI_BUDGET_SECONDS = 90
+
 # The write's guard: the eligibility the read already checked, asked again in
 # the UPDATE so a *Set base model* landing mid-batch still wins. A
 # cleared base model is `base_model NULL, source 'user'`: the owner's "none of
@@ -2523,7 +2528,11 @@ def fill_base_models_online(hub, ids: list[int], lookup=lookup_base_model) -> di
             continue
         skipped.append({"id": model_id, "reason": reason})
 
+    started = time.monotonic()
     for position, (model_id, sha256) in enumerate(eligible):
+        if time.monotonic() - started > CIVITAI_BUDGET_SECONDS:
+            not_asked = [model_id for model_id, _ in eligible[position:]]
+            break
         if position:
             time.sleep(CIVITAI_PAUSE_SECONDS)
         try:

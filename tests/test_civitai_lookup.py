@@ -37,7 +37,16 @@ def civitai(monkeypatch):
 
 @pytest.mark.parametrize(
     "bad",
-    ["AB" * 32, "ab" * 31, "ab" * 33, "zz" * 32, "../" + "a" * 61, "", None],
+    [
+        "AB" * 32,
+        "ab" * 31,
+        "ab" * 33,
+        "zz" * 32,
+        "../" + "a" * 61,
+        "ab" * 32 + "\n",
+        "",
+        None,
+    ],
 )
 def test_anything_but_a_lowercase_hex_sha256_is_refused_before_a_request(civitai, bad):
     with pytest.raises(ValueError):
@@ -71,6 +80,7 @@ def test_only_the_hash_is_sent_to_the_by_hash_url_without_redirects(civitai):
         SimpleNamespace(status_code=200, json=lambda: {"name": "no base model"}),
         SimpleNamespace(status_code=200, json=lambda: {"baseModel": 7}),
         SimpleNamespace(status_code=200, json=lambda: {"baseModel": "x" * 101}),
+        SimpleNamespace(status_code=200, json=lambda: {"baseModel": "SD\x1b[31m"}),
         SimpleNamespace(status_code=200, json=lambda: ["not", "a", "dict"]),
     ],
 )

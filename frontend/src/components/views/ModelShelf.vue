@@ -1644,8 +1644,8 @@ async function confirmLookupBaseModel() {
         ? "Look up 1 base model on Civitai?"
         : `Look up ${ids.length} base models on Civitai?`,
     message:
-      "PixlStash sends each file's SHA-256 fingerprint to civitai.com and nothing else. Base models you set yourself are never changed.",
-    confirmLabel: "Look up",
+      "PixlStash sends only each file's SHA-256 hash to civitai.com. Files are not uploaded, and base models you set yourself are never changed.",
+    confirmLabel: "Look up on Civitai",
   });
   if (ok) await store.lookupBaseModels(ids);
 }

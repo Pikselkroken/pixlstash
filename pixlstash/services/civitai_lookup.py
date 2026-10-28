@@ -1,7 +1,7 @@
 """Ask Civitai which base model a file was made for, by its SHA-256.
 
 The one outbound call the model shelf makes, and only when the owner asks
-(*Look up base model online…*). **Only the hash leaves the machine**: it is the
+(*Look up base model on Civitai…*). **Only the hash leaves the machine**: it is the
 whole of the URL path, it is checked to be 64 lowercase hex digits before the
 URL is built, and nothing else - no filename, no cookie, no key - is sent.
 Redirects are refused, so the hash goes to civitai.com and nowhere else.
@@ -32,7 +32,7 @@ TIMEOUT_SECONDS = 10
 #: Longer than any base model's name; a longer answer is not stored.
 MAX_LABEL_LENGTH = 100
 
-_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 
 class LookupUnavailable(Exception):
@@ -47,7 +47,7 @@ def lookup_base_model(sha256: str) -> Optional[str]:
             any request is built.
         LookupUnavailable: Civitai could not be asked (see the module docstring).
     """
-    if not isinstance(sha256, str) or not _SHA256_RE.match(sha256):
+    if not isinstance(sha256, str) or not _SHA256_RE.fullmatch(sha256):
         raise ValueError("not a lowercase hex SHA-256")
     prefix = sha256[:12]
     started = time.monotonic()
@@ -59,13 +59,14 @@ def lookup_base_model(sha256: str) -> Optional[str]:
             headers={"User-Agent": "PixlStash", "Accept": "application/json"},
         )
     except requests.RequestException as exc:
+        # The exception's text carries the whole URL, so only its type is logged.
         logger.warning(
             "Civitai lookup for %s… failed after %.1fs: %s",
             prefix,
             time.monotonic() - started,
-            exc,
+            type(exc).__name__,
         )
-        raise LookupUnavailable(str(exc)) from exc
+        raise LookupUnavailable(type(exc).__name__) from exc
     elapsed = time.monotonic() - started
     status = response.status_code
     if status == 404:
@@ -87,7 +88,7 @@ def lookup_base_model(sha256: str) -> Optional[str]:
         raise LookupUnavailable("not JSON") from exc
     label = body.get("baseModel") if isinstance(body, dict) else None
     label = label.strip() if isinstance(label, str) else ""
-    if not label or len(label) > MAX_LABEL_LENGTH:
+    if not label or len(label) > MAX_LABEL_LENGTH or not label.isprintable():
         logger.info("Civitai knows %s… but names no usable base model.", prefix)
         return None
     return label

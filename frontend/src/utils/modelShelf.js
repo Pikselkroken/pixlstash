@@ -862,7 +862,7 @@ export function baseModelCell(row) {
 export const MAX_BASE_MODEL_LOOKUP = 100;
 
 /**
- * Whether Look up base model online would ask about this model.
+ * Whether Look up base model on Civitai would ask about this model.
  *
  * Mirrors the server's eligibility, which stays the authority: an adapter or
  * checkpoint, hashed, with no base model, that the owner has not cleared

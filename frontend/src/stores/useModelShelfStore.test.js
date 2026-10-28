@@ -1732,7 +1732,7 @@ describe("the receipts", () => {
         not_asked: [5, 6, 7],
       }),
     ).toBe(
-      "Filled 1 model · not on Civitai 2 · left alone 1 · Civitai unreachable, 3 not asked",
+      "Filled 1 model · 2 not on Civitai · 1 left alone · 3 not asked (Civitai stopped answering)",
     );
     expect(
       lookupReceipt({ filled: [], not_found: [], skipped: [], not_asked: [] }),

@@ -628,7 +628,7 @@ const triggerable = computed(
 );
 
 /**
- * The selected models Look up base model online would ask Civitai about.
+ * The selected models Look up base model on Civitai would ask Civitai about.
  * Listed always, disabled with its reason when none would be, like Set trigger
  * words above; over the route's cap it says so rather than sending part.
  */
@@ -638,11 +638,12 @@ const lookupIds = computed(() =>
 
 const lookupTitle = computed(() => {
   const eligible = lookupIds.value.length;
+  if (store.lookupBusy) return "A lookup is already running";
   if (!eligible) {
-    return "Only adapters and checkpoints with no base model, once hashed, can be looked up";
+    return "Only adapters and checkpoints with no base model and a file hash can be looked up";
   }
   if (eligible > MAX_BASE_MODEL_LOOKUP) {
-    return `Select at most ${MAX_BASE_MODEL_LOOKUP} models with no base model at a time`;
+    return `Look up at most ${MAX_BASE_MODEL_LOOKUP} at a time; ${eligible} selected have no base model`;
   }
   return "";
 });
@@ -1220,7 +1221,7 @@ const VerbItems = (props) => {
       verb: "set-base-model",
       on: () => props.onVerb("set-base-model"),
     }),
-    item("mdi-cloud-search-outline", "Look up base model online…", {
+    item("mdi-cloud-search-outline", "Look up base model on Civitai…", {
       verb: "lookup-base-model",
       on: () => props.onVerb("lookup-base-model"),
       disabled: !props.lookupable,

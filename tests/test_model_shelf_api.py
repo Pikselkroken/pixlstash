@@ -11621,6 +11621,21 @@ def test_the_first_unreachable_answer_stops_the_batch(shelf_env, no_civitai_paus
     assert result["filled"] == [] and result["skipped"] == []
 
 
+def test_a_spent_time_budget_stops_the_batch(shelf_env, monkeypatch):
+    monkeypatch.setattr(model_shelf_service, "CIVITAI_BUDGET_SECONDS", -1)
+    selection = [
+        shelf_env.model_ids["sd_xl_noname.safetensors"],
+        shelf_env.model_ids["dana.safetensors"],
+    ]
+    asked = []
+
+    result = model_shelf_service.fill_base_models_online(
+        shelf_env.server.hub, selection, asked.append
+    )
+
+    assert asked == [] and result["not_asked"] == selection
+
+
 def test_a_civitai_answer_reaches_the_companion_ladder(shelf_env, no_civitai_pause):
     hub = shelf_env.server.hub
     noname = shelf_env.model_ids["sd_xl_noname.safetensors"]

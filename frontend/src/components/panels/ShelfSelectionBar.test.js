@@ -589,7 +589,7 @@ describe("Set trigger words", () => {
   });
 });
 
-describe("Look up base model online", () => {
+describe("Look up base model on Civitai", () => {
   it("is offered on a model with no base model and emits its verb", async () => {
     selectRows([row(1, "present"), row(2, "present", { base_model: null })]);
     const wrapper = mount(ShelfSelectionBar, globalOpts);
@@ -612,6 +612,14 @@ describe("Look up base model online", () => {
     expect(tip(item)).toContain("no base model");
     await item.trigger("click");
     expect(wrapper.emitted("lookup-base-model")).toBeUndefined();
+  });
+
+  it("waits for a lookup already in flight", async () => {
+    const store = selectRows([row(1, "present", { base_model: null })]);
+    store.lookupBusy = true;
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(verb(wrapper, "lookup-base-model").attributes("disabled")).toBeDefined();
+    expect(tip(verb(wrapper, "lookup-base-model"))).toContain("already running");
   });
 });
 

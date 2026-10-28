@@ -471,9 +471,9 @@ export function lookupReceipt(body) {
   const skipped = body?.skipped?.length ?? 0;
   const notAsked = body?.not_asked?.length ?? 0;
   const parts = [`Filled ${modelCount(filled)}`];
-  if (missing) parts.push(`not on Civitai ${missing}`);
-  if (skipped) parts.push(`left alone ${skipped}`);
-  if (notAsked) parts.push(`Civitai unreachable, ${notAsked} not asked`);
+  if (missing) parts.push(`${missing} not on Civitai`);
+  if (skipped) parts.push(`${skipped} left alone`);
+  if (notAsked) parts.push(`${notAsked} not asked (Civitai stopped answering)`);
   return parts.join(" · ");
 }
 
@@ -4374,6 +4374,9 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     }
   }
 
+  /** True while a Civitai lookup is in flight; the verb waits for it. */
+  const lookupBusy = ref(false);
+
   /**
    * Ask Civitai for the base models of *ids*, then say what it filled.
    *
@@ -4385,7 +4388,13 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    */
   async function lookupBaseModels(ids) {
     const notices = useNoticeStore();
-    if (!ids.length) return false;
+    // One at a time: a second press would queue up to 100 more requests.
+    if (!ids.length || lookupBusy.value) return false;
+    lookupBusy.value = true;
+    notices.push({
+      level: "info",
+      text: `Looking up ${ids.length === 1 ? "1 base model" : `${ids.length} base models`} on Civitai…`,
+    });
     try {
       const body = await lookupBaseModelsOnline(ids);
       if (body?.filled?.length) invalidateBaseModelCompletions();
@@ -4405,6 +4414,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         text: errorDetail(err) || "Could not look those base models up.",
       });
       return false;
+    } finally {
+      lookupBusy.value = false;
     }
   }
 
@@ -4948,6 +4959,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     editModelIds,
     forgetSelected,
     lookupBaseModels,
+    lookupBusy,
     deleteSelected,
     mergeCopies,
     setIconOnSelected,

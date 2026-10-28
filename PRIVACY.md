@@ -124,7 +124,7 @@ after 400 days of silence, and only aggregate counts are ever published.
 
 ## Optional base-model lookup (only when you ask)
 
-On the model shelf, **Look up base model online…** asks Civitai which base model
+On the model shelf, **Look up base model on Civitai…** asks Civitai which base model
 the selected files were made for. It runs only when you choose it for rows you
 selected and confirm the prompt. For each selected file that has no base model
 yet, PixlStash sends that file's SHA-256 fingerprint to `civitai.com`, and
