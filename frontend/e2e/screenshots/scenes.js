@@ -664,7 +664,7 @@ export const manual = {
   'ScreenshotLibraries.jpg':
     'Settings → Libraries with two registered libraries — superseded on the site by ScreenshotLibrariesManage.jpg, which the libraries-manage scene reproduces',
   'ScreenshotModelShelf.jpg':
-    'The model shelf — demo-data registers no model folders, so the shelf renders empty; needs a model-folder fixture',
+    'The model shelf — reproducible next: the e2e launcher now seeds a model folder (#2209); the scene must set the flat list view',
   'ScreenshotAiToolkitImport.jpg':
     'Discovered ai-toolkit training runs — needs a real ai-toolkit output folder to read',
   'ScreenshotDeleteLora.jpg':

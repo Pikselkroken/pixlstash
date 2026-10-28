@@ -163,6 +163,7 @@ from pixlstash.routes.training import create_router as create_training_router
 from pixlstash.routes.telemetry import create_router as create_telemetry_router
 from pixlstash.routes.resources import create_router as create_resources_router
 from pixlstash.routes.test_hooks import create_router as create_test_hooks_router
+from pixlstash.routes.test_hooks import seed_model_folder
 from pixlstash.routes.workflows import create_router as create_workflows_router
 from pixlstash.server_config_io import DEVICE_ON_DISK_KEY, persist_server_config
 from pixlstash.utils.accelerator import VALID_DEVICE_SETTINGS
@@ -2062,6 +2063,8 @@ class Server(
                 include_in_schema=False,
                 dependencies=gate,
             )
+            if self._server_config.get("e2e_model_folder"):
+                seed_model_folder(self, self._server_config["e2e_model_folder"])
 
         @self.api.middleware("http")
         async def auth_middleware(request: Request, call_next):

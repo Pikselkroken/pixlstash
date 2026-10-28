@@ -35,6 +35,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
+from pixlstash.routes.model_folders import register_model_folder
+from pixlstash.services.model_folder_scanner import ModelFolderScanner
 
 logger = get_logger(__name__)
 
@@ -142,6 +144,32 @@ class InjectWsEventResponse(BaseModel):
     event_type: str = Field(..., description="The event type that was emitted.")
     emitted: int = Field(
         ..., description="Number of ``vault.notify`` calls actually made."
+    )
+
+
+def seed_model_folder(server, path: str) -> None:
+    """Register the e2e launcher's model folder and scan it synchronously.
+
+    The e2e backend runs with background workers off, so the scan a new folder
+    normally gets never runs and the shelf would stay empty. Called at start-up,
+    only when ``enable_test_hooks`` is on. A failure is logged rather than
+    raised: the shelf specs then fail on their own assertions, and every other
+    spec still gets a server.
+    """
+    try:
+        folder_id = register_model_folder(server, path, "user")
+        result = ModelFolderScanner(server.hub).scan_folder(folder_id, path, "user")
+    except Exception as exc:
+        logger.error(
+            "[test-hooks] could not seed the e2e model folder %s: %s", path, exc
+        )
+        return
+    logger.info(
+        "[test-hooks] seeded e2e model folder %s (id=%s): %d adapters, %d checkpoints",
+        path,
+        folder_id,
+        result.adapters,
+        result.checkpoints,
     )
 
 

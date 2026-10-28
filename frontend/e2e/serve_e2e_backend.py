@@ -5,7 +5,8 @@ Playwright's ``webServer`` runs this script. It does NOT touch the committed
 ``test-data/`` fixture: it copies the fixture images + vault into a throwaway
 work directory, strips any user/token rows so the server boots in *first-run*
 state (the e2e global-setup then registers an admin and mints an ALL-scope
-token per run — no credentials are committed), writes a lean server-config
+token per run — no credentials are committed), seeds a small model folder
+for the shelf specs, writes a lean server-config
 (background workers and startup thumbnail generation disabled, CPU only), and
 execs the real server. The server also serves the built SPA from
 ``pixlstash/frontend/dist`` on the same origin, so cookie auth just works.
@@ -25,6 +26,7 @@ import os
 import hashlib
 import shutil
 import sqlite3
+import struct
 import sys
 import tempfile
 from pathlib import Path
@@ -44,6 +46,8 @@ _CHECKOUT_TAG = hashlib.sha1(str(REPO_ROOT).encode()).hexdigest()[:8]
 WORK_DIR = (
     Path(tempfile.gettempdir()) / f"pixlstash-e2e-{SRC_DATA.name}-{_CHECKOUT_TAG}"
 )
+# Not ``models``: that is the managed store the server creates beside its hub.
+MODEL_FOLDER = WORK_DIR / "model-shelf"
 
 
 def _ignore_backups(_dir, names):
@@ -73,6 +77,46 @@ def _strip_credentials(db_path: Path) -> None:
         sidecar = db_path.with_name(db_path.name + suffix)
         if sidecar.exists():
             sidecar.unlink()
+
+
+def _write_stub_model(path: Path, tensors: dict, metadata: dict) -> None:
+    """Write a header-only ``.safetensors``: the scanner reads only the header."""
+    header = {
+        name: {"dtype": "F16", "shape": shape, "data_offsets": [0, 0]}
+        for name, shape in tensors.items()
+    }
+    header["__metadata__"] = metadata
+    blob = json.dumps(header).encode("utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(struct.pack("<Q", len(blob)) + blob)
+
+
+def _seed_model_folder(root: Path) -> None:
+    """Lay out a small model folder for the shelf specs, under the work dir.
+
+    Two LoRAs and a checkpoint (mixed-case names, as real ones are), an empty
+    subfolder, and a preview ``.png`` the scanner must not list. The server
+    registers and scans it at start-up (``e2e_model_folder``), because the
+    background rescan is off here.
+    """
+    lora = {"blocks.0.lora_A.weight": [8, 16], "blocks.0.lora_B.weight": [16, 8]}
+    _write_stub_model(
+        root / "Clementine_Portrait.safetensors",
+        lora,
+        {"format": "pt", "ss_output_name": "Clementine_Portrait"},
+    )
+    _write_stub_model(
+        root / "Lora" / "DetailTweaker_v2.safetensors",
+        lora,
+        {"format": "pt", "ss_output_name": "DetailTweaker_v2"},
+    )
+    (root / "Lora" / "DetailTweaker_v2.preview.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    _write_stub_model(
+        root / "StableDiffusion" / "RealVisXL_V4.safetensors",
+        {"model.weight": [40000, 40000]},
+        {"format": "pt"},
+    )
+    (root / "Empty").mkdir()
 
 
 def _harden_permissions(root: Path) -> None:
@@ -117,6 +161,7 @@ def main() -> int:
     print(f"[e2e-backend] copying fixture -> {work_images}")
     shutil.copytree(SRC_IMAGES, work_images, ignore=_ignore_backups)
     _strip_credentials(work_images / "vault.db")
+    _seed_model_folder(MODEL_FOLDER)
 
     # Build a lean server-config from the fixture's own config, overriding the
     # fields that matter for a fast, hermetic, password-auth test server.
@@ -141,6 +186,9 @@ def main() -> int:
             # NEVER set this flag — it exposes /api/v1/test-hooks/ws-event,
             # which emits arbitrary owner-only WebSocket events.
             "enable_test_hooks": True,
+            # Read only when enable_test_hooks is on: registered as a `user`
+            # model folder and scanned synchronously at start-up.
+            "e2e_model_folder": str(MODEL_FOLDER),
             "generate_thumbnails_on_startup": False,
             "default_device": "cpu",
             "daily_snapshots": False,

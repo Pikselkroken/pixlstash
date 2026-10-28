@@ -31,7 +31,12 @@ The backend boots against the repo's `test-data/` fixture — a seeded vault
    state — this is why no credential is ever committed;
 3. writes a lean `server-config.json` (background workers + startup-thumbnail
    generation disabled, CPU only, password auth on);
-4. execs `python -m pixlstash.app` against that temp copy.
+4. lays out a small model folder (`<work dir>/model-shelf`: stub LoRAs and a
+   checkpoint in nested subfolders, an empty one, a preview `.png`) and names it
+   in the config as `e2e_model_folder`. With `enable_test_hooks` on, the server
+   registers it and scans it synchronously at start-up, so the Models shelf has
+   rows although background scans are off (`model-shelf-fixture.spec.js`);
+5. execs `python -m pixlstash.app` against that temp copy.
 
 Because the user table is stripped per run, `global-setup.js` registers a fresh
 admin (random password) and mints an `ALL` token — credentials live only for
