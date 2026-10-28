@@ -378,8 +378,7 @@
         />
         <!-- ── The app-wide tail: the rail toggle (shared with the duplicates
              queue, which is why it lives in its own component). Never folds
-             (amendment #2); the activity light stays first-class on it at
-             every width. Undo left this bar with #2160: Ctrl+Z and the
+             (amendment #2). Undo left this bar with #2160: Ctrl+Z and the
              receipt carry it in the grid. -->
         <TbGlobalActions rail-name="Stats and tasks" />
       </div>

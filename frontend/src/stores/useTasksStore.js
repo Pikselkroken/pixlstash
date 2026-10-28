@@ -39,7 +39,7 @@ export function downloadMessage(download) {
  *
  * This is the single source of truth for active background work, and the single
  * poller of GET /workers/progress. It exists so the Tasks tab, the animated
- * Tasks-tab indicator, and the app-wide stats-sidebar activity light all read
+ * Tasks-tab indicator, and the title bar's Tasks pill all read
  * the same state, and so we never poll the endpoint from two places at once.
  *
  * Three kinds of work are merged into one `activeEntries` list:

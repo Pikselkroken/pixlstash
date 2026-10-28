@@ -309,7 +309,7 @@ function finalizeError(message) {
   importActive.value = false;
   if (transitioned && importRunId) {
     // Phase B failure: the dialog is already gone. Surface it on the task row,
-    // which the toolbar activity light / Tasks-tab pulse point the user to.
+    // which the title bar's Tasks pill / Tasks-tab pulse point the user to.
     tasksStore.setImportRun(importRunId, {
       status: "failed",
       percent: 0,
@@ -385,7 +385,7 @@ function prefersReducedMotion() {
  * FLIP the count chip into the Tasks-tab import row. Resolves when the flight
  * finishes (or immediately when reduced motion is on, or the destination row
  * isn't rendered - e.g. the stats sidebar is collapsed - so the dialog just
- * fades and the toolbar activity light signals the backgrounded work).
+ * fades and the title bar's Tasks pill signals the backgrounded work).
  */
 function flyChipToTaskRow(runId) {
   return new Promise((resolve) => {
