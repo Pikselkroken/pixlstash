@@ -113,7 +113,7 @@
    olive, which is the selection, and not amber, which is an action. */
 .model-drop-target.drop-ring {
   background: var(--hover-wash);
-  box-shadow: var(--focus-ring-inset);
+  box-shadow: inset 0 0 0 var(--focus-width) var(--focus-stroke);
 }
 
 /* Non-scoped: webkit scrollbar pseudo-elements are suppressed by scoped data-v selectors */

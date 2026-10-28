@@ -430,6 +430,7 @@ button:disabled {
 }
 .v-field :focus-visible {
   outline: none;
+  box-shadow: none;
 }
 
 /* The sidebar, toolbar and title bar each paint from their OWN theme token

@@ -98,8 +98,8 @@ onMounted(async () => {
   min-width: 0;
 }
 
-/* 24px, the field's own height; the ring is the ink focus stroke drawn inset,
-   so the field reads as a field before it has focus. */
+/* 24px, the field's own height; a 1px inset border, so the field reads as a
+   field before it has focus. Focused, the global ring covers it. */
 .mnf-input {
   display: block;
   width: 100%;
@@ -109,7 +109,7 @@ onMounted(async () => {
   border: 0;
   border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-on-background), 0.06);
-  box-shadow: var(--focus-ring-inset);
+  box-shadow: inset 0 0 0 1px rgb(var(--v-theme-border));
   color: rgb(var(--v-theme-on-background));
   font-family: var(--font-ui);
   font-size: var(--text-sm);
