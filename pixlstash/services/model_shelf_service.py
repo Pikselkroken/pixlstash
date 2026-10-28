@@ -2569,10 +2569,23 @@ def fill_base_models_online(hub, ids: list[int], lookup=lookup_base_model) -> di
                 f"base_model_source = ? WHERE id = ? AND {_LOOKUP_FILLABLE_SQL}",
                 (label, fold(label), SOURCE_CIVITAI, model_id, *_LOOKUP_REPLACEABLE),
             ).rowcount
+            # Lost to a write that landed mid-batch: say whose, read in the
+            # same transaction so it is the write that beat this one.
+            winner = (
+                None
+                if written
+                else conn.execute(
+                    "SELECT base_model_source FROM model WHERE id = ?", (model_id,)
+                ).fetchone()
+            )
         if written:
             filled.append({"id": model_id, "base_model": label})
-        else:
+        elif winner is None:
+            skipped.append({"id": model_id, "reason": "unknown_id"})
+        elif winner["base_model_source"] == SOURCE_USER:
             skipped.append({"id": model_id, "reason": "owner_set"})
+        else:
+            skipped.append({"id": model_id, "reason": "already_set"})
 
     logger.info(
         "Civitai base-model lookup over %d model(s): %d filled, %d not on "

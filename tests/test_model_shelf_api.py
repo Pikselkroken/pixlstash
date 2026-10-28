@@ -11631,8 +11631,11 @@ def test_a_header_identification_landing_during_the_lookup_wins(
             )
         return "Pony"
 
-    model_shelf_service.fill_base_models_online(hub, [noname], lookup)
+    result = model_shelf_service.fill_base_models_online(hub, [noname], lookup)
 
+    assert result["skipped"] == [{"id": noname, "reason": "already_set"}], (
+        "a header that won the race was reported as the owner's ruling"
+    )
     assert _base_model_columns(shelf_env, noname) == (None, "SDXL 1.0", "declared")
 
 
