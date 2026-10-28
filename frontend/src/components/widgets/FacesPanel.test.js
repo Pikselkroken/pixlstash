@@ -65,6 +65,12 @@ describe("FacesPanel", () => {
     expect(document.activeElement?.dataset.face).toBe("3");
   });
 
+  it("never starts on a face without a picker, falling back to close", async () => {
+    mountPanel({ rows: [{ ...ROWS[1], key: 8, id: null }] });
+    await flushPromises();
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Close");
+  });
+
   it("closes on Escape and gives focus back to the pencil", async () => {
     const w = mountPanel();
     await flushPromises();

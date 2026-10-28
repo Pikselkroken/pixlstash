@@ -845,7 +845,7 @@
             <!-- The pencil's panel: a person picker per face, over the
                  sidebar rather than pushing Tags down. -->
             <FacesPanel
-              v-if="namingFaces && image && !isReadOnly"
+              v-if="namingFaces && image && !isReadOnly && !facesCollapsed"
               id="overlay-faces-panel"
               ref="facesPanelRef"
               class="overlay-faces-panel"
@@ -3224,6 +3224,10 @@ function handleKeydown(e) {
       clearDrawMode();
     } else if (pluginMenuOpen.value) {
       pluginMenuOpen.value = false;
+    } else if (namingFaces.value) {
+      // The Faces panel, not the lightbox, wherever focus was left.
+      namingFaces.value = false;
+      facesPencilRef.value?.focus?.();
     } else {
       emit("close");
     }
@@ -5513,6 +5517,15 @@ function preloadAdjacentImages() {
 const comfyMetadata = ref(null);
 
 const facesCollapsed = useSectionCollapse("faces");
+
+// The panel names one picture's faces; stepping to the next shuts it, as the
+// rail's does.
+watch(
+  () => image.value?.id,
+  () => {
+    namingFaces.value = false;
+  },
+);
 
 watch(
   () => image.value?.id,

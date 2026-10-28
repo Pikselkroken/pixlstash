@@ -15,6 +15,7 @@
     :class="{ 'faces-panel--on-dark': onDark }"
     role="dialog"
     aria-label="Faces"
+    tabindex="-1"
     @keydown.esc.stop.prevent="close(true)"
   >
     <span class="tbm-caret" :style="caretStyle"></span>
@@ -146,10 +147,12 @@ onMounted(async () => {
       caretStyle.value = { left: `${a.left + a.width / 2 - p.left - 5.5}px` };
     }
   }
+  // Only a face with an id has a live picker; with none, the close button.
+  const live = props.rows.filter((r) => r.id && !props.readonly);
   const start =
-    props.rows.find((r) => r.key === props.focusKey) ??
-    props.rows.find((r) => r.characterId == null && r.id) ??
-    props.rows[0];
+    live.find((r) => r.key === props.focusKey) ??
+    live.find((r) => r.characterId == null) ??
+    live[0];
   if (start) focusRow(start.key);
   else rootEl.value?.querySelector("button")?.focus();
 });
@@ -165,6 +168,12 @@ defineExpose({ focusRow });
 .faces-panel {
   display: flex;
   flex-direction: column;
+}
+
+/* Focusable only so a press on its title or padding keeps the keyboard inside
+   (and Escape with it); the rows carry the visible focus. */
+.faces-panel:focus {
+  outline: none;
 }
 
 /* The lightbox's always-dark sidebar: the panel takes the dark surface in both

@@ -298,6 +298,25 @@ describe("boxes are drawn while asked about, never left on", () => {
     expect(wrapper.find(".faces-panel").exists()).toBe(true);
   });
 
+  it("Escape shuts the faces panel, not the lightbox, wherever focus is", async () => {
+    const wrapper = await openMeasured();
+    await wrapper.find('[aria-label="Edit faces"]').trigger("click");
+    document.activeElement?.blur();
+    press("Escape");
+    await flush();
+    expect(wrapper.find(".faces-panel").exists()).toBe(false);
+    expect(wrapper.emitted("close")).toBeUndefined();
+  });
+
+  it("shuts the faces panel on a step to the next picture", async () => {
+    const wrapper = await openMeasured();
+    await wrapper.find('[aria-label="Edit faces"]').trigger("click");
+    press("ArrowRight");
+    await flush();
+    await flush();
+    expect(wrapper.find(".faces-panel").exists()).toBe(false);
+  });
+
   it("draws a face box from the faces panel's footer", async () => {
     const wrapper = await openMeasured();
     await wrapper.find('[aria-label="Edit faces"]').trigger("click");
