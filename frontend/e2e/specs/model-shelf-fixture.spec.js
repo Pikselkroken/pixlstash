@@ -4,8 +4,10 @@
 // the server registers and scans it at start-up, because background workers
 // (and so the scan a new folder normally gets) are off here. This spec is the
 // fixture's own check: the folder is registered, it lives under the temp dir
-// rather than in anybody's real model folders, and the shelf lists what the
-// scan found - and only that.
+// rather than in anybody's real model folders, its file count is the three
+// stubs (so the preview .png and the empty subfolder added nothing), and the
+// shelf lists each of them. The shelf is not counted whole: on a developer's
+// machine it also lists that machine's own model folders.
 
 import { realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'

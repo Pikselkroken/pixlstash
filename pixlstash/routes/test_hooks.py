@@ -161,7 +161,10 @@ def seed_model_folder(server, path: str) -> None:
         result = ModelFolderScanner(server.hub).scan_folder(folder_id, path, "user")
     except Exception as exc:
         logger.error(
-            "[test-hooks] could not seed the e2e model folder %s: %s", path, exc
+            "[test-hooks] could not seed the e2e model folder %s: %s",
+            path,
+            exc,
+            exc_info=True,
         )
         return
     logger.info(

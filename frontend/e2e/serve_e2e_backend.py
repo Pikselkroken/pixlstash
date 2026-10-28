@@ -80,7 +80,11 @@ def _strip_credentials(db_path: Path) -> None:
 
 
 def _write_stub_model(path: Path, tensors: dict, metadata: dict) -> None:
-    """Write a header-only ``.safetensors``: the scanner reads only the header."""
+    """Write a header-only ``.safetensors``: the scanner reads only the header.
+
+    Every tensor's byte range is empty, so the file is complete by its own
+    header but cannot be loaded. Same shape as the pytest fixtures' stubs.
+    """
     header = {
         name: {"dtype": "F16", "shape": shape, "data_offsets": [0, 0]}
         for name, shape in tensors.items()
