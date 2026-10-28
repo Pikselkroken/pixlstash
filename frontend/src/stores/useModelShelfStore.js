@@ -502,7 +502,7 @@ export function mergeReceipt(
   note(
     "no_such_copy",
     (n) =>
-      `${modelCount(n)} no longer has the copy you chose. Rescan that folder.`,
+      `${modelCount(n)} no longer has the copy you chose. The shelf is catching up with that folder; try again in a moment.`,
   );
   note(
     "keeper_is_that_copy",
@@ -536,7 +536,7 @@ export function mergeReceipt(
   note(
     "escapes_its_folder",
     (n) =>
-      `${modelCount(n)} is recorded outside its own folder. Rescan that folder.`,
+      `${modelCount(n)} is recorded outside its own folder. The next scan of that folder corrects it.`,
   );
   note(
     "no_such_model",
@@ -629,7 +629,7 @@ export function deleteReceipt(
   note(
     "escapes_its_folder",
     (n) =>
-      `${modelCount(n)} ${n === 1 ? "is" : "are"} recorded at a path outside the folder ${n === 1 ? "it belongs" : "they belong"} to; rescan that folder.`,
+      `${modelCount(n)} ${n === 1 ? "is" : "are"} recorded at a path outside the folder ${n === 1 ? "it belongs" : "they belong"} to; the next scan of that folder corrects it.`,
   );
   note(
     "no_such_model",

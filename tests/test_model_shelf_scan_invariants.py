@@ -245,6 +245,8 @@ class TestWeCouldNotLookIsNotGone:
         emptied.mkdir()
         write_adapter(kept / "a.safetensors")
         write_adapter(emptied / "b.safetensors", pad=1)
+        # Not empty after: an empty folder reads as an unmounted drive.
+        (emptied / "notes.txt").write_text("kept")
         kept_id = register_folder(hub, kept)
         emptied_id = register_folder(hub, emptied)
         scanner.scan_all()

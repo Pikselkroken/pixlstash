@@ -172,7 +172,7 @@ const refusal = computed(() => {
   const reason = plan.value?.refused?.[0]?.reason;
   if (!reason) return "";
   if (reason === "keeper_not_present") {
-    return "That copy is not on your disk any more. Rescan the folder, or keep another one.";
+    return "That copy is not on your disk any more. Keep another one.";
   }
   if (reason === "keeper_is_that_copy") {
     return "These two are one file — one is a shortcut to the other. There is nothing to reclaim.";

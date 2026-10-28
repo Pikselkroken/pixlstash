@@ -207,7 +207,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
 
     28 = 23 + 5 later still, when the shelf's **ai-toolkit import** block joined
     it: ``GET /model-folders/{folder_id}/runs`` and ``POST /model-imports``.
-    The listing walks a registered output root, which is ``rescan``'s authority;
+    The listing walks a registered output root, which is the folder scan's authority;
     the import writes into one registered folder and may unlink from the output
     root, which is ``POST /model-moves``' authority. Neither takes a host path -
     the import names a registered folder id and a run *name* - so they are on
@@ -222,7 +222,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     30 = 25 + 5 with ``GET /model-folders/{folder_id}/runs/{run_name}/samples/
     {filename}``, which serves one preview image out of a registered output root
     so a step can be judged before it is imported: it reads inside a registered
-    host root and writes nothing, which is ``rescan``'s authority class.
+    host root and writes nothing, which is the folder scan's authority class.
 
     31 = 26 + 5 with ``POST /model-files``, the shelf's ``Add file`` (plan F6).
     It is the second route on this tier for **both** reasons at once, and the
@@ -287,7 +287,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     them into ``<stem>_samples/`` beside the checkpoint. The byte route is
     ``GET /adapters/{sha256}/file`` again - raw bytes out of a registered model
     folder - and the listing walks one directory inside that folder, reporting
-    names of files PixlStash never registered, which is ``rescan``'s authority
+    names of files PixlStash never registered, which is the folder scan's authority
     narrowed to a directory. **The plan for that change asked for
     ``owner_only``**, on the grounds that both are addressed by a ``model.id``
     with no host path crossing the wire; that is the argument the
@@ -485,8 +485,8 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     names this host's GPUs and what runs on them, the second changes which one
     the server runs on at its next start.
     65 = 57 + 8 with ``POST /model-folders/pick-up`` (#1985): it walks every
-    folder a rescan walks and registers the files it finds by the names a
-    workflow reports missing, which is ``rescan``'s authority narrowed to those
+    folder the background scan walks and registers the files it finds by the names a
+    workflow reports missing, which is the folder scan's authority narrowed to those
     files. It takes filenames, not a host path.
     66 = 57 + 9 with ``POST /comfyui/node-packs/{pack_id}/install`` (#2054): it
     has ComfyUI-Manager install third-party code (a pack from
@@ -511,6 +511,10 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     66 = 65 + 1 with ``GET /model-folders/comfyui-reads``, which returns the
     subdirectories of registered folders the host ComfyUI loads from, names
     PixlStash never registered: the authority of ``/dirs``.
+    74 = 65 + 9 when ``POST /model-folders/{folder_id}/rescan`` was removed: a
+    registered folder is scanned in the background (``ModelFolderScanFinder``),
+    so no route walks one on request. The routes that cited its authority walk
+    what that scan walks.
 
     Arithmetic, not judgement."""
     loopback = {
@@ -525,7 +529,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 9, sorted(loopback)
-    assert len(local) == 66, sorted(local)
+    assert len(local) == 65, sorted(local)
 
 
 # ===========================================================================

@@ -198,8 +198,6 @@ const folderGates = vi.hoisted(() => ({
 }));
 vi.mock("../../composables/useModelFolderGates", () => ({
   useModelFolderGates: () => ({
-    canScan: (folder) => folder.kind === "user",
-    scanReason: () => "",
     relocateReason: () => folderGates.moveReason,
     scan: (...args) => folderGates.scan(...args),
   }),

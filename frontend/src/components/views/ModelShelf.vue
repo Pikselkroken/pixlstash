@@ -1772,7 +1772,7 @@ async function openLocation() {
         status === 403
           ? "A file manager opens on the machine running PixlStash, so this only works when you are sitting at it."
           : status === 409
-            ? "That file is not where the shelf last saw it. Rescan its folder to catch up."
+            ? "That file is not where the shelf last saw it. The shelf catches up in a moment."
             : "Couldn't open that folder - the machine running PixlStash has no desktop file manager.",
       key: "shelf-open-location",
     });

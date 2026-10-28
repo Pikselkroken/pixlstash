@@ -51,7 +51,7 @@ import json
 import os
 import sqlite3
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, NamedTuple, Optional
 
@@ -106,6 +106,11 @@ SHELF_MODEL_SUFFIXES = (".safetensors", ".gguf", ".pth")
 # The one suffix a safetensors header can be read from. Everything else on the
 # shelf is described from its filename alone.
 HEADER_SUFFIX = ".safetensors"
+
+# How long a new ``.gguf`` or ``.pth`` must sit unchanged before a scan hashes
+# it. Neither format says how long it should be, so its mtime is all a scan can
+# go on; a ``.safetensors`` is checked against its own header instead.
+ARRIVING_SETTLE_S = 10.0
 
 # ai-toolkit output roots are taken FROM, never catalogued in place.
 SOURCE_FOLDER_KIND = "source"
@@ -183,6 +188,13 @@ class FolderScanResult:
     missing: int = 0
     unreachable: int = 0
     skipped: bool = False
+    # Files left for a later scan because they are still being written: an
+    # in-flight sibling (``foo.safetensors.part``) or a safetensors shorter
+    # than its own header says.
+    arriving: int = 0
+    # The ``model.id`` of every copy this scan found that the folder had no
+    # ``present`` row for, so the shelf can be told what arrived.
+    arrived_model_ids: list[int] = field(default_factory=list)
 
 
 class _FileRecord(NamedTuple):
@@ -275,6 +287,34 @@ def _identify(
         [info.base_model, info.architecture],
         [os.path.basename(abs_path), info.trained_on],
     )
+
+
+def _still_arriving(path: str) -> bool:
+    """Whether *path* looks like a file that is still being written.
+
+    An in-flight sibling says so outright. A ``.gguf`` or ``.pth`` is arriving
+    until it has gone ``ARRIVING_SETTLE_S`` unchanged. A safetensors is arriving
+    when its header reads but its tensors run past the end of the file, which
+    is a download with its header in and its bytes still coming. A header that does
+    not read at all is left to ``_describe``, which refuses the file as
+    unreadable and says so, because a broken file and one whose first bytes
+    have not landed look the same and the warning is what the broken one needs.
+    """
+    # Local: downloads_intake imports this module.
+    from pixlstash.services.downloads_intake import (
+        IN_FLIGHT_SUFFIXES,
+        safetensors_complete,
+    )
+
+    if any(os.path.exists(path + suffix) for suffix in IN_FLIGHT_SUFFIXES):
+        return True
+    if not path.lower().endswith(HEADER_SUFFIX):
+        try:
+            return time.time() - os.path.getmtime(path) < ARRIVING_SETTLE_S
+        except OSError as exc:
+            logger.info("Cannot stat %s, leaving it for the next scan: %s", path, exc)
+            return True
+    return not safetensors_complete(path) and describe_adapter(path) is not None
 
 
 def _utcnow() -> str:
@@ -478,27 +518,48 @@ class ModelFolderScanner:
         # one. Only ``.safetensors`` files are yielded, so the list is small even
         # for a folder of 1,800 adapters.
         files = list(self._walk(path, blocked))
+        if not files and not blocked and self._is_empty_dir(path):
+            # An unmounted drive often leaves its mount point behind, empty and
+            # readable. Sweeping that would mark every model missing and hash
+            # it all again when the drive returns, so a folder with nothing at
+            # all in it is read as unreachable. A folder whose models were
+            # deleted but that still holds anything else is swept as usual.
+            if self._lists_files(folder_id):
+                return self._mark_unreachable(folder_id, path, "is empty")
         total = len(files)
         if progress is not None:
             progress(0, total)
 
         batch: list[_FileRecord] = []
+        written: dict[str, int] = {}
         last_write = time.monotonic()
         for processed, (abs_path, relpath) in enumerate(files, start=1):
-            record = self._describe(abs_path, relpath, known, result)
+            # Scans run on their own whenever a folder changes, which is exactly
+            # while a download is landing in it, and an adapter hashed half
+            # written is a model row under a digest nothing will ever match. A
+            # file the folder already lists is left to the fast path, so a
+            # file being rewritten in place is not swept to `missing`.
+            if relpath not in known and _still_arriving(abs_path):
+                result.arriving += 1
+                record = None
+            else:
+                record = self._describe(abs_path, relpath, known, result)
             if record is not None:
                 batch.append(record)
             if batch and (
                 len(batch) >= _WRITE_BATCH
                 or time.monotonic() - last_write >= _WRITE_INTERVAL_S
             ):
-                self._write_batch(folder_id, batch, scanned_at)
+                written.update(self._write_batch(folder_id, batch, scanned_at))
                 batch = []
                 last_write = time.monotonic()
             if progress is not None:
                 progress(processed, total)
         if batch:
-            self._write_batch(folder_id, batch, scanned_at)
+            written.update(self._write_batch(folder_id, batch, scanned_at))
+        result.arrived_model_ids = sorted(
+            {model_id for relpath, model_id in written.items() if relpath not in known}
+        )
 
         # Before the missing sweep, never after: a subtree we could not read is
         # not a subtree whose files were deleted.
@@ -525,6 +586,15 @@ class ModelFolderScanner:
     @staticmethod
     def _is_readable(path: str) -> bool:
         return bool(path) and os.path.isdir(path) and os.access(path, os.R_OK | os.X_OK)
+
+    @staticmethod
+    def _is_empty_dir(path: str) -> bool:
+        try:
+            with os.scandir(path) as entries:
+                return next(entries, None) is None
+        except OSError as exc:
+            logger.info("Cannot list %s to see whether it is empty: %s", path, exc)
+            return False
 
     @staticmethod
     def _walk(root: str, blocked: set[str]):
@@ -844,7 +914,9 @@ class ModelFolderScanner:
 
     def _write_batch(
         self, folder_id: int, batch: list[_FileRecord], scanned_at: str
-    ) -> None:
+    ) -> dict[str, int]:
+        """Write *batch* in one transaction; return ``{relpath: model.id}``."""
+        written: dict[str, int] = {}
         with self._hub.transaction() as conn:
             for record in batch:
                 model_id = record.model_id
@@ -861,6 +933,8 @@ class ModelFolderScanner:
                     )
                 self._write_identification(conn, model_id, record)
                 self._upsert_model_file(conn, folder_id, model_id, record, scanned_at)
+                written[record.relpath] = model_id
+        return written
 
     @staticmethod
     def _write_identification(
@@ -1147,7 +1221,20 @@ class ModelFolderScanner:
             )
             return int(cursor.rowcount or 0)
 
-    def _mark_unreachable(self, folder_id: int, path: str) -> FolderScanResult:
+    def _lists_files(self, folder_id: int) -> bool:
+        """Whether the folder has a row a missing sweep would demote."""
+        return (
+            self._hub.fetchone(
+                "SELECT 1 FROM model_file WHERE model_folder_id = ? "
+                "AND state NOT IN (?, ?) LIMIT 1",
+                (folder_id, STATE_MISSING, STATE_REMOVED),
+            )
+            is not None
+        )
+
+    def _mark_unreachable(
+        self, folder_id: int, path: str, reason: str = "is not a readable directory"
+    ) -> FolderScanResult:
         """Record that the folder could not be read, and change nothing else.
 
         Not ``missing``: an unplugged drive says nothing about whether its files
@@ -1155,10 +1242,11 @@ class ModelFolderScanner:
         content the user still has.
         """
         logger.warning(
-            "Model folder %s (id=%s) is not a readable directory; marking its "
-            "files unreachable rather than missing.",
+            "Model folder %s (id=%s) %s; marking its files unreachable rather "
+            "than missing.",
             path,
             folder_id,
+            reason,
         )
         scanned_at = _utcnow()
         with self._hub.transaction() as conn:

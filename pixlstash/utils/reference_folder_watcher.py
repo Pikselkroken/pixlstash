@@ -11,12 +11,20 @@ runs without waiting for the normal 5-minute poll interval.
 
 Events are debounced per folder so that rapid sequences (e.g. an editor doing
 an atomic write via temp-file → rename) are collapsed into a single rescan.
+
+The model shelf watches its registered model folders with a second instance,
+given the model suffixes instead of the picture ones
+(:class:`~pixlstash.tasks.model_folder_scan_finder.ModelFolderScanFinder`).
 """
 
 import os
 import threading
 
-from watchdog.events import FileSystemEventHandler
+from watchdog.events import (
+    EVENT_TYPE_CLOSED_NO_WRITE,
+    EVENT_TYPE_OPENED,
+    FileSystemEventHandler,
+)
 from watchdog.observers import Observer
 
 from pixlstash.pixl_logging import get_logger
@@ -39,6 +47,14 @@ ROOT_INTERNAL_DIRS: frozenset[str] = frozenset({"snapshots", "tmp"})
 # Coalesces rapid event bursts (editor saves, atomic renames, etc.).
 _DEBOUNCE_S: float = 2.0
 
+# watchdog reports a file being opened and closed unwritten too. Neither changes
+# anything, and both happen whenever something READS the file: a thumbnail
+# pass, ComfyUI loading a LoRA, or the scan this watch triggers, which would
+# otherwise wake itself again forever.
+_READ_ONLY_EVENTS: frozenset[str] = frozenset(
+    {EVENT_TYPE_OPENED, EVENT_TYPE_CLOSED_NO_WRITE}
+)
+
 
 class ReferenceFolderWatcher:
     """Watches reference folder directories for filesystem changes.
@@ -52,10 +68,20 @@ class ReferenceFolderWatcher:
     Args:
         on_folder_changed: Called with ``folder_id: int`` when a relevant
             filesystem change is detected for that folder.
+        extensions: The lower-cased suffixes whose changes count. Pictures and
+            sidecars by default; the model shelf passes its model suffixes.
+        debounce_s: How long a folder must stay quiet before the callback.
     """
 
-    def __init__(self, on_folder_changed) -> None:
+    def __init__(
+        self,
+        on_folder_changed,
+        extensions: frozenset[str] = _WATCHED_EXTS,
+        debounce_s: float = _DEBOUNCE_S,
+    ) -> None:
         self._on_folder_changed = on_folder_changed
+        self._extensions = frozenset(extensions)
+        self._debounce_s = debounce_s
         self._observer = Observer()
         self._watches: dict[int | None, object] = {}  # folder_id → watchdog Watch
         self._timers: dict[
@@ -104,6 +130,7 @@ class ReferenceFolderWatcher:
             self._schedule_rescan,
             # Only the library root has internal folders of ours to ignore.
             root=resolved_path if folder_id is None else None,
+            extensions=self._extensions,
         )
         # Never call into the observer while holding `self._lock`: watchdog
         # dispatches events to handlers while holding ITS lock, and
@@ -133,6 +160,11 @@ class ReferenceFolderWatcher:
             resolved_path,
         )
 
+    def watched_ids(self) -> set[int | None]:
+        """The folder ids with a watch scheduled right now."""
+        with self._lock:
+            return {fid for fid, watch in self._watches.items() if watch is not None}
+
     def unwatch_folder(self, folder_id: int | None) -> None:
         """Stop watching the directory for *folder_id*.
 
@@ -155,7 +187,7 @@ class ReferenceFolderWatcher:
             if existing:
                 existing.cancel()
             timer = threading.Timer(
-                _DEBOUNCE_S, self._trigger_rescan, args=(folder_id,)
+                self._debounce_s, self._trigger_rescan, args=(folder_id,)
             )
             timer.daemon = True
             self._timers[folder_id] = timer
@@ -183,11 +215,16 @@ class _ChangeHandler(FileSystemEventHandler):
     """Handles filesystem events for a single reference folder directory."""
 
     def __init__(
-        self, folder_id: int | None, callback, root: str | None = None
+        self,
+        folder_id: int | None,
+        callback,
+        root: str | None = None,
+        extensions: frozenset[str] = _WATCHED_EXTS,
     ) -> None:
         self._folder_id = folder_id
         self._callback = callback
         self._root = root
+        self._extensions = extensions
 
     def _is_internal(self, path: str) -> bool:
         """Whether *path* lies in a folder PixlStash writes itself (root only).
@@ -203,11 +240,13 @@ class _ChangeHandler(FileSystemEventHandler):
         return top.startswith(".") or top in ROOT_INTERNAL_DIRS
 
     def dispatch(self, event) -> None:
-        if event.is_directory:
+        if event.is_directory or getattr(event, "event_type", None) in (
+            _READ_ONLY_EVENTS
+        ):
             return
         # For move events watchdog exposes `dest_path`; use that so a file
         # moved *into* the watched directory also triggers a rescan.
         path: str = getattr(event, "dest_path", None) or event.src_path
         ext = os.path.splitext(path)[1].lower()
-        if ext in _WATCHED_EXTS and not self._is_internal(path):
+        if ext in self._extensions and not self._is_internal(path):
             self._callback(self._folder_id)

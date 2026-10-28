@@ -164,3 +164,36 @@ def test_the_root_watch_ignores_what_pixlstash_writes_itself(tmp_path):
         )
     )
     assert seen == [None, 7], "a reference folder has no internal folders to skip"
+
+
+def test_reading_a_file_is_not_a_change_and_the_suffixes_are_the_callers(tmp_path):
+    """watchdog reports opens and unwritten closes too. A scan reads every file
+    it walks and ComfyUI reads every LoRA it loads, so counting those would make
+    each scan wake the next one. The model shelf watches model suffixes, not
+    pictures."""
+    from types import SimpleNamespace
+
+    from watchdog.events import (
+        EVENT_TYPE_CLOSED,
+        EVENT_TYPE_CLOSED_NO_WRITE,
+        EVENT_TYPE_CREATED,
+        EVENT_TYPE_OPENED,
+    )
+
+    seen: list = []
+    handler = module._ChangeHandler(
+        3, seen.append, extensions=frozenset({".safetensors"})
+    )
+    model = str(tmp_path / "a.safetensors")
+
+    def event(event_type, path=model):
+        return SimpleNamespace(is_directory=False, src_path=path, event_type=event_type)
+
+    handler.dispatch(event(EVENT_TYPE_OPENED))
+    handler.dispatch(event(EVENT_TYPE_CLOSED_NO_WRITE))
+    handler.dispatch(event(EVENT_TYPE_CREATED, str(tmp_path / "b.png")))
+    assert seen == []
+
+    handler.dispatch(event(EVENT_TYPE_CREATED))
+    handler.dispatch(event(EVENT_TYPE_CLOSED))
+    assert seen == [3, 3]

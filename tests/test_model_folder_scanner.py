@@ -79,6 +79,18 @@ def write_unknown(path):
     return _write_safetensors(path, {"vae.weight": _tensor([64, 64])})
 
 
+def _not_empty(folder):
+    """Leave something besides models in *folder*: one with nothing in it at
+    all reads as an unmounted drive, not as deleted files."""
+    (folder / "notes.txt").write_text("kept")
+
+
+def _settled(path):
+    """Age a ``.gguf`` or ``.pth`` past the window a scan waits out for one."""
+    old = os.path.getmtime(path) - scanner_module.ARRIVING_SETTLE_S - 1
+    os.utime(path, (old, old))
+
+
 @pytest.fixture
 def scanner(hub):
     return ModelFolderScanner(hub)
@@ -421,6 +433,7 @@ class TestStates:
         folder.mkdir()
         path = folder / "a.safetensors"
         write_adapter(path)
+        _not_empty(folder)
         folder_id = register_folder(hub, folder)
         scanner.scan_folder(folder_id, str(folder), "user")
         with hub.transaction() as conn:
@@ -439,6 +452,7 @@ class TestStates:
         folder.mkdir()
         path = folder / "sdxl.safetensors"
         write_checkpoint(path)
+        _not_empty(folder)
         folder_id = register_folder(hub, folder)
         scanner.scan_folder(folder_id, str(folder), "user")
 
@@ -782,6 +796,7 @@ class TestScanCost:
         folder.mkdir()
         path = folder / "a.safetensors"
         write_adapter(path, name="AAAA")
+        _not_empty(folder)
         folder_id = register_folder(hub, folder)
         scanner.scan_folder(folder_id, str(folder), "user")
         stale = digest_at(hub, "a.safetensors")
@@ -1036,6 +1051,7 @@ class TestFilesWithNoReadableHeader:
         # happened to be unparseable: they are a valid start of a real format
         # whose header this build does not read.
         path.write_bytes(b"GGUF" + struct.pack("<I", 3) + b"\0" * size)
+        _settled(path)
         return str(path)
 
     def test_a_gguf_is_registered_with_the_quant_from_its_name(
@@ -1094,6 +1110,7 @@ class TestFilesWithNoReadableHeader:
         folder = tmp_path / "upscale_models"
         folder.mkdir()
         (folder / "4xNomos8kSC.pth").write_bytes(b"PK\x03\x04" + b"\0" * 64)
+        _settled(folder / "4xNomos8kSC.pth")
         folder_id = register_folder(hub, folder)
 
         result = scanner.scan_folder(folder_id, str(folder), "user")
@@ -1463,3 +1480,295 @@ class TestCuratedBaseModel:
 
         (row,) = models(hub).values()
         assert row["base_model_source"] == "filename_fuzzy", dict(row)
+
+
+class TestScansThatRunByThemselves:
+    """A scan now runs whenever a folder changes, which is while a download is
+    landing in it, and says what it found so the shelf can be told."""
+
+    def test_a_file_still_arriving_is_left_for_a_later_scan(
+        self, hub, scanner, tmp_path
+    ):
+        folder = tmp_path / "loras"
+        folder.mkdir()
+        sibling = write_adapter(folder / "fresh.safetensors")
+        (folder / "fresh.safetensors.part").write_bytes(b"")
+        truncated = folder / "short.safetensors"
+        blob = json.dumps(
+            {"blocks.0.lora_A.weight": {**_tensor([8, 16]), "data_offsets": [0, 4096]}}
+        ).encode("utf-8")
+        truncated.write_bytes(struct.pack("<Q", len(blob)) + blob)
+        write_adapter(folder / "whole.safetensors")
+        folder_id = register_folder(hub, folder)
+
+        result = scanner.scan_folder(folder_id, str(folder), "user")
+
+        assert result.arriving == 2
+        assert set(located(hub)) == {"whole.safetensors"}
+
+        # The download finishes: the sibling goes and the bytes land.
+        os.remove(str(folder / "fresh.safetensors.part"))
+        with open(truncated, "ab") as handle:
+            handle.write(b"\0" * 4096)
+        result = scanner.scan_folder(folder_id, str(folder), "user")
+        assert result.arriving == 0
+        assert set(located(hub)) == {
+            "whole.safetensors",
+            "fresh.safetensors",
+            "short.safetensors",
+        }
+        assert digest_at(hub, "fresh.safetensors") == sha256_file(sibling)
+
+    def test_a_listed_file_with_a_sibling_is_not_swept_to_missing(
+        self, hub, scanner, tmp_path
+    ):
+        """Being rewritten in place is not being deleted."""
+        folder = tmp_path / "loras"
+        folder.mkdir()
+        write_adapter(folder / "kept.safetensors")
+        folder_id = register_folder(hub, folder)
+        scanner.scan_folder(folder_id, str(folder), "user")
+
+        (folder / "kept.safetensors.part").write_bytes(b"")
+        scanner.scan_folder(folder_id, str(folder), "user")
+
+        assert located(hub)["kept.safetensors"]["state"] == STATE_PRESENT
+
+    def test_only_copies_new_to_the_folder_are_reported_as_arrived(
+        self, hub, scanner, tmp_path
+    ):
+        folder = tmp_path / "loras"
+        folder.mkdir()
+        write_adapter(folder / "one.safetensors", name="One")
+        folder_id = register_folder(hub, folder)
+
+        first = scanner.scan_folder(folder_id, str(folder), "user")
+        assert first.arrived_model_ids == [located(hub)["one.safetensors"]["model_id"]]
+
+        assert (
+            scanner.scan_folder(folder_id, str(folder), "user").arrived_model_ids == []
+        )
+
+        write_adapter(folder / "two.safetensors", name="Two")
+        third = scanner.scan_folder(folder_id, str(folder), "user")
+        assert third.arrived_model_ids == [located(hub)["two.safetensors"]["model_id"]]
+
+    def test_a_gguf_is_left_until_it_has_sat_still(self, hub, scanner, tmp_path):
+        """A GGUF states no length, so a half-copied one would hash as a model
+        nothing ever matches. Its mtime is the only evidence it is done."""
+        folder = tmp_path / "unet"
+        folder.mkdir()
+        path = folder / "flux1-dev-Q4_K_M.gguf"
+        path.write_bytes(b"GGUF" + struct.pack("<I", 3) + b"\0" * 64)
+        folder_id = register_folder(hub, folder)
+
+        result = scanner.scan_folder(folder_id, str(folder), "user")
+        assert result.arriving == 1
+        assert located(hub) == {}
+
+        _settled(path)
+        result = scanner.scan_folder(folder_id, str(folder), "user")
+        assert result.arriving == 0
+        assert set(located(hub)) == {"flux1-dev-Q4_K_M.gguf"}
+
+    def test_an_empty_mount_point_is_unreachable_not_a_folder_of_deletions(
+        self, hub, scanner, tmp_path
+    ):
+        """An unmounted drive leaves its mount point behind, empty and readable.
+        Swept, every model would read missing and be hashed again on return."""
+        folder = tmp_path / "drive"
+        folder.mkdir()
+        write_adapter(folder / "a.safetensors")
+        folder_id = register_folder(hub, folder)
+        scanner.scan_folder(folder_id, str(folder), "user")
+
+        os.remove(folder / "a.safetensors")
+        result = scanner.scan_folder(folder_id, str(folder), "user")
+
+        assert result.state == STATE_UNREACHABLE
+        assert located(hub)["a.safetensors"]["state"] == STATE_UNREACHABLE
+
+
+class _FakeWatcher:
+    def __init__(self):
+        self.watched: dict[int, str] = {}
+
+    def watch_folder(self, folder_id, path):
+        if os.path.isdir(path):
+            self.watched[folder_id] = path
+
+    def unwatch_folder(self, folder_id):
+        self.watched.pop(folder_id, None)
+
+    def watched_ids(self):
+        return set(self.watched)
+
+
+class TestModelFolderScanFinder:
+    """Which folder the background scan picks, and when it leaves one alone."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh_registry(self):
+        from pixlstash.tasks import model_folder_scan_task
+
+        with model_folder_scan_task._scans_lock:
+            model_folder_scan_task._scans.clear()
+        yield
+        with model_folder_scan_task._scans_lock:
+            model_folder_scan_task._scans.clear()
+
+    @staticmethod
+    def _finder(hub, watcher=None):
+        from pixlstash.tasks.model_folder_scan_finder import ModelFolderScanFinder
+
+        finder = ModelFolderScanFinder(hub, watcher=watcher)
+        # Every call is a check; the 2 s throttle is not what is under test.
+        finder._due = lambda _interval: True
+        return finder
+
+    @staticmethod
+    def _finish(task):
+        from pixlstash.tasks.base_task import TaskStatus
+
+        task.status = TaskStatus.COMPLETED
+
+    def test_hands_out_each_scanned_folder_once_and_never_a_taken_from_one(
+        self, hub, tmp_path
+    ):
+        own = register_folder(hub, tmp_path)
+        register_folder(hub, tmp_path / "runs", kind="source")
+        register_folder(hub, tmp_path / "dl", kind="downloads")
+        finder = self._finder(hub)
+
+        task = finder.find_task()
+        assert task.folder_id == own
+        self._finish(task)
+        assert finder.find_task() is None, "handed out again inside the interval"
+
+    def test_a_change_makes_a_folder_due_again_and_waits_out_a_running_scan(
+        self, hub, tmp_path
+    ):
+        own = register_folder(hub, tmp_path)
+        finder = self._finder(hub)
+        task = finder.find_task()
+
+        finder.mark_due(own)
+        assert finder.find_task() is None, "a second scan beside a running one"
+
+        self._finish(task)
+        again = finder.find_task()
+        assert again is not None and again.folder_id == own
+        self._finish(again)
+        assert finder.find_task() is None
+
+    def test_a_folder_scanned_long_ago_is_due_and_a_recent_one_is_not(
+        self, hub, tmp_path
+    ):
+        from datetime import datetime, timedelta, timezone
+
+        from pixlstash.tasks.model_folder_scan_finder import RESCAN_INTERVAL_S
+
+        stale = register_folder(hub, tmp_path / "a")
+        fresh = register_folder(hub, tmp_path / "b")
+        now = datetime.now(timezone.utc)
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model_folder SET last_checked = ? WHERE id = ?",
+                ((now - timedelta(seconds=RESCAN_INTERVAL_S + 5)).isoformat(), stale),
+            )
+            conn.execute(
+                "UPDATE model_folder SET last_checked = ? WHERE id = ?",
+                (now.isoformat(), fresh),
+            )
+        finder = self._finder(hub)
+
+        task = finder.find_task()
+        assert task.folder_id == stale
+        self._finish(task)
+        assert finder.find_task() is None
+
+    def test_a_change_is_answered_inside_the_check_throttle(self, hub, tmp_path):
+        """The watch wakes the planner at once; a change that waited for the
+        next 2 s check would wait for the planner's backoff instead."""
+        from pixlstash.tasks.model_folder_scan_finder import ModelFolderScanFinder
+
+        own = register_folder(hub, tmp_path)
+        finder = ModelFolderScanFinder(hub)
+        self._finish(finder.find_task())
+
+        finder.mark_due(own)
+        task = finder.find_task()
+        assert task is not None and task.folder_id == own
+
+    def test_a_scan_that_left_a_file_arriving_comes_back_for_it(
+        self, hub, tmp_path, monkeypatch
+    ):
+        """A copy that stalls sends the watch nothing more, so the finder has
+        to return for it rather than wait out the ten-minute timer."""
+        from pixlstash.tasks import model_folder_scan_finder as finder_module
+
+        register_folder(hub, tmp_path)
+        finder = self._finder(hub)
+        clock = [1_000_000.0]
+        monkeypatch.setattr(finder_module.time, "time", lambda: clock[0])
+        task = finder.find_task()
+        self._finish(task)
+        task.result = {"arriving": 1}
+        finder.on_task_complete(task, None)
+
+        clock[0] += finder_module._ARRIVING_RETRY_S - 1
+        assert finder.find_task() is None, "not before the file could settle"
+        clock[0] += 1
+        again = finder.find_task()
+        assert again is not None and again.folder_id == task.folder_id
+        self._finish(again)
+        again.result = {"arriving": 0}
+        finder.on_task_complete(again, None)
+        clock[0] += finder_module._ARRIVING_RETRY_S
+        assert finder.find_task() is None, "nothing left arriving"
+
+    def test_a_scan_dropped_before_submission_releases_its_folder(self, hub, tmp_path):
+        own = register_folder(hub, tmp_path)
+        finder = self._finder(hub)
+        task = finder.find_task()
+
+        finder.on_task_complete(task, RuntimeError("dropped"))
+        finder.mark_due(own)
+        assert finder.find_task() is not None
+
+    def test_a_folder_is_scanned_once_its_watch_is_up(self, hub, tmp_path):
+        """Whatever changed before the watch existed (while PixlStash was
+        closed, in the second after the folder was added) has no event."""
+        from datetime import datetime, timezone
+
+        own = register_folder(hub, tmp_path)
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model_folder SET last_checked = ? WHERE id = ?",
+                (datetime.now(timezone.utc).isoformat(), own),
+            )
+        assert self._finder(hub).find_task() is None, "control: not due by time"
+
+        finder = self._finder(hub, _FakeWatcher())
+        task = finder.find_task()
+        assert task is not None and task.folder_id == own
+        self._finish(task)
+        assert finder.find_task() is None, "only when the watch is new"
+
+    def test_watches_follow_the_registry(self, hub, tmp_path):
+        a = tmp_path / "a"
+        a.mkdir()
+        own = register_folder(hub, a)
+        unplugged = register_folder(hub, tmp_path / "not-there")
+        register_folder(hub, tmp_path, kind="source")
+        watcher = _FakeWatcher()
+        finder = self._finder(hub, watcher)
+
+        finder.find_task()
+        assert watcher.watched == {own: str(a)}
+
+        (tmp_path / "not-there").mkdir()
+        with hub.transaction() as conn:
+            conn.execute("DELETE FROM model_folder WHERE id = ?", (own,))
+        finder.find_task()
+        assert set(watcher.watched) == {unplugged}

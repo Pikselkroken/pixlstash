@@ -340,20 +340,9 @@
 
       <div class="mf-foot">
         <span>{{ footSummary }}</span>
-        <AppButton
-          size="sm"
-          variant="secondary"
-          icon-left="refresh"
-          :loading="rescanning"
-          :tooltip="
-            rescanReason ||
-            'Look for models added or removed in every folder PixlStash lists from.'
-          "
-          v-bind="blockedAttrs(rescanReason)"
-          @click="onRescanAll"
-        >
-          {{ rescanLabel }}
-        </AppButton>
+        <!-- No Rescan: the server scans a folder whenever a model in it
+             changes, so this only says that it is doing so. -->
+        <span role="status">{{ scanSummary }}</span>
       </div>
     </template>
 
@@ -361,7 +350,7 @@
          target of every control the tier blocks, so the reason a keyboard user
          lands on is rendered rather than living in a tooltip. -->
     <p v-if="!canManage" :id="REMOTE_NOTE_ID" class="mf-note">
-      Adding, scanning, moving, and forgetting model folders is only available
+      Adding, moving, and forgetting model folders is only available
       on the machine running PixlStash, or over your local network or Tailscale.
       To allow it from anywhere, set <code>allow_remote_host_ops</code> in
       server settings.
@@ -423,11 +412,9 @@ const {
   remoteReason,
   addReason,
   isScanning,
-  canScan,
   canForget,
   forgetReason,
   relocateReason,
-  scan,
 } = useModelFolderGates();
 
 const browseOpen = ref(false);
@@ -441,8 +428,6 @@ const downloadMenuOpen = ref(false);
 const relocating = ref(null);
 const addingKind = ref(null);
 const replacing = ref(null);
-// The folders the last Rescan all started, so its label can count them down.
-const rescanBatch = ref([]);
 
 /** Every folder but the ones the header and the pinned cards already show. */
 const listed = computed(() =>
@@ -481,26 +466,10 @@ const footSummary = computed(() => {
   return bytes > 0 ? `${count} · ${formatModelSize(bytes)}` : count;
 });
 
-/** Every folder a scan catalogues: the managed store and the owner's own. */
-const scannable = computed(() => store.folders.filter(canScan));
-
-const rescanRemaining = computed(
-  () => rescanBatch.value.filter((id) => store.scanningIds.has(id)).length,
-);
-
-// True from the click until every scan request has answered, which is before
-// any of them shows up in `scanningIds`.
-const rescanStarting = ref(false);
-
-const rescanning = computed(
-  () => rescanStarting.value || rescanRemaining.value > 0,
-);
-
-const rescanLabel = computed(() => {
-  if (!rescanning.value) return "Rescan all";
-  const total = rescanBatch.value.length;
-  const done = rescanStarting.value ? 0 : total - rescanRemaining.value;
-  return `Scanning ${Math.min(done + 1, total)} of ${total}…`;
+const scanSummary = computed(() => {
+  const n = store.scanningIds.size;
+  if (!n) return "Kept up to date as models are added or removed";
+  return `Scanning ${n} ${n === 1 ? "folder" : "folders"}…`;
 });
 
 /** Why the default cannot be changed here, or "" when it can. */
@@ -527,11 +496,6 @@ const changeDownloadsReason = computed(
     addReason.value ||
     (store.downloadsFolder ? forgetReason(store.downloadsFolder) : ""),
 );
-
-const rescanReason = computed(() => {
-  if (remoteReason.value) return remoteReason.value;
-  return scannable.value.length ? "" : "There is no folder to scan yet.";
-});
 
 /** "5 files · 811.2 MB"; the size is left off at zero rather than claiming 0 B. */
 function folderStats(folder) {
@@ -628,21 +592,8 @@ function onForget(folder) {
   store.forget(folder);
 }
 
-/** Scan every catalogued folder. Locked, source and Downloads folders are skipped. */
-async function onRescanAll() {
-  if (rescanReason.value || rescanning.value) return;
-  const batch = scannable.value.filter((folder) => !isScanning(folder));
-  rescanBatch.value = batch.map((folder) => folder.id);
-  rescanStarting.value = true;
-  try {
-    await Promise.all(batch.map(scan));
-  } finally {
-    rescanStarting.value = false;
-  }
-}
-
 // The registry is host data, re-read when Settings opens so its rows are
-// current. A scan started here keeps polling in the store after it closes.
+// current. A scan running when it closes keeps polling in the store.
 watch(
   () => props.open,
   (isOpen) => {

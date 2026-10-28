@@ -1956,7 +1956,7 @@ def _present_copy(locations: list[dict]) -> Optional[str]:
             return path
         logger.warning(
             "The shelf records a present copy at %s but there is no file "
-            "there; a rescan of that folder would correct the row.",
+            "there; the folder's next scan corrects the row.",
             path,
         )
     return None

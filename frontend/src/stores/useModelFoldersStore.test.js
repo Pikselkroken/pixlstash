@@ -1,11 +1,11 @@
-// The model-folder registry, and the scans it waits on.
+// The model-folder registry, and the scans the server runs against it.
 //
 // The assertions worth having are the ones that pin decisions which are easy to
-// "simplify" back into bugs: the API reports a scan STARTED, never finished, so
-// the only completion signal is `last_checked` advancing and the poll must both
-// find it and give up when it never comes; and forgetting a folder is only
-// cheap to undo because the row's fields are captured BEFORE the request that
-// destroys them.
+// "simplify" back into bugs: nobody starts a scan, so "scanning" is whatever the
+// server's `scan_status` says and the poll must stop once none is in flight;
+// only the first scan of a folder added here is announced, never the server's
+// own rescans; and forgetting a folder is only cheap to undo because the row's
+// fields are captured BEFORE the request that destroys them.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { setActivePinia, createPinia } from "pinia";
@@ -13,7 +13,6 @@ import { setActivePinia, createPinia } from "pinia";
 const listModelFolders = vi.fn();
 const createModelFolder = vi.fn();
 const forgetModelFolder = vi.fn();
-const rescanModelFolder = vi.fn();
 const setDefaultModelFolder = vi.fn();
 const listModelFolderDirs = vi.fn();
 
@@ -25,7 +24,6 @@ vi.mock("../api/modelFolders", () => ({
   listModelFolders: (...a) => listModelFolders(...a),
   createModelFolder: (...a) => createModelFolder(...a),
   forgetModelFolder: (...a) => forgetModelFolder(...a),
-  rescanModelFolder: (...a) => rescanModelFolder(...a),
   setDefaultModelFolder: (...a) => setDefaultModelFolder(...a),
   listModelFolderDirs: (...a) => listModelFolderDirs(...a),
 }));
@@ -47,7 +45,7 @@ import { useNoticeStore } from "./useNoticeStore";
 function folder(overrides = {}) {
   return {
     id: 1,
-    path: "/home/g/loras",
+    path: "/home/me/loras",
     kind: "user",
     owner: null,
     movable: "per_item",
@@ -69,7 +67,6 @@ beforeEach(() => {
   forgetModelFolder
     .mockReset()
     .mockResolvedValue({ status: "success", id: 1, tombstoned_files: 91 });
-  rescanModelFolder.mockReset().mockResolvedValue({ status: "started", id: 1 });
 });
 
 afterEach(() => {
@@ -77,80 +74,76 @@ afterEach(() => {
 });
 
 describe("scanning", () => {
-  it("waits for last_checked to advance, then refreshes the shelf", async () => {
-    // The route answers 202 the instant the thread starts, so "started" is not
-    // "done". Treating the response as completion would refresh the shelf
-    // before a single file had been read.
+  it("is scanning while the server says so, and stops polling when it is not", async () => {
+    listModelFolders.mockResolvedValue([folder({ scan_status: "running" })]);
     const store = useModelFoldersStore();
     await store.refresh();
-    await store.scan(1);
     expect(store.scanningIds.has(1)).toBe(true);
-    expect(fetchRows).not.toHaveBeenCalled();
 
-    // A poll that finds the same stamp leaves the scan running.
     await vi.advanceTimersByTimeAsync(3000);
-    expect(store.scanningIds.has(1)).toBe(true);
+    expect(listModelFolders).toHaveBeenCalledTimes(2);
+
+    listModelFolders.mockResolvedValue([folder({ scan_status: "completed" })]);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(store.scanningIds.size).toBe(0);
+    const reads = listModelFolders.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(9000);
+    expect(listModelFolders).toHaveBeenCalledTimes(reads);
+  });
+
+  it("announces the first scan of a folder it added, and not the server's own", async () => {
+    // Folder 1 is being rescanned by the server; folder 2 was just added.
+    createModelFolder.mockResolvedValue(
+      folder({ id: 2, scan_status: "pending" }),
+    );
+    listModelFolders.mockResolvedValue([
+      folder({ id: 1, path: "/home/me/other", scan_status: "running" }),
+      folder({ id: 2, scan_status: "pending" }),
+    ]);
+    const store = useModelFoldersStore();
+    await store.add({ path: "/home/me/loras", kind: "user" });
+    expect(useNoticeStore().notices.at(-1).text).toContain(
+      "Looking for models",
+    );
 
     listModelFolders.mockResolvedValue([
-      folder({ last_checked: "2026-08-09T12:00:00", file_count: 91 }),
+      folder({ id: 1, path: "/home/me/other", scan_status: "completed" }),
+      folder({ id: 2, scan_status: "completed", file_count: 91 }),
     ]);
     await vi.advanceTimersByTimeAsync(3000);
-    expect(store.scanningIds.has(1)).toBe(false);
-    expect(fetchRows).toHaveBeenCalledTimes(1);
-    expect(useNoticeStore().notices[0].text).toContain("91 files listed");
+    const texts = useNoticeStore().notices.map((n) => n.text);
+    expect(texts.at(-1)).toBe("Scanned loras. 91 files listed.");
+    expect(texts.some((t) => t.includes("other"))).toBe(false);
+
+    // Announced once: the next read does not say it again.
+    await store.refresh();
+    expect(useNoticeStore().notices.map((n) => n.text)).toEqual(texts);
   });
 
-  it("gives up on a scan that never stamps, instead of polling forever", async () => {
-    // The scanner logs its exception and returns WITHOUT touching
-    // `last_checked`, so a crash is indistinguishable from a slow read on the
-    // wire. Unbounded, this poll would run for the life of the tab.
+  it("says so when the first scan of a folder it added failed", async () => {
+    createModelFolder.mockResolvedValue(
+      folder({ id: 2, scan_status: "pending" }),
+    );
+    listModelFolders.mockResolvedValue([
+      folder({ id: 2, scan_status: "failed", scan_error: "disk on fire" }),
+    ]);
     const store = useModelFoldersStore();
-    await store.refresh();
-    await store.scan(1);
-
-    await vi.advanceTimersByTimeAsync(10 * 60 * 1000 + 3000);
-    expect(store.scanningIds.has(1)).toBe(false);
-    expect(fetchRows).not.toHaveBeenCalled();
+    await store.add({ path: "/home/me/loras", kind: "user" });
     const notice = useNoticeStore().notices.at(-1);
-    expect(notice.level).toBe("warning");
-    expect(notice.text).toContain("Still scanning");
+    expect(notice.level).toBe("error");
+    expect(notice.text).toBe("Could not scan loras: disk on fire");
   });
 
-  it("does not watch a source folder, which is taken from and never scanned", async () => {
-    rescanModelFolder.mockResolvedValue({ status: "skipped", id: 1 });
-    const store = useModelFoldersStore();
-    await store.refresh();
-    await store.scan(1);
-    expect(store.scanningIds.size).toBe(0);
-  });
-
-  it("does not even submit a scan when the folder added is an output root", async () => {
-    // The server answers a source folder's scan with `skipped`, so submitting
-    // one spends a task to do nothing - and the toast that promises it would be
-    // describing work that never happens. Its runs are read live instead.
+  it("promises no scan for an output root, which is taken from", async () => {
     createModelFolder.mockResolvedValue(
       folder({ id: 2, kind: "source", path: "/runs" }),
     );
     const store = useModelFoldersStore();
 
     expect(await store.add({ path: "/runs", kind: "source" })).toBe(true);
-    expect(rescanModelFolder).not.toHaveBeenCalled();
     const notice = useNoticeStore().notices.at(-1);
     expect(notice.text).toContain("ready to import");
     expect(notice.text).not.toContain("Looking for models");
-  });
-
-  it("still scans an ordinary folder, which is the reason the branch exists", async () => {
-    // The positive control. A branch that skipped the scan for everything would
-    // pass the assertion above and break every other add.
-    rescanModelFolder.mockResolvedValue({ status: "started", id: 2 });
-    const store = useModelFoldersStore();
-
-    await store.add({ path: "/home/g/loras", kind: "user" });
-    expect(rescanModelFolder).toHaveBeenCalled();
-    expect(useNoticeStore().notices.at(-1).text).toContain(
-      "Looking for models",
-    );
   });
 
   it("names the one output root, and nothing else", async () => {
@@ -193,7 +186,7 @@ describe("forgetting", () => {
 
     await notice.action.handler();
     expect(createModelFolder).toHaveBeenCalledWith({
-      path: "/home/g/loras",
+      path: "/home/me/loras",
       kind: "user",
       hostPath: "/mnt/host/loras",
       deleteAfterImport: false,
@@ -237,9 +230,10 @@ describe("session reset", () => {
   it("drops the host paths and abandons the poll", async () => {
     // Absolute paths on this machine are owner-only, so none of it may survive
     // into a share or read-only session that could never have asked for it.
+    listModelFolders.mockResolvedValue([folder({ scan_status: "running" })]);
     const store = useModelFoldersStore();
     await store.refresh();
-    await store.scan(1);
+    expect(store.scanningIds.has(1)).toBe(true);
     store.resetForSession();
 
     expect(store.folders).toEqual([]);
@@ -259,7 +253,7 @@ describe("sentence helpers", () => {
   });
 
   it("names the folder by its last segment, trailing slash or not", () => {
-    expect(basename("/home/g/loras/")).toBe("loras");
+    expect(basename("/home/me/loras/")).toBe("loras");
     expect(basename("C:\\models\\lora")).toBe("lora");
   });
 });

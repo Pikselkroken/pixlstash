@@ -20,16 +20,15 @@ after commit, before the unlink  both paths                 the **destination**
 
 Both residues are a *duplicate*, which the shelf already models - one ``model``
 row with two ``model_file`` rows is what a file copied into two registered
-folders is, and a **manual** rescan of either folder reconciles it. Neither
+folders is, and the next scan of either folder reconciles it. Neither
 residue is a dangling row. That is the acceptance bar (shelf plan §6 item 3),
 and ``tests/test_model_move.py`` interrupts both windows to prove it.
 
-**"A rescan fixes it" means the owner presses the button.** ``ModelFolderScanner``
-has exactly one caller, ``POST /model-folders/{id}/rescan``; nothing scans a
-model folder on start or on a schedule. So every reconciliation claim below is a
-claim about a *repair the owner can make*, not about one that happens by itself.
-The residues are chosen so that waiting costs nothing - a duplicate is
-serviceable, a dangling row is not - but nobody should read them as self-healing.
+**"A rescan fixes it" means the next background scan.** ``ModelFolderScanFinder``
+scans a folder when a model file in it changes, when its watch comes up (start-up
+included) and every ten minutes, so the reconciliation claims below heal by
+themselves within that. The residues are still chosen so that waiting costs
+nothing - a duplicate is serviceable, a dangling row is not.
 
 **Same-drive is a rename and skips all of it**, per the ruling. Nothing is
 copied, nothing is verified and no space is needed, because no second copy is
@@ -38,7 +37,7 @@ destination name and then drops the source one (:func:`publish_no_clobber`), so
 a crash between it and the commit leaves the file at the destination - and, if
 the crash lands between those two syscalls, at the source as well - with the row
 still naming the source. That is a ``missing`` row and an unregistered file, or
-a plain duplicate, and a manual rescan of either folder repairs both by content,
+a plain duplicate, and the next scan of either folder repairs both by content,
 because ``model`` is keyed by sha256 and the row keeps its curation. An *error*
 in that gap is not a residue at all: the publication removes the name it claimed
 and the move fails with both files where they were. The window is the
@@ -1126,8 +1125,8 @@ class ModelMover:
             # only known location. Let a rescan clear it instead.
             raise MoveRefused(
                 f"{destination_relpath} is registered to model "
-                f"{existing['model_id']} in the destination folder. Rescan that "
-                "folder first."
+                f"{existing['model_id']} in the destination folder. Try again "
+                "once that folder's next scan has caught up."
             )
 
     # -- execution --------------------------------------------------------
@@ -1242,7 +1241,7 @@ class ModelMover:
         No copy, no verify and no space check, because no second copy is made -
         the ruling. The residue of a crash between the two steps is a file at the
         destination that no row names plus a row that will read ``missing``, and
-        a manual rescan of either folder re-links it by content with its
+        the next scan of either folder re-links it by content with its
         curation intact. That is narrower than the copy path's guarantee, and it
         is bought with a window measured in syscalls rather than in minutes of
         I/O.
@@ -1325,8 +1324,8 @@ class ModelMover:
                 # lookup and the public {sha256}/file route both resolve on it.
                 raise OSError(
                     f"{move.source_relpath} hashes as {written} but is "
-                    f"registered as {move.sha256}; rescan its folder before "
-                    "moving it."
+                    f"registered as {move.sha256}; try again once its folder's "
+                    "next scan has re-read it."
                 )
             publish_no_clobber(partial, move.destination_path)
         except OSError:

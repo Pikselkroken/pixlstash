@@ -640,9 +640,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # rows - even though the shipped labels beside them are a constant.
     ("GET", "/api/v1/models/base-models"): RoutePolicy(_OWNER),
     # ── model_folders.py (shelf plan B5; §16.3 host-capability for the writes)
-    # The read is OWNER_ONLY like the rest of the shelf. Every mutator and the
-    # rescan take - or walk - a caller-supplied host path, which is the
-    # reference-folders class exactly, so they carry the §16.3 locality tier.
+    # The read is OWNER_ONLY like the rest of the shelf. Every mutator takes - or
+    # walks - a caller-supplied host path, which is the reference-folders class
+    # exactly, so they carry the §16.3 locality tier. There is no rescan route:
+    # folders are scanned in the background (ModelFolderScanFinder).
     ("GET", "/api/v1/model-folders"): RoutePolicy(_OWNER),
     # OWNER_ONLY, not the §16.3 tier the mutators carry, and the difference is
     # deliberate. It takes no caller-supplied path, reads no file content and
@@ -681,13 +682,9 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _LOCAL,
         justification="§16.3 asks the saved ComfyUI on this computer where it loads each kind of model from and returns the subdirectories of registered model folders that match, names PixlStash never registered - the authority of model-folders/{folder_id}/dirs; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
-    ("POST", "/api/v1/model-folders/{folder_id}/rescan"): RoutePolicy(
-        _LOCAL,
-        justification="§16.3 walks a registered host path and reads every model file under it - the same authority as reference-folders/detect-sidecars; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
-    ),
     ("POST", "/api/v1/model-folders/pick-up"): RoutePolicy(
         _LOCAL,
-        justification="§16.3 walks every registered host path and registers the model files it finds by name - model-folders/{folder_id}/rescan's authority, narrowed to the files named; takes no host path; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+        justification="§16.3 walks every registered host path and registers the model files it finds by name - the background folder scan's authority, narrowed to the files named; takes no host path; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
     # ── model_moves.py (shelf plan B7; §16.3 host-capability) ───────────────
     # The strongest filesystem authority the shelf has: this block writes new
@@ -770,14 +767,14 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # and contains it.
     ("GET", "/api/v1/model-folders/{folder_id}/runs"): RoutePolicy(
         _LOCAL,
-        justification="§16.3 walks a registered ai-toolkit output root and reads every run folder and config under it - the same authority as model-folders/{folder_id}/rescan and reference-folders/detect-sidecars; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+        justification="§16.3 walks a registered ai-toolkit output root and reads every run folder and config under it - the same authority as POST model-folders and reference-folders/detect-sidecars; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
     (
         "GET",
         "/api/v1/model-folders/{folder_id}/runs/{run_name}/samples/{filename}",
     ): RoutePolicy(
         _LOCAL,
-        justification="§16.3 reads inside a registered ai-toolkit output root and writes nothing - the same authority class as model-folders/{folder_id}/rescan. NOT a subset of the listing beside it: that returns metadata for names matching the sample regex, this returns raw bytes for any allowlisted extension, which is a new capability rather than a narrower one. Both path segments are names joined and contained against the registered path, the samples directory is contained too (a symlinked one would otherwise become its own safe base), and the extension is allowlisted so nothing but an image can be served from our origin; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+        justification="§16.3 reads inside a registered ai-toolkit output root and writes nothing - the same authority class as POST model-folders. NOT a subset of the listing beside it: that returns metadata for names matching the sample regex, this returns raw bytes for any allowlisted extension, which is a new capability rather than a narrower one. Both path segments are names joined and contained against the registered path, the samples directory is contained too (a symlinked one would otherwise become its own safe base), and the extension is allowlisted so nothing but an image can be served from our origin; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
     ("POST", "/api/v1/model-imports"): RoutePolicy(
         _LOCAL,
@@ -791,13 +788,13 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # because what decides the tier is the authority exercised - reading bytes
     # out of a folder the owner registered - not what the route accepts. The
     # listing walks one directory inside that folder and reports names of files
-    # PixlStash never registered, which is rescan's authority in miniature; the
+    # PixlStash never registered, which is the folder scan's authority in miniature; the
     # byte route is the sample route beside it with the run replaced by a shelf
     # row. Both are kept on one tier so a caller who cannot fetch a preview is
     # not handed a list of them.
     ("GET", "/api/v1/models/{model_id}/samples"): RoutePolicy(
         _LOCAL,
-        justification="§16.3 lists one directory inside a registered model folder, reporting filenames of files PixlStash never registered - rescan's walk-a-registered-root authority, narrowed to one directory; kept on the byte route's tier so a caller who cannot fetch a preview is not handed a list of them; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+        justification="§16.3 lists one directory inside a registered model folder, reporting filenames of files PixlStash never registered - the folder scan's walk-a-registered-root authority, narrowed to one directory; kept on the byte route's tier so a caller who cannot fetch a preview is not handed a list of them; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
     ("GET", "/api/v1/models/{model_id}/samples/{filename}"): RoutePolicy(
         _LOCAL,
