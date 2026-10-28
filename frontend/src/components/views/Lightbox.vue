@@ -387,9 +387,10 @@
               <!-- A box is drawn while the reader asks about what it outlines
                    (a face crop or a detected tag pointed at in Info), every
                    box while Shift is held, the detection boxes while the
-                   Segmentation boxes toggle is pressed, and the face boxes
-                   while one is being drawn. Out of the way while a selection
-                   is being painted. -->
+                   Segmentation boxes toggle is pressed, the face boxes while
+                   one is being drawn, and a face's box for as long as its crop
+                   is clicked on. Out of the way while a selection is being
+                   painted. -->
               <template v-if="lightboxReady && !paintActive">
                 <div
                   v-if="
@@ -407,7 +408,12 @@
                 </div>
                 <div
                   v-for="(face, idx) in faceBboxes"
-                  v-show="boxesAll || drawMode || hoveredFaceIdx === idx"
+                  v-show="
+                    boxesAll ||
+                    drawMode ||
+                    hoveredFaceIdx === idx ||
+                    pinnedFaceIdxs.has(idx)
+                  "
                   :key="`face-${idx}`"
                   class="face-bbox-overlay"
                   :style="{
@@ -837,28 +843,33 @@
             </SectionHeader>
             <template v-if="!facesCollapsed">
               <div v-if="faceAssignItems.length" class="face-chips">
-                <div
+                <button
                   v-for="face in faceAssignItems"
                   :key="face.faceKey"
+                  type="button"
                   class="face-chip"
                   :class="{
                     'face-chip--unnamed': face.character_id == null,
-                    'face-chip--ringed': pictureFaceIdx === face.faceIdx,
+                    'face-chip--ringed':
+                      pictureFaceIdx === face.faceIdx ||
+                      pinnedFaceIdxs.has(face.faceIdx),
                   }"
                   :style="{ '--face-hue': faceBoxColor(face.faceIdx) }"
+                  :aria-pressed="pinnedFaceIdxs.has(face.faceIdx)"
                   @mouseenter="hoveredFaceIdx = face.faceIdx"
                   @mouseleave="hoveredFaceIdx = null"
+                  @click="togglePinnedFace(face.faceIdx)"
                 >
-                  <div class="face-chip-crop">
-                    <div
+                  <span class="face-chip-crop">
+                    <span
                       class="face-assign-crop"
                       :style="getFaceThumbStyle(face, face.faceIdx, FACE_CHIP_SIZE)"
-                    ></div>
-                  </div>
+                    ></span>
+                  </span>
                   <span class="face-chip-name">{{
                     faceAssignedName(face) || "Unknown"
                   }}</span>
-                </div>
+                </button>
               </div>
               <div v-if="!faceAssignItems.length" class="face-assign-empty">
                 No faces detected
@@ -3989,13 +4000,15 @@ const filmstripCanvasWindow = computed(() => filmstripCanvasData.value.items);
 // ── Boxes on demand ────────────────────────────────────────────────────────
 //
 // A box is drawn while the reader asks about what it outlines. Pointing at a
-// face crop in Info draws that face's box; pointing at a tag the object
-// detector found draws its box; holding Shift draws every box. The one switch
-// is the toolbar's Segmentation boxes, which keeps the detection boxes on. Pointing at a face on the picture rings its
-// crop in Info.
+// face crop in Info draws that face's box, and clicking the crop keeps it on
+// until clicked again or the picture changes; pointing at a tag the object
+// detector found draws its box; holding Shift draws every box. The one global
+// switch is the toolbar's Segmentation boxes, which keeps the detection boxes
+// on. Pointing at a face on the picture rings its crop in Info.
 const FACE_CHIP_SIZE = 42;
 const shiftHeld = ref(false);
 const hoveredFaceIdx = ref(null);
+const pinnedFaceIdxs = ref(new Set());
 const pictureFaceIdx = ref(null);
 const hoveredTagLabel = ref(null);
 // The pencil on Faces: the panel of person pickers, one per face.
@@ -4075,6 +4088,23 @@ watch(
     hoveredFaceIdx.value = null;
     pictureFaceIdx.value = null;
     hoveredTagLabel.value = null;
+  },
+);
+
+function togglePinnedFace(idx) {
+  const pinned = new Set(pinnedFaceIdxs.value);
+  // Letting go also drops the hover: a tap brings no mouseleave, so the box
+  // would otherwise stay up after the second tap.
+  if (pinned.delete(idx)) hoveredFaceIdx.value = null;
+  else pinned.add(idx);
+  pinnedFaceIdxs.value = pinned;
+}
+
+// Face indices name this picture's faces only.
+watch(
+  () => image.value?.id,
+  () => {
+    pinnedFaceIdxs.value = new Set();
   },
 );
 

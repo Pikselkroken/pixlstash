@@ -211,6 +211,47 @@ describe("boxes are drawn while asked about or switched on", () => {
     expect(shownBoxes(wrapper)).toEqual([]);
   });
 
+  it("keeps a face's box on once its crop is clicked, until clicked again", async () => {
+    const wrapper = await openMeasured();
+    const chip = wrapper.find(".face-chip");
+    await chip.trigger("mouseenter");
+    await chip.trigger("click");
+    await chip.trigger("mouseleave");
+    expect(shownBoxes(wrapper)).toEqual(["Face 1"]);
+    expect(chip.attributes("aria-pressed")).toBe("true");
+    expect(chip.classes()).toContain("face-chip--ringed");
+    // Unpinning drops the hover too: a tap brings no mouseleave.
+    await chip.trigger("mouseenter");
+    await chip.trigger("click");
+    expect(shownBoxes(wrapper)).toEqual([]);
+    expect(chip.attributes("aria-pressed")).toBe("false");
+  });
+
+  it("lets a kept face box go on the next picture", async () => {
+    const wrapper = await openMeasured();
+    await wrapper.find(".face-chip").trigger("click");
+    expect(shownBoxes(wrapper)).toEqual(["Face 1"]);
+    press("ArrowRight");
+    await flush();
+    expect(wrapper.find(".face-chip").attributes("aria-pressed")).toBe(
+      "false",
+    );
+    expect(shownBoxes(wrapper)).toEqual([]);
+  });
+
+  // Space is the chrome toggle's everywhere but on a focused pane button.
+  it("leaves Space on a keyboard-focused face chip to the chip", async () => {
+    const wrapper = await openMeasured();
+    const chip = wrapper.find(".face-chip").element;
+    chip.focus({ focusVisible: true });
+    const event = press(" ", { target: chip });
+    await flush();
+    expect(event.defaultPrevented).toBe(false);
+    expect(wrapper.find(".lightbox-shell").classes()).not.toContain(
+      "chrome-hidden",
+    );
+  });
+
   it("lets a face's box go when the inspector shuts under the pointer", async () => {
     const wrapper = await openMeasured();
     await wrapper.find(".face-chip").trigger("mouseenter");
