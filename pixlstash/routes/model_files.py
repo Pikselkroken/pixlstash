@@ -1655,6 +1655,12 @@ def create_router(server) -> APIRouter:
             present: list[dict] = []
             inside: dict[int, set[tuple[int, str]]] = {}
             for row in rows:
+                # Every row under it, whatever its state, is what the removal
+                # drops: a model whose only row here is `missing` leaves the
+                # shelf too, so it is weighed for what it breaks.
+                inside.setdefault(int(row["model_id"]), set()).add(
+                    (folder_id, row["relpath"])
+                )
                 if row["state"] != STATE_PRESENT:
                     continue
                 copies[row["relpath"][prefix:].replace(os.sep, "/")] = int(
@@ -1667,9 +1673,6 @@ def create_router(server) -> APIRouter:
                         "model_id": int(row["model_id"]),
                         "size": int(row["file_size"]),
                     }
-                )
-                inside.setdefault(int(row["model_id"]), set()).add(
-                    (folder_id, row["relpath"])
                 )
             consequences = folder_removal_consequences(server.hub, server.vault, inside)
             files = sorted(

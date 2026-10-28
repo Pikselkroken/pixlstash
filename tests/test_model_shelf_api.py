@@ -11471,6 +11471,21 @@ def test_a_model_only_inside_breaks_its_person_set_and_workflow(shelf_env, old_f
     assert plan["pictures"] == 2
 
 
+def test_a_model_whose_only_row_inside_is_missing_still_breaks_its_person(
+    shelf_env, old_folder
+):
+    """The removal drops every row under the folder, whatever its state, and
+    purges the models left with none, so the dry run weighs those too."""
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model_file SET state = 'missing' WHERE model_folder_id = 1"
+        )
+    _attach(shelf_env.server, _h("dirs-1-lost"), "character", shelf_env.character_id)
+    plan = _plan_removal(shelf_env)
+    assert [p["id"] for p in plan["breaks"]["people"]] == [shelf_env.character_id]
+    assert plan["copies"] == [], "a missing row was offered to the move"
+
+
 def test_a_stale_fingerprint_is_a_409_and_removes_nothing(
     shelf_env, old_folder, fake_trash
 ):

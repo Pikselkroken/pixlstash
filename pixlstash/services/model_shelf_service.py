@@ -2787,8 +2787,10 @@ def folder_removal_consequences(
     Args:
         hub: The open hub database.
         vault: The active vault.
-        inside: ``model.id`` to the ``(model_folder_id, relpath)`` keys of its
-            ``present`` copies under the directory.
+        inside: ``model.id`` to the ``(model_folder_id, relpath)`` keys of
+            every row it has under the directory, whatever the state: the
+            removal drops them all, so a model whose only row there is
+            ``missing`` leaves the shelf as surely as one that is present.
 
     Returns:
         ``{"models", "breaks", "pictures"}``. ``models`` is one

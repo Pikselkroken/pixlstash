@@ -12185,7 +12185,9 @@ list (previews, notes, sidecars) go too.
   `(relpath, size, mtime)`.
 - **`breaks`** is `model_shelf_service.folder_removal_consequences`. A model
   breaks something only when every `present` copy of it is inside the
-  directory. For those, `people` and `sets` (picture sets) come from
+  directory. Every model with a row under it counts, whatever the row's state,
+  because the removal drops all of them: one whose only row there is `missing`
+  leaves the shelf too. For those, `people` and `sets` (picture sets) come from
   `fetch_attachments`, `workflows` from the combinations of `fetch_workflow_sets`
   holding one, and `pictures` counts the kept pictures of every recipe
   (`recipe_asset_index` + `resolve_recipe_models`) naming one, so a picture
@@ -12197,6 +12199,12 @@ list (previews, notes, sidecars) go too.
   permanent; both remove a link inside as a link. The rows under the prefix
   are re-read after the bytes went and handed to `purge_deleted_models`, which
   drops them and the models left with no row at all.
+- **The ceiling.** `SHELF_IO_LOCK` holds off PixlStash's own writers only. A
+  process outside it that swaps a directory on the way for a link, between the
+  re-walk and the removal, redirects the trash or `rmtree`; that needs write
+  access to the model folder already. On Python 3.11 `os.path.isjunction` does
+  not exist, so on Windows a junction inside is walked into and over-listed
+  (shown, never followed by `rmtree`).
 
 ## 26. Prompt match
 
