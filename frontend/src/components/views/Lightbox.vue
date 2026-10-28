@@ -4093,10 +4093,13 @@ watch(
 
 function togglePinnedFace(idx) {
   const pinned = new Set(pinnedFaceIdxs.value);
-  // Letting go also drops the hover: a tap brings no mouseleave, so the box
+  // Letting go also drops its hover: a tap brings no mouseleave, so the box
   // would otherwise stay up after the second tap.
-  if (pinned.delete(idx)) hoveredFaceIdx.value = null;
-  else pinned.add(idx);
+  if (pinned.delete(idx)) {
+    if (hoveredFaceIdx.value === idx) hoveredFaceIdx.value = null;
+  } else {
+    pinned.add(idx);
+  }
   pinnedFaceIdxs.value = pinned;
 }
 

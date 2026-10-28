@@ -225,6 +225,14 @@ describe("boxes are drawn while asked about or switched on", () => {
     await chip.trigger("click");
     expect(shownBoxes(wrapper)).toEqual([]);
     expect(chip.attributes("aria-pressed")).toBe("false");
+
+    // Letting one go by keyboard keeps another face's hover box up.
+    await chip.trigger("click");
+    await wrapper.vm.$nextTick();
+    const vm = wrapper.vm.$.setupState;
+    vm.hoveredFaceIdx = 1;
+    await chip.trigger("click");
+    expect(vm.hoveredFaceIdx).toBe(1);
   });
 
   it("lets a kept face box go on the next picture", async () => {
