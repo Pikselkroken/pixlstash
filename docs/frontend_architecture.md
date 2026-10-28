@@ -4954,8 +4954,7 @@ neither edge moves on a workspace switch.
 row is the one stop), or by Shift+F10 and the Menu key on the focused row. F2
 renames and Ctrl+Shift+N makes a folder, on the focused row. `menuFor(node)`
 decides what a row offers. A subfolder gets *New folder*, *Move folder to…*,
-*Rename*, a rule, and *Remove folder…*, drawn disabled with its reason (the
-verb is #2207's). A registered root gets *New folder* and *Stop watching…*,
+*Rename*, a rule, and *Remove folder…* (`Del`, below). A registered root gets *New folder* and *Stop watching…*,
 which asks the shelf for Manage model folders, and nothing that would move
 its directory, because the server refuses to move a root. A locked folder has
 no menu at all: its lock is what it shows. Pick mode has no menus; it chooses.
@@ -5014,6 +5013,24 @@ change.
 reject with the server's sentence (`begin(..., { rethrow: true })`), so a
 rename shows it under its field, and a drop or the dialog shows it as a notice
 or in the dialog. A refused plan starts nothing.
+
+**Removing a folder reads it first (#2207).** *Remove folder…* and `Del` (with
+or without Shift) on a focused row call `startFolderRemove`
+(`composables/useModelFolderRemove.js`), which runs the server's dry run. A
+folder with no file goes at once, with the dry run's `fingerprint` as `expect`,
+to the Trash on `Del` and permanently on Shift+`Del` (there is nothing in it to
+confirm).
+Anything else is handed to `useModelShelfStore.requestFolderRemove`, and
+`ModelShelf` opens `ShelfRemoveFolderDialog` on that plan: every file on the
+left, largest first, the ones the shelf does not list marked *not listed*;
+the people, picture sets and workflows that break on the right, and the
+picture count last. The folder's name must be typed when something breaks or
+the delete is permanent. Shift relabels the button *Permanently delete*
+(`shiftHeld`, as on the selection pill) and the click's own `shiftKey`
+decides. A 409 re-reads the folder, and a new fingerprint replaces what is
+shown with a note that it changed. *Move the models out first…* closes the
+dialog and opens `ShelfMoveDialog` on the plan's `copies`. After a removal the
+open folder view, if it was inside, steps up to the folder that held it.
 
 #### Sorting and grouping (the `Sort` split-button)
 

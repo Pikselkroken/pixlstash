@@ -292,3 +292,38 @@ export async function moveModelFolderDir(
     ),
   );
 }
+
+/**
+ * Remove a folder inside a registered folder (#2207).
+ *
+ * With `dryRun` it reads only and answers what would go: every file (`files`,
+ * largest first, `model_id` null for one the shelf does not list), `models`,
+ * what `breaks` outside it, `pictures`, the `copies` a move takes and a
+ * `fingerprint`. The removal sends that fingerprint back as `expect`, and the
+ * server answers 409 when the folder changed since, so nothing goes that was
+ * not shown.
+ *
+ * @param {number|string} id - the folder the directory is in.
+ * @param {Object} options
+ * @param {string} options.path - the directory, POSIX, relative to its folder.
+ * @param {boolean} [options.permanent=false] - delete rather than trash.
+ * @param {boolean} [options.dryRun=false]
+ * @param {string} [options.expect] - the dry run's fingerprint.
+ * @returns {Promise<Object>} the plan, or `{files_removed, removed_models,
+ *   permanent, trash_name}`.
+ */
+export async function removeModelFolderDir(
+  id,
+  { path, permanent = false, dryRun = false, expect },
+) {
+  const body = { path };
+  if (permanent) body.permanent = true;
+  if (dryRun) body.dry_run = true;
+  if (expect) body.expect = expect;
+  return unwrap(
+    apiClient.post(
+      `${MODEL_FOLDERS_URL}/${encodeURIComponent(id)}/dirs/remove`,
+      body,
+    ),
+  );
+}

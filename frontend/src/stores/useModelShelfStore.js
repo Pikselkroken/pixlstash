@@ -3572,6 +3572,13 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    */
   const folderMoveRequest = shallowRef(null);
   let folderMoveAsks = 0;
+  /**
+   * A folder removal that needs the dialog (#2207): `{source, plan, at}`, the
+   * plan being the dry run already read. An empty folder never gets here; it
+   * goes at once. `ModelShelf` owns the dialog.
+   */
+  const folderRemoveRequest = shallowRef(null);
+  let folderRemoveAsks = 0;
 
   /**
    * The selection's copies that can move. In a folder view, only the copy in
@@ -3667,6 +3674,14 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       plan,
       at: (folderMoveAsks += 1),
     };
+  }
+
+  /**
+   * @param {{folderId: number, path: string, name: string}} source
+   * @param {Object} plan - the removal's dry run.
+   */
+  function requestFolderRemove(source, plan) {
+    folderRemoveRequest.value = { source, plan, at: (folderRemoveAsks += 1) };
   }
 
   /** True once the sets are read, so "in no set" is an answer, not a guess. */
@@ -4881,6 +4896,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     moveRequest.value = null;
     dragFolder.value = null;
     folderMoveRequest.value = null;
+    folderRemoveRequest.value = null;
     anchorId.value = null;
     anchorOccurrence.value = null;
     loaded.value = false;
@@ -5089,6 +5105,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     dragFolder,
     folderMoveRequest,
     requestFolderMove,
+    folderRemoveRequest,
+    requestFolderRemove,
     movableSelection,
     cutSelection,
     clearCut,

@@ -36,6 +36,7 @@ import itertools
 import json
 import os
 import re
+import stat
 import sys
 import tempfile
 import threading
@@ -4250,6 +4251,12 @@ _FOLDER_MUTATORS = (
         "POST",
         f"{API}/model-folders/1/dirs",
         {"json": {"path": "", "name": "authz-probe"}},
+    ),
+    # A dry run of a directory that does not exist: 404, and it reads nothing.
+    (
+        "POST",
+        f"{API}/model-folders/1/dirs/remove",
+        {"json": {"path": "authz-probe", "dry_run": True}},
     ),
 )
 
@@ -11344,6 +11351,320 @@ def test_a_folder_move_refusal_is_answered_before_the_job_starts(shelf_env, tmp_
     assert bad_name.status_code == 400, bad_name.text
     assert model_moves._job is None, "a refused folder move still took the job slot"
     assert (root / "a" / "b").is_dir()
+
+
+# ---------------------------------------------------------------------------
+# POST /model-folders/{id}/dirs/remove - removing a folder (#2207)
+# ---------------------------------------------------------------------------
+
+_REMOVE = f"{API}/model-folders/1/dirs/remove"
+
+
+@pytest.fixture
+def old_folder(shelf_env, tmp_path, request):
+    """The seeded folder at a real directory holding ``old/``: one model, a
+    note the shelf does not list, and a preview one level down. ``keep/`` is
+    beside it, empty unless the test's copies put something there."""
+    root = tmp_path / "loras"
+    (root / "old" / "previews").mkdir(parents=True)
+    (root / "keep").mkdir()
+    (root / "old" / "lost.safetensors").write_bytes(b"m" * 300)
+    (root / "old" / "notes.txt").write_bytes(b"n" * 20)
+    (root / "old" / "previews" / "p.png").write_bytes(b"p" * 100)
+    _seeded_folder_at(shelf_env.server, str(root))
+    # Indirect parametrisation names other catalogued copies; each is written.
+    copies = getattr(request, "param", None) or [
+        (os.path.join("old", "lost.safetensors"), 300, "lost")
+    ]
+    for relpath, size, _key in copies:
+        (root / relpath).write_bytes(b"m" * size)
+    _set_copies(shelf_env, 1, copies)
+    return root
+
+
+def _model_of(shelf_env, relpath: str) -> int:
+    return int(
+        shelf_env.server.hub.fetchone(
+            "SELECT model_id FROM model_file WHERE model_folder_id = 1 AND relpath = ?",
+            (relpath,),
+        )["model_id"]
+    )
+
+
+def _plan_removal(shelf_env, path: str = "old") -> dict:
+    r = shelf_env.owner.post(_REMOVE, json={"path": path, "dry_run": True})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_the_removal_dry_run_lists_every_file_largest_first_and_removes_nothing(
+    shelf_env, old_folder
+):
+    lost = _model_of(shelf_env, os.path.join("old", "lost.safetensors"))
+    plan = _plan_removal(shelf_env)
+    assert [(f["relpath"], f["size"], f["model_id"]) for f in plan["files"]] == [
+        ("lost.safetensors", 300, lost),
+        ("previews/p.png", 100, None),
+        ("notes.txt", 20, None),
+    ]
+    assert (plan["file_count"], plan["bytes"], plan["name"]) == (3, 420, "old")
+    assert plan["models"] == [
+        {"id": lost, "name": "lost.safetensors", "elsewhere": False}
+    ]
+    assert plan["breaks"] == {"people": [], "sets": [], "workflows": []}
+    assert plan["pictures"] == 0
+    assert plan["copies"] == [
+        {
+            "folder_id": 1,
+            "relpath": os.path.join("old", "lost.safetensors"),
+            "model_id": lost,
+            "size": 300,
+        }
+    ]
+    assert len(plan["fingerprint"]) == 64
+    assert (old_folder / "old" / "notes.txt").exists(), "a dry run removed something"
+    assert _plan_removal(shelf_env)["fingerprint"] == plan["fingerprint"], (
+        "the fingerprint is not a function of the folder"
+    )
+
+
+@pytest.mark.parametrize(
+    "old_folder",
+    [
+        [
+            (os.path.join("old", "lost.safetensors"), 300, "lost"),
+            (os.path.join("keep", "lost.safetensors"), 300, "lost"),
+        ]
+    ],
+    indirect=True,
+)
+def test_a_model_with_a_copy_elsewhere_breaks_nothing(shelf_env, old_folder):
+    _attach(shelf_env.server, _h("dirs-1-lost"), "character", shelf_env.character_id)
+    plan = _plan_removal(shelf_env)
+    assert plan["models"][0]["elsewhere"] is True
+    assert plan["breaks"] == {"people": [], "sets": [], "workflows": []}
+
+
+def test_a_model_only_inside_breaks_its_person_set_and_workflow(shelf_env, old_folder):
+    server = shelf_env.server
+    _attach(server, _h("dirs-1-lost"), "character", shelf_env.character_id)
+    _attach(server, _h("dirs-1-lost"), "set", shelf_env.set_id)
+    try:
+        _seed_recipe(server, "sh-remove", [("lora_name", "lost.safetensors")])
+        _seed_workflow_of(server, "manual:wf-remove", "sh-remove")
+        _seed_picture(server, "sh-remove")
+        _seed_picture(server, "sh-remove")
+        plan = _plan_removal(shelf_env)
+    finally:
+        _unseed_workflows(server)
+        _wipe_recipes(server)
+    assert plan["breaks"]["people"] == [
+        {
+            "id": shelf_env.character_id,
+            "name": "Shelf Character",
+            "models": ["lost.safetensors"],
+        }
+    ]
+    assert plan["breaks"]["sets"] == [
+        {"id": shelf_env.set_id, "name": "Shelf Set", "models": ["lost.safetensors"]}
+    ]
+    assert [w["id"] for w in plan["breaks"]["workflows"]] == ["manual:wf-remove"]
+    assert plan["pictures"] == 2
+
+
+def test_a_model_whose_only_row_inside_is_missing_still_breaks_its_person(
+    shelf_env, old_folder
+):
+    """The removal drops every row under the folder, whatever its state, and
+    purges the models left with none, so the dry run weighs those too."""
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model_file SET state = 'missing' WHERE model_folder_id = 1"
+        )
+    _attach(shelf_env.server, _h("dirs-1-lost"), "character", shelf_env.character_id)
+    plan = _plan_removal(shelf_env)
+    assert [p["id"] for p in plan["breaks"]["people"]] == [shelf_env.character_id]
+    assert plan["copies"] == [], "a missing row was offered to the move"
+
+
+def test_a_stale_fingerprint_is_a_409_and_removes_nothing(
+    shelf_env, old_folder, fake_trash
+):
+    plan = _plan_removal(shelf_env)
+    (old_folder / "old" / "late.txt").write_bytes(b"written after the dialog opened")
+    r = shelf_env.owner.post(
+        _REMOVE, json={"path": "old", "expect": plan["fingerprint"]}
+    )
+    assert r.status_code == 409, r.text
+    assert (old_folder / "old" / "lost.safetensors").exists()
+    assert list(fake_trash.iterdir()) == []
+
+    # A row that changes with the bytes left alone (a scan marking a copy
+    # missing, or registering a file) is a change too: the purge acts on rows.
+    plan = _plan_removal(shelf_env)
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model_file SET state = 'missing' WHERE model_folder_id = 1"
+        )
+    r = shelf_env.owner.post(
+        _REMOVE, json={"path": "old", "expect": plan["fingerprint"]}
+    )
+    assert r.status_code == 409, r.text
+    assert (old_folder / "old" / "lost.safetensors").exists()
+
+    missing = shelf_env.owner.post(_REMOVE, json={"path": "old"})
+    assert missing.status_code == 400, missing.text
+    assert (old_folder / "old").is_dir(), "a removal without a fingerprint went ahead"
+
+
+@pytest.mark.parametrize(
+    "old_folder",
+    [
+        [
+            (os.path.join("old", "lost.safetensors"), 300, "lost"),
+            (os.path.join("old", "twin.safetensors"), 50, "twin"),
+            (os.path.join("keep", "twin.safetensors"), 50, "twin"),
+        ]
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("permanent", [False, True], ids=["trash", "permanent"])
+def test_a_folder_goes_whole_and_takes_its_rows_and_its_last_copies(
+    shelf_env, old_folder, fake_trash, permanent
+):
+    lost = _model_of(shelf_env, os.path.join("old", "lost.safetensors"))
+    twin = _model_of(shelf_env, os.path.join("keep", "twin.safetensors"))
+    plan = _plan_removal(shelf_env)
+
+    r = shelf_env.owner.post(
+        _REMOVE,
+        json={"path": "old", "permanent": permanent, "expect": plan["fingerprint"]},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["removed_models"] == [lost]
+    assert r.json()["files_removed"] == 4
+    assert not (old_folder / "old").exists()
+    if permanent:
+        assert list(fake_trash.iterdir()) == []
+    else:
+        # One entry, whole, so it restores whole.
+        assert sorted(p.name for p in fake_trash.iterdir()) == ["old"]
+        assert (fake_trash / "old" / "previews" / "p.png").exists()
+        assert (fake_trash / "old" / "notes.txt").exists()
+    assert (old_folder / "keep" / "twin.safetensors").exists()
+
+    hub = shelf_env.server.hub
+    assert hub.fetchone("SELECT id FROM model WHERE id = ?", (lost,)) is None
+    assert [
+        row["relpath"]
+        for row in hub.fetchall(
+            "SELECT relpath FROM model_file WHERE model_id = ?", (twin,)
+        )
+    ] == [os.path.join("keep", "twin.safetensors")], "the twin lost its other copy"
+
+
+@pytest.mark.parametrize("permanent", [False, True], ids=["trash", "permanent"])
+def test_a_symlinked_directory_inside_is_removed_as_a_link(
+    shelf_env, old_folder, fake_trash, tmp_path, permanent
+):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "theirs.safetensors").write_bytes(b"o" * 999)
+    try:
+        os.symlink(outside, old_folder / "old" / "elsewhere")
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"cannot make a directory symlink here: {exc}")
+
+    plan = _plan_removal(shelf_env)
+    listed = {f["relpath"]: f for f in plan["files"]}
+    assert "elsewhere" in listed and listed["elsewhere"]["link"] is True
+    assert "elsewhere/theirs.safetensors" not in listed, (
+        "the walk followed a link out of the folder"
+    )
+
+    r = shelf_env.owner.post(
+        _REMOVE,
+        json={"path": "old", "permanent": permanent, "expect": plan["fingerprint"]},
+    )
+    assert r.status_code == 200, r.text
+    assert (outside / "theirs.safetensors").read_bytes() == b"o" * 999, (
+        "the removal reached through the link"
+    )
+
+
+def test_a_junction_is_listed_as_a_link_and_never_walked(tmp_path, monkeypatch):
+    """Without ``os.path.isjunction`` (Python 3.11), a junction is told by its
+    reparse tag. Simulated here: a directory whose ``lstat`` carries the tag."""
+    (tmp_path / "junction").mkdir()
+    (tmp_path / "junction" / "theirs.txt").write_bytes(b"not ours")
+    junction = str(tmp_path / "junction")
+    real_lstat = os.lstat
+
+    def lstat(path, *args, **kwargs):
+        if os.fspath(path) == junction:
+            return SimpleNamespace(
+                st_mode=stat.S_IFDIR,
+                st_size=0,
+                st_mtime_ns=0,
+                st_reparse_tag=model_files_routes._JUNCTION_TAG,
+            )
+        return real_lstat(path, *args, **kwargs)
+
+    monkeypatch.delattr(os.path, "isjunction", raising=False)
+    monkeypatch.setattr(os, "lstat", lstat)
+    listing = model_files_routes._folder_listing(str(tmp_path))
+    assert [(relpath, link) for relpath, _size, _mtime, link in listing] == [
+        ("junction", True)
+    ]
+
+
+def test_a_folder_removal_through_a_link_is_refused(shelf_env, old_folder, tmp_path):
+    try:
+        os.symlink(tmp_path, old_folder / "link")
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"cannot make a directory symlink here: {exc}")
+    via_link = shelf_env.owner.post(_REMOVE, json={"path": "link", "dry_run": True})
+    assert via_link.status_code == 400, via_link.text
+
+
+def test_a_folder_removal_is_refused_where_a_folder_move_is(shelf_env, old_folder):
+    root = shelf_env.owner.post(_REMOVE, json={"path": "", "dry_run": True})
+    assert root.status_code == 400, root.text
+
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model_folder (path, kind, movable, created_at) "
+            "VALUES (?, 'user', 'per_item', '2026-08-09T00:00:00Z')",
+            (str(old_folder / "old" / "previews"),),
+        )
+    holds_one = shelf_env.owner.post(_REMOVE, json={"path": "old", "dry_run": True})
+    assert holds_one.status_code == 409, holds_one.text
+
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute("UPDATE model_folder SET movable = 'root_only' WHERE id = 1")
+    locked = shelf_env.owner.post(_REMOVE, json={"path": "keep", "dry_run": True})
+    assert locked.status_code == 409, locked.text
+    assert (old_folder / "old" / "lost.safetensors").exists()
+
+
+def test_a_share_token_cannot_remove_a_folder(shelf_env, old_folder, fake_trash):
+    plan = _plan_removal(shelf_env)
+    body = {"path": "old", "expect": plan["fingerprint"]}
+    assert_real_route(shelf_env.server.api, "POST", _REMOVE)
+    for description, restriction in (
+        ("remove scoped probe", {"resource_type": "character", "resource_id": 1}),
+        ("remove unscoped probe", {}),
+    ):
+        token = mint_read_token(shelf_env.owner, description, **restriction)
+        client = bearer_client(shelf_env.server, token)
+        assert client.get(f"{API}/pictures").status_code == 200, (
+            f"{description} is dead; the refusal below would prove nothing"
+        )
+        r = client.post(_REMOVE, json=body)
+        assert r.status_code == 403, f"a share token removed a folder: {r.text}"
+    assert (old_folder / "old").is_dir(), "a refused call still removed the folder"
+    # Positive control: the owner is not blocked on the same call.
+    assert shelf_env.owner.post(_REMOVE, json=body).status_code == 200
 
 
 # ---------------------------------------------------------------------------

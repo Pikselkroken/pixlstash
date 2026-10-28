@@ -696,6 +696,12 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _LOCAL,
         justification="§16.3 moves or renames a directory tree inside or between registered model folders - a rename on one drive, a copy, verify and remove across drives - and repoints the model_file rows under it; POST /model-moves' write-and-unlink authority over a whole subtree, with both ends contained against registered folders; takes no host path; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
+    # Remove a directory inside a model folder (#2207): the delete's unlink
+    # authority over a whole subtree, so the same tier as the two above.
+    ("POST", "/api/v1/model-folders/{folder_id}/dirs/remove"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 moves a directory tree inside a registered model folder to the OS trash (or deletes it on request) and drops the model_file rows under it - POST /model-files/delete's unlink authority over a whole subtree, including files the shelf does not list. Takes no host path: the directory is contained against its registered folder by `resolve_subfolder` (no `..`, no link or dot-name on the way, realpath inside), links inside are removed as links and never walked, only per-item folders whose files the shelf may unlink are eligible, and the removal must match the fingerprint of the dry run that listed it; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
     ("POST", "/api/v1/model-folders/pick-up"): RoutePolicy(
         _LOCAL,
         justification="§16.3 walks every registered host path and registers the model files it finds by name - the background folder scan's authority, narrowed to the files named; takes no host path; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",

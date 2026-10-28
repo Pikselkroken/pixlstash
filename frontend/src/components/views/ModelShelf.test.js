@@ -253,6 +253,7 @@ const globalOpts = {
       ShelfEditDialog: true,
       ShelfMoveDialog: true,
       FolderMoveDialog: true,
+      ShelfRemoveFolderDialog: true,
       WorkflowSetRenameDialog: true,
       MergeCopiesDialog: true,
       ReplaceMissingDialog: true,
@@ -3428,8 +3429,8 @@ describe("Delete", () => {
   });
 
   // The Folders tree (#2206) is in the sidebar, outside `.shelf`, and its
-  // Delete is Remove folder…, which is not available yet. Here it must never
-  // open a file deletion, selection or no selection.
+  // Delete is Remove folder… (#2207). Here it must never open a file
+  // deletion, selection or no selection.
   it("is not the shelf's when pressed in the Folders tree", async () => {
     const wrapper = await mountWithSelection();
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);

@@ -54,6 +54,7 @@ from pixlstash.services.model_features import (
     FEATURE_SEARCH,
     FEATURE_TAGGER,
 )
+from pixlstash.services.model_folder_scanner import STATE_PRESENT
 from pixlstash.services.stack_detector import repair_stacks
 from pixlstash.services.workflow_hash import (
     SHA256_FIELD_RE,
@@ -2761,6 +2762,143 @@ def _purge(conn, ids: list[int]) -> None:
     # only ever name nothing.
     conn.execute(f"DELETE FROM model_hidden WHERE model_id IN ({marks})", tuple(ids))
     repair_stacks(conn, stack_ids)
+
+
+def folder_removal_consequences(
+    hub, vault, inside: dict[int, set[tuple[int, str]]]
+) -> dict:
+    """What removing a directory of models breaks outside it (#2207).
+
+    **A model breaks something only when every present copy of it is inside the
+    directory.** One with a present copy anywhere else is still on the shelf
+    afterwards, under the same id and digest, so its people, sets and workflows
+    keep it. An ``unreachable`` copy is not present: the drive it is on is not
+    plugged in, and a warning too many is the safe side of that.
+
+    Composed from the shelf's own reads, so the dialog and the shelf agree
+    about each link: :func:`fetch_attachments` for the people and picture sets a
+    model is attached to, :func:`fetch_workflow_sets` for the workflows its
+    pictures were made with, and :func:`recipe_asset_index` with
+    :func:`resolve_recipe_models` for how many kept pictures in this library
+    used one of the lost models. That count goes through the recipes rather
+    than summing :func:`fetch_picture_counts` per model, so a picture made with
+    two of them is counted once.
+
+    Args:
+        hub: The open hub database.
+        vault: The active vault.
+        inside: ``model.id`` to the ``(model_folder_id, relpath)`` keys of
+            every row it has under the directory, whatever the state: the
+            removal drops them all, so a model whose only row there is
+            ``missing`` leaves the shelf as surely as one that is present.
+
+    Returns:
+        ``{"models", "breaks", "pictures"}``. ``models`` is one
+        ``{"id", "name", "elsewhere"}`` per model in *inside*, ``elsewhere``
+        true when a present copy outside keeps it on the shelf. ``breaks`` is
+        ``{"people", "sets", "workflows"}``, each a list of ``{"id", "name",
+        "models"}`` naming the lost models it uses, by name. ``pictures`` is
+        the kept pictures in this library made with a lost model.
+    """
+    locations = fetch_locations(hub)
+    lost = {
+        model_id
+        for model_id, keys in inside.items()
+        if not any(
+            loc["state"] == STATE_PRESENT
+            and (loc["folder_id"], loc["relpath"]) not in keys
+            for loc in locations.get(model_id, ())
+        )
+    }
+    index = recipe_asset_index(hub)
+    _by_name, by_digest, filenames, names = index
+
+    def name_of(model_id: int) -> str:
+        return names.get(model_id) or filenames.get(model_id) or f"Model {model_id}"
+
+    models = sorted(
+        (
+            {
+                "id": model_id,
+                "name": name_of(model_id),
+                "elsewhere": model_id not in lost,
+            }
+            for model_id in inside
+        ),
+        key=lambda entry: entry["name"].lower(),
+    )
+    breaks: dict[str, list[dict]] = {"people": [], "sets": [], "workflows": []}
+    if not lost:
+        return {"models": models, "breaks": breaks, "pictures": 0}
+
+    # People and picture sets: the attachments, keyed by digest.
+    attached: dict[tuple[str, int], set[int]] = {}
+    for sha256, rows in fetch_attachments(vault).items():
+        model_id = by_digest.get(str(sha256).lower())
+        if model_id not in lost:
+            continue
+        for row in rows:
+            key = (row["entity_type"], int(row["entity_id"]))
+            attached.setdefault(key, set()).add(model_id)
+    if attached:
+        wanted: dict[str, list[int]] = {}
+        for entity_type, entity_id in attached:
+            wanted.setdefault(entity_type, []).append(entity_id)
+
+        def entity_names(session: Session) -> dict[tuple[str, int], str]:
+            found: dict[tuple[str, int], str] = {}
+            for entity_type, ids in wanted.items():
+                table = _ENTITY_MODELS.get(entity_type)
+                if table is None:
+                    continue
+                for entity_id, name in session.exec(
+                    select(table.id, table.name).where(table.id.in_(ids))
+                ).all():
+                    found[(entity_type, int(entity_id))] = name or ""
+            return found
+
+        named = vault.db.run_task(entity_names, priority=DBPriority.IMMEDIATE)
+        for (entity_type, entity_id), model_ids in attached.items():
+            if (entity_type, entity_id) not in named:
+                # An attachment to a person or set this library no longer has
+                # breaks nothing anyone can see.
+                continue
+            bucket = "people" if entity_type == ENTITY_CHARACTER else "sets"
+            breaks[bucket].append(
+                {
+                    "id": entity_id,
+                    "name": named[(entity_type, entity_id)],
+                    "models": sorted(name_of(m) for m in model_ids),
+                }
+            )
+
+    # Workflows: those whose pictures were made with a combination holding a
+    # lost model.
+    workflows: dict[str, dict] = {}
+    for combination in fetch_workflow_sets(hub, vault)["combinations"]:
+        members = {int(m["id"]) for m in combination["models"]} & lost
+        if not members:
+            continue
+        for workflow in combination["workflows"]:
+            entry = workflows.setdefault(
+                workflow["id"],
+                {"id": workflow["id"], "name": workflow["name"], "models": set()},
+            )
+            entry["models"].update(name_of(m) for m in members)
+    breaks["workflows"] = [
+        {**entry, "models": sorted(entry["models"])} for entry in workflows.values()
+    ]
+    for bucket in breaks.values():
+        bucket.sort(key=lambda entry: str(entry["name"]).lower())
+
+    recipe_models = resolve_recipe_models(hub, index)[0]
+    counts = vault.db.run_task(recipe_picture_counts, priority=DBPriority.IMMEDIATE)
+    pictures = sum(
+        counts.get(recipe, 0)
+        for recipe, members in recipe_models.items()
+        if members & lost
+    )
+    return {"models": models, "breaks": breaks, "pictures": pictures}
 
 
 def purge_deleted_models(hub, emptied: dict[int, list[tuple[int, str]]]) -> list[int]:

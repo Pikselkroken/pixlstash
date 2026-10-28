@@ -211,6 +211,7 @@ import {
   blockedAttrs,
   useModelFolderGates,
 } from "../../composables/useModelFolderGates";
+import { startFolderRemove } from "../../composables/useModelFolderRemove";
 import { errorMessage } from "../../utils/apiError";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import { driveFullness } from "../../utils/libraryChrome";
@@ -283,7 +284,6 @@ const drop = useModelCopyDrop();
 const folderDrop = useFolderDrop();
 
 const SEPARATOR = "separator";
-const REMOVE_REASON = "Removing a folder is not available yet.";
 
 const isLocked = (folder) => folder.movable !== "per_item";
 const nodeKey = (folderId, path) => `f:${folderId}:${path}`;
@@ -529,7 +529,7 @@ function menuFor(node) {
       icon: "mdi-minus-circle-outline",
       shortcut: "Del",
       danger: true,
-      reason: REMOVE_REASON,
+      reason: busy,
     },
   ];
 }
@@ -558,11 +558,15 @@ function onMoreClick(event, node) {
   openMenuFor(node, at.right, at.bottom, trigger);
 }
 
-/** Run one entry, from the menu or from its key. */
-function act(key, node) {
+/**
+ * Run one entry, from the menu or from its key. `options.permanent` is Shift on
+ * the Delete that asked, for an empty folder, which goes without a dialog.
+ */
+function act(key, node, options = {}) {
   if (key === "new") startNew(node);
   else if (key === "rename") startRename(node);
   else if (key === "move") shelf.requestFolderMove(sourceOf(node));
+  else if (key === "remove") void startFolderRemove(sourceOf(node), options);
   else if (key === "stop") {
     shelf.requestShell("manage-folders", rowEls.get(node.key) ?? null);
   }
@@ -598,6 +602,12 @@ function verbKey(event, node) {
   if (event.key === "F2" && !chord && !event.shiftKey && !event.altKey) {
     return verbFor(node, "rename");
   }
+  // Delete, with or without Shift: a folder with files opens the dialog, whose
+  // own button reads Shift; an empty one goes at once, permanently on Shift.
+  // Never the shelf's file delete.
+  if (event.key === "Delete" && !chord && !event.altKey) {
+    return verbFor(node, "remove", { permanent: event.shiftKey });
+  }
   if ((event.key === "F10" && event.shiftKey) || event.key === "ContextMenu") {
     const trigger = rowEls.get(node.key);
     if (!trigger) return false;
@@ -611,14 +621,14 @@ function verbKey(event, node) {
  * Take a verb by its key, for a row that offers it. A row that offers it and is
  * refused says why in a notice; a row that does not offer it lets the key on.
  */
-function verbFor(node, key) {
+function verbFor(node, key, options = {}) {
   const entry = menuFor(node).find((one) => one.key === key);
   if (!entry) return false;
   if (entry.reason) {
     notices.push({ level: "info", text: entry.reason });
     return true;
   }
-  act(key, node);
+  act(key, node, options);
   return true;
 }
 
