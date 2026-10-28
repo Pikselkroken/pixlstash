@@ -197,3 +197,122 @@ describe("OverlayTagsPanel - selecting, copying and pasting tags", () => {
     expect(wrapper.find(".tag-add-input").exists()).toBe(true);
   });
 });
+
+describe("OverlayTagsPanel - selecting and copying rejected tags", () => {
+  async function mountWithRejected() {
+    const { listTagPredictions } = await import("../../api/tags");
+    listTagPredictions.mockResolvedValueOnce({
+      tag_predictions: [
+        { tag: "hand", confidence: 0.38, status: "REJECTED" },
+        { tag: "blonde hair", confidence: 0.35, status: "REJECTED" },
+      ],
+      meta: {},
+    });
+    const wrapper = mountPanel();
+    await vi.waitFor(() =>
+      expect(wrapper.findAll(".overlay-tag--prediction")).toHaveLength(2),
+    );
+    return wrapper;
+  }
+
+  function rejected(wrapper) {
+    return wrapper.findAll(".overlay-tag--prediction");
+  }
+
+  it("a click selects a rejected chip and Copy copies it with the tags", async () => {
+    const wrapper = await mountWithRejected();
+    const store = useTagClipboardStore();
+    const [hand, blonde] = rejected(wrapper);
+    await blonde.trigger("click");
+    await chips(wrapper)[0].trigger("click");
+    await hand.trigger("click");
+    expect(blonde.classes()).toContain("overlay-tag--selected");
+    expect(wrapper.text()).toContain("3 selected");
+    await button(wrapper, "Copy").trigger("click");
+    expect(store.clipboardTags).toEqual(["blonde hair", "rain", "hand"]);
+    await hand.trigger("click");
+    expect(hand.classes()).not.toContain("overlay-tag--selected");
+  });
+
+  it("a right-click selects a rejected chip", async () => {
+    const wrapper = await mountWithRejected();
+    await rejected(wrapper)[1].trigger("contextmenu");
+    expect(wrapper.text()).toContain("1 selected");
+  });
+
+  it("the ✓ confirms the rejected tag without selecting it", async () => {
+    const { confirmTagPrediction } = await import("../../api/tags");
+    confirmTagPrediction.mockClear();
+    const wrapper = await mountWithRejected();
+    await rejected(wrapper)[0].find(".tag-pred-btn--confirm").trigger("click");
+    expect(confirmTagPrediction).toHaveBeenCalledWith(7, "hand");
+    expect(wrapper.find(".tag-selection-bar").exists()).toBe(false);
+  });
+
+  it("Copy all rejected tags copies every rejected chip", async () => {
+    const wrapper = await mountWithRejected();
+    const store = useTagClipboardStore();
+    await wrapper
+      .find('button[aria-label="Copy all rejected tags"]')
+      .trigger("click");
+    expect(store.clipboardTags).toEqual(["hand", "blonde hair"]);
+  });
+
+  it("removing the selection removes only the tags, never a rejected chip", async () => {
+    const { removeTagEverywhere } = await import("../../api/tags");
+    removeTagEverywhere.mockClear();
+    const wrapper = await mountWithRejected();
+    const rain = chips(wrapper)[0];
+    await rejected(wrapper)[0].trigger("click");
+    await rain.trigger("click");
+    const x = rain.find(".tag-delete-btn");
+    expect(x.attributes("aria-label")).toBe("Remove tag");
+    await x.trigger("click");
+    await vi.waitFor(() =>
+      expect(removeTagEverywhere.mock.calls.map((c) => c[1])).toEqual(["rain"]),
+    );
+  });
+
+  it("a selected rejected chip later added in another case removes the tag as spelt", async () => {
+    const { removeTagEverywhere } = await import("../../api/tags");
+    removeTagEverywhere.mockClear();
+    const wrapper = await mountWithRejected();
+    await rejected(wrapper)[0].trigger("click");
+    await wrapper.setProps({
+      image: { ...image(), tags: [...image().tags, { id: 4, tag: "Hand" }] },
+    });
+    await wrapper.vm.removeSelection();
+    await vi.waitFor(() =>
+      expect(removeTagEverywhere.mock.calls.map((c) => c[1])).toEqual(["Hand"]),
+    );
+    expect(wrapper.emitted("update-tags").at(-1)[0].map((t) => t.tag)).toEqual([
+      "rain",
+      "umbrella",
+      "yellow raincoat",
+    ]);
+  });
+
+  it("with only rejected chips selected, Delete removes nothing and keeps them", async () => {
+    const { removeTagEverywhere } = await import("../../api/tags");
+    removeTagEverywhere.mockClear();
+    const wrapper = await mountWithRejected();
+    await rejected(wrapper)[0].trigger("click");
+    await wrapper.vm.removeSelection();
+    expect(removeTagEverywhere).not.toHaveBeenCalled();
+    expect(wrapper.text()).toContain("1 selected");
+  });
+
+  it("the selection bar stays in view with the Tags section collapsed", async () => {
+    const wrapper = await mountWithRejected();
+    await rejected(wrapper)[0].trigger("click");
+    await wrapper
+      .find(".sidebar-section--tags .section-head")
+      .trigger("click");
+    expect(wrapper.find(".sidebar-section--tags .tag-list").exists()).toBe(false);
+    expect(wrapper.find(".tag-selection-bar").exists()).toBe(true);
+    // The collapse is app-wide state: open it again for the next test.
+    await wrapper
+      .find(".sidebar-section--tags .section-head")
+      .trigger("click");
+  });
+});
