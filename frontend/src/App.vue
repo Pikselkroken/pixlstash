@@ -1095,7 +1095,6 @@ defineExpose({
           :score-of="(card) => gridContainer?.scoreOf(card) ?? card.score ?? 0"
           @set-score="(card, n) => gridContainer?.setScore(card, n)"
           @toggle-favourite="(ids) => gridContainer?.toggleFavourite(ids)"
-          @add-tag="(id, tag) => gridContainer?.addTagToImage(id, tag)"
           @update-description="
             (id, text) => gridContainer?.updateDescriptionForImage(id, text)
           "

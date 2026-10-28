@@ -170,6 +170,16 @@ export const useSidebarStore = defineStore("sidebar", () => {
     cardTabRequest.value += 1;
   }
 
+  // T, or the selection pill's Tag: "tag what is selected". Opens the grid's
+  // rail and leaves a request its tag field takes when it is on screen, which
+  // may be a render later when the rail was shut. Not persisted, for the same
+  // reason as `showTasksTab`.
+  const tagFieldPending = ref(false);
+  function requestTagField() {
+    statsOpen.value = true;
+    tagFieldPending.value = true;
+  }
+
   // Back-compat helper used elsewhere.
   function persistSidebarDocked(val) {
     setSidebarDocked(val);
@@ -190,6 +200,7 @@ export const useSidebarStore = defineStore("sidebar", () => {
     tasksTabRequest,
     tasksPillRequest,
     cardTabRequest,
+    tagFieldPending,
     sidebarForcedHidden,
     statsForcedHidden,
     setSidebarDocked,
@@ -203,6 +214,7 @@ export const useSidebarStore = defineStore("sidebar", () => {
     toggleModelsRail,
     showTasksTab,
     showCardInInspector,
+    requestTagField,
     persistSidebarDocked,
   };
 });

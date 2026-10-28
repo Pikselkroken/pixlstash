@@ -16,12 +16,16 @@ vi.mock("../../api/pictures", () => ({
   getPictureMetadata: (...args) => getPictureMetadata(...args),
   listPictureFaces: (...args) => listPictureFaces(...args),
   openPictureLocation: (...args) => openPictureLocation(...args),
-  listPicturesByIds: vi.fn(async () => []),
   pictureThumbnailUrl: (id) => `/thumbs/${id}.webp`,
+  resetPicturesTags: vi.fn(async () => ({})),
 }));
+vi.mock("../../api/config", () => ({ getUserConfig: vi.fn(async () => ({})) }));
+vi.mock("../../api/users", () => ({ getPenalisedTags: vi.fn(async () => ({})) }));
+vi.mock("../../api/taggers", () => ({ listTaggers: vi.fn(async () => ({})) }));
 const bulkFetchTags = vi.fn(async () => []);
 vi.mock("../../api/tags", () => ({
   bulkFetchTags: (...args) => bulkFetchTags(...args),
+  listTags: vi.fn(async () => []),
   listTagPredictions: vi.fn(async () => ({ tag_predictions: [], meta: {} })),
   addPictureTag: vi.fn(),
   removePictureTag: vi.fn(),
@@ -36,6 +40,7 @@ import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
 import { SCRAPHEAP_PICTURES_ID } from "../../stores/useViewStore";
 import { useSelectionTags } from "../../composables/useSelectionTags";
 import { sessionContext } from "../../utils/apiClient";
+import { fitWords, pictureTitle } from "../../composables/useRailPicture";
 import {
   addPictureTag,
   confirmTagPrediction,
@@ -52,7 +57,6 @@ const STUBS = {
   Tooltip: { props: ["text"], template: '<span class="tip" :data-text="text" />' },
   StatsHistogram: true,
   OverlayDescriptionPanel: true,
-  OverlayTagsPanel: true,
   AddToEntityControl: true,
   TasksPanel: true,
 };
@@ -106,7 +110,7 @@ async function select(wrapper, ids) {
   await flush();
 }
 
-/** Select several, then wait out RailPictures' 250 ms settle and the read. */
+/** Select several, then wait out RailTags' 250 ms settle and the read. */
 async function selectAndRead(wrapper, ids) {
   await select(wrapper, ids);
   await new Promise((resolve) => setTimeout(resolve, 260));
@@ -149,14 +153,15 @@ describe("the rail's head row", () => {
   it("names one picture by its description, never by its file name", async () => {
     const wrapper = mountRail();
     await select(wrapper, [7]);
-    expect(title(wrapper)).toContain("A woman with red hair walking in the rain");
-    expect(title(wrapper)).not.toContain("IMG_2291");
-    // The first clause is the title; the whole description is the tip.
-    expect(title(wrapper)).not.toContain("neon");
+    // The first sentence, without its article; the whole is the tip.
+    expect(title(wrapper)).toBe(
+      "Woman with red hair walking in the rain, neon behind her",
+    );
     expect(
       wrapper.find('[data-testid="rail-title"] .tip').attributes("data-text"),
     ).toBe(DETAILS[7].description);
-    // The file name is a property instead.
+    // The file name is a property instead, folded until asked for.
+    await wrapper.find('[aria-label="Expand Properties"]').trigger("click");
     expect(wrapper.find(".rail-picture__props").text()).toContain(
       "IMG_2291.jpg",
     );
@@ -233,26 +238,28 @@ describe("the rail's rating strip", () => {
 });
 
 describe("the rail's sections", () => {
-  it("stay collapsed across a change of selection", async () => {
+  it("stay open across a change of selection once opened", async () => {
     const wrapper = mountRail();
     await select(wrapper, [7]);
     const propsToggle = () =>
       wrapper
         .findAll(".section-head__chevron")
         .find((b) => b.attributes("aria-label")?.endsWith("Properties"));
-    await propsToggle().trigger("click");
-    expect(wrapper.find(".rail-picture__props").exists()).toBe(false);
+    // Collapsed state is the session's, so an earlier test may have opened it.
+    if (propsToggle().attributes("aria-expanded") === "false") {
+      await propsToggle().trigger("click");
+    }
+    expect(wrapper.find(".rail-picture__props").exists()).toBe(true);
 
     // Another picture, then several, then one again: each remounts the body.
     await select(wrapper, [8]);
-    expect(wrapper.find(".rail-picture__props").exists()).toBe(false);
+    expect(wrapper.find(".rail-picture__props").exists()).toBe(true);
     await select(wrapper, [7, 8]);
     await select(wrapper, [7]);
-    expect(wrapper.find(".rail-picture__props").exists()).toBe(false);
-    expect(propsToggle().attributes("aria-expanded")).toBe("false");
+    expect(propsToggle().attributes("aria-expanded")).toBe("true");
 
     await propsToggle().trigger("click");
-    expect(wrapper.find(".rail-picture__props").exists()).toBe(true);
+    expect(wrapper.find(".rail-picture__props").exists()).toBe(false);
   });
 });
 
@@ -261,10 +268,17 @@ describe("the File property's Show in folder", () => {
     sessionContext.value = null;
   });
 
+  // Properties folds by default and keeps its state across tests: open it.
+  async function openProperties(wrapper) {
+    const toggle = wrapper.find('[aria-label="Expand Properties"]');
+    if (toggle.exists()) await toggle.trigger("click");
+  }
+
   it("opens the selected picture's folder", async () => {
     openPictureLocation.mockReset().mockResolvedValue({ status: "ok" });
     const wrapper = mountRail();
     await select(wrapper, [7]);
+    await openProperties(wrapper);
     const button = wrapper.find('.rail-picture__file button[aria-label="Show in folder"]');
     expect(button.find(".tip").attributes("data-text")).toBe("Show in folder");
     await button.trigger("click");
@@ -275,6 +289,7 @@ describe("the File property's Show in folder", () => {
     sessionContext.value = { is_owner: false, scope: "READ" };
     const wrapper = mountRail();
     await select(wrapper, [7]);
+    await openProperties(wrapper);
     expect(wrapper.find(".rail-picture__props").text()).toContain(
       "IMG_2291.jpg",
     );
@@ -282,113 +297,17 @@ describe("the File property's Show in folder", () => {
   });
 });
 
-describe("keys for chips selected in the rail", () => {
-  // The grid listens on window in the bubble phase; this stands in for it.
-  function mountWithChips(hasSelection) {
-    const panel = {
-      removeSelection: vi.fn(),
-      clearSelection: vi.fn(),
-      copySelection: vi.fn(),
-    };
-    const TagsStub = {
-      setup(_, { expose }) {
-        expose({ hasSelection, ...panel });
-        return () => null;
-      },
-    };
-    const wrapper = mount(StatsSidebar, {
-      props: { viewName: "All Pictures", pictures: [] },
-      global: { stubs: { ...STUBS, OverlayTagsPanel: TagsStub } },
-    });
-    return { wrapper, panel };
-  }
-
-  function press(key, init = {}) {
-    document.body.dispatchEvent(
-      new KeyboardEvent("keydown", { key, bubbles: true, ...init }),
+describe("several pictures' ratings", () => {
+  it("count each rating among the loaded cards", async () => {
+    const wrapper = mountRail();
+    await select(wrapper, [7, 8, 9]);
+    expect(wrapper.find(".rail-hist").attributes("aria-label")).toBe(
+      "unrated: 0, ★1: 1, ★2: 0, ★3: 2, ★4: 0, ★5: 0",
     );
-  }
-
-  let grid;
-  beforeEach(() => {
-    grid = vi.fn();
-    window.addEventListener("keydown", grid);
-  });
-  afterEach(() => window.removeEventListener("keydown", grid));
-
-  it("Delete removes the selected tags and never reaches the grid", async () => {
-    const { wrapper, panel } = mountWithChips(true);
-    await select(wrapper, [7]);
-    press("Delete");
-    expect(panel.removeSelection).toHaveBeenCalledOnce();
-    expect(grid).not.toHaveBeenCalled();
-    press("Escape");
-    expect(panel.clearSelection).toHaveBeenCalledOnce();
-    press("c", { ctrlKey: true });
-    expect(panel.copySelection).toHaveBeenCalledOnce();
-    expect(grid).not.toHaveBeenCalled();
-  });
-
-  it("still takes them while a tooltip is showing", async () => {
-    const { wrapper, panel } = mountWithChips(true);
-    await select(wrapper, [7]);
-    const tip = document.createElement("div");
-    tip.className = "v-overlay v-tooltip v-overlay--active";
-    document.body.appendChild(tip);
-    try {
-      press("Delete");
-      expect(panel.removeSelection).toHaveBeenCalledOnce();
-      expect(grid).not.toHaveBeenCalled();
-    } finally {
-      tip.remove();
-    }
-  });
-
-  it("leaves Ctrl+C to selected text, as the lightbox does", async () => {
-    const { wrapper, panel } = mountWithChips(true);
-    await select(wrapper, [7]);
-    const para = document.createElement("p");
-    para.textContent = "IMG_2291.jpg";
-    document.body.appendChild(para);
-    try {
-      window.getSelection().selectAllChildren(para);
-      press("c", { ctrlKey: true });
-      expect(panel.copySelection).not.toHaveBeenCalled();
-      expect(grid).toHaveBeenCalledOnce();
-    } finally {
-      window.getSelection().removeAllRanges();
-      para.remove();
-    }
-  });
-
-  it("leaves the keys to the grid while no chip is selected", async () => {
-    const { wrapper, panel } = mountWithChips(false);
-    await select(wrapper, [7]);
-    press("Delete");
-    expect(panel.removeSelection).not.toHaveBeenCalled();
-    expect(grid).toHaveBeenCalledOnce();
-  });
-});
-
-describe("several pictures' rating", () => {
-  const rating = (wrapper) =>
-    wrapper
-      .findAll(".rail-pictures__props dt")
-      .find((dt) => dt.text() === "Rating");
-
-  it("is Mixed when the loaded cards differ", async () => {
-    const wrapper = mountRail();
-    await select(wrapper, [7, 9]);
-    expect(rating(wrapper).element.nextElementSibling.textContent).toBe("Mixed");
-  });
-
-  it("is left out, not called Mixed, while some cards are not loaded", async () => {
-    const wrapper = mountRail();
-    useSelectionStore().selectedImageIds = [7, 8, 9];
-    await wrapper.setProps({ pictures: [CARDS[7], CARDS[8]] });
-    await flush();
-    expect(wrapper.find(".rail-pictures__props").exists()).toBe(true);
-    expect(rating(wrapper)).toBeUndefined();
+    // The tallest column is the most common rating.
+    const bars = wrapper.findAll(".rail-hist__bar");
+    expect(bars[3].attributes("style")).toContain("height: 28px");
+    expect(bars[1].attributes("style")).toContain("height: 14px");
   });
 });
 
@@ -581,19 +500,39 @@ describe("the selection's tag reads", () => {
   });
 });
 
-describe("the face crop", () => {
-  it("fills its square from a wide face box", async () => {
+describe("the faces", () => {
+  it("crop fills its square from a wide face box", async () => {
     listPictureFaces.mockResolvedValue([
       // 200 wide, 100 tall, in an 800 x 600 picture.
       { id: 1, frame_index: 0, bbox: [100, 100, 300, 200], character_id: null },
     ]);
     const wrapper = mountRail();
     await select(wrapper, [7]);
-    const style = wrapper.find(".rail-faces__crop").attributes("style");
-    // Scaled by the shorter side (32 / 100): the picture is 256 x 192 px and
-    // the face's 64 px width is centred in the 32 px box.
-    expect(style).toContain("background-size: 256px 192px");
-    expect(style).toContain("background-position: -48px -32px");
+    const style = wrapper.find(".rail-face__crop").attributes("style");
+    // Scaled by the shorter side (42 / 100): the picture is 336 x 252 px and
+    // the face's 84 px width is centred in the 42 px box.
+    expect(style).toContain("background-size: 336px 252px");
+    expect(style).toContain("background-position: -63px -42px");
+    expect(wrapper.find(".rail-face__name").text()).toBe("Unknown");
+  });
+
+  it("drop their names past three and end in a +N tile", async () => {
+    listPictureFaces.mockResolvedValue(
+      [1, 2, 3, 4, 5].map((id) => ({
+        id,
+        frame_index: 0,
+        bbox: [id * 10, 0, id * 10 + 50, 50],
+        character_id: null,
+      })),
+    );
+    const wrapper = mountRail();
+    await select(wrapper, [7]);
+    expect(wrapper.findAll(".rail-face")).toHaveLength(4);
+    expect(wrapper.find(".rail-face__name").exists()).toBe(false);
+    expect(wrapper.find(".rail-face__more").text()).toBe("+2");
+    // The menu has a row, and a picker, for every one of them.
+    await wrapper.find('[aria-label="Edit faces"]').trigger("click");
+    expect(wrapper.findAll(".rail-faces__row")).toHaveLength(5);
   });
 });
 
@@ -601,8 +540,7 @@ describe("adding a tag to several", () => {
   it("sends it once for a double Enter, as an add", async () => {
     const wrapper = mountRail();
     await selectAndRead(wrapper, [7, 8, 9]);
-    await wrapper.find('[aria-label="Add a tag to all 3"]').trigger("click");
-    const input = wrapper.find(".rail-pictures__input");
+    const input = wrapper.find(".rail-tags__input");
     await input.setValue("rain");
     addPictureTag.mockClear();
     input.trigger("keydown", { key: "Enter" });
@@ -612,29 +550,76 @@ describe("adding a tag to several", () => {
     expect(wrapper.emitted("tags-applied")).toEqual([
       [{ tag: "rain", pictureIds: [7, 8, 9], action: "add" }],
     ]);
+    // The field empties for the next tag.
+    expect(input.element.value).toBe("");
   });
 
   it("re-reads the rejected tags too: an add confirms a rejected one", async () => {
     const wrapper = mountRail();
     await selectAndRead(wrapper, [7, 8, 9]);
-    await wrapper.find('[aria-label="Add a tag to all 3"]').trigger("click");
-    const input = wrapper.find(".rail-pictures__input");
+    const input = wrapper.find(".rail-tags__input");
     await input.setValue("rain");
     listTagPredictions.mockClear();
     await input.trigger("keydown", { key: "Enter" });
     await flush();
     expect(listTagPredictions.mock.calls.map(([id]) => id)).toEqual([7, 8, 9]);
   });
+});
 
-  it("opens a collapsed Tags section and focuses the field", async () => {
+describe("T", () => {
+  it("opens a shut rail and puts the caret in its tag field", async () => {
+    const sidebar = useSidebarStore();
+    sidebar.statsOpen = false;
     const wrapper = mountRail({}, { attachTo: document.body });
-    await selectAndRead(wrapper, [7, 8, 9]);
-    await wrapper.find('[aria-label="Collapse Tags"]').trigger("click");
-    expect(wrapper.find(".rail-pictures__zone").exists()).toBe(false);
-    await wrapper.find('[aria-label="Add a tag to all 3"]').trigger("click");
+    await select(wrapper, [7, 8, 9]);
+    expect(wrapper.find(".rail-tags__input").exists()).toBe(false);
+    sidebar.requestTagField();
     await flush();
-    const input = wrapper.find(".rail-pictures__input");
+    const input = wrapper.find(".rail-tags__input");
     expect(input.exists()).toBe(true);
     expect(document.activeElement).toBe(input.element);
+    expect(sidebar.tagFieldPending).toBe(false);
+  });
+
+  it("takes the selection back from a deep-linked Tasks tab", async () => {
+    const wrapper = mountRail({}, { attachTo: document.body });
+    await select(wrapper, [7]);
+    useSidebarStore().showTasksTab();
+    await flush();
+    expect(wrapper.find(".rail-picture").exists()).toBe(false);
+    useSidebarStore().requestTagField();
+    await flush();
+    expect(document.activeElement).toBe(
+      wrapper.find(".rail-picture .rail-tags__input").element,
+    );
+  });
+});
+
+describe("the head's title", () => {
+  const measure = (text) => text.length * 10;
+
+  it("cuts after the last whole word that fits", () => {
+    expect(fitWords("Elderly man with white hair at a desk", 300, measure)).toBe(
+      "Elderly man with white hair…",
+    );
+    expect(fitWords("Short", 300, measure)).toBe("Short");
+    // Unmeasured (no layout yet): whole, for CSS to clip.
+    expect(fitWords("Elderly man with white hair", 0, measure)).toBe(
+      "Elderly man with white hair",
+    );
+  });
+
+  it("drops a trailing comma before the ellipsis", () => {
+    expect(fitWords("Woman with red hair, neon behind", 210, measure)).toBe(
+      "Woman with red hair…",
+    );
+  });
+
+  it("names a picture by its first sentence, without its article", () => {
+    const image = { description: "An old man. He smiles." };
+    expect(pictureTitle(image, [], String).title).toBe("Old man");
+    expect(pictureTitle({ description: "Theatre seats" }, [], String).title).toBe(
+      "Theatre seats",
+    );
   });
 });

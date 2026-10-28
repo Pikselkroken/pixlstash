@@ -5,7 +5,6 @@ import {
   bulkFetchTags,
   confirmTagPrediction,
   listTagPredictions,
-  rejectTagPrediction,
   removePictureTag,
 } from "../api/tags";
 import { errorDetail } from "../utils/apiError";
@@ -18,9 +17,11 @@ export const MAX_TAG_FETCH = 100;
  *
  * Coverage (a tag on all of them, or on some), the rejected predictions summed
  * across them, and the fan-outs that remove a tag from all, add it to the rest
- * or confirm a rejected one on all. Shared by the tag dialog (`TbTagPanel`) and
- * the grid's rail (#2161), so the two read and write a selection's tags the
- * same way.
+ * or confirm a rejected one on all. Read by `RailTags`, the tag field and chips
+ * of the grid's rail and of a review card, so every place that tags a
+ * selection reads and writes its tags the same way. One picture is a
+ * selection of one: its applied tags also carry the tagger's confidence
+ * (`confidenceByTag`).
  *
  * Nothing is read until the host calls `fetchSelectedImageTags` and
  * `fetchSelectedImagePredictions`; each gesture re-reads what it changed.
@@ -46,6 +47,9 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
   const predictionLoading = ref(false);
   const predictionAcceptanceThreshold = ref(0.95);
   const labelThresholds = ref({});
+  // One picture's applied tags, lowercased, to the tagger's confidence in
+  // each. Empty for several: coverage is their measure instead.
+  const confidenceByTag = ref(new Map());
   const tagActionLoading = ref([]);
   const tagError = ref("");
   // The newest read of each kind wins: an answer for a selection the user has
@@ -102,10 +106,13 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
   }
 
   async function fetchSelectedImagePredictions() {
-    const ids = pictureIds()
-      .slice(0, MAX_TAG_FETCH);
+    const ids = pictureIds().slice(0, MAX_TAG_FETCH);
     const mine = (predictionRead += 1);
+    // One picture reads every status: its accepted predictions are the
+    // confidence its chips are tinted by. Several read only the rejected.
+    const one = ids.length === 1;
     if (!ids.length) {
+      confidenceByTag.value = new Map();
       fetchedPredictionData.value = [];
       predictionReadFailed.value = false;
       predictionLoading.value = false;
@@ -116,15 +123,32 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
     try {
       const results = await Promise.all(
         ids.map((id) =>
-          listTagPredictions(id, {
-            status: "REJECTED",
-          })
+          listTagPredictions(id, one ? {} : { status: "REJECTED" })
             .then((payload) => {
-              const predictions = Array.isArray(payload)
+              const rows = Array.isArray(payload)
                 ? payload
                 : Array.isArray(payload?.tag_predictions)
                   ? payload.tag_predictions
                   : [];
+              const predictions = one
+                ? rows.filter((p) => p.status === "REJECTED")
+                : rows;
+              if (one && mine === predictionRead) {
+                // A `manual` row is the human-label ledger's placeholder, not
+                // a tagger's confidence (see aggregatedPredictions).
+                confidenceByTag.value = new Map(
+                  rows
+                    .filter(
+                      (p) =>
+                        p.status !== "REJECTED" &&
+                        p.model_version !== "manual" &&
+                        typeof p.confidence === "number",
+                    )
+                    .map((p) => [p.tag.trim().toLowerCase(), p.confidence]),
+                );
+              } else if (!one && mine === predictionRead) {
+                confidenceByTag.value = new Map();
+              }
               const threshold = Number(payload?.meta?.acceptance_threshold);
               if (mine === predictionRead) {
                 if (
@@ -200,17 +224,10 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
   });
 
-  const tagMinCoverage = ref(1);
-
   const tagsOnSome = computed(() => {
     if (!totalWithTagData.value) return [];
     return [...tagFrequency.value.entries()]
-      .filter(
-        ([, v]) =>
-          v.count > 0 &&
-          v.count < totalWithTagData.value &&
-          v.count >= tagMinCoverage.value,
-      )
+      .filter(([, v]) => v.count > 0 && v.count < totalWithTagData.value)
       .map(([name, v]) => ({
         name,
         count: v.count,
@@ -218,8 +235,6 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
       }))
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
   });
-
-  const predMinCoverage = ref(1);
 
   const aggregatedPredictions = computed(() => {
     if (!fetchedPredictionData.value.length) return [];
@@ -245,7 +260,6 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
       }
     }
     return [...freq.values()]
-      .filter((e) => e.count >= predMinCoverage.value)
       .map((e) => {
         const avgConf = e.totalConf / e.count;
         const perLabel = labelThresholds.value[e.tag];
@@ -322,16 +336,6 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
     }
   }
 
-  const tagsOnSomeHiddenCount = computed(() => {
-    if (!totalWithTagData.value || tagMinCoverage.value <= 1) return 0;
-    return [...tagFrequency.value.entries()].filter(
-      ([, v]) =>
-        v.count > 0 &&
-        v.count < totalWithTagData.value &&
-        v.count < tagMinCoverage.value,
-    ).length;
-  });
-
   /**
    * Remove one tag from every selected picture that carries it.
    *
@@ -397,34 +401,6 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
   }
 
   /**
-   * Record the human NEG for a tag on every picture it was just removed from.
-   *
-   * @param {Object} tagEntry - the aggregated tag row (`name`, `tagsByImageId`).
-   * @param {Object} [options]
-   * @param {string} [options.batchId] - the gesture batch id of the removal this
-   *   reject belongs to.
-   */
-  async function rejectTagOnAll(tagEntry, { batchId } = {}) {
-    const imageIds = [...tagEntry.tagsByImageId.keys()];
-    // A second drop of the same tag while the first is still out would
-    // record every NEG twice.
-    if (!imageIds.length || tagActionLoading.value.includes(tagEntry.name)) {
-      return;
-    }
-    tagActionLoading.value = [...tagActionLoading.value, tagEntry.name];
-    try {
-      await fanOut(imageIds, (id) =>
-        rejectTagPrediction(id, tagEntry.name, { batchId }),
-      );
-      await fetchSelectedImagePredictions();
-    } finally {
-      tagActionLoading.value = tagActionLoading.value.filter(
-        (n) => n !== tagEntry.name,
-      );
-    }
-  }
-
-  /**
    * Add these tags to every selected picture.
    *
    * @param {Array<string>} tags
@@ -471,15 +447,13 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
     predictionLoading,
     predictionAcceptanceThreshold,
     labelThresholds,
+    confidenceByTag,
     tagActionLoading,
     predActionLoading,
     tagError,
     totalWithTagData,
     tagsOnAll,
-    tagMinCoverage,
     tagsOnSome,
-    tagsOnSomeHiddenCount,
-    predMinCoverage,
     aggregatedPredictions,
     fetchSelectedImageTags,
     fetchSelectedImagePredictions,
@@ -488,6 +462,5 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
     addTagToRemaining,
     addTagsToAll,
     confirmPredictionOnAll,
-    rejectTagOnAll,
   };
 }

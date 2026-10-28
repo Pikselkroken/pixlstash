@@ -115,34 +115,6 @@
           :tooltip="`${favouriteLabel} (H)`"
           @click="emit('favourite')"
         />
-        <div v-if="!isScrapheapView && !isReadOnly" class="plugin-run-controls">
-          <v-menu
-            v-model="tagMenuOpen"
-            :close-on-content-click="false"
-            location-strategy="connected"
-            location="bottom end"
-            origin="top end"
-            transition="scale-transition"
-          >
-            <template #activator="{ props: menuProps }">
-              <div
-                v-bind="
-                  withRef(menuProps, (el) => (tagBtnRef = el))
-                "
-                class="hidden-panel-activator"
-                aria-hidden="true"
-              ></div>
-            </template>
-            <TbTagPanel
-              :selected-count="selectedCount"
-              :selected-image-ids="props.selectedImageIds"
-              :all-grid-images="props.allGridImages"
-              :open="tagMenuOpen"
-              @tags-applied="emit('tags-applied', $event)"
-              @close="tagMenuOpen = false"
-            />
-          </v-menu>
-        </div>
         <AppBarButton
           v-if="showTagControls"
           class="pill-verb"
@@ -369,13 +341,13 @@ import { useTrainingStore } from "../../stores/useTrainingStore";
 import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
+import { useSidebarStore } from "../../stores/useSidebarStore";
 import {
   ALL_PICTURES_ID,
   UNASSIGNED_PICTURES_ID,
   SCRAPHEAP_PICTURES_ID,
 } from "../../stores/useViewStore";
 import SelectionMenu from "./SelectionMenu.vue";
-import TbTagPanel from "./TbTagPanel.vue";
 import TbExportPanel from "./TbExportPanel.vue";
 import PluginParametersUI from "../widgets/PluginParametersUI.vue";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
@@ -783,27 +755,16 @@ function handlePluginMenuEsc(event) {
   pluginMenuOpen.value = false;
 }
 
-// ── Bulk tag ──────────────────────────────────────────────────────────────────
-const tagMenuOpen = ref(false);
-const tagBtnRef = ref(null);
-
-// Same guard as the plugin menu above. The whole half is unmounted by
-// GridActionPill the moment the selection empties. If ESC clears the selection
-// before Vuetify emits update:modelValue, the menu unmounts with tagMenuOpen
-// still true and auto-reopens on the next selection. Reset it when it hides.
+// ── Tag ───────────────────────────────────────────────────────────────────────
+// Tagging happens in the grid's rail (RailTags): T and the Tag verb open it and
+// put the caret in its tag field.
+const sidebarStore = useSidebarStore();
 const showTagControls = computed(
   () => props.selectedCount > 0 && !isScrapheapView.value && !isReadOnly.value,
 );
-watch(showTagControls, (shown) => {
-  if (!shown) tagMenuOpen.value = false;
-});
 
 function openTagInput() {
-  if (tagMenuOpen.value) return;
-  // Use a real click so Vuetify's location-strategy="connected" records the
-  // activator element for positioning. Directly setting tagMenuOpen skips
-  // that step and causes the menu to appear at (0, 0) on first open.
-  tagBtnRef.value?.click();
+  if (showTagControls.value) sidebarStore.requestTagField();
 }
 
 function openPluginPanel() {

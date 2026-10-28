@@ -80,7 +80,6 @@ const globalOpts = {
       "v-switch": true,
       VTooltip: true,
       FilterMenu: true,
-      TbTagPanel: true,
       UndoControl: true,
       TbGlobalActions: true,
       // AppDialog's VDialog needs an installed Vuetify; these tests are about

@@ -34,16 +34,15 @@
          bottom-right "Apply tags" button, removed as a duplicate. Anchored
          bottom-right so the panel still opens in the same place. -->
     <div v-if="store.current" ref="tagApplyRef" class="rs-tag-apply">
-      <TbTagPanel
-        v-if="tagApplyOpen"
-        class="rs-tag-apply-panel"
-        :selected-count="cardImages.length"
-        :selected-image-ids="cardImages.map((i) => i.id)"
-        :all-grid-images="cardImages"
-        :open="tagApplyOpen"
-        @tags-applied="onTagsApplied"
-        @close="tagApplyOpen = false"
-      />
+      <!-- The grid rail's own tag field and chips: Esc in the field closes. -->
+      <div v-if="tagApplyOpen" class="rs-tag-apply-panel">
+        <RailTags
+          :ids="cardImages.map((i) => i.id)"
+          autofocus
+          @tags-applied="onTagsApplied"
+          @leave="tagApplyOpen = false"
+        />
+      </div>
     </div>
 
     <!-- Keyboard cheat-sheet (?) -->
@@ -129,7 +128,7 @@ import TagHealthBoard from "../reviews/TagHealthBoard.vue";
 import ReviewSessionView from "../reviews/ReviewSessionView.vue";
 import ReviewArchivedReceipt from "../reviews/ReviewArchivedReceipt.vue";
 import NewReviewDialog from "../reviews/NewReviewDialog.vue";
-import TbTagPanel from "../panels/TbTagPanel.vue";
+import RailTags from "../panels/RailTags.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
@@ -223,7 +222,7 @@ function openNewReview(preset = "") {
   dialog.value = { preset, initialScope };
 }
 
-// Minimal image objects for TbTagPanel: the current card's picture(s).
+// The current card's picture(s), for the tag panel.
 const cardImages = computed(() => {
   const item = store.current;
   if (!item) return [];
@@ -239,7 +238,7 @@ function onTagsApplied(payload) {
 }
 
 // Cards render a visible bottom-left "Tag manually" button that opens the
-// same TbTagPanel flow as the T shortcut.
+// same tag panel as the T shortcut.
 provide("rs-open-tag-apply", () => {
   tagApplyOpen.value = true;
 });
@@ -585,6 +584,19 @@ onUnmounted(() => {
   flex-direction: column;
   align-items: flex-end;
   gap: var(--space-3);
+}
+
+.rs-tag-apply-panel {
+  width: var(--stats-panel-w);
+  max-width: calc(100vw - 2 * var(--space-5));
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: var(--space-4);
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-md);
+  background: rgb(var(--v-theme-surface));
+  color: rgb(var(--v-theme-on-surface));
+  box-shadow: var(--elevation-4);
 }
 
 .rs-keys-backdrop {

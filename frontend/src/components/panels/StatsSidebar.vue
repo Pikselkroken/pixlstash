@@ -23,7 +23,11 @@ import {
   SECTION_SCOPE,
   useSectionCollapse,
 } from "../../composables/useSectionCollapse";
-import { pictureTitle, useRailPicture } from "../../composables/useRailPicture";
+import {
+  fitWords,
+  pictureTitle,
+  useRailPicture,
+} from "../../composables/useRailPicture";
 import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useFilterStore } from "../../stores/useFilterStore";
@@ -98,7 +102,6 @@ const props = defineProps({
 const emit = defineEmits([
   "set-score",
   "toggle-favourite",
-  "add-tag",
   "update-description",
   "overlay-change",
   "tags-applied",
@@ -162,6 +165,39 @@ const head = computed(() => {
 
 // The grid's closed-rail edge tab names the selection the way this head does.
 defineExpose({ head });
+
+// The head cuts its title after the last whole word that fits, which CSS
+// cannot do: it measures the title in the head's own font.
+const titleRef = ref(null);
+const titleWidth = ref(0);
+let titleCanvas = null;
+function measureTitle(text) {
+  titleCanvas ??= document.createElement("canvas").getContext("2d");
+  if (!titleCanvas || !titleRef.value) return 0;
+  titleCanvas.font = getComputedStyle(titleRef.value).font;
+  return titleCanvas.measureText(text).width;
+}
+const shownTitle = computed(() =>
+  fitWords(head.value.title, titleWidth.value, measureTitle),
+);
+let titleObserver = null;
+watch(titleRef, (el) => {
+  titleObserver?.disconnect();
+  if (!el || typeof ResizeObserver === "undefined") return;
+  titleObserver = new ResizeObserver(() => {
+    titleWidth.value = el.clientWidth;
+  });
+  titleObserver.observe(el);
+});
+onUnmounted(() => titleObserver?.disconnect());
+
+// T over a deep-linked Tasks tab means the selection: back to it.
+watch(
+  () => sidebarStore.tagFieldPending,
+  (pending) => {
+    if (pending) tasksOverSelection.value = false;
+  },
+);
 
 // The sections in this rail keep their own collapsed state, apart from the
 // same sections in the lightbox.
@@ -1084,26 +1120,30 @@ watch(
     :tabs="railMode === 'none' ? tabs : []"
   >
     <!-- One head row on the toolbar's line (#2161): what the rail is about -
-         the view, the one picture, or how many - and Clear while anything is
-         selected. -->
+         the view, the one picture, or how many - and, while anything is
+         selected, Esc's keycap and the selection-off icon that clears it. -->
     <template #head>
-      <h2 class="rail-title" data-testid="rail-title">
+      <h2 ref="titleRef" class="rail-title" data-testid="rail-title">
         <Tooltip
-          v-if="head.full && head.full !== head.title"
+          v-if="head.full && head.full !== shownTitle"
           :text="head.full"
           activator="parent"
         />
-        {{ head.title }}
+        {{ shownTitle }}
       </h2>
-      <AppButton
-        v-if="selectedIds.length"
-        class="rail-clear"
-        variant="ghost"
-        size="sm"
-        tooltip="Clear the selection"
-        @click="selectionStore.selectedImageIds = []"
-        >Clear</AppButton
-      >
+      <template v-if="selectedIds.length">
+        <kbd class="fm-kbd rail-esc" aria-hidden="true">Esc</kbd>
+        <AppButton
+          class="rail-clear"
+          variant="ghost"
+          size="sm"
+          icon-left="selection-off"
+          icon-only
+          tooltip="Clear the selection · Esc"
+          aria-keyshortcuts="Escape"
+          @click="selectionStore.selectedImageIds = []"
+        />
+      </template>
     </template>
     <template v-if="railMode === 'none' && stats" #lead>
       <div class="stats-tiles">
@@ -1138,9 +1178,9 @@ watch(
       :favouritable="!isReadOnly && !isScrapheapView"
       @set-score="(n) => oneCard && emit('set-score', oneCard, n)"
       @toggle-favourite="emit('toggle-favourite', [oneId])"
-      @add-tag="(id, tag) => emit('add-tag', id, tag)"
       @update-description="(id, text) => emit('update-description', id, text)"
       @overlay-change="emit('overlay-change', $event)"
+      @tags-applied="emit('tags-applied', $event)"
       @refresh="refreshOne"
     />
     <RailPictures
@@ -1821,6 +1861,12 @@ watch(
   white-space: nowrap;
   font-size: var(--text-base);
   font-weight: var(--weight-semibold);
+}
+
+.rail-esc {
+  flex: none;
+  margin-left: var(--space-2);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .rail-clear {

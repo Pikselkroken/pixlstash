@@ -245,7 +245,7 @@ const overlayOpts = {
       TagHealthBoard: Blank,
       ReviewArchivedReceipt: Blank,
       NewReviewDialog: Blank,
-      TbTagPanel: Blank,
+      RailTags: Blank,
     },
   },
   attachTo: document.body,
