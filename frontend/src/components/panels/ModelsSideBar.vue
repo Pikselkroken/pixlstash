@@ -70,7 +70,7 @@
           <v-icon size="16" aria-hidden="true">mdi-folder-plus-outline</v-icon>
         </button>
       </div>
-      <div v-if="newFolder" class="msb-new">
+      <div v-if="newFolder" ref="newFolderRow" class="msb-new">
         <ModelFolderNameField
           :model-value="newFolder.name"
           :label="`New folder in ${newFolderScopeName}`"
@@ -275,6 +275,7 @@ const shelfFolders = computed(() =>
 /** The tree, to reveal a folder the field below just made. */
 const tree = ref(null);
 const newFolderButton = ref(null);
+const newFolderRow = ref(null);
 /** The field under the heading: `{folderId, path, name, error, busy}`, or null. */
 const newFolder = ref(null);
 
@@ -305,6 +306,11 @@ function openNewFolder() {
   const scope = openScope.value;
   if (newFolderReason.value) {
     useNoticeStore().push({ level: "info", text: newFolderReason.value });
+    return;
+  }
+  // A second click keeps what was typed and goes back to it.
+  if (newFolder.value) {
+    newFolderRow.value?.querySelector("input")?.focus();
     return;
   }
   newFolder.value = {

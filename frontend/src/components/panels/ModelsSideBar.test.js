@@ -201,6 +201,24 @@ describe("ModelsSideBar", () => {
     wrapper.unmount();
   });
 
+  it("keeps what was typed when the Folders + is clicked again", async () => {
+    useLibrariesStore().canManage = true;
+    const wrapper = mountBar({ attachTo: document.body });
+    await flushPromises();
+    await wrapper.find('[role="treeitem"][data-folder-id="2"]').trigger("click");
+    const add = wrapper.find('[data-testid="models-sidebar-new-folder"]');
+    await add.trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-testid="model-folder-name"]').setValue("flux");
+    add.element.focus();
+    await add.trigger("click");
+    await flushPromises();
+    const field = wrapper.find('[data-testid="model-folder-name"]');
+    expect(field.element.value).toBe("flux");
+    expect(document.activeElement).toBe(field.element);
+    wrapper.unmount();
+  });
+
   it("closes the Folders + field when Training runs hides the open folder", async () => {
     useLibrariesStore().canManage = true;
     const wrapper = mountBar();
