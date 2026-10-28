@@ -5017,7 +5017,9 @@ or in the dialog. A refused plan starts nothing.
 **Removing a folder reads it first (#2207).** *Remove folder…* and `Del` (with
 or without Shift) on a focused row call `startFolderRemove`
 (`composables/useModelFolderRemove.js`), which runs the server's dry run. A
-folder with no file goes at once, with the dry run's `fingerprint` as `expect`.
+folder with no file goes at once, with the dry run's `fingerprint` as `expect`,
+to the Trash on `Del` and permanently on Shift+`Del` (there is nothing in it to
+confirm).
 Anything else is handed to `useModelShelfStore.requestFolderRemove`, and
 `ModelShelf` opens `ShelfRemoveFolderDialog` on that plan: every file on the
 left, largest first, the ones the shelf does not list marked *not listed*;

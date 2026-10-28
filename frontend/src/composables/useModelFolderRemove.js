@@ -75,14 +75,19 @@ export async function removeFolder(source, plan, permanent) {
  * The tree's *Remove folder…* and `Del`: read the folder, remove it at once
  * when it holds no file, else open the dialog on what was read.
  *
+ * `permanent` applies to the empty folder only, Shift+Del's file-manager
+ * meaning: with no file in it there is nothing to confirm. A folder with files
+ * gets the dialog, where Shift and the typed name decide.
+ *
  * @param {{folderId: number, path: string, name: string}} source
+ * @param {{permanent?: boolean}} [options]
  * @returns {Promise<void>}
  */
-export async function startFolderRemove(source) {
+export async function startFolderRemove(source, { permanent = false } = {}) {
   try {
     const plan = await planFolderRemove(source);
     if (Number(plan.file_count) === 0) {
-      await removeFolder(source, plan, false);
+      await removeFolder(source, plan, Boolean(permanent));
       return;
     }
     useModelShelfStore().requestFolderRemove(source, plan);

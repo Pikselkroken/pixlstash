@@ -821,6 +821,23 @@ describe("the folder verbs (#2206)", () => {
     wrapper.unmount();
   });
 
+  it("deletes an empty folder permanently on Shift+Del, and trashes it on Del", async () => {
+    const wrapper = await openLora();
+    removeModelFolderDir.mockImplementation(async (id, body) =>
+      body.dryRun
+        ? { file_count: 0, files: [], fingerprint: "fp-empty", name: "VAE" }
+        : { files_removed: 0, removed_models: [], permanent: body.permanent, trash_name: "Trash" },
+    );
+    item(wrapper, 1, "VAE").element.focus();
+    await item(wrapper, 1, "VAE").trigger("keydown", { key: "Delete", shiftKey: true });
+    await flushPromises();
+    await item(wrapper, 1, "VAE").trigger("keydown", { key: "Delete" });
+    await flushPromises();
+    const removals = removeModelFolderDir.mock.calls.filter(([, body]) => !body.dryRun);
+    expect(removals.map(([, body]) => body.permanent)).toEqual([true, false]);
+    wrapper.unmount();
+  });
+
   it("asks the shelf for the dialog when the folder holds files", async () => {
     const wrapper = await openLora();
     const read = { file_count: 2, files: [], fingerprint: "fp", name: "VAE" };
