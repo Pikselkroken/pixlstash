@@ -195,6 +195,23 @@ describe("ShelfRemoveFolderDialog", () => {
     expect(wrapper.emitted("close")).toBeTruthy();
   });
 
+  it("cannot be dismissed while the removal is running", async () => {
+    let finish;
+    removeModelFolderDir.mockImplementation(
+      () => new Promise((resolve) => (finish = () => resolve(DONE))),
+    );
+    mountDialog(plan());
+    await confirmButton().trigger("click");
+    await flushPromises();
+    wrapper.findComponent(AppDialogStub).vm.$emit("close");
+    const cancel = wrapper.findAll("button").find((b) => b.text() === "Cancel");
+    expect(cancel.attributes("disabled")).toBeDefined();
+    expect(wrapper.emitted("close")).toBeFalsy();
+    finish();
+    await flushPromises();
+    expect(wrapper.emitted("close")).toHaveLength(1);
+  });
+
   it("hands the folder's copies to the move dialog for Move the models out first", async () => {
     mountDialog(plan());
     await wrapper.find('[data-testid="remove-folder-move-out"]').trigger("click");

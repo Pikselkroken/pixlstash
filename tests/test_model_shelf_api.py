@@ -11591,15 +11591,18 @@ def test_a_symlinked_directory_inside_is_removed_as_a_link(
     )
 
 
-def test_a_folder_removal_is_refused_where_a_folder_move_is(
-    shelf_env, old_folder, tmp_path
-):
-    root = shelf_env.owner.post(_REMOVE, json={"path": "", "dry_run": True})
-    assert root.status_code == 400, root.text
-
-    os.symlink(tmp_path, old_folder / "link")
+def test_a_folder_removal_through_a_link_is_refused(shelf_env, old_folder, tmp_path):
+    try:
+        os.symlink(tmp_path, old_folder / "link")
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"cannot make a directory symlink here: {exc}")
     via_link = shelf_env.owner.post(_REMOVE, json={"path": "link", "dry_run": True})
     assert via_link.status_code == 400, via_link.text
+
+
+def test_a_folder_removal_is_refused_where_a_folder_move_is(shelf_env, old_folder):
+    root = shelf_env.owner.post(_REMOVE, json={"path": "", "dry_run": True})
+    assert root.status_code == 400, root.text
 
     with shelf_env.server.hub.transaction() as conn:
         conn.execute(

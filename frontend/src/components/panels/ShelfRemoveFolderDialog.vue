@@ -1,13 +1,15 @@
 <template>
   <!-- Destructive: no @accept, so Enter never removes. Escape, the scrim and
-       the close button cancel. -->
+       the close button cancel, except while the removal runs: it cannot be
+       called back, so nothing may look like a cancel then. -->
   <AppDialog
     :open="open"
     role="alertdialog"
     title="Remove folder"
     :subtitle="source.path"
     size="lg"
-    @close="emit('close')"
+    :persistent="working"
+    @close="dismiss"
   >
     <p class="srf-lead" data-testid="remove-folder-lead">{{ lead }}</p>
     <p v-if="changed" class="srf-note" role="status">
@@ -69,7 +71,12 @@
     <p v-if="refusal" class="srf-refusal" role="alert">{{ refusal }}</p>
 
     <template #footer>
-      <AppButton variant="ghost" key-hint="esc" @click="emit('close')">
+      <AppButton
+        variant="ghost"
+        key-hint="esc"
+        :disabled="working"
+        @click="dismiss"
+      >
         Cancel
       </AppButton>
       <AppButton
@@ -222,6 +229,11 @@ const canConfirm = computed(
     !!facts.value.fingerprint &&
     (!(hasBreaks.value || shiftHeld.value) || nameOk.value),
 );
+
+/** Close, unless the removal is in flight and could not be stopped. */
+function dismiss() {
+  if (!working.value) emit("close");
+}
 
 async function confirm(event) {
   if (working.value) return;
