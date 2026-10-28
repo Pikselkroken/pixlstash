@@ -335,53 +335,19 @@
             </div>
           </div>
         </v-menu>
-        <!-- ── Separator G-S1: the lens run | the action run ────────────
-             The toolbar is browse-only (#2160): the verbs that act on pictures
-             live on the selection pill, the context menu and their shortcuts.
-             What is left of the action run needs no selection. -->
-        <div v-if="filterStore.comfyuiConfigured" class="bar-separator"></div>
-        <!-- ── Generate with no selection (v1.12 F5). The old button here
-             opened the rail run panel, which is gone; this opens the Run
-             popup with its workflow picker unset, which is the same popup
-             every other entry point opens and the one case it was already
-             built for (`kind: "card"`, its own "Results go to" set picker).
-             Without a door on the grid, starting a run from nothing meant
-             navigating to Workflows first. -->
-        <AppBarButton
-          v-if="filterStore.comfyuiConfigured"
-          class="tb-fold-700"
-          icon="image-plus-outline"
-          :disabled="isReadOnly"
-          tooltip="Generate new pictures with a ComfyUI workflow"
-          aria-label="Generate new pictures with a ComfyUI workflow"
-          @click="generateFromNothing"
-        />
         <!-- ── The ⋯ overflow (amendment #2 in docs/design/
              toolbar-responsive-decisions.md): a burger may only collapse
              controls from its OWN visual group, and it stands where those
-             controls stood - so it lives HERE, at the end of the action run
-             it collapses (Generate at ≤700, View at ≤600), and
-             never a control from across a group boundary. Fold = CSS both
-             ways: each row shares its bar button's v-if, and the container
-             queries flip which of the pair is visible. The panel keeps its
-             right-aligned anchoring, so it opens leftward and stays
-             on-screen. -->
+             controls stood - so it lives HERE, at the end of the lens run
+             it collapses (View at ≤600), and never a control from across a
+             group boundary. Fold = CSS both ways: each row shares its bar
+             button's v-if, and the container queries flip which of the pair
+             is visible. The panel keeps its right-aligned anchoring, so it
+             opens leftward and stays on-screen. The toolbar is browse-only
+             (#2160); Generate left it too, so a run starts from a selection,
+             a picture, a person or set, or the Workflows screen. -->
         <TbOverflowMenu class="tb-overflow">
           <template #default="{ close }">
-            <button
-              v-if="filterStore.comfyuiConfigured"
-              type="button"
-              role="menuitem"
-              class="ctx-item tb-row-700"
-              :disabled="isReadOnly"
-              @click="
-                close();
-                generateFromNothing();
-              "
-            >
-              <v-icon class="ctx-icon">mdi-image-plus-outline</v-icon>
-              <span>Generate with ComfyUI…</span>
-            </button>
             <button
               type="button"
               role="menuitem"
@@ -422,7 +388,6 @@
 
 <script setup>
 import { computed, ref, watch } from "vue";
-import { isReadOnly } from "../../utils/apiClient";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useSortStore } from "../../stores/useSortStore";
 import { useGridStore } from "../../stores/useGridStore";
@@ -438,7 +403,6 @@ import SearchTokenField from "./SearchTokenField.vue";
 import { filterChips } from "../../utils/filterChips";
 import TbGlobalActions from "./TbGlobalActions.vue";
 import TbOverflowMenu from "./TbOverflowMenu.vue";
-import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
@@ -458,19 +422,6 @@ const emit = defineEmits([
   "collapse-all-stacks",
   "open-duplicates",
 ]);
-
-const runDialog = useRunDialogStore();
-
-/**
- * Generate with nothing selected: the Run popup, picker unset.
- *
- * No pictures, so the card IS the run's source and the popup shows its own
- * "Results go to" set picker rather than filing beside a source picture.
- */
-function generateFromNothing() {
-  if (isReadOnly.value) return;
-  runDialog.openRun({ kind: "card", pickWorkflow: true, emptyPrompt: true });
-}
 
 // Shown once per browser and then never again. A migration nudge that came back
 // after a reload would be an ad, so the flag is persisted rather than held in
@@ -1153,7 +1104,7 @@ const gbCollapseAllStacksDisabled = computed(
 }
 
 /* ── The ⋯ overflow ladder (see docs/design/toolbar-responsive-decisions.md,
-   amendment #2). The burger stands at the end of its OWN group (the action
+   amendment #2). The burger stands at the end of its OWN group (the lens
    run) and collapses only that group's members. Fold = CSS both ways: a
    control's bar button and its overflow row share one v-if, and these
    queries flip which of the pair is visible. No JS measures anything. The
@@ -1163,26 +1114,16 @@ const gbCollapseAllStacksDisabled = computed(
   display: none;
 }
 
-.tb-row-700,
 .tb-row-600 {
   display: none;
-}
-
-@container selbar (max-width: 700px) {
-  .tb-fold-700 {
-    display: none;
-  }
-  .tb-overflow {
-    display: flex;
-  }
-  .tb-row-700 {
-    display: flex;
-  }
 }
 
 @container toolbar (max-width: 600px) {
   .tb-fold-600 {
     display: none;
+  }
+  .tb-overflow {
+    display: flex;
   }
   .tb-row-600 {
     display: flex;
