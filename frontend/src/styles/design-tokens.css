@@ -146,30 +146,40 @@
   --elevation-3: 0 4px 16px rgba(var(--v-theme-shadow), 0.22); /* popovers, floating panels */
   --elevation-4: 0 8px 28px rgba(var(--v-theme-shadow), 0.30); /* dialogs, lightbox chrome */
 
-  /* Focus is INK (owner decision, 2026-09-13): a 2px `--focus-stroke` (the
-     text colour, per theme in style.css) drawn as `outline` with a 2px gap, so
-     the ring only ever meets the ground and never has to contrast with a fill.
-     Amber is the action fill and olive the selection, so an amber ring measured
-     1.27:1 against the Save button it surrounds and read as a second mark on a
-     selection. Ink measures 10.24:1 dark and 13.74:1 light at worst (on
-     `panel`). The one rule lives in style.css; a component does not paint its
-     own. A control that cannot take a gap (a 32px menu row flush in its menu)
-     uses the inset form, `--focus-ring-inset`, as a box-shadow.
-     A focus ring is the one place in this system where "subtle" is a defect. */
-  /* Declared here as well as per theme in style.css: a custom property holding
-     var() resolves where it is DECLARED, so `--focus-ring-inset` below needs a stroke
-     on :root, where Vuetify also writes the active theme's colours. */
-  --focus-stroke: rgb(var(--v-theme-on-surface));
-  --focus-width: 2px;
-  --focus-offset: 2px;
-  /* Restated beside every `--focus-stroke` override (the theme blocks in
-     style.css, the lightbox), for the same resolve-where-declared reason. */
-  --focus-ring-inset: inset 0 0 0 var(--focus-width) var(--focus-stroke);
+  /* Focus is ONE GLOWING BORDER (owner decision, 2026-10-28). It replaces the
+     2px ink ring that sat 2px OUTSIDE the box (2026-09-13), which any overflow
+     container clipped and which read as a second outline.
 
-  /* The ring as a GLOW rather than a stroke, for the one place a stroke cannot
-     sit: a Vuetify field, whose floating label rides ON the top border.
-     `style.css` paints it beneath the label and clips it off the top edge. */
-  --focus-glow: 0 0 6px 2px var(--focus-stroke);
+     The ring traces the control's own edge: 2px of `--focus-stroke` drawn
+     INWARD from the border box (`--focus-offset` is minus the width), so it
+     covers the 1px border where there is one, follows the corners, and moves
+     nothing. Around it, `--focus-glow`: the same blue blurred 8px outward with
+     no spread and no edge of its own. Only the glow leaves the box, so a
+     clipping container can cut nothing but the glow.
+
+     ONE COLOUR, BOTH THEMES, EVERY GROUND: `focus-ring` in main.js, #3880eb.
+     3.3:1 at worst against `panel`, 3.85 on `surface`, 4.3 on dark
+     `background`, 3.66 on light. On an amber, olive or brick fill the ring
+     meets the fill at 1.1-1.6:1; the ground outside the edge and the glow
+     carry it there. So no surface restates it: the lightbox and the on-dark
+     contexts take the same blue.
+
+     The one rule lives in style.css and draws the ring as an `outline` (which
+     paints over the control's children, so a tile's picture cannot hide it)
+     with the glow as its `box-shadow`. A control whose ring has to be a
+     box-shadow (a menu row, a field wrapper) uses `--focus-ring-inset`: the
+     same 2px inset ring plus the glow.
+     A focus ring is the one place in this system where "subtle" is a defect. */
+  --focus-stroke: rgb(var(--v-theme-focus-ring));
+  --focus-width: 2px;
+  --focus-offset: calc(-1 * var(--focus-width));
+  /* Stronger in dark, where a glow needs more to register; light restates it
+     at 35% in style.css. A custom property holding var() resolves where it is
+     DECLARED, so the theme blocks restate `--focus-ring-inset` beside it. */
+  --focus-glow: 0 0 8px 0
+    color-mix(in srgb, var(--focus-stroke) 45%, transparent);
+  --focus-ring-inset: inset 0 0 0 var(--focus-width) var(--focus-stroke),
+    var(--focus-glow);
 
   /* ---------------------------------------------------------------------------
      SCRIMS - translucent legibility backings for corner badges/chips that sit on

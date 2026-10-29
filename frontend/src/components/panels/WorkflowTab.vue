@@ -5366,7 +5366,7 @@ async function checkInstalled(key, { quiet = false } = {}) {
 
 .wftab-stage:focus-visible {
   outline: var(--focus-width) solid var(--focus-stroke);
-  outline-offset: 1px;
+  outline-offset: var(--focus-offset);
 }
 
 .wftab-stage:disabled {

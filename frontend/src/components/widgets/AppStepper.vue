@@ -91,6 +91,7 @@ function onBlur(e) {
 .app-stepper:has(.app-stepper__input:focus-visible) {
   outline: var(--focus-width) solid var(--focus-stroke);
   outline-offset: var(--focus-offset);
+  box-shadow: var(--focus-glow);
 }
 
 .app-stepper__btn:focus-visible {

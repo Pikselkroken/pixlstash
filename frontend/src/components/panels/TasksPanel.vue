@@ -2225,11 +2225,6 @@ const tmSystemItems = computed(() => {
   display: none;
 }
 
-.tm-tile:focus-visible {
-  outline: 2px solid rgb(var(--v-theme-on-surface));
-  outline-offset: 1px;
-}
-
 /* The column label and Clear share one cell; Clear shows on hover or focus. */
 .tm-head-swap {
   display: inline-grid;

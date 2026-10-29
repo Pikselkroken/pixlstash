@@ -743,7 +743,7 @@ The photos are the hero. The chrome frames them; it does not compete.
 - **Consistent aspect handling.** Tiles share a radius (`--radius-md`) and a restrained
   border. No per-tile bespoke framing.
 - **States are designed, not defaulted.** Every tile has a real hover, a real selected
-  state (`--active-wash` / `--active-bar`), and a focus state (the ink ring, §11). The
+  state (`--active-wash` / `--active-bar`), and a focus state (the blue glowing border, §11). The
   selected state is how bulk work feels confident; make it unambiguous.
 - **Empty, loading, error.** Use the existing `Empty.png` / `EmptyTrash.png` art for
   empty states with a `--text-2xl` Tiny5 headline and a `--text-sm` line of guidance.
@@ -802,20 +802,26 @@ pattern, don't re-roll the numbers.
 
 These get skipped and that is exactly why a UI looks cheap.
 
-- **Focus is ink** (2026-09-13). Every focusable element shows one ring, drawn by
-  the single `:focus-visible` rule in `style.css`: a `--focus-width` (2px) outline in
-  `--focus-stroke` with a `--focus-offset` (2px) gap. `--focus-stroke` is its own
-  per-theme token and resolves to the text colour in both themes. The gap is the
-  point: the ring only ever meets the ground, never the fill it surrounds, so it never
-  has to contrast with amber or olive. Worst case 10.24:1 dark and 13.74:1 light, on
-  `panel`. The amber ring it replaces measured 1.27:1 against the Save button and read
-  as a second mark on an olive selection. **A component does not paint its own
-  focus colour.** A control that cannot take a gap (a 32px menu row flush in its menu)
-  uses `--focus-ring-inset`. A Vuetify field, whose label rides on its top border,
-  keeps `--focus-glow`, now in the same ink. Never remove an outline without replacing
-  it; a focus ring is the one place in this system where "subtle" is a defect.
-  **There is exactly one focus language.** The theme's legacy `focus` key and any
-  `rgb(var(--v-theme-accent))` ring are drift.
+- **Focus is one glowing border** (2026-10-28, replacing the 2026-09-13 ink ring that
+  sat 2px outside the box, where overflow containers clipped it). Every focusable
+  element shows one ring, drawn by the single `:focus-visible` rule in `style.css`: a
+  `--focus-width` (2px) outline in `--focus-stroke` drawn **inward** from the control's
+  edge (`--focus-offset` is minus the width), so it covers the 1px border where there is
+  one, follows the corners and moves nothing. Around it `--focus-glow`, the same blue
+  blurred 8px outward (45% in dark, 35% in light), is the only part that leaves the
+  box, so a clipping container cuts nothing but the glow. It fades in over `--dur-1`.
+  `--focus-stroke` is the theme's `focus-ring`, **`#3880eb` in both themes and on every
+  ground**, the lightbox and the on-dark contexts included: 3.3:1 at worst on `panel`,
+  3.85 on `surface`, 4.3 on dark `background`, 3.66 on light. On an amber, olive or brick
+  fill the ring meets the fill at 1.1-1.6:1, and the ground outside the edge and the
+  glow carry it. **A component does not paint its own focus colour.** A control whose
+  ring has to be a box-shadow (a 32px menu row flush in its menu, a field wrapper's
+  inset) uses `--focus-ring-inset`, the same 2px inset ring plus the glow; a wrapper
+  that rings for its field with `:focus-within` adds `box-shadow: var(--focus-glow)`. An
+  outlined Vuetify field, whose label rides on its top border, keeps the glow alone.
+  Never remove an outline without replacing it; a focus ring is the one place in this
+  system where "subtle" is a defect. **There is exactly one focus language.** Amber or
+  olive on a ring, an accent border on focus, or a per-surface ink are drift.
 - **Hover is an ink wash** (2026-09-13). A transparent control (row, tab, bar button,
   segment, menu row) takes `--hover-wash`, the text colour at 16% per theme, and a
   muted label or icon goes to full ink. It carries no hue, because amber is the action

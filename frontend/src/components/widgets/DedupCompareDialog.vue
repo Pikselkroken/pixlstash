@@ -2478,12 +2478,6 @@ function onZoomContextMenu() {
   background: rgba(var(--v-theme-on-dark-surface), 0.16);
 }
 
-/* It sits on the photo scrim in both themes, so its focus ring is the on-dark
-   ink rather than the theme's. */
-.dc-zoom:focus-visible {
-  outline-color: rgb(var(--v-theme-on-dark-surface));
-}
-
 /* ── The compact meta grid: two columns, label over value ─────────────────── */
 .dc-meta {
   display: grid;
@@ -2737,11 +2731,6 @@ function onZoomContextMenu() {
   font-weight: var(--weight-semibold);
 }
 
-/* Near-black in both themes, so the theme's ink ring would vanish in light. */
-.dc-zv :focus-visible {
-  outline-color: rgb(var(--v-theme-on-dark-surface));
-}
-
 .dc-flag--zv {
   position: static;
 }
@@ -2764,7 +2753,6 @@ function onZoomContextMenu() {
   --hover-wash: rgba(var(--v-theme-on-dark-surface), 0.16);
   --track-trough: rgba(var(--v-theme-scrim), 0.34);
   --track-ring: rgba(var(--v-theme-on-dark-surface), 0.4);
-  --focus-stroke: rgb(var(--v-theme-on-dark-surface));
   /* The selected fill too. The deep olive is a dark fill on a dark trough and
      the elevation that carries the second cue is invisible on near-black; the
      bright olive is the dark-theme value for exactly this, under the surface's

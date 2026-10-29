@@ -139,6 +139,7 @@ function confirm() {
 .save-as-name-field:focus-within {
   outline: var(--focus-width) solid var(--focus-stroke);
   outline-offset: var(--focus-offset);
+  box-shadow: var(--focus-glow);
 }
 
 .save-as-input {

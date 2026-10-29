@@ -255,6 +255,18 @@ describe("design drift", () => {
   // One exception, named: the filter strip tucks its top 2px under the grid
   // toolbar so the toolbar's divider shows. An equal rung would need the strip
   // before the toolbar in the template, which moves it ahead in tab order.
+  // The focus ring is one blue on every ground (visual-language.md §11). A
+  // surface that restates the stroke, or a focus rule that paints its ring
+  // (outline or box-shadow) in a theme colour, is the per-surface ink the 2026-10-28 ring retired.
+  it("gives the focus ring one colour", () => {
+    expect(hits(/--focus-stroke\s*:[^;]*/g)).toEqual([]);
+    expect(
+      hits(
+        /[^{}]*:focus(?:-visible|-within)?\b[^{}]*\{[^}]*?\b(?:outline(?:-color)?|box-shadow):[^;]*v-theme-[^;]*/g,
+      ),
+    ).toEqual([]);
+  });
+
   it("writes no z-index as a number", () => {
     expect(hits(/z-index:[^;}]*\d[^;}]*/g)).toEqual([
       "components/panels/FilterStrip.vue: z-index: calc(var(--z-sticky) - 1)",

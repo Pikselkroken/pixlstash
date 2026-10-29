@@ -113,7 +113,6 @@ function sameBox(box) {
   --hover-wash: rgba(var(--v-theme-on-dark-surface), 0.16);
   --track-trough: rgba(var(--v-theme-scrim), 0.34);
   --track-ring: rgba(var(--v-theme-on-dark-surface), 0.4);
-  --focus-stroke: rgb(var(--v-theme-on-dark-surface));
 
   position: absolute;
   top: var(--space-3);

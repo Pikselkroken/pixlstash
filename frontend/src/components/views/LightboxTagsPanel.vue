@@ -1545,12 +1545,6 @@ defineExpose({
   background: rgba(var(--v-theme-on-dark-surface), 0.16);
 }
 
-.tag-selection-btn:focus-visible,
-.tag-paste-btn:focus-visible {
-  outline: 2px solid rgb(var(--v-theme-on-dark-surface));
-  outline-offset: -2px;
-}
-
 /* The x of every selected chip while the pointer is on one of them. */
 .lightbox-tag--remove-hot .tag-delete-btn,
 .lightbox-tag--remove-hot .tag-delete-btn:hover {

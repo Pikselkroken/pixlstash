@@ -237,8 +237,9 @@ reachable. **Pending is not disabled:** the leading icon swaps for the
 spinner, the label stays legible at full opacity, the cursor is `progress`,
 `aria-busy` is set, and focus is handed back when the request settles. There is
 no loading-text prop, because the label is the accessible name. The focus ring
-is ink: 2px `--focus-stroke` (`--text`) with a 2px gap, drawn as `outline` plus
-`outline-offset`. Full rationale in `visual-language.md` §11.
+is one blue glowing border: 2px `--focus-stroke` drawn inward from the edge
+(`outline` at a negative `outline-offset`) with `--focus-glow` around it. Full
+rationale in `visual-language.md` §11.
 
 ### The three things it needs first
 
@@ -272,7 +273,6 @@ outlined border are washes of the ink), so those are set directly.
 | `surface-error` (destructive bar verb) | `dark-surface-error` |
 | Active bar glyph (`--selected-ink`) | `dark-surface-primary`, set as a colour because a `v-icon` redeclares the variable on itself |
 | `--hover-wash`, `--hover-neutral` | `on-dark-surface` at 16% |
-| `--focus-stroke` (and `--focus-ring-inset`, restated) | `on-dark-surface` |
 
 The key action keeps white on the bright amber, the trade-off #1413 already
 made for every amber fill on a dark panel. The danger fill needs nothing: `error` with `on-error` is one value in both
@@ -544,6 +544,14 @@ themes: 2px, with a 2px gap (`--focus-width`, `--focus-offset`) so the ring
 only ever meets the ground, never a fill. Worst case 10.24:1 dark and 13.74:1
 light, both on `--panel`. A 32px menu row keeps the inset form. Options
 compared: <https://claude.ai/code/artifact/2b675a9b-b3a7-4421-a13c-e0ee6218b98c>.
+
+**Superseded 2026-10-28: focus is one blue glowing border.** The ink ring sat
+2px outside the box, so any overflow container clipped it, and it needed an
+on-dark restatement on every surface that stays dark. `--focus-stroke` is now
+the theme's `focus-ring`, `#3880eb` in both themes and on every ground (3.3:1
+worst, on `--panel`), drawn 2px inward from the control's edge with an 8px glow
+of the same blue. Only the glow leaves the box, and nothing restates the
+stroke. See `visual-language.md` §11.
 
 #### Pick one: two shapes, and the boundary is arity
 

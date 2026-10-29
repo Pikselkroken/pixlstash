@@ -109,10 +109,11 @@ defineExpose({
 }
 
 /* The field inside is borderless and outline-free, so the wrap draws the
-   global ink ring for it. */
+   global ring for it, over its own border. */
 .app-input__wrap:has(.app-input__field:focus-visible) {
   outline: var(--focus-width) solid var(--focus-stroke);
   outline-offset: var(--focus-offset);
+  box-shadow: var(--focus-glow);
 }
 
 .app-input__icon {

@@ -989,6 +989,7 @@ const notchStyle = computed(() => {
 .mss__offer:focus-visible {
   outline: var(--focus-width) solid var(--focus-stroke);
   outline-offset: var(--focus-offset);
+  box-shadow: var(--focus-glow);
 }
 
 .mss__offercell {

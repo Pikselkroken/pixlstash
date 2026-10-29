@@ -664,7 +664,7 @@ function onKeydown(event) {
     var(--wsc-right);
 }
 
-/* Pointer: the wash. Keyboard cursor: the wash and the inset ink ring, the
+/* Pointer: the wash. Keyboard cursor: the wash and the inset focus ring, the
    filter checklist's `.fm-check--kbd`. The two never look alike. */
 .wsc__r:hover,
 .wsc__r--cur {

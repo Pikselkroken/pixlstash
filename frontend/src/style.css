@@ -80,10 +80,11 @@ body {
   /* Olive as a foreground where something is merely chosen: the active bar
      button's icon, the option row's check. Words stay `--active-text`. */
   --selected-ink: rgb(var(--v-theme-selected-ink));
-  /* Focus is ink (design-tokens.css). */
-  --focus-stroke: rgb(var(--v-theme-on-surface));
-  --focus-ring-inset: inset 0 0 0 var(--focus-width) var(--focus-stroke);
-  --focus-glow: 0 0 6px 2px var(--focus-stroke);
+  /* Focus is one glowing border (design-tokens.css), its glow at 45% here. */
+  --focus-glow: 0 0 8px 0
+    color-mix(in srgb, var(--focus-stroke) 45%, transparent);
+  --focus-ring-inset: inset 0 0 0 var(--focus-width) var(--focus-stroke),
+    var(--focus-glow);
   /* Tint alpha behind a folder-level dropdown (LibraryLayoutDialog). Deeper
      than light: 0.10 over the dark `input-background` is a smudge, 0.14 gives
      the same 1.28 luminance step off the field that 0.10 gives on white. */
@@ -155,9 +156,11 @@ body {
   /* Olive in both themes; the deep olive clears a light ground (4.66:1 on panel). */
   --active-wash: rgba(var(--v-theme-primary), 0.16);
   --selected-ink: rgb(var(--v-theme-selected-ink));
-  --focus-stroke: rgb(var(--v-theme-on-surface));
-  --focus-ring-inset: inset 0 0 0 var(--focus-width) var(--focus-stroke);
-  --focus-glow: 0 0 6px 2px var(--focus-stroke);
+  /* A light ground needs less of the glow. */
+  --focus-glow: 0 0 8px 0
+    color-mix(in srgb, var(--focus-stroke) 35%, transparent);
+  --focus-ring-inset: inset 0 0 0 var(--focus-width) var(--focus-stroke),
+    var(--focus-glow);
   /* See the dark block above. */
   --level-wash: 0.1;
   --active-bar: rgb(var(--v-theme-primary));
@@ -354,16 +357,28 @@ button:disabled {
    (StatsSidebar's SVG stroke). A component that wants NO indicator must say
    `outline: none` explicitly, not merely stay silent.
 
-   Ink, 2px, with a 2px gap (2026-09-13): drawn as `outline` so the gap is real
-   and the ring meets only the ground, never the fill it surrounds. Being an
-   outline, it no longer fights anything painting elevation with `box-shadow`,
-   which is why `.v-btn` needed excluding while the ring was a shadow. */
+   One glowing border (2026-10-28): a 2px blue ring drawn INSIDE the control's
+   edge (`--focus-offset` is minus the width), over its own 1px border, with
+   the glow as the box-shadow. An `outline` rather than an inset shadow,
+   because an outline paints over the control's children: a tile filled by its
+   picture would hide an inset shadow. It fades in over `--dur-1` as focus
+   lands, as an animation rather than a transition so a component's own
+   `transition` cannot cancel it; reduced motion collapses it to appear. */
 :focus-visible:not(
   :where(.v-overlay__content, .v-overlay__content > .v-card)
 ) {
   outline: var(--focus-width) solid var(--focus-stroke);
   outline-offset: var(--focus-offset);
-  box-shadow: none;
+  box-shadow: var(--focus-glow);
+  animation: focus-ring-in var(--dur-1) var(--ease-decelerate);
+}
+/* `none` interpolates against a shadow list of either kind, so the one
+   keyframe fades the inset menu-row ring as well as the outline's glow. */
+@keyframes focus-ring-in {
+  from {
+    outline-color: transparent;
+    box-shadow: none;
+  }
 }
 
 /* A dialog takes focus when it opens, so the keyboard lands inside it rather
@@ -381,11 +396,12 @@ button:disabled {
    label - tightest, and most obviously wrong, on an empty select showing only
    its placeholder.
 
-   The indicator is therefore a glow (`--focus-glow`) on a pseudo-element the
-   size of the field, painted first so it sits beneath the outline and the
-   label, and an outlined field's is clipped at the top edge: its label floats
-   INTO the top border, and any shadow up there is a bar through the label. What
-   is left is a glow down the sides and under the field, below the label.
+   The indicator is therefore the ring (`--focus-ring-inset`) on a
+   pseudo-element the size of the field, painted first so it sits beneath the
+   label. An OUTLINED field keeps only the glow, clipped at the top edge: its
+   label floats INTO the top border, so a ring or a shadow up there is a bar
+   through the label. What is left is a glow down the sides and under the
+   field, below the label.
 
    A select's menu drops flush against the field's bottom edge and would cut
    that glow in half, so it goes away while the menu is open; an open menu is
@@ -401,9 +417,10 @@ button:disabled {
   inset: 0;
   border-radius: inherit;
   pointer-events: none;
-  box-shadow: var(--focus-glow);
+  box-shadow: var(--focus-ring-inset);
 }
 .v-field--variant-outlined:has(:focus-visible)::before {
+  box-shadow: var(--focus-glow);
   clip-path: inset(0 -12px -12px -12px);
 }
 .v-select--active-menu .v-field::before,
@@ -413,6 +430,7 @@ button:disabled {
 }
 .v-field :focus-visible {
   outline: none;
+  box-shadow: none;
 }
 
 /* The sidebar, toolbar and title bar each paint from their OWN theme token

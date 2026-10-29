@@ -273,13 +273,10 @@ defineExpose({
   text-decoration: underline;
   text-underline-offset: 2px;
 }
-/* The pill is dark in both themes, so hover and focus take the on-dark ink
-   rather than the theme's. */
+/* The pill is dark in both themes, so hover takes the on-dark ink rather than
+   the theme's. */
 .r-btn:hover:not([aria-disabled="true"]) {
   background: rgba(var(--v-theme-on-dark-surface), 0.16);
-}
-.r-btn:focus-visible {
-  outline-color: rgb(var(--v-theme-on-dark-surface));
 }
 /* `aria-disabled`, never the attribute: disabling a control the keyboard is on
    moves focus to <body>, and this button flips to Redo when the trip lands. */

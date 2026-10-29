@@ -785,6 +785,7 @@ defineExpose({ focus });
 .rail-tags__field--focus {
   outline: var(--focus-width) solid var(--focus-stroke);
   outline-offset: var(--focus-offset);
+  box-shadow: var(--focus-glow);
 }
 
 .rail-tags__input {

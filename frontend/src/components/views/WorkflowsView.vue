@@ -2092,11 +2092,11 @@ onBeforeUnmount(() => {
 }
 
 /* Focused by a background click, as the target for Ctrl+A. The ring is the
-   inset form (visual-language.md §11): the outset one would sit outside the
-   pane, under the toolbar and the inspector edge. */
+   inset form (visual-language.md §11) without the glow: anything outset would
+   sit outside the pane, under the toolbar and the inspector edge. */
 .wfv-scroll:focus-visible {
   outline: none;
-  box-shadow: var(--focus-ring-inset);
+  box-shadow: inset 0 0 0 var(--focus-width) var(--focus-stroke);
 }
 
 /* The closed inspector's edge tab (34px) floats over this edge: the cards
