@@ -758,8 +758,9 @@ function remember(key, masked) {
 /**
  * *cached* answers each card from ComfyUI's node list as last read, up to a
  * minute old: asking ComfyUI afresh for every card took the tab seconds to
- * appear. Run asks afresh anyway. A re-read after an install does not, or it
- * would still see the nodes missing.
+ * appear. The listing is drawing, not the decision: Run asks afresh, so a
+ * card listed on a minute-old answer is refused there with the reason. A
+ * re-read after an install does not, or it would still see the nodes missing.
  */
 async function loadCards({ cached = true } = {}) {
   if (loaded.value || loading.value) return;

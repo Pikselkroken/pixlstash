@@ -2998,14 +2998,18 @@ function handleKeydown(e) {
 
   // Ctrl+Enter is the Edit tab's Run wherever focus is while the tab is on
   // screen, not only in its instruction box: after marking with the tools the
-  // focus is on the picture or a tool.
+  // focus is on the picture or a tool. Not under an open menu or dialog: in
+  // the workflow picker the highlighted row is not yet the chosen one.
   if (
     e.key === "Enter" &&
     (e.ctrlKey || e.metaKey) &&
     !e.repeat &&
     editPanelRef.value &&
     inspectorShown.value &&
-    sidebarTab.value === "edit"
+    sidebarTab.value === "edit" &&
+    !document.querySelector(
+      ".v-overlay--active.v-menu, .v-overlay--active.v-dialog",
+    )
   ) {
     e.preventDefault();
     void editPanelRef.value.submit();

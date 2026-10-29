@@ -620,6 +620,16 @@ describe("the lightbox Edit tab", () => {
     await wrapper.findAll(".inspector-tab")[2].trigger("click");
     expect(ctrlEnter()).toBe(false);
     expect(editSubmit).toHaveBeenCalledOnce();
+    // Under an open menu (the workflow picker) the key is the menu's.
+    const menu = document.createElement("div");
+    menu.className = "v-overlay--active v-menu";
+    document.body.append(menu);
+    try {
+      ctrlEnter();
+      expect(editSubmit).toHaveBeenCalledOnce();
+    } finally {
+      menu.remove();
+    }
   });
 
   it("shows an edit result the grid has not inserted yet", async () => {

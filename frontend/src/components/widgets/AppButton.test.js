@@ -154,3 +154,11 @@ describe("AppButton on-dark context", () => {
     );
   });
 });
+
+describe("AppButton key hint", () => {
+  it("wears Ctrl ↵ for ctrl+enter and names the chord for assistive tech", () => {
+    const w = mountButton({ keyHint: "ctrl+enter" });
+    expect(w.find(".app-btn__key").text()).toBe("Ctrl ↵");
+    expect(w.find("button").attributes("aria-keyshortcuts")).toBe("Control+Enter");
+  });
+});
