@@ -641,12 +641,14 @@ defineExpose({
 }
 
 /* The lightbox's pane is dark in both themes, so the other way round: every
-   ink the rail's parts use is handed its dark-surface twin. */
+   ink the rail's parts use is handed its dark-surface twin. Not `tertiary`:
+   it is only the confidence chips' fill, already dark enough to carry the
+   light label (7.31:1 at full confidence), and the lifted twin painted them
+   brighter than the same chips on the rail (#2282). */
 .rail-picture--on-dark {
   --v-theme-on-surface: var(--v-theme-on-dark-surface);
   --v-theme-error: var(--v-theme-dark-surface-error);
   --v-theme-surface-error: var(--v-theme-dark-surface-error);
-  --v-theme-tertiary: var(--v-theme-dark-surface-tertiary);
   --v-theme-primary: var(--v-theme-dark-surface-primary);
   --v-theme-accent: var(--v-theme-dark-surface-accent);
   --v-theme-favourite: var(--v-theme-dark-surface-favourite);
