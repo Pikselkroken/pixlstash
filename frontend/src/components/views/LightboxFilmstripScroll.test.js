@@ -195,3 +195,37 @@ describe("Lightbox filmstrip scrolls independently", () => {
     expect(reveal).toHaveBeenLastCalledWith(13, { centre: true });
   });
 });
+
+describe("Lightbox stack chip", () => {
+  const STACK = [
+    { id: 1, tags: [] },
+    { id: 2, tags: [], stack_id: 5, stack_position: 0, stack_count: 3 },
+    { id: 3, tags: [], stack_id: 5, stack_position: 1, stack_count: 3 },
+    { id: 4, tags: [], stack_id: 5, stack_position: 2, stack_count: 3 },
+    { id: 9, tags: [] },
+  ];
+  const chipText = (wrapper) =>
+    wrapper.find(".lightbox-stack-chip-text").text().replace(/\s+/g, " ");
+  const step = (wrapper, i) =>
+    wrapper.findAll(".lightbox-stack-chip-step")[i].trigger("click");
+
+  it("steps through a folded stack, wrapping at either end", async () => {
+    const wrapper = await openLightboxOn(2, STACK);
+    expect(chipText(wrapper)).toBe("1 of 3 in this stack");
+
+    await step(wrapper, 1);
+    await flush();
+    expect(activeId(wrapper)).toBe(3);
+    expect(chipText(wrapper)).toBe("2 of 3 in this stack");
+
+    await step(wrapper, 1);
+    await step(wrapper, 1);
+    await flush();
+    expect(activeId(wrapper)).toBe(2);
+
+    await step(wrapper, 0);
+    await flush();
+    expect(activeId(wrapper)).toBe(4);
+    expect(chipText(wrapper)).toBe("3 of 3 in this stack");
+  });
+});

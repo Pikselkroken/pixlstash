@@ -211,8 +211,9 @@
   line-height: var(--leading-snug);
 }
 
-/* "2 of 4 in this stack · Make cover": the lock chip's shape, with one
-   action riding inside it. */
+/* "‹ 2 of 4 in this stack › · Make cover": the lock chip's shape. The arrows
+   are round 24px buttons that fill the pill's end caps, so the chip has no
+   padding of its own and the text sits evenly between them. */
 .lightbox-stack-chip {
   display: inline-flex;
   align-items: center;
@@ -220,7 +221,7 @@
   gap: var(--space-2);
   height: var(--control-h-sm);
   margin-left: var(--space-2);
-  padding: 0 var(--space-1) 0 var(--space-3);
+  padding: 0;
   border-radius: var(--radius-pill);
   background: var(--hover-wash);
   color: rgb(var(--v-theme-on-surface));
@@ -229,11 +230,31 @@
   white-space: nowrap;
 }
 
+.lightbox-stack-chip-step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.lightbox-stack-chip-step:hover {
+  background: var(--hover-wash);
+}
+
 .lightbox-stack-chip-btn {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
   height: calc(var(--control-h-sm) - 2 * var(--space-1));
+  margin-right: var(--space-1);
   padding: 0 var(--space-3) 0 var(--space-2);
   border: 0;
   border-radius: var(--radius-pill);
