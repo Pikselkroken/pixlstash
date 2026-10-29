@@ -414,14 +414,13 @@ function pickFacet(key, id) {
     calc(var(--space-3) + var(--rail-w));
 }
 
-/* A label with a control at its right edge, as the Media sidebar's "+" sits.
-   The 24px button is pulled into the label's line so this head stands as tall
-   as the plain ones and the rows below it do not move. */
+/* A label with a control at its right edge. The button's negative margins
+   take it out of the line's height, so this head stands exactly as tall as
+   the plain ones and the rows below it do not move. */
 .wfs-label--action {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-right: var(--space-3);
 }
 
 .wfs-sort {
@@ -431,7 +430,7 @@ function pickFacet(key, id) {
   justify-content: center;
   width: var(--control-h-sm);
   height: var(--control-h-sm);
-  margin: calc(var(--space-2) * -1) 0;
+  margin: calc(var(--control-h-sm) / -2) 0;
   padding: 0;
   border: 0;
   border-radius: var(--radius-sm);
