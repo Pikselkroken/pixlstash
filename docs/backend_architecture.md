@@ -11950,8 +11950,9 @@ Its loader lists only `.jpg .jpeg .png .webp` and loads with `convert("RGB")`,
 so any other still (HEIC, AVIF, GIF, BMP, TIFF) would be skipped without a word
 and a transparent area would train as black. The builder writes those, and any
 still with alpha, as an RGB `image_NNNNN.png` (orientation baked in, alpha
-flattened onto `TRAINER_ALPHA_BACKGROUND`, mid grey); the rest are copied byte
-for byte. A still that cannot be decoded is left out, and the manifest's
+flattened onto `TRAINER_ALPHA_BACKGROUND`, mid grey, 16-bit grey scaled to
+8-bit); the rest are copied byte for byte, or resized at a half or quarter
+resolution. A still that cannot be decoded is left out, and the manifest's
 `image_count` and `picture_ids` are taken from the items read back, so the
 snapshot never names a picture the trainer was not given.
 

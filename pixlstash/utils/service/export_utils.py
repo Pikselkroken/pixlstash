@@ -271,7 +271,8 @@ class ExportUtils:
         """Write *full_path* as an RGB PNG ai-toolkit trains on as it looks.
 
         Orientation is baked into the pixels (the EXIF that carried it is not
-        written) and alpha is flattened onto :data:`TRAINER_ALPHA_BACKGROUND`.
+        written), the colour profile is kept, 16-bit grey is scaled to 8-bit
+        and alpha is flattened onto :data:`TRAINER_ALPHA_BACKGROUND`.
         An animated GIF gives its first frame.
 
         Args:
@@ -286,7 +287,12 @@ class ExportUtils:
         """
         try:
             with Image.open(full_path) as img:
+                icc_profile = img.info.get("icc_profile")
                 img = ImageOps.exif_transpose(img)
+                if img.mode.startswith("I"):
+                    # 16-bit and 32-bit integer grey: convert("RGB") clips
+                    # every value above 255 to white, so scale it down first.
+                    img = img.convert("I").point(lambda v: v / 256).convert("L")
                 if img.mode in {"RGBA", "LA", "PA"} or "transparency" in img.info:
                     rgba = img.convert("RGBA")
                     img = Image.new("RGB", rgba.size, TRAINER_ALPHA_BACKGROUND)
@@ -294,7 +300,12 @@ class ExportUtils:
                 else:
                     img = img.convert("RGB")
                 ExportUtils._write_image_to_zip(
-                    img, arcname, sink, ext=".png", scale=scale
+                    img,
+                    arcname,
+                    sink,
+                    ext=".png",
+                    scale=scale,
+                    save_kwargs={"icc_profile": icc_profile} if icc_profile else None,
                 )
             return True
         except Exception as exc:
@@ -1161,7 +1172,8 @@ class ExportUtils:
         :data:`TRAINER_IMAGE_EXTS`) or whose alpha it would train as black is
         written as ``image_NNNNN.png`` instead, alpha flattened onto
         :data:`TRAINER_ALPHA_BACKGROUND`; one that cannot be decoded is left
-        out, and the manifest counts only what was written.
+        out, and the manifest counts only what was written. The rest are
+        copied as they are, or resized at a reduced ``resolution``.
 
         Captions default to the picture's tags.  When ``trigger_word`` is
         given it leads every caption as its first comma-separated token.

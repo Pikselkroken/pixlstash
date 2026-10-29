@@ -65,6 +65,11 @@ def _add_to_set(client, set_id, pic_id):
     assert resp.status_code == 200, resp.text
 
 
+def _write_bytes(path, data):
+    with open(path, "wb") as fh:
+        fh.write(data)
+
+
 def _assert_pairs(dest_dir, expected_count, trigger_word=None):
     """Assert one .txt per image, contiguous image_NNNNN naming, trigger leading."""
     files = sorted(os.listdir(dest_dir))
@@ -279,7 +284,8 @@ def test_build_training_dataset_converts_what_ai_toolkit_would_skip(env):
         "photo.tiff": lambda path: Image.new("RGB", (8, 8), red).save(path),
         "cutout.png": lambda path: transparent.save(path),
         "cutout.gif": lambda path: transparent.save(path),
-        "broken.bmp": lambda path: open(path, "wb").write(b"not a bitmap"),
+        "grey16.tiff": lambda path: Image.new("I;16", (8, 8), 40000).save(path),
+        "broken.bmp": lambda path: _write_bytes(path, b"not a bitmap"),
     }
     ids = {}
     for name, write in sources.items():
@@ -319,6 +325,9 @@ def test_build_training_dataset_converts_what_ai_toolkit_would_skip(env):
                 assert img.mode == "RGB"
                 r, g, b = img.getpixel((4, 4))
                 assert abs(r - red[0]) < 16 and g < 40 and b < 40, (name, r, g, b)
+        with Image.open(os.path.join(dest_dir, written["grey16.tiff"])) as img:
+            # Scaled to 8-bit, not clipped to white by convert("RGB").
+            assert img.getpixel((4, 4)) == (156, 156, 156)
         for name in ("cutout.png", "cutout.gif"):
             assert written[name].endswith(".png"), written[name]
             with Image.open(os.path.join(dest_dir, written[name])) as img:
