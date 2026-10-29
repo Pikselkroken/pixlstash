@@ -33,7 +33,6 @@
     @apply-score="applyScore"
     @apply-favourite="applyLightboxFavourite"
     @set-guest-score="(img, n) => setGuestScore(img, n)"
-    @add-tag="addTagToImage"
     @update-description="updateDescriptionForImage"
     @lightbox-change="handleLightboxChange"
     @added-to-set="handleLightboxAddedToSet"
@@ -1387,7 +1386,6 @@ import {
   listPicturesByIds,
   rotatePictures,
 } from "../../api/pictures";
-import { addPictureTag } from "../../api/tags";
 import {
   getStack,
   keepCoverOnly,
@@ -1452,12 +1450,10 @@ import {
   lockedSetsSentence,
 } from "../../utils/dedup.js";
 import {
-  dedupeTagList,
   hasPenalisedTags,
   penalisedTagsTitle,
   penalisedTagIcon,
   penalisedTagColor,
-  getTagList,
 } from "../../utils/tags.js";
 import {
   getStackBadgeCount,
@@ -6333,8 +6329,7 @@ const lightboxGuestScore = computed(() => {
   const img = allGridImages.value?.find((i) => i.id === Number(id));
   return img?.score ?? 0;
 });
-// Set to true when a tag mutation was deferred (applyTagFilter=true, lightbox
-// open). Triggers a filtered grid refetch once the lightbox closes.
+// Set to true when a tag edit in the lightbox was deferred (applyTagFilter on). Triggers a filtered grid refetch once the lightbox closes.
 const pendingTagFilterRefresh = ref(false);
 // Set to true when a grid-mutating operation (set removal, stack change,
 // smart-score re-rank) was deferred to avoid the filmstrip losing its current
@@ -7128,6 +7123,12 @@ function handleLightboxChange(payload) {
   if (fields.pixels) {
     void applyRotatedCards([imageId]);
     return;
+  }
+  // A tag edit can take a picture into or out of a tag-filtered view. The
+  // lightbox shows its live tags, so the filtered refetch waits for it to close
+  // rather than emptying the grid behind it.
+  if (fields.tags && userPrefsStore.applyTagFilter && lightboxOpen.value) {
+    pendingTagFilterRefresh.value = true;
   }
   if ((fields.tags || fields.smartScore) && isSmartScoreSortActive()) {
     if (lightboxOpen.value) {
@@ -8509,63 +8510,6 @@ async function confirmRevokePictureShares() {
 
 // updateColumns removed; columns is now controlled by prop
 
-async function _afterTagMutation(imageId) {
-  if (userPrefsStore.applyTagFilter) {
-    if (lightboxOpen.value) {
-      // The lightbox is showing live tag state already. Defer the full
-      // tag-filtered refetch until the lightbox is closed to prevent the
-      // grid from unexpectedly going empty in the background.
-      pendingTagFilterRefresh.value = true;
-      refreshGridImage(imageId);
-      return;
-    }
-    lastFetchSuccess.value = { key: "", at: 0 };
-    lastFetchError.value = { key: "", at: 0 };
-    await fetchAllGridImages();
-    updateVisibleThumbnails();
-    return;
-  }
-  if (isSmartScoreSortActive()) {
-    if (lightboxOpen.value) {
-      // Smart-score re-ranking would reorder the grid while the lightbox is
-      // open. Defer the full refetch until the lightbox closes.
-      pendingLightboxGridRefresh.value = true;
-      refreshGridImage(imageId);
-      return;
-    }
-    // Smart score values shown in the grid must match the list endpoint's
-    // global ranking context. Recompute by refetching the sorted list instead
-    // of patching a single card from metadata.
-    preserveScrollOnNextFetch.value = true;
-    lastFetchSuccess.value = { key: "", at: 0 };
-    lastFetchError.value = { key: "", at: 0 };
-    await fetchAllGridImages({ force: true });
-    updateVisibleThumbnails();
-  } else {
-    refreshGridImage(imageId);
-  }
-}
-
-async function addTagToImage(imageId, tag) {
-  try {
-    const response = await addPictureTag(imageId, tag);
-    const responseTags = getTagList(response?.tags);
-    const gridImg = allGridImages.value.find(
-      (img) => img && img.id === imageId,
-    );
-    if (gridImg) {
-      const current = getTagList(gridImg.tags);
-      const merged = responseTags.length
-        ? responseTags
-        : dedupeTagList([...current, { id: null, tag }]);
-      gridImg.tags = merged;
-    }
-    await _afterTagMutation(imageId);
-  } catch (error) {
-    console.error("Error adding tag:", error);
-  }
-}
-
 function updateDescriptionForImage(imageId, description) {
   const gridImg = allGridImages.value.find((img) => img && img.id === imageId);
   if (gridImg) {
@@ -8666,7 +8610,6 @@ defineExpose({
       : img.score || 0,
   setScore,
   toggleFavourite,
-  addTagToImage,
   updateDescriptionForImage,
   handleLightboxChange,
   handleTagsApplied,

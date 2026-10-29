@@ -4,7 +4,7 @@
        the tags the tagger rejected for it. Several pictures' chips are tinted
        by how many of them carry the tag (ink); one picture's by how sure the
        tagger was (teal); anomaly tags wear the error hue at the front. -->
-  <div class="rail-tags">
+  <div ref="rootRef" class="rail-tags">
     <div v-if="!readOnly" class="rail-tags__compose">
       <div
         class="rail-tags__field"
@@ -716,6 +716,19 @@ function onRemoveClick(t) {
   else void removeAndReject(t);
 }
 
+const rootRef = ref(null);
+
+/** Out of sight: the lightbox's pane shut, or Info behind another tab. */
+const hidden = () => Boolean(rootRef.value?.closest('[style*="display: none"]'));
+
+/**
+ * A selection is one gesture: a press anywhere outside these chips ends it,
+ * so a chip picked a while ago never takes a key meant for the grid.
+ */
+function onWindowPointerdown(e) {
+  if (hasSelection.value && !rootRef.value?.contains(e.target)) clearSelection();
+}
+
 /**
  * With chips selected, Ctrl+C copies them, Delete removes them and Escape
  * clears them, wherever focus is but a text field. Capture phase, so the
@@ -723,7 +736,7 @@ function onRemoveClick(t) {
  * Scrapheap) never see the key.
  */
 function onWindowKeydown(e) {
-  if (!hasSelection.value || e.altKey) return;
+  if (!hasSelection.value || e.altKey || hidden()) return;
   // A menu or dialog over the panel takes its own keys.
   if (document.querySelector(".v-overlay--active.v-menu, .v-overlay--active.v-dialog")) {
     return;
@@ -1060,11 +1073,13 @@ onMounted(() => {
   fetchAnomalies();
   if (props.autofocus) focus();
   window.addEventListener("keydown", onWindowKeydown, true);
+  window.addEventListener("pointerdown", onWindowPointerdown, true);
 });
 onBeforeUnmount(() => {
   clearTimeout(settleTimer);
   clearTimeout(wsTimer);
   window.removeEventListener("keydown", onWindowKeydown, true);
+  window.removeEventListener("pointerdown", onWindowPointerdown, true);
   hoverTag(null);
 });
 

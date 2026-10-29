@@ -440,6 +440,36 @@ describe("selecting tags", () => {
     }
   });
 
+  it("ends the selection on a press outside it, so Delete is the grid's again", async () => {
+    const wrapper = await mountTags([5]);
+    await label(wrapper, "rain").trigger("click");
+    // A press on the chips keeps it.
+    chip(wrapper, "coat").element.dispatchEvent(
+      new Event("pointerdown", { bubbles: true }),
+    );
+    await flush();
+    expect(selected(wrapper)).toEqual(["rain"]);
+    document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    await flush();
+    expect(selected(wrapper)).toEqual([]);
+    expect(press("Delete").defaultPrevented).toBe(false);
+    expect(removePictureTag).not.toHaveBeenCalled();
+  });
+
+  it("takes no keys while out of sight (the lightbox's pane shut, or another tab)", async () => {
+    const wrapper = await mountTags([5]);
+    await label(wrapper, "rain").trigger("click");
+    wrapper.element.parentElement.style.display = "none";
+    try {
+      expect(press("Delete").defaultPrevented).toBe(false);
+      expect(press("Escape").defaultPrevented).toBe(false);
+      await flush();
+      expect(removePictureTag).not.toHaveBeenCalled();
+    } finally {
+      wrapper.element.parentElement.style.display = "";
+    }
+  });
+
   it("leaves Escape and Delete to the tag field", async () => {
     const wrapper = await mountTags([5]);
     await label(wrapper, "rain").trigger("click");

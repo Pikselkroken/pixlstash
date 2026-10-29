@@ -1912,7 +1912,6 @@ const emit = defineEmits([
   "apply-score",
   "apply-favourite",
   "set-guest-score",
-  "add-tag",
   "update-description",
   "lightbox-change",
   "added-to-set",
