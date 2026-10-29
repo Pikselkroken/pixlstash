@@ -983,15 +983,64 @@ count.
 
 ### The key-hint badge (`kbd`)
 
-Dialog action buttons wear their keys (owner decision, 2026-07-29; the behavioural
+Every keyboard hint in the app is one keycap (owner decision, 2026-10-28, after
+the toolbar search's F proved unreadable at a distance). The box is shared and
+lives in the `KEYCAP` block of `design-tokens.css`; each site keeps its own font
+and colour, so the only thing a site chooses is which inset:
+
+- **`--kbd-pad`** (2px 8px): the default, everywhere a keycap sits in text, a
+  menu, a tooltip or a footer.
+- **`--kbd-pad-tight`** (2px 6px): inside a control, such as a selection pill or
+  a bar button. 6px is deliberately between spacing steps: 8px reads loose inside
+  a pill, 4px puts the border back on the glyph.
+- **`--kbd-pad-field`** (0 4px): the F inside a search field at rest. It is set
+  in the UI face at `--text-sm`, not mono at `--text-2xs`, which shrank a lone
+  letter to a speck. The line-height (`--kbd-leading`) gives it its air.
+
+Corners are `--radius-sm` throughout; the extra inset is what stops the 4px
+corner reading as round. Never write a keycap's padding as a literal.
+
+Colour follows where the keycap sits. In running text, a menu or a tooltip it
+takes the theme border; on a control's own fill (the search field's F, an
+`AppButton`, the shelf's selection bar) it takes `currentColor`, so it follows
+the control's ink. The selection pill's verbs and the add-to controls keep
+`.fm-kbd`, a cap with its own input fill, so they take the theme border too.
+The search menu's list and footer follow their own muted ink the same way. Key
+names are mono; the search field's F (`--kbd-font-field`, `--kbd-size-field`) is
+the one exception. ↵ is always the `mdi-subdirectory-arrow-left` icon, never the
+character: its tall upright is what makes it read as enter. A chord is caps side
+by side, never joined by a `+`, `--kbd-chord-gap` (2px) apart (one global `kbd +
+kbd` rule) so they read as one press. Alternatives such as ← → keep a word space,
+and each key that starts a new press carries `kbd-or`: text between keys does
+not break CSS adjacency, so without it they take the chord gap too. A modifier
+that applies to both alternatives is repeated, ⌘← ⌘→, never left for → to
+borrow. Shift is its own cap, drawn as `mdi-apple-keyboard-shift`; never `⇧Tab`
+in one cap, where the ⇧ is the weakest mark in the row. Write a key with
+`KeyCap` (`components/widgets/KeyCap.vue`): it draws Shift, ⌘, Enter and
+Backspace as icons and carries each one's name as `visually-hidden` text, since
+`v-icon` is `aria-hidden` and the cap would otherwise read as nothing. Its root
+is the `kbd`, so a host's scoped keycap rule still applies. The enter icon's ink
+weighs about 1px right of its box, so every keycap nudges it back (`App.css`);
+measured centred within 0.15px.
+
+**Dialog buttons** wear their keys (owner decision, 2026-07-29; the behavioural
 contract lives in `frontend_architecture.md`, "App* design-system layer"): the
-accept/confirm button carries an **↵** badge and the cancel/abort button an **Esc**
-badge, rendered by `AppButton`'s `key-hint` prop as a `<kbd>` chip — `--font-mono` at
-`--text-2xs`, a 1px `currentColor` border at `--radius-sm`, the whole chip at 0.55
-opacity. `currentColor` is what makes it legal on every variant fill without a new
-token pair, and the opacity is what keeps it a hint rather than a second label. It is
-`aria-hidden` (the accessible name must stay the verb); the machine-readable copy is
-`aria-keyshortcuts` on the button itself.
+accept/confirm button carries an **↵** and the cancel/abort button an **Esc**,
+rendered by `AppButton`'s `key-hint` prop as a `<kbd>` chip at `--text-xs`, a
+fixed `--kbd-h-button` (20px; `--kbd-h-button-sm`, 16px, on a small button) tall
+so both chips match and keep 4px clear inside the button. The ↵ chip is a step
+narrower than it is high, as the key is, with the icon (14px; 12px on a small
+button) centred in it. Text in the chip is centred on its capitals
+(`text-box: trim-both cap alphabetic`), or Esc floats a pixel high. The glyph and its 1px `currentColor` border are at 90%;
+there is no wash and no shadow on the chip (owner, 2026-10-28: both read
+badly). The old 0.55 opacity on the whole chip measured 2.6:1 on amber (2.1:1
+dark); this measures 4.19:1 (3.07:1 dark), 4.67:1 on danger. What keeps it a
+hint is its size beside the 14px label, not a fade. The chip is hidden on a
+coarse pointer, where there is no keyboard to hint at. A hand-made keycap
+inside an `AppButton` is a bug: pass `key-hint` instead. The bar buttons' Esc
+(Clear search) and the shelf pill's verb keys take the same 90% colour. It is
+`aria-hidden` (the accessible name must stay the verb); the machine-readable
+copy is `aria-keyshortcuts` on the button itself.
 
 The full-width bar that appears above the grid to act on a context — the bulk
 **selection bar**, the lightbox top bar, and the new **Trash restore/purge

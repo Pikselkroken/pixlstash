@@ -485,13 +485,13 @@ button:focus:not(:focus-visible) {
 }
 kbd {
   display: inline-block;
-  padding: var(--space-1) var(--space-2);
+  padding: var(--kbd-pad);
   font-size: var(--text-2xs);
   font-family: var(--font-mono);
   background: rgba(var(--v-theme-on-background), 0.08);
   border: 1px solid rgba(var(--v-theme-on-background), 0.2);
   border-radius: var(--radius-sm);
-  line-height: 1.5;
+  line-height: var(--kbd-leading);
 }
 
 /* The cover of an expanded stack, named. Bottom-left, on the photo scrim: the
@@ -1071,11 +1071,29 @@ kbd {
   line-height: var(--leading-body);
   color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
 }
+/* A chord is keycaps side by side: Shift, then Tab. They sit a hairline
+   apart so they read as one press. */
+kbd + kbd {
+  margin-left: var(--kbd-chord-gap);
+}
+/* An alternative (← or →, 1 to 5) starts a new press, not a chord: the text
+   between keys does not break `+` adjacency, so the key opts out and keeps
+   only the word space before it. */
+kbd + kbd.kbd-or {
+  margin-left: 0;
+}
+/* The enter icon's ink weighs about 1px right of its box (the upright is on
+   the right), so centred it reads off-centre in its cap. An optical nudge, in
+   one place for every keycap that wears it. A transform, not a margin: inside
+   a centring flex box a margin moves it half as far and rounds away at 1x. */
+kbd .mdi-subdirectory-arrow-left {
+  transform: translateX(-1px);
+}
 .fm-kbd {
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
-  line-height: 1;
-  padding: var(--space-1) var(--space-2);
+  line-height: var(--kbd-leading);
+  padding: var(--kbd-pad);
   border-radius: var(--radius-sm);
   background: rgb(var(--v-theme-input-background));
   border: 1px solid rgb(var(--v-theme-border));
@@ -1218,7 +1236,8 @@ kbd {
    (ViewBackButton, the lightbox's Exit full screen). */
 .bar-btn-kbd {
   margin-left: var(--space-2);
-  padding: 0 var(--space-2);
+  padding: var(--kbd-pad-tight);
+  line-height: var(--kbd-leading);
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-sm);
   font-family: inherit;

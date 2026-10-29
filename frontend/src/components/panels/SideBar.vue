@@ -20,6 +20,7 @@ import SidebarResizeHandle from "./SidebarResizeHandle.vue";
 import UserSettingsDialog from "../settings/UserSettingsDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
 import HeadlineTourCard from "./HeadlineTourCard.vue";
+import KeyCap from "../widgets/KeyCap.vue";
 import Segmented from "../widgets/Segmented.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import ReviewEndDialog from "../reviews/ReviewEndDialog.vue";
@@ -5220,8 +5221,8 @@ defineExpose({
             aria-live="polite"
           >
             {{ matchCountLabel(findMatches.length) }} ·
-            <kbd class="sidebar-kbd">Enter</kbd> opens the first ·
-            <kbd class="sidebar-kbd">Esc</kbd> clears
+            <KeyCap k="Enter" class="sidebar-kbd" /> opens the first ·
+            <kbd class="sidebar-kbd kbd-or">Esc</kbd> clears
           </div>
           <div v-else-if="isFinding" class="sidebar-find-none" aria-live="polite">
             <p>No project, person or set is called “{{ findQuery.trim() }}”.</p>

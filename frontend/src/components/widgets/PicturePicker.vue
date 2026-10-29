@@ -97,7 +97,7 @@
             hide-details
           />
           <span class="pp-paste">
-            or press <kbd>Ctrl</kbd><kbd>V</kbd>
+            or press <span><KeyCap k="Ctrl" /><kbd>V</kbd></span>
           </span>
         </div>
 
@@ -237,6 +237,7 @@ import { errorDetail } from "../../utils/apiError";
 import { PIL_IMAGE_EXTENSIONS } from "../../utils/media";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useTasksStore } from "../../stores/useTasksStore";
+import KeyCap from "./KeyCap.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -689,7 +690,7 @@ watch(
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 .pp-paste kbd {
-  padding: var(--space-1) var(--space-2);
+  padding: var(--kbd-pad);
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-sm);
   background: rgb(var(--v-theme-input-background));

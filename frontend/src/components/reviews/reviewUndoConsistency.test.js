@@ -402,7 +402,9 @@ describe("ReviewSessionsOverlay - Ctrl+Z is no longer dead", () => {
     await nextTick();
     const sheet = w.find(".rs-keys");
     expect(sheet.exists()).toBe(true);
-    expect(sheet.text()).toMatch(/U \/ (Ctrl\+Z|⌘\+Z)/);
+    // Separate caps, so the chord has no "+"; each cap's hidden space keeps
+    // the names apart, and ⌘ is an icon named Command.
+    expect(sheet.text().replace(/\s+/g, " ")).toMatch(/U \/ (Ctrl|Command) Z/);
     expect(sheet.text()).toContain("Undo the last decision in this review");
     w.unmount();
   });

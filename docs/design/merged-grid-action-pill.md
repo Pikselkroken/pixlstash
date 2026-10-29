@@ -418,7 +418,7 @@ Order, one layer per press, innermost and most reversible first:
 4. No selection, search active → clear the search. The pill unmounts.
 
 The Esc keycap belongs to exactly **one** visible control at a time — the one Esc
-will actually hit — rendered as the `<kbd>` chip from `visual-language.md` §13,
+will actually hit — rendered as the keycap from `visual-language.md` ("The key-hint badge"),
 with `aria-keyshortcuts="Escape"` on that control only (`aria-keyshortcuts` on a
 button that will not get the key is a 4.1.2 lie).
 

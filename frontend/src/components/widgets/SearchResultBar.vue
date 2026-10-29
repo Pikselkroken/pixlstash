@@ -748,8 +748,8 @@ onUnmounted(() => {
   font-size: var(--text-2xs);
   border: 1px solid currentColor;
   border-radius: var(--radius-sm);
-  padding: 0 var(--space-2);
-  opacity: 0.55;
+  padding: var(--kbd-pad-tight);
+  color: color-mix(in srgb, currentColor 90%, transparent);
 }
 
 /* ── Responsive ladder (container `selbar`, declared on .grid-content-area) ──

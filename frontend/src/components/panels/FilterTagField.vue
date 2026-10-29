@@ -39,8 +39,14 @@
           @keydown.esc="onEsc"
         />
         <span :id="`${listId}-hint`" class="ftf-hint">
-          <kbd class="fm-kbd ftf-kbd">↵</kbd> {{ rows[0].short }} ·
-          <kbd class="fm-kbd ftf-kbd">⇧↵</kbd> {{ rows[1].short }}
+          <KeyCap k="Enter" class="fm-kbd ftf-kbd" /> {{ rows[0].short }} ·
+          <!-- One flex item, so the hint's gap does not split the chord. -->
+          <span
+            ><KeyCap k="Shift" class="fm-kbd ftf-kbd" /><KeyCap
+              k="Enter"
+              class="fm-kbd ftf-kbd"
+          /></span>
+          {{ rows[1].short }}
         </span>
       </div>
       <span v-if="browsing" class="tbm-label ftf-label--next">By group</span>
@@ -182,6 +188,7 @@
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { groupToken, useTagGroupsStore } from "../../stores/useTagGroupsStore";
 import { formatCount, percent } from "../../utils/filterChips";
+import KeyCap from "../widgets/KeyCap.vue";
 
 const MAX_SUGGESTIONS = 4;
 // A typed query can match at most this many group names; tags fill the rest.
@@ -459,7 +466,7 @@ onMounted(() => nextTick(() => fieldRef.value?.focus()));
 .ftf-kbd {
   font-family: var(--font-ui);
   font-size: var(--text-sm);
-  padding: 0 var(--space-2);
+  padding: var(--kbd-pad-field);
 }
 .ftf-none {
   display: inline-flex;
@@ -467,6 +474,9 @@ onMounted(() => nextTick(() => fieldRef.value?.focus()));
   height: var(--control-h-sm);
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
+}
+.ftf-hint .keycap--icon {
+  padding-inline: var(--space-1);
 }
 .ftf-row-kbd {
   margin-left: var(--space-3);

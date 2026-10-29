@@ -825,6 +825,7 @@ defineExpose({ openTagInput, openPluginPanel });
 
 .pill-verb-kbd {
   margin-left: var(--space-1);
+  padding: var(--kbd-pad-tight);
 }
 
 /* The set picker's own trigger, dressed as the round bar verbs beside it

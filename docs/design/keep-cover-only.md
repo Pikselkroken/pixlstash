@@ -273,10 +273,11 @@ surface picking 3px". Three components already carry a raw 3px rail.
    three shipped surfaces.
 4. ~~`DeleteForeverDialog.vue:419` raw `opacity: 0.38` → `--opacity-disabled`.~~
    **Done** with this lane. Identical value, no visual change.
-5. A fourth `<kbd>` recipe; converge on `AppButton`'s `key-hint`. **Deferred.**
-   `KeepCoverOnlyDialog` copies `DedupAutoStackDialog`'s `<kbd>` verbatim, which
-   is what "matching the sibling verbatim" asks for above; converging them is one
-   change across all the surfaces that carry keycaps, not a per-dialog decision.
+5. A fourth `<kbd>` recipe; converge on `AppButton`'s `key-hint`. **Partly
+   done** (2026-10-28): every keycap now shares the `KEYCAP` inset tokens
+   (`visual-language.md`, "The key-hint badge"), so the box is one recipe. The
+   colours are still per surface; `KeepCoverOnlyDialog` and
+   `DedupAutoStackDialog` keep matching each other verbatim.
 
 ## Keep recipes only (#1315)
 

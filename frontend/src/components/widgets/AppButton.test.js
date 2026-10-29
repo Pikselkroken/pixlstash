@@ -155,10 +155,30 @@ describe("AppButton on-dark context", () => {
   });
 });
 
+// The dialog keyboard contract's visible half (visual-language.md, "The
+// key-hint badge"): ↵ is drawn as an icon, never the character, and the
+// machine-readable copy rides the button.
 describe("AppButton key hint", () => {
-  it("wears Ctrl ↵ for ctrl+enter and names the chord for assistive tech", () => {
+  it("draws Enter as the keyboard-return icon", () => {
+    const w = mountButton({ keyHint: "enter" });
+    expect(w.find("kbd i").exists()).toBe(true);
+    expect(w.find("kbd").text()).not.toContain("↵");
+    expect(w.find("button").attributes("aria-keyshortcuts")).toBe("Enter");
+  });
+
+  it("draws Ctrl+Enter as a Ctrl cap beside the Enter cap", () => {
     const w = mountButton({ keyHint: "ctrl+enter" });
-    expect(w.find(".app-btn__key").text()).toBe("Ctrl ↵");
+    const caps = w.findAll("kbd");
+    expect(caps.map((c) => c.text())).toEqual(["Ctrl", ""]);
+    expect(caps[1].find("i").exists()).toBe(true);
     expect(w.find("button").attributes("aria-keyshortcuts")).toBe("Control+Enter");
+  });
+
+  it("writes Esc and any other key as text", () => {
+    expect(mountButton({ keyHint: "esc" }).find("kbd").text()).toBe("Esc");
+    const r = mountButton({ keyHint: "r" });
+    expect(r.find("kbd").text()).toBe("R");
+    expect(r.find("kbd i").exists()).toBe(false);
+    expect(r.find("button").attributes("aria-keyshortcuts")).toBe("R");
   });
 });

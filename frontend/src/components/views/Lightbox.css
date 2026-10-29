@@ -119,7 +119,7 @@
 .lightbox-fullscreen-notice kbd {
   font-family: inherit;
   font-size: var(--text-xs);
-  padding: 0 var(--space-1);
+  padding: var(--kbd-pad);
   border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-on-dark-surface), 0.15);
 }
@@ -614,14 +614,14 @@
   background-image: var(--hover-shade);
 }
 
+/* A keycap inside a control: the tight inset, at full ink like the others. */
 .lightbox-edit-chip kbd {
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
-  line-height: 1;
-  padding: var(--space-1) var(--space-2);
+  line-height: var(--kbd-leading);
+  padding: var(--kbd-pad-tight);
   border: 1px solid currentColor;
   border-radius: var(--radius-sm);
-  opacity: 0.9;
 }
 
 .lightbox-canvas:hover .lightbox-nav,
@@ -700,8 +700,8 @@
   font-family: inherit;
   font-size: inherit;
   background: rgba(var(--v-theme-on-dark-surface), 0.15);
-  border-radius: 3px;
-  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  padding: var(--kbd-pad);
 }
 
 /* The Info tab's own column. The inspector's lightbox body is a fixed-height
@@ -1012,7 +1012,7 @@
 .compare-exit-key {
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
-  padding: 0 var(--space-2);
+  padding: var(--kbd-pad-tight);
   border: 1px solid currentColor;
   border-radius: var(--radius-sm);
 }

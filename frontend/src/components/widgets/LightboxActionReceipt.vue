@@ -37,6 +37,7 @@
 import { computed, ref } from "vue";
 
 import { useActionReceipt } from "../../composables/useActionReceipt";
+import KeyCap from "./KeyCap.vue";
 
 // `announce: false`: the grid's receipt owns the single app-wide live region.
 const {
@@ -150,7 +151,7 @@ defineExpose({
             <span>{{ actionLabel }}</span>
           </button>
           <span class="kbdhint" aria-hidden="true">
-            <kbd v-for="key in keyHint" :key="key">{{ key }}</kbd>
+            <KeyCap v-for="key in keyHint" :key="key" :k="key" />
           </span>
         </template>
         <span class="r-progress run" aria-hidden="true"></span>
@@ -285,10 +286,10 @@ defineExpose({
   cursor: default;
 }
 
+/* The chord's gap is the global `kbd + kbd` rule's. */
 .kbdhint {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
   flex-shrink: 0;
 }
 
@@ -298,13 +299,13 @@ defineExpose({
    border on a dark pill. */
 .lightbox-receipt kbd {
   display: inline-block;
-  padding: var(--space-1) var(--space-2);
+  padding: var(--kbd-pad);
   font-size: var(--text-2xs);
   font-family: var(--font-mono);
   background: rgba(var(--v-theme-on-dark-surface), 0.08);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.2);
   border-radius: var(--radius-sm);
-  line-height: 1.5;
+  line-height: var(--kbd-leading);
 }
 
 /* ── Countdown drain ──────────────────────────────────────────────────────── */

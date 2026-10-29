@@ -2662,7 +2662,7 @@ function onKeyDown(event) {
 }
 
 .msg__kbd {
-  padding: 0 var(--space-2);
+  padding: var(--kbd-pad);
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-sm);
   font-family: inherit;

@@ -32,7 +32,7 @@
         />
         <template v-if="focused && draft.trim()">
           <span v-if="many" class="rail-tags__to">to all {{ n }}</span>
-          <kbd class="fm-kbd" aria-hidden="true">↵</kbd>
+          <KeyCap k="Enter" class="fm-kbd" aria-hidden="true" />
         </template>
         <kbd v-else-if="!focused" class="fm-kbd" aria-hidden="true">T</kbd>
       </div>
@@ -669,6 +669,7 @@ import { formatSentinelTag } from "../../utils/tags.js";
 import { chipText, colourKey, NEUTRAL_KEYS } from "../../utils/tagColour.js";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import { vSubmenuFit } from "../../utils/submenuFit";
+import KeyCap from "../widgets/KeyCap.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 
 const props = defineProps({

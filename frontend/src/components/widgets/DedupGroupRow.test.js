@@ -154,10 +154,12 @@ describe("DedupGroupRow - the verdict key scheme (amendment #3)", () => {
   // taught in copy, never as a second chip) - while aria-keyshortcuts
   // carries the full machine-readable set: the chips are aria-hidden, and
   // before this nothing announced the keys at all.
-  it("chips show Enter and K; aria-keyshortcuts carries the full set", () => {
+  it("chips show ↵ and K; aria-keyshortcuts carries the full set", () => {
     const wrapper = mountRow({ focused: true });
     const stack = wrapper.find('[data-testid="dedup-stack"]');
-    expect(stack.find("kbd").text()).toBe("Enter");
+    expect(stack.find("kbd v-icon-stub").attributes("icon")).toBe(
+      "mdi-subdirectory-arrow-left",
+    );
     expect(stack.attributes("aria-keyshortcuts")).toBe("Enter S");
 
     const keep = wrapper.find('[data-testid="dedup-keep-separate"]');

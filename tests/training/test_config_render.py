@@ -331,7 +331,7 @@ def test_training_folder_override_is_refused():
     with pytest.raises(TunableOverrideError, match="training_folder"):
         _render(
             overrides={
-                "config": {"process": [{"training_folder": "/home/victim/library"}]}
+                "config": {"process": [{"training_folder": "/home/you/library"}]}
             }
         )
 
@@ -345,7 +345,7 @@ def test_dataset_folder_path_override_is_refused():
         _render(
             overrides={
                 "config": {
-                    "process": [{"datasets": [{"folder_path": "/home/victim/pics"}]}]
+                    "process": [{"datasets": [{"folder_path": "/home/you/pics"}]}]
                 }
             }
         )

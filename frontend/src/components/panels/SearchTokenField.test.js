@@ -152,7 +152,9 @@ describe("SearchTokenField", () => {
     await type("pud");
     expect(optionTexts()[1]).toContain("1 picture");
     expect(optionTexts()[1]).not.toContain("1 pictures");
-    expect(wrapper.find(".stf-foot").text()).toContain("⇧Tab without tag");
+    expect(wrapper.find(".stf-foot").text().replace(/\s+/g, " ")).toContain(
+      "Shift Tab without tag",
+    );
   });
 
   it("finds any filter by name, under the Filter menu's kinds", async () => {
@@ -334,6 +336,18 @@ describe("SearchTokenField", () => {
     const tab = await press("Tab");
     expect(tab.defaultPrevented).toBe(false);
     expect(useFilterStore().tagFilter).toEqual([]);
+  });
+
+  // The footer's keys are icons, and v-icon is aria-hidden, so each icon key
+  // carries its name as hidden text; without it the footer reads
+  // "Tab add filter ... Tab without tag" (visual-language.md, "The key-hint badge").
+  it("names its icon keys in the footer text", async () => {
+    await mountField();
+    // A reader collapses runs of spaces; the name's own space keeps "Shift"
+    // from running into "Tab".
+    const foot = wrapper.find(".stf-foot").text().replace(/\s+/g, " ");
+    expect(foot).toContain("Enter search words");
+    expect(foot).toContain("Shift Tab without tag");
   });
 
   it("names its filters to a screen reader at rest, Lacks as lacks", async () => {

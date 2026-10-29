@@ -2166,6 +2166,13 @@ onBeforeUnmount(() => {
   right: var(--space-3);
   transform: translateY(-50%);
   pointer-events: none;
+  /* The grid search field's F (SearchTokenField): its type, its inset and its
+     text-coloured border. */
+  font-family: var(--kbd-font-field);
+  font-size: var(--kbd-size-field);
+  line-height: var(--kbd-leading);
+  padding: var(--kbd-pad-field);
+  border-color: currentColor;
 }
 
 /* The app-wide tail's own gap: this bar spaces its controls at --space-4, and

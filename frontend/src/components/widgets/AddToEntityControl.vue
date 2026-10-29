@@ -1544,6 +1544,11 @@ defineExpose({
 </script>
 
 <style scoped>
+/* Sits in the selection pill beside the verbs' keycaps: the tight inset. */
+.ate-kbd {
+  padding: var(--kbd-pad-tight);
+}
+
 /* The menu surface and its rows are the shared `.ctx-menu` / `.ctx-item`
    (styles/context-menu.css). What stays here is placement, the pinned search /
    create / status parts around the list, and the stand-alone trigger. */
@@ -1765,9 +1770,9 @@ defineExpose({
 .ate-item-shortcut {
   border: 1px solid rgba(var(--v-theme-on-surface), 0.32);
   border-radius: var(--radius-sm);
-  padding: var(--space-1) var(--space-2);
+  padding: var(--kbd-pad);
   font-size: var(--text-2xs);
-  line-height: 1;
+  line-height: var(--kbd-leading);
   color: rgba(var(--v-theme-on-surface), 0.9);
   background: rgba(var(--v-theme-on-surface), 0.08);
 }

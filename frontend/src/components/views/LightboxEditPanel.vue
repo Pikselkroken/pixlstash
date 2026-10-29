@@ -390,7 +390,10 @@
           @click="paint.undo()"
         >
           Undo stroke
-          <kbd class="edit-kbd" aria-hidden="true">Ctrl Z</kbd>
+          <!-- One flex child, so the button's gap does not split the chord. -->
+          <span aria-hidden="true"
+            ><kbd class="edit-kbd">Ctrl</kbd><kbd class="edit-kbd">Z</kbd></span
+          >
         </button>
       </div>
     </template>
@@ -1290,7 +1293,7 @@ defineExpose({ submit });
 .edit-kbd {
   font-family: inherit;
   font-size: var(--text-2xs);
-  padding: 0 var(--space-1);
+  padding: var(--kbd-pad);
   border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-on-dark-surface), 0.15);
   color: rgb(var(--v-theme-on-dark-surface));

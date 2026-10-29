@@ -1456,13 +1456,13 @@ defineExpose({
    AppButton's `.app-btn__key`: currentColor border, so it follows the verb. */
 .selbar-kbd {
   margin-left: var(--space-1);
-  padding: 0 var(--space-1);
+  padding: var(--kbd-pad-tight);
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
-  line-height: 1.5;
+  line-height: var(--kbd-leading);
   border: 1px solid currentColor;
   border-radius: var(--radius-sm);
-  opacity: 0.55;
+  color: color-mix(in srgb, currentColor 90%, transparent);
 }
 
 /* The rows are the global `.ctx-*` menu (styles/context-menu.css). What is left

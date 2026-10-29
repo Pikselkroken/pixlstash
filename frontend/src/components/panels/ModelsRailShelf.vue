@@ -190,9 +190,11 @@
           :tooltip="`Add to ${targetName}`"
           :disabled="!addableSelection.length"
           data-testid="mrail-add-selection"
+          key-hint="enter"
           @click="addSelection"
-          ><span class="mrsh-foot-add-name">Add to {{ targetName }}</span
-          ><kbd class="mrsh-kbd" aria-hidden="true">⏎</kbd></AppButton
+          ><span class="mrsh-foot-add-name"
+            >Add to {{ targetName }}</span
+          ></AppButton
         >
         <AppButton
           v-else
@@ -1387,12 +1389,6 @@ onBeforeUnmount(endDrag);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.mrsh-kbd {
-  margin-left: var(--space-2);
-  font-family: inherit;
-  opacity: var(--opacity-text-secondary);
 }
 
 /* The drag pill. A solid primary fill, the sidebar's live-drop colour, so it
