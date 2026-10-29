@@ -196,3 +196,46 @@ describe("grid context menu keyboard reach into the Add-to controls", () => {
     wrapper.unmount();
   });
 });
+
+// The tools sit behind four group rows, so a keyboard user reaches them only if
+// ArrowRight opens a group and ArrowLeft comes back out of it.
+describe("grid context menu keyboard reach into the tool groups", () => {
+  it("opens a group on ArrowRight, roves inside it, and returns on ArrowLeft", async () => {
+    const wrapper = await mountMenu();
+    const wrap = menuEl().querySelector('[data-group="adjust"]');
+    const trigger = wrap.querySelector(":scope > .ctx-item");
+    trigger.focus();
+
+    await press(trigger, "ArrowRight");
+    await nextTick();
+    const rows = Array.from(wrap.querySelectorAll(".ctx-submenu .ctx-item"));
+    expect(rows.length).toBeGreaterThan(1);
+    expect(document.activeElement).toBe(rows[0]);
+
+    // ArrowDown stays inside the group rather than walking the outer menu.
+    await press(rows[0], "ArrowDown");
+    expect(document.activeElement).toBe(rows[1]);
+
+    await press(rows[1], "ArrowLeft");
+    await nextTick();
+    expect(wrap.querySelector(".ctx-submenu")).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+    wrapper.unmount();
+  });
+
+  it("keeps a hover-opened group's rows out of the outer roving order", async () => {
+    const wrapper = await mountMenu();
+    const wrap = menuEl().querySelector('[data-group="adjust"]');
+    wrap.dispatchEvent(new MouseEvent("mouseenter"));
+    await nextTick();
+    expect(wrap.querySelector(".ctx-submenu")).not.toBeNull();
+    const trigger = wrap.querySelector(":scope > .ctx-item");
+    trigger.focus();
+    await press(trigger, "ArrowDown");
+    // The next submenu's trigger, not the first row of the one open beside it.
+    expect(document.activeElement).toBe(
+      menuEl().querySelector('[data-group="restore"] > .ctx-item'),
+    );
+    wrapper.unmount();
+  });
+});

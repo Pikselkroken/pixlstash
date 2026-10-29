@@ -1,9 +1,9 @@
 import { test, expect } from '../fixtures/test.js'
 
 // Release plan §3.5 — the right-click context menu. Right-clicking a grid card
-// opens the menu and exposes the selection-scoped actions (Tag, Reverse image
-// search, Share image …). Read-only: we open the menu and dismiss it without
-// invoking any action.
+// opens the menu and exposes the selection-scoped actions (Tag, Share image, the
+// tool groups such as Find & compare …). Read-only: we open the menu and dismiss
+// it without invoking any action.
 
 test.describe('context menu', () => {
   test.beforeEach(async ({ grid }) => {
@@ -14,8 +14,10 @@ test.describe('context menu', () => {
     await grid.openContextMenu()
 
     await expect(grid.contextMenuItem('Tag')).toBeVisible()
-    await expect(grid.contextMenuItem('Reverse image search')).toBeVisible()
     await expect(grid.contextMenuItem('Share image')).toBeVisible()
+    // The tools fold into groups: Reverse image search is behind Find & compare.
+    await grid.contextMenuItem('Find & compare').hover()
+    await expect(grid.contextMenuItem('Reverse image search')).toBeVisible()
 
     await page.keyboard.press('Escape')
     await expect(grid.contextMenu).toBeHidden()

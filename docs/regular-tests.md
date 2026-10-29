@@ -157,7 +157,7 @@ missing or placeholder sources fail with the actual `src` in the diagnostic.
 ## Context menu — `context-menu.spec.js` (plan §3.5)
 | Test | Covers | Status |
 |------|--------|--------|
-| opens on right-click and lists picture actions | Right-click a card opens `.image-ctx-menu` exposing Tag / Reverse image search / Share image; Escape dismisses it | ✅ |
+| opens on right-click and lists picture actions | Right-click a card opens `.image-ctx-menu` exposing Tag / Share image, and Reverse image search once Find & compare is hovered; Escape dismisses it | ✅ |
 
 ## Statistics sidebar — `stats.spec.js`
 | Test | Covers | Status |

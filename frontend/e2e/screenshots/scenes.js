@@ -262,7 +262,12 @@ export const scenes = [
     async setup({ grid, page }) {
       await readyGrid(grid)
       await grid.openContextMenu(grid.thumbnails.first())
-      // Highlight the "Reverse image search" action, as in the original.
+      // Highlight the "Reverse image search" action, as in the original. It
+      // sits in the Find & compare group, which opens on hover.
+      await grid.contextMenu
+        .locator('.ctx-item', { hasText: 'Find & compare' })
+        .first()
+        .hover()
       const item = grid.contextMenu
         .locator('.ctx-item', { hasText: 'Reverse image search' })
         .first()
