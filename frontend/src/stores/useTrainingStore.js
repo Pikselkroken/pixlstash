@@ -31,6 +31,7 @@ import {
   toggleTrigger,
   triggerFromName,
 } from "../utils/trainingPlan";
+import { isBusyJob } from "../utils/trainingRuns.js";
 
 // How long the dialog waits after a change before it asks the server again.
 const RESOLVE_DEBOUNCE_MS = 150;
@@ -121,12 +122,7 @@ export const useTrainingStore = defineStore("training", () => {
     () => !!(aiToolkitRepoPath.value && aiToolkitPython.value),
   );
 
-  const TERMINAL_STATUSES = ["completed", "error", "stopped"];
-  const isTerminalStatus = (status) => TERMINAL_STATUSES.includes(status);
-
-  const hasRunningJob = computed(() =>
-    jobs.value.some((j) => !isTerminalStatus(j.status)),
-  );
+  const hasRunningJob = computed(() => jobs.value.some(isBusyJob));
 
   /** The character the run is filed under, or null for an ordinary set. */
   const character = computed(() => dataset.value?.character || null);
@@ -769,7 +765,6 @@ export const useTrainingStore = defineStore("training", () => {
     jobsLoading,
     jobsError,
     hasRunningJob,
-    isTerminalStatus,
     fetchJobs,
     cancelJob,
     deleteJob,

@@ -172,7 +172,9 @@
           <div class="tr-card-body">
             <span class="tr-card-title">
               <span class="tr-card-name">{{ card.name }}</span>
-              <span v-if="card.live" class="tr-card-chip">Training</span>
+              <span v-if="card.live" class="tr-card-chip">{{
+                card.job?.status === "completed" ? "Finishing" : "Training"
+              }}</span>
               <span v-else-if="failed(card)" class="tr-card-chip tr-card-chip--err"
                 >Failed</span
               >

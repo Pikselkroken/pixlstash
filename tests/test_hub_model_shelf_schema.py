@@ -1516,6 +1516,10 @@ def store(tmp_path):
         yield database
 
 
+# A finished run's completed_at; a completed run without one is still busy.
+_COMPLETED_AT = "2026-10-26T09:00:00+00:00"
+
+
 def _new_run(store, library_uuid, uuid):
     return training_runs.create_run(
         store,
@@ -1586,7 +1590,9 @@ class TestTrainingRunStore:
         """The status test is part of the DELETE: a live run is never removed."""
         queued = _new_run(store, "lib-a", "run-queued")
         done = _new_run(store, "lib-a", "run-done")
-        training_runs.update_run(store, "run-done", status="completed")
+        training_runs.update_run(
+            store, "run-done", status="completed", completed_at=_COMPLETED_AT
+        )
 
         assert (
             training_runs.delete_run(store, "lib-a", queued, only_finished=True) is None
@@ -1597,6 +1603,22 @@ class TestTrainingRunStore:
             == "run-done"
         )
         assert training_runs.get_run(store, "lib-a", done) is None
+
+    def test_only_finished_delete_leaves_a_run_still_being_imported(self, store):
+        """Completed with no completed_at: still drawing previews or importing."""
+        busy = _new_run(store, "lib-a", "run-busy")
+        training_runs.update_run(store, "run-busy", status="completed")
+
+        assert (
+            training_runs.delete_run(store, "lib-a", busy, only_finished=True) is None
+        )
+        assert training_runs.get_run(store, "lib-a", busy) is not None
+
+        training_runs.update_run(store, "run-busy", completed_at=_COMPLETED_AT)
+        assert (
+            training_runs.delete_run(store, "lib-a", busy, only_finished=True)
+            == "run-busy"
+        )
 
 
 def _snapshot(store, library_uuid, run_uuid, captions):
@@ -1667,7 +1689,9 @@ class TestDatasetSnapshotStore:
         _new_run(store, "lib-a", "run-kept")
         _snapshot(store, "lib-a", "run-gone", ["a", "b"])
         kept = _snapshot(store, "lib-a", "run-kept", ["c"])
-        training_runs.update_run(store, "run-gone", status="completed")
+        training_runs.update_run(
+            store, "run-gone", status="completed", completed_at=_COMPLETED_AT
+        )
 
         assert training_runs.delete_run(store, "lib-a", gone, only_finished=True)
         assert _snapshot_rows(store) == (1, 1)

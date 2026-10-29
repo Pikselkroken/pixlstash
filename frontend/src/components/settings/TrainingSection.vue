@@ -13,6 +13,7 @@ import { computed, onUnmounted, ref, watch } from "vue";
 import { useTrainingStore } from "../../stores/useTrainingStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
+import { isBusyJob, LIVE_STATUSES } from "../../utils/trainingRuns.js";
 import Tooltip from "../widgets/Tooltip.vue";
 import AiToolkitSetup from "./AiToolkitSetup.vue";
 
@@ -87,11 +88,14 @@ const STATUS_META = {
   running: { icon: "mdi-play-circle-outline", color: "primary", label: "running" },
   stopping: { icon: "mdi-stop-circle-outline", color: "warning", label: "stopping" },
   stopped: { icon: "mdi-cancel", color: "warning", label: "cancelled" },
+  // Trained, still drawing its previews or being imported (#2291).
+  finishing: { icon: "mdi-progress-upload", color: "primary", label: "finishing" },
   completed: { icon: "mdi-check-circle-outline", color: "success", label: "completed" },
   error: { icon: "mdi-alert-circle-outline", color: "error", label: "failed" },
 };
 
-function statusMeta(status) {
+function statusMeta(job) {
+  const status = job.status === "completed" && isBusyJob(job) ? "finishing" : job.status;
   return (
     STATUS_META[status] || {
       icon: "mdi-help-circle-outline",
@@ -192,13 +196,13 @@ async function deleteJob(job) {
         <li v-for="job in jobs" :key="job.id" class="training-row">
           <div class="training-row-main">
             <v-chip
-              :color="statusMeta(job.status).color"
+              :color="statusMeta(job).color"
               size="x-small"
               variant="tonal"
               class="training-status-chip"
             >
-              <v-icon start size="13">{{ statusMeta(job.status).icon }}</v-icon>
-              {{ statusMeta(job.status).label }}
+              <v-icon start size="13">{{ statusMeta(job).icon }}</v-icon>
+              {{ statusMeta(job).label }}
             </v-chip>
             <span class="training-row-name" :title="job.name">{{
               job.name
@@ -207,7 +211,7 @@ async function deleteJob(job) {
           </div>
           <div class="training-row-sub">
             <span
-              v-if="!store.isTerminalStatus(job.status) && job.total_steps"
+              v-if="isBusyJob(job) && job.total_steps"
               class="training-row-progress"
             >
               step {{ job.step }}/{{ job.total_steps }}
@@ -221,7 +225,7 @@ async function deleteJob(job) {
           </div>
           <div class="training-row-actions">
             <v-btn
-              v-if="!store.isTerminalStatus(job.status)"
+              v-if="isBusyJob(job)"
               size="x-small"
               variant="text"
               density="compact"
@@ -231,8 +235,11 @@ async function deleteJob(job) {
               View in Tasks
               <v-icon end size="13">mdi-open-in-new</v-icon>
             </v-btn>
+            <!-- A run still drawing previews or importing has neither: its
+                 previews are skipped from its own page, and the worker still
+                 reads the work dir a delete would remove. -->
             <v-btn
-              v-if="!store.isTerminalStatus(job.status)"
+              v-if="LIVE_STATUSES.includes(job.status)"
               size="x-small"
               variant="text"
               density="compact"
@@ -243,7 +250,7 @@ async function deleteJob(job) {
               Cancel
             </v-btn>
             <v-btn
-              v-else
+              v-else-if="!isBusyJob(job)"
               size="x-small"
               variant="text"
               density="compact"

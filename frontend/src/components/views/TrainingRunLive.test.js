@@ -255,6 +255,56 @@ describe("TrainingRunLive", () => {
     }
   });
 
+  it("keeps a trained run live while it draws its previews, and offers to skip them", async () => {
+    // Trained but not imported: `completed` with no completed_at (#2291).
+    vi.useFakeTimers();
+    try {
+      const drawing = payload({
+        status: "completed",
+        phase: "previews",
+        step: 1500,
+        completed_at: null,
+      });
+      const wrapper = await open(drawing);
+      expect(wrapper.find(".trl-status").text()).toContain("Generating previews");
+      expect(wrapper.find(".trl-status").text()).not.toContain("Finished");
+      expect(wrapper.find(".app-btn").text()).toBe("Skip previews");
+
+      getTrainingJobLive.mockClear();
+      await vi.advanceTimersByTimeAsync(2_500);
+      expect(getTrainingJobLive).toHaveBeenCalled();
+
+      cancelTrainingJob.mockResolvedValue({ status: "cancelled" });
+      await wrapper.find(".app-btn").trigger("click");
+      await flushPromises();
+      expect(cancelTrainingJob).toHaveBeenCalledWith(7);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps an importing run live with nothing to stop", async () => {
+    vi.useFakeTimers();
+    try {
+      const wrapper = await open(
+        payload({
+          status: "completed",
+          phase: "importing",
+          previews: null,
+          step: 1500,
+          completed_at: null,
+        }),
+      );
+      expect(wrapper.find(".trl-status").text()).toContain("Importing to the shelf");
+      expect(wrapper.find(".app-btn").exists()).toBe(false);
+      getTrainingJobLive.mockClear();
+      await vi.advanceTimersByTimeAsync(2_500);
+      expect(getTrainingJobLive).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("stops asking about a run this library does not hold", async () => {
     vi.useFakeTimers();
     try {

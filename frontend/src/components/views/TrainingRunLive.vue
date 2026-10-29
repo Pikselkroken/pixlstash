@@ -39,7 +39,7 @@
             :disabled="live.status === 'stopping'"
             @click="stop"
           >
-            {{ live.status === "stopping" ? "Stopping…" : "Stop training" }}
+            {{ stopLabel }}
           </AppButton>
         </template>
       </div>
@@ -385,6 +385,7 @@ import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { errorDetail } from "../../utils/apiError";
 import { saveFileAs } from "../../utils/downloadFile";
+import { isBusyJob, LIVE_STATUSES } from "../../utils/trainingRuns.js";
 
 const props = defineProps({
   jobId: { type: Number, required: true },
@@ -467,13 +468,12 @@ const Meter = defineComponent({
 
 const columns = computed(() => live.value?.columns ?? []);
 
-const LIVE_STATUSES = ["queued", "running", "stopping"];
-const isLive = computed(
-  () =>
-    live.value != null &&
-    (LIVE_STATUSES.includes(live.value.status) || live.value.phase === "importing"),
+const isLive = computed(() => isBusyJob(live.value));
+// While it draws its deferred previews, the cancel skips the rest of them and
+// imports the run as it is; once it is importing there is nothing to stop.
+const canStop = computed(
+  () => LIVE_STATUSES.includes(live.value?.status) || live.value?.phase === "previews",
 );
-const canStop = computed(() => LIVE_STATUSES.includes(live.value?.status));
 const busy = computed(() => ["previews", "saving", "importing"].includes(live.value?.phase));
 
 /** A step's position on the column axis: column i's centre is i + 0.5. */
@@ -633,10 +633,16 @@ const headline = computed(() => {
     case "error":
       return "Failed";
     case "completed":
-      return run.phase === "importing" ? PHASE_LABELS.importing : "Finished";
+      if (run.completed_at) return "Finished";
+      return PHASE_LABELS[run.phase] ?? PHASE_LABELS.importing;
     default:
       return SETUP.includes(run.phase) ? PHASE_LABELS[run.phase] : progress;
   }
+});
+
+const stopLabel = computed(() => {
+  if (live.value?.status === "stopping") return "Stopping…";
+  return live.value?.status === "completed" ? "Skip previews" : "Stop training";
 });
 
 const subline = computed(() => {

@@ -53,6 +53,10 @@ UNFINISHED_STATUSES = ("running", "stopping")
 # Statuses a run ends in: its trainer is gone and nothing more will write to it.
 FINISHED_STATUSES = ("completed", "stopped", "error")
 
+# A completed run the worker has not finished with: it is still drawing its
+# deferred previews or being imported, and ``_finalize`` writes completed_at.
+_COMPLETED_BUT_BUSY = "(status = 'completed' AND completed_at IS NULL)"
+
 
 def create_run(
     hub: HubDatabase,
@@ -173,8 +177,8 @@ def unfinished_runs(hub: HubDatabase, library_uuid: str) -> list[dict]:
     marks = ", ".join("?" for _ in UNFINISHED_STATUSES)
     rows = hub.fetchall(
         "SELECT * FROM training_run WHERE library_uuid = ? "
-        f"AND (status IN ({marks}) OR (status = 'completed' "
-        "AND completed_at IS NULL)) ORDER BY created_at, id",
+        f"AND (status IN ({marks}) OR {_COMPLETED_BUT_BUSY}) "
+        "ORDER BY created_at, id",
         (library_uuid, *UNFINISHED_STATUSES),
     )
     return [dict(row) for row in rows]
@@ -215,7 +219,8 @@ def delete_run(
 
     With *only_finished*, the status test is part of the DELETE itself, so a
     run that is queued, running or stopping (its trainer may still write into
-    its folder) is left alone and None is returned. Checking the status in a
+    its folder), or completed but still drawing its previews or being imported,
+    is left alone and None is returned. Checking the status in a
     separate read would leave a window in which the worker can start the run.
 
     Models the run put on the shelf are not touched: they keep their
@@ -233,7 +238,8 @@ def delete_run(
         if only_finished:
             marks = ", ".join("?" for _ in FINISHED_STATUSES)
             deleted = conn.execute(
-                f"DELETE FROM training_run WHERE id = ? AND status IN ({marks})",
+                f"DELETE FROM training_run WHERE id = ? AND status IN ({marks}) "
+                f"AND NOT {_COMPLETED_BUT_BUSY}",
                 (run_id, *FINISHED_STATUSES),
             )
             if not deleted.rowcount:
