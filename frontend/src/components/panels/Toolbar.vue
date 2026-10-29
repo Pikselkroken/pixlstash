@@ -855,12 +855,16 @@ const gbCollapseAllStacksDisabled = computed(
   gap: var(--space-3);
   flex-shrink: 0;
 }
+/* The right group takes the bar's spare room so the search field can grow
+   into it (to its 560 px cap; past that the room sits before the field). The
+   margin keeps the elastic left|right gap from closing to nothing. */
 .selection-bar-right {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: var(--space-3);
-  margin-left: auto;
-  flex-shrink: 0;
+  margin-left: var(--space-5);
+  flex: 1 0 auto;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════

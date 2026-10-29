@@ -128,6 +128,30 @@ describe("Toolbar - the search field", () => {
     expect(bar.classes()).toContain("selection-bar-overlay--searching");
   });
 
+  // At rest the field grows into the bar's spare room, up to its open width:
+  // the right group takes that room and the field takes it from the group.
+  // jsdom computes no layout, so the rules are what is pinned.
+  it("grows the resting field into spare room, up to 560px", async () => {
+    const { readFileSync } = await import("node:fs");
+    const blockOf = (path, selector) => {
+      const source = readFileSync(`${process.cwd()}/${path}`, "utf8");
+      const start = source.indexOf(`\n${selector} {`);
+      expect(start).toBeGreaterThan(-1);
+      return source.slice(start, source.indexOf("}", start));
+    };
+    const field = blockOf("src/components/panels/SearchTokenField.vue", ".stf");
+    expect(field).toMatch(/flex: [1-9] 1 260px;/);
+    expect(field).toContain("max-width: 560px;");
+    const right = blockOf(
+      "src/components/panels/Toolbar.vue",
+      ".selection-bar-right",
+    );
+    expect(right).toMatch(/flex: [1-9] 0 auto;/);
+    expect(right).toContain("justify-content: flex-end;");
+    // The fixed margin is what keeps a gap once the field takes the room.
+    expect(right).toContain("margin-left: var(--space-5);");
+  });
+
   // jsdom applies no scoped CSS, so the rules themselves are what can be
   // pinned: the open field hides View, and touches Sort's value only inside
   // the 700px container step, where the field would otherwise be squeezed.

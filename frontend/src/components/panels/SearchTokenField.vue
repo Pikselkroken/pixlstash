@@ -1,7 +1,8 @@
 <!--
   The toolbar search field: the field itself, not a trigger for a popover.
-  At rest it is the 260 px field with a one-line summary of what narrows the
-  grid; focused it widens in place to 560 px and drops one list beneath it.
+  At rest it is the 260 px field, wider up to 560 px when the bar has room,
+  with a one-line summary of what narrows the grid; focused it widens in place
+  to 560 px and drops one list beneath it.
 
   Tokens before the text are every filter in the filter strip and the Filter
   menu (`filterChips`), so search and the Filter menu are two doors to one set
@@ -742,12 +743,14 @@ defineExpose({ focus });
 </script>
 
 <style scoped>
-/* At rest the 260 px toolbar field; focused it widens in place to 560 px,
-   giving way when the bar has less room. The list drops beneath it. */
+/* At rest the 260 px toolbar field, growing into whatever room the bar has
+   spare up to the 560 px it takes focused; focused it widens in place to
+   560 px, giving way when the bar has less room. The list drops beneath it. */
 .stf {
   position: relative;
-  flex: 0 1 260px;
+  flex: 1 1 260px;
   width: 260px;
+  max-width: 560px;
   min-width: 0;
   font-family: var(--font-ui);
   font-size: var(--text-sm);
