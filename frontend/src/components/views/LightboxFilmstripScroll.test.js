@@ -212,10 +212,14 @@ describe("Lightbox stack chip", () => {
   it("steps through a folded stack, wrapping at either end", async () => {
     const wrapper = await openLightboxOn(2, STACK);
     expect(chipText(wrapper)).toBe("1 of 3 in this stack");
+    // Folded: the filmstrip shows the cover alone.
+    expect(strip(wrapper).props("offsets")).toHaveLength(3);
 
     await step(wrapper, 1);
     await flush();
     expect(activeId(wrapper)).toBe(3);
+    // Unfolded, so the member stepped to is on the strip.
+    expect(strip(wrapper).props("offsets")).toHaveLength(5);
     expect(chipText(wrapper)).toBe("2 of 3 in this stack");
 
     await step(wrapper, 1);

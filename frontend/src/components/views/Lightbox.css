@@ -213,7 +213,7 @@
 
 /* "‹ 2 of 4 in this stack › · Make cover": the lock chip's shape. The arrows
    are round 24px buttons that fill the pill's end caps, so the chip has no
-   padding of its own and the text sits evenly between them. */
+   padding of its own and nothing inside it touches an edge. */
 .lightbox-stack-chip {
   display: inline-flex;
   align-items: center;
