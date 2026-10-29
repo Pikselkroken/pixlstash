@@ -26,28 +26,28 @@
       "id": "minimax-h3-image",
       "version": 1,
       "file": "minimax-h3-image.json",
-      "sha256": "9ff76dd0ae860714a7062932a26acaae57ba77b4854497a12a702308bba587a5",
+      "sha256": "1a8814464bf872744c9316cf4dc1170a87b3a3d85fc267ee8573f54b9b56fffa",
       "min_pixlstash": "1.13.0"
     },
     {
       "id": "minimax-h3-motion",
       "version": 1,
       "file": "minimax-h3-motion.json",
-      "sha256": "0685359570d6ca70c5ac0e13688030d4b1c13b9c6141fa239973cdbec6bcc6f5",
+      "sha256": "17e7faf763e669cbd2c1282a0481d0501b8015ee0539a6907998c022bf52f00a",
       "min_pixlstash": "1.13.0"
     },
     {
       "id": "moss-image-base",
       "version": 1,
       "file": "moss-image-base.json",
-      "sha256": "23b3ef24261832898e89f35b3a4d1eb27dd71541f7ce70136151efa47c58f8d1",
+      "sha256": "5abbe574b7aa85df01898d425abb77e97ca2bd60c0f31ca127248f4788dfc8dc",
       "min_pixlstash": "1.13.0"
     },
     {
       "id": "zimage-turbo",
       "version": 1,
       "file": "zimage-turbo.json",
-      "sha256": "65e57d20258f9646581a3ce5e970ae66e8f2f49c84f17da160a8756818796988",
+      "sha256": "b9bf8b7193ab351c8681b09dd919264830de5090d3e5b6adc3f69851011a9607",
       "min_pixlstash": "1.13.0"
     }
   ]

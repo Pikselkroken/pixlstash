@@ -11,6 +11,7 @@
     "model.extras_name_or_path": "Tongyi-MAI/Z-Image-Turbo",
     "model.assistant_lora_path": "ostris/zimage_turbo_training_adapter/zimage_turbo_training_adapter_v2.safetensors",
     "network.network_kwargs.ignore_if_contains": [],
+    "datasets[*].cache_latents_to_disk": true,
     "train.noise_scheduler": "flowmatch",
     "sample.sampler": "flowmatch"
   },
@@ -176,7 +177,7 @@
     }
   },
   "sources": {
-    "locked": "ai-toolkit ui/src/app/jobs/new/options.tsx (zimage:turbo); extensions_built_in/diffusion_models/z_image/z_image.py",
+    "locked": "ai-toolkit ui/src/app/jobs/new/options.tsx (zimage:turbo); extensions_built_in/diffusion_models/z_image/z_image.py. Latents are cached, as in every recipe: the 12 GB profiles' figures are for cached text and latents (#2295)",
     "divisibility": "z_image.py get_bucket_divisibility: 8 for the VAE x 2 for the patch size",
     "defaults": "the shipped ai-toolkit-jobs template; ai-toolkit UI defaults for zimage:turbo (timestep weighted, which flowmatch samples like linear)",
     "preview.turbo": "Tongyi-MAI/Z-Image-Turbo model card: 9 steps (8 DiT forwards), guidance 0, which ai-toolkit spells guidance_scale 1",

@@ -8,9 +8,7 @@
   "locked": {
     "model.arch": "minimax_h3",
     "model.name_or_path": "Comfy-Org/MiniMax-H3",
-    "model.assistant_lora_path": "ostris/minimax_h3_training_adapter/minimax_h3_training_adapter_v1.safetensors",
-    "train.do_guidance_loss": true,
-    "train.guidance_loss_target": 3.5,
+    "model.assistant_lora_path": "ostris/minimax_h3_training_adapter/minimax_h3_training_adapter_v3.safetensors",
     "train.bypass_guidance_embedding": false,
     "network.network_kwargs.ignore_if_contains": [
       "adaln_proj"
@@ -132,7 +130,7 @@
     }
   },
   "sources": {
-    "locked": "ai-toolkit ui/src/app/jobs/new/options.tsx (minimax_h3): the Comfy-Org/MiniMax-H3 repack (pruned int8 ConvRot transformer about 21 GB, nvfp4 Qwen3-VL-32B text encoder about 16 GB, about 43 GB with the video and audio VAEs), downloaded into the checkout's models folder on first load. H3 is guidance-distilled, so the recipe keeps ai-toolkit's default distillation handling: the ostris training adapter merged into the weights and contrastive guidance (do_guidance_loss, target 3.5), and the adaln_proj layers left out of the LoRA. Latents are cached",
+    "locked": "ai-toolkit ui/src/app/jobs/new/options.tsx (minimax_h3): the Comfy-Org/MiniMax-H3 repack (pruned int8 ConvRot transformer about 21 GB, nvfp4 Qwen3-VL-32B text encoder about 16 GB, about 43 GB with the video and audio VAEs), downloaded into the checkout's models folder on first load. H3 is guidance-distilled, so the recipe keeps ai-toolkit's default distillation handling since 0.13.23 (commit 60d0c28): the ostris v3 training adapter merged into the weights, which no longer needs contrastive guidance, and the adaln_proj layers left out of the LoRA. Latents are cached",
     "divisibility": "minimax_h3.py get_bucket_divisibility: 16 for the VAE x 2 for the patch size",
     "defaults": "ai-toolkit UI defaults for minimax_h3 (timestep shift, adamw8bit, lr 1e-4, rank 16). Image mode trains stills as single frames (num_frames 1), so a set's clips are left out",
     "preview.base": "minimax_h3.py model notes: guidance-distilled, keep guidance at 1; 28 steps as ai-toolkit samples; a single frame renders an image",
