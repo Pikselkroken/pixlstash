@@ -1020,7 +1020,11 @@ vanish — they **fold** into the ⋯ overflow (`TbOverflowMenu`, a
   the bar. Each bar's ladder is a decision, not an accident — recorded in
   `toolbar-responsive-decisions.md`.
 - **The trigger earns its place.** The ⋯ stays hidden until the first fold
-  step; an overflow with nothing in it is chrome without a job.
+  step; an overflow with nothing in it is chrome without a job. Nor does a
+  bar get a ⋯ for a single control: the burger takes the same width as that
+  control's glyph, so it saves nothing and costs a click. Drop the label and
+  keep the glyph instead (the grid toolbar's View, which is why that bar has
+  no ⋯).
 - **Some controls never fold.** Undo is the recovery control and stays a
   single visible target at every width. A standing state (the scope pill)
   compresses to its icon rather than folding — a filter that hides is a

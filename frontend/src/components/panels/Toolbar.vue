@@ -248,7 +248,7 @@
           <template #activator="{ props: menuProps }">
             <AppBarButton
               v-bind="menuProps"
-              class="tb-fold-600 tb-view"
+              class="tb-view"
               icon="view-grid"
               :open="gbViewMenuOpen"
               tooltip="View options"
@@ -335,33 +335,12 @@
             </div>
           </div>
         </v-menu>
-        <!-- ── The ⋯ overflow (amendment #2 in docs/design/
-             toolbar-responsive-decisions.md): a burger may only collapse
-             controls from its OWN visual group, and it stands where those
-             controls stood - so it lives HERE, at the end of the lens run
-             it collapses (View at ≤600), and never a control from across a
-             group boundary. Fold = CSS both ways: each row shares its bar
-             button's v-if, and the container queries flip which of the pair
-             is visible. The panel keeps its right-aligned anchoring, so it
-             opens leftward and stays on-screen. The toolbar is browse-only
-             (#2160); Generate left it too, so a run starts from a selection,
-             a picture, a person or set, or the Workflows screen. -->
-        <TbOverflowMenu class="tb-overflow">
-          <template #default="{ close }">
-            <button
-              type="button"
-              role="menuitem"
-              class="ctx-item tb-row-600"
-              @click="
-                close();
-                gbViewMenuOpen = true;
-              "
-            >
-              <v-icon class="ctx-icon">mdi-view-grid</v-icon>
-              <span>View options…</span>
-            </button>
-          </template>
-        </TbOverflowMenu>
+        <!-- No ⋯ overflow here: View was its only member, and a burger
+             holding one control is that control's glyph behind an extra
+             click. View keeps its glyph at every width instead. The toolbar
+             is browse-only (#2160); Generate left it too, so a run starts
+             from a selection, a picture, a person or set, or the Workflows
+             screen. -->
       </div>
       <!-- No separator between the groups: the elastic gap IS the left|right
            boundary (two-boundary rule, docs/design/toolbar-responsive-
@@ -402,7 +381,6 @@ import FilterMenu from "./FilterMenu.vue";
 import SearchTokenField from "./SearchTokenField.vue";
 import { filterChips } from "../../utils/filterChips";
 import TbGlobalActions from "./TbGlobalActions.vue";
-import TbOverflowMenu from "./TbOverflowMenu.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
@@ -1107,33 +1085,6 @@ const gbCollapseAllStacksDisabled = computed(
   .tb-label,
   .bar-btn-sort-secondary {
     display: none;
-  }
-}
-
-/* ── The ⋯ overflow ladder (see docs/design/toolbar-responsive-decisions.md,
-   amendment #2). The burger stands at the end of its OWN group (the lens
-   run) and collapses only that group's members. Fold = CSS both ways: a
-   control's bar button and its overflow row share one v-if, and these
-   queries flip which of the pair is visible. No JS measures anything. The
-   trigger appears with the FIRST fold step; the search field and the rail
-   toggle never fold at any width. ─────────────────────────────────────── */
-.tb-overflow {
-  display: none;
-}
-
-.tb-row-600 {
-  display: none;
-}
-
-@container toolbar (max-width: 600px) {
-  .tb-fold-600 {
-    display: none;
-  }
-  .tb-overflow {
-    display: flex;
-  }
-  .tb-row-600 {
-    display: flex;
   }
 }
 

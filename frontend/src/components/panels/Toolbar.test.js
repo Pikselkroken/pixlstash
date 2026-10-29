@@ -1,11 +1,9 @@
-// The grid toolbar: browse only (#2160), its app-wide tail and its ⋯ overflow.
+// The grid toolbar: browse only (#2160), its app-wide tail, and no ⋯ overflow.
 //
 // jsdom does not evaluate container queries, so the width steps themselves are
-// not simulated here - they are covered by the CSS being SHARED (the same
-// scoped @container rules ship to both bars). What these tests pin is the part
-// jsdom can see: the canonical tail order, the fold pairs existing with the
-// same v-if on both sides, and read-only degrading the rows exactly as it
-// degrades the buttons.
+// not simulated here. What these tests pin is the part jsdom can see: the
+// canonical tail order, and View being a plain bar button that no width folds
+// away.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { h } from "vue";
@@ -488,18 +486,16 @@ describe("Toolbar - browse only (#2160)", () => {
     ).toBe(true);
   });
 
-  // Amendment #2: the burger lives at the END of the left group, where the
-  // controls it collapses stood - never in the right tail.
-  it("mounts the ⋯ as the left group's last child, not in the tail", () => {
+  // The ⋯ held View alone, so it was View's glyph behind an extra click. The
+  // bar has no overflow, and View carries no fold class to hide it.
+  it("has no ⋯ overflow, and View never folds", () => {
     const wrapper = mountToolbar();
-    expect(wrapper.find(".selection-bar-left .tb-overflow").exists()).toBe(
-      true,
-    );
-    expect(wrapper.find(".selection-bar-right .tb-overflow").exists()).toBe(
+    expect(wrapper.findComponent({ name: "TbOverflowMenu" }).exists()).toBe(
       false,
     );
-    const left = wrapper.find(".selection-bar-left").element;
-    expect(left.lastElementChild.classList.contains("tb-overflow")).toBe(true);
+    const view = wrapper.find('button[aria-label="View options"]');
+    expect(view.exists()).toBe(true);
+    expect(view.classes().some((c) => c.startsWith("tb-fold"))).toBe(false);
   });
 
   // Generate left the bar, and with it the rule that marked the lens run |
@@ -516,36 +512,13 @@ describe("Toolbar - browse only (#2160)", () => {
     ).toBe(false);
   });
 
-  it("keeps the tail and the ⋯ in a read-only session", () => {
+  it("keeps the tail and View in a read-only session", () => {
     readOnlyRef.value = true;
     const wrapper = mountToolbar();
     expect(wrapper.findComponent({ name: "TbGlobalActions" }).exists()).toBe(
       true,
     );
-    expect(wrapper.find(".tb-overflow").exists()).toBe(true);
-  });
-});
-
-describe("Toolbar - the ⋯ overflow mirrors its controls", () => {
-  async function openOverflow(wrapper) {
-    await wrapper.find(".tbo-trigger").trigger("click");
-    return wrapper.find(".tbo-panel");
-  }
-
-  // Amendment #2: the burger holds ONLY its own group's members. The search
-  // field and the rail toggle never fold.
-  it("carries rows for its own group's foldables and nothing else", async () => {
-    const filterStore = useFilterStore();
-    filterStore.comfyuiConfigured = true;
-    const wrapper = mountToolbar();
-    const panel = await openOverflow(wrapper);
-    const labels = panel.findAll(".ctx-item").map((b) => b.text());
-    expect(labels).toEqual(["View options…"]);
-  });
-
-  it("keeps the rail toggle as a visible control", () => {
-    const wrapper = mountToolbar();
-    expect(wrapper.findComponent({ name: "TbGlobalActions" }).exists()).toBe(
+    expect(wrapper.find('button[aria-label="View options"]').exists()).toBe(
       true,
     );
   });

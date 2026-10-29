@@ -126,9 +126,9 @@ defineExpose({ close, isOpen, trigger });
 }
 
 /* The trigger appears with the host's FIRST fold step, and the host owns that
-   rule from its own ladder (`.tb-overflow` at selbar ≤700, `.dq-overflow` at
-   dqbar ≤1180): only the host knows when its first control folds. The rule
-   lives there rather than here because the breakpoint differs per bar. */
+   rule from its own ladder (`.dq-overflow` at dqbar ≤1180): only the host
+   knows when its first control folds. The rule lives there rather than here
+   because the breakpoint differs per bar. */
 
 /* The in-place menu: the dq-tier-wrap positioning, the shared .ctx-menu surface. */
 .tbo-panel {
