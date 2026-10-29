@@ -300,6 +300,48 @@ describe("facets", () => {
   });
 });
 
+describe("Base model order", () => {
+  const SORT_KEY = "pixlstash:workflowsBaseModelSort";
+  // Most-used is not first alphabetically, and one name is lower case and
+  // carries a number, so case-folding and numeric order both show.
+  const cardsUsing = (...names) =>
+    names.map((name, i) => card({ id: `auto:${i}`, models: [{ name, kind: "checkpoint" }] }));
+  const baseLabels = (wrapper) =>
+    wrapper.findAll(".wfs-row__label").map((label) => label.text()).filter((text) => text.endsWith(".safetensors"));
+
+  beforeEach(() => {
+    listWorkflowCards.mockResolvedValue({
+      cards: cardsUsing("Zeta.safetensors", "Zeta.safetensors", "model10.safetensors", "Alpha.safetensors", "model9.safetensors"),
+    });
+  });
+
+  it("reads A-Z by default, ignoring case and counting numbers as numbers", async () => {
+    const { wrapper } = await mountSidebar();
+    expect(baseLabels(wrapper)).toEqual([
+      "Alpha.safetensors",
+      "model9.safetensors",
+      "model10.safetensors",
+      "Zeta.safetensors",
+    ]);
+  });
+
+  it("the toggle sorts by count and remembers it", async () => {
+    const { wrapper } = await mountSidebar();
+    await wrapper.find(".wfs-sort").trigger("click");
+    expect(baseLabels(wrapper)[0]).toBe("Zeta.safetensors");
+    expect(localStorage.getItem(SORT_KEY)).toBe("count");
+    await wrapper.find(".wfs-sort").trigger("click");
+    expect(baseLabels(wrapper)[0]).toBe("Alpha.safetensors");
+    expect(localStorage.getItem(SORT_KEY)).toBe("name");
+  });
+
+  it("opens in the remembered order", async () => {
+    localStorage.setItem(SORT_KEY, "count");
+    const { wrapper } = await mountSidebar();
+    expect(baseLabels(wrapper)[0]).toBe("Zeta.safetensors");
+  });
+});
+
 describe("the Templates row", () => {
   it("sets the shown flag, and lights only Templates", async () => {
     const { wrapper, templates } = await mountSidebar();
