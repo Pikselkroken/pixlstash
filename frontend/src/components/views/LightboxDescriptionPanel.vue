@@ -761,17 +761,14 @@ defineExpose({
 </script>
 
 <style scoped>
+/* As tall as its text, not the room left: blank space under a short caption
+   is space Properties could have had. The column around it scrolls. */
 .sidebar-section--description {
-  flex: 1 1 114px;
   display: flex;
   flex-direction: column;
-  min-height: 114px;
-  overflow: visible;
 }
 
 .sidebar-section--description.sidebar-section--collapsed {
-  flex: 0 0 auto;
-  min-height: 0;
   overflow: hidden;
 }
 
@@ -811,14 +808,12 @@ defineExpose({
 }
 
 .description-editor {
-  flex: 1;
   display: flex;
   flex-direction: column;
-  min-height: 0;
 }
 
 .description-editor textarea {
-  flex: 1;
+  field-sizing: content;
   width: 100%;
   min-height: 56px;
   border-radius: var(--radius-md);
@@ -931,7 +926,6 @@ defineExpose({
 
 /* ── Text panel ── */
 .picture-text {
-  flex: 1;
   min-height: 56px;
   overflow: auto;
   border-radius: var(--radius-md);
