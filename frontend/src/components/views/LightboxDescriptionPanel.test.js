@@ -378,14 +378,22 @@ describe("LightboxDescriptionPanel - the head's title in the description", () =>
     w.unmount();
   });
 
-  it("leaves the Text tab for the description", async () => {
+  it("leaves the Text tab for the description and selects there", async () => {
+    // The parent switches tabs as the lightbox does: in the emit's handler.
     const w = mountPanel({
       image,
       textState: "read",
       textLines: [[{ text: "EXIT", box: [0.1, 0.1, 0.1, 0.05] }]],
       activeTab: "text",
+      "onPick-tab": (tab) => w.setProps({ activeTab: tab }),
     });
     w.vm.selectText("Old man reads");
     expect(w.emitted("pick-tab")).toEqual([["description"]]);
+    await w.vm.$nextTick();
+    await w.vm.$nextTick();
+    const area = w.find("textarea").element;
+    expect(document.activeElement).toBe(area);
+    expect([area.selectionStart, area.selectionEnd]).toEqual([4, 17]);
+    w.unmount();
   });
 });
