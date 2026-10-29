@@ -469,18 +469,26 @@ class TrainingService:
             # written under the lock the worker clears its wait under, and the
             # lease is released only while still waiting: one granted meanwhile
             # belongs to the worker, which releases it when it sees the stop.
+            # The worker launches the run under the same lock, so the status is
+            # read again there: one launched since is stopped like a running one.
             with self._active_lock:
                 waiting = self._waiting
-                self._update_job(
-                    info["uuid"], status="stopped", error="Cancelled before start"
+                queued = self._job_status(info["uuid"]) == "queued"
+                if queued:
+                    self._update_job(
+                        info["uuid"], status="stopped", error="Cancelled before start"
+                    )
+            if queued:
+                if waiting is not None and waiting[0] == info["uuid"]:
+                    waiting[1].release(only_waiting=True)
+                self._emit_progress(
+                    info["uuid"], status="stopped", message="Cancelled before start"
                 )
-            if waiting is not None and waiting[0] == info["uuid"]:
-                waiting[1].release(only_waiting=True)
-            self._emit_progress(
-                info["uuid"], status="stopped", message="Cancelled before start"
-            )
-            logger.info("cancel: queued job %s marked stopped.", info["uuid"])
-            return True
+                logger.info("cancel: queued job %s marked stopped.", info["uuid"])
+                return True
+            info = training_runs.get_run(hub, library_uuid, job_id)
+            if info is None or info["status"] in _TERMINAL_JOB_STATUSES:
+                return False
 
         # Running/stopping: mark the job 'stopping' BEFORE signalling the
         # backend. backend.cancel() blocks until the process exits, by which
@@ -785,7 +793,7 @@ class TrainingService:
                 backend, info, work_dir, manifest, lease
             ):
                 return  # stopped, failed or shut down; the row says which
-            handle, progress = self._train_under_lease(
+            launched = self._train_under_lease(
                 backend,
                 info,
                 work_dir,
@@ -795,6 +803,9 @@ class TrainingService:
                 training_folder=training_folder,
                 watch=watch,
             )
+            if launched is None:
+                return  # cancelled after its memory check, before launch
+            handle, progress = launched
             if self._after_training(backend, handle, info, progress, lease, watch):
                 self._finalize(backend, handle, info, progress)
         except Exception:
@@ -825,8 +836,13 @@ class TrainingService:
         gpu_ids: str = "0",
         training_folder: str | None = None,
         watch: _Watch | None = None,
-    ) -> tuple[object, TrainingProgress]:
+    ) -> tuple[object, TrainingProgress] | None:
         """Prepare + submit + poll a run while the GPU lease is held.
+
+        The run is launched and marked ``running`` under the lock
+        :meth:`cancel` writes a queued run's stop under, and only while the run
+        is still queued: a cancel during the memory check's last seconds, or
+        between the claim and the launch, is never overwritten.
 
         Args:
             backend: The trainer backend.
@@ -841,7 +857,8 @@ class TrainingService:
 
         Returns:
             A ``(handle, progress)`` tuple: the launched handle and the terminal
-            :class:`TrainingProgress` snapshot.
+            :class:`TrainingProgress` snapshot. None when the run was cancelled
+            before it could launch.
         """
         job_uuid = info["uuid"]
         pending = self._load_pending_spec(job_uuid)
@@ -866,26 +883,27 @@ class TrainingService:
             if cfg.get("repo_path")
             else None
         )
-        handle = backend.prepare(spec)
-        backend.submit(handle, spec)
-        self._note_phase(job_uuid, "loading")
-
         with self._active_lock:
+            if self._job_status(job_uuid) != "queued":
+                logger.info("Job %s was cancelled before launch.", job_uuid)
+                return None
+            handle = backend.prepare(spec)
+            backend.submit(handle, spec)
             self._active_backend = backend
             self._active_job_uuid = job_uuid
-
-        config = self._read_rendered_config(handle.config_path)
-        total_steps = self._total_steps_from_config(config)
-        self._update_job(
-            job_uuid,
-            status="running",
-            pid=handle.pid,
-            training_folder=handle.training_folder,
-            rendered_config=json.dumps(config) if config is not None else None,
-            ai_toolkit_commit=commit,
-            total_steps=total_steps,
-            started_at=now_iso(),
-        )
+            config = self._read_rendered_config(handle.config_path)
+            total_steps = self._total_steps_from_config(config)
+            self._update_job(
+                job_uuid,
+                status="running",
+                pid=handle.pid,
+                training_folder=handle.training_folder,
+                rendered_config=json.dumps(config) if config is not None else None,
+                ai_toolkit_commit=commit,
+                total_steps=total_steps,
+                started_at=now_iso(),
+            )
+        self._note_phase(job_uuid, "loading")
         self._emit_progress(
             job_uuid, status="running", current=0, total=total_steps, message="Started"
         )

@@ -25,6 +25,8 @@ config offloads layers (``model.layer_offloading``), and ``FAKE_RUN_FAIL=<text>`
 fails every launch with that text, like a loader error. ``train.disable_sampling``
 skips the sample, as ai-toolkit does. ``FAKE_RUN_LAUNCHES=<file>`` appends one
 line per launch to that file, naming the config's step count.
+``FAKE_RUN_LOAD_SECONDS=<s>`` spends that long "Loading model" before step 1
+without reading ``stop``, as ai-toolkit does, so only a signal ends it there.
 
 It does NOT import torch or anything heavy: ``.safetensors`` files are written
 as small placeholder byte blobs.
@@ -257,6 +259,11 @@ def main(argv: list[str]) -> int:
     try:
         if job_id:
             _set_job_status(job_db_path, job_id, "running", "Starting")
+        load_seconds = float(os.environ.get("FAKE_RUN_LOAD_SECONDS", "0"))
+        if load_seconds > 0:
+            if job_id:
+                _set_job_status(job_db_path, job_id, "running", "Loading model")
+            time.sleep(load_seconds)
 
         for step in range(1, total_steps + 1):
             if job_id and _stop_requested(job_db_path, job_id):

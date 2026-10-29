@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import sqlite3
 import subprocess
 import sys
 import time
 from types import SimpleNamespace
 
+import psutil
 import pytest
 
 from pixlstash.training.backend import TrainingSpec
@@ -372,6 +374,81 @@ def test_cancel_still_signals_an_inherited_trainer_it_can_verify(tmp_path, monke
         if trainer.poll() is None:
             trainer.kill()
             trainer.wait()
+
+
+def _submit_loading(tmp_path, monkeypatch):
+    """A trainer spending a while loading its model, deaf to ``stop`` meanwhile."""
+    monkeypatch.setattr(
+        "pixlstash.training.local_ai_toolkit._CANCEL_GRACE_SECONDS", 0.2
+    )
+    monkeypatch.setenv("FAKE_RUN_LOAD_SECONDS", "15")
+    backend = _make_backend()
+    spec = _make_spec(tmp_path)
+    handle = backend.prepare(spec)
+    backend.submit(handle, spec)
+    assert _poll_until(lambda: backend.progress(handle).info == "Loading model")
+    return backend, handle
+
+
+def test_a_cancel_while_the_model_loads_ends_stopped_not_error(tmp_path, monkeypatch):
+    """ai-toolkit reads ``stop`` only between steps, so a cancel during the model
+    load ends in a signal with the row still ``running``. We asked for that, so
+    it is a stop, not an interrupted run."""
+    backend, handle = _submit_loading(tmp_path, monkeypatch)
+
+    backend.cancel(handle)
+
+    assert not backend.is_alive(handle)
+    progress = backend.reconcile(handle)
+    assert (progress.status, progress.info) == ("stopped", "Stopped")
+
+
+def test_a_cancel_on_windows_ends_the_trainer_without_posix_signals(
+    tmp_path, monkeypatch
+):
+    """Windows has no ``killpg``, ``getpgid`` or ``SIGKILL``: a cancel that
+    outlasts the grace must end the trainer anyway, and raise nothing."""
+    backend, handle = _submit_loading(tmp_path, monkeypatch)
+
+    with monkeypatch.context() as windows:
+        windows.setattr(os, "name", "nt")
+        windows.delattr(os, "killpg")
+        windows.delattr(os, "getpgid")
+        windows.delattr(signal, "SIGKILL")
+        backend.cancel(handle)
+
+    assert not backend.is_alive(handle)
+    assert backend.reconcile(handle).status == "stopped"
+
+
+def test_ending_the_trainer_tree_ends_the_processes_it_started():
+    """Without process groups the trainer's own children (data-loader workers)
+    are ended one by one, or they would outlive it holding the card."""
+    child = "import time; time.sleep(60)"
+    parent = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import subprocess, sys, time; "
+            f"subprocess.Popen([sys.executable, '-c', {child!r}]); time.sleep(60)",
+        ]
+    )
+    trainer = psutil.Process(parent.pid)
+    workers = []
+    try:
+        workers = _poll_until(lambda: trainer.children(recursive=True))
+        assert workers, "the trainer never started its worker"
+
+        LocalAiToolkit._end_process_tree(parent.pid, force=False)
+
+        parent.wait(timeout=10)
+        _, alive = psutil.wait_procs(workers, timeout=10)
+        assert not alive, "the trainer's worker outlived it"
+    finally:
+        for proc in [*workers, trainer]:
+            if proc.is_running():
+                proc.kill()
+        parent.wait()
 
 
 @pytest.mark.parametrize(
