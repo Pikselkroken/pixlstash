@@ -556,8 +556,13 @@ export function basename(path) {
   return parts[parts.length - 1] || trimmed || "the folder";
 }
 
+/** A folder's own name: its tool's, else its last segment. */
+export function folderName(folder) {
+  return folder.tool || basename(folder.path);
+}
+
 /**
- * folder id → the name a folder row goes by.
+ * folder id → the name a folder goes by in a sentence.
  *
  * A folder is named for its tool, else its last segment. Folders that would
  * share a name (every StabilityMatrix folder reads "StabilityMatrix") are told
@@ -568,10 +573,9 @@ export function basename(path) {
  * @returns {Map<number, string>}
  */
 export function folderLabels(folders) {
-  const nameOf = (folder) => folder.tool || basename(folder.path);
   const groups = new Map();
   for (const folder of folders) {
-    const name = nameOf(folder);
+    const name = folderName(folder);
     if (!groups.has(name)) groups.set(name, []);
     groups.get(name).push(folder);
   }

@@ -16,6 +16,7 @@
         :class="[
           {
             'mft-row--drive': node.kind === 'drive',
+            'mft-row--two': Boolean(node.origin),
             active: isSelected(node),
             'mft-row--off': node.disabled,
             'mft-row--lifted': dragKey === node.key,
@@ -77,28 +78,47 @@
           </span>
         </template>
         <template v-else>
-          <v-icon size="16" class="mft-glyph" aria-hidden="true">{{
-            node.expanded ? "mdi-folder-open-outline" : "mdi-folder-outline"
-          }}</v-icon>
-          <span class="mft-label">{{ node.name }}</span>
-          <!-- What ComfyUI loads from this very folder (#2205). -->
-          <span
-            v-for="type in node.marks"
-            :key="type.key"
-            class="mft-mark"
-            data-testid="comfyui-mark"
-            ><Tooltip :text="comfyuiLoadsTitle(type)" activator="parent" /><TypeMark
-              :mark="type.mark"
-              :tint="type.tint"
-          /></span>
+          <!-- A locked folder is a folder glyph with a lock, so nothing after
+               the name changes width with the lock. -->
           <v-icon
-            v-if="node.locked"
-            size="14"
-            class="mft-lock"
+            size="16"
+            class="mft-glyph"
             aria-hidden="true"
-            data-testid="model-folder-lock"
-            >mdi-lock-outline</v-icon
+            :data-testid="node.locked ? 'model-folder-lock' : undefined"
+            >{{
+              node.locked
+                ? "mdi-folder-lock-outline"
+                : node.expanded
+                  ? "mdi-folder-open-outline"
+                  : "mdi-folder-outline"
+            }}</v-icon
           >
+          <!-- A registered folder is its name over where it is, so two of the
+               same name are told apart without either being renamed. -->
+          <span v-if="node.origin" class="mft-stack">
+            <Tooltip :text="node.fullPath" activator="parent" />
+            <span class="mft-label">{{ node.name }}</span>
+            <span class="mft-origin" data-testid="model-folder-origin"
+              ><span class="mft-origin-head">{{ node.origin.head }}</span
+              ><span class="mft-origin-tail">{{ node.origin.tail }}</span></span
+            >
+          </span>
+          <span v-else class="mft-label">{{ node.name }}</span>
+          <!-- What ComfyUI loads from this very folder (#2205), in a slot of
+               its own so the counts stay in one column. -->
+          <span class="mft-marks">
+            <span
+              v-for="type in node.marks"
+              :key="type.key"
+              class="mft-mark"
+              data-testid="comfyui-mark"
+              ><Tooltip
+                :text="comfyuiLoadsTitle(type)"
+                activator="parent" /><TypeMark
+                :mark="type.mark"
+                :tint="type.tint"
+            /></span>
+          </span>
           <span class="mft-count">{{ node.count }}</span>
           <!-- The row's own menu, for a pointer. Hidden until hover or focus,
                and out of the tab order: the row is the one stop, and the menu
@@ -115,6 +135,13 @@
           >
             <v-icon size="16">mdi-dots-horizontal</v-icon>
           </button>
+          <!-- A row with no menu (a locked folder) keeps the ⋯'s width, or its
+               count would stand a column to the right of the others. -->
+          <span
+            v-else-if="mode === 'browse'"
+            class="mft-more-slot"
+            aria-hidden="true"
+          ></span>
         </template>
       </div>
 
@@ -213,6 +240,7 @@ import {
 } from "../../composables/useModelFolderGates";
 import { startFolderRemove } from "../../composables/useModelFolderRemove";
 import { errorMessage } from "../../utils/apiError";
+import { folderOrigin } from "../../utils/folderPath";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import { driveFullness } from "../../utils/libraryChrome";
 import {
@@ -224,6 +252,7 @@ import {
 import { isApplePlatform } from "../../utils/shortcutHints";
 import {
   basename,
+  folderName,
   useModelFoldersStore,
 } from "../../stores/useModelFoldersStore";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
@@ -315,6 +344,7 @@ const drives = computed(() => {
       byKey.set(key, {
         key,
         name: device ? device.label || device.mount_point : "Folders",
+        mountPoint: device?.mount_point ?? "",
         drive: driveFullness(device),
         folders: [],
       });
@@ -367,6 +397,7 @@ function pushFolderRows(out, entry) {
     marks,
     aria: [
       entry.name,
+      entry.origin ? entry.origin.head + entry.origin.tail : "",
       n == null ? "" : `${count(n)} ${Number(n) === 1 ? "model" : "models"}`,
       entry.locked ? "locked" : "",
       ...marks.map(comfyuiLoadsTitle),
@@ -416,11 +447,19 @@ const nodes = computed(() => {
     });
     if (!open) continue;
     for (const folder of drive.folders) {
+      const name = folderName(folder);
       pushFolderRows(out, {
         kind: "folder",
         folderId: Number(folder.id),
         path: "",
-        name: foldersStore.labelByFolderId.get(Number(folder.id)) ?? "",
+        name,
+        // Where it is, without repeating a name that is its own last segment.
+        origin: folderOrigin(
+          folder.path,
+          drive.mountPoint,
+          name !== basename(folder.path),
+        ),
+        fullPath: folder.path,
         level: 2,
         locked: isLocked(folder),
       });
@@ -1099,6 +1138,13 @@ defineExpose({ reveal });
   font-weight: var(--weight-semibold);
 }
 
+/* A registered folder's two lines: 40px against a subfolder's 32px. */
+.mft-row--two {
+  min-height: calc(var(--control-h-bar) + var(--space-3));
+  padding-top: var(--space-1);
+  padding-bottom: var(--space-1);
+}
+
 .mft-twist {
   cursor: pointer;
   opacity: var(--opacity-text-secondary);
@@ -1132,15 +1178,54 @@ defineExpose({ reveal });
   white-space: nowrap;
 }
 
-.mft-mark {
+.mft-stack {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: var(--leading-tight);
+}
+
+/* Where the folder is. The middle gives way, so the last segment, which is
+   what tells two installs apart, keeps its width. */
+.mft-origin {
+  display: flex;
+  min-width: 0;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-regular);
+  white-space: nowrap;
+  opacity: var(--opacity-text-secondary);
+}
+
+.mft-origin-head {
+  flex: 0 1 auto;
+  min-width: 2ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mft-origin-head:empty {
+  min-width: 0;
+}
+
+.mft-origin-tail {
+  flex: 0 0 auto;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The type marks' slot: one glyph wide whether or not it holds one. */
+.mft-marks {
+  flex-shrink: 0;
   display: inline-flex;
+  gap: var(--space-1);
+  min-width: var(--gutter-glyph);
   margin-left: var(--space-2);
 }
 
-.mft-lock {
-  flex-shrink: 0;
-  margin-left: var(--space-2);
-  opacity: var(--opacity-text-secondary);
+.mft-mark {
+  display: inline-flex;
 }
 
 .mft-count,
@@ -1151,6 +1236,18 @@ defineExpose({ reveal });
   font-weight: var(--weight-regular);
   font-variant-numeric: tabular-nums;
   opacity: var(--opacity-text-secondary);
+}
+
+/* One right-aligned column, so every count on the tree lines up; a count too
+   long for it widens its own row rather than running into the ⋯. */
+.mft-count {
+  min-width: var(--space-7);
+  text-align: right;
+}
+
+.mft-row:hover .mft-count,
+.mft-row.active .mft-count {
+  opacity: 1;
 }
 
 .mft-free--full {
@@ -1191,6 +1288,13 @@ defineExpose({ reveal });
 .mft-more:focus-visible {
   box-shadow: var(--focus-ring-inset);
   outline: none;
+}
+
+/* The ⋯'s width on a row that has no menu. */
+.mft-more-slot {
+  flex-shrink: 0;
+  width: var(--control-h-sm);
+  margin-left: var(--space-1);
 }
 
 /* The field, lined up with the label it names: past the row's glyph slot. */

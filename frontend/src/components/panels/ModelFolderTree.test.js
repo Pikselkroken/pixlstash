@@ -127,22 +127,67 @@ describe("ModelFolderTree", () => {
     wrapper.unmount();
   });
 
-  it("tells apart folders that one tool owns", async () => {
+  it("names a registered folder for itself, over where it is", async () => {
+    // Two folders one tool owns keep its name; the line under each says where
+    // it is, so neither is renamed because the other exists.
     const folders = useModelFoldersStore();
     folders.folders = [
       ...FOLDERS,
       { id: 4, path: "/home/me/.insightface/models", kind: "foreign", movable: "root_only", tool: "PixlStash" },
+      { id: 5, path: "/mnt/scratch/Forge-old/models", kind: "user", movable: "per_item", tool: "Forge" },
     ];
-    folders.devices = [{ ...DEVICES[0], folder_ids: [1, 2, 4] }];
+    folders.devices = [
+      { ...DEVICES[0], folder_ids: [1, 2, 4] },
+      { device_id: "d2", mount_point: "/mnt/scratch", label: "Scratch", total_bytes: 1000, free_bytes: 500, folder_ids: [5] },
+    ];
     const wrapper = mountTree();
     await flushPromises();
+    const origin = (row) => row.find('[data-testid="model-folder-origin"]').text();
+    // No tool: named for its last segment, which line 2 does not repeat.
     expect(item(wrapper, 1).find(".mft-label").text()).toBe("Models");
-    expect(item(wrapper, 2).find(".mft-label").text()).toBe(
-      ".pixlstash/models (PixlStash)",
-    );
-    expect(item(wrapper, 4).find(".mft-label").text()).toBe(
-      ".insightface/models (PixlStash)",
-    );
+    expect(origin(item(wrapper, 1))).toBe("~/StabilityMatrix");
+    expect(item(wrapper, 2).find(".mft-label").text()).toBe("PixlStash");
+    expect(origin(item(wrapper, 2))).toBe("~/.pixlstash/models");
+    expect(item(wrapper, 4).find(".mft-label").text()).toBe("PixlStash");
+    expect(origin(item(wrapper, 4))).toBe("~/.insightface/models");
+    // Off the home folder, the path starts where its drive's mount point ends,
+    // and the last segment is the part kept whole.
+    expect(item(wrapper, 5).find(".mft-label").text()).toBe("Forge");
+    expect(item(wrapper, 5).find(".mft-origin-head").text()).toBe("Forge-old");
+    expect(item(wrapper, 5).find(".mft-origin-tail").text()).toBe("/models");
+    expect(item(wrapper, 5).attributes("aria-label")).toContain("Forge-old/models");
+    expect(item(wrapper, 5).classes()).toContain("mft-row--two");
+    // A subfolder is one line: the root above it says where it is.
+    await item(wrapper, 1).find(".mft-twist").trigger("click");
+    await flushPromises();
+    const lora = item(wrapper, 1, "Lora");
+    expect(lora.find('[data-testid="model-folder-origin"]').exists()).toBe(false);
+    expect(lora.classes()).not.toContain("mft-row--two");
+    wrapper.unmount();
+  });
+
+  it("ends every row with the marks slot, the count and the ⋯'s width", async () => {
+    // The lock is in the folder glyph and a row with no menu keeps the menu's
+    // width, so nothing after the name moves the count. (jsdom draws nothing;
+    // the column itself was checked in a browser.)
+    listModelFolderDirs.mockImplementation(async (id, path) => ({
+      folder_id: id,
+      path,
+      locked: id === 2,
+      model_count: id === 2 ? 5 : 0,
+      direct_model_count: 0,
+      bytes: 0,
+      dirs: [],
+    }));
+    const wrapper = mountTree();
+    await flushPromises();
+    for (const id of [1, 2]) {
+      const tail = item(wrapper, id)
+        .findAll(":scope > span, :scope > button")
+        .slice(-3)
+        .map((one) => one.classes()[0]);
+      expect(tail).toEqual(["mft-marks", "mft-count", id === 2 ? "mft-more-slot" : "mft-more"]);
+    }
     wrapper.unmount();
   });
 

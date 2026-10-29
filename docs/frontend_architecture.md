@@ -4879,15 +4879,24 @@ neither edge moves on a workspace switch.
   folder's own level is read once on mount, for its count and whether it has
   any subfolders. **The count is what opening the row lists**:
   `direct_model_count` (one level) for a browsable folder, `model_count`
-  (everything beneath) for a locked one. A registered folder is **named by
-  `useModelFoldersStore().labelByFolderId`**, which the rail,
-  the drop tip and the drop-target chooser read too: its tool, else its last
-  segment, and where two would share that name (every StabilityMatrix
-  folder), the shortest path tail no namesake shares, with the tool after it
-  when it has one: `Lora (StabilityMatrix)`. A
-  **locked** folder (`movable !== "per_item"`: the managed
-  store, the HuggingFace cache, the InsightFace packs) shows a lock and never
-  expands. **Rows are flat**, carrying `aria-level`, under one `role="tree"`
+  (everything beneath) for a locked one. **A registered folder is two lines,
+  its name over where it is**: the name is `folderName` (its tool, else its
+  last segment) and never changes because a namesake was registered; the
+  second line, `folderOrigin`, is its path from the drive row above it (`~`
+  for a home folder, recognised by its shape as `splitFolderPath` does, the
+  mount point dropped elsewhere), leaving out the
+  last segment when that is already the name, and giving way in the middle so
+  the last segment survives. Subfolder rows stay one line. Sentences
+  elsewhere (the rail, the drop tip, the drop-target chooser) have one line
+  only and keep `useModelFoldersStore().labelByFolderId`, which tells
+  namesakes apart by the shortest path tail with the tool after it:
+  `Lora (StabilityMatrix)`. **Every count sits in one column**: a slot one
+  mark wide for the ComfyUI type marks (empty when none, wider only for a
+  second mark), the count right-aligned in a 32px column, and a row with no
+  menu keeps the ⋯'s width. A **locked**
+  folder (`movable !== "per_item"`: the managed store, the HuggingFace cache,
+  the InsightFace packs) is drawn with `mdi-folder-lock-outline` in the glyph
+  slot, so the lock changes no width, and never expands. **Rows are flat**, carrying `aria-level`, under one `role="tree"`
   rather than nested `group`s: the roving tabindex walks one list (Up/Down,
   Home/End, Right opens then enters, Left closes then goes to the parent,
   Enter/Space opens) and a row never re-mounts on expand. The recursion is in

@@ -27,3 +27,33 @@ export function splitFolderPath(path) {
     tail: cut >= 0 ? rest.slice(cut) : rest,
   };
 }
+
+/**
+ * Where a registered folder is, said from the drive it sits under: the second
+ * line of a root row in the Folders tree. The home directory is `~`; a path on
+ * any other mounted drive starts where the mount point ends, since the drive
+ * row above already names it. Split like {@link splitFolderPath} so the last
+ * segment, the part that tells two installs apart, survives truncation.
+ *
+ * @param {string} path - the folder's absolute path.
+ * @param {string} [mountPoint] - its drive's mount point, when measured.
+ * @param {boolean} [leaf=true] - false drops the last segment, for a row whose
+ *   name already is that segment.
+ * @returns {{head: string, tail: string}} the origin is `head + tail`.
+ */
+export function folderOrigin(path, mountPoint = "", leaf = true) {
+  const { home, head, tail } = splitFolderPath(
+    String(path || "").replace(/(.)[\\/]+$/, "$1"),
+  );
+  let text = leaf ? head + tail : head;
+  const mount = String(mountPoint || "").replace(/[\\/]+$/, "");
+  if (home) text = `~${text}`;
+  else if (mount && text.startsWith(mount) && /^[\\/]./.test(text.slice(mount.length)))
+    text = text.slice(mount.length + 1);
+  // Only a folder at the very root of the filesystem has no parent left.
+  text = text || "/";
+  const cut = Math.max(text.lastIndexOf("/"), text.lastIndexOf("\\"));
+  return cut > 0
+    ? { head: text.slice(0, cut), tail: text.slice(cut) }
+    : { head: "", tail: text };
+}
