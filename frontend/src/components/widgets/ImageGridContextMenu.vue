@@ -1150,11 +1150,11 @@ function openFaceSubmenu() {
   loadFaceCharacterNames();
 }
 
-// The grid's Find & compare group lists the faces inline, so their names load
-// when it opens.
+// The grid's Find & compare group lists the faces inline for one picture, so
+// their names load when it opens over one.
 function openFindGroup() {
   openGroup.value = "find";
-  loadFaceCharacterNames();
+  if (props.selectedImageIds.length === 1) loadFaceCharacterNames();
 }
 
 function faceLabel(face, idx) {

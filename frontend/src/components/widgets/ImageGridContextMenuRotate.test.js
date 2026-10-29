@@ -22,12 +22,16 @@ vi.mock("../../utils/apiClient", async () => {
   };
 });
 
+vi.mock("../../api/characters", () => ({
+  getCharacterName: vi.fn().mockResolvedValue({ name: "alice" }),
+}));
 vi.mock("../../api/snapshots", () => ({
   hashCompareSnapshot: vi.fn().mockResolvedValue({ identical_ids: [] }),
 }));
 
 import { isReadOnly } from "../../utils/apiClient";
 import { hashCompareSnapshot } from "../../api/snapshots";
+import { getCharacterName } from "../../api/characters";
 import { useSnapshotsStore } from "../../stores/useSnapshotsStore";
 import ImageGridContextMenu from "./ImageGridContextMenu.vue";
 import { ROTATE_FORMAT_REASON } from "../../utils/rotate";
@@ -273,5 +277,24 @@ describe("ImageGridContextMenu - groups", () => {
     expect(wrapper.find('[data-group="restore"]').exists()).toBe(false);
     await wrapper.find('[data-group="adjust"]').trigger("mouseenter");
     expect(hashCompareSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("loads face names on opening Find & compare over one picture only", async () => {
+    const contextImage = {
+      id: 10,
+      faces: [
+        { id: 1, frame_index: 0, character_id: 3 },
+        { id: 2, frame_index: 0, character_id: 4 },
+      ],
+    };
+    getCharacterName.mockClear();
+    let wrapper = mountMenu({ contextImage });
+    await wrapper.find('[data-group="find"]').trigger("mouseenter");
+    expect(getCharacterName).not.toHaveBeenCalled();
+    wrapper.unmount();
+
+    wrapper = mountMenu({ contextImage, selectedImageIds: ["10"] });
+    await wrapper.find('[data-group="find"]').trigger("mouseenter");
+    expect(getCharacterName).toHaveBeenCalledTimes(2);
   });
 });
