@@ -102,6 +102,72 @@ def test_user_text_spelling_a_placeholder_is_never_expanded():
     assert not any("/work/dataset" in prompt for prompt in prompts)
 
 
+def test_sample_prompts_expand_only_the_trigger_word():
+    """A host-path placeholder in a sample prompt stays literal.
+
+    The live view shows sample prompts unredacted, so a prompt must never be
+    the place a host path enters. Only the trigger word expands inside one.
+    """
+    prompts = [
+        "ohwx_person in {{TRAINING_FOLDER}}",
+        "{{DATASET_FOLDER}} then {{SQLITE_DB_PATH}}",
+        "a photo of {{TRIGGER_WORD}}",
+        "x {{OUTPUT_FOLDER}} y",
+    ]
+    config = render_job_config(
+        presets.template_path(_PRESET),
+        job_name="job-abc",
+        training_folder="/work/output",
+        sqlite_db_path="/work/job.db",
+        trigger_word="ohwx_person",
+        dataset_dir="/work/dataset",
+        overrides=_RESOLVED,
+        locked=deep_merge(
+            presets.to_patch(_PRESET["locked"]),
+            presets.to_patch({presets.PROMPTS_KEY: prompts}),
+        ),
+    )
+
+    sample_prompts_out = [
+        s["prompt"] for s in config["config"]["process"][0]["sample"]["samples"]
+    ]
+    assert sample_prompts_out == [
+        "ohwx_person in {{TRAINING_FOLDER}}",
+        "{{DATASET_FOLDER}} then {{SQLITE_DB_PATH}}",
+        "a photo of ohwx_person",
+        "x {{OUTPUT_FOLDER}} y",
+    ]
+    assert "/work" not in json.dumps(sample_prompts_out)
+
+
+def test_a_padded_trigger_word_renders_as_the_stripped_one():
+    """The trigger word is one normalised value everywhere it is rendered.
+
+    A trigger word with surrounding spaces must give the same config as the
+    stripped word: the trainer's trigger, the sample prompts, and the dataset
+    captions all read one value.
+    """
+
+    def render(trigger):
+        return render_job_config(
+            presets.template_path(_PRESET),
+            job_name="job-abc",
+            training_folder="/work/output",
+            sqlite_db_path="/work/job.db",
+            trigger_word=trigger,
+            dataset_dir="/work/dataset",
+            overrides=_RESOLVED,
+            locked=presets.to_patch(_PRESET["locked"]),
+        )
+
+    padded = render("  ohwx  ")
+    stripped = render("ohwx")
+    assert padded == stripped
+    assert padded["config"]["process"][0]["trigger_word"] == "ohwx"
+    prompts = [s["prompt"] for s in padded["config"]["process"][0]["sample"]["samples"]]
+    assert not any("  " in prompt for prompt in prompts)
+
+
 def test_no_placeholders_remain():
     """No ``{{NAME}}`` placeholder token survives rendering anywhere."""
     config = _render()

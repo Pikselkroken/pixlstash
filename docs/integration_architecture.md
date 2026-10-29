@@ -1754,6 +1754,10 @@ On app mount, the SPA calls:
 - `GET /api/v1/login` — determines whether registration is needed.
 - `GET /api/v1/check-session` — validates the current cookie; on `401`, the SPA renders the login screen.
 - `GET /api/v1/users/me/config` (or equivalent) — fetches the user's settings (`sessionContext` ref).
+  `ai_toolkit_repo_path` / `ai_toolkit_python` are host paths: they are `null`
+  unless the request passes the §16.3 local rule, and `ai_toolkit_configured`
+  says whether an install is saved. The Train dialog's setup state reads the
+  flag, never the paths (#2295).
 
 ### Logout
 

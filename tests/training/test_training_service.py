@@ -1579,6 +1579,7 @@ def test_an_unmeasured_setup_is_checked_then_learned_from(
 ):
     """The first run of a setup probes it, trains on what the probe measured,
     and leaves its own measurement for the next run."""
+    seen = _spy_pass_pids(hub, monkeypatch)
     lease = _StubLease()
     service = _make_service(
         hub,
@@ -1613,6 +1614,12 @@ def test_an_unmeasured_setup_is_checked_then_learned_from(
     assert measured["source"] == "run"
     assert measured["phase_peaks"]["training"]["vram_mb"] == _HOLDS_MB
     assert measured["seconds_per_update"] is not None
+    # The probe put its pid on the run while it trained, and was checked for
+    # an orphan before its directory was cleared.
+    assert seen["probe"] and all(
+        pid is not None and pid == row_pid for pid, row_pid in seen["probe"]
+    )
+    assert any(path.endswith("probe") for path in seen["checked"])
     # The next run of the same setup is admitted on it, with no probe.
     again = _resolve_small(hub)
     assert (again["probe"], again["evidence"]) == (False, "measured")
@@ -1707,6 +1714,7 @@ def test_deferred_previews_are_drawn_from_each_checkpoint_after_training(
         monkeypatch.setattr(
             uuid, "uuid4", lambda: uuid.UUID(id_prefix + real_uuid4().hex[8:])
         )
+    seen = _spy_pass_pids(hub, monkeypatch)
     first = _resolve_small(hub)
     measurements.record(
         hub,
@@ -1751,6 +1759,12 @@ def test_deferred_previews_are_drawn_from_each_checkpoint_after_training(
     ]
     work_dir = os.path.join(os.path.dirname(hub.path), "training", job["uuid"])
     assert not os.listdir(os.path.join(work_dir, "after"))
+    # Each preview pass put its pid on the run while it drew, and was checked
+    # for an orphan before its directory was cleared.
+    assert len(seen["preview"]) >= 3 and all(
+        pid is not None and pid == row_pid for pid, row_pid in seen["preview"]
+    )
+    assert any(f"{os.sep}after{os.sep}" in path for path in seen["checked"])
     phases = [entry["phase"] for entry in json.loads(row.phase_log)]
     assert phases[-2:] == ["previews", "importing"]
     # The run's own record keeps the previews peak the deferral came from
@@ -2008,3 +2022,204 @@ def test_a_run_finishing_at_shutdown_still_records_its_measurement(hub, repo_dir
 
     measured = measurements.read(hub, resolution["fingerprint"])
     assert measured["phase_peaks"]["training"]["vram_mb"] == 9000
+
+
+# ---------------------------------------------------------------------------
+# Passes' pids, the active slot, and the stopping flag (#2295)
+# ---------------------------------------------------------------------------
+
+
+def _spy_pass_pids(hub, monkeypatch):
+    """Record, on each poll of a probe or a preview pass, the pass's pid and
+    the pid the run's own row holds at that moment."""
+    seen = {"probe": [], "preview": []}
+    real_progress = LocalAiToolkit.progress
+
+    def progress(self, handle):
+        if handle.work_dir.endswith(os.sep + "probe"):
+            kind = "probe"
+        elif f"{os.sep}after{os.sep}" in handle.work_dir:
+            kind = "preview"
+        else:
+            kind = None
+        if kind is not None:
+            row = training_runs.get_run_by_uuid(hub, handle.job_id)
+            seen[kind].append((handle.pid, row["pid"]))
+        return real_progress(self, handle)
+
+    monkeypatch.setattr(LocalAiToolkit, "progress", progress)
+    checked = seen["checked"] = []
+    real_stop_orphaned = TrainingService._stop_orphaned_pass
+
+    def stop_orphaned(self, backend, job_uuid, name, pass_dir):
+        checked.append(pass_dir)
+        return real_stop_orphaned(self, backend, job_uuid, name, pass_dir)
+
+    monkeypatch.setattr(TrainingService, "_stop_orphaned_pass", stop_orphaned)
+    return seen
+
+
+def test_a_trainer_a_crashed_pass_left_running_is_stopped_before_a_new_pass(
+    hub, repo_dir, tmp_path, monkeypatch
+):
+    """A pass records its pid on the run. The next pass of that run stops the
+    trainer the pid names, if it is still that pass's trainer, before it clears
+    the directory and launches; a process that is not that trainer survives."""
+    monkeypatch.setattr(
+        "pixlstash.training.local_ai_toolkit._CANCEL_GRACE_SECONDS", 0.2
+    )
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    training_runs.create_run(
+        hub,
+        library_uuid=_LIBRARY_UUID,
+        uuid="orphaned-job",
+        name="orphaned",
+        set_id=None,
+        character_id=_CHARACTER_ID,
+        base_model="m",
+        trigger_word="t",
+    )
+    backend = service._make_backend()
+    pass_dir = str(tmp_path / "probe")
+    pass_handle = LocalAiToolkit.handle_for(pass_dir, "orphaned-job", "orphaned")
+    trainer = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import time; time.sleep(60)",
+            backend.run_script,
+            pass_handle.config_path,
+        ],
+        start_new_session=True,
+    )
+    try:
+        service._update_job("orphaned-job", pid=trainer.pid)
+        service._stop_orphaned_pass(backend, "orphaned-job", "orphaned", pass_dir)
+        assert trainer.wait(timeout=10) == -15, "the orphaned trainer was not stopped"
+    finally:
+        if trainer.poll() is None:
+            trainer.kill()
+            trainer.wait()
+
+
+def test_a_re_attached_run_leaves_a_later_runs_backend_in_the_slot(
+    hub, repo_dir, monkeypatch
+):
+    """A re-attached run clears the active slot only while it still holds it:
+    once a later run has taken the slot, its end must not clear that run."""
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    mine = service._make_backend()
+    later = service._make_backend()
+    monkeypatch.setattr(service, "_after_training", lambda *args, **kwargs: False)
+    monkeypatch.setattr(service, "_check_released", lambda *args, **kwargs: None)
+    ended = TrainingProgress(
+        status="stopped", info="Job stopped", step=1, total_steps=2, speed=""
+    )
+
+    def take_over_while_polling(*args, **kwargs):
+        # The lease shrank, so a later run got the card and took the slot.
+        service._active_backend, service._active_job_uuid = later, "later-job"
+        return ended
+
+    monkeypatch.setattr(service, "_poll_until_done", take_over_while_polling)
+    service._poll_and_finalize_reattached(mine, None, {"uuid": "old-job"}, _StubLease())
+    assert service._active_backend is later
+    assert service._active_job_uuid == "later-job"
+
+    monkeypatch.setattr(service, "_poll_until_done", lambda *args, **kwargs: ended)
+    service._poll_and_finalize_reattached(mine, None, {"uuid": "old-job"}, _StubLease())
+    assert service._active_backend is None and service._active_job_uuid is None
+
+
+def test_a_finished_run_leaves_the_slot_to_a_later_run(hub, repo_dir, monkeypatch):
+    """The worker's end clears the slot only if it still holds its own backend."""
+    importer = _RecordingImport()
+    lease = _StubLease(grant=True)
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=lease,
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+        importer=importer,
+    )
+    later = service._make_backend()
+    real_after = service._after_training
+
+    def hand_over(*args, **kwargs):
+        result = real_after(*args, **kwargs)
+        with service._active_lock:
+            service._active_backend = later
+            service._active_job_uuid = "later-job"
+        return result
+
+    monkeypatch.setattr(service, "_after_training", hand_over)
+    job = service.enqueue(
+        set_id=_SET_ID,
+        name="handover",
+        base_model="m",
+        trigger_word="t",
+        template_path=_write_template(repo_dir, steps=4, save_every=2),
+        resolution=_RESOLUTION,
+    )
+
+    _run_to_terminal(hub, service, job, expect="completed")
+
+    assert service._active_backend is later
+    assert service._active_job_uuid == "later-job"
+
+
+def test_progress_and_cancel_write_the_stopping_flag_under_the_active_lock(
+    hub, repo_dir, monkeypatch
+):
+    """The poll reads the stopping flag and writes the status in one held
+    lock, and cancel writes stopping under that lock too, so a cancel cannot
+    land between the poll's read and its write and be undone."""
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(grant=True),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    training_runs.create_run(
+        hub,
+        library_uuid=_LIBRARY_UUID,
+        uuid="racing-job",
+        name="racing",
+        set_id=None,
+        character_id=_CHARACTER_ID,
+        base_model="m",
+        trigger_word="t",
+    )
+    training_runs.update_run(hub, "racing-job", status="running")
+    written = []
+    real_update = service._update_job
+
+    def update_job(job_uuid, **fields):
+        if "status" in fields:
+            written.append((fields["status"], service._active_lock.locked()))
+        real_update(job_uuid, **fields)
+
+    monkeypatch.setattr(service, "_update_job", update_job)
+    running = TrainingProgress(
+        status="running", info="Training", step=1, total_steps=10, speed=""
+    )
+    service._persist_progress("racing-job", running, SimpleNamespace(log_path=""))
+    assert written == [("running", True)]
+
+    written.clear()
+    service.cancel(training_runs.get_run_by_uuid(hub, "racing-job")["id"])
+    assert written[0] == ("stopping", True)

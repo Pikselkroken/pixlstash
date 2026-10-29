@@ -4,6 +4,7 @@ import json
 import os
 
 from pixlstash.services import comfyui_connections
+from pixlstash.training import ai_toolkit_install
 
 from pixlstash.utils.system_utils import (  # noqa: F401
     MAX_VRAM_BUDGET_GB,
@@ -16,8 +17,11 @@ def validate_ai_toolkit_settings(repo_path: str | None, python: str | None) -> N
     """Check the ai-toolkit paths a PATCH is about to store.
 
     ``python`` becomes argv[0] of the trainer process and ``repo_path`` is its
-    working directory, so both must name real things on this host. A ``None``
-    value is not checked (it clears the setting, or is left unchanged).
+    working directory, so both must name real things on this host, and the
+    Python must belong to the checkout: inside its ``.venv`` or ``venv``, or the
+    one :func:`ai_toolkit_install.find_python` picks for it. A ``None`` value is
+    not checked (it clears the setting, or is left unchanged), but a Python is
+    never accepted without the checkout it belongs to.
 
     Args:
         repo_path: The ai-toolkit checkout directory, or ``None``.
@@ -25,22 +29,41 @@ def validate_ai_toolkit_settings(repo_path: str | None, python: str | None) -> N
 
     Raises:
         ValueError: With a message naming the problem, if either path is not an
-            absolute path to the expected kind of file or directory.
+            absolute path to the expected kind of file or directory, or the
+            Python is not the checkout's.
     """
     if repo_path:
         if not os.path.isabs(repo_path):
             raise ValueError("ai_toolkit_repo_path must be an absolute path.")
         if not os.path.isdir(repo_path):
             raise ValueError("ai_toolkit_repo_path must be an existing directory.")
-        if not os.path.isfile(os.path.join(repo_path, "run.py")):
+        if not ai_toolkit_install.is_checkout(repo_path):
             raise ValueError(
-                "ai_toolkit_repo_path has no run.py; point it at the ai-toolkit checkout."
+                "ai_toolkit_repo_path has no run.py and toolkit folder; point it at "
+                "the ai-toolkit checkout."
             )
     if python:
         if not os.path.isabs(python):
             raise ValueError("ai_toolkit_python must be an absolute path.")
         if not (os.path.isfile(python) and os.access(python, os.X_OK)):
             raise ValueError("ai_toolkit_python must be an existing executable file.")
+        if not repo_path:
+            raise ValueError("ai_toolkit_python needs the checkout it runs in.")
+        # normpath, not realpath: a venv's python is a link out of the checkout.
+        chosen = os.path.normcase(os.path.normpath(python))
+        found = ai_toolkit_install.find_python(repo_path)
+        in_venv = any(
+            chosen.startswith(
+                os.path.normcase(os.path.normpath(os.path.join(repo_path, env)))
+                + os.sep
+            )
+            for env in (".venv", "venv")
+        )
+        if not in_venv and chosen != os.path.normcase(os.path.normpath(found or "")):
+            raise ValueError(
+                "ai_toolkit_python must be the checkout's own Python: one in its "
+                ".venv or venv, or the python3 on the PATH when it has neither."
+            )
 
 
 # The ai-toolkit keys a PATCH to /users/me/config may not write. The checkout and

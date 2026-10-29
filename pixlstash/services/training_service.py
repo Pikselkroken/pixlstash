@@ -494,8 +494,11 @@ class TrainingService:
         # backend. backend.cancel() blocks until the process exits, by which
         # point the worker's poll loop may have already finalized the job to its
         # terminal status; writing 'stopping' after that would clobber the
-        # terminal state. Marking it first lets the worker's _finalize win.
-        self._update_job(info["uuid"], status="stopping")
+        # terminal state. Marking it first lets the worker's _finalize win. Under
+        # the lock _persist_progress reads and writes under, so a poll cannot
+        # read "running" and then write it over this flag.
+        with self._active_lock:
+            self._update_job(info["uuid"], status="stopping")
         logger.info("cancel: job %s asked to stop (status=stopping).", info["uuid"])
 
         with self._active_lock:
@@ -682,8 +685,11 @@ class TrainingService:
             )
         finally:
             with self._active_lock:
-                self._active_backend = None
-                self._active_job_uuid = None
+                # Only the run that holds the slot clears it: a later run may
+                # have taken it since this one's lease shrank.
+                if self._active_backend is backend:
+                    self._active_backend = None
+                    self._active_job_uuid = None
             self._check_released(info["uuid"], lease, watch)
             lease.release()
 
@@ -773,6 +779,7 @@ class TrainingService:
         # frees it, and the Tasks tab shows the job waiting until then.
         lease = self._request_gpu(self._lease_label(info), job_uuid, *need)
         watch = _Watch()
+        backend: TrainerBackend | None = None
         try:
             with self._active_lock:
                 self._waiting = (job_uuid, lease)
@@ -814,8 +821,11 @@ class TrainingService:
             self._emit_progress(job_uuid, status="error", message="Training run failed")
         finally:
             with self._active_lock:
-                self._active_backend = None
-                self._active_job_uuid = None
+                # Only the run that holds the slot clears it, as a re-attached
+                # run's end does (_poll_and_finalize_reattached).
+                if backend is not None and self._active_backend is backend:
+                    self._active_backend = None
+                    self._active_job_uuid = None
                 self._waiting = None
             self._check_released(job_uuid, lease, watch)
             lease.release()
@@ -1215,6 +1225,36 @@ class TrainingService:
             "deferred" if settled["previews_deferred"] else "while training",
         )
 
+    def _stop_orphaned_pass(
+        self, backend: TrainerBackend, job_uuid: str, name: str, pass_dir: str
+    ) -> None:
+        """Stop the trainer a crashed probe or preview pass left running.
+
+        A pass records its pid on the run, as the run does. Before a new pass
+        clears its directory and launches, the trainer that pid names is
+        cancelled if it is still this pass's trainer, so a second one never
+        trains beside it on the card. Any other process is left alone.
+
+        Args:
+            backend: The trainer backend.
+            job_uuid: The run's uuid.
+            name: The run's display name, as the pass's paths derive from it.
+            pass_dir: The pass's work directory.
+        """
+        run = training_runs.get_run_by_uuid(self._hub, job_uuid) or {}
+        pid = run.get("pid")
+        if not pid:
+            return
+        handle = LocalAiToolkit.handle_for(pass_dir, job_uuid, name, pid)
+        if backend.is_alive(handle):
+            logger.warning(
+                "Job %s: stopping pid %s, a pass of it left running in %s.",
+                job_uuid,
+                pid,
+                pass_dir,
+            )
+            backend.cancel(handle)
+
     def _probe_once(
         self,
         backend: TrainerBackend,
@@ -1248,6 +1288,7 @@ class TrainingService:
             # The worst bucket only, so the peak is the largest a step makes.
             process["datasets"] = [{"resolution": [max(sizes)]}]
         probe_dir = os.path.join(work_dir, "probe")
+        self._stop_orphaned_pass(backend, job_uuid, info["name"], probe_dir)
         self._remove_tree(probe_dir)
         spec = TrainingSpec(
             job_id=job_uuid,
@@ -1265,6 +1306,7 @@ class TrainingService:
         )
         handle = backend.prepare(spec)
         backend.submit(handle, spec)
+        self._update_job(job_uuid, pid=handle.pid)
         started = time.time()
         watch = _Watch()
 
@@ -1484,6 +1526,7 @@ class TrainingService:
             if stop() is not None:
                 break
             pass_dir = os.path.join(handle.work_dir, "after", str(step))
+            self._stop_orphaned_pass(backend, job_uuid, info["name"], pass_dir)
             self._remove_tree(pass_dir)
             process = {
                 "train": {
@@ -1511,6 +1554,7 @@ class TrainingService:
             try:
                 pass_handle = backend.prepare(spec)
                 backend.submit(pass_handle, spec)
+                self._update_job(job_uuid, pid=pass_handle.pid)
                 ended, stopped = self._watch_pass(
                     backend, pass_handle, lease, _Watch(), "previews", stop
                 )
@@ -1751,21 +1795,26 @@ class TrainingService:
             handle: The job handle (for reading the log tail).
         """
         status = progress.status if progress.status != "unknown" else "running"
+        log_tail = self._read_log_tail(handle.log_path)
         # The trainer reports running for a while after a cancel; the row's
-        # "stopping" stands until the trainer reaches an end state.
-        if status == "running" and self._job_status(job_uuid) == "stopping":
-            status = "stopping"
-        self._update_job(
-            job_uuid,
-            status=status,
-            step=progress.step,
-            total_steps=progress.total_steps,
-            loss_curve=json.dumps(progress.loss_curve) if progress.loss_curve else None,
-            sample_image_paths=(
-                json.dumps(progress.samples) if progress.samples else None
-            ),
-            log_tail=self._read_log_tail(handle.log_path),
-        )
+        # "stopping" stands until the trainer reaches an end state. The read and
+        # the write sit under the lock cancel writes "stopping" under.
+        with self._active_lock:
+            if status == "running" and self._job_status(job_uuid) == "stopping":
+                status = "stopping"
+            self._update_job(
+                job_uuid,
+                status=status,
+                step=progress.step,
+                total_steps=progress.total_steps,
+                loss_curve=json.dumps(progress.loss_curve)
+                if progress.loss_curve
+                else None,
+                sample_image_paths=(
+                    json.dumps(progress.samples) if progress.samples else None
+                ),
+                log_tail=log_tail,
+            )
         # A completed trainer is imported next: `_finalize` writes completed_at.
         self._note_phase(
             job_uuid, live_view.phase_of(status, progress.info, progress.step, None)

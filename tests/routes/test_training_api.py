@@ -23,6 +23,8 @@ import shutil
 import sqlite3
 import sys
 import tempfile
+import threading
+import time
 import zipfile
 
 import pytest
@@ -167,7 +169,7 @@ def _setup(checkout=True):
     read_token = resp.json()["token"]
     if checkout:
         repo = _fake_checkout(os.path.join(temp_dir.name, "aitk"))
-        _save_checkout(client, repo, sys.executable)
+        _save_checkout(client, repo, _venv_python(repo))
 
     # The sets and characters here hold no picture files; a test sets the
     # count the dataset would have. Patched last, so a failing step above
@@ -1080,7 +1082,7 @@ def test_list_presets_offers_only_what_the_saved_checkout_can_run(tmp_path):
         assert server.vault.training_service.enqueue_calls == []
 
         repo = _fake_checkout(str(tmp_path / "kit"))
-        _save_checkout(owner, repo, sys.executable)
+        _save_checkout(owner, repo, _venv_python(repo))
         r = owner.get("/training/presets")
         listed = r.json()
         # The dialog preselects the first offered recipe: the default leads.
@@ -1282,6 +1284,99 @@ def test_sample_prompts_scoped_token_forbidden():
 # ---------------------------------------------------------------------------
 # POST /training/resolve and GET /training/dataset (the Train dialog's preview)
 # ---------------------------------------------------------------------------
+
+
+def test_create_job_strips_the_trigger_word_and_refuses_control_characters():
+    """The stored trigger word is the stripped one, and a newline or control
+    character in a name or trigger word is a 422 naming the field."""
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        char_id = _make_character(owner)
+        base = {"character_id": char_id, "name": "Alice LoRA"}
+
+        r = owner.post("/training/jobs", json={**base, "trigger_word": "  alice  "})
+        assert r.status_code == 200, r.text
+        assert server.vault.training_service.enqueue_calls[-1]["trigger_word"] == (
+            "alice"
+        )
+
+        for bad in (
+            {"trigger_word": "al\nice"},
+            {"trigger_word": "alice\x00"},
+            {"trigger_word": "   "},
+            {**base, "name": "Alice\nLoRA"},
+        ):
+            payload = {**base, "trigger_word": "alice", **bad}
+            r = owner.post("/training/jobs", json=payload)
+            assert r.status_code == 422, (bad, r.text)
+        assert len(server.vault.training_service.enqueue_calls) == 1
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_create_job_caps_the_name_and_the_trigger_word_length():
+    """A name over 200 characters or a trigger word over 500 is refused (422)."""
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        char_id = _make_character(owner)
+        body = {"character_id": char_id, "name": "x", "trigger_word": "alice"}
+        r = owner.post("/training/jobs", json={**body, "name": "n" * 200})
+        assert r.status_code == 200, r.text
+        r = owner.post("/training/jobs", json={**body, "name": "n" * 201})
+        assert r.status_code == 422, r.text
+        r = owner.post("/training/jobs", json={**body, "trigger_word": "t" * 501})
+        assert r.status_code == 422, r.text
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_resolve_refuses_a_picture_count_no_set_can_hold():
+    """An absurd picture count is a 422 at the boundary, never an overflow."""
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        body = {"subject": "person", "picture_count": 10**30}
+        r = owner.post("/training/resolve", json=body)
+        assert r.status_code == 422, r.text
+        body["picture_count"] = 1_000_001
+        assert owner.post("/training/resolve", json=body).status_code == 422
+        body["picture_count"] = 1_000_000
+        r = owner.post("/training/resolve", json=body)
+        assert r.status_code == 200, r.text
+        assert r.json()["derived"]["train.steps"]["value"] == 3000
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_resolve_plans_from_the_same_sample_prompts_a_job_is_created_with():
+    """The previews resolve counts are the ones a run stores: four prompts,
+    the same list POST /training/jobs plans from for the same scope."""
+    from pixlstash.training import presets
+
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        char_id = _make_character(owner)
+        r = owner.post(
+            "/training/resolve",
+            json={
+                "character_id": char_id,
+                "subject": "person",
+                "picture_count": 24,
+                "trigger_word": " alice ",
+            },
+        )
+        assert r.status_code == 200, r.text
+        resolved = r.json()["resolution"]["values"][presets.PROMPTS_KEY]["value"]
+        assert len(resolved) == 4
+
+        r = owner.post(
+            "/training/jobs",
+            json={"character_id": char_id, "name": "x", "trigger_word": "alice"},
+        )
+        assert r.status_code == 200, r.text
+        call = server.vault.training_service.enqueue_calls[-1]
+        assert call["resolution"]["values"][presets.PROMPTS_KEY]["value"] == resolved
+    finally:
+        _teardown(temp_dir, server)
 
 
 def _reference_set_of(server, char_id):
@@ -1795,7 +1890,7 @@ def test_create_job_refuses_a_set_with_no_pictures():
         repo = _fake_checkout(
             os.path.join(temp_dir.name, "h3kit"), archs=("minimax_h3",)
         )
-        _save_checkout(owner, repo, sys.executable)
+        _save_checkout(owner, repo, _venv_python(repo))
         body = {"set_id": set_id, "name": "x", "trigger_word": "tw"}
         for preset, empty in (("minimax-h3-image", True), ("minimax-h3-motion", False)):
             r = owner.post(
@@ -1825,7 +1920,7 @@ def test_create_job_on_a_set_needs_a_subject_and_a_capable_checkout(tmp_path):
 
         # A saved checkout without the z_image model code cannot train it.
         repo = _fake_checkout(str(tmp_path / "kit"), archs=("flux2",))
-        _save_checkout(owner, repo, sys.executable)
+        _save_checkout(owner, repo, _venv_python(repo))
         calls = len(server.vault.training_service.enqueue_calls)
         r = owner.post("/training/jobs", json={**body, "subject": "style"})
         assert r.status_code == 422, r.text
@@ -1948,7 +2043,28 @@ def test_put_config_refuses_ai_toolkit_values_that_are_not_real():
         with open(not_exec, "w") as fh:
             fh.write("#!/bin/sh\n")
         os.chmod(not_exec, 0o644)
+        # #2295: run.py alone is not a checkout, and the Python must be its own.
+        repo_no_toolkit = os.path.join(temp_dir.name, "repo-without-toolkit")
+        os.makedirs(repo_no_toolkit)
+        with open(os.path.join(repo_no_toolkit, "run.py"), "w") as fh:
+            fh.write("")
+        checkout = _fake_checkout(os.path.join(temp_dir.name, "kit"))
+        own_python = _venv_python(checkout)
+        stranger = os.path.join(temp_dir.name, "stranger-python")
+        with open(stranger, "w") as fh:
+            fh.write("#!/bin/sh\n")
+        os.chmod(stranger, 0o755)
         bad = [
+            {"repo_path": repo_no_toolkit, "python": None},
+            {"repo_path": checkout, "python": stranger},
+            {"repo_path": checkout, "python": sys.executable},
+            {"repo_path": None, "python": own_python},
+            {
+                "repo_path": checkout,
+                "python": os.path.join(
+                    checkout, ".venv", "..", "..", "stranger-python"
+                ),
+            },
             {"repo_path": "relative/ai-toolkit", "python": None},
             {"repo_path": os.path.join(temp_dir.name, "missing"), "python": None},
             {"repo_path": repo_no_run, "python": None},
@@ -1966,6 +2082,12 @@ def test_put_config_refuses_ai_toolkit_values_that_are_not_real():
         cfg = owner.get("/users/me/config").json()
         assert cfg["ai_toolkit_repo_path"] in (None, "")
         assert cfg["ai_toolkit_python"] in (None, "")
+
+        r = owner.put(
+            "/training/ai-toolkit/config",
+            json={"repo_path": checkout, "python": own_python},
+        )
+        assert r.status_code == 200, r.text
 
         r = owner.put(
             "/training/ai-toolkit/config", json={"repo_path": None, "python": None}
@@ -2064,7 +2186,7 @@ def test_ai_toolkit_status_reports_the_saved_checkout_and_its_folders():
     temp_dir, owner, server, read_token = _setup()
     try:
         repo = _fake_checkout(os.path.join(temp_dir.name, "kit"))
-        python = sys.executable
+        python = _venv_python(repo)
         _save_checkout(owner, repo, python)
 
         status = owner.get("/training/ai-toolkit/status").json()
@@ -2096,7 +2218,7 @@ def test_ai_toolkit_status_counts_runs_in_the_registered_shelf_folder():
     temp_dir, owner, server, read_token = _setup()
     try:
         repo = _fake_checkout(os.path.join(temp_dir.name, "kit"))
-        _save_checkout(owner, repo, sys.executable)
+        _save_checkout(owner, repo, _venv_python(repo))
         shelf = os.path.join(temp_dir.name, "shelf-output")
         run = os.path.join(shelf, "trained_abcd1234")
         os.makedirs(run)
@@ -2174,13 +2296,14 @@ def test_ai_toolkit_check_folders_match_status_for_the_same_checkout(monkeypatch
     temp_dir, owner, server, read_token = _setup()
     try:
         repo = _fake_checkout(os.path.join(temp_dir.name, "kit"))
-        _save_checkout(owner, repo, sys.executable)
+        python = _venv_python(repo)
+        _save_checkout(owner, repo, python)
         check = owner.post(
             "/training/ai-toolkit/check",
-            json={"repo_path": repo, "python": sys.executable},
+            json={"repo_path": repo, "python": python},
         ).json()
         status = owner.get("/training/ai-toolkit/status").json()
-        assert check["python"] == sys.executable
+        assert check["python"] == python
         assert check["datasets"] == status["datasets"]
         assert check["runs"] == status["runs"]
         # The checkout ships z_image, so the Z-Image Turbo recipe is offered.
@@ -2232,6 +2355,48 @@ def test_ai_toolkit_check_refuses_paths_that_are_not_real(monkeypatch):
             assert r.json()["detail"], r.text
         assert started == [], "a refused path must not start a process"
     finally:
+        _teardown(temp_dir, server)
+
+
+def test_ai_toolkit_check_runs_one_at_a_time(monkeypatch):
+    """#2295: a check can hold a worker thread for minutes, so a second one while
+    it runs is a 409 and starts nothing; once it ends, the next one runs."""
+    from pixlstash.training import ai_toolkit_install
+
+    started = []
+    release = threading.Event()
+
+    def runner(argv, cwd, timeout):
+        started.append(argv)
+        release.wait(10)
+        return _probe_ok_runner(argv, cwd, timeout)
+
+    monkeypatch.setattr(ai_toolkit_install, "run_host_process", runner)
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        repo = _fake_checkout(os.path.join(temp_dir.name, "kit"))
+        _venv_python(repo)
+        first = {}
+        worker = threading.Thread(
+            target=lambda: first.update(
+                r=owner.post("/training/ai-toolkit/check", json={"repo_path": repo})
+            )
+        )
+        worker.start()
+        deadline = time.monotonic() + 10
+        while not started and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert started, "the first check never started"
+        r = owner.post("/training/ai-toolkit/check", json={"repo_path": repo})
+        assert r.status_code == 409, r.text
+        assert len(started) == 1, "a refused check must not start a process"
+        release.set()
+        worker.join(10)
+        assert first["r"].status_code == 200, first["r"].text
+        r = owner.post("/training/ai-toolkit/check", json={"repo_path": repo})
+        assert r.status_code == 200, r.text
+    finally:
+        release.set()
         _teardown(temp_dir, server)
 
 
@@ -2303,7 +2468,7 @@ def test_put_config_disconnect_clears_both_ai_toolkit_paths():
     temp_dir, owner, server, read_token = _setup()
     try:
         repo = _fake_checkout(os.path.join(temp_dir.name, "kit"))
-        _save_checkout(owner, repo, sys.executable)
+        _save_checkout(owner, repo, _venv_python(repo))
         assert owner.get("/training/ai-toolkit/status").json()["configured"] is True
 
         r = owner.put(

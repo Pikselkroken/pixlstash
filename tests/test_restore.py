@@ -4607,7 +4607,9 @@ def test_full_restore_reset_failure_is_not_success_and_keeps_auth_closed(
 
 
 def _fake_interpreter(path):
-    """An executable file that passes ``validate_ai_toolkit_settings``."""
+    """An executable file that passes ``validate_ai_toolkit_settings`` inside
+    the checkout around it (``<repo>/.venv/<name>``)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     path.chmod(0o755)
     return str(path)
@@ -4632,19 +4634,22 @@ def test_full_restore_neither_reinstates_nor_clears_the_ai_toolkit_python(
         json={"username": "owner", "password": "example-owner-password"},
     )
     assert login.status_code == 200, login.text
-    at_snapshot = _fake_interpreter(tmp_path / "python-at-snapshot")
-    after_snapshot = _fake_interpreter(tmp_path / "python-after-snapshot")
+    repo = tmp_path / "ai-toolkit"
+    (repo / "toolkit").mkdir(parents=True)
+    (repo / "run.py").write_text("", encoding="utf-8")
+    at_snapshot = _fake_interpreter(repo / ".venv" / "python-at-snapshot")
+    after_snapshot = _fake_interpreter(repo / ".venv" / "python-after-snapshot")
 
     r = client.put(
         "/api/v1/training/ai-toolkit/config",
-        json={"repo_path": None, "python": at_snapshot},
+        json={"repo_path": str(repo), "python": at_snapshot},
     )
     assert r.status_code == 200, r.text
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")
 
     r = client.put(
         "/api/v1/training/ai-toolkit/config",
-        json={"repo_path": None, "python": after_snapshot},
+        json={"repo_path": str(repo), "python": after_snapshot},
     )
     assert r.status_code == 200, r.text
 

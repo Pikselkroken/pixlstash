@@ -77,7 +77,7 @@ def create_router(server) -> APIRouter:
     router = APIRouter()
     hw_monitor = config_service.HardwareMonitor()
 
-    def _config_payload(user) -> dict:
+    def _config_payload(user, request: Request) -> dict:
         """Serialise the user's config, with the library-owned settings merged in.
 
         The client sees one flat config object exactly as before. Behind it,
@@ -85,8 +85,18 @@ def create_router(server) -> APIRouter:
         the user row: it is a character id in that vault, so the same number in
         another library is a different person (see
         pixlstash/db_models/library_settings.py).
+
+        The ai-toolkit checkout and its Python are host paths, which only the
+        §16.3 tier that ``GET /training/ai-toolkit/status`` carries may read;
+        everyone else gets ``ai_toolkit_configured`` and nulls (#2295).
         """
         payload = serialize_user_config(user)
+        payload["ai_toolkit_configured"] = bool(
+            payload.get("ai_toolkit_repo_path") and payload.get("ai_toolkit_python")
+        )
+        if not _host_local(request):
+            payload["ai_toolkit_repo_path"] = None
+            payload["ai_toolkit_python"] = None
         payload["similarity_character"] = (
             library_settings_service.get_similarity_character(server.vault.db)
         )
@@ -99,6 +109,13 @@ def create_router(server) -> APIRouter:
             server.hub, getattr(user, "id", None)
         )
         return payload
+
+    def _host_local(request: Request) -> bool:
+        """Whether *request* passes the ``LOCAL_OWNER_ONLY`` locality rule (§16.3)."""
+        return (
+            is_local_or_tailscale_ip(server.auth.real_client_ip(request))
+            or server.auth.allow_remote_host_ops
+        )
 
     def _ensure_secure_when_required(request: Request):
         server.auth.ensure_secure_when_required(request)
@@ -195,6 +212,13 @@ def create_router(server) -> APIRouter:
         ai_toolkit_repo_path: Optional[str] = None
         ai_toolkit_python: Optional[str] = None
         ai_toolkit_commit: Optional[str] = None
+        ai_toolkit_configured: Optional[bool] = Field(
+            default=None,
+            description=(
+                "Whether an ai-toolkit checkout and its Python are saved. The two "
+                "paths themselves are null unless the request is local (§16.3)."
+            ),
+        )
         public_url: Optional[str] = None
         similarity_character: Optional[int] = None
         stack_strictness: Optional[float] = None
@@ -531,7 +555,7 @@ def create_router(server) -> APIRouter:
     def get_me_config(request: Request):
         _ensure_secure_when_required(request)
         user = server.auth.get_user_for_request(request)
-        return _config_payload(user)
+        return _config_payload(user, request)
 
     @router.get(
         "/users/me/penalised-tags",
@@ -542,7 +566,7 @@ def create_router(server) -> APIRouter:
     def get_me_penalised_tags(request: Request):
         _ensure_secure_when_required(request)
         user = server.auth.get_user_for_request(request)
-        config = _config_payload(user)
+        config = _config_payload(user, request)
         return {"smart_score_penalised_tags": config["smart_score_penalised_tags"]}
 
     def _host_ops_allowed(request: Request) -> bool:
@@ -552,9 +576,9 @@ def create_router(server) -> APIRouter:
         (``LOCAL_OWNER_ONLY``, §16.3): saving a ComfyUI address must not be a
         way round it. A refused request still saves the address; it is logged.
         """
-        client_ip = server.auth.real_client_ip(request)
-        if is_local_or_tailscale_ip(client_ip) or server.auth.allow_remote_host_ops:
+        if _host_local(request):
             return True
+        client_ip = server.auth.real_client_ip(request)
         logger.info(
             "ComfyUI address saved from %s; its model folders are not registered "
             "because host operations are local-only (allow_remote_host_ops is off).",
@@ -870,7 +894,7 @@ def create_router(server) -> APIRouter:
         return {
             "status": "success",
             "updated": updated,
-            "config": _config_payload(user),
+            "config": _config_payload(user, request),
         }
 
     @router.post(

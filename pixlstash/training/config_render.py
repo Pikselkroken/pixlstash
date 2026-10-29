@@ -4,8 +4,8 @@ PixlStash owns only a handful of fields in the trainer config (the
 ``{{PLACEHOLDER}}`` tokens in the template); everything else is passed through
 verbatim. This module loads the template, deep-merges the run's tunable values
 and the recipe's locked keys (:mod:`pixlstash.training.presets`) on top, then
-substitutes those placeholders everywhere, including inside
-``sample.samples[].prompt``.
+substitutes those placeholders everywhere, except that a sample prompt
+(``sample.samples[].prompt``) takes only the trigger word.
 
 Caller overrides are restricted to :data:`TUNABLE_KEYS`: training
 hyper-parameters only. A path, a process type, a device or a model source can
@@ -99,7 +99,9 @@ TUNABLE_KEYS: dict[str, _Rule] = {
     "datasets[*].flip_x": _flag(),
     "datasets[*].do_audio": _flag(),
     "save.save_every": _ints(1, 100_000),
-    "save.max_step_saves_to_keep": _ints(1, 1000),
+    # Kept checkpoints are what fills the disk, whatever save_every is, so this
+    # bounds what a recipe update from pixlstash.dev can ask for (#2295).
+    "save.max_step_saves_to_keep": _ints(1, 24),
     "sample.sample_every": _ints(1, 100_000),
     "sample.samples[*].prompt": _text(2000),
     "sample.sample_steps": _ints(1, 200),
@@ -331,35 +333,71 @@ def _merge_lists(base_list: list, patch_list: list) -> list:
     return merged
 
 
-def _substitute_placeholders(value: Any, replacements: dict[str, str]) -> Any:
+def normalise_trigger_word(word: str | None) -> str:
+    """The trigger word as every consumer reads it: surrounding whitespace out.
+
+    The rendered config, the sample prompts and the dataset captions all take
+    this value, so none of them can disagree about the word.
+
+    Args:
+        word: The trigger word as given, or None.
+
+    Returns:
+        The word stripped, or ``""`` when there is none.
+    """
+    return (word or "").strip()
+
+
+def _fill_text(text: str, replacements: dict[str, str]) -> str:
+    """Replace each token in *text* in one pass over the original string.
+
+    Sequential replace would re-scan text an earlier pass inserted, so a
+    trigger word or job name naming a later token (e.g. ``{{DATASET_FOLDER}}``)
+    would expand to a host path.
+    """
+    if not replacements:
+        return text
+    pattern = "|".join(re.escape(token) for token in replacements)
+    return re.sub(pattern, lambda match: replacements[match.group(0)], text)
+
+
+def _substitute_placeholders(
+    value: Any,
+    replacements: dict[str, str],
+    prompt_replacements: dict[str, str],
+) -> Any:
     """Recursively replace ``{{PLACEHOLDER}}`` tokens in any JSON value.
 
-    Replacement is applied to every string leaf, so placeholders are honoured
-    wherever they appear in the tree, including inside ``sample.samples[].prompt``.
+    Every string leaf takes *replacements*, except the ``prompt`` of a sample
+    entry (ai-toolkit's ``sample.samples[]``), which takes *prompt_replacements*
+    only. A sample prompt is shown unredacted in the live view, so it must not
+    be where a host path enters.
 
     Args:
         value: A JSON-decoded value (dict, list, str, or scalar).
         replacements: Mapping of placeholder token (``"{{NAME}}"``) to its
             replacement string.
+        prompt_replacements: The subset of *replacements* a sample prompt takes.
 
     Returns:
         A new value with all placeholders substituted.
     """
     if isinstance(value, dict):
         return {
-            key: _substitute_placeholders(item, replacements)
+            key: (
+                _fill_text(item, prompt_replacements)
+                if key == "prompt" and isinstance(item, str)
+                else _substitute_placeholders(item, replacements, prompt_replacements)
+            )
             for key, item in value.items()
         }
     if isinstance(value, list):
-        return [_substitute_placeholders(item, replacements) for item in value]
+        return [
+            _substitute_placeholders(item, replacements, prompt_replacements)
+            for item in value
+        ]
     if isinstance(value, str):
-        # One pass over the original string. Sequential replace would re-scan
-        # text an earlier pass inserted, so a trigger word or job name naming a
-        # later token (e.g. "{{DATASET_FOLDER}}") would expand to a host path.
-        if not replacements:
-            return value
-        pattern = "|".join(re.escape(token) for token in replacements)
-        return re.sub(pattern, lambda match: replacements[match.group(0)], value)
+        return _fill_text(value, replacements)
     return value
 
 
@@ -378,7 +416,8 @@ def render_job_config(
 
     Loads the JSON template at *template_path*, deep-merges *overrides* and then
     *locked* on top, and substitutes the five PixlStash placeholders last, so a
-    placeholder in an override (a recipe's sample prompt) is filled too.
+    placeholder in an override is filled too. A sample prompt takes only
+    ``{{TRIGGER_WORD}}``; the host-path placeholders stay literal in it.
 
     The substituted placeholders are:
 
@@ -421,17 +460,21 @@ def render_job_config(
         logger.error("Job-config template %s is not valid JSON: %s", template_path, exc)
         raise
 
+    trigger = normalise_trigger_word(trigger_word)
     replacements = {
         "{{JOB_NAME}}": job_name,
         "{{TRAINING_FOLDER}}": training_folder,
         "{{SQLITE_DB_PATH}}": sqlite_db_path,
-        "{{TRIGGER_WORD}}": trigger_word,
+        "{{TRIGGER_WORD}}": trigger,
         "{{DATASET_FOLDER}}": dataset_dir,
     }
+    # A sample prompt takes the trigger word alone: the host paths stay literal
+    # there, since the live view shows prompts unredacted.
+    prompt_replacements = {"{{TRIGGER_WORD}}": trigger}
 
     if overrides:
         template = deep_merge(template, validate_tunables(overrides))
     if locked:
         template = deep_merge(template, locked)
 
-    return _substitute_placeholders(template, replacements)
+    return _substitute_placeholders(template, replacements, prompt_replacements)
