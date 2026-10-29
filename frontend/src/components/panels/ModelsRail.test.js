@@ -157,7 +157,7 @@ const ROWS = [
 
 const mounted = [];
 
-/** Load the shelf and the sets, then mount the rail on the Models tab. */
+/** Load the shelf and the sets, then mount the rail. */
 async function mountRail({
   handMade = [],
   rows = ROWS,
@@ -250,6 +250,19 @@ describe("nothing picked", () => {
     await wrapper.get('[data-testid="mrail-select-missing"]').trigger("click");
     expect(store.place).toBe("sets");
     expect([...store.selectedMissingKeys]).toEqual(["missing:flux1-dev.safetensors"]);
+  });
+
+  it("has no tab band, and a Tasks deep link opens the title bar's pill", async () => {
+    const { wrapper } = await mountRail();
+    expect(wrapper.find(".inspector-tabs").exists()).toBe(false);
+    const sidebar = useSidebarStore();
+    sidebar.setModelsRailOpen(false);
+    const before = sidebar.tasksPillRequest;
+    sidebar.showTasksTab();
+    await wrapper.vm.$nextTick();
+    expect(sidebar.tasksPillRequest).toBe(before + 1);
+    // Nothing for the rail to show, so the link does not open it.
+    expect(sidebar.modelsRailOpen).toBe(false);
   });
 
   it("has no picker: the old list and its search are gone", async () => {

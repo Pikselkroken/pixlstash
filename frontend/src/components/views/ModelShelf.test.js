@@ -1375,7 +1375,7 @@ describe("the shelf's own accessible name", () => {
     // them.
     const wrapper = await mountShelf([adapter()]);
     const help = wrapper.find("#shelf-help").text();
-    expect(help).toContain("Settings and the Models and tasks toggle");
+    expect(help).toContain("Settings and the Models toggle");
     expect(help).toMatch(/nothing on this screen can be undone/i);
     expect(help).not.toMatch(/undo and redo/i);
   });
@@ -3214,7 +3214,7 @@ describe("the app-wide toolbar tail", () => {
     sidebar.modelsRailOpen = false;
     sidebar.statsOpen = false;
     const toggle = wrapper.find(".shelf-toolbar .tb-stats-btn");
-    expect(toggle.attributes("aria-label")).toBe("Models and tasks");
+    expect(toggle.attributes("aria-label")).toBe("Models");
     await toggle.trigger("click");
     expect(sidebar.modelsRailOpen).toBe(true);
     expect(toggle.attributes("aria-pressed")).toBe("true");

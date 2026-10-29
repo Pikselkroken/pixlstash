@@ -1,200 +1,197 @@
 <template>
   <AppInspector
-    v-model="tab"
     class="mrail"
-    label="Models and tasks"
+    label="Models"
     :open="sidebarStore.modelsRailOpen"
-    :tabs="tabs"
   >
-    <TasksPanel v-if="tab === 'tasks'" />
+    <!-- One head row on the toolbar's line (the StatsSidebar idiom). -->
+    <template #head>
+      <h2 class="mrail-title" tabindex="-1" data-testid="mrail-title">
+        {{ title }}
+      </h2>
+      <AppButton
+        v-if="hasSelection"
+        class="mrail-clear"
+        variant="ghost"
+        size="sm"
+        data-testid="mrail-clear"
+        @click="clearSelection"
+        >Clear</AppButton
+      >
+    </template>
 
-    <template v-else>
-      <header class="mrail-head">
-        <h2 class="mrail-title" data-testid="mrail-title">{{ title }}</h2>
-        <AppButton
-          v-if="hasSelection"
-          class="mrail-clear"
-          variant="ghost"
-          size="sm"
-          data-testid="mrail-clear"
-          @click="clearSelection"
-          >Clear</AppButton
+    <div class="mrail-scroll">
+      <!-- The training runs place (#2169): the picked run, or the folder. -->
+      <template v-if="onRuns">
+        <ModelsRailRun
+          v-if="pickedRuns.length === 1"
+          :key="pickedRuns[0].key"
+          :card="pickedRuns[0]"
+        />
+        <div
+          v-else-if="pickedRuns.length > 1"
+          class="mrail-pane"
+          data-testid="mrail-runs-many"
         >
-      </header>
-
-      <div class="mrail-scroll">
-        <!-- The training runs place (#2169): the picked run, or the folder. -->
-        <template v-if="onRuns">
-          <ModelsRailRun
-            v-if="pickedRuns.length === 1"
-            :key="pickedRuns[0].key"
-            :card="pickedRuns[0]"
-          />
-          <div
-            v-else-if="pickedRuns.length > 1"
-            class="mrail-pane"
-            data-testid="mrail-runs-many"
-          >
-            <dl class="mrs-facts">
-              <div class="mrs-fact">
-                <dt>Checkpoints</dt>
-                <dd>{{ runCheckpoints }}</dd>
-              </div>
-              <div class="mrs-fact">
-                <dt>Base models</dt>
-                <dd>{{ runBases || "–" }}</dd>
-              </div>
-            </dl>
-            <p class="mrs-hint">
-              At two or more runs, Import takes every checkpoint of each; each
-              run lands as one stack.
-            </p>
-          </div>
-          <div v-else class="mrail-pane" data-testid="mrail-runs-hint">
-            <dl class="mrs-facts">
-              <div class="mrs-fact">
-                <dt>Folder</dt>
-                <dd class="mrail-path">{{ runsStore.source?.path || "–" }}</dd>
-              </div>
-              <div class="mrs-fact">
-                <dt>Runs</dt>
-                <dd>{{ runsLine }}</dd>
-              </div>
-            </dl>
-            <p class="mrs-hint">
-              Pick a run to see its samples and loss. Import puts its LoRA on
-              the shelf.
-            </p>
-          </div>
-        </template>
-
-        <div v-else-if="kind === 'none'" class="mrail-pane">
-          <p v-if="store.setsError" class="mrail-warn" role="alert">
-            Could not read your sets, so where each model is cannot be shown.
-            <AppButton
-              variant="ghost"
-              size="sm"
-              @click="store.loadWorkflowSets({ force: true })"
-              >Retry</AppButton
-            >
-          </p>
-
-          <div class="mrail-stats">
-            <div class="mrail-stat">
-              <span class="mrail-stat-n num" data-testid="mrail-stat-count">{{
-                stat1
-              }}</span>
-              <span class="mrail-stat-l">{{ stat1Label }}</span>
-            </div>
-            <div class="mrail-stat">
-              <span class="mrail-stat-n num" data-testid="mrail-stat-disk">{{
-                diskTotal
-              }}</span>
-              <span class="mrail-stat-l">on disk</span>
-            </div>
-            <div class="mrail-stat">
-              <span
-                class="mrail-stat-n num mrail-warn-ink"
-                data-testid="mrail-stat-loose"
-                >{{ looseCount }}</span
-              >
-              <span class="mrail-stat-l">in no set</span>
-            </div>
-          </div>
-
-          <section class="mrail-block" aria-labelledby="mrail-disk-label">
-            <span id="mrail-disk-label" class="section-label">Disk by type</span>
-            <div
-              class="mrail-bar"
-              role="img"
-              :aria-label="diskAria"
-              data-testid="mrail-disk-bar"
-            >
-              <span
-                v-for="bucket in disk"
-                :key="bucket.key"
-                class="mrail-bar-seg"
-                :class="`mrail-tone--${bucket.tone}`"
-                :style="{ width: `${bucket.pct}%` }"
-              ></span>
-            </div>
-            <ul class="mrail-legend">
-              <li v-for="bucket in disk" :key="bucket.key">
-                <span
-                  class="mrail-swatch"
-                  :class="`mrail-tone--${bucket.tone}`"
-                  aria-hidden="true"
-                ></span>
-                {{ bucket.label }} {{ bytesText(bucket.bytes) }}
-              </li>
-            </ul>
-          </section>
-
-          <section class="mrail-block" aria-labelledby="mrail-largest-label">
-            <span id="mrail-largest-label" class="section-label"
-              >Largest files</span
-            >
-            <ul class="mrail-files">
-              <li
-                v-for="row in largest"
-                :key="row.id"
-                class="mrail-file"
-                data-testid="mrail-largest"
-              >
-                <TypeMark v-bind="shelfTypeMark(row)" />
-                <span class="mrs-name">{{ rowName(row) }}</span>
-                <span class="mrs-num num">{{ bytesText(row.file_size) }}</span>
-              </li>
-            </ul>
-          </section>
-
-          <div
-            v-if="missingCount"
-            class="mrail-note"
-            role="status"
-            data-testid="mrail-missing-note"
-          >
-            <v-icon size="16" aria-hidden="true">mdi-alert-outline</v-icon>
-            <span class="mrail-note-text">{{ missingText }}</span>
-            <AppButton
-              variant="ghost"
-              size="sm"
-              data-testid="mrail-select-missing"
-              @click="selectMissing"
-              >{{ missingCount === 1 ? "Select it" : "Select them" }}</AppButton
-            >
-          </div>
-        </div>
-
-        <ModelsRailSet
-          v-else-if="kind === 'set'"
-          :key="pickedGroups[0].key"
-          :group="pickedGroups[0]"
-        />
-
-        <ModelsRailModel
-          v-else-if="kind === 'model'"
-          :key="pickedRows[0].id"
-          :row="pickedRows[0]"
-        />
-
-        <div v-else class="mrail-pane" data-testid="mrail-many">
           <dl class="mrs-facts">
             <div class="mrs-fact">
-              <dt>On disk</dt>
-              <dd>{{ bytesText(manyBytes) }}</dd>
+              <dt>Checkpoints</dt>
+              <dd>{{ runCheckpoints }}</dd>
             </div>
             <div class="mrs-fact">
               <dt>Base models</dt>
-              <dd>{{ manyBases || "–" }}</dd>
+              <dd>{{ runBases || "–" }}</dd>
             </div>
           </dl>
           <p class="mrs-hint">
-            Assign, move, hide or delete them from the selection pill.
+            At two or more runs, Import takes every checkpoint of each; each run
+            lands as one stack.
           </p>
         </div>
+        <div v-else class="mrail-pane" data-testid="mrail-runs-hint">
+          <dl class="mrs-facts">
+            <div class="mrs-fact">
+              <dt>Folder</dt>
+              <dd class="mrail-path">{{ runsStore.source?.path || "–" }}</dd>
+            </div>
+            <div class="mrs-fact">
+              <dt>Runs</dt>
+              <dd>{{ runsLine }}</dd>
+            </div>
+          </dl>
+          <p class="mrs-hint">
+            Pick a run to see its samples and loss. Import puts its LoRA on the
+            shelf.
+          </p>
+        </div>
+      </template>
+
+      <div v-else-if="kind === 'none'" class="mrail-pane">
+        <p v-if="store.setsError" class="mrail-warn" role="alert">
+          Could not read your sets, so where each model is cannot be shown.
+          <AppButton
+            variant="ghost"
+            size="sm"
+            @click="store.loadWorkflowSets({ force: true })"
+            >Retry</AppButton
+          >
+        </p>
+
+        <div class="mrail-stats">
+          <div class="mrail-stat">
+            <span class="mrail-stat-n num" data-testid="mrail-stat-count">{{
+              stat1
+            }}</span>
+            <span class="mrail-stat-l">{{ stat1Label }}</span>
+          </div>
+          <div class="mrail-stat">
+            <span class="mrail-stat-n num" data-testid="mrail-stat-disk">{{
+              diskTotal
+            }}</span>
+            <span class="mrail-stat-l">on disk</span>
+          </div>
+          <div class="mrail-stat">
+            <span
+              class="mrail-stat-n num mrail-warn-ink"
+              data-testid="mrail-stat-loose"
+              >{{ looseCount }}</span
+            >
+            <span class="mrail-stat-l">in no set</span>
+          </div>
+        </div>
+
+        <section class="mrail-block" aria-labelledby="mrail-disk-label">
+          <span id="mrail-disk-label" class="section-label">Disk by type</span>
+          <div
+            class="mrail-bar"
+            role="img"
+            :aria-label="diskAria"
+            data-testid="mrail-disk-bar"
+          >
+            <span
+              v-for="bucket in disk"
+              :key="bucket.key"
+              class="mrail-bar-seg"
+              :class="`mrail-tone--${bucket.tone}`"
+              :style="{ width: `${bucket.pct}%` }"
+            ></span>
+          </div>
+          <ul class="mrail-legend">
+            <li v-for="bucket in disk" :key="bucket.key">
+              <span
+                class="mrail-swatch"
+                :class="`mrail-tone--${bucket.tone}`"
+                aria-hidden="true"
+              ></span>
+              {{ bucket.label }} {{ bytesText(bucket.bytes) }}
+            </li>
+          </ul>
+        </section>
+
+        <section class="mrail-block" aria-labelledby="mrail-largest-label">
+          <span id="mrail-largest-label" class="section-label"
+            >Largest files</span
+          >
+          <ul class="mrail-files">
+            <li
+              v-for="row in largest"
+              :key="row.id"
+              class="mrail-file"
+              data-testid="mrail-largest"
+            >
+              <TypeMark v-bind="shelfTypeMark(row)" />
+              <span class="mrs-name">{{ rowName(row) }}</span>
+              <span class="mrs-num num">{{ bytesText(row.file_size) }}</span>
+            </li>
+          </ul>
+        </section>
+
+        <div
+          v-if="missingCount"
+          class="mrail-note"
+          role="status"
+          data-testid="mrail-missing-note"
+        >
+          <v-icon size="16" aria-hidden="true">mdi-alert-outline</v-icon>
+          <span class="mrail-note-text">{{ missingText }}</span>
+          <AppButton
+            variant="ghost"
+            size="sm"
+            data-testid="mrail-select-missing"
+            @click="selectMissing"
+            >{{ missingCount === 1 ? "Select it" : "Select them" }}</AppButton
+          >
+        </div>
       </div>
-    </template>
+
+      <ModelsRailSet
+        v-else-if="kind === 'set'"
+        :key="pickedGroups[0].key"
+        :group="pickedGroups[0]"
+      />
+
+      <ModelsRailModel
+        v-else-if="kind === 'model'"
+        :key="pickedRows[0].id"
+        :row="pickedRows[0]"
+      />
+
+      <div v-else class="mrail-pane" data-testid="mrail-many">
+        <dl class="mrs-facts">
+          <div class="mrs-fact">
+            <dt>On disk</dt>
+            <dd>{{ bytesText(manyBytes) }}</dd>
+          </div>
+          <div class="mrs-fact">
+            <dt>Base models</dt>
+            <dd>{{ manyBases || "–" }}</dd>
+          </div>
+        </dl>
+        <p class="mrs-hint">
+          Assign, move, hide or delete them from the selection pill.
+        </p>
+      </div>
+    </div>
   </AppInspector>
 </template>
 
@@ -203,19 +200,18 @@
  * The Models screen's right rail (#2168): an inspector of the shelf's
  * selection. With nothing picked it shows the view's figures; with one set or
  * one model it shows that item's sections; with several it says how much they
- * hold. The Tasks tab stays beside it, and the title bar's tasks pill opens it.
+ * hold. It has no Tasks tab: the task list is the title bar's pill.
  *
  * The rail holds no selection of its own: it reads the store's, so the shelf,
  * the set grid and this rail cannot disagree about what is picked.
  */
-import { computed, onBeforeUnmount, provide, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, provide, reactive, watch } from "vue";
 import { useRoute } from "vue-router";
 import { VIcon } from "vuetify/components";
 
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
-import { useTasksStore } from "../../stores/useTasksStore";
 import { formatModelSize, shelfTypeMark } from "../../utils/modelShelf";
 import {
   baseOf,
@@ -238,12 +234,10 @@ import { baseOf as runBaseOf } from "../../utils/trainingRuns.js";
 import ModelsRailModel from "./ModelsRailModel.vue";
 import ModelsRailRun from "./ModelsRailRun.vue";
 import ModelsRailSet from "./ModelsRailSet.vue";
-import TasksPanel, { tasksTabFor } from "./TasksPanel.vue";
 
 const store = useModelShelfStore();
 const foldersStore = useModelFoldersStore();
 const sidebarStore = useSidebarStore();
-const tasksStore = useTasksStore();
 const runsStore = useTrainingRunsStore();
 const route = useRoute();
 
@@ -253,30 +247,14 @@ store.loadWorkflowSets();
 store.setRailMounted(true);
 onBeforeUnmount(() => store.setRailMounted(false));
 
-const tab = ref("models");
+// A notice's "show me" (`showTasksTab`) lands on the title bar's Tasks pill,
+// as on the Workflows screen (#2165).
 watch(
   () => sidebarStore.tasksTabRequest,
   () => {
-    tab.value = "tasks";
+    sidebarStore.tasksPillRequest += 1;
   },
 );
-// A double-click on a set card that opened this rail (`showCardInInspector`).
-watch(
-  () => sidebarStore.cardTabRequest,
-  () => {
-    tab.value = "models";
-  },
-);
-
-const tabs = computed(() => [
-  {
-    value: "models",
-    label: "Models",
-    icon: "mdi-cube-outline",
-    count: store.visibleRows.length,
-  },
-  tasksTabFor(tasksStore),
-]);
 
 /** Open or shut, per section key, for the life of the rail. */
 const shut = reactive({});
@@ -458,17 +436,8 @@ function bytesText(bytes) {
 </script>
 
 <style scoped>
-.mrail-head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  height: 40px;
-  padding: 0 var(--space-5);
-  flex-shrink: 0;
-  border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.12);
-}
-
 .mrail-title {
+  flex: 1;
   min-width: 0;
   margin: 0;
   overflow: hidden;
@@ -480,8 +449,7 @@ function bytesText(bytes) {
 }
 
 .mrail-clear {
-  margin-left: auto;
-  flex-shrink: 0;
+  flex: none;
 }
 
 .mrail-scroll {
@@ -632,9 +600,14 @@ function bytesText(bytes) {
   gap: var(--space-2);
   padding: var(--space-3);
   border-radius: var(--radius-md);
-  background: rgb(var(--v-theme-surface-warning));
+  background: rgba(var(--v-theme-surface-warning), 0.14);
   color: rgb(var(--v-theme-on-surface));
   font-size: var(--text-xs);
+}
+
+.mrail-note .v-icon {
+  flex-shrink: 0;
+  color: rgb(var(--v-theme-surface-warning));
 }
 
 .mrail-note-text {
