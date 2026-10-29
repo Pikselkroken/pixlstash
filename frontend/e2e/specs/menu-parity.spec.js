@@ -63,6 +63,40 @@ function topLevelMenuLabels(rootLocator) {
   })
 }
 
+/**
+ * Sorted row labels inside each tool group of a menu, keyed by group.
+ *
+ * The tools sit behind group rows (`[data-group]`) whose submenu renders only
+ * while open, so each group is hovered the way a user opens it and its rows
+ * read then. Without this the spec would compare only the four group names
+ * and miss a row added to one menu's group and not the other's.
+ */
+async function groupMenuLabels(rootLocator) {
+  const groups = await rootLocator
+    .locator('[data-group]')
+    .evaluateAll((els) => els.map((el) => el.dataset.group))
+  const out = {}
+  for (const group of groups) {
+    const wrap = rootLocator.locator(`[data-group="${group}"]`)
+    // A trigger greyed for an empty selection still opens on hover; Move to
+    // library does not, and has nothing to compare then.
+    await wrap.locator(':scope > .ctx-item').hover()
+    const sub = wrap.locator('.ctx-submenu')
+    if (!(await sub.count())) continue
+    out[group] = await sub.evaluate((root) =>
+      Array.from(root.querySelectorAll('.ctx-item'))
+        .map((el) => {
+          const clone = el.cloneNode(true)
+          clone.querySelectorAll('i, .v-icon, svg').forEach((n) => n.remove())
+          return (clone.textContent || '').replace(/\s+/g, ' ').trim()
+        })
+        .filter(Boolean)
+        .sort(),
+    )
+  }
+  return out
+}
+
 // Documented as context-only in SelectionBar.vue: single-image actions with no
 // selection-scoped equivalent. Listed here so that if one ever shows up for a
 // multi-picture selection, this spec says which item and why it is surprising,
@@ -93,6 +127,7 @@ test.describe('selection / context menu parity (§4, #403)', () => {
 
     await grid.openSelectionMenu()
     const selectionLabels = await topLevelMenuLabels(grid.selectionMenuPanel)
+    const selectionGroups = await groupMenuLabels(grid.selectionMenuPanel)
     await grid.closeSelectionMenu()
 
     // Guards against the whole spec passing vacuously if the panel renders
@@ -104,14 +139,16 @@ test.describe('selection / context menu parity (§4, #403)', () => {
 
     await grid.openContextMenuOnSelected(0)
     const contextLabels = await topLevelMenuLabels(grid.contextMenu)
+    const contextGroups = await groupMenuLabels(grid.contextMenu)
     await grid.closeContextMenu()
 
     // Fails loudly and specifically if a documented context-only action leaks
     // into a multi-picture context menu, rather than surfacing as an opaque
     // diff line in the parity assertion below.
+    const contextAllLabels = [contextLabels, ...Object.values(contextGroups)].flat()
     for (const action of CONTEXT_ONLY_SINGLE_IMAGE_ACTIONS) {
       expect(
-        contextLabels,
+        contextAllLabels,
         `"${action}" is documented as single-image only and must not appear ` +
           'for a multi-picture selection',
       ).not.toContain(action)
@@ -120,6 +157,11 @@ test.describe('selection / context menu parity (§4, #403)', () => {
     // toEqual prints the exact two-way diff when they diverge, which is what
     // made #403 diagnosable from CI output alone.
     expect(contextLabels).toEqual(selectionLabels)
+    expect(
+      Object.keys(selectionGroups).length,
+      'neither menu opened a tool group — the group comparison would be vacuous',
+    ).toBeGreaterThan(0)
+    expect(contextGroups).toEqual(selectionGroups)
   })
 
 })
