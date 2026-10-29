@@ -435,7 +435,9 @@ function pickFacet(key, id) {
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
-  color: rgb(var(--v-theme-sidebar-text));
+  /* 10% under the rows' ink: at full strength the glyph outshone the labels
+     beside it (owner's call). */
+  color: rgba(var(--v-theme-sidebar-text), 0.9);
   cursor: pointer;
 }
 
