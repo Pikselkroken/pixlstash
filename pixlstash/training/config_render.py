@@ -365,32 +365,46 @@ def _substitute_placeholders(
     value: Any,
     replacements: dict[str, str],
     prompt_replacements: dict[str, str],
+    *,
+    parent: str | None = None,
+    sample_entry: bool = False,
 ) -> Any:
     """Recursively replace ``{{PLACEHOLDER}}`` tokens in any JSON value.
 
     Every string leaf takes *replacements*, except the ``prompt`` of a sample
-    entry (ai-toolkit's ``sample.samples[]``), which takes *prompt_replacements*
-    only. A sample prompt is shown unredacted in the live view, so it must not
-    be where a host path enters.
+    entry (an item of a ``sample.samples`` list), which takes
+    *prompt_replacements* only. A sample prompt is shown unredacted in the live
+    view, so it must not be where a host path enters. A ``prompt`` anywhere
+    else is an ordinary leaf.
 
     Args:
         value: A JSON-decoded value (dict, list, str, or scalar).
         replacements: Mapping of placeholder token (``"{{NAME}}"``) to its
             replacement string.
         prompt_replacements: The subset of *replacements* a sample prompt takes.
+        parent: The key *value* sits under, if any.
+        sample_entry: Whether *value* is an item of a ``sample.samples`` list.
 
     Returns:
         A new value with all placeholders substituted.
     """
     if isinstance(value, dict):
-        return {
-            key: (
-                _fill_text(item, prompt_replacements)
-                if key == "prompt" and isinstance(item, str)
-                else _substitute_placeholders(item, replacements, prompt_replacements)
-            )
-            for key, item in value.items()
-        }
+        out = {}
+        for key, item in value.items():
+            if sample_entry and key == "prompt" and isinstance(item, str):
+                out[key] = _fill_text(item, prompt_replacements)
+            elif parent == "sample" and key == "samples" and isinstance(item, list):
+                out[key] = [
+                    _substitute_placeholders(
+                        entry, replacements, prompt_replacements, sample_entry=True
+                    )
+                    for entry in item
+                ]
+            else:
+                out[key] = _substitute_placeholders(
+                    item, replacements, prompt_replacements, parent=key
+                )
+        return out
     if isinstance(value, list):
         return [
             _substitute_placeholders(item, replacements, prompt_replacements)

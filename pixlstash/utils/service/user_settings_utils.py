@@ -14,14 +14,15 @@ from pixlstash.utils.system_utils import (  # noqa: F401
 
 
 def validate_ai_toolkit_settings(repo_path: str | None, python: str | None) -> None:
-    """Check the ai-toolkit paths a PATCH is about to store.
+    """Check the ai-toolkit paths a PUT or a check is about to use.
 
     ``python`` becomes argv[0] of the trainer process and ``repo_path`` is its
     working directory, so both must name real things on this host, and the
     Python must belong to the checkout: inside its ``.venv`` or ``venv``, or the
     one :func:`ai_toolkit_install.find_python` picks for it. A ``None`` value is
-    not checked (it clears the setting, or is left unchanged), but a Python is
-    never accepted without the checkout it belongs to.
+    not checked (it clears that setting). Both callers, ``PUT
+    /training/ai-toolkit/config`` and ``/check``, pass the pair together, so a
+    Python is checked against the checkout beside it and never accepted alone.
 
     Args:
         repo_path: The ai-toolkit checkout directory, or ``None``.
