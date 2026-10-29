@@ -509,9 +509,11 @@ function openRuns() {
 }
 
 /* No top padding: the first row meets the slot's rule, as the Media list's
-   does. Block flow, not a flex column: a flex column shrinks the rows to fit
-   an expanded folder instead of scrolling. */
+   does. The Folders tree's rows take the nav rows' type size from here. The
+   list is the shared nav list's flex column, whose children never shrink
+   (SidebarNav.css), so an expanded folder scrolls rather than squeezes. */
 .msb-scroll {
+  font-size: var(--text-base);
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -530,11 +532,6 @@ function openRuns() {
 .msb-new {
   padding: 0 var(--space-3) var(--space-3)
     calc(var(--space-3) + var(--rail-w));
-}
-
-.sidebar-section-add:focus-visible {
-  box-shadow: var(--focus-ring-inset);
-  outline: none;
 }
 
 .msb-live {

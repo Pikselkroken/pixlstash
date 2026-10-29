@@ -35,6 +35,8 @@ beforeEach(() => {
   setActivePinia(createPinia());
   prefs = useUserPrefsStore();
   prefs.sidebarWidth = 240;
+  // Module state: a test that failed mid-drag must not leak its width.
+  useSidebarWidth().dragWidth.value = null;
 });
 
 describe("SidebarResizeHandle", () => {

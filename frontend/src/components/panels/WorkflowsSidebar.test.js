@@ -163,7 +163,17 @@ describe("frame", () => {
 
   it("can be resized, as the Media sidebar can", async () => {
     const { wrapper } = await mountSidebar();
+    useUserPrefsStore().sidebarWidth = 240;
     expect(wrapper.findComponent(SidebarResizeHandle).exists()).toBe(true);
+    const handle = wrapper.find(".sidebar-resize-handle");
+    handle.element.dispatchEvent(
+      new MouseEvent("pointerdown", { clientX: 100, bubbles: true }),
+    );
+    window.dispatchEvent(new MouseEvent("pointermove", { clientX: 140 }));
+    await flushPromises();
+    expect(wrapper.element.style.width).toBe("280px");
+    window.dispatchEvent(new MouseEvent("pointerup", { clientX: 140 }));
+    expect(useUserPrefsStore().sidebarWidth).toBe(280);
   });
 });
 

@@ -1053,13 +1053,11 @@ defineExpose({ reveal });
   flex-direction: column;
 }
 
-/* The sidebar's row type size (SidebarNav.css's nav rows). */
 .mft-row {
   display: flex;
   align-items: center;
   width: 100%;
   min-height: var(--control-h-bar);
-  font-size: var(--text-base);
   color: inherit;
   cursor: pointer;
   transition: background var(--dur-1) var(--ease-standard);

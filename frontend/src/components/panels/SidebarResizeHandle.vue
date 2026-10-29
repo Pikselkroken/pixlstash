@@ -26,6 +26,7 @@ function onMove(event) {
 function onEnd() {
   window.removeEventListener("pointermove", onMove);
   window.removeEventListener("pointerup", onEnd);
+  window.removeEventListener("pointercancel", onEnd);
   document.body.style.cursor = "";
   document.body.style.userSelect = "";
   // Commit the final width once (store → persist).
@@ -43,6 +44,8 @@ function onStart(event) {
   dragWidth.value = clampSidebarWidth(startWidth);
   window.addEventListener("pointermove", onMove);
   window.addEventListener("pointerup", onEnd);
+  // A cancelled pointer (a touch taken over by the browser) ends it too.
+  window.addEventListener("pointercancel", onEnd);
   document.body.style.cursor = "ew-resize";
   document.body.style.userSelect = "none";
 }
@@ -94,7 +97,7 @@ onBeforeUnmount(() => {
   cursor: ew-resize;
   background: transparent;
   touch-action: none;
-  transition: background 0.15s ease;
+  transition: background var(--dur-1) var(--ease-standard);
 }
 
 .sidebar-resize-handle:hover {

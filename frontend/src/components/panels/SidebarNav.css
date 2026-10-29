@@ -187,13 +187,14 @@
   color: var(--active-text);
 }
 
-/* A destination a read-only session can see but not enter. The same 0.38 the
-   context-menu items use for disabled, and hover is neutralised so the row does
-   not offer a response it will not give. Pointer events stay ON: the title is
-   the only explanation of WHY the row is inert, and `pointer-events: none`
-   would take the tooltip with it. */
+/* A destination that can be seen but not entered right now (a read-only
+   session's Duplicates, Models' "In no set yet" while the sets are read). The
+   disabled fade, and hover is neutralised so the row does not offer a
+   response it will not give. Pointer events stay ON: the tooltip is the only
+   explanation of WHY the row is inert, and `pointer-events: none` would take
+   it with it. */
 .sidebar-list-item--unavailable {
-  opacity: 0.38;
+  opacity: var(--opacity-disabled);
   cursor: default;
 }
 
