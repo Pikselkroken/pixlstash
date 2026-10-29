@@ -58,6 +58,17 @@
         </div>
       </template>
       <template v-if="isTextTab" #actions>
+        <button
+          class="section-meta-btn"
+          type="button"
+          aria-label="Copy text"
+          @click.stop="copyPictureText(fullText, 'text')"
+        >
+          <Tooltip text="Copy text" activator="parent" :describe="false" />
+          <v-icon size="16">
+            {{ textCopyState === "text" ? "mdi-check-bold" : "mdi-content-copy" }}
+          </v-icon>
+        </button>
         <!-- aria-disabled, not disabled, while busy: a disabled button drops
              the keyboard focus that just pressed it to <body>. -->
         <button
@@ -77,99 +88,8 @@
             {{ textReadBusy ? "mdi-loading" : "mdi-refresh" }}
           </v-icon>
         </button>
-        <button
-          class="section-meta-btn"
-          type="button"
-          aria-label="Copy text"
-          @click.stop="copyPictureText(fullText, 'text')"
-        >
-          <Tooltip text="Copy text" activator="parent" :describe="false" />
-          <v-icon size="16">
-            {{ textCopyState === "text" ? "mdi-check-bold" : "mdi-content-copy" }}
-          </v-icon>
-        </button>
       </template>
       <template v-else #actions>
-        <button
-          v-if="props.image && !readOnly"
-          class="section-meta-btn"
-          type="button"
-          aria-label="Regenerate description - deletes the current description and requeues it for captioning"
-          :disabled="isDescriptionRefreshing"
-          @click.stop="refreshDescription()"
-        >
-          <Tooltip
-            text="Regenerate description - deletes the current description and requeues it for captioning"
-            activator="parent"
-            :describe="false"
-          />
-          <v-icon size="16" :class="{ 'mdi-spin': isDescriptionRefreshing }">
-            {{ isDescriptionRefreshing ? "mdi-loading" : "mdi-refresh" }}
-          </v-icon>
-        </button>
-        <v-menu
-          v-if="props.image && !readOnly"
-          v-model="descPluginMenuOpen"
-          :close-on-content-click="true"
-          location="bottom end"
-        >
-          <template #activator="{ props: menuProps }">
-            <button
-              class="section-meta-btn section-meta-btn--with-chevron"
-              type="button"
-              aria-label="Regenerate description with a specific model..."
-              :disabled="isDescriptionRefreshing"
-              v-bind="menuProps"
-              @click.stop="fetchDescPlugins"
-            >
-              <Tooltip
-                text="Regenerate description with a specific model..."
-                activator="parent"
-                :describe="false"
-              />
-              <v-icon size="14">mdi-refresh</v-icon>
-              <v-icon size="10">mdi-chevron-down</v-icon>
-            </button>
-          </template>
-          <div
-            class="ctx-menu ctx-menu--on-dark"
-            role="menu"
-            tabindex="-1"
-            style="min-width: 160px"
-            @keydown="onMenuKeydown"
-          >
-            <button
-              v-if="descPluginsLoading"
-              type="button"
-              class="ctx-item"
-              role="menuitem"
-              disabled
-            >
-              Loading...
-            </button>
-            <template v-else>
-              <button
-                v-for="plugin in descPlugins"
-                :key="plugin.name"
-                type="button"
-                class="ctx-item"
-                role="menuitem"
-                @click="refreshDescription(plugin.name)"
-              >
-                {{ plugin.display_name || plugin.name }}
-              </button>
-              <button
-                v-if="!descPlugins.length"
-                type="button"
-                class="ctx-item"
-                role="menuitem"
-                disabled
-              >
-                No description models available
-              </button>
-            </template>
-          </div>
-        </v-menu>
         <button
           class="section-meta-btn"
           type="button"
@@ -177,7 +97,11 @@
           :disabled="!canCopyDescription"
           @click.stop="copyDescription"
         >
-          <Tooltip text="Copy description" activator="parent" :describe="false" />
+          <Tooltip
+            text="Copy description"
+            activator="parent"
+            :describe="false"
+          />
           <v-icon size="16">
             {{
               descriptionCopyState === "copied"
@@ -186,6 +110,85 @@
             }}
           </v-icon>
         </button>
+        <span v-if="props.image && !readOnly" class="section-split">
+          <button
+            class="section-meta-btn"
+            type="button"
+            aria-label="Regenerate description - deletes the current description and requeues it for captioning"
+            :disabled="isDescriptionRefreshing"
+            @click.stop="refreshDescription()"
+          >
+            <Tooltip
+              text="Regenerate description - deletes the current description and requeues it for captioning"
+              activator="parent"
+              :describe="false"
+            />
+            <v-icon size="16" :class="{ 'mdi-spin': isDescriptionRefreshing }">
+              {{ isDescriptionRefreshing ? "mdi-loading" : "mdi-auto-fix" }}
+            </v-icon>
+          </button>
+          <v-menu
+            v-model="descPluginMenuOpen"
+            :close-on-content-click="true"
+            location="bottom end"
+          >
+            <template #activator="{ props: menuProps }">
+              <button
+                class="section-meta-btn section-meta-btn--chevron"
+                type="button"
+                aria-label="Regenerate description with a specific model..."
+                :disabled="isDescriptionRefreshing"
+                v-bind="menuProps"
+                @click.stop="fetchDescPlugins"
+              >
+                <Tooltip
+                  text="Regenerate description with a specific model..."
+                  activator="parent"
+                  :describe="false"
+                />
+                <v-icon size="14">mdi-menu-down</v-icon>
+              </button>
+            </template>
+            <div
+              class="ctx-menu ctx-menu--on-dark"
+              role="menu"
+              tabindex="-1"
+              style="min-width: 160px"
+              @keydown="onMenuKeydown"
+            >
+              <button
+                v-if="descPluginsLoading"
+                type="button"
+                class="ctx-item"
+                role="menuitem"
+                disabled
+              >
+                Loading...
+              </button>
+              <template v-else>
+                <button
+                  v-for="plugin in descPlugins"
+                  :key="plugin.name"
+                  type="button"
+                  class="ctx-item"
+                  role="menuitem"
+                  @click="refreshDescription(plugin.name)"
+                >
+                  {{ plugin.display_name || plugin.name }}
+                </button>
+                <button
+                  v-if="!descPlugins.length"
+                  type="button"
+                  class="ctx-item"
+                  role="menuitem"
+                  disabled
+                >
+                  No description models available
+                </button>
+              </template>
+            </div>
+          </v-menu>
+        </span>
       </template>
     </SectionHeader>
     <template v-if="!descriptionCollapsed && isTextTab">
@@ -726,8 +729,13 @@ defineExpose({
   opacity: 0.5;
 }
 
-.section-meta-btn--with-chevron {
-  gap: 1px;
+.section-split {
+  display: inline-flex;
+}
+
+.section-meta-btn--chevron {
+  padding-inline: 0;
+  margin-left: calc(-1 * var(--space-1));
 }
 
 .lightbox-lock-note {

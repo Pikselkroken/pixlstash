@@ -307,3 +307,33 @@ describe("LightboxDescriptionPanel - reading the text again (#1197)", () => {
     expect(w.findAll(".picture-text-word")).toHaveLength(0);
   });
 });
+
+describe("LightboxDescriptionPanel - header controls match Tags", () => {
+  // v-menu is not registered here; render its activator so the caret mounts.
+  const mountHeader = (props) =>
+    mount(LightboxDescriptionPanel, {
+      props: { image: IMAGE, backendUrl: "http://b.test", textState: "none", ...props },
+      global: {
+        stubs: {
+          "v-menu": { template: '<span><slot name="activator" :props="{}" /></span>' },
+        },
+      },
+    });
+  const labels = (w) =>
+    w.findAll(".section-head .section-meta-btn").map((b) => b.attributes("aria-label"));
+
+  it("copy comes first, then the wand and its model caret", () => {
+    const w = mountHeader();
+    expect(labels(w)).toEqual([
+      "Copy description",
+      expect.stringMatching(/^Regenerate description - /),
+      "Regenerate description with a specific model...",
+    ]);
+    expect(w.find(".section-split").text()).toContain("mdi-auto-fix");
+  });
+
+  it("a locked picture keeps copy and drops the wand and caret", () => {
+    const w = mountHeader({ locked: true });
+    expect(labels(w)).toEqual(["Copy description"]);
+  });
+});
