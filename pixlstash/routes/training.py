@@ -124,6 +124,28 @@ def _redact_host_paths(value):
     return value
 
 
+# The owner's own text in a job response. The path pattern reads "Cats / Dogs
+# (cd)" or a "sunset / beach" prompt as a path, and these carry no host path, so
+# they pass through as written.
+_OWNER_TEXT_FIELDS = frozenset({"name", "trigger_word", "rows"})
+
+
+def _redact_job(payload: dict) -> dict:
+    """Redact host paths in a job response, except in the owner's own text.
+
+    Args:
+        payload: A job response with ``_OWNER_TEXT_FIELDS`` at its top level.
+
+    Returns:
+        A copy of *payload* with every other field passed through
+        ``_redact_host_paths``.
+    """
+    return {
+        key: value if key in _OWNER_TEXT_FIELDS else _redact_host_paths(value)
+        for key, value in payload.items()
+    }
+
+
 def _latest_loss(loss_curve) -> float | None:
     """Return the loss value of the last point in a loss curve, if any."""
     if not isinstance(loss_curve, list) or not loss_curve:
@@ -981,7 +1003,7 @@ def create_router(server) -> APIRouter:
         return models
 
     def _job_to_summary(job: dict, model_ids: list[int]) -> dict:
-        return _redact_host_paths(
+        return _redact_job(
             {
                 "id": job["id"],
                 "uuid": job["uuid"],
@@ -1443,7 +1465,7 @@ def create_router(server) -> APIRouter:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        return _redact_host_paths(
+        return _redact_job(
             {
                 "id": job["id"],
                 "uuid": job["uuid"],
@@ -1496,7 +1518,7 @@ def create_router(server) -> APIRouter:
         job = training_runs.get_run(hub, library_uuid, job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="Training job not found")
-        return _redact_host_paths(
+        return _redact_job(
             {
                 "id": job["id"],
                 "uuid": job["uuid"],
@@ -1558,7 +1580,7 @@ def create_router(server) -> APIRouter:
         total = job["total_steps"] or 0
         # A trainer can report a step past its planned total; the fraction stops at 1.
         progress = min(job["step"] / total, 1.0) if total > 0 else 0.0
-        return _redact_host_paths(
+        return _redact_job(
             {
                 "id": job["id"],
                 "uuid": job["uuid"],
@@ -1591,12 +1613,7 @@ def create_router(server) -> APIRouter:
         job = training_runs.get_run(hub, library_uuid, job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="Training job not found")
-        payload = _live_payload(job)
-        # The prompts are the owner's own text, and the path pattern reads
-        # "sunset / beach" as a path; they carry no host path, so they pass
-        # through as written.
-        rows = payload.pop("rows")
-        return {**_redact_host_paths(payload), "rows": rows}
+        return _redact_job(_live_payload(job))
 
     @router.put(
         "/training/jobs/{job_id}/cover",
