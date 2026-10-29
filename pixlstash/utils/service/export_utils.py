@@ -247,7 +247,8 @@ class ExportUtils:
 
         Returns:
             True for a format outside :data:`TRAINER_IMAGE_EXTS`, a picture
-            with transparency, or one that cannot be read; False for one the
+            with transparency, 16-bit grey (the trainer's ``convert("RGB")``
+            clips it to white), or one that cannot be read; False for one the
             trainer reads as it is, and for a video, which the trainer cuts
             frames from itself.
         """
@@ -257,7 +258,11 @@ class ExportUtils:
             return True
         try:
             with Image.open(full_path) as img:
-                return img.mode in {"RGBA", "LA", "PA"} or "transparency" in img.info
+                return (
+                    img.mode in {"RGBA", "LA", "PA"}
+                    or img.mode.startswith("I;16")
+                    or "transparency" in img.info
+                )
         except Exception as exc:
             # A still the trainer cannot decode either: the conversion fails
             # too, and leaves it out of the dataset rather than miscounted.

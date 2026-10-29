@@ -285,6 +285,7 @@ def test_build_training_dataset_converts_what_ai_toolkit_would_skip(env):
         "cutout.png": lambda path: transparent.save(path),
         "cutout.gif": lambda path: transparent.save(path),
         "grey16.tiff": lambda path: Image.new("I;16", (8, 8), 40000).save(path),
+        "grey16.png": lambda path: Image.new("I;16", (8, 8), 40000).save(path),
         "broken.bmp": lambda path: _write_bytes(path, b"not a bitmap"),
     }
     ids = {}
@@ -325,9 +326,10 @@ def test_build_training_dataset_converts_what_ai_toolkit_would_skip(env):
                 assert img.mode == "RGB"
                 r, g, b = img.getpixel((4, 4))
                 assert abs(r - red[0]) < 16 and g < 40 and b < 40, (name, r, g, b)
-        with Image.open(os.path.join(dest_dir, written["grey16.tiff"])) as img:
-            # Scaled to 8-bit, not clipped to white by convert("RGB").
-            assert img.getpixel((4, 4)) == (156, 156, 156)
+        for name in ("grey16.tiff", "grey16.png"):
+            with Image.open(os.path.join(dest_dir, written[name])) as img:
+                # Scaled to 8-bit, not clipped to white by convert("RGB").
+                assert img.getpixel((4, 4)) == (156, 156, 156), name
         for name in ("cutout.png", "cutout.gif"):
             assert written[name].endswith(".png"), written[name]
             with Image.open(os.path.join(dest_dir, written[name])) as img:
