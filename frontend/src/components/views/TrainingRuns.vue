@@ -201,7 +201,6 @@
               v-if="!card.live && card.job?.error"
               class="tr-card-note"
               data-testid="tr-card-reason"
-              :title="card.job.error"
               >{{ card.job.error }}</span
             >
             <span
