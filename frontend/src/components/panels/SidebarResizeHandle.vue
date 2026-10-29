@@ -37,6 +37,8 @@ function onEnd() {
 }
 
 function onStart(event) {
+  // The primary button only: a right or middle click on the edge is not a drag.
+  if (event.button !== 0) return;
   event.preventDefault();
   const rect = handle.value?.parentElement?.getBoundingClientRect();
   startWidth = rect?.width || savedWidth.value;

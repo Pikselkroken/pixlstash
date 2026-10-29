@@ -55,6 +55,22 @@ describe("SidebarResizeHandle", () => {
     wrapper.unmount();
   });
 
+  it("starts no drag from a right or middle press", async () => {
+    const wrapper = mountBar();
+    const handle = wrapper.find(".sidebar-resize-handle").element;
+    for (const button of [1, 2]) {
+      handle.dispatchEvent(
+        new MouseEvent("pointerdown", { clientX: 100, button, bubbles: true }),
+      );
+      pointer("pointermove", 160);
+      await wrapper.vm.$nextTick();
+      expect(wrapper.element.style.width).toBe("240px");
+      pointer("pointerup", 160);
+    }
+    expect(prefs.sidebarWidth).toBe(240);
+    wrapper.unmount();
+  });
+
   it("clamps a drag past either end", async () => {
     const wrapper = mountBar();
     const handle = wrapper.find(".sidebar-resize-handle");
