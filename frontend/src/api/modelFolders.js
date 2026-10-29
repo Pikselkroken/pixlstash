@@ -105,8 +105,9 @@ export async function listModelFolderDevices() {
  *
  * @param {number|string} id - the registered folder.
  * @param {string} [path=""] - POSIX, relative to the folder; `""` is its root.
- * @returns {Promise<Object>} `{folder_id, path, locked, model_count, bytes,
- *   dirs: [{name, path, model_count, bytes, has_dirs}]}`.
+ * @returns {Promise<Object>} `{folder_id, path, locked, model_count,
+ *   direct_model_count, bytes, dirs: [{name, path, model_count,
+ *   direct_model_count, bytes, has_dirs}]}`.
  */
 export async function listModelFolderDirs(id, path = "") {
   return unwrap(

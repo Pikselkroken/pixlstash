@@ -46,10 +46,14 @@
     </div>
 
     <!-- The list's grouping (#2168). The Sets place is a card grid whose
-         grouping is its own, so this section is not offered there. Type, Base
-         model, Feature and None are the only bands a list can take: the folder
-         is the sidebar's slot now, and a workflow set is the Sets place. -->
-    <div v-if="store.place !== 'sets'" class="tbm-section shelf-group-section">
+         grouping is its own, and a folder is not banded, so this section is not
+         offered on either. Type, Base model, Feature and None are the only
+         bands a list can take: the folder is the sidebar's slot now, and a
+         workflow set is the Sets place. -->
+    <div
+      v-if="store.place !== 'sets' && store.place !== 'folder'"
+      class="tbm-section shelf-group-section"
+    >
       <span class="tbm-label">Group by</span>
       <OptionRows
         :options="groupOptions"

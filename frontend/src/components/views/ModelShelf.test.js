@@ -1503,11 +1503,16 @@ describe("the column headings", () => {
     expect(wrapper.find(".shelf-head").exists()).toBe(false);
   });
 
-  it("leaves Kind a heading rather than a button, having no sort key", async () => {
+  it("sorts on Type and Sets too, every column being a button", async () => {
     const wrapper = await mountShelf([adapter()]);
-    expect(headOf(wrapper, "kind").element.tagName).toBe("SPAN");
-    // And it is still resizable: the grip belongs to the column, not to the
-    // sort.
+    const store = useModelShelfStore();
+    await headOf(wrapper, "kind").trigger("click");
+    expect(store.view.sortKey).toBe("type");
+    expect(store.view.sortDirection).toBe("asc");
+    await headOf(wrapper, "sets").trigger("click");
+    expect(store.view.sortKey).toBe("sets");
+    expect(store.view.sortDirection).toBe("desc");
+    expect(wrapper.find(".shelf-head").findAll("button").length).toBe(6);
     expect(gripOf(wrapper, "kind").exists()).toBe(true);
   });
 
@@ -1519,13 +1524,13 @@ describe("the column headings", () => {
     const headers = wrapper.findAll('[role="columnheader"]');
     expect(headers.map((h) => h.attributes("aria-sort"))).toEqual([
       "none", // Name
-      undefined, // Type: static, no sort of its own
+      "none", // Type
       "ascending", // Base
       "none", // Size
       // Added names whichever date axis the shelf is on and is therefore
       // `none` here for `added_at` rather than absent.
       "none",
-      undefined, // Sets: static
+      "none", // Sets
     ]);
   });
 });
@@ -4605,39 +4610,6 @@ describe("the open folder (#2203)", () => {
       wrapper.unmount();
     });
 
-    it("opens the dialog pre-chosen when selected rows are dropped on a subfolder", async () => {
-      const { wrapper } = await selectLoose();
-      const setData = vi.fn();
-      const start = new Event("dragstart", { bubbles: true, cancelable: true });
-      start.dataTransfer = { setData, effectAllowed: "" };
-      wrapper.find(".shelf-row").element.dispatchEvent(start);
-      expect(setData).toHaveBeenCalledWith(
-        "application/x-pixlstash-model-copies",
-        JSON.stringify([LOOSE]),
-      );
-
-      const target = wrapper.find(".shelf-folder[data-path='Lora']");
-      const types = ["application/x-pixlstash-model-copies"];
-      const over = new Event("dragover", { bubbles: true, cancelable: true });
-      over.dataTransfer = { types, dropEffect: "" };
-      target.element.dispatchEvent(over);
-      await flushPromises();
-      expect(over.defaultPrevented).toBe(true);
-      expect(target.classes()).toContain("drop-ring");
-
-      const drop = new Event("drop", { bubbles: true, cancelable: true });
-      drop.dataTransfer = { types };
-      target.element.dispatchEvent(drop);
-      await flushPromises();
-      expect(dialog(wrapper).props("open")).toBe(true);
-      expect(dialog(wrapper).props("items")).toEqual([LOOSE]);
-      expect(dialog(wrapper).props("initialDestination")).toEqual({
-        folderId: 1,
-        path: "Lora",
-      });
-      wrapper.unmount();
-    });
-
     it("drags an unselected row alone, selecting it first", async () => {
       const { wrapper, store } = await openFolder();
       expect(store.selectedRows).toEqual([]);
@@ -4693,44 +4665,6 @@ describe("the open folder (#2203)", () => {
       wrapper.unmount();
     });
 
-    it("pastes into a subfolder with Ctrl V on it, or Paste here in its menu", async () => {
-      const { wrapper, store } = await selectLoose();
-      await press("x");
-      const vae = wrapper.find(".shelf-folder[data-path='VAE']");
-      vae.element.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "v", ctrlKey: true, bubbles: true }),
-      );
-      await flushPromises();
-      expect(dialog(wrapper).props("open")).toBe(true);
-      expect(dialog(wrapper).props("initialDestination")).toEqual({
-        folderId: 1,
-        path: "VAE",
-      });
-      dialog(wrapper).vm.$emit("close");
-      await flushPromises();
-
-      const lora = wrapper.find(".shelf-folder[data-path='Lora']");
-      const menu = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
-      lora.element.dispatchEvent(menu);
-      expect(menu.defaultPrevented).toBe(true);
-      await wrapper
-        .find("[data-testid='shelf-folder-menu'] [data-verb='paste']")
-        .trigger("click");
-      await flushPromises();
-      expect(dialog(wrapper).props("open")).toBe(true);
-      expect(dialog(wrapper).props("initialDestination")).toEqual({
-        folderId: 1,
-        path: "Lora",
-      });
-
-      // With nothing cut, a subfolder keeps the platform's own menu.
-      store.clearCut();
-      const plain = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
-      lora.element.dispatchEvent(plain);
-      expect(plain.defaultPrevented).toBe(false);
-      wrapper.unmount();
-    });
-
     it("refuses a paste into a locked folder, and a cut that has gone since", async () => {
       const { wrapper, store } = await selectLoose();
       await press("x");
@@ -4748,33 +4682,6 @@ describe("the open folder (#2203)", () => {
       expect(store.cutCopies).toBe(null);
       await flushPromises();
       expect(dialog(wrapper).props("open")).toBe(false);
-      wrapper.unmount();
-    });
-
-    it("opens a subfolder's menu from the keyboard while something is cut", async () => {
-      const { wrapper } = await selectLoose();
-      const vae = wrapper.find(".shelf-folder[data-path='VAE']");
-      const key = () => {
-        const event = new KeyboardEvent("keydown", {
-          key: "F10",
-          shiftKey: true,
-          bubbles: true,
-          cancelable: true,
-        });
-        vae.element.dispatchEvent(event);
-        return event;
-      };
-      expect(key().defaultPrevented).toBe(false);
-      await press("x");
-      expect(key().defaultPrevented).toBe(true);
-      await wrapper
-        .find("[data-testid='shelf-folder-menu'] [data-verb='paste']")
-        .trigger("click");
-      await flushPromises();
-      expect(dialog(wrapper).props("initialDestination")).toEqual({
-        folderId: 1,
-        path: "VAE",
-      });
       wrapper.unmount();
     });
 
@@ -4825,12 +4732,6 @@ describe("the open folder (#2203)", () => {
       getComfyuiReads.mockResolvedValue(READS);
       const { wrapper, store } = await openFolder();
       expect(getComfyuiReads).toHaveBeenCalledTimes(1);
-      const lora = wrapper.find(".shelf-folder[data-path='Lora']");
-      expect(textOf(lora.find("[data-testid='comfyui-mark']"))).toContain("LoRAs");
-      expect(
-        wrapper.find(".shelf-folder[data-path='VAE'] [data-testid='comfyui-mark']").exists(),
-      ).toBe(false);
-
       const row = wrapper.find(".shelf-row");
       expect(textOf(row.find("[data-testid='shelf-row-nolist']"))).toBe(
         "ComfyUI does not list it here",
@@ -4881,48 +4782,25 @@ describe("the open folder (#2203)", () => {
     });
   });
 
-  it("lists the open folder's subfolders first, with a folders and models count", async () => {
-    const { wrapper } = await openFolder();
-    const rows = wrapper.findAll("[data-testid='shelf-folders'] .shelf-folder");
-    expect(rows.map((one) => one.attributes("data-path"))).toEqual(["Lora", "VAE"]);
-    expect(textOf(rows[0])).toContain("1 model");
-    expect(textOf(wrapper.find(".shelf-sub"))).toBe("2 folders · 1 model");
-    expect(wrapper.findAll(".shelf-row").length).toBe(1);
-    wrapper.unmount();
-  });
-
-  it("opens a subfolder from its row, one level at a time", async () => {
+  it("lists only the folder's own models: no subfolders, path or bands", async () => {
+    // The Folders tree is where subfolders and the way back up live. The
+    // root's listing names Lora and VAE, and no model is called VAE.
     const { wrapper, store } = await openFolder();
-    await wrapper.find(".shelf-folder[data-path='Lora']").trigger("click");
+    expect(wrapper.findAll(".shelf-row").length).toBe(1);
+    expect(textOf(wrapper)).not.toContain("VAE");
+    expect(textOf(wrapper)).not.toContain("All folders");
+    expect(textOf(wrapper.find(".shelf-sub"))).toBe("1 model");
+    store.setView({ groupBy: "type", listGroupBy: "type" });
     await flushPromises();
-    expect(store.folderScope.path).toBe("Lora");
-    expect(store.visibleRows.map((row) => row.id)).toEqual([2]);
+    expect(wrapper.find(".shelf-group-heading").exists()).toBe(false);
+    store.setPlace("all");
+    await flushPromises();
+    expect(wrapper.find(".shelf-group-heading").exists()).toBe(true);
     wrapper.unmount();
   });
 
-  it("draws the breadcrumb: All folders, the drive as text, then the folders", async () => {
-    const { wrapper, store } = await openFolder("Lora");
-    const crumbs = wrapper.find("[data-testid='shelf-breadcrumb']");
-    expect(crumbs.findAll(".shelf-crumb").map((one) => one.text())).toEqual([
-      "All folders",
-      "System drive",
-      "Models",
-      "Lora",
-    ]);
-    const links = crumbs.findAll("button").map((one) => one.text());
-    expect(links).toEqual(["All folders", "Models"]);
-    expect(crumbs.find("[aria-current='location']").text()).toBe("Lora");
-    await crumbs.findAll("button")[1].trigger("click");
-    expect(store.folderScope.path).toBe("");
-    await crumbs.findAll("button")[0].trigger("click");
-    expect(store.place).toBe("all");
-    expect(store.folderScope).toBe(null);
-    wrapper.unmount();
-  });
-
-  it("says when the open folder's subfolders could not be read", async () => {
+  it("does not call a folder empty of subfolders while its listing is unread", async () => {
     const { wrapper } = await openFolder();
-    expect(wrapper.find("[data-testid='shelf-folders-error']").exists()).toBe(false);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     listModelFolderDirs.mockRejectedValue({
       response: { status: 409, data: { detail: "Could not read the directory." } },
@@ -4930,9 +4808,6 @@ describe("the open folder (#2203)", () => {
     const store = useModelShelfStore();
     store.setFolderScope({ folderId: 1, path: "VAE" });
     await flushPromises();
-    expect(
-      textOf(wrapper.find("[data-testid='shelf-folders-error']")),
-    ).toContain("Subfolders could not be read");
     // An unread listing does not let the empty line claim there are none.
     expect(textOf(wrapper)).toContain("No models directly in this folder.");
     warn.mockRestore();
@@ -4950,14 +4825,6 @@ describe("the open folder (#2203)", () => {
     wrapper.unmount();
   });
 
-  it("draws no folder path outside a folder", async () => {
-    const wrapper = await mountShelf([adapter({ id: 1 })]);
-    const store = useModelShelfStore();
-    store.setPlace("favourites");
-    await flushPromises();
-    expect(wrapper.find("[data-testid='shelf-breadcrumb']").exists()).toBe(false);
-    wrapper.unmount();
-  });
 });
 
 describe("the sidebar's requests reach their dialog (#2168)", () => {

@@ -11993,7 +11993,10 @@ arrow before it is asked.
   folders. The counts still come from the database.
 - **Counts.** `model_count` is the number of distinct `model_id`s with a `present`
   copy under the path, and `bytes` the sum of `model.file_size` over those copies
-  (null as 0). Both are recursive. One query selects the folder's `present` rows,
+  (null as 0). Both are recursive. `direct_model_count` counts only the copies
+  directly in the directory, which is what the shelf lists when it is opened; the
+  models tree shows it for a browsable folder and `model_count` for a locked one,
+  whose shelf view takes everything beneath it. One query selects the folder's `present` rows,
   narrowed for a subpath by `relpath LIKE <prefix>% ESCAPE '\'`, with the prefix
   escaped by the scanner's `_LIKE_ESCAPE` as the missing sweep does. SQLite's LIKE
   folds ASCII case, so the exact prefix is checked again in Python. The rows are

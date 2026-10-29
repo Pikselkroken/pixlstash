@@ -140,7 +140,7 @@ const open = computed(() => props.modelValue);
         </tr>
         <tr :class="{ 'shortcut-disabled': isReadOnly }">
           <td><kbd>{{ stackModKey }}</kbd>+<kbd>V</kbd></td>
-          <td>On Models: move the cut models into the open folder, or into the focused subfolder or Folders row</td>
+          <td>On Models: move the cut models into the open folder, or into the focused Folders row</td>
         </tr>
         <tr>
           <td><kbd>Esc</kbd></td>

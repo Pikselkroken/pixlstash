@@ -117,37 +117,6 @@
             :focus-name-request="nameFocusRequest"
           />
         </v-menu>
-
-        <!-- The open folder's path (#2203), where a file manager puts the
-             way back up: All folders, the drive, the registered folder and
-             each subfolder. Only the drive is plain text: it is not a place. -->
-        <nav
-          v-if="breadcrumb.length"
-          class="shelf-crumbs"
-          aria-label="Folder"
-          data-testid="shelf-breadcrumb"
-        >
-          <template v-for="(crumb, i) in breadcrumb" :key="i">
-            <span v-if="i > 0" class="shelf-crumbs-sep" aria-hidden="true"
-              >›</span
-            >
-            <button
-              v-if="crumb.go"
-              type="button"
-              class="shelf-crumb shelf-crumb--link"
-              @click="crumb.go()"
-            >
-              {{ crumb.label }}
-            </button>
-            <span
-              v-else
-              class="shelf-crumb"
-              :class="{ 'shelf-crumb--here': i === breadcrumb.length - 1 }"
-              :aria-current="i === breadcrumb.length - 1 ? 'location' : undefined"
-              >{{ crumb.label }}</span
-            >
-          </template>
-        </nav>
       </template>
 
       <span class="shelf-spacer"></span>
@@ -261,20 +230,6 @@
           @click="offlineDismissed = true"
         />
       </p>
-      <!-- A listing that failed says so rather than reading as "no
-           subfolders": gone since the tree was drawn, unreadable, or refused
-           to a remote owner. -->
-      <p
-        v-if="folderListingError"
-        class="shelf-banner"
-        role="status"
-        data-testid="shelf-folders-error"
-      >
-        <v-icon size="16" aria-hidden="true">mdi-folder-alert-outline</v-icon>
-        <span class="shelf-banner-text"
-          >Subfolders could not be read: {{ folderListingError }}</span
-        >
-      </p>
       <!-- Models ComfyUI's own loaders cannot see here (#2205). A note, not an
            error: PixlStash's loaders find them by hash wherever they are. -->
       <p
@@ -302,85 +257,6 @@
           >Select {{ misplacedIds.size === 1 ? "it" : "them" }}</AppButton
         >
       </p>
-      <!-- An open folder's subfolders, as a file manager lists them: first,
-           and opened with a click. -->
-      <ul
-        v-if="subfolders.length"
-        class="shelf-folders"
-        aria-label="Subfolders"
-        data-testid="shelf-folders"
-      >
-        <li v-for="dir in subfolders" :key="dir.path">
-          <!-- Each one takes model rows dropped on it (#2204), and a paste
-               from its menu or Ctrl V on it. -->
-          <button
-            type="button"
-            class="shelf-folder model-drop-target"
-            :class="folderDrop.dropClass(dir.path)"
-            :data-path="dir.path"
-            @click="openSubfolder(dir.path)"
-            @contextmenu="openSubfolderMenu(dir, $event)"
-            @keydown="onSubfolderKeydown(dir, $event)"
-            @dragover="folderDrop.onDragOver($event, dir.path, subfolderDestination(dir))"
-            @dragleave="folderDrop.onDragLeave($event, dir.path)"
-            @drop="folderDrop.onDrop($event, subfolderDestination(dir))"
-          >
-            <v-icon size="16" class="shelf-folder-glyph" aria-hidden="true"
-              >mdi-folder-outline</v-icon
-            >
-            <span class="shelf-folder-name">{{ dir.name }}</span>
-            <!-- What ComfyUI loads from this folder (#2205). -->
-            <span
-              v-for="type in comfyuiMarks(store.folderScope.folderId, dir.path, foldersStore.comfyuiReads)"
-              :key="type.key"
-              class="shelf-folder-loads"
-              data-testid="comfyui-mark"
-              ><Tooltip
-                :text="comfyuiLoadsTitle(type)"
-                activator="parent"
-              /><TypeMark :mark="type.mark" :tint="type.tint" />{{
-                type.label
-              }}</span
-            >
-            <span class="shelf-folder-meta">{{
-              dir.bytes ? formatModelSize(dir.bytes) : ""
-            }}</span>
-            <span class="shelf-folder-meta shelf-folder-meta--count">{{
-              modelCount(dir.model_count)
-            }}</span>
-          </button>
-        </li>
-      </ul>
-      <!-- A subfolder's menu: Paste here, while something is cut. -->
-      <v-menu
-        v-model="subfolderMenu.contextOpen.value"
-        :target="subfolderMenu.contextAt.value"
-        location="bottom end"
-        origin="top start"
-        :offset="2"
-      >
-        <div
-          class="ctx-menu"
-          role="menu"
-          tabindex="-1"
-          data-testid="shelf-folder-menu"
-          @keydown="onMenuKeydown"
-        >
-          <button
-            type="button"
-            role="menuitem"
-            class="ctx-item"
-            data-verb="paste"
-            @click="pasteIntoSubfolder"
-          >
-            <v-icon class="ctx-icon" aria-hidden="true"
-              >mdi-content-paste</v-icon
-            >
-            <span class="ctx-label-text">Paste here</span>
-            <span class="ctx-shortcut">{{ pasteKeyHint }}</span>
-          </button>
-        </div>
-      </v-menu>
       <!-- The set grid, ahead of every row-list state: its groups OVERLAP, so
            it is a different screen rather than a banded version of this one. It
            still reads `visibleRows`, so Show and the filters keep applying. -->
@@ -497,7 +373,6 @@
             :class="`shelf-head-col--${col.key}`"
           >
             <button
-              v-if="col.sort"
               class="section-label shelf-head-cell"
               :class="{
                 'shelf-head-cell--on': store.view.sortKey === col.sort,
@@ -516,12 +391,6 @@
                 directionIcon
               }}</v-icon>
             </button>
-            <span
-              v-else
-              class="section-label shelf-head-cell shelf-head-cell--static"
-            >
-              <span class="shelf-head-text">{{ col.label }}</span>
-            </span>
             <!-- `separator` with a value, which is the window-splitter pattern
                  and the only reason this is focusable: a grip that answered
                  the pointer alone would put the column widths out of reach of
@@ -605,7 +474,7 @@
                      an unrecognised value get, both of which mean "no feature
                      here to name" and so are exactly the axis. -->
                 <v-icon size="16" class="shelf-group-mark">{{
-                  group.icon || GROUP_BY_LABELS[store.view.groupBy].icon
+                  group.icon || GROUP_BY_LABELS[store.groupAxis].icon
                 }}</v-icon>
                 <!-- The label and everything that qualifies it. The chips are
                      WORDS on purpose: the rail's hue groups the folders on one
@@ -661,7 +530,9 @@
                 <span role="columnheader" :aria-sort="columnSortState('name')"
                   >Name</span
                 >
-                <span role="columnheader">Type</span>
+                <span role="columnheader" :aria-sort="columnSortState('type')"
+                  >Type</span
+                >
                 <span
                   role="columnheader"
                   :aria-sort="columnSortState('base_model')"
@@ -678,7 +549,9 @@
                   :aria-sort="columnSortState(DATE_COLUMN.sort)"
                   >{{ DATE_COLUMN.label }}</span
                 >
-                <span role="columnheader">Sets</span>
+                <span role="columnheader" :aria-sort="columnSortState('sets')"
+                  >Sets</span
+                >
               </li>
               <!-- The `v-for` sits on a wrapping template, not on the row, so a
                    stack's expanded members can be siblings of their cover inside
@@ -961,13 +834,13 @@
                     <span
                       v-if="row.file_kind === 'engine'"
                       class="shelf-chip"
-                      :title="typeLabel(row)"
-                      >{{ typeLabel(row) }}</span
+                      :title="shelfTypeLabel(row)"
+                      >{{ shelfTypeLabel(row) }}</span
                     >
                     <KindMenu
                       v-else
                       :file-kind="row.file_kind"
-                      :kind-text="typeLabel(row)"
+                      :kind-text="shelfTypeLabel(row)"
                       :subject="row.name.text || row.filename || 'this model'"
                       :suggested-kind="row.suggested_kind || ''"
                       :suggested-by="row.suggested_by || 0"
@@ -1359,9 +1232,6 @@ import ShelfMoveDialog from "../panels/ShelfMoveDialog.vue";
 import FolderMoveDialog from "../panels/FolderMoveDialog.vue";
 import ShelfRemoveFolderDialog from "../panels/ShelfRemoveFolderDialog.vue";
 import ModelDropTip from "../panels/ModelDropTip.vue";
-import { useModelCopyDrop } from "../../composables/useModelCopyDrop";
-import { useContextMenuAt } from "../../composables/useContextMenuAt";
-import { formatKeyHint, isApplePlatform } from "../../utils/shortcutHints";
 import ModelWorksWithDialog from "../panels/ModelWorksWithDialog.vue";
 import ModelSetGrid from "./ModelSetGrid.vue";
 import InspectorEdgeTab from "../widgets/InspectorEdgeTab.vue";
@@ -1419,12 +1289,7 @@ import { errorDetail } from "../../utils/apiError";
 import { formatUserDate, formatUserDay } from "../../utils/utils";
 import { isTypingTarget } from "../../utils/dom.js";
 import { driveFullness } from "../../utils/libraryChrome";
-import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import {
-  adapterKindLabel,
-  capabilityLabel,
-  comfyuiLoadsTitle,
-  comfyuiMarks,
   companionsSentences,
   inFolderScopeOf,
   isMisplaced,
@@ -1433,6 +1298,7 @@ import {
   defaultSortDirection,
   deletableModels,
   fileKindLabel,
+  shelfTypeLabel,
   undeletableNotice,
   baseModelCell,
   lookupEligible,
@@ -2037,17 +1903,6 @@ function onRowDragEnd() {
   store.dropTip = null;
 }
 
-const folderDrop = useModelCopyDrop();
-
-/** A subfolder row of the open folder, as a drop destination. */
-function subfolderDestination(dir) {
-  return {
-    folderId: store.folderScope.folderId,
-    path: dir.path,
-    locked: Boolean(store.folderScope.locked),
-  };
-}
-
 /** Ctrl X and the menu's Cut: hold the selection's movable copies. */
 function cutSelected() {
   if (!store.cutSelection(foldersById.value)) {
@@ -2061,41 +1916,6 @@ function cutSelected() {
 /** Ctrl V and the menu's Paste: the cut copies into the open folder. */
 function pasteCut() {
   store.pasteCut(store.folderScope);
-}
-
-const pasteKeyHint = formatKeyHint([isApplePlatform() ? "⌘" : "Ctrl", "V"]);
-const subfolderMenu = useContextMenuAt();
-/** The subfolder whose menu is open, and its button. */
-const subfolderMenuDir = shallowRef(null);
-let subfolderMenuTrigger = null;
-
-/** Right-click a subfolder: Paste here while something is cut, else nothing. */
-function openSubfolderMenu(dir, event) {
-  if (!store.cutCopies) return;
-  event.preventDefault();
-  subfolderMenuDir.value = dir;
-  subfolderMenuTrigger = event.currentTarget;
-  subfolderMenu.openContextMenu(event.clientX, event.clientY, event.currentTarget);
-}
-
-/** The Menu key or Shift+F10 on a subfolder: the same menu, under it. */
-function onSubfolderKeydown(dir, event) {
-  if (!isMenuKey(event) || !store.cutCopies) return;
-  event.preventDefault();
-  event.stopPropagation();
-  const box = event.currentTarget.getBoundingClientRect();
-  subfolderMenuDir.value = dir;
-  subfolderMenuTrigger = event.currentTarget;
-  subfolderMenu.openContextMenu(box.left + 24, box.bottom, event.currentTarget);
-}
-
-function pasteIntoSubfolder() {
-  subfolderMenu.contextOpen.value = false;
-  // Focus back on the subfolder first, so the Move dialog returns it there
-  // rather than to the menu row it is about to lose.
-  subfolderMenuTrigger?.focus?.();
-  const dir = subfolderMenuDir.value;
-  if (dir) store.pasteCut(subfolderDestination(dir));
 }
 
 async function closeMove() {
@@ -2281,11 +2101,7 @@ function onShelfKeydown(event) {
     }
     if (!store.cutCopies || !inFolder.value) return;
     event.preventDefault();
-    // On a subfolder of the open folder, into that subfolder.
-    const dirPath = event.target?.closest?.(".shelf-folder")?.dataset.path;
-    const dir = dirPath && subfolders.value.find((one) => one.path === dirPath);
-    if (dir) store.pasteCut(subfolderDestination(dir));
-    else pasteCut();
+    pasteCut();
     return;
   }
   // F2 is let through for a selected hand-made set, whose pill and menu
@@ -3765,7 +3581,7 @@ async function setKindFromMenu(row, fileKind) {
     {
       text:
         `Filed ${row.name.text || row.filename || "the model"} as ${label}.` +
-        (store.view.groupBy === "feature" ? ` It is now under ${label}.` : ""),
+        (store.groupAxis === "feature" ? ` It is now under ${label}.` : ""),
       action: { label: "Undo", handler: () => store.editModelIds(ids, undo) },
     },
   );
@@ -3928,50 +3744,6 @@ function selectMisplaced() {
   );
 }
 
-/** Why the open folder's listing failed, or "". */
-const folderListingError = computed(() => {
-  if (!inFolder.value) return "";
-  const { folderId, path } = store.folderScope;
-  return (
-    foldersStore.dirListings.get(foldersStore.dirsKey(folderId, path))?.error ??
-    ""
-  );
-});
-
-function openSubfolder(path) {
-  store.setFolderScope({ ...store.folderScope, path });
-}
-
-/**
- * All folders › drive › registered folder › subfolders. All folders goes to
- * All models; the drive is not a place, so it is plain text; the last crumb
- * is where you are.
- */
-const breadcrumb = computed(() => {
-  if (!inFolder.value) return [];
-  const { path } = store.folderScope;
-  const parts = path ? path.split("/") : [];
-  const folder = openFolderRow.value;
-  const crumbs = [{ label: "All folders", go: () => store.setPlace("all") }];
-  if (openDriveName.value) crumbs.push({ label: openDriveName.value });
-  crumbs.push({
-    label: folder
-      ? (foldersStore.labelByFolderId.get(Number(folder.id)) ?? "Folder")
-      : "Folder",
-    go: parts.length ? () => openSubfolder("") : null,
-  });
-  parts.forEach((name, i) => {
-    crumbs.push({
-      label: name,
-      go:
-        i < parts.length - 1
-          ? () => openSubfolder(parts.slice(0, i + 1).join("/"))
-          : null,
-    });
-  });
-  return crumbs;
-});
-
 const NO_MODELS_LINE =
   "No models found. PixlStash lists what it finds in the model folders registered on this machine.";
 /** What an empty place says in its own words; Show's own empty state is above. */
@@ -4083,14 +3855,12 @@ const countLabel = computed(() => {
   }
   const models = modelCount(store.visibleRows.length);
   const drawn = store.renderedCount;
-  const folders = subfolders.value.length;
-  const lead = folders ? `${folders.toLocaleString()} ${folders === 1 ? "folder" : "folders"} · ` : "";
-  if (drawn === store.visibleRows.length) return `${lead}${models}`;
-  return `${lead}${models} · ${drawn.toLocaleString()} copies`;
+  if (drawn === store.visibleRows.length) return models;
+  return `${models} · ${drawn.toLocaleString()} copies`;
 });
 
 /** True while the list is cut into groups, i.e. headers are drawn. */
-const grouped = computed(() => store.view.groupBy !== "none");
+const grouped = computed(() => store.groupAxis !== "none");
 
 /**
  * True while the set grid has the content area instead of the row list.
@@ -4231,11 +4001,8 @@ function toggleDirection() {
 }
 
 /* ── The header strip ──────────────────────────────────────────────────────
-   The four fixed data columns, in the order the rows draw them. `sort` is the
-   SORT_KEYS value the heading orders on, or null where the column answers no
-   sort key: `Kind` is a chip of whatever the row's capabilities happen to be
-   and the API's `SortKey` has no member for it, so its heading names the
-   column and offers a grip, but is not a button that would do nothing.
+   The fixed data columns, in the order the rows draw them. `sort` is the
+   SORT_KEYS value the heading orders on; every column has one.
 
    The Name column is not in this list. It is the flexible track - it takes
    whatever the others leave - so it has a heading and a sort but no width
@@ -4251,11 +4018,11 @@ const NAME_COLUMN = { key: "name", label: "Name", sort: "name" };
 /* A computed and not a constant, for one entry: `DATE_COLUMN` renames itself
    with the axis it is drawn in. The three ahead of it never move. */
 const SHELF_COLUMNS = computed(() => [
-  { key: "kind", label: "Type", sort: null },
+  { key: "kind", label: "Type", sort: "type" },
   { key: "base", label: "Base", sort: "base_model" },
   { key: "size", label: "Size", sort: "size" },
   DATE_COLUMN.value,
-  { key: "sets", label: "Sets", sort: null },
+  { key: "sets", label: "Sets", sort: "sets" },
 ]);
 
 /** How far one arrow-key press moves a column edge. One --space-3. */
@@ -4463,38 +4230,9 @@ function resetColumn(key) {
   store.setColumnWidth(key, DEFAULT_COLUMN_WIDTHS[key]);
 }
 
-/**
- * The always-present anchor of the metadata line, whatever else is null.
- *
- * A model that serves several features lists them ALL, because a single label
- * answers "what breaks if I delete this" wrongly for exactly the rows a reader
- * is most likely to be deciding about: Florence-2 captions and detects, and the
- * CLIP the embedder loads is both the search encoder and the aesthetic scorer's
- * backbone. `capabilities` arrives primary-first, so the first word is the one
- * `row.kind` holds and the column still reads as one thing at a glance.
- */
-function kindLabel(row) {
-  // One table with the `feature` group axis, which names its headings from the
-  // same one - the cell reading `Checkpoint` under a header saying something
-  // else is the contradiction that table exists to prevent.
-  const named = fileKindLabel(row.file_kind);
-  if (named) return named;
-  const capabilities = Array.isArray(row.capabilities) ? row.capabilities : [];
-  if (capabilities.length) return capabilities.map(capabilityLabel).join(", ");
-  // The axis still files `unknown` under `Other` where the cell says
-  // "Unclassified": a shrug is not a heading of its own. The CELL always names
-  // what the row is.
-  return adapterKindLabel(row.kind) || "Adapter";
-}
-
 /** The Type row a shelf row sits under, or undefined for an engine or an unclassified file. */
 function typeOf(row) {
   return SHELF_TYPES.find((type) => type.key === shelfTypeOf(row));
-}
-
-/** The Type cell's words: the Type row's singular, or today's kind label where there is none. */
-function typeLabel(row) {
-  return typeOf(row)?.one ?? kindLabel(row);
 }
 
 /**
@@ -4871,122 +4609,6 @@ watch(
    One line, one verb, dismissible. Nothing here is broken and nothing needs
    fixing - the models come back the moment the drive does - so it states the
    fact and stops, and deliberately never takes the error surface. */
-/* The open folder's breadcrumb (#2203), with the image grid's crumb look:
-   ancestors read as links, the separator half strength, the leaf as text. */
-.shelf-crumbs {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-  overflow: hidden;
-  font-size: var(--text-sm);
-  font-weight: var(--weight-semibold);
-  white-space: nowrap;
-}
-
-.shelf-crumb {
-  margin: 0;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-  max-width: 220px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.shelf-crumb--link {
-  cursor: pointer;
-  color: rgb(var(--v-theme-primary));
-}
-
-.shelf-crumb--link:hover {
-  text-decoration: underline;
-}
-
-.shelf-crumbs-sep {
-  flex: none;
-  opacity: var(--opacity-text-secondary);
-}
-
-/* An open folder's subfolders, ahead of its models. */
-.shelf-folders {
-  flex-shrink: 0;
-  max-height: 40%;
-  margin: 0;
-  padding: 0;
-  overflow-y: auto;
-  list-style: none;
-  border-bottom: 1px solid rgb(var(--v-theme-divider));
-}
-
-.shelf-folder {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  width: 100%;
-  min-height: var(--control-h-bar);
-  padding: 0 var(--space-5);
-  border: 0;
-  border-bottom: 1px solid rgb(var(--v-theme-divider));
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  font-size: var(--text-sm);
-  text-align: left;
-  cursor: pointer;
-  transition: background var(--dur-1) var(--ease-standard);
-}
-
-.shelf-folders li:last-child .shelf-folder {
-  border-bottom: 0;
-}
-
-.shelf-folder:hover {
-  background: var(--hover-wash);
-}
-
-.shelf-folder:focus-visible {
-  box-shadow: var(--focus-ring-inset);
-  outline: none;
-}
-
-.shelf-folder-glyph {
-  opacity: var(--opacity-text-secondary);
-}
-
-.shelf-folder-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: var(--weight-semibold);
-}
-
-.shelf-folder-meta {
-  flex: none;
-  font-size: var(--text-xs);
-  font-variant-numeric: tabular-nums;
-  opacity: var(--opacity-text-secondary);
-}
-
-/* "ComfyUI loads LoRAs from here": the folder's Type mark and its word. */
-.shelf-folder-loads {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--text-xs);
-}
-
-.shelf-folder-meta--count {
-  min-width: 10ch;
-  text-align: right;
-}
-
 /* The open folder's drive, under the list, on the toolbar's chrome: one of
    the grounds the drive meter's track is audited on (contrastAudit.js). */
 .shelf-status {
@@ -5137,10 +4759,6 @@ watch(
   background: none;
   cursor: pointer;
   transition: color var(--dur-1) var(--ease-standard);
-}
-
-.shelf-head-cell--static {
-  cursor: default;
 }
 
 button.shelf-head-cell:hover {
