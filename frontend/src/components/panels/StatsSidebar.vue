@@ -184,6 +184,8 @@ function closeRail() {
 // The head cuts its title after the last whole word that fits, which CSS
 // cannot do: it measures the title in the head's own font.
 const titleRef = ref(null);
+const titleHovered = ref(false);
+const railPictureRef = ref(null);
 const titleWidth = ref(0);
 let titleCanvas = null;
 function measureTitle(text) {
@@ -1152,7 +1154,22 @@ watch(
           :text="head.full"
           activator="parent"
         />
-        {{ shownTitle }}
+        <!-- A description's sentence: pointing at it marks it there, and a
+             click selects it. -->
+        <button
+          v-if="head.fromDescription"
+          class="rail-title__quote"
+          type="button"
+          @mouseenter="titleHovered = true"
+          @mouseleave="titleHovered = false"
+          @focus="titleHovered = true"
+          @blur="titleHovered = false"
+          @vue:unmounted="titleHovered = false"
+          @click="railPictureRef?.selectInDescription(head.title)"
+        >
+          {{ shownTitle }}
+        </button>
+        <template v-else>{{ shownTitle }}</template>
       </h2>
       <template v-if="selectedIds.length">
         <kbd class="fm-kbd rail-esc" aria-hidden="true">Esc</kbd>
@@ -1202,12 +1219,14 @@ watch(
 
     <RailPicture
       v-if="railMode === 'one' && !covered"
+      ref="railPictureRef"
       v-model:image="oneImage"
       v-model:faces="oneFaces"
       :picture-id="oneId"
       :card="oneCard"
       :score="oneCard ? scoreOf(oneCard) : 0"
       :favouritable="!isReadOnly && !isScrapheapView"
+      :description-highlight="titleHovered && head.fromDescription ? head.title : ''"
       @set-score="(n) => oneCard && emit('set-score', oneCard, n)"
       @toggle-favourite="emit('toggle-favourite', [oneId])"
       @update-description="(id, text) => emit('update-description', id, text)"
@@ -1893,6 +1912,15 @@ watch(
   white-space: nowrap;
   font-size: var(--text-base);
   font-weight: var(--weight-semibold);
+}
+
+.rail-title__quote {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: inherit;
+  text-align: left;
 }
 
 .rail-esc {

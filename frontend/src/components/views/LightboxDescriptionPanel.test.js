@@ -337,3 +337,63 @@ describe("LightboxDescriptionPanel - header controls match Tags", () => {
     expect(labels(w)).toEqual(["Copy description"]);
   });
 });
+
+describe("LightboxDescriptionPanel - the head's title in the description", () => {
+  const image = { id: 9, description: "The old man reads. A dog sleeps." };
+
+  it("marks the title's words, ignoring case, only while one is given", async () => {
+    const w = mountPanel({ image, highlight: "Old man reads" });
+    expect(w.find(".description-mark mark").text()).toBe("old man reads");
+    expect(w.find(".description-mark").text()).toBe(image.description);
+    await w.setProps({ highlight: "" });
+    expect(w.find(".description-mark").exists()).toBe(false);
+  });
+
+  it("drops the mark while the caret is in the field", async () => {
+    const w = mountPanel({ image, highlight: "Old man reads" });
+    await w.find("textarea").trigger("focus");
+    expect(w.find(".description-mark").exists()).toBe(false);
+  });
+
+  it("a click on the title selects its words in the field and starts the edit", async () => {
+    const w = mountPanel({ image });
+    w.vm.selectText("Old man reads");
+    await w.vm.$nextTick();
+    await w.vm.$nextTick();
+    const area = w.find("textarea").element;
+    expect(document.activeElement).toBe(area);
+    expect([area.selectionStart, area.selectionEnd]).toEqual([4, 17]);
+    expect(w.vm.isEditingDescription).toBe(true);
+    w.unmount();
+  });
+
+  it("a locked field still takes the selection, without an edit", async () => {
+    const w = mountPanel({ image, locked: true });
+    w.vm.selectText("Old man reads");
+    await w.vm.$nextTick();
+    const area = w.find("textarea").element;
+    expect(document.activeElement).toBe(area);
+    expect([area.selectionStart, area.selectionEnd]).toEqual([4, 17]);
+    expect(w.vm.isEditingDescription).toBe(false);
+    w.unmount();
+  });
+
+  it("leaves the Text tab for the description and selects there", async () => {
+    // The parent switches tabs as the lightbox does: in the emit's handler.
+    const w = mountPanel({
+      image,
+      textState: "read",
+      textLines: [[{ text: "EXIT", box: [0.1, 0.1, 0.1, 0.05] }]],
+      activeTab: "text",
+      "onPick-tab": (tab) => w.setProps({ activeTab: tab }),
+    });
+    w.vm.selectText("Old man reads");
+    expect(w.emitted("pick-tab")).toEqual([["description"]]);
+    await w.vm.$nextTick();
+    await w.vm.$nextTick();
+    const area = w.find("textarea").element;
+    expect(document.activeElement).toBe(area);
+    expect([area.selectionStart, area.selectionEnd]).toEqual([4, 17]);
+    w.unmount();
+  });
+});

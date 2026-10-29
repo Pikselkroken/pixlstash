@@ -271,18 +271,32 @@
         :role="showTabs ? 'tabpanel' : undefined"
         :aria-labelledby="showTabs ? descTabId : undefined"
       >
-        <textarea
-          ref="descriptionEditorRef"
-          v-model="descriptionDraft"
-          :readonly="!isEditingDescription || readOnly"
-          @focus="!readOnly && startEditDescription()"
-          @click="!readOnly && startEditDescription()"
-          @keydown.enter.prevent="
-            isEditingDescription && !$event.shiftKey && saveDescription()
-          "
-          @keydown="handleDescriptionEditorKey"
-          @blur="cancelEditDescription"
-        ></textarea>
+        <div class="description-field">
+          <textarea
+            ref="descriptionEditorRef"
+            v-model="descriptionDraft"
+            :readonly="!isEditingDescription || readOnly"
+            @focus="onFieldFocus"
+            @click="!readOnly && startEditDescription()"
+            @keydown.enter.prevent="
+              isEditingDescription && !$event.shiftKey && saveDescription()
+            "
+            @keydown="handleDescriptionEditorKey"
+            @blur="onFieldBlur"
+            @scroll="syncMarkScroll"
+          ></textarea>
+          <!-- Pointing at the head's title marks its words here: a copy of
+               the text laid over the field, transparent but for the mark's
+               wash, since a textarea cannot paint part of its own text. -->
+          <div
+            v-if="markRange"
+            ref="markLayerRef"
+            class="description-mark"
+            aria-hidden="true"
+          >{{ descriptionDraft.slice(0, markRange[0])
+          }}<mark>{{ descriptionDraft.slice(markRange[0], markRange[1]) }}</mark
+          >{{ descriptionDraft.slice(markRange[1]) }}</div>
+        </div>
         <div class="description-actions">
           <template v-if="isEditingDescription">
             <button
@@ -340,6 +354,7 @@ import { useSectionCollapse } from "../../composables/useSectionCollapse";
 import {
   isDescriptionSentinel,
   formatDescriptionSentinel,
+  findInDescription,
 } from "../../utils/descriptions";
 import {
   DESCRIPTION_TAB,
@@ -366,6 +381,9 @@ const props = defineProps({
   activeTab: { type: String, default: DESCRIPTION_TAB },
   selectedWords: { type: Array, default: () => [] },
   textReadBusy: { type: Boolean, default: false },
+  // Words to mark in the description, ignoring case: the head's title while
+  // it is pointed at.
+  highlight: { type: String, default: "" },
 });
 
 // Compose the app-wide read-only (token capability) with the data-state lock.
@@ -581,6 +599,50 @@ function startEditDescription() {
   });
 }
 
+// With the caret in the field the browser's own selection is the mark.
+const fieldFocused = ref(false);
+const markLayerRef = ref(null);
+const markRange = computed(() =>
+  fieldFocused.value || isSentinelDescription.value
+    ? null
+    : findInDescription(descriptionDraft.value, props.highlight),
+);
+
+function syncMarkScroll() {
+  if (markLayerRef.value && descriptionEditorRef.value) {
+    markLayerRef.value.scrollTop = descriptionEditorRef.value.scrollTop;
+  }
+}
+watch(markLayerRef, syncMarkScroll);
+
+function onFieldFocus() {
+  fieldFocused.value = true;
+  if (!readOnly.value) startEditDescription();
+}
+
+function onFieldBlur() {
+  fieldFocused.value = false;
+  cancelEditDescription();
+}
+
+/**
+ * Put the caret in the field with `text` selected (the head's title was
+ * clicked). A read-only field still takes the focus and the selection.
+ */
+function selectText(text) {
+  if (!props.image || isSentinelDescription.value) return;
+  descriptionCollapsed.value = false;
+  if (isTextTab.value) pickTab(DESCRIPTION_TAB);
+  nextTick(() => {
+    const field = descriptionEditorRef.value;
+    if (!field) return;
+    // Focusing starts the edit where the field can be edited.
+    field.focus();
+    const range = findInDescription(descriptionDraft.value, text);
+    if (range) field.setSelectionRange(range[0], range[1]);
+  });
+}
+
 function cancelEditDescription() {
   isEditingDescription.value = false;
   isSavingDescription.value = false;
@@ -694,6 +756,7 @@ defineExpose({
   startEditDescription,
   resetCopyState,
   revealWord,
+  selectText,
 });
 </script>
 
@@ -770,6 +833,38 @@ defineExpose({
      panel: a full-width light track with stepper arrows on a dark surface. */
   scrollbar-width: thin;
   scrollbar-color: rgba(var(--v-theme-on-dark-surface), 0.4) transparent;
+}
+
+.description-field {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* The field's box and type exactly, so the mark lands on its words; its own
+   scrollbar is kept (to wrap at the same width) but never painted. */
+.description-mark {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  border: 1px solid transparent;
+  padding: 6px;
+  font-size: var(--text-xs);
+  letter-spacing: normal;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  color: transparent;
+  pointer-events: none;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+.description-mark mark {
+  color: transparent;
+  background: var(--active-wash);
+  border-radius: var(--radius-sm);
 }
 
 .description-editor textarea:hover {

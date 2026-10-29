@@ -15,8 +15,9 @@ import { dedupeDetections } from "../utils/media.js";
  * @param {Object|null} image - the picture's details; null while reading.
  * @param {Array<string>} people - the names of the people in it.
  * @param {(date: string) => string} formatDate
- * @returns {{ title: string, full: string }} the head's text and, for its
- *   tooltip, the whole of what it was cut from.
+ * @returns {{ title: string, full: string, fromDescription?: boolean }} the
+ *   head's text, for its tooltip the whole of what it was cut from, and
+ *   whether the text is the description's own words.
  */
 export function pictureTitle(image, people, formatDate) {
   if (!image) return { title: "", full: "" };
@@ -25,7 +26,7 @@ export function pictureTitle(image, people, formatDate) {
     const sentence = description.split(/[.!?\n]/)[0].trim() || description;
     const bare = sentence.replace(/^(a|an|the)\s+/i, "") || sentence;
     const title = bare.charAt(0).toUpperCase() + bare.slice(1);
-    return { title, full: description };
+    return { title, full: description, fromDescription: true };
   }
   const when = image.created_at ? formatDate(image.created_at) : "";
   const byline = [people.join(", "), when].filter(Boolean).join(" · ");

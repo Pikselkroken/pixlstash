@@ -234,6 +234,43 @@ describe("the rail's head row", () => {
   });
 });
 
+describe("the head's title and the description", () => {
+  const selectText = vi.fn();
+  const DescriptionStub = {
+    props: ["highlight"],
+    template: '<div class="desc-stub" :data-highlight="highlight" />',
+    methods: { selectText },
+  };
+  const mountWithDescription = () =>
+    mountRail({}, { global: { stubs: { ...STUBS, LightboxDescriptionPanel: DescriptionStub } } });
+  const highlight = (wrapper) =>
+    wrapper.find(".desc-stub").attributes("data-highlight");
+
+  it("pointing at the title marks its words, and a click selects them", async () => {
+    selectText.mockReset();
+    const wrapper = mountWithDescription();
+    await select(wrapper, [7]);
+    const quote = wrapper.find(".rail-title__quote");
+    expect(highlight(wrapper)).toBe("");
+    await quote.trigger("mouseenter");
+    expect(highlight(wrapper)).toBe(
+      "Woman with red hair walking in the rain, neon behind her",
+    );
+    await quote.trigger("mouseleave");
+    expect(highlight(wrapper)).toBe("");
+    await quote.trigger("click");
+    expect(selectText).toHaveBeenCalledWith(
+      "Woman with red hair walking in the rain, neon behind her",
+    );
+  });
+
+  it("a title that is not the description's words is plain text", async () => {
+    const wrapper = mountWithDescription();
+    await select(wrapper, [8]);
+    expect(wrapper.find(".rail-title__quote").exists()).toBe(false);
+  });
+});
+
 describe("the rail's rating strip", () => {
   it("rates and favourites through the grid, and shows what the tile shows", async () => {
     const wrapper = mountRail();

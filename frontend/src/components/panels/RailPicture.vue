@@ -17,14 +17,22 @@
       }"
     >
       <!-- Only where nothing above names the picture (the lightbox's band
-           holds tabs). No tip: the whole description is a section below. -->
-      <div
+           holds tabs). No tip: the whole description is a section below.
+           Pointing at it marks its words there; a click selects them. -->
+      <button
         v-if="title"
         class="rail-picture__title"
         :class="{ 'rail-picture__title--tall': solo }"
+        type="button"
+        @mouseenter="titleHovered = true"
+        @mouseleave="titleHovered = false"
+        @focus="titleHovered = true"
+        @blur="titleHovered = false"
+        @vue:unmounted="titleHovered = false"
+        @click="emit('pick-title')"
       >
         {{ title }}
-      </div>
+      </button>
       <!-- The same strip as the grid tile: five stars, a hairline, the heart.
            It rates and favourites through the grid's own paths (App.vue), so
            the tile and the rail cannot disagree. -->
@@ -171,9 +179,11 @@
 
     <!-- The lightbox fills this with its own panel, wired to the picture's
          read text. -->
-    <slot name="description">
+    <slot name="description" :highlight="descriptionMark">
       <LightboxDescriptionPanel
+        ref="descriptionRef"
         class="rail-picture__desc"
+        :highlight="descriptionMark"
         :image="image"
         :locked="locked"
         :lock-note="lockNote"
@@ -274,6 +284,8 @@ const props = defineProps({
   boxedTags: { type: Set, default: () => new Set() },
   /** A video's runtime in seconds, when the host measured it. */
   videoDuration: { type: Number, default: null },
+  /** Words to mark in the description: the host's head title, pointed at. */
+  descriptionHighlight: { type: String, default: "" },
 });
 
 const emit = defineEmits([
@@ -289,7 +301,14 @@ const emit = defineEmits([
   "pin-face",
   "create-person",
   "hover-tag",
+  "pick-title",
 ]);
+
+const titleHovered = ref(false);
+// The description panel marks the title being pointed at, the host's or this.
+const descriptionMark = computed(
+  () => props.descriptionHighlight || (titleHovered.value ? props.title : ""),
+);
 
 /** The faces panel; a host that must veto a close (a dialog over it) binds it. */
 const facesOpen = defineModel("facesOpen", { type: Boolean, default: false });
@@ -389,6 +408,7 @@ const focusFaceId = ref(null);
 const pencilRef = ref(null);
 const facesPanelRef = ref(null);
 const tagsRef = ref(null);
+const descriptionRef = ref(null);
 const facesPanelId = useId();
 
 const faceRows = computed(() =>
@@ -592,6 +612,8 @@ defineExpose({
   focusPencil: () => pencilRef.value?.focus(),
   /** A row of the open faces panel (back from the new-person dialog). */
   focusFaceRow: (key) => facesPanelRef.value?.focusRow(key),
+  /** The head's title was clicked: its words, selected in the description. */
+  selectInDescription: (text) => descriptionRef.value?.selectText(text),
 });
 </script>
 
@@ -641,6 +663,9 @@ defineExpose({
 
 .rail-picture__title {
   grid-column: 1 / -1;
+  min-width: 0;
+  color: inherit;
+  text-align: left;
   overflow: hidden;
   font-size: var(--text-md);
   font-weight: var(--weight-medium);

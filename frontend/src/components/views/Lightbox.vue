@@ -860,6 +860,7 @@
             @pin-face="togglePinnedFace"
             @create-person="openCreatePersonForFace"
             @hover-tag="(label) => (hoveredTagLabel = label)"
+            @pick-title="descriptionPanelRef?.selectText(pictureName)"
             @tags-applied="onTagsApplied"
             @lightbox-change="(payload) => emit('lightbox-change', payload)"
           >
@@ -873,10 +874,11 @@
                 Draw a face box
               </AppButton>
             </template>
-            <template #description>
+            <template #description="{ highlight }">
               <LightboxDescriptionPanel
                 ref="descriptionPanelRef"
                 :image="image"
+                :highlight="highlight"
                 :locked="isCurrentLocked"
                 :lock-note="currentLockReason"
                 :text-state="pictureText.text.value.state"
@@ -1191,6 +1193,7 @@ import LightboxActionReceipt from "../widgets/LightboxActionReceipt.vue";
 import LightboxSaveAsDialog from "../widgets/LightboxSaveAsDialog.vue";
 import PluginParametersUI from "../widgets/PluginParametersUI.vue";
 import RailPicture from "../panels/RailPicture.vue";
+import { isDescriptionSentinel } from "../../utils/descriptions";
 import { FAVOURITE_KEY } from "../../stores/useFavouritesStore";
 import Tooltip from "../widgets/Tooltip.vue";
 import {
@@ -5504,10 +5507,11 @@ onPictureSignal(orientationUpdate, "named", (id) => {
   void refreshAfterTurn(id);
 });
 
-// The Info tab names the picture by its description's first sentence.
+// The Info tab names the picture by its description's first sentence; one
+// still being written has none.
 const pictureName = computed(() => {
   const text = String(image.value?.description || "").trim();
-  if (!text) return "";
+  if (!text || isDescriptionSentinel(text)) return "";
   return text.split(/(?<=[.!?])\s/)[0].replace(/[.!?]+$/, "");
 });
 
