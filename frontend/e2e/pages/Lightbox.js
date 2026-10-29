@@ -3,8 +3,9 @@ import { expect } from '@playwright/test'
 /**
  * The lightbox, opened inside the frame over the centre column and the right
  * rail. Selectors verified in Lightbox.vue: .lightbox root,
- * .lightbox-back, .lightbox-nav-left/right, .sidebar-section--faces, the face
- * chips (.face-chip, holding .face-assign-crop), .face-bbox-overlay.
+ * .lightbox-back, .lightbox-nav-left/right, .face-bbox-overlay. Info is the
+ * grid rail's one-picture view (RailPicture.vue): the faces row (.rail-faces,
+ * a .rail-face per face holding its .rail-face__crop) and the tags (RailTags).
  */
 export class Lightbox {
   constructor(page) {
@@ -14,24 +15,24 @@ export class Lightbox {
     this.closeButton = page.locator('.lightbox-back')
     this.next = page.locator('.lightbox-nav-right')
     this.prev = page.locator('.lightbox-nav-left')
-    this.facesSection = page.locator('.sidebar-section--faces')
-    this.faceCrops = page.locator('.face-assign-crop')
-    // Face boxes have no global switch: pointing at a face's chip draws its
+    this.facesSection = page.locator('.lightbox .rail-faces')
+    this.faceCrops = page.locator('.lightbox .rail-face__crop')
+    // Face boxes have no global switch: pointing at a face's crop draws its
     // box, clicking it keeps the box on.
-    this.faceChips = page.locator('.face-chip')
+    this.faceChips = page.locator('.lightbox .rail-face')
     // The pane stands where the right rail stands, on its own open flag.
     this.pane = page.locator('.lightbox .lightbox-sidebar')
     this.railToggle = page.locator('.lightbox .tb-stats-btn')
     // Every box is in the DOM; only the ones asked about are visible.
     this.faceBboxes = page.locator('.face-bbox-overlay')
-    // Tags (§5) — chips, the "Add tag (T)" affordance, and the inline input.
-    // Scoped to the applied-tag list (.tag-section). Removing a tag rejects its
-    // prediction, which re-renders the same label as a chip in the separate
-    // "Rejected Tags" section (.tag-drop-zone--predictions); that chip is not an
-    // applied tag and must not match here, or removeTag assertions go flaky.
-    this.tags = page.locator('.tag-section .lightbox-tag')
-    this.addTagButton = page.locator('.section-meta-btn[aria-label="Add tag (T)"]').first()
-    this.tagInput = page.locator('.tag-add-input')
+    // Tags (§5) — the field T focuses and the chips. Scoped to the applied
+    // list (.rail-tags__applied). Removing a tag rejects its prediction, which
+    // re-renders the same label as a chip under Rejected
+    // (.rail-tags__rejected); that chip is not an applied tag and must not
+    // match here, or removeTag assertions go flaky.
+    this.tags = page.locator('.lightbox .rail-tags__applied .rail-chip')
+    this.rejectedTags = page.locator('.lightbox .rail-tags__rejected .rail-chip')
+    this.tagInput = page.locator('.lightbox .rail-tags__input')
     // Star rating (§6) — heading the rail's Info tab. Scoped to .lightbox so
     // it never matches the grid's .star-overlay--compact thumbnails. Filled
     // stars carry an inline colour referencing --v-theme-accent; unfilled ones
@@ -45,19 +46,18 @@ export class Lightbox {
     return this.tags.filter({ hasText: label }).first()
   }
 
-  /** Add a tag through the inline input (commits on Enter). */
+  /** Add a tag through the tag field (commits on Enter). */
   async addTag(label) {
-    await this.addTagButton.click()
     await expect(this.tagInput).toBeVisible()
     await this.tagInput.fill(label)
-    await this.page.keyboard.press('Enter')
+    await this.tagInput.press('Enter')
   }
 
-  /** Remove a tag via the ✕ delete button on its chip. */
+  /** Remove a tag via the ✕ on its chip. */
   async removeTag(label) {
     const chip = this.tag(label)
     await chip.hover()
-    await chip.locator('.tag-delete-btn').click()
+    await chip.locator('.rail-chip__x').click()
   }
 
   /** Click the Nth star (1-based) in the overlay rating widget. */

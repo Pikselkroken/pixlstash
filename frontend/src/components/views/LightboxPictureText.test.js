@@ -52,7 +52,7 @@ vi.mock("../../utils/apiClient", () => ({
 const revealWord = vi.fn();
 
 const STUBS = {
-  LightboxTagsPanel: true,
+  RailTags: true,
   LightboxFilmstrip: true,
   LightboxDescriptionPanel: {
     name: "LightboxDescriptionPanel",
@@ -65,7 +65,6 @@ const STUBS = {
     },
     template: "<div class='description-panel'></div>",
   },
-  LightboxMetadataPanel: true,
   AddToEntityControl: true,
   CharacterEditor: true,
   StarRatingOverlay: true,

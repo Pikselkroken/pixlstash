@@ -65,7 +65,7 @@ vi.mock("../../api/stacks", () => ({
 enableAutoUnmount(afterEach);
 
 const STUBS = {
-  LightboxTagsPanel: true,
+  RailTags: true,
   LightboxFilmstrip: true,
   LightboxDescriptionPanel: true,
   AddToEntityControl: true,
@@ -74,15 +74,9 @@ const STUBS = {
   PluginParametersUI: true,
   ProgressOverlay: true,
   // Real-but-thin panel, so the test can read the card actually on screen.
-  LightboxMetadataPanel: {
-    name: "LightboxMetadataPanel",
-    props: [
-      "image",
-      "comfyMetadata",
-      "dateFormat",
-      "backendUrl",
-      "videoDuration",
-    ],
+  RailPicture: {
+    name: "RailPicture",
+    props: ["image"],
     template: "<div class='meta'></div>",
   },
 };
@@ -90,7 +84,7 @@ const STUBS = {
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 const shownId = (wrapper) =>
-  wrapper.findComponent({ name: "LightboxMetadataPanel" }).props("image")?.id;
+  wrapper.findComponent({ name: "RailPicture" }).props("image")?.id;
 
 async function openLightboxOn(id, allImages) {
   const wrapper = mount(Lightbox, {

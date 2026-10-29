@@ -54,16 +54,9 @@ vi.mock("../../utils/apiClient", async () => {
 
 
 const STUBS = {
-  LightboxTagsPanel: {
-    setup(_props, { expose }) {
-      expose({ refetchPredictions: vi.fn() });
-      return {};
-    },
-    template: "<div />",
-  },
+  RailTags: true,
   LightboxFilmstrip: true,
   LightboxDescriptionPanel: true,
-  LightboxMetadataPanel: true,
   AddToEntityControl: true,
   CharacterEditor: true,
   StarRatingOverlay: true,

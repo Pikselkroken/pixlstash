@@ -172,8 +172,17 @@
         </v-menu>
       </span>
     </div>
-    <div class="rail-tags__body">
+    <!-- A rejected chip dropped here is accepted; a tag dropped on Rejected
+         below is removed and rejected: the ✓ and × as one drag. -->
+    <div
+      class="rail-tags__body rail-tags__applied"
+      :class="{ 'rail-tags__body--drop': dropOn === 'applied' }"
+      @dragover="onDragOver('applied', $event)"
+      @dragleave="onDragLeave('applied', $event)"
+      @drop.prevent="onDrop('applied')"
+    >
       <p v-if="locked && lockNote" class="rail-tags__note">
+        <Tooltip :text="lockNote" activator="parent" />
         <v-icon size="12">mdi-lock-outline</v-icon>
         Locked - read-only. Unlock the set to edit.
       </p>
@@ -190,25 +199,46 @@
           :class="{
             'rail-chip--conf': !many && !t.anomaly,
             'rail-chip--anomaly': t.anomaly,
+            'rail-chip--selected': isSelected(t.name),
+            'rail-chip--remove-hot': removeHot && isSelected(t.name),
           }"
           :style="{ '--tint': t.tint }"
           :data-tag="t.name"
+          :draggable="readOnly ? undefined : 'true'"
+          @dragstart="onDragStart('applied', t.name, $event)"
+          @dragend="onDragEnd"
+          @contextmenu="onChipContextMenu(t.name, $event)"
+          @mouseenter="hoverTag(t.name)"
+          @mouseleave="hoverTag(null)"
         >
           <Tooltip :text="chipTip(t)" activator="parent" />
           <v-icon v-if="t.anomaly" class="rail-chip__warn" size="13"
             >mdi-alert-outline</v-icon
           >
+          <!-- The object detector found it: pointing at it draws its box. -->
+          <v-icon
+            v-if="isBoxed(t.name)"
+            class="rail-chip__box"
+            size="12"
+            aria-hidden="true"
+            >mdi-vector-square</v-icon
+          >
+          <!-- A click selects the chip, except on a part-tinted one, where
+               it adds the tag to the rest; a modifier selects there too. -->
           <button
-            v-if="!readOnly && t.count < totalWithTagData"
             class="rail-chip__label"
             type="button"
-            :aria-label="`Add ${t.label} to the other ${totalWithTagData - t.count}`"
-            :disabled="tagActionLoading.includes(t.name)"
-            @click="addTagToRemaining(t)"
+            :aria-label="
+              addsToRest(t)
+                ? `Add ${t.label} to the other ${totalWithTagData - t.count}`
+                : undefined
+            "
+            :aria-pressed="addsToRest(t) ? undefined : String(isSelected(t.name))"
+            :disabled="addsToRest(t) && tagActionLoading.includes(t.name)"
+            @click="onChipLabelClick(t, $event)"
           >
             {{ t.label }}
           </button>
-          <span v-else>{{ t.label }}</span>
           <span v-if="many" class="visually-hidden"
             >, on {{ t.count }} of {{ totalWithTagData }}</span
           >
@@ -216,11 +246,11 @@
             v-if="!readOnly"
             class="rail-chip__x"
             type="button"
-            :aria-label="
-              many ? `Remove ${t.label} from ${t.count}` : `Remove ${t.label}`
-            "
+            :aria-label="removeLabel(t)"
             :disabled="tagActionLoading.includes(t.name)"
-            @click="removeAndReject(t)"
+            @click="onRemoveClick(t)"
+            @mouseenter="removeHot = isSelected(t.name)"
+            @mouseleave="removeHot = false"
           >
             <v-icon size="12">mdi-close</v-icon>
           </button>
@@ -239,33 +269,94 @@
       </p>
     </div>
 
+    <!-- Rejected chips select too, so the bar sits under both lists. -->
+    <div
+      v-if="selectedLabels.length"
+      class="rail-tags__selbar"
+      role="toolbar"
+      aria-label="Selected tags"
+    >
+      <span class="rail-tags__selcount" role="status"
+        >{{ selectedLabels.length }} selected</span
+      >
+      <button
+        class="rail-ib"
+        type="button"
+        aria-label="Copy selected tags"
+        @click="copySelection"
+      >
+        <Tooltip text="Copy (Ctrl+C)" activator="parent" :describe="false" />
+        <v-icon size="16">mdi-content-copy</v-icon>
+      </button>
+      <button
+        class="rail-ib"
+        type="button"
+        aria-label="Clear selection"
+        @click="clearSelection"
+      >
+        <Tooltip text="Clear selection (Esc)" activator="parent" :describe="false" />
+        <v-icon size="16">mdi-selection-off</v-icon>
+      </button>
+    </div>
+
     <template v-if="rejected.length || predictionReadFailed">
       <div class="rail-sec">
         <span class="rail-sec__label">Rejected</span>
         <span v-if="rejected.length" class="rail-sec__count">{{
           rejected.length.toLocaleString()
         }}</span>
+        <span class="rail-sec__sp"></span>
+        <button
+          v-if="rejected.length"
+          class="rail-ib"
+          type="button"
+          aria-label="Copy all rejected tags"
+          @click="tagClipboard.copyTags(rejected.map((p) => p.tag))"
+        >
+          <Tooltip text="Copy all rejected tags" activator="parent" :describe="false" />
+          <v-icon size="16">mdi-content-copy</v-icon>
+        </button>
       </div>
-      <div class="rail-tags__body">
+      <div
+        class="rail-tags__body rail-tags__rejected"
+        :class="{ 'rail-tags__body--drop': dropOn === 'rejected' }"
+        @dragover="onDragOver('rejected', $event)"
+        @dragleave="onDragLeave('rejected', $event)"
+        @drop.prevent="onDrop('rejected')"
+      >
         <p
           v-if="predictionReadFailed"
           class="rail-tags__note rail-tags__note--error"
         >
           Some pictures' rejected tags couldn't be read.
         </p>
-        <div v-if="rejected.length" class="rail-tags__chips">
+        <div v-if="shownRejected.length" class="rail-tags__chips">
           <span
-            v-for="p in rejected"
+            v-for="p in shownRejected"
             :key="p.tag"
             class="rail-chip rail-chip--quiet"
-            :class="{ 'rail-chip--anomaly-quiet': p.anomaly }"
+            :class="{
+              'rail-chip--anomaly-quiet': p.anomaly,
+              'rail-chip--selected': isSelected(p.tag),
+            }"
             :data-tag="p.tag"
+            :draggable="readOnly ? undefined : 'true'"
+            @dragstart="onDragStart('rejected', p.tag, $event)"
+            @dragend="onDragEnd"
+            @contextmenu="onChipContextMenu(p.tag, $event)"
           >
             <Tooltip :text="rejectedTip(p)" activator="parent" />
             <v-icon v-if="p.anomaly" class="rail-chip__warn" size="13"
               >mdi-alert-outline</v-icon
             >
-            {{ p.tag }}
+            <button
+              class="rail-chip__label"
+              type="button"
+              :aria-pressed="String(isSelected(p.tag))"
+              @click="toggleSelected(p.tag)"
+            >
+              {{ p.tag }}
+            </button>
             <span class="rail-chip__n">{{ p.note }}</span>
             <button
               v-if="!readOnly"
@@ -281,6 +372,19 @@
             </button>
           </span>
         </div>
+        <button
+          v-if="faintRejected"
+          class="rail-tags__more"
+          type="button"
+          :aria-expanded="showFaint ? 'true' : 'false'"
+          @click="showFaint = !showFaint"
+        >
+          {{
+            showFaint
+              ? `Hide those under ${FAINT_PCT}%`
+              : `+ ${faintRejected} under ${FAINT_PCT}%`
+          }}
+        </button>
       </div>
     </template>
   </div>
@@ -312,8 +416,10 @@ import {
   useTagClipboardStore,
 } from "../../stores/useTagClipboardStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
+import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useWsStore } from "../../stores/useWsStore";
 import { errorDetail } from "../../utils/apiError";
+import { hasNativeCopyContext, isTypingTarget } from "../../utils/dom.js";
 import { formatSentinelTag } from "../../utils/tags.js";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import Tooltip from "../widgets/Tooltip.vue";
@@ -328,20 +434,29 @@ const props = defineProps({
   takesTagKey: { type: Boolean, default: false },
   /** Put the caret in the field on mount (a review card's Tag manually). */
   autofocus: { type: Boolean, default: false },
+  /**
+   * Lower-cased labels the object detector found (the lightbox): those chips
+   * carry a box glyph, and pointing at one emits `hover-tag`.
+   */
+  boxedTags: { type: Set, default: () => new Set() },
 });
 
 /**
  * `tags-applied` after a change, for the grid to refresh what shows tags;
- * `leave` when Esc leaves the field with nothing left to dismiss.
+ * `leave` when Esc leaves the field with nothing left to dismiss;
+ * `hover-tag` with the boxed tag pointed at, or null.
  */
-const emit = defineEmits(["tags-applied", "leave"]);
+const emit = defineEmits(["tags-applied", "leave", "hover-tag"]);
 
 // Clicking to select changes the selection once per click; several pictures'
 // reads wait for it to settle rather than going out for every step of it.
 const SETTLE_MS = 250;
 const SUGGESTIONS = 6;
+// Rejections fainter than this are folded behind a link; anomalies never are.
+const FAINT_PCT = 25;
 
 const sidebarStore = useSidebarStore();
+const userPrefsStore = useUserPrefsStore();
 const wsStore = useWsStore();
 const tagClipboard = useTagClipboardStore();
 
@@ -362,6 +477,8 @@ const {
   tagActionLoading,
   predActionLoading,
   tagError,
+  predictionAcceptanceThreshold,
+  labelThresholds,
   totalWithTagData,
   tagsOnAll,
   tagsOnSome,
@@ -418,7 +535,26 @@ async function fetchLibrary({ force = false } = {}) {
 }
 
 // ── The chips ────────────────────────────────────────────────────────────────
-const isAnomaly = (name) => anomalies.value.has(name.trim().toLowerCase());
+const fold = (name) => String(name || "").trim().toLowerCase();
+const isAnomaly = (name) => anomalies.value.has(fold(name));
+const isBoxed = (name) => props.boxedTags.has(fold(name));
+
+// The reader's hidden tags, while their filter is on. A tag added here stays
+// in sight until the selection changes, or it would vanish as it is typed.
+const keptInSight = ref(new Set());
+const hiddenTagKeys = computed(() =>
+  userPrefsStore.applyTagFilter
+    ? new Set((userPrefsStore.hiddenTags || []).map(fold).filter(Boolean))
+    : new Set(),
+);
+const isHidden = (name) =>
+  hiddenTagKeys.value.has(fold(name)) && !keptInSight.value.has(fold(name));
+
+function keepInSight(names) {
+  const next = new Set(keptInSight.value);
+  for (const name of names) next.add(fold(name));
+  keptInSight.value = next;
+}
 
 /**
  * Every applied tag with its strength: coverage for several (the share of
@@ -428,6 +564,7 @@ const isAnomaly = (name) => anomalies.value.has(name.trim().toLowerCase());
 const applied = computed(() => {
   const total = totalWithTagData.value || 1;
   return [...tagsOnAll.value, ...tagsOnSome.value]
+    .filter((t) => !isHidden(t.name))
     .map((t) => {
       const confidence = confidenceByTag.value.get(t.name.trim().toLowerCase());
       return {
@@ -459,14 +596,19 @@ const shownApplied = computed(() =>
 );
 
 /**
- * ×, as in the lightbox: the tag goes and the tagger is told it was wrong,
- * one gesture, so one undo step.
+ * ×: the tag goes and the tagger is told it was wrong, one gesture, so one
+ * undo step. Several tags (a selection) are one gesture too.
  */
-async function removeAndReject(t) {
+async function removeAndReject(...tags) {
   const batchId = newOperationBatchId();
-  await removeTagFromAll(t, { batchId });
-  await rejectTagOnAll(t, { batchId });
+  for (const t of tags) {
+    await removeTagFromAll(t, { batchId });
+    await rejectTagOnAll(t, { batchId });
+  }
 }
+
+/** A part-tinted chip's click adds it to the rest of the selection. */
+const addsToRest = (t) => !readOnly.value && t.count < totalWithTagData.value;
 
 function chipTip(t) {
   if (many.value) {
@@ -494,10 +636,169 @@ const rejected = computed(() =>
     .sort((a, b) => b.anomaly - a.anomaly),
 );
 
+// Faint rejections fold behind a link; anomalies never do.
+const showFaint = ref(false);
+const isFaint = (p) => !p.anomaly && p.avgConf * 100 < FAINT_PCT;
+const faintRejected = computed(() => rejected.value.filter(isFaint).length);
+const shownRejected = computed(() =>
+  showFaint.value ? rejected.value : rejected.value.filter((p) => !isFaint(p)),
+);
+
 function rejectedTip(p) {
   const pct = Math.round(p.avgConf * 100);
-  if (!many.value) return `Rejected at ${pct}% · accept to add it`;
+  if (!many.value) {
+    const perLabel = labelThresholds.value[p.tag];
+    const threshold = Number.isFinite(perLabel)
+      ? perLabel
+      : Number(predictionAcceptanceThreshold.value) || 0.95;
+    return `Rejected at ${pct}% (the tagger adds it from ${Math.round(threshold * 100)}%) · accept to add it`;
+  }
   return `Rejected on ${p.count} of ${fetchedPredictionData.value.length}, ${pct}% on average · accept to add it to those ${p.count}`;
+}
+
+// ── Selection (#2139) ────────────────────────────────────────────────────────
+// Chips picked to copy or remove together, labels in click order. Rejected
+// chips select too, to copy; removal passes them over.
+const selectedLabels = ref([]);
+const hasSelection = computed(() => selectedLabels.value.length > 0);
+// The pointer is on the × of a selected chip: every selected chip's × lights
+// up, because that click removes the whole selection.
+const removeHot = ref(false);
+
+const isSelected = (label) => selectedLabels.value.includes(label);
+
+function toggleSelected(label) {
+  selectedLabels.value = isSelected(label)
+    ? selectedLabels.value.filter((l) => l !== label)
+    : [...selectedLabels.value, label];
+}
+
+function clearSelection() {
+  selectedLabels.value = [];
+  removeHot.value = false;
+}
+
+function onChipLabelClick(t, event) {
+  const modified = event.ctrlKey || event.metaKey || event.shiftKey;
+  if (addsToRest(t) && !modified) void addTagToRemaining(t);
+  else toggleSelected(t.name);
+}
+
+/** A right-click selects the chip, so the selection bar is right there. */
+function onChipContextMenu(label, event) {
+  event.preventDefault();
+  if (!isSelected(label)) selectedLabels.value = [...selectedLabels.value, label];
+}
+
+/** The selected chips that are applied tags, not rejected ones. */
+const selectedApplied = () => applied.value.filter((t) => isSelected(t.name));
+
+function copySelection() {
+  return tagClipboard.copyTags([...new Set(selectedLabels.value)]);
+}
+
+async function removeSelection() {
+  const tags = selectedApplied();
+  if (readOnly.value || !tags.length) return;
+  clearSelection();
+  await removeAndReject(...tags);
+}
+
+function removeLabel(t) {
+  const n = selectedApplied().length;
+  if (n > 1 && isSelected(t.name)) return `Remove ${n} selected tags (Del)`;
+  return many.value ? `Remove ${t.label} from ${t.count}` : `Remove ${t.label}`;
+}
+
+/** A selected chip's × removes the whole selection. */
+function onRemoveClick(t) {
+  if (isSelected(t.name)) void removeSelection();
+  else void removeAndReject(t);
+}
+
+/**
+ * With chips selected, Ctrl+C copies them, Delete removes them and Escape
+ * clears them, wherever focus is but a text field. Capture phase, so the
+ * grid's and the lightbox's own handlers (Delete sends pictures to the
+ * Scrapheap) never see the key.
+ */
+function onWindowKeydown(e) {
+  if (!hasSelection.value || e.altKey) return;
+  // A menu or dialog over the panel takes its own keys.
+  if (document.querySelector(".v-overlay--active.v-menu, .v-overlay--active.v-dialog")) {
+    return;
+  }
+  let act = null;
+  if (e.ctrlKey || e.metaKey) {
+    if (!e.shiftKey && e.key?.toLowerCase() === "c" && !hasNativeCopyContext(e.target)) {
+      act = copySelection;
+    }
+  } else if (!isTypingTarget(e.target)) {
+    if (e.key === "Escape") act = clearSelection;
+    else if (e.key === "Delete" || e.key === "Backspace") act = removeSelection;
+  }
+  if (!act) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  void act();
+}
+
+// ── Detected tags ────────────────────────────────────────────────────────────
+let hoveredTag = null;
+function hoverTag(name) {
+  const next = name && isBoxed(name) ? name : null;
+  if (next === hoveredTag) return;
+  hoveredTag = next;
+  emit("hover-tag", next);
+}
+
+// A chip removed under the pointer sends no mouseleave: let its box go too.
+watch(applied, (tags) => {
+  if (hoveredTag && !tags.some((t) => t.name === hoveredTag)) hoverTag(null);
+});
+
+// ── Drag between Tags and Rejected ───────────────────────────────────────────
+const drag = ref(null);
+const dropOn = ref(null);
+
+function onDragStart(from, tag, event) {
+  if (readOnly.value) return;
+  drag.value = { from, tag };
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = "move";
+    // Firefox starts no drag without data.
+    event.dataTransfer.setData("text/plain", tag);
+  }
+}
+
+function onDragEnd() {
+  drag.value = null;
+  dropOn.value = null;
+}
+
+function onDragOver(to, event) {
+  if (!drag.value || drag.value.from === to) return;
+  event.preventDefault();
+  dropOn.value = to;
+}
+
+function onDragLeave(to, event) {
+  if (dropOn.value === to && !event.currentTarget.contains(event.relatedTarget)) {
+    dropOn.value = null;
+  }
+}
+
+async function onDrop(to) {
+  const dragged = drag.value;
+  onDragEnd();
+  if (!dragged || dragged.from === to || readOnly.value) return;
+  if (to === "applied") {
+    const p = rejected.value.find((r) => r.tag === dragged.tag);
+    if (p) await confirmPredictionOnAll(p);
+  } else {
+    const t = applied.value.find((a) => a.name === dragged.tag);
+    if (t) await removeAndReject(t);
+  }
 }
 
 // ── The field ────────────────────────────────────────────────────────────────
@@ -592,6 +893,7 @@ async function commit() {
   draft.value = "";
   dismissedFor.value = null;
   retagNote.value = "";
+  keepInSight(tags);
   if (await addTagsToAll(tags)) void fetchLibrary({ force: true });
   else if (!draft.value) draft.value = sent;
 }
@@ -659,6 +961,8 @@ const pasteTooltip = computed(
 );
 
 async function pasteClipboard() {
+  if (readOnly.value) return;
+  keepInSight(tagClipboard.clipboardTags);
   const result = await tagClipboard.pasteClipboard(pictureIds.value);
   if (result?.pictureIds.length) {
     emit("tags-applied", {
@@ -724,7 +1028,10 @@ watch(
   () => {
     clearTimeout(settleTimer);
     showSingles.value = false;
+    showFaint.value = false;
     retagNote.value = "";
+    clearSelection();
+    keptInSight.value = new Set();
     const read = () => {
       fetchSelectedImageTags();
       fetchSelectedImagePredictions();
@@ -752,16 +1059,26 @@ watch(
 onMounted(() => {
   fetchAnomalies();
   if (props.autofocus) focus();
+  window.addEventListener("keydown", onWindowKeydown, true);
 });
 onBeforeUnmount(() => {
   clearTimeout(settleTimer);
   clearTimeout(wsTimer);
+  window.removeEventListener("keydown", onWindowKeydown, true);
+  hoverTag(null);
 });
 
-defineExpose({ focus });
+defineExpose({
+  focus,
+  /** The caret is in the tag field: a host defers re-renders that would blur it. */
+  editing: focused,
+  pasteClipboard,
+});
 </script>
 
 <style scoped>
+/* `--rail-line` and `--rail-field` are a host's way to re-ink the field and
+   the quiet chips: the lightbox's pane is dark in both themes. */
 .rail-tags {
   display: flex;
   flex-direction: column;
@@ -775,11 +1092,17 @@ defineExpose({ focus });
   gap: var(--space-3);
   height: var(--control-h-bar);
   padding: 0 var(--space-2) 0 var(--space-3);
-  border: 1px solid rgb(var(--v-theme-border));
+  border: 1px solid var(--rail-line, rgb(var(--v-theme-border)));
   border-radius: var(--radius-sm);
-  background: rgb(var(--v-theme-input-background));
+  background: var(--rail-field, rgb(var(--v-theme-input-background)));
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
   cursor: text;
+}
+
+/* The keycap's own inks are the page's (App.css); it takes the field's. */
+.rail-tags__field .fm-kbd {
+  border-color: var(--rail-line, rgb(var(--v-theme-border)));
+  background: var(--rail-field, rgb(var(--v-theme-input-background)));
 }
 
 .rail-tags__field--focus {
@@ -939,9 +1262,50 @@ defineExpose({ focus });
   color: rgb(var(--v-theme-surface-error));
 }
 
+.rail-chip__box {
+  margin-left: calc(-1 * var(--space-1));
+  opacity: var(--opacity-text-secondary);
+}
+
+/* Selected is olive (shell rule 3): the active wash and edge over the chip's
+   own tint, so its measure still reads. */
+.rail-chip--selected {
+  border-color: var(--active-bar);
+  box-shadow: inset 0 0 0 1px var(--active-bar);
+  background-image: linear-gradient(var(--active-wash), var(--active-wash));
+}
+
+/* The × of every selected chip while the pointer is on one of them. */
+.rail-chip--remove-hot .rail-chip__x {
+  opacity: 1;
+  color: rgb(var(--v-theme-surface-error));
+}
+
+.rail-tags__body--drop {
+  border-radius: var(--radius-sm);
+  outline: 1px dashed var(--active-bar);
+  outline-offset: var(--space-1);
+}
+
+.rail-tags__selbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-1) 0 var(--space-3);
+  border: 1px solid var(--active-bar);
+  border-radius: var(--radius-sm);
+  background: var(--active-wash);
+}
+
+.rail-tags__selcount {
+  margin-right: auto;
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+
 .rail-chip--quiet {
   background: transparent;
-  border-color: rgb(var(--v-theme-border));
+  border-color: var(--rail-line, rgb(var(--v-theme-border)));
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 

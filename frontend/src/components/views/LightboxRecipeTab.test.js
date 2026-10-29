@@ -107,10 +107,9 @@ vi.mock("../../utils/apiClient", async () => ({
 }));
 
 const STUBS = {
-  LightboxTagsPanel: true,
+  RailTags: true,
   LightboxFilmstrip: true,
   LightboxDescriptionPanel: true,
-  LightboxMetadataPanel: true,
   // Real-but-thin, so the payload the lightbox hands the panel can be read off
   // its prop. A `true` stub swallows it, and the field the whole refusal path
   // exists to deliver could then be deleted with the suite still green.
@@ -221,7 +220,7 @@ describe("the lightbox Recipe tab follows the picture", () => {
     // The stars and the heart head Info now, not the band.
     expect(wrapper.find(".inspector-tabs").exists()).toBe(false);
     expect(
-      wrapper.find(".lightbox-info-head .lightbox-rail-rating").exists(),
+      wrapper.find(".lightbox-sidebar-group .rail-picture__strip").exists(),
     ).toBe(true);
   });
 
@@ -494,15 +493,15 @@ describe("the lightbox rail", () => {
     setActivePinia(createPinia());
     const sidebar = useSidebarStore();
     sidebar.lightboxRailOpen = false;
-    const beginAddTag = vi.fn();
+    const focusTags = vi.fn();
     const wrapper = mount(Lightbox, {
       props: { open: true, initialImageId: 7, allImages: [{ id: 7, tags: [] }] },
       global: {
         stubs: {
           ...STUBS,
-          LightboxTagsPanel: {
+          RailPicture: {
             template: "<div></div>",
-            methods: { beginAddTag },
+            methods: { focusTags },
           },
         },
       },
@@ -512,7 +511,7 @@ describe("the lightbox rail", () => {
     await flush();
     expect(sidebar.lightboxRailOpen).toBe(true);
     expect(sidebar.statsOpen).toBe(false);
-    expect(beginAddTag).toHaveBeenCalledTimes(1);
+    expect(focusTags).toHaveBeenCalledTimes(1);
     expect(wrapper.find(".lightbox-sidebar").classes()).not.toContain(
       "inspector--collapsed",
     );

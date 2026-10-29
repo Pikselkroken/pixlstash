@@ -73,8 +73,8 @@
  *
  * Keys follow the tag field as far as the tag field goes - Arrow highlights,
  * Tab fills, and the highlighted row wears the same TAB hint - and then add the
- * two it has no answer for. `LightboxTagsPanel`'s list has no open state at all:
- * it is simply visible whenever the input holds a prefix that matches, inside a
+ * two it had no answer for. The old lightbox tag field's list had no open state:
+ * it was simply visible whenever the input held a prefix that matched, inside a
  * panel that is itself a mode. This field lives on a row and inside a dialog
  * that both own Escape, so it needs one: ArrowDown opens the menu, Escape
  * closes it, and only a second Escape reaches the host. Enter commits, taking
@@ -281,7 +281,7 @@ defineExpose({
 <style scoped>
 /* The tag field's treatment, repeated on purpose: two completion menus that
    looked different would be two things to learn. The values below are copied
-   from `LightboxTagsPanel.vue` along with the reasons they are off-token. */
+   from the old lightbox tag field along with the reasons they are off-token. */
 .bmi-menu {
   position: fixed;
   max-height: 240px;

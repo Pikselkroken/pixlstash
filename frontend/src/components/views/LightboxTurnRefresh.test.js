@@ -77,7 +77,7 @@ vi.mock("../../utils/apiClient", () => ({
 }));
 
 const STUBS = {
-  LightboxTagsPanel: true,
+  RailTags: true,
   LightboxFilmstrip: true,
   // Thin real component: the lightbox's close watcher calls back into this
   // panel's exposed methods, so a bare `true` stub throws on close.
@@ -89,7 +89,6 @@ const STUBS = {
     },
     template: "<div class='description-panel'></div>",
   },
-  LightboxMetadataPanel: true,
   AddToEntityControl: true,
   CharacterEditor: true,
   StarRatingOverlay: true,

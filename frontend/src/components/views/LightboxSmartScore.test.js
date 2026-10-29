@@ -1,4 +1,4 @@
-// Lightbox smart-score refresh - the lightbox metadata panel must show the
+// Lightbox smart-score refresh - Info (RailPicture) must show the
 // freshly-recomputed smart score after a tag edit or a penalised-tag settings
 // change, without a full page reload.
 //
@@ -206,7 +206,7 @@ describe("lightbox smartScoreUpdate watcher trigger", () => {
 // whenever the smart_score signal that landed did not name the open card.
 describe("Lightbox mounted smart-score refresh", () => {
   const STUBS = {
-    LightboxTagsPanel: true,
+    RailTags: true,
     LightboxFilmstrip: true,
     LightboxDescriptionPanel: true,
     AddToEntityControl: true,
@@ -216,15 +216,9 @@ describe("Lightbox mounted smart-score refresh", () => {
     ProgressOverlay: true,
     VTooltip: true,
     // Real-but-thin panel so we can read the `image` prop it renders from.
-    LightboxMetadataPanel: {
-      name: "LightboxMetadataPanel",
-      props: [
-        "image",
-        "comfyMetadata",
-        "dateFormat",
-        "backendUrl",
-        "videoDuration",
-      ],
+    RailPicture: {
+      name: "RailPicture",
+      props: ["image"],
       template: "<div class='meta'></div>",
     },
   };
@@ -251,7 +245,7 @@ describe("Lightbox mounted smart-score refresh", () => {
   }
 
   const scoreOf = (wrapper) =>
-    wrapper.findComponent({ name: "LightboxMetadataPanel" }).props("image")
+    wrapper.findComponent({ name: "RailPicture" }).props("image")
       .smartScore;
 
   beforeEach(() => {

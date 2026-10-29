@@ -37,6 +37,7 @@ vi.mock("../../api/pictures", () => ({ resetPicturesTags: vi.fn() }));
 import RailTags from "./RailTags.vue";
 import { useTagClipboardStore } from "../../stores/useTagClipboardStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
+import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 
 enableAutoUnmount(afterEach);
 
@@ -118,8 +119,10 @@ describe("several pictures' tags", () => {
     expect(addPictureTag.mock.calls.map(([id, tag]) => [id, tag])).toEqual([
       [3, "photo"],
     ]);
-    // A tag on all of them has nothing to add: it is no button.
-    expect(chip(wrapper, "man").find(".rail-chip__label").exists()).toBe(false);
+    // A tag on all of them has nothing to add: its click selects it.
+    const man = chip(wrapper, "man").find(".rail-chip__label");
+    expect(man.attributes("aria-label")).toBeUndefined();
+    expect(man.attributes("aria-pressed")).toBe("false");
 
     await chip(wrapper, "man").find(".rail-chip__x").trigger("click");
     await flush();
@@ -262,10 +265,16 @@ describe("one picture's tags", () => {
     expect(chip(wrapper, "mine").find(".tip").attributes("data-text")).toBe(
       "Added by hand",
     );
-    // Only the rejected are offered for accepting, with their confidence.
+    // Only the rejected are offered for accepting, with their confidence;
+    // one under 25% waits behind a link.
+    expect(wrapper.findAll(".rail-chip--quiet")).toHaveLength(0);
+    const faint = wrapper.find(".rail-tags__rejected .rail-tags__more");
+    expect(faint.text()).toBe("+ 1 under 25%");
+    await faint.trigger("click");
     const rejected = wrapper.findAll(".rail-chip--quiet");
     expect(rejected.map((c) => c.attributes("data-tag"))).toEqual(["woman"]);
     expect(rejected[0].find(".rail-chip__n").text()).toBe("22%");
+    expect(faint.text()).toBe("Hide those under 25%");
     await rejected[0].find(".rail-chip__x").trigger("click");
     await flush();
     expect(confirmTagPrediction.mock.calls[0].slice(0, 2)).toEqual([5, "woman"]);
@@ -295,5 +304,245 @@ describe("one picture's tags", () => {
     expect(wrapper.find(".rail-tags__input").exists()).toBe(false);
     expect(wrapper.find(".rail-chip__x").exists()).toBe(false);
     expect(wrapper.findAll(".rail-chip--conf")).toHaveLength(3);
+  });
+});
+
+describe("selecting tags", () => {
+  beforeEach(() => {
+    bulkFetchTags.mockReset().mockResolvedValue([
+      { id: 5, tags: [{ id: 51, tag: "rain" }, { id: 52, tag: "coat" }, { id: 53, tag: "desk" }] },
+    ]);
+    listTagPredictions.mockResolvedValue({
+      tag_predictions: [
+        { tag: "umbrella", confidence: 0.6, status: "REJECTED", model_version: "t" },
+      ],
+      meta: {},
+    });
+  });
+
+  const label = (wrapper, name) => chip(wrapper, name).find(".rail-chip__label");
+  const selected = (wrapper) =>
+    wrapper.findAll(".rail-chip--selected").map((c) => c.attributes("data-tag"));
+  const bar = (wrapper) => wrapper.find(".rail-tags__selbar");
+  const press = (key, init = {}, target = window) => {
+    const event = new KeyboardEvent("keydown", {
+      key,
+      bubbles: true,
+      cancelable: true,
+      ...init,
+    });
+    target.dispatchEvent(event);
+    return event;
+  };
+
+  it("a click selects a chip and a second deselects it; nothing is copied", async () => {
+    const wrapper = await mountTags([5]);
+    const store = useTagClipboardStore();
+    await label(wrapper, "rain").trigger("click");
+    expect(selected(wrapper)).toEqual(["rain"]);
+    expect(label(wrapper, "rain").attributes("aria-pressed")).toBe("true");
+    expect(bar(wrapper).text()).toContain("1 selected");
+    await label(wrapper, "rain").trigger("click");
+    expect(selected(wrapper)).toEqual([]);
+    expect(bar(wrapper).exists()).toBe(false);
+    expect(store.clipboardTags).toEqual([]);
+  });
+
+  it("Copy copies the selection, rejected chips too, in the order picked", async () => {
+    const wrapper = await mountTags([5]);
+    const store = useTagClipboardStore();
+    await label(wrapper, "desk").trigger("click");
+    await label(wrapper, "umbrella").trigger("click");
+    await chip(wrapper, "rain").trigger("contextmenu");
+    await bar(wrapper).find('[aria-label="Copy selected tags"]').trigger("click");
+    expect(store.clipboardTags).toEqual(["desk", "umbrella", "rain"]);
+    await bar(wrapper).find('[aria-label="Clear selection"]').trigger("click");
+    expect(selected(wrapper)).toEqual([]);
+  });
+
+  it("Copy all rejected tags copies every rejected chip", async () => {
+    const wrapper = await mountTags([5]);
+    const store = useTagClipboardStore();
+    await wrapper.find('[aria-label="Copy all rejected tags"]').trigger("click");
+    expect(store.clipboardTags).toEqual(["umbrella"]);
+  });
+
+  it("the × of a selected chip removes the selection in one step, never a rejected chip", async () => {
+    const wrapper = await mountTags([5]);
+    for (const name of ["rain", "coat", "umbrella"]) {
+      await label(wrapper, name).trigger("click");
+    }
+    await chip(wrapper, "rain").find(".rail-chip__x").trigger("mouseenter");
+    expect(
+      wrapper.findAll(".rail-chip--remove-hot").map((c) => c.attributes("data-tag")),
+    ).toEqual(["coat", "rain"]);
+    expect(chip(wrapper, "rain").find(".rail-chip__x").attributes("aria-label")).toBe(
+      "Remove 2 selected tags (Del)",
+    );
+    await chip(wrapper, "rain").find(".rail-chip__x").trigger("click");
+    await flush();
+    expect(removePictureTag.mock.calls.map(([id, tagId]) => [id, tagId])).toEqual([
+      [5, 52],
+      [5, 51],
+    ]);
+    expect(rejectTagPrediction.mock.calls.map(([, tag]) => tag)).toEqual(["coat", "rain"]);
+    const batches = new Set(
+      [...removePictureTag.mock.calls, ...rejectTagPrediction.mock.calls].map(
+        ([, , opts]) => opts?.batchId,
+      ),
+    );
+    expect(batches.size).toBe(1);
+  });
+
+  it("the × of a chip outside the selection removes that chip alone", async () => {
+    const wrapper = await mountTags([5]);
+    await label(wrapper, "rain").trigger("click");
+    await chip(wrapper, "desk").find(".rail-chip__x").trigger("mouseenter");
+    expect(wrapper.findAll(".rail-chip--remove-hot")).toHaveLength(0);
+    await chip(wrapper, "desk").find(".rail-chip__x").trigger("click");
+    await flush();
+    expect(removePictureTag.mock.calls.map(([, tagId]) => tagId)).toEqual([53]);
+  });
+
+  it("drops the selection when the picture changes", async () => {
+    const wrapper = await mountTags([5]);
+    await label(wrapper, "rain").trigger("click");
+    await wrapper.setProps({ ids: [6] });
+    await flush();
+    expect(bar(wrapper).exists()).toBe(false);
+  });
+
+  it("takes Escape, Delete and Ctrl+C before the page's own keys", async () => {
+    const wrapper = await mountTags([5]);
+    const store = useTagClipboardStore();
+    const page = vi.fn();
+    window.addEventListener("keydown", page);
+    try {
+      await label(wrapper, "rain").trigger("click");
+      await label(wrapper, "umbrella").trigger("click");
+      expect(press("c", { ctrlKey: true }).defaultPrevented).toBe(true);
+      expect(store.clipboardTags).toEqual(["rain", "umbrella"]);
+      // Delete removes the tags, and the grid never sees it (its Delete
+      // sends pictures to the Scrapheap).
+      expect(press("Delete").defaultPrevented).toBe(true);
+      await flush();
+      expect(removePictureTag.mock.calls.map(([, tagId]) => tagId)).toEqual([51]);
+      await label(wrapper, "coat").trigger("click");
+      expect(press("Escape").defaultPrevented).toBe(true);
+      await flush();
+      expect(selected(wrapper)).toEqual([]);
+      expect(page).not.toHaveBeenCalled();
+      // With nothing selected the keys are the page's again.
+      press("Escape");
+      expect(page).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener("keydown", page);
+    }
+  });
+
+  it("leaves Escape and Delete to the tag field", async () => {
+    const wrapper = await mountTags([5]);
+    await label(wrapper, "rain").trigger("click");
+    const input = wrapper.find(".rail-tags__input").element;
+    input.focus();
+    press("Delete", {}, input);
+    press("Escape", {}, input);
+    await flush();
+    expect(selected(wrapper)).toEqual(["rain"]);
+    expect(removePictureTag).not.toHaveBeenCalled();
+  });
+
+  it("with only rejected chips selected, Delete removes nothing and keeps them", async () => {
+    const wrapper = await mountTags([5]);
+    await label(wrapper, "umbrella").trigger("click");
+    press("Delete");
+    await flush();
+    expect(removePictureTag).not.toHaveBeenCalled();
+    expect(selected(wrapper)).toEqual(["umbrella"]);
+  });
+
+  it("dragging a tag onto Rejected rejects it; a rejected one onto Tags accepts it", async () => {
+    const wrapper = await mountTags([5]);
+    const dataTransfer = { setData: vi.fn(), effectAllowed: "" };
+    await chip(wrapper, "rain").trigger("dragstart", { dataTransfer });
+    // Its own list is no target.
+    const own = new Event("dragover", { cancelable: true });
+    wrapper.find(".rail-tags__applied").element.dispatchEvent(own);
+    expect(own.defaultPrevented).toBe(false);
+    await wrapper.find(".rail-tags__rejected").trigger("dragover");
+    expect(wrapper.find(".rail-tags__rejected").classes()).toContain(
+      "rail-tags__body--drop",
+    );
+    await wrapper.find(".rail-tags__rejected").trigger("drop");
+    await flush();
+    expect(removePictureTag.mock.calls.map(([, tagId]) => tagId)).toEqual([51]);
+    expect(rejectTagPrediction.mock.calls.map(([, tag]) => tag)).toEqual(["rain"]);
+
+    await chip(wrapper, "umbrella").trigger("dragstart", { dataTransfer });
+    await wrapper.find(".rail-tags__applied").trigger("dragover");
+    await wrapper.find(".rail-tags__applied").trigger("drop");
+    await flush();
+    expect(confirmTagPrediction.mock.calls.map(([id, tag]) => [id, tag])).toEqual([
+      [5, "umbrella"],
+    ]);
+  });
+
+  it("never drags on a locked picture", async () => {
+    const wrapper = await mountTags([5], { locked: true });
+    expect(chip(wrapper, "rain").attributes("draggable")).toBeUndefined();
+  });
+
+  it("marks a detected tag and says when it is pointed at", async () => {
+    const wrapper = await mountTags([5], { boxedTags: new Set(["coat"]) });
+    expect(chip(wrapper, "coat").find(".rail-chip__box").exists()).toBe(true);
+    expect(chip(wrapper, "rain").find(".rail-chip__box").exists()).toBe(false);
+    await chip(wrapper, "rain").trigger("mouseenter");
+    expect(wrapper.emitted("hover-tag")).toBeUndefined();
+    await chip(wrapper, "coat").trigger("mouseenter");
+    await chip(wrapper, "coat").trigger("mouseleave");
+    expect(wrapper.emitted("hover-tag")).toEqual([["coat"], [null]]);
+  });
+
+  it("hides the reader's hidden tags while their filter is on, but not one just added", async () => {
+    const prefs = useUserPrefsStore();
+    prefs.hiddenTags = ["Desk", "lamp"];
+    prefs.applyTagFilter = true;
+    const wrapper = await mountTags([5]);
+    expect(chip(wrapper, "desk").exists()).toBe(false);
+    expect(chip(wrapper, "rain").exists()).toBe(true);
+
+    bulkFetchTags.mockResolvedValue([
+      { id: 5, tags: [{ id: 51, tag: "rain" }, { id: 54, tag: "lamp" }] },
+    ]);
+    await wrapper.find(".rail-tags__input").setValue("lamp");
+    await wrapper.find(".rail-tags__input").trigger("keydown", { key: "Enter" });
+    await flush();
+    expect(chip(wrapper, "lamp").exists()).toBe(true);
+
+    prefs.applyTagFilter = false;
+    await flush();
+    expect(chip(wrapper, "desk").exists()).toBe(false);
+    expect(chip(wrapper, "lamp").exists()).toBe(true);
+  });
+});
+
+describe("selecting several pictures' tags", () => {
+  beforeEach(() => {
+    bulkFetchTags.mockReset().mockResolvedValue([
+      { id: 1, tags: [{ id: 11, tag: "man" }, { id: 12, tag: "photo" }] },
+      { id: 2, tags: [{ id: 21, tag: "man" }] },
+    ]);
+  });
+
+  it("a modifier selects a part-tinted chip instead of adding it to the rest", async () => {
+    const wrapper = await mountTags([1, 2]);
+    const photo = chip(wrapper, "photo").find(".rail-chip__label");
+    await photo.trigger("click", { ctrlKey: true });
+    await photo.trigger("click", { shiftKey: true });
+    await photo.trigger("click", { metaKey: true });
+    expect(addPictureTag).not.toHaveBeenCalled();
+    expect(chip(wrapper, "photo").classes()).toContain("rail-chip--selected");
+    await chip(wrapper, "man").find(".rail-chip__label").trigger("click");
+    expect(wrapper.find(".rail-tags__selbar").text()).toContain("2 selected");
   });
 });

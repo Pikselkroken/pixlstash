@@ -24,20 +24,22 @@ test.describe('tag copy and paste', () => {
     }
 
     // A click selects a chip; the selection bar offers Copy.
-    for (const tag of TAGS) await lightbox.tag(tag).click()
-    const bar = page.locator('.tag-selection-bar')
+    for (const tag of TAGS) await lightbox.tag(tag).locator('.rail-chip__label').click()
+    const bar = page.locator('.lightbox .rail-tags__selbar')
     await expect(bar).toContainText('2 selected')
     await shot('1-selected')
     // The x of one selected chip lights the x of every selected chip.
-    await lightbox.tag(TAGS[0]).locator('.tag-delete-btn').hover()
-    await expect(page.locator('.lightbox-tag--remove-hot')).toHaveCount(2)
+    await lightbox.tag(TAGS[0]).locator('.rail-chip__x').hover()
+    await expect(page.locator('.lightbox .rail-chip--remove-hot')).toHaveCount(2)
     await shot('1b-remove-hot')
     await bar.hover()
-    await bar.getByRole('button', { name: 'Copy' }).click()
+    await bar.getByRole('button', { name: 'Copy selected tags' }).click()
     await expect(bar.getByRole('button', { name: 'Clear selection' })).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(bar).toBeHidden()
-    await expect(page.locator('.tag-paste-btn')).toContainText('Paste 2')
+    await expect(
+      page.locator('.lightbox').getByRole('button', { name: 'Paste 2 tags' }),
+    ).toBeVisible()
     await shot('2-copied')
 
     // Next picture, rail closed: Ctrl+V still pastes on it.
