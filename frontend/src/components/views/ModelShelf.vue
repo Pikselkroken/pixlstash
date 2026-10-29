@@ -19,7 +19,7 @@
       headings sort the list too. Every column but Name begins with a handle
       that resizes it: Left and Right move the edge, Home and End take it to its
       widest and narrowest, Enter puts it back. The bar ends in the app-wide
-      controls: Settings and the Models and tasks toggle. Nothing on this screen
+      controls: Settings and the Models toggle. Nothing on this screen
       can be undone. A heart after a name marks a favourite. A name in italics
       has not been given one. A row that stands for a training run says how many
       files it holds; Right and Left open and close it. Right-click a row for
@@ -166,7 +166,7 @@
         <span class="bar-separator" aria-hidden="true"></span>
         <TbGlobalActions
           rail="models"
-          rail-name="Models and tasks"
+          rail-name="Models"
         />
       </div>
     </div>
@@ -1510,11 +1510,16 @@ const railLabel = computed(() => {
 });
 
 // The same act as the toolbar toggle, so it persists. The handle unmounts as
-// the rail opens, so focus is handed to the rail's active tab rather than
-// dropping to `body`.
+// the rail opens, so focus is handed into the rail (Clear while anything is
+// selected, else its title) rather than dropping to `body`.
 function openRailFromTab() {
   sidebarStore.setModelsRailOpen(true);
-  nextTick(() => document.querySelector(".mrail .inspector-tab--active")?.focus());
+  nextTick(() =>
+    (
+      document.querySelector(".mrail .mrail-clear") ??
+      document.querySelector(".mrail .mrail-title")
+    )?.focus(),
+  );
 }
 
 // A NEW selection nudges the rail: the handle bounces and the toolbar's rail
