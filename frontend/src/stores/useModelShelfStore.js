@@ -59,6 +59,7 @@ import {
   movableCopies,
   presentCopies,
   SHELF_TYPES,
+  shelfTypeLabel,
   shelfTypeOf,
   trashName,
   modelName,
@@ -300,7 +301,8 @@ export function clampColumnWidth(key, px) {
 }
 
 /**
- * The five ruled sort keys, mirroring `SortKey` in `routes/model_shelf.py`.
+ * The sort keys: one per column, so every heading sorts. The first five mirror
+ * `SortKey` in `routes/model_shelf.py`; `type` and `sets` are the client's own.
  *
  * Applied CLIENT-SIDE, and that is not a shortcut. `fetchRows` issues one
  * request per selected block and concatenates the results, so three
@@ -314,9 +316,15 @@ export const SORT_KEYS = [
   "name",
   "size",
   "base_model",
+  "type",
+  "sets",
 ];
 
-/** What each sort key reads off a row. `null` means the row cannot answer. */
+/**
+ * What each sort key reads off a row. `null` means the row cannot answer.
+ * `sets` reads the model's set count from `membership` (`setMembership`), or
+ * null while the sets are unread.
+ */
 const SORT_VALUE = {
   // A stack's date is its newest member's, never its cover's.
   added_at: (row) => row.newest_member_at || row.added_at || null,
@@ -327,6 +335,9 @@ const SORT_VALUE = {
   size: (row) => row.total_size ?? row.file_size ?? null,
   // Sorted by the folded value so the run is by base rather than by spelling.
   base_model: (row) => baseModelKey(row) || null,
+  type: (row) => shelfTypeLabel(row),
+  sets: (row, membership) =>
+    membership ? (membership.get(row.id)?.length ?? 0) : null,
 };
 
 /**
@@ -337,9 +348,9 @@ const SORT_VALUE = {
  * no base model" is an unanswered question, and letting 37% of the shelf pile
  * up at whichever end the direction points is how a sort stops being one.
  */
-function compareOn(a, b, key, direction) {
-  const left = SORT_VALUE[key](a);
-  const right = SORT_VALUE[key](b);
+function compareOn(a, b, key, direction, membership = null) {
+  const left = SORT_VALUE[key](a, membership);
+  const right = SORT_VALUE[key](b, membership);
   if (left === null || left === "")
     return right === null || right === "" ? 0 : 1;
   if (right === null || right === "") return -1;
@@ -1148,6 +1159,14 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * folder, and opening a folder leaves Sets.
    */
   const folderScope = ref(null);
+  /**
+   * The axis the list is banded on. A folder is not banded: it holds a handful
+   * of models, and its column headings sort them. `view.groupBy` keeps the
+   * owner's grouping for when the folder is left.
+   */
+  const groupAxis = computed(() =>
+    place.value === "folder" ? "none" : view.groupBy,
+  );
   /** Every row fetched so far, across blocks. Not the shown set. */
   const rows = ref([]);
   /** Model ids the last scan added, for the `New` badge. Never persisted. */
@@ -1616,12 +1635,14 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * the list rather than banding it, so no axis here spends a second level.
    */
   const groups = computed(() => {
-    const axis = view.groupBy;
+    const axis = groupAxis.value;
+    const membership = setsKnown.value ? setMembership.value : null;
     // A tiebreak on id, because a refetch can reorder equal-valued rows and a
     // list that reshuffles under an unchanged sort reads as a rendering fault.
     const sorted = [...visibleRows.value].sort(
       (a, b) =>
-        compareOn(a, b, view.sortKey, view.sortDirection) || a.id - b.id,
+        compareOn(a, b, view.sortKey, view.sortDirection, membership) ||
+        a.id - b.id,
     );
     // The set grid draws its own cards, so its axis has no bands here: it is
     // the one flat group, as `none` is, for anything that reads `groups`.
@@ -3372,7 +3393,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
 
   /** True when this group is collapsed on the axis currently in use. */
   function isCollapsed(key) {
-    return collapsed.value[view.groupBy]?.has(key) ?? false;
+    return collapsed.value[groupAxis.value]?.has(key) ?? false;
   }
 
   /**
@@ -3383,7 +3404,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * what was there.
    */
   function toggleGroup(key) {
-    const axis = view.groupBy;
+    const axis = groupAxis.value;
     const next = new Set(collapsed.value[axis] || []);
     if (next.has(key)) next.delete(key);
     else next.add(key);
@@ -3394,7 +3415,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   /**
    * Change the grouping or the sort.
    *
-   * Never refetches: every field the five sort keys read is already on the list
+   * Never refetches: every field the sort keys read is already on the list
    * payload, so a direction flip is a resort of what is in hand.
    *
    * @param {Object} patch - any of `groupBy`, `listGroupBy`, `sortKey`,
@@ -5050,6 +5071,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     activeCount,
     nothingSelected,
     isCollapsed,
+    groupAxis,
     toggleGroup,
     resetFilters,
     resetForSession,

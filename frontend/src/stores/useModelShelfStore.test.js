@@ -776,7 +776,86 @@ describe("sorting", () => {
   });
 });
 
+describe("sorting on every column", () => {
+  it("sorts on Type by the words the cell shows", async () => {
+    listAdapters.mockResolvedValue([adapter({ id: 1, display_name: "lora" })]);
+    listCheckpoints.mockResolvedValue([
+      adapter({ id: 2, file_kind: "checkpoint", kind: null, display_name: "ckpt" }),
+    ]);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    store.setView({ groupBy: "none", sortKey: "type" });
+    expect(store.view.sortDirection).toBe("asc");
+    expect(store.groups[0].rows.map((r) => r.id)).toEqual([2, 1]);
+    store.setView({ sortDirection: "desc" });
+    expect(store.groups[0].rows.map((r) => r.id)).toEqual([1, 2]);
+  });
+
+  it("sorts on Sets by how many sets hold the model, most first", async () => {
+    const member = (id) => ({
+      name: "x",
+      kind: "lora",
+      slot: "lora",
+      id,
+      sha256: String(id).repeat(64),
+      on_shelf: true,
+    });
+    const set = (id, members) => ({
+      id,
+      name: `set ${id}`,
+      declined: [],
+      removed: [],
+      members: members.map(member),
+    });
+    listAdapters.mockResolvedValue([1, 2, 3].map((id) =>
+      adapter({ id, sha256: String(id).repeat(64), display_name: `m${id}` }),
+    ));
+    fetchWorkflowSets.mockResolvedValue({
+      combinations: [],
+      no_set: [],
+      hand_made: [set(7, [3, 2]), set(8, [3])],
+    });
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+    expect(store.setMembership.get(3)).toHaveLength(2);
+    store.setView({ groupBy: "none", sortKey: "sets" });
+    expect(store.view.sortDirection).toBe("desc");
+    expect(store.groups[0].rows.map((r) => r.id)).toEqual([3, 2, 1]);
+    store.setView({ sortDirection: "asc" });
+    expect(store.groups[0].rows.map((r) => r.id)).toEqual([1, 2, 3]);
+  });
+});
+
 describe("grouping", () => {
+  it("draws an open folder as one band, and keeps the grouping for leaving it", async () => {
+    listAdapters.mockResolvedValue([
+      adapter({ id: 1, locations: [{ state: "present", folder_id: 1, relpath: "a.st" }] }),
+    ]);
+    listCheckpoints.mockResolvedValue([
+      adapter({
+        id: 2,
+        file_kind: "checkpoint",
+        kind: null,
+        locations: [{ state: "present", folder_id: 1, relpath: "b.st" }],
+      }),
+    ]);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    store.setView({ groupBy: "type", listGroupBy: "type" });
+    expect(store.groups).toHaveLength(2);
+
+    store.setFolderScope({ folderId: 1, path: "" });
+    expect(store.groupAxis).toBe("none");
+    expect(store.groups).toHaveLength(1);
+    expect(store.groups[0].rows.map((r) => r.id).sort()).toEqual([1, 2]);
+    expect(store.view.groupBy).toBe("type");
+
+    store.setPlace("all");
+    expect(store.groupAxis).toBe("type");
+    expect(store.groups).toHaveLength(2);
+  });
+
   it("puts the models that record no base model last, in both directions", async () => {
     // 37% of real adapters record nothing, so this group is one of the largest
     // on the shelf. It sorts last because it is the ABSENCE of a value rather

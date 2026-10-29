@@ -516,6 +516,12 @@ class ModelFolderDirResponse(BaseModel):
             "however deep."
         )
     )
+    direct_model_count: int = Field(
+        description=(
+            "Distinct models with a `present` copy directly in this directory, "
+            "not in a subdirectory of it."
+        )
+    )
     bytes: int = Field(
         description=(
             "Sum of the sizes of the `present` copies under this directory, "
@@ -553,6 +559,9 @@ class ModelFolderDirsResponse(BaseModel):
     )
     model_count: int = Field(
         description="Distinct models with a `present` copy under `path`, recursively."
+    )
+    direct_model_count: int = Field(
+        description="Distinct models with a `present` copy directly in `path`."
     )
     bytes: int = Field(
         description="Sum of the `present` copies' sizes under `path`, recursively."
@@ -708,6 +717,7 @@ class _Subtree:
     """The `present` copies counted under one directory, recursively."""
 
     model_ids: set[int] = field(default_factory=set)
+    direct_ids: set[int] = field(default_factory=set)
     bytes: int = 0
 
 
@@ -1370,7 +1380,7 @@ def create_router(server) -> APIRouter:
             "level per call, so the models tree opens lazily.\n\n"
             "`path` is POSIX and relative to the folder; leave it empty for the "
             "root. Every directory carries the `present` models under it, "
-            "recursively. Empty directories are listed. Dot-names, symlinks and a "
+            "recursively, and those directly in it. Empty directories are listed. Dot-names, symlinks and a "
             "`<stem>_samples` directory beside its model are not.\n\n"
             "A locked folder answers `locked: true` with no `dirs`, and its disk "
             "is not read; the counts still come from the database."
@@ -1427,12 +1437,14 @@ def create_router(server) -> APIRouter:
             totals.bytes += size
             head, separator, tail = relpath[len(prefix) :].partition(os.sep)
             if not separator:
+                totals.direct_ids.add(model_id)
                 here_stems.add(os.path.splitext(head)[0])
                 continue
             child = children.setdefault(head, _Subtree())
             child.model_ids.add(model_id)
             child.bytes += size
             if os.sep not in tail:
+                child.direct_ids.add(model_id)
                 child_stems.setdefault(head, set()).add(os.path.splitext(tail)[0])
 
         dirs: list[ModelFolderDirResponse] = []
@@ -1475,6 +1487,7 @@ def create_router(server) -> APIRouter:
                         name=entry.name,
                         path=f"{subpath}/{entry.name}" if subpath else entry.name,
                         model_count=len(child.model_ids),
+                        direct_model_count=len(child.direct_ids),
                         bytes=child.bytes,
                         has_dirs=has_dirs,
                     )
@@ -1485,6 +1498,7 @@ def create_router(server) -> APIRouter:
             path=subpath,
             locked=locked,
             model_count=len(totals.model_ids),
+            direct_model_count=len(totals.direct_ids),
             bytes=totals.bytes,
             dirs=dirs,
         )

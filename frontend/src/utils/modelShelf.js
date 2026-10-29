@@ -363,6 +363,8 @@ export const SORT_LABELS = {
   name: { label: "Name", icon: "mdi-sort-alphabetical-variant" },
   size: { label: "Size", icon: "mdi-harddisk" },
   base_model: { label: "Base model", icon: "mdi-cube-outline" },
+  type: { label: "Type", icon: "mdi-shape-outline" },
+  sets: { label: "Sets", icon: "mdi-view-grid-outline" },
 };
 
 /**
@@ -451,7 +453,9 @@ const DIRECTION_WORDS = {
   file_mtime: ["Oldest first", "Newest first"],
   name: ["A to Z", "Z to A"],
   base_model: ["A to Z", "Z to A"],
+  type: ["A to Z", "Z to A"],
   size: ["Smallest first", "Largest first"],
+  sets: ["Fewest first", "Most first"],
 };
 
 /**
@@ -480,7 +484,9 @@ export function sortDirectionLabel(key, direction) {
  * @returns {"asc"|"desc"}
  */
 export function defaultSortDirection(key) {
-  return key === "name" || key === "base_model" ? "asc" : "desc";
+  return key === "name" || key === "base_model" || key === "type"
+    ? "asc"
+    : "desc";
 }
 
 /** What each grouping axis is called, and the glyph that stands for it. */
@@ -601,6 +607,44 @@ export function shelfTypeOf(row) {
   const kind = String(row?.file_kind || "");
   if (kind === "adapter") return "lora";
   return SHELF_TYPES.some((type) => type.key === kind) ? kind : "";
+}
+
+/**
+ * The always-present anchor of the metadata line, whatever else is null.
+ *
+ * A model that serves several features lists them ALL, because a single label
+ * answers "what breaks if I delete this" wrongly for exactly the rows a reader
+ * is most likely to be deciding about: Florence-2 captions and detects, and the
+ * CLIP the embedder loads is both the search encoder and the aesthetic scorer's
+ * backbone. `capabilities` arrives primary-first, so the first word is the one
+ * `row.kind` holds and the column still reads as one thing at a glance.
+ */
+function kindLabel(row) {
+  // One table with the `feature` group axis, which names its headings from the
+  // same one - the cell reading `Checkpoint` under a header saying something
+  // else is the contradiction that table exists to prevent.
+  const named = fileKindLabel(row.file_kind);
+  if (named) return named;
+  const capabilities = Array.isArray(row.capabilities) ? row.capabilities : [];
+  if (capabilities.length) return capabilities.map(capabilityLabel).join(", ");
+  // The axis still files `unknown` under `Other` where the cell says
+  // "Unclassified": a shrug is not a heading of its own. The CELL always names
+  // what the row is.
+  return adapterKindLabel(row.kind) || "Adapter";
+}
+
+/**
+ * The Type cell's words: the Type row's singular, or the kind label where there
+ * is none. The Type sort orders on the same words.
+ *
+ * @param {Object} row - a shelf row.
+ * @returns {string}
+ */
+export function shelfTypeLabel(row) {
+  return (
+    SHELF_TYPES.find((type) => type.key === shelfTypeOf(row))?.one ??
+    kindLabel(row)
+  );
 }
 
 /**

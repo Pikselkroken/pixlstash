@@ -49,11 +49,11 @@ const DEVICES = [
 ];
 const LISTINGS = {
   "1:": [
-    { name: "Lora", path: "Lora", model_count: 46, bytes: 1, has_dirs: true },
-    { name: "VAE", path: "VAE", model_count: 3, bytes: 1, has_dirs: false },
+    { name: "Lora", path: "Lora", model_count: 46, direct_model_count: 42, bytes: 1, has_dirs: true },
+    { name: "VAE", path: "VAE", model_count: 3, direct_model_count: 3, bytes: 1, has_dirs: false },
   ],
   "1:Lora": [
-    { name: "flux", path: "Lora/flux", model_count: 4, bytes: 1, has_dirs: false },
+    { name: "flux", path: "Lora/flux", model_count: 4, direct_model_count: 4, bytes: 1, has_dirs: false },
   ],
 };
 
@@ -91,6 +91,7 @@ beforeEach(() => {
     path,
     locked: id === 2,
     model_count: id === 2 ? 5 : 52,
+    direct_model_count: id === 2 ? 0 : 3,
     bytes: 0,
     dirs: id === 2 ? [] : (LISTINGS[`${id}:${path}`] ?? []),
   }));
@@ -110,7 +111,19 @@ describe("ModelFolderTree", () => {
     expect(drive.find(".mft-free--full").exists()).toBe(true);
     expect(drive.find(".mft-bar--full").exists()).toBe(true);
     expect(item(wrapper, 1).attributes("aria-level")).toBe("2");
-    expect(item(wrapper, 1).find(".mft-count").text()).toBe("52");
+    wrapper.unmount();
+  });
+
+  it("counts a folder's own models, and everything under a locked one", async () => {
+    // What opening the row on the shelf lists: one level, or a locked folder
+    // whole, since it cannot be browsed into.
+    const wrapper = mountTree();
+    await flushPromises();
+    expect(item(wrapper, 1).find(".mft-count").text()).toBe("3");
+    expect(item(wrapper, 2).find(".mft-count").text()).toBe("5");
+    await item(wrapper, 1).find(".mft-twist").trigger("click");
+    await flushPromises();
+    expect(item(wrapper, 1, "Lora").find(".mft-count").text()).toBe("42");
     wrapper.unmount();
   });
 

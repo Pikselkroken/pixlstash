@@ -343,7 +343,13 @@ function pushFolderRows(out, entry) {
     (listing?.listing
       ? listing.listing.dirs.length > 0
       : (entry.hasDirs ?? !listing?.error));
-  const n = entry.count ?? listing?.listing?.model_count;
+  // What opening the row shows: the models directly in it, or everything
+  // under a locked folder, which the shelf cannot browse into.
+  const n =
+    entry.count ??
+    (entry.locked
+      ? listing?.listing?.model_count
+      : listing?.listing?.direct_model_count);
   const refused =
     props.mode === "pick" && (entry.locked || props.disabled?.(entry));
   const marks = comfyuiMarks(
@@ -378,7 +384,7 @@ function pushFolderRows(out, entry) {
       level: entry.level + 1,
       locked: false,
       hasDirs: dir.has_dirs,
-      count: dir.model_count,
+      count: dir.direct_model_count,
     });
   }
 }

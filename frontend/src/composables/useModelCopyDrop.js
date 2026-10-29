@@ -1,8 +1,8 @@
 // Folders as drop targets for model rows dragged off the shelf (#2204).
 //
-// The Folders tree (in the sidebar) and the folder view's subfolder rows (in
-// the shelf) both take the drop, so the rules live here once: what refuses,
-// what the tip under the pointer says, and that a drop only ASKS for the move.
+// The Folders tree (in the sidebar) takes the drop, and the rules live here:
+// what refuses, what the tip under the pointer says, and that a drop only ASKS
+// for the move.
 // The Move dialog opens pre-chosen and the reader confirms with Enter: a drop
 // is one slip of the pointer, and a move has no undo.
 

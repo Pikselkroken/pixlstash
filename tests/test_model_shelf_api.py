@@ -10925,7 +10925,8 @@ def _by_name(body: dict) -> dict[str, dict]:
 def test_dirs_count_every_copy_beneath_each_entry(shelf_env, tmp_path):
     """Counts are recursive, distinct by model and summed by copy.
 
-    The file two levels down counts at the root and in its parent. Two copies of
+    The file two levels down counts at the root and in its parent, but directly
+    only in its own directory. Two copies of
     one model count once by model and twice by bytes. An empty directory shows.
     """
     root = tmp_path / "loras"
@@ -10947,9 +10948,11 @@ def test_dirs_count_every_copy_beneath_each_entry(shelf_env, tmp_path):
     body = _listing(shelf_env).json()
     assert (body["path"], body["locked"]) == ("", False)
     assert (body["model_count"], body["bytes"]) == (3, 40)
+    assert body["direct_model_count"] == 1
     dirs = _by_name(body)
     assert list(dirs) == ["people", "style"]
     assert (dirs["people"]["model_count"], dirs["people"]["bytes"]) == (2, 30)
+    assert dirs["people"]["direct_model_count"] == 1
     assert dirs["people"]["path"] == "people"
     assert dirs["people"]["has_dirs"] is True
     assert (dirs["style"]["model_count"], dirs["style"]["bytes"]) == (0, 0)
@@ -10957,9 +10960,11 @@ def test_dirs_count_every_copy_beneath_each_entry(shelf_env, tmp_path):
 
     body = _listing(shelf_env, path="people").json()
     assert (body["path"], body["model_count"], body["bytes"]) == ("people", 2, 30)
+    assert body["direct_model_count"] == 1
     dirs = _by_name(body)
     assert list(dirs) == ["alice", "empty"]
     assert (dirs["alice"]["model_count"], dirs["alice"]["bytes"]) == (1, 20)
+    assert dirs["alice"]["direct_model_count"] == 1
     assert dirs["alice"]["path"] == "people/alice"
     assert dirs["alice"]["has_dirs"] is False
     assert (dirs["empty"]["model_count"], dirs["empty"]["bytes"]) == (0, 0)
