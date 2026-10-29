@@ -138,7 +138,11 @@
         @mouseenter="openGroup = 'analyse'"
         @mouseleave="openGroup = null"
       >
-        <button class="ctx-item" aria-haspopup="menu">
+        <button
+          class="ctx-item"
+          aria-haspopup="menu"
+          @click="openGroup = 'analyse'"
+        >
           <v-icon class="ctx-icon">mdi-magnify-scan</v-icon>
           Analyse
           <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
@@ -226,7 +230,11 @@
         @mouseenter="openGroup = 'generate'"
         @mouseleave="openGroup = null"
       >
-        <button class="ctx-item" aria-haspopup="menu">
+        <button
+          class="ctx-item"
+          aria-haspopup="menu"
+          @click="openGroup = 'generate'"
+        >
           <v-icon class="ctx-icon">mdi-sitemap-outline</v-icon>
           Generate
           <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
@@ -278,7 +286,11 @@
         @mouseenter="openGroup = 'adjust'"
         @mouseleave="openGroup = null"
       >
-        <button class="ctx-item" aria-haspopup="menu">
+        <button
+          class="ctx-item"
+          aria-haspopup="menu"
+          @click="openGroup = 'adjust'"
+        >
           <v-icon class="ctx-icon">mdi-tune-variant</v-icon>
           Adjust
           <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
@@ -364,7 +376,11 @@
         @mouseenter="openGroup = 'find'"
         @mouseleave="openGroup = null"
       >
-        <button class="ctx-item" aria-haspopup="menu">
+        <button
+          class="ctx-item"
+          aria-haspopup="menu"
+          @click="openGroup = 'find'"
+        >
           <v-icon class="ctx-icon">mdi-image-search-outline</v-icon>
           Find &amp; compare
           <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
@@ -786,7 +802,8 @@ const recentSnapshots = computed(() =>
 // ImageGridContextMenu.vue and SnapshotsSection.vue.
 let _hashCompareRunToken = 0;
 
-watch(() => openGroup.value === "adjust", async (isOpen) => {
+// Read-only sessions see Adjust but not its snapshot rows.
+watch(() => openGroup.value === "adjust" && !props.isReadOnly, async (isOpen) => {
   if (!isOpen || !props.selectedImageIds.length) {
     return;
   }

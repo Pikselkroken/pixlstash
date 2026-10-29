@@ -262,7 +262,12 @@ export const scenes = [
     async setup({ grid, page }) {
       await readyGrid(grid)
       await grid.openContextMenu(grid.thumbnails.first())
-      // Highlight the "Reverse image search" action, as in the original.
+      // Highlight the "Reverse image search" action, as in the original. It
+      // sits in the Find & compare group, which opens on hover.
+      await grid.contextMenu
+        .locator('.ctx-item', { hasText: 'Find & compare' })
+        .first()
+        .hover()
       const item = grid.contextMenu
         .locator('.ctx-item', { hasText: 'Reverse image search' })
         .first()
@@ -289,16 +294,20 @@ export const scenes = [
       await readyGrid(grid)
       await selectN(grid, 3)
       await grid.openContextMenu(grid.thumbnails.first())
-      // Open the "Restore from snapshot" submenu so its restore-point list shows.
-      const restore = grid.contextMenu
-        .locator('.ctx-item', { hasText: 'Restore from snapshot' })
+      // Open the Adjust group, whose "Restore from snapshot" heading lists the
+      // restore points.
+      await grid.contextMenu
+        .locator('.ctx-item', { hasText: 'Adjust' })
         .first()
-      if (!(await restore.count())) {
-        throw new Error('No "Restore from snapshot" item — are there snapshots?')
-      }
-      await restore.hover()
+        .hover()
       await page.waitForTimeout(500)
-      await expect(grid.contextMenu.locator('.ctx-submenu').first()).toBeVisible()
+      const heading = grid.contextMenu.locator('.ctx-label', {
+        hasText: 'Restore from snapshot',
+      })
+      if (!(await heading.count())) {
+        throw new Error('No "Restore from snapshot" heading — are there snapshots?')
+      }
+      await expect(heading).toBeVisible()
       return null
     },
   },

@@ -439,7 +439,11 @@
           @mouseenter="openGroup = 'analyse'"
           @mouseleave="openGroup = null"
         >
-          <button class="ctx-item" aria-haspopup="menu">
+          <button
+            class="ctx-item"
+            aria-haspopup="menu"
+            @click="openGroup = 'analyse'"
+          >
             <v-icon class="ctx-icon">mdi-magnify-scan</v-icon>
             Analyse
             <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
@@ -519,7 +523,11 @@
           @mouseenter="openGroup = 'generate'"
           @mouseleave="openGroup = null"
         >
-          <button class="ctx-item" aria-haspopup="menu">
+          <button
+            class="ctx-item"
+            aria-haspopup="menu"
+            @click="openGroup = 'generate'"
+          >
             <v-icon class="ctx-icon">mdi-sitemap-outline</v-icon>
             Generate
             <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
@@ -571,7 +579,11 @@
           @mouseenter="openGroup = 'adjust'"
           @mouseleave="openGroup = null"
         >
-          <button class="ctx-item" aria-haspopup="menu">
+          <button
+            class="ctx-item"
+            aria-haspopup="menu"
+            @click="openGroup = 'adjust'"
+          >
             <v-icon class="ctx-icon">mdi-tune-variant</v-icon>
             Adjust
             <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
@@ -650,7 +662,11 @@
           @mouseenter="openFindGroup"
           @mouseleave="openGroup = null"
         >
-          <button class="ctx-item" aria-haspopup="menu">
+          <button
+            class="ctx-item"
+            aria-haspopup="menu"
+            @click="openFindGroup"
+          >
             <v-icon class="ctx-icon">mdi-image-search-outline</v-icon>
             Find &amp; compare
             <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
@@ -985,7 +1001,10 @@ let _hashCompareRunToken = 0;
 
 // The snapshot rows are in the lightbox's submenu or the grid's Adjust group.
 watch(
-  () => restoreSubmenuOpen.value || openGroup.value === "adjust",
+  // Read-only sessions see Adjust but not its snapshot rows.
+  () =>
+    restoreSubmenuOpen.value ||
+    (openGroup.value === "adjust" && !isReadOnly.value),
   async (isOpen) => {
     if (!isOpen || !props.selectedImageIds.length) {
       return;

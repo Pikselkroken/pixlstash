@@ -22,7 +22,13 @@ vi.mock("../../utils/apiClient", async () => {
   };
 });
 
+vi.mock("../../api/snapshots", () => ({
+  hashCompareSnapshot: vi.fn().mockResolvedValue({ identical_ids: [] }),
+}));
+
 import { isReadOnly } from "../../utils/apiClient";
+import { hashCompareSnapshot } from "../../api/snapshots";
+import { useSnapshotsStore } from "../../stores/useSnapshotsStore";
 import ImageGridContextMenu from "./ImageGridContextMenu.vue";
 import { ROTATE_FORMAT_REASON } from "../../utils/rotate";
 import { COMPARE_PICK_REASON } from "../../utils/compare";
@@ -219,5 +225,28 @@ describe("ImageGridContextMenu - groups", () => {
     expect(sub.find(".ctx-label").text()).toBe("Tag automatically");
     expect(sub.text()).toContain("WD14 Tagger");
     expect(sub.find(".ctx-submenu").exists()).toBe(false);
+  });
+
+  it("opens a group on click too, so Enter on a focused group row works", async () => {
+    const wrapper = mountMenu();
+    await wrapper.find('[data-group="adjust"] > .ctx-item').trigger("click");
+    expect(wrapper.find('[data-group="adjust"] .ctx-submenu').exists()).toBe(true);
+  });
+
+  it("compares snapshots on opening Adjust, but not in a read-only session", async () => {
+    const snapshot = { id: 5, is_compatible: true, kind: "MANUAL" };
+    hashCompareSnapshot.mockClear();
+    let wrapper = mountMenu();
+    useSnapshotsStore().snapshots = [snapshot];
+    await wrapper.find('[data-group="adjust"]').trigger("mouseenter");
+    expect(hashCompareSnapshot).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+
+    hashCompareSnapshot.mockClear();
+    isReadOnly.value = true;
+    wrapper = mountMenu();
+    useSnapshotsStore().snapshots = [snapshot];
+    await wrapper.find('[data-group="adjust"]').trigger("mouseenter");
+    expect(hashCompareSnapshot).not.toHaveBeenCalled();
   });
 });

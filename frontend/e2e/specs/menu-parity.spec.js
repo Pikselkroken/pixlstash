@@ -82,7 +82,12 @@ async function groupMenuLabels(rootLocator) {
     // library does not, and has nothing to compare then.
     await wrap.locator(':scope > .ctx-item').hover()
     const sub = wrap.locator('.ctx-submenu')
-    if (!(await sub.count())) continue
+    if (!(await sub.count())) {
+      // Recorded rather than skipped, so a group that stops opening shows in
+      // the diff instead of two absences comparing equal.
+      if (group !== 'move') out[group] = 'did not open'
+      continue
+    }
     out[group] = await sub.evaluate((root) =>
       Array.from(root.querySelectorAll('.ctx-item'))
         .map((el) => {
@@ -161,6 +166,13 @@ test.describe('selection / context menu parity (§4, #403)', () => {
       Object.keys(selectionGroups).length,
       'neither menu opened a tool group — the group comparison would be vacuous',
     ).toBeGreaterThan(0)
+    for (const [menu, groups] of [['context', contextGroups], ['Selection ▾', selectionGroups]]) {
+      for (const [group, rows] of Object.entries(groups)) {
+        expect(rows, `the ${menu} menu's ${group} group did not open on hover`).not.toBe(
+          'did not open',
+        )
+      }
+    }
     expect(contextGroups).toEqual(selectionGroups)
   })
 
