@@ -139,6 +139,8 @@ beforeEach(() => {
   Object.values(training).forEach((fn) => fn.mockReset());
   Object.values(config).forEach((fn) => fn.mockReset());
   config.getUserConfig.mockResolvedValue(NOT_CONNECTED);
+  // The PUT answers with what it stored, as the route does.
+  training.putAiToolkitConfig.mockImplementation(async (body) => body);
   training.discoverAiToolkit.mockResolvedValue(FOUND);
   training.checkAiToolkit.mockResolvedValue(CHECK_OK);
   training.getAiToolkitStatus.mockResolvedValue(STATUS);

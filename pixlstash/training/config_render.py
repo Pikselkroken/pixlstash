@@ -373,9 +373,9 @@ def _substitute_placeholders(
 
     Every string leaf takes *replacements*, except the ``prompt`` of a sample
     entry (an item of a ``sample.samples`` list), which takes
-    *prompt_replacements* only. A sample prompt is shown unredacted in the live
-    view, so it must not be where a host path enters. A ``prompt`` anywhere
-    else is an ordinary leaf.
+    *prompt_replacements* only, at any depth inside that entry. A sample prompt
+    is shown unredacted in the live view, so it must not be where a host path
+    enters. A ``prompt`` outside a sample entry is an ordinary leaf.
 
     Args:
         value: A JSON-decoded value (dict, list, str, or scalar).
@@ -383,7 +383,8 @@ def _substitute_placeholders(
             replacement string.
         prompt_replacements: The subset of *replacements* a sample prompt takes.
         parent: The key *value* sits under, if any.
-        sample_entry: Whether *value* is an item of a ``sample.samples`` list.
+        sample_entry: Whether *value* is, or lies inside, an item of a
+            ``sample.samples`` list.
 
     Returns:
         A new value with all placeholders substituted.
@@ -402,12 +403,18 @@ def _substitute_placeholders(
                 ]
             else:
                 out[key] = _substitute_placeholders(
-                    item, replacements, prompt_replacements, parent=key
+                    item,
+                    replacements,
+                    prompt_replacements,
+                    parent=key,
+                    sample_entry=sample_entry,
                 )
         return out
     if isinstance(value, list):
         return [
-            _substitute_placeholders(item, replacements, prompt_replacements)
+            _substitute_placeholders(
+                item, replacements, prompt_replacements, sample_entry=sample_entry
+            )
             for item in value
         ]
     if isinstance(value, str):

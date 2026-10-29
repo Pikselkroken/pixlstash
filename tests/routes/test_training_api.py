@@ -1303,6 +1303,9 @@ def test_create_job_strips_the_trigger_word_and_refuses_control_characters():
         for bad in (
             {"trigger_word": "al\nice"},
             {"trigger_word": "alice\x00"},
+            {"trigger_word": "al\u0085ice"},
+            {"trigger_word": "al\u2028ice"},
+            {**base, "name": "Alice\u2029LoRA"},
             {"trigger_word": "   "},
             {**base, "name": "Alice\nLoRA"},
         ):

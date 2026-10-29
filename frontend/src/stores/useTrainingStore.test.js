@@ -329,3 +329,13 @@ describe("fetchConfig", () => {
     expect(store.aiToolkitRepoPath).toBe("");
   });
 });
+
+describe("saveAiToolkitPaths", () => {
+  it("keeps what the server stored, not what was typed", async () => {
+    const store = useTrainingStore();
+    training.putAiToolkitConfig.mockResolvedValue({ repo_path: "/home/me/ai-toolkit", python: null });
+    await store.saveAiToolkitPaths("/home/me/ai-toolkit", "  ");
+    expect(store.aiToolkitPython).toBe("");
+    expect(store.aiToolkitConfigured).toBe(false);
+  });
+});

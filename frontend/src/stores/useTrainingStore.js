@@ -613,10 +613,11 @@ export const useTrainingStore = defineStore("training", () => {
    * caller shows the server's `detail`.
    */
   async function saveAiToolkitPaths(repoPath, python) {
-    await putAiToolkitConfig({ repo_path: repoPath, python });
-    aiToolkitRepoPath.value = repoPath;
-    aiToolkitPython.value = python;
-    aiToolkitSaved.value = !!(repoPath && python);
+    // What the server stored (it trims, and may clear a blank value).
+    const saved = await putAiToolkitConfig({ repo_path: repoPath, python });
+    aiToolkitRepoPath.value = saved?.repo_path || "";
+    aiToolkitPython.value = saved?.python || "";
+    aiToolkitSaved.value = !!(saved?.repo_path && saved?.python);
   }
 
   /** Forget both paths; the install's check and status go with them. */

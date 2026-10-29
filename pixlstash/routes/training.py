@@ -23,6 +23,7 @@ import shutil
 import tempfile
 import threading
 import time
+import unicodedata
 import zipfile
 from datetime import datetime, timezone
 from typing import Any, Literal, Optional
@@ -83,10 +84,11 @@ def _checked_text(value: str, field: str) -> str:
     """Refuse a newline or other control character in a name or trigger word.
 
     Raises:
-        ValueError: The value holds a character below space, or DEL. Pydantic
+        ValueError: The value holds a control character (C0, DEL or C1, which
+            takes in U+0085) or a Unicode line or paragraph separator. Pydantic
             turns it into a 422 naming the field.
     """
-    if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+    if any(unicodedata.category(ch) in ("Cc", "Zl", "Zp") for ch in value):
         raise ValueError(f"{field} cannot contain a newline or control character.")
     return value
 

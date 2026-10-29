@@ -149,7 +149,15 @@ def test_only_a_sample_entrys_prompt_is_limited_to_the_trigger_word():
     takes every placeholder, so a config that names one elsewhere still runs."""
     out = _substitute_placeholders(
         {
-            "sample": {"samples": [{"prompt": "{{TRIGGER_WORD}} {{DATASET_FOLDER}}"}]},
+            "sample": {
+                "samples": [
+                    {
+                        "prompt": "{{TRIGGER_WORD}} {{DATASET_FOLDER}}",
+                        "extra": {"prompt": "{{TRAINING_FOLDER}}"},
+                        "more": [{"prompt": "{{DATASET_FOLDER}}"}],
+                    }
+                ]
+            },
             "datasets": [{"prompt": "{{DATASET_FOLDER}}"}],
             "prompt": "{{TRAINING_FOLDER}}",
         },
@@ -160,7 +168,11 @@ def test_only_a_sample_entrys_prompt_is_limited_to_the_trigger_word():
         },
         {"{{TRIGGER_WORD}}": "ohwx"},
     )
-    assert out["sample"]["samples"][0]["prompt"] == "ohwx {{DATASET_FOLDER}}"
+    entry = out["sample"]["samples"][0]
+    assert entry["prompt"] == "ohwx {{DATASET_FOLDER}}"
+    # Deeper inside a sample entry is still a sample prompt.
+    assert entry["extra"]["prompt"] == "{{TRAINING_FOLDER}}"
+    assert entry["more"][0]["prompt"] == "{{DATASET_FOLDER}}"
     assert out["datasets"][0]["prompt"] == "/work/dataset"
     assert out["prompt"] == "/work/output"
 
