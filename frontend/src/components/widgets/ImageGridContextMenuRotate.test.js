@@ -229,8 +229,11 @@ describe("ImageGridContextMenu - groups", () => {
 
   it("opens a group on click too, so Enter on a focused group row works", async () => {
     const wrapper = mountMenu();
-    await wrapper.find('[data-group="adjust"] > .ctx-item').trigger("click");
+    const trigger = wrapper.find('[data-group="adjust"] > .ctx-item');
+    expect(trigger.attributes("aria-expanded")).toBe("false");
+    await trigger.trigger("click");
     expect(wrapper.find('[data-group="adjust"] .ctx-submenu').exists()).toBe(true);
+    expect(trigger.attributes("aria-expanded")).toBe("true");
   });
 
   it("compares snapshots on opening Adjust, but not in a read-only session", async () => {

@@ -442,6 +442,7 @@
           <button
             class="ctx-item"
             aria-haspopup="menu"
+            :aria-expanded="openGroup === 'analyse'"
             @click="openGroup = 'analyse'"
           >
             <v-icon class="ctx-icon">mdi-magnify-scan</v-icon>
@@ -526,6 +527,7 @@
           <button
             class="ctx-item"
             aria-haspopup="menu"
+            :aria-expanded="openGroup === 'generate'"
             @click="openGroup = 'generate'"
           >
             <v-icon class="ctx-icon">mdi-sitemap-outline</v-icon>
@@ -582,6 +584,7 @@
           <button
             class="ctx-item"
             aria-haspopup="menu"
+            :aria-expanded="openGroup === 'adjust'"
             @click="openGroup = 'adjust'"
           >
             <v-icon class="ctx-icon">mdi-tune-variant</v-icon>
@@ -665,6 +668,7 @@
           <button
             class="ctx-item"
             aria-haspopup="menu"
+            :aria-expanded="openGroup === 'find'"
             @click="openFindGroup"
           >
             <v-icon class="ctx-icon">mdi-image-search-outline</v-icon>
