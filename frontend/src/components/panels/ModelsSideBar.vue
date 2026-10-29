@@ -501,14 +501,13 @@ function openRuns() {
 }
 
 /* No top padding: the first row meets the slot's rule, as the Media list's
-   does. */
+   does. Block flow, not a flex column: a flex column shrinks the rows to fit
+   an expanded folder instead of scrolling. */
 .msb-scroll {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   padding: 0 0 var(--space-2);
-  display: flex;
-  flex-direction: column;
 }
 
 .msb-head {
