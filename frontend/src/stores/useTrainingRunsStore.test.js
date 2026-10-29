@@ -53,3 +53,45 @@ describe("a session reset and the per-checkpoint picks", () => {
     expect(store.chosenSteps).toEqual([500, 1000]);
   });
 });
+
+describe("the cards of jobs with no folder", () => {
+  const job = (uuid, status, run_name = null, started_at = null) => ({
+    uuid,
+    name: uuid,
+    status,
+    run_name,
+    started_at,
+    created_at: "2026-10-01T00:00:00Z",
+  });
+  const STARTED = "2026-10-01T00:01:00Z";
+
+  // A run that failed or was cancelled before ai-toolkit made a folder has
+  // nothing on disk to draw, so its job is its only card (#2293); one that
+  // finished, or ended after it had a folder, is drawn from the folder or not
+  // at all.
+  it("keeps a card for a run that ended before it had a folder", () => {
+    const store = useTrainingRunsStore();
+    store.runs = [walter()];
+    store.jobs = [
+      job("queued", "queued"),
+      job("dataset-failed", "error"),
+      job("cancelled", "stopped"),
+      job("finished", "completed"),
+      job("imported-away", "error", "gone_v1", STARTED),
+      // A started run under an output root since moved names no run.
+      job("root-moved", "stopped", null, STARTED),
+      job("walter", "error", "walter_v2", STARTED),
+    ];
+
+    const keys = store.cards.map((card) => card.key);
+    expect(keys).toEqual([
+      "job:queued",
+      "job:dataset-failed",
+      "job:cancelled",
+      "run:walter_v2",
+    ]);
+    const failed = store.cards.find((card) => card.key === "job:dataset-failed");
+    expect(failed.live).toBe(false);
+    expect(failed.run).toBe(null);
+  });
+});

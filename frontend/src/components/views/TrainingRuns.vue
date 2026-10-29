@@ -146,8 +146,17 @@
               <v-icon v-if="card.live" size="18" class="mdi-spin"
                 >mdi-loading</v-icon
               >
+              <v-icon v-else-if="failed(card)" size="18" class="tr-card-err"
+                >mdi-alert</v-icon
+              >
               <v-icon v-else size="18">mdi-image-off-outline</v-icon>
-              <span>{{ card.live ? jobStatus(card.job) : "No previews" }}</span>
+              <!-- A job with no folder has nothing to preview: its state is the
+                   whole card (#2293). -->
+              <span>{{
+                card.live || failed(card) || !card.run
+                  ? jobStatus(card.job)
+                  : "No previews"
+              }}</span>
             </div>
 
             <!-- The countable half of the checked state. The rail says "this
@@ -164,6 +173,9 @@
             <span class="tr-card-title">
               <span class="tr-card-name">{{ card.name }}</span>
               <span v-if="card.live" class="tr-card-chip">Training</span>
+              <span v-else-if="failed(card)" class="tr-card-chip tr-card-chip--err"
+                >Failed</span
+              >
             </span>
             <span
               v-if="progressOf(card) != null"
@@ -183,7 +195,19 @@
                  interrupted. The highest step is then the best available
                  answer, not a certain one, and saying so is the difference
                  between a surprise and a choice. -->
-            <span v-if="card.run && !card.live && !hasBareFinal(card.run)" class="tr-card-note">
+            <!-- Why it ended, in the trainer's words: a failed run with a
+                 folder otherwise reads as one that is merely unfinished. -->
+            <span
+              v-if="!card.live && card.job?.error"
+              class="tr-card-note"
+              data-testid="tr-card-reason"
+              :title="card.job.error"
+              >{{ card.job.error }}</span
+            >
+            <span
+              v-else-if="card.run && !card.live && !failed(card) && !hasBareFinal(card.run)"
+              class="tr-card-note"
+            >
               No final file yet, so the newest step is the cover.
             </span>
             <span v-if="card.run?.config_error" class="tr-card-note">
@@ -421,6 +445,7 @@ import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import {
   baseOf,
   dateOf,
+  failed,
   hasBareFinal,
   jobStatus,
   progressOf,
@@ -1063,6 +1088,15 @@ function batchReceipt(imported, failed) {
   border-radius: var(--radius-sm);
   color: rgb(var(--v-theme-on-background));
   font-size: var(--text-2xs);
+}
+
+/* As the run page's notices: the hue on the edge and the glyph, the word in ink. */
+.tr-card-chip--err {
+  border-color: rgb(var(--v-theme-surface-error));
+}
+
+.tr-card-err {
+  color: rgb(var(--v-theme-surface-error));
 }
 
 .tr-card-bar {

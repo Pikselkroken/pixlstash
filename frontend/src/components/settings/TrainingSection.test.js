@@ -53,6 +53,16 @@ describe("the Training settings section", () => {
     expect(training.listTrainingJobs).toHaveBeenCalledTimes(1);
   });
 
+  it("says why a failed job failed", async () => {
+    training.listTrainingJobs.mockResolvedValue([
+      { ...DONE, status: "error", error: "Dataset build failed" },
+    ]);
+    const wrapper = mountSection(true);
+    await flushPromises();
+
+    expect(wrapper.find(".training-row-err").text()).toBe("Dataset build failed");
+  });
+
   it("polls while a job started elsewhere is running", async () => {
     vi.useFakeTimers();
     mountSection(true);

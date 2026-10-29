@@ -6406,7 +6406,10 @@ its own overrides (the container-query fold, the icon-trigger accent) and
 listing, the job list and which cards are picked, because the grid draws and
 picks them, the rail describes the pick and the sidebar counts them. A card is
 `{ key, name, run, job, live }`: every folder run, plus each live job with no
-folder yet. A run with a folder is keyed `run:<name>` whether or not its job
+folder yet, and each job that failed or was stopped before it started, which
+would otherwise vanish the moment it ended (#2293). The test is `started_at`,
+written in the same update as the run's folder, and not `run_name`, which is
+also null for a run under an output root since moved. A run with a folder is keyed `run:<name>` whether or not its job
 has been read, so a tick survives the job list landing or failing; a queued job
 with no folder is `job:<uuid>`, and the tick moves to its folder card when the
 folder appears. Cards sort live first,
@@ -6426,7 +6429,11 @@ progress, base, date, the samples grid) is `utils/trainingRuns.js`.
 being `display: contents` so its options sit in the grid beside the tile. A
 card shows the highest step's samples as a strip in prompt order, a progress
 bar (amber while live), base / steps / date chips and an amber-outlined
-*Training* chip while live.
+*Training* chip while live. A failed run carries a *Failed* chip outlined in
+`surface-error` instead. A run that has ended shows its job's `error`, which
+`GET /training/jobs` carries redacted like the rest, as its note in place of
+"No final file yet", and the rail's Training section repeats it. A failed run
+that saved checkpoints stays importable, as a stopped one is.
 
 **Selection.** A click, Enter or Space picks. Finished runs gather into a
 batch; a live run is picked on its own (picking it replaces the batch, and a

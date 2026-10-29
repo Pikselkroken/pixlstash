@@ -9,6 +9,11 @@ export function hasBareFinal(run) {
   return (run?.checkpoints || []).some((cp) => cp.step === null);
 }
 
+/** True when PixlStash trained the run and it failed. */
+export function failed(card) {
+  return card?.job?.status === "error";
+}
+
 /** The highest step a run saved a checkpoint at, or 0. */
 export function lastSavedStep(run) {
   return Math.max(
