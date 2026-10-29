@@ -14,6 +14,7 @@ import { enableAutoUnmount, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 
 import Lightbox from "./Lightbox.vue";
+import { getStackColor } from "../../utils/utils.js";
 
 vi.mock("../../utils/apiClient", () => ({
   API_BASE_URL: "/api/v1",
@@ -193,5 +194,49 @@ describe("Lightbox filmstrip scrolls independently", () => {
     await flush();
     await flush();
     expect(reveal).toHaveBeenLastCalledWith(13, { centre: true });
+  });
+});
+
+describe("Lightbox stack chip", () => {
+  const STACK = [
+    { id: 1, tags: [] },
+    { id: 2, tags: [], stack_id: 5, stack_position: 0, stack_count: 3 },
+    { id: 3, tags: [], stack_id: 5, stack_position: 1, stack_count: 3 },
+    { id: 4, tags: [], stack_id: 5, stack_position: 2, stack_count: 3 },
+    { id: 9, tags: [] },
+  ];
+  const chipText = (wrapper) =>
+    wrapper.find(".lightbox-stack-chip-text").text().replace(/\s+/g, " ");
+  const step = (wrapper, i) =>
+    wrapper.findAll(".lightbox-stack-chip-step")[i].trigger("click");
+
+  it("steps through a folded stack, wrapping at either end", async () => {
+    const wrapper = await openLightboxOn(2, STACK);
+    expect(chipText(wrapper)).toBe("1 of 3 in this stack");
+    // Washed with the stack's own hue.
+    const chip = wrapper.find(".lightbox-stack-chip");
+    expect(chip.classes()).toContain("lightbox-stack-chip--tinted");
+    expect(chip.attributes("style")).toContain(
+      `--stack-chip-tint: ${getStackColor(5)}`,
+    );
+    // Folded: the filmstrip shows the cover alone.
+    expect(strip(wrapper).props("offsets")).toHaveLength(3);
+
+    await step(wrapper, 1);
+    await flush();
+    expect(activeId(wrapper)).toBe(3);
+    // Unfolded, so the member stepped to is on the strip.
+    expect(strip(wrapper).props("offsets")).toHaveLength(5);
+    expect(chipText(wrapper)).toBe("2 of 3 in this stack");
+
+    await step(wrapper, 1);
+    await step(wrapper, 1);
+    await flush();
+    expect(activeId(wrapper)).toBe(2);
+
+    await step(wrapper, 0);
+    await flush();
+    expect(activeId(wrapper)).toBe(4);
+    expect(chipText(wrapper)).toBe("3 of 3 in this stack");
   });
 });

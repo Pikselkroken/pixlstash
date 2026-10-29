@@ -58,14 +58,48 @@
           :disabled="!canStep"
           @click.stop="showNextImage"
         />
-        <!-- Where this picture sits in its stack, and the one-click way to
-             make it the cover without a trip to the filmstrip. -->
-        <div v-if="image && lightboxStackPlace" class="lightbox-stack-chip">
+        <!-- Where this picture sits in its stack, arrows to step through it
+             even while it is folded in the filmstrip, and the one-click way
+             to make it the cover. -->
+        <div
+          v-if="image && lightboxStackPlace"
+          class="lightbox-stack-chip"
+          :class="{ 'lightbox-stack-chip--tinted': lightboxStackTint }"
+          :style="
+            lightboxStackTint ? { '--stack-chip-tint': lightboxStackTint } : null
+          "
+        >
+          <button
+            type="button"
+            class="lightbox-stack-chip-step"
+            aria-label="Previous in this stack"
+            @click.stop="stepStack(-1)"
+          >
+            <Tooltip
+              text="Previous in this stack"
+              activator="parent"
+              :describe="false"
+            />
+            <v-icon size="16">mdi-chevron-left</v-icon>
+          </button>
           <v-icon size="16">mdi-layers-outline</v-icon>
-          <span
+          <span class="lightbox-stack-chip-text num"
             >{{ lightboxStackPlace.position + 1 }} of
             {{ lightboxStackPlace.count }} in this stack</span
           >
+          <button
+            type="button"
+            class="lightbox-stack-chip-step"
+            aria-label="Next in this stack"
+            @click.stop="stepStack(1)"
+          >
+            <Tooltip
+              text="Next in this stack"
+              activator="parent"
+              :describe="false"
+            />
+            <v-icon size="16">mdi-chevron-right</v-icon>
+          </button>
           <button
             v-if="!isReadOnly && lightboxStackPlace.position > 0"
             type="button"
@@ -2701,6 +2735,30 @@ function getLightboxStackPlace(item) {
 }
 
 const lightboxStackPlace = computed(() => getLightboxStackPlace(image.value));
+// The stack's own hue, the one its filmstrip band wears, washed into the chip.
+const lightboxStackTint = computed(() => getLightboxStackColor(image.value));
+
+/**
+ * The stack chip's arrows: the neighbouring member, wrapping like the
+ * toolbar's own arrows. A folded stack is unfolded in the filmstrip first,
+ * which is where the member is looked up and where it would land anyway.
+ *
+ * @param {1|-1} direction
+ */
+function stepStack(direction) {
+  const place = lightboxStackPlace.value;
+  const stackId = getPictureStackId(image.value);
+  if (!place || !stackId) return;
+  const ids = getLightboxStackOrder(stackId);
+  const targetId = ids[(place.position + direction + ids.length) % ids.length];
+  if (!lightboxExpandedStackIds.value.has(stackId)) {
+    lightboxExpandedStackIds.value = new Set([
+      ...lightboxExpandedStackIds.value,
+      stackId,
+    ]);
+  }
+  setLightboxImageById(targetId);
+}
 
 // The header chip and the menu need the order of the picture on screen even
 // when its stack is folded in the filmstrip.
