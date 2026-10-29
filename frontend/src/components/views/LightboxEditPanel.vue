@@ -227,7 +227,7 @@
             </button>
             <div class="ctx-sep" role="separator"></div>
             <p class="edit-menu-note">
-              Upscalers are not listed here. Use More options… for those.
+              Upscalers are not listed here. Use More settings… for those.
             </p>
           </div>
         </v-menu>
@@ -262,8 +262,6 @@
           class="edit-textarea"
           rows="4"
           :placeholder="promptHelp.placeholder"
-          :aria-describedby="shortcutHintId"
-          @keydown="onInstructionKeydown"
         ></textarea>
         <div v-show="helpOpen" :id="helpId" class="edit-help">
           <p v-for="(tip, index) in promptHelp.tips" :key="index">{{ tip }}</p>
@@ -354,6 +352,7 @@
           block
           :loading="submitting"
           :disabled="!!chosenMissing"
+          key-hint="ctrl+enter"
           @click="submit"
         >
           <v-icon v-if="!submitting" size="16">mdi-play</v-icon>
@@ -361,12 +360,19 @@
             runsOnAll ? `Run on ${applyToIds.length} pictures` : "Run edit"
           }}
         </AppButton>
-        <div class="edit-foot-row">
-          <button type="button" class="edit-link" @click="onMoreOptions()">
-            More options…
-          </button>
-          <span :id="shortcutHintId" class="edit-note">Ctrl + Enter</span>
-        </div>
+        <!-- Run's Ctrl+Enter is handled by the lightbox, so it works wherever
+             focus is while this tab is on screen. -->
+        <AppButton
+          on-dark
+          variant="ghost"
+          size="sm"
+          block
+          icon-left="cog-outline"
+          tooltip="Open the Run window with this filled in, for LoRAs, seed, size and more"
+          @click="onMoreOptions()"
+        >
+          More settings…
+        </AppButton>
         <!-- The selection's undo, which the floating toolbox used to hold. -->
         <button
           v-if="hasSelection"
@@ -389,7 +395,7 @@
  *
  * Built to the "Slim Form" design: three fields and a button. Everything past
  * the instruction (LoRAs, seed, size) stays in the Run popup, one click away
- * behind *More options…*, which opens it with this picture, this workflow and
+ * behind *More settings…*, which opens it with this picture, this workflow and
  * the typed instruction filled in.
  *
  * **Which cards count.** Image to Image, Inpaint and Outpaint only - the card
@@ -525,7 +531,6 @@ const PROMPT_HELP = {
 const workflowLabelId = useId();
 const pickerValueId = useId();
 const instructionFieldId = useId();
-const shortcutHintId = useId();
 const helpId = useId();
 
 const runDialog = useRunDialogStore();
@@ -750,7 +755,14 @@ function remember(key, masked) {
   }
 }
 
-async function loadCards() {
+/**
+ * *cached* answers each card from ComfyUI's node list as last read, up to a
+ * minute old: asking ComfyUI afresh for every card took the tab seconds to
+ * appear. The listing is drawing, not the decision: Run asks afresh, so a
+ * card listed on a minute-old answer is refused there with the reason. A
+ * re-read after an install does not, or it would still see the nodes missing.
+ */
+async function loadCards({ cached = true } = {}) {
   if (loaded.value || loading.value) return;
   loading.value = true;
   loadError.value = "";
@@ -761,7 +773,9 @@ async function loadCards() {
     const { cards: all } = await listWorkflowCards();
     const edits = all.filter((card) => EDIT_TYPES.has(card.type));
     const landed = tasksStore.downloadsLanded;
-    const runs = await Promise.all(edits.map(wouldRun));
+    const runs = await Promise.all(
+      edits.map((card) => wouldRun(card, { cached })),
+    );
     cards.value = edits.filter((_, index) => listed(runs[index]));
     packReason.value = mergedPackReason(
       runs.filter((run) => run?.code === MISSING_NODES),
@@ -815,7 +829,7 @@ function mergedPackReason(reasons) {
 /** Read the cards again, once the install's nodes have loaded. */
 function reloadCards() {
   loaded.value = false;
-  void loadCards();
+  void loadCards({ cached: false });
 }
 
 /**
@@ -849,9 +863,9 @@ function runsHere(key) {
  * `missing_nodes` reason when its only objection is nodes a known pack
  * provides (the card is dropped, but the pack is offered), false otherwise.
  */
-async function wouldRun(card) {
+async function wouldRun(card, options) {
   try {
-    return await verdict(card.id);
+    return await verdict(card.id, options);
   } catch (err) {
     console.warn(`Could not pre-flight ${card.id} for the Edit tab:`, err);
     return true;
@@ -859,13 +873,13 @@ async function wouldRun(card) {
 }
 
 /** `wouldRun`'s answer, throwing when the pre-flight itself fails. */
-async function verdict(key) {
+async function verdict(key, { cached = false } = {}) {
   const id = Number(props.pictureId);
   if (!Number.isFinite(id) || id <= 0) return true;
-  const answer = await preflightWorkflowRun({
-    picture_ids: [id],
-    target: key,
-  });
+  const answer = await preflightWorkflowRun(
+    { picture_ids: [id], target: key },
+    { cached },
+  );
   const reasons = (answer?.groups || [])
     .flatMap((group) => group.reasons || [])
     .filter((reason) => !UNCHECKED_CODES.includes(reason.code));
@@ -1062,13 +1076,6 @@ function showResult() {
   }
 }
 
-function onInstructionKeydown(event) {
-  if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-    event.preventDefault();
-    void submit();
-  }
-}
-
 function openInWorkflows() {
   if (!workflowId.value) return;
   router.push({ name: "workflows", query: { workflow: workflowId.value } });
@@ -1077,7 +1084,7 @@ function openInWorkflows() {
 /**
  * The Run popup for this picture. *edit* is a card chosen because it needs
  * another picture: the popup opens as an edit of this one, reading none of its
- * recipe, as the tab's own Run would. *More options…* keeps the recipe read.
+ * recipe, as the tab's own Run would. *More settings…* keeps the recipe read.
  */
 function onMoreOptions(key = workflowId.value, edit = false) {
   const id = Number(props.pictureId);
@@ -1167,7 +1174,7 @@ function follow(sourceId, workflowName, text, stacked, before, count = 1) {
   };
 }
 
-// A run the Run popup started for this tab (*More options…*, or a card that
+// A run the Run popup started for this tab (*More settings…*, or a card that
 // needs a reference picture), followed as one of its own. App.vue has already
 // handed it on without picture ids, so the lightbox stays put.
 watch(
@@ -1537,12 +1544,6 @@ defineExpose({ submit });
 
 .edit-foot .edit-note {
   margin: 0;
-}
-
-.edit-foot-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
 }
 
 .edit-undo {

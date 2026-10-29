@@ -136,6 +136,7 @@ const STUBS = {
       "applyToIds",
       "comfyuiConfigured",
     ],
+    methods: { submit: (...args) => editSubmit(...args) },
     template: "<div class='edit-stub'></div>",
   },
 };
@@ -150,6 +151,9 @@ const tabLabels = (wrapper) =>
   wrapper.findAll(".inspector-tab").map(labelOf);
 
 const activeTab = (wrapper) => labelOf(wrapper.find(".inspector-tab--active"));
+
+// The Edit tab's Run, as the lightbox's Ctrl+Enter reaches it.
+const editSubmit = vi.fn();
 
 async function openOn(
   id,
@@ -179,6 +183,7 @@ async function openOn(
 }
 
 beforeEach(() => {
+  editSubmit.mockClear();
   setActivePinia(createPinia());
   // The pane, open here unless a test says otherwise.
   useSidebarStore().lightboxRailOpen = true;
@@ -597,6 +602,34 @@ describe("the lightbox Edit tab", () => {
     editPanel(wrapper).vm.$emit("running", false);
     await flush();
     expect(lightboxBar(wrapper)).toBe(true);
+  });
+
+  it("runs the Edit tab on Ctrl+Enter wherever focus is, only on that tab", async () => {
+    const wrapper = await openOn(7, undefined, configured);
+    const ctrlEnter = () =>
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          ctrlKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    ctrlEnter();
+    expect(editSubmit).not.toHaveBeenCalled();
+    await wrapper.findAll(".inspector-tab")[2].trigger("click");
+    expect(ctrlEnter()).toBe(false);
+    expect(editSubmit).toHaveBeenCalledOnce();
+    // Under an open menu (the workflow picker) the key is the menu's.
+    const menu = document.createElement("div");
+    menu.className = "v-overlay--active v-menu";
+    document.body.append(menu);
+    try {
+      ctrlEnter();
+      expect(editSubmit).toHaveBeenCalledOnce();
+    } finally {
+      menu.remove();
+    }
   });
 
   it("shows an edit result the grid has not inserted yet", async () => {
