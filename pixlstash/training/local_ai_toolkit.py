@@ -56,6 +56,19 @@ CREATE TABLE IF NOT EXISTS Job (
 # Flags added since a job.db could have been created, for a table that exists.
 _LATER_JOB_FLAGS = ("sample_now",)
 
+# The trainer's own stdout/stderr, in the work dir. Never the backend's streams:
+# under the desktop app those are pipes that close when it quits, and the
+# trainer's next print would die on them. Not log.txt either: ai-toolkit
+# deletes and reopens that one itself.
+_TRAINER_OUTPUT_NAME = "trainer_output.log"
+# Windows has no sessions: these give the trainer its own hidden console, so a
+# Ctrl+C in the backend's or closing its window does not reach it, and console
+# tools it starts open no window (DETACHED_PROCESS would give each one its own).
+# It stays the backend's child: `taskkill /T` still ends it. 0 elsewhere.
+_DETACHED_FLAGS = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(
+    subprocess, "CREATE_NO_WINDOW", 0
+)
+
 # The trainer's CUDA allocator setting, unless the owner set their own.
 _ALLOC_CONF = "expandable_segments:True"
 
@@ -306,6 +319,8 @@ class LocalAiToolkit(TrainerBackend):
         Launches ``<python> <run_script> <config> --log <log>`` from the repo
         in its own process group (so cancel can signal the group), records the
         PID onto *handle* and into ``pid.txt``, and marks the job ``running``.
+        Its stdout/stderr go to ``<work_dir>/trainer_output.log`` and its stdin
+        is closed, so it outlives the backend's streams.
 
         ``HF_TOKEN`` is forwarded to the child env when set but is NEVER logged;
         only the names of the env keys we set are logged.
@@ -345,15 +360,27 @@ class LocalAiToolkit(TrainerBackend):
             set_env_keys,
         )
 
+        output_path = os.path.join(handle.work_dir, _TRAINER_OUTPUT_NAME)
         try:
-            process = subprocess.Popen(  # noqa: S603 - argv list, never shell
-                cmd,
-                cwd=self.ai_toolkit_repo_path,
-                env=env,
-                start_new_session=True,
-            )
+            # The child keeps its own copy of the descriptor; ours closes here.
+            with open(output_path, "wb") as output:
+                process = subprocess.Popen(  # noqa: S603 - argv list, never shell
+                    cmd,
+                    cwd=self.ai_toolkit_repo_path,
+                    env=env,
+                    stdin=subprocess.DEVNULL,
+                    stdout=output,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                    creationflags=_DETACHED_FLAGS,
+                )
         except OSError as exc:
-            logger.error("Failed to launch trainer job %s: %s", handle.job_id, exc)
+            logger.error(
+                "Failed to launch trainer job %s (output %s): %s",
+                handle.job_id,
+                output_path,
+                exc,
+            )
             self._set_job_status(handle.sqlite_db_path, handle.job_id, "error")
             raise
 

@@ -8,6 +8,7 @@ poll-with-timeout loops so the suite runs in well under a second.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import sqlite3
@@ -18,7 +19,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from pixlstash.training.backend import TrainingSpec
+from pixlstash.training.backend import TrainingHandle, TrainingSpec
 from pixlstash.training.local_ai_toolkit import LocalAiToolkit, safe_job_stem
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -245,6 +246,60 @@ def test_full_run_progresses_to_completed(tmp_path):
 
     # Process should have exited on its own.
     assert _poll_until(lambda: not backend.is_alive(handle))
+
+
+# Launches a run from a backend whose stdout/stderr are pipes, prints the handle
+# and exits: the desktop app's backend quitting while a run goes on.
+_LAUNCH_AND_EXIT = """
+import dataclasses, json, sys
+from pixlstash.training.backend import TrainingHandle, TrainingSpec
+from pixlstash.training.local_ai_toolkit import LocalAiToolkit
+backend = LocalAiToolkit(*sys.argv[1:4])
+spec = TrainingSpec(**json.loads(sys.argv[4]))
+handle = backend.prepare(spec)
+backend.submit(handle, spec)
+print(json.dumps(dataclasses.asdict(handle)), flush=True)
+"""
+
+
+def test_a_run_outlives_the_backend_and_its_closed_streams(tmp_path, monkeypatch):
+    """The trainer's prints never reach the backend's streams (#2289).
+
+    Handed them, its first print after the app closes the pipes raises
+    BrokenPipeError and the run dies mid-way.
+    """
+    monkeypatch.setenv("FAKE_RUN_STEP_DELAY", "0.05")
+    spec = _make_spec(tmp_path, steps=20, save_every=0)
+    launcher = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            _LAUNCH_AND_EXIT,
+            _THIS_DIR,
+            sys.executable,
+            "fake_run.py",
+            json.dumps(dataclasses.asdict(spec)),
+        ],
+        cwd=os.path.dirname(os.path.dirname(_THIS_DIR)),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    line = launcher.stdout.readline()
+    launcher.stdout.close()
+    launcher.stderr.close()
+    launcher.wait(timeout=30)
+    assert line, "the launcher printed no handle"
+    handle = TrainingHandle(**json.loads(line))
+    backend = _make_backend()
+    try:
+        assert _poll_until(lambda: not backend.is_alive(handle), timeout=30)
+        assert _job_status(handle) == "completed"
+        with open(os.path.join(handle.work_dir, "trainer_output.log")) as fh:
+            output = fh.read()
+        assert "step 20/20" in output
+        assert "progress 20" in output
+    finally:
+        backend.cancel(handle)
 
 
 def test_cancel_midrun_stops_job_and_kills_process(tmp_path, monkeypatch):

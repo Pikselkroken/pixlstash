@@ -11502,7 +11502,16 @@ folder routes call. The server binds that registrar at start-up with
 id[:8]>`. The suffix is there because the folder is shared, so two runs with one
 name must not share a directory. The dataset goes to
 `<repo>/datasets/pixlstash-<uuid>`. The per-job work dir (`job.db`, the rendered
-config) stays under `<image_root>/training/<uuid>`.
+config, `trainer_output.log`) stays under `<image_root>/training/<uuid>`.
+
+The trainer runs in its own session with stdin closed and its stdout and stderr
+in `trainer_output.log`, never the backend's streams: under the desktop app
+those are pipes that close when the app quits, and a trainer still writing to
+them would die mid-run (#2289). On POSIX a run therefore outlives the app. On
+Windows it does not yet: the desktop app stops the backend with `taskkill /T`,
+which follows parent-pid links and ends the trainer too. The log tail the app
+shows still reads `log.txt`, ai-toolkit's own tee, so output printed before
+that tee starts is only in `trainer_output.log`.
 
 Job delete removes the work dir and the `pixlstash-<uuid>` dataset it recorded.
 It never removes a run folder in a shelf folder, and it refuses a dataset path
