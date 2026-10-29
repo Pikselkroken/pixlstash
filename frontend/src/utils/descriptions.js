@@ -20,3 +20,18 @@ export function formatDescriptionSentinel(value) {
   if (engine) return `Generating with ${engine}\u2026`;
   return "Generating description\u2026";
 }
+
+/**
+ * Where a quote from a description sits in it, ignoring case: the head's
+ * title is its first sentence, capitalised and without its article.
+ *
+ * @param {string} text - the description.
+ * @param {string} quote
+ * @returns {[number, number]|null} the quote's start and end in `text`.
+ */
+export function findInDescription(text, quote) {
+  if (!text || !quote) return null;
+  const pattern = quote.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(pattern, "i").exec(text);
+  return match ? [match.index, match.index + match[0].length] : null;
+}

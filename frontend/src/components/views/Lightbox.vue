@@ -860,6 +860,7 @@
             @pin-face="togglePinnedFace"
             @create-person="openCreatePersonForFace"
             @hover-tag="(label) => (hoveredTagLabel = label)"
+            @pick-title="descriptionPanelRef?.selectText(pictureName)"
             @tags-applied="onTagsApplied"
             @lightbox-change="(payload) => emit('lightbox-change', payload)"
           >
@@ -873,10 +874,11 @@
                 Draw a face box
               </AppButton>
             </template>
-            <template #description>
+            <template #description="{ highlight }">
               <LightboxDescriptionPanel
                 ref="descriptionPanelRef"
                 :image="image"
+                :highlight="highlight"
                 :locked="isCurrentLocked"
                 :lock-note="currentLockReason"
                 :text-state="pictureText.text.value.state"
