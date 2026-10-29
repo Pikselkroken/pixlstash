@@ -16,7 +16,9 @@ const read = (name) =>
   readFileSync(fileURLToPath(new URL(name, import.meta.url)), "utf8");
 
 const globalCss = read("./SideBar.global.css");
-const scopedCss = read("./SideBar.css");
+// The scoped sheets: Media's own, and the nav rows every workspace's sidebar
+// shares (SidebarNav.css), checked as one.
+const scopedCss = read("./SideBar.css") + "\n" + read("./SidebarNav.css");
 
 /** Strip comments so prose about a bug is never mistaken for the bug. */
 const code = (css) => css.replace(/\/\*[\s\S]*?\*\//g, "");
@@ -63,6 +65,33 @@ describe("the row system is defined once, unscoped", () => {
     // drift apart again.
     expect(globalCss).toContain(".sidebar-list-item.not-droppable");
     expect(scopedCss).not.toContain("not-droppable");
+  });
+});
+
+describe("every workspace's sidebar is one sidebar", () => {
+  // Media, Workflows and Models each drew their own rows and only Media could
+  // be resized; the three drifted apart in glyph size, gaps and type.
+  for (const file of [
+    "./SideBar.vue",
+    "./WorkflowsSidebar.vue",
+    "./ModelsSideBar.vue",
+  ]) {
+    it(`${file} wears the shared nav sheet, rows and resize handle`, () => {
+      const sfc = read(file);
+      expect(sfc).toContain('<style scoped src="./SidebarNav.css"></style>');
+      expect(sfc).toMatch(/<SidebarResizeHandle\b/);
+      expect(sfc).toMatch(/class="[^"]*\bsidebar-panel\b/);
+      expect(sfc).toMatch(/class="[^"]*\bsidebar-nav-list\b/);
+      expect(sfc).toContain('class="sidebar-list-icon');
+      expect(sfc).toContain('class="sidebar-section-header"');
+    });
+  }
+
+  it("Media imports the shared sheet before its own, so its rules refine it", () => {
+    const sfc = read("./SideBar.vue");
+    expect(sfc.indexOf('src="./SidebarNav.css"')).toBeLessThan(
+      sfc.indexOf('src="./SideBar.css"'),
+    );
   });
 });
 

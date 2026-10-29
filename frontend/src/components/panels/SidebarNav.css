@@ -1,0 +1,290 @@
+/* ---------------------------------------------------------------------------
+   THE SIDEBAR NAV: one shell, one row, one section head and one footer band
+   for every workspace's left sidebar (Media's SideBar, WorkflowsSidebar,
+   ModelsSideBar), so a workspace switch moves no edge, glyph or label.
+
+   Each of the three imports this file SCOPED (`<style scoped src>`), before
+   its own sheet, so these rules carry the same specificity they had when they
+   lived in SideBar.css and the component's own rules still refine them. The
+   horizontal row box (left edge, depth, rail) is not here: it is the row
+   system in SideBar.global.css, which these rows also wear.
+
+   Row anatomy, left to right: the reserved 3px rail, `--row-pad`, a 20px
+   icon slot holding a 16px glyph, `--space-3`, the label, the count.
+   --------------------------------------------------------------------------- */
+
+/* The rail itself: the sidebar ground, its own column, and one rule for
+   "chrome rail meets the grid canvas", shared with the inspector's
+   (`AppInspector`) border-left so both rails present the same edge. A child
+   SidebarResizeHandle sits on that rule, so the shell is the positioned box. */
+.sidebar-panel {
+  position: relative;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
+  background: rgb(var(--v-theme-sidebar));
+  color: rgb(var(--v-theme-sidebar-text));
+  border-right: 1px solid rgb(var(--v-theme-border));
+}
+
+/* The list of places and sections: full-width rows of one 32px height, a
+   20px icon slot. */
+.sidebar-nav-list {
+  --sidebar-thumb-size: 20px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* A list that scrolls (Workflows, Models) must scroll, not squeeze its rows
+   and an expanded folder tree to fit its height. */
+.sidebar-nav-list > * {
+  flex-shrink: 0;
+}
+
+.sidebar-section-header {
+  position: relative;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  min-height: clamp(18px, calc(var(--sidebar-thumb-size) * 0.65), 24px);
+  padding-top: clamp(var(--space-1), calc(var(--sidebar-thumb-size) * 0.1), var(--space-3));
+  padding-bottom: var(--space-1);
+  padding-right: var(--sidebar-header-action-right-edge, 0px) !important;
+  display: flex;
+  align-items: center;
+  color: rgb(var(--v-theme-sidebar-text));
+}
+
+/* Section heads: the uppercase label, with the section's "+" at the right
+   edge (visual-language.md, "The section label"). */
+.sidebar-nav-list .sidebar-section-header {
+  min-height: 0;
+  height: var(--control-h-bar);
+  margin-top: var(--space-3);
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+/* Type comes from .sidebar-section-header; at full ink, since a structural
+   label must not be dimmer than the rows it heads (visual-language.md §5.1). */
+.sidebar-section-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar-header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 40px;
+  justify-content: flex-end;
+  margin-left: auto;
+  padding-right: var(--sidebar-header-action-right-edge, 0px) !important;
+}
+
+.sidebar-nav-list .sidebar-header-actions {
+  min-width: 0;
+}
+
+.sidebar-header-actions .v-icon {
+  min-width: 22px;
+  min-height: 22px;
+  justify-content: center;
+  text-align: center;
+  color: rgb(var(--v-theme-sidebar-text));
+}
+
+/* The section's own "+", at the head's right edge. */
+.sidebar-section-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: rgb(var(--v-theme-sidebar-text));
+  cursor: pointer;
+}
+
+.sidebar-section-add:hover {
+  background: var(--hover-wash);
+}
+
+.sidebar-list-item {
+  display: flex;
+  align-items: center;
+  min-height: calc(var(--sidebar-thumb-size) + 6px);
+  padding-top: var(--space-2);
+  padding-bottom: var(--space-2);
+  padding-right: var(--sidebar-right-edge, var(--space-3)) !important;
+  cursor: pointer;
+  border-radius: 0;
+  margin-bottom: 0;
+  font-size: var(--text-sm);
+  font-weight: 400;
+  background: transparent;
+  color: rgb(var(--v-theme-sidebar-text));
+  transition:
+    background 0.12s,
+    color 0.12s,
+    border-color 0.12s;
+  /* The destination rows are <button>s (keyboard reach); the rest of this class
+     is still on <div>s. Neutralise the UA button chrome so both render alike.
+     The left rail belongs to the row system in SideBar.global.css, so only the
+     other three sides are zeroed here. */
+  appearance: none;
+  font-family: inherit;
+  text-align: left;
+  border-top: 0;
+  border-right: 0;
+  border-bottom: 0;
+}
+
+.sidebar-nav-list .sidebar-list-item {
+  min-height: 0;
+  height: var(--control-h-bar);
+  padding-top: 0;
+  padding-bottom: 0;
+  font-size: var(--text-base);
+}
+
+/* Inset, not the global outline: these rows run edge to edge in the sidebar or
+   a menu, so an outer ring with its gap is clipped on both sides. Everything
+   else here (the dock's icons, header actions) takes the global ring. */
+.sidebar-list-item:focus-visible {
+  box-shadow: var(--focus-ring-inset);
+  outline: none;
+}
+
+.sidebar-list-item.active {
+  background: var(--active-wash);
+  color: var(--active-text);
+  border-left-color: var(--active-bar);
+  position: relative;
+  border-radius: 0;
+}
+
+.sidebar-list-item.active .sidebar-list-count {
+  color: color-mix(in srgb, var(--active-text) 65%, transparent);
+}
+
+.sidebar-list-item:hover {
+  background: var(--hover-wash);
+  color: rgb(var(--v-theme-sidebar-text));
+}
+
+.sidebar-list-item.active:hover {
+  background:
+    linear-gradient(var(--hover-wash), var(--hover-wash)), var(--active-wash);
+  color: var(--active-text);
+}
+
+/* A destination a read-only session can see but not enter. The same 0.38 the
+   context-menu items use for disabled, and hover is neutralised so the row does
+   not offer a response it will not give. Pointer events stay ON: the title is
+   the only explanation of WHY the row is inert, and `pointer-events: none`
+   would take the tooltip with it. */
+.sidebar-list-item--unavailable {
+  opacity: 0.38;
+  cursor: default;
+}
+
+.sidebar-list-item--unavailable:hover {
+  background: transparent;
+  color: rgb(var(--v-theme-sidebar-text));
+}
+
+/* The icon slot: the thumbnail size (20px in the nav list), whatever it
+   holds, so every label in the column starts at one x. */
+.sidebar-list-icon {
+  display: flex;
+  align-items: center;
+  margin-right: var(--space-3);
+  justify-content: center;
+  width: var(--sidebar-thumb-size);
+  height: var(--sidebar-thumb-size);
+  flex-shrink: 0;
+  overflow: visible;
+}
+
+.sidebar-list-icon .v-icon,
+.sidebar-list-icon svg {
+  color: rgb(var(--v-theme-sidebar-text));
+}
+
+.sidebar-list-label {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  padding-left: 0;
+}
+
+/* A label that ellipsizes rather than wraps. */
+.sidebar-list-label-text {
+  display: block;
+  width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-list-count {
+  font-size: var(--text-xs);
+  color: rgb(var(--v-theme-sidebar-text));
+  min-width: 2.4em;
+  text-align: right;
+  margin: 0;
+  font-weight: 400;
+  letter-spacing: 0.01em;
+  align-self: center;
+  display: inline-flex;
+  justify-content: flex-end;
+}
+
+/* Under ~150px there isn't room for the per-entry counts - drop them. */
+.sidebar--narrow .sidebar-list-count {
+  display: none;
+}
+
+/* The footer band: the sidebar's one amber action, at the bar height. */
+.sidebar-footer-band {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  height: var(--sidebar-band-h);
+  box-sizing: border-box;
+  padding: 0 var(--space-3);
+  border-top: 1px solid rgb(var(--v-theme-divider));
+}
+
+@media (hover: none) and (pointer: coarse) {
+  /* Touch targets grow VERTICALLY only. A `padding` shorthand here would reset
+     padding-left and flatten every row back to depth 0. */
+  .sidebar-list-item {
+    min-height: 56px;
+    padding-top: var(--space-3);
+    padding-bottom: var(--space-3);
+  }
+
+  .sidebar-section-header {
+    min-height: 48px;
+  }
+
+  .sidebar-list-icon {
+    width: var(--sidebar-thumb-size);
+    height: var(--sidebar-thumb-size);
+  }
+
+  .sidebar-header-actions .v-icon {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}

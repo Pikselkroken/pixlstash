@@ -14,10 +14,11 @@
 import { computed, onMounted, ref, watch } from "vue";
 import AppButton from "../widgets/AppButton.vue";
 import ModelMark from "../widgets/ModelMark.vue";
+import SidebarResizeHandle from "./SidebarResizeHandle.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import WorkflowsComfyuiSlot from "./WorkflowsComfyuiSlot.vue";
+import { useSidebarWidth } from "../../composables/useSidebarWidth";
 import { useFilterStore } from "../../stores/useFilterStore";
-import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { useWorkflowTemplatesStore } from "../../stores/useWorkflowTemplatesStore";
 import { isReadOnly } from "../../utils/apiClient";
@@ -27,10 +28,8 @@ const emit = defineEmits(["open-settings"]);
 const store = useWorkflowsStore();
 const tpl = useWorkflowTemplatesStore();
 const filterStore = useFilterStore();
-const userPrefsStore = useUserPrefsStore();
-
-// The library sidebar's width, so switching workspace does not move the edge.
-const width = computed(() => userPrefsStore.sidebarWidth ?? 240);
+// The width every workspace's sidebar shares, so a switch does not move the edge.
+const { width, narrow } = useSidebarWidth();
 
 // The list is read once per session and the server keeps its own copy of
 // ComfyUI's, so this is one cheap read, not a ComfyUI round trip per visit. It
@@ -167,7 +166,12 @@ function pickFacet(key, id) {
 </script>
 
 <template>
-  <div class="workflows-sidebar" :style="{ width: `${width}px` }">
+  <div
+    class="workflows-sidebar sidebar-panel"
+    :class="{ 'sidebar--narrow': narrow }"
+    :style="{ width: `${width}px` }"
+  >
+    <SidebarResizeHandle />
     <!-- A shared view cannot read the owner's ComfyUI address, so it would
          always read as not set up. -->
     <WorkflowsComfyuiSlot
@@ -175,101 +179,106 @@ function pickFacet(key, id) {
       @open-settings="(section) => emit('open-settings', section)"
     />
     <nav
-      class="workflows-sidebar__list sidebar-scroll"
+      class="workflows-sidebar__list sidebar-nav-list sidebar-scroll"
       aria-label="Workflow navigation"
     >
       <button
         v-for="place in placeRows"
         :key="place.id"
         type="button"
-        class="wfs-row"
-        :class="{ 'wfs-row--lit': place.lit }"
+        class="sidebar-list-item"
+        :class="{ active: place.lit }"
         :aria-current="place.lit ? 'page' : undefined"
         @click="pickPlace(place.id)"
       >
-        <v-icon class="wfs-row__glyph" aria-hidden="true">{{
-          place.icon
-        }}</v-icon>
-        <span class="wfs-row__label">{{ place.label }}</span>
+        <span class="sidebar-list-icon" aria-hidden="true"
+          ><v-icon size="16">{{ place.icon }}</v-icon></span
+        >
+        <span class="sidebar-list-label sidebar-list-label-text">{{ place.label }}</span>
         <!-- Blank until the grid is read: a 0 there reads as an empty
              library while the first read is still out, or after it failed. -->
-        <span v-if="store.loaded" class="wfs-row__count">{{
+        <span v-if="store.loaded" class="sidebar-list-count">{{
           place.count
         }}</span>
       </button>
 
-      <div class="section-label wfs-label">From ComfyUI</div>
+      <div class="sidebar-section-header" role="presentation">
+        <span class="sidebar-section-title">From ComfyUI</span>
+      </div>
       <button
         type="button"
-        class="wfs-row"
-        :class="{ 'wfs-row--lit': tpl.shown }"
+        class="sidebar-list-item"
+        :class="{ active: tpl.shown }"
         :aria-current="tpl.shown ? 'page' : undefined"
         @click="pickTemplates"
       >
-        <v-icon class="wfs-row__glyph" aria-hidden="true"
-          >mdi-shape-outline</v-icon
+        <span class="sidebar-list-icon" aria-hidden="true"
+          ><v-icon size="16">mdi-shape-outline</v-icon></span
         >
-        <span class="wfs-row__label">Templates</span>
+        <span class="sidebar-list-label sidebar-list-label-text">Templates</span>
         <span v-if="showNew" class="wfs-new"
           >{{ tpl.newCount }} new</span
         >
-        <span class="wfs-row__count">{{ templatesCount }}</span>
+        <span class="sidebar-list-count">{{ templatesCount }}</span>
       </button>
 
-      <div class="section-label wfs-label">Type</div>
+      <div class="sidebar-section-header" role="presentation">
+        <span class="sidebar-section-title">Type</span>
+      </div>
       <button
         v-for="option in typeRows"
         :key="option.id"
         type="button"
-        class="wfs-row"
-        :class="{ 'wfs-row--lit': option.lit }"
+        class="sidebar-list-item"
+        :class="{ active: option.lit }"
         :aria-current="option.lit ? 'page' : undefined"
         @click="pickFacet('type', option.id)"
       >
-        <v-icon class="wfs-row__glyph" aria-hidden="true">{{
-          option.icon
-        }}</v-icon>
-        <span class="wfs-row__label">{{ option.label }}</span>
-        <span class="wfs-row__count">{{ option.count }}</span>
+        <span class="sidebar-list-icon" aria-hidden="true"
+          ><v-icon size="16">{{ option.icon }}</v-icon></span
+        >
+        <span class="sidebar-list-label sidebar-list-label-text">{{ option.label }}</span>
+        <span class="sidebar-list-count">{{ option.count }}</span>
       </button>
 
-      <div class="section-label wfs-label wfs-label--action">
-        <span>Base model</span>
-        <button
-          v-if="baseRows.length > 1"
-          type="button"
-          class="wfs-sort"
-          :aria-label="baseSortLabel"
-          @click="toggleBaseSort"
-        >
-          <Tooltip :text="baseSortLabel" activator="parent" :describe="false" />
-          <v-icon size="16" aria-hidden="true">{{
-            baseSort === "name"
-              ? "mdi-sort-alphabetical-variant"
-              : "mdi-sort-numeric-descending"
-          }}</v-icon>
-        </button>
+      <div class="sidebar-section-header">
+        <span class="sidebar-section-title">Base model</span>
+        <span v-if="baseRows.length > 1" class="sidebar-header-actions">
+          <button
+            type="button"
+            class="sidebar-section-add wfs-sort"
+            :aria-label="baseSortLabel"
+            @click="toggleBaseSort"
+          >
+            <Tooltip :text="baseSortLabel" activator="parent" :describe="false" />
+            <v-icon size="16" aria-hidden="true">{{
+              baseSort === "name"
+                ? "mdi-sort-alphabetical-variant"
+                : "mdi-sort-numeric-descending"
+            }}</v-icon>
+          </button>
+        </span>
       </div>
       <button
         v-for="option in baseRows"
         :key="option.id"
         type="button"
-        class="wfs-row"
-        :class="{ 'wfs-row--lit': option.lit }"
+        class="sidebar-list-item"
+        :class="{ active: option.lit }"
         :aria-current="option.lit ? 'page' : undefined"
         @click="pickFacet('checkpoint', option.id)"
       >
         <!-- The card strip's tile for this model, so a row and the cards it
              narrows to wear the same mark. Hidden: the label names it. -->
-        <span class="wfs-row__glyph" aria-hidden="true">
+        <span class="sidebar-list-icon wfs-mark" aria-hidden="true">
           <ModelMark :row="option.mark" named />
         </span>
-        <span class="wfs-row__label">{{ option.label }}</span>
-        <span class="wfs-row__count">{{ option.count }}</span>
+        <span class="sidebar-list-label sidebar-list-label-text">{{ option.label }}</span>
+        <span class="sidebar-list-count">{{ option.count }}</span>
       </button>
     </nav>
 
-    <div class="wfs-footer">
+    <div class="sidebar-footer-band">
       <AppButton
         class="wfs-add"
         variant="primary"
@@ -282,22 +291,8 @@ function pickFacet(key, id) {
   </div>
 </template>
 
+<style scoped src="./SidebarNav.css"></style>
 <style scoped>
-/* The shell is SideBar's: its width and right rule, the sidebar ground, its
-   own column. */
-.workflows-sidebar {
-  box-sizing: border-box;
-  height: 100%;
-  min-height: 0;
-  max-height: 100%;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  background: rgb(var(--v-theme-sidebar));
-  color: rgb(var(--v-theme-sidebar-text));
-  border-right: 1px solid rgb(var(--v-theme-border));
-}
-
 /* The list takes the room and scrolls; the footer below it does not. No top
    padding: the first row meets the slot's rule, as the Media list's does. */
 .workflows-sidebar__list {
@@ -307,89 +302,15 @@ function pickFacet(key, id) {
   padding: 0 0 var(--space-2);
 }
 
-/* A 32px row, as the sidebar's own rows are. The 3px rail is always present
-   and transparent on the base, so selecting a row does not shift its label. */
-.wfs-row {
-  box-sizing: border-box;
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  width: 100%;
-  height: var(--control-h-bar);
-  margin: 0;
-  padding: 0 var(--space-3);
-  border: 0;
-  border-left: var(--rail-w) solid transparent;
-  border-radius: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  font-size: var(--text-base);
-  text-align: left;
-  cursor: pointer;
-  transition: background var(--dur-1) var(--ease-standard);
+/* The model tile, drawn at the icon slot's size rather than its own 24px. */
+.wfs-mark {
+  --entity-thumb: var(--sidebar-thumb-size);
 }
 
-.wfs-row:hover {
-  background: var(--hover-wash);
-}
-
-/* Inset, as the Media rows' is: the list clips an outer ring at its edges. */
-.wfs-row:focus-visible {
-  box-shadow: var(--focus-ring-inset);
-  outline: none;
-}
-
-/* Selected is the olive wash and rail; the words keep the surface's ink. */
-.wfs-row--lit,
-.wfs-row--lit:hover {
-  background: var(--active-wash);
-  border-left-color: var(--active-bar);
-  color: var(--active-text);
-}
-
-.wfs-row--lit:hover {
-  background:
-    linear-gradient(var(--hover-wash), var(--hover-wash)), var(--active-wash);
-}
-
-/* The entity slot on every row, not only on the Base model rows that fill
-   it, so every label in the rail starts at one x. A glyph centres in it at
-   the glyph size, set here rather than by `v-icon`'s `size`, which writes the
-   width inline and would shrink the slot back to the glyph. */
-.wfs-row__glyph {
-  flex: none;
-  width: var(--entity-thumb);
-  height: var(--entity-thumb);
-  font-size: var(--gutter-glyph);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-/* The row prints the model's name, version included; at the rail's 24px the
+/* The row prints the model's name, version included; at the rail's size the
    tile's version and role pills would cover most of the glyph they label. */
-.wfs-row__glyph :deep(.mmark-version) {
+.wfs-mark :deep(.mmark-version) {
   display: none;
-}
-
-.wfs-row__label {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.wfs-row__count {
-  flex: none;
-  font-size: var(--text-xs);
-  font-variant-numeric: tabular-nums;
-  opacity: var(--opacity-text-secondary);
-}
-
-.wfs-row--lit .wfs-row__count {
-  opacity: 1;
 }
 
 /* A count of templates, not pictures: the outline pill, the one count that
@@ -408,53 +329,10 @@ function pickFacet(key, id) {
   white-space: nowrap;
 }
 
-/* The label sits past the row's rail, so it lines up with the row text. */
-.wfs-label {
-  padding: var(--space-5) var(--space-3) var(--space-2)
-    calc(var(--space-3) + var(--rail-w));
-}
-
-/* A label with a control at its right edge. The button's negative margins
-   take it out of the line's height, so this head stands exactly as tall as
-   the plain ones and the rows below it do not move. */
-.wfs-label--action {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
+/* The head's sort toggle, the section "+"'s shape, 10% under the rows' ink:
+   at full strength the glyph outshone the labels beside it (owner's call). */
 .wfs-sort {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: var(--control-h-sm);
-  height: var(--control-h-sm);
-  margin: calc(var(--control-h-sm) / -2) 0;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  /* 10% under the rows' ink: at full strength the glyph outshone the labels
-     beside it (owner's call). */
   color: rgba(var(--v-theme-sidebar-text), 0.9);
-  cursor: pointer;
-}
-
-.wfs-sort:hover {
-  background: var(--hover-wash);
-}
-
-/* The band the Add workflow button sits in, with the rail's own top edge:
-   the shell's sidebar band, the Media sidebar's Import band's height. */
-.wfs-footer {
-  flex: none;
-  box-sizing: border-box;
-  height: var(--sidebar-band-h);
-  display: flex;
-  align-items: center;
-  padding: 0 var(--space-3);
-  border-top: 1px solid rgb(var(--v-theme-border));
 }
 
 .wfs-add {

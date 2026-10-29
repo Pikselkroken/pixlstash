@@ -228,7 +228,7 @@ All state consumed by more than one component lives in a Pinia store. The stores
 | `useGridStore` | `useGridStore.js` | `columns`, `thumbnailSize`, `sidebarThumbnailSize`, `gridVersion`, `wsUpdateKey`, `showStars`, `showFaceBboxes`, `showProblemIcon`, `showStacks`, `stackThreshold`, `expandedStackCount`, `totalStackCount`, `compactMode`, `visibleRangeLabel` |
 | `useExportStore` | `useExportStore.js` | `exportType`, `exportCaptionMode`, `exportResolution`, `exportTagFormat`, `exportIncludeCharacterName`, `exportUseOriginalFileNames`, etc. |
 | `useWsStore` | `useWsStore.js` | `wsTagUpdate`, `wsPluginProgress`, `updatesSocket`; the per-tab `clientId` (`crypto.randomUUID()`, persisted under `pixlstash:clientId` in `sessionStorage`, in-memory fallback; mirrored into `apiClient` via `setRequestClientId`); the two pills' ids — `pendingExternalImportIds`/`sortChangedExternalIds` with computed `*Count` and `add*`/`clear*` setters |
-| `useUserPrefsStore` | `useUserPrefsStore.js` | `checkForUpdates`, `hiddenTags`, `applyTagFilter`, `penalisedTagWeights`, `dateFormat`, `themeMode`, `sidebarWidth` (drag-resizable, clamped 120–300), `showKeyboardHint`, `gridOpenGesture` (`"double"`/`"single"`), `viewerWheelAction` (`"zoom"`/`"browse"`) |
+| `useUserPrefsStore` | `useUserPrefsStore.js` | `checkForUpdates`, `hiddenTags`, `applyTagFilter`, `penalisedTagWeights`, `dateFormat`, `themeMode`, `sidebarWidth` (drag-resizable through `useSidebarWidth`, clamped 140–300), `showKeyboardHint`, `gridOpenGesture` (`"double"`/`"single"`), `viewerWheelAction` (`"zoom"`/`"browse"`) |
 | `useTagClipboardStore` | `useTagClipboardStore.js` | Tag copy and paste (#2139). `clipboardTags` (filled by Copy on the chips selected in `RailTags`, in the grid rail and the lightbox's Info alike, where Rejected chips select and copy too but Delete passes them over, or a search token; also written to the system clipboard as comma-separated text; **client memory only**, gone when the app closes) and `chipSize` (written to the `--tag-chip-font` root variable; stored in `/users/me/config` as `tag_chip_size`). `pasteClipboard(ids)` adds only the tags each picture is missing, one batch id, so one undo step; it never rejects. Ctrl+V reaches it from the lightbox (anywhere but a text field) and the grid selection; the rail's Tags header (`RailTags`) has a Paste button too. Hydrated by `useAppConfig`. |
 | `useProjectStore` | `useProjectStore.js` | `projectViewMode` *(sidebar-display only — see below)*, `selectedProjectId`, `characterProjectIds`, `setProjectIds` |
 | `useSidebarStore` | `useSidebarStore.js` | `sidebarDocked` (width pref), `sidebarPinned` (visibility pref), `statsOpen` (the Library's stats rail, default closed), `lightboxRailOpen` (the lightbox inspector's own flag, default **open**, key `pixlstash:lightboxRailOpen`; `toggleLightboxRail()` persists), `workflowInspectorOpen` (the Workflows inspector's own flag, default **open**, key `pixlstash:workflowInspectorOpen`; `toggleWorkflowInspector()` persists, `openWorkflowInspector()` is for deep links and does not), `showCardInInspector(rail)` + `cardTabRequest` (a card's double-click: opens a shut `workflows` or `models` rail, persisted, and bumps the counter so the rail on screen selects its card tab, Workflow or Models; an open rail is left on its tab), `inspectorNudge` (a counter a selection-describing inspector's screen bumps on each new selection, and the Models shelf also when a card's tray opens, see "Closed inspector" under Shared shell pieces), `sidebarForcedHidden`, `statsForcedHidden`, `characterMultiMode`, `setMultiMode`, `setDifferenceBaseId`; computeds `effectivePinned`, `effectiveDocked`, `sidebarVisible`, `sidebarOverlay` model the pin / dock / auto-hide behaviour (mobile `*ForcedHidden` overrides win). All localStorage access is try/caught. |
@@ -623,7 +623,11 @@ Two things the fix must not undo, both asserted: a card the server reports **no*
 Every path still emits `refresh-sidebar` (the counts changed) and, under an open overlay, defers its grid work to `pendingLightboxGridRefresh` rather than restructuring the frozen filmstrip (§9.1), but only when a refetch was warranted in the first place, so a deferred redundant reload is not queued either. Regression coverage: `ImageGridProjectAssignRefresh.test.js` (both directions: no refetch in the global view, refetch still fires in the project view).
 
 #### `SideBar.vue` (6390 lines)
-The Media workspace's sidebar. Expanded, it is a fixed frame (#2159): the **header slot** (`--sidebar-slot-h`, the toolbar band's height, so its rule continues the toolbar's) holds the project scope, one list scrolls under it, and the 52px **footer band** (`--sidebar-band-h`) holds the one amber action, **Import**. Every workspace's sidebar uses the same two tokens, so the frame keeps its shape on a switch. Responsibilities:
+The Media workspace's sidebar. Expanded, it is a fixed frame (#2159): the **header slot** (`--sidebar-slot-h`, the toolbar band's height, so its rule continues the toolbar's) holds the project scope, one list scrolls under it, and the 52px **footer band** (`--sidebar-band-h`) holds the one amber action, **Import**. Every workspace's sidebar uses the same two tokens, so the frame keeps its shape on a switch. The three workspace sidebars (this one, `WorkflowsSidebar.vue`, `ModelsSideBar.vue`) are one sidebar in code as well as in look:
+  - **One width, one resize.** `composables/useSidebarWidth.js` holds the width (`userPrefsStore.sidebarWidth`, clamped 140–300, and a module-level live drag width), so a drag in any workspace moves every sidebar's edge and a switch never does. `SidebarResizeHandle.vue` is the right-edge grip each of them mounts (pointer drag committed once on release, arrow keys step 8px, Shift 24px; `role="separator"` with its value and range). Media hides it while docked; the other two have no docked form.
+  - **One row.** `SidebarNav.css` holds the shell (`.sidebar-panel`), the nav list (`.sidebar-nav-list`: full-width 32px rows, a 20px icon slot with a 16px glyph, `--space-3` to the label), the row (`.sidebar-list-item` with `-icon`, `-label`, `-label-text`, `-count`, `--unavailable`, `.active`), the section head (`.sidebar-section-header`, `-title`, `.sidebar-header-actions`, `.sidebar-section-add`), the narrow rule (`.sidebar--narrow` drops the counts under 150px) and the footer band (`.sidebar-footer-band`). Each sidebar imports it **scoped and before its own sheet**, so in `SideBar` the rules keep the specificity and order they had in `SideBar.css`, and a component's own rules refine them. The row's left edge stays the row system's (`SideBar.global.css`). A new workspace sidebar uses these classes rather than a private row.
+
+Responsibilities:
 - **Project scope** (`SidebarScopeSlot.vue`): the project's colour tile, name and up/down chevrons over a "Limit view to" menu: Any project, each project with its count, Not in a project, then *New project…* and *Edit "name"…*. Right-click on the slot or a project row opens that project's context menu (share, export, edit, delete). Projects store no colour; `utils/setAppearance.projectColor` cycles the set palette by id, and a chosen project tints the slot (22 %) and the list (6 %) with it.
 - **One list in every scope, its places rows 32px** (`--control-h-bar`): places (All media, Favourites, Scrapheap), a **Review** group (Inbox once an import folder exists, Duplicates, Tags to review, and Moves while its queue holds anything), then **People**, **Sets** and the scoped project's **Project files**. Reference folders are not listed: adding a folder is *Add a library*, and a reference folder view is reached only by URL. Import folders are managed in Settings › Import folders, and what they bring in is the Inbox (§13.6). A pending folder read for this library shows as a "Finish organising…" row below the list. Section heads are uppercase labels with a `+` at the right edge. The places rows wear a 20px mark. People and Sets' top-level rows take the thumbnail-size setting (S, 20 to 64px; `--sidebar-entity-thumb`), which #2159 had left sizing only the docked rail, and every tree size follows from it: a child set's mark is 0.6 S (`--tree-kid-thumb`, at least 16px), a row is its mark plus `--space-3`, a set glyph its mark less 4px.
 - **People and Sets are trees (#2124).** `utils/setTree.js` splits the listed sets into roots, children of a set and children of a person (`buildSetTree`; a set whose parent is not listed, or is caught in a stored cycle, is a root, so none vanish) and flattens an open branch into rows with their level, elbow and the ancestor rails that run past them (`flattenBranch`). A parent row carries a chevron in the gutter its depth already leaves empty, and "N sets" under its name; ArrowRight and ArrowLeft open and close it. An open top-level parent and its rows become one `.sidebar-tree-group` on `--group-surface`, its rows taking the group's inset off through `--row-pad` (the row system's one hook for it) so marks, names and counts stay on the outer columns. A child row's spacer hangs its own caret slot, then its mark, just past the centre of its parent's mark (half that mark, `--space-1` and `--gutter-glyph`; under the parent's name was ruled too deep, and carets in the far-left gutter read as belonging to nothing) and draws the `--tree-guide` line from `treeGuideX` / `treeSpacerWidth`; real elements, not row pseudo-elements, carry the parent's stub, because `.not-droppable` owns `::after`. Opening the branch the selected set lives in is automatic (`ancestorsOf`), and which parents are open persists (`composables/useSetTreeExpansion.js`, localStorage `pixlstash:sidebar:tree`). Child rows are ordinary set rows: they select, drop, and open the set menu, which leads with **Train LoRA…** and **New set inside "…"…** and offers **Move out of "…"** on a child (disabled with its reason on a locked set). **New set inside** is disabled with its reason on a set already at the third level, the server's limit. An open group takes its 1px border back with a negative top margin, so opening a parent does not move it. The person menu gains **New set in "…"…** beside its **Train LoRA…**. The docked rail stays flat.
@@ -3818,7 +3822,7 @@ than inline, pulled in with `<style scoped src="./Name.css">`:
 | Component | Sidecar |
 |---|---|
 | `App.vue` | `App.css` (unscoped) |
-| `SideBar.vue` | `SideBar.css` (scoped) + `SideBar.global.css` |
+| `SideBar.vue` | `SidebarNav.css` (scoped, shared with the Workflows and Models sidebars) + `SideBar.css` (scoped) + `SideBar.global.css` |
 | `ImageGrid.vue` | `ImageGrid.css` (scoped) + `ImageGrid.global.css` |
 | `Lightbox.vue` | `Lightbox.css` (scoped) |
 
@@ -4844,9 +4848,10 @@ the viewport, which is what 1,800 rows need, in two declarations.
 mounted under it, behind the same `display: contents` wrapper as the Workflows
 sidebar's (`v-show` on `SideBar` itself would not reach its several roots), so a
 switch back to Media neither refetches
-the library's navigation nor loses its scroll. It takes the library sidebar's
-width (`userPrefsStore.sidebarWidth`) so the edge does not move on a switch;
-it has no docked form yet. Its header slot and footer band are
+the library's navigation nor loses its scroll. It shares the Media sidebar's
+width, resize handle and rows (`useSidebarWidth`, `SidebarResizeHandle`,
+`SidebarNav.css`; see `SideBar.vue` above) so the edge does not move on a
+switch; it has no docked form yet. Its header slot and footer band are
 `--sidebar-slot-h` and `--sidebar-band-h`, the Media sidebar's (#2159), so
 neither edge moves on a workspace switch.
 
@@ -6750,9 +6755,10 @@ In the Workflows workspace the left column is `WorkflowsSidebar.vue`, not
 `SideBar`: `App.vue` mounts it on `isWorkflowsView` and keeps `SideBar` mounted
 behind a `v-show` wrapper (`display: contents`, since `SideBar` is multi-root),
 so `sidebarRef`, the importer and its drop targets stay alive. Like the Models
-sidebar it takes the library sidebar's width (`userPrefsStore.sidebarWidth`)
-and its right rule (`--v-theme-border`), so a workspace switch moves neither
-the edge, the toolbar nor the header slot. Neither has a docked form yet: with
+sidebar it shares the Media sidebar's width, resize handle, shell and rows
+(`useSidebarWidth`, `SidebarResizeHandle`, `SidebarNav.css`; see `SideBar.vue`),
+so a workspace switch moves neither the edge, the toolbar, the header slot nor
+a row's glyph and label. Neither has a docked form yet: with
 the library sidebar docked, both still draw at full width.
 
 - **Places**, one lit at a time: *All workflows*, *Favourites*
@@ -6773,8 +6779,9 @@ the library sidebar docked, both still draw at full width.
   per served type (`TYPE_ICONS`, a generic one for a type it does not know);
   a Base model row draws the card strip's `ModelMark` tile (`named`, from the
   same `markRow()` payload in `utils/workflowCard.js`), with its version and
-  role pills hidden because the label already says them. Every row's glyph
-  slot is `--entity-thumb` wide, so all the labels start at one x.
+  role pills hidden because the label already says them, drawn at the shared
+  20px icon slot (`--entity-thumb` set to it) so its label starts at the same
+  x as every other row's.
 - **The header slot is the ComfyUI connection** (`WorkflowsComfyuiSlot.vue`,
   #2166). It stays empty until the config is read
   (`filterStore.comfyuiConfigRead`), so a saved address never flashes the

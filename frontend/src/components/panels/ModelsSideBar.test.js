@@ -62,6 +62,7 @@ vi.mock("../../api/training", async (importOriginal) => ({
 }));
 
 import ModelsSideBar from "./ModelsSideBar.vue";
+import SidebarResizeHandle from "./SidebarResizeHandle.vue";
 import { useLibrariesStore } from "../../stores/useLibrariesStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useTasksStore } from "../../stores/useTasksStore";
@@ -122,9 +123,15 @@ beforeEach(async () => {
 const row = (wrapper, attr, value) =>
   wrapper.find(`[data-${attr}="${value}"]`);
 const countOf = (wrapper, attr, value) =>
-  row(wrapper, attr, value).find(".msb-count").text();
+  row(wrapper, attr, value).find(".sidebar-list-count").text();
 
 describe("ModelsSideBar", () => {
+  it("can be resized, as the Media sidebar can", async () => {
+    const wrapper = mountBar();
+    await flushPromises();
+    expect(wrapper.findComponent(SidebarResizeHandle).exists()).toBe(true);
+  });
+
   it("keeps the slot as one Model folders button that opens Manage", async () => {
     const wrapper = mountBar();
     await flushPromises();
