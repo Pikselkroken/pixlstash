@@ -256,10 +256,13 @@ describe("nothing picked", () => {
     const { wrapper } = await mountRail();
     expect(wrapper.find(".inspector-tabs").exists()).toBe(false);
     const sidebar = useSidebarStore();
+    sidebar.setModelsRailOpen(false);
     const before = sidebar.tasksPillRequest;
     sidebar.showTasksTab();
     await wrapper.vm.$nextTick();
     expect(sidebar.tasksPillRequest).toBe(before + 1);
+    // Nothing for the rail to show, so the link does not open it.
+    expect(sidebar.modelsRailOpen).toBe(false);
   });
 
   it("has no picker: the old list and its search are gone", async () => {
