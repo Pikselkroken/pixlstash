@@ -1619,7 +1619,7 @@ def test_an_unmeasured_setup_is_checked_then_learned_from(
     assert seen["probe"] and all(
         pid is not None and pid == row_pid for pid, row_pid in seen["probe"]
     )
-    assert any(path.endswith("probe") for path in seen["checked"])
+    assert seen["checked"], "the probe never checked for an orphaned pass"
     # The next run of the same setup is admitted on it, with no probe.
     again = _resolve_small(hub)
     assert (again["probe"], again["evidence"]) == (False, "measured")
@@ -1764,7 +1764,7 @@ def test_deferred_previews_are_drawn_from_each_checkpoint_after_training(
     assert len(seen["preview"]) >= 3 and all(
         pid is not None and pid == row_pid for pid, row_pid in seen["preview"]
     )
-    assert any(f"{os.sep}after{os.sep}" in path for path in seen["checked"])
+    assert seen["checked"] and set(seen["checked"]) == {work_dir}
     phases = [entry["phase"] for entry in json.loads(row.phase_log)]
     assert phases[-2:] == ["previews", "importing"]
     # The run's own record keeps the previews peak the deferral came from
@@ -2051,9 +2051,9 @@ def _spy_pass_pids(hub, monkeypatch):
     checked = seen["checked"] = []
     real_stop_orphaned = TrainingService._stop_orphaned_pass
 
-    def stop_orphaned(self, backend, job_uuid, name, pass_dir):
-        checked.append(pass_dir)
-        return real_stop_orphaned(self, backend, job_uuid, name, pass_dir)
+    def stop_orphaned(self, backend, job_uuid, name, work_dir):
+        checked.append(work_dir)
+        return real_stop_orphaned(self, backend, job_uuid, name, work_dir)
 
     monkeypatch.setattr(TrainingService, "_stop_orphaned_pass", stop_orphaned)
     return seen
@@ -2063,8 +2063,9 @@ def test_a_trainer_a_crashed_pass_left_running_is_stopped_before_a_new_pass(
     hub, repo_dir, tmp_path, monkeypatch
 ):
     """A pass records its pid on the run. The next pass of that run stops the
-    trainer the pid names, if it is still that pass's trainer, before it clears
-    the directory and launches; a process that is not that trainer survives."""
+    trainer the pid names, if it is a pass of this run, before it clears the
+    directory and launches. The orphan may be a preview pass at another step
+    than the one about to run; a process that is no pass of the run survives."""
     monkeypatch.setattr(
         "pixlstash.training.local_ai_toolkit._CANCEL_GRACE_SECONDS", 0.2
     )
@@ -2086,8 +2087,15 @@ def test_a_trainer_a_crashed_pass_left_running_is_stopped_before_a_new_pass(
         trigger_word="t",
     )
     backend = service._make_backend()
-    pass_dir = str(tmp_path / "probe")
+    # A crash left the step-1000 preview pass running; the restart begins at 250.
+    pass_dir = str(tmp_path / "after" / "1000")
+    os.makedirs(pass_dir)
+    os.makedirs(tmp_path / "after" / "250")
     pass_handle = LocalAiToolkit.handle_for(pass_dir, "orphaned-job", "orphaned")
+    stranger = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)", backend.run_script],
+        start_new_session=True,
+    )
     trainer = subprocess.Popen(
         [
             sys.executable,
@@ -2099,13 +2107,19 @@ def test_a_trainer_a_crashed_pass_left_running_is_stopped_before_a_new_pass(
         start_new_session=True,
     )
     try:
+        service._update_job("orphaned-job", pid=stranger.pid)
+        service._stop_orphaned_pass(backend, "orphaned-job", "orphaned", str(tmp_path))
+        time.sleep(0.5)
+        assert stranger.poll() is None, "a process that is no pass was stopped"
+
         service._update_job("orphaned-job", pid=trainer.pid)
-        service._stop_orphaned_pass(backend, "orphaned-job", "orphaned", pass_dir)
+        service._stop_orphaned_pass(backend, "orphaned-job", "orphaned", str(tmp_path))
         assert trainer.wait(timeout=10) == -15, "the orphaned trainer was not stopped"
     finally:
-        if trainer.poll() is None:
-            trainer.kill()
-            trainer.wait()
+        for process in (trainer, stranger):
+            if process.poll() is None:
+                process.kill()
+                process.wait()
 
 
 def test_a_re_attached_run_leaves_a_later_runs_backend_in_the_slot(

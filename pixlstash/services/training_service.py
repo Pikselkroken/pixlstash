@@ -1226,34 +1226,43 @@ class TrainingService:
         )
 
     def _stop_orphaned_pass(
-        self, backend: TrainerBackend, job_uuid: str, name: str, pass_dir: str
+        self, backend: TrainerBackend, job_uuid: str, name: str, work_dir: str
     ) -> None:
         """Stop the trainer a crashed probe or preview pass left running.
 
         A pass records its pid on the run, as the run does. Before a new pass
         clears its directory and launches, the trainer that pid names is
-        cancelled if it is still this pass's trainer, so a second one never
-        trains beside it on the card. Any other process is left alone.
+        cancelled if it is a pass of this run, so a second one never trains
+        beside it on the card. The pid may belong to any earlier pass (the
+        probe, or a preview pass at another step), so each pass directory the
+        run has on disk is tried. Any other process is left alone.
 
         Args:
             backend: The trainer backend.
             job_uuid: The run's uuid.
             name: The run's display name, as the pass's paths derive from it.
-            pass_dir: The pass's work directory.
+            work_dir: The run's work directory, holding ``probe`` and
+                ``after/<step>``.
         """
         run = training_runs.get_run_by_uuid(self._hub, job_uuid) or {}
         pid = run.get("pid")
         if not pid:
             return
-        handle = LocalAiToolkit.handle_for(pass_dir, job_uuid, name, pid)
-        if backend.is_alive(handle):
-            logger.warning(
-                "Job %s: stopping pid %s, a pass of it left running in %s.",
-                job_uuid,
-                pid,
-                pass_dir,
-            )
-            backend.cancel(handle)
+        after = os.path.join(work_dir, "after")
+        steps = sorted(os.listdir(after)) if os.path.isdir(after) else []
+        pass_dirs = [os.path.join(work_dir, "probe")]
+        pass_dirs += [os.path.join(after, step) for step in steps]
+        for pass_dir in pass_dirs:
+            handle = LocalAiToolkit.handle_for(pass_dir, job_uuid, name, pid)
+            if backend.is_alive(handle):
+                logger.warning(
+                    "Job %s: stopping pid %s, a pass of it left running in %s.",
+                    job_uuid,
+                    pid,
+                    pass_dir,
+                )
+                backend.cancel(handle)
+                return
 
     def _probe_once(
         self,
@@ -1288,7 +1297,7 @@ class TrainingService:
             # The worst bucket only, so the peak is the largest a step makes.
             process["datasets"] = [{"resolution": [max(sizes)]}]
         probe_dir = os.path.join(work_dir, "probe")
-        self._stop_orphaned_pass(backend, job_uuid, info["name"], probe_dir)
+        self._stop_orphaned_pass(backend, job_uuid, info["name"], work_dir)
         self._remove_tree(probe_dir)
         spec = TrainingSpec(
             job_id=job_uuid,
@@ -1526,7 +1535,7 @@ class TrainingService:
             if stop() is not None:
                 break
             pass_dir = os.path.join(handle.work_dir, "after", str(step))
-            self._stop_orphaned_pass(backend, job_uuid, info["name"], pass_dir)
+            self._stop_orphaned_pass(backend, job_uuid, info["name"], handle.work_dir)
             self._remove_tree(pass_dir)
             process = {
                 "train": {
