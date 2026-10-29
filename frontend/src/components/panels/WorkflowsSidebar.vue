@@ -11,9 +11,10 @@
  * `useWorkflowTemplatesStore().shown`, which the grid's view reads too. Picking
  * a place or a facet leaves the Templates place.
  */
-import { computed, onMounted, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import AppButton from "../widgets/AppButton.vue";
 import ModelMark from "../widgets/ModelMark.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import WorkflowsComfyuiSlot from "./WorkflowsComfyuiSlot.vue";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
@@ -103,12 +104,51 @@ const typeRows = computed(() =>
   })),
 );
 
-const baseRows = computed(() =>
-  store.filterOptions.checkpoints.map((option) => ({
+// The Base model list reads A-Z by default; the head's toggle switches it to
+// most-used first (the store's own order). A per-browser view preference, so
+// it stays in localStorage; a refused read or write only loses the choice.
+const BASE_SORT_KEY = "pixlstash:workflowsBaseModelSort";
+
+function readBaseSort() {
+  try {
+    return localStorage.getItem(BASE_SORT_KEY) === "count" ? "count" : "name";
+  } catch (e) {
+    console.warn("Base model sort could not be read; sorting by name.", e);
+    return "name";
+  }
+}
+
+const baseSort = ref(readBaseSort());
+
+const baseSortLabel = computed(() =>
+  baseSort.value === "name"
+    ? "Sorted by name. Sort by count"
+    : "Sorted by count. Sort by name",
+);
+
+function toggleBaseSort() {
+  baseSort.value = baseSort.value === "name" ? "count" : "name";
+  try {
+    localStorage.setItem(BASE_SORT_KEY, baseSort.value);
+  } catch (e) {
+    console.warn("Base model sort could not be saved; it resets on reload.", e);
+  }
+}
+
+const byLabel = (a, b) =>
+  a.label.localeCompare(b.label, undefined, {
+    numeric: true,
+    sensitivity: "base",
+  }) || a.id.localeCompare(b.id);
+
+const baseRows = computed(() => {
+  const options = [...store.filterOptions.checkpoints];
+  if (baseSort.value === "name") options.sort(byLabel);
+  return options.map((option) => ({
     ...option,
     lit: !tpl.shown && store.filters.checkpoint === option.id,
-  })),
-);
+  }));
+});
 
 function pickPlace(id) {
   tpl.shown = false;
@@ -193,7 +233,23 @@ function pickFacet(key, id) {
         <span class="wfs-row__count">{{ option.count }}</span>
       </button>
 
-      <div class="section-label wfs-label">Base model</div>
+      <div class="section-label wfs-label wfs-label--action">
+        <span>Base model</span>
+        <button
+          v-if="baseRows.length > 1"
+          type="button"
+          class="wfs-sort"
+          :aria-label="baseSortLabel"
+          @click="toggleBaseSort"
+        >
+          <Tooltip :text="baseSortLabel" activator="parent" :describe="false" />
+          <v-icon size="16" aria-hidden="true">{{
+            baseSort === "name"
+              ? "mdi-sort-alphabetical-variant"
+              : "mdi-sort-numeric-descending"
+          }}</v-icon>
+        </button>
+      </div>
       <button
         v-for="option in baseRows"
         :key="option.id"
@@ -356,6 +412,36 @@ function pickFacet(key, id) {
 .wfs-label {
   padding: var(--space-5) var(--space-3) var(--space-2)
     calc(var(--space-3) + var(--rail-w));
+}
+
+/* A label with a control at its right edge, as the Media sidebar's "+" sits.
+   The 24px button is pulled into the label's line so this head stands as tall
+   as the plain ones and the rows below it do not move. */
+.wfs-label--action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-right: var(--space-3);
+}
+
+.wfs-sort {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
+  margin: calc(var(--space-2) * -1) 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: rgb(var(--v-theme-sidebar-text));
+  cursor: pointer;
+}
+
+.wfs-sort:hover {
+  background: var(--hover-wash);
 }
 
 /* The band the Add workflow button sits in, with the rail's own top edge:
