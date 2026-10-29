@@ -62,6 +62,8 @@ vi.mock("../../api/training", async (importOriginal) => ({
 }));
 
 import ModelsSideBar from "./ModelsSideBar.vue";
+import SidebarResizeHandle from "./SidebarResizeHandle.vue";
+import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useLibrariesStore } from "../../stores/useLibrariesStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useTasksStore } from "../../stores/useTasksStore";
@@ -122,9 +124,26 @@ beforeEach(async () => {
 const row = (wrapper, attr, value) =>
   wrapper.find(`[data-${attr}="${value}"]`);
 const countOf = (wrapper, attr, value) =>
-  row(wrapper, attr, value).find(".msb-count").text();
+  row(wrapper, attr, value).find(".sidebar-list-count").text();
 
 describe("ModelsSideBar", () => {
+  it("can be resized, as the Media sidebar can", async () => {
+    const wrapper = mountBar();
+    await flushPromises();
+    useUserPrefsStore().sidebarWidth = 240;
+    expect(wrapper.findComponent(SidebarResizeHandle).exists()).toBe(true);
+    const handle = wrapper.find(".sidebar-resize-handle");
+    handle.element.dispatchEvent(
+      new MouseEvent("pointerdown", { clientX: 100, bubbles: true }),
+    );
+    window.dispatchEvent(new MouseEvent("pointermove", { clientX: 140 }));
+    await flushPromises();
+    const bar = wrapper.find('[data-testid="models-sidebar"]').element;
+    expect(bar.style.width).toBe("280px");
+    window.dispatchEvent(new MouseEvent("pointerup", { clientX: 140 }));
+    expect(useUserPrefsStore().sidebarWidth).toBe(280);
+  });
+
   it("keeps the slot as one Model folders button that opens Manage", async () => {
     const wrapper = mountBar();
     await flushPromises();

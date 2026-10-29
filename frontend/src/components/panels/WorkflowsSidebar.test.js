@@ -24,6 +24,7 @@ vi.mock("../../api/comfyui", () => ({
 
 import WorkflowsSidebar from "./WorkflowsSidebar.vue";
 import ModelMark from "../widgets/ModelMark.vue";
+import SidebarResizeHandle from "./SidebarResizeHandle.vue";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useWorkflowsStore, RECENT_DAYS } from "../../stores/useWorkflowsStore";
@@ -128,7 +129,7 @@ async function mountSidebar({ configured = true, configRead = true, stubs = STUB
 function row(wrapper, label) {
   const found = wrapper
     .findAll("button")
-    .find((button) => button.find(".wfs-row__label").exists() && button.find(".wfs-row__label").text() === label);
+    .find((button) => button.find(".sidebar-list-label").exists() && button.find(".sidebar-list-label").text() === label);
   if (!found) throw new Error(`no row ${label}`);
   return found;
 }
@@ -159,6 +160,21 @@ describe("frame", () => {
     await flushPromises();
     expect(wrapper.element.style.width).toBe("300px");
   });
+
+  it("can be resized, as the Media sidebar can", async () => {
+    const { wrapper } = await mountSidebar();
+    useUserPrefsStore().sidebarWidth = 240;
+    expect(wrapper.findComponent(SidebarResizeHandle).exists()).toBe(true);
+    const handle = wrapper.find(".sidebar-resize-handle");
+    handle.element.dispatchEvent(
+      new MouseEvent("pointerdown", { clientX: 100, bubbles: true }),
+    );
+    window.dispatchEvent(new MouseEvent("pointermove", { clientX: 140 }));
+    await flushPromises();
+    expect(wrapper.element.style.width).toBe("280px");
+    window.dispatchEvent(new MouseEvent("pointerup", { clientX: 140 }));
+    expect(useUserPrefsStore().sidebarWidth).toBe(280);
+  });
 });
 
 describe("places", () => {
@@ -166,8 +182,8 @@ describe("places", () => {
     const { wrapper } = await mountSidebar();
     const all = row(wrapper, "All workflows");
     expect(all.attributes("aria-current")).toBe("page");
-    expect(all.classes()).toContain("wfs-row--lit");
-    expect(all.find(".wfs-row__count").text()).toBe("3");
+    expect(all.classes()).toContain("active");
+    expect(all.find(".sidebar-list-count").text()).toBe("3");
   });
 
   it("picking Favourites sets the filter and lights only that row", async () => {
@@ -186,7 +202,7 @@ describe("places", () => {
 
   it("Recently used keeps only cards used in the last RECENT_DAYS", async () => {
     const { wrapper, store } = await mountSidebar();
-    expect(row(wrapper, "Recently used").find(".wfs-row__count").text()).toBe("1");
+    expect(row(wrapper, "Recently used").find(".sidebar-list-count").text()).toBe("1");
     await row(wrapper, "Recently used").trigger("click");
     expect(store.filters.recent).toBe(true);
     expect(store.filteredCards.map((c) => c.name)).toEqual(["Portrait"]);
@@ -212,7 +228,7 @@ describe("place counts before the grid is read", () => {
       global: { plugins: [pinia], stubs: { "v-icon": true } },
     });
     await flushPromises();
-    expect(row(wrapper, "All workflows").find(".wfs-row__count").exists()).toBe(
+    expect(row(wrapper, "All workflows").find(".sidebar-list-count").exists()).toBe(
       false,
     );
     wrapper.unmount();
@@ -225,7 +241,7 @@ describe("facets", () => {
     const type = row(wrapper, "Text to Image");
     await type.trigger("click");
     expect(store.filters.type).toBe("txt2img");
-    expect(row(wrapper, "Text to Image").classes()).toContain("wfs-row--lit");
+    expect(row(wrapper, "Text to Image").classes()).toContain("active");
     // The place stays where it was: a facet narrows, it does not move the place.
     expect(row(wrapper, "All workflows").attributes("aria-current")).toBe("page");
     await row(wrapper, "Text to Image").trigger("click");
@@ -248,7 +264,7 @@ describe("facets", () => {
     const { wrapper } = await mountSidebar({
       stubs: { ...STUBS, "v-icon": { template: "<i><slot /></i>" } },
     });
-    const glyph = (label) => row(wrapper, label).find(".wfs-row__glyph").text();
+    const glyph = (label) => row(wrapper, label).find(".sidebar-list-icon").text();
     expect(glyph("Text to Image")).toBe("mdi-text-box-outline");
     expect(glyph("Upscale")).toBe("mdi-magnify-plus-outline");
     expect(glyph("Relight")).toBe("mdi-sitemap-outline");
@@ -276,7 +292,7 @@ describe("facets", () => {
       ],
     });
     const { wrapper } = await mountSidebar();
-    const glyph = row(wrapper, "FLUX.1 dev").find(".wfs-row__glyph");
+    const glyph = row(wrapper, "FLUX.1 dev").find(".sidebar-list-icon");
     const mark = glyph.findComponent(ModelMark);
     expect(mark.props("named")).toBe(true);
     expect(mark.props("row")).toMatchObject({
@@ -307,7 +323,7 @@ describe("Base model order", () => {
   const cardsUsing = (...names) =>
     names.map((name, i) => card({ id: `auto:${i}`, models: [{ name, kind: "checkpoint" }] }));
   const baseLabels = (wrapper) =>
-    wrapper.findAll(".wfs-row__label").map((label) => label.text()).filter((text) => text.endsWith(".safetensors"));
+    wrapper.findAll(".sidebar-list-label").map((label) => label.text()).filter((text) => text.endsWith(".safetensors"));
 
   beforeEach(() => {
     listWorkflowCards.mockResolvedValue({
@@ -353,25 +369,25 @@ describe("the Templates row", () => {
 
   it("counts the templates once read", async () => {
     const { wrapper } = await mountSidebar();
-    expect(templatesRow(wrapper).find(".wfs-row__count").text()).toBe("2");
+    expect(templatesRow(wrapper).find(".sidebar-list-count").text()).toBe("2");
   });
 
   it("shows a dash, not a zero, when ComfyUI did not answer", async () => {
     listTemplates.mockResolvedValue(listing([], { reachable: false, detail: "down" }));
     const { wrapper } = await mountSidebar();
-    expect(templatesRow(wrapper).find(".wfs-row__count").text()).toBe("–");
+    expect(templatesRow(wrapper).find(".sidebar-list-count").text()).toBe("–");
     expect(templatesRow(wrapper).find(".wfs-new").exists()).toBe(false);
   });
 
   it("shows a dash and no new pill with no ComfyUI set up, whatever the default address serves", async () => {
     const { wrapper } = await mountSidebar({ configured: false });
-    expect(templatesRow(wrapper).find(".wfs-row__count").text()).toBe("–");
+    expect(templatesRow(wrapper).find(".sidebar-list-count").text()).toBe("–");
     expect(templatesRow(wrapper).find(".wfs-new").exists()).toBe(false);
   });
 
   it("shows nothing rather than a dash before the config is read", async () => {
     const { wrapper } = await mountSidebar({ configured: false, configRead: false });
-    expect(templatesRow(wrapper).find(".wfs-row__count").text()).toBe("");
+    expect(templatesRow(wrapper).find(".sidebar-list-count").text()).toBe("");
   });
 
   it("does not read the list again when the config's first read names the address", async () => {

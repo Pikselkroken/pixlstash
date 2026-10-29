@@ -4,11 +4,13 @@
        It replaces the library's sidebar on /models, as the shelf replaces the
        grid: nothing in the library's navigation is about files on this disk. -->
   <aside
-    class="msb"
+    class="msb sidebar-panel"
+    :class="{ 'sidebar--narrow': narrow }"
     :style="{ width: `${width}px` }"
     aria-label="Model navigation"
     data-testid="models-sidebar"
   >
+    <SidebarResizeHandle />
     <!-- The slot the library sidebar gives the project, on the toolbar's line
          at the toolbar's height (#2203): one button that opens Manage model
          folders. The folders themselves are the tree below, which also shows
@@ -22,40 +24,46 @@
       @click="ask('manage-folders', $event.currentTarget)"
     >
       <span class="msb-slot-mark" aria-hidden="true"
-        ><v-icon size="14">mdi-folder-outline</v-icon></span
+        ><v-icon size="12">mdi-folder-outline</v-icon></span
       >
       <span class="msb-slot-name">Model folders</span>
-      <v-icon size="14" class="msb-slot-chev" aria-hidden="true"
+      <v-icon size="16" class="msb-slot-chev" aria-hidden="true"
         >mdi-cog-outline</v-icon
       >
     </button>
 
-    <nav class="msb-scroll" aria-label="Model places">
+    <nav class="msb-scroll sidebar-nav-list" aria-label="Model places">
       <button
         v-for="row in placeRows"
         :key="row.id"
         type="button"
-        class="ps-row msb-row"
-        :class="{ active: row.active, 'msb-row--off': row.disabled }"
+        class="sidebar-list-item"
+        :class="{
+          active: row.active,
+          'sidebar-list-item--unavailable': row.disabled,
+        }"
         :aria-current="row.active ? 'page' : undefined"
         :aria-disabled="row.disabled ? 'true' : undefined"
         :data-place="row.id"
         @click="pickPlace(row)"
       >
         <Tooltip v-if="row.reason" :text="row.reason" activator="parent" />
-        <v-icon size="16" class="ps-row-glyph" aria-hidden="true">{{
-          row.icon
-        }}</v-icon>
-        <span class="msb-label">{{ row.label }}</span>
-        <span class="msb-count">{{ row.count }}</span>
+        <span class="sidebar-list-icon" aria-hidden="true"
+          ><v-icon size="16">{{ row.icon }}</v-icon></span
+        >
+        <span class="sidebar-list-label sidebar-list-label-text">{{
+          row.label
+        }}</span>
+        <span class="sidebar-list-count">{{ row.count }}</span>
       </button>
 
       <!-- The Folders heading's + makes a folder in the open one (#2206). -->
-      <div class="msb-head msb-head--action">
-        <h3 class="section-label msb-head-label">Folders</h3>
+      <div class="sidebar-section-header">
+        <h3 class="sidebar-section-title msb-head-title">Folders</h3>
+        <span class="sidebar-header-actions">
         <button
           type="button"
-          class="msb-add"
+          class="sidebar-section-add"
           :aria-label="newFolderReason ? 'New folder, unavailable' : 'New folder'"
           :aria-disabled="newFolderReason ? 'true' : undefined"
           ref="newFolderButton"
@@ -69,6 +77,7 @@
           />
           <v-icon size="16" aria-hidden="true">mdi-folder-plus-outline</v-icon>
         </button>
+        </span>
       </div>
       <div v-if="newFolder" ref="newFolderRow" class="msb-new">
         <ModelFolderNameField
@@ -87,11 +96,12 @@
       />
 
       <!-- Training, last (#2169): its place, and the door to a new run. -->
-      <div class="msb-head msb-head--action">
-        <h3 class="section-label msb-head-label">Training</h3>
+      <div class="sidebar-section-header">
+        <h3 class="sidebar-section-title msb-head-title">Training</h3>
+        <span class="sidebar-header-actions">
         <button
           type="button"
-          class="msb-add"
+          class="sidebar-section-add"
           aria-label="New training run…"
           aria-haspopup="dialog"
           data-testid="models-sidebar-new-run"
@@ -100,19 +110,22 @@
           <Tooltip text="New training run…" activator="parent" :describe="false" />
           <v-icon size="16" aria-hidden="true">mdi-plus</v-icon>
         </button>
+        </span>
       </div>
       <button
         type="button"
-        class="ps-row msb-row"
+        class="sidebar-list-item"
         :class="{ active: onRuns }"
         :aria-current="onRuns ? 'page' : undefined"
         data-place="runs"
         @click="openRuns"
       >
-        <v-icon size="16" class="ps-row-glyph" aria-hidden="true"
-          >mdi-chart-line-variant</v-icon
+        <span class="sidebar-list-icon" aria-hidden="true"
+          ><v-icon size="16">mdi-chart-line-variant</v-icon></span
         >
-        <span class="msb-label">Training runs</span>
+        <span class="sidebar-list-label sidebar-list-label-text"
+          >Training runs</span
+        >
         <span
           v-if="trainingNow"
           class="msb-live"
@@ -120,14 +133,14 @@
           aria-hidden="true"
         ></span>
         <span v-if="trainingNow" class="visually-hidden">, training now</span>
-        <span class="msb-count" data-testid="models-sidebar-runs-count">{{
+        <span class="sidebar-list-count" data-testid="models-sidebar-runs-count">{{
           count(runsStore.count)
         }}</span>
       </button>
     </nav>
 
     <!-- The one amber action on this screen. -->
-    <div class="msb-band">
+    <div class="sidebar-footer-band">
       <v-menu v-model="addMenuOpen" location="top start" :offset="4">
         <template #activator="{ props: menuProps }">
           <AppButton
@@ -204,7 +217,7 @@ import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useTrainingRunsStore } from "../../stores/useTrainingRunsStore";
 import { useTrainingStore } from "../../stores/useTrainingStore";
-import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
+import { useSidebarWidth } from "../../composables/useSidebarWidth";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import { withRef } from "../../utils/withRef.js";
 import AiToolkitIcon from "../widgets/AiToolkitIcon.vue";
@@ -212,6 +225,7 @@ import AppButton from "../widgets/AppButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import ModelFolderNameField from "./ModelFolderNameField.vue";
 import ModelFolderTree from "./ModelFolderTree.vue";
+import SidebarResizeHandle from "./SidebarResizeHandle.vue";
 
 const store = useModelShelfStore();
 const foldersStore = useModelFoldersStore();
@@ -219,12 +233,11 @@ const gates = useModelFolderGates();
 const tasksStore = useTasksStore();
 const runsStore = useTrainingRunsStore();
 const training = useTrainingStore();
-const userPrefsStore = useUserPrefsStore();
 const route = useRoute();
 const router = useRouter();
 
-// The library sidebar's width, so switching workspace does not move the edge.
-const width = computed(() => userPrefsStore.sidebarWidth ?? 240);
+// The width every workspace's sidebar shares, so a switch does not move the edge.
+const { width, narrow } = useSidebarWidth();
 
 const addMenuOpen = ref(false);
 // The trigger outlives its menu, so a dialog opened from it hands focus back
@@ -431,18 +444,10 @@ function openRuns() {
 }
 </script>
 
+<style scoped src="./SidebarNav.css"></style>
 <style scoped>
 .msb {
   flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-  box-sizing: border-box;
-  background: rgb(var(--v-theme-sidebar));
-  color: rgb(var(--v-theme-sidebar-text));
-  border-right: 1px solid rgb(var(--v-theme-border));
-  font-size: var(--text-sm);
 }
 
 /* The header slot, the height the Media sidebar's scope slot takes, so a
@@ -455,7 +460,7 @@ function openRuns() {
   width: 100%;
   height: var(--sidebar-slot-h);
   box-sizing: border-box;
-  padding: 0 var(--space-4) 0 var(--space-4);
+  padding: 0 var(--space-4);
   border: 0;
   border-bottom: 1px solid rgb(var(--v-theme-divider));
   background: transparent;
@@ -475,13 +480,16 @@ function openRuns() {
   outline: none;
 }
 
+/* The neutral 20px tile the Media and Workflows slots wear. */
 .msb-slot-mark {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: var(--gutter-glyph);
-  height: var(--gutter-glyph);
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-sm);
+  background: rgba(var(--v-theme-sidebar-text), 0.12);
 }
 
 .msb-slot-name {
@@ -501,116 +509,29 @@ function openRuns() {
 }
 
 /* No top padding: the first row meets the slot's rule, as the Media list's
-   does. Block flow, not a flex column: a flex column shrinks the rows to fit
-   an expanded folder instead of scrolling. */
+   does. The Folders tree's rows take the nav rows' type size from here. The
+   list is the shared nav list's flex column, whose children never shrink
+   (SidebarNav.css), so an expanded folder scrolls rather than squeezes. */
 .msb-scroll {
+  font-size: var(--text-base);
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   padding: 0 0 var(--space-2);
 }
 
-.msb-head {
+/* A heading for the outline; the head's own type, not the h3's. */
+.msb-head-title {
   margin: 0;
-  padding: var(--space-5) var(--space-4) var(--space-2) var(--space-5);
-}
-
-/* The Training head carries its + at the right edge, as the design draws it. */
-.msb-head--action {
-  display: flex;
-  align-items: center;
-  padding-top: var(--space-4);
-  padding-bottom: var(--space-1);
-  padding-right: var(--space-3);
-}
-
-.msb-head-label {
-  flex: 1;
-  margin: 0;
-}
-
-/* The field a folder is named in, under the Folders heading. */
-.msb-new {
-  padding: 0 var(--space-4) var(--space-3) var(--space-5);
-}
-
-/* The library sidebar's section + (`sidebar-section-add`). */
-.msb-add {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: var(--control-h-sm);
-  height: var(--control-h-sm);
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: rgb(var(--v-theme-sidebar-text));
-  cursor: pointer;
-}
-
-.msb-add:hover {
-  background: var(--hover-wash);
-}
-
-.msb-add:focus-visible {
-  box-shadow: var(--focus-ring-inset);
-  outline: none;
-}
-
-.msb-row {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  height: var(--control-h-bar);
-  background: transparent;
-  color: inherit;
   font: inherit;
-  text-align: left;
-  border-top: 0;
-  border-right: 0;
-  border-bottom: 0;
-  cursor: pointer;
-  transition: background var(--dur-1) var(--ease-standard);
+  letter-spacing: inherit;
 }
 
-.msb-row:hover {
-  background: var(--hover-wash);
-}
-
-.msb-row.active {
-  background: var(--active-wash);
-  border-left-color: var(--active-bar);
-  font-weight: var(--weight-medium);
-}
-
-.msb-row:focus-visible {
-  box-shadow: var(--focus-ring-inset);
-  outline: none;
-}
-
-.msb-row--off {
-  cursor: default;
-  opacity: var(--opacity-disabled);
-}
-
-.msb-row--off:hover {
-  background: transparent;
-}
-
-.msb-label {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.msb-count {
-  margin-left: var(--space-2);
-  font-size: var(--text-xs);
-  font-variant-numeric: tabular-nums;
-  opacity: var(--opacity-text-secondary);
+/* The field a folder is named in, under the Folders heading: at the rows'
+   label column. */
+.msb-new {
+  padding: 0 var(--space-3) var(--space-3)
+    calc(var(--space-3) + var(--rail-w));
 }
 
 .msb-live {
@@ -619,17 +540,5 @@ function openRuns() {
   margin-left: var(--space-2);
   border-radius: var(--radius-pill);
   background: rgb(var(--v-theme-accent));
-}
-
-/* The footer band, with the screen's one amber button, at the Media
-   sidebar's band height. */
-.msb-band {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  height: var(--sidebar-band-h);
-  box-sizing: border-box;
-  padding: 0 var(--space-3);
-  border-top: 1px solid rgb(var(--v-theme-divider));
 }
 </style>

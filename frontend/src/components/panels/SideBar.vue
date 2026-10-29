@@ -16,6 +16,7 @@ import PictureSetEditor from "../editors/PictureSetEditor.vue";
 import ProjectEditor from "../editors/ProjectEditor.vue";
 import ProjectFiles from "./ProjectFiles.vue";
 import SidebarScopeSlot from "./SidebarScopeSlot.vue";
+import SidebarResizeHandle from "./SidebarResizeHandle.vue";
 import UserSettingsDialog from "../settings/UserSettingsDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
@@ -92,6 +93,7 @@ import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useSetTreeExpansion } from "../../composables/useSetTreeExpansion";
+import { useSidebarWidth } from "../../composables/useSidebarWidth";
 import { useRoute } from "vue-router";
 import { useDedupStore, scopeKey } from "../../stores/useDedupStore";
 import { useMovesStore } from "../../stores/useMovesStore";
@@ -1846,32 +1848,13 @@ const sidebarFontScale = computed(() => {
   return Math.max(0.85, Math.round((1 - (40 - t) * 0.008) * 1000) / 1000);
 });
 
-// Expanded-sidebar width (drag-resizable). Clamp ≈50%–125% of the 240px default.
-const SIDEBAR_WIDTH_MIN = 140;
-const SIDEBAR_WIDTH_MAX = 300;
-const clampSidebarWidth = (v) =>
-  Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, Math.round(v)));
+// The expanded width is the one every workspace's sidebar shares; the handle
+// in the template drags it.
+const { width: sidebarWidth, narrow: sidebarWidthNarrow } = useSidebarWidth();
 
-// Persisted width; the setter emits up to the store/backend.
-const sidebarWidthModel = computed({
-  get: () => userPrefsStore.sidebarWidth ?? 240,
-  set: (value) => {
-    const parsed = Number(value);
-    if (!Number.isFinite(parsed)) return;
-    userPrefsStore.setSidebarWidth(clampSidebarWidth(parsed));
-  },
-});
-
-// Live width while dragging (null when not dragging). Kept local so a drag does
-// not emit/persist on every frame - we commit once on pointer-up.
-const sidebarDragWidth = ref(null);
-
-// Below 150px the expanded sidebar is too tight for the per-entry image counts;
-// drop them. Uses the live drag width while resizing, the saved width otherwise.
+// Too tight for the per-entry image counts; drop them (expanded only).
 const sidebarIsNarrow = computed(
-  () =>
-    !sidebarStore.effectiveDocked &&
-    (sidebarDragWidth.value ?? sidebarWidthModel.value ?? 240) < 150,
+  () => !sidebarStore.effectiveDocked && sidebarWidthNarrow.value,
 );
 
 /** The mark of a tree row: the setting at the top level, the child size below. */
@@ -1900,58 +1883,10 @@ const sidebarThumbStyle = computed(() => {
   // Apply the resized width only when expanded; docked width is driven by the
   // thumbnail size in CSS, so leave it to the stylesheet there.
   if (!sidebarStore.effectiveDocked) {
-    const w = sidebarDragWidth.value ?? sidebarWidthModel.value;
-    style.width = `${w}px`;
+    style.width = `${sidebarWidth.value}px`;
   }
   return style;
 });
-
-// --- Sidebar resize drag (expanded mode only) ---
-let _resizeStartX = 0;
-let _resizeStartWidth = 0;
-
-function onSidebarResizeMove(e) {
-  sidebarDragWidth.value = clampSidebarWidth(
-    _resizeStartWidth + (e.clientX - _resizeStartX),
-  );
-}
-
-function onSidebarResizeEnd() {
-  window.removeEventListener("pointermove", onSidebarResizeMove);
-  window.removeEventListener("pointerup", onSidebarResizeEnd);
-  document.body.style.cursor = "";
-  document.body.style.userSelect = "";
-  // Commit the final width once (emits → store → persist).
-  if (sidebarDragWidth.value != null) {
-    sidebarWidthModel.value = sidebarDragWidth.value;
-    sidebarDragWidth.value = null;
-  }
-}
-
-function onSidebarResizeStart(e) {
-  if (sidebarStore.effectiveDocked) return;
-  e.preventDefault();
-  const rect = sidebarRootRef.value?.getBoundingClientRect();
-  _resizeStartWidth = rect ? rect.width : sidebarWidthModel.value;
-  _resizeStartX = e.clientX;
-  sidebarDragWidth.value = clampSidebarWidth(_resizeStartWidth);
-  window.addEventListener("pointermove", onSidebarResizeMove);
-  window.addEventListener("pointerup", onSidebarResizeEnd);
-  document.body.style.cursor = "ew-resize";
-  document.body.style.userSelect = "none";
-}
-
-function onSidebarResizeKey(e) {
-  if (sidebarStore.effectiveDocked) return;
-  const step = e.shiftKey ? 24 : 8;
-  if (e.key === "ArrowLeft") {
-    sidebarWidthModel.value = sidebarWidthModel.value - step;
-    e.preventDefault();
-  } else if (e.key === "ArrowRight") {
-    sidebarWidthModel.value = sidebarWidthModel.value + step;
-    e.preventDefault();
-  }
-}
 
 const reactiveSelectedDescending = ref(sortStore.selectedDescending);
 
@@ -3828,8 +3763,6 @@ let _dockedScrollObserver = null;
 onBeforeUnmount(() => {
   document.removeEventListener("mousedown", onSidebarCtxOutside);
   document.removeEventListener("keydown", onSidebarCtxKeydown, true);
-  // Drop any in-flight sidebar-resize drag listeners.
-  onSidebarResizeEnd();
   if (sidebarNoticeCleanup) {
     sidebarNoticeCleanup();
     sidebarNoticeCleanup = null;
@@ -4209,7 +4142,7 @@ defineExpose({
 
   <aside
     ref="sidebarRootRef"
-    class="sidebar"
+    class="sidebar sidebar-panel"
     :class="{
       'sidebar-docked': sidebarStore.effectiveDocked,
       'sidebar--narrow': sidebarIsNarrow,
@@ -4217,18 +4150,7 @@ defineExpose({
     :style="sidebarThumbStyle"
   >
     <!-- Drag the right edge to resize the expanded sidebar (hidden when docked). -->
-    <div
-      v-if="!sidebarStore.effectiveDocked"
-      class="sidebar-resize-handle"
-      role="separator"
-      aria-orientation="vertical"
-      aria-label="Resize sidebar"
-      tabindex="0"
-      @pointerdown="onSidebarResizeStart"
-      @keydown="onSidebarResizeKey"
-    >
-      <Tooltip text="Drag to resize sidebar" activator="parent" />
-    </div>
+    <SidebarResizeHandle v-if="!sidebarStore.effectiveDocked" />
     <!-- The docked counterpart of the Global / Projects scope slot below,
          and gated on `scopedResourceType` for the same reason it is: a share
          token scoped to a character, a picture or a set can read no project
@@ -5182,7 +5104,7 @@ defineExpose({
              scope in the header slot narrows the grid, the counts and the
              People and Sets lists; it no longer swaps this list for a tree. -->
         <div
-          class="sidebar-tab-panel sidebar-media-list"
+          class="sidebar-tab-panel sidebar-media-list sidebar-nav-list"
           :style="scopeWashStyle"
         >
           <template v-if="!scopedResourceType">
@@ -6939,5 +6861,6 @@ defineExpose({
     </template>
   </AppDialog>
 </template>
+<style scoped src="./SidebarNav.css"></style>
 <style scoped src="./SideBar.css"></style>
 <style src="./SideBar.global.css"></style>
