@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { splitFolderPath } from "./folderPath";
+import { folderOrigin, splitFolderPath } from "./folderPath";
 
 describe("splitFolderPath", () => {
   it("says a home directory as one word and keeps the last segment whole", () => {
@@ -44,5 +44,66 @@ describe("splitFolderPath", () => {
 
   it("reads a Windows home written with forward slashes", () => {
     expect(splitFolderPath("C:/Users/me/loras").home).toBe(true);
+  });
+});
+
+describe("folderOrigin", () => {
+  it("says where a folder is from its drive, home as ~", () => {
+    expect(folderOrigin("/home/me/ComfyUI/models", "/")).toEqual({
+      head: "~/ComfyUI/",
+      tail: "models",
+    });
+    expect(folderOrigin("/mnt/scratch/ComfyUI/models", "/mnt/scratch")).toEqual(
+      {
+        head: "ComfyUI/",
+        tail: "models",
+      },
+    );
+    expect(folderOrigin("D:\\ComfyUI\\models", "D:\\")).toEqual({
+      head: "ComfyUI\\",
+      tail: "models",
+    });
+    // On the root drive the path stays absolute.
+    expect(folderOrigin("/opt/models", "/")).toEqual({
+      head: "/opt/",
+      tail: "models",
+    });
+  });
+
+  it("says the parent for a folder already named by its own last segment", () => {
+    expect(
+      folderOrigin("/home/me/.insightface/models", "/", { parent: true }),
+    ).toEqual({
+      head: "~/",
+      tail: ".insightface",
+    });
+    expect(folderOrigin("/home/me/models", "/", { parent: true })).toEqual({
+      head: "",
+      tail: "~",
+    });
+    expect(folderOrigin("/models", "/", { parent: true })).toEqual({
+      head: "",
+      tail: "/",
+    });
+    // A folder at its drive's root keeps the mount point rather than nothing.
+    expect(
+      folderOrigin("/mnt/scratch/models", "/mnt/scratch", { parent: true }),
+    ).toEqual({
+      head: "/mnt/",
+      tail: "scratch",
+    });
+  });
+
+  it("keeps a home-level parent's whole name ahead of the ellipsis", () => {
+    // Two namesakes one level under home must not both read `~/ComfyUI-…`.
+    expect(
+      folderOrigin("/home/me/ComfyUI-portable/models", "/", { parent: true }),
+    ).toEqual({ head: "~/", tail: "ComfyUI-portable" });
+  });
+
+  it("drops the mount point only at a separator", () => {
+    expect(folderOrigin("/mnt/scratchy/models", "/mnt/scratch").head).toBe(
+      "/mnt/scratchy/",
+    );
   });
 });

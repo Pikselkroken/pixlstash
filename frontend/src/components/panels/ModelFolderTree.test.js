@@ -127,22 +127,51 @@ describe("ModelFolderTree", () => {
     wrapper.unmount();
   });
 
-  it("tells apart folders that one tool owns", async () => {
+  it("tells namesakes apart by where they are, never by renaming them", async () => {
     const folders = useModelFoldersStore();
     folders.folders = [
       ...FOLDERS,
       { id: 4, path: "/home/me/.insightface/models", kind: "foreign", movable: "root_only", tool: "PixlStash" },
+      { id: 5, path: "/mnt/scratch/Forge-old/models", kind: "user", movable: "per_item" },
     ];
-    folders.devices = [{ ...DEVICES[0], folder_ids: [1, 2, 4] }];
+    folders.devices = [
+      { ...DEVICES[0], folder_ids: [1, 2, 4] },
+      { device_id: "d2", mount_point: "/mnt/scratch", label: "Scratch", total_bytes: 10, free_bytes: 5, folder_ids: [5] },
+    ];
     const wrapper = mountTree();
     await flushPromises();
+    const origin = (id) => item(wrapper, id).find('[data-testid="model-folder-origin"]').text();
+    // A tool's folder says its whole path; a folder named for itself says its
+    // parent, so the name is not said twice.
     expect(item(wrapper, 1).find(".mft-label").text()).toBe("Models");
-    expect(item(wrapper, 2).find(".mft-label").text()).toBe(
-      ".pixlstash/models (PixlStash)",
-    );
-    expect(item(wrapper, 4).find(".mft-label").text()).toBe(
-      ".insightface/models (PixlStash)",
-    );
+    expect(origin(1)).toBe("~/StabilityMatrix");
+    expect(item(wrapper, 2).find(".mft-label").text()).toBe("PixlStash");
+    expect(origin(2)).toBe("~/.pixlstash/models");
+    expect(item(wrapper, 4).find(".mft-label").text()).toBe("PixlStash");
+    expect(origin(4)).toBe("~/.insightface/models");
+    // From the drive row above it, which already names the drive.
+    expect(origin(5)).toBe("Forge-old");
+    expect(item(wrapper, 2).attributes("aria-label")).toContain("~/.pixlstash/models");
+    // A subfolder is one line: the root above says where it is.
+    await item(wrapper, 1).find(".mft-twist").trigger("click");
+    await flushPromises();
+    expect(item(wrapper, 1, "Lora").find('[data-testid="model-folder-origin"]').exists()).toBe(false);
+    expect(item(wrapper, 1, "Lora").classes()).not.toContain("mft-row--two");
+    expect(item(wrapper, 1).classes()).toContain("mft-row--two");
+    wrapper.unmount();
+  });
+
+  it("draws the lock as the folder glyph, so nothing trails the name", async () => {
+    const wrapper = mountTree();
+    await flushPromises();
+    const tail = (id) => item(wrapper, id).element.lastElementChild.className;
+    // No lock trails the count, and the ⋯ is laid over it rather than after.
+    expect(tail(1)).toBe("mft-more");
+    expect(item(wrapper, 1).classes()).toContain("mft-row--verbs");
+    expect(tail(2)).toBe("mft-count");
+    expect(item(wrapper, 2).classes()).not.toContain("mft-row--verbs");
+    expect(item(wrapper, 2).find("[data-testid='model-folder-lock']").classes()).toContain("mft-glyph");
+    expect(item(wrapper, 1).find("[data-testid='model-folder-lock']").exists()).toBe(false);
     wrapper.unmount();
   });
 

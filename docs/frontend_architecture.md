@@ -4879,15 +4879,22 @@ neither edge moves on a workspace switch.
   folder's own level is read once on mount, for its count and whether it has
   any subfolders. **The count is what opening the row lists**:
   `direct_model_count` (one level) for a browsable folder, `model_count`
-  (everything beneath) for a locked one. A registered folder is **named by
-  `useModelFoldersStore().labelByFolderId`**, which the rail,
-  the drop tip and the drop-target chooser read too: its tool, else its last
-  segment, and where two would share that name (every StabilityMatrix
-  folder), the shortest path tail no namesake shares, with the tool after it
-  when it has one: `Lora (StabilityMatrix)`. A
-  **locked** folder (`movable !== "per_item"`: the managed
-  store, the HuggingFace cache, the InsightFace packs) shows a lock and never
-  expands. **Rows are flat**, carrying `aria-level`, under one `role="tree"`
+  (everything beneath) for a locked one. **A registered folder is two
+  lines**: its tool, else its last segment, and under it where it is
+  (`folderOrigin` in `utils/folderPath.js`): the path from the drive row above,
+  `~` for home, the parent rather than the folder itself when the name is
+  already its last segment, the head (up to and including its last
+  separator) giving way to an ellipsis before the last segment does. Every root carries that line, so a name never changes when a
+  namesake is registered; subfolders stay one line. The rail, the drop tip and
+  the drop-target chooser have no second line and still read
+  `useModelFoldersStore().labelByFolderId`, which tells namesakes apart in the
+  name itself: `Lora (StabilityMatrix)`. A **locked** folder (`movable !==
+  "per_item"`: the managed store, the HuggingFace cache, the InsightFace packs)
+  draws `mdi-folder-lock-outline` as its glyph and never expands. **The counts
+  are one column**: nothing trails them, the ComfyUI marks sit in a slot one
+  mark wide whether or not it holds one, and a row's ⋯ is laid over its count
+  on pointer hover rather than taking a width of its own (never on keyboard
+  focus, which keeps the count; the menu there is Shift+F10). **Rows are flat**, carrying `aria-level`, under one `role="tree"`
   rather than nested `group`s: the roving tabindex walks one list (Up/Down,
   Home/End, Right opens then enters, Left closes then goes to the parent,
   Enter/Space opens) and a row never re-mounts on expand. The recursion is in
