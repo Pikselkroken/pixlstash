@@ -84,7 +84,7 @@ const props = defineProps({
   tooltip: { type: String, default: "" },
   tooltipLocation: { type: String, default: "top" },
   // The visible shortcut affordance from the dialog keyboard contract:
-  // "enter" wears ↵ and "esc" wears Esc; any other single key (e.g. "s" on
+  // "enter" wears ↵, "ctrl+enter" Ctrl ↵ and "esc" Esc; any other single key (e.g. "s" on
   // the dedup Keep separate) wears its own uppercase label. A shortcut shown
   // next to the action it triggers is the only kind anyone discovers.
   keyHint: { type: String, default: "" },
@@ -93,19 +93,23 @@ const props = defineProps({
 const keyLabel = computed(() =>
   props.keyHint === "enter"
     ? "↵"
-    : props.keyHint === "esc"
-      ? "Esc"
-      : props.keyHint.toUpperCase(),
+    : props.keyHint === "ctrl+enter"
+      ? "Ctrl ↵"
+      : props.keyHint === "esc"
+        ? "Esc"
+        : props.keyHint.toUpperCase(),
 );
 
 const keyShortcut = computed(() =>
   props.keyHint === "enter"
     ? "Enter"
-    : props.keyHint === "esc"
-      ? "Escape"
-      : props.keyHint
-        ? props.keyHint.toUpperCase()
-        : undefined,
+    : props.keyHint === "ctrl+enter"
+      ? "Control+Enter"
+      : props.keyHint === "esc"
+        ? "Escape"
+        : props.keyHint
+          ? props.keyHint.toUpperCase()
+          : undefined,
 );
 
 const rootEl = ref(null);

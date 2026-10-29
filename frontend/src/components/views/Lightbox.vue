@@ -965,6 +965,7 @@
              over a video, where the tab itself is absent. -->
         <LightboxEditPanel
           v-if="editTabAvailable"
+          ref="editPanelRef"
           v-show="sidebarTab === 'edit'"
           :picture-id="image?.id ?? null"
           :active="sidebarTab === 'edit'"
@@ -1504,6 +1505,7 @@ const upscaleTitle = computed(() => {
 // screen its own bar reports the run, so the lightbox's ComfyUI bar would be a
 // second copy. A run from the grid's menus still gets the lightbox bar.
 const editRunning = ref(false);
+const editPanelRef = ref(null);
 const editTabShowsRun = computed(
   () => editRunning.value && inspectorShown.value && sidebarTab.value === "edit",
 );
@@ -2991,6 +2993,22 @@ function handleKeydown(e) {
   if (runDialogStore.source || runDialogStore.makeMore) return;
   if (filmstripMenu.value) {
     if (e.key === "Escape") closeFilmstripMenu();
+    return;
+  }
+
+  // Ctrl+Enter is the Edit tab's Run wherever focus is while the tab is on
+  // screen, not only in its instruction box: after marking with the tools the
+  // focus is on the picture or a tool.
+  if (
+    e.key === "Enter" &&
+    (e.ctrlKey || e.metaKey) &&
+    !e.repeat &&
+    editPanelRef.value &&
+    inspectorShown.value &&
+    sidebarTab.value === "edit"
+  ) {
+    e.preventDefault();
+    void editPanelRef.value.submit();
     return;
   }
 

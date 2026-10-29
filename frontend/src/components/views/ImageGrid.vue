@@ -2322,7 +2322,7 @@ function runWorkflowOnPicture(pictureId) {
 }
 
 /**
- * The lightbox Edit tab's *More options…* (#1381): the Run popup on this
+ * The lightbox Edit tab's *More settings…* (#1381): the Run popup on this
  * picture, with the tab's workflow and instruction already filled in. With no
  * instruction typed the popup starts from the picture's own prompt, as *Use as
  * input for…* does: `emptyPrompt` would send `""` over a recipe prompt, which

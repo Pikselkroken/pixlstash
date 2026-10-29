@@ -53,7 +53,11 @@ async function mountPanel(extra = {}) {
     props: { pictureId: 7, active: true, ...extra },
     global: {
       stubs: {
-        AppButton: { template: "<button class='run' @click=\"$emit('click')\"><slot /></button>" },
+        // `emits`, or the native click falls through as a second one.
+        AppButton: {
+          emits: ["click"],
+          template: "<button class='run' @click=\"$emit('click')\"><slot /></button>",
+        },
         "v-icon": true,
         // Draws a slot-form tip's control (the notice's Install button) and
         // nothing of the tip itself.
@@ -135,10 +139,16 @@ describe("the Edit tab", () => {
       expect(wrapper.text()).toContain("from ComfyUI-Inpaint-CropAndStitch");
       expect(listWorkflowCards).toHaveBeenCalledTimes(1);
       refuse({});
+      preflightWorkflowRun.mockClear();
       notice.vm.$emit("retry");
       await flush();
       await flush();
       expect(listWorkflowCards).toHaveBeenCalledTimes(2);
+      // Asked afresh, or the minute-old node list still lacks the pack's nodes.
+      expect(preflightWorkflowRun).toHaveBeenCalledWith(
+        { picture_ids: [7], target: "i2i" },
+        { cached: false },
+      );
       const rows = wrapper.findAll("[role=menuitemradio]").map((row) => row.text());
       expect(rows).toEqual(["Widen, Outpaint", "Relight, Image to Image"]);
       expect(wrapper.findComponent({ name: "RunReasonNotice" }).exists()).toBe(false);
@@ -232,10 +242,11 @@ describe("the Edit tab", () => {
     const rows = wrapper.findAll("[role=menuitemradio]").map((row) => row.text());
     expect(rows).toEqual(["Widen, Outpaint"]);
     // Asked the way the run asks: this picture, that card.
-    expect(preflightWorkflowRun).toHaveBeenCalledWith({
-      picture_ids: [7],
-      target: "i2i",
-    });
+    // From the last minute's node list: a fresh read per card was slow.
+    expect(preflightWorkflowRun).toHaveBeenCalledWith(
+      { picture_ids: [7], target: "i2i" },
+      { cached: true },
+    );
   });
 
   it("lists a card missing only models, flagged, with Run held", async () => {
@@ -299,9 +310,15 @@ describe("the Edit tab", () => {
     expect(wrapper.find("button.run").attributes("disabled")).toBeDefined();
 
     present = true;
+    preflightWorkflowRun.mockClear();
     useTasksStore().downloadsLanded += 1;
     await flush();
     await flush();
+    // Asked afresh: the minute-old node list would not have the new model.
+    expect(preflightWorkflowRun).toHaveBeenCalledWith(
+      { picture_ids: [7], target: "i2i" },
+      { cached: false },
+    );
     expect(wrapper.find(".edit-missing-notice").exists()).toBe(false);
     expect(checkedRow(wrapper)).toBe("Relight, Image to Image");
     expect(wrapper.find("button.run").attributes("disabled")).toBeUndefined();
@@ -446,9 +463,9 @@ describe("the Edit tab", () => {
       ],
     ]);
     expect(checkedRow(wrapper)).toBe("Widen, Outpaint");
-    // More options… still opens the tab's own card, not the click event.
+    // More settings… still opens the tab's own card, not the click event.
     const moreOptions = wrapper.findAll("button").find((b) =>
-      b.text().includes("More options"),
+      b.text().includes("More settings"),
     );
     await moreOptions.trigger("click");
     expect(wrapper.emitted("more-options").at(-1)[0]).toEqual(
@@ -551,10 +568,10 @@ describe("the Edit tab", () => {
     expect(checkedRow(wrapper)).toBe("Widen, Outpaint");
   });
 
-  it("hands More options the instruction trimmed, blank as empty", async () => {
+  it("hands More settings the instruction trimmed, blank as empty", async () => {
     const wrapper = await mountPanel();
     const moreOptions = wrapper.findAll("button").find((b) =>
-      b.text().includes("More options"),
+      b.text().includes("More settings"),
     );
     await wrapper.find("textarea").setValue("   ");
     await moreOptions.trigger("click");
@@ -952,9 +969,9 @@ describe("the Edit tab with the Paint tools", () => {
     expect(runWorkflowCard.mock.calls[0][0].picture_ids).toEqual([7]);
   });
 
-  it("hands the selection to the Run popup through More options…", async () => {
+  it("hands the selection to the Run popup through More settings…", async () => {
     const wrapper = await mountPanel({ paint: fakePaint([RECT]) });
-    const more = wrapper.findAll("button").find((b) => b.text() === "More options…");
+    const more = wrapper.findAll("button").find((b) => b.text() === "More settings…");
     await more.trigger("click");
     expect(wrapper.emitted("more-options")[0][0].selection).toMatchObject({
       steps: [RECT],
