@@ -289,9 +289,10 @@ class ExportUtils:
             with Image.open(full_path) as img:
                 icc_profile = img.info.get("icc_profile")
                 img = ImageOps.exif_transpose(img)
-                if img.mode.startswith("I"):
-                    # 16-bit and 32-bit integer grey: convert("RGB") clips
-                    # every value above 255 to white, so scale it down first.
+                if img.mode.startswith("I;16"):
+                    # 16-bit grey: convert("RGB") clips every value above 255
+                    # to white, so scale it down first. Plain "I" is left
+                    # alone: a 32-bit file can hold 0-255 already.
                     img = img.convert("I").point(lambda v: v / 256).convert("L")
                 if img.mode in {"RGBA", "LA", "PA"} or "transparency" in img.info:
                     rgba = img.convert("RGBA")
