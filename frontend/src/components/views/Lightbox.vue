@@ -826,157 +826,73 @@
              opens the tag field, Escape cancels an edit), and unmounting the
              Info group behind the Recipe tab would take those with it. -->
         <div v-show="sidebarTab === 'info'" class="lightbox-sidebar-group">
-          <!-- The picture named by its description's first sentence, then
-               its rating and heart: the head of the grid rail's one-picture
-               view. -->
-          <div v-if="image" class="lightbox-info-head">
-            <!-- No tip: the whole description is a section further down. -->
-            <div v-if="pictureName" class="lightbox-info-name">
-              {{ pictureName }}
-            </div>
-            <StarRatingOverlay
-              class="lightbox-rail-rating"
-              :score="isReadOnly ? guestScore || 0 : image?.score || 0"
-              :readonly="!isReadOnly && isCurrentLocked"
-              icon-size="18"
-              :favouritable="!isReadOnly && favouritable"
-              :favourite="Boolean(image?.favourite)"
-              @set-score="setScore"
-              @toggle-favourite="toggleFavourite"
-            />
-          </div>
-
-          <!-- The faces as named crops (the grid rail's one-picture order).
-               Pointing at a crop draws that face's box on the picture; pointing
-               at the face on the picture rings its crop here. The pencil opens
-               the person menus for all of them at once. -->
-          <div class="sidebar-section sidebar-section--faces">
-            <SectionHeader
-              v-model:collapsed="facesCollapsed"
-              label="Faces"
-              :count="faceAssignItems.length || null"
-              on-dark
-            >
-              <template v-if="image && !isReadOnly" #actions>
-                <button
-                  v-if="faceAssignItems.length || !isMobile"
-                  ref="facesPencilRef"
-                  class="section-meta-btn"
-                  :class="{ 'section-meta-btn--on': namingFaces }"
-                  type="button"
-                  aria-label="Edit faces"
-                  aria-haspopup="dialog"
-                  aria-controls="lightbox-faces-panel"
-                  :aria-expanded="namingFaces ? 'true' : 'false'"
-                  @click.stop="namingFaces = !namingFaces"
-                >
-                  <Tooltip text="Edit faces" activator="parent" :describe="false" />
-                  <v-icon size="16">mdi-pencil-outline</v-icon>
-                </button>
-              </template>
-            </SectionHeader>
-            <template v-if="!facesCollapsed">
-              <div v-if="faceAssignItems.length" class="face-chips">
-                <button
-                  v-for="face in faceAssignItems"
-                  :key="face.faceKey"
-                  type="button"
-                  class="face-chip"
-                  :class="{
-                    'face-chip--unnamed': face.character_id == null,
-                    'face-chip--ringed':
-                      pictureFaceIdx === face.faceIdx ||
-                      pinnedFaceIdxs.has(face.faceIdx),
-                  }"
-                  :style="{ '--face-hue': faceBoxColor(face.faceIdx) }"
-                  :aria-pressed="pinnedFaceIdxs.has(face.faceIdx)"
-                  @mouseenter="hoveredFaceIdx = face.faceIdx"
-                  @mouseleave="hoveredFaceIdx = null"
-                  @click="togglePinnedFace(face.faceIdx)"
-                >
-                  <span class="face-chip-crop">
-                    <span
-                      class="face-assign-crop"
-                      :style="getFaceThumbStyle(face, face.faceIdx, FACE_CHIP_SIZE)"
-                    ></span>
-                  </span>
-                  <span class="face-chip-name">{{
-                    faceAssignedName(face) || "Unknown"
-                  }}</span>
-                </button>
-              </div>
-              <div v-if="!faceAssignItems.length" class="face-assign-empty">
-                No faces detected
-              </div>
-            </template>
-            <!-- The pencil's panel: a person picker per face, over the
-                 sidebar rather than pushing Tags down. -->
-            <FacesPanel
-              v-if="namingFaces && image && !isReadOnly && !facesCollapsed"
-              id="lightbox-faces-panel"
-              ref="facesPanelRef"
-              class="lightbox-faces-panel"
-              on-dark
-              allow-create
-              :rows="facePanelRows"
-              :anchor="facesPencilRef"
-              @close="closeFacesPanel"
-              @hover="(row) => (hoveredFaceIdx = row ? row.face.faceIdx : null)"
-              @assign="(row, payload) => handleFaceAssign(row.face, payload)"
-              @unassign="(row) => unassignFaceCharacter(row.face)"
-              @create="(row, query) => openCreatePersonForFace(row.face, query)"
-            >
-              <template v-if="!isMobile" #footer>
-                <AppButton
-                  size="sm"
-                  on-dark
-                  icon-left="vector-square-plus"
-                  @click="drawFaceFromPanel"
-                >
-                  Draw a face box
-                </AppButton>
-              </template>
-            </FacesPanel>
-          </div>
-
-          <LightboxTagsPanel
-            ref="tagsPanelRef"
+          <!-- The grid rail's one-picture view, on the dark pane: the
+               picture's name, rating and faces, the tags with the field T
+               focuses, the description and Properties. A face's crop draws
+               its box on the picture; the pencil's panel can make a person
+               and draw a face box. -->
+          <RailPicture
+            v-if="image"
+            ref="railPictureRef"
+            v-model:faces="faceBboxes"
+            :picture-id="image.id"
+            :card="image"
             :image="image"
-            :hidden-tags="hiddenTags"
-            :apply-tag-filter="applyTagFilter"
-            :locked="isCurrentLocked"
-            :lock-note="currentLockReason"
+            :score="isReadOnly ? guestScore || 0 : image?.score || 0"
+            :readonly="!isReadOnly && isCurrentLocked"
+            :favouritable="!isReadOnly && favouritable"
+            :title="pictureName"
+            :takes-tag-key="false"
+            on-dark
+            pinnable
+            :pinned-faces="pinnedFaceIdxs"
+            :ringed-face="pictureFaceIdx"
+            allow-create
             :boxed-tags="detectionLabels"
-            @hover-tag="(label) => (hoveredTagLabel = label)"
-            @update-tags="handleTagsUpdate"
-            @lightbox-change="(payload) => emit('lightbox-change', payload)"
-            @add-tag="(imageId, tag) => emit('add-tag', imageId, tag)"
-            @request-metadata-refresh="fetchLightboxMetadata"
-          />
-
-          <LightboxDescriptionPanel
-            ref="descriptionPanelRef"
-            :image="image"
-            :locked="isCurrentLocked"
-            :lock-note="currentLockReason"
-            :text-state="pictureText.text.value.state"
-            :text-lines="pictureText.text.value.lines"
-            :active-tab="pictureText.activeTab.value"
-            :selected-words="pictureText.selectedWords.value"
-            :text-read-busy="pictureText.readAgainBusy.value"
-            @update-description="handleDescriptionUpdate"
-            @editing-finished="focusLightboxCanvas"
-            @pick-tab="pictureText.pickTab"
-            @select-word="pictureText.selectWord"
-            @clear-word-selection="pictureText.clearSelection"
-            @read-text-again="pictureText.readAgain"
-          />
-
-          <LightboxMetadataPanel
-            :image="image"
-            :date-format="dateFormat"
             :video-duration="videoMeta.duration"
-          />
+            :faces-open="namingFaces"
+            @update:faces-open="
+              (on) => (on ? (namingFaces = true) : closeFacesPanel())
+            "
+            @set-score="setScore"
+            @toggle-favourite="toggleFavourite"
+            @hover-face="(idx) => (hoveredFaceIdx = idx)"
+            @pin-face="togglePinnedFace"
+            @create-person="openCreatePersonForFace"
+            @hover-tag="(label) => (hoveredTagLabel = label)"
+            @tags-applied="onTagsApplied"
+            @lightbox-change="(payload) => emit('lightbox-change', payload)"
+          >
+            <template v-if="!isMobile" #faces-footer>
+              <AppButton
+                size="sm"
+                on-dark
+                icon-left="vector-square-plus"
+                @click="drawFaceFromPanel"
+              >
+                Draw a face box
+              </AppButton>
+            </template>
+            <template #description>
+              <LightboxDescriptionPanel
+                ref="descriptionPanelRef"
+                :image="image"
+                :locked="isCurrentLocked"
+                :lock-note="currentLockReason"
+                :text-state="pictureText.text.value.state"
+                :text-lines="pictureText.text.value.lines"
+                :active-tab="pictureText.activeTab.value"
+                :selected-words="pictureText.selectedWords.value"
+                :text-read-busy="pictureText.readAgainBusy.value"
+                @update-description="handleDescriptionUpdate"
+                @editing-finished="focusLightboxCanvas"
+                @pick-tab="pictureText.pickTab"
+                @select-word="pictureText.selectWord"
+                @clear-word-selection="pictureText.clearSelection"
+                @read-text-again="pictureText.readAgain"
+              />
+            </template>
+          </RailPicture>
         </div>
 
         <!-- `v-if`, unlike the Info group above: the Recipe tab is read-only
@@ -1231,7 +1147,6 @@ import {
   getCharacterName,
   getCharacterThumbnail,
   addCharacterFacesByFaceId,
-  removeCharacterFacesByFaceId,
 } from "../../api/characters";
 import { listStackPictures, setStackOrder } from "../../api/stacks";
 import { getPictureRecipe } from "../../api/comfyui";
@@ -1255,13 +1170,11 @@ import { bareDigit } from "../../utils/shortcutKeys";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
-import FacesPanel from "../widgets/FacesPanel.vue";
 import AppInspector from "../widgets/AppInspector.vue";
 import InspectorEdgeTab from "../widgets/InspectorEdgeTab.vue";
 import CharacterEditor from "../editors/CharacterEditor.vue";
 import LightboxDescriptionPanel from "./LightboxDescriptionPanel.vue";
 import LightboxFilmstrip from "./LightboxFilmstrip.vue";
-import LightboxMetadataPanel from "./LightboxMetadataPanel.vue";
 import LightboxRecipePanel from "./LightboxRecipePanel.vue";
 import LightboxEditPanel from "./LightboxEditPanel.vue";
 import PaintLayer from "./PaintLayer.vue";
@@ -1274,13 +1187,10 @@ import {
   usePaintSelection,
 } from "../../composables/usePaintSelection";
 import { cropFramings } from "../../utils/cropFramings";
-import LightboxTagsPanel from "./LightboxTagsPanel.vue";
 import LightboxActionReceipt from "../widgets/LightboxActionReceipt.vue";
 import LightboxSaveAsDialog from "../widgets/LightboxSaveAsDialog.vue";
 import PluginParametersUI from "../widgets/PluginParametersUI.vue";
-import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
-import SectionHeader from "../widgets/SectionHeader.vue";
-import { useSectionCollapse } from "../../composables/useSectionCollapse";
+import RailPicture from "../panels/RailPicture.vue";
 import { FAVOURITE_KEY } from "../../stores/useFavouritesStore";
 import Tooltip from "../widgets/Tooltip.vue";
 import {
@@ -1291,6 +1201,7 @@ import {
   toggleScore,
 } from "../../utils/utils.js";
 import {
+  hasNativeCopyContext,
   isEditableElement,
   isTypingTarget,
   LIGHTBOX_HOST_ID,
@@ -1376,9 +1287,6 @@ const props = defineProps({
   // Signals the named pictures were turned (`orientation`) - a rotate, or the
   // undo/redo of one, from this tab or another.
   orientationUpdate: { type: Object, default: () => ({}) },
-  hiddenTags: { type: Array, default: () => [] },
-  applyTagFilter: { type: Boolean, default: false },
-  dateFormat: { type: String, default: "locale" },
   showStacks: { type: Boolean, default: true },
   showProblemIcon: { type: Boolean, default: true },
   // False from the Scrapheap, which shows no heart: click and H both go inert.
@@ -1413,8 +1321,6 @@ const {
   detectionUpdate,
   textUpdate,
   orientationUpdate,
-  hiddenTags,
-  applyTagFilter,
   showStacks,
   showProblemIcon,
   availablePlugins,
@@ -1458,13 +1364,23 @@ const stackGroupingLockReason = computed(() => {
     : null;
 });
 const addToSetControlRef = ref(null);
-const tagsPanelRef = ref(null);
-const isAddingTag = computed(() => tagsPanelRef.value?.addingTag ?? false);
+// Info is the grid rail's one-picture view (`RailPicture`): T, Ctrl+V and the
+// faces panel's focus reach into it.
+const railPictureRef = ref(null);
+const isAddingTag = computed(() => Boolean(railPictureRef.value?.tagsEditing));
 
-function handleTagsUpdate(newTagsArray) {
-  if (image.value) {
-    image.value = { ...image.value, tags: newTagsArray };
-  }
+/**
+ * A tag gesture in Info landed: re-read the picture's tags and smart score,
+ * and tell the grid. A reset only queues the tagger, whose own signal re-reads.
+ */
+function onTagsApplied(change) {
+  const id = image.value?.id;
+  if (!id || change?.action === "reset") return;
+  void fetchLightboxMetadata(id);
+  emit("lightbox-change", {
+    imageId: id,
+    fields: { tags: true, smartScore: true },
+  });
 }
 // The pane stands where the right rail stands (#2163) but keeps its own open
 // flag, default open: a reader who keeps the grid's stats rail shut still
@@ -1947,7 +1863,7 @@ function setLightboxImageById(nextId) {
     }
     return;
   }
-  // Tag state reset is handled by LightboxTagsPanel's image-id watcher.
+  // Tag state reset is handled by RailTags' picture-id watcher.
 }
 
 /**
@@ -2030,7 +1946,6 @@ const emit = defineEmits([
   "apply-score",
   "apply-favourite",
   "set-guest-score",
-  "add-tag",
   "update-description",
   "lightbox-change",
   "added-to-set",
@@ -2091,7 +2006,7 @@ const tagsEditable = computed(
  */
 function pasteClipboardToImage() {
   if (!tagsEditable.value) return;
-  void tagsPanelRef.value?.pasteClipboard();
+  void railPictureRef.value?.pasteTags();
 }
 
 // ── Rotate in place ────────────────────────────────────────────────────────
@@ -3006,25 +2921,6 @@ function showNextImage() {
   return navigateLightboxImage(1);
 }
 
-/**
- * Is the keystroke landing in a text-entry surface?
- *
- * A text field keeps its own native undo stack, and the lightbox has several
- * (the tag field, the description editor, the plugin parameter inputs). Both
- * the event target and `document.activeElement` count, matching the strictness
- * App's global handler uses: a Vuetify combobox moves focus around, so the two
- * do not always agree.
- *
- * @param {EventTarget|null} target - the keydown target.
- * @returns {boolean}
- */
-function hasNativeCopyContext(target) {
-  if (isTypingTarget(target)) return true;
-  const selection =
-    typeof window === "undefined" ? null : window.getSelection?.();
-  return Boolean(selection && !selection.isCollapsed && selection.toString());
-}
-
 function handleKeydown(e) {
   if (!open.value) return;
   // A menu over the lightbox takes its own Escape: the title bar's, which sits
@@ -3127,17 +3023,8 @@ function handleKeydown(e) {
       saveMedia(buildContextMenuImage());
       return;
     }
-    // Chips selected in the sidebar: Ctrl+C copies those tags, not the media.
-    if (
-      !e.shiftKey &&
-      commandKey === "c" &&
-      tagsPanelRef.value?.hasSelection &&
-      !hasNativeCopyContext(e.target)
-    ) {
-      e.preventDefault();
-      void tagsPanelRef.value.copySelection();
-      return;
-    }
+    // Chips selected in Info take Ctrl+C before this (RailTags' capture
+    // listener), so it copies those tags, not the media.
     if (
       !e.shiftKey &&
       commandKey === "c" &&
@@ -3229,13 +3116,10 @@ function handleKeydown(e) {
 
   handleUserActivity();
 
+  // The tag field takes its own Escape (RailTags), one layer per press.
   if (isDescriptionEditing.value || isAddingTag.value) {
-    if (e.key === "Escape") {
-      if (isDescriptionEditing.value) {
-        descriptionPanelRef.value?.cancelEditDescription();
-      } else if (isAddingTag.value) {
-        tagsPanelRef.value?.cancelAddTag();
-      }
+    if (e.key === "Escape" && isDescriptionEditing.value) {
+      descriptionPanelRef.value?.cancelEditDescription();
     }
     return;
   }
@@ -3275,24 +3159,7 @@ function handleKeydown(e) {
     return;
   }
 
-  // Tag chips selected: Escape clears them, Delete removes them.
-  if (tagsPanelRef.value?.hasSelection) {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      tagsPanelRef.value.clearSelection();
-      return;
-    }
-    if (
-      (e.key === "Delete" || e.key === "Backspace") &&
-      !e.ctrlKey &&
-      !e.metaKey &&
-      !e.altKey
-    ) {
-      e.preventDefault();
-      if (tagsEditable.value) void tagsPanelRef.value.removeSelection();
-      return;
-    }
-  }
+  // Tag chips selected in Info: RailTags takes Escape and Delete first.
 
   if (
     paintActive.value &&
@@ -3343,7 +3210,7 @@ function handleKeydown(e) {
     } else if (namingFaces.value) {
       // The Faces panel, not the lightbox, wherever focus was left.
       namingFaces.value = false;
-      facesPencilRef.value?.focus?.();
+      railPictureRef.value?.focusPencil();
     } else {
       emit("close");
     }
@@ -3684,12 +3551,12 @@ function handleLightboxClick(event) {
 
 /** T: the tag field, on Info, in a pane opened for it if the rail was shut.
  * A reader sitting on Recipe is brought back to Info rather than given an
- * invisible cursor. `beginAddTag` focuses after the next render, by which the
+ * invisible cursor. The field focuses after the next render, by which the
  * pane and the Info group are shown. */
 function beginTagEntry() {
   openSidebar();
   sidebarTab.value = "info";
-  tagsPanelRef.value?.beginAddTag();
+  railPictureRef.value?.focusTags();
 }
 
 // S: the reader's own toggle, kept like the toolbar's. In full screen it is
@@ -4085,7 +3952,6 @@ const filmstripCanvasWindow = computed(() => filmstripCanvasData.value.items);
 // detector found draws its box; holding Shift draws every box. The one global
 // switch is the toolbar's Segmentation boxes, which keeps the detection boxes
 // on. Pointing at a face on the picture rings its crop in Info.
-const FACE_CHIP_SIZE = 42;
 const shiftHeld = ref(false);
 const hoveredFaceIdx = ref(null);
 const pinnedFaceIdxs = ref(new Set());
@@ -4093,8 +3959,6 @@ const pictureFaceIdx = ref(null);
 const hoveredTagLabel = ref(null);
 // The pencil on Faces: the panel of person pickers, one per face.
 const namingFaces = ref(false);
-const facesPencilRef = ref(null);
-const facesPanelRef = ref(null);
 
 function closeFacesPanel() {
   // A press in the new-person dialog a face row opened lands outside the
@@ -5019,9 +4883,6 @@ const characters = ref([]);
 const charactersLoading = ref(false);
 const characterThumbnails = ref({});
 let characterThumbnailEpoch = 0;
-const FACE_THUMB_BASE = 34;
-const FACE_THUMB_MIN = 28;
-const FACE_THUMB_MAX = 60;
 let metadataRequestId = 0;
 let faceBboxesRequestId = 0;
 let detectionBboxesRequestId = 0;
@@ -5184,7 +5045,6 @@ async function fetchLightboxMetadata(imageId) {
       frozenAllImages.value = next;
     }
     void ensureLightboxFilmstripForImage();
-    void tagsPanelRef.value?.refetchPredictions(imageId);
   } catch (e) {
     console.error("Failed to fetch lightbox metadata:", e);
   }
@@ -5343,144 +5203,6 @@ function clearCharacterThumbnails() {
   characterThumbnails.value = {};
 }
 
-function getFaceThumbStyle(face, idx, size = FACE_THUMB_BASE) {
-  const color = faceBoxColor(idx);
-  const base = {
-    borderColor: color,
-  };
-  const bbox = Array.isArray(face?.bbox) ? face.bbox : null;
-  const sourceWidth = Number(
-    image.value?.width || lightboxDims.value.naturalWidth || 0,
-  );
-  const sourceHeight = Number(
-    image.value?.height || lightboxDims.value.naturalHeight || 0,
-  );
-  const sourceUrl = getFullImageUrl(image.value);
-  if (!sourceUrl || !bbox || bbox.length !== 4) {
-    return {
-      ...base,
-      width: `${size}px`,
-      height: `${size}px`,
-    };
-  }
-  const [x1, y1, x2, y2] = bbox;
-  const faceW = Math.max(1, x2 - x1);
-  const faceH = Math.max(1, y2 - y1);
-  const imageW = sourceWidth || lightboxDims.value.naturalWidth || 1;
-  const imageH = sourceHeight || lightboxDims.value.naturalHeight || 1;
-  const maxDim = Math.max(faceW, faceH);
-  const targetMax = Math.min(
-    FACE_THUMB_MAX,
-    Math.max(FACE_THUMB_MIN, size),
-  );
-  const scale = targetMax / maxDim;
-  const targetW = Math.max(1, Math.round(faceW * scale));
-  const targetH = Math.max(1, Math.round(faceH * scale));
-  const bgWidth = Math.round(imageW * scale);
-  const bgHeight = Math.round(imageH * scale);
-  const bgPosX = Math.round(-x1 * scale);
-  const bgPosY = Math.round(-y1 * scale);
-  return {
-    ...base,
-    width: `${targetW}px`,
-    height: `${targetH}px`,
-    backgroundImage: `url(${sourceUrl})`,
-    backgroundSize: `${bgWidth}px ${bgHeight}px`,
-    backgroundPosition: `${bgPosX}px ${bgPosY}px`,
-  };
-}
-
-async function assignFaceToCharacter(face, character) {
-  if (!face?.id || !character?.id || !backendUrl.value) return;
-  // Store imageId before the await in case image.value changes or is nulled during the async operation
-  const capturedImageId = image.value?.id ?? null;
-  try {
-    await addCharacterFacesByFaceId(character.id, [face.id], {
-      baseUrl: backendUrl.value,
-    });
-    if (Array.isArray(faceBboxes.value)) {
-      faceBboxes.value = faceBboxes.value.map((entry) => {
-        if (entry?.id === face.id) {
-          return {
-            ...entry,
-            character_id: character.id,
-            character_name: character.displayName || character.name || null,
-          };
-        }
-        return entry;
-      });
-    }
-    if (capturedImageId) {
-      emit("lightbox-change", {
-        imageId: capturedImageId,
-        fields: { faces: true },
-      });
-    }
-  } catch (e) {
-    console.error("Failed to assign character", e);
-    noticeStore.error(
-      `Couldn't assign that person. ${errorDetail(e) || e?.message || "Please try again."}`,
-      { key: "lightbox-assign-character" },
-    );
-  }
-}
-
-async function unassignFaceCharacter(face) {
-  if (!face?.id || !face?.character_id || !backendUrl.value) return;
-  // Store imageId before the await in case image.value changes or is nulled during the async operation
-  const capturedImageId = image.value?.id ?? null;
-  try {
-    await removeCharacterFacesByFaceId(face.character_id, [face.id], {
-      baseUrl: backendUrl.value,
-    });
-    if (Array.isArray(faceBboxes.value)) {
-      faceBboxes.value = faceBboxes.value.map((entry) => {
-        if (entry?.id === face.id) {
-          return { ...entry, character_id: null, character_name: null };
-        }
-        return entry;
-      });
-    }
-    if (capturedImageId) {
-      emit("lightbox-change", {
-        imageId: capturedImageId,
-        fields: { faces: true },
-      });
-    }
-  } catch (e) {
-    console.error("Failed to unassign character", e);
-    noticeStore.error(
-      `Couldn't unassign that person. ${errorDetail(e) || e?.message || "Please try again."}`,
-      { key: "lightbox-unassign-character" },
-    );
-  }
-}
-
-// The face menu performs no writes of its own, so the existing (and unchanged)
-// face-level assign path stays the single place that talks to the API.
-function handleFaceAssign(face, payload) {
-  const character =
-    sortedCharacters.value.find(
-      (char) => String(char.id) === String(payload?.characterId),
-    ) ??
-    (payload?.characterId != null
-      ? { id: payload.characterId, name: payload.characterName }
-      : null);
-  if (character) assignFaceToCharacter(face, character);
-}
-
-// What the trigger reads when the face already has someone: prefer the stored
-// name, fall back to the character list, and finally to the id, which is what
-// the select's fallback <option> used to do.
-function faceAssignedName(face) {
-  if (face?.character_id == null) return "";
-  if (face.character_name) return face.character_name;
-  const known = sortedCharacters.value.find(
-    (char) => String(char.id) === String(face.character_id),
-  );
-  return known?.displayName || `Character ${face.character_id}`;
-}
-
 // ── Create a person from a face row (#645) ───────────────────────────────────
 // The face id and the invoking select are captured at flow start so they
 // survive the dialog: on save the new person is assigned to exactly that face,
@@ -5495,7 +5217,8 @@ let createPersonFaceKey = null;
 async function openCreatePersonForFace(face, query) {
   if (!face?.id || isReadOnly.value) return;
   createPersonFaceId = face.id;
-  createPersonFaceKey = face.faceKey;
+  // The faces panel keys its rows by face id.
+  createPersonFaceKey = face.id;
   const typed = typeof query === "string" ? query.trim() : "";
   const projects = await listProjects({ baseUrl: backendUrl.value }).catch(
     (e) => {
@@ -5549,7 +5272,7 @@ function restoreCreatePersonFocus() {
   const key = createPersonFaceKey;
   createPersonFaceKey = null;
   if (key == null) return;
-  nextTick(() => facesPanelRef.value?.focusRow(key));
+  nextTick(() => railPictureRef.value?.focusFaceRow(key));
 }
 
 function handleCreatePersonClose() {
@@ -5655,8 +5378,6 @@ function preloadAdjacentImages() {
 }
 
 const comfyMetadata = ref(null);
-
-const facesCollapsed = useSectionCollapse("faces");
 
 // The panel names one picture's faces; stepping to the next shuts it, as the
 // rail's does.
@@ -5788,42 +5509,6 @@ const pictureName = computed(() => {
   const text = String(image.value?.description || "").trim();
   if (!text) return "";
   return text.split(/(?<=[.!?])\s/)[0].replace(/[.!?]+$/, "");
-});
-
-const faceAssignItems = computed(() => {
-  const faces = Array.isArray(faceBboxes.value) ? faceBboxes.value : [];
-  return faces.map((face, idx) => ({
-    ...face,
-    faceIdx: idx,
-    faceKey: face?.id ?? `face-${idx}`,
-    label: `Face ${idx + 1}`,
-  }));
-});
-
-const facePanelRows = computed(() =>
-  faceAssignItems.value.map((face) => ({
-    key: face.faceKey,
-    id: face.id,
-    characterId: face.character_id,
-    name: faceAssignedName(face),
-    label: face.label,
-    hue: faceBoxColor(face.faceIdx),
-    cropStyle: getFaceThumbStyle(face, face.faceIdx, 36),
-    face,
-  })),
-);
-
-const sortedCharacters = computed(() => {
-  const list = Array.isArray(characters.value) ? characters.value : [];
-  return [...list]
-    .filter((char) => char && typeof char.name === "string")
-    .sort((a, b) =>
-      a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
-    )
-    .map((char) => ({
-      ...char,
-      displayName: char.name.charAt(0).toUpperCase() + char.name.slice(1),
-    }));
 });
 
 function isValidOverlayBBox(bbox) {

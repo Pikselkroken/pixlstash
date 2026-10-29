@@ -52,10 +52,9 @@ vi.mock("../../api/operations", () => ({
 }));
 
 const STUBS = {
-  LightboxTagsPanel: true,
+  RailTags: true,
   LightboxFilmstrip: true,
   LightboxDescriptionPanel: true,
-  LightboxMetadataPanel: true,
   AddToEntityControl: true,
   CharacterEditor: true,
   StarRatingOverlay: true,

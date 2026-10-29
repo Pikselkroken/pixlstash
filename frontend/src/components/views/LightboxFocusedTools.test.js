@@ -43,13 +43,9 @@ vi.mock("../../utils/apiClient", async () => {
 });
 
 const STUBS = {
-  LightboxTagsPanel: {
-    name: "LightboxTagsPanel",
+  RailTags: {
+    name: "RailTags",
     props: ["boxedTags"],
-    setup(_props, { expose }) {
-      expose({ refetchPredictions: vi.fn() });
-      return {};
-    },
     template: "<div class='tags-stub' />",
   },
   LightboxFilmstrip: true,
@@ -61,7 +57,6 @@ const STUBS = {
     },
     template: "<div />",
   },
-  LightboxMetadataPanel: true,
   LightboxEditPanel: true,
   AddToEntityControl: true,
   CharacterEditor: true,
@@ -203,7 +198,7 @@ describe("boxes are drawn while asked about or switched on", () => {
 
   it("draws a face's box while its crop in Info is pointed at", async () => {
     const wrapper = await openMeasured();
-    const chip = wrapper.find(".face-chip");
+    const chip = wrapper.find(".rail-face");
     expect(chip.text()).toBe("Unknown");
     await chip.trigger("mouseenter");
     expect(shownBoxes(wrapper)).toEqual(["Face 1"]);
@@ -213,13 +208,13 @@ describe("boxes are drawn while asked about or switched on", () => {
 
   it("keeps a face's box on once its crop is clicked, until clicked again", async () => {
     const wrapper = await openMeasured();
-    const chip = wrapper.find(".face-chip");
+    const chip = wrapper.find(".rail-face");
     await chip.trigger("mouseenter");
     await chip.trigger("click");
     await chip.trigger("mouseleave");
     expect(shownBoxes(wrapper)).toEqual(["Face 1"]);
     expect(chip.attributes("aria-pressed")).toBe("true");
-    expect(chip.classes()).toContain("face-chip--ringed");
+    expect(chip.classes()).toContain("rail-face--ringed");
     // Unpinning drops the hover too: a tap brings no mouseleave.
     await chip.trigger("mouseenter");
     await chip.trigger("click");
@@ -237,11 +232,11 @@ describe("boxes are drawn while asked about or switched on", () => {
 
   it("lets a kept face box go on the next picture", async () => {
     const wrapper = await openMeasured();
-    await wrapper.find(".face-chip").trigger("click");
+    await wrapper.find(".rail-face").trigger("click");
     expect(shownBoxes(wrapper)).toEqual(["Face 1"]);
     press("ArrowRight");
     await flush();
-    expect(wrapper.find(".face-chip").attributes("aria-pressed")).toBe(
+    expect(wrapper.find(".rail-face").attributes("aria-pressed")).toBe(
       "false",
     );
     expect(shownBoxes(wrapper)).toEqual([]);
@@ -250,7 +245,7 @@ describe("boxes are drawn while asked about or switched on", () => {
   // Space is the chrome toggle's everywhere but on a focused pane button.
   it("leaves Space on a keyboard-focused face chip to the chip", async () => {
     const wrapper = await openMeasured();
-    const chip = wrapper.find(".face-chip").element;
+    const chip = wrapper.find(".rail-face").element;
     chip.focus({ focusVisible: true });
     const event = press(" ", { target: chip });
     await flush();
@@ -262,7 +257,7 @@ describe("boxes are drawn while asked about or switched on", () => {
 
   it("lets a face's box go when the inspector shuts under the pointer", async () => {
     const wrapper = await openMeasured();
-    await wrapper.find(".face-chip").trigger("mouseenter");
+    await wrapper.find(".rail-face").trigger("mouseenter");
     expect(shownBoxes(wrapper)).toEqual(["Face 1"]);
     press("s");
     await flush();
@@ -271,7 +266,7 @@ describe("boxes are drawn while asked about or switched on", () => {
 
   it("draws a detected tag's box while the tag is pointed at", async () => {
     const wrapper = await openMeasured();
-    const tags = wrapper.findComponent({ name: "LightboxTagsPanel" });
+    const tags = wrapper.findComponent({ name: "RailTags" });
     expect([...tags.props("boxedTags")]).toEqual(["dragon"]);
     tags.vm.$emit("hover-tag", "Dragon");
     await flush();
@@ -329,19 +324,19 @@ describe("boxes are drawn while asked about or switched on", () => {
       new MouseEvent("mousemove", { bubbles: true, clientX: 100, clientY: 75 }),
     );
     await flush();
-    expect(wrapper.find(".face-chip").classes()).toContain("face-chip--ringed");
+    expect(wrapper.find(".rail-face").classes()).toContain("rail-face--ringed");
     canvas.dispatchEvent(
       new MouseEvent("mousemove", { bubbles: true, clientX: 600, clientY: 75 }),
     );
     await flush();
-    expect(wrapper.find(".face-chip").classes()).not.toContain(
-      "face-chip--ringed",
+    expect(wrapper.find(".rail-face").classes()).not.toContain(
+      "rail-face--ringed",
     );
   });
 
   it("edits faces in a panel over the sidebar, not an inline grid", async () => {
     const wrapper = await openMeasured();
-    const section = wrapper.find(".sidebar-section--faces");
+    const section = wrapper.find(".lightbox .rail-id");
     expect(section.find('[aria-label="More face actions"]').exists()).toBe(false);
     await section.find('[aria-label="Edit faces"]').trigger("click");
     const panel = section.find(".faces-panel");

@@ -59,10 +59,9 @@ import { useOperationStore } from "../../stores/useOperationStore";
 // The receipt is deliberately NOT stubbed: the Escape guard and the hint
 // suppression are contracts between the two components.
 const STUBS = {
-  LightboxTagsPanel: true,
+  RailTags: true,
   LightboxFilmstrip: true,
   LightboxDescriptionPanel: true,
-  LightboxMetadataPanel: true,
   AddToEntityControl: true,
   CharacterEditor: true,
   StarRatingOverlay: true,

@@ -274,14 +274,6 @@
   background: rgba(var(--v-theme-accent), 0.34);
 }
 
-/* The rating and heart at the end of the rail's tab band. The pane is dark in
-   both themes, so the empty stars take its ink rather than the page's. On the
-   icons themselves: each carries the theme's class, which restates the
-   theme's variables. */
-.lightbox-rail-rating :deep(.v-icon) {
-  --v-theme-on-background: var(--v-theme-on-dark-surface);
-}
-
 .lightbox-star-mobile-btn {
   display: flex;
   align-items: center;
@@ -645,15 +637,18 @@
 }
 
 /* The Info tab's own column. The inspector's lightbox body is a fixed-height
-   flex column whose sections bound and scroll themselves, so the group has to
-   be that column rather than a plain wrapper, or Description loses the
-   `flex: 1 1 114px` that gives it its share of the height. */
+   flex column, so the group is that column's one growing child, and the one
+   that scrolls. */
 .lightbox-sidebar-group {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
   flex: 1;
   min-height: 0;
+  /* Scrolls as one column, as the grid rail does; Description takes what is
+     left on a tall window (RailPicture's `min-height`). */
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .sidebar-section--description {
@@ -668,126 +663,6 @@
   flex: 0 0 auto;
   min-height: 0;
   overflow: hidden;
-}
-
-/* The Tags / Rejected Tags section layout lives in LightboxTagsPanel's own
-   scoped block: that component has multiple root nodes, so this file's scope id
-   is never stamped onto them and rules written here would not match. */
-
-.rejected-threshold-label {
-  margin-left: 6px;
-  font-size: var(--text-2xs);
-  opacity: 0.5;
-  font-weight: 400;
-  letter-spacing: 0.01em;
-}
-
-/* The head of Info: the picture's name, then its rating and heart. */
-.lightbox-info-head {
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.lightbox-info-name {
-  font-size: var(--text-md);
-  font-weight: var(--weight-medium);
-  color: rgb(var(--v-theme-on-dark-surface));
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* A section's own verbs in its header (the Tags panel's, restated: its
-   styles are scoped to it). */
-.section-meta-btn {
-  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
-  padding: var(--space-1);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-sm);
-}
-
-.section-meta-btn:hover:not(:disabled),
-.section-meta-btn--on {
-  color: rgb(var(--v-theme-on-dark-surface));
-}
-
-.section-meta-btn--on {
-  background: rgba(var(--v-theme-on-dark-surface), 0.16);
-}
-
-/* The faces as named crops, in each face's identity hue. An unnamed face is
-   dashed and muted; the one pointed at on the picture, or clicked to keep its
-   box on, draws its one border heavier, never a second ring outside it. The
-   border hugs the crop itself; the square box round it only holds the place. */
-.face-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-3);
-  margin-top: var(--space-2);
-}
-
-.face-chip {
-  min-width: 42px;
-  max-width: 64px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-1);
-  padding: 0;
-  border: 0;
-  background: none;
-  font: inherit;
-  cursor: pointer;
-}
-
-.face-chip-crop {
-  width: 42px;
-  height: 42px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-}
-
-.face-chip-crop .face-assign-crop {
-  border-radius: var(--radius-sm);
-  border: 1.5px solid var(--face-hue);
-  transition: border-width var(--dur-1) var(--ease-standard);
-}
-
-.face-chip--unnamed .face-chip-crop {
-  opacity: var(--opacity-text-secondary);
-}
-
-.face-chip--unnamed .face-assign-crop {
-  border-style: dashed;
-}
-
-.face-chip:hover .face-chip-crop,
-.face-chip--ringed .face-chip-crop {
-  opacity: 1;
-}
-
-.face-chip:hover .face-assign-crop,
-.face-chip--ringed .face-assign-crop {
-  border-width: 2px;
-}
-
-.face-chip-name {
-  max-width: 100%;
-  font-size: var(--text-2xs);
-  color: var(--face-hue);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.face-chip--unnamed .face-chip-name {
-  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
 }
 
 /* The Edit tab's Quick changes (rendered into LightboxEditPanel's slot). */
@@ -809,34 +684,6 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
   justify-items: start;
   gap: var(--space-2);
-}
-
-.face-assign-crop {
-  border-radius: 2px;
-  border: 1px solid transparent;
-  background-repeat: no-repeat;
-  background-position: center;
-  background-size: cover;
-  margin: 0 auto;
-}
-
-/* The Edit faces panel hangs under the section's header, over Tags. */
-.sidebar-section--faces {
-  position: relative;
-}
-
-.lightbox-faces-panel {
-  position: absolute;
-  top: calc(var(--control-h-bar) + var(--space-3));
-  left: 0;
-  right: 0;
-  z-index: var(--z-dropdown);
-}
-
-.face-assign-empty {
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
-  padding: var(--space-2) 6px;
 }
 
 .face-bbox-empty {

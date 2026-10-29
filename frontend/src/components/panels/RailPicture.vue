@@ -1,17 +1,21 @@
 <template>
-  <!-- One selected picture in the grid's rail, tag-first: who it is (the
-       tile's rating strip, a small thumbnail and its faces), the tag field T
-       focuses with its tags and rejected tags, then the lightbox's own
-       Description panel, which takes the room left, and Properties. The grid
-       already shows the picture big; the rail only says which one it is. -->
-  <div class="rail-picture">
+  <!-- One picture, tag-first: who it is (the tile's rating strip, a small
+       thumbnail and its faces), the tag field T focuses with its tags and
+       rejected tags, then the Description panel, which takes the room left,
+       and Properties. The grid rail's one-picture view and the lightbox's Info
+       tab are both this; `on-dark` is the lightbox's pane. -->
+  <div class="rail-picture" :class="{ 'rail-picture--on-dark': onDark }">
     <div class="rail-id">
+      <!-- Only where nothing above names the picture (the lightbox's band
+           holds tabs). No tip: the whole description is a section below. -->
+      <div v-if="title" class="rail-picture__title">{{ title }}</div>
       <!-- The same strip as the grid tile: five stars, a hairline, the heart.
            It rates and favourites through the grid's own paths (App.vue), so
            the tile and the rail cannot disagree. -->
       <div class="rail-picture__strip">
         <StarRatingOverlay
           :score="score"
+          :readonly="readonly"
           icon-size="18"
           :favouritable="favouritable"
           :favourite="Boolean(card?.favourite)"
@@ -26,16 +30,32 @@
         alt=""
         draggable="false"
       />
-      <div class="rail-faces" :class="{ 'rail-faces--compact': compact }">
+      <div
+        class="rail-faces"
+        :class="{
+          'rail-faces--compact': compact,
+          'rail-faces--pinnable': pinnable,
+        }"
+      >
+        <!-- In the lightbox a face's box is on the picture beside it:
+             pointing at the crop draws it, clicking keeps it on, and pointing
+             at the face on the picture rings the crop here. -->
         <button
           v-for="(face, idx) in shownFaces"
           :key="face.id ?? `face-${idx}`"
           class="rail-face"
-          :class="{ 'rail-face--unknown': face.character_id == null }"
+          :class="{
+            'rail-face--unknown': face.character_id == null,
+            'rail-face--ringed':
+              pinnable && (ringedFace === idx || pinnedFaces.has(idx)),
+          }"
           type="button"
           :aria-label="`Face ${idx + 1}: ${faceName(face)}`"
-          :aria-controls="facesPanelId"
-          @click="openFaces(face.id)"
+          :aria-controls="pinnable ? undefined : facesPanelId"
+          :aria-pressed="pinnable ? String(pinnedFaces.has(idx)) : undefined"
+          @mouseenter="pinnable && emit('hover-face', idx)"
+          @mouseleave="pinnable && emit('hover-face', null)"
+          @click="pinnable ? emit('pin-face', idx) : openFaces(face.id)"
         >
           <Tooltip v-if="compact" :text="faceName(face)" activator="parent" :describe="false" />
           <span
@@ -54,10 +74,14 @@
         >
           <span class="rail-face__crop rail-face__more">+{{ moreFaces }}</span>
         </button>
+        <span v-if="pinnable && !faces.length" class="rail-faces__none"
+          >No faces detected</span
+        >
         <button
           v-if="!isReadOnly"
           ref="pencilRef"
           class="rail-ib"
+          :class="{ 'rail-ib--on': facesOpen }"
           type="button"
           aria-label="Edit faces"
           :aria-controls="facesPanelId"
@@ -69,34 +93,50 @@
         </button>
       </div>
       <FacesPanel
-        v-if="facesOpen"
+        v-if="facesOpen && !isReadOnly"
         :id="facesPanelId"
+        ref="facesPanelRef"
         class="rail-faces__panel"
         :rows="faceRows"
         :anchor="pencilRef"
         :focus-key="focusFaceId"
         :readonly="isReadOnly"
+        :on-dark="onDark"
+        :allow-create="allowCreate"
         @close="facesOpen = false"
+        @hover="(row) => emit('hover-face', row ? row.idx : null)"
         @assign="(row, payload) => assignFace(row.face, payload)"
         @unassign="(row) => unassignFace(row.face)"
-      />
+        @create="(row, query) => emit('create-person', row.face, query)"
+      >
+        <template v-if="$slots['faces-footer']" #footer>
+          <slot name="faces-footer"></slot>
+        </template>
+      </FacesPanel>
     </div>
 
     <RailTags
+      ref="tagsRef"
       :ids="[pictureId]"
       :locked="locked"
       :lock-note="lockNote"
-      takes-tag-key
+      :takes-tag-key="takesTagKey"
+      :boxed-tags="boxedTags"
       @tags-applied="emit('tags-applied', $event)"
+      @hover-tag="emit('hover-tag', $event)"
     />
 
-    <LightboxDescriptionPanel
-      class="rail-picture__desc"
-      :image="image"
-      :locked="locked"
-      :lock-note="lockNote"
-      @update-description="onDescriptionUpdated"
-    />
+    <!-- The lightbox fills this with its own panel, wired to the picture's
+         read text. -->
+    <slot name="description">
+      <LightboxDescriptionPanel
+        class="rail-picture__desc"
+        :image="image"
+        :locked="locked"
+        :lock-note="lockNote"
+        @update-description="onDescriptionUpdated"
+      />
+    </slot>
 
     <section class="rail-picture__section" aria-label="Properties">
       <SectionHeader
@@ -108,7 +148,10 @@
         <template v-for="row in properties" :key="row.label">
           <dt>{{ row.label }}</dt>
           <dd v-if="row.folder && !isReadOnly" class="rail-picture__file">
-            <span>{{ row.value }}</span>
+            <span
+              >{{ row.value
+              }}<Tooltip v-if="row.path" :text="row.path" activator="parent"
+            /></span>
             <button
               type="button"
               class="rail-picture__folder"
@@ -138,6 +181,7 @@ import {
   removeCharacterFacesByFaceId,
 } from "../../api/characters";
 import { faceBoxColor, formatUserDate } from "../../utils/utils.js";
+import { getLightboxFormat, isSupportedVideoFile } from "../../utils/media.js";
 import { formatModelSize } from "../../utils/modelShelf.js";
 import { errorDetail } from "../../utils/apiError";
 import { useSectionCollapse } from "../../composables/useSectionCollapse";
@@ -163,6 +207,30 @@ const props = defineProps({
   score: { type: Number, default: 0 },
   /** The tile's heart rule: not read-only, not the Scrapheap. */
   favouritable: { type: Boolean, default: true },
+  /** The stars show the rating but take no click (a locked picture). */
+  readonly: { type: Boolean, default: false },
+  /** The picture's name, where the host's head does not already say it. */
+  title: { type: String, default: "" },
+  /** The grid's rail: T (`useSidebarStore.requestTagField`) focuses the field. */
+  takesTagKey: { type: Boolean, default: true },
+  /** Drawn on the lightbox's pane, dark in both themes. */
+  onDark: { type: Boolean, default: false },
+  /**
+   * The lightbox, where the picture's face boxes are beside the rail: a crop
+   * reports `hover-face` and `pin-face` rather than opening the panel, and
+   * every face is shown.
+   */
+  pinnable: { type: Boolean, default: false },
+  /** Face indices whose box is kept on (`pinnable`). */
+  pinnedFaces: { type: Set, default: () => new Set() },
+  /** The face index pointed at on the picture (`pinnable`). */
+  ringedFace: { type: Number, default: null },
+  /** The faces panel offers "new person" (the lightbox owns that dialog). */
+  allowCreate: { type: Boolean, default: false },
+  /** Lower-cased labels the object detector found (`RailTags`). */
+  boxedTags: { type: Set, default: () => new Set() },
+  /** A video's runtime in seconds, when the host measured it. */
+  videoDuration: { type: Number, default: null },
 });
 
 const emit = defineEmits([
@@ -174,7 +242,14 @@ const emit = defineEmits([
   "update:image",
   "update:faces",
   "refresh",
+  "hover-face",
+  "pin-face",
+  "create-person",
+  "hover-tag",
 ]);
+
+/** The faces panel; a host that must veto a close (a dialog over it) binds it. */
+const facesOpen = defineModel("facesOpen", { type: Boolean, default: false });
 
 const namesStore = useEntityNamesStore();
 const lockedSetsStore = useLockedSetsStore();
@@ -200,12 +275,15 @@ function personName(characterId) {
 const faceName = (face) => personName(face.character_id) || "Unknown";
 
 // ── Faces ────────────────────────────────────────────────────────────────────
-// Four or more drop their names, step down and end in a "+N" tile.
+// Four or more drop their names, step down and end in a "+N" tile; in the
+// lightbox they all stay, wrapping, since each one's box can be pinned.
 const CROWD = 4;
 const compact = computed(() => props.faces.length >= CROWD);
 const cropSize = computed(() => (compact.value ? 32 : 42)); // px
 const shownFaces = computed(() =>
-  compact.value ? props.faces.slice(0, CROWD - 1) : props.faces,
+  compact.value && !props.pinnable
+    ? props.faces.slice(0, CROWD - 1)
+    : props.faces,
 );
 const moreFaces = computed(() => props.faces.length - shownFaces.value.length);
 
@@ -240,9 +318,10 @@ function faceCropStyle(face, size) {
   };
 }
 
-const facesOpen = ref(false);
 const focusFaceId = ref(null);
 const pencilRef = ref(null);
+const facesPanelRef = ref(null);
+const tagsRef = ref(null);
 const facesPanelId = useId();
 
 const faceRows = computed(() =>
@@ -254,6 +333,7 @@ const faceRows = computed(() =>
     label: `Face ${idx + 1}`,
     hue: faceBoxColor(idx),
     cropStyle: faceCropStyle(face, 36),
+    idx,
     face,
   })),
 );
@@ -274,6 +354,7 @@ watch(
     facesOpen.value = false;
   },
 );
+
 function replaceFace(faceId, patch) {
   emit(
     "update:faces",
@@ -290,7 +371,10 @@ async function assignFace(face, payload) {
   if (!face?.id || characterId == null) return;
   try {
     await addCharacterFacesByFaceId(characterId, [face.id]);
-    replaceFace(face.id, { character_id: characterId });
+    replaceFace(face.id, {
+      character_id: characterId,
+      character_name: payload?.characterName ?? null,
+    });
   } catch (e) {
     console.error("Failed to assign a face from the rail", face.id, e);
     noticeStore.error(
@@ -304,7 +388,7 @@ async function unassignFace(face) {
   if (!face?.id || face.character_id == null) return;
   try {
     await removeCharacterFacesByFaceId(face.character_id, [face.id]);
-    replaceFace(face.id, { character_id: null });
+    replaceFace(face.id, { character_id: null, character_name: null });
   } catch (e) {
     console.error("Failed to unassign a face from the rail", face.id, e);
     noticeStore.error(
@@ -349,25 +433,73 @@ function modelNames(raw) {
   }
 }
 
+function aspectRatio(width, height) {
+  const gcd = (a, b) => (b === 0 ? a : gcd(b, a % b));
+  const d = gcd(width, height);
+  return `${Math.round(width / d)}:${Math.round(height / d)}`;
+}
+
+function formatRuntime(seconds) {
+  const total = Math.round(Number(seconds));
+  if (!Number.isFinite(total) || total <= 0) return "";
+  const pad = (n) => String(n).padStart(2, "0");
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  return h
+    ? `${h}:${pad(m)}:${pad(total % 60)}`
+    : `${m}:${pad(total % 60)}`;
+}
+
 // The file name is a property here, never the title: files mostly have
 // random names (#2161).
 const properties = computed(() => {
   const img = props.image;
   if (!img) return [];
-  const rows = [];
+  // The id first (#1379): what a bug report or a share link names.
+  const rows = img.id != null ? [{ label: "ID", value: String(img.id) }] : [];
   const file =
     img.original_file_name || String(img.file_path || "").split(/[\\/]/).pop();
-  // Shown in its folder only when there is a stored path to open.
-  if (file) rows.push({ label: "File", value: file, folder: !!img.file_path });
-  if (img.width && img.height) {
-    rows.push({ label: "Dimensions", value: `${img.width} × ${img.height}` });
+  // Shown in its folder only when there is a stored path to open; the whole
+  // path is the name's tooltip.
+  if (file) {
+    rows.push({
+      label: "File",
+      value: file,
+      folder: !!img.file_path,
+      path: img.file_path || "",
+    });
+  }
+  const width = Number(img.width) || 0;
+  const height = Number(img.height) || 0;
+  if (width && height) {
+    rows.push({ label: "Dimensions", value: `${width} × ${height}` });
+    rows.push({ label: "Aspect", value: aspectRatio(width, height) });
   }
   const size = formatModelSize(img.size_bytes);
   if (size) rows.push({ label: "Size", value: size });
+  const format = getLightboxFormat(img);
+  const isVideo = format ? isSupportedVideoFile(format) : false;
+  if (format) {
+    rows.push({
+      label: "Type",
+      value: `${isVideo ? "Video" : "Image"} · ${format.toUpperCase()}`,
+    });
+  }
+  // A still image is one frame, which says nothing.
+  const frames = Number(img.frame_count) || 0;
+  if (frames > 1 || (isVideo && frames > 0)) {
+    rows.push({ label: "Frames", value: frames.toLocaleString() });
+  }
+  const runtime = isVideo
+    ? formatRuntime(props.videoDuration || img.duration)
+    : "";
+  if (runtime) rows.push({ label: "Runtime", value: runtime });
   const models = modelNames(img.comfyui_models);
   if (models.length) rows.push({ label: "Model", value: models.join(", ") });
-  if (typeof img.smart_score === "number") {
-    rows.push({ label: "Quality", value: img.smart_score.toFixed(2) });
+  const quality =
+    typeof img.smart_score === "number" ? img.smart_score : img.smartScore;
+  if (typeof quality === "number") {
+    rows.push({ label: "Quality", value: quality.toFixed(2) });
   }
   if (img.created_at) {
     rows.push({
@@ -375,15 +507,41 @@ const properties = computed(() => {
       value: formatUserDate(img.created_at, userPrefsStore.dateFormat),
     });
   }
+  // The set(s) freezing this picture's tags and description.
+  const lockedBy = (Array.isArray(img.locked_by_sets) ? img.locked_by_sets : [])
+    .map((set) => set?.name)
+    .filter(Boolean);
+  if (lockedBy.length) rows.push({ label: "Locked by", value: lockedBy.join(", ") });
   return rows;
+});
+
+defineExpose({
+  /** T: the tag field. */
+  focusTags: () => tagsRef.value?.focus(),
+  /** The caret is in the tag field. */
+  tagsEditing: computed(() => Boolean(tagsRef.value?.editing)),
+  /** Ctrl+V: the copied tags onto this picture. */
+  pasteTags: () => tagsRef.value?.pasteClipboard(),
+  focusPencil: () => pencilRef.value?.focus(),
+  /** A row of the open faces panel (back from the new-person dialog). */
+  focusFaceRow: (key) => facesPanelRef.value?.focusRow(key),
 });
 </script>
 
 <style scoped>
-/* The lightbox's Description panel inks itself for its always-dark surface.
-   Here it sits on the rail, so each dark-surface ink is handed this theme's
-   own. */
 .rail-picture {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  /* At least the rail's height: the Description panel grows into what is
+     left, so a long caption reads whole on a tall window. */
+  min-height: 100%;
+  font-size: var(--text-xs);
+}
+
+/* The lightbox's Description panel inks itself for its always-dark surface.
+   On the rail each dark-surface ink is handed this theme's own. */
+.rail-picture:not(.rail-picture--on-dark) {
   --v-theme-dark-surface: var(--v-theme-sidebar);
   --v-theme-on-dark-surface: var(--v-theme-on-surface);
   --v-theme-dark-surface-error: var(--v-theme-surface-error);
@@ -394,13 +552,33 @@ const properties = computed(() => {
   --v-theme-dark-surface-primary: var(--v-theme-primary);
   --v-theme-dark-surface-tertiary: var(--v-theme-tertiary);
   --v-theme-dark-surface-favourite: var(--v-theme-favourite);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  /* At least the rail's height: the Description panel grows into what is
-     left, so a long caption reads whole on a tall window. */
-  min-height: 100%;
-  font-size: var(--text-xs);
+}
+
+/* The lightbox's pane is dark in both themes, so the other way round: every
+   ink the rail's parts use is handed its dark-surface twin. */
+.rail-picture--on-dark {
+  --v-theme-on-surface: var(--v-theme-on-dark-surface);
+  --v-theme-error: var(--v-theme-dark-surface-error);
+  --v-theme-surface-error: var(--v-theme-dark-surface-error);
+  --v-theme-tertiary: var(--v-theme-dark-surface-tertiary);
+  --v-theme-primary: var(--v-theme-dark-surface-primary);
+  --v-theme-accent: var(--v-theme-dark-surface-accent);
+  --v-theme-favourite: var(--v-theme-dark-surface-favourite);
+  --hover-wash: rgba(var(--v-theme-on-dark-surface), 0.16);
+  --active-bar: rgb(var(--v-theme-dark-surface-primary));
+  --active-wash: rgba(var(--v-theme-dark-surface-primary), 0.2);
+  --rail-line: rgba(var(--v-theme-on-dark-surface), 0.16);
+  --rail-field: rgba(var(--v-theme-on-dark-surface), 0.05);
+  color: rgb(var(--v-theme-on-dark-surface));
+}
+
+.rail-picture__title {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Identity: the rating on the first line, full width; the thumbnail and its
@@ -442,6 +620,14 @@ const properties = computed(() => {
   background: var(--hover-wash);
 }
 
+/* The same theme class restates the page's inks on every star, so on the
+   dark pane they are restated on the icons themselves. */
+.rail-picture--on-dark .rail-picture__strip :deep(.v-icon) {
+  --v-theme-on-background: var(--v-theme-on-dark-surface);
+  --v-theme-on-surface: var(--v-theme-on-dark-surface);
+  --v-theme-favourite: var(--v-theme-dark-surface-favourite);
+}
+
 .rail-faces {
   display: flex;
   align-items: center;
@@ -472,6 +658,14 @@ const properties = computed(() => {
   min-width: 32px;
 }
 
+.rail-faces--pinnable {
+  flex-wrap: wrap;
+}
+
+.rail-faces__none {
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
 .rail-face__crop {
   flex: none;
   border-radius: var(--radius-sm);
@@ -485,6 +679,19 @@ const properties = computed(() => {
   outline: 1px dashed
     rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
   outline-offset: 1px;
+}
+
+/* Its box is drawn on the picture: the same ring, heavier, never a second. */
+.rail-faces--pinnable .rail-face:hover .rail-face__crop,
+.rail-face--ringed .rail-face__crop {
+  box-shadow: 0 0 0 3px var(--ring, transparent);
+}
+
+.rail-faces--pinnable .rail-face--unknown:hover .rail-face__crop,
+.rail-face--unknown.rail-face--ringed .rail-face__crop {
+  box-shadow: none;
+  outline-width: 2px;
+  outline-color: rgb(var(--v-theme-on-surface));
 }
 
 .rail-face__name {
@@ -532,7 +739,8 @@ const properties = computed(() => {
   cursor: pointer;
 }
 
-.rail-ib:hover {
+.rail-ib:hover,
+.rail-ib--on {
   background: var(--hover-wash);
   color: rgb(var(--v-theme-on-surface));
 }
@@ -547,8 +755,8 @@ const properties = computed(() => {
 
 /* The lightbox's fields sit on a dark wash over the picture; on the rail they
    are this surface's quiet field, as a stat tile is. */
-.rail-picture :deep(.description-editor textarea),
-.rail-picture :deep(.picture-text) {
+.rail-picture:not(.rail-picture--on-dark) :deep(.description-editor textarea),
+.rail-picture:not(.rail-picture--on-dark) :deep(.picture-text) {
   background: rgba(var(--v-theme-on-surface), 0.05);
 }
 

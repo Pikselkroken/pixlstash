@@ -33,29 +33,22 @@ vi.mock("../../api/operations", () => ({
   undoBatch: vi.fn().mockResolvedValue({ operations: [] }),
 }));
 
-const pasteClipboard = vi.fn();
-const clearSelection = vi.fn();
-let hasSelection = false;
+const pasteTags = vi.fn();
 
-// The Tags panel, reduced to what the lightbox's keys reach into.
-const TagsPanelStub = {
+// Info's one-picture view, reduced to what the lightbox's keys reach into.
+// Escape, Delete and Ctrl+C on selected chips are RailTags' own
+// (RailTags.test.js).
+const RailPictureStub = {
   template: "<div />",
   setup(_, { expose }) {
-    expose({
-      pasteClipboard,
-      clearSelection,
-      get hasSelection() {
-        return hasSelection;
-      },
-    });
+    expose({ pasteTags });
   },
 };
 
 const STUBS = {
-  LightboxTagsPanel: TagsPanelStub,
+  RailPicture: RailPictureStub,
   LightboxFilmstrip: true,
   LightboxDescriptionPanel: true,
-  LightboxMetadataPanel: true,
   AddToEntityControl: true,
   CharacterEditor: true,
   StarRatingOverlay: true,
@@ -100,9 +93,7 @@ function press(key, init = {}, target = window) {
 
 beforeEach(() => {
   setActivePinia(createPinia());
-  pasteClipboard.mockReset();
-  clearSelection.mockReset();
-  hasSelection = false;
+  pasteTags.mockReset();
 });
 
 describe("Lightbox - star keys", () => {
@@ -119,7 +110,7 @@ describe("Lightbox - Ctrl+V", () => {
   it("pastes the copied tags with nothing in particular focused", async () => {
     await openLightbox();
     const event = press("v", { code: "KeyV", ctrlKey: true });
-    expect(pasteClipboard).toHaveBeenCalledTimes(1);
+    expect(pasteTags).toHaveBeenCalledTimes(1);
     expect(event.defaultPrevented).toBe(true);
   });
 
@@ -135,7 +126,7 @@ describe("Lightbox - Ctrl+V", () => {
       window.getSelection().removeAllRanges();
       text.remove();
     }
-    expect(pasteClipboard).toHaveBeenCalledTimes(1);
+    expect(pasteTags).toHaveBeenCalledTimes(1);
   });
 
   it("leaves a text field its own paste", async () => {
@@ -148,15 +139,6 @@ describe("Lightbox - Ctrl+V", () => {
     } finally {
       input.remove();
     }
-    expect(pasteClipboard).not.toHaveBeenCalled();
-  });
-});
-
-describe("Lightbox - Escape with tags selected", () => {
-  it("clears the tag selection", async () => {
-    hasSelection = true;
-    await openLightbox();
-    press("Escape");
-    expect(clearSelection).toHaveBeenCalledTimes(1);
+    expect(pasteTags).not.toHaveBeenCalled();
   });
 });

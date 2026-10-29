@@ -45,13 +45,12 @@ enableAutoUnmount(afterEach);
 const reveal = vi.fn();
 
 const STUBS = {
-  LightboxTagsPanel: true,
+  RailTags: true,
   // Closing the lightbox calls into the description panel.
   LightboxDescriptionPanel: {
     template: "<div></div>",
     methods: { cancelEditDescription() {}, resetCopyState() {} },
   },
-  LightboxMetadataPanel: true,
   AddToEntityControl: true,
   CharacterEditor: true,
   StarRatingOverlay: true,

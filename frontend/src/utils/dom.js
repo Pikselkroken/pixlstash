@@ -43,6 +43,24 @@ export function isTypingTarget(target) {
 }
 
 /**
+ * Does a copy keystroke here belong to the browser rather than the app?
+ *
+ * Inside a text field, or with text selected on the page, Ctrl+C copies what
+ * the reader chose. Both the event target and `document.activeElement` count
+ * (`isTypingTarget`): a Vuetify combobox moves focus around, so the two do not
+ * always agree.
+ *
+ * @param {EventTarget|null} target - the keydown target.
+ * @returns {boolean}
+ */
+export function hasNativeCopyContext(target) {
+  if (isTypingTarget(target)) return true;
+  const selection =
+    typeof window === "undefined" ? null : window.getSelection?.();
+  return Boolean(selection && !selection.isCollapsed && selection.toString());
+}
+
+/**
  * A duration custom property, in milliseconds.
  *
  * The production CSS minifier rewrites `700ms` as `.7s`, so a bare
