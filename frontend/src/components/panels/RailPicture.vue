@@ -322,7 +322,8 @@ const faceName = (face) => personName(face.character_id) || "Unknown";
 // tile. In the lightbox a lone face is a portrait with its name under it, and
 // more are a two-row block of nameless crops beside the title: three columns
 // of six cells, the last the pencil, so five show and six or more show four
-// and a "+N".
+// and a "+N". A read-only session has no faces panel for "+N" to open, so
+// there every face shows.
 const CROWD = 4;
 const HEAD_CELLS = 6;
 const solo = computed(() => props.pinnable && props.faces.length === 1);
@@ -336,7 +337,9 @@ const cropSize = computed(() => {
 const shownFaces = computed(() => {
   const faces = props.faces;
   if (props.pinnable) {
-    return faces.length < HEAD_CELLS ? faces : faces.slice(0, HEAD_CELLS - 2);
+    return isReadOnly.value || faces.length < HEAD_CELLS
+      ? faces
+      : faces.slice(0, HEAD_CELLS - 2);
   }
   return compact.value ? faces.slice(0, CROWD - 1) : faces;
 });

@@ -99,9 +99,21 @@ describe("the lightbox head", () => {
   });
 
   it("six or more show four and a +N", () => {
+    const six = mountHead(6);
+    expect(crops(six)).toHaveLength(4);
+    expect(six.find(".rail-face__more").text()).toBe("+2");
+    const seven = mountHead(7);
+    expect(crops(seven)).toHaveLength(4);
+    expect(seven.find(".rail-face__more").text()).toBe("+3");
+  });
+
+  // "+N" opens the faces panel, which a read-only session does not have.
+  it("a read-only session shows every face and no +N", () => {
+    sessionContext.value = { scope: "READ" };
     const w = mountHead(7);
-    expect(crops(w)).toHaveLength(4);
-    expect(w.find(".rail-face__more").text()).toBe("+3");
+    expect(crops(w)).toHaveLength(7);
+    expect(w.find(".rail-face__more").exists()).toBe(false);
+    expect(w.find(".rail-face-edit").exists()).toBe(false);
   });
 
   it("a read-only session keeps the lone face's name, without a button", () => {
