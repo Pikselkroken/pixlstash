@@ -14,6 +14,7 @@ import { enableAutoUnmount, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 
 import Lightbox from "./Lightbox.vue";
+import { getStackColor } from "../../utils/utils.js";
 
 vi.mock("../../utils/apiClient", () => ({
   API_BASE_URL: "/api/v1",
@@ -212,6 +213,12 @@ describe("Lightbox stack chip", () => {
   it("steps through a folded stack, wrapping at either end", async () => {
     const wrapper = await openLightboxOn(2, STACK);
     expect(chipText(wrapper)).toBe("1 of 3 in this stack");
+    // Washed with the stack's own hue.
+    const chip = wrapper.find(".lightbox-stack-chip");
+    expect(chip.classes()).toContain("lightbox-stack-chip--tinted");
+    expect(chip.attributes("style")).toContain(
+      `--stack-chip-tint: ${getStackColor(5)}`,
+    );
     // Folded: the filmstrip shows the cover alone.
     expect(strip(wrapper).props("offsets")).toHaveLength(3);
 

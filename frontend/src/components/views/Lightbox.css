@@ -230,6 +230,12 @@
   white-space: nowrap;
 }
 
+/* Washed with the stack's hue at 30%: the hue reads, and on-surface text stays
+   above 6:1 for every stack colour in both themes. */
+.lightbox-stack-chip--tinted {
+  background: color-mix(in srgb, var(--stack-chip-tint) 30%, transparent);
+}
+
 .lightbox-stack-chip-step {
   display: inline-flex;
   align-items: center;

@@ -61,7 +61,14 @@
         <!-- Where this picture sits in its stack, arrows to step through it
              even while it is folded in the filmstrip, and the one-click way
              to make it the cover. -->
-        <div v-if="image && lightboxStackPlace" class="lightbox-stack-chip">
+        <div
+          v-if="image && lightboxStackPlace"
+          class="lightbox-stack-chip"
+          :class="{ 'lightbox-stack-chip--tinted': lightboxStackTint }"
+          :style="
+            lightboxStackTint ? { '--stack-chip-tint': lightboxStackTint } : null
+          "
+        >
           <button
             type="button"
             class="lightbox-stack-chip-step"
@@ -2728,6 +2735,8 @@ function getLightboxStackPlace(item) {
 }
 
 const lightboxStackPlace = computed(() => getLightboxStackPlace(image.value));
+// The stack's own hue, the one its filmstrip band wears, washed into the chip.
+const lightboxStackTint = computed(() => getLightboxStackColor(image.value));
 
 /**
  * The stack chip's arrows: the neighbouring member, wrapping like the
