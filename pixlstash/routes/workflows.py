@@ -3329,12 +3329,13 @@ class SetClonePlan(BaseModel):
 
     key: str
     fit: Literal["same_base_model", "same_family", "other", "wont_load"]
-    reason: str | None = Field(
+    reason: str | None = Field(None, description="Why it will not load.")
+    warning: str | None = Field(
         None,
         description=(
-            "Why it will not load. That includes a set whose checkpoints "
-            "have only run in another kind of workflow (Text to Image, Image "
-            "to Video, ...) than this one."
+            "Why it may not suit this workflow though it loads: its "
+            "checkpoints have only run in another kind of workflow (Text to "
+            "Image, Image to Video, ...) than this one."
         ),
     )
     base_model: str | None = Field(None, description="The set checkpoint's.")
@@ -11612,7 +11613,7 @@ def create_router(server) -> APIRouter:
         return swaps, chosen
 
     def _other_type(kinds: set[str], wants: str) -> str:
-        """Why a set that has only run in other kinds of workflow is refused."""
+        """The warning on a set that has only run in other kinds of workflow."""
         ran = " and ".join(sorted(_MATCH_TYPE_LABELS.get(k, k) for k in kinds))
         return f"Used for {ran}, not {_MATCH_TYPE_LABELS.get(wants, wants)}"
 
@@ -11648,11 +11649,12 @@ def create_router(server) -> APIRouter:
             "class too, when a file of another type needs another loader, and "
             "the node pack that loader comes from), whether the set's "
             "checkpoint has the workflow's base model so its LoRAs are kept, "
-            "and, when the clone would be refused, why. A set is refused "
-            "when the recipes naming its checkpoints are all of another kind "
-            "of workflow than this one (its type, a video workflow told apart "
-            "by whether it starts from a picture); a checkpoint no recipe "
-            "names is refused nothing. Read off the graph a "
+            "and, when the clone would be refused, why. A set is warned about "
+            "(`warning`), never refused, when the recipes naming its "
+            "checkpoints are all of another kind of workflow than this one "
+            "(its type, a video workflow told apart by whether it starts from "
+            "a picture); a checkpoint no recipe names is warned about "
+            "nothing. Read off the graph a "
             "run submits: where the owner replaced a model this machine lacks "
             "(`model-fix`), every file named for the graph (`swaps` and "
             "`takes` keys, `loaders[].was`, `base_filename`, "
@@ -11719,8 +11721,8 @@ def create_router(server) -> APIRouter:
         )
         # A set is for the kind of workflow its checkpoints have run in: a
         # text-to-video model needs other nodes than a text-to-image graph
-        # has. Like for like only, and a checkpoint no recipe names is not
-        # known to be for anything else, so it is still offered.
+        # has. Another kind is warned about, not refused, and a checkpoint
+        # no recipe names is not known to be for anything else.
         wants = match_type(
             card.workflow_type,
             [
@@ -11804,9 +11806,14 @@ def create_router(server) -> APIRouter:
                 if gone
                 else "Has no checkpoint"
                 if checkpoint is None
-                else _other_type(kinds, wants)
-                if kinds and wants not in kinds
                 else _wont_load(base, unswapped, object_info)
+            )
+            # Another kind of workflow is a warning, never a refusal: the
+            # owner may know the model does this kind too.
+            warning = (
+                _other_type(kinds, wants)
+                if not reason and kinds and wants not in kinds
+                else None
             )
             if reason:
                 fit = "wont_load"
@@ -11911,6 +11918,7 @@ def create_router(server) -> APIRouter:
                         ],
                     },
                     reason=reason,
+                    warning=warning,
                     base_model=checkpoint.base_model if checkpoint else None,
                     keeps_loras=keeps,
                     swaps=swaps,
