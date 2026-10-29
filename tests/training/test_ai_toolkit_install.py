@@ -6,6 +6,7 @@ test of :func:`run_host_process`, which runs the test interpreter for a moment.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -264,6 +265,29 @@ def test_run_host_process_returns_output_and_reports_a_timeout(tmp_path):
     )
     assert code == -1
     assert "timed out" in err
+
+
+def test_run_host_process_hides_the_backends_python_path_and_secrets(
+    tmp_path, monkeypatch
+):
+    """The desktop GPU overlay must not shadow the checkout's own torch (#2288)."""
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path / "overlay"))
+    monkeypatch.setenv("PIXLSTASH_DESKTOP_SESSION", "test-session")
+    monkeypatch.setenv("CUDA_HOME", "/opt/cuda")
+    code, out, _err = install.run_host_process(
+        [
+            sys.executable,
+            "-c",
+            "import json, os; print(json.dumps(dict(os.environ)))",
+        ],
+        str(tmp_path),
+        30.0,
+    )
+    assert code == 0
+    child = json.loads(out)
+    assert "PYTHONPATH" not in child
+    assert not [key for key in child if key.startswith("PIXLSTASH_")]
+    assert child["CUDA_HOME"] == "/opt/cuda"
 
 
 # ---------------------------------------------------------------------------

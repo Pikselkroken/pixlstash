@@ -26,6 +26,7 @@ import time
 import psutil
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.training.ai_toolkit_install import trainer_env
 from pixlstash.training.backend import (
     TrainerBackend,
     TrainingHandle,
@@ -313,7 +314,7 @@ class LocalAiToolkit(TrainerBackend):
             handle: The handle returned by :meth:`prepare`.
             spec: The run spec (for GPU selection and the optional HF token).
         """
-        env = dict(os.environ)
+        env = trainer_env()
         env["AITK_JOB_ID"] = spec.job_id
         env["CUDA_VISIBLE_DEVICES"] = spec.gpu_ids
         env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"

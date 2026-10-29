@@ -57,6 +57,11 @@ _GIT_HEAD_RE = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 _GIT_TIMEOUT_SECONDS = 10.0
 _VERSION_RE = re.compile(r"""^\s*VERSION\s*=\s*["']([^"'\r\n]+)["']""", re.MULTILINE)
 
+# Set for the backend alone. PYTHONPATH/PYTHONHOME would make the checkout's own
+# interpreter import PixlStash's torch (the desktop app's GPU overlay), and
+# PIXLSTASH_* carries the desktop session token.
+_BACKEND_ONLY_ENV = ("PYTHONPATH", "PYTHONHOME")
+
 # (returncode, stdout, stderr). Injected by tests so no real Python is spawned.
 Runner = Callable[[list[str], str, float], tuple[int, str, str]]
 
@@ -228,8 +233,24 @@ def discover(
     }
 
 
+def trainer_env() -> dict[str, str]:
+    """The backend's environment minus what belongs to the backend alone.
+
+    Returns:
+        A copy of ``os.environ`` without ``PYTHONPATH``, ``PYTHONHOME`` or any
+        ``PIXLSTASH_*`` variable, for a process run by ai-toolkit's Python.
+    """
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if key not in _BACKEND_ONLY_ENV and not key.startswith("PIXLSTASH_")
+    }
+
+
 def run_host_process(argv: list[str], cwd: str, timeout: float) -> tuple[int, str, str]:
     """Run one host process with an argv list, no shell, and a timeout.
+
+    The process gets :func:`trainer_env`, as the trainer itself does.
 
     Args:
         argv: The command, ``argv[0]`` being the interpreter.
@@ -244,6 +265,7 @@ def run_host_process(argv: list[str], cwd: str, timeout: float) -> tuple[int, st
         done = subprocess.run(
             argv,
             cwd=cwd,
+            env=trainer_env(),
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -328,4 +350,5 @@ __all__ = [
     "is_checkout",
     "read_version",
     "run_host_process",
+    "trainer_env",
 ]
