@@ -16,7 +16,8 @@ export class Lightbox {
     this.prev = page.locator('.lightbox-nav-left')
     this.facesSection = page.locator('.sidebar-section--faces')
     this.faceCrops = page.locator('.face-assign-crop')
-    // Face boxes have no switch: pointing at a face's chip draws its box.
+    // Face boxes have no global switch: pointing at a face's chip draws its
+    // box, clicking it keeps the box on.
     this.faceChips = page.locator('.face-chip')
     // The pane stands where the right rail stands, on its own open flag.
     this.pane = page.locator('.lightbox .lightbox-sidebar')
