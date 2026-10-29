@@ -344,6 +344,40 @@ describe("the rows", () => {
     expect(menu(wrapper).exists()).toBe(true);
   });
 
+  it("keep a set used in another kind of workflow takeable, with the warning", async () => {
+    planSetClones.mockResolvedValue({
+      ...PLANS,
+      plans: PLANS.plans.map((entry) =>
+        entry.key === "model:31"
+          ? { ...entry, fit: "other", warning: "Used for Image to Video, not Image to Image" }
+          : entry,
+      ),
+    });
+    const wrapper = mountMenu();
+    await openMenu(wrapper);
+    const warned = row(wrapper, "model:31");
+    expect(warned.find(".wfset-warn").text()).toBe(
+      "Used for Image to Video, not Image to Image",
+    );
+    expect(warned.attributes("aria-disabled")).toBeUndefined();
+    expect(warned.attributes("aria-label")).toMatch(
+      /, fills 1 row · its LoRAs are not added, Used for Image to Video, not Image to Image$/,
+    );
+    // Only the set it is about.
+    expect(row(wrapper, "hand:7").find(".wfset-warn").exists()).toBe(false);
+    await warned.trigger("click");
+    expect(wrapper.emitted("use")).toEqual([
+      [
+        {
+          name: warned.find(".ctx-label-text").text(),
+          models: [
+            { address: "4.ckpt_name", filename: "juggernautXL_v9.safetensors" },
+          ],
+        },
+      ],
+    ]);
+  });
+
   it("disable a set that changes none of the rows", async () => {
     const wrapper = mountMenu();
     await openMenu(wrapper);

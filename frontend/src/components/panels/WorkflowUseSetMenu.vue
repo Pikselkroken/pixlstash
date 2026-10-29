@@ -52,12 +52,17 @@
         type="button"
         role="menuitem"
         :aria-disabled="row.off ? 'true' : undefined"
-        :aria-label="`${row.name}, ${row.meta}`"
+        :aria-label="[row.name, row.meta, row.warning].filter(Boolean).join(', ')"
         :data-set="row.key"
         @click="choose(row)"
       >
         <span class="ctx-label-text">{{ row.name }}</span>
         <span class="ctx-meta">{{ row.meta }}</span>
+        <!-- Its checkpoints only ran in another kind of workflow: said, in
+             amber, and still taken, since the owner may know better. -->
+        <span v-if="row.warning" class="ctx-meta wfset-warn">{{
+          row.warning
+        }}</span>
       </button>
       <!-- The read is out, failed, or found nothing: a row that says so, never
            an empty surface. Opening the menu again asks again. -->
@@ -297,6 +302,7 @@ const rows = computed(
               .filter(Boolean)
               .join(" · ");
       const coming = set.downloading ?? [];
+      const off = wontLoad || !fill.length;
       return {
         key: set.key,
         name: set.name,
@@ -304,7 +310,8 @@ const rows = computed(
         meta: coming.length
           ? `${meta} · ${comingWhat(coming)} still downloading, left out`
           : meta,
-        off: wontLoad || !fill.length,
+        off,
+        warning: off ? "" : set.plan.warning || "",
         coming,
       };
     }) ?? null,
@@ -457,5 +464,9 @@ defineExpose({ open: openMenu, focus });
 
 .wfset-menu .ctx-item--disabled .ctx-label-text {
   opacity: var(--opacity-disabled);
+}
+
+.wfset-menu .ctx-item[data-set] .wfset-warn {
+  color: rgb(var(--v-theme-surface-warning));
 }
 </style>

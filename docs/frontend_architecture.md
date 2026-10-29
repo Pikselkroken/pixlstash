@@ -2880,8 +2880,11 @@ own row.
     less the sets hidden in this library (`hidden_sets` on the same payload,
     #1869: there is no "Show them" here, so the list decides and no plan is
     asked for a hidden set), and each row says `fills N rows`, the server's `reason` for a set that
-    will not load, or `changes nothing here`. The surface has a width of its
-    own (320px) and a row is the set's name over that line, wrapped: the sets
+    will not load, or `changes nothing here`. A plan's `warning` (the
+    set's checkpoints have only run in another kind of workflow, "Used for
+    Image to Video, not Image to Image") is a third line, in amber, on a row
+    that can still be taken: the owner may know the model does this kind
+    too. The surface has a width of its own (320px) and a row is the set's name over that line, wrapped: the sets
     are read after the menu has opened and been placed, and a surface sized
     by a long row ran off the window. The button is found through a wrapper,
     not a `ref`: `v-menu` hands its activator a `ref` of its own and a second

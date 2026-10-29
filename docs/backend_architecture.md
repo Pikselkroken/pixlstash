@@ -10819,16 +10819,18 @@ map, or a type ComfyUI does not list for that class keeps the graph's own.
 per set asked, so the dialog's diff is the clone's own rewrite. The copy is
 the graph with the owner's model fixes applied, so each file it names is the
 one a run loads (§13, "A model pick at a loader that holds a model fix").
-**A set is offered like for like only.** A set is for the kind of workflow its
+**A set used in another kind of workflow is warned about, never refused.** A set is for the kind of workflow its
 checkpoints have run in (`model_shelf_service.model_workflow_types`: the
 `workflow_type` of every recipe naming the checkpoint, in any library), and
 the kind is `workflow_identity.match_type`: the type, with `video` told apart
 by whether the graph loads a picture (`img2vid`, `txt2vid`), because a model
 that continues a picture does not load where one that starts from the prompt
 does and the card calls both Video. A set whose kinds do not include the
-workflow's is `wont_load` with `Used for <types>, not <type>`; a checkpoint no
-recipe names, and a workflow whose type is unknown, are refused nothing, since
-nothing is known. `_set_swaps`
+workflow's carries `warning`, `Used for <types>, not <type>`, and is planned
+as any other (the owner may know the model does this kind too); a plan refused
+for a harder reason carries no warning. A checkpoint no recipe names, and a
+workflow whose type is unknown, are warned about nothing, since nothing is
+known. `_set_swaps`
 maps a set to the graph: the base slots take the checkpoints the caller names (`checkpoint_ids`, checkpoints or unclassified files, never guessed from the members), paired by `_pair_bases` - one base slot takes the first, and each slot of a two-model graph the untaken one whose filename is closest to its own, so a high-noise expert replaces the high-noise one; a slot left over keeps its file. The slots a loader some output reads names (`live_node_ids`) are paired first and the base slot the plan reads its base model from is the first of them, so a leftover base loader wired into nothing never takes a set's one checkpoint because its name reads closer: the run would sample the old model, and the tab, which has no row for that loader, would fill no checkpoint. With ComfyUI unreachable nothing says what is live and every slot is paired alike. The VAE and the text-encoder slots are each
 paired with the set's files of that kind in four passes, a file taken once
 (#1831): the owner's own pairing (`picks`, graph filename -> a model of

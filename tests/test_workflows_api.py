@@ -16497,40 +16497,45 @@ def _ran_in(env, kind: str, filename: str, name: str, graph: dict | None = None)
             )
 
 
-def test_a_set_is_offered_only_to_the_kind_of_workflow_it_has_run_in(cloneable):
-    """RUN_WF is Text to Image, so a set that only ever made videos is refused.
+def test_a_set_used_in_another_kind_of_workflow_is_warned_about_not_refused(
+    cloneable,
+):
+    """RUN_WF is Text to Image, so a set that only ever made videos is warned
+    about, and still planned: the owner may know the model does this too.
 
-    Wrong if a set no recipe names is refused too (nothing is known about it),
-    or if one that has run both ways is.
+    Wrong if the warning refuses the set (`wont_load`, a `reason`, no swap),
+    if a set no recipe names is warned about (nothing is known about it), or
+    if one that has run both ways is.
     """
     _body, plans = _plans(cloneable, krea=[cloneable.checkpoint_id])
-    assert (plans["krea"]["fit"], plans["krea"]["reason"]) == ("other", None)
+    assert (plans["krea"]["fit"], plans["krea"]["warning"]) == ("other", None)
 
     start_frame = {"1": {"class_type": "LoadImage", "inputs": {"image": None}}}
     _ran_in(cloneable, "video", CLONE_CHECKPOINT, "krea-i2v", start_frame)
     _body, plans = _plans(cloneable, krea=[cloneable.checkpoint_id])
     krea = plans["krea"]
-    assert krea["fit"] == "wont_load"
-    assert krea["reason"] == "Used for Image to Video, not Text to Image"
-    assert krea["maps_cleanly"] is False
+    assert (krea["fit"], krea["reason"]) == ("other", None)
+    assert krea["warning"] == "Used for Image to Video, not Text to Image"
+    assert krea["swaps"] == {_SHELF_FILENAME: CLONE_CHECKPOINT}
 
     # From the prompt alone is another kind again, and both are named.
     _ran_in(cloneable, "video", CLONE_CHECKPOINT, "krea-t2v", {"1": {}})
     _body, plans = _plans(cloneable, krea=[cloneable.checkpoint_id])
-    assert plans["krea"]["reason"] == (
+    assert plans["krea"]["warning"] == (
         "Used for Image to Video and Text to Video, not Text to Image"
     )
 
     # One Text to Image recipe is enough: it has run in this kind too.
     _ran_in(cloneable, "txt2img", CLONE_CHECKPOINT, "krea-t2i")
     _body, plans = _plans(cloneable, krea=[cloneable.checkpoint_id])
-    assert (plans["krea"]["fit"], plans["krea"]["reason"]) == ("other", None)
+    assert (plans["krea"]["fit"], plans["krea"]["warning"]) == ("other", None)
 
 
-def test_a_set_that_ran_in_another_image_workflow_is_refused_by_name(cloneable):
+def test_a_set_that_ran_in_another_image_workflow_is_warned_about_by_name(cloneable):
     _ran_in(cloneable, "img2img", CLONE_CHECKPOINT, "krea-i2i")
     _body, plans = _plans(cloneable, krea=[cloneable.checkpoint_id])
-    assert plans["krea"]["reason"] == "Used for Image to Image, not Text to Image"
+    assert plans["krea"]["fit"] != "wont_load"
+    assert plans["krea"]["warning"] == "Used for Image to Image, not Text to Image"
 
 
 def test_a_video_workflow_takes_only_sets_that_start_where_it_does(cloneable):
@@ -16548,16 +16553,16 @@ def test_a_video_workflow_takes_only_sets_that_start_where_it_does(cloneable):
     _ran_in(cloneable, "video", CLONE_CHECKPOINT, "krea-unread")
     _ran_in(cloneable, "video", CLONE_CHECKPOINT, "krea-garbled", ["not a graph"])
     _body, plans = _plans(cloneable, krea=[cloneable.checkpoint_id])
-    assert (plans["krea"]["fit"], plans["krea"]["reason"]) == ("other", None)
+    assert (plans["krea"]["fit"], plans["krea"]["warning"]) == ("other", None)
 
     _ran_in(cloneable, "video", CLONE_CHECKPOINT, "krea-t2v", {"1": {}})
     _body, plans = _plans(cloneable, krea=[cloneable.checkpoint_id])
-    assert plans["krea"]["reason"] == "Used for Text to Video, not Image to Video"
+    assert plans["krea"]["warning"] == "Used for Text to Video, not Image to Video"
 
     start_frame = {"1": {"class_type": "LoadImage", "inputs": {"image": None}}}
     _ran_in(cloneable, "video", CLONE_CHECKPOINT, "krea-i2v", start_frame)
     _body, plans = _plans(cloneable, krea=[cloneable.checkpoint_id])
-    assert (plans["krea"]["fit"], plans["krea"]["reason"]) == ("other", None)
+    assert (plans["krea"]["fit"], plans["krea"]["warning"]) == ("other", None)
 
 
 def test_a_set_plan_is_read_off_the_graph_with_the_owners_replacements(cloneable):
