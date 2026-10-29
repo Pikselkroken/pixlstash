@@ -199,7 +199,7 @@ describe("boxes are drawn while asked about or switched on", () => {
   it("draws a face's box while its crop in Info is pointed at", async () => {
     const wrapper = await openMeasured();
     const chip = wrapper.find(".rail-face");
-    expect(chip.text()).toBe("Unknown");
+    expect(chip.attributes("aria-label")).toBe("Face 1: Unknown");
     await chip.trigger("mouseenter");
     expect(shownBoxes(wrapper)).toEqual(["Face 1"]);
     await chip.trigger("mouseleave");
@@ -338,7 +338,7 @@ describe("boxes are drawn while asked about or switched on", () => {
     const wrapper = await openMeasured();
     const section = wrapper.find(".lightbox .rail-id");
     expect(section.find('[aria-label="More face actions"]').exists()).toBe(false);
-    await section.find('[aria-label="Edit faces"]').trigger("click");
+    await section.find('[aria-label="Unknown: edit faces"]').trigger("click");
     const panel = section.find(".faces-panel");
     expect(panel.exists()).toBe(true);
     expect(panel.classes()).toContain("faces-panel--on-dark");
@@ -352,7 +352,7 @@ describe("boxes are drawn while asked about or switched on", () => {
 
   it("keeps the panel while a face row's new-person dialog is up", async () => {
     const wrapper = await openMeasured();
-    await wrapper.find('[aria-label="Edit faces"]').trigger("click");
+    await wrapper.find('[aria-label="Unknown: edit faces"]').trigger("click");
     wrapper
       .find(".faces-panel")
       .findComponent({ name: "AddToEntityControl" })
@@ -367,7 +367,7 @@ describe("boxes are drawn while asked about or switched on", () => {
 
   it("Escape shuts the faces panel, not the lightbox, wherever focus is", async () => {
     const wrapper = await openMeasured();
-    await wrapper.find('[aria-label="Edit faces"]').trigger("click");
+    await wrapper.find('[aria-label="Unknown: edit faces"]').trigger("click");
     document.activeElement?.blur();
     press("Escape");
     await flush();
@@ -377,7 +377,7 @@ describe("boxes are drawn while asked about or switched on", () => {
 
   it("shuts the faces panel on a step to the next picture", async () => {
     const wrapper = await openMeasured();
-    await wrapper.find('[aria-label="Edit faces"]').trigger("click");
+    await wrapper.find('[aria-label="Unknown: edit faces"]').trigger("click");
     press("ArrowRight");
     await flush();
     await flush();
@@ -386,7 +386,7 @@ describe("boxes are drawn while asked about or switched on", () => {
 
   it("draws a face box from the faces panel's footer", async () => {
     const wrapper = await openMeasured();
-    await wrapper.find('[aria-label="Edit faces"]').trigger("click");
+    await wrapper.find('[aria-label="Unknown: edit faces"]').trigger("click");
     const draw = wrapper
       .findAll(".faces-panel .tbm-footer button")
       .find((item) => item.text().includes("Draw a face box"));

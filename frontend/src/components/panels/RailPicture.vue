@@ -5,10 +5,26 @@
        and Properties. The grid rail's one-picture view and the lightbox's Info
        tab are both this; `on-dark` is the lightbox's pane. -->
   <div class="rail-picture" :class="{ 'rail-picture--on-dark': onDark }">
-    <div class="rail-id">
+    <!-- In the lightbox (`pinnable`) the faces stand beside the title and
+         stars, as tall as them, with no thumbnail: the picture is beside the
+         pane. Without faces the title takes the width and "No faces" ends the
+         stars' line. -->
+    <div
+      class="rail-id"
+      :class="{
+        'rail-id--head': pinnable,
+        'rail-id--faceless': pinnable && !faces.length,
+      }"
+    >
       <!-- Only where nothing above names the picture (the lightbox's band
            holds tabs). No tip: the whole description is a section below. -->
-      <div v-if="title" class="rail-picture__title">{{ title }}</div>
+      <div
+        v-if="title"
+        class="rail-picture__title"
+        :class="{ 'rail-picture__title--tall': solo }"
+      >
+        {{ title }}
+      </div>
       <!-- The same strip as the grid tile: five stars, a hairline, the heart.
            It rates and favourites through the grid's own paths (App.vue), so
            the tile and the rail cannot disagree. -->
@@ -24,7 +40,7 @@
         />
       </div>
       <img
-        v-if="thumbnailUrl"
+        v-if="thumbnailUrl && !pinnable"
         class="rail-id__thumb"
         :src="thumbnailUrl"
         alt=""
@@ -35,6 +51,7 @@
         :class="{
           'rail-faces--compact': compact,
           'rail-faces--pinnable': pinnable,
+          'rail-faces--solo': solo,
         }"
       >
         <!-- In the lightbox a face's box is on the picture beside it:
@@ -62,7 +79,9 @@
             class="rail-face__crop"
             :style="{ ...faceCropStyle(face, cropSize), '--ring': faceBoxColor(idx) }"
           ></span>
-          <span v-if="!compact" class="rail-face__name">{{ faceName(face) }}</span>
+          <span v-if="!compact && !pinnable" class="rail-face__name">{{
+            faceName(face)
+          }}</span>
         </button>
         <button
           v-if="moreFaces"
@@ -74,23 +93,47 @@
         >
           <span class="rail-face__crop rail-face__more">+{{ moreFaces }}</span>
         </button>
-        <span v-if="pinnable && !faces.length" class="rail-faces__none"
-          >No faces detected</span
-        >
+        <!-- Edit faces always touches a face or the word "faces": the
+             block's last cell, the name under a lone portrait, or "No faces". -->
         <button
           v-if="!isReadOnly"
           ref="pencilRef"
-          class="rail-ib"
-          :class="{ 'rail-ib--on': facesOpen }"
+          :class="
+            pinnable
+              ? {
+                  'rail-face-edit': true,
+                  'rail-face-edit--cell': !pencilText,
+                  'rail-face-edit--on': facesOpen,
+                }
+              : { 'rail-ib': true, 'rail-ib--on': facesOpen }
+          "
+          :style="solo ? { '--ring': faceBoxColor(0) } : undefined"
           type="button"
-          aria-label="Edit faces"
+          :aria-label="pencilText ? `${pencilText}: edit faces` : 'Edit faces'"
           :aria-controls="facesPanelId"
           :aria-expanded="facesOpen ? 'true' : 'false'"
           @click="openFaces(null)"
         >
           <Tooltip text="Edit faces" activator="parent" :describe="false" />
-          <v-icon size="16">mdi-pencil-outline</v-icon>
+          <span
+            v-if="pencilText"
+            class="rail-face-edit__text"
+            :class="{ 'rail-face-edit__text--named': soloNamed }"
+            >{{ pencilText }}</span
+          >
+          <v-icon :size="pencilText ? 12 : 16">mdi-pencil-outline</v-icon>
         </button>
+        <span
+          v-else-if="pencilText"
+          class="rail-face-edit"
+          :style="solo ? { '--ring': faceBoxColor(0) } : undefined"
+        >
+          <span
+            class="rail-face-edit__text"
+            :class="{ 'rail-face-edit__text--named': soloNamed }"
+            >{{ pencilText }}</span
+          >
+        </span>
       </div>
       <FacesPanel
         v-if="facesOpen && !isReadOnly"
@@ -217,8 +260,8 @@ const props = defineProps({
   onDark: { type: Boolean, default: false },
   /**
    * The lightbox, where the picture's face boxes are beside the rail: a crop
-   * reports `hover-face` and `pin-face` rather than opening the panel, and
-   * every face is shown.
+   * reports `hover-face` and `pin-face` rather than opening the panel, and the
+   * faces stand beside the title rather than beside a thumbnail.
    */
   pinnable: { type: Boolean, default: false },
   /** Face indices whose box is kept on (`pinnable`). */
@@ -275,17 +318,38 @@ function personName(characterId) {
 const faceName = (face) => personName(face.character_id) || "Unknown";
 
 // ── Faces ────────────────────────────────────────────────────────────────────
-// Four or more drop their names, step down and end in a "+N" tile; in the
-// lightbox they all stay, wrapping, since each one's box can be pinned.
+// On the rail four or more drop their names, step down and end in a "+N"
+// tile. In the lightbox a lone face is a portrait with its name under it, and
+// more are a two-row block of nameless crops beside the title: three columns
+// of six cells, the last the pencil, so five show and six or more show four
+// and a "+N".
 const CROWD = 4;
-const compact = computed(() => props.faces.length >= CROWD);
-const cropSize = computed(() => (compact.value ? 32 : 42)); // px
-const shownFaces = computed(() =>
-  compact.value && !props.pinnable
-    ? props.faces.slice(0, CROWD - 1)
-    : props.faces,
+const HEAD_CELLS = 6;
+const solo = computed(() => props.pinnable && props.faces.length === 1);
+const compact = computed(() =>
+  props.pinnable ? props.faces.length > 1 : props.faces.length >= CROWD,
 );
+const cropSize = computed(() => {
+  if (solo.value) return 64; // px
+  return compact.value ? 32 : 42;
+});
+const shownFaces = computed(() => {
+  const faces = props.faces;
+  if (props.pinnable) {
+    return faces.length < HEAD_CELLS ? faces : faces.slice(0, HEAD_CELLS - 2);
+  }
+  return compact.value ? faces.slice(0, CROWD - 1) : faces;
+});
 const moreFaces = computed(() => props.faces.length - shownFaces.value.length);
+// The lightbox's pencil carries words where it has room: the lone face's name,
+// or "No faces".
+const soloNamed = computed(
+  () => solo.value && props.faces[0].character_id != null,
+);
+const pencilText = computed(() => {
+  if (!props.pinnable || props.faces.length > 1) return "";
+  return solo.value ? faceName(props.faces[0]) : "No faces";
+});
 
 // The face, cut from the thumbnail: it keeps the picture's aspect, so the
 // detector's full-size box scales onto it.
@@ -597,6 +661,66 @@ defineExpose({
   display: flex;
 }
 
+/* The lightbox's head: the title over the stars, and the faces beside both
+   as tall as them, so the title gets two lines (three beside a portrait)
+   instead of one with an ellipsis. */
+.rail-id--head {
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) auto;
+  row-gap: var(--space-2);
+  align-items: start;
+}
+
+.rail-id--head .rail-picture__title {
+  display: -webkit-box;
+  grid-column: 1;
+  grid-row: 1;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: var(--leading-tight);
+  white-space: normal;
+}
+
+.rail-id--head .rail-picture__title--tall {
+  -webkit-line-clamp: 3;
+}
+
+.rail-id--head .rail-picture__strip {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.rail-id--head .rail-faces {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
+.rail-id--faceless .rail-picture__title {
+  grid-column: 1 / -1;
+}
+
+.rail-id--faceless .rail-faces {
+  grid-row: 2;
+  align-self: center;
+}
+
+/* Two rows of crops, as tall as two title lines and the stars. */
+.rail-id--head .rail-faces--compact {
+  display: grid;
+  grid-template-rows: repeat(2, 32px);
+  grid-auto-columns: 32px;
+  grid-auto-flow: column;
+  gap: var(--space-2);
+}
+
+/* The name may run a little wider than its portrait before it is cut. */
+.rail-faces--solo {
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 64px;
+  max-width: 96px;
+}
+
 .rail-id__thumb {
   width: 60px;
   height: 60px;
@@ -658,14 +782,6 @@ defineExpose({
   min-width: 32px;
 }
 
-.rail-faces--pinnable {
-  flex-wrap: wrap;
-}
-
-.rail-faces__none {
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-}
-
 .rail-face__crop {
   flex: none;
   border-radius: var(--radius-sm);
@@ -718,6 +834,7 @@ defineExpose({
 }
 
 .rail-face:focus-visible,
+.rail-face-edit:focus-visible,
 .rail-ib:focus-visible {
   outline: var(--focus-width) solid var(--focus-stroke);
   outline-offset: var(--focus-offset);
@@ -743,6 +860,61 @@ defineExpose({
 .rail-ib--on {
   background: var(--hover-wash);
   color: rgb(var(--v-theme-on-surface));
+}
+
+/* The lightbox's Edit faces: the same quiet fill as the "+N" cell, so it
+   reads as part of the faces it edits. */
+.rail-face-edit {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-width: 0;
+  height: var(--control-h-sm);
+  padding: 0 var(--space-2) 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: rgba(var(--v-theme-on-surface), 0.06);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  font: inherit;
+}
+
+button.rail-face-edit {
+  cursor: pointer;
+}
+
+.rail-face-edit--cell {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+}
+
+button.rail-face-edit:hover,
+.rail-face-edit--on {
+  background: var(--hover-wash);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+/* Under a lone portrait: its name and the pencil. */
+.rail-faces--solo .rail-face-edit {
+  gap: var(--space-1);
+  width: 100%;
+  height: auto;
+  padding: var(--space-1);
+  font-size: var(--text-2xs);
+  line-height: 1;
+}
+
+.rail-face-edit__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-face-edit__text--named {
+  color: var(--ring);
 }
 
 .rail-faces__panel {
