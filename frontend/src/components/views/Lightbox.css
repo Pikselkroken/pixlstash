@@ -645,24 +645,9 @@
   gap: var(--space-3);
   flex: 1;
   min-height: 0;
-  /* Scrolls as one column, as the grid rail does; Description takes what is
-     left on a tall window (RailPicture's `min-height`). */
+  /* Scrolls as one column, as the grid rail does. */
   overflow-x: hidden;
   overflow-y: auto;
-}
-
-.sidebar-section--description {
-  flex: 1 1 114px;
-  display: flex;
-  flex-direction: column;
-  min-height: 114px;
-  overflow: visible;
-}
-
-.sidebar-section--description.sidebar-section--collapsed {
-  flex: 0 0 auto;
-  min-height: 0;
-  overflow: hidden;
 }
 
 /* The Edit tab's Quick changes (rendered into LightboxEditPanel's slot). */

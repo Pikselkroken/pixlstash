@@ -1,8 +1,8 @@
 <template>
   <!-- One picture, tag-first: who it is (the tile's rating strip, a small
        thumbnail and its faces), the tag field T focuses with its tags and
-       rejected tags, then the Description panel, which takes the room left,
-       and Properties. The grid rail's one-picture view and the lightbox's Info
+       rejected tags, then the Description panel, as tall as its text, and
+       Properties. The grid rail's one-picture view and the lightbox's Info
        tab are both this; `on-dark` is the lightbox's pane. -->
   <div class="rail-picture" :class="{ 'rail-picture--on-dark': onDark }">
     <!-- In the lightbox (`pinnable`) the faces stand beside the title and
@@ -600,9 +600,6 @@ defineExpose({
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  /* At least the rail's height: the Description panel grows into what is
-     left, so a long caption reads whole on a tall window. */
-  min-height: 100%;
   font-size: var(--text-xs);
 }
 
