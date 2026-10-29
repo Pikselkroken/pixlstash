@@ -294,20 +294,16 @@ export const scenes = [
       await readyGrid(grid)
       await selectN(grid, 3)
       await grid.openContextMenu(grid.thumbnails.first())
-      // Open the Adjust group, whose "Restore from snapshot" heading lists the
-      // restore points.
-      await grid.contextMenu
-        .locator('.ctx-item', { hasText: 'Adjust' })
+      // Open the "Restore from snapshot" submenu so its restore-point list shows.
+      const restore = grid.contextMenu
+        .locator('.ctx-item', { hasText: 'Restore from snapshot' })
         .first()
-        .hover()
-      await page.waitForTimeout(500)
-      const heading = grid.contextMenu.locator('.ctx-label', {
-        hasText: 'Restore from snapshot',
-      })
-      if (!(await heading.count())) {
-        throw new Error('No "Restore from snapshot" heading — are there snapshots?')
+      if (!(await restore.count())) {
+        throw new Error('No "Restore from snapshot" item — are there snapshots?')
       }
-      await expect(heading).toBeVisible()
+      await restore.hover()
+      await page.waitForTimeout(500)
+      await expect(grid.contextMenu.locator('.ctx-submenu').first()).toBeVisible()
       return null
     },
   },

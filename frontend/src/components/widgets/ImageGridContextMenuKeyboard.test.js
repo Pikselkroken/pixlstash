@@ -232,9 +232,9 @@ describe("grid context menu keyboard reach into the tool groups", () => {
     const trigger = wrap.querySelector(":scope > .ctx-item");
     trigger.focus();
     await press(trigger, "ArrowDown");
-    // The next group's trigger, not the first row of the one open beside it.
+    // The next submenu's trigger, not the first row of the one open beside it.
     expect(document.activeElement).toBe(
-      menuEl().querySelector('[data-group="find"] > .ctx-item'),
+      menuEl().querySelector('[data-group="restore"] > .ctx-item'),
     );
     wrapper.unmount();
   });

@@ -573,8 +573,7 @@
           </div>
         </div>
 
-        <!-- Adjust ▸: what changes the file. Snapshots sit under a heading
-             instead of a third level. -->
+        <!-- Adjust ▸: what changes the file. -->
         <div
           class="ctx-submenu-wrap"
           data-group="adjust"
@@ -625,34 +624,53 @@
               <v-icon class="ctx-icon">mdi-tune-variant</v-icon>
               Filters…
             </button>
-            <template v-if="!isReadOnly && selectedImageIds.length >= 1">
-              <div class="ctx-label section-label">Restore from snapshot</div>
-              <button
-                v-for="cp in recentSnapshots"
-                :key="cp.id"
-                class="ctx-item"
-                :disabled="identicalSnapshotIds.has(cp.id)"
-                @click="handleRestoreFromSnapshot(cp.id)"
-              >
-                <Tooltip
-                  :text="
-                    identicalSnapshotIds.has(cp.id)
-                      ? 'Selection is identical to this snapshot'
-                      : ''
-                  "
-                  activator="parent"
-                />
-                <v-icon class="ctx-icon">mdi-camera-outline</v-icon>
-                {{ cp.label || cp.kind }}
-                <span class="ctx-default-pill">{{
-                  cp.created_at ? formatSnapshotDate(cp.created_at) : ""
-                }}</span>
-              </button>
-              <button class="ctx-item" @click="handleRestoreMore">
-                <v-icon class="ctx-icon">mdi-dots-horizontal</v-icon>
-                More…
-              </button>
-            </template>
+          </div>
+        </div>
+
+        <!-- Restore from snapshot ▸: its own submenu, not part of Adjust. -->
+        <div
+          v-if="!isReadOnly && selectedImageIds.length >= 1"
+          class="ctx-submenu-wrap"
+          data-group="restore"
+          @mouseenter="openGroup = 'restore'"
+          @mouseleave="openGroup = null"
+        >
+          <button
+            class="ctx-item"
+            aria-haspopup="menu"
+            :aria-expanded="openGroup === 'restore'"
+            @click="openGroup = 'restore'"
+          >
+            <v-icon class="ctx-icon">mdi-restore</v-icon>
+            Restore from snapshot
+            <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
+          </button>
+          <div v-if="openGroup === 'restore'" class="ctx-submenu" role="menu">
+            <button
+              v-for="cp in recentSnapshots"
+              :key="cp.id"
+              class="ctx-item"
+              :disabled="identicalSnapshotIds.has(cp.id)"
+              @click="handleRestoreFromSnapshot(cp.id)"
+            >
+              <Tooltip
+                :text="
+                  identicalSnapshotIds.has(cp.id)
+                    ? 'Selection is identical to this snapshot'
+                    : ''
+                "
+                activator="parent"
+              />
+              <v-icon class="ctx-icon">mdi-camera-outline</v-icon>
+              {{ cp.label || cp.kind }}
+              <span class="ctx-default-pill">{{
+                cp.created_at ? formatSnapshotDate(cp.created_at) : ""
+              }}</span>
+            </button>
+            <button class="ctx-item" @click="handleRestoreMore">
+              <v-icon class="ctx-icon">mdi-dots-horizontal</v-icon>
+              More…
+            </button>
           </div>
         </div>
 
@@ -1003,12 +1021,9 @@ const identicalSnapshotIds = ref(new Set());
 // the new batch's state. Same pattern as SnapshotsSection.vue:88.
 let _hashCompareRunToken = 0;
 
-// The snapshot rows are in the lightbox's submenu or the grid's Adjust group.
+// The snapshot rows are in the lightbox's submenu or the grid's own one.
 watch(
-  // Read-only sessions see Adjust but not its snapshot rows.
-  () =>
-    restoreSubmenuOpen.value ||
-    (openGroup.value === "adjust" && !isReadOnly.value),
+  () => restoreSubmenuOpen.value || openGroup.value === "restore",
   async (isOpen) => {
     if (!isOpen || !props.selectedImageIds.length) {
       return;

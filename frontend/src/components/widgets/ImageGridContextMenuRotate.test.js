@@ -199,14 +199,20 @@ describe("ImageGridContextMenu - groups", () => {
     wrapper.findAll("[data-group]").map((w) => w.attributes("data-group"));
   const taggers = [{ name: "wd14", display_name: "WD14 Tagger" }];
 
-  it("folds the tools into the four groups, in a fixed order", () => {
+  it("folds the tools into the four groups and Restore, in a fixed order", () => {
     const wrapper = mountMenu({ comfyuiConfigured: true, taggerPlugins: taggers });
-    expect(groups(wrapper)).toEqual(["analyse", "generate", "adjust", "find"]);
+    expect(groups(wrapper)).toEqual([
+      "analyse",
+      "generate",
+      "adjust",
+      "restore",
+      "find",
+    ]);
   });
 
   it("drops Generate without ComfyUI, as its rows always were", () => {
     const wrapper = mountMenu({ taggerPlugins: taggers });
-    expect(groups(wrapper)).toEqual(["analyse", "adjust", "find"]);
+    expect(groups(wrapper)).toEqual(["analyse", "adjust", "restore", "find"]);
   });
 
   it("draws Analyse as the bare Segment row when it has no models to list", () => {
@@ -233,15 +239,30 @@ describe("ImageGridContextMenu - groups", () => {
     expect(trigger.attributes("aria-expanded")).toBe("false");
     await trigger.trigger("click");
     expect(wrapper.find('[data-group="adjust"] .ctx-submenu').exists()).toBe(true);
-    expect(trigger.attributes("aria-expanded")).toBe("true");
+    expect(
+      wrapper.find('[data-group="adjust"] > .ctx-item').attributes("aria-expanded"),
+    ).toBe("true");
   });
 
-  it("compares snapshots on opening Adjust, but not in a read-only session", async () => {
+  it("keeps the snapshots out of Adjust, in their own submenu", async () => {
+    const wrapper = mountMenu();
+    useSnapshotsStore().snapshots = [{ id: 5, is_compatible: true, kind: "MANUAL" }];
+    await wrapper.find('[data-group="adjust"]').trigger("mouseenter");
+    expect(wrapper.find('[data-group="adjust"] .ctx-submenu').text()).not.toContain(
+      "MANUAL",
+    );
+    await wrapper.find('[data-group="restore"]').trigger("mouseenter");
+    expect(wrapper.find('[data-group="restore"] .ctx-submenu').text()).toContain(
+      "MANUAL",
+    );
+  });
+
+  it("compares snapshots on opening Restore, which a read-only session lacks", async () => {
     const snapshot = { id: 5, is_compatible: true, kind: "MANUAL" };
     hashCompareSnapshot.mockClear();
     let wrapper = mountMenu();
     useSnapshotsStore().snapshots = [snapshot];
-    await wrapper.find('[data-group="adjust"]').trigger("mouseenter");
+    await wrapper.find('[data-group="restore"]').trigger("mouseenter");
     expect(hashCompareSnapshot).toHaveBeenCalledTimes(1);
     wrapper.unmount();
 
@@ -249,6 +270,7 @@ describe("ImageGridContextMenu - groups", () => {
     isReadOnly.value = true;
     wrapper = mountMenu();
     useSnapshotsStore().snapshots = [snapshot];
+    expect(wrapper.find('[data-group="restore"]').exists()).toBe(false);
     await wrapper.find('[data-group="adjust"]').trigger("mouseenter");
     expect(hashCompareSnapshot).not.toHaveBeenCalled();
   });
