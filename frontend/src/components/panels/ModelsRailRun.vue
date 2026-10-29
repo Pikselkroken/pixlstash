@@ -271,6 +271,14 @@ function openRun() {
 
 async function stop() {
   if (stopping.value) return;
+  // The same confirmation as Settings' Cancel: a stopped run cannot resume.
+  if (
+    !window.confirm(
+      `Stop training "${props.card.name}"? The run will stop and cannot be resumed.`,
+    )
+  ) {
+    return;
+  }
   stopping.value = true;
   try {
     await cancelTrainingJob(props.card.job.id);

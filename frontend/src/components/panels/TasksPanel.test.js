@@ -1433,6 +1433,48 @@ describe("the GPU queue in the task manager", () => {
     expect(wrapper.findAll('[data-testid="tm-comfy-row"]')).toHaveLength(0);
   });
 
+  it("asks before cancelling a waiting AI Toolkit run, and cancels nothing on no", async () => {
+    cancelLease.mockClear();
+    setGpu(
+      gpuAnswer({
+        leases: [
+          gpuLease({
+            id: "lease-t",
+            tenant: "aitoolkit",
+            label: "Clementine",
+            kind: "heavy",
+            state: "waiting",
+            device: null,
+            need_mb: 14600,
+            waiting_reason: {
+              code: "fifo",
+              text: "Waiting behind ComfyUI.",
+              need_mb: 14600,
+              free_mb: 11500,
+              short_by_mb: 3100,
+              position: 1,
+              blocked_by: [],
+              actions: ["cancel"],
+            },
+          }),
+        ],
+      }),
+    );
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const wrapper = mount(TasksPanel, globalOpts);
+    await wrapper.find('[data-testid="tm-cancel-wait"]').trigger("click");
+    await flushPromises();
+    expect(confirm).toHaveBeenCalledWith(
+      'Stop training "Clementine"? The run will stop and cannot be resumed.',
+    );
+    expect(cancelLease).not.toHaveBeenCalled();
+
+    confirm.mockReturnValue(true);
+    await wrapper.find('[data-testid="tm-cancel-wait"]').trigger("click");
+    await flushPromises();
+    expect(cancelLease).toHaveBeenCalledWith("lease-t");
+  });
+
   it("asks before Run anyway, and starts the lease only when the dialog is confirmed", async () => {
     setGpu(
       gpuAnswer({
