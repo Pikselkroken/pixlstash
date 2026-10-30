@@ -61,8 +61,9 @@ def test_only_the_h3_motion_recipe_trains_on_clips():
 
 def test_h3_keeps_its_pre_quantised_formats_and_its_distillation_handling():
     """H3 ships int8 ConvRot and nvfp4 weights; any other qtype re-quantises
-    them on load. It is guidance-distilled, so both recipes train with the
-    adapter and contrastive guidance, and sound is a choice only for clips."""
+    them on load. It is guidance-distilled, so both recipes train with
+    ai-toolkit's v3 adapter, which needs no contrastive guidance (#2295), and
+    sound is a choice only for clips."""
     for pid in ("minimax-h3-image", "minimax-h3-motion"):
         preset = presets.get_preset(pid)
         values = presets.resolved_values(_resolve(preset, vram_mb=100_000, ram_mb=None))
@@ -71,10 +72,11 @@ def test_h3_keeps_its_pre_quantised_formats_and_its_distillation_handling():
             "nvfp4",
         )
         locked = preset["locked"]
-        assert locked["train.do_guidance_loss"] is True
-        assert locked["train.guidance_loss_target"] == 3.5
-        assert locked["model.assistant_lora_path"].startswith(
+        assert "train.do_guidance_loss" not in locked
+        assert "train.guidance_loss_target" not in locked
+        assert locked["model.assistant_lora_path"] == (
             "ostris/minimax_h3_training_adapter/"
+            "minimax_h3_training_adapter_v3.safetensors"
         )
         assert ("datasets[*].do_audio" in values) == (pid == "minimax-h3-motion")
     motion = presets.get_preset("minimax-h3-motion")
@@ -108,9 +110,35 @@ def test_moss_is_offered_only_by_a_checkout_with_its_model_code(tmp_path):
     moss = presets.get_preset("moss-image-base")
     root = tmp_path / "extensions_built_in" / "diffusion_models"
     (root / "z_image").mkdir(parents=True)
-    assert not presets.offered(moss, presets.checkout_architectures(str(tmp_path)))
+    archs = presets.checkout_architectures(str(tmp_path))
+    assert not presets.offered(moss, archs, "0.13.28")
     (root / "moss_image").mkdir()
-    assert presets.offered(moss, presets.checkout_architectures(str(tmp_path)))
+    archs = presets.checkout_architectures(str(tmp_path))
+    assert presets.offered(moss, archs, "0.13.28")
+
+
+def test_moss_needs_the_ai_toolkit_that_trains_its_base_model():
+    """#2295: moss_image arrived in 0.13.27, but the Base checkpoint and the
+    fresh-cache tokenizer fix in 0.13.28, so the folder alone is not enough."""
+    moss = presets.get_preset("moss-image-base")
+    archs = ["moss_image"]
+    assert presets.offered(moss, archs, "0.13.28")
+    assert presets.offered(moss, archs, "0.14.0")
+    assert presets.offered(moss, archs, "1.0")
+    for older in ("0.13.27", "0.12.99", None, "dev"):
+        assert not presets.offered(moss, archs, older), older
+    reason = presets.not_offered_because(moss, archs, "0.13.27")
+    assert "0.13.28" in reason and "0.13.27" in reason
+    # A recipe with no minimum still asks only for its model folder.
+    zimage = presets.get_preset("zimage-turbo")
+    assert presets.offered(zimage, ["z_image"], None)
+
+
+def test_a_recipe_minimum_must_be_a_version():
+    preset = copy.deepcopy(presets.get_preset("moss-image-base"))
+    preset["min_ai_toolkit"] = "latest"
+    with pytest.raises(presets.PresetError, match="min_ai_toolkit"):
+        presets.validate_preset(preset)
 
 
 def test_table_keys_are_tunable_and_locked_keys_are_not():
@@ -448,3 +476,14 @@ def test_a_forced_profile_is_resolved_alone():
     assert out["profile"] == "q8_offload" and out["fallbacks"] == []
     with pytest.raises(ValueError):
         _resolve(profile="no-such-profile")
+
+
+def test_a_recipe_cannot_keep_enough_checkpoints_to_fill_the_disk():
+    """#2295: an unsigned update could set save_every=1 with a huge keep count;
+    the keep count is what bounds the disk, so it has a small ceiling."""
+    check_tunable = presets.check_tunable
+    check_tunable("save.max_step_saves_to_keep", 24)
+    with pytest.raises(TunableOverrideError):
+        check_tunable("save.max_step_saves_to_keep", 25)
+    with pytest.raises(TunableOverrideError):
+        check_tunable("save.max_step_saves_to_keep", 1000)

@@ -37,6 +37,18 @@ export function lastSavedStep(run) {
   );
 }
 
+/** A queued run that is held by another run ahead of it, not by the GPU. */
+export const WAITING_BEHIND_RUN = "Waiting for the run ahead of it";
+
+/**
+ * True when the live view's `waiting` says the lease is queued behind another
+ * run (`fifo`), so the wait is for that run, not for the GPU. Only `/live`
+ * carries `waiting`; the job list does not, so its cards keep the plain text.
+ */
+export function isQueuedBehindRun(waiting) {
+  return waiting?.code === "fifo";
+}
+
 /** The run's state in words, from its job. */
 export function jobStatus(job) {
   switch (job?.status) {

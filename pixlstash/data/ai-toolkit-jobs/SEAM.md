@@ -40,7 +40,8 @@ the desktop app's `taskkill /T` on quit still ends it there.
 One `JobConfig` tree (`ui/src/types.ts`). The template is the passthrough skeleton; the recipe in
 `pixlstash/data/training-presets/` supplies every value it owns (locked model keys, defaults, the
 choices' tables and the resolved memory profile, see `docs/backend_architecture.md` §25.16). The
-placeholders are substituted last, recipe prompts included:
+placeholders are substituted last; a sample prompt (`sample.samples[].prompt`) expands only
+`{{TRIGGER_WORD}}`, so no host path reaches one:
 
 | Placeholder | Goes to | Notes |
 |---|---|---|

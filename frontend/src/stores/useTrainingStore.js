@@ -18,6 +18,7 @@ import {
 import { getUserConfig, patchUserConfig } from "../api/config";
 import { DEFAULT_TIMEOUTS, useNoticeStore } from "./useNoticeStore";
 import { onSessionReset } from "../utils/apiClient";
+import { errorMessage } from "../utils/apiError";
 import { useSidebarStore } from "./useSidebarStore";
 import {
   AUDIO_KEY,
@@ -107,6 +108,8 @@ export const useTrainingStore = defineStore("training", () => {
   // ── Setup config (ai-toolkit paths) ─────────────────────────────────────────
   const aiToolkitRepoPath = ref("");
   const aiToolkitPython = ref("");
+  // Saved or not: a remote owner is told this without the two host paths (#2295).
+  const aiToolkitSaved = ref(false);
   const configLoaded = ref(false);
 
   // ── ai-toolkit setup flow: the last discover, check and status replies ─────
@@ -118,9 +121,7 @@ export const useTrainingStore = defineStore("training", () => {
   const settingsTabRequest = ref(0); // bump to request; App.vue watches
 
   // ── Derived ─────────────────────────────────────────────────────────────────
-  const aiToolkitConfigured = computed(
-    () => !!(aiToolkitRepoPath.value && aiToolkitPython.value),
-  );
+  const aiToolkitConfigured = computed(() => aiToolkitSaved.value);
 
   const hasRunningJob = computed(() => jobs.value.some(isBusyJob));
 
@@ -288,10 +289,7 @@ export const useTrainingStore = defineStore("training", () => {
       if (seq === datasetSeq) dataset.value = data;
     } catch (err) {
       if (seq !== datasetSeq) return;
-      datasetError.value =
-        err?.response?.data?.detail ||
-        err?.message ||
-        "Could not read the pictures to train on.";
+      datasetError.value = errorMessage(err, "Could not read the pictures to train on.");
     } finally {
       if (seq === datasetSeq) datasetLoading.value = false;
     }
@@ -578,10 +576,7 @@ export const useTrainingStore = defineStore("training", () => {
       const data = await listTrainingJobs();
       jobs.value = Array.isArray(data) ? data : [];
     } catch (err) {
-      jobsError.value =
-        err?.response?.data?.detail ||
-        err?.message ||
-        "Failed to load training jobs.";
+      jobsError.value = errorMessage(err, "Failed to load training jobs.");
     } finally {
       jobsLoading.value = false;
     }
@@ -604,6 +599,7 @@ export const useTrainingStore = defineStore("training", () => {
       const config = await getUserConfig();
       aiToolkitRepoPath.value = config?.ai_toolkit_repo_path || "";
       aiToolkitPython.value = config?.ai_toolkit_python || "";
+      aiToolkitSaved.value = !!config?.ai_toolkit_configured;
       presetsAutoCheck.value = config?.training_presets_auto_check ?? null;
       configLoaded.value = true;
     } catch (err) {
@@ -617,9 +613,11 @@ export const useTrainingStore = defineStore("training", () => {
    * caller shows the server's `detail`.
    */
   async function saveAiToolkitPaths(repoPath, python) {
-    await putAiToolkitConfig({ repo_path: repoPath, python });
-    aiToolkitRepoPath.value = repoPath;
-    aiToolkitPython.value = python;
+    // What the server stored (it trims, and may clear a blank value).
+    const saved = await putAiToolkitConfig({ repo_path: repoPath, python });
+    aiToolkitRepoPath.value = saved?.repo_path || "";
+    aiToolkitPython.value = saved?.python || "";
+    aiToolkitSaved.value = !!(saved?.repo_path && saved?.python);
   }
 
   /** Forget both paths; the install's check and status go with them. */
@@ -627,6 +625,7 @@ export const useTrainingStore = defineStore("training", () => {
     await putAiToolkitConfig({ repo_path: null, python: null });
     aiToolkitRepoPath.value = "";
     aiToolkitPython.value = "";
+    aiToolkitSaved.value = false;
     aiToolkitCheck.value = null;
     aiToolkitStatus.value = null;
   }
@@ -676,6 +675,7 @@ export const useTrainingStore = defineStore("training", () => {
     presetCheckMessage.value = "";
     aiToolkitRepoPath.value = "";
     aiToolkitPython.value = "";
+    aiToolkitSaved.value = false;
     configLoaded.value = false;
     aiToolkitDiscovery.value = null;
     aiToolkitCheck.value = null;

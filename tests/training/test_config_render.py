@@ -6,7 +6,11 @@ import json
 import re
 
 from pixlstash.training import presets, sample_prompts
-from pixlstash.training.config_render import deep_merge, render_job_config
+from pixlstash.training.config_render import (
+    _substitute_placeholders,
+    deep_merge,
+    render_job_config,
+)
 
 # The shipped Z-Image Turbo recipe, resolved for 24 pictures on a 24 GB card
 # with the prompts an uncaptioned set gets: what a real run renders over the
@@ -100,6 +104,105 @@ def test_user_text_spelling_a_placeholder_is_never_expanded():
     prompts = [s["prompt"] for s in process["sample"]["samples"]]
     assert sum("{{DATASET_FOLDER}}" in prompt for prompt in prompts) == 2
     assert not any("/work/dataset" in prompt for prompt in prompts)
+
+
+def test_sample_prompts_expand_only_the_trigger_word():
+    """A host-path placeholder in a sample prompt stays literal.
+
+    The live view shows sample prompts unredacted, so a prompt must never be
+    the place a host path enters. Only the trigger word expands inside one.
+    """
+    prompts = [
+        "ohwx_person in {{TRAINING_FOLDER}}",
+        "{{DATASET_FOLDER}} then {{SQLITE_DB_PATH}}",
+        "a photo of {{TRIGGER_WORD}}",
+        "x {{OUTPUT_FOLDER}} y",
+    ]
+    config = render_job_config(
+        presets.template_path(_PRESET),
+        job_name="job-abc",
+        training_folder="/work/output",
+        sqlite_db_path="/work/job.db",
+        trigger_word="ohwx_person",
+        dataset_dir="/work/dataset",
+        overrides=_RESOLVED,
+        locked=deep_merge(
+            presets.to_patch(_PRESET["locked"]),
+            presets.to_patch({presets.PROMPTS_KEY: prompts}),
+        ),
+    )
+
+    sample_prompts_out = [
+        s["prompt"] for s in config["config"]["process"][0]["sample"]["samples"]
+    ]
+    assert sample_prompts_out == [
+        "ohwx_person in {{TRAINING_FOLDER}}",
+        "{{DATASET_FOLDER}} then {{SQLITE_DB_PATH}}",
+        "a photo of ohwx_person",
+        "x {{OUTPUT_FOLDER}} y",
+    ]
+    assert "/work" not in json.dumps(sample_prompts_out)
+
+
+def test_only_a_sample_entrys_prompt_is_limited_to_the_trigger_word():
+    """A ``prompt`` key outside ``sample.samples[]`` is an ordinary leaf and
+    takes every placeholder, so a config that names one elsewhere still runs."""
+    out = _substitute_placeholders(
+        {
+            "sample": {
+                "samples": [
+                    {
+                        "prompt": "{{TRIGGER_WORD}} {{DATASET_FOLDER}}",
+                        "extra": {"prompt": "{{TRAINING_FOLDER}}"},
+                        "more": [{"prompt": "{{DATASET_FOLDER}}"}],
+                    }
+                ]
+            },
+            "datasets": [{"prompt": "{{DATASET_FOLDER}}"}],
+            "prompt": "{{TRAINING_FOLDER}}",
+        },
+        {
+            "{{TRIGGER_WORD}}": "ohwx",
+            "{{DATASET_FOLDER}}": "/work/dataset",
+            "{{TRAINING_FOLDER}}": "/work/output",
+        },
+        {"{{TRIGGER_WORD}}": "ohwx"},
+    )
+    entry = out["sample"]["samples"][0]
+    assert entry["prompt"] == "ohwx {{DATASET_FOLDER}}"
+    # Deeper inside a sample entry is still a sample prompt.
+    assert entry["extra"]["prompt"] == "{{TRAINING_FOLDER}}"
+    assert entry["more"][0]["prompt"] == "{{DATASET_FOLDER}}"
+    assert out["datasets"][0]["prompt"] == "/work/dataset"
+    assert out["prompt"] == "/work/output"
+
+
+def test_a_padded_trigger_word_renders_as_the_stripped_one():
+    """The trigger word is one normalised value everywhere it is rendered.
+
+    A trigger word with surrounding spaces must give the same config as the
+    stripped word: the trainer's trigger, the sample prompts, and the dataset
+    captions all read one value.
+    """
+
+    def render(trigger):
+        return render_job_config(
+            presets.template_path(_PRESET),
+            job_name="job-abc",
+            training_folder="/work/output",
+            sqlite_db_path="/work/job.db",
+            trigger_word=trigger,
+            dataset_dir="/work/dataset",
+            overrides=_RESOLVED,
+            locked=presets.to_patch(_PRESET["locked"]),
+        )
+
+    padded = render("  ohwx  ")
+    stripped = render("ohwx")
+    assert padded == stripped
+    assert padded["config"]["process"][0]["trigger_word"] == "ohwx"
+    prompts = [s["prompt"] for s in padded["config"]["process"][0]["sample"]["samples"]]
+    assert not any("  " in prompt for prompt in prompts)
 
 
 def test_no_placeholders_remain():

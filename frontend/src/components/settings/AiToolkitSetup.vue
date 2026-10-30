@@ -155,7 +155,8 @@ async function runCheck() {
       liveText.value = "AI-toolkit can train.";
     } else {
       checkError.value =
-        reply?.detail || "AI-toolkit could not start a training run here.";
+        (typeof reply?.detail === "string" && reply.detail) ||
+        "AI-toolkit could not start a training run here.";
       liveText.value = "AI-toolkit cannot train here.";
     }
   } catch (e) {

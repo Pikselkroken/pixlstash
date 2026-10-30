@@ -36,6 +36,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 from functools import lru_cache
 from typing import Callable
 
@@ -82,6 +83,9 @@ FIELDS = (
     "hardware_profiles",
     "sources",
 )
+# Keys a recipe may leave out. ``min_ai_toolkit``: the oldest ai-toolkit version
+# (``version.py``) that can train it, when its model folder alone does not say.
+OPTIONAL_FIELDS = ("min_ai_toolkit",)
 PROFILE_FIELDS = (
     "label",
     "vram_mb",
@@ -161,6 +165,8 @@ def validate_preset(preset: dict) -> dict:
             raise PresetError(f"{pid}: missing '{field}'.")
     if not isinstance(preset["version"], int) or isinstance(preset["version"], bool):
         raise PresetError(f"{pid}: version must be a whole number.")
+    if "min_ai_toolkit" in preset and _version_tuple(preset["min_ai_toolkit"]) is None:
+        raise PresetError(f"{pid}: min_ai_toolkit must be a version like 0.13.28.")
     if "model.name_or_path" not in preset["locked"]:
         raise PresetError(f"{pid}: locked must name 'model.name_or_path'.")
     for key in preset["locked"]:
@@ -250,7 +256,7 @@ def validate_update(preset: dict, shipped: dict) -> dict:
     pid = shipped["id"]
     if not isinstance(preset, dict):
         raise PresetError(f"{pid}: a recipe must be an object.")
-    extra = set(preset) - set(FIELDS)
+    extra = set(preset) - set(FIELDS) - set(OPTIONAL_FIELDS)
     if extra:
         raise PresetError(f"{pid}: unknown keys {', '.join(sorted(extra))}.")
     try:
@@ -389,9 +395,41 @@ def checkout_architectures(repo_path: str | None) -> list[str]:
     )
 
 
-def offered(preset: dict, architectures: list[str]) -> bool:
-    """Whether a checkout with *architectures* can train *preset*."""
-    return preset["requires_arch"] in architectures
+def _version_tuple(value) -> tuple[int, ...] | None:
+    """``"0.13.28"`` as ``(0, 13, 28)``; None for anything that is not one."""
+    if not isinstance(value, str) or not re.fullmatch(r"\d+(\.\d+)*", value.strip()):
+        return None
+    return tuple(int(part) for part in value.strip().split("."))
+
+
+def not_offered_because(
+    preset: dict, architectures: list[str], version: str | None = None
+) -> str | None:
+    """Why a checkout with *architectures* at *version* cannot train *preset*.
+
+    Returns:
+        One sentence naming what the checkout lacks, or None when it can train.
+    """
+    if preset["requires_arch"] not in architectures:
+        return (
+            f"This ai-toolkit checkout has no {preset['requires_arch']} model "
+            f"code, so it cannot train {preset['label']}. Update the checkout."
+        )
+    needed = preset.get("min_ai_toolkit")
+    if needed:
+        have = _version_tuple(version)
+        if have is None or have < _version_tuple(needed):
+            return (
+                f"{preset['label']} needs ai-toolkit {needed} or newer; this "
+                f"checkout is {version or 'of an unknown version'}. Update the "
+                "checkout."
+            )
+    return None
+
+
+def offered(preset: dict, architectures: list[str], version: str | None = None) -> bool:
+    """Whether a checkout with *architectures* at *version* can train *preset*."""
+    return not_offered_because(preset, architectures, version) is None
 
 
 def trains_clips(preset: dict) -> bool:

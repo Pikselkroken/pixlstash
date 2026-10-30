@@ -271,6 +271,16 @@ function openRun() {
 
 async function stop() {
   if (stopping.value) return;
+  // The same confirmation as Settings' Cancel: a stopped run cannot resume.
+  // Skip previews (a trained run) keeps the model, so it does not ask.
+  if (
+    current.value.job?.status !== "completed" &&
+    !window.confirm(
+      `Stop training "${props.card.name}"? The run will stop and cannot be resumed.`,
+    )
+  ) {
+    return;
+  }
   stopping.value = true;
   try {
     await cancelTrainingJob(props.card.job.id);

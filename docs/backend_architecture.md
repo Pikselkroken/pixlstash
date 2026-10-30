@@ -11494,6 +11494,22 @@ short probe that prints torch's version and CUDA devices as JSON, then
 response share `_ai_toolkit_folders`, so the Folders step and the status card
 agree.
 
+Choosing that Python is choosing argv[0] of a host process: `/check` runs it at
+once and `PUT /training/ai-toolkit/config` makes it run on every training job.
+Both are `LOOPBACK_OWNER_ONLY`, like server restart (#2295), so a browser
+reaching PixlStash in a container through its bridge address is refused them
+too; and
+`validate_ai_toolkit_settings` accepts a Python only beside its checkout, from
+the checkout's `.venv` or `venv` or the one `find_python` picks, compared on
+normalised (not resolved) paths because a venv's `python` links out of it. A
+Python saved before that rule (a conda or system one) still runs jobs, but the
+Settings check refuses it until the checkout's own is connected. One
+check runs at a time; another while it runs is a 409. `GET /users/me/config`
+is owner-only, so it gives the two paths only to the §16.3 local tier that
+`/status` serves and `null` elsewhere, with `ai_toolkit_configured` saying
+whether an install is saved. `/training/resolve` reuses the checkout's commit
+for 30 s (`_COMMIT_TTL_S`), so the dialog does not start `git` on every change.
+
 A run lands in the shelf's `source` folder. `TrainingService._run_folders`
 takes the first `model_folder` row of kind `source`. When there is none, it
 registers `<repo>/output` through `register_model_folder`, the same function the
@@ -11525,7 +11541,7 @@ recipe is offered only when the checkout ships its model code,
 (`presets.checkout_architectures`). `GET /training/presets` answers the same for
 the saved checkout, and `POST /training/jobs` refuses, with a 422, a job when no
 checkout is saved and a recipe the saved checkout cannot run (naming the
-missing folder).
+missing folder, or the ai-toolkit version the recipe needs).
 
 ### 25.16 Training recipes and the memory-profile resolver (#2116)
 
@@ -11538,21 +11554,22 @@ Z-Image Turbo (`DEFAULT_PRESET`), Krea 2 Raw, FLUX.2 Klein 9B Base, Chroma1
 Base, MOSS-Image Base and MiniMax H3 in two modes, image and motion.
 `list_presets` puts the default first, because the Train dialog preselects the
 first recipe the checkout can run. All seven render over the same passthrough
-template. The six newer recipes lock `datasets[*].cache_latents_to_disk`: Krea
-2's VAE, encoding every step, measured 5 GB above training. Krea 2's 8-bit
+template. Every recipe locks `datasets[*].cache_latents_to_disk`: Krea
+2's VAE, encoding every step, measured 5 GB above training, and Z-Image Turbo's
+12 GB profiles are figures for cached text and latents (#2295). Krea 2's 8-bit
 profiles are `measured` (the probe's own shape, on a 32 GB card). Klein's,
 Chroma's and MOSS's are `derived` seeds, scaled by what Krea 2's derivation
 missed. The probe (§25.20) measures each setup on the owner's machine before
 its first run. Chroma has no profile below 8-bit: ai-toolkit's Chroma cannot
 offload layers and quantises on the GPU. MOSS needs ai-toolkit 0.13.28 or later
-(Base support and the fresh-cache tokenizer fix). The gate reads only the
-`moss_image` folder: a checkout before 0.13.27 lists the recipe as not offered,
-and a 0.13.27 checkout, which has the folder, is offered it and fails when
-ai-toolkit loads the model. Its 9B text encoder is larger than its transformer,
+(Base support and the fresh-cache tokenizer fix), which its optional
+`min_ai_toolkit` says: `presets.not_offered_because` refuses a checkout without
+the recipe's model folder, and, for a recipe with a minimum, one whose
+`version.py` is older or unreadable (#2295). Its 9B text encoder is larger than its transformer,
 so its offload profile offloads the text encoder too. MiniMax H3 is
 guidance-distilled and ships pre-quantised (int8 ConvRot transformer, nvfp4 text
-encoder), so both modes lock ai-toolkit's distillation handling (the training
-adapter and contrastive guidance) and write the `convrot8` / `nvfp4` qtypes its
+encoder), so both modes lock ai-toolkit's distillation handling since 0.13.23
+(the v3 training adapter, which needs no contrastive guidance) and write the `convrot8` / `nvfp4` qtypes its
 files already hold. Their 60%-offload profile is `measured` on a 32 GB card;
 without offloading, and with 30%, the transformer ran out of memory there, so
 the no-offload tier is a `derived` one for 40 GB cards. Image mode trains stills
@@ -11644,7 +11661,11 @@ length (`measurements.CLIP_FINGERPRINT_KEYS`, named only when a recipe
 resolves them, so other recipes keep their measurements). The rendered config is the template, the
 resolved values (checked by `validate_tunables`) and the locked keys merged
 last; placeholders are substituted after the merge, so a recipe's prompts get
-the trigger word.
+the trigger word. A sample prompt expands `{{TRIGGER_WORD}}` and nothing else,
+so a prompt naming `{{DATASET_FOLDER}}` or `{{TRAINING_FOLDER}}` stays literal
+and no host path reaches `/live`, which shows prompts unredacted (#2295). The
+trigger word is stripped once (`normalise_trigger_word`) wherever it is written:
+the request, the rendered config and the dataset agree.
 
 ### 25.17 Sample prompts written from the dataset (#2117)
 
@@ -11821,7 +11842,11 @@ and stays `queued` meanwhile: the live view shows "Checking memory and speed"
 from the lease, and a cancel or a shutdown simply stops the probe. The probe is
 the run's own config with `PROBE_STEPS` (6) updates at the largest bucket only,
 no "before" sample, one save and one round of previews at the end, written under
-`<work dir>/probe` and polled every second. It is stopped when available RAM
+`<work dir>/probe` and polled every second. The probe and each after-training
+preview pass write their trainer's pid on the run row as the main trainer does,
+and a pass stops a trainer that row names (when `psutil` says its command line
+is that job's) before it clears its folder, so a pass orphaned by a crash is not
+joined by a second trainer on the same card (#2295). It is stopped when available RAM
 falls below `RAM_GUARD_MB` (1 GB), which fails the run as "Not enough system
 RAM to start". **The search is bounded** (`MAX_PROBES`, 3): running out of
 memory (ai-toolkit's `out of memory`, `OutOfMemoryError` or its `OOM during
@@ -11930,7 +11955,10 @@ for an id is ignored. Anything else is logged and ignored.
 **Trust is TLS to pixlstash.dev**: the sha256 comes from the same origin, so it
 catches a truncated or mismatched file, not a compromised site. What such a site
 could still change is bounded by `TUNABLE_KEYS`' ranges (learning rate, steps,
-save and sample frequency, memory figures), never a checkpoint or code. A
+save and sample frequency, memory figures), never a checkpoint or code. The
+number of checkpoints a run keeps is what fills the disk, so
+`save.max_step_saves_to_keep` stops at 24 (#2295); false memory figures can
+still make a run run out of memory. A
 signature over the index is the upgrade if that bound is not enough.
 
 **The cache lives beside the hub**, `<config dir>/training-presets/<id>.json`,

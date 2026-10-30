@@ -2283,16 +2283,16 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         justification="§16.3 discloses host paths: it searches the owner's home directory and the shelf's folders for an ai-toolkit checkout and returns the paths it found and tried; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
     ("POST", "/api/v1/training/ai-toolkit/check"): RoutePolicy(
-        _LOCAL,
-        justification="§16.3 starts the checkout's own Python on the host (a torch/CUDA probe and run.py --help); owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+        _LOOPBACK,
+        justification="§16.3 RED LINE (#2295): chooses argv[0] of a host process and runs it at once (a torch/CUDA probe and run.py --help), at least as powerful as server/restart; loopback-only, allow_remote_host_ops can NOT loosen it",
     ),
     ("GET", "/api/v1/training/ai-toolkit/status"): RoutePolicy(
         _LOCAL,
         justification="§16.3 discloses host paths: the configured checkout, its interpreter, its datasets folder and the run folder, with their run counts; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
     ("PUT", "/api/v1/training/ai-toolkit/config"): RoutePolicy(
-        _LOCAL,
-        justification="§16.3 stores the host paths the trainer runs: the checkout (its working directory) and the Python that is argv[0] of the trainer process, both checked on this host; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+        _LOOPBACK,
+        justification="§16.3 RED LINE (#2295): stores the Python that is argv[0] of every later trainer process and the checkout it runs in, both checked on this host; loopback-only, allow_remote_host_ops can NOT loosen it",
     ),
 }
 
