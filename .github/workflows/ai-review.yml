@@ -175,12 +175,14 @@ jobs:
             }
 
             // Answers fill the cap first; remarks get what is left. Newest first
-            // within each, then back in the order they were written.
+            // within each, then back in the order they were written. A note
+            // too long for what is left is skipped, not the end: an older,
+            // shorter one may still fit.
             let size = 0;
             const take = (notes) => {
               const kept = [];
               for (const note of [...notes].sort((a, b) => b.at.localeCompare(a.at))) {
-                if (size + note.text.length > CAP) break;
+                if (size + note.text.length > CAP) continue;
                 kept.push(note.text);
                 size += note.text.length;
               }
