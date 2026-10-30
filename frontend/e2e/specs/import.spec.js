@@ -236,7 +236,10 @@ test.describe('picture import', () => {
     try {
       // Unlock first: a locked set would refuse the purge of its members.
       for (const id of sets) {
-        await apiContext.patch(`/api/v1/picture_sets/${id}`, { data: { locked: false } })
+        const unlock = await apiContext.patch(`/api/v1/picture_sets/${id}`, {
+          data: { locked: false },
+        })
+        expect(unlock.ok(), `unlock set ${id}: ${await unlock.text()}`).toBe(true)
       }
       await purgePictures(apiContext, [...pictures])
     } finally {
