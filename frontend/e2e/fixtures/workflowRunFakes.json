@@ -1,0 +1,147 @@
+{
+  "preflight": {
+    "ok": true,
+    "runs": 1,
+    "groups": [
+      {
+        "workflow_id": "auto:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "runs": 1,
+        "reasons": [],
+        "picture_inputs": [],
+        "prompt": {
+          "positive_settable": true,
+          "negative_settable": false,
+          "positive_text": "portrait by a tall window, soft overcast light"
+        }
+      }
+    ]
+  },
+  "refused": {
+    "ok": false,
+    "runs": 0,
+    "groups": [
+      {
+        "workflow_id": "auto:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "runs": 0,
+        "reasons": [{ "code": "comfyui_not_configured" }],
+        "picture_inputs": [],
+        "prompt": {
+          "positive_settable": true,
+          "negative_settable": false,
+          "positive_text": "portrait by a tall window, soft overcast light"
+        }
+      }
+    ]
+  },
+  "run": {
+    "status": "success",
+    "runs": 1,
+    "prompts": [
+      {
+        "workflow_id": "auto:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "run_id": "run-e2e-1",
+        "prompt_id": "prompt-e2e-1",
+        "status": "queued"
+      }
+    ]
+  },
+  "opening": {
+    "opening": "00000000000000000000000000000000",
+    "workflow_id": "auto:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "cleared": { "cleared": 1, "workflow_id": null },
+  "leaseAnswer": { "status": "success" },
+  "pixlstashNode": { "can_open_workflows": true, "saves_back": true, "opens_runs": true },
+  "liveRun": {
+    "run_id": "run-e2e-1",
+    "prompt_id": "prompt-e2e-1",
+    "label": "Portrait, soft window light",
+    "workflow_id": "auto:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "status": "running",
+    "percent": 40.0
+  },
+  "finished": {
+    "id": "run-e2e-1",
+    "workflow_id": "auto:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "label": "Portrait, soft window light",
+    "ended_at": "2026-10-30T06:00:00+00:00",
+    "status": "completed",
+    "message": null,
+    "made": 2,
+    "picture_ids": [1, 2],
+    "offer": false
+  },
+  "resources": {
+    "enforcing": true,
+    "devices": [
+      {
+        "uuid": "GPU-00000000-0000-0000-0000-000000000001",
+        "name": "Test GPU",
+        "total_mb": 24576,
+        "used_mb": 12000,
+        "free_mb": 12576,
+        "reserved_mb": 0,
+        "budget_mb": 11348,
+        "measurable": true,
+        "pixlstash": true
+      }
+    ],
+    "ram": { "total_mb": 65536, "available_mb": 32768 },
+    "holders": [
+      {
+        "device": "GPU-00000000-0000-0000-0000-000000000001",
+        "tenant": "unattributed",
+        "label": "Other apps",
+        "used_mb": 12000,
+        "measured_by": "nvml",
+        "lease_id": null,
+        "outside_pixlstash": false
+      }
+    ],
+    "leases": [
+      {
+        "id": "lease-e2e-1",
+        "tenant": "comfyui",
+        "label": "Portrait, soft window light",
+        "kind": "heavy",
+        "state": "waiting",
+        "device": "GPU-00000000-0000-0000-0000-000000000001",
+        "need_mb": 20000,
+        "ram_mb": 0,
+        "reserved_mb": 0,
+        "held_mb": 0,
+        "peak_mb": null,
+        "since": "2026-10-30T06:00:00+00:00",
+        "worker_type": null,
+        "run_id": "run-e2e-2",
+        "job_id": null,
+        "workflow_id": "auto:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "progress": null,
+        "on_cpu": false,
+        "warnings": [],
+        "waiting_reason": {
+          "code": "vram",
+          "text": "Needs 19.5 GB; 11.1 GB is free. Other apps holds 11.7 GB.",
+          "need_mb": 20000,
+          "free_mb": 11348,
+          "short_by_mb": 8652,
+          "position": 1,
+          "blocked_by": [
+            {
+              "device": "GPU-00000000-0000-0000-0000-000000000001",
+              "tenant": "unattributed",
+              "label": "Other apps",
+              "used_mb": 12000,
+              "measured_by": "nvml",
+              "lease_id": null,
+              "outside_pixlstash": false
+            }
+          ],
+          "actions": ["run_anyway", "cancel"]
+        }
+      }
+    ],
+    "preempted": [],
+    "summary": { "state": "waiting", "headline": "1 waiting for memory" }
+  }
+}
