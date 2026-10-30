@@ -87,6 +87,11 @@ function drift(fake, real, path, found, unverified) {
   }
   if (kind(fake) !== "object") return;
   const map = MAPS.has(path.split(".").pop());
+  // An empty real map, like an empty real array, has no shape to check.
+  if (map && Object.keys(fake).length && !Object.keys(real).length) {
+    unverified.push(path);
+    return;
+  }
   for (const [key, value] of Object.entries(fake)) {
     const at = `${path}.${key}`;
     if (map) {
