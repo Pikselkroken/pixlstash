@@ -11653,6 +11653,14 @@ queued row without a profile (queued before recipes) ends in `error` rather than
 training on a guess. A profile this machine has measured is admitted on its
 measurement instead of the seed (§25.20).
 
+The Playwright backend trains on a pretend card: its config names
+`e2e_training_card` (`{vram_mb, ram_mb}`), read only under `enable_test_hooks`,
+and `routes/test_hooks.fake_training_card` replaces `Vault.training_room` with
+those figures and the service's lease requests with a lease granted at once on
+no device. A CI runner has no card to measure, and a developer's card must not
+be leased for a trainer that is `tests/training/fake_run.py`, which the
+launcher's fake checkout runs as its `run.py`.
+
 Resolution happens once, at `POST /training/jobs`, against the pictures the
 dataset would hold then (`ExportUtils.count_training_pictures`, the same
 selection the dataset builder writes).

@@ -6,8 +6,9 @@ Playwright's ``webServer`` runs this script. It does NOT touch the committed
 work directory, strips any user/token rows so the server boots in *first-run*
 state (the e2e global-setup then registers an admin and mints an ALL-scope
 token per run — no credentials are committed), seeds a small model folder
-for the shelf specs, a reference folder for the Media specs and a few
-workflows, pictures and recipes for the Workflows specs, writes a lean
+for the shelf specs, a reference folder for the Media specs, a few
+workflows, pictures and recipes for the Workflows specs and a fake
+ai-toolkit checkout for the training specs, writes a lean
 server-config (the task runner runs, the work planner keeps only the folder
 sweeps and an idle face finder, no models, no startup thumbnail generation, CPU
 only), puts refusing ``xdg-open``/``open`` stubs first on ``PATH`` so no spec
@@ -62,6 +63,9 @@ REFERENCE_MOVED = "Inbox/fern.png"
 # folder and the trash, all of which are otherwise shared with the owner.
 USER_DATA = WORK_DIR / "user-data"
 WORKFLOW_SEED = WORK_DIR / "workflow-seed"
+# A fake ai-toolkit checkout whose run.py is the backend suite's CPU stand-in.
+AI_TOOLKIT = WORK_DIR / "ai-toolkit"
+FAKE_RUN = REPO_ROOT / "tests" / "training" / "fake_run.py"
 
 
 def _ignore_backups(_dir, names):
@@ -324,6 +328,26 @@ def _seed_workflows(root: Path, picture_date: str) -> None:
     (root / "seed.json").write_text(json.dumps(manifest, indent=2))
 
 
+def _seed_fake_ai_toolkit(root: Path) -> None:
+    """Lay out a fake ai-toolkit checkout for the training specs, under the work dir.
+
+    ``run.py`` is ``tests/training/fake_run.py``, linked rather than copied so
+    the two suites share one stand-in. ``toolkit/`` makes it a checkout and the
+    ``z_image`` model folder offers the default recipe, and ``output/`` is
+    where runs land. Its ``.venv`` Python is this interpreter, which
+    ``PUT /training/ai-toolkit/config`` accepts as the checkout's own. A spec
+    connects it with that PUT; runs and datasets then land inside it.
+    """
+    (root / "toolkit").mkdir(parents=True)
+    # The first run registers it as the shelf's ai-toolkit folder.
+    (root / "output").mkdir()
+    (root / "extensions_built_in" / "diffusion_models" / "z_image").mkdir(parents=True)
+    (root / "run.py").symlink_to(FAKE_RUN)
+    venv_bin = root / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "python").symlink_to(sys.executable)
+
+
 def _harden_permissions(root: Path) -> None:
     """Strip group/world write bits from the throwaway work directory.
 
@@ -391,6 +415,9 @@ def server_overrides(work_images: Path) -> dict:
         },
         # Read only when enable_test_hooks is on: imported at start-up.
         "e2e_workflow_seed": str(WORKFLOW_SEED),
+        # Likewise: what POST /training/jobs sizes a run against, and a lease
+        # granted without touching this machine's GPU (CI has none).
+        "e2e_training_card": {"vram_mb": 24000, "ram_mb": 64000},
         "generate_thumbnails_on_startup": False,
         "default_device": "cpu",
         "daily_snapshots": False,
@@ -424,6 +451,10 @@ def main() -> int:
     _seed_reference_folder(REFERENCE_FOLDER)
     _stub_host_openers(WORK_DIR / "bin")
     _seed_workflows(WORKFLOW_SEED, _median_picture_date(work_images / "vault.db"))
+    _seed_fake_ai_toolkit(AI_TOOLKIT)
+    # Inherited by the trainer: slow enough for a spec to see a run in
+    # progress, fast enough that a short run costs about a second.
+    os.environ.setdefault("FAKE_RUN_STEP_DELAY", "0.05")
 
     # Build a lean server-config from the fixture's own config, overriding the
     # fields that matter for a fast, hermetic, password-auth test server.
