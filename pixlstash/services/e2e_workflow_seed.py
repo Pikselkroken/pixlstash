@@ -28,8 +28,8 @@ logger = get_logger(__name__)
 def add_pictures_in_session(session, pictures: list) -> list[int]:
     """Insert the seeded pictures; return their ids.
 
-    No pending-tag marker, unlike an upload: with the workers off nothing
-    would ever clear it.
+    No pending-tag marker, unlike an upload: the e2e planner runs no tagger,
+    so nothing would ever clear it.
     """
     session.add_all(pictures)
     session.commit()
@@ -44,7 +44,8 @@ def seed_workflows(server, path: str) -> None:
     the app's own takes: ``store_manual_workflow`` as an import does, the
     picture importer's ``_create_picture_imports``, then the ComfyUI extraction
     and the card backfill that file the pictures under a workflow - run here
-    synchronously because the e2e backend's background workers are off - and
+    synchronously because the e2e planner leaves both finders out
+    (``e2e_planner_finders``) - and
     the recipe service ``POST /recipes`` saves through. Called at start-up,
     only when ``enable_test_hooks`` is on; a failure is logged rather than
     raised, like ``test_hooks.seed_model_folder``.
