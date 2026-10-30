@@ -106,6 +106,11 @@ checklist shrinks as coverage grows.
   pruning doesn't break tests (see `specs/grid.spec.js`).
 - Pictures are identified by their thumbnail `<img>` src
   (`.../thumbnails/<id>.webp`) — the only per-card picture id the grid renders.
+- A route fake is a copy of a server answer that nothing keeps current. The
+  Workflows run fakes (`fixtures/workflowRunFakes.json`, read by
+  `specs/workflow-run.spec.js`) are held against the server's own models and
+  producers by `tests/test_e2e_workflow_run_fakes.py`; change a fake's values
+  in a spec, never its keys.
 - Selectors are CSS/ARIA-first; prefer stable classes and `aria-label` (a native `title` survives only to reveal clipped text).
 - The backend boots ONE throwaway DB per `playwright test` invocation (shared
   across specs in a run), so keep mutations additive/idempotent. The logout

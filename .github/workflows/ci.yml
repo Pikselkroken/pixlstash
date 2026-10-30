@@ -514,6 +514,7 @@ jobs:
           tests/test_detections_scope.py
           tests/test_docker_demo_hub_rewrite.py
           tests/test_downloads_intake.py
+          tests/test_e2e_workflow_run_fakes.py
           tests/test_edit_selection.py
           tests/test_except_hygiene_guardrail.py
           tests/test_export_api.py
