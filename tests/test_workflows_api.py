@@ -9595,6 +9595,34 @@ def test_extracting_a_recipe_stores_its_run_graph_with_comfyui_down(
     )
 
 
+def test_extracting_a_recipe_with_a_lora_needs_no_comfyui(runnable, monkeypatch):
+    """The recipe's LoRA goes into the filename slot by its shelf name (#2350):
+    nothing is run, so ComfyUI is not asked which file it lists."""
+
+    def no_comfyui(url):
+        raise AssertionError("extraction asked ComfyUI")
+
+    monkeypatch.setattr(workflows_routes, "_read_object_info", no_comfyui)
+    recipe_id = _saved_on_run_card(
+        runnable,
+        loras=[
+            {
+                "filename": RUN_ADAPTER_FILENAME,
+                "sha256": RUN_ADAPTER_DIGEST,
+                "strength": 0.6,
+            }
+        ],
+    )
+
+    r = runnable.owner.post(f"{API}/recipes/{recipe_id}/extract-workflow")
+    assert r.status_code == 201, r.text
+    loader = manual_document(runnable.server.hub, r.json()["workflow_id"])["2"]
+    # Not the graph's own add_detail: the recipe's LoRA, at its strength.
+    assert loader["inputs"]["lora_name"] == RUN_ADAPTER_FILENAME
+    assert loader["inputs"]["strength_model"] == 0.6
+    assert runnable.submitted == []
+
+
 def test_a_recipe_on_a_gone_workflow_is_unfiled_and_still_extracts(runnable):
     """Its workflow gone, a recipe runs - and extracts - on the card it was
     saved from; with that gone too there is nothing to build on (409)."""
