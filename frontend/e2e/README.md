@@ -11,6 +11,9 @@ playwright.config.js
   └─ webServer:  npm run build  &&  python e2e/serve_e2e_backend.py
                  (builds the SPA, then boots a backend that serves it
                   + the API on one origin → cookie auth, no CORS)
+  └─ webServer:  python e2e/fake_comfyui.py
+                 (a fake ComfyUI on the backend's port + 200; the backend's
+                  ComfyUI address points at it)
   └─ globalSetup: e2e/global-setup.js
                  (registers an admin with a per-run random password,
                   mints an ALL-scope token, suppresses first-run dialogs,
@@ -75,7 +78,41 @@ The backend boots against the repo's `test-data/` fixture — a seeded vault
    `PUT /training/ai-toolkit/config` and disconnects it after
    (`training-fixture.spec.js`). Datasets, runs, the job database and the
    imported LoRA all land in the work dir;
-9. execs `python -m pixlstash.app` against that temp copy.
+9. names the fake ComfyUI as `e2e_comfyui_url`. With `enable_test_hooks` on,
+   it replaces the `127.0.0.1:8188` an owner with no ComfyUI address of their
+   own reaches, so no run, read or abort reaches a real ComfyUI on the machine;
+10. execs `python -m pixlstash.app` against that temp copy.
+
+### The fake ComfyUI (`fake_comfyui.py`)
+
+Playwright starts it beside the backend, on the backend's port + 200
+(`PIXLSTASH_E2E_COMFYUI_PORT` pins it; it refuses 8188), bound to 127.0.0.1.
+It answers what PixlStash calls: `system_stats`, `object_info` (the stock
+loaders and samplers with the seeded model folder's files, and the Picture
+Saver), `extensions` (the ComfyUI-PixlStash scripts, so the pack reads as
+installed), `queue`, `interrupt`, `prompt`, `history` and `view`. A prompt
+"runs" as it is queued: each `SaveImage` makes one small random PNG with the
+graph in its `prompt` chunk, and the backend imports it from `/view` exactly as
+it would from ComfyUI. It never receives a `PixlStashPictureSaver`: PixlStash
+swaps each for a `SaveImage` before it submits and files the pictures itself.
+Anything it does not answer is a 404 and a `[fake-comfyui] not faked:` line in
+the output (the progress socket, `/ws`, is one: a run then shows no step
+progress, and nothing else changes).
+
+For specs (`specs/comfyui-fixture.spec.js` is the worked example), at
+`process.env.PIXLSTASH_E2E_COMFYUI_URL`:
+
+- `GET /__fake/prompts`: every graph it was sent, as `{prompt_id, client_id,
+  prompt}`. Find yours by the `prompt_id` the run answered with.
+- `PUT /__fake/fail` with `{"mode": "missing_models"}` (no model files in
+  `object_info`, so the pre-flight refuses), `{"mode": "node_error"}` (`POST
+  /prompt` answers ComfyUI's validation failure) or `{"mode": null}`. Turn it
+  off again in `afterEach`.
+
+The owner's own `comfyui_url` stays unset, so the SPA still reads ComfyUI as
+not configured; a run through the API reaches the fake regardless. A run that
+names one person files its picture as theirs pending face extraction
+(`pending_character_id`), which the e2e backend never runs.
 
 Because the user table is stripped per run, `global-setup.js` registers a fresh
 admin (random password) and mints an `ALL` token — credentials live only for

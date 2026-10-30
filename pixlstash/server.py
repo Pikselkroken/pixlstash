@@ -168,6 +168,7 @@ from pixlstash.routes.test_hooks import create_router as create_test_hooks_route
 from pixlstash.routes.test_hooks import (
     fake_training_card,
     isolate_e2e_data,
+    point_comfyui_default,
     seed_model_folder,
 )
 from pixlstash.routes.workflows import create_router as create_workflows_router
@@ -2089,6 +2090,8 @@ class Server(
                 seed_model_folder(self, self._server_config["e2e_model_folder"])
             if self._server_config.get("e2e_reference_folder"):
                 seed_reference_folder(self, self._server_config["e2e_reference_folder"])
+            if self._server_config.get("e2e_comfyui_url"):
+                point_comfyui_default(self._server_config["e2e_comfyui_url"])
             if self._server_config.get("e2e_workflow_seed"):
                 seed_workflows(self, self._server_config["e2e_workflow_seed"])
             if self._server_config.get("e2e_training_card"):
