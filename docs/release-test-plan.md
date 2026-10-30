@@ -33,6 +33,7 @@ plan; legacy § numbers are still cited in spec titles):
 | §6 Star rating — overlay persist + grid stars + grid↔overlay sync | `rating.spec.js` |
 | §7/§8/§9 Set/project/character navigation & filtering; create, edit, delete | `entities.spec.js`, `set-operations.spec.js`, `set-locking.spec.js`, `sidebar-entries.spec.js` |
 | §10 Faces crops + bounding boxes | `faces.spec.js` |
+| Delete to the Scrapheap (key, Selection ▾, context menu, lightbox), locked-set refusal, Restore / Restore all, Empty and Delete forever up to Cancel | `scrapheap.spec.js` (confirming a purge stays manual until #2353) |
 | §11 Stack expand/collapse | `stacks.spec.js` (badge click + visual stacking order stay manual) |
 | §14 Predictions — delete drops to prediction chip, Confirm restores | `tag-predictions.spec.js` (generation after import stays manual) |
 | §15 Export — selection ZIP contents + set ZIP count | `export.spec.js` |

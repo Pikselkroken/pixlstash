@@ -9,9 +9,9 @@ import { test, expect } from "../fixtures/test.js";
 //
 // Nothing is stubbed. Each test stores its own workflow through the import
 // route and saves its recipes on it through `POST /recipes`, so the rows it
-// asserts on are its own whatever else the shared backend has listed by then:
-// other specs' workflows, and on a developer machine whatever the shared
-// workflow inbox holds (#2313).
+// asserts on are its own whatever else the shared backend has listed by then.
+// Each test deletes what it stored (afterEach): a workflow left behind is listed
+// on every later Workflows screen and breaks the empty state's test.
 //
 // Not here: the lightbox's "Matches your saved recipe X" banner (#1480). It
 // needs a picture made in ComfyUI, the fixture library has none, and the e2e
@@ -68,6 +68,9 @@ const GRAPH = {
   },
 };
 
+/** What the running test stored, for afterEach to delete. */
+const made = { workflows: [], recipes: [] };
+
 /** Distinct per test, so a name never matches a row another test left. */
 let serial = 0;
 function tag() {
@@ -88,15 +91,18 @@ async function storeWorkflow(api, name) {
     }),
     "import the workflow",
   );
+  made.workflows.push(body.workflow_id);
   return body.workflow_id;
 }
 
 /** Save a recipe on *workflowId* through the real route; the stored row. */
 async function saveRecipe(api, workflowId, fields) {
-  return ok(
+  const recipe = await ok(
     await api.post(`${API}/recipes`, { data: { workflow_id: workflowId, ...fields } }),
     `save recipe ${fields.name}`,
   );
+  made.recipes.push(recipe.id);
+  return recipe;
 }
 
 /** The workflow's recipes as the server orders them. */
@@ -165,6 +171,17 @@ async function menu(page, scope, name, item) {
 }
 
 // ── The tests ───────────────────────────────────────────────────────────────
+
+test.afterEach(async ({ apiContext }) => {
+  const gone = async (path) => {
+    const res = await apiContext.delete(`${API}${path}`);
+    // 404: the test deleted it itself.
+    const why = `clean up ${path}: ${res.status()} ${await res.text()}`;
+    expect(res.ok() || res.status() === 404, why).toBe(true);
+  };
+  for (const id of made.recipes.splice(0)) await gone(`/recipes/${id}`);
+  for (const id of made.workflows.splice(0)) await gone(`/workflows/${encodeURIComponent(id)}`);
+});
 
 test("the deep link opens the rail on the Recipes tab, the saved rows in the server's order", async ({
   page,
@@ -271,6 +288,7 @@ test("Extract workflow stores a new workflow and selects its card", async ({ pag
   );
   await menu(page, rail(page), names[2], "Extract workflow");
   const body = await ok(await extracted, "extract the workflow");
+  made.workflows.push(body.workflow_id);
   expect(body.name).toBe(names[2]);
   expect(body.workflow_id).not.toBe(workflowId);
 
@@ -324,12 +342,11 @@ test("an unfiled recipe is listed once its workflow is deleted, and can still be
   page,
   apiContext,
 }) => {
-  // Deleting a workflow writes its document into the SHARED workflow inbox and
-  // sends it to the OS trash from there (#2313): on a developer machine that is
-  // the owner's own inbox and trash. A CI runner is thrown away after the job.
-  test.skip(!process.env.CI, "deletes a workflow through the shared inbox until #2313");
-
   const { workflowId, names, recipes } = await seed(apiContext);
+  // With no workflow left, the empty state replaces the grid and the Unfiled
+  // list with it (#2356); a second workflow keeps the grid up. afterEach
+  // deletes it.
+  await storeWorkflow(apiContext, `Recipes e2e keeps the grid ${tag()}`);
   try {
     await ok(await apiContext.delete(`${API}/workflows/${encodeURIComponent(workflowId)}`), "delete the workflow");
 
