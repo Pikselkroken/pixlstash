@@ -85,7 +85,8 @@ test.describe('grid keys', () => {
 
     await page.keyboard.press('Enter')
     await expect(lightbox.root).toBeVisible()
-    expect(new URL(page.url()).searchParams.get('overlay')).toBe(third)
+    // `?overlay=` is written by a `replace` that can land after the lightbox shows.
+    await expect.poll(() => new URL(page.url()).searchParams.get('overlay')).toBe(third)
   })
 
   test('Home, End, PageDown and PageUp scroll the grid', async ({ page, grid }) => {

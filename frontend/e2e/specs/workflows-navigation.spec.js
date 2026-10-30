@@ -439,7 +439,9 @@ test.describe("cover tile and lightbox", () => {
     await lightbox.closeButton.click();
     await expect(lightbox.root).toBeHidden();
     await expect.poll(() => new URL(page.url()).pathname).toBe("/");
-    expect(query(page)).not.toHaveProperty("overlay");
+    // The lightbox hides before the close's `replace` lands, and the path was
+    // "/" all along, so the poll above does not wait for it: poll the query.
+    await expect.poll(() => query(page)).not.toHaveProperty("overlay");
     await expect(rows(page)).toHaveCount(0);
   });
 });
