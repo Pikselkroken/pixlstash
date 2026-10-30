@@ -156,11 +156,15 @@ jobs:
               if (!reply.in_reply_to_id || reply.user?.id !== ownerId) continue;
               const finding = byId.get(reply.in_reply_to_id);
               if (!finding || !isReviewBot(finding.user)) continue;
+              // Nothing of the owner's own left (a quote only): not an answer,
+              // and listing it would tell the model the finding was answered.
+              const answer = own(reply.body);
+              if (!answer) continue;
               const where = `${finding.path}:${finding.line ?? finding.original_line ?? "?"}`;
               const what = clip(flat(finding.body.replace(/```[\s\S]*?```/g, "").replace(/<!--[\s\S]*?-->/g, "")), 300);
               answers.push({
                 at: reply.created_at,
-                text: `- ${where}. Finding: ${what}\n  Owner's answer: ${clip(own(reply.body), 1200)}`,
+                text: `- ${where}. Finding: ${what}\n  Owner's answer: ${clip(answer, 1200)}`,
               });
             }
             const remarks = [];
