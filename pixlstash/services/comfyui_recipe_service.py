@@ -1463,7 +1463,8 @@ def apply_adapter(
             file is not on that ComfyUI, its name is ambiguous there, or the
             loader does not enumerate its files. Refusing is the point: a name
             ComfyUI does not have comes back as an opaque 400 from ``/prompt``
-            after the run has been queued.
+            after the run has been queued. With no *object_info*, when the
+            shelf has no name for the file at all.
     """
     written = 0
     for target in targets or []:

@@ -26,8 +26,9 @@ const API = "/api/v1";
  * (extract builds on the planner) and for the Run popup to find a prompt;
  * nothing here ever reaches a ComfyUI.
  *
- * Its LoRA loader names a LoRA the shelf holds, so extract has a recipe LoRA
- * to write with no ComfyUI to ask which files it lists (#2350).
+ * Its LoRA loader names a LoRA the shelf holds, so the workflow's default
+ * recipe places it and extract writes it with no ComfyUI to ask which files
+ * it lists (#2350).
  */
 const GRAPH = {
   1: {
