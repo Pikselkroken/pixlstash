@@ -551,9 +551,19 @@ def runnable_identity(document: dict) -> str:
     body = _runnable_editor_graph(document)
     body.pop("id", None)
     extra = document.get("extra")
-    if isinstance(extra, dict) and extra.get("groupNodes"):
-        # A legacy group node's definition: what its nodes run.
-        body["groupNodes"] = extra["groupNodes"]
+    group_nodes = extra.get("groupNodes") if isinstance(extra, dict) else None
+    if isinstance(group_nodes, dict) and group_nodes:
+        # Legacy group nodes, by name: what each definition's nodes run, its
+        # layout aside as for any graph.
+        body["groupNodes"] = {
+            name: _runnable_editor_graph(definition)
+            if isinstance(definition, dict)
+            else definition
+            for name, definition in group_nodes.items()
+        }
+    elif group_nodes:
+        # Not the shape ComfyUI writes: kept whole, so it still counts.
+        body["groupNodes"] = group_nodes
     definitions = document.get("definitions")
     if isinstance(definitions, dict) and isinstance(definitions.get("subgraphs"), list):
         body["definitions"] = {

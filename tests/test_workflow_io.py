@@ -933,6 +933,34 @@ def test_runnable_identity_ignores_layout_and_nothing_a_run_reads():
         # Moving it as well does not hide the change.
         assert identity(_moved(changed)) != identity(ui)
 
+    # A legacy group node's definition, keyed by its name, is a graph too:
+    # moving a node inside it is layout, changing a value inside it is not.
+    def grouped(seed, x):
+        doc = copy.deepcopy(ui)
+        doc["extra"] = {
+            "groupNodes": {
+                "Sampler pair": {
+                    "nodes": [
+                        {
+                            "type": "KSampler",
+                            "pos": [x, 0],
+                            "size": [300, 200],
+                            "title": f"Sampler at {x}",
+                            "index": 0,
+                            "widgets_values": [seed, "fixed", 20],
+                        }
+                    ],
+                    "links": [],
+                    "external": [],
+                }
+            }
+        }
+        return doc
+
+    assert identity(grouped(1, 640)) == identity(grouped(1, 0))
+    assert identity(grouped(2, 0)) != identity(grouped(1, 0))
+    assert identity(grouped(1, 0)) != identity(ui)
+
     # A subgraph's nodes are not shape-checked: an odd `type` there is keyed,
     # never raised on.
     odd = copy.deepcopy(ui)
