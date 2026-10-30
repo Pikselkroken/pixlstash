@@ -21,6 +21,7 @@ vi.mock("../api/training", () => ({
 vi.mock("../api/config", () => ({ getUserConfig: vi.fn() }));
 
 import * as training from "../api/training";
+import { getUserConfig } from "../api/config";
 import { useTrainingStore } from "./useTrainingStore";
 
 const T = "{{TRIGGER_WORD}}";
@@ -287,5 +288,54 @@ describe("startTraining", () => {
     expect(store.submitError).toBe(
       "Z-Image Turbo needs 10.5 GB of GPU memory at least",
     );
+  });
+});
+
+// FastAPI answers a 422 with `detail` as a list of objects; the page must
+// show a sentence, never "[object Object]" (#2295).
+const VALIDATION_422 = {
+  response: {
+    data: { detail: [{ loc: ["query", "set_id"], msg: "field required", type: "missing" }] },
+  },
+};
+
+describe("error copy from a refused request", () => {
+  it("shows a refused dataset read as its fallback sentence", async () => {
+    const store = useTrainingStore();
+    training.getTrainingDataset.mockRejectedValue(VALIDATION_422);
+    await store.openForScope({ type: "set", id: 9, name: "Pub nights" });
+    await vi.waitFor(() => expect(store.datasetError).not.toBe(""));
+    expect(store.datasetError).toBe("Could not read the pictures to train on.");
+  });
+
+  it("shows a refused job list as its fallback sentence", async () => {
+    const store = useTrainingStore();
+    training.listTrainingJobs.mockRejectedValue(VALIDATION_422);
+    await store.fetchJobs();
+    expect(store.jobsError).toBe("Failed to load training jobs.");
+  });
+});
+
+describe("fetchConfig", () => {
+  it("counts the install as set up from the flag a remote owner gets without paths", async () => {
+    const store = useTrainingStore();
+    getUserConfig.mockResolvedValue({
+      ai_toolkit_repo_path: null,
+      ai_toolkit_python: null,
+      ai_toolkit_configured: true,
+    });
+    await store.fetchConfig();
+    expect(store.aiToolkitConfigured).toBe(true);
+    expect(store.aiToolkitRepoPath).toBe("");
+  });
+});
+
+describe("saveAiToolkitPaths", () => {
+  it("keeps what the server stored, not what was typed", async () => {
+    const store = useTrainingStore();
+    training.putAiToolkitConfig.mockResolvedValue({ repo_path: "/home/me/ai-toolkit", python: null });
+    await store.saveAiToolkitPaths("/home/me/ai-toolkit", "  ");
+    expect(store.aiToolkitPython).toBe("");
+    expect(store.aiToolkitConfigured).toBe(false);
   });
 });

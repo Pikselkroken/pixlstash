@@ -91,6 +91,23 @@ shrinks as automated coverage grows.
 The spec asserts the thumbnail URL shape before extracting its picture ID, so
 missing or placeholder sources fail with the actual `src` in the diagnostic.
 
+## Undo and redo — `undo-redo.spec.js`
+
+Changes are made through the API with the page's own `X-Client-Id`, so the tab
+treats them as its own; every verdict is read back from the server. The toolbar
+control is mounted on Duplicates only (#2160 removed it from the grid toolbar),
+so its checks run there. Cleanup takes back each test's own operation by id.
+
+| Test | Covers | Status |
+|------|--------|--------|
+| Ctrl+Z reverts … on the server, Ctrl+Y redoes it | One test per change kind: Scrapheap move, tag add, tag remove, rating, set add, character assignment, rotation; exactly one undo and one redo request | ✅ |
+| names the last operation, and its buttons undo and redo it | `UndoControl` accessible names; its Undo and Redo buttons | ✅ |
+| the History picker undoes back to a step, newest first, and no further | Preview range, per-step `POST /operations/{id}/undo` order, the step before survives | ✅ |
+| Ctrl+Z belongs to the field being typed in | Grid search, lightbox tag entry and description: the text is undone, the library is not, the description is not saved | ✅ |
+| Ctrl+Z in the lightbox undoes and keeps the lightbox open | Lightbox's own binding and receipt | ✅ |
+| a read-only session: undo is inert, and the control says why | Chord and control make no `/operations` call; the control and History explain why (the chord itself is silent) | ✅ |
+| nothing to undo: the control is disabled and Ctrl+Z does nothing | Served an empty stack (undo/redo POSTs stubbed off the real log): disabled control, "Nothing to undo." notice, no POST | ✅ |
+
 ## Picture Detail (Lightbox) — `lightbox.spec.js` (plan §4)
 | Test | Covers | Status |
 |------|--------|--------|
@@ -237,10 +254,10 @@ mutations) is unit-covered in `src/stores/useReviewSessionsStore.test.js`.
 | creating a review opens a session with a scan receipt and progress | Dialog → "Scan & create" → session view, receipt ("Scanned N · N suspects"), rail done/found, Undo disabled at start | ✅ |
 | binary Yes/No map to keep/remove; tally + backend receipt track it | remove-dir No=remove / Yes=keep; tally + `GET /reviews/{id}` receipt agree; focus advances to the re-keyed card; Undo enabled after a decision | ✅ |
 | Escape closes the review first (back to tag health); a second Escape closes the overlay | In a session, Escape returns to the tag-health board; a second Escape dismisses the overlay | ✅ |
-| Undo reverses the last decision and decrements the tally | Undo (net counter) decrements the tally and re-disables when the stack empties; backend receipt returns to 0 | 📝 fixme |
-| Skip removes the card with no decision and is reported separately | Skip → `.rs-tally-skipped` + rail "N skipped"; receipt removed/added/kept unchanged, skipped++ | 📝 fixme |
-| keyboard Y / N / S / U drive decisions and focus stays on the card | Keyboard parity with the buttons; focus stays on `.rs-card` | 📝 fixme |
-| working through the queue reaches completion and archives to a receipt | Decide all → completion state → Archive → `.rs-archived` receipt; backend status ARCHIVED | 📝 fixme |
+| Undo reverses the last decision and decrements the tally | Undo (net counter) decrements the tally and re-disables when the stack empties; backend receipt returns to 0. Uses a multi-suspect tag so the decision bar is still there after one decision | ✅ |
+| Skip removes the card with no decision and is reported separately | Skip → `.rs-tally-skipped` + rail "done/found · N skipped"; receipt removed/added/kept unchanged, skipped++ | ✅ |
+| keyboard Y / N / S / U drive decisions and focus stays on the card | Keyboard parity with the buttons; focus stays on `.rs-card`; `U` straight after `N` undoes it. The in-flight-write case itself is pinned by the store unit test, since a local backend usually answers before the next key | ✅ |
+| working through the queue reaches completion and archives to a receipt | Decide all → completion state → Archive → back on the board, session gone from the rail → rail Archived entry → `.rs-archived` receipt; backend status ARCHIVED | ✅ |
 
 **✅ BUG-RS-1 — RESOLVED.** The session card used to never render in a real
 browser: the moment the suggestions queue loaded, `ReviewSessionView` crashed
@@ -249,13 +266,11 @@ with `TypeError: Cannot read properties of undefined (reading 'el')` in Vue's
 collision between the card's `v-else` branch and the compiler's numeric auto-key
 for the sibling "Loading" `v-if` (only surfacing in production block patching);
 fixed by namespacing the key (`card-${current.id}`) in `ReviewSessionView.vue`.
-The three active specs above (create, binary decide, Escape-close) are the
-authoritative regression guard and run green against the production build. The
-four rows marked **📝 fixme** stay `test.fixme`'d for reasons **unrelated to
-BUG-RS-1** — each encodes a behaviour that does not yet match the implementation
-(single-suspect queue emptying, Skip tally, keyboard focus, queue completion/
-archive) and needs QA+dev reconciliation; see the per-test `FIXME (not BUG-RS-1)`
-notes in the spec. Un-`fixme` each as its behaviour is settled.
+The first three specs above (create, binary decide, Escape-close) are the
+authoritative regression guard and run green against the production build.
+Archiving returns to the board rather than to the receipt: the completion state
+has just shown the tally, and the next step is picking another tag. The receipt
+stays one click away in the rail's Archived list.
 
 ---
 
@@ -306,12 +321,10 @@ Tracked so they aren't forgotten — weighted by blast radius:
   actions, so an item present in both menus but wired to the wrong handler in
   one of them would still pass. Asserting that representative actions actually
   fire is the remaining gap.
-- **Review Sessions — partial loop automation + manual-only signals (plan §20).**
+- **Review Sessions — manual-only signals (plan §20).**
   The board is automated (`review-board.spec.js`, 9 cases). The session loop is
-  **partly automated**: create, binary decide, and Escape-close run green
-  (BUG-RS-1 is resolved); four further cases (Undo, Skip, keyboard, queue
-  completion/archive) stay `test.fixme`'d for reasons unrelated to BUG-RS-1 and
-  are tracked separately. Separately, several board/creation
+  **automated**: create, binary decide, Escape-close, Undo, Skip, keyboard,
+  and queue completion/archive run green. Separately, several board/creation
   paths are **not exercisable against the committed fixture** and stay manual
   (see release-test-plan §20): `est_wrong`/`est_missing` columns and
   auto-resolvable/bulk-accept (the fixture's predictions never disagree with

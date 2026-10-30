@@ -29,7 +29,6 @@ import contextlib
 import json
 import os
 import subprocess
-import sys
 import tempfile
 
 import pytest
@@ -93,6 +92,8 @@ _LOOPBACK_ROUTE_KEYS = {
     ("POST", "/api/v1/test-hooks/reference-folders/{folder_id}/rescan"),
     ("POST", "/api/v1/comfyui/pack/install"),
     ("POST", "/api/v1/comfyui/node-packs/{pack_id}/install"),
+    ("POST", "/api/v1/training/ai-toolkit/check"),
+    ("PUT", "/api/v1/training/ai-toolkit/config"),
 }
 
 
@@ -531,7 +532,11 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     72 = 71 + 1 with ``POST /model-folders/{folder_id}/dirs/remove``, which
     trashes or deletes a directory inside a registered folder:
     ``POST /model-files/delete``' authority over a subtree.
-    82 = 72 + 10 with ``POST /test-hooks/reference-folders/{folder_id}/rescan``
+    81 = 70 + 11 with ``POST /training/ai-toolkit/check`` and ``PUT
+    /training/ai-toolkit/config`` moved to the loopback tier (#2295): the first
+    runs the Python it is given at once and the second makes it argv[0] of every
+    later trainer, which is at least ``POST /server/restart``'s authority.
+    82 = 70 + 12 with ``POST /test-hooks/reference-folders/{folder_id}/rescan``
     (#2325), the second e2e hook: it marks a reference folder due for a rescan,
     as the filesystem watcher does, and is loopback for ``ws-event``'s reasons.
 
@@ -547,8 +552,8 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
         if rp.policy is AccessPolicy.LOCAL_OWNER_ONLY
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
-    assert len(loopback) == 10, sorted(loopback)
-    assert len(local) == 72, sorted(local)
+    assert len(loopback) == 12, sorted(loopback)
+    assert len(local) == 70, sorted(local)
 
 
 # ===========================================================================
@@ -1079,6 +1084,70 @@ def test_loopback_owner_only_rfc1918_403_even_with_flag_on():
             )
 
 
+def test_choosing_the_trainers_python_is_loopback_only():
+    """#2295: ``/training/ai-toolkit/check`` runs the Python it is given and
+    ``PUT /training/ai-toolkit/config`` makes it the trainer's argv[0], so a LAN
+    or Tailscale owner is refused both even with ``allow_remote_host_ops``,
+    while a loopback owner reaches the handler (its 422 for a path that is not
+    a checkout, never a loopback 403)."""
+    body = {"repo_path": "/home/me/no-such-ai-toolkit", "python": None}
+    calls = (
+        ("post", f"{API}/training/ai-toolkit/check"),
+        ("put", f"{API}/training/ai-toolkit/config"),
+    )
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server), _remote_host_ops(server, True):
+            for method, url in calls:
+                r = getattr(owner, method)(url, json=body)
+                assert not _is_loopback_403(r), (
+                    f"loopback owner must reach {url}; got {r.status_code}: {r.text}"
+                )
+                assert r.status_code == 422, (url, r.status_code, r.text)
+                for ip in (LAN_IPV4, "100.64.0.5", "8.8.8.8"):
+                    r = getattr(owner, method)(url, json=body, headers=_xff(ip))
+                    assert _is_loopback_403(r), (
+                        f"{ip} must be refused {url}; got {r.status_code}: {r.text}"
+                    )
+
+
+def test_config_names_the_ai_toolkit_paths_only_to_a_local_owner(tmp_path):
+    """#2295: ``GET /users/me/config`` is owner-only, so a remote owner reads it
+    too; the checkout and its Python are host paths, so they read as null there
+    with ``ai_toolkit_configured`` still saying an install is saved. A loopback
+    or LAN owner reads them, as ``/training/ai-toolkit/status`` gives them."""
+    repo = tmp_path / "ai-toolkit"
+    (repo / "toolkit").mkdir(parents=True)
+    (repo / "run.py").write_text("", encoding="utf-8")
+    python = repo / ".venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    python.chmod(0o755)
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server), _remote_host_ops(server, False):
+            r = owner.put(
+                f"{API}/training/ai-toolkit/config",
+                json={"repo_path": str(repo), "python": str(python)},
+            )
+            assert r.status_code == 200, r.text
+            for headers in ({}, _xff(LAN_IPV4)):
+                cfg = owner.get(f"{API}/users/me/config", headers=headers).json()
+                assert cfg["ai_toolkit_repo_path"] == str(repo), cfg
+                assert cfg["ai_toolkit_python"] == str(python), cfg
+                assert cfg["ai_toolkit_configured"] is True
+            cfg = owner.get(f"{API}/users/me/config", headers=_xff("8.8.8.8")).json()
+            assert cfg["ai_toolkit_repo_path"] is None, cfg
+            assert cfg["ai_toolkit_python"] is None, cfg
+            assert cfg["ai_toolkit_configured"] is True
+            assert str(tmp_path) not in json.dumps(cfg)
+            r = owner.put(
+                f"{API}/training/ai-toolkit/config",
+                json={"repo_path": None, "python": None},
+            )
+            assert r.status_code == 200, r.text
+
+
 def test_loopback_owner_only_public_403():
     """A public remote owner is 403'd on the red-line route (flag off)."""
     with _owner_env() as env:
@@ -1541,33 +1610,25 @@ def test_training_host_routes_admit_a_remote_owner_with_the_flag_on():
 
 
 def test_ai_toolkit_install_routes_refuse_a_remote_owner_and_admit_lan():
-    """discover and status disclose host paths; check starts the checkout's
-    Python. All three are LOCAL_OWNER_ONLY: a remote owner is 403'd naming the
-    flag, and the LAN owner reaches the handler (200 for the GETs, 422 for a
-    check with no body, which is the handler's own validation)."""
+    """discover and status disclose host paths, so they are LOCAL_OWNER_ONLY: a
+    remote owner is 403'd naming the flag, and the LAN owner reaches the handler.
+    check and PUT config moved to the loopback tier (#2295) and are covered by
+    test_choosing_the_trainers_python_is_loopback_only."""
     cases = (
-        ("get", f"{API}/training/ai-toolkit/discover", None, 200),
-        ("get", f"{API}/training/ai-toolkit/status", None, 200),
-        ("post", f"{API}/training/ai-toolkit/check", {}, 422),
-        (
-            "put",
-            f"{API}/training/ai-toolkit/config",
-            {"repo_path": None, "python": None},
-            200,
-        ),
+        ("get", f"{API}/training/ai-toolkit/discover"),
+        ("get", f"{API}/training/ai-toolkit/status"),
     )
     with _owner_env() as env:
         server, owner = env["server"], env["owner"]
         with _enforcing(server), _remote_host_ops(server, False):
-            for method, path, body, lan_status in cases:
+            for method, path in cases:
                 call = getattr(owner, method)
-                kwargs = {} if body is None else {"json": body}
-                remote = call(path, headers=_xff("8.8.8.8"), **kwargs)
+                remote = call(path, headers=_xff("8.8.8.8"))
                 assert remote.status_code == 403, (path, remote.text)
                 assert "allow_remote_host_ops" in remote.text, (path, remote.text)
-                lan = call(path, headers=_xff(LAN_IPV4), **kwargs)
+                lan = call(path, headers=_xff(LAN_IPV4))
                 assert not _is_locality_403(lan), (path, lan.text)
-                assert lan.status_code == lan_status, (path, lan.text)
+                assert lan.status_code == 200, (path, lan.text)
 
 
 def test_ai_toolkit_discover_admits_a_remote_owner_with_the_flag_on():
@@ -1581,35 +1642,36 @@ def test_ai_toolkit_discover_admits_a_remote_owner_with_the_flag_on():
             assert "searched" in r.json(), r.text
 
 
-def test_ai_toolkit_config_refuses_a_remote_owner_and_admits_lan():
+def test_ai_toolkit_config_is_saved_only_from_this_computer(tmp_path):
     """PUT /training/ai-toolkit/config stores the checkout and the Python that is
-    argv[0] of the trainer, so it is LOCAL_OWNER_ONLY: a remote owner is 403'd
-    naming the flag, even to disconnect, and the LAN owner saves the Python and
-    reads it back. The flag admits the remote owner. PATCH /users/me/config no
-    longer writes these keys: it refuses them with 422 from any address."""
+    argv[0] of the trainer, so it is LOOPBACK_OWNER_ONLY (#2295): a remote or LAN
+    owner is refused, even to disconnect and even with allow_remote_host_ops,
+    and the loopback owner saves the checkout's Python and reads it back. PATCH
+    /users/me/config does not write these keys: 422 from any address."""
+    repo = tmp_path / "ai-toolkit"
+    (repo / "toolkit").mkdir(parents=True)
+    (repo / "run.py").write_text("", encoding="utf-8")
+    python = repo / ".venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    python.chmod(0o755)
+    body = {"repo_path": str(repo), "python": str(python)}
     with _owner_env() as env:
         server, owner = env["server"], env["owner"]
+        for flag in (False, True):
+            with _enforcing(server), _remote_host_ops(server, flag):
+                for address in ("8.8.8.8", LAN_IPV4):
+                    for attempt in (body, {"repo_path": None, "python": None}):
+                        refused = owner.put(
+                            f"{API}/training/ai-toolkit/config",
+                            json=attempt,
+                            headers=_xff(address),
+                        )
+                        assert _is_loopback_403(refused), (address, refused.text)
+
         with _enforcing(server), _remote_host_ops(server, False):
-            body = {"repo_path": None, "python": sys.executable}
-            remote = owner.put(
-                f"{API}/training/ai-toolkit/config", json=body, headers=_xff("8.8.8.8")
-            )
-            assert remote.status_code == 403, remote.text
-            assert "allow_remote_host_ops" in remote.text, remote.text
-            cleared = owner.put(
-                f"{API}/training/ai-toolkit/config",
-                json={"repo_path": None, "python": None},
-                headers=_xff("8.8.8.8"),
-            )
-            assert cleared.status_code == 403, cleared.text
-
-            lan = owner.put(
-                f"{API}/training/ai-toolkit/config", json=body, headers=_xff(LAN_IPV4)
-            )
-            assert lan.status_code == 200, lan.text
-            stored = owner.get(f"{API}/users/me/config", headers=_xff(LAN_IPV4)).json()
-            assert stored["ai_toolkit_python"] == sys.executable
-
+            saved = owner.put(f"{API}/training/ai-toolkit/config", json=body)
+            assert saved.status_code == 200, saved.text
             for address in (LAN_IPV4, "8.8.8.8"):
                 patched = owner.patch(
                     f"{API}/users/me/config",
@@ -1618,13 +1680,10 @@ def test_ai_toolkit_config_refuses_a_remote_owner_and_admits_lan():
                 )
                 assert patched.status_code == 422, (address, patched.text)
                 assert "PUT /api/v1/training/ai-toolkit/config" in patched.text
-            stored = owner.get(f"{API}/users/me/config", headers=_xff(LAN_IPV4)).json()
-            assert stored["ai_toolkit_python"] == sys.executable
-
-        with _enforcing(server), _remote_host_ops(server, True):
-            admitted = owner.put(
+            stored = owner.get(f"{API}/users/me/config").json()
+            assert stored["ai_toolkit_python"] == str(python)
+            cleared = owner.put(
                 f"{API}/training/ai-toolkit/config",
                 json={"repo_path": None, "python": None},
-                headers=_xff("8.8.8.8"),
             )
-            assert admitted.status_code == 200, admitted.text
+            assert cleared.status_code == 200, cleared.text

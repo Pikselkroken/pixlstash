@@ -48,7 +48,11 @@ The backend boots against the repo's `test-data/` fixture — a seeded vault
    pending review (`media-fixture.spec.js`). A spec that registers a folder of
    its own uses a `mkdtemp` folder: Delete forever with *include protected*
    removes reference-folder originals from disk;
-6. execs `python -m pixlstash.app` against that temp copy.
+6. names `<work dir>/user-data` in the config as `e2e_data_dir`. With
+   `enable_test_hooks` on, the workflow inbox, the user workflow folder and the
+   trash move there, so a run neither imports the machine's own workflows nor
+   writes into or trashes from the folders the owner's server uses;
+7. execs `python -m pixlstash.app` against that temp copy.
 
 Because the user table is stripped per run, `global-setup.js` registers a fresh
 admin (random password) and mints an `ALL` token — credentials live only for
@@ -123,6 +127,11 @@ checklist shrinks as coverage grows.
   across specs in a run), so keep mutations additive/idempotent. The logout
   spec mints an isolated session (`loginToFreshSession`) because the backend
   tracks sessions in-memory and logout would otherwise pop the shared session.
+- Models shelf specs that move or delete files act only on stubs they stage
+  themselves (`stageStub` in `pages/ModelShelfPage.js`, through
+  `POST /model-files` into the seeded folder) and delete them in `afterEach`.
+  Real removals are the permanent kind; a Trash path is checked at the request
+  and answered by the spec, because the Trash is that of whoever runs the suite.
 - A spec that registers a reference or import folder makes it with
   `scratchFolder` (`fixtures/folders.js`), calls `expectScratch` on it before
   any remove or relocate, and writes its pictures with `writePicture`. After

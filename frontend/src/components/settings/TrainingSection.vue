@@ -16,6 +16,7 @@ import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
 import { isBusyJob, LIVE_STATUSES } from "../../utils/trainingRuns.js";
 import Tooltip from "../widgets/Tooltip.vue";
 import AiToolkitSetup from "./AiToolkitSetup.vue";
+import { errorMessage } from "../../utils/apiError";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -135,8 +136,7 @@ async function cancelJob(job) {
   try {
     await store.cancelJob(job.id);
   } catch (err) {
-    actionError.value =
-      err?.response?.data?.detail || err?.message || "Cancel failed.";
+    actionError.value = errorMessage(err, "Cancel failed.");
   } finally {
     cancellingId.value = null;
   }
@@ -155,8 +155,7 @@ async function deleteJob(job) {
   try {
     await store.deleteJob(job.id);
   } catch (err) {
-    actionError.value =
-      err?.response?.data?.detail || err?.message || "Delete failed.";
+    actionError.value = errorMessage(err, "Delete failed.");
   } finally {
     deletingJobId.value = null;
   }
