@@ -12,6 +12,12 @@ import { test, expect } from '../fixtures/test.js'
 // back as generated text here: the captioner is a background sweep, and the
 // e2e backend runs without workers. The reset is checked up to the point the
 // text is cleared for it.
+//
+// Nothing here turns a seeded picture. A turn NULLs the picture's embedding and
+// perceptual hash for the sweeps to redo, and with no workers nothing redoes
+// them, so a turned seeded picture drops out of every later spec's tag scan
+// (review-session counts on exactly two "black hair" suspects). Undo puts the
+// orientation back, not the embedding. The rotate tests turn a copy instead.
 
 const API = '/api/v1'
 
@@ -93,16 +99,44 @@ function rotateResponse(page) {
   )
 }
 
-/** Turn a picture back upright through the API, whatever a failed test left. */
-async function setUpright(apiContext, id) {
-  const steps = { 6: ['ccw'], 8: ['cw'], 3: ['cw', 'cw'] }
-  const { orientation } = await metadata(apiContext, id)
-  for (const direction of steps[orientation] ?? []) {
-    const res = await apiContext.post(`${API}/pictures/rotate`, {
-      data: { picture_ids: [id], direction },
-    })
+/**
+ * A picture of the spec's own to turn: a near-full crop of `sourceId`, out of
+ * any stack. Portrait, like its source.
+ */
+async function makeCopy(apiContext, sourceId) {
+  const res = await apiContext.post(`${API}/pictures/plugins/crop`, {
+    data: {
+      picture_ids: [sourceId],
+      parameters: { left: 0.01, top: 0.01, width: 0.98, height: 0.98 },
+      stack: false,
+    },
+  })
+  expect(res.ok(), await res.text()).toBe(true)
+  const ids = (await res.json()).created_picture_ids ?? []
+  expect(ids, 'the copy should be a new picture').toHaveLength(1)
+  return ids[0]
+}
+
+/**
+ * Delete forever what a test made, and only that: moved to the Scrapheap, then
+ * purged by id, after the preview confirms it names nothing else.
+ */
+async function purgePictures(apiContext, ids) {
+  if (!ids.length) return
+  for (const id of ids) {
+    const res = await apiContext.delete(`${API}/pictures/${id}`)
     expect(res.ok(), await res.text()).toBe(true)
   }
+  const preview = await apiContext.post(`${API}/pictures/scrapheap/delete-preview`, {
+    data: { picture_ids: ids },
+  })
+  expect(preview.ok(), await preview.text()).toBe(true)
+  const { total_count: total, confirm_token: confirmToken } = await preview.json()
+  expect(total, 'the purge must name only what this test made').toBe(ids.length)
+  const purged = await apiContext.delete(`${API}/pictures/scrapheap`, {
+    data: { picture_ids: ids, include_protected: false, confirm_token: confirmToken },
+  })
+  expect(purged.ok(), await purged.text()).toBe(true)
 }
 
 async function expectOrientation(apiContext, id, expected) {
@@ -126,7 +160,7 @@ test.describe('lightbox editing', () => {
     let pictureId = null
 
     test.afterEach(async ({ apiContext }) => {
-      if (pictureId != null) await setUpright(apiContext, pictureId)
+      if (pictureId != null) await purgePictures(apiContext, [pictureId])
       pictureId = null
     })
 
@@ -137,7 +171,7 @@ test.describe('lightbox editing', () => {
       apiContext,
     }) => {
       await grid.goto()
-      ;[pictureId] = await editablePictures(page, apiContext)
+      pictureId = await makeCopy(apiContext, (await editablePictures(page, apiContext))[0])
       await openPicture(page, lightbox, pictureId)
       const [w0, h0] = await lightbox.mainImageSize()
       expect(w0, 'the fixture picture starts portrait').toBeLessThan(h0)
@@ -172,7 +206,7 @@ test.describe('lightbox editing', () => {
 
     test('the Edit tab rotates left and right', async ({ page, grid, lightbox, apiContext }) => {
       await grid.goto()
-      ;[, pictureId] = await editablePictures(page, apiContext)
+      pictureId = await makeCopy(apiContext, (await editablePictures(page, apiContext))[1])
       await openPicture(page, lightbox, pictureId)
       await lightbox.openEditTab()
 
@@ -195,35 +229,17 @@ test.describe('lightbox editing', () => {
     let sourceId = null
     const created = []
 
-    // What a crop made goes, and only that: moved to the Scrapheap, then purged
-    // by id, after the preview confirms it names nothing else. Then the stack
-    // the crop opened is taken apart, as the source was in none before.
+    // What a crop made goes (`purgePictures`). Then the stack the crop opened
+    // is taken apart, as the source was in none before.
     test.afterEach(async ({ apiContext }) => {
       try {
-        if (created.length) await purgeCrops(apiContext)
+        await purgePictures(apiContext, created)
       } finally {
         await unstackSource(apiContext)
         created.length = 0
         sourceId = null
       }
     })
-
-    async function purgeCrops(apiContext) {
-      for (const id of created) {
-        const res = await apiContext.delete(`${API}/pictures/${id}`)
-        expect(res.ok(), await res.text()).toBe(true)
-      }
-      const preview = await apiContext.post(`${API}/pictures/scrapheap/delete-preview`, {
-        data: { picture_ids: created },
-      })
-      expect(preview.ok(), await preview.text()).toBe(true)
-      const { total_count: total, confirm_token: confirmToken } = await preview.json()
-      expect(total, 'the purge must name only the crops this test made').toBe(created.length)
-      const purged = await apiContext.delete(`${API}/pictures/scrapheap`, {
-        data: { picture_ids: created, include_protected: false, confirm_token: confirmToken },
-      })
-      expect(purged.ok(), await purged.text()).toBe(true)
-    }
 
     async function unstackSource(apiContext) {
       if (sourceId != null) {
@@ -461,7 +477,7 @@ test.describe('lightbox editing', () => {
     let pictureId = null
 
     test.afterEach(async ({ apiContext }) => {
-      if (pictureId != null) await setUpright(apiContext, pictureId)
+      if (pictureId != null) await purgePictures(apiContext, [pictureId])
       pictureId = null
     })
 
@@ -472,10 +488,13 @@ test.describe('lightbox editing', () => {
       apiContext,
     }) => {
       await grid.goto()
-      const ids = await editablePictures(page, apiContext)
-      pictureId = ids[4]
+      // A copy, because the control at the end really turns it.
+      pictureId = await makeCopy(apiContext, (await editablePictures(page, apiContext))[4])
+      const described = await apiContext.patch(`${API}/pictures/${pictureId}`, {
+        data: { description: 'A copy made by the typing-guard test.' },
+      })
+      expect(described.ok(), await described.text()).toBe(true)
       const before = await metadata(apiContext, pictureId)
-      expect(before.description, 'the seeded picture has a description').toBeTruthy()
       await openPicture(page, lightbox, pictureId)
 
       const rotates = []
