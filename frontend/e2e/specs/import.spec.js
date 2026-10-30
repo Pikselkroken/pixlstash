@@ -5,11 +5,12 @@ import { test, expect } from '../fixtures/test.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
-// Release plan §2 — Picture Import, the drag affordance. A synthetic
-// DataTransfer carrying a real JPEG File is dispatched onto the grid's scroll
-// wrapper (the element that owns the dragenter/dragleave handlers in
-// ImageGrid.vue), asserting the "Drop files here to import" overlay appears
-// while dragging files and clears when the drag leaves.
+// Release plan §2 — Picture Import, the drag affordance only: no file is
+// imported here. A synthetic DataTransfer carrying a real JPEG File is
+// dispatched onto the grid's scroll wrapper (the element that owns the
+// dragenter/dragleave handlers in ImageGrid.vue), asserting the "Drop files
+// here to import" overlay appears while dragging files and clears when the
+// drag leaves.
 //
 // An import completing is covered by media-fixture.spec.js, through the
 // Import dialog.

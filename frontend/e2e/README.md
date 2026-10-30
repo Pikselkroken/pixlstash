@@ -124,7 +124,10 @@ checklist shrinks as coverage grows.
   (`.../thumbnails/<id>.webp`) — the only per-card picture id the grid renders.
 - Selectors are CSS/ARIA-first; prefer stable classes and `aria-label` (a native `title` survives only to reveal clipped text).
 - The backend boots ONE throwaway DB per `playwright test` invocation (shared
-  across specs in a run), so keep mutations additive/idempotent. The logout
+  across specs in a run), so keep mutations additive/idempotent. The one
+  exception is `snapshots.spec.js`: its full restore signs out every session
+  and revokes every token, so it signs in again and rewrites `.auth/` for the
+  specs after it. The logout
   spec mints an isolated session (`loginToFreshSession`) because the backend
   tracks sessions in-memory and logout would otherwise pop the shared session.
 - Stable selectors in use: `.thumbnail-card` (grid cell), `.lightbox` /

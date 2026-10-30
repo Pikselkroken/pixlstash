@@ -9,8 +9,10 @@ token per run — no credentials are committed), seeds a small model folder
 for the shelf specs and a reference folder for the Media specs, writes a lean
 server-config (the task runner runs, the work planner keeps only the folder
 sweeps and an idle face finder, no models, no startup thumbnail generation, CPU
-only), and execs the real server. The server also serves the built SPA from
-``pixlstash/frontend/dist`` on the same origin, so cookie auth just works.
+only), puts refusing ``xdg-open``/``open`` stubs first on ``PATH`` so no spec
+drives the host's file manager, and execs the real server. The server also
+serves the built SPA from ``pixlstash/frontend/dist`` on the same origin, so
+cookie auth just works.
 
 Env:
     PIXLSTASH_E2E_PORT   Port to bind (default 9600).
@@ -150,6 +152,24 @@ def _seed_reference_folder(root: Path) -> None:
         Image.new("RGB", (64, 48), colour).save(path)
 
 
+def _stub_host_openers(bin_dir: Path) -> None:
+    """Put openers that always refuse first on the server's ``PATH``.
+
+    Export to Folder (``pixlstash/utils/host_open.py``) ends by handing the
+    folder to ``xdg-open`` / ``open``. Run from a developer's desktop that pops
+    a file manager per spec run, and a headless host may answer either way.
+    Exit 3 is xdg-open's own
+    "a required tool could not be found", so the server takes the headless path
+    on every machine and the spec can assert on one outcome.
+    """
+    bin_dir.mkdir(parents=True)
+    for name in ("xdg-open", "open"):
+        stub = bin_dir / name
+        stub.write_text("#!/bin/sh\nexit 3\n")
+        stub.chmod(0o700)
+    os.environ["PATH"] = f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+
+
 def _harden_permissions(root: Path) -> None:
     """Strip group/world write bits from the throwaway work directory.
 
@@ -246,6 +266,7 @@ def main() -> int:
     _strip_credentials(work_images / "vault.db")
     _seed_model_folder(MODEL_FOLDER)
     _seed_reference_folder(REFERENCE_FOLDER)
+    _stub_host_openers(WORK_DIR / "bin")
 
     # Build a lean server-config from the fixture's own config, overriding the
     # fields that matter for a fast, hermetic, password-auth test server.

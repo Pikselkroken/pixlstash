@@ -1,5 +1,8 @@
 import { test, expect } from '../fixtures/test.js'
 
+// A layout spec only: what the editors look like open, never what they save.
+// Creating, renaming and deleting characters and sets is #2323.
+//
 // The person and picture-set editors are two-column so they stop outgrowing the
 // viewport and scrolling `AppDialog`'s body. That is the whole point of the
 // layout and it is not something a jsdom unit test can see: the branch which
