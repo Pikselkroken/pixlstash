@@ -9623,6 +9623,32 @@ def test_extracting_a_recipe_with_a_lora_needs_no_comfyui(runnable, monkeypatch)
     assert runnable.submitted == []
 
 
+def test_extracting_a_lora_the_shelf_cannot_name_says_so(runnable, monkeypatch):
+    """No name to write is the shelf's problem, not ComfyUI's: an extract never
+    asks it, so the refusal must not say to start it."""
+    monkeypatch.setattr(
+        workflows_routes,
+        "_read_object_info",
+        lambda url: pytest.fail("extraction asked ComfyUI"),
+    )
+    nameless = _h("nameless-lora")
+    with runnable.server.hub.transaction() as conn:
+        conn.execute("DELETE FROM model WHERE sha256 = ?", (nameless,))
+        conn.execute(
+            "INSERT INTO model (file_kind, kind, filename, sha256, provenance) "
+            "VALUES ('adapter', 'unknown', NULL, ?, 'scanned')",
+            (nameless,),
+        )
+    recipe_id = _saved_on_run_card(
+        runnable, loras=[{"filename": "gone.safetensors", "sha256": nameless}]
+    )
+
+    r = runnable.owner.post(f"{API}/recipes/{recipe_id}/extract-workflow")
+    assert r.status_code == 400, r.text
+    assert "shelf has no file name" in r.json()["detail"]
+    assert "ComfyUI" not in r.json()["detail"]
+
+
 def test_a_recipe_on_a_gone_workflow_is_unfiled_and_still_extracts(runnable):
     """Its workflow gone, a recipe runs - and extracts - on the card it was
     saved from; with that gone too there is nothing to build on (409)."""

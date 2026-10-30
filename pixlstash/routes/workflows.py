@@ -6247,11 +6247,20 @@ def create_router(server) -> APIRouter:
                     ),
                 )
             adapter = _shelf_adapter(hub, item.sha256)
-            if (
-                object_info is None
-                and target.get("by") != "digest"
-                and not (by_name and adapter["filenames"])
-            ):
+            unlisted = object_info is None and target.get("by") != "digest"
+            if unlisted and by_name and not adapter["filenames"]:
+                # An extract asks no ComfyUI, so starting one would not help:
+                # the shelf has no name to write for the file.
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "The model shelf has no file name for this LoRA, so "
+                        f"PixlStash cannot write it into LoRA slot {item.field} "
+                        f"on node {item.node_id}. Choose another LoRA in the "
+                        "recipe, or remove it."
+                    ),
+                )
+            if unlisted and not by_name:
                 # A filename slot is resolved against what THIS ComfyUI lists,
                 # and with no `object_info` there is no list. Refused rather
                 # than skipped: the caller asked for LoRA X and consented to
