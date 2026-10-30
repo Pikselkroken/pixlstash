@@ -833,7 +833,9 @@ async function useStep(step) {
 
 async function stop() {
   // The same confirmation as Settings' Cancel: a stopped run cannot resume.
+  // Skip previews (a trained run) keeps the model, so it does not ask.
   if (
+    live.value?.status !== "completed" &&
     !window.confirm(
       `Stop training "${live.value?.name}"? The run will stop and cannot be resumed.`,
     )

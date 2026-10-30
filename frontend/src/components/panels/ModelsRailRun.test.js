@@ -63,6 +63,7 @@ const mounted = [];
 afterEach(() => {
   while (mounted.length) mounted.pop().unmount();
   vi.restoreAllMocks();
+  cancelTrainingJob.mockClear();
 });
 
 describe("the rail's training card", () => {
@@ -85,6 +86,24 @@ describe("the rail's training card", () => {
     confirm.mockReturnValue(true);
     await wrapper.find('[data-testid="mrr-stop"]').trigger("click");
     await flushPromises();
+    expect(cancelTrainingJob).toHaveBeenCalledWith(7);
+  });
+
+  it("skips a trained run's previews without asking: the model is kept", async () => {
+    setActivePinia(createPinia());
+    const trained = { ...card, job: { ...card.job, status: "completed", phase: "previews" } };
+    getTrainingJobLive.mockResolvedValue({ ...live, status: "completed", phase: "previews" });
+    cancelTrainingJob.mockResolvedValue({});
+    const wrapper = mount(ModelsRailRun, { props: { card: trained }, global: { stubs } });
+    mounted.push(wrapper);
+    await flushPromises();
+
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const skip = wrapper.find('[data-testid="mrr-stop"]');
+    expect(skip.text()).toBe("Skip previews");
+    await skip.trigger("click");
+    await flushPromises();
+    expect(confirm).not.toHaveBeenCalled();
     expect(cancelTrainingJob).toHaveBeenCalledWith(7);
   });
 });

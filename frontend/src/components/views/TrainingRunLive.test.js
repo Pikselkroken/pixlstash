@@ -276,8 +276,11 @@ describe("TrainingRunLive", () => {
       expect(getTrainingJobLive).toHaveBeenCalled();
 
       cancelTrainingJob.mockResolvedValue({ status: "cancelled" });
+      // Skipping keeps the trained model, so it does not ask as Stop does.
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
       await wrapper.find(".app-btn").trigger("click");
       await flushPromises();
+      expect(confirm).not.toHaveBeenCalled();
       expect(cancelTrainingJob).toHaveBeenCalledWith(7);
     } finally {
       vi.useRealTimers();
