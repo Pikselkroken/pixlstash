@@ -140,7 +140,9 @@ test.describe('export', () => {
       for (let i = 0; ids.length < 3 && i < 30; i++) {
         const card = grid.thumbnails.nth(i)
         const src = await card.locator('img.thumbnail-img').getAttribute('src')
-        const id = Number(src.match(/\/thumbnails\/(\d+)\./)[1])
+        // A card still loading has no thumbnail URL yet; skip it.
+        const id = Number(src?.match(/\/thumbnails\/(\d+)\./)?.[1])
+        if (!Number.isFinite(id)) continue
         const tags = await apiContext.get(`/api/v1/pictures/${id}/tags`)
         expect(tags.ok(), await tags.text()).toBe(true)
         const payload = await tags.json()
