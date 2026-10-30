@@ -440,9 +440,10 @@ WORKFLOW_TOOLS = [
         "over that workflow as its next version: the workflow keeps its "
         "name, pictures and recipes, the graph it replaces is kept as the "
         "version before, and the answer carries the version. Without it, "
-        "every call stores a new manual workflow named after `name` (API or "
-        "UI format, identical copies included) and the answer carries its "
-        "workflow_id.",
+        "it stores a new manual workflow named after `name` (API or UI "
+        "format) and the answer carries its workflow_id; a graph already in "
+        "the library (the same nodes, values and links, whatever the layout) "
+        "is refused with 409 naming the workflow_id and name it is there as.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -784,6 +785,10 @@ def _checked(status: int, content_type: str, body: bytes) -> tuple[str, bytes]:
     if status not in (200, 201):
         try:
             detail = json.loads(body).get("detail", "")
+            if isinstance(detail, dict):
+                # A structured refusal (an import already in the library) is
+                # handed on whole, so the agent reads the ids it names.
+                detail = json.dumps(detail)
         except (ValueError, AttributeError):
             detail = body[:200].decode("utf-8", "replace")
         if status == 401:

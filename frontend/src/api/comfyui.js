@@ -43,8 +43,10 @@ export async function cardForWorkflow(name) {
 /**
  * Import a workflow file as it is, UI or API format.
  *
- * Every import is a NEW manual workflow (identical copies are allowed), and
- * the answer names it: open it by `workflow_id`.
+ * An import is a NEW manual workflow, and the answer names it: open it by
+ * `workflow_id`. A file whose runnable graph is already a workflow's saved
+ * graph (layout aside) is refused with 409; `existingWorkflow(err)` reads
+ * which workflow it is.
  *
  * @param {Object} body
  * @param {string} body.name
@@ -55,6 +57,25 @@ export async function importWorkflow({ name, workflow }) {
   return unwrap(
     apiClient.post(comfyUrl("/workflows/import"), { name, workflow }),
   );
+}
+
+/**
+ * The workflow an import was refused as a copy of, or null for any other
+ * failure.
+ *
+ * @param {*} err - what `importWorkflow` rejected with.
+ * @returns {{workflow_id: string, name: string|null, hidden: boolean}|null}
+ */
+export function existingWorkflow(err) {
+  const detail = err?.response?.data?.detail;
+  if (err?.response?.status !== 409 || detail?.code !== "workflow_exists") {
+    return null;
+  }
+  return {
+    workflow_id: detail.workflow_id,
+    name: detail.name ?? null,
+    hidden: Boolean(detail.hidden),
+  };
 }
 
 /**

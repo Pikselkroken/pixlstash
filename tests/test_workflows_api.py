@@ -6098,8 +6098,8 @@ def test_a_conversion_is_an_editor_workflow_and_its_api_graph(
 def test_two_imports_of_one_graph_are_two_workflows(
     workflow_env, tmp_path, monkeypatch
 ):
-    """A manual workflow is a record, not a content address: identical copies
-    are allowed and never fold into one."""
+    """A manual workflow is a record, not a content address: two stored
+    copies never fold into one (only the import route refuses a copy)."""
     first = _file_a_workflow(
         workflow_env.server, tmp_path, monkeypatch, "editor.json", _EDITOR_WORKFLOW
     )
@@ -16133,13 +16133,15 @@ def test_the_mcp_round_trip_stores_an_edit_as_a_manual_workflow(exportable, tmp_
     assert new_key.startswith("manual:")
     assert exportable.owner.get(f"{API}/workflows/{new_key}").status_code == 200
 
-    # The same file again is a second manual workflow: identical copies are
-    # allowed, and nothing is written to the folder either way.
-    again = _mcp_json(
-        fetch, "import_workflow_graph", name="mcp-edited-again.json", path=str(out)
-    )
-    assert (again["matched"], again["name"]) == (False, "mcp-edited-again")
-    assert again["workflow_id"] != new_key
+    # The same file again is refused with the workflow it already is, so the
+    # agent can go on with that one; nothing is written to the folder either way.
+    with pytest.raises(mcp_server.ToolError) as refused:
+        _mcp_json(
+            fetch, "import_workflow_graph", name="mcp-edited-again.json", path=str(out)
+        )
+    assert "409" in str(refused.value)
+    detail = json.loads(str(refused.value).split(": ", 1)[1])
+    assert (detail["code"], detail["workflow_id"]) == ("workflow_exists", new_key)
     assert list((tmp_path / "store").glob("*.json")) == []
 
     # Preflight reads the stored file: this ComfyUI lacks two of its nodes, and
