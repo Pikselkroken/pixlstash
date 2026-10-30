@@ -12,7 +12,7 @@ version bump is a single-file change. Verified against the local clone
 ```
 <ai_toolkit_python> run.py <config.json> --log <training_folder>/<name>/log.txt
   cwd  = <ai_toolkit_repo_path>
-  env  = parent env + {
+  env  = parent env - {PYTHONPATH, PYTHONHOME, PIXLSTASH_*} + {
            AITK_JOB_ID        = <our job uuid>        # enables soft UI mode (status/step/cancel)
            CUDA_VISIBLE_DEVICES = <gpu id(s)>
            CUDA_DEVICE_ORDER  = PCI_BUS_ID
@@ -20,6 +20,9 @@ version bump is a single-file change. Verified against the local clone
            HF_TOKEN           = <secret, only if set> # NEVER logged
          }
 ```
+
+The install check (the torch probe and `run.py --help`) runs with the same parent env minus those
+keys, so it sees the torch the trainer will.
 
 `run.py` accepts `config… [-r/--recover] [-n/--name] [-l/--log <path>]`; raises (non-zero exit) on
 job failure when `--recover` is absent. Spawn in **its own process group** so cancel can signal the

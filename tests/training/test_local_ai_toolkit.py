@@ -418,6 +418,35 @@ def test_the_trainer_gets_expandable_segments_unless_the_owner_chose(
     assert got == expected
 
 
+def test_the_trainer_does_not_inherit_the_backends_python_path_or_secrets(
+    tmp_path, monkeypatch
+):
+    """ai-toolkit's Python must import its own torch, not the overlay's (#2288)."""
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path / "overlay"))
+    monkeypatch.setenv("PYTHONHOME", str(tmp_path / "home"))
+    monkeypatch.setenv("PIXLSTASH_DESKTOP_SESSION", "test-session")
+    monkeypatch.setenv("CUDA_HOME", "/opt/cuda")
+    launched = {}
+
+    class _Process:
+        pid = 4242
+
+    def fake_popen(cmd, **kwargs):
+        launched.update(kwargs["env"])
+        return _Process()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    backend = _make_backend()
+    spec = _make_spec(tmp_path)
+    backend.submit(backend.prepare(spec), spec)
+
+    assert "PYTHONPATH" not in launched
+    assert "PYTHONHOME" not in launched
+    assert not [key for key in launched if key.startswith("PIXLSTASH_")]
+    assert launched["CUDA_HOME"] == "/opt/cuda"
+    assert launched["AITK_JOB_ID"] == spec.job_id
+
+
 def test_hf_token_never_written_to_log(tmp_path):
     """The HF token value must never appear in the trainer log file."""
     backend = _make_backend()
