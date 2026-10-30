@@ -145,7 +145,7 @@ test.describe("delete", () => {
 
     await workflows.goto();
     await workflows.card(first).click();
-    await workflows.card(second).click({ modifiers: ["Control"] });
+    await workflows.card(second).click({ modifiers: ["ControlOrMeta"] });
     await expect.poll(() => selectedKeys(page)).toEqual(expect.arrayContaining([first, second]));
     await page.keyboard.press("Delete");
     const ask = deleteDialog(page, "Delete these 2 workflows?");

@@ -66,7 +66,10 @@ function unite(values) {
   return Object.fromEntries([...keys].map((key) => [key, unite(objects.map((o) => o[key]))]));
 }
 
-/** Every path where *fake* serves what *real* does not. */
+/**
+ * Every path where *fake* serves what *real* does not. *real* is already
+ * `unite`d, so each real array holds one element: the shape of all of them.
+ */
 function drift(fake, real, path, found, unverified) {
   if (fake === null || real === null) return;
   if (kind(fake) !== kind(real)) {
