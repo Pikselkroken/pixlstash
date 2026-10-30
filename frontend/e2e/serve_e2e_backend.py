@@ -242,7 +242,20 @@ def _graph(
     return g
 
 
-def _seed_workflows(root: Path) -> None:
+def _median_picture_date(db_path: Path) -> str:
+    """The middle ``created_at`` of the work copy's pictures, as stored."""
+    conn = sqlite3.connect(str(db_path))
+    try:
+        (dated,) = conn.execute(
+            "SELECT created_at FROM picture ORDER BY created_at LIMIT 1 "
+            "OFFSET (SELECT COUNT(*) / 2 FROM picture)"
+        ).fetchone()
+    finally:
+        conn.close()
+    return dated
+
+
+def _seed_workflows(root: Path, picture_date: str) -> None:
     """Lay out the Workflows specs' seed, under the work dir.
 
     ``seed.json`` names the stored workflows, the pictures and the recipes; the
@@ -255,6 +268,10 @@ def _seed_workflows(root: Path) -> None:
     * a workflow known from three pictures, so it has covers and a count;
     * a one-off: a workflow known from a single unrated picture;
     * two recipes on the LoRA workflow and one unfiled.
+
+    The pictures are dated *picture_date*, the fixture's median, so they sit
+    mid-grid whichever way it sorts by date: the specs that open the first or
+    the last few pictures, and rate or tag them, still get fixture ones.
     """
     root.mkdir(parents=True)
     loras = ("Clementine_Portrait.safetensors", "DetailTweaker_v2.safetensors")
@@ -283,6 +300,7 @@ def _seed_workflows(root: Path) -> None:
             },
         ],
         "pictures": pictures,
+        "picture_date": picture_date,
         "recipes": [
             {
                 "name": "Seeded golden hour",
@@ -405,7 +423,7 @@ def main() -> int:
     _seed_model_folder(MODEL_FOLDER)
     _seed_reference_folder(REFERENCE_FOLDER)
     _stub_host_openers(WORK_DIR / "bin")
-    _seed_workflows(WORKFLOW_SEED)
+    _seed_workflows(WORKFLOW_SEED, _median_picture_date(work_images / "vault.db"))
 
     # Build a lean server-config from the fixture's own config, overriding the
     # fields that matter for a fast, hermetic, password-auth test server.

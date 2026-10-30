@@ -24,11 +24,6 @@ from pixlstash.tasks.workflow_card_backfill_task import WorkflowCardBackfillTask
 
 logger = get_logger(__name__)
 
-# Older than any fixture picture, so the seeded ones sort last on the grid's
-# default (newest first) and the specs that open the first picture still get a
-# fixture one.
-_SEED_PICTURE_DATE = datetime(2000, 1, 1, tzinfo=timezone.utc)
-
 
 def add_pictures_in_session(session, pictures: list) -> list[int]:
     """Insert the seeded pictures; return their ids.
@@ -79,8 +74,21 @@ def seed_workflows(server, path: str) -> None:
             server, files, server.vault.image_root
         )
         pictures = list(new_pictures.values())
+        if len(pictures) != len(files):
+            logger.warning(
+                "[test-hooks] %d of the %d seeded pictures were already in the "
+                "vault and are not seeded again",
+                len(files) - len(pictures),
+                len(files),
+            )
+        # The fixture's median date (the launcher reads it off the vault), so
+        # the seeded pictures sit mid-grid in either date order and the specs
+        # that open the first or the last pictures still get fixture ones.
+        dated = datetime.fromisoformat(manifest["picture_date"])
+        if dated.tzinfo is None:
+            dated = dated.replace(tzinfo=timezone.utc)
         for picture in pictures:
-            picture.created_at = picture.imported_at = _SEED_PICTURE_DATE
+            picture.created_at = picture.imported_at = dated
 
         picture_ids = server.vault.db.run_task(add_pictures_in_session, pictures)
         ComfyUIExtractionTask(

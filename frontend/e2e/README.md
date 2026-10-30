@@ -61,9 +61,9 @@ The backend boots against the repo's `test-data/` fixture — a seeded vault
    plain txt2img*, and a workflow known from three pictures; *Seeded hidden
    draft* is hidden and an img2img picture is a one-off. `GET /recipes` lists
    two recipes on the LoRA workflow and one unfiled
-   (`workflows-seed.spec.js`). The pictures are dated 2000 so they sort last
-   on the grid's default order, and the specs that open the first picture
-   still get a fixture one;
+   (`workflows-seed.spec.js`). The pictures carry the fixture's median date,
+   so they sit mid-grid in either date order and the specs that open, rate or
+   tag the first or last few pictures still get fixture ones;
 8. execs `python -m pixlstash.app` against that temp copy.
 
 Because the user table is stripped per run, `global-setup.js` registers a fresh

@@ -12,6 +12,13 @@ const LORA_WORKFLOW = 'Seeded LoRA portrait'
 const PLAIN_WORKFLOW = 'Seeded plain txt2img'
 const HIDDEN_WORKFLOW = 'Seeded hidden draft'
 
+// A workflow known from seeded pictures: none stored, made with the seeded
+// checkpoint, from exactly `count` pictures.
+const fromSeededPictures = (count) => (c) =>
+  !c.manual &&
+  c.picture_count === count &&
+  c.recipe_values.checkpoints.some((v) => v.name === 'RealVisXL_V4.safetensors')
+
 async function cards(apiContext, query = '') {
   const res = await apiContext.get(`/api/v1/workflows${query}`)
   expect(res.ok(), await res.text()).toBe(true)
@@ -35,8 +42,11 @@ test('GET /workflows lists the seeded cards, a hidden one and a one-off', async 
 
   // The workflow the three seeded portraits are filed under: covers, a count,
   // and its pictures route answering the same three.
-  const drawn = grid.cards.find((c) => !c.manual && c.picture_count === 3)
+  const drawn = grid.cards.find(fromSeededPictures(3))
   expect(drawn, JSON.stringify(names)).toBeTruthy()
+  expect(drawn.recipe_values.loras.map((v) => v.name)).toEqual([
+    'Clementine_Portrait.safetensors',
+  ])
   expect(drawn.covers).toHaveLength(3)
   const res = await apiContext.get(`/api/v1/workflows/${drawn.id}/pictures`)
   expect(res.ok(), await res.text()).toBe(true)
@@ -48,9 +58,7 @@ test('GET /workflows lists the seeded cards, a hidden one and a one-off', async 
   const hidden = all.cards.find((c) => c.name === HIDDEN_WORKFLOW)
   expect(hidden?.hidden).toBe(true)
   const shown = new Set(grid.cards.map((c) => c.id))
-  const oneOff = all.cards.find(
-    (c) => !shown.has(c.id) && !c.manual && c.picture_count === 1,
-  )
+  const oneOff = all.cards.find((c) => !shown.has(c.id) && fromSeededPictures(1)(c))
   expect(oneOff, JSON.stringify(all.cards.map((c) => c.name))).toBeTruthy()
 })
 
