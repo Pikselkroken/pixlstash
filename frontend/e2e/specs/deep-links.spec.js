@@ -95,8 +95,12 @@ test.describe('deep links: ?overlay= on entity routes', () => {
       const path = pathOf(found)
       const members = await pictureIds(apiContext, queryOf(found))
       // Not the first: a lightbox that opened on whatever led the grid would
-      // pass with the first.
-      const pictureId = members[Math.min(1, members.length - 1)]
+      // pass with the first. So the entity needs a second picture to open.
+      expect(
+        members.length,
+        `${path} has at least two stack-leader pictures`,
+      ).toBeGreaterThanOrEqual(2)
+      const pictureId = members[1]
 
       await page.goto(`${path}?overlay=${pictureId}`)
       await expect(lightbox.root).toBeVisible({ timeout: 15_000 })
