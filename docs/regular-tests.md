@@ -108,6 +108,27 @@ so its checks run there. Cleanup takes back each test's own operation by id.
 | a read-only session: undo is inert, and the control says why | Chord and control make no `/operations` call; the control and History explain why (the chord itself is silent) | ✅ |
 | nothing to undo: the control is disabled and Ctrl+Z does nothing | Served an empty stack (undo/redo POSTs stubbed off the real log): disabled control, "Nothing to undo." notice, no POST | ✅ |
 
+## Deleting pictures and the Scrapheap — `scrapheap.spec.js`
+
+| Test | Covers | Status |
+|------|--------|--------|
+| the Delete key sends the selected picture to the Scrapheap | Grid keyboard delete; the live card goes and `/scrapheap` lists it | ✅ |
+| the Selection menu's Delete sends the selection to the Scrapheap | Selection ▾ Delete on a two-picture selection | ✅ |
+| the context menu's Delete sends the picture to the Scrapheap | Right-click Delete | ✅ |
+| a picture in a locked set is refused, with a notice saying why | Delete key keeps it and says it is in a locked set; the context menu's Delete is disabled | ✅ |
+| the lightbox deletes its picture, and Restore in the Scrapheap brings it back | Lightbox context menu Delete (what the lightbox does next is #2346's); Restore from the Scrapheap's lightbox | ✅ |
+| Restore all returns every picture with its sets, character and tags | Restore all on a heap holding only the test's pictures; membership and tags checked through the API | ✅ |
+| Empty scrapheap states the count, and Cancel deletes nothing | The confirm's count; Cancel sends no purge | ✅ |
+| Delete forever on a selection counts only the selection, and Cancel deletes nothing | Selection-scoped preview count; Cancel sends no purge | ✅ |
+| a cold load of /scrapheap renders the Scrapheap, not the library | Direct navigation to `/scrapheap` | ✅ |
+
+Every test puts back what it sent to the Scrapheap. The purge request is
+blocked at the network in the two Cancel tests, so a broken Cancel fails the
+test rather than destroying fixture pictures. Confirming Empty scrapheap or
+Delete forever needs pictures the spec imported itself, and the
+protected-original choice needs a reference-folder picture. The e2e backend
+provides both since #2320; until #2353 runs them for real, they stay manual.
+
 ## Picture Detail (Lightbox) — `lightbox.spec.js` (plan §4)
 | Test | Covers | Status |
 |------|--------|--------|
