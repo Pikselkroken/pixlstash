@@ -123,6 +123,14 @@ checklist shrinks as coverage grows.
   across specs in a run), so keep mutations additive/idempotent. The logout
   spec mints an isolated session (`loginToFreshSession`) because the backend
   tracks sessions in-memory and logout would otherwise pop the shared session.
+- A spec that registers a reference or import folder makes it with
+  `scratchFolder` (`fixtures/folders.js`), calls `expectScratch` on it before
+  any remove or relocate, and writes its pictures with `writePicture`. After
+  changing a reference folder's files on disk it calls `markFolderChanged`,
+  which does what the filesystem watcher would (`POST
+  /api/v1/test-hooks/reference-folders/{id}/rescan`): the watcher needs an
+  inotify instance a busy machine may not have, and without it the next scan
+  is five minutes away. Import folders poll and need neither.
 - Stable selectors in use: `.thumbnail-card` (grid cell), `.lightbox` /
   `.lightbox-back` (lightbox), `.search-overlay` (search), `.mdi-magnify`
   (toolbar search button).
