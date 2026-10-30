@@ -359,10 +359,9 @@ regression when someone stumbles into it — not so that anyone goes looking.
 
 ## 11. Review Sessions — manual remainder
 
-Board + create + binary decide + Escape-close are automated
-(`review-board.spec.js`, `review-session.spec.js`; four further cases are
-`fixme`-guarded pending behaviour reconciliation). The rest needs a real vault
-or human judgement.
+Board + the session loop (create, binary decide, Escape-close, Undo, Skip,
+keyboard, completion/archive) are automated (`review-board.spec.js`,
+`review-session.spec.js`). The rest needs a real vault or human judgement.
 
 ### 11.1 Board signals not exercisable on the committed fixture
 

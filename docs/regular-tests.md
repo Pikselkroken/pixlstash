@@ -230,10 +230,10 @@ mutations) is unit-covered in `src/stores/useReviewSessionsStore.test.js`.
 | creating a review opens a session with a scan receipt and progress | Dialog → "Scan & create" → session view, receipt ("Scanned N · N suspects"), rail done/found, Undo disabled at start | ✅ |
 | binary Yes/No map to keep/remove; tally + backend receipt track it | remove-dir No=remove / Yes=keep; tally + `GET /reviews/{id}` receipt agree; focus advances to the re-keyed card; Undo enabled after a decision | ✅ |
 | Escape closes the review first (back to tag health); a second Escape closes the overlay | In a session, Escape returns to the tag-health board; a second Escape dismisses the overlay | ✅ |
-| Undo reverses the last decision and decrements the tally | Undo (net counter) decrements the tally and re-disables when the stack empties; backend receipt returns to 0 | 📝 fixme |
-| Skip removes the card with no decision and is reported separately | Skip → `.rs-tally-skipped` + rail "N skipped"; receipt removed/added/kept unchanged, skipped++ | 📝 fixme |
-| keyboard Y / N / S / U drive decisions and focus stays on the card | Keyboard parity with the buttons; focus stays on `.rs-card` | 📝 fixme |
-| working through the queue reaches completion and archives to a receipt | Decide all → completion state → Archive → `.rs-archived` receipt; backend status ARCHIVED | 📝 fixme |
+| Undo reverses the last decision and decrements the tally | Undo (net counter) decrements the tally and re-disables when the stack empties; backend receipt returns to 0. Uses a multi-suspect tag so the decision bar is still there after one decision | ✅ |
+| Skip removes the card with no decision and is reported separately | Skip → `.rs-tally-skipped` + rail "done/found · N skipped"; receipt removed/added/kept unchanged, skipped++ | ✅ |
+| keyboard Y / N / S / U drive decisions and focus stays on the card | Keyboard parity with the buttons; focus stays on `.rs-card`. `U` straight after `N` undoes the decision even while its write is still in flight | ✅ |
+| working through the queue reaches completion and archives to a receipt | Decide all → completion state → Archive → back on the board, session gone from the rail → rail Archived entry → `.rs-archived` receipt; backend status ARCHIVED | ✅ |
 
 **✅ BUG-RS-1 — RESOLVED.** The session card used to never render in a real
 browser: the moment the suggestions queue loaded, `ReviewSessionView` crashed
@@ -242,13 +242,11 @@ with `TypeError: Cannot read properties of undefined (reading 'el')` in Vue's
 collision between the card's `v-else` branch and the compiler's numeric auto-key
 for the sibling "Loading" `v-if` (only surfacing in production block patching);
 fixed by namespacing the key (`card-${current.id}`) in `ReviewSessionView.vue`.
-The three active specs above (create, binary decide, Escape-close) are the
-authoritative regression guard and run green against the production build. The
-four rows marked **📝 fixme** stay `test.fixme`'d for reasons **unrelated to
-BUG-RS-1** — each encodes a behaviour that does not yet match the implementation
-(single-suspect queue emptying, Skip tally, keyboard focus, queue completion/
-archive) and needs QA+dev reconciliation; see the per-test `FIXME (not BUG-RS-1)`
-notes in the spec. Un-`fixme` each as its behaviour is settled.
+The first three specs above (create, binary decide, Escape-close) are the
+authoritative regression guard and run green against the production build.
+Archiving returns to the board rather than to the receipt: the completion state
+has just shown the tally, and the next step is picking another tag. The receipt
+stays one click away in the rail's Archived list.
 
 ---
 
@@ -299,12 +297,10 @@ Tracked so they aren't forgotten — weighted by blast radius:
   actions, so an item present in both menus but wired to the wrong handler in
   one of them would still pass. Asserting that representative actions actually
   fire is the remaining gap.
-- **Review Sessions — partial loop automation + manual-only signals (plan §20).**
+- **Review Sessions — manual-only signals (plan §20).**
   The board is automated (`review-board.spec.js`, 9 cases). The session loop is
-  **partly automated**: create, binary decide, and Escape-close run green
-  (BUG-RS-1 is resolved); four further cases (Undo, Skip, keyboard, queue
-  completion/archive) stay `test.fixme`'d for reasons unrelated to BUG-RS-1 and
-  are tracked separately. Separately, several board/creation
+  **automated**: create, binary decide, Escape-close, Undo, Skip, keyboard,
+  and queue completion/archive run green. Separately, several board/creation
   paths are **not exercisable against the committed fixture** and stay manual
   (see release-test-plan §20): `est_wrong`/`est_missing` columns and
   auto-resolvable/bulk-accept (the fixture's predictions never disagree with
