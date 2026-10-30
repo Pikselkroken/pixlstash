@@ -68,6 +68,7 @@ import ImageGrid from "./ImageGrid.vue";
 let pluginResponses = {};
 
 const showRunResult = vi.fn();
+const showPicture = vi.fn();
 
 function mountGrid() {
   const wrapper = mount(ImageGrid, {
@@ -75,7 +76,7 @@ function mountGrid() {
     global: {
       // The lightbox, as far as a finished filter run reaches into it.
       stubs: {
-        Lightbox: { template: "<div />", methods: { showRunResult } },
+        Lightbox: { template: "<div />", methods: { showRunResult, showPicture } },
       },
       config: {
         compilerOptions: { isCustomElement: (tag) => tag.startsWith("v-") },
@@ -130,6 +131,7 @@ beforeEach(() => {
   });
   pluginResponses = {};
   showRunResult.mockReset();
+  showPicture.mockReset();
 });
 
 describe("ImageGrid - plugin run whose output already exists", () => {
@@ -268,6 +270,7 @@ describe("ImageGrid - a filter run from the lightbox", () => {
     await runPlugin(wrapper, "blur", [42], { compare: true });
 
     expect(showRunResult).toHaveBeenCalledWith("9", 42, null);
+    expect(showPicture).not.toHaveBeenCalled();
     expect(wrapper.vm.lightboxImageId).not.toBe("9");
     wrapper.unmount();
   });
@@ -278,7 +281,9 @@ describe("ImageGrid - a filter run from the lightbox", () => {
     await runPlugin(wrapper, "blur", [42, 43], { compare: true });
 
     expect(showRunResult).not.toHaveBeenCalled();
-    expect(wrapper.vm.lightboxImageId).toBe("9");
+    // Through the lightbox, which reads the new picture in: it is in none of
+    // its lists yet, so a bare `lightboxImageId` move would show nothing new.
+    expect(showPicture).toHaveBeenCalledWith("9");
     wrapper.unmount();
   });
 
@@ -288,7 +293,9 @@ describe("ImageGrid - a filter run from the lightbox", () => {
     await runPlugin(wrapper, "blur");
 
     expect(showRunResult).not.toHaveBeenCalled();
-    expect(wrapper.vm.lightboxImageId).toBe("9");
+    // Through the lightbox, which reads the new picture in: it is in none of
+    // its lists yet, so a bare `lightboxImageId` move would show nothing new.
+    expect(showPicture).toHaveBeenCalledWith("9");
     wrapper.unmount();
   });
 });

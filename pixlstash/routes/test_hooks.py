@@ -1,11 +1,19 @@
-"""E2E-only test hooks for the WebSocket grid-event system.
+"""E2E-only test hooks.
 
-This router exists **solely** to let Playwright deterministically inject a
-WebSocket grid event by driving ``vault.notify`` with a controlled payload.
-The e2e backend runs only the folder sweeps and loads no models, so the
-tag/quality/smart-score/face events behind most "continuous refresh" and
-"pill-on-own-change" reports never fire on their own. This endpoint reproduces
-those flood / echo scenarios on demand, without real-timing nondeterminism.
+This router exists **solely** for Playwright, and holds two hooks.
+
+``ws-event`` deterministically injects a WebSocket grid event by driving
+``vault.notify`` with a controlled payload. The e2e backend runs only the
+folder sweeps (and a face finder that queues nothing) and loads no models, so the tag/quality/smart-score/face events
+behind most "continuous refresh" and "pill-on-own-change" reports never fire on
+their own. This endpoint reproduces those flood / echo scenarios on demand,
+without real-timing nondeterminism.
+
+``reference-folders/{folder_id}/rescan`` marks a reference folder changed on
+disk, which is the filesystem watcher's job. The watcher needs an inotify
+instance, and a machine running many processes may have none left to give it,
+so a spec that changes a folder's files says so here instead of waiting for
+the five-minute rescan.
 
 Security posture (do not weaken):
 
@@ -303,5 +311,26 @@ def create_router(server) -> APIRouter:
             event_type=payload.event_type,
             emitted=emitted,
         )
+
+    @router.post(
+        "/test-hooks/reference-folders/{folder_id}/rescan",
+        summary="[E2E ONLY] Mark a reference folder changed on disk",
+        description=(
+            "Owner-only, e2e-only hook. Does what the filesystem watcher does "
+            "when a file in the folder changes: marks the folder due, so the "
+            "planner's reference-folder scan picks it up at once. The watcher "
+            "itself needs an inotify instance, which a busy machine may not "
+            "have to give. Registered only when ``enable_test_hooks`` is "
+            "true; absent otherwise."
+        ),
+        include_in_schema=False,
+    )
+    def rescan_reference_folder(folder_id: int, request: Request) -> dict:
+        server.auth.require_unscoped_owner(request)
+        # The watcher's own callback, so the scan that follows is the real one.
+        if not server.vault.mark_reference_folder_changed(folder_id):
+            raise HTTPException(status_code=404, detail="Reference folder not found.")
+        logger.info("[test-hooks] marked reference folder %s changed", folder_id)
+        return {"status": "success", "folder_id": folder_id}
 
     return router

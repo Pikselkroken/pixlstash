@@ -24,6 +24,7 @@ from .db_models import (
     Picture,
     PicturePendingPerson,
     PictureSet,
+    ReferenceFolder,
     Snapshot,
     Tag,
     TAG_SENTINEL_LIKE_PATTERN,
@@ -809,6 +810,27 @@ class Vault:
         that reads existing caption files in and writes the missing ones out
         once caption sync is turned on."""
         self._on_reference_folder_fs_changed(None)
+
+    def mark_reference_folder_changed(self, folder_id: int) -> bool:
+        """Do what the filesystem watcher does when a file in a reference
+        folder changes: mark the folder due, so the next scan is now.
+
+        Only the e2e test hook calls this. The e2e specs call it after every
+        change they make on disk rather than wait on the watcher, which needs
+        an inotify instance a busy machine may not have.
+
+        Args:
+            folder_id: Primary key of the reference folder.
+
+        Returns:
+            bool: False when there is no such folder, and nothing was marked.
+        """
+        exists = self.db.run_immediate_read_task(
+            lambda session: session.get(ReferenceFolder, folder_id) is not None
+        )
+        if exists:
+            self._on_reference_folder_fs_changed(folder_id)
+        return exists
 
     def _on_model_folder_fs_changed(self, folder_id: int) -> None:
         """A model file in a registered model folder changed: scan it now."""

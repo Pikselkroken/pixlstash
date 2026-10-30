@@ -2086,7 +2086,9 @@ async function runPluginWithParameters(
           // Taken only while the reader is still on the source picture.
           lightboxRef.value?.showRunResult?.(newest, pictureIds[0], null);
         } else if (lightboxOpen.value) {
-          moveLightboxTo(newest);
+          // Through the lightbox, not the URL alone: the new picture is in
+          // neither of its lists yet, and a bare move would find nothing.
+          lightboxRef.value?.showPicture?.(newest);
         }
       }
     }
