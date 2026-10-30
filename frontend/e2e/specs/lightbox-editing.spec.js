@@ -199,22 +199,33 @@ test.describe('lightbox editing', () => {
     // by id, after the preview confirms it names nothing else. Then the stack
     // the crop opened is taken apart, as the source was in none before.
     test.afterEach(async ({ apiContext }) => {
-      if (created.length) {
-        for (const id of created) {
-          const res = await apiContext.delete(`${API}/pictures/${id}`)
-          expect(res.ok(), await res.text()).toBe(true)
-        }
-        const preview = await apiContext.post(`${API}/pictures/scrapheap/delete-preview`, {
-          data: { picture_ids: created },
-        })
-        expect(preview.ok(), await preview.text()).toBe(true)
-        const { total_count: total, confirm_token: confirmToken } = await preview.json()
-        expect(total, 'the purge must name only the crops this test made').toBe(created.length)
-        const purged = await apiContext.delete(`${API}/pictures/scrapheap`, {
-          data: { picture_ids: created, include_protected: false, confirm_token: confirmToken },
-        })
-        expect(purged.ok(), await purged.text()).toBe(true)
+      try {
+        if (created.length) await purgeCrops(apiContext)
+      } finally {
+        await unstackSource(apiContext)
+        created.length = 0
+        sourceId = null
       }
+    })
+
+    async function purgeCrops(apiContext) {
+      for (const id of created) {
+        const res = await apiContext.delete(`${API}/pictures/${id}`)
+        expect(res.ok(), await res.text()).toBe(true)
+      }
+      const preview = await apiContext.post(`${API}/pictures/scrapheap/delete-preview`, {
+        data: { picture_ids: created },
+      })
+      expect(preview.ok(), await preview.text()).toBe(true)
+      const { total_count: total, confirm_token: confirmToken } = await preview.json()
+      expect(total, 'the purge must name only the crops this test made').toBe(created.length)
+      const purged = await apiContext.delete(`${API}/pictures/scrapheap`, {
+        data: { picture_ids: created, include_protected: false, confirm_token: confirmToken },
+      })
+      expect(purged.ok(), await purged.text()).toBe(true)
+    }
+
+    async function unstackSource(apiContext) {
       if (sourceId != null) {
         const { stack_id: stackId } = await metadata(apiContext, sourceId)
         if (stackId != null) {
@@ -224,9 +235,7 @@ test.describe('lightbox editing', () => {
           expect(res.ok(), await res.text()).toBe(true)
         }
       }
-      created.length = 0
-      sourceId = null
-    })
+    }
 
     test('each framing crops to its size as a new member of the stack, and the original is untouched', async ({
       page,
@@ -245,8 +254,9 @@ test.describe('lightbox editing', () => {
       const W = before.width
       const H = before.height
 
-      // The sizes worked out here from the stored face and the picture, not
-      // from the app's own framing code. One pixel of slack for rounding.
+      // The sizes the framings promise, restated from their definition
+      // (utils/cropFramings.js) against the stored face and the picture, and
+      // read back from the server's file. One pixel of slack for rounding.
       const [x1, y1, x2, y2] = face.bbox
       const largest = (aspect) => (W / H > aspect ? [H * aspect, H] : [W, W / aspect])
       const buckets = [
@@ -421,7 +431,8 @@ test.describe('lightbox editing', () => {
     test('a face can be given to an existing person', async ({ page, grid, lightbox, apiContext }) => {
       await grid.goto()
       const unnamed = await withOneUnnamedFace(apiContext, await editablePictures(page, apiContext))
-      // The second such picture: the first is the create test's.
+      // Another picture than the create test's, so a cleanup that failed there
+      // cannot hand this test a face that already has a person.
       const target = unnamed[1] ?? unnamed[0]
       expect(target, 'the grid should show a picture with an unnamed face').toBeTruthy()
       const listed = await (await apiContext.get(`${API}/characters`)).json()
@@ -464,6 +475,7 @@ test.describe('lightbox editing', () => {
       const ids = await editablePictures(page, apiContext)
       pictureId = ids[4]
       const before = await metadata(apiContext, pictureId)
+      expect(before.description, 'the seeded picture has a description').toBeTruthy()
       await openPicture(page, lightbox, pictureId)
 
       const rotates = []
