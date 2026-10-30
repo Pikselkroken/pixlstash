@@ -6302,16 +6302,6 @@ only after each row is committed, so "nothing imported" and "the run is gone"
 cannot both be true, and saying it anyway would tell the reader their run was
 destroyed for nothing.
 
-**A checkpoint that landed without its previews gets its own sentence.** The
-import copies each checkpoint's samples into `<stem>_samples/` beside it, and a
-failed copy is deliberately *not* a failed file — losing a preview must not cost
-the weights, so the server leaves the outcome `imported` with `sample_count: 0`
-and a `detail`. That means the status counts the receipt is otherwise built from
-cannot see it, and a receipt built from them alone would call a run whose
-previews were lost a clean import. It is named separately rather than folded
-into the failure count, because the checkpoint is genuinely on the shelf and
-telling someone otherwise is the worse error.
-
 **`Add file` is the same step's loose-file half, and it reuses `FolderBrowser`
 in a file mode rather than an `<input type=file>`.** The file is on the machine
 running PixlStash and the server copies it there, so an upload would push a
@@ -6461,14 +6451,16 @@ bar (amber while live), base / steps / date chips and an amber-outlined
 "No final file yet", and the rail's Training section repeats it. A failed run
 that saved checkpoints stays importable, as a stopped one is.
 
-**Selection.** A click, Enter or Space picks; a double-click opens a run
-PixlStash trained (the second click of the pair does not toggle, so the run stays
-picked). Right-click, the ContextMenu key or Shift+F10 opens a menu anchored to
+**Selection.** A click, Enter or Space picks; a double-click picks and opens a
+run PixlStash trained (the pair's second click does not toggle). The view does
+not follow the picture grid's `gridOpenGesture`: like the Workflow set grid, a
+click here always picks. Right-click, the ContextMenu key or Shift+F10 opens a menu anchored to
 the pointer: the card becomes the selection unless it is already in it, and the
 menu offers **Open run** (a job's run), the pill's **Import** verb, **Stop
 training** (a run still training; Skip previews stays on the rail, which polls
-the phase the job list lacks) and Select all / Clear selection. Focus returns to
-the card when it closes. Finished runs gather into a
+the phase the job list lacks) and Select all / Clear selection. It reads its
+card by key from the live list, so a reload while it is open acts on the job as
+it is now. Focus returns to the card when it closes. Finished runs gather into a
 batch; a live run is picked on its own (picking it replaces the batch, and a
 finished run picked next replaces it), and is never importable. The pill shows
 only while something importable is picked: "N runs · M checkpoints ▾" (Select

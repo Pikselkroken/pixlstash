@@ -121,7 +121,7 @@
           :data-run-index="index"
           :data-run-key="card.key"
           @click="$event.detail > 1 || toggle(card)"
-          @dblclick="openCard(card)"
+          @dblclick="onCardDblClick(card)"
           @contextmenu.prevent="openMenu(card, $event.clientX, $event.clientY)"
           @focus="cursor = index"
           @keydown.enter.prevent="toggle(card)"
@@ -551,7 +551,11 @@ const working = ref(false);
 const countMenuOpen = ref(false);
 const cardMenuOpen = ref(false);
 const cardMenuAt = ref([0, 0]);
-const menuCard = ref(null);
+const menuKey = ref("");
+/** Read live, so a reload while the menu is open acts on the current job. */
+const menuCard = computed(
+  () => cards.value.find((card) => card.key === menuKey.value) ?? null,
+);
 const stepMenuOpen = ref(false);
 const destMenuOpen = ref(false);
 
@@ -569,6 +573,15 @@ const openJob = computed(
 
 function closeRun() {
   router.push({ name: "models-runs" });
+}
+
+/**
+ * The pair's first click toggled (the second is ignored), so a card that was
+ * already selected is picked again before its page opens.
+ */
+function onCardDblClick(card) {
+  if (!isChosen(card)) toggle(card);
+  openCard(card);
 }
 
 /** A run PixlStash trained has its own page; one trained elsewhere has none. */
@@ -596,7 +609,7 @@ async function openMenu(card, x, y) {
   }
   cardMenuOpen.value = false;
   await nextTick();
-  menuCard.value = card;
+  menuKey.value = card.key;
   cardMenuAt.value = [x, y];
   cardMenuOpen.value = true;
 }
@@ -1033,17 +1046,20 @@ function batchReceipt(imported, failed) {
 }
 
 /* The global ink outline, drawn inside the card so it stays clear of the
-   selection ring outside it. */
+   selection ring outside it, and both show on a focused selected card. */
 .tr-card:focus-visible {
   outline-offset: calc(var(--focus-width) * -1);
 }
 
 /* The Workflow set card's selection mark (`ModelSetCard`'s `.msc--on`): a ring
-   off the card in the active ink. A left rail ran down the previews and
-   stopped at the body's wash, which read as a stray edge. */
-.tr-card--checked:not(:focus-visible) {
-  outline: var(--space-1) solid var(--active-bar);
-  outline-offset: var(--space-1);
+   off the card in the active ink, `--space-1` wide and `--space-1` out. Drawn as
+   two spread shadows rather than an outline, because the focus ring above is
+   the outline. A left rail ran down the previews and stopped at the body's
+   wash, which read as a stray edge. */
+.tr-card--checked {
+  box-shadow:
+    0 0 0 var(--space-1) rgb(var(--v-theme-background)),
+    0 0 0 calc(var(--space-1) * 2) var(--active-bar);
 }
 
 /* The New tile leads the grid, dashed like the set grid's New workflow set:

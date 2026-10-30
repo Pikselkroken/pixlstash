@@ -9565,7 +9565,10 @@ previews are the trainer's working output, the Training runs view reads them in
 the run folder, and copying every step's set onto the shelf put a folder of
 pictures beside each checkpoint that nothing on the shelf shows (owner ruling,
 2026-10-30). `delete_after_import` unlinks the checkpoints it took and nothing
-else, so the samples stay in the run either way.
+else, so the samples stay on disk in the run folder either way. A folder left
+with no checkpoint is no longer listed as a run (`read_output_root` needs one),
+so after a deleting import its previews are reachable from the file manager and
+not from the app.
 
 Imports before that ruling copied each checkpoint's previews into a directory
 named from its own stem — `JimmyVehicle.safetensors` → `JimmyVehicle_samples/`,

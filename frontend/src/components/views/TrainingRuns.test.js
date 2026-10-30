@@ -1023,6 +1023,30 @@ describe("the runs PixlStash trains (#2118)", () => {
     expect(card.attributes("aria-selected")).toBe("true");
   });
 
+  it("keeps an already-selected card selected when it is double-clicked open", async () => {
+    listTrainingJobs.mockResolvedValue([job()]);
+    const wrapper = await openWith([run("Clementine_abcd1234")]);
+    const card = cardNamed(wrapper, "Clementine_abcd1234");
+    await card.trigger("click");
+    for (const detail of [1, 2]) {
+      card.element.dispatchEvent(new MouseEvent("click", { detail, bubbles: true }));
+    }
+    await card.trigger("dblclick");
+    expect(card.attributes("aria-selected")).toBe("true");
+    expect(nav.push).toHaveBeenCalledTimes(1);
+  });
+
+  it("acts on the job as it is now, not as it was when the menu opened", async () => {
+    listTrainingJobs.mockResolvedValue([job()]);
+    const wrapper = await openWith([run("Clementine_abcd1234")]);
+    await cardNamed(wrapper, "Clementine_abcd1234").trigger("contextmenu");
+    expect(wrapper.find("[data-testid='tr-menu-stop']").exists()).toBe(true);
+    listTrainingJobs.mockResolvedValue([job({ status: "stopping" })]);
+    await useTrainingRunsStore().loadJobs();
+    await settle(wrapper);
+    expect(wrapper.find("[data-testid='tr-menu-stop']").exists()).toBe(false);
+  });
+
   it("opens nothing for a run trained elsewhere", async () => {
     const wrapper = await openWith([run("Foxglove")]);
     await cardNamed(wrapper, "Foxglove").trigger("dblclick");
@@ -1069,13 +1093,16 @@ describe("the runs PixlStash trains (#2118)", () => {
     listTrainingJobs.mockResolvedValue([job()]);
     cancelTrainingJob.mockResolvedValue({});
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
-    const wrapper = await openWith([run("Clementine_abcd1234")]);
-    await cardNamed(wrapper, "Clementine_abcd1234").trigger("contextmenu");
-    await wrapper.find("[data-testid='tr-menu-stop']").trigger("click");
-    await settle(wrapper);
-    expect(confirm).toHaveBeenCalled();
-    expect(cancelTrainingJob).toHaveBeenCalledWith(7);
-    confirm.mockRestore();
+    try {
+      const wrapper = await openWith([run("Clementine_abcd1234")]);
+      await cardNamed(wrapper, "Clementine_abcd1234").trigger("contextmenu");
+      await wrapper.find("[data-testid='tr-menu-stop']").trigger("click");
+      await settle(wrapper);
+      expect(confirm).toHaveBeenCalled();
+      expect(cancelTrainingJob).toHaveBeenCalledWith(7);
+    } finally {
+      confirm.mockRestore();
+    }
   });
 
   it("offers no Stop for a trained run still finishing", async () => {
