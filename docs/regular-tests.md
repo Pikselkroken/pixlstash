@@ -91,6 +91,23 @@ shrinks as automated coverage grows.
 The spec asserts the thumbnail URL shape before extracting its picture ID, so
 missing or placeholder sources fail with the actual `src` in the diagnostic.
 
+## Undo and redo — `undo-redo.spec.js`
+
+Changes are made through the API with the page's own `X-Client-Id`, so the tab
+treats them as its own; every verdict is read back from the server. The toolbar
+control is mounted on Duplicates only (#2160 removed it from the grid toolbar),
+so its checks run there. Cleanup takes back each test's own operation by id.
+
+| Test | Covers | Status |
+|------|--------|--------|
+| Ctrl+Z reverts … on the server, Ctrl+Y redoes it | One test per change kind: Scrapheap move, tag add, tag remove, rating, set add, character assignment, rotation; exactly one undo and one redo request | ✅ |
+| names the last operation, and its buttons undo and redo it | `UndoControl` accessible names; its Undo and Redo buttons | ✅ |
+| the History picker undoes back to a step, newest first, and no further | Preview range, per-step `POST /operations/{id}/undo` order, the step before survives | ✅ |
+| Ctrl+Z belongs to the field being typed in | Grid search, lightbox tag entry and description: the text is undone, the library is not, the description is not saved | ✅ |
+| Ctrl+Z in the lightbox undoes and keeps the lightbox open | Lightbox's own binding and receipt | ✅ |
+| a read-only session: undo is inert, and the control says why | Chord and control make no `/operations` call; the control and History explain why (the chord itself is silent) | ✅ |
+| nothing to undo: the control is disabled and Ctrl+Z does nothing | Served an empty stack (undo/redo POSTs stubbed off the real log): disabled control, "Nothing to undo." notice, no POST | ✅ |
+
 ## Picture Detail (Lightbox) — `lightbox.spec.js` (plan §4)
 | Test | Covers | Status |
 |------|--------|--------|
