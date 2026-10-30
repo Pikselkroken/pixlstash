@@ -77,9 +77,14 @@ def _model_files() -> tuple[list[str], list[str]]:
     """
     checkpoints, loras = [], []
     for path in sorted(MODEL_FOLDER.rglob("*.safetensors")):
-        with path.open("rb") as fh:
-            (length,) = struct.unpack("<Q", fh.read(8))
-            header = json.loads(fh.read(length))
+        try:
+            with path.open("rb") as fh:
+                (length,) = struct.unpack("<Q", fh.read(8))
+                header = json.loads(fh.read(length))
+        except (OSError, struct.error, ValueError) as exc:
+            # A shelf spec's move can leave a file half copied for a moment.
+            sys.stderr.write(f"[fake-comfyui] skipping unreadable {path.name}: {exc}\n")
+            continue
         is_lora = any("lora" in key.lower() for key in header)
         (loras if is_lora else checkpoints).append(path.name)
     return checkpoints, loras
@@ -252,8 +257,12 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _body(self):
-        length = int(self.headers.get("Content-Length") or 0)
-        return json.loads(self.rfile.read(length) or b"null")
+        """The request's JSON, or ``None`` when it cannot be read as JSON."""
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            return json.loads(self.rfile.read(length) or b"null")
+        except ValueError:
+            return None
 
     def do_GET(self):
         url = urlsplit(self.path)
@@ -337,7 +346,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         if urlsplit(self.path).path == "/__fake/fail":
-            mode = (self._body() or {}).get("mode")
+            body = self._body()
+            mode = body.get("mode", "") if isinstance(body, dict) else ""
             if mode not in FAIL_MODES:
                 return self._send(400, {"error": f"mode is one of {FAIL_MODES}"})
             with _lock:
