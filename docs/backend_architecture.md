@@ -11760,7 +11760,9 @@ calls except each run's last swap counters.
 - **Memory.** While the run waits or trains: the card's used and total (NVML)
   and the machine's RAM, and the trainer's own share from its process tree
   (NVML's per-process figure, resident memory) where the platform reports one,
-  else null. Paging is more than 32 MB through swap between two reads.
+  else null. Paging is more than 32 MB through swap between two reads while
+  less than 10% of RAM is available; with plenty free, swap traffic is the OS
+  moving idle pages, not pressure on the run.
 
 **The cover.** `PUT /training/jobs/{id}/cover {step}` is "Use this step". Before
 the run is on the shelf it records `training_run.cover_step`, and
