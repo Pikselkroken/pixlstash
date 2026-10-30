@@ -9073,7 +9073,10 @@ like any folder added by hand.
   parent holding two or more category folders to that parent (`ComfyUI/models`),
   and keeps a lone category folder as itself, so an `extra_model_paths.yaml`
   entry pointing a category at a home folder does not catalogue the home folder.
-  `custom_nodes` is skipped: its parent is the install.
+  `custom_nodes` is skipped: its parent is the install. So is any folder
+  inside it, matched case-insensitively for a Windows path: a node pack that
+  registers its own bundled assets (KJNodes' `fonts` and `intrinsic_loras`)
+  would otherwise make the pack itself a models root.
 - **Same checks as the create route.** `register_comfyui_model_folders` calls the
   route's own `register_model_folder`; a path already covered, not on this
   machine (a remote ComfyUI), or Docker without a host path is logged and

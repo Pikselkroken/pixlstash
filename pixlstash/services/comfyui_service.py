@@ -2765,7 +2765,9 @@ def comfyui_model_roots(base_url: str) -> list[str]:
     of one category alone under their parent are returned as themselves, so a
     ``loras:`` entry pointing straight at ``~/loras`` does not turn into the
     whole home folder. ``custom_nodes`` is skipped: its parent is the ComfyUI
-    install, not models.
+    install, not models. So is any folder inside it: a node pack that registers
+    its own bundled assets (KJNodes' ``fonts`` and ``intrinsic_loras``) would
+    otherwise put the pack itself on the shelf as a models root.
 
     Empty when ComfyUI cannot be asked. Whether a root is reachable from this
     machine is the caller's question.
@@ -2787,6 +2789,12 @@ def comfyui_model_roots(base_url: str) -> list[str]:
             type(folder_paths).__name__,
         )
         return []
+    node_paths = folder_paths.get("custom_nodes")
+    node_dirs = [
+        _path_module(path).normcase(_path_module(path).normpath(path)).rstrip("\\/")
+        for path in (node_paths if isinstance(node_paths, list) else [])
+        if isinstance(path, str) and path.strip()
+    ]
     # parent -> {child folder -> the categories that use it}
     by_parent: dict[str, dict[str, set[str]]] = {}
     seps: dict[str, str] = {}
@@ -2797,6 +2805,11 @@ def comfyui_model_roots(base_url: str) -> list[str]:
             if isinstance(path, str) and path.strip():
                 pathmod = _path_module(path)
                 path = pathmod.normpath(path)
+                folded = pathmod.normcase(path)
+                if any(
+                    folded == d or folded.startswith(d + pathmod.sep) for d in node_dirs
+                ):
+                    continue
                 seps[path] = pathmod.sep
                 children = by_parent.setdefault(pathmod.dirname(path), {})
                 children.setdefault(path, set()).add(category)
