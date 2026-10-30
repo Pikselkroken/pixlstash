@@ -201,8 +201,9 @@
                  folder otherwise reads as one that is merely unfinished. -->
             <span
               v-if="!card.live && card.job?.error"
-              class="tr-card-note"
+              class="tr-card-note tr-card-reason"
               data-testid="tr-card-reason"
+              :title="card.job.error"
               >{{ card.job.error }}</span
             >
             <span
@@ -1146,6 +1147,16 @@ function batchReceipt(imported, failed) {
 .tr-card-note {
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-background), 0.7);
+}
+
+/* A run failed before its reason was summarised still carries the trainer's
+   whole paragraph; clamp it, and `title` keeps the full text reachable. */
+.tr-card-reason {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
 }
 
 .tr-loading {
