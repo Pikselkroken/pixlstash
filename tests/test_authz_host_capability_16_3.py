@@ -32,6 +32,7 @@ import subprocess
 import tempfile
 
 import pytest
+from starlette.testclient import TestClient
 
 from pixlstash.auth import (
     READ_BLOCKED_GET_PATHS,
@@ -566,7 +567,6 @@ def _owner_env():
     """Real Server + owner cookie login. ``trusted_proxies=["testclient"]`` lets a
     test spoof the real client IP via ``X-Forwarded-For``; without the header the
     in-process ``testclient`` peer is treated as loopback."""
-    from starlette.testclient import TestClient
 
     tmp = tempfile.TemporaryDirectory()
     cfg = os.path.join(tmp.name, "server-config.json")
@@ -819,7 +819,6 @@ def test_tagger_diagnostics_is_local_and_the_any_token_routes_carry_no_host_path
             assert minted.status_code == 200, minted.text
             # A cookie-less client: the middleware prefers the owner's session
             # cookie over a Bearer token, which would never exercise the scope.
-            from starlette.testclient import TestClient
 
             anon = TestClient(server.api, raise_server_exceptions=True)
             share = {"Authorization": f"Bearer {minted.json()['token']}"}
@@ -938,7 +937,6 @@ def test_owner_only_path_disclosing_gets_survive_the_documented_gate_rollback():
             },
         )
         assert minted.status_code == 200, minted.text
-        from starlette.testclient import TestClient
 
         anon = TestClient(server.api, raise_server_exceptions=True)
         share = {"Authorization": f"Bearer {minted.json()['token']}"}
@@ -1410,7 +1408,6 @@ _RESCAN_HOOK = f"{API}/test-hooks/reference-folders/{{folder_id}}/rescan"
 @contextlib.contextmanager
 def _test_hooks_owner_env():
     """Owner-authenticated server with ``enable_test_hooks`` ON."""
-    from starlette.testclient import TestClient
 
     tmp = tempfile.TemporaryDirectory()
     cfg = os.path.join(tmp.name, "server-config.json")
@@ -1559,7 +1556,6 @@ def test_test_hooks_refuse_read_and_share_tokens():
     resource-scoped share token reaches either hook, from loopback. The token
     reads ``/pictures`` (it is live) and the owner reaches both hooks (they
     resolve), so each 403 is a refusal, not a dead token or a dead path."""
-    from starlette.testclient import TestClient
 
     with _test_hooks_owner_env() as env:
         server, owner = env["server"], env["owner"]
