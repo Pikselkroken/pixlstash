@@ -5602,10 +5602,10 @@ def test_importing_a_run_registers_it_as_one_stack(shelf_env, import_folders):
 
 # ── The imported samples, read back off the shelf ───────────────────────────
 #
-# The run's previews travel with its weights, so the same images are reachable
-# twice: from the output root before the import (the routes above) and from the
-# destination folder afterwards (these). The containment story is the same one,
-# with the run replaced by a `model_file` row.
+# Imports before 2026-10-30 copied a run's previews into `<stem>_samples/`
+# beside each checkpoint, and these routes still read them there. The
+# containment story is the run routes' one, with the run replaced by a
+# `model_file` row.
 
 
 def _import_clementine(env, folders, *, steps=None):
@@ -5632,32 +5632,32 @@ def _run_samples(folders, *pairs):
         )
 
 
-def test_an_imported_runs_samples_are_listed_and_served_off_the_shelf(
+def test_an_import_leaves_the_samples_and_an_earlier_copy_is_still_served(
     shelf_env, import_folders
 ):
-    """The positive control for both routes, and the bare final's cover rule at
-    the same time: it carries no step of its own, so it takes the highest step's
-    previews rather than showing nothing."""
+    """An import takes the weights only: the previews stay in the run. A
+    `<stem>_samples/` an earlier import copied is still listed and served, which
+    is the positive control for both routes."""
     _run_samples(import_folders, (500, 0), (500, 1))
     ids, files = _import_clementine(shelf_env, import_folders)
+    assert all("sample_count" not in f for f in files)
+    assert not list(import_folders.destination_dir.glob("*_samples")), (
+        "the import copied the run's previews onto the shelf"
+    )
+    assert len(list((import_folders.run_dir / "samples").iterdir())) == 2
 
     final = ids["Clementine.safetensors"]
-    stepped = ids["Clementine_000000500.safetensors"]
-    assert {f["filename"]: f["sample_count"] for f in files} == {
-        "Clementine.safetensors": 2,
-        "Clementine_000000500.safetensors": 2,
-    }
+    earlier = import_folders.destination_dir / "Clementine_samples"
+    earlier.mkdir()
+    for sample in (import_folders.run_dir / "samples").iterdir():
+        (earlier / sample.name).write_bytes(sample.read_bytes())
 
     listed = shelf_env.owner.get(f"{API}/models/{final}/samples")
     assert listed.status_code == 200, listed.text
     assert listed.json()["samples"] == [
         "1712345678901__000000500_0.jpg",
         "1712345678901__000000500_1.jpg",
-    ], "the stack cover listed no previews - the blank-cover failure"
-    assert (
-        shelf_env.owner.get(f"{API}/models/{stepped}/samples").json()["samples"]
-        == listed.json()["samples"]
-    )
+    ]
 
     served = shelf_env.owner.get(
         f"{API}/models/{final}/samples/1712345678901__000000500_1.jpg"
@@ -5724,12 +5724,12 @@ def test_a_non_image_in_a_models_samples_is_never_served_or_listed(
     """Same allowlist as the run route, for the same reason: the directory is on
     the owner's disk and anything can be dropped into it, and `mimetypes` would
     label this text/html and serve it from our own origin."""
-    _run_samples(import_folders, (500, 0))
     ids, _ = _import_clementine(shelf_env, import_folders, steps=[None])
     model_id = ids["Clementine.safetensors"]
-    (import_folders.destination_dir / "Clementine_samples" / "note.html").write_text(
-        "<script>alert(1)</script>"
-    )
+    samples = import_folders.destination_dir / "Clementine_samples"
+    samples.mkdir()
+    (samples / "1712345678901__000000500_0.jpg").write_bytes(b"\xff\xd8\xff")
+    (samples / "note.html").write_text("<script>alert(1)</script>")
 
     listed = shelf_env.owner.get(f"{API}/models/{model_id}/samples")
     assert "note.html" not in listed.json()["samples"], (

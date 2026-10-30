@@ -841,39 +841,6 @@ describe("importReceipt", () => {
     ).toContain("2 checkpoints could not be copied and were left in the run.");
   });
 
-  it("names a checkpoint that landed without its previews", () => {
-    // The server keeps such a file `imported` on purpose - losing a preview must
-    // not cost the weights - so the status counts cannot see it, and a receipt
-    // built from them alone would call this a clean import. It is not folded
-    // into the failure count either: the checkpoint is genuinely on the shelf.
-    expect(
-      importReceipt({
-        run_name: "Clementine",
-        files: [
-          { status: "imported", sample_count: 2 },
-          {
-            status: "imported",
-            sample_count: 0,
-            detail: "no room for previews",
-          },
-        ],
-      }),
-    ).toBe(
-      "Imported 2 checkpoints from Clementine. 1 checkpoint landed without its training previews.",
-    );
-  });
-
-  it("says nothing about previews for a run that had none", () => {
-    // `sample_count: 0` with no detail is a run with no samples at all, which is
-    // ordinary and not worth a sentence.
-    expect(
-      importReceipt({
-        run_name: "Clementine",
-        files: [{ status: "imported", sample_count: 0 }],
-      }),
-    ).toBe("Imported 1 checkpoint from Clementine.");
-  });
-
   it("says the run is gone when it is", () => {
     expect(
       importReceipt({
