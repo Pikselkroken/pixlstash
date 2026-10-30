@@ -6,55 +6,71 @@
     @close="emit('close')"
     @accept="submit"
   >
-    <div class="smd-field">
-      <span class="smd-label" aria-hidden="true">Move them to</span>
-      <!-- The Folders tree, picking (#2204): any subfolder is a destination,
-           and each drive shows its free space. Locked folders and the folder
-           every file is already in are refused. -->
-      <div ref="treeBoxEl" class="smd-tree">
-        <ModelFolderTree
-          ref="treeRef"
-          mode="pick"
-          label="Move them to"
-          :selected="destination"
-          :disabled="refused"
-          @select="pick"
+    <!-- A drop or a paste already named the place, so the dialog only says
+         what goes where. It gets here only when the move is a copy across
+         drives (or one a drive could not be measured for): a rename on one
+         drive starts without it. -->
+    <template v-if="confirming">
+      <p class="smd-lead" data-testid="shelf-move-route">
+        Move <strong>{{ what }}</strong> from <strong>{{ fromName }}</strong>
+        to <strong>{{ toName }}</strong>.
+      </p>
+      <p class="smd-note">
+        {{ formatModelSize(totalBytes) }}. {{ mechanism }}.
+      </p>
+    </template>
+
+    <template v-else>
+      <div class="smd-field">
+        <span class="smd-label" aria-hidden="true">Move them to</span>
+        <!-- The Folders tree, picking (#2204): any subfolder is a destination,
+             and each drive shows its free space. Locked folders and the folder
+             every file is already in are refused. -->
+        <div ref="treeBoxEl" class="smd-tree">
+          <ModelFolderTree
+            ref="treeRef"
+            mode="pick"
+            label="Move them to"
+            :selected="destination"
+            :disabled="refused"
+            @select="pick"
+          />
+        </div>
+        <!-- A folder made here is the destination, so the move can go straight
+             into it (#2206). -->
+        <ModelFolderNewRow
+          v-if="destination"
+          :folder-id="destination.folderId"
+          :path="destination.path"
+          :label="destinationName(folders.folders, destination)"
+          :reason="gates.folderVerbReason({ id: destination.folderId })"
+          @created="onCreated"
         />
       </div>
-      <!-- A folder made here is the destination, so the move can go straight
-           into it (#2206). -->
-      <ModelFolderNewRow
-        v-if="destination"
-        :folder-id="destination.folderId"
-        :path="destination.path"
-        :label="destinationName(folders.folders, destination)"
-        :reason="gates.folderVerbReason({ id: destination.folderId })"
-        @created="onCreated"
-      />
-    </div>
 
-    <p v-if="!destinations.length" class="smd-note" role="status">
-      There is nowhere to move these. Register another model folder first.
-    </p>
+      <p v-if="!destinations.length" class="smd-note" role="status">
+        There is nowhere to move these. Register another model folder first.
+      </p>
 
-    <!-- What the move will actually cost, before it starts. The server plans
-         the whole batch inside the POST and refuses it whole, so this is not
-         the safety net; it is the difference between pressing Move on a rename
-         and pressing it on 40 minutes of copying across a USB drive. -->
-    <dl v-else class="smd-facts">
-      <div class="smd-fact">
-        <dt>Files</dt>
-        <dd>{{ itemCount.toLocaleString() }}</dd>
-      </div>
-      <div class="smd-fact">
-        <dt>Size</dt>
-        <dd>{{ formatModelSize(totalBytes) }}</dd>
-      </div>
-      <div class="smd-fact">
-        <dt>How</dt>
-        <dd>{{ mechanism }}</dd>
-      </div>
-    </dl>
+      <!-- What the move will actually cost, before it starts. The server plans
+           the whole batch inside the POST and refuses it whole, so this is not
+           the safety net; it is the difference between pressing Move on a rename
+           and pressing it on 40 minutes of copying across a USB drive. -->
+      <dl v-else class="smd-facts">
+        <div class="smd-fact">
+          <dt>Files</dt>
+          <dd>{{ itemCount.toLocaleString() }}</dd>
+        </div>
+        <div class="smd-fact">
+          <dt>Size</dt>
+          <dd>{{ formatModelSize(totalBytes) }}</dd>
+        </div>
+        <div class="smd-fact">
+          <dt>How</dt>
+          <dd>{{ mechanism }}</dd>
+        </div>
+      </dl>
+    </template>
 
     <p v-if="alreadyThere" class="smd-note" role="status">
       {{ alreadyThere }}
@@ -98,6 +114,7 @@ import ModelFolderNewRow from "./ModelFolderNewRow.vue";
 import ModelFolderTree from "./ModelFolderTree.vue";
 import { DOWNLOADS_KIND, SOURCE_KIND } from "../../api/modelFolders";
 import { destinationName } from "../../composables/useModelCopyDrop";
+import { parentPath } from "../../composables/useModelFolderMove";
 import { useModelFolderGates } from "../../composables/useModelFolderGates";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
@@ -136,6 +153,13 @@ const gates = useModelFolderGates();
 /** `{folderId, path}` picked in the tree, or null. */
 const destination = ref(null);
 const working = ref(false);
+/**
+ * Opened on a place already chosen (a drop or a paste): the dialog states the
+ * move instead of offering the tree. Latched on open, because the host clears
+ * `initialDestination` as it closes and the dialog must not swap to the tree
+ * while it fades out.
+ */
+const confirming = ref(false);
 const treeBoxEl = ref(null);
 const treeRef = ref(null);
 const moveButton = ref(null);
@@ -170,6 +194,32 @@ function onCreated({ folderId, path }) {
   treeRef.value?.reveal(folderId, destination.value?.path ?? "", path);
   destination.value = { folderId, path };
 }
+
+/** The file's name for one file, else how many. */
+const what = computed(() => {
+  if (itemCount.value !== 1) return subtitle.value;
+  return String(props.items[0].relpath ?? "")
+    .replace(/\\/g, "/")
+    .split("/")
+    .pop();
+});
+
+/** The folder the files are in, or how many folders when they differ. */
+const fromName = computed(() => {
+  const names = new Set(
+    props.items.map((item) =>
+      destinationName(folders.folders, {
+        folderId: item.folder_id,
+        path: parentPath(String(item.relpath ?? "").replace(/\\/g, "/")),
+      }),
+    ),
+  );
+  return names.size === 1 ? [...names][0] : `${names.size} folders`;
+});
+
+const toName = computed(() =>
+  destination.value ? destinationName(folders.folders, destination.value) : "",
+);
 
 const subtitle = computed(
   () =>
@@ -242,6 +292,7 @@ watch(
     if (!open) return;
     working.value = false;
     const initial = props.initialDestination;
+    confirming.value = initial != null;
     destination.value = initial
       ? { folderId: Number(initial.folderId), path: initial.path ?? "" }
       : null;
@@ -306,6 +357,13 @@ async function submit() {
   margin: 0;
   font-size: var(--text-sm);
   color: rgb(var(--v-theme-on-surface));
+}
+
+.smd-lead {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-sm);
+  color: rgb(var(--v-theme-on-surface));
+  overflow-wrap: anywhere;
 }
 
 .smd-note {

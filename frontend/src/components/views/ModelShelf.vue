@@ -1310,6 +1310,7 @@ import {
   modelVersion,
   MODEL_COPIES_TYPE,
   movableCopies,
+  moveMechanism,
   quantBadge,
   triggerChip,
   releaseReceipt,
@@ -1784,14 +1785,32 @@ function showMove(copies, destination = null, fromCut = false) {
   moveOpen.value = true;
 }
 
-// A folder in the sidebar's tree took a drop: the tree asks, the shelf owns
-// the dialog.
+// A folder in the sidebar's tree took a drop, or a paste named one: the
+// destination is already chosen, so the only question left is whether to ask.
+// A rename on one drive copies nothing and starts at once, as a folder drop
+// does and as a file manager does; a copy across drives (or a drive that could
+// not be measured) states its cost in the dialog first.
 watch(
   () => store.moveRequest,
-  (request) => {
-    if (request) {
-      showMove(request.copies, request.destination, Boolean(request.fromCut));
+  async (request) => {
+    if (!request) return;
+    const { copies, destination } = request;
+    const fromCut = Boolean(request.fromCut);
+    const { how } = moveMechanism(
+      copies,
+      destination.folderId,
+      foldersStore.deviceByFolderId,
+    );
+    if (how !== "rename" || moves.busy) {
+      showMove(copies, destination, fromCut);
+      return;
     }
+    const started = await moves.start(
+      destination.folderId,
+      copies.items,
+      destination.path,
+    );
+    if (started && fromCut) store.clearCut();
   },
 );
 
@@ -1874,8 +1893,8 @@ async function moveModelsOutFirst(copies) {
 /**
  * A row picks up the selection's movable copies. An unselected row is made the
  * selection first, alone, as a file manager does: what is dragged is what is
- * under the pointer. The drop only opens the Move dialog, so nothing moves on
- * a stray drag either way.
+ * under the pointer. A drop on the same drive moves at once, as a file manager
+ * does; across drives it asks first.
  */
 function onRowDragStart(event, row) {
   if (!store.isSelected(row.id)) {

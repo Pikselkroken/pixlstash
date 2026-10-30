@@ -1,5 +1,6 @@
-// The Move dialog (#2204): the destination is any folder or subfolder, picked
-// in the Folders tree, and a drop or a paste opens it with one already chosen.
+// The Move dialog (#2204): from *Move to…* the destination is any folder or
+// subfolder, picked in the Folders tree; a drop or a paste that needs asking
+// opens it with one already chosen, and it only says what goes where.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
@@ -103,14 +104,28 @@ describe("ShelfMoveDialog", () => {
     expect(moveButton().attributes("disabled")).toBeDefined();
   });
 
-  it("opens pre-chosen from a drop, with Move focused for Enter", async () => {
+  it("states a drop's move from and to, without the tree, Move focused", async () => {
     mountDialog({ initialDestination: { folderId: 1, path: "Lora" } });
     await flushPromises();
-    expect(row(1, "Lora").attributes("aria-selected")).toBe("true");
+    expect(wrapper.find('[role="treeitem"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="shelf-move-route"]').text()).toBe(
+      "Move alice.safetensors from Models to Models/Lora.",
+    );
     expect(document.activeElement).toBe(moveButton().element);
 
     await moveButton().trigger("click");
     await flushPromises();
     expect(startModelMove).toHaveBeenCalledWith(1, ITEMS, "Lora");
+  });
+
+  it("names how many files and folders when a drop carries several", async () => {
+    mountDialog({
+      items: [...ITEMS, { folder_id: 1, relpath: "Lora/bob.safetensors" }],
+      initialDestination: { folderId: 1, path: "VAE" },
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="shelf-move-route"]').text()).toBe(
+      "Move 2 files from 2 folders to Models/VAE.",
+    );
   });
 });
