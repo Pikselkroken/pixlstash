@@ -1,5 +1,7 @@
 import { test, expect } from "../fixtures/test.js";
 import {
+  RETIRED_CHECKPOINT,
+  checkpointOf,
   listWorkflows,
   made,
   ok,
@@ -14,14 +16,16 @@ import {
 // spec (`workflow-tab-editor.spec.js`) holds the layout and the timing; this
 // one holds that what the bar says happened, happened on the server.
 //
-// Each test stores its own workflow: the seeded LoRA graph with an upscale
-// stage after it. Two edits, because they save differently: switching the
-// stage off is stored as a default and makes no version, and taking the LoRA
-// loader out is written into the graph and does. Where a version must move,
-// the loader count is the content checked, never the version number alone: a
-// restore that bumped the number and kept the graph would pass a number check.
+// Each test stores its own workflow (`REPAIR_GRAPH`): an upscale stage, and a
+// checkpoint the e2e shelf does not have. Two edits, because they save
+// differently: switching the stage off is stored as a default and makes no
+// version, and choosing the shelf's checkpoint through Change model set… is a
+// repair written into the graph, which does. Where a version must move, the
+// graph's checkpoint is the content checked, never the version number alone:
+// a restore that bumped the number and kept the graph would pass a number
+// check.
 
-const LORA = "DetailTweaker_v2";
+const SHELF_CHECKPOINT = "RealVisXL_V4.safetensors";
 
 let id;
 
@@ -46,10 +50,6 @@ async function versions(api) {
   return (await ok(await api.get(`${workflowPath(id)}/versions`), "read the versions")).versions;
 }
 
-/** How many LoRA loaders the stored graph has now. */
-async function loaders(api) {
-  return (await ok(await api.get(`${workflowPath(id)}/lora-chain`), "read the chain")).loaders.length;
-}
 
 /** Switch the upscale stage off: one unsaved change. */
 async function toggleStage(workflows) {
@@ -57,13 +57,12 @@ async function toggleStage(workflows) {
   await expect(workflows.rail.getByTestId("wftab-draft-count")).toHaveText(/1 unsaved change/);
 }
 
-/** Take the LoRA loader out in Edit LoRAs, then Save: a new version. */
-async function removeLoraAndSave(page, workflows) {
-  await workflows.rail.getByRole("button", { name: "Edit LoRAs" }).click();
-  const dialog = page.locator(".app-dialog").filter({ hasText: "Edit LoRAs" });
-  await dialog.getByRole("button", { name: `Remove ${LORA}` }).click();
-  await dialog.getByTestId("wftab-loras-done").click();
-  await expect(dialog).toBeHidden();
+/** Fill the checkpoint from the shelf's one set, then Save: a new version. */
+async function repairAndSave(page, workflows) {
+  await workflows.rail.getByRole("button", { name: "Change model set…" }).click();
+  const menu = page.getByTestId("wftab-use-set-menu");
+  await menu.locator("[data-set]").filter({ hasText: "RealVisXL V4" }).click();
+  await expect(menu).toBeHidden();
   await expect(workflows.rail.getByTestId("wftab-draft-count")).toHaveText(/1 unsaved change/);
   await workflows.rail.getByTestId("wftab-save").click();
   await expect(bar(workflows)).toBeHidden();
@@ -95,16 +94,16 @@ test("Save writes a new version, and the version menu lists it", async ({
   workflows,
 }) => {
   const before = await versions(apiContext);
-  expect(await loaders(apiContext)).toBe(1);
+  expect(await checkpointOf(apiContext, id)).toBe(RETIRED_CHECKPOINT);
 
-  await removeLoraAndSave(page, workflows);
+  await repairAndSave(page, workflows);
   const next = before[0].version + 1;
   await expect(notice(page, `Saved as version ${next}.`)).toBeVisible();
 
   const after = await versions(apiContext);
   expect(after).toHaveLength(before.length + 1);
   expect(after[0]).toMatchObject({ version: next, current: true });
-  expect(await loaders(apiContext)).toBe(0);
+  expect(await checkpointOf(apiContext, id)).toBe(SHELF_CHECKPOINT);
   expect((await changes(apiContext)).count).toBe(0);
 
   await workflows.rail.getByTestId("wftab-version").click();
@@ -144,9 +143,9 @@ test("Go back to an older version moves the head, and its Undo moves it back", a
   workflows,
 }) => {
   const first = (await versions(apiContext))[0].version;
-  await removeLoraAndSave(page, workflows);
+  await repairAndSave(page, workflows);
   await expect(notice(page, `Saved as version ${first + 1}.`)).toBeVisible();
-  expect(await loaders(apiContext)).toBe(0);
+  expect(await checkpointOf(apiContext, id)).toBe(SHELF_CHECKPOINT);
 
   await workflows.rail.getByTestId("wftab-version").click();
   const menu = page.getByTestId("wftab-version-menu");
@@ -158,10 +157,10 @@ test("Go back to an older version moves the head, and its Undo moves it back", a
   const back = notice(page, `Back on version ${first}, kept as version ${first + 2}.`);
   await expect(back).toBeVisible();
   // The head is the old graph again, kept as a new version.
-  expect(await loaders(apiContext)).toBe(1);
+  expect(await checkpointOf(apiContext, id)).toBe(RETIRED_CHECKPOINT);
   expect((await versions(apiContext))[0]).toMatchObject({ version: first + 2, current: true });
 
   await back.locator(".notice-action").filter({ hasText: "Undo" }).click();
   await expect(notice(page, `Back on version ${first + 1}, kept as version ${first + 3}.`)).toBeVisible();
-  expect(await loaders(apiContext)).toBe(0);
+  expect(await checkpointOf(apiContext, id)).toBe(SHELF_CHECKPOINT);
 });

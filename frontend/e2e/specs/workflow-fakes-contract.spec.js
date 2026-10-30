@@ -1,5 +1,5 @@
 import { test, expect } from "../fixtures/test.js";
-import { WF as TAB_WF, stubWorkflows } from "../fixtures/workflowTabStubs.js";
+import { CKPT, WF as TAB_WF, stubWorkflows } from "../fixtures/workflowTabStubs.js";
 import { WF as POPUP_WF, stubWorkflow } from "../fixtures/workflowStubs.js";
 import {
   API,
@@ -33,8 +33,10 @@ import {
 // Not compared: `POST /workflows/run` and the poll's `finished[]` need a run
 // (`workflow-run.spec.js` holds those against the server's models, through
 // `tests/test_e2e_workflow_run_fakes.py`); `GET /comfyui/pixlstash-node`
-// needs a ComfyUI; the `/users/me/config` fakes are the real body with one
-// key added; `/characters/{id}/thumbnail` is an SVG.
+// needs a ComfyUI, and so does `PUT /workflows/{id}/lora-chain`, even as a
+// dry run (it asks ComfyUI what each node hands on); the `/users/me/config`
+// fakes are the real body with one key added; `/characters/{id}/thumbnail` is
+// an SVG.
 
 /** Objects whose keys are data (a stage's name, a file's), not field names. */
 const MAPS = new Set(["stages", "stage_details", "swaps", "takes", "choices", "picks"]);
@@ -99,7 +101,8 @@ function drift(fake, real, path, found, unverified) {
  * worth comparing: changes wait before they are read and saved, and a save
  * comes before the versions are read again. `on` is the real workflow the
  * call is made on: `seed` (the seeded LoRA workflow), `drawn` (the seeded
- * workflow that has pictures) or `own` (one this spec stored, for writes).
+ * workflow that has pictures) or `own` (one this spec stored, with no LoRA
+ * loader, for writes).
  * `fakes` names the fakes that answer it; `before` readies a fake's world.
  */
 const CALLS = [
@@ -121,10 +124,13 @@ const CALLS = [
   { label: "GET /workflows/{id}/changes", path: (id) => `${wf(id)}/changes`, fakes: ["tab", "popup"] },
   { label: "GET /workflows/{id}/versions", path: (id) => `${wf(id)}/versions`, fakes: ["tab", "popup"] },
   {
+    // On a graph with no LoRA loader: a filename LoRA slot is resolved
+    // against ComfyUI's list, and there is no ComfyUI here.
     label: "POST /workflows/run/preflight",
     method: "POST",
     path: () => "/workflows/run/preflight",
     body: (id) => ({ workflow_id: id, values: [] }),
+    on: "own",
     fakes: ["tab", "popup"],
   },
   {
@@ -140,12 +146,14 @@ const CALLS = [
   { label: "GET /characters", path: () => "/characters", fakes: ["popup"] },
   // Writes, on a workflow of this spec's own.
   {
-    // A loader taken out: a stage alone is stored as a default and makes no
-    // version, and the save below must make one.
+    // The checkpoint repaired from the shelf: a stage alone is stored as a
+    // default and makes no version, and the save below must make one.
     label: "PUT /workflows/{id}/changes",
     method: "PUT",
     path: (id) => `${wf(id)}/changes`,
-    body: (id, ctx) => ({ skip_loras: [{ node_id: ctx.loader[id] }] }),
+    body: (id, ctx) => ({
+      models: [{ address: ctx.address[id], filename: "RealVisXL_V4.safetensors" }],
+    }),
     on: "own",
     fakes: ["tab"],
   },
@@ -171,14 +179,6 @@ const CALLS = [
     body: () => ({ dry_run: true }),
     on: "own",
     fakes: ["popup"],
-  },
-  {
-    label: "PUT /workflows/{id}/lora-chain, dry run",
-    method: "PUT",
-    path: (id) => `${wf(id)}/lora-chain`,
-    body: () => ({ entries: [], dry_run: true }),
-    on: "own",
-    fakes: ["tab"],
   },
   {
     label: "POST /workflows/{id}/save",
@@ -279,15 +279,17 @@ test("the Workflows fakes serve nothing the real server does not", async ({
     .flatMap((combination) => combination.models)
     .find((model) => model.kind === "checkpoint")?.id;
   expect(checkpoint, "a checkpoint on the e2e shelf").toBeTruthy();
-  const ctx = { checkpoint, tag: tag(), loader: {} };
+  const ctx = { checkpoint, tag: tag(), address: {} };
   const on = {
     seed: await cardId(apiContext, SEEDED_LORA),
     drawn: drawn.id,
     own: await store(apiContext, `Contract guard ${ctx.tag}`),
   };
-  // The loader each side takes out: the fake's own, and the stored graph's.
-  ctx.loader[on.own] = "10";
-  ctx.loader[TAB_WF] = "7";
+  // The checkpoint loader each side repairs: the fake's own, and the stored
+  // graph's, as its card addresses it.
+  const own = await ok(await apiContext.get(workflowPath(on.own)), "read its own workflow");
+  ctx.address[on.own] = own.card.default_recipe.models.find((m) => m.kind === "checkpoint").address;
+  ctx.address[TAB_WF] = CKPT;
   const real = {};
   for (const call of CALLS) {
     const id = on[call.on ?? "seed"];
