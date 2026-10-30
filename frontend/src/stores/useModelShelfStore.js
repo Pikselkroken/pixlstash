@@ -3568,9 +3568,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   /** The tip under the pointer while a drag is over a folder: `{x, y, text}`. */
   const dropTip = shallowRef(null);
   /**
-   * A move a drop asked for, `{copies, destination, at}`. The Folders tree is
-   * in the sidebar and the Move dialog in `ModelShelf`, so a drop asks here
-   * the way the sidebar asks for a dialog (`requestShell`).
+   * A move a drop or a paste asked for, `{copies, destination, at}`. The
+   * Folders tree is in the sidebar and the move (or its dialog) in
+   * `ModelShelf`, so a drop asks here the way the sidebar asks for a dialog
+   * (`requestShell`).
    */
   const moveRequest = shallowRef(null);
   let moveAsks = 0;
@@ -3680,7 +3681,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   }
 
   /**
-   * Paste the cut into a folder: the Move dialog, pre-chosen to it. One rule
+   * Paste the cut into a folder: a move to it, as a drop asks for. One rule
    * for every way in - `Ctrl V` and *Paste* in the row menu (the open folder),
    * and *Paste here* or `Ctrl V` on a folder row - so each refuses the same
    * way: a locked folder, a cut that has since moved or gone, and a folder

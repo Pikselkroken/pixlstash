@@ -5824,10 +5824,17 @@ end the loop on the first failed reading, losing the receipt and both refreshes
 for a move that actually completed. `watching` is cleared by the reading that
 reported the finish and by nothing else, so it is what the loop tests.
 
-**Four ways in, one dialog (#2204).** Every gesture ends in `ShelfMoveDialog`,
-which states the move in files, bytes and rename-versus-copy before anything
-starts. There is no undo behind a move, which is why the dialog is the
-confirmation, a drop included.
+**Four ways in, and a dialog only when there is something to ask (#2204).**
+*Move to…* always opens `ShelfMoveDialog` on its tree. A drop or a paste has
+already named the place, so it asks only when the move would copy: a rename on
+one drive starts at once, as a file manager does and as a folder drop does.
+Across drives, or when a drive could not be measured, the dialog opens without
+its tree and says, in one sentence, what goes from where to where, then the
+bytes and that it copies. A same-drive move needs no confirmation because it
+is cheap to put back (drag it back) and cannot overwrite: the server refuses a
+name already taken in the destination. That decision is the `store.moveRequest` watcher in
+`ModelShelf`, on `moveMechanism`; a move already running sends the drop to the
+dialog, which says so on its button.
 
 - **Move to…**, on the selection pill and in the row menu, calls `openMove`. The
   dialog opens with **nothing chosen**: the destination is always the reader's
@@ -5847,17 +5854,16 @@ confirmation, a drop included.
   the pointer with the destination, rename or copy, and what the other drive
   gets back (`moveMechanism`, on `device_id` as the server's `same_device`
   measures it). It is its own component so the drag's pointer moves repaint the
-  tip and never the shelf. The drop does not move anything: it calls
-  `store.requestMove`, and `ModelShelf` (which owns the dialog; the tree is in
-  the sidebar) opens it with that folder pre-chosen and focus on **Move**, so
-  Enter confirms.
+  tip and never the shelf. The drop calls `store.requestMove`, and `ModelShelf`
+  (which owns the dialog; the tree is in the sidebar) starts a same-drive move
+  or opens the dialog on that folder with focus on **Move**, so Enter confirms.
 - **Cut and paste**, from the keyboard and from the menus. `Ctrl X`, or
   **Cut** in the row menu and the pill's `⋯`, holds the selection's movable
   copies in `store.cutCopies`, and those rows draw at `--opacity-disabled`
   until the paste. A paste lands in a folder, and every way in ends in
   `store.pasteCut(destination)`, which refuses a locked folder, a cut that has
   since moved or gone, and a folder every cut file is already in, and otherwise
-  calls `store.requestMove` with `fromCut` so the dialog opens pre-chosen:
+  calls `store.requestMove` with `fromCut`, which goes the same way as a drop:
   `Ctrl V` or **Paste** in the row menu (the open folder, so only in a folder
   view; the menu entry shows only while something is cut and says why it is
   disabled elsewhere), and `Ctrl V` on a
@@ -5873,8 +5879,8 @@ drag whose `types` carry `Files` and not the private type, so a row dropped
 short of a folder is never an import, even on the desktop shell, which fills
 `dataTransfer.files` for in-page drags.
 
-**The destination is any folder or subfolder, picked in the tree.** The dialog
-holds `ModelFolderTree` in `pick` mode, which shows each drive's free space and
+**From *Move to…*, the destination is any folder or subfolder, picked in the
+tree.** The dialog holds `ModelFolderTree` in `pick` mode, which shows each drive's free space and
 refuses locked folders and the folder every chosen copy is already in. The pick
 is `{folderId, path}` and goes to the server as `destination_folder_id` and
 `destination_subpath`; the backend's skip rule (backend §25.24) skips only a

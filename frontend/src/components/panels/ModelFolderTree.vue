@@ -270,7 +270,7 @@ import TypeMark from "../widgets/TypeMark.vue";
  * `selected` back so the parent owns the choice.
  *
  * In `browse` the rows also take model rows dragged off the shelf (#2204): a
- * drop asks for the Move dialog, pre-chosen to that folder.
+ * drop asks for a move to that folder.
  */
 const props = defineProps({
   mode: {
@@ -643,8 +643,8 @@ function runEntry(entry) {
     return;
   }
   contextOpen.value = false;
-  // A paste opens the Move dialog, which returns focus to what held it: the
-  // row, not the menu row about to go.
+  // A paste may open the Move dialog, which returns focus to what held it:
+  // the row, not the menu row about to go.
   if (entry.key === "paste") rowEls.get(node.key)?.focus();
   act(entry.key, node);
 }

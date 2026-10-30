@@ -1,8 +1,9 @@
 // Moving models into a subfolder by drag and by cut and paste (#2204).
 //
-// A drop never moves on release: it opens the Move dialog with the
-// destination already chosen, and Enter confirms. So the drag test follows the
-// gesture through to the disk, and the refusals assert that no dialog opens.
+// A drop or a paste on the same drive moves at once, as a file manager does:
+// no dialog asks first (one would only for a copy across drives, which this
+// suite's single disk cannot stage). So the drag test follows the gesture
+// through to the disk, and the refusals assert that nothing moves.
 // Real HTML5 drag had not been exercised in this suite before, so the drag
 // test also records that `dragstart` and `drop` fired: a spec whose drag never
 // started would otherwise pass every refusal for the wrong reason.
@@ -75,20 +76,13 @@ test('a row dropped on a subfolder moves its file there on disk', async ({ page,
   await row.dragTo(shelf.treeRow(folder.id, dest))
   expect(await page.evaluate(() => window.__drags)).toEqual(['dragstart', 'drop'])
 
-  // Pre-chosen: the dialog's own tree has the subfolder picked.
-  const dialog = shelf.moveDialog
-  await expect(dialog).toBeVisible()
-  await expect(
-    dialog.locator(`[role="treeitem"][data-folder-id="${folder.id}"][data-path="${dest}"]`),
-  ).toHaveAttribute('aria-selected', 'true')
-  await page.keyboard.press('Enter')
-  await expect(dialog).toBeHidden()
-
   const landed = join(folder.path, dest, stub.filename)
   await expect.poll(() => existsSync(landed)).toBe(true)
   expect(existsSync(stub.diskPath)).toBe(false)
   // The row goes from the root's view: the file is in the subfolder now.
   await expect(row).toHaveCount(0)
+  // One drive, so a rename: it never asked.
+  await expect(shelf.moveDialog).toHaveCount(0)
 })
 
 test('drops on a locked folder, the source folder or nothing are refused', async ({
@@ -138,7 +132,7 @@ test('drops on a locked folder, the source folder or nothing are refused', async
   expect(existsSync(stub.diskPath)).toBe(true)
 })
 
-test('Ctrl X then Ctrl V in a subfolder opens the move there; Esc clears the cut', async ({
+test('Ctrl X then Ctrl V in a subfolder moves the file there; Esc clears the cut', async ({
   page,
   apiContext,
 }) => {
@@ -167,15 +161,9 @@ test('Ctrl X then Ctrl V in a subfolder opens the move there; Esc clears the cut
   await expect(row).toHaveClass(/shelf-row--cut/)
   await shelf.openFolder(folder.id, dest)
   await page.keyboard.press('Control+v')
-  const dialog = shelf.moveDialog
-  await expect(dialog).toBeVisible()
-  await expect(
-    dialog.locator(`[role="treeitem"][data-folder-id="${folder.id}"][data-path="${dest}"]`),
-  ).toHaveAttribute('aria-selected', 'true')
 
-  // Esc cancels the dialog and moves nothing.
-  await page.keyboard.press('Escape')
-  await expect(dialog).toBeHidden()
-  expect(existsSync(stub.diskPath)).toBe(true)
-  expect(existsSync(join(folder.path, dest, stub.filename))).toBe(false)
+  const landed = join(folder.path, dest, stub.filename)
+  await expect.poll(() => existsSync(landed)).toBe(true)
+  expect(existsSync(stub.diskPath)).toBe(false)
+  await expect(shelf.moveDialog).toHaveCount(0)
 })

@@ -1,10 +1,9 @@
 // Folders as drop targets for model rows dragged off the shelf (#2204).
 //
 // The Folders tree (in the sidebar) takes the drop, and the rules live here:
-// what refuses, what the tip under the pointer says, and that a drop only ASKS
-// for the move.
-// The Move dialog opens pre-chosen and the reader confirms with Enter: a drop
-// is one slip of the pointer, and a move has no undo.
+// what refuses, and what the tip under the pointer says. The drop hands the
+// move to `ModelShelf`, which starts a rename on one drive at once, as a file
+// manager does, and asks first only for a copy across drives.
 
 import { ref } from "vue";
 

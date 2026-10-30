@@ -94,9 +94,10 @@ const getComfyuiReads = vi.fn();
 // Every file passed and the runner still exited 1 (#880's first CI run). It is
 // timing-dependent, so a local run can be green with the same bug present.
 const getModelMoveStatus = vi.fn();
+const startModelMove = vi.fn();
 vi.mock("../../api/modelMoves", () => ({
   getModelMoveStatus: (...args) => getModelMoveStatus(...args),
-  startModelMove: vi.fn(),
+  startModelMove: (...args) => startModelMove(...args),
   cancelModelMove: vi.fn(),
 }));
 
@@ -409,6 +410,7 @@ beforeEach(() => {
   // from an unawaited promise.
   getModelMoveStatus.mockReset();
   getModelMoveStatus.mockResolvedValue({ status: "idle", results: [] });
+  startModelMove.mockReset().mockResolvedValue({ status: "running", results: [] });
   addModelFile.mockReset();
   createStack.mockReset();
   unstackStack.mockReset();
@@ -4574,7 +4576,7 @@ describe("the open folder (#2203)", () => {
       return opened;
     }
 
-    it("cuts with Ctrl X and pastes into the open folder with Ctrl V", async () => {
+    it("cuts with Ctrl X and pastes on the same drive without asking", async () => {
       const { wrapper, store } = await selectLoose();
       await press("x");
       expect(store.cutCopies.items).toEqual([LOOSE]);
@@ -4583,15 +4585,28 @@ describe("the open folder (#2203)", () => {
       store.setFolderScope({ folderId: 1, path: "Lora" });
       await flushPromises();
       await press("v");
+      // A rename on one drive: the move starts, as a file manager's does, and
+      // no dialog asks first.
+      expect(dialog(wrapper).props("open")).toBe(false);
+      expect(startModelMove).toHaveBeenCalledWith(1, [LOOSE], "Lora");
+      // The cut is spent once the move it pasted starts.
+      expect(store.cutCopies).toBe(null);
+      wrapper.unmount();
+    });
+
+    it("asks before a drop it cannot promise is a rename", async () => {
+      const { wrapper, store } = await selectLoose();
+      // The drive was not measured, so the move may copy: it is stated first.
+      useModelFoldersStore().devices = [];
+      store.requestMove(store.movableSelection(), { folderId: 1, path: "Lora" });
+      await flushPromises();
+      expect(startModelMove).not.toHaveBeenCalled();
       expect(dialog(wrapper).props("open")).toBe(true);
       expect(dialog(wrapper).props("items")).toEqual([LOOSE]);
       expect(dialog(wrapper).props("initialDestination")).toEqual({
         folderId: 1,
         path: "Lora",
       });
-      // The cut is spent once the move it pasted starts.
-      dialog(wrapper).vm.$emit("started");
-      expect(store.cutCopies).toBe(null);
       wrapper.unmount();
     });
 
@@ -4630,6 +4645,8 @@ describe("the open folder (#2203)", () => {
 
     it("cuts and pastes from the row menu", async () => {
       const { wrapper, store } = await selectLoose();
+      // Unmeasured, so the paste opens the dialog rather than starting.
+      useModelFoldersStore().devices = [];
       const bar = wrapper.findComponent({ name: "ShelfSelectionBar" });
       const verb = (name) => bar.findAll(`.ctx-item[data-verb='${name}']`);
       // Paste is listed only while something is cut.
