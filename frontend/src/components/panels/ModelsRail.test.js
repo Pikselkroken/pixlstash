@@ -651,6 +651,18 @@ describe("a picked training run (#2169)", () => {
     expect(grid.findAll("img")).toHaveLength(0);
   });
 
+  it("says why a run failed before it had a folder", async () => {
+    const failed = { ...liveJob, status: "error", error: "Dataset build failed" };
+    getTrainingJobLive.mockResolvedValue({ ...failed, rows: [] });
+    const { wrapper } = await mountOnRuns({ jobs: [failed], pick: ["job:u7"] });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(wrapper.get('[data-testid="mrr-reason"]').text()).toBe(
+      "Dataset build failed",
+    );
+    expect(wrapper.find('[data-testid="mrr-stop"]').exists()).toBe(false);
+  });
+
   it("offers no second Stop while the run is already stopping", async () => {
     getTrainingJobLive.mockResolvedValue({ ...liveJob, status: "stopping", rows: [] });
     const { wrapper } = await mountOnRuns({

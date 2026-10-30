@@ -457,6 +457,10 @@ def create_router(server) -> APIRouter:
         completed_at: Optional[datetime] = Field(
             default=None, description="UTC timestamp when the run finished."
         )
+        error: Optional[str] = Field(
+            default=None,
+            description="Why the run failed or stopped, when it says; host paths redacted.",
+        )
         dataset_snapshot_id: Optional[int] = Field(
             default=None,
             description=(
@@ -1019,6 +1023,7 @@ def create_router(server) -> APIRouter:
                 "started_at": job["started_at"],
                 "completed_at": job["completed_at"],
                 "run_name": _run_name(job),
+                "error": job["error"],
                 "dataset_snapshot_id": job["dataset_snapshot_id"],
                 "model_ids": model_ids,
             }

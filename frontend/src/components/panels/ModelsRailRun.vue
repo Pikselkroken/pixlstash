@@ -38,6 +38,13 @@
         </div>
       </dl>
       <LoraLossChart v-if="curve.length > 1" :curve="curve" compact :height="40" />
+      <p
+        v-if="!current.live && current.job?.error"
+        class="mrs-hint"
+        data-testid="mrr-reason"
+      >
+        {{ current.job.error }}
+      </p>
       <p v-if="!card.job" class="mrs-hint">
         Trained outside PixlStash, so its loss was not recorded.
       </p>

@@ -202,6 +202,56 @@ describe("drawing the grid", () => {
     expect(wrapper.find(".tr-card-note").text()).toContain("No final file yet");
   });
 
+  it("says a failed run failed, and why, instead of calling it unfinished", async () => {
+    listTrainingJobs.mockResolvedValue([
+      {
+        uuid: "u1",
+        name: "Clementine",
+        status: "error",
+        error: "CUDA out of memory",
+        run_name: "Clementine",
+        started_at: "2026-10-01T00:01:00Z",
+        step: 500,
+        total_steps: 1000,
+      },
+    ]);
+    const wrapper = await openWith([
+      run("Clementine", {
+        checkpoints: [
+          { filename: "Clementine_000000500.safetensors", step: 500, size: 1 },
+        ],
+      }),
+    ]);
+    expect(wrapper.find(".tr-card-chip--err").text()).toBe("Failed");
+    expect(wrapper.find("[data-testid='tr-card-reason']").text()).toBe(
+      "CUDA out of memory",
+    );
+    expect(wrapper.text()).not.toContain("No final file yet");
+  });
+
+  it("keeps a card for a run that failed before it had a folder", async () => {
+    // Nothing on disk to draw, so the job is the whole card (#2293).
+    listTrainingJobs.mockResolvedValue([
+      {
+        uuid: "u1",
+        name: "Clementine",
+        status: "error",
+        error: "Dataset build failed",
+        run_name: null,
+        created_at: "2026-10-01T00:00:00Z",
+      },
+    ]);
+    const wrapper = await openWith([]);
+    const card = wrapper.find(".tr-card");
+    expect(card.find(".tr-card-preview--none").text()).toBe("Failed");
+    expect(card.find("[data-testid='tr-card-reason']").text()).toBe(
+      "Dataset build failed",
+    );
+    // There is nothing to import from it.
+    await tick(wrapper, "Clementine");
+    expect(importBtn(wrapper)).toBeUndefined();
+  });
+
   it("keeps a run importable when its config could not be read", async () => {
     // Steps and samples come from filenames, so the config is decoration.
     const wrapper = await openWith([

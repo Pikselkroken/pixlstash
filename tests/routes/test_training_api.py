@@ -388,11 +388,19 @@ def test_list_jobs_owner_works_and_filters():
         char_id = _make_character(owner)
         id_set, _ = _seed_job(server, set_id=set_id, name="set-job")
         id_char, _ = _seed_job(server, character_id=char_id, name="char-job")
+        id_failed, _ = _seed_job(
+            server,
+            status="error",
+            error="Dataset build failed: /home/me/pixlstash/work is full",
+        )
 
         r = owner.get("/training/jobs")
         assert r.status_code == 200, r.text
-        ids = {row["id"] for row in r.json()}
-        assert {id_set, id_char} <= ids
+        rows = {row["id"]: row for row in r.json()}
+        assert {id_set, id_char} <= rows.keys()
+        # A failed row says why, with the host path redacted like the rest.
+        assert rows[id_failed]["error"] == "Dataset build failed: <host path>"
+        assert rows[id_set]["error"] is None
 
         r = owner.get("/training/jobs", params={"set_id": set_id})
         assert r.status_code == 200, r.text

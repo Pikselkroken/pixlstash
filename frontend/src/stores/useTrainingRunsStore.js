@@ -10,6 +10,9 @@ import { useModelFoldersStore } from "./useModelFoldersStore";
 /** A job in one of these is training, or about to: it selects alone. */
 export const LIVE_STATUSES = ["queued", "running", "stopping"];
 
+/** A job that ended in one of these may have ended before it was started. */
+const ENDED_EARLY = ["error", "stopped"];
+
 /**
  * The Models workspace's training runs (#2169): the runs in the ai-toolkit
  * output root, the runs PixlStash trains, and which of them are picked.
@@ -56,8 +59,10 @@ export const useTrainingRunsStore = defineStore("trainingRuns", () => {
   }
 
   /**
-   * One card per run: every folder run, plus each live job that has no folder
-   * yet (queued, setting up). Live runs first, then the newest.
+   * One card per run: every folder run, plus each job that has no folder - a
+   * live one not there yet (queued, setting up), and one that failed or was
+   * stopped before ai-toolkit made it one, which would otherwise vanish the
+   * moment it ended (#2293). Live runs first, then the newest.
    */
   const cards = computed(() => {
     // Jobs arrive newest first; on a shared run name the newest one names it.
@@ -78,15 +83,21 @@ export const useTrainingRunsStore = defineStore("trainingRuns", () => {
         live: isLive(job),
       };
     });
-    const pending = jobs.value
-      .filter((job) => isLive(job) && !names.has(job.run_name))
-      .map((job) => ({
-        key: `job:${job.uuid}`,
-        name: job.name,
-        run: null,
-        job,
-        live: true,
-      }));
+    // A job is given its folder in the same write that sets `started_at`, so
+    // one that ended without a start never had a folder. Not `run_name`: that
+    // is also null for a run under an output root since moved, which would
+    // bring an imported-away run back as a card.
+    const folderless = (job) =>
+      isLive(job)
+        ? !names.has(job.run_name)
+        : !job.started_at && ENDED_EARLY.includes(job.status);
+    const pending = jobs.value.filter(folderless).map((job) => ({
+      key: `job:${job.uuid}`,
+      name: job.name,
+      run: null,
+      job,
+      live: isLive(job),
+    }));
     const when = (card) =>
       card.run?.modified_at ??
       (Date.parse(card.job?.created_at ?? "") / 1000 || 0);
