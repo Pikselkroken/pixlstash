@@ -25,13 +25,16 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import zipfile
 
+import psutil
 import pytest
 from fastapi.testclient import TestClient
 
 from pixlstash.hub import dataset_snapshots, training_runs
 from pixlstash.resources.arbiter import Tenant, arbiter
+from pixlstash.routes import training as training_routes
 from pixlstash.routes.training import _redact_host_paths
 from pixlstash.training import preset_updates, presets
 from pixlstash.server import Server
@@ -763,6 +766,33 @@ def test_a_run_that_ended_without_a_finish_time_has_no_growing_last_phase():
         )
     finally:
         _teardown(temp_dir, server)
+
+
+def test_swap_traffic_is_paging_only_while_ram_is_tight(monkeypatch):
+    moved = {"bytes": 0}
+    monkeypatch.setattr(
+        psutil,
+        "swap_memory",
+        lambda: types.SimpleNamespace(sin=moved["bytes"], sout=0),
+    )
+    lots_free = {"total_mb": 96_000, "available_mb": 70_000}
+    tight = {"total_mb": 96_000, "available_mb": 4_000}
+    burst = 2 * training_routes._PAGING_BYTES
+    try:
+        # The first read only records the counters.
+        assert training_routes._paging(-1, tight) is False
+        # Swap traffic with most of RAM free is the OS, not pressure.
+        moved["bytes"] += burst
+        assert training_routes._paging(-1, lots_free) is False
+        moved["bytes"] += burst
+        assert training_routes._paging(-1, tight) is True
+        # Tight RAM but no traffic since the last read is not paging.
+        assert training_routes._paging(-1, tight) is False
+        # Unmeasured RAM never claims paging.
+        moved["bytes"] += burst
+        assert training_routes._paging(-1, {"total_mb": 0, "available_mb": 0}) is False
+    finally:
+        training_routes._swap_seen.pop(-1, None)
 
 
 def test_live_and_cover_refuse_a_read_token():

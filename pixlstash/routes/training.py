@@ -194,13 +194,22 @@ def _latest_loss(loss_curve) -> float | None:
 # Swap traffic between two polls of the live view above this reads as the
 # machine paging to disk.
 _PAGING_BYTES = 32 * 1024 * 1024
+# ...but only while less than this share of RAM is available. With plenty free,
+# swap traffic is the OS moving idle pages out (or back in when touched), not
+# memory pressure slowing the run.
+_PAGING_AVAILABLE_SHARE = 0.10
 # The swap counters (bytes in + out) each run's live view saw last, by job id.
 _swap_seen: dict[int, int] = {}
 
 
-def _paging(job_id: int) -> bool:
+def _paging(job_id: int, memory: dict) -> bool:
     """Whether the machine moved more than :data:`_PAGING_BYTES` through swap
-    since the last time this run's live view was read."""
+    since the last time this run's live view was read, while RAM was tight.
+
+    Args:
+        job_id: The run whose live view is being read.
+        memory: ``{total_mb, available_mb}`` of this machine's RAM.
+    """
     try:
         swap = psutil.swap_memory()
     except Exception as exc:
@@ -209,7 +218,9 @@ def _paging(job_id: int) -> bool:
     moved = int(getattr(swap, "sin", 0) or 0) + int(getattr(swap, "sout", 0) or 0)
     last = _swap_seen.get(job_id)
     _swap_seen[job_id] = moved
-    return last is not None and moved - last > _PAGING_BYTES
+    total = memory.get("total_mb") or 0
+    tight = total > 0 and memory["available_mb"] < total * _PAGING_AVAILABLE_SHARE
+    return tight and last is not None and moved - last > _PAGING_BYTES
 
 
 def _telemetry(job: dict, lease: dict | None, resolution: dict) -> dict:
@@ -243,7 +254,7 @@ def _telemetry(job: dict, lease: dict | None, resolution: dict) -> dict:
                 used_mb=memory["total_mb"] - memory["available_mb"],
                 ours_mb=measurements.rss_mb(tree),
             )
-        paging = _paging(job["id"])
+        paging = _paging(job["id"], memory)
     else:
         _swap_seen.pop(job["id"], None)
     return {
