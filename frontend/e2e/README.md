@@ -112,7 +112,8 @@ For specs (`specs/comfyui-fixture.spec.js` is the worked example), at
 The owner's own `comfyui_url` stays unset, so the SPA still reads ComfyUI as
 not configured; a run through the API reaches the fake regardless. A run that
 names one person files its picture as theirs pending face extraction
-(`pending_character_id`), which the e2e backend never runs.
+(`pending_character_id`); the e2e backend loads no face model, so it stays
+pending.
 
 Because the user table is stripped per run, `global-setup.js` registers a fresh
 admin (random password) and mints an `ALL` token — credentials live only for

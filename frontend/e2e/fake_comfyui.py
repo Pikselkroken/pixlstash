@@ -28,7 +28,7 @@ For specs, under ``/__fake/``:
 * ``PUT /__fake/fail`` with ``{"mode": ...}``: ``missing_models`` lists no model
   file in ``object_info`` (the pre-flight refuses), ``node_error`` answers
   ``POST /prompt`` with ComfyUI's validation failure, ``null`` turns it off. A
-  spec that sets one turns it off again in a ``finally``.
+  spec that sets one turns it off again (``afterEach``).
 
 Binds 127.0.0.1 only, and never 8188, so it can neither answer for nor collide
 with a real ComfyUI on the machine. Stdlib and Pillow only.

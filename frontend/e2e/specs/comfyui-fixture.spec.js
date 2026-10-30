@@ -80,7 +80,15 @@ async function failWith(api, mode) {
 }
 
 test.afterEach(async ({ apiContext }) => {
-  await failWith(apiContext, null)
+  try {
+    await cleanUp(apiContext)
+  } finally {
+    // Whatever failed above, later specs get a fake that works.
+    await failWith(apiContext, null)
+  }
+})
+
+async function cleanUp(apiContext) {
   const ids = made.pictures.splice(0)
   if (ids.length) {
     // Delete forever, and only these: to the Scrapheap, then purged by id.
@@ -104,7 +112,7 @@ test.afterEach(async ({ apiContext }) => {
   for (const id of made.workflows.splice(0)) {
     await ok(await apiContext.delete(`${API}/workflows/${id}`), `delete workflow ${id}`)
   }
-})
+}
 
 test('a run reaches the fake ComfyUI and its picture is filed for the person it names', async ({
   apiContext,
@@ -158,6 +166,10 @@ test('a run reaches the fake ComfyUI and its picture is filed for the person it 
 test('the fake fails on demand, through the real run path', async ({ apiContext }) => {
   const { workflowId } = await seed(apiContext)
   const body = { data: { workflow_id: workflowId } }
+
+  // As it stands the workflow would run: the refusals below are the fake's.
+  const fine = await ok(await apiContext.post(`${API}/workflows/run/preflight`, body), 'preflight')
+  expect(fine.ok, JSON.stringify(fine)).toBe(true)
 
   // No model files: the pre-flight refuses, and nothing is sent.
   await failWith(apiContext, 'missing_models')
