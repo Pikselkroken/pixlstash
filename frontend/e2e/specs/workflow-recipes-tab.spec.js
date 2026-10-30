@@ -386,3 +386,61 @@ test("an unfiled recipe is listed once its workflow is deleted, and can still be
     for (const recipe of recipes) await apiContext.delete(`${API}/recipes/${recipe.id}`);
   }
 });
+
+test("deleting the last workflow leaves its recipes listed under the empty state", async ({
+  page,
+  apiContext,
+}) => {
+  const { workflowId, workflowName, names, recipes } = await seed(apiContext);
+  try {
+    // The state this test is about, checked rather than assumed (#2356).
+    const listed = await ok(await apiContext.get(`${API}/workflows`), "list the workflows");
+    expect(listed.cards.map((c) => c.id)).toEqual([workflowId]);
+
+    await page.goto("/workflows");
+    const row = page.locator(`.wfv-row[data-key="${workflowId}"]`);
+    await expect(row).toBeVisible({ timeout: 15_000 });
+    await row.click();
+    await page.keyboard.press("Delete");
+    const ask = page.getByRole("dialog", { name: "Delete this workflow?" });
+    await expect(ask).toContainText(workflowName);
+    await ask.getByRole("button", { name: "Delete", exact: true }).click();
+
+    // The empty state, unchanged, and the recipes under it.
+    const empty = page.locator(".wfv-empty");
+    await expect(empty.getByRole("heading", { name: "Nothing found yet" })).toBeVisible();
+    await expect(empty.getByRole("button", { name: "Drop a workflow file" })).toBeVisible();
+    const unfiled = page.locator(".wfv-unfiled");
+    for (const name of names) {
+      await expect(card(unfiled, name)).toBeVisible({ timeout: 15_000 });
+    }
+
+    // Rename lands on the server.
+    const renamed = `${names[0]} kept`;
+    await menu(page, unfiled, names[0], "Rename");
+    const field = unfiled.getByRole("textbox", { name: "Name for this recipe" });
+    await field.fill(renamed);
+    await field.press("Enter");
+    await expect(card(unfiled, renamed)).toBeVisible();
+
+    // Delete does too, and the rest stay listed.
+    await menu(page, unfiled, names[1], "Delete");
+    await confirmDialog(page).getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(card(unfiled, names[1])).toHaveCount(0);
+
+    await page.reload();
+    await expect(card(page.locator(".wfv-unfiled"), renamed)).toBeVisible({ timeout: 15_000 });
+    await expect(card(page.locator(".wfv-unfiled"), names[2])).toBeVisible();
+    const rows = await ok(
+      await apiContext.get(`${API}/recipes`, { params: { unfiled: "true" } }),
+      "list the unfiled recipes",
+    );
+    const ids = rows.map((r) => r.id);
+    expect(ids).not.toContain(recipes[1].id);
+    expect(rows.find((r) => r.id === recipes[0].id)?.name).toBe(renamed);
+  } finally {
+    // Left behind, an unfiled recipe would turn the empty-state spec's library
+    // into one with something in it.
+    for (const recipe of recipes) await apiContext.delete(`${API}/recipes/${recipe.id}`);
+  }
+});
