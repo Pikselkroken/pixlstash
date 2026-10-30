@@ -149,9 +149,11 @@ test.afterEach(async ({ apiContext }) => {
     const left = await find(apiContext, kind, id)
     if (left?.name !== name) continue
     if (left.locked) {
-      await apiContext.patch(`${API}/picture_sets/${id}`, { data: { locked: false } })
+      await body(
+        await apiContext.patch(`${API}/picture_sets/${id}`, { data: { locked: false } }),
+      )
     }
-    await apiContext.delete(`${API}/${LIST[kind]}/${id}`)
+    await body(await apiContext.delete(`${API}/${LIST[kind]}/${id}`))
   }
 })
 
@@ -174,8 +176,8 @@ test.describe('creating a child set', () => {
     await expect(editor(page)).toBeHidden()
 
     const set = await findNamed(apiContext, 'set', name)
+    if (set) track('set', set)
     expect(set, 'the set reached the backend').toBeTruthy()
-    track('set', set)
     expect(set).toMatchObject({ parent_character_id: person.id, parent_set_id: null })
 
     await expect.poll(() => pathname(page)).toBe(`/set/${set.id}`)
@@ -209,8 +211,8 @@ test.describe('creating a child set', () => {
     await expect(editor(page)).toBeHidden()
 
     const set = await findNamed(apiContext, 'set', name)
+    if (set) track('set', set)
     expect(set, 'the set reached the backend').toBeTruthy()
-    track('set', set)
     expect(set).toMatchObject({ parent_set_id: parent.id, parent_character_id: null })
 
     await expect.poll(() => pathname(page)).toBe(`/set/${set.id}`)
@@ -284,6 +286,7 @@ test('a child set renames in place and moves out to the top level', async ({
     .poll(async () => (await find(apiContext, 'set', child.id)).parent_set_id)
     .toBeNull()
   await expect(setRow(sidebar, renamed)).not.toHaveClass(/sidebar-tree-kid/)
+  await expect(setRow(sidebar, parent.name)).toBeVisible()
   await expect(setRow(sidebar, parent.name)).not.toContainText('1 set')
   // Moving changes the home, never the members.
   expect(await setMembers(apiContext, child.id)).toEqual(ids)
@@ -322,6 +325,7 @@ test.describe('deleting', () => {
     // Not left on the dead set's route (#2340).
     await expect.poll(() => pathname(page)).toBe('/')
     await grid.waitForThumbnailLoaded()
+    await expect(setRow(sidebar, parent.name)).toBeVisible()
     await expect(setRow(sidebar, parent.name)).not.toContainText('1 set')
 
     expect(await find(apiContext, 'set', child.id)).toBeUndefined()
@@ -429,7 +433,9 @@ test('a locked child set refuses new members, a move and a delete', async ({
 
   await dragPictureOnto(page, ids[0], row)
 
-  await expect(page.locator('.sidebar-error-bubble')).toContainText('locked')
+  await expect(page.locator('.sidebar-error-bubble')).toContainText(
+    `locked set '${child.name}', which cannot gain or change members`,
+  )
   expect(await setMembers(apiContext, child.id)).toEqual([])
   await expect(sidebar.count(row)).toHaveText('0')
   expect(await find(apiContext, 'set', child.id)).toMatchObject({ parent_set_id: parent.id })
