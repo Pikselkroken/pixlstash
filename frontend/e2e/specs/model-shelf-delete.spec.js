@@ -38,7 +38,8 @@ test('Delete asks to move the model to the Trash and sends exactly that', async 
   const stub = await stageStub(apiContext, folder, `E2E_Trash_${uniqueTag()}`)
   staged.push(stub)
   const sent = []
-  await page.route('**/api/v1/model-files/delete', async (route) => {
+  // Any query string too: a request this missed would reach the real Trash.
+  await page.route(/\/api\/v1\/model-files\/delete(\?.*)?$/, async (route) => {
     sent.push(route.request().postDataJSON())
     await route.fulfill({
       json: { deleted: [stub.modelId], files_removed: 1, permanent: false, trash_name: 'Trash', refused: [] },

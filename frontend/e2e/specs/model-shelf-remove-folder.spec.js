@@ -30,9 +30,7 @@ test.beforeAll(async ({ apiContext }) => {
 
 test.afterEach(async ({ apiContext }) => {
   await deleteModels(apiContext, staged.map((s) => s.modelId))
-  for (const path of dirs) {
-    if (existsSync(join(folder.path, path))) await removeDir(apiContext, folder, path)
-  }
+  for (const path of dirs) await removeDir(apiContext, folder, path)
   staged = []
   dirs = []
 })
@@ -77,12 +75,14 @@ test('Del on a folder lists its files, refuses a changed folder, and never delet
   await page.keyboard.press('Delete')
   const dialog = page.getByRole('alertdialog').filter({ hasText: 'Remove folder' })
   await expect(dialog).toBeVisible()
-  await expect(page.getByRole('dialog').filter({ hasText: 'Move this model' })).toHaveCount(0)
+  const modelDelete = page.getByRole('dialog').filter({ hasText: 'Move this model' })
   await expect(keptRow).toHaveAttribute('aria-selected', 'true')
 
+  // Waited for first, so the check on the model's line runs on a drawn list.
   const files = dialog.getByTestId('remove-folder-files').locator('.srf-file')
-  await expect(files.filter({ hasText: inside.filename })).not.toContainText('not listed')
+  await expect(files).toHaveCount(2)
   await expect(files.filter({ hasText: 'notes.txt' })).toContainText('not listed')
+  await expect(files.filter({ hasText: inside.filename })).not.toContainText('not listed')
 
   // The folder changes after the dry run. Shift is held on the keyboard rather
   // than passed to the click: it relabels the button and opens the name field,
@@ -113,7 +113,9 @@ test('Del on a folder lists its files, refuses a changed folder, and never delet
   await expect(dialog).toBeHidden()
   expect(existsSync(join(folder.path, dir))).toBe(false)
 
-  // The selected model was never the target.
+  // The selected model was never the target. Asked last, when the shelf's own
+  // delete prompt has long had time to open had Del reached it.
+  await expect(modelDelete).toHaveCount(0)
   expect(deletes).toEqual([])
   expect(existsSync(kept.diskPath)).toBe(true)
   await expect(keptRow).toHaveCount(1)

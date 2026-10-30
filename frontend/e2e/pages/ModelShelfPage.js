@@ -1,6 +1,7 @@
 import { expect } from '@playwright/test'
 import { randomBytes } from 'node:crypto'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join, sep } from 'node:path'
 
 /**
@@ -58,14 +59,20 @@ export class ModelShelfPage {
 /**
  * The model folder serve_e2e_backend.py seeds, and the work dir it sits in.
  *
+ * Matched under the throwaway work dir, never by its name alone: the shelf
+ * also lists the machine's own folders, and these specs delete from this one.
+ *
  * @returns {Promise<{id: number, path: string, workDir: string}>}
  */
 export async function seededFolder(apiContext) {
   const res = await apiContext.get('/api/v1/model-folders')
   expect(res.ok(), await res.text()).toBe(true)
   const { folders } = await res.json()
-  const folder = folders.find((f) => f.path.endsWith(`${sep}model-shelf`))
-  expect(folder, 'the e2e backend seeds a model-shelf folder').toBeTruthy()
+  const workDirs = `${realpathSync(tmpdir())}${sep}pixlstash-e2e-`
+  const folder = folders.find(
+    (f) => f.path.endsWith(`${sep}model-shelf`) && f.path.startsWith(workDirs),
+  )
+  expect(folder, 'the e2e backend seeds a model-shelf folder in its work dir').toBeTruthy()
   return { id: folder.id, path: folder.path, workDir: dirname(folder.path) }
 }
 
@@ -133,26 +140,31 @@ export async function moveInto(apiContext, folder, stub, subpath) {
   return { ...stub, diskPath: join(folder.path, subpath, stub.filename) }
 }
 
-/** Permanently delete staged models. Already-gone ones are fine. */
+/**
+ * Permanently delete staged models. An id already gone is answered as refused,
+ * not as a failure; anything else fails the test here, rather than as a
+ * miscount in a later spec sharing the backend.
+ */
 export async function deleteModels(apiContext, ids) {
   if (!ids.length) return
   const res = await apiContext.post('/api/v1/model-files/delete', {
     data: { ids, permanent: true },
   })
-  if (!res.ok()) console.warn(`[e2e] cleanup could not delete models ${ids}: ${await res.text()}`)
+  expect(res.ok(), `cleanup could not delete models ${ids}: ${await res.text()}`).toBe(true)
 }
 
-/** Permanently remove a staged subfolder, through the route's own dry run. */
+/**
+ * Permanently remove a staged subfolder, through the route's own dry run. One
+ * a test already removed is skipped; any other failure fails the test.
+ */
 export async function removeDir(apiContext, folder, path) {
+  if (!existsSync(join(folder.path, path))) return
   const url = `/api/v1/model-folders/${folder.id}/dirs/remove`
   const plan = await apiContext.post(url, { data: { path, dry_run: true } })
-  if (!plan.ok()) {
-    console.warn(`[e2e] cleanup could not read ${path}: ${await plan.text()}`)
-    return
-  }
+  expect(plan.ok(), `cleanup could not read ${path}: ${await plan.text()}`).toBe(true)
   const { fingerprint } = await plan.json()
   const res = await apiContext.post(url, { data: { path, permanent: true, expect: fingerprint } })
-  if (!res.ok()) console.warn(`[e2e] cleanup could not remove ${path}: ${await res.text()}`)
+  expect(res.ok(), `cleanup could not remove ${path}: ${await res.text()}`).toBe(true)
 }
 
 /** A short random tag, so a retried test never meets its own leftovers. */
