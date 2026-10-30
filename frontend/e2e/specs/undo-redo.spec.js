@@ -51,11 +51,14 @@ async function tagLabels(apiContext, pictureId) {
  * narrated, so a test waiting on its receipt would wait forever.
  */
 async function openWithHistory(page, open) {
-  const firstRead = page.waitForResponse((res) =>
-    res.url().includes(`${API}/operations/undo-state`),
-  )
+  // Both halves: the store sets the watermark once the list AND the state
+  // have answered.
+  const firstReads = Promise.all([
+    page.waitForResponse((res) => new URL(res.url()).pathname === `${API}/operations/undo-state`),
+    page.waitForResponse((res) => new URL(res.url()).pathname === `${API}/operations`),
+  ])
   await open()
-  await firstRead
+  await firstReads
 }
 
 /** Every POST the page makes to the operation log, in the order it made them. */
@@ -68,9 +71,25 @@ function recordOperationPosts(page) {
   return posts
 }
 
-async function undoOnServer(apiContext) {
-  const res = await apiContext.post(`${API}/operations/undo`)
+/** The id of the newest operation in the log: the one a test just made. */
+async function newestOperationId(apiContext) {
+  const res = await apiContext.get(`${API}/operations`, { params: { limit: 1 } })
   expect(res.ok(), await res.text()).toBe(true)
+  return (await res.json())[0]?.id ?? null
+}
+
+/**
+ * Cleanup: take back the test's own operation if it is still applied. By id,
+ * never "the newest", so a test that failed before its change was logged
+ * cannot revert somebody else's.
+ */
+async function undoIfApplied(apiContext, operationId) {
+  if (operationId == null) return
+  const res = await apiContext.get(`${API}/operations`, { params: { limit: 50 } })
+  const op = (await res.json()).find((row) => row.id === operationId)
+  if (op?.status !== 'applied') return
+  const undone = await apiContext.post(`${API}/operations/${operationId}/undo`)
+  expect(undone.ok(), await undone.text()).toBe(true)
 }
 
 /**
@@ -191,7 +210,7 @@ test.beforeAll(async ({ apiContext }) => {
     data: { tag: PROBE_TAG },
   })
   expect(res.ok(), await res.text()).toBe(true)
-  await undoOnServer(apiContext)
+  await undoIfApplied(apiContext, await newestOperationId(apiContext))
 })
 
 test.describe('undo and redo from the keyboard', () => {
@@ -209,16 +228,18 @@ test.describe('undo and redo from the keyboard', () => {
 
       await openWithHistory(page, () => grid.goto())
       const headers = { [CLIENT_HEADER]: await readClientId(page) }
+      const posts = recordOperationPosts(page)
       const receipt = page.locator('.receipt:not(.receipt--undone):not(.receipt-leave-active)')
       const undoneReceipt = page.locator('.receipt.receipt--undone')
       const before = await read()
-      let after = null
+      let operationId = null
 
       try {
         const res = await kind.apply(apiContext, pictureId, headers, ctx)
         expect(res.ok(), await res.text()).toBe(true)
+        operationId = await newestOperationId(apiContext)
         await expect.poll(read).not.toEqual(before)
-        after = await read()
+        const after = await read()
         // The receipt is this tab narrating its own change: the stack has been
         // re-read and the change is the step Ctrl+Z will take.
         await expect(receipt).toBeVisible()
@@ -230,9 +251,11 @@ test.describe('undo and redo from the keyboard', () => {
         await page.keyboard.press('Control+y')
         await expect.poll(read).toEqual(after)
         await expect(receipt).toBeVisible()
+        // One press, one step: a chord handled twice would take back an
+        // earlier operation as well, and the state checks above cannot see it.
+        expect(posts).toEqual([`${API}/operations/undo`, `${API}/operations/redo`])
       } finally {
-        if (after !== null && JSON.stringify(await read()) !== JSON.stringify(before))
-          await undoOnServer(apiContext)
+        await undoIfApplied(apiContext, operationId)
         await kind.teardown?.(apiContext, ctx)
       }
     })
@@ -251,12 +274,14 @@ test.describe('the toolbar undo control', () => {
     const control = page.getByRole('group', { name: 'Undo and redo' })
     const undoButton = control.locator('.uc-btn--undo')
     const redoButton = control.locator('.uc-btn--redo')
+    const posts = recordOperationPosts(page)
 
     const res = await apiContext.post(`${API}/pictures/${pictureId}/tags`, {
       headers,
       data: { tag: PROBE_TAG },
     })
     expect(res.ok(), await res.text()).toBe(true)
+    const operationId = await newestOperationId(apiContext)
     try {
       const { next_undo: last } = await (
         await apiContext.get(`${API}/operations/undo-state`)
@@ -271,9 +296,9 @@ test.describe('the toolbar undo control', () => {
       await expect(redoButton).toHaveAccessibleName(`Redo: ${last.summary} (Ctrl+Y)`)
       await redoButton.click()
       await expect.poll(() => tagLabels(apiContext, pictureId)).toContain(PROBE_TAG)
+      expect(posts).toEqual([`${API}/operations/undo`, `${API}/operations/redo`])
     } finally {
-      if ((await tagLabels(apiContext, pictureId)).includes(PROBE_TAG))
-        await undoOnServer(apiContext)
+      await undoIfApplied(apiContext, operationId)
     }
   })
 
@@ -394,10 +419,12 @@ test.describe('Ctrl+Z belongs to the field being typed in', () => {
       await expectTextUndoOnly(page, apiContext, pictureId, lightbox.tagInput, posts)
       await lightbox.tagInput.fill('')
 
+      const savedDescription = (await metadata(apiContext, pictureId)).description
       const description = page.locator('.lightbox .description-field textarea')
       await expectTextUndoOnly(page, apiContext, pictureId, description, posts)
-      // Leaving the field cancels the edit; nothing is saved.
+      // Escape cancels the edit, so the typing never reaches the server.
       await page.keyboard.press('Escape')
+      expect((await metadata(apiContext, pictureId)).description).toBe(savedDescription)
     } finally {
       await removeProbeTag(apiContext, pictureId)
     }
@@ -413,12 +440,14 @@ test('Ctrl+Z in the lightbox undoes and keeps the lightbox open', async ({
   await openWithHistory(page, () => page.goto(`/?overlay=${pictureId}`))
   await expect(lightbox.root).toBeVisible({ timeout: 15_000 })
   const receipt = page.locator('.lightbox-receipt:not(.lightbox-receipt--undone):not(.receipt-leave-active)')
+  const posts = recordOperationPosts(page)
 
   const res = await apiContext.post(`${API}/pictures/${pictureId}/tags`, {
     headers: { [CLIENT_HEADER]: await readClientId(page) },
     data: { tag: PROBE_TAG },
   })
   expect(res.ok(), await res.text()).toBe(true)
+  const operationId = await newestOperationId(apiContext)
   try {
     await expect(receipt).toBeVisible()
     await page.keyboard.press('Control+z')
@@ -429,13 +458,14 @@ test('Ctrl+Z in the lightbox undoes and keeps the lightbox open', async ({
     await page.keyboard.press('Control+y')
     await expect.poll(() => tagLabels(apiContext, pictureId)).toContain(PROBE_TAG)
     await expect(lightbox.root).toBeVisible()
+    // The lightbox and the app-wide handler must not BOTH take the chord.
+    expect(posts).toEqual([`${API}/operations/undo`, `${API}/operations/redo`])
   } finally {
-    if ((await tagLabels(apiContext, pictureId)).includes(PROBE_TAG))
-      await undoOnServer(apiContext)
+    await undoIfApplied(apiContext, operationId)
   }
 })
 
-test('a read-only session: undo is inert and says why', async ({
+test('a read-only session: undo is inert, and the control says why', async ({
   browser,
   apiContext,
   baseURL,
@@ -456,6 +486,8 @@ test('a read-only session: undo is inert and says why', async ({
   try {
     await page.goto(`/?token=${encodeURIComponent(token)}`)
     await expect(page.locator('.thumbnail-img').first()).toBeVisible({ timeout: 15_000 })
+    // The chord is silent here (useGlobalKeydown declines read-only sessions
+    // without a notice); what is asserted is that it calls nothing.
     await page.keyboard.press('Control+z')
     await page.keyboard.press('Control+y')
 
@@ -490,15 +522,27 @@ test('nothing to undo: the control is disabled and Ctrl+Z does nothing', async (
   // The shared backend's log is never empty this late in a run, so the empty
   // stack is served to the page rather than made: what is under test is how
   // the UI answers it.
-  await page.route(`**${API}/operations/undo-state`, (route) =>
-    route.fulfill({
+  const served = { state: 0, list: 0 }
+  await page.route(`**${API}/operations/undo-state`, (route) => {
+    served.state += 1
+    return route.fulfill({
       json: { can_undo: false, can_redo: false, next_undo: null, next_redo: null },
-    }),
+    })
+  })
+  await page.route(`**${API}/operations?*`, (route) => {
+    served.list += 1
+    return route.fulfill({ json: [] })
+  })
+  // The real log is not empty: a regressed guard must not reach it.
+  await page.route(`**${API}/operations/*do`, (route) =>
+    route.fulfill({ status: 409, json: { detail: 'blocked by the e2e stub' } }),
   )
-  await page.route(`**${API}/operations?*`, (route) => route.fulfill({ json: [] }))
   const posts = recordOperationPosts(page)
 
-  await duplicates.goto()
+  await openWithHistory(page, () => duplicates.goto())
+  // The page is answering the served stack, not its own default.
+  expect(served.state).toBeGreaterThan(0)
+  expect(served.list).toBeGreaterThan(0)
   const control = page.getByRole('group', { name: 'Undo and redo' })
   const undoButton = control.locator('.uc-btn--undo')
   await expect(undoButton).toHaveAccessibleName('Nothing to undo (Ctrl+Z)')
