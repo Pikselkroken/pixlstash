@@ -1,0 +1,194 @@
+{
+  "id": "zimage-turbo",
+  "version": 1,
+  "label": "Z-Image Turbo",
+  "requires_arch": "z_image",
+  "template": "zimage-turbo-lora",
+  "divisibility": 16,
+  "locked": {
+    "model.arch": "zimage:turbo",
+    "model.name_or_path": "Tongyi-MAI/Z-Image-Turbo",
+    "model.extras_name_or_path": "Tongyi-MAI/Z-Image-Turbo",
+    "model.assistant_lora_path": "ostris/zimage_turbo_training_adapter/zimage_turbo_training_adapter_v2.safetensors",
+    "network.network_kwargs.ignore_if_contains": [],
+    "datasets[*].cache_latents_to_disk": true,
+    "train.noise_scheduler": "flowmatch",
+    "sample.sampler": "flowmatch"
+  },
+  "defaults": {
+    "datasets[*].resolution": [512, 768, 1024],
+    "train.timestep_type": "weighted",
+    "train.optimizer": "adamw8bit",
+    "train.batch_size": 1,
+    "save.save_every": 250,
+    "sample.sample_every": 250
+  },
+  "inference_target": "turbo",
+  "preview": {
+    "turbo": {
+      "sample.sample_steps": 9,
+      "sample.guidance_scale": 1,
+      "sample.width": 1024,
+      "sample.height": 1024
+    }
+  },
+  "subject": {
+    "person": {
+      "datasets[*].caption_dropout_rate": 0.05,
+      "train.content_or_style": "balanced"
+    },
+    "style": {
+      "datasets[*].caption_dropout_rate": 0.05,
+      "train.content_or_style": "style"
+    },
+    "thing": {
+      "datasets[*].caption_dropout_rate": 0.05,
+      "train.content_or_style": "balanced"
+    }
+  },
+  "effort": {
+    "gentle": {
+      "steps_per_picture": 60,
+      "min_steps": 800,
+      "max_steps": 1500,
+      "train.lr": 0.0001,
+      "network.linear": 16
+    },
+    "standard": {
+      "steps_per_picture": 100,
+      "min_steps": 1200,
+      "max_steps": 3000,
+      "train.lr": 0.0001,
+      "network.linear": 32
+    },
+    "strong": {
+      "steps_per_picture": 150,
+      "min_steps": 1800,
+      "max_steps": 4000,
+      "train.lr": 0.0002,
+      "network.linear": 32
+    }
+  },
+  "fit": {
+    "auto": ["q8", "q8_cached", "q8_offload"],
+    "save_memory": ["q8_offload"],
+    "best_quality": ["bf16", "bf16_cached"]
+  },
+  "hardware_profiles": {
+    "q8": {
+      "label": "8-bit model · text encoder on the GPU",
+      "vram_mb": 16000,
+      "ram_mb": 16000,
+      "max_bucket": 1024,
+      "max_rank": 32,
+      "max_batch": 1,
+      "evidence": "derived",
+      "settings": {
+        "model.quantize": true,
+        "model.quantize_te": true,
+        "model.low_vram": false,
+        "model.layer_offloading": false,
+        "model.layer_offloading_transformer_percent": 1.0,
+        "model.layer_offloading_text_encoder_percent": 1.0,
+        "train.cache_text_embeddings": false,
+        "model.qtype": "qfloat8",
+        "model.qtype_te": "qfloat8"
+      }
+    },
+    "q8_cached": {
+      "label": "8-bit model · captions encoded once",
+      "vram_mb": 12500,
+      "ram_mb": 16000,
+      "max_bucket": 1024,
+      "max_rank": 32,
+      "max_batch": 1,
+      "evidence": "reported",
+      "settings": {
+        "model.quantize": true,
+        "model.quantize_te": true,
+        "model.low_vram": false,
+        "model.layer_offloading": false,
+        "model.layer_offloading_transformer_percent": 1.0,
+        "model.layer_offloading_text_encoder_percent": 1.0,
+        "train.cache_text_embeddings": true,
+        "model.qtype": "qfloat8",
+        "model.qtype_te": "qfloat8"
+      }
+    },
+    "q8_offload": {
+      "label": "8-bit model · 15% of layers in RAM",
+      "vram_mb": 10800,
+      "ram_mb": 17000,
+      "max_bucket": 1024,
+      "max_rank": 32,
+      "max_batch": 1,
+      "evidence": "derived",
+      "settings": {
+        "model.quantize": true,
+        "model.quantize_te": true,
+        "model.low_vram": false,
+        "model.layer_offloading": true,
+        "model.layer_offloading_transformer_percent": 0.15,
+        "model.layer_offloading_text_encoder_percent": 0.0,
+        "train.cache_text_embeddings": true,
+        "model.qtype": "qfloat8",
+        "model.qtype_te": "qfloat8"
+      }
+    },
+    "bf16": {
+      "label": "Full-precision model · text encoder on the GPU",
+      "vram_mb": 24000,
+      "ram_mb": 16000,
+      "max_bucket": 1024,
+      "max_rank": 32,
+      "max_batch": 1,
+      "evidence": "derived",
+      "settings": {
+        "model.quantize": false,
+        "model.quantize_te": false,
+        "model.low_vram": false,
+        "model.layer_offloading": false,
+        "model.layer_offloading_transformer_percent": 1.0,
+        "model.layer_offloading_text_encoder_percent": 1.0,
+        "train.cache_text_embeddings": false,
+        "model.qtype": "qfloat8",
+        "model.qtype_te": "qfloat8"
+      }
+    },
+    "bf16_cached": {
+      "label": "Full-precision model · captions encoded once",
+      "vram_mb": 16000,
+      "ram_mb": 16000,
+      "max_bucket": 1024,
+      "max_rank": 32,
+      "max_batch": 1,
+      "evidence": "derived",
+      "settings": {
+        "model.quantize": false,
+        "model.quantize_te": false,
+        "model.low_vram": false,
+        "model.layer_offloading": false,
+        "model.layer_offloading_transformer_percent": 1.0,
+        "model.layer_offloading_text_encoder_percent": 1.0,
+        "train.cache_text_embeddings": true,
+        "model.qtype": "qfloat8",
+        "model.qtype_te": "qfloat8"
+      }
+    }
+  },
+  "sources": {
+    "locked": "ai-toolkit ui/src/app/jobs/new/options.tsx (zimage:turbo); extensions_built_in/diffusion_models/z_image/z_image.py. Latents are cached, as in every recipe: the 12 GB profiles' figures are for cached text and latents (#2295)",
+    "divisibility": "z_image.py get_bucket_divisibility: 8 for the VAE x 2 for the patch size",
+    "defaults": "the shipped ai-toolkit-jobs template; ai-toolkit UI defaults for zimage:turbo (timestep weighted, which flowmatch samples like linear)",
+    "preview.turbo": "Tongyi-MAI/Z-Image-Turbo model card: 9 steps (8 DiT forwards), guidance 0, which ai-toolkit spells guidance_scale 1",
+    "subject": "heuristic: ai-toolkit's own caption dropout default is 0.0; content_or_style per jobs/process/BaseSDTrainProcess.py (style favours low-noise timesteps)",
+    "effort": "heuristic anchored on ostris/ai-toolkit#550: 1200-3000 steps at lr 1e-4 to 2e-4 for 6-46 pictures; no source gives a steps-per-picture rule",
+    "hardware_profiles.q8_cached.vram_mb": "reported, ostris/ai-toolkit#550: 1024px, float8 transformer, cached text and latents, 11.5-11.7 GB on a 12 GB card and briefly above 12 GB; the figure is set past that peak",
+    "hardware_profiles.q8_offload.vram_mb": "reported fit on a 12 GB card at 15% transformer offload (ostris/ai-toolkit#550); figure derived: 11.7 GB less 15% of the 6.15 GB float8 transformer",
+    "hardware_profiles.q8.vram_mb": "derived: the q8_cached report plus the 4.0 GB qfloat8 Qwen3-4B text encoder kept resident",
+    "hardware_profiles.bf16_cached.vram_mb": "derived: 12.3 GB bf16 transformer + 0.2 GB VAE + 0.85 GB LoRA, grads and 8-bit Adam at rank 32 + 2.5 GB activations at 1024",
+    "hardware_profiles.bf16.vram_mb": "derived: bf16_cached plus the 8.0 GB bf16 text encoder kept resident",
+    "hardware_profiles.*.max_rank, max_batch": "the rank and batch size the VRAM figures were reported or derived at",
+    "hardware_profiles.*.ram_mb": "derived: the 12.3 GB bf16 transformer is loaded in RAM before it is quantised or moved, plus loader overhead; q8_offload adds the 0.9 GB of layers parked in pinned RAM"
+  }
+}

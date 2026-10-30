@@ -1,0 +1,191 @@
+{
+  "id": "krea2-raw",
+  "version": 1,
+  "label": "Krea 2 Raw",
+  "requires_arch": "krea2",
+  "template": "zimage-turbo-lora",
+  "divisibility": 16,
+  "locked": {
+    "model.arch": "krea2",
+    "model.name_or_path": "krea/Krea-2-Raw",
+    "datasets[*].cache_latents_to_disk": true,
+    "network.network_kwargs.ignore_if_contains": [],
+    "train.noise_scheduler": "flowmatch",
+    "sample.sampler": "flowmatch"
+  },
+  "defaults": {
+    "datasets[*].resolution": [512, 1024],
+    "train.timestep_type": "linear",
+    "train.optimizer": "adamw8bit",
+    "train.batch_size": 1,
+    "save.save_every": 250,
+    "sample.sample_every": 250
+  },
+  "inference_target": "raw",
+  "preview": {
+    "raw": {
+      "sample.sample_steps": 30,
+      "sample.guidance_scale": 3.5,
+      "sample.width": 1024,
+      "sample.height": 1024
+    }
+  },
+  "subject": {
+    "person": {
+      "datasets[*].caption_dropout_rate": 0.05,
+      "train.content_or_style": "balanced"
+    },
+    "style": {
+      "datasets[*].caption_dropout_rate": 0.05,
+      "train.content_or_style": "style"
+    },
+    "thing": {
+      "datasets[*].caption_dropout_rate": 0.05,
+      "train.content_or_style": "balanced"
+    }
+  },
+  "effort": {
+    "gentle": {
+      "steps_per_picture": 60,
+      "min_steps": 1000,
+      "max_steps": 1800,
+      "train.lr": 0.0001,
+      "network.linear": 16
+    },
+    "standard": {
+      "steps_per_picture": 100,
+      "min_steps": 1500,
+      "max_steps": 3000,
+      "train.lr": 0.0001,
+      "network.linear": 32
+    },
+    "strong": {
+      "steps_per_picture": 150,
+      "min_steps": 2000,
+      "max_steps": 4000,
+      "train.lr": 0.00015,
+      "network.linear": 32
+    }
+  },
+  "fit": {
+    "auto": ["q8", "q8_cached", "q8_low_vram", "q8_offload"],
+    "save_memory": ["q8_offload"],
+    "best_quality": ["bf16_cached"]
+  },
+  "hardware_profiles": {
+    "q8": {
+      "label": "8-bit model · text encoder on the GPU",
+      "vram_mb": 25800,
+      "ram_mb": 43200,
+      "max_bucket": 1024,
+      "max_rank": 32,
+      "max_batch": 1,
+      "evidence": "measured",
+      "settings": {
+        "model.quantize": true,
+        "model.quantize_te": true,
+        "model.low_vram": false,
+        "model.layer_offloading": false,
+        "model.layer_offloading_transformer_percent": 1.0,
+        "model.layer_offloading_text_encoder_percent": 1.0,
+        "train.cache_text_embeddings": false,
+        "model.qtype": "qfloat8",
+        "model.qtype_te": "qfloat8"
+      }
+    },
+    "q8_cached": {
+      "label": "8-bit model · captions encoded once",
+      "vram_mb": 22800,
+      "ram_mb": 48800,
+      "max_bucket": 1024,
+      "max_rank": 32,
+      "max_batch": 1,
+      "evidence": "measured",
+      "settings": {
+        "model.quantize": true,
+        "model.quantize_te": true,
+        "model.low_vram": false,
+        "model.layer_offloading": false,
+        "model.layer_offloading_transformer_percent": 1.0,
+        "model.layer_offloading_text_encoder_percent": 1.0,
+        "train.cache_text_embeddings": true,
+        "model.qtype": "qfloat8",
+        "model.qtype_te": "qfloat8"
+      }
+    },
+    "q8_low_vram": {
+      "label": "8-bit model · loaded one part at a time",
+      "vram_mb": 20400,
+      "ram_mb": 47000,
+      "max_bucket": 1024,
+      "max_rank": 32,
+      "max_batch": 1,
+      "evidence": "measured",
+      "settings": {
+        "model.quantize": true,
+        "model.quantize_te": true,
+        "model.low_vram": true,
+        "model.layer_offloading": false,
+        "model.layer_offloading_transformer_percent": 1.0,
+        "model.layer_offloading_text_encoder_percent": 1.0,
+        "train.cache_text_embeddings": true,
+        "model.qtype": "qfloat8",
+        "model.qtype_te": "qfloat8"
+      }
+    },
+    "q8_offload": {
+      "label": "8-bit model · 60% of layers in RAM",
+      "vram_mb": 16100,
+      "ram_mb": 42900,
+      "max_bucket": 1024,
+      "max_rank": 32,
+      "max_batch": 1,
+      "evidence": "measured",
+      "settings": {
+        "model.quantize": true,
+        "model.quantize_te": true,
+        "model.low_vram": true,
+        "model.layer_offloading": true,
+        "model.layer_offloading_transformer_percent": 0.6,
+        "model.layer_offloading_text_encoder_percent": 0.0,
+        "train.cache_text_embeddings": true,
+        "model.qtype": "qfloat8",
+        "model.qtype_te": "qfloat8"
+      }
+    },
+    "bf16_cached": {
+      "label": "Full-precision model · captions encoded once",
+      "vram_mb": 34000,
+      "ram_mb": 35400,
+      "max_bucket": 1024,
+      "max_rank": 32,
+      "max_batch": 1,
+      "evidence": "derived",
+      "settings": {
+        "model.quantize": false,
+        "model.quantize_te": false,
+        "model.low_vram": true,
+        "model.layer_offloading": false,
+        "model.layer_offloading_transformer_percent": 1.0,
+        "model.layer_offloading_text_encoder_percent": 1.0,
+        "train.cache_text_embeddings": true,
+        "model.qtype": "qfloat8",
+        "model.qtype_te": "qfloat8"
+      }
+    }
+  },
+  "sources": {
+    "locked": "ai-toolkit ui/src/app/jobs/new/options.tsx (krea2); extensions_built_in/diffusion_models/krea2/krea2.py, which reads raw.safetensors from krea/Krea-2-Raw, the Qwen3-VL-4B-Instruct text encoder and the Qwen-Image VAE. Latents are cached: without it the Qwen-Image VAE encodes every step, a 5 GB peak on top of training (measured, below)",
+    "divisibility": "krea2.py get_bucket_divisibility: 8 for the VAE x 2 for the patch size",
+    "defaults": "ai-toolkit UI defaults for krea2 (timestep linear); 768 left out of the buckets because Krea 2 trained at 256, 512 and 1024 and 768 runs were reported to misbehave (community reports, ai-toolkit Discord)",
+    "preview.raw": "krea/Krea-2-Raw model card: 52 steps at guidance 3.5, 1024 x 1024; previews use 30 steps (community Raw LoRA pages use about 40) to keep a preview round short. The card says Raw is a base for training, not for inference: LoRAs trained on it are meant to run on Krea 2 Turbo",
+    "subject": "heuristic, as for Z-Image Turbo: ai-toolkit's own caption dropout default is 0.0; content_or_style per jobs/process/BaseSDTrainProcess.py",
+    "effort": "community report (a Krea-2-Raw LoRA on Hugging Face): 3000 steps, adamw8bit at lr 1e-4, rank 32, 19 pictures at 1024, likeness holding from about step 2000; no source gives a steps-per-picture rule",
+    "hardware_profiles": "measured on an RTX 5090 (32 GB) with ai-toolkit 0.12.26: PixlStash's probe (6 updates at 1024, rank 32, batch 1, one save and a round of 1024 previews at 30 steps), latents cached, the trainer's process tree read every 0.2 s through NVML and its resident memory. Each vram_mb and ram_mb is the highest peak outside previews x1.1, as a measurement on the owner's machine is admitted (training/measurements.py NEED_MARGIN); about 3.5 s per update in every 8-bit profile",
+    "hardware_profiles.*.preview_peaks": "measured, previews at 1024 and 30 steps, about 59 s a picture: q8 27.9 GB, q8_cached 24.2 GB, q8_low_vram 15.7 GB, q8_offload 10.3 GB. The probe on the owner's machine admits previews apart and defers them when they do not fit",
+    "hardware_profiles.q8_offload": "measured at 60% of the transformer's layers in RAM: 30% saved only 0.6 GB over q8_low_vram, 60% saves 3.9 GB at the same speed",
+    "hardware_profiles.bf16_cached.vram_mb": "derived: ran out of memory loading on the 32 GB card at 29.9 GB, before training; the 25 GB bf16 transformer with VAE, LoRA state and activations needs a larger card",
+    "hardware_profiles.*.max_rank, max_batch": "the rank and batch size the figures were measured at",
+    "hardware_profiles.*.ram_mb": "measured: the 25 GB bf16 transformer is read into RAM and quantised there, the text encoder beside it; caching captions parks the text encoder in RAM"
+  }
+}

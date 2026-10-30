@@ -1,0 +1,146 @@
+{
+  "id": "chroma1-base",
+  "version": 1,
+  "label": "Chroma1 Base",
+  "requires_arch": "chroma",
+  "template": "zimage-turbo-lora",
+  "divisibility": 32,
+  "locked": {
+    "model.arch": "chroma",
+    "model.name_or_path": "lodestones/Chroma1-Base",
+    "datasets[*].cache_latents_to_disk": true,
+    "network.network_kwargs.ignore_if_contains": [],
+    "train.noise_scheduler": "flowmatch",
+    "sample.sampler": "flowmatch"
+  },
+  "defaults": {
+    "datasets[*].resolution": [512, 768, 1024],
+    "train.timestep_type": "sigmoid",
+    "train.optimizer": "adamw8bit",
+    "train.batch_size": 1,
+    "save.save_every": 250,
+    "sample.sample_every": 250
+  },
+  "inference_target": "base",
+  "preview": {
+    "base": {
+      "sample.sample_steps": 30,
+      "sample.guidance_scale": 3,
+      "sample.width": 1024,
+      "sample.height": 1024
+    }
+  },
+  "subject": {
+    "person": {
+      "datasets[*].caption_dropout_rate": 0.05,
+      "train.content_or_style": "balanced"
+    },
+    "style": {
+      "datasets[*].caption_dropout_rate": 0.05,
+      "train.content_or_style": "style"
+    },
+    "thing": {
+      "datasets[*].caption_dropout_rate": 0.05,
+      "train.content_or_style": "balanced"
+    }
+  },
+  "effort": {
+    "gentle": {
+      "steps_per_picture": 60,
+      "min_steps": 800,
+      "max_steps": 1500,
+      "train.lr": 0.0001,
+      "network.linear": 16
+    },
+    "standard": {
+      "steps_per_picture": 100,
+      "min_steps": 1200,
+      "max_steps": 3000,
+      "train.lr": 0.0001,
+      "network.linear": 32
+    },
+    "strong": {
+      "steps_per_picture": 150,
+      "min_steps": 1800,
+      "max_steps": 4000,
+      "train.lr": 0.00015,
+      "network.linear": 32
+    }
+  },
+  "fit": {
+    "auto": ["q8"],
+    "save_memory": ["q8"],
+    "best_quality": ["bf16", "bf16_cached"]
+  },
+  "hardware_profiles": {
+    "q8": {
+      "label": "8-bit model · text encoder on the GPU",
+      "vram_mb": 22600,
+      "ram_mb": 39000,
+      "max_bucket": 1024,
+      "max_rank": 32,
+      "max_batch": 1,
+      "evidence": "derived",
+      "settings": {
+        "model.quantize": true,
+        "model.quantize_te": true,
+        "model.low_vram": false,
+        "model.layer_offloading": false,
+        "train.cache_text_embeddings": false,
+        "model.qtype": "qfloat8",
+        "model.qtype_te": "qfloat8"
+      }
+    },
+    "bf16": {
+      "label": "Full-precision model · text encoder on the GPU",
+      "vram_mb": 37000,
+      "ram_mb": 39000,
+      "max_bucket": 1024,
+      "max_rank": 32,
+      "max_batch": 1,
+      "evidence": "derived",
+      "settings": {
+        "model.quantize": false,
+        "model.quantize_te": false,
+        "model.low_vram": false,
+        "model.layer_offloading": false,
+        "train.cache_text_embeddings": false,
+        "model.qtype": "qfloat8",
+        "model.qtype_te": "qfloat8"
+      }
+    },
+    "bf16_cached": {
+      "label": "Full-precision model · captions encoded once",
+      "vram_mb": 33200,
+      "ram_mb": 39000,
+      "max_bucket": 1024,
+      "max_rank": 32,
+      "max_batch": 1,
+      "evidence": "derived",
+      "settings": {
+        "model.quantize": false,
+        "model.quantize_te": false,
+        "model.low_vram": false,
+        "model.layer_offloading": false,
+        "train.cache_text_embeddings": true,
+        "model.qtype": "qfloat8",
+        "model.qtype_te": "qfloat8"
+      }
+    }
+  },
+  "sources": {
+    "locked": "ai-toolkit ui/src/app/jobs/new/options.tsx (chroma); extensions_built_in/diffusion_models/chroma/chroma_model.py, which reads Chroma1-Base.safetensors and the T5-XXL text encoder and VAE from ostris/Flex.1-alpha. Latents are cached, as for Krea 2, where encoding every step was measured at 5 GB above training",
+    "divisibility": "chroma_model.py get_bucket_divisibility: 32",
+    "defaults": "ai-toolkit UI defaults for chroma: the UI sets no timestep type, so its general default, sigmoid, applies",
+    "preview.base": "lodestones/Chroma1-Base model card: 40 steps at guidance 3.0; previews use 30 steps to keep a preview round short",
+    "subject": "heuristic, as for Z-Image Turbo: ai-toolkit's own caption dropout default is 0.0; content_or_style per jobs/process/BaseSDTrainProcess.py",
+    "effort": "heuristic: no source gives Chroma1 LoRA steps or learning rate, so the step ranges are Z-Image Turbo's and the learning rates Krea 2's (1.5e-4 at most, for a model of this size)",
+    "fit": "chroma_model.py has no layer offloading and no low_vram path, so there is no profile that saves memory below q8, and every profile writes both off so that pinning either one on is refused rather than ignored; caching captions does not lower the peak either, which is set while loading",
+    "hardware_profiles": "derived from chroma_model.py's load order and the weights, never run here: an 8.9B transformer (17.8 GB bf16, 8.9 GB qfloat8), the 4.7B T5-XXL encoder (9.5 GB bf16, 4.75 GB qfloat8), a 0.16 GB VAE, about 0.4 GB of LoRA, gradients and 8-bit Adam at rank 32 and about 2.6 GB of activations at 1024; each vram_mb calibrated like every untested seed here: the derived peak plus 0.6 GB of CUDA context, x1.08 (what Krea 2's derivation missed against its measurement) and x1.1 (the margin a measured peak is admitted with)",
+    "hardware_profiles.q8.vram_mb": "derived: chroma_model.py moves the bf16 transformer onto the GPU to quantise it and then loads the bf16 T5 there beside it, so loading peaks near 19 GB before calibration, above training's 16.8 GB",
+    "hardware_profiles.bf16.vram_mb": "derived: the bf16 transformer and T5 resident, plus VAE, LoRA state and activations, 31.1 GB before calibration",
+    "hardware_profiles.bf16_cached.vram_mb": "derived: loading peaks with the bf16 transformer and T5 both on the GPU, 27.9 GB before calibration, before the encoder is unloaded",
+    "hardware_profiles.*.max_rank, max_batch": "the rank and batch size the VRAM figures were derived at",
+    "hardware_profiles.*.ram_mb": "derived: the 17.8 GB transformer state dict stays referenced in RAM while the 9.5 GB bf16 T5 loads, x1.3 for what Krea 2's RAM derivation missed against its resident-memory measurement, and x1.1 margin"
+  }
+}
