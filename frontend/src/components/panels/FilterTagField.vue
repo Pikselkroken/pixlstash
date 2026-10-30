@@ -32,7 +32,7 @@
           :aria-describedby="`${listId}-hint`"
           @keydown.down.prevent="move(1)"
           @keydown.up.prevent="move(-1)"
-          @keydown.enter.prevent="onEnter"
+          @keydown.enter.prevent.stop="onEnter"
           @keydown.tab="onTab"
           @keydown.backspace="removeLast"
           @keydown.esc="onEsc"
@@ -211,10 +211,16 @@ function onEnter(event) {
 
 // Tab completes like Enter while there is a suggestion to take; with none it
 // moves focus as usual, so the field is never a keyboard trap.
+//
+// Both keys stop here when the field takes them: the menu around it (a
+// VMenu that stays open on a click inside) reads Enter and Tab as "focus the
+// next control, or close when there is none", so a tag typed before the
+// vocabulary arrived, or one with no match, closed the whole Filters menu.
 function onTab(event) {
   const item = suggestions.value[highlight.value];
   if (!item || event.isComposing) return;
   event.preventDefault();
+  event.stopPropagation();
   add(item.tag, event.shiftKey);
 }
 

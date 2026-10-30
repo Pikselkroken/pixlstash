@@ -296,6 +296,29 @@ describe("FilterMenu", () => {
     expect(store.tagFilter).toEqual(["outdoors"]);
   });
 
+  it("keeps Enter, and a Tab that takes a tag, from the menu around the field", async () => {
+    const wrapper = await mountMenu();
+    await openKind(wrapper, "Tags");
+    const field = wrapper.find(".fm-sub input");
+    // The VMenu's own listener sits outside: Enter or Tab reaching it moves
+    // focus on, or closes the whole menu when nothing follows.
+    const reached = [];
+    wrapper.element.addEventListener("keydown", (e) => reached.push(e.key));
+
+    // No match (or a vocabulary not loaded yet): Enter does nothing at all.
+    await field.setValue("no such tag");
+    await field.trigger("keydown", { key: "Enter" });
+    await field.setValue("hat");
+    await field.trigger("keydown", { key: "Enter" });
+    await field.setValue("outdoors");
+    await field.trigger("keydown", { key: "Tab" });
+    expect(reached).toEqual([]);
+
+    // With nothing to take, Tab moves focus on as usual.
+    await field.trigger("keydown", { key: "Tab" });
+    expect(reached).toEqual(["Tab"]);
+  });
+
   it("leads with Favourites only, counted as the view plus favourite=1", async () => {
     const store = useFilterStore();
     const wrapper = await mountMenu();
