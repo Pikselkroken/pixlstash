@@ -1,7 +1,8 @@
 # Review context for the AI reviewer
 
 PixlStash: a FastAPI + SQLModel backend (`pixlstash/`) and a Vue 3 frontend
-(`frontend/`). Loaded by `.github/workflows/ai-review.yml` from `main`.
+(`frontend/`). Loaded by `.github/workflows/ai-review.yml` from the pull
+request's base branch.
 
 ## How to review
 
@@ -28,6 +29,31 @@ fragment format.
   so its requests run live. Do not ask to remove or rotate it. A finding is
   any other token string in those places, or this one given more than READ
   scope.
+
+## Known non-findings, do not report
+
+Each of these has come back across PRs and been wrong every time. None of them
+excuses an authorization, data-loss or secret-exposure defect in `pixlstash/` or
+`frontend/src/`: report those whatever this list says.
+
+- **Code that does not exist.** A suggestion that names a function, class,
+  config key or CSS selector must name one that exists in the repository.
+  Check before suggesting it; a suggestion built on an invented API (a
+  `paint-compare-after` element, a `run_task_now` method, a `needs_engine`
+  attribute) is wrong whatever it is for.
+- **The kind of confirm dialog.** Some flows confirm with the browser's own
+  `confirm()`, others with an in-app dialog. Read the handler before saying a
+  test drives the wrong one; for example, Restore all in the Scrapheap uses
+  `confirm()`.
+- **E2E cleanup on a failed test.** The e2e specs share one backend. A cleanup
+  that only goes missing after an assertion has already failed is not a
+  finding: the run is red either way, and later specs assert on identities, not
+  counts. A spec that leaves state behind on a passing run is a finding.
+- **Guards that fail loudly.** An assertion that checks a precondition and
+  fails before acting (the Scrapheap holding only the test's own pictures,
+  the library holding no workflows) is intended. Do not suggest turning it into
+  `test.skip`, `test.fixme` or a softer check: that turns a broken fixture into
+  coverage that silently stops running.
 
 ## Backend rules to check
 
