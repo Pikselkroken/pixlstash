@@ -9,7 +9,8 @@ import { test, expect } from '../fixtures/test.js'
 // confirm's count is checked, Cancel is pressed, and the purge request is
 // blocked at the network so a broken Cancel fails the test instead of
 // destroying the shared fixture. Confirming either one needs pictures the spec
-// imported itself, which the e2e backend cannot do yet (#2320).
+// imported itself; the e2e backend provides them since #2320, and #2353 tracks
+// running the confirms for real.
 
 const API = '/api/v1'
 
