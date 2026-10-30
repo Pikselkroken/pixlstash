@@ -1561,7 +1561,7 @@ def create_router(server) -> APIRouter:
         def update_set(session, id, name, description, set_icon, set_color, locked):
             picture_set = session.get(PictureSet, id)
             if not picture_set:
-                return False
+                return False, False, False, []
 
             # Capture the projects the set is in before we mutate it, so we can
             # disassociate its member pictures from the ones it leaves.

@@ -181,6 +181,10 @@ def test_update_and_delete_picture_set():
         assert resp.status_code == 200
         resp = client.get(f"/picture_sets/{set_id}?info=true")
         assert resp.status_code == 404
+        # An editor still open on the deleted set (#2349).
+        resp = client.patch(f"/picture_sets/{set_id}", json={"name": "Stale"})
+        assert resp.status_code == 404, resp.text
+        assert resp.json()["detail"] == "Picture set not found"
     finally:
         server.close()
         temp_dir.cleanup()
