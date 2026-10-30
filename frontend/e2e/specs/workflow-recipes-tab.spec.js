@@ -393,9 +393,20 @@ test("deleting the last workflow leaves its recipes listed under the empty state
 }) => {
   const { workflowId, workflowName, names, recipes } = await seed(apiContext);
   try {
-    // The state this test is about, checked rather than assumed (#2356).
     const listed = await ok(await apiContext.get(`${API}/workflows`), "list the workflows");
-    expect(listed.cards.map((c) => c.id)).toEqual([workflowId]);
+    expect(listed.cards.map((c) => c.id)).toContain(workflowId);
+    // The state this test is about (#2356): the e2e backend seeds workflows at
+    // start-up (#2314), so the view is shown the server's own list with only
+    // this test's workflow in it. Before the delete that is its card; after,
+    // nothing. The delete and the recipes stay real.
+    await page.route(
+      (url) => url.pathname === `${API}/workflows`,
+      async (route) => {
+        const body = await (await route.fetch()).json();
+        const cards = body.cards.filter((c) => c.id === workflowId);
+        await route.fulfill({ json: { ...body, cards, hidden: 0, one_offs: 0 } });
+      },
+    );
 
     await page.goto("/workflows");
     const row = page.locator(`.wfv-row[data-key="${workflowId}"]`);
