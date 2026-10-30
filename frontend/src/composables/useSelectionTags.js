@@ -325,13 +325,20 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
     // A picture is skipped when none of its requests landed: a lock freezes
     // the whole picture, so one that took a tag was not skipped.
     const changed = new Set(done.map(pictureOf));
-    const skipped = new Set(
-      locked.map(pictureOf).filter((id) => !changed.has(id)),
-    ).size;
+    const skippedIds = [
+      ...new Set(locked.map(pictureOf).filter((id) => !changed.has(id))),
+    ];
+    const skipped = skippedIds.length;
     if (skipped) {
+      // The refusal itself names the locked sets; kept as an object so the
+      // console can expand it, as with a failure below.
+      const lockReason = results.find(
+        (r) => r.status === "rejected" && isLockedRefusal(r.reason),
+      ).reason;
       console.warn(
         `${skipped} picture(s) skipped: a locked set freezes them`,
-        locked,
+        skippedIds,
+        lockReason,
       );
       if (verb) {
         useNoticeStore().warning(
