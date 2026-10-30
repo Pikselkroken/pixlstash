@@ -307,6 +307,7 @@ def _stand_in_vault(monkeypatch, seen):
     stand_in = types.SimpleNamespace(
         _engine=None,
         _disable_background_workers=False,
+        _planner_finders=None,
         image_root="unused",
         _force_cpu=False,
         _fast_captions=True,

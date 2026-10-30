@@ -981,10 +981,15 @@ const footLine = computed(() =>
     .join(" "),
 );
 
+// The plan on screen must answer the choices now made: a plan for earlier
+// choices (the debounce has not fired yet) or a dataset still loading would
+// put a run on screen that Start does not queue.
 const canStart = computed(
   () =>
     !blocker.value &&
     !!resolution.value &&
+    plan.value?.choicesKey === store.choicesKey &&
+    !store.datasetLoading &&
     !store.planLoading &&
     !store.submitting,
 );

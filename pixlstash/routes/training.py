@@ -21,6 +21,9 @@ import os
 import re
 import shutil
 import tempfile
+import threading
+import time
+import unicodedata
 import zipfile
 from datetime import datetime, timezone
 from typing import Any, Literal, Optional
@@ -28,7 +31,7 @@ from typing import Any, Literal, Optional
 import psutil
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.background import BackgroundTask
 
 from pixlstash.database import DBPriority
@@ -50,7 +53,11 @@ from pixlstash.training import (
     presets,
     sample_prompts,
 )
-from pixlstash.training.config_render import TUNABLE_KEYS, TunableOverrideError
+from pixlstash.training.config_render import (
+    TUNABLE_KEYS,
+    TunableOverrideError,
+    normalise_trigger_word,
+)
 from pixlstash.utils.aitoolkit_run import read_output_root, read_run
 from pixlstash.utils.path_utils import path_is_within, resolve_path_within
 from pixlstash.utils.service.export_utils import ExportUtils
@@ -64,6 +71,31 @@ logger = get_logger(__name__)
 # The smallest set the effort tables' source reports a working LoRA from
 # (ostris/ai-toolkit#550: 6 to 46 pictures); the dialog warns below it.
 MIN_PICTURES = 6
+
+# The most pictures a resolve preview takes: far past any real set, and small
+# enough that the step arithmetic (float steps per picture) cannot overflow.
+MAX_PICTURE_COUNT = 1_000_000
+# Lengths follow the recipe names (200) and the model trigger words (500).
+MAX_JOB_NAME_LENGTH = 200
+MAX_TRIGGER_WORD_LENGTH = 500
+
+
+def _checked_text(value: str, field: str) -> str:
+    """Refuse a newline or other control character in a name or trigger word.
+
+    Raises:
+        ValueError: The value holds a control character (C0, DEL or C1, which
+            takes in U+0085) or a Unicode line or paragraph separator. Pydantic
+            turns it into a 422 naming the field.
+    """
+    if any(unicodedata.category(ch) in ("Cc", "Zl", "Zp") for ch in value):
+        raise ValueError(f"{field} cannot contain a newline or control character.")
+    return value
+
+
+# Seconds a checkout's commit is reused for: a pull shows up in the plan's
+# measurements this much later at most.
+_COMMIT_TTL_S = 30.0
 
 # ---------------------------------------------------------------------------
 # JSON parsing helpers for progress fields persisted as text columns
@@ -255,6 +287,8 @@ def create_router(server) -> APIRouter:
         The configured :class:`fastapi.APIRouter`.
     """
     router = APIRouter()
+    # A check holds a worker thread for up to PROBE + TRIAL timeouts; one at a time.
+    check_lock = threading.Lock()
     # Recipes downloaded from pixlstash.dev live beside the hub.
     presets.use_cache_dir(
         os.path.join(os.path.dirname(server.server_config_path), "training-presets")
@@ -325,12 +359,20 @@ def create_router(server) -> APIRouter:
             ),
         )
         name: str = Field(
-            ..., min_length=1, description="Human-readable name for the job."
+            ...,
+            min_length=1,
+            max_length=MAX_JOB_NAME_LENGTH,
+            description="Human-readable name for the job.",
         )
         trigger_word: str = Field(
             ...,
             min_length=1,
-            description="Caption trigger word baked into the training dataset.",
+            max_length=MAX_TRIGGER_WORD_LENGTH,
+            description=(
+                "Caption trigger word baked into the training dataset. Stripped "
+                "of surrounding spaces; the config, the sample prompts and the "
+                "captions all use the stripped word."
+            ),
         )
         preset: str = Field(
             default=presets.DEFAULT_PRESET,
@@ -358,11 +400,43 @@ def create_router(server) -> APIRouter:
             ),
         )
 
+        @field_validator("name")
+        @classmethod
+        def _name_is_plain(cls, value: str) -> str:
+            return _checked_text(value, "name")
+
+        @field_validator("trigger_word")
+        @classmethod
+        def _trigger_word_is_plain(cls, value: str) -> str:
+            word = normalise_trigger_word(_checked_text(value, "trigger_word"))
+            if not word:
+                raise ValueError("trigger_word cannot be only spaces.")
+            return word
+
     class ResolveRequest(BaseModel):
         """Body for previewing what a run would use, without queueing it."""
 
         model_config = ConfigDict(extra="forbid")
 
+        set_id: Optional[int] = Field(
+            default=None,
+            description=(
+                "Picture-set scope, as POST /training/jobs takes it. With neither "
+                "scope the previews are written from no captions."
+            ),
+        )
+        character_id: Optional[int] = Field(
+            default=None,
+            description="Character scope, as POST /training/jobs takes it.",
+        )
+        trigger_word: Optional[str] = Field(
+            default=None,
+            max_length=MAX_TRIGGER_WORD_LENGTH,
+            description=(
+                "The caption trigger word a run would use. The sample prompts "
+                "are written with it."
+            ),
+        )
         preset: str = Field(
             default=presets.DEFAULT_PRESET,
             description="The training recipe's id (GET /training/presets).",
@@ -379,12 +453,20 @@ def create_router(server) -> APIRouter:
         picture_count: int = Field(
             ...,
             ge=0,
+            le=MAX_PICTURE_COUNT,
             description="Pictures in the dataset (GET /training/dataset).",
         )
         pins: Optional[dict[str, Any]] = Field(
             default=None,
             description="The owner's Advanced values, as POST /training/jobs takes.",
         )
+
+        @field_validator("trigger_word")
+        @classmethod
+        def _trigger_word_is_plain(cls, value: Optional[str]) -> Optional[str]:
+            if value is None:
+                return None
+            return normalise_trigger_word(_checked_text(value, "trigger_word")) or None
 
     # ── Response models ───────────────────────────────────────────────────
 
@@ -976,8 +1058,12 @@ def create_router(server) -> APIRouter:
 
     # ── Serialisation helpers ─────────────────────────────────────────────
 
+    def _checkout_version(repo_path: str | None) -> str | None:
+        return ai_toolkit_install.read_version(repo_path) if repo_path else None
+
     def _preset_items(repo_path: str | None) -> list[dict]:
         architectures = presets.checkout_architectures(repo_path)
+        version = _checkout_version(repo_path)
         return [
             {
                 "id": preset["id"],
@@ -985,7 +1071,7 @@ def create_router(server) -> APIRouter:
                 "label": preset["label"],
                 "base_model": preset["locked"]["model.name_or_path"],
                 "requires_arch": preset["requires_arch"],
-                "offered": presets.offered(preset, architectures),
+                "offered": presets.offered(preset, architectures, version),
                 "clips": presets.trains_clips(preset),
             }
             for preset in presets.list_presets()
@@ -1054,10 +1140,25 @@ def create_router(server) -> APIRouter:
         return "person"
 
     def _default_prompts(set_id, character_id, subject, trigger_word) -> dict:
-        captions, tags = ExportUtils.training_captions(
-            server, set_id=set_id, character_id=character_id
+        """The default sample prompts of a run of this scope.
+
+        With no scope (resolve asked without one) they are written from no
+        captions, which gives the same number of prompts.
+        """
+        captions, tags = [], []
+        if set_id is not None or character_id is not None:
+            captions, tags = ExportUtils.training_captions(
+                server, set_id=set_id, character_id=character_id
+            )
+        return sample_prompts.generate(
+            subject, captions, tags, normalise_trigger_word(trigger_word)
         )
-        return sample_prompts.generate(subject, captions, tags, trigger_word)
+
+    def _sample_prompt_texts(set_id, character_id, subject, trigger_word) -> list[str]:
+        """The prompt strings a run stores. Create and resolve both plan from these."""
+        return sample_prompts.prompt_texts(
+            _default_prompts(set_id, character_id, subject, trigger_word)
+        )
 
     def _cover_state(job: dict, run_dir_info) -> dict:
         """Which steps can cover the run, and which one does.
@@ -1311,21 +1412,32 @@ def create_router(server) -> APIRouter:
             )
         return set_id, owner
 
+    # repo path -> (read at, commit): /resolve runs on every change in the Train
+    # dialog, and must not start a git process each time.
+    commits: dict[str, tuple[float, str | None]] = {}
+
+    def _commit(repo_path: str) -> str | None:
+        read_at, commit = commits.get(repo_path, (None, None))
+        if read_at is None or time.monotonic() - read_at > _COMMIT_TTL_S:
+            commit = ai_toolkit_install.read_commit(repo_path)
+            commits[repo_path] = (time.monotonic(), commit)
+        return commit
+
     def _measured(repo_path: str | None) -> dict:
         """The checkout's commit and the card's name, which measurements are
         tied to (§25.20)."""
         reading = ledger().device(ledger().pixlstash_device())
         return {
-            "commit": ai_toolkit_install.read_commit(repo_path) if repo_path else None,
+            "commit": _commit(repo_path) if repo_path else None,
             "device": reading.name if reading is not None else None,
         }
 
     def _lookup(preset, context: dict):
         return measurements.make_lookup(server.vault.hub, preset, **context)
 
-    def _verdict(preset, architectures, context, **choices) -> str:
+    def _verdict(preset, offered: bool, context, **choices) -> str:
         """How *preset* would fit this machine with *choices* and no pins."""
-        if not presets.offered(preset, architectures):
+        if not offered:
             return "needs_checkout"
         try:
             resolution = presets.resolve(
@@ -1381,15 +1493,13 @@ def create_router(server) -> APIRouter:
                     "AI-toolkit before training."
                 ),
             )
-        if not presets.offered(preset, presets.checkout_architectures(repo_path)):
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    f"This ai-toolkit checkout has no {preset['requires_arch']} "
-                    f"model code, so it cannot train {preset['label']}. Update "
-                    "the checkout."
-                ),
-            )
+        refusal = presets.not_offered_because(
+            preset,
+            presets.checkout_architectures(repo_path),
+            _checkout_version(repo_path),
+        )
+        if refusal:
+            raise HTTPException(status_code=422, detail=refusal)
         subject = _subject_for(payload.subject, character_id)
         try:
             pins = presets.validate_pins(preset, payload.pins)
@@ -1409,8 +1519,8 @@ def create_router(server) -> APIRouter:
             )
         prompts = None
         if presets.PROMPTS_KEY not in pins:
-            prompts = sample_prompts.prompt_texts(
-                _default_prompts(set_id, character_id, subject, payload.trigger_word)
+            prompts = _sample_prompt_texts(
+                set_id, character_id, subject, payload.trigger_word
             )
         room = server.vault.training_room()
         if room["ram_mb"] is None:
@@ -1988,7 +2098,8 @@ def create_router(server) -> APIRouter:
             "with an argument list and a timeout. With no `python`, the checkout's "
             "own interpreter is found first. The response names the interpreter "
             "checked and gives the dataset and run folders for this checkout, as "
-            "/status does. Owner-only, from this machine."
+            "/status does. One check runs at a time: another while it runs is a "
+            "409. Owner-only, from this machine."
         ),
     )
     def check_ai_toolkit(payload: AiToolkitCheckRequest, request: Request):
@@ -2003,10 +2114,18 @@ def create_router(server) -> APIRouter:
                     "No Python found for this checkout: it has no .venv or venv, "
                     "and python3 is not on the PATH."
                 )
-            validate_ai_toolkit_settings(None, python)
+            validate_ai_toolkit_settings(payload.repo_path, python)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        result = ai_toolkit_install.check(payload.repo_path, python)
+        if not check_lock.acquire(blocking=False):
+            raise HTTPException(
+                status_code=409,
+                detail="An AI-toolkit check is already running. Try again when it ends.",
+            )
+        try:
+            result = ai_toolkit_install.check(payload.repo_path, python)
+        finally:
+            check_lock.release()
         result["python"] = python
         result.update(_ai_toolkit_folders(payload.repo_path))
         result["presets"] = _preset_items(payload.repo_path)
@@ -2073,10 +2192,10 @@ def create_router(server) -> APIRouter:
         description=(
             "Stores the ai-toolkit checkout and the Python that runs its trainer. "
             "Each is checked on this host first: the checkout must hold run.py and "
-            "the Python must be an executable file. Both null disconnects the "
+            "toolkit/, and the Python must be an executable in its .venv or venv, "
+            "or the python3 AI-toolkit itself would use. Both null disconnects the "
             "install. The Python is the trainer's argv[0] and the checkout its "
-            "working directory, so this is a host operation: a remote owner is "
-            "refused unless allow_remote_host_ops is set."
+            "working directory, so only this computer (loopback) may set them."
         ),
     )
     def put_ai_toolkit_config(payload: AiToolkitConfigRequest, request: Request):
@@ -2290,6 +2409,14 @@ def create_router(server) -> APIRouter:
                 )
             }
             return out
+        set_id = character_id = None
+        if payload.set_id is not None or payload.character_id is not None:
+            set_id, character_id = _scope(payload.set_id, payload.character_id)
+        # The same prompts POST /training/jobs plans from, so the previews
+        # counted here are the ones a run gets.
+        prompts = _sample_prompt_texts(
+            set_id, character_id, payload.subject, payload.trigger_word
+        )
         choices = {
             "subject": payload.subject,
             "effort": payload.effort,
@@ -2297,17 +2424,23 @@ def create_router(server) -> APIRouter:
             "picture_count": payload.picture_count,
             "vram_mb": room["vram_mb"],
             "ram_mb": room["ram_mb"],
+            "prompts": prompts,
         }
         user = server.auth.get_user()
         repo_path = user.ai_toolkit_repo_path if user is not None else None
         architectures = presets.checkout_architectures(repo_path)
+        version = _checkout_version(repo_path)
         context = _measured(repo_path)
+        offers = {
+            p["id"]: presets.offered(p, architectures, version)
+            for p in presets.list_presets()
+        }
         out["presets"] = [
             {
                 "id": p["id"],
                 "label": p["label"],
-                "offered": presets.offered(p, architectures),
-                "verdict": _verdict(p, architectures, context, **choices),
+                "offered": offers[p["id"]],
+                "verdict": _verdict(p, offers[p["id"]], context, **choices),
             }
             for p in presets.list_presets()
         ]

@@ -94,7 +94,11 @@ const SENTENCE_ONE_GPU =
   "Its venv has torch 2.13 with CUDA and sees one GPU with 24 GB. A trial start loaded the trainer and exited without training.";
 
 const NOT_CONNECTED = { ai_toolkit_repo_path: null, ai_toolkit_python: null };
-const CONNECTED = { ai_toolkit_repo_path: REPO, ai_toolkit_python: PY };
+const CONNECTED = {
+  ai_toolkit_repo_path: REPO,
+  ai_toolkit_python: PY,
+  ai_toolkit_configured: true,
+};
 // The PUT body: the checkout and its Python, or both null to disconnect.
 const SAVED = { repo_path: REPO, python: PY };
 const CLEARED = { repo_path: null, python: null };
@@ -135,6 +139,8 @@ beforeEach(() => {
   Object.values(training).forEach((fn) => fn.mockReset());
   Object.values(config).forEach((fn) => fn.mockReset());
   config.getUserConfig.mockResolvedValue(NOT_CONNECTED);
+  // The PUT answers with what it stored, as the route does.
+  training.putAiToolkitConfig.mockImplementation(async (body) => body);
   training.discoverAiToolkit.mockResolvedValue(FOUND);
   training.checkAiToolkit.mockResolvedValue(CHECK_OK);
   training.getAiToolkitStatus.mockResolvedValue(STATUS);

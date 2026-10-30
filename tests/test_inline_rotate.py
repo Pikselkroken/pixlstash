@@ -643,6 +643,33 @@ def test_a_180_rotate_changes_the_thumbnail_cache_version(client, server):
     assert after == "320x240o3"
 
 
+def test_a_rotate_before_the_thumbnail_is_processed_changes_the_url(client, server):
+    """A turn changes the served URL even while the bitmap's size is unknown.
+
+    The rotate NULLs ``thumbnail_width`` / ``thumbnail_height`` until the
+    sweep regenerates the bitmap, so the version falls back to ``"0"``. With the
+    orientation dropped there, a picture not yet processed, or a second turn
+    inside that window, kept the same URL and the grid painted the old bitmap
+    (#2324's rotate spec, which runs with the sweep off, caught it).
+    """
+    picture_id = _upload(client)
+
+    def _thumbnail_url():
+        resp = client.post(f"{API}/pictures/thumbnails", json={"ids": [picture_id]})
+        assert resp.status_code == 200, resp.text
+        return resp.json()[str(picture_id)]["thumbnail"]
+
+    first = _thumbnail_url()
+    assert _rotate(client, [picture_id], "cw").status_code == 200
+    second = _thumbnail_url()
+    assert _rotate(client, [picture_id], "cw").status_code == 200
+    third = _thumbnail_url()
+
+    assert len({first, second, third}) == 3, (
+        f"each turn must give the thumbnail a new URL, got {first}, {second}, {third}"
+    )
+
+
 def test_the_thumbnail_route_regenerates_a_turned_bitmap_on_the_next_request(
     client, server
 ):

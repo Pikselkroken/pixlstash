@@ -385,7 +385,12 @@ import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { errorDetail } from "../../utils/apiError";
 import { saveFileAs } from "../../utils/downloadFile";
-import { isBusyJob, LIVE_STATUSES } from "../../utils/trainingRuns.js";
+import {
+  isBusyJob,
+  isQueuedBehindRun,
+  LIVE_STATUSES,
+  WAITING_BEHIND_RUN,
+} from "../../utils/trainingRuns.js";
 
 const props = defineProps({
   jobId: { type: Number, required: true },
@@ -625,7 +630,7 @@ const headline = computed(() => {
     : "Training";
   switch (run.status) {
     case "queued":
-      return PHASE_LABELS.waiting_gpu;
+      return isQueuedBehindRun(run.waiting) ? WAITING_BEHIND_RUN : PHASE_LABELS.waiting_gpu;
     case "stopping":
       return `Stopping at step ${run.step.toLocaleString()}`;
     case "stopped":
@@ -678,7 +683,8 @@ const notice = computed(() => {
     };
   }
   if (run.waiting) {
-    return { kind: "info", icon: "mdi-information-outline", title: "Waiting for the GPU.", text: run.waiting.text || "" };
+    const title = isQueuedBehindRun(run.waiting) ? `${WAITING_BEHIND_RUN}.` : "Waiting for the GPU.";
+    return { kind: "info", icon: "mdi-information-outline", title, text: run.waiting.text || "" };
   }
   if (run.telemetry.paging) {
     return {
@@ -826,6 +832,16 @@ async function useStep(step) {
 }
 
 async function stop() {
+  // The same confirmation as Settings' Cancel: a stopped run cannot resume.
+  // Skip previews (a trained run) keeps the model, so it does not ask.
+  if (
+    live.value?.status !== "completed" &&
+    !window.confirm(
+      `Stop training "${live.value?.name}"? The run will stop and cannot be resumed.`,
+    )
+  ) {
+    return;
+  }
   stopping.value = true;
   try {
     await cancelTrainingJob(props.jobId);
@@ -862,6 +878,8 @@ let timer = null;
 let generation = 0;
 // A run this library does not hold will not appear by asking again.
 let notFound = false;
+// A read in flight at unmount still reaches schedule(); it must not re-arm.
+let disposed = false;
 
 async function load() {
   const gen = ++generation;
@@ -883,7 +901,7 @@ async function load() {
 function schedule() {
   clearTimeout(timer);
   timer = null;
-  if (document.visibilityState !== "visible" || notFound) return;
+  if (disposed || document.visibilityState !== "visible" || notFound) return;
   if (live.value && !isLive.value) return;
   timer = setTimeout(async () => {
     await load();
@@ -916,6 +934,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  disposed = true;
   generation += 1;
   clearTimeout(timer);
   document.removeEventListener("visibilitychange", onVisible);

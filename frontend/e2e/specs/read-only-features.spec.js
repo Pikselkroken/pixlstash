@@ -129,6 +129,71 @@ test.describe('read-only session: owner-only features stay visible', () => {
     }
   })
 
+  // The workflow library is the Models case again (#2319): every /workflows
+  // route is OWNER_ONLY, so the whole screen is the owner-only action. Its
+  // verbs (delete, rename, Save, Run, download missing) are never drawn for a
+  // READ session, because the screen that holds them is never mounted; what
+  // stays visible and explains itself is the workspace segment.
+  test('shows Workflows as inert, and the owner session still reaches it', async ({
+    browser,
+    apiContext,
+    baseURL,
+    page: ownerPage,
+  }) => {
+    // The positive control first: the owner's own session goes there, so the
+    // refusal below is the token's and not a broken route.
+    await ownerPage.goto('/')
+    const ownerWorkflows = ownerPage
+      .getByRole('navigation', { name: 'Workspace' })
+      .getByRole('link', { name: 'Workflows' })
+    await ownerWorkflows.click()
+    await ownerPage.waitForURL((u) => new URL(u).pathname === '/workflows')
+    await expect(ownerPage.getByRole('region', { name: 'Workflows' })).toBeVisible()
+
+    const token = await mintLibraryReadToken(apiContext)
+    const context = await browser.newContext({ baseURL, storageState: undefined })
+    const page = await context.newPage()
+
+    const workflowCalls = []
+    page.on('request', (req) => {
+      const path = new URL(req.url()).pathname
+      if (path.startsWith('/api/v1/workflows')) workflowCalls.push(path)
+    })
+    const visited = []
+    page.on('framenavigated', (frame) => {
+      if (frame === page.mainFrame()) visited.push(new URL(frame.url()).pathname)
+    })
+
+    try {
+      await page.goto(`/?token=${encodeURIComponent(token)}`)
+      // What a READ session can do still works: the library's pictures.
+      await expect(page.locator('.thumbnail-card').first()).toBeVisible({
+        timeout: 15_000,
+      })
+
+      const workspaces = page.getByRole('navigation', { name: 'Workspace' })
+      const workflows = workspaces.getByRole('button', { name: 'Workflows' })
+      await expect(workflows).toBeVisible()
+      await expect(workflows).toHaveAttribute('aria-disabled', 'true')
+      await expect(workflows).toHaveAccessibleDescription(
+        'The workflow library is only available in your own library',
+      )
+      await expect(workflows).toBeDisabled()
+      await expect(workflows).not.toHaveAttribute('disabled', /.*/)
+
+      // `force` for the reason given for Models above: the press must reach
+      // the segment, and navigate nowhere.
+      await workflows.click({ force: true })
+      await page.waitForTimeout(500)
+      expect(visited).not.toContain('/workflows')
+      // The open segment beside it is a positive control in the same bar.
+      await expect(workspaces.getByRole('link', { name: 'Media' })).toBeVisible()
+      expect(workflowCalls).toEqual([])
+    } finally {
+      await context.close()
+    }
+  })
+
   test('explains the Duplicates destination when it is reached by URL', async ({
     browser,
     apiContext,
@@ -194,6 +259,44 @@ test.describe('read-only session: owner-only features stay visible', () => {
       expect(url.searchParams.get('token')).toBe(token)
       // …and asked the shelf for nothing on the way through.
       expect(shelfCalls).toEqual([])
+    } finally {
+      await context.close()
+    }
+  })
+
+  // A pasted workflow link, deep link and all, bounces the same way: the
+  // selection, the rail and Edit LoRAs it asks for are all owner-only reads.
+  test('bounces a Workflows deep link when it is reached by URL', async ({
+    browser,
+    apiContext,
+    baseURL,
+  }) => {
+    const token = await mintLibraryReadToken(apiContext)
+    const context = await browser.newContext({ baseURL, storageState: undefined })
+    const page = await context.newPage()
+
+    const workflowCalls = []
+    page.on('request', (req) => {
+      const path = new URL(req.url()).pathname
+      if (path.startsWith('/api/v1/workflows')) workflowCalls.push(path)
+    })
+
+    try {
+      const link = new URLSearchParams({
+        workflow: `auto:${'a'.repeat(64)}`,
+        edit: 'loras',
+        token,
+      })
+      await page.goto(`/workflows?${link}`)
+
+      await page.waitForURL((u) => new URL(u).pathname === '/', {
+        timeout: 15_000,
+      })
+      await expect(page.locator('.thumbnail-card').first()).toBeVisible()
+      expect(new URL(page.url()).searchParams.get('token')).toBe(token)
+      await expect(page.getByRole('region', { name: 'Workflows' })).toHaveCount(0)
+      await expect(page.getByRole('dialog', { name: 'Edit LoRAs' })).toHaveCount(0)
+      expect(workflowCalls).toEqual([])
     } finally {
       await context.close()
     }

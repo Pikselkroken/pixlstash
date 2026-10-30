@@ -68,6 +68,7 @@ from pixlstash.hub.bootstrap import (
     unusable_vault_from_open_failure,
 )
 from pixlstash.hub.registry import LibraryRegistry
+from pixlstash.services.e2e_seed_service import seed_reference_folder
 from pixlstash.services.library_switch_service import LibrarySwitchService
 from pixlstash.services.workflow_bindings import migrate_workflow_folder
 from pixlstash.services.workflow_events import announce_changed_workflows
@@ -163,9 +164,10 @@ from pixlstash.routes.training import create_router as create_training_router
 from pixlstash.routes.telemetry import create_router as create_telemetry_router
 from pixlstash.routes.resources import create_router as create_resources_router
 from pixlstash.routes.test_hooks import create_router as create_test_hooks_router
-from pixlstash.routes.test_hooks import seed_model_folder
+from pixlstash.routes.test_hooks import isolate_e2e_data, seed_model_folder
 from pixlstash.routes.workflows import create_router as create_workflows_router
 from pixlstash.server_config_io import DEVICE_ON_DISK_KEY, persist_server_config
+from pixlstash.tasks import TaskType
 from pixlstash.utils.accelerator import VALID_DEVICE_SETTINGS
 from pixlstash.utils.atomic_write import write_json_atomic
 from pixlstash.utils.path_mapper import PathMapper
@@ -630,6 +632,11 @@ class Server(
         # issue #168), and it means a test or an alternate deployment gets its
         # own hub instead of reaching into the user's real one.
         hub_path = os.path.join(os.path.dirname(self._server_config_path), "hub.db")
+        # Before the hub opens: its data steps read the user workflow folder.
+        if self._server_config.get("enable_test_hooks", False) and (
+            self._server_config.get("e2e_data_dir")
+        ):
+            isolate_e2e_data(self._server_config["e2e_data_dir"])
         self._hub_bootstrap = bootstrap_hub(
             self._server_config["image_root"],
             hub_path,
@@ -1141,6 +1148,13 @@ class Server(
             if Server.DEFAULT_FORCE_CPU is not None
             else startup_forced_cpu
         )
+        # E2E only: run submitted tasks and a few named sweeps, never the ones
+        # that would rewrite the fixture (tags, embeddings, scores).
+        planner_finders = None
+        if self._server_config.get("enable_test_hooks", False):
+            names = self._server_config.get("e2e_planner_finders")
+            if names is not None:
+                planner_finders = frozenset(TaskType(name) for name in names)
         return Vault(
             image_root=image_root,
             description=User().description,
@@ -1148,6 +1162,7 @@ class Server(
             path_mapper=self.path_mapper,
             disable_background_workers=not workers
             or self._server_config.get("disable_background_workers", False),
+            planner_finders=planner_finders,
             force_cpu=bool(force_cpu),
             fast_captions=Server.DEFAULT_FAST_CAPTIONS,
             daily_snapshots_enabled=self._server_config.get("daily_snapshots", True),
@@ -2065,6 +2080,8 @@ class Server(
             )
             if self._server_config.get("e2e_model_folder"):
                 seed_model_folder(self, self._server_config["e2e_model_folder"])
+            if self._server_config.get("e2e_reference_folder"):
+                seed_reference_folder(self, self._server_config["e2e_reference_folder"])
 
         @self.api.middleware("http")
         async def auth_middleware(request: Request, call_next):

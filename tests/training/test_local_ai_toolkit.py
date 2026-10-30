@@ -399,6 +399,40 @@ def test_an_unverifiable_inherited_pid_stays_alive_but_is_never_signalled(
         sleeper.wait()
 
 
+def test_trainer_identity_is_read_through_psutil_not_proc(tmp_path, monkeypatch):
+    """Identity comes from psutil's cmdline, so it works off Linux too.
+
+    The fake process has no /proc entry behind it, which is how macOS and
+    Windows look to the old /proc read: the check must still answer from the
+    cmdline. A process that names another run, or that cannot be read, is not
+    verified.
+    """
+    backend = _make_backend()
+    handle = backend.prepare(_make_spec(tmp_path))
+    handle.pid = 987_654_321  # no such pid on any platform
+    argv_for = {}
+
+    class FakeProcess:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def cmdline(self):
+            return argv_for[self.pid]
+
+    monkeypatch.setattr(psutil, "Process", FakeProcess)
+    argv_for[handle.pid] = [sys.executable, backend.run_script, handle.config_path]
+    assert backend._is_our_trainer(handle) is True
+
+    argv_for[handle.pid] = [sys.executable, "some_other_script.py", handle.config_path]
+    assert backend._is_our_trainer(handle) is False
+
+    def denied(self):
+        raise psutil.AccessDenied(handle.pid)
+
+    monkeypatch.setattr(FakeProcess, "cmdline", denied)
+    assert backend._is_our_trainer(handle) is None
+
+
 def test_cancel_still_signals_an_inherited_trainer_it_can_verify(tmp_path, monkeypatch):
     """The positive control for the check above: after a restart, a process whose
     cmdline names this backend's run script and the job's config is our trainer,

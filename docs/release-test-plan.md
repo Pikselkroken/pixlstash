@@ -31,7 +31,7 @@ plan; legacy § numbers are still cited in spec titles):
 | §4 Lightbox open/navigate/close | `lightbox.spec.js` |
 | §5 Tags add/remove | `tags.spec.js` |
 | §6 Star rating — overlay persist + grid stars + grid↔overlay sync | `rating.spec.js` |
-| §7/§8/§9 Set/project/character navigation & filtering | `entities.spec.js`, `set-operations.spec.js`, `set-locking.spec.js` |
+| §7/§8/§9 Set/project/character navigation & filtering; create, edit, delete | `entities.spec.js`, `set-operations.spec.js`, `set-locking.spec.js`, `sidebar-entries.spec.js` |
 | §10 Faces crops + bounding boxes | `faces.spec.js` |
 | Delete to the Scrapheap (key, Selection ▾, context menu, lightbox), locked-set refusal, Restore / Restore all, Empty and Delete forever up to Cancel | `scrapheap.spec.js` (confirming a purge stays manual until #2320) |
 | §11 Stack expand/collapse | `stacks.spec.js` (badge click + visual stacking order stay manual) |
@@ -265,11 +265,12 @@ inside the overlay directory), then launch:
 
 ## 5. Import & background processing
 
-The e2e harness runs with `disable_background_workers: true` and the import
-endpoint requires the face worker — so everything here needs a real server
+The e2e harness runs submitted tasks (an import through the Import dialog is
+automated, `media-fixture.spec.js`) but loads no models and runs none of the
+tagging, embedding or scoring sweeps — so everything here needs a real server
 run with workers ON.
 
-- [ ] Drag two or more image files from the OS file manager onto the grid and drop — import starts immediately, a progress indicator appears, and the pictures appear in the grid without a reload (the drag overlay itself is automated; the drop → import path is not)
+- [ ] Drag two or more image files from the OS file manager onto the grid and drop — import starts immediately, a progress indicator appears, and the pictures appear in the grid without a reload (the drag overlay and a one-file import through the Import dialog are automated; a real OS drop is not)
 - [ ] After importing a batch of 5+ pictures: the task indicator shows live progress; faces, a generated caption (Description section), and predicted tags appear on the new pictures once processing completes
 - [ ] Deleting all tags on a processed picture and requeueing (Reset and regenerate) produces fresh predictions
 
@@ -360,10 +361,9 @@ regression when someone stumbles into it — not so that anyone goes looking.
 
 ## 11. Review Sessions — manual remainder
 
-Board + create + binary decide + Escape-close are automated
-(`review-board.spec.js`, `review-session.spec.js`; four further cases are
-`fixme`-guarded pending behaviour reconciliation). The rest needs a real vault
-or human judgement.
+Board + the session loop (create, binary decide, Escape-close, Undo, Skip,
+keyboard, completion/archive) are automated (`review-board.spec.js`,
+`review-session.spec.js`). The rest needs a real vault or human judgement.
 
 ### 11.1 Board signals not exercisable on the committed fixture
 

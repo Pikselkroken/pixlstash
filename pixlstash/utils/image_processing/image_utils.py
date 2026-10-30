@@ -875,17 +875,23 @@ class ImageUtils:
             file_path: The picture's stored ``file_path``; ``None`` only for a
                 row with no file, which has no thumbnail to serve either.
 
+        The orientation is kept while the dimensions are missing too. A rotate
+        NULLs them until the thumbnail sweep regenerates the bitmap, so a second
+        turn inside that window, or a turn of a picture not yet processed,
+        would otherwise leave the URL at ``"0"`` both sides of the turn.
+
         Returns:
             ``"<width>x<height>"`` for an unrotated picture,
-            ``"<width>x<height>o<orientation>"`` for a rotated one, or ``"0"``
-            when either dimension is missing, then ``-<file digest>``.
+            ``"<width>x<height>o<orientation>"`` for a rotated one, ``"0"`` (or
+            ``"0o<orientation>"``) when either dimension is missing, then
+            ``-<file digest>``.
         """
         if not (thumbnail_width and thumbnail_height):
             version = "0"
         else:
             version = f"{thumbnail_width}x{thumbnail_height}"
-            if orientation and int(orientation) != 1:
-                version = f"{version}o{int(orientation)}"
+        if orientation and int(orientation) != 1:
+            version = f"{version}o{int(orientation)}"
         if not file_path:
             return version
         digest = hashlib.blake2s(file_path.encode("utf-8"), digest_size=4).hexdigest()

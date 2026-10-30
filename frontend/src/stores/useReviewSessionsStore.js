@@ -14,7 +14,7 @@
 // streak counters are monotonic - Undo never decrements them, and stickers are
 // never clawed back.
 
-import { ref, computed, onScopeDispose } from "vue";
+import { ref, computed, onScopeDispose, toRaw } from "vue";
 import { defineStore } from "pinia";
 import { onSessionReset } from "../utils/apiClient";
 import { getUserConfig } from "../api/config";
@@ -233,7 +233,9 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   // Per-session client-side state, keyed by review id.
   const queues = ref({}); // { [id]: { items: [], loading, error } }
   const tallies = ref({}); // { [id]: { removed, added, kept, skipped } }
-  const undoStacks = ref({}); // { [id]: [{ item, action, delta, votes }] }
+  // { [id]: [{ item, action, delta, votes, written }] } - `written` settles
+  // true once the entry's own write has landed, false if it failed.
+  const undoStacks = ref({});
   // Open-review ids whose pre-session server receipt has already been folded
   // into `tallies` once (see seedTallyFromReceipt). Non-reactive: it only gates
   // the one-time seed so a mid-review refresh can't fold the same decisions in
@@ -966,6 +968,29 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
 
   // --- Decisions ----------------------------------------------------------------
 
+  // A decision or skip is undoable the moment its card leaves the queue, not
+  // when its write lands: the tally already shows it, so a U pressed in between
+  // must not answer "Nothing to undo". undo() waits on `written` instead.
+  function pushUndo(id, entry, write) {
+    entry.written = write.then(
+      () => true,
+      () => false,
+    );
+    undoStacks.value = {
+      ...undoStacks.value,
+      [id]: [...(undoStacks.value[id] || []), entry],
+    };
+  }
+
+  // The stack holds reactive proxies of its entries, so compare the raw ones.
+  function dropUndo(id, entry) {
+    const raw = toRaw(entry);
+    undoStacks.value = {
+      ...undoStacks.value,
+      [id]: (undoStacks.value[id] || []).filter((e) => toRaw(e) !== raw),
+    };
+  }
+
   function bumpTally(id, delta, sign = 1) {
     const t = { removed: 0, added: 0, kept: 0, ...(tallies.value[id] || {}) };
     for (const k of Object.keys(delta)) {
@@ -1014,12 +1039,11 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     // Gamification fires on the optimistic pop (a failed write never claws a
     // sticker back - the schedule is about the act of deciding).
     noteDecision(s.tag);
+    const entry = { item, action, delta, votes };
+    const write = resolveTagSuggestion(item.id, action);
+    pushUndo(id, entry, write);
     try {
-      await resolveTagSuggestion(item.id, action);
-      undoStacks.value = {
-        ...undoStacks.value,
-        [id]: [...(undoStacks.value[id] || []), { item, action, delta, votes }],
-      };
+      await write;
       // Refill when the local page runs dry but the review still has pending.
       const row = sessions.value.find((x) => x.id === id);
       if (!queueFor(id).items.length && (row?.progress?.pending ?? 0) > 0) {
@@ -1028,6 +1052,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
       return true;
     } catch (e) {
       // Put it back at the head and surface the error; nothing silently lost.
+      dropUndo(id, entry);
       setQueue(id, { items: [item, ...queueFor(id).items] });
       bumpTally(id, delta, -1);
       bumpProgress(id, { done: -1, pending: 1 });
@@ -1077,16 +1102,13 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     setQueue(id, { items: queueFor(id).items.slice(1) });
     bumpTally(id, { skipped: 1 });
     bumpProgress(id, { pending: -1, skipped: 1 });
+    const entry = { item, action: "skip", delta: { skipped: 1 }, votes: [] };
+    const write = skipTagSuggestion(item.id);
+    pushUndo(id, entry, write);
     try {
-      await skipTagSuggestion(item.id);
-      undoStacks.value = {
-        ...undoStacks.value,
-        [id]: [
-          ...(undoStacks.value[id] || []),
-          { item, action: "skip", delta: { skipped: 1 }, votes: [] },
-        ],
-      };
+      await write;
     } catch (e) {
+      dropUndo(id, entry);
       if (e?.response?.status === 404) {
         // Already gone server-side - the card stays out of the queue, but it is
         // not reopenable, so no undo entry is recorded.
@@ -1103,8 +1125,13 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   // Reopen every card skipped in THIS client session (their ids live on the
   // undo stack) and put them back in the queue.
   async function reopenSkipped(id) {
-    const stack = undoStacks.value[id] || [];
-    const skips = stack.filter((e) => e.action === "skip");
+    const pending = (undoStacks.value[id] || []).filter(
+      (e) => e.action === "skip",
+    );
+    // A skip still in flight is reopened only once it has landed; one that
+    // failed has already rolled back and left the stack.
+    const landed = await Promise.all(pending.map((e) => e.written));
+    const skips = pending.filter((e, i) => landed[i] !== false);
     if (!skips.length) return;
     // Settle every reopen independently - one dead/already-gone id must not
     // block reopening the rest (a single rejection in Promise.all did exactly
@@ -1134,7 +1161,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     if (!settled.size) return;
     undoStacks.value = {
       ...undoStacks.value,
-      [id]: stack.filter((e) => !settled.has(e)),
+      [id]: (undoStacks.value[id] || []).filter((e) => !settled.has(e)),
     };
     bumpTally(id, { skipped: settled.size }, -1);
     // `settled` = reopened (SKIPPED → PENDING) plus already-gone 404s (the row
@@ -1159,15 +1186,25 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     const s = activeSession.value;
     if (!s) return;
     const stack = undoStacks.value[s.id] || [];
-    const last = stack[stack.length - 1];
+    const at = stack.length - 1;
+    const last = stack[at];
     if (!last) return;
+    // Claim the entry before waiting, so a second U pressed meanwhile takes the
+    // one before it rather than undoing this decision twice.
+    dropUndo(s.id, last);
+    // Reopening before the write lands would race it server-side. A write
+    // that failed has already rolled itself back: nothing to undo.
+    if ((await last.written) === false) return;
     try {
       await reopenTagSuggestion(last.item.id);
     } catch (e) {
       error.value = e?.message || "Failed to undo";
+      // Back where it was claimed from, under any decision made meanwhile.
+      const now = [...(undoStacks.value[s.id] || [])];
+      now.splice(Math.min(at, now.length), 0, last);
+      undoStacks.value = { ...undoStacks.value, [s.id]: now };
       return;
     }
-    undoStacks.value = { ...undoStacks.value, [s.id]: stack.slice(0, -1) };
     bumpTally(s.id, last.delta, -1);
     if (last.action === "skip") {
       bumpProgress(s.id, { pending: 1, skipped: -1 });

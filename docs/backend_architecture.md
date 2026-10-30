@@ -477,7 +477,7 @@ List and import workflow files; read the workflow a picture carries. Running one
 
 **A workflow is stored as imported, and a run fills it without tokens** (#1303, `services/workflow_bindings.py`). `POST /comfyui/workflows/import` stores the JSON, UI or API format, as a new **manual workflow**: a hub `workflow_document` row (see *Manual workflows* below), never a file. Every import is a new workflow; identical copies are allowed and a name is no key, so there is no `matched`, `overwrite` or `keep_both` any more. A document past `MAX_WORKFLOW_FILE_BYTES` is a 413. A document not shaped like either format is a 400 and is not stored: `check_comfy_workflow` (`utils/comfyui_utilities.py`), called first in `store_manual_workflow`, wants a non-empty `nodes` list whose every node has an `id` and a `type`, beside a `links` list (or, in a schema-version-1 file that dropped an empty one, `state` or `last_node_id`), or (bare or under `prompt`) at least one node and every non-`pixlstash_*` entry a node with a `class_type` and an `inputs` object. What a run fills comes from `run_targets`: a workflow's `pixlstash_bindings` when it has them, otherwise detection on an API-format graph (exactly one picture input; exactly one positive prompt's text, one link upstream when a primitive feeds it — two of either is ambiguous and fills nothing, so a fixed style prompt combined with the subject is never overwritten). An empty caption leaves the prompt as the workflow has it. `fill` writes each path once from every role bound to it, so a template holding both tokens gets both values. `missing_placeholders` keeps its name and now means *no target for that role*, so the ComfyUI menus still choose by what a run can accept. **Bindings exist only for files the old import dialog wrote.** Start-up (`Server.DEFAULT_MIGRATE_WORKFLOW_TOKENS`, off in the suite because the folder is machine-global) runs `migrate_workflow_folder` once per folder. **The `.placeholder-bindings-migrated` marker is taken exclusively before the pass**, creating the folder on a fresh install, so an as-is import made after that start is never given empty bindings and a second process starting at once leaves the files alone; a file that could not be read or written for a reason that may pass (locked, disk full) is named in the marker's `retry` list and only those are tried at the next start, while a file that is not valid JSON is logged and left. Temp files are `mkstemp` names, removed on failure. In the pass, a file with tokens gets each token's JSON path and node as a binding and a neutral value back (`example.png`, an empty prompt); a file with none gets `pixlstash_bindings: []`, because the dialog let a workflow take no picture or no caption and detection must not start filling those. Each rewritten file keeps its original beside it as `<name>.json.pre-bindings`, which is also the way back for an older build, whose run route needs the tokens. A token inside a longer string is bound with that string as its `template`, so a run still substitutes into it; the stored value loses the token, the binding is `recovered: false` and the list reports the workflow `flagged`. `_meta` is never read for tokens. Import runs `migrate_placeholders` too, so an old export is stored the way its siblings were and matches them. Detection is a known reach until #1305: a caption-only workflow with a fixed reference `LoadImage` imported as-is now fills that loader, where one the old dialog stored keeps its bindings and stays t2i.
 
-**The watched `workflows/` folder is an inbox** (#1304, `services/workflow_inbox.py`). It sits in the app's data directory beside `comfyui-workflows/`. A `.json` put there is stored as a manual workflow by `routes/comfyui.store_inbox_workflow`, **once per content**: it is deduplicated on `workflow_origin` alone (`stored_as`, the content hash of any origin row naming a live workflow), and a new one is stored with its `inbox` origin row in the same transaction. The file is then renamed `<stem>.<hash>.json`: `content_hash` is the first 16 hex of the sha256 of `workflow_bindings.canonical` over the migrated document, and a rename never replaces an existing file. Start-up (`Server.DEFAULT_WATCH_WORKFLOW_INBOX`, off in the suite because the folder is machine-global) runs `reconcile` after the placeholder migration and then starts `WorkflowInboxWatcher`, a watchdog observer that reconciles one second after the last `.json` event. `reconcile` holds `INBOX_LOCK` and is idempotent: a file already stored matches its origin row, so a restart re-imports nothing; editing a file in the inbox is new content and stores a new workflow. A file that is not a JSON object, or not a workflow, is logged and left. **Removing a file never deletes a workflow.** Deleting a manual workflow (`DELETE /workflows/{workflow_id}`, under `INBOX_LOCK`) writes its document back into the inbox and sends it to the system trash (`trash_workflow`, `send2trash`) before its rows go, sweeping only the inbox files this workflow owns, so a failed trash keeps the workflow and restoring the trashed file imports it again. The Workflows list does not refresh on a watched import; it shows the workflow the next time it is fetched.
+**The watched `workflows/` folder is an inbox** (#1304, `services/workflow_inbox.py`). It sits in the app's data directory beside `comfyui-workflows/`. A `.json` put there is stored as a manual workflow by `routes/comfyui.store_inbox_workflow`, **once per content**: it is deduplicated on `workflow_origin` alone (`stored_as`, the content hash of any origin row naming a live workflow), and a new one is stored with its `inbox` origin row in the same transaction. The file is then renamed `<stem>.<hash>.json`: `content_hash` is the first 16 hex of the sha256 of `workflow_bindings.canonical` over the migrated document, and a rename never replaces an existing file. Start-up (`Server.DEFAULT_WATCH_WORKFLOW_INBOX`, off in the suite because the folder is machine-global) runs `reconcile` after the placeholder migration and then starts `WorkflowInboxWatcher`, a watchdog observer that reconciles one second after the last `.json` event. `reconcile` holds `INBOX_LOCK` and is idempotent: a file already stored matches its origin row, so a restart re-imports nothing; editing a file in the inbox is new content and stores a new workflow. A file that is not a JSON object, or not a workflow, is logged and left. **Removing a file never deletes a workflow.** Deleting a manual workflow (`DELETE /workflows/{workflow_id}`, under `INBOX_LOCK`) writes its document back into the inbox and sends it to the system trash (`trash_workflow`, `send2trash`) before its rows go, sweeping only the inbox files this workflow owns, so a failed trash keeps the workflow and restoring the trashed file imports it again. The Workflows list does not refresh on a watched import; it shows the workflow the next time it is fetched. The e2e backend keeps the inbox, the user workflow folder and the trash under its work dir: its config names `e2e_data_dir`, read only with `enable_test_hooks`, and `routes/test_hooks.isolate_e2e_data` points `workflow_inbox.DATA_ROOT` there and swaps the `send2trash` package's function, and every module's already-bound copy, for a move into `<e2e_data_dir>/trash`, before the hub opens.
 
 **The file-keyed routes are retired (#1410).** `GET` / `PUT /comfyui/workflows/{workflow_name}/inputs` (the `selection` / `picker` / `fixed` setup, #1305), `GET .../parameters` and `PUT .../pins` (#1306), `POST .../run` (#1307), and `POST /comfyui/run_i2i`, `run_t2i` and `run_recipe` are all deleted. They keyed everything on a workflow **file name**, which the card model replaced: a card is content-addressed and carries its own defaults, pins, inputs and slots (`routes/workflows.py`, v1.12 B3/B4), and `POST /workflows/run` is the one run route. The hub's `workflow_picture_input` and `workflow_parameter_pins` tables stop being read; the hub is append-only, so they are not dropped. The readers that nothing calls any more went with the routes - `topology_index`, `assets_by_topology`, `adapter_slots_by_topology`, `picture_ghosts_by_topology` and the file-keyed `parameter_pins` / `replace_input_modes` in `hub/workflows.py`, and `read_library`, `read_topology_picture_ids` and `topology_picture_ids` in `services/workflow_library_service.py`. `_randomize_seeds` and `_apply_fixed_seed` in `services/comfyui_service.py` went too, superseded by `apply_seeds`. **Two were held unused for #1457 and are wired again**: `comfyui_service._upload_image_to_comfyui`, the only code that POSTs to ComfyUI's `/upload/image`, which `POST /workflows/run` now calls to fill a card's picture inputs, and `stacking.build_stack_filename_prefix`, which tags each save node of a stacked run so its outputs join the source's stack however they are imported (see "Filling a card's picture inputs" below). Its partner `_apply_filename_prefix` wrote one prefix onto every save node and was deleted; `_tag_for_stack` tags each node under its own. **One more is production-dead but test-held**, noted at its `def` so the next sweep does not take the function and its test together: `assets_for_recipe` (`hub/workflows.py`). What `GET /comfyui/workflows` still answers is below.
 
@@ -1165,6 +1165,8 @@ The write path has to tell the two apart. Blanking a description is how a pictur
 Most finders still fetch the full ORM row; only `MissingThumbnailFinder` and `MissingSmartScoreFinder` (the two hottest) have been narrowed so far.
 
 **User-triggered tasks** (e.g. `DETECTION`, `PICTURE_IMPORT`) have no finder: they are enqueued directly from a route in response to a user action and replace prior rows on re-run rather than being gated on a `NULL` column. A route that needs background work therefore submits a task (`Vault.submit_task`) — **never a bare thread**. The task runner owns the lifecycle, which is what gives the work a queue position, live progress in the worker-progress snapshot, a real terminal `status`, and a deterministic shutdown (#856).
+
+**A restricted planner (e2e only).** `Vault(planner_finders=...)` registers only the named finders, and a restricted vault builds no inference engine (`ensure_ready()` and `get_worker_future()` skip it), so a model finder kept in the set registers but never queues work. The Playwright backend uses it, through the server-config key `e2e_planner_finders` read only under `enable_test_hooks`: the task runner runs, so an import or a folder scan a spec starts completes, while the sweeps that would rewrite the fixture stay off. It keeps `REFERENCE_FOLDER_SCAN`, `WATCH_FOLDERS`, and `FACE_EXTRACTION`, which is there only because both import routes refuse unless that finder is registered with a live planner (`worker_unavailable_reason`).
 
 ### VRAM arbitration
 
@@ -11494,6 +11496,22 @@ short probe that prints torch's version and CUDA devices as JSON, then
 response share `_ai_toolkit_folders`, so the Folders step and the status card
 agree.
 
+Choosing that Python is choosing argv[0] of a host process: `/check` runs it at
+once and `PUT /training/ai-toolkit/config` makes it run on every training job.
+Both are `LOOPBACK_OWNER_ONLY`, like server restart (#2295), so a browser
+reaching PixlStash in a container through its bridge address is refused them
+too; and
+`validate_ai_toolkit_settings` accepts a Python only beside its checkout, from
+the checkout's `.venv` or `venv` or the one `find_python` picks, compared on
+normalised (not resolved) paths because a venv's `python` links out of it. A
+Python saved before that rule (a conda or system one) still runs jobs, but the
+Settings check refuses it until the checkout's own is connected. One
+check runs at a time; another while it runs is a 409. `GET /users/me/config`
+is owner-only, so it gives the two paths only to the §16.3 local tier that
+`/status` serves and `null` elsewhere, with `ai_toolkit_configured` saying
+whether an install is saved. `/training/resolve` reuses the checkout's commit
+for 30 s (`_COMMIT_TTL_S`), so the dialog does not start `git` on every change.
+
 A run lands in the shelf's `source` folder. `TrainingService._run_folders`
 takes the first `model_folder` row of kind `source`. When there is none, it
 registers `<repo>/output` through `register_model_folder`, the same function the
@@ -11525,7 +11543,7 @@ recipe is offered only when the checkout ships its model code,
 (`presets.checkout_architectures`). `GET /training/presets` answers the same for
 the saved checkout, and `POST /training/jobs` refuses, with a 422, a job when no
 checkout is saved and a recipe the saved checkout cannot run (naming the
-missing folder).
+missing folder, or the ai-toolkit version the recipe needs).
 
 ### 25.16 Training recipes and the memory-profile resolver (#2116)
 
@@ -11538,21 +11556,22 @@ Z-Image Turbo (`DEFAULT_PRESET`), Krea 2 Raw, FLUX.2 Klein 9B Base, Chroma1
 Base, MOSS-Image Base and MiniMax H3 in two modes, image and motion.
 `list_presets` puts the default first, because the Train dialog preselects the
 first recipe the checkout can run. All seven render over the same passthrough
-template. The six newer recipes lock `datasets[*].cache_latents_to_disk`: Krea
-2's VAE, encoding every step, measured 5 GB above training. Krea 2's 8-bit
+template. Every recipe locks `datasets[*].cache_latents_to_disk`: Krea
+2's VAE, encoding every step, measured 5 GB above training, and Z-Image Turbo's
+12 GB profiles are figures for cached text and latents (#2295). Krea 2's 8-bit
 profiles are `measured` (the probe's own shape, on a 32 GB card). Klein's,
 Chroma's and MOSS's are `derived` seeds, scaled by what Krea 2's derivation
 missed. The probe (§25.20) measures each setup on the owner's machine before
 its first run. Chroma has no profile below 8-bit: ai-toolkit's Chroma cannot
 offload layers and quantises on the GPU. MOSS needs ai-toolkit 0.13.28 or later
-(Base support and the fresh-cache tokenizer fix). The gate reads only the
-`moss_image` folder: a checkout before 0.13.27 lists the recipe as not offered,
-and a 0.13.27 checkout, which has the folder, is offered it and fails when
-ai-toolkit loads the model. Its 9B text encoder is larger than its transformer,
+(Base support and the fresh-cache tokenizer fix), which its optional
+`min_ai_toolkit` says: `presets.not_offered_because` refuses a checkout without
+the recipe's model folder, and, for a recipe with a minimum, one whose
+`version.py` is older or unreadable (#2295). Its 9B text encoder is larger than its transformer,
 so its offload profile offloads the text encoder too. MiniMax H3 is
 guidance-distilled and ships pre-quantised (int8 ConvRot transformer, nvfp4 text
-encoder), so both modes lock ai-toolkit's distillation handling (the training
-adapter and contrastive guidance) and write the `convrot8` / `nvfp4` qtypes its
+encoder), so both modes lock ai-toolkit's distillation handling since 0.13.23
+(the v3 training adapter, which needs no contrastive guidance) and write the `convrot8` / `nvfp4` qtypes its
 files already hold. Their 60%-offload profile is `measured` on a 32 GB card;
 without offloading, and with 30%, the transformer ran out of memory there, so
 the no-offload tier is a `derived` one for 40 GB cards. Image mode trains stills
@@ -11644,7 +11663,11 @@ length (`measurements.CLIP_FINGERPRINT_KEYS`, named only when a recipe
 resolves them, so other recipes keep their measurements). The rendered config is the template, the
 resolved values (checked by `validate_tunables`) and the locked keys merged
 last; placeholders are substituted after the merge, so a recipe's prompts get
-the trigger word.
+the trigger word. A sample prompt expands `{{TRIGGER_WORD}}` and nothing else,
+so a prompt naming `{{DATASET_FOLDER}}` or `{{TRAINING_FOLDER}}` stays literal
+and no host path reaches `/live`, which shows prompts unredacted (#2295). The
+trigger word is stripped once (`normalise_trigger_word`) wherever it is written:
+the request, the rendered config and the dataset agree.
 
 ### 25.17 Sample prompts written from the dataset (#2117)
 
@@ -11821,7 +11844,11 @@ and stays `queued` meanwhile: the live view shows "Checking memory and speed"
 from the lease, and a cancel or a shutdown simply stops the probe. The probe is
 the run's own config with `PROBE_STEPS` (6) updates at the largest bucket only,
 no "before" sample, one save and one round of previews at the end, written under
-`<work dir>/probe` and polled every second. It is stopped when available RAM
+`<work dir>/probe` and polled every second. The probe and each after-training
+preview pass write their trainer's pid on the run row as the main trainer does,
+and a pass stops a trainer that row names (when `psutil` says its command line
+is that job's) before it clears its folder, so a pass orphaned by a crash is not
+joined by a second trainer on the same card (#2295). It is stopped when available RAM
 falls below `RAM_GUARD_MB` (1 GB), which fails the run as "Not enough system
 RAM to start". **The search is bounded** (`MAX_PROBES`, 3): running out of
 memory (ai-toolkit's `out of memory`, `OutOfMemoryError` or its `OOM during
@@ -11930,7 +11957,10 @@ for an id is ignored. Anything else is logged and ignored.
 **Trust is TLS to pixlstash.dev**: the sha256 comes from the same origin, so it
 catches a truncated or mismatched file, not a compromised site. What such a site
 could still change is bounded by `TUNABLE_KEYS`' ranges (learning rate, steps,
-save and sample frequency, memory figures), never a checkpoint or code. A
+save and sample frequency, memory figures), never a checkpoint or code. The
+number of checkpoints a run keeps is what fills the disk, so
+`save.max_step_saves_to_keep` stops at 24 (#2295); false memory figures can
+still make a run run out of memory. A
 signature over the index is the upgrade if that bound is not enough.
 
 **The cache lives beside the hub**, `<config dir>/training-presets/<id>.json`,

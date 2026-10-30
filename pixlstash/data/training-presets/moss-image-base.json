@@ -1,6 +1,7 @@
 {
   "id": "moss-image-base",
   "version": 1,
+  "min_ai_toolkit": "0.13.28",
   "label": "MOSS-Image Base",
   "requires_arch": "moss_image",
   "template": "zimage-turbo-lora",

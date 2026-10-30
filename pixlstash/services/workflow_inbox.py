@@ -44,10 +44,15 @@ _DEBOUNCE_S = 1.0
 # reconcile never reads a file a delete then trashes and imports it again.
 INBOX_LOCK = threading.Lock()
 
+# The folder both workflow folders below sit in; ``None`` is the app's data
+# directory. Only the e2e backend moves it (``test_hooks.isolate_e2e_data``),
+# so a test run never touches the folders the owner's own server uses.
+DATA_ROOT: str | None = None
+
 
 def workflow_inbox_dir() -> str:
     """The watched folder, in the app's data directory."""
-    return os.path.join(user_data_dir("pixlstash"), "workflows")
+    return os.path.join(DATA_ROOT or user_data_dir("pixlstash"), "workflows")
 
 
 def workflow_user_dir() -> str:
@@ -56,7 +61,9 @@ def workflow_user_dir() -> str:
     Nothing is written here any more; hub data step 7 read what is, and the
     legacy file routes still list and delete it.
     """
-    return os.path.join(user_data_dir("pixlstash"), "comfyui-workflows", "user")
+    return os.path.join(
+        DATA_ROOT or user_data_dir("pixlstash"), "comfyui-workflows", "user"
+    )
 
 
 def content_hash(workflow: dict) -> str:

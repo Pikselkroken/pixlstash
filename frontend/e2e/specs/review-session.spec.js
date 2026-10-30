@@ -5,13 +5,17 @@ import { ReviewSessions } from '../pages/ReviewSessions.js'
 // DISTINCT tag: the backend enforces one open review per tag, and the suite runs
 // single-worker against one shared, mutable backend, so two tests creating the
 // same tag would 409. The fixture vault's real CLIP embeddings + the base-rate-
-// relative scan thresholds produce these whole-vault suspect counts (probed live
-// 2026-07-17 via scan_tag on test-data/images/vault.db): black hair 2 (remove),
-// smile 2 (remove), man 1 (add), beard / closed eyes / grin / woman 1 (remove).
-// 'shirt' now yields 0 suspects — the base-rate-relative threshold work
-// (6c79e6de / 02fe21c2) moved it below eligibility — so it can no longer back a
-// session test; do NOT reintroduce it here. Assertions are relative where counts
-// could shift; the binary test needs a pure-remove tag with >=2 suspects.
+// relative scan thresholds produce these whole-vault suspect counts (re-probed
+// 2026-10-30 by creating a review per tag on the e2e backend): black hair 2
+// (remove), smile 2 (remove), close-up 4 (2 remove + 2 add), arm hair 3
+// (1 remove + 2 add), closed eyes / woman 1 (remove). The queue orders
+// remove-direction cards first. 'shirt' now yields 0 suspects — the base-rate-
+// relative threshold work (6c79e6de / 02fe21c2) moved it below eligibility — so
+// it can no longer back a session test; do NOT reintroduce it here. Single-
+// suspect tags ('beard', 'grin') cannot back a test that decides and then keeps
+// working: the first decision empties the queue and the decision bar goes with
+// it. Assertions are relative where counts could shift; the binary, Undo and
+// keyboard tests need a tag with >=2 suspects whose first card is a remove.
 
 // Read a tally span's integer (e.g. "✗ 2" -> 2). Missing span -> 0.
 async function tallyNum(locator) {
@@ -29,6 +33,12 @@ async function openReviewId(apiContext, tag) {
   return match ? match.id : null
 }
 
+// The review's server-side receipt. The tally moves optimistically, before the
+// decision's write lands, so a test reading this after a tally change polls it.
+async function receiptOf(apiContext, rid) {
+  return (await (await apiContext.get(`/api/v1/reviews/${rid}`)).json()).receipt
+}
+
 // BUG-RS-1 (RESOLVED): the session card used to never render in a production
 // browser build — ReviewSessionView crashed with `TypeError: Cannot read
 // properties of undefined (reading 'el')` in Vue's patchBlockChildren the moment
@@ -41,12 +51,7 @@ async function openReviewId(apiContext, tag) {
 // (`card-${current.id}`) in ReviewSessionView.vue.
 //
 // The first two specs (create + binary decide) are the authoritative BUG-RS-1
-// regression guard and pass against the production build. The remaining four are
-// individually `.fixme`'d — NOT because of the render crash (the card renders and
-// the core loop works: decide, tally, backend receipt, advance, skip, undo
-// mid-queue, completion all verified), but because each encodes a behaviour that
-// does not match the current implementation and needs QA+dev reconciliation. See
-// the per-test notes. Un-fixme each as its behaviour is settled.
+// regression guard and pass against the production build.
 test.describe('review sessions — session loop', () => {
   test.beforeEach(async ({ grid, reviews, apiContext }) => {
     // Isolation: fully reset any leftover OPEN review before each attempt so a
@@ -122,9 +127,8 @@ test.describe('review sessions — session loop', () => {
     await expect.poll(async () => tallyNum(reviews.tallyKept)).toBe(beforeKept + 1)
 
     // Backend receipt confirms the mapping was written through.
-    const detail = await (await apiContext.get(`/api/v1/reviews/${rid}`)).json()
-    expect(detail.receipt.removed).toBe(1)
-    expect(detail.receipt.kept).toBe(1)
+    await expect.poll(async () => (await receiptOf(apiContext, rid)).kept).toBe(1)
+    expect((await receiptOf(apiContext, rid)).removed).toBe(1)
   })
 
   test('Escape closes the review first (back to tag health); a second Escape closes the overlay', async ({ reviews, page }) => {
@@ -144,14 +148,12 @@ test.describe('review sessions — session loop', () => {
     await expect(reviews.overlay).toBeHidden()
   })
 
-  // FIXME (not BUG-RS-1): 'beard' has a single suspect, so one decision empties
-  // the queue and shows the completion state, where the decision bar (and its
-  // Undo button) is `v-if="current"` and therefore gone — the click at line 98
-  // has nothing to target. Undo mid-queue works (verified). This spec needs a
-  // multi-suspect tag, or Undo needs to be offered in the completion state.
-  test.fixme('Undo reverses the last decision and decrements the tally', async ({ reviews, apiContext }) => {
-    await reviews.createReview('beard')
-    const rid = await openReviewId(apiContext, 'beard')
+  // 'close-up' has several suspects, so the queue is still non-empty after the
+  // first decision and the decision bar (with Undo) is still there to click.
+  test('Undo reverses the last decision and decrements the tally', async ({ reviews, apiContext }) => {
+    await reviews.createReview('close-up')
+    const rid = await openReviewId(apiContext, 'close-up')
+    await expect(reviews.binBanner.first()).toBeVisible()
     const beforeRemoved = await tallyNum(reviews.tallyRemoved)
     await reviews.noButton.click() // remove
     await expect.poll(async () => tallyNum(reviews.tallyRemoved)).toBe(beforeRemoved + 1)
@@ -161,38 +163,31 @@ test.describe('review sessions — session loop', () => {
     // Undo empties the stack again -> disabled.
     await expect(reviews.undoButton).toBeDisabled()
     // Backend receipt is back to zero decided.
-    const detail = await (await apiContext.get(`/api/v1/reviews/${rid}`)).json()
-    expect(detail.receipt.removed).toBe(0)
+    expect((await receiptOf(apiContext, rid)).removed).toBe(0)
   })
 
-  // FIXME (not BUG-RS-1): Skip works — the card advances and the `.rs-tally-skipped`
-  // counter increments (verified). The failing assertion is the rail progress hint:
-  // it renders "0/3" (done/found), not "N skipped". Either the rail's progressText
-  // should surface skips, or this assertion should target the tally, not the rail.
-  test.fixme('Skip removes the card with no decision and is reported separately', async ({ reviews, apiContext }) => {
+  test('Skip removes the card with no decision and is reported separately', async ({ reviews, apiContext }) => {
     await reviews.createReview('smile')
     const rid = await openReviewId(apiContext, 'smile')
     const beforeSkipped = await tallyNum(reviews.tallySkipped)
     await reviews.skipButton.click()
     await expect.poll(async () => tallyNum(reviews.tallySkipped)).toBe(beforeSkipped + 1)
-    // The rail progress hint shows "N skipped".
+    // The rail progress hint reads "done/found · N skipped".
     const rail = reviews.railSessions.filter({ hasText: 'smile' }).first()
-    await expect(rail.locator('.rs-rail-session-count')).toContainText('skipped')
+    await expect(rail.locator('.rs-rail-session-count')).toContainText(`${beforeSkipped + 1} skipped`)
     // Skip writes nothing to the receipt's decided counts.
-    const detail = await (await apiContext.get(`/api/v1/reviews/${rid}`)).json()
-    expect(detail.receipt.removed).toBe(0)
-    expect(detail.receipt.added).toBe(0)
-    expect(detail.receipt.kept).toBe(0)
-    expect(detail.receipt.skipped).toBe(beforeSkipped + 1)
+    await expect.poll(async () => (await receiptOf(apiContext, rid)).skipped).toBe(beforeSkipped + 1)
+    const receipt = await receiptOf(apiContext, rid)
+    expect(receipt.removed).toBe(0)
+    expect(receipt.added).toBe(0)
+    expect(receipt.kept).toBe(0)
   })
 
-  // FIXME (not BUG-RS-1): the individual keys work in isolation (N removes, U undoes
-  // mid-queue, Y keeps, S skips — all verified). This spec fails at the U step
-  // (line 136: removed stays 1) — a focus/timing interaction between the focus
-  // assertion at line 132 and the immediately-following `press('u')`. Needs a
-  // settle/poll on focus before the keypress, or a keyboard-routing review.
-  test.fixme('keyboard Y / N / S / U drive decisions and focus stays on the card', async ({ reviews, page }) => {
-    await reviews.createReview('grin')
+  // 'arm hair': a remove card first, then more cards, so every key below acts
+  // on a card that is still there.
+  test('keyboard Y / N / S / U drive decisions and focus stays on the card', async ({ reviews, page }) => {
+    await reviews.createReview('arm hair')
+    await expect(reviews.binBanner.first()).toBeVisible()
     await expect(reviews.card).toBeFocused()
 
     // N (remove) records a removal.
@@ -201,27 +196,27 @@ test.describe('review sessions — session loop', () => {
     await expect.poll(async () => tallyNum(reviews.tallyRemoved)).toBe(beforeRemoved + 1)
     await expect(reviews.card).toBeFocused()
 
-    // U undoes it.
+    // U undoes it, and the card it puts back takes focus.
     await page.keyboard.press('u')
     await expect.poll(async () => tallyNum(reviews.tallyRemoved)).toBe(beforeRemoved)
+    await expect(reviews.card).toBeFocused()
 
-    // Y (remove) keeps the tag.
+    // Y on that same remove card keeps the tag.
     const beforeKept = await tallyNum(reviews.tallyKept)
     await page.keyboard.press('y')
     await expect.poll(async () => tallyNum(reviews.tallyKept)).toBe(beforeKept + 1)
+    await expect(reviews.card).toBeFocused()
 
-    // S skips.
+    // S skips the next card.
     const beforeSkipped = await tallyNum(reviews.tallySkipped)
     await page.keyboard.press('s')
     await expect.poll(async () => tallyNum(reviews.tallySkipped)).toBe(beforeSkipped + 1)
   })
 
-  // FIXME (not BUG-RS-1): the queue reaches completion correctly and Archive is
-  // clickable. But `store.archiveSession()` calls `showBoard()`, so after archiving
-  // the overlay navigates to the tag-health board — the inline `.rs-archived`
-  // receipt (reached via the rail's Archived list) never appears here. Either
-  // archiving should land on the receipt, or this spec should open it from the rail.
-  test.fixme('working through the queue reaches completion and archives to a receipt', async ({ reviews, apiContext }) => {
+  // Archiving files the review away and returns to the tag-health board to pick
+  // the next tag; the completion state has already shown the tally. The archived
+  // receipt is opened from the rail's Archived list.
+  test('working through the queue reaches completion and archives to a receipt', async ({ reviews, apiContext }) => {
     await reviews.createReview('closed eyes')
     const rid = await openReviewId(apiContext, 'closed eyes')
 
@@ -238,7 +233,13 @@ test.describe('review sessions — session loop', () => {
     await expect(reviews.archiveButton).toBeVisible()
     await reviews.archiveButton.click()
 
-    // The archived receipt renders with the tally.
+    // Archiving lands on the board, and the session leaves the open list.
+    await expect(reviews.board).toBeVisible()
+    await expect(reviews.session).toBeHidden()
+    await expect(reviews.railSessions.filter({ hasText: 'closed eyes' })).toHaveCount(0)
+
+    // The archived receipt opens from the rail and renders with the tally.
+    await reviews.railArchived.filter({ hasText: 'closed eyes' }).first().click()
     await expect(reviews.archived).toBeVisible()
     await expect(reviews.archivedTitle).toContainText('closed eyes')
     await expect(reviews.archivedTally).toContainText('removed')

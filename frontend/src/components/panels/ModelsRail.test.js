@@ -619,6 +619,8 @@ describe("a picked training run (#2169)", () => {
     expect(wrapper.findAll(".mrr-col").map((c) => c.text())).toEqual(["0", "500"]);
     expect(wrapper.find('[data-testid="mrr-open"]').exists()).toBe(true);
 
+    // Stopping asks first (#2295); the owner says yes.
+    vi.spyOn(window, "confirm").mockReturnValue(true);
     await wrapper.get('[data-testid="mrr-stop"]').trigger("click");
     expect(cancelTrainingJob).toHaveBeenCalledWith(7);
   });

@@ -137,6 +137,7 @@ beforeEach(() => {
 
 afterEach(() => {
   while (mounted.length) mounted.pop().unmount();
+  vi.restoreAllMocks();
 });
 
 describe("TrainingRunLive", () => {
@@ -275,8 +276,11 @@ describe("TrainingRunLive", () => {
       expect(getTrainingJobLive).toHaveBeenCalled();
 
       cancelTrainingJob.mockResolvedValue({ status: "cancelled" });
+      // Skipping keeps the trained model, so it does not ask as Stop does.
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
       await wrapper.find(".app-btn").trigger("click");
       await flushPromises();
+      expect(confirm).not.toHaveBeenCalled();
       expect(cancelTrainingJob).toHaveBeenCalledWith(7);
     } finally {
       vi.useRealTimers();
@@ -438,6 +442,7 @@ describe("TrainingRunLive", () => {
 
       // Stop reads the run again, and it answers: polling resumes.
       cancelTrainingJob.mockResolvedValue({});
+      vi.spyOn(window, "confirm").mockReturnValue(true);
       await wrapper.find(".app-btn").trigger("click");
       await flushPromises();
       expect(wrapper.find(".trl-notice--err").exists()).toBe(false);
@@ -447,5 +452,53 @@ describe("TrainingRunLive", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("does not re-arm a poll for a read that lands after the page closed", async () => {
+    vi.useFakeTimers();
+    try {
+      let answer;
+      getTrainingJobLive.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+      const wrapper = mount(TrainingRunLive, { props: { jobId: 7 }, global: { stubs } });
+      wrapper.unmount();
+      answer(payload());
+      await flushPromises();
+      getTrainingJobLive.mockClear();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(getTrainingJobLive).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("asks before stopping, and stops nothing when the owner says no", async () => {
+    const wrapper = await open(payload({ status: "running" }));
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    await wrapper.find(".app-btn").trigger("click");
+    await flushPromises();
+    expect(confirm).toHaveBeenCalledWith(
+      'Stop training "ohwx-portrait-v2"? The run will stop and cannot be resumed.',
+    );
+    expect(cancelTrainingJob).not.toHaveBeenCalled();
+
+    confirm.mockReturnValue(true);
+    await wrapper.find(".app-btn").trigger("click");
+    await flushPromises();
+    expect(cancelTrainingJob).toHaveBeenCalledWith(7);
+  });
+
+  it("says a run queued behind another run waits for that run, not the GPU", async () => {
+    const wrapper = await open(
+      payload({
+        status: "queued",
+        phase: "waiting_gpu",
+        step: 0,
+        phases: [{ phase: "waiting_gpu", seconds: 12 }],
+        waiting: { code: "fifo", text: "Waiting behind ComfyUI 'Klein inpaint'." },
+      }),
+    );
+    expect(wrapper.find(".trl-status").text()).toContain("Waiting for the run ahead of it");
+    expect(wrapper.find(".trl-status").text()).not.toContain("Waiting for the GPU");
+    expect(wrapper.text()).toContain("Waiting for the run ahead of it.");
   });
 });
