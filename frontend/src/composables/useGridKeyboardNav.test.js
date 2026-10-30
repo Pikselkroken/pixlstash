@@ -494,6 +494,15 @@ describe("useGridKeyboardNav - reordering an open stack", () => {
     expect(move).not.toHaveBeenCalled();
     expect(wrapper.scrollTop).toBe(0);
   });
+
+  // One 128px row, plus the scroller's own padding below it: End is the
+  // scroller's bottom, not the row model's, or the last row is cut off.
+  it("End reaches the bottom of the scroller, padding included", () => {
+    const wrapper = { scrollTop: 0, clientHeight: 100, scrollHeight: 141 };
+    const { onGlobalKeyPress } = makeNav({ scrollWrapper: wrapper });
+    onGlobalKeyPress("End", {});
+    expect(wrapper.scrollTop).toBe(41);
+  });
 });
 
 describe("H favourites", () => {
