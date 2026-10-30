@@ -108,9 +108,9 @@ missing or placeholder sources fail with the actual `src` in the diagnostic.
 Every test puts back what it sent to the Scrapheap. The purge request is
 blocked at the network in the two Cancel tests, so a broken Cancel fails the
 test rather than destroying fixture pictures. Confirming Empty scrapheap or
-Delete forever, and the protected-original choice, need pictures the spec
-imported itself and a reference folder, which the e2e backend cannot provide
-yet (#2320), so they stay manual.
+Delete forever needs pictures the spec imported itself, and the
+protected-original choice needs a reference-folder picture; the e2e backend can
+provide neither yet (#2320), so they stay manual.
 
 ## Picture Detail (Lightbox) — `lightbox.spec.js` (plan §4)
 | Test | Covers | Status |

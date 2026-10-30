@@ -2,10 +2,10 @@ import { test, expect } from '../fixtures/test.js'
 
 // Deleting pictures and the Scrapheap: the Media view's data-loss paths.
 //
-// Everything here is reversible. A soft delete (Delete key, Selection menu,
-// context menu, lightbox) only moves a picture to the Scrapheap, and every test
-// puts back what it moved there. The two irreversible actions, Empty scrapheap
-// and Delete forever, are driven up to their confirm and no further: the
+// Only reversible steps are completed. A soft delete (Delete key, Selection
+// menu, context menu, lightbox) only moves a picture to the Scrapheap, and every
+// test puts back what it moved there. The two irreversible actions, Empty
+// scrapheap and Delete forever, are driven up to their confirm and no further: the
 // confirm's count is checked, Cancel is pressed, and the purge request is
 // blocked at the network so a broken Cancel fails the test instead of
 // destroying the shared fixture. Confirming either one needs pictures the spec
@@ -43,9 +43,10 @@ test.describe('deleting pictures and the Scrapheap', () => {
     scrapheapBefore = await scrapheapIds(apiContext)
   })
 
-  // What a test sent to the Scrapheap goes back, and no set stays locked:
-  // every later spec counts on the fixture. Only what THIS test put there,
-  // since an earlier spec may have left pictures of its own.
+  // No set stays locked (as in set-locking.spec.js, any locked set is
+  // unlocked: the fixture has none), and what a test sent to the Scrapheap goes
+  // back: every later spec counts on the fixture. Only the pictures THIS test
+  // put there, since an earlier spec may have left pictures of its own.
   test.afterEach(async ({ apiContext }) => {
     const sets = await (await apiContext.get(`${API}/picture_sets`)).json()
     for (const set of sets) {
@@ -403,6 +404,12 @@ test.describe('deleting pictures and the Scrapheap', () => {
     await grid.waitForLoaded()
     await expect(page.getByRole('button', { name: 'Empty scrapheap' })).toBeVisible()
     await expect(grid.card(id)).toBeVisible()
-    await expect(grid.thumbnails).toHaveCount(heap.length)
+    // Every card rendered is a Scrapheap picture; none is from the library.
+    const srcs = await grid.thumbnailImages.evaluateAll((imgs) =>
+      imgs.map((img) => img.getAttribute('src')),
+    )
+    const rendered = srcs.map((src) => Number(src?.match(/\/thumbnails\/(\d+)\./)?.[1]))
+    expect(rendered.length).toBeGreaterThan(0)
+    for (const renderedId of rendered) expect(heap).toContain(renderedId)
   })
 })
