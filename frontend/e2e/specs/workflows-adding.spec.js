@@ -10,8 +10,14 @@ import { test, expect } from "../fixtures/test.js";
 //
 // Order matters, and Playwright keeps it (one worker, file order): the empty
 // state is only empty before the first import, and Connect ComfyUI is only
-// offered before the Templates block saves an address. Nothing here deletes a
-// workflow, because a delete trashes through the shared inbox (#2313).
+// offered before the Templates block saves an address. So the empty-state test
+// stores nothing, and every later test works whatever the library holds, which
+// keeps a retry of any one of them honest.
+//
+// Nothing here deletes a workflow, because a delete trashes through the shared
+// inbox (#2313). The same issue is why the empty state can see a machine's own
+// inbox: until it is fixed, the e2e backend imports what that folder holds at
+// start-up, and a file there fails the empty-state test.
 
 const WORKFLOWS = "/api/v1/workflows";
 const IMPORT = "/api/v1/comfyui/workflows/import";
@@ -77,9 +83,10 @@ test.describe("empty state", () => {
     await page.goto("/workflows");
     const empty = page.locator(".wfv-empty");
     await expect(empty).toBeVisible({ timeout: 15_000 });
-    await expect(
-      empty.getByRole("button", { name: "Drop a workflow file" }),
-    ).toBeVisible();
+    // Its button is the file picker, one file or several.
+    const chooser = page.waitForEvent("filechooser");
+    await empty.getByRole("button", { name: "Drop a workflow file" }).click();
+    expect((await chooser).isMultiple()).toBe(true);
 
     await empty.getByRole("button", { name: "Connect ComfyUI" }).click();
     await expect(page.locator("#settings-nav-comfyui")).toHaveAttribute(
@@ -91,12 +98,12 @@ test.describe("empty state", () => {
 });
 
 test.describe("import", () => {
-  test("the empty state's button opens the picker, and the card lands selected and stays", async ({
+  test("Add workflow takes a file; its card lands selected and survives a reload", async ({
     page,
     apiContext,
   }) => {
     await page.goto("/workflows");
-    const button = page.getByRole("button", { name: "Drop a workflow file" });
+    const button = page.getByRole("button", { name: "Add workflow" });
     await expect(button).toBeVisible({ timeout: 15_000 });
     const chooser = page.waitForEvent("filechooser");
     await button.click();
@@ -119,31 +126,6 @@ test.describe("import", () => {
 
     await page.reload();
     await expect(row(page, body.workflow_id)).toBeVisible({ timeout: 15_000 });
-  });
-
-  test("the sidebar's Add workflow takes a file through the same input", async ({
-    page,
-  }) => {
-    await page.goto("/workflows");
-    await expect(page.locator(".wfv-scroll")).toBeVisible({ timeout: 15_000 });
-    const imported = page.waitForResponse(
-      (res) => new URL(res.url()).pathname === IMPORT,
-    );
-    await page.locator(".wfv-file-input").first().setInputFiles({
-      name: "Sidebar import.json",
-      mimeType: "application/json",
-      buffer: Buffer.from(JSON.stringify(graph(2))),
-    });
-    const body = await (await imported).json();
-    await expect(row(page, body.workflow_id)).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
-
-    // And the button itself opens that picker.
-    const chooser = page.waitForEvent("filechooser");
-    await page.getByRole("button", { name: "Add workflow" }).click();
-    expect((await chooser).isMultiple()).toBe(true);
   });
 
   test("a drop of two files imports both and announces the count", async ({
@@ -212,6 +194,8 @@ test.describe("import", () => {
     expect((await refused).status()).toBe(400);
     await expect(alert).toContainText("not a ComfyUI workflow");
 
+    // Only the last of the three was ever sent.
+    expect(posts.map((req) => req.postDataJSON().name)).toEqual(["notes"]);
     expect(await workflowIds(apiContext)).toEqual(before);
   });
 
@@ -312,7 +296,9 @@ test.describe("templates tab", () => {
     for (const t of shipped) {
       for (const m of t.model_names ?? []) counts.set(m, (counts.get(m) ?? 0) + 1);
     }
-    const [model] = [...counts].find(([, n]) => n >= 3 && n < shipped.length);
+    const shared = [...counts].find(([, n]) => n >= 3 && n < shipped.length);
+    expect(shared, "no model is shared by 3+ shipped templates").toBeTruthy();
+    const [model] = shared;
     const narrowed = shipped.filter((t) => t.model_names?.includes(model));
 
     await page.getByRole("button", { name: "Filter", exact: true }).click();
@@ -411,6 +397,7 @@ test.describe("templates tab", () => {
     const template = shipped.find(
       (t) => t.files.filter((f) => !f.present && f.downloadable).length >= 2,
     );
+    expect(template, "no shipped template lacks 2+ downloadable files").toBeTruthy();
     const wanted = [
       ...new Set(
         template.files
@@ -447,8 +434,10 @@ test.describe("templates tab", () => {
     await item.click();
 
     await expect.poll(() => [...asked].sort()).toEqual([...wanted].sort());
-    await expect(page.locator(".notice-message").first()).toContainText(
-      `Downloading ${wanted.length} models.`,
-    );
+    await expect(
+      page.locator(".notice-message", {
+        hasText: `Downloading ${wanted.length} models.`,
+      }),
+    ).toBeVisible();
   });
 });
