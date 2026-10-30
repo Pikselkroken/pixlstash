@@ -556,7 +556,11 @@
               <!-- The `v-for` sits on a wrapping template, not on the row, so a
                    stack's expanded members can be siblings of their cover inside
                    the same iteration and still see `row`. -->
-              <template v-for="row in group.rows" :key="row.rowKey">
+              <template
+                v-for="row in group.rows"
+                :key="row.rowKey"
+                v-memo="rowMemo(row)"
+              >
                 <li
                   class="shelf-row fav-host"
                   :class="{
@@ -811,6 +815,8 @@
                       {{ row.filename
                       }}<template v-if="LOC_NOTE[row.locState]">
                         · {{ LOC_NOTE[row.locState] }}</template
+                      ><template v-else-if="lockedNote(row)">
+                        · {{ lockedNote(row) }}</template
                       ><!-- The same bytes written twice. It rides the file line
                         rather than taking a chip of its own because it is a
                         fact ABOUT the file, and because the tooltip already
@@ -1910,6 +1916,7 @@ function onRowDragStart(event, row) {
     const scope = inFolder.value ? store.folderScope : null;
     if (!movableCopies([row], foldersById.value, scope).items.length) {
       event.preventDefault();
+      noticeUnmovable();
       return;
     }
     store.selectFromClick(row.id, {}, orderedRowIds.value);
@@ -1917,6 +1924,7 @@ function onRowDragStart(event, row) {
   const copies = store.movableSelection(foldersById.value);
   if (!copies.items.length) {
     event.preventDefault();
+    noticeUnmovable();
     return;
   }
   store.dragCopies = copies;
@@ -1929,14 +1937,17 @@ function onRowDragEnd() {
   store.dropTip = null;
 }
 
+/** Why a drag or a cut took nothing: otherwise the gesture just fails. */
+function noticeUnmovable() {
+  useNoticeStore().push({
+    level: "info",
+    text: "None of these files can be moved: they are missing, offline or in a locked folder.",
+  });
+}
+
 /** Ctrl X and the menu's Cut: hold the selection's movable copies. */
 function cutSelected() {
-  if (!store.cutSelection(foldersById.value)) {
-    useNoticeStore().push({
-      level: "info",
-      text: "None of these files can be moved: they are missing, offline or in a locked folder.",
-    });
-  }
+  if (!store.cutSelection(foldersById.value)) noticeUnmovable();
 }
 
 /** Ctrl V and the menu's Paste: the cut copies into the open folder. */
@@ -2982,6 +2993,22 @@ const LOC_NOTE = {
   removed: "removed as a duplicate",
   forgotten: "every registered copy forgotten",
 };
+
+/**
+ * The file line's note for a file that is there but cannot be dragged: every
+ * copy sits in a folder whose files do not leave it one at a time (the lock in
+ * the Folders tree). Without it, All models draws such a row like any other
+ * and the drag that refuses it is the only answer.
+ *
+ * @param {Object} row - a shelf row.
+ * @returns {string}
+ */
+function lockedNote(row) {
+  return row.locState === "present" &&
+    !movableCopies([row], foldersById.value).items.length
+    ? "in a locked folder"
+    : "";
+}
 
 const LOC_TITLE = {
   present: "",
@@ -4274,6 +4301,41 @@ function setsCell(row) {
   // Blank until the sets are read: a dash would say "in none" for every row.
   if (!store.setsKnown) return "";
   return store.setMembership.get(row.id)?.length || "\u2013";
+}
+
+/**
+ * Everything a row draws from outside its own object, for the list's `v-memo`.
+ *
+ * The rows are one component, so without it a selection change re-rendered all
+ * of them: 1,500 rows cost a quarter of a second per click, and a drag that
+ * selects its row paid it before the row would lift. `row` itself is a fresh
+ * object on every refetch (`displayRow`), so its own fields need no entry; what
+ * belongs here is each other value the row's template or its helpers read. A
+ * value left out draws stale until the row next changes.
+ *
+ * An open run draws its members in the same iteration, each with its own
+ * selection, so it is never memoised: the `{}` differs every render.
+ *
+ * @param {Object} row - a shelf row.
+ * @returns {Array}
+ */
+function rowMemo(row) {
+  const key = row.rowKey;
+  return [
+    row,
+    store.isSelected(row.id),
+    store.isCut(row.id),
+    store.isFavouriteRow(row),
+    key === rovingRowKey.value,
+    key === editingRowKey.value && editingName.value,
+    key === editingBaseKey.value && editingBase.value,
+    misplacedIds.value.has(row.id),
+    lockedNote(row),
+    setsCell(row),
+    store.view.sortKey,
+    userPrefs.dateFormat,
+    isStackOpen(row.stack_id) && {},
+  ];
 }
 
 onMounted(() => {

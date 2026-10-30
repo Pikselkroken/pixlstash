@@ -5842,7 +5842,16 @@ dialog, which says so on its button.
 - **Drag.** Every row of the shelf list is `draggable` (the set grid's cards
   are not). Dragging an unselected row makes it the selection first, alone, as
   a file manager does, unless it has nothing movable, when it refuses before
-  touching the selection; the drag carries the
+  touching the selection and says why in a notice (the cut's sentence). A row
+  that is there but cannot move ends its file line `· in a locked folder`
+  (`lockedNote`), so All models tells the two apart before the drag is tried.
+  Selecting is what the drag waits on, so it has to be cheap: the rows are one
+  component, and the list's `v-for` carries `v-memo="rowMemo(row)"` so a
+  selection change redraws the two rows it touched rather than all of them
+  (~300 ms per click on 1,500 rows before). `row` is a fresh object on every
+  refetch, so `rowMemo` lists only what a row reads from outside itself; **a
+  new outside read in the row's template must be added there**, or that row
+  draws stale until it next changes. The drag carries the
   selection's movable copies under the private type `application/x-pixlstash-model-copies`
   (`MODEL_COPIES_TYPE`). `store.dragCopies` holds them for the drag, because a
   drop target cannot read `dataTransfer` data before the drop. Folders tree rows
