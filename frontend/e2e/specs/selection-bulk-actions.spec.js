@@ -122,8 +122,11 @@ test.describe('bulk actions on a selection (#2324)', () => {
     }
   })
 
+  // The pictures first: they are fixture data other specs read, and nothing in
+  // their restore depends on the throwaways being gone. (A lock on a throwaway
+  // set would refuse the score PATCH, but every lock here is set on `zz-e2e-bulk
+  // lock` and the score test locks nothing.)
   test.afterEach(async ({ apiContext }) => {
-    await removeThrowaways(apiContext)
     // The faces go back to their person by id, whatever a test did to them.
     await ok(await apiContext.post(`${API}/characters/${pics.personId}/faces`, {
       data: { face_ids: pics.faceIds },
@@ -137,6 +140,7 @@ test.describe('bulk actions on a selection (#2324)', () => {
         if (t.tag === TAG) await ok(await apiContext.delete(`${API}/pictures/${id}/tags/${t.id}`))
       }
     }
+    await removeThrowaways(apiContext)
   })
 
   /** Open the source set and Ctrl-click its three pictures. */
