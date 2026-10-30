@@ -172,7 +172,7 @@ class FilePicturesRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    picture_ids: list[int] = Field(..., min_length=1)
+    picture_ids: list[int] = Field(..., min_length=1, max_length=_MAX_REPEAT)
     workflow_id: Optional[str] = Field(
         default=None, description="The workflow to file them on; null unfiles them."
     )

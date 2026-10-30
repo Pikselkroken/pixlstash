@@ -85,8 +85,9 @@ export async function cardId(api, name) {
 }
 
 /**
- * The workflows a spec made, for `removeAll` to delete. One list per spec
- * file: Playwright runs a file's tests in one worker, one after another.
+ * The workflows the running test made, for `removeAll` to delete. One list
+ * per worker process, shared by every spec file it runs; the suite runs one
+ * worker, one test at a time, and each spec drains it after every test.
  */
 export const made = [];
 

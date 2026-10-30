@@ -126,8 +126,10 @@ test("Save as new… makes a card with the given name and leaves this one as it 
   await expect(notice(page, `Saved as a new workflow, ${name}.`)).toBeVisible();
 
   const created = (await listWorkflows(apiContext)).cards.find((c) => c.name === name);
+  // Recorded before anything can fail: a card left behind sits on every later
+  // Workflows screen.
+  if (created) made.push(created.id);
   expect(created, `a card named ${name}`).toBeTruthy();
-  made.push(created.id);
   await expect(workflows.row(created.id)).toHaveCount(1);
   // The new one has the edit; this one has neither the edit nor what waited.
   const read = async (key) => (await ok(await apiContext.get(workflowPath(key)), key)).card;
