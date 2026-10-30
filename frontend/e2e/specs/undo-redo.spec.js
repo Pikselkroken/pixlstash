@@ -86,6 +86,13 @@ async function newestOperationId(apiContext) {
 async function undoIfApplied(apiContext, operationId) {
   if (operationId == null) return
   const res = await apiContext.get(`${API}/operations`, { params: { limit: 50 } })
+  if (!res.ok()) {
+    // Runs from `finally`: throwing here would replace the test's own failure.
+    console.warn(
+      `undo-redo cleanup: could not read the log (${res.status()}), operation ${operationId} may still be applied: ${await res.text()}`,
+    )
+    return
+  }
   const op = (await res.json()).find((row) => row.id === operationId)
   if (op?.status !== 'applied') return
   const undone = await apiContext.post(`${API}/operations/${operationId}/undo`)
