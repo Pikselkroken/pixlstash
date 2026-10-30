@@ -96,10 +96,11 @@ function rowFor(page, pictureId) {
 }
 
 test.describe('the Moves queue', () => {
-  // Out of the library again (their files stay in the seeded folder, which is
-  // the launcher's throwaway copy), so later specs read the fixture as before.
+  // Out of the library and the Scrapheap again, files and all: this file wrote
+  // them into the seeded folder, which is the launcher's throwaway copy.
   test.afterAll(async ({ apiContext }) => {
-    await discardPictures(apiContext, created.splice(0))
+    const folder = await seededReferenceFolder(apiContext)
+    await discardPictures(apiContext, created.splice(0), { originalsUnder: folder.folder })
   })
 
   test('lists the seeded review with the change it proposes', async ({

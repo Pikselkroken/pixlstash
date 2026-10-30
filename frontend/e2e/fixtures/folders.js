@@ -96,13 +96,18 @@ export async function waitForPicture(apiContext, folderId, path) {
 }
 
 /**
- * Take pictures a spec imported back out of the library, so later specs read
- * the fixture as they would have. Scrapped, then deleted forever without
- * *include protected*: a vault copy goes, file and all, and a reference-folder
- * original stays in the Scrapheap with its file untouched. Either way it no
- * longer counts as part of the library.
+ * Take pictures a spec imported back out of the library, and out of the
+ * Scrapheap, so later specs read the fixture as they would have: a picture
+ * left in the Scrapheap breaks every spec that needs it empty
+ * (scrapheap.spec.js). A vault copy goes, file and all.
+ *
+ * A reference-folder original is protected, and a purge without *include
+ * protected* leaves it in the Scrapheap. Pass *originalsUnder*, a folder the
+ * spec's own files are in, to delete those originals too: every protected file
+ * must be under it, or nothing is purged.
+ * @param {{originalsUnder?: string}} [options]
  */
-export async function discardPictures(apiContext, ids) {
+export async function discardPictures(apiContext, ids, { originalsUnder } = {}) {
   if (!ids.length) return
   const scrapped = await apiContext.delete('/api/v1/pictures', { data: { picture_ids: ids } })
   expect(scrapped.ok(), await scrapped.text()).toBe(true)
@@ -110,14 +115,33 @@ export async function discardPictures(apiContext, ids) {
     data: { picture_ids: ids },
   })
   expect(preview.ok(), await preview.text()).toBe(true)
+  const plan = await preview.json()
+  if (originalsUnder) {
+    // The whole list, or no proof that nothing outside the folder goes.
+    expect(plan.protected.length, JSON.stringify(plan)).toBe(plan.protected_count)
+    for (const item of plan.protected) {
+      expect(
+        item.file_path.startsWith(`${originalsUnder}${sep}`),
+        `${item.file_path} is not under ${originalsUnder}`,
+      ).toBe(true)
+    }
+  }
   const purged = await apiContext.delete('/api/v1/pictures/scrapheap', {
     data: {
       picture_ids: ids,
-      include_protected: false,
-      confirm_token: (await preview.json()).confirm_token,
+      include_protected: Boolean(originalsUnder),
+      confirm_token: plan.confirm_token,
     },
   })
   expect(purged.ok(), await purged.text()).toBe(true)
+  if (!originalsUnder) return
+  // Checked, not assumed: the Scrapheap holds none of them now.
+  const heap = await apiContext.get('/api/v1/pictures', {
+    params: { only_deleted: 'true', fields: 'grid' },
+  })
+  expect(heap.ok(), await heap.text()).toBe(true)
+  const left = (await heap.json()).map((p) => p.id).filter((id) => ids.includes(id))
+  expect(left, 'pictures still in the Scrapheap after the purge').toEqual([])
 }
 
 function chunk(type, data) {
