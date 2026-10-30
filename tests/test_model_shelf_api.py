@@ -3492,13 +3492,16 @@ class _FolderPaths:
 def test_comfyui_model_roots_collapse_categories_to_their_root(monkeypatch):
     """Two categories under one parent make that parent the root; a category
     alone keeps itself, so a ``loras:`` entry pointing at a home folder does not
-    put the whole home folder on the shelf. ``custom_nodes`` names the install."""
+    put the whole home folder on the shelf. ``custom_nodes`` names the install,
+    and a node pack's own bundled folders never make the pack a models root."""
     fake = _FolderPaths(
         {
             "checkpoints": ["/comfy/models/checkpoints"],
             "loras": ["/comfy/models/loras", "/data/my-loras"],
             "vae": ["/comfy/models/vae", "/comfy/models/vae/extra"],
             "custom_nodes": ["/comfy/custom_nodes"],
+            "kjnodes_fonts": ["/comfy/custom_nodes/comfyui-kjnodes/fonts"],
+            "intrinsic_loras": ["/comfy/custom_nodes/comfyui-kjnodes/intrinsic_loras"],
             "configs": "not a list",
         }
     )

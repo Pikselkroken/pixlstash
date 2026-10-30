@@ -4613,6 +4613,9 @@ watch(
    the grounds the drive meter's track is audited on (contrastAudit.js). */
 .shelf-status {
   flex-shrink: 0;
+  /* Pinned to the foot of the pane: an empty-folder or error state does not
+     grow to fill it the way the list's scrollport does. */
+  margin-top: auto;
   background: rgb(var(--v-theme-toolbar));
   display: flex;
   align-items: center;
