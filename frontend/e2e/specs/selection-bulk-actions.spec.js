@@ -370,11 +370,12 @@ test.describe('dragging pictures onto sidebar rows (#2324)', () => {
     source = await createSet(apiContext, `${PREFIX} source`, pics.ids)
   })
 
+  // Faces first, as in the describe above.
   test.afterEach(async ({ apiContext }) => {
-    await removeThrowaways(apiContext)
     await ok(await apiContext.post(`${API}/characters/${pics.personId}/faces`, {
       data: { face_ids: pics.faceIds },
     }))
+    await removeThrowaways(apiContext)
   })
 
   /**
