@@ -3804,6 +3804,20 @@ describe("acting inside a run", () => {
     return wrapper;
   }
 
+  it("draws the deck behind the Type letter, not across the whole slot", async () => {
+    // The ticks fill their nearest positioned box. Left in the slot they drew
+    // a grey pill over the letter, which read as a broken thumbnail.
+    const wrapper = await openRun();
+    const ticks = wrapper.find(
+      ".shelf-row:not(.shelf-row--member) [data-testid='stack-edge-ticks']",
+    );
+    expect(ticks.element.parentElement.classList).toContain("shelf-row-mark");
+    expect(
+      ticks.element.parentElement.querySelector(".type-mark")?.textContent,
+    ).toBe("L");
+    wrapper.unmount();
+  });
+
   it("says which file the run is being drawn from, once it is open", async () => {
     const wrapper = await openRun();
     // On the cover's thumbnail, not among the name's chips (where it pushed
