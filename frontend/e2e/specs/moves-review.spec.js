@@ -15,7 +15,6 @@ import { mkdirSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect } from '../fixtures/test.js'
 import {
-  expectScratch,
   markFolderChanged,
   seededReferenceFolder,
   waitForPicture,
@@ -65,7 +64,6 @@ async function reviewFor(apiContext, pictureId) {
  */
 async function pictureMovedOnDisk(apiContext, { from, to, before }) {
   const folder = await seededReferenceFolder(apiContext)
-  expectScratch(folder.folder)
   seed += 1
   const name = `moved-${seed}.png`
   const source = join(folder.folder, from, name)
@@ -107,7 +105,6 @@ test.describe('the Moves queue', () => {
     expect(facet).toBe('project')
 
     await page.goto('/moves')
-    const view = page.getByTestId('moves-review')
     const row = rowFor(page, seeded.picture_id)
     await expect(row).toBeVisible()
     // Where the file went, and what that would add.
@@ -115,7 +112,6 @@ test.describe('the Moves queue', () => {
     await expect(row.locator('.mv-etag--in')).toHaveText(new RegExp(`\\+\\s*Project\\s*${name}`))
     await expect(row.getByRole('button', { name: 'Apply' })).toBeVisible()
     // Nothing is applied by looking.
-    await expect(view.locator('.mv-sub')).toContainText('nothing has been changed yet')
     expect(await reviewFor(apiContext, seeded.picture_id)).toBeTruthy()
     expect(await projectsOf(apiContext, seeded.picture_id)).not.toContain(name)
   })

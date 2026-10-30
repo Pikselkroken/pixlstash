@@ -814,8 +814,9 @@ class Vault:
         """Do what the filesystem watcher does when a file in a reference
         folder changes: mark the folder due, so the next scan is now.
 
-        Only the e2e test hook calls this, for a machine whose watcher could
-        not start.
+        Only the e2e test hook calls this. The e2e specs call it after every
+        change they make on disk rather than wait on the watcher, which needs
+        an inotify instance a busy machine may not have.
 
         Args:
             folder_id: Primary key of the reference folder.

@@ -4,7 +4,7 @@ This router exists **solely** for Playwright, and holds two hooks.
 
 ``ws-event`` deterministically injects a WebSocket grid event by driving
 ``vault.notify`` with a controlled payload. The e2e backend runs only the
-folder sweeps and loads no models, so the tag/quality/smart-score/face events
+folder sweeps (and a face finder that queues nothing) and loads no models, so the tag/quality/smart-score/face events
 behind most "continuous refresh" and "pill-on-own-change" reports never fire on
 their own. This endpoint reproduces those flood / echo scenarios on demand,
 without real-timing nondeterminism.

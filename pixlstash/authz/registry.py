@@ -2252,8 +2252,8 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         justification=(
             "E2E-only hook that marks a reference folder due for a rescan, "
             "exactly as the filesystem watcher does when a file in it changes "
-            "(Vault._on_reference_folder_fs_changed). Returns no resource data "
-            "and reads nothing back. Loopback for the same reasons as "
+            "(Vault._on_reference_folder_fs_changed). Returns no resource data: "
+            "only the folder id, or 404 when there is no such folder. Loopback for the same reasons as "
             "/test-hooks/ws-event above: mounted only when enable_test_hooks is "
             "true, which only frontend/e2e/serve_e2e_backend.py sets on a "
             "127.0.0.1 backend, and allow_remote_host_ops must never expose a "

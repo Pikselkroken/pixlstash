@@ -5,7 +5,9 @@
 // spec calls `expectScratch` on a folder before it removes or relocates it. A
 // remove deletes the folder's pictures from the library and a relocate moves
 // its files on disk, so a folder that is not one this run made is a folder
-// that must not be touched.
+// that must not be touched. `expectScratch` therefore accepts only folders
+// `scratchFolder` made in this process, not anything that merely looks like
+// one (another checkout's e2e work dir has the same prefix).
 
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -14,6 +16,8 @@ import { crc32, deflateSync } from 'node:zlib'
 import { expect } from '@playwright/test'
 
 const SCRATCH_PREFIX = 'pixlstash-e2e-'
+// The folders scratchFolder made, in this worker process.
+const made = new Set()
 
 /** The temp root, resolved the way the server stores a folder (realpath). */
 function scratchRoot() {
@@ -25,15 +29,14 @@ function scratchRoot() {
  * @param {string} name - a word for what the folder is for.
  */
 export function scratchFolder(name) {
-  return realpathSync(mkdtempSync(join(scratchRoot(), `${SCRATCH_PREFIX}${name}-`)))
+  const folder = realpathSync(mkdtempSync(join(scratchRoot(), `${SCRATCH_PREFIX}${name}-`)))
+  made.add(folder)
+  return folder
 }
 
-/** Fail unless *path* is a folder this run made under the temp dir. */
+/** Fail unless *path* is a folder scratchFolder made in this run. */
 export function expectScratch(path) {
-  expect(
-    String(path).startsWith(`${scratchRoot()}${sep}${SCRATCH_PREFIX}`),
-    `${path} is not a throwaway folder under ${scratchRoot()}`,
-  ).toBe(true)
+  expect(made.has(String(path)), `${path} is not a folder this run made`).toBe(true)
 }
 
 /**
@@ -47,7 +50,11 @@ export async function seededReferenceFolder(apiContext) {
   const { folders } = await res.json()
   const seeded = folders.find((f) => f.folder.endsWith(`${sep}reference-folder`))
   expect(seeded, JSON.stringify(folders.map((f) => f.folder))).toBeTruthy()
-  expectScratch(seeded.folder)
+  // The launcher's, under its work dir in the temp root, never the owner's.
+  expect(
+    seeded.folder.startsWith(`${scratchRoot()}${sep}${SCRATCH_PREFIX}`),
+    `${seeded.folder} is not under the e2e work dir`,
+  ).toBe(true)
   return seeded
 }
 
@@ -120,6 +127,11 @@ export function writePicture(path, seed) {
     }
     rows.push(row)
   }
+  // The pattern repeats every 256 seeds; the first pixel carries the seed
+  // itself, so no two seeds below 2^24 make the same file.
+  rows[0][1] = (seed >> 16) & 0xff
+  rows[0][2] = (seed >> 8) & 0xff
+  rows[0][3] = seed & 0xff
   mkdirSync(dirname(path), { recursive: true })
   writeFileSync(
     path,

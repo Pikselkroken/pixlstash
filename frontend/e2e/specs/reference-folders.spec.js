@@ -6,7 +6,10 @@
 // a folder from the UI is "Add a library", and a reference folder's view is
 // reached by URL (docs/frontend_architecture.md, the sidebar list). So the
 // folder is registered, relocated and removed through the API, and what the
-// owner sees is checked on /ref-folder/:id.
+// owner sees is checked on /ref-folder/:id. The rescan after a file is added
+// is asked for through the test hook that does the watcher's job, so the
+// watcher itself is not exercised here (tests/test_reference_folder_watcher.py
+// covers it).
 //
 // Serial: each step works on what the one before left. A retry reruns the
 // group from beforeAll, against a new folder.
