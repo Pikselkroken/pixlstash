@@ -1672,8 +1672,12 @@ def create_router(server) -> APIRouter:
         "/reference-folders/{folder_id}",
         summary="Remove a reference folder",
         description=(
-            "Removes a reference folder record. Pictures indexed from this folder "
-            "are de-associated but not deleted from the database or disk."
+            "Removes a reference folder and every picture indexed from it. The "
+            "pictures are deleted from the library for good, together with their "
+            "tags, ratings, descriptions, faces and set, person and project "
+            "memberships: they do not go to the Scrapheap and the removal cannot "
+            "be undone. The original files on disk are left untouched; only the "
+            "thumbnails PixlStash generated for them are removed."
         ),
         tags=["folders"],
         response_model=ReferenceFolderDeleteResponse,
