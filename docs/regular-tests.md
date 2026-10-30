@@ -116,7 +116,7 @@ so its checks run there. Cleanup takes back each test's own operation by id.
 | the Selection menu's Delete sends the selection to the Scrapheap | Selection ▾ Delete on a two-picture selection | ✅ |
 | the context menu's Delete sends the picture to the Scrapheap | Right-click Delete | ✅ |
 | a picture in a locked set is refused, with a notice saying why | Delete key keeps it and says it is in a locked set; the context menu's Delete is disabled | ✅ |
-| the lightbox deletes its picture, and Restore in the Scrapheap brings it back | Lightbox context menu Delete closes the lightbox; Restore from the Scrapheap's lightbox | ✅ |
+| the lightbox deletes its picture, and Restore in the Scrapheap brings it back | Lightbox context menu Delete (what the lightbox does next is #2346's); Restore from the Scrapheap's lightbox | ✅ |
 | Restore all returns every picture with its sets, character and tags | Restore all on a heap holding only the test's pictures; membership and tags checked through the API | ✅ |
 | Empty scrapheap states the count, and Cancel deletes nothing | The confirm's count; Cancel sends no purge | ✅ |
 | Delete forever on a selection counts only the selection, and Cancel deletes nothing | Selection-scoped preview count; Cancel sends no purge | ✅ |

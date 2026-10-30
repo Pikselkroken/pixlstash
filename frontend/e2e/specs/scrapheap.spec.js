@@ -250,8 +250,7 @@ test.describe('deleting pictures and the Scrapheap', () => {
     const answered = bulkDeleteAnswered(page)
     await page.getByRole('menuitem', { name: 'Delete', exact: true }).click()
     expect((await answered).ok()).toBe(true)
-    // The lightbox never goes on showing a picture that has left the view.
-    await expect(lightbox.root).toBeHidden()
+    // Whether the lightbox closes or moves on is #2346's to decide, not asserted.
     await expectInScrapheap(page, grid, apiContext, [id])
 
     await lightbox.openFromGrid(grid.card(id).locator('.thumbnail-card'))
@@ -263,7 +262,6 @@ test.describe('deleting pictures and the Scrapheap', () => {
     )
     await page.getByRole('menuitem', { name: 'Restore', exact: true }).click()
     expect((await restored).ok()).toBe(true)
-    await expect(lightbox.root).toBeHidden()
 
     expect(await scrapheapIds(apiContext)).not.toContain(id)
     expect((await libraryPictures(apiContext)).map((p) => p.id)).toContain(id)
