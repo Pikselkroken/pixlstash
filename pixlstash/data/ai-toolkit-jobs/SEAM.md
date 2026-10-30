@@ -12,6 +12,7 @@ version bump is a single-file change. Verified against the local clone
 ```
 <ai_toolkit_python> run.py <config.json> --log <training_folder>/<name>/log.txt
   cwd  = <ai_toolkit_repo_path>
+  stdin = /dev/null, stdout + stderr = <work_dir>/trainer_output.log
   env  = parent env - {PYTHONPATH, PYTHONHOME, PIXLSTASH_*} + {
            AITK_JOB_ID        = <our job uuid>        # enables soft UI mode (status/step/cancel)
            CUDA_VISIBLE_DEVICES = <gpu id(s)>
@@ -26,7 +27,13 @@ keys, so it sees the torch the trainer will.
 
 `run.py` accepts `config… [-r/--recover] [-n/--name] [-l/--log <path>]`; raises (non-zero exit) on
 job failure when `--recover` is absent. Spawn in **its own process group** so cancel can signal the
-group and a restart can reconcile by PID.
+group and a restart can reconcile by PID. Its stdio is never the backend's: under the desktop app
+those are pipes that close when the app quits, and the trainer's next print would raise
+`BrokenPipeError` and end the run. `--log` tees into `log.txt` (deleted and reopened by the trainer,
+so not shared with our redirect); `trainer_output.log` also holds what is printed before that tee
+starts. On Windows the spawn adds `CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW`, keeping console
+Ctrl+C and close events away from it. They do not take it out of the backend's process tree, so
+the desktop app's `taskkill /T` on quit still ends it there.
 
 ## Config (skeleton: `built-in/zimage-turbo-lora.json`, values: `../training-presets/`)
 

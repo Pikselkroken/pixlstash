@@ -28,6 +28,9 @@ line per launch to that file, naming the config's step count.
 ``FAKE_RUN_LOAD_SECONDS=<s>`` spends that long "Loading model" before step 1
 without reading ``stop``, as ai-toolkit does, so only a signal ends it there.
 
+Like the real trainer (tqdm, prints) it writes to stdout and stderr every step,
+so a launch that hands it the backend's streams dies when they close.
+
 It does NOT import torch or anything heavy: ``.safetensors`` files are written
 as small placeholder byte blobs.
 """
@@ -272,6 +275,9 @@ def main(argv: list[str]) -> int:
                     with open(args.log, "a", encoding="utf-8") as log_handle:
                         log_handle.write(f"stopped at step {step}\n")
                 return 0
+
+            print(f"step {step}/{total_steps}", flush=True)
+            print(f"progress {step}", file=sys.stderr, flush=True)
 
             # Decaying loss so the curve is monotone-ish and non-trivial.
             loss = 1.0 * math.exp(-step / max(1.0, total_steps / 3.0)) + 0.01
