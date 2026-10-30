@@ -48,7 +48,7 @@ from pixlstash.authz.policy import (
     validate_policy_declarations,
 )
 from pixlstash.authz.registry import ROUTE_POLICIES
-from pixlstash.db_models import Picture
+from pixlstash.db_models import Picture, ReferenceFolder
 from pixlstash.route_inventory import api_endpoint_set
 from pixlstash.services import node_pack_install_service
 from tests.authz_guard import no_spa_fallback  # noqa: F401
@@ -1404,6 +1404,7 @@ from pixlstash.server import Server  # noqa: E402
 
 _WS_HOOK = f"{API}/test-hooks/ws-event"
 _WS_HOOK_BODY = {"event_type": "CHANGED_PICTURES", "picture_ids": [1]}
+_RESCAN_HOOK = f"{API}/test-hooks/reference-folders/{{folder_id}}/rescan"
 
 
 @contextlib.contextmanager
@@ -1449,9 +1450,11 @@ def test_test_hooks_route_is_absent_unless_the_flag_is_on():
 
     with _owner_env() as env:
         server, owner = env["server"], env["owner"]
-        assert ("POST", _WS_HOOK) not in api_endpoint_set(server.api), (
-            "the test-hooks router must not be mounted without the flag"
-        )
+        mounted = api_endpoint_set(server.api)
+        for hook in (_WS_HOOK, _RESCAN_HOOK):
+            assert ("POST", hook) not in mounted, (
+                f"{hook} must not be mounted without the flag"
+            )
         with _enforcing(server):
             r = owner.post(_WS_HOOK, json=_WS_HOOK_BODY)
             assert r.status_code in (404, 405), (
@@ -1465,6 +1468,7 @@ def test_test_hooks_declaration_does_not_boot_fail_when_unmounted():
     from pixlstash.authz.registry import CONDITIONALLY_MOUNTED_ROUTES
 
     assert ("POST", _WS_HOOK) in CONDITIONALLY_MOUNTED_ROUTES
+    assert ("POST", _RESCAN_HOOK) in CONDITIONALLY_MOUNTED_ROUTES
     with _owner_env() as env:
         server = env["server"]
         with _enforcing(server):
@@ -1505,26 +1509,25 @@ def test_test_hooks_non_loopback_owner_is_403_even_with_flag_on():
                 )
 
 
-_RESCAN_HOOK = f"{API}/test-hooks/reference-folders/{{folder_id}}/rescan"
+def _insert_reference_folder(session, path):
+    """A reference folder row, last scanned long ago; its id."""
+    rf = ReferenceFolder(folder=path, label="r", last_scanned=1.0)
+    session.add(rf)
+    session.commit()
+    session.refresh(rf)
+    return rf.id
 
 
 def test_rescan_hook_loopback_owner_marks_the_folder_due():
     """POSITIVE direction: a loopback owner reaches the rescan hook, which
     marks the folder due exactly as the watcher does, and 404s a folder that
     does not exist (so the 200 is the handler's, not a catch-all's)."""
-    from pixlstash.db_models.reference_folder import ReferenceFolder
-
     with _test_hooks_owner_env() as env:
         server, owner = env["server"], env["owner"]
 
-        def insert(session):
-            rf = ReferenceFolder(folder=env["tmp"].name, label="r", last_scanned=1.0)
-            session.add(rf)
-            session.commit()
-            session.refresh(rf)
-            return rf.id
-
-        folder_id = server.vault.db.run_task(insert)
+        folder_id = server.vault.db.run_task(
+            lambda session: _insert_reference_folder(session, env["tmp"].name)
+        )
         with _enforcing(server):
             r = owner.post(_RESCAN_HOOK.format(folder_id=folder_id))
             assert r.status_code == 200, r.text
@@ -1549,6 +1552,52 @@ def test_rescan_hook_non_loopback_owner_is_403_even_with_flag_on():
                     f"{ip} must be 403'd on the rescan hook even with "
                     f"allow_remote_host_ops=true; got {r.status_code}: {r.text}"
                 )
+
+
+def test_test_hooks_refuse_read_and_share_tokens():
+    """NEGATIVE direction for tokens: neither an unscoped READ token nor a
+    resource-scoped share token reaches either hook, from loopback. The token
+    reads ``/pictures`` (it is live) and the owner reaches both hooks (they
+    resolve), so each 403 is a refusal, not a dead token or a dead path."""
+    from starlette.testclient import TestClient
+
+    with _test_hooks_owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        folder_id = server.vault.db.run_task(
+            lambda session: _insert_reference_folder(session, env["tmp"].name)
+        )
+        hooks = (
+            (_WS_HOOK, _WS_HOOK_BODY),
+            (_RESCAN_HOOK.format(folder_id=folder_id), None),
+        )
+        minted = {
+            "read": {"description": "read", "scope": "READ"},
+            "share": {
+                "description": "set share",
+                "scope": "READ",
+                "resource_type": "picture_set",
+                "resource_id": 1,
+            },
+        }
+        with _enforcing(server):
+            for path, body in hooks:
+                r = owner.post(path, json=body)
+                assert r.status_code == 200, f"{path} must resolve: {r.text}"
+            # Cookie-less: the middleware prefers the owner's session cookie.
+            anon = TestClient(server.api, raise_server_exceptions=True)
+            for kind, request in minted.items():
+                token = owner.post(f"{API}/users/me/token", json=request)
+                assert token.status_code == 200, token.text
+                headers = {"Authorization": f"Bearer {token.json()['token']}"}
+                assert (
+                    anon.get(f"{API}/pictures", headers=headers).status_code == 200
+                ), f"the {kind} token is dead; its refusals would prove nothing"
+                for path, body in hooks:
+                    r = anon.post(path, json=body, headers=headers)
+                    assert r.status_code == 403, (
+                        f"a {kind} token must not reach {path}; "
+                        f"got {r.status_code}: {r.text}"
+                    )
 
 
 def test_conditionally_mounted_routes_are_all_declared():
