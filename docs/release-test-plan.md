@@ -31,7 +31,7 @@ plan; legacy § numbers are still cited in spec titles):
 | §4 Lightbox open/navigate/close | `lightbox.spec.js` |
 | §5 Tags add/remove | `tags.spec.js` |
 | §6 Star rating — overlay persist + grid stars + grid↔overlay sync | `rating.spec.js` |
-| §7/§8/§9 Set/project/character navigation & filtering | `entities.spec.js`, `set-operations.spec.js`, `set-locking.spec.js` |
+| §7/§8/§9 Set/project/character navigation & filtering; create, edit, delete | `entities.spec.js`, `set-operations.spec.js`, `set-locking.spec.js`, `sidebar-entries.spec.js` |
 | §10 Faces crops + bounding boxes | `faces.spec.js` |
 | §11 Stack expand/collapse | `stacks.spec.js` (badge click + visual stacking order stay manual) |
 | §14 Predictions — delete drops to prediction chip, Confirm restores | `tag-predictions.spec.js` (generation after import stays manual) |

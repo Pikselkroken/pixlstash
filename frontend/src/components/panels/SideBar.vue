@@ -1444,18 +1444,14 @@ function closeProjectEditor() {
 async function projectSaved(newProjectId) {
   closeProjectEditor();
   await fetchProjects();
-  if (newProjectId != null) {
-    selectedProjectId.value = newProjectId;
-    projectViewMode.value = "project";
-  }
+  // Through chooseScope, which navigates: setting the scope alone leaves the
+  // route on the old view.
+  if (newProjectId != null) chooseScope(newProjectId);
 }
 
 async function projectDeleted(deletedId) {
   closeProjectEditor();
-  if (selectedProjectId.value === deletedId) {
-    selectedProjectId.value = null;
-  }
-  projectViewMode.value = "global";
+  if (Number(selectedProjectId.value) === Number(deletedId)) chooseScope("any");
   await fetchProjects();
   await fetchCharacters();
   await fetchSidebarData();
@@ -1464,7 +1460,7 @@ async function projectDeleted(deletedId) {
 async function deleteProjectById(project) {
   if (
     !window.confirm(
-      `Delete project "${project.name}"? This will remove all its people, sets, and attachments.`,
+      `Delete project "${project.name}"? Its people, sets and pictures stay in the library; its attachments are deleted.`,
     )
   )
     return;
@@ -1943,6 +1939,14 @@ function closeSetEditor() {
   setEditorSet.value = null;
 }
 
+// A new set opens, as a new project does. After the list has it: selectSet
+// reads the set's project off the list, and inside a project a set read as in
+// none filters the grid to UNASSIGNED.
+async function openCreatedSet(created) {
+  await fetchPictureSets();
+  selectSet(created.id, created.name);
+}
+
 // The control focused when Settings opened and its ancestors, nearest first:
 // DOM nodes, held raw. The ancestors are taken now because a node that has
 // since been removed no longer leads back up to the ones still in the page.
@@ -2150,34 +2154,38 @@ async function deleteCharactersByIds(ids) {
     ? `Delete character "${charName}"?`
     : `Delete ${ids.length} characters?`;
   if (!window.confirm(msg)) return;
-  try {
-    await Promise.all(ids.map((id) => apiDeleteCharacter(id)));
-    await fetchCharacters();
-  } catch (e) {
-    setError(e.message);
+  const viewed = new Set(selectedCharacterIdSet.value);
+  viewed.add(Number(selectionStore.selectedCharacter));
+  const { deleted, failure } = await settleDeletes(ids, apiDeleteCharacter);
+  if (deleted.some((id) => viewed.has(Number(id)))) leaveDeletedView();
+  if (deleted.length) await fetchCharacters();
+  if (failure) {
+    console.error("Failed to delete characters", { ids, error: failure });
+    setError(failure.message);
   }
 }
 
-async function deleteSetById(id) {
-  const set = pictureSets.value.find((s) => s.id === id);
-  if (!set) return;
-  if (
-    !window.confirm(
-      `Delete picture set "${set.name}"? This will unassign all their images.`,
-    )
-  )
-    return;
-  try {
-    await deletePictureSet(id);
-    emit("select-set", null);
-    await fetchPictureSets();
-    await fetchSidebarData();
-  } catch (e) {
-    console.error("Failed to delete set", e);
-    noticeStore.error(`Couldn't delete that set. ${noticeDetail(e)}`, {
-      key: "set-delete",
-    });
-  }
+/** Delete each id, and say which went and the first refusal. Settled rather
+ * than all-or-nothing: the ones that did go must still leave the view and
+ * drop out of the list when another is refused (a locked set, say). */
+async function settleDeletes(ids, deleteOne) {
+  const results = await Promise.allSettled(ids.map((id) => deleteOne(id)));
+  return {
+    deleted: ids.filter((_, i) => results[i].status === "fulfilled"),
+    failure: results.find((r) => r.status === "rejected")?.reason ?? null,
+  };
+}
+
+/** Deleting what is on screen must not leave the route on a dead id: go to
+ * All Pictures, in the scope the header slot names. */
+function leaveDeletedView() {
+  emit("select-character", {
+    id: ALL_PICTURES_ID,
+    label: null,
+    ids: [],
+    projectIds: {},
+    projectContext: currentScopeContext(),
+  });
 }
 
 // The sets a set row's Delete acts on: the whole multi-selection when the
@@ -2208,14 +2216,21 @@ async function deleteSetsByIds(ids) {
     : `Delete ${normalizedIds.length} picture sets? This will unassign all their images.`;
   if (!window.confirm(msg)) return;
 
-  try {
-    await Promise.all(normalizedIds.map((id) => deletePictureSet(id)));
-    emit("select-set", null);
+  const { deleted, failure } = await settleDeletes(
+    normalizedIds,
+    deletePictureSet,
+  );
+  if (deleted.some((id) => selectedSetIdSet.value.has(id))) leaveDeletedView();
+  if (deleted.length) {
     await fetchPictureSets();
     await fetchSidebarData();
-  } catch (e) {
-    console.error("Failed to delete picture sets", e);
-    noticeStore.error(`Couldn't delete those sets. ${noticeDetail(e)}`, {
+  }
+  if (failure) {
+    console.error("Failed to delete picture sets", {
+      ids: normalizedIds,
+      error: failure,
+    });
+    noticeStore.error(`Couldn't delete those sets. ${noticeDetail(failure)}`, {
       key: "set-delete-many",
     });
   }
@@ -3103,7 +3118,7 @@ async function fetchCharacters() {
   setLoading(true);
   setError(null);
   try {
-    const nextCharacters = await entityLists.refresh("characters");
+    const [nextCharacters] = await entityLists.invalidate(["characters"]);
     entityNames.mergeCharacterNames(nextCharacters);
     for (const char of nextCharacters) {
       fetchCharacterThumbnail(char.id);
@@ -3191,14 +3206,17 @@ async function fetchSortOptions() {
 async function fetchProjects() {
   // The store declines the call outright for a token scoped to a non-project
   // resource, which cannot read the projects list.
-  const rows = await entityLists.refresh("projects");
+  const [rows] = await entityLists.invalidate(["projects"]);
   entityNames.mergeProjectNames(rows);
 }
 
 async function fetchPictureSets() {
   // Always fetch all sets - in the flat project tree each project filters
   // its own sets client-side, so we must not scope this call to a single project.
-  const sets = await entityLists.refresh("sets");
+  // `invalidate`, not `refresh`, in all three fetchers: they run after a change
+  // (a delete, a save, a WS event), and `refresh` would join a read already in
+  // flight that started before it, putting a deleted row back on screen.
+  const [sets] = await entityLists.invalidate(["sets"]);
   entityNames.mergeSetNames(sets);
   await updateSetThumbnails(sets);
 }
@@ -3605,8 +3623,10 @@ function handleDropOnCharacter(payload) {
 }
 
 // --- Character Management ---
-async function characterSaved() {
-  if (characterEditorCharacter.value && !characterEditorCharacter.value.id) {
+async function characterSaved(saved) {
+  const created =
+    characterEditorCharacter.value && !characterEditorCharacter.value.id;
+  if (created) {
     // New character was created, increment nextCharacterNumber. The row itself
     // comes from the refetch below - the shared list is never written locally.
     nextCharacterNumber.value++;
@@ -3615,6 +3635,8 @@ async function characterSaved() {
   await fetchSortOptions(); // Ensure sort options include similarity when characters exist
   await fetchPictureSets(); // Refresh picture sets to include reference sets
   closeCharacterEditor();
+  // A new person opens, as a new project does.
+  if (created && saved?.id) selectCharacter(saved.id, saved.name);
 }
 
 onMounted(() => {
@@ -4102,6 +4124,7 @@ defineExpose({
     "
     :projects="projects"
     @close="closeSetEditor"
+    @saved="openCreatedSet"
     @refresh-sidebar="refreshSidebar"
   />
   <ProjectEditor
@@ -6657,9 +6680,7 @@ defineExpose({
           class="ctx-item ctx-item--danger"
           :disabled="isReadOnly || sidebarCtxSet.locked"
           @click="
-            ctxSetDeleteIds.length > 1
-              ? deleteSetsByIds(ctxSetDeleteIds)
-              : deleteSetById(sidebarCtxSet.id);
+            deleteSetsByIds(ctxSetDeleteIds);
             closeSidebarCtxMenu();
           "
         >
