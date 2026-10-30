@@ -7498,10 +7498,23 @@ turns the file from a counter into a fingerprint:
 existing user who upgrades and opts in would otherwise carry a first-seen date of
 the upgrade, so their "week 1" would really be week 40 and week-1 retention would
 read absurdly high. The flag is decided **once**, when the ID is created, from
-whether the installation already had a server config. That is why
-`ensure_install_identity` is called in `Server.__init__` **before**
-`init_server_config`. Afterwards the config file always exists and the
-distinction is gone.
+whether the installation already had a server config, or a `hub.db` beside where
+it goes (a lost config next to a library is still an upgrade). Afterwards the
+config file always exists and the distinction is gone, so **every writer of a
+fresh config on a real install calls `ensure_install_identity` before it
+writes** (the demo image bakes its config and hub in, and is classed an
+upgrade):
+
+| Writer | Where the call is |
+|---|---|
+| `pixlstash.app` (pip, desktop backend) | first thing in `main()`, ahead of the bootstrap wizard and `init_server_config` |
+| Docker | `docker-entrypoint.sh`, `python -m pixlstash.telemetry` before writing its default config |
+| Desktop first run | `runFirstRunSetup` (`electron/src/setup/RunSetup.ts`), the same module call before `writeConfig`; skipped whenever a standalone library was detected, imported or not, since that person already runs PixlStash |
+| Anything else constructing a `Server` | `Server.__init__`, before `init_server_config`; a no-op after any of the above |
+
+The identity directory is created private (`mkdir_private`), as
+`init_server_config` would: on a fresh install this call can be the one that
+creates the config directory the hub then lands in.
 
 **Failure behaviour is deliberate.** A corrupt, truncated, wrong-version, or
 non-UUID record is logged and regenerated rather than trusted. An *unwritable*

@@ -37,8 +37,10 @@ import os
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+from pathlib import Path
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.startup_permissions import mkdir_private
 from pixlstash.utils.atomic_write import write_json_atomic
 
 logger = get_logger(__name__)
@@ -58,8 +60,8 @@ class InstallIdentity:
         install_id: Random UUIDv4 string. Never derived from anything.
         created_date: UTC date the ID was generated, ``YYYY-MM-DD``. Deliberately
             a date and not a timestamp. See the module docstring.
-        is_new_install: True only if this installation had no server config when
-            the ID was generated and did not subsequently decline install-ID
+        is_new_install: True only if this installation had no server config and
+            no hub when the ID was generated and did not subsequently decline install-ID
             telemetry during its initial consent decision.
     """
 
@@ -195,7 +197,10 @@ def _write_identity(path: str, identity: InstallIdentity) -> InstallIdentity | N
         The identity if it was persisted, None if the write failed.
     """
     try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        # Private, as init_server_config makes it: on a fresh install this can
+        # be the call that creates the config directory, and the hub lands in
+        # it next. A plain makedirs would leave it 0775 under umask 0002.
+        mkdir_private(Path(path).parent)
         write_json_atomic(path, identity.to_record())
     except OSError as exc:
         # A non-persisted ID would be regenerated on every boot, which would
@@ -218,6 +223,9 @@ def ensure_install_identity(server_config_path: str) -> InstallIdentity | None:
 
     Call this *before* the server config file is created, so a genuinely fresh
     install is distinguishable from an upgrade (see the module docstring).
+    Every writer of a fresh config does: ``app.main`` first thing, and the
+    Docker entrypoint and the desktop's first-run setup through
+    ``python -m pixlstash.telemetry``.
 
     Args:
         server_config_path: Path to the server config file.
@@ -229,10 +237,13 @@ def ensure_install_identity(server_config_path: str) -> InstallIdentity | None:
     if existing is not None:
         return existing
 
-    # Decided once, here: an installation that already has a server config
-    # predates this ID, so it joins the upgrade population rather than the
-    # new-install cohort.
-    is_new_install = not os.path.exists(server_config_path)
+    # Decided once, here: an installation that already has a server config, or
+    # a hub beside where it goes (a lost or deleted config), predates this ID,
+    # so it joins the upgrade population rather than the new-install cohort.
+    config_dir = os.path.dirname(os.path.abspath(server_config_path))
+    is_new_install = not os.path.exists(server_config_path) and not os.path.exists(
+        os.path.join(config_dir, "hub.db")
+    )
     identity = InstallIdentity(
         install_id=str(uuid.uuid4()),
         created_date=datetime.now(timezone.utc).date().isoformat(),

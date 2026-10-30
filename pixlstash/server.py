@@ -570,8 +570,10 @@ class Server(
         # Before init_server_config, deliberately: ensure_install_identity reads
         # the presence of the server config to decide whether this is a fresh
         # install or an existing one upgrading in. Once init_server_config has
-        # run, that file always exists and the distinction is gone. The ID is
-        # written locally and transmitted by nothing in this release.
+        # run, that file always exists and the distinction is gone. Entry
+        # points that write the config before constructing a Server (app.main,
+        # the Docker entrypoint, the desktop's first-run setup) call it earlier
+        # still, which makes this a no-op for them.
         ensure_install_identity(server_config_path)
 
         self._server_config = self.init_server_config(server_config_path)
