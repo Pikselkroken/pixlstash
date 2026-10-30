@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+import send2trash as send2trash_package
 from fastapi import HTTPException
 
 import pixlstash.routes.comfyui as comfyui_module
@@ -624,6 +625,7 @@ def test_e2e_data_dir_moves_the_workflow_folders_and_the_trash(tmp_path, monkeyp
     for name, module in list(sys.modules.items()):
         if name.startswith("pixlstash") and hasattr(module, "send2trash"):
             monkeypatch.setattr(module, "send2trash", real_trash)
+    monkeypatch.setattr(send2trash_package, "send2trash", real_trash)
     data = tmp_path / "user-data"
     user_dir = data / "comfyui-workflows" / "user"
     user_dir.mkdir(parents=True)
@@ -658,6 +660,10 @@ def test_e2e_data_dir_moves_the_workflow_folders_and_the_trash(tmp_path, monkeyp
         # Every caller of the real trash is moved, not only the inbox's.
         assert comfyui_module.send2trash is workflow_inbox.send2trash
         assert comfyui_module.send2trash is not real_trash
+        # And a module imported after start-up binds the fake as well.
+        from send2trash import send2trash as imported_later
+
+        assert imported_later is workflow_inbox.send2trash
         assert not shared.exists()
     finally:
         server.__exit__(None, None, None)

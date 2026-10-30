@@ -34,6 +34,7 @@ import sys
 import tempfile
 from typing import Optional
 
+import send2trash as send2trash_package
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 from send2trash import send2trash
@@ -202,8 +203,9 @@ def isolate_e2e_data(path: str) -> None:
         # A folder per file, so two files of one name both keep theirs.
         shutil.move(os.fspath(target), tempfile.mkdtemp(dir=trash))
 
-    # Every module that bound the real one, not a list of them: a module that
-    # starts trashing later is covered without being named here.
+    # Every module that already bound the real one, not a list of them, and
+    # the package itself, so a module imported later binds the fake too.
+    send2trash_package.send2trash = fake_trash
     for name, module in list(sys.modules.items()):
         if name.startswith("pixlstash") and (
             getattr(module, "send2trash", None) is send2trash
