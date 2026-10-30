@@ -28,6 +28,11 @@ const BASE_URL = `http://127.0.0.1:${PORT}`
 // what it was sent. Set PIXLSTASH_E2E_COMFYUI_PORT to pin it.
 const COMFYUI_PORT =
   process.env.PIXLSTASH_E2E_COMFYUI_PORT || String(Number(PORT) + 200)
+if (Number(COMFYUI_PORT) === 8188) {
+  throw new Error(
+    'The fake ComfyUI would sit on 8188, ComfyUI\'s own port: set PIXLSTASH_E2E_COMFYUI_PORT.',
+  )
+}
 process.env.PIXLSTASH_E2E_COMFYUI_URL = `http://127.0.0.1:${COMFYUI_PORT}`
 const PYTHON = process.env.PIXLSTASH_PYTHON || 'python'
 
