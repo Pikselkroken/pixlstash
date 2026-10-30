@@ -91,13 +91,17 @@ INSERT INTO Job (id) VALUES ('<job uuid>');
 - **Cooperative (preferred):** `UPDATE Job SET stop=1 WHERE id=?`. Polled every step; trainer raises
   cleanly, records final `step`, sets status `stopped`. Does **not** write an extra checkpoint; only
   `save_every` checkpoints survive, so keep `save_every` modest.
-- **Hard fallback / shutdown:** SIGTERM→SIGKILL the process group. Loses progress since the last
-  `save_every` checkpoint.
+- **Hard fallback / shutdown:** SIGTERM→SIGKILL the process group. Windows has neither, so there
+  both steps are TerminateProcess (a hard kill) on the trainer and every process it started, through
+  psutil. Loses progress since the last `save_every` checkpoint. `stop` is polled only between
+  steps, so a cancel while the model loads or latents/text are cached, when that outlasts the
+  cooperative grace, ends here with `Job.status` still `running`.
 
 ## Restart reconciliation
 
 A PixlStash row left `running` after a restart: check PID liveness; if dead, read `Job.status` (if it
-reached `completed`/`error`) else mark `error`/`interrupted`. Collect any checkpoints already in
+reached `completed`/`error`) else mark `stopped` when `Job.stop` is set (we asked; see above) and
+`error`/`interrupted` when not. Collect any checkpoints already in
 `save_root`.
 
 ## Known facts to re-verify on bump

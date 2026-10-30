@@ -585,6 +585,120 @@ def test_cancel_midrun_ends_stopped_and_releases_lease(hub, repo_dir, monkeypatc
     assert lease.acquire_count == lease.release_count == 1
 
 
+def test_a_cancel_while_the_model_loads_ends_stopped(hub, repo_dir, monkeypatch):
+    """ai-toolkit does not read ``stop`` while it loads the model, so the cancel
+    ends in a signal; the run still ends ``stopped``, not ``error``."""
+    monkeypatch.setenv("FAKE_RUN_LOAD_SECONDS", "15")
+    monkeypatch.setattr(
+        "pixlstash.training.local_ai_toolkit._CANCEL_GRACE_SECONDS", 0.2
+    )
+    lease = _StubLease()
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=lease,
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    job = service.enqueue(
+        set_id=_SET_ID,
+        name="loading",
+        base_model="m",
+        trigger_word="t",
+        template_path=_write_template(repo_dir, steps=4, save_every=2),
+        resolution=_RESOLUTION,
+    )
+    service.start()
+    try:
+        assert _poll_until(lambda: _job_status(hub, job["uuid"]).pid is not None)
+        assert service.cancel(job["id"]) is True
+        assert _poll_until(lambda: _job_status(hub, job["uuid"]).completed_at)
+    finally:
+        service.stop()
+
+    final = _job_status(hub, job["uuid"])
+    assert (final.status, final.error) == ("stopped", None)
+    assert lease.acquire_count == lease.release_count == 1
+
+
+def test_a_cancel_after_the_memory_check_is_not_overwritten(hub, repo_dir):
+    """A cancel in the last seconds of checking memory and speed sees the run
+    queued and stops it; the worker must not then launch it anyway."""
+    importer = _RecordingImport()
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+        importer=importer,
+    )
+
+    def cancelled_while_checking(backend, info, *args):
+        assert service.cancel(info["id"]) is True
+        return True
+
+    service._check_memory_and_speed = cancelled_while_checking
+    job = service.enqueue(
+        set_id=_SET_ID,
+        name="checked",
+        base_model="m",
+        trigger_word="t",
+        template_path=_write_template(repo_dir, steps=4, save_every=2),
+        resolution=_RESOLUTION,
+    )
+
+    service._run_job(training_runs.get_run(hub, _LIBRARY_UUID, job["id"]))
+
+    final = _job_status(hub, job["uuid"])
+    assert (final.status, final.pid) == ("stopped", None)
+    assert importer.calls == []
+
+
+def test_a_cancel_that_read_queued_stops_a_run_launched_meanwhile(
+    hub, repo_dir, monkeypatch
+):
+    """cancel() reads the run before taking the lock; if the worker launched it
+    in between, the cancel must stop the trainer, not write ``stopped`` over a
+    running row."""
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    job = service.enqueue(
+        set_id=_SET_ID,
+        name="raced",
+        base_model="m",
+        trigger_word="t",
+        template_path=_write_template(repo_dir, steps=4, save_every=2),
+    )
+    stale = training_runs.get_run(hub, _LIBRARY_UUID, job["id"])
+    training_runs.update_run(hub, job["uuid"], status="running", pid=4242)
+    cancelled = []
+
+    class _Backend:
+        def cancel(self, handle):
+            cancelled.append(handle.pid)
+
+    service._active_backend = _Backend()
+    service._active_job_uuid = job["uuid"]
+    reads = iter([stale])
+    real_get_run = training_runs.get_run
+    monkeypatch.setattr(
+        training_service_module.training_runs,
+        "get_run",
+        lambda *args: next(reads, None) or real_get_run(*args),
+    )
+
+    assert service.cancel(job["id"]) is True
+
+    assert _job_status(hub, job["uuid"]).status == "stopping"
+    assert cancelled == [4242]
+
+
 def test_shutdown_mid_run_leaves_the_live_job_running(hub, repo_dir, monkeypatch):
     """Stopping the service while a trainer runs must not mark it errored.
 

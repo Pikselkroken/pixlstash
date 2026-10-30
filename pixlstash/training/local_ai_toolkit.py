@@ -402,8 +402,8 @@ class LocalAiToolkit(TrainerBackend):
 
         Sets ``Job.stop=1`` (the trainer polls this every step and exits
         cleanly). If the process is still alive after a grace period, escalates
-        to ``SIGTERM`` then ``SIGKILL`` on the process group. Each step is
-        logged.
+        to ending it, then to killing it (see :meth:`_signal_trainer`). Each
+        step is logged.
 
         Args:
             handle: The job handle.
@@ -441,21 +441,21 @@ class LocalAiToolkit(TrainerBackend):
             return
 
         logger.warning(
-            "Job %s did not stop within %.0fs; sending SIGTERM to process group",
+            "Job %s did not stop within %.0fs; terminating the trainer",
             handle.job_id,
             _CANCEL_GRACE_SECONDS,
         )
-        self._signal_trainer(handle, signal.SIGTERM)
+        self._signal_trainer(handle, force=False)
 
         if self._wait_for_exit(handle, _SIGTERM_GRACE_SECONDS):
-            logger.info("Job %s terminated after SIGTERM", handle.job_id)
+            logger.info("Job %s terminated", handle.job_id)
             return
 
         logger.warning(
-            "Job %s still alive after SIGTERM; sending SIGKILL to process group",
+            "Job %s still alive after terminating it; killing the trainer",
             handle.job_id,
         )
-        self._signal_trainer(handle, signal.SIGKILL)
+        self._signal_trainer(handle, force=True)
 
     def reconcile(self, handle: TrainingHandle) -> TrainingProgress:
         """Re-derive a job's state after a restart.
@@ -463,7 +463,9 @@ class LocalAiToolkit(TrainerBackend):
         Reads a fresh progress snapshot, then resolves a process that is no
         longer alive but whose persisted status is still non-terminal: if the
         trainer recorded ``completed``/``error`` it is trusted, otherwise the
-        run is reported as ``error`` (interrupted by the crash/restart).
+        run is reported as ``stopped`` when a stop was requested (ai-toolkit
+        reads ``Job.stop`` only between steps, so a cancel while it loads the
+        model or caches ends in a signal) and ``error`` (interrupted) when not.
 
         Args:
             handle: The job handle as persisted before the restart.
@@ -474,6 +476,15 @@ class LocalAiToolkit(TrainerBackend):
         progress = self.progress(handle)
         terminal = {"completed", "error", "stopped"}
         if not self.is_alive(handle) and progress.status not in terminal:
+            if self._stop_requested(handle.sqlite_db_path, handle.job_id):
+                logger.info(
+                    "Job %s ended while %r after a stop was requested; stopped",
+                    handle.job_id,
+                    progress.info,
+                )
+                progress.status = "stopped"
+                progress.info = "Stopped"
+                return progress
             logger.warning(
                 "Job %s found dead with non-terminal status %r after restart; "
                 "marking as error (interrupted)",
@@ -572,7 +583,7 @@ class LocalAiToolkit(TrainerBackend):
 
         A ``Popen`` we hold proves it. Otherwise the pid must still be the
         trainer: its cmdline names this backend's run script and the job's
-        config. Refuses on any platform without ``/proc``, which is logged.
+        config. Refuses where the cmdline cannot be read, which is logged.
 
         Args:
             handle: The job handle.
@@ -593,7 +604,7 @@ class LocalAiToolkit(TrainerBackend):
         return ours is True
 
     def _is_our_trainer(self, handle: TrainingHandle) -> bool | None:
-        """Check ``/proc/<pid>/cmdline`` for this job's trainer launch.
+        """Check the pid's cmdline (through psutil) for this job's trainer launch.
 
         Args:
             handle: The job handle; its ``pid`` and ``config_path`` are compared.
@@ -601,13 +612,11 @@ class LocalAiToolkit(TrainerBackend):
         Returns:
             ``True`` if the cmdline holds the run script and the job's config
             path as arguments, ``False`` if it does not, ``None`` if it cannot
-            be read (no ``/proc``, or the process has just gone).
+            be read (access denied, or the process has just gone).
         """
-        cmdline = f"/proc/{handle.pid}/cmdline"
         try:
-            with open(cmdline, "rb") as fh:
-                argv = fh.read().split(b"\0")
-        except OSError as exc:
+            argv = psutil.Process(handle.pid).cmdline()
+        except psutil.Error as exc:
             logger.debug(
                 "Cannot read the cmdline of pid %s (job %s): %s",
                 handle.pid,
@@ -615,10 +624,7 @@ class LocalAiToolkit(TrainerBackend):
                 exc,
             )
             return None
-        return (
-            os.fsencode(self.run_script) in argv
-            and os.fsencode(handle.config_path) in argv
-        )
+        return self.run_script in argv and handle.config_path in argv
 
     @staticmethod
     def _pid_alive(pid: int) -> bool:
@@ -666,29 +672,74 @@ class LocalAiToolkit(TrainerBackend):
             time.sleep(0.05)
         return not self._pid_running(handle)
 
-    def _signal_trainer(self, handle: TrainingHandle, sig: int) -> None:
-        """Signal the job's trainer group, after checking it still is the trainer.
+    def _signal_trainer(self, handle: TrainingHandle, *, force: bool) -> None:
+        """End the job's trainer, after checking it still is the trainer.
 
         The check runs immediately before the signal, so a pid reused during the
-        grace period is never signalled.
+        grace period is never signalled. POSIX signals the process group;
+        Windows has no process groups, ``killpg`` or ``SIGKILL``, so there the
+        trainer's process tree is ended through psutil.
 
         Args:
             handle: The job handle.
-            sig: Signal number to send (``SIGTERM`` / ``SIGKILL``).
+            force: Kill (``SIGKILL``) rather than terminate (``SIGTERM``).
         """
         if not self._is_this_jobs_trainer(handle):
             logger.warning(
-                "Job %s: pid %d is no longer this job's trainer; not sending signal %s",
+                "Job %s: pid %d is no longer this job's trainer; not ending it",
                 handle.job_id,
                 handle.pid,
-                sig,
             )
             return
-        self._signal_process_group(handle.pid, sig)
+        if os.name == "nt":
+            self._end_process_tree(handle.pid, force=force)
+        else:
+            self._signal_process_group(
+                handle.pid, signal.SIGKILL if force else signal.SIGTERM
+            )
+
+    @staticmethod
+    def _end_process_tree(pid: int, *, force: bool) -> None:
+        """Terminate (or kill) *pid* and every process it started.
+
+        The descendants are listed before anything is ended: once the trainer
+        is gone its data-loader workers no longer show as its children. On
+        Windows both terminate and kill are TerminateProcess.
+
+        Args:
+            pid: The trainer's pid.
+            force: Kill rather than terminate.
+        """
+        try:
+            trainer = psutil.Process(pid)
+        except psutil.Error as exc:
+            logger.info("Trainer pid %d is gone or unreadable: %s", pid, exc)
+            return
+        try:
+            tree = [*trainer.children(recursive=True), trainer]
+        except psutil.Error as exc:
+            logger.warning(
+                "Cannot list the processes trainer pid %d started (%s); ending the "
+                "trainer alone, its workers may outlive it",
+                pid,
+                exc,
+            )
+            tree = [trainer]
+        for proc in tree:
+            try:
+                (proc.kill if force else proc.terminate)()
+            except psutil.NoSuchProcess:
+                logger.info(
+                    "Process %d of trainer pid %d already exited", proc.pid, pid
+                )
+            except psutil.Error as exc:
+                logger.warning(
+                    "Failed to end process %d of trainer pid %d: %s", proc.pid, pid, exc
+                )
 
     @staticmethod
     def _signal_process_group(pid: int, sig: int) -> None:
-        """Send *sig* to the process group led by *pid*.
+        """Send *sig* to the process group led by *pid* (POSIX only).
 
         Args:
             pid: Process group leader PID (the child was started with
@@ -837,6 +888,33 @@ class LocalAiToolkit(TrainerBackend):
                 conn.close()
         except sqlite3.Error as exc:
             logger.warning("Failed to set stop flag for job %s: %s", job_id, exc)
+
+    @staticmethod
+    def _stop_requested(sqlite_db_path: str, job_id: str) -> bool:
+        """Return whether ``Job.stop`` is set, i.e. :meth:`cancel` asked.
+
+        Args:
+            sqlite_db_path: Path to the per-job DB.
+            job_id: The job id.
+
+        Returns:
+            ``True`` if a stop was requested; ``False`` if not or unreadable.
+        """
+        if not os.path.exists(sqlite_db_path):
+            logger.warning("Job %s has no job DB at %s", job_id, sqlite_db_path)
+            return False
+        try:
+            conn = sqlite3.connect(sqlite_db_path, timeout=5.0)
+            try:
+                row = conn.execute(
+                    "SELECT stop FROM Job WHERE id = ?", (job_id,)
+                ).fetchone()
+            finally:
+                conn.close()
+        except sqlite3.Error as exc:
+            logger.warning("Failed to read the stop flag of job %s: %s", job_id, exc)
+            return False
+        return bool(row and row[0])
 
     def _read_job_row(self, handle: TrainingHandle) -> tuple[str, str, int, str]:
         """Read status/info/step/speed from the Job table.
