@@ -69,6 +69,7 @@ from pixlstash.hub.bootstrap import (
 )
 from pixlstash.hub.registry import LibraryRegistry
 from pixlstash.services.e2e_seed_service import seed_reference_folder
+from pixlstash.services.e2e_workflow_seed import seed_workflows
 from pixlstash.services.library_switch_service import LibrarySwitchService
 from pixlstash.services.workflow_bindings import migrate_workflow_folder
 from pixlstash.services.workflow_events import announce_changed_workflows
@@ -2084,6 +2085,8 @@ class Server(
                 seed_model_folder(self, self._server_config["e2e_model_folder"])
             if self._server_config.get("e2e_reference_folder"):
                 seed_reference_folder(self, self._server_config["e2e_reference_folder"])
+            if self._server_config.get("e2e_workflow_seed"):
+                seed_workflows(self, self._server_config["e2e_workflow_seed"])
 
         @self.api.middleware("http")
         async def auth_middleware(request: Request, call_next):

@@ -151,6 +151,7 @@ def test_services_no_direct_db_calls():
         "pixlstash/services/dedup_tier_service.py",  # vault-injection pattern; thin wrappers around the *_in_session queue reads and the scan request
         "pixlstash/services/dedup_verdict_service.py",  # vault-injection pattern; thin wrappers around the *_in_session verdict writers
         "pixlstash/services/e2e_seed_service.py",  # vault-injection pattern; e2e-only start-up seed around register_seed_folder_in_session
+        "pixlstash/services/e2e_workflow_seed.py",  # vault-injection pattern; e2e-only start-up seed, one write through add_pictures_in_session
         "pixlstash/services/impossible_tag_clear_service.py",  # vault-injection pattern; bulk impossible-tag clear/undo
         "pixlstash/services/keep_cover_only_service.py",  # vault-injection pattern; thin wrappers around the *_in_session keep-cover-only preview and collapse
         "pixlstash/services/library_insights_service.py",  # vault-injection pattern; read-only wrapper around build_insights_in_session

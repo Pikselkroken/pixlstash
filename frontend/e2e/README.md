@@ -52,7 +52,19 @@ The backend boots against the repo's `test-data/` fixture — a seeded vault
    `enable_test_hooks` on, the workflow inbox, the user workflow folder and the
    trash move there, so a run neither imports the machine's own workflows nor
    writes into or trashes from the folders the owner's server uses;
-7. execs `python -m pixlstash.app` against that temp copy.
+7. writes a workflow seed (`<work dir>/workflow-seed`: `seed.json` and PNGs
+   carrying a ComfyUI `prompt` graph) and names it as `e2e_workflow_seed`.
+   With `enable_test_hooks` on, the server imports it at start-up through the
+   import, picture-import and recipe paths, and runs the ComfyUI extraction and
+   card backfill synchronously. `GET /workflows` then lists *Seeded LoRA
+   portrait* (a checkpoint and two LoRAs, all on the seeded shelf), *Seeded
+   plain txt2img*, and a workflow known from three pictures; *Seeded hidden
+   draft* is hidden and an img2img picture is a one-off. `GET /recipes` lists
+   two recipes on the LoRA workflow and one unfiled
+   (`workflows-seed.spec.js`). The pictures are dated 2000 so they sort last
+   on the grid's default order, and the specs that open the first picture
+   still get a fixture one;
+8. execs `python -m pixlstash.app` against that temp copy.
 
 Because the user table is stripped per run, `global-setup.js` registers a fresh
 admin (random password) and mints an `ALL` token — credentials live only for
