@@ -145,6 +145,7 @@ provides both since #2320; until #2353 runs them for real, they stay manual.
 | Test | Covers | Status |
 |------|--------|--------|
 | expands and collapses stacks from the View menu | Expand-all / collapse-all stack controls in the View menu | ✅ |
+| make a cover, take a member out and reorder in the filmstrip; each survives a reload | On a stack of four loose pictures the spec creates: Edit stack ▸ Open stack, Make cover, Take out of stack, and the lightbox filmstrip's Move later; each checked against the server's order and the grid's position chips after a fresh load (`afterAll` takes the stack apart) | ✅ |
 
 ## Tags — `tags.spec.js` (plan §5)
 | Test | Covers | Status |
@@ -180,6 +181,7 @@ provides both since #2320; until #2353 runs them for real, they stay manual.
 |------|--------|--------|
 | exports 3 selected pictures to a ZIP containing exactly 3 image files | Ctrl-click 3 cards → the selection pill's Export panel (captions "none") → Export → the downloaded ZIP's central directory holds exactly 3 image entries | ✅ |
 | exports a picture set to a ZIP matching the sidebar count | Open a non-empty set, Ctrl+A, Export — the request carries the view's query rather than ids, and the ZIP image-entry count equals the set's sidebar count badge | ✅ |
+| writes 3 half-size pictures and their tag captions into the folder picked | Export to Folder… into a mkdtemp folder walked to in the folder browser, captions "Tags", resolution "Half Size": 3 images and 3 non-empty captions on disk, each image half its recorded size; the backend's openers refuse, so the notice says it could not open the folder | ✅ |
 
 ## Tag predictions — `tag-predictions.spec.js` (plan §14)
 | Test | Covers | Status |
@@ -203,6 +205,9 @@ provides both since #2320; until #2353 runs them for real, they stay manual.
 | Test | Covers | Status |
 |------|--------|--------|
 | opens on right-click and lists picture actions | Right-click a card opens `.image-ctx-menu` exposing Tag / Share image, and Reverse image search once Find & compare is hovered; Escape dismisses it | ✅ |
+| Set ▸ adds the picture to the set picked, and picking it again removes it | On a set the spec creates: the API membership gains the picture, then loses it | ✅ |
+| Tag… opens and focuses the tag field | The stats sidebar opens with its tag field focused | ✅ |
+| Find & compare ▸ Compare lays the two selected pictures over each other | Two selected pictures open in the lightbox's compare view, one on the stage and the other clipped over it | ✅ |
 
 ## Statistics sidebar — `stats.spec.js`
 | Test | Covers | Status |
@@ -212,7 +217,7 @@ provides both since #2320; until #2353 runs them for real, they stay manual.
 ## Boolean set operations — `set-operations.spec.js`
 | Test | Covers | Status |
 |------|--------|--------|
-| combines multiple sets via the multi-select toolbar | Ctrl-click a second set reveals the combine toolbar with Union / Overlap / Difference / Unique (XOR); clearing dismisses it | ✅ |
+| the combined grid matches the set arithmetic for every mode | On two overlapping sets the spec creates, the grid under Union / Overlap / Difference / Unique (XOR) holds exactly the ids computed from the API's memberships; clearing dismisses the toolbar | ✅ |
 
 ## Picture-set locking — `set-locking.spec.js` (plan §4)
 | Test | Covers | Status |
@@ -227,7 +232,7 @@ provides both since #2320; until #2353 runs them for real, they stay manual.
 ## Snapshots — `snapshots.spec.js`
 | Test | Covers | Status |
 |------|--------|--------|
-| lists restore points with a restore action (list-only) | Settings → Snapshots lists ≥1 restore point, each offering a Restore action (rollback itself is **not** clicked — it would rewrite the shared DB) | ✅ |
+| a snapshot taken now restores sets, people and pictures to this state | Create now (file lands under the work dir) → add a set → full restore of that snapshot → sets, set memberships, people and pictures (score, stack) match the state before. The restore signs out every session and revokes every token, so the spec signs in again and rewrites `.auth/state.json` and `token.json` | ✅ |
 
 ## Grid live-update — `grid-own-change-no-pill.spec.js`, `grid-external-change-pill.spec.js`, `grid-injection.spec.js`, `grid-lightbox-deferral.spec.js` (plan §19)
 WebSocket-driven grid refresh and the two pills. The e2e harness simulates an
@@ -311,12 +316,10 @@ stays one click away in the rail's Archived list.
 
 Tracked so they aren't forgotten — weighted by blast radius:
 
-- **Snapshots rollback & selective restore (v1.5) — HIGH RISK, partially
-  automated.** `snapshots.spec.js` now asserts the restore-point list renders
-  with a Restore action, but the destructive round-trip (snapshot → mutate →
-  rollback) and *selective metadata restore* are still uncovered — clicking
-  Restore would rewrite the shared fixture DB, so it needs an isolated backend.
-  Data-loss territory; should be the next spec.
+- **Selective snapshot restore (v1.5) — HIGH RISK, uncovered.**
+  `snapshots.spec.js` runs the full round-trip (snapshot → mutate → full
+  restore), but restoring chosen pictures from a snapshot (the context menu's
+  Restore from snapshot) has no spec. Data-loss territory.
 - **Bulk operations at scale** — select-all/range and apply-to-many beyond a
   handful of pictures are only smoke-covered.
 - **Import completion blocked by the worker requirement.** The import endpoint

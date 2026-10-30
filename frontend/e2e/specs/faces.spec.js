@@ -4,6 +4,9 @@ import { test, expect } from '../fixtures/test.js'
 // has one, so we step through the lightbox until we land on a picture with
 // detected faces, then assert the side-panel crops and the bounding-box
 // lightbox render. Read-only.
+//
+// Showing faces is all this spec checks. Assigning a face and creating a
+// person from one are lightbox edits, covered by #2326.
 
 test.describe('faces', () => {
   test('shows face crops and bounding-box overlays', async ({ page, grid, lightbox }) => {
