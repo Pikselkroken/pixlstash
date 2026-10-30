@@ -95,6 +95,31 @@ export async function waitForPicture(apiContext, folderId, path) {
   return id
 }
 
+/**
+ * Take pictures a spec imported back out of the library, so later specs read
+ * the fixture as they would have. Scrapped, then deleted forever without
+ * *include protected*: a vault copy goes, file and all, and a reference-folder
+ * original stays in the Scrapheap with its file untouched. Either way it no
+ * longer counts as part of the library.
+ */
+export async function discardPictures(apiContext, ids) {
+  if (!ids.length) return
+  const scrapped = await apiContext.delete('/api/v1/pictures', { data: { picture_ids: ids } })
+  expect(scrapped.ok(), await scrapped.text()).toBe(true)
+  const preview = await apiContext.post('/api/v1/pictures/scrapheap/delete-preview', {
+    data: { picture_ids: ids },
+  })
+  expect(preview.ok(), await preview.text()).toBe(true)
+  const purged = await apiContext.delete('/api/v1/pictures/scrapheap', {
+    data: {
+      picture_ids: ids,
+      include_protected: false,
+      confirm_token: (await preview.json()).confirm_token,
+    },
+  })
+  expect(purged.ok(), await purged.text()).toBe(true)
+}
+
 function chunk(type, data) {
   const length = Buffer.alloc(4)
   length.writeUInt32BE(data.length)

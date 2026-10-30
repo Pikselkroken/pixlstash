@@ -9,7 +9,12 @@
 import { existsSync, rmSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { test, expect } from '../fixtures/test.js'
-import { expectScratch, scratchFolder, writePicture } from '../fixtures/folders.js'
+import {
+  discardPictures,
+  expectScratch,
+  scratchFolder,
+  writePicture,
+} from '../fixtures/folders.js'
 
 test.describe('an import folder', () => {
   let folder = null
@@ -21,14 +26,9 @@ test.describe('an import folder', () => {
       const res = await apiContext.delete(`/api/v1/import-folders/${folderId}`)
       expect(res.ok(), await res.text()).toBe(true)
     }
-    // Out of the Inbox, so the sidebar's count is as later specs found it.
-    // The picture itself stays: it is in the library now, like any import.
-    if (pictureId != null) {
-      const res = await apiContext.post('/api/v1/import-folders/inbox/seen', {
-        data: { picture_ids: [pictureId] },
-      })
-      expect(res.ok(), await res.text()).toBe(true)
-    }
+    // The picture goes again, so later specs (and the Inbox) read the
+    // fixture as they would have.
+    if (pictureId != null) await discardPictures(apiContext, [pictureId])
     if (folder) {
       expectScratch(folder)
       rmSync(folder, { recursive: true, force: true })

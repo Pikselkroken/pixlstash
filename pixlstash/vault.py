@@ -24,6 +24,7 @@ from .db_models import (
     Picture,
     PicturePendingPerson,
     PictureSet,
+    ReferenceFolder,
     Snapshot,
     Tag,
     TAG_SENTINEL_LIKE_PATTERN,
@@ -824,8 +825,6 @@ class Vault:
         Returns:
             bool: False when there is no such folder, and nothing was marked.
         """
-        from pixlstash.db_models.reference_folder import ReferenceFolder
-
         exists = self.db.run_immediate_read_task(
             lambda session: session.get(ReferenceFolder, folder_id) is not None
         )

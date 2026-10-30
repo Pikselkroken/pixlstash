@@ -15,6 +15,7 @@ import { mkdirSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect } from '../fixtures/test.js'
 import {
+  discardPictures,
   markFolderChanged,
   seededReferenceFolder,
   waitForPicture,
@@ -22,6 +23,8 @@ import {
 } from '../fixtures/folders.js'
 
 let seed = Date.now() % 100_000
+// Every picture this file put in the seeded folder, taken out again at the end.
+const created = []
 
 /** Every project, by name. */
 async function projectsByName(apiContext) {
@@ -70,6 +73,7 @@ async function pictureMovedOnDisk(apiContext, { from, to, before }) {
   writePicture(source, seed)
   await markFolderChanged(apiContext, folder.id)
   const pictureId = await waitForPicture(apiContext, folder.id, source)
+  created.push(pictureId)
   if (before) await before(pictureId)
   const target = join(folder.folder, to, name)
   mkdirSync(join(folder.folder, to), { recursive: true })
@@ -92,6 +96,12 @@ function rowFor(page, pictureId) {
 }
 
 test.describe('the Moves queue', () => {
+  // Out of the library again (their files stay in the seeded folder, which is
+  // the launcher's throwaway copy), so later specs read the fixture as before.
+  test.afterAll(async ({ apiContext }) => {
+    await discardPictures(apiContext, created.splice(0))
+  })
+
   test('lists the seeded review with the change it proposes', async ({
     page,
     apiContext,
