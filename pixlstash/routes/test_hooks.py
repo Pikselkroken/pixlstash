@@ -28,14 +28,21 @@ See ``docs/reviews/2026-06-grid-refresh-cleanup-plan.md`` §4 Phase 2 and
 
 from __future__ import annotations
 
+import os
+import shutil
+import sys
+import tempfile
 from typing import Optional
 
+import send2trash as send2trash_package
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
+from send2trash import send2trash
 
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
 from pixlstash.routes.model_folders import register_model_folder
+from pixlstash.services import workflow_inbox
 from pixlstash.services.model_folder_scanner import ModelFolderScanner
 
 logger = get_logger(__name__)
@@ -174,6 +181,37 @@ def seed_model_folder(server, path: str) -> None:
         result.adapters,
         result.checkpoints,
     )
+
+
+def isolate_e2e_data(path: str) -> None:
+    """Keep the e2e backend's workflow folders and its trash under *path*.
+
+    The workflow inbox and the user workflow folder are machine-global, so an
+    e2e run would otherwise import whatever the owner's inbox holds, migrate
+    their workflows, and write a deleted workflow into the inbox their own
+    server watches. Every ``send2trash`` PixlStash calls moves the file into
+    ``<path>/trash`` instead of the OS trash, the way the pytest suites'
+    ``fake_trash`` does. Called by ``Server.__init__`` just before the
+    hub's data steps read the user folder, and only when ``enable_test_hooks``
+    is on.
+    """
+    workflow_inbox.DATA_ROOT = path
+    trash = os.path.join(path, "trash")
+    os.makedirs(trash, exist_ok=True)
+
+    def fake_trash(target) -> None:
+        # A folder per file, so two files of one name both keep theirs.
+        shutil.move(os.fspath(target), tempfile.mkdtemp(dir=trash))
+
+    # Every module that already bound the real one, not a list of them, and
+    # the package itself, so a module imported later binds the fake too.
+    send2trash_package.send2trash = fake_trash
+    for name, module in list(sys.modules.items()):
+        if name.startswith("pixlstash") and (
+            getattr(module, "send2trash", None) is send2trash
+        ):
+            module.send2trash = fake_trash
+    logger.warning("[test-hooks] workflow folders and trash moved under %s", path)
 
 
 def create_router(server) -> APIRouter:

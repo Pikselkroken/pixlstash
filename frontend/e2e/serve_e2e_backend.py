@@ -54,6 +54,9 @@ MODEL_FOLDER = WORK_DIR / "model-shelf"
 REFERENCE_FOLDER = WORK_DIR / "reference-folder"
 # The seeded file the server moves after its first scan, leaving a review.
 REFERENCE_MOVED = "Inbox/fern.png"
+# Stands in for the app's data directory: the workflow inbox, the user workflow
+# folder and the trash, all of which are otherwise shared with the owner.
+USER_DATA = WORK_DIR / "user-data"
 
 
 def _ignore_backups(_dir, names):
@@ -167,6 +170,58 @@ def _harden_permissions(root: Path) -> None:
             print(f"[e2e-backend] could not tighten permissions on {path}: {exc}")
 
 
+def server_overrides(work_images: Path) -> dict:
+    """The fields that make the fixture's config a fast, hermetic test server."""
+    return {
+        "host": "127.0.0.1",
+        "port": PORT,
+        "image_root": str(work_images),
+        "require_ssl": False,
+        "cookie_secure": False,
+        "disable_password_auth": False,
+        # The suite reloads the SPA many times in quick succession; the
+        # global rate limiter (120 public requests / 60s) would otherwise
+        # 429 later navigations. Safe to disable on this hermetic backend.
+        "disable_rate_limit": True,
+        # The task runner runs, so an import or a folder scan a spec
+        # starts completes. The planner keeps only these finders: the
+        # folder sweeps, and the face finder the import routes require,
+        # which queues nothing because this vault builds no inference
+        # engine. The sweeps that would rewrite the fixture (tags,
+        # embeddings, scores, thumbnails) stay off. Read only with
+        # enable_test_hooks.
+        "disable_background_workers": False,
+        "e2e_planner_finders": [
+            "ReferenceFolderScanTask",
+            "WatchFolderImportTask",
+            "FaceExtractionTask",
+        ],
+        # Register the e2e-only WS test-hooks router so specs can inject
+        # grid events deterministically (the sweeps that fire the
+        # tag/face/score events the grid reacts to are off). Off by default
+        # everywhere else: production configs MUST NEVER set this flag — it
+        # exposes /api/v1/test-hooks/ws-event, which emits arbitrary
+        # owner-only WebSocket events.
+        "enable_test_hooks": True,
+        # Read only when enable_test_hooks is on: registered as a `user`
+        # model folder and scanned synchronously at start-up.
+        "e2e_model_folder": str(MODEL_FOLDER),
+        # Read only when enable_test_hooks is on: the workflow folders and the
+        # trash move here, so nothing under the shared data directory changes.
+        "e2e_data_dir": str(USER_DATA),
+        # Likewise: registered with a layout, scanned, one file moved and
+        # scanned again, so /moves lists a pending review.
+        "e2e_reference_folder": {
+            "path": str(REFERENCE_FOLDER),
+            "move": REFERENCE_MOVED,
+        },
+        "generate_thumbnails_on_startup": False,
+        "default_device": "cpu",
+        "daily_snapshots": False,
+        "log_level": "warning",
+    }
+
+
 def main() -> int:
     # Everything below lives in a throwaway directory that holds a SQLite
     # database, so create it private rather than at the developer's umask. The
@@ -195,52 +250,7 @@ def main() -> int:
     # Build a lean server-config from the fixture's own config, overriding the
     # fields that matter for a fast, hermetic, password-auth test server.
     base_config = json.loads((SRC_DATA / "server-config.json").read_text())
-    base_config.update(
-        {
-            "host": "127.0.0.1",
-            "port": PORT,
-            "image_root": str(work_images),
-            "require_ssl": False,
-            "cookie_secure": False,
-            "disable_password_auth": False,
-            # The suite reloads the SPA many times in quick succession; the
-            # global rate limiter (120 public requests / 60s) would otherwise
-            # 429 later navigations. Safe to disable on this hermetic backend.
-            "disable_rate_limit": True,
-            # The task runner runs, so an import or a folder scan a spec
-            # starts completes. The planner keeps only these finders: the
-            # folder sweeps, and the face finder the import routes require,
-            # which queues nothing because this vault builds no inference
-            # engine. The sweeps that would rewrite the fixture (tags,
-            # embeddings, scores, thumbnails) stay off. Read only with
-            # enable_test_hooks.
-            "disable_background_workers": False,
-            "e2e_planner_finders": [
-                "ReferenceFolderScanTask",
-                "WatchFolderImportTask",
-                "FaceExtractionTask",
-            ],
-            # Register the e2e-only WS test-hooks router so specs can inject
-            # grid events deterministically (the sweeps that fire the
-            # tag/face/score events the grid reacts to are off). Off by default everywhere else: production configs MUST
-            # NEVER set this flag — it exposes /api/v1/test-hooks/ws-event,
-            # which emits arbitrary owner-only WebSocket events.
-            "enable_test_hooks": True,
-            # Read only when enable_test_hooks is on: registered as a `user`
-            # model folder and scanned synchronously at start-up.
-            "e2e_model_folder": str(MODEL_FOLDER),
-            # Likewise: registered with a layout, scanned, one file moved and
-            # scanned again, so /moves lists a pending review.
-            "e2e_reference_folder": {
-                "path": str(REFERENCE_FOLDER),
-                "move": REFERENCE_MOVED,
-            },
-            "generate_thumbnails_on_startup": False,
-            "default_device": "cpu",
-            "daily_snapshots": False,
-            "log_level": "warning",
-        }
-    )
+    base_config.update(server_overrides(work_images))
     config_path = WORK_DIR / "server-config.json"
     config_path.write_text(json.dumps(base_config, indent=2))
 

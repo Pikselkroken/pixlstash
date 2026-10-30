@@ -48,7 +48,11 @@ The backend boots against the repo's `test-data/` fixture — a seeded vault
    pending review (`media-fixture.spec.js`). A spec that registers a folder of
    its own uses a `mkdtemp` folder: Delete forever with *include protected*
    removes reference-folder originals from disk;
-6. execs `python -m pixlstash.app` against that temp copy.
+6. names `<work dir>/user-data` in the config as `e2e_data_dir`. With
+   `enable_test_hooks` on, the workflow inbox, the user workflow folder and the
+   trash move there, so a run neither imports the machine's own workflows nor
+   writes into or trashes from the folders the owner's server uses;
+7. execs `python -m pixlstash.app` against that temp copy.
 
 Because the user table is stripped per run, `global-setup.js` registers a fresh
 admin (random password) and mints an `ALL` token — credentials live only for

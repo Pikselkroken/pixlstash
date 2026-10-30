@@ -6,10 +6,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 
-const training = vi.hoisted(() => ({ listTrainingJobs: vi.fn() }));
+const training = vi.hoisted(() => ({
+  listTrainingJobs: vi.fn(),
+  cancelTrainingJob: vi.fn(),
+}));
 vi.mock("../../api/training", async (importOriginal) => ({
   ...(await importOriginal()),
   listTrainingJobs: training.listTrainingJobs,
+  cancelTrainingJob: training.cancelTrainingJob,
 }));
 vi.mock("./AiToolkitSetup.vue", () => ({ default: { render: () => null } }));
 
@@ -102,5 +106,21 @@ describe("the Training settings section", () => {
     const before = training.listTrainingJobs.mock.calls.length;
     await vi.advanceTimersByTimeAsync(4000);
     expect(training.listTrainingJobs.mock.calls.length).toBeGreaterThan(before);
+  });
+
+  it("shows a refused cancel as its sentence, never as an object (#2295)", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    training.listTrainingJobs.mockResolvedValue([RUNNING]);
+    training.cancelTrainingJob.mockRejectedValue({
+      response: {
+        data: { detail: [{ loc: ["path", "job_id"], msg: "bad id", type: "int" }] },
+      },
+    });
+    const wrapper = mountSection(true);
+    await flushPromises();
+    await wrapper.findAll("v-btn").find((b) => b.text() === "Cancel").trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".training-inline-error").text()).toBe("Cancel failed.");
+    vi.restoreAllMocks();
   });
 });

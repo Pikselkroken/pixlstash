@@ -25,6 +25,7 @@ vi.mock("../../api/config", () => ({
   getUserConfig: vi.fn(async () => ({
     ai_toolkit_repo_path: "/home/me/ai-toolkit",
     ai_toolkit_python: "/home/me/ai-toolkit/venv/bin/python",
+    ai_toolkit_configured: true,
   })),
   patchUserConfig: vi.fn(async () => ({})),
 }));
@@ -253,6 +254,36 @@ describe("TrainLoraDialog", () => {
     await flushPromises();
     expect(startButton(wrapper).attributes("disabled")).toBeUndefined();
     expect(wrapper.text()).toContain("From the set's name.");
+  });
+
+  it("refuses Start while the plan on screen answers choices already changed (#2295)", async () => {
+    const { wrapper, store } = await openDialog(
+      { type: "character", id: 4, name: "Grandad" },
+      dataset(),
+    );
+    expect(startButton(wrapper).attributes("disabled")).toBeUndefined();
+    // The change is on screen before the debounced resolve has run.
+    store.effort = "strong";
+    await flushPromises();
+    expect(startButton(wrapper).attributes("disabled")).toBeDefined();
+
+    await store.resolvePlan();
+    await flushPromises();
+    expect(startButton(wrapper).attributes("disabled")).toBeUndefined();
+  });
+
+  it("refuses Start while the dataset is still loading (#2295)", async () => {
+    const { wrapper, store } = await openDialog(
+      { type: "character", id: 4, name: "Grandad" },
+      dataset(),
+    );
+    store.datasetLoading = true;
+    await flushPromises();
+    expect(startButton(wrapper).attributes("disabled")).toBeDefined();
+
+    store.datasetLoading = false;
+    await flushPromises();
+    expect(startButton(wrapper).attributes("disabled")).toBeUndefined();
   });
 
   it("pins a typed value, keeps the choice's name, and unpins back", async () => {
@@ -628,6 +659,7 @@ describe("recipe updates from pixlstash.dev (#2122)", () => {
     config.getUserConfig.mockResolvedValueOnce({
       ai_toolkit_repo_path: "/home/me/ai-toolkit",
       ai_toolkit_python: "/home/me/ai-toolkit/venv/bin/python",
+      ai_toolkit_configured: true,
       training_presets_auto_check: true,
     });
     training.checkTrainingPresets.mockResolvedValue({

@@ -164,7 +164,7 @@ from pixlstash.routes.training import create_router as create_training_router
 from pixlstash.routes.telemetry import create_router as create_telemetry_router
 from pixlstash.routes.resources import create_router as create_resources_router
 from pixlstash.routes.test_hooks import create_router as create_test_hooks_router
-from pixlstash.routes.test_hooks import seed_model_folder
+from pixlstash.routes.test_hooks import isolate_e2e_data, seed_model_folder
 from pixlstash.routes.workflows import create_router as create_workflows_router
 from pixlstash.server_config_io import DEVICE_ON_DISK_KEY, persist_server_config
 from pixlstash.tasks import TaskType
@@ -632,6 +632,11 @@ class Server(
         # issue #168), and it means a test or an alternate deployment gets its
         # own hub instead of reaching into the user's real one.
         hub_path = os.path.join(os.path.dirname(self._server_config_path), "hub.db")
+        # Before the hub opens: its data steps read the user workflow folder.
+        if self._server_config.get("enable_test_hooks", False) and (
+            self._server_config.get("e2e_data_dir")
+        ):
+            isolate_e2e_data(self._server_config["e2e_data_dir"])
         self._hub_bootstrap = bootstrap_hub(
             self._server_config["image_root"],
             hub_path,

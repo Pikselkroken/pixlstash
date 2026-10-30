@@ -921,6 +921,16 @@ async function confirmRunAnyway() {
 
 async function cancelWait(entry) {
   if (!entry.lease || busyLease.value) return;
+  // A waiting AI Toolkit lease is a queued training run: cancelling it is
+  // Stop training, so it asks the same question.
+  if (
+    entry.lease.tenant === "aitoolkit" &&
+    !window.confirm(
+      `Stop training "${entry.label}"? The run will stop and cannot be resumed.`,
+    )
+  ) {
+    return;
+  }
   busyLease.value = entry.lease.id;
   // Never rejects either; see `confirmRunAnyway`.
   try {
