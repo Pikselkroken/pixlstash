@@ -36,7 +36,11 @@ The backend boots against the repo's `test-data/` fixture — a seeded vault
    in the config as `e2e_model_folder`. With `enable_test_hooks` on, the server
    registers it and scans it synchronously at start-up, so the Models shelf has
    rows although background scans are off (`model-shelf-fixture.spec.js`);
-5. execs `python -m pixlstash.app` against that temp copy.
+5. names `<work dir>/user-data` in the config as `e2e_data_dir`. With
+   `enable_test_hooks` on, the workflow inbox, the user workflow folder and the
+   trash move there, so a run neither imports the machine's own workflows nor
+   writes into or trashes from the folders the owner's server uses;
+6. execs `python -m pixlstash.app` against that temp copy.
 
 Because the user table is stripped per run, `global-setup.js` registers a fresh
 admin (random password) and mints an `ALL` token — credentials live only for

@@ -48,6 +48,9 @@ WORK_DIR = (
 )
 # Not ``models``: that is the managed store the server creates beside its hub.
 MODEL_FOLDER = WORK_DIR / "model-shelf"
+# Stands in for the app's data directory: the workflow inbox, the user workflow
+# folder and the trash, all of which are otherwise shared with the owner.
+USER_DATA = WORK_DIR / "user-data"
 
 
 def _ignore_backups(_dir, names):
@@ -143,6 +146,40 @@ def _harden_permissions(root: Path) -> None:
             print(f"[e2e-backend] could not tighten permissions on {path}: {exc}")
 
 
+def server_overrides(work_images: Path) -> dict:
+    """The fields that make the fixture's config a fast, hermetic test server."""
+    return {
+        "host": "127.0.0.1",
+        "port": PORT,
+        "image_root": str(work_images),
+        "require_ssl": False,
+        "cookie_secure": False,
+        "disable_password_auth": False,
+        # The suite reloads the SPA many times in quick succession; the
+        # global rate limiter (120 public requests / 60s) would otherwise
+        # 429 later navigations. Safe to disable on this hermetic backend.
+        "disable_rate_limit": True,
+        "disable_background_workers": True,
+        # Register the e2e-only WS test-hooks router so specs can inject
+        # grid events deterministically (the disabled background workers
+        # otherwise never fire the tag/face/score events the grid reacts
+        # to). Off by default everywhere else: production configs MUST
+        # NEVER set this flag — it exposes /api/v1/test-hooks/ws-event,
+        # which emits arbitrary owner-only WebSocket events.
+        "enable_test_hooks": True,
+        # Read only when enable_test_hooks is on: registered as a `user`
+        # model folder and scanned synchronously at start-up.
+        "e2e_model_folder": str(MODEL_FOLDER),
+        # Read only when enable_test_hooks is on: the workflow folders and the
+        # trash move here, so nothing under the shared data directory changes.
+        "e2e_data_dir": str(USER_DATA),
+        "generate_thumbnails_on_startup": False,
+        "default_device": "cpu",
+        "daily_snapshots": False,
+        "log_level": "warning",
+    }
+
+
 def main() -> int:
     # Everything below lives in a throwaway directory that holds a SQLite
     # database, so create it private rather than at the developer's umask. The
@@ -170,35 +207,7 @@ def main() -> int:
     # Build a lean server-config from the fixture's own config, overriding the
     # fields that matter for a fast, hermetic, password-auth test server.
     base_config = json.loads((SRC_DATA / "server-config.json").read_text())
-    base_config.update(
-        {
-            "host": "127.0.0.1",
-            "port": PORT,
-            "image_root": str(work_images),
-            "require_ssl": False,
-            "cookie_secure": False,
-            "disable_password_auth": False,
-            # The suite reloads the SPA many times in quick succession; the
-            # global rate limiter (120 public requests / 60s) would otherwise
-            # 429 later navigations. Safe to disable on this hermetic backend.
-            "disable_rate_limit": True,
-            "disable_background_workers": True,
-            # Register the e2e-only WS test-hooks router so specs can inject
-            # grid events deterministically (the disabled background workers
-            # otherwise never fire the tag/face/score events the grid reacts
-            # to). Off by default everywhere else: production configs MUST
-            # NEVER set this flag — it exposes /api/v1/test-hooks/ws-event,
-            # which emits arbitrary owner-only WebSocket events.
-            "enable_test_hooks": True,
-            # Read only when enable_test_hooks is on: registered as a `user`
-            # model folder and scanned synchronously at start-up.
-            "e2e_model_folder": str(MODEL_FOLDER),
-            "generate_thumbnails_on_startup": False,
-            "default_device": "cpu",
-            "daily_snapshots": False,
-            "log_level": "warning",
-        }
-    )
+    base_config.update(server_overrides(work_images))
     config_path = WORK_DIR / "server-config.json"
     config_path.write_text(json.dumps(base_config, indent=2))
 
