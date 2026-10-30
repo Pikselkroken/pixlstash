@@ -1963,6 +1963,8 @@ const emit = defineEmits([
   // The Edit tab (#1381): step to its result, or open the Run popup on it.
   "show-picture",
   "edit-more-options",
+  // Delete / Backspace on the picture on screen (#2346).
+  "delete-picture",
 ]);
 
 const descriptionPanelRef = ref(null);
@@ -2924,6 +2926,144 @@ function showNextImage() {
   return navigateLightboxImage(1);
 }
 
+// ── A delete moves on (#2346) ────────────────────────────────────────────
+// The sequence as it stood before each delete made here, newest last, so an
+// undo puts the picture back exactly where it was and shows it again.
+let deletedHere = [];
+
+watch(open, () => {
+  deletedHere = [];
+});
+
+const ARRIVED_CLASSES = [
+  "lightbox-media-inner--arrived-next",
+  "lightbox-media-inner--arrived-prev",
+];
+
+/**
+ * The picture that takes a deleted one's place comes in from the side it came
+ * from. Set by hand, not bound, so a held Delete restarts it on each picture.
+ * @param {"next"|"prev"} from
+ */
+function playArrival(from) {
+  const el = mediaInnerRef.value;
+  if (!el) return;
+  el.classList.remove(...ARRIVED_CLASSES);
+  void el.offsetWidth; // a reflow between, or the animation does not restart
+  el.classList.add(`lightbox-media-inner--arrived-${from}`);
+}
+
+/** The next survivor after `currentId` in `list`, else the previous one. */
+function pickSurvivor(list, currentId, gone) {
+  const at = list.findIndex((item) => String(item?.id) === currentId);
+  if (at === -1) return null;
+  for (let i = at + 1; i < list.length; i += 1) {
+    if (!gone.has(String(list[i]?.id))) return { id: list[i].id, from: "next" };
+  }
+  for (let i = at - 1; i >= 0; i -= 1) {
+    if (!gone.has(String(list[i]?.id))) return { id: list[i].id, from: "prev" };
+  }
+  return null;
+}
+
+/**
+ * Pictures deleted from here have left the view: drop them from the sequence
+ * and step to the next one in the lightbox's order, or the previous one at the
+ * end. A member of a stack opened here steps within its stack first.
+ *
+ * @param {Array<number|string>} ids - every picture the delete removed.
+ * @returns {boolean} false when nothing is left to show; the caller closes.
+ */
+function removePictures(ids) {
+  const gone = new Set((ids ?? []).map(String));
+  if (!gone.size) return true;
+  const currentId = String(image.value?.id ?? "");
+  // The reader may have stepped on while the delete was in flight: then the
+  // picture on screen stays, and only the sequence loses the deleted one.
+  const stays = !gone.has(currentId);
+  const list = filmstripImages.value;
+  const stackId = getPictureStackId(image.value);
+  const stackList =
+    stackId && lightboxExpandedStackIds.value.has(stackId)
+      ? list.filter((item) => getPictureStackId(item) === stackId)
+      : [];
+  const target = stays
+    ? null
+    : (pickSurvivor(stackList, currentId, gone) ??
+      pickSurvivor(list, currentId, gone));
+  if (!stays && !target) return false;
+
+  const members = lightboxExpandedStackMembers.value;
+  deletedHere.push({
+    ids: gone,
+    shownId: stays ? [...gone][0] : currentId,
+    images: lightboxImages.value,
+    members,
+  });
+
+  // A stack opened here may hold its members only in `members`, with just the
+  // leader in the sequence: a deleted leader hands its place to the next
+  // member, or the whole stack would leave the filmstrip with it.
+  const present = new Set(lightboxImages.value.map((item) => String(item?.id)));
+  const next = [];
+  for (const item of lightboxImages.value) {
+    if (!gone.has(String(item?.id))) {
+      next.push(item);
+      continue;
+    }
+    const heir = (members.get(getPictureStackId(item))?.images ?? []).find(
+      (m) => !gone.has(String(m?.id)) && !present.has(String(m?.id)),
+    );
+    if (heir) {
+      next.push(heir);
+      present.add(String(heir.id));
+    }
+  }
+  frozenAllImages.value = next;
+  const nextMembers = new Map();
+  for (const [key, entry] of members) {
+    nextMembers.set(key, {
+      ids: (entry?.ids ?? []).filter((id) => !gone.has(String(id))),
+      images: (entry?.images ?? []).filter((m) => !gone.has(String(m?.id))),
+    });
+  }
+  lightboxExpandedStackMembers.value = nextMembers;
+  // Re-record each stack's signature, or the next grid repaint reads the
+  // shrunken stack as a restructure and sends the reader to its leader.
+  const signatures = new Map(lightboxStackSignatures.value);
+  for (const key of signatures.keys()) {
+    signatures.set(key, getLightboxStackSignature(key));
+  }
+  lightboxStackSignatures.value = signatures;
+
+  if (stays) return true;
+  setLightboxImageById(target.id);
+  playArrival(target.from);
+  void ensureLightboxFilmstripForImage();
+  return true;
+}
+
+// An undo of the newest delete made here puts the sequence back as it was and
+// shows the picture again. An older one, behind a delete that still stands,
+// is left to the grid's reconcile on close.
+watch(
+  () => operationStore.lastRestore,
+  (restore) => {
+    const entry = deletedHere[deletedHere.length - 1];
+    if (!open.value || !entry) return;
+    if (!(restore?.ids ?? []).some((id) => entry.ids.has(String(id)))) return;
+    deletedHere.pop();
+    frozenAllImages.value = entry.images;
+    lightboxExpandedStackMembers.value = entry.members;
+    const signatures = new Map(lightboxStackSignatures.value);
+    for (const key of signatures.keys()) {
+      signatures.set(key, getLightboxStackSignature(key));
+    }
+    lightboxStackSignatures.value = signatures;
+    setLightboxImageById(entry.shownId);
+  },
+);
+
 function handleKeydown(e) {
   if (!open.value) return;
   // A menu over the lightbox takes its own Escape: the title bar's, which sits
@@ -2948,6 +3088,9 @@ function handleKeydown(e) {
   // The Run popup the Edit tab opened sits over the lightbox: its keys are its
   // own, and an arrow or Escape must not step or close the lightbox below.
   if (runDialogStore.source || runDialogStore.makeMore) return;
+  // So does a dialog over it (the Scrapheap's Delete forever confirm): an
+  // arrow under it would move the picture its confirm is about.
+  if (document.querySelector(".v-overlay--active.v-dialog")) return;
   if (filmstripMenu.value) {
     if (e.key === "Escape") closeFilmstripMenu();
     return;
@@ -3224,6 +3367,18 @@ function handleKeydown(e) {
   } else if (["ArrowRight", "Right", "ArrowDown", "Down"].includes(e.key)) {
     e.preventDefault();
     showNextImage();
+  } else if (
+    (e.key === "Delete" || e.key === "Backspace") &&
+    !e.ctrlKey &&
+    !e.metaKey &&
+    !e.altKey
+  ) {
+    // The context menu's Delete, as in the grid. The grid decides what a
+    // held key may do (one delete at a time, never a repeat in the Scrapheap).
+    if (!isReadOnly.value && image.value?.id != null) {
+      e.preventDefault();
+      emit("delete-picture", image.value, { repeat: e.repeat });
+    }
   } else if ((e.key === "z" || e.key === "Z") && !e.ctrlKey && !e.metaKey) {
     // Modifier-blind `z` would make Ctrl+Z and Ctrl+Shift+Z (which reports
     // `e.key === "Z"`) zoom instead of undo: the worst kind of collision,
@@ -5861,6 +6016,9 @@ defineExpose({
   // A picture just made from this one (a crop, a filter), without a compare.
   showPicture: (id) => showEditResult(id, null),
   moveStackMember,
+  removePictures,
+  // Stacks opened here: a delete of one of their members takes just that one.
+  expandedStackIds: () => new Set(lightboxExpandedStackIds.value),
   // A Segment run started: press the toggle so its boxes show when they land.
   showSegmentation: () => {
     showDetections.value = true;

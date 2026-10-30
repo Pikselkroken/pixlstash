@@ -458,6 +458,44 @@
   z-index: var(--z-base);
 }
 
+/* A delete moved on (#2346): the picture that takes its place comes in from
+   the side it came from, so the step reads as "that one left", not as an
+   arrow press. Routine motion: --dur-3, decelerating into rest. */
+.lightbox-media-inner--arrived-next,
+.lightbox-media-inner--arrived-prev {
+  animation: lightbox-arrive var(--dur-3) var(--ease-decelerate);
+}
+
+.lightbox-media-inner--arrived-next {
+  --lightbox-arrive-from: var(--space-6);
+}
+
+.lightbox-media-inner--arrived-prev {
+  --lightbox-arrive-from: calc(-1 * var(--space-6));
+}
+
+@keyframes lightbox-arrive {
+  from {
+    opacity: 0;
+    transform: translateX(var(--lightbox-arrive-from));
+  }
+}
+
+@keyframes lightbox-arrive-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+/* No travel. The global reset already makes it an instant swap; this keeps
+   the slide out even if a duration ever survives it. */
+@media (prefers-reduced-motion: reduce) {
+  .lightbox-media-inner--arrived-next,
+  .lightbox-media-inner--arrived-prev {
+    animation-name: lightbox-arrive-fade;
+  }
+}
+
 .lightbox-media.panning {
   transition: none;
   cursor: grabbing;

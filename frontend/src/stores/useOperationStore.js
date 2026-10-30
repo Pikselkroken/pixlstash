@@ -312,6 +312,8 @@ export const useOperationStore = defineStore("operation", () => {
   let queuedUndos = 0;
 
   // ── Ghost state ──────────────────────────────────────────────────────────
+  /** `{ids}` of the pictures the latest undo/redo brought back, or null. */
+  const lastRestore = ref(null);
   /** Picture ids whose tiles are ghosted in place, awaiting their undo window. */
   const ghostPictureIds = ref([]);
   /** `none` | `pending` | `committed` - see the constants above. */
@@ -767,7 +769,11 @@ export const useOperationStore = defineStore("operation", () => {
   /** Un-ghost whatever an undo/redo response says it put back. */
   function applyLifecycleToGhosts(result) {
     const restored = result?.restored_picture_ids;
-    if (Array.isArray(restored) && restored.length) unghostPictures(restored);
+    if (Array.isArray(restored) && restored.length) {
+      unghostPictures(restored);
+      // A new object per undo, so a watcher sees the same ids twice.
+      lastRestore.value = { ids: restored.slice() };
+    }
   }
 
   // ── Server reads ─────────────────────────────────────────────────────────
@@ -1195,6 +1201,7 @@ export const useOperationStore = defineStore("operation", () => {
     loaded,
     receipt,
     ghostPictureIds,
+    lastRestore,
     ghostState,
     collapsingPictureIds,
     // computed

@@ -43,6 +43,7 @@
     @run-recipe="openRunForPicture"
     @use-as-input="runWorkflowOnPicture"
     @show-picture="moveLightboxTo"
+    @delete-picture="handleLightboxDelete"
     @edit-more-options="openRunFromEditTab"
   />
   <ImageImporter
@@ -189,7 +190,7 @@
       @find-similar-faces="handleLightboxFindSimilarFaces"
       @reverse-image-search="handleLightboxReverseImageSearch"
       @segment="openLightboxSegmentDialog"
-      @delete-selected="handleLightboxDelete"
+      @delete-selected="handleLightboxDelete()"
       @remove-from-group="handleLightboxScrapheapRestore"
       @use-as-input="runWorkflowOnPicture"
     />
@@ -4150,16 +4151,24 @@ function showLibraryMoveNotice(library, counts) {
 }
 
 // `idsOverride` scopes the delete to an explicit picture list (the lightbox
-// context menu passes `[lightboxImageId]`). When set, the grid selection is
-// neither read for the target NOR mutated as a side effect - the lightbox owns
-// its own post-delete cleanup (it closes the lightbox). Default (null) is the
-// grid path: act on, and update, `selectedImageIds`.
+// passes the picture on screen). When set, the grid selection is neither read
+// for the target NOR mutated as a side effect - the lightbox owns its own
+// post-delete step (it moves on). Default (null) is the grid path: act on, and
+// update, `selectedImageIds`.
 // `moveTo` is a library: the request becomes the move, and the outcome is
 // worded by `buildLibraryMoveMessage` instead of the delete's own notice.
-async function deleteSelected(idsOverride = null, moveTo = null) {
+// `expandedStacks` adds stacks the lightbox opened, so deleting one of their
+// members takes that member, not the whole stack.
+// Resolves to the ids the server removed ([] when none did); the Scrapheap's
+// purge only opens its confirm here and resolves to [].
+async function deleteSelected(
+  idsOverride = null,
+  moveTo = null,
+  expandedStacks = null,
+) {
   const scoped = Array.isArray(idsOverride) && idsOverride.length > 0;
   const baseIds = scoped ? idsOverride : selectedImageIds.value;
-  if (!baseIds.length) return;
+  if (!baseIds.length) return [];
   const isScrapheapSelection = isScrapheapView.value;
 
   // For non-scrapheap deletions, expand collapsed stacks to all their members
@@ -4182,7 +4191,11 @@ async function deleteSelected(idsOverride = null, moveTo = null) {
     for (const id of baseIds) {
       const img = imageById.get(String(id));
       const stackId = getPictureStackId(img);
-      if (!stackId || expandedStackIds.value.has(stackId)) {
+      if (
+        !stackId ||
+        expandedStackIds.value.has(stackId) ||
+        expandedStacks?.has(stackId)
+      ) {
         // No stack, or stack is expanded: delete only this picture.
         resolved.add(id);
         if (stackId && getStackPositionValue(img) === 0) {
@@ -4227,7 +4240,7 @@ async function deleteSelected(idsOverride = null, moveTo = null) {
     // confirm, which names any reference-folder ORIGINALS being destroyed. The
     // scrapheap purge runs on @confirm (runScrapheapSelectionPurge).
     openDeleteForeverForSelection(idsToRemove, scoped);
-    return;
+    return [];
   }
 
   // Pictures frozen by a locked set are SKIPPED by the bulk delete - the server
@@ -4250,7 +4263,7 @@ async function deleteSelected(idsOverride = null, moveTo = null) {
         }),
       );
     }
-    return;
+    return [];
   }
 
   if (moveTo) {
@@ -4369,6 +4382,7 @@ async function deleteSelected(idsOverride = null, moveTo = null) {
         }),
       );
     }
+    return removedIds;
   } catch (err) {
     console.error(moveTo ? "Move to library failed" : "Bulk delete failed", err);
     if (moveTo) {
@@ -4389,6 +4403,7 @@ async function deleteSelected(idsOverride = null, moveTo = null) {
         : `Couldn't delete those pictures. ${errorDetail(err)}`,
       { key: moveTo ? "pictures-move" : "pictures-delete" },
     );
+    return [];
   }
 }
 
@@ -5682,6 +5697,14 @@ async function runScrapheapSelectionPurge(idsToRemove, includeProtected) {
       if (!stillSelected.has(String(lastSelectedImageId.value))) {
         lastSelectedImageId.value = null;
       }
+    }
+    if (deleteForeverScoped.value) {
+      // The lightbox's one picture. Kept when it is a protected original the
+      // confirm chose to spare, or a locked one.
+      const kept = !includeProtected && deleteForeverProtectedCount.value > 0;
+      leaveDeletedLightboxPictures(
+        kept ? [] : idsToRemove.filter((id) => !skippedLocked.has(String(id))),
+      );
     }
     updateVisibleThumbnails();
     emit("refresh-sidebar");
@@ -8363,15 +8386,45 @@ function openLightboxSegmentDialog() {
   segmentDialogOpen.value = true;
 }
 
-async function handleLightboxDelete() {
-  const id = lightboxCtxImage.value?.id;
-  if (id == null) return;
-  // Scope the shared delete flow to just this picture (idsOverride). For the
-  // scrapheap this opens the Delete-forever confirm; for a normal view it
-  // soft-deletes immediately. Either way, close the lightbox so it never shows
-  // a picture that has just left the current view.
-  await deleteSelected([id]);
-  closeLightbox(false);
+// One lightbox delete at a time: a held Delete steps through the pictures it
+// has been shown, never ahead of them on queued key repeats.
+let lightboxDeleteBusy = false;
+
+/**
+ * Delete the picture on screen and move on to the next one (#2346). The tile
+ * behind leaves the grid the same way a grid delete's does, and the lightbox's
+ * receipt carries the Undo.
+ * @param {Object} [img] - the picture; the context menu's by default.
+ * @param {{repeat?: boolean}} [options] - from a key held down.
+ */
+async function handleLightboxDelete(img = lightboxCtxImage.value, options) {
+  const id = img?.id;
+  if (id == null || lightboxDeleteBusy) return;
+  // Delete forever asks first: a held key must not open its confirm again the
+  // moment it is cancelled.
+  if (isScrapheapView.value && (options?.repeat || deleteForeverOpen.value)) {
+    return;
+  }
+  lightboxDeleteBusy = true;
+  try {
+    // Scoped to this picture (idsOverride). In the Scrapheap this only opens
+    // the Delete-forever confirm, and `runScrapheapSelectionPurge` moves on
+    // once it is confirmed.
+    const removed = await deleteSelected(
+      [id],
+      null,
+      lightboxRef.value?.expandedStackIds?.(),
+    );
+    if (removed.length) leaveDeletedLightboxPictures(removed);
+  } finally {
+    lightboxDeleteBusy = false;
+  }
+}
+
+/** Step past pictures that just left, or close when none is left to show. */
+function leaveDeletedLightboxPictures(ids) {
+  if (!lightboxOpen.value || !ids.length) return;
+  if (!lightboxRef.value?.removePictures?.(ids)) closeLightbox(false);
 }
 
 async function handleLightboxScrapheapRestore() {
