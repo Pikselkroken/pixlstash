@@ -145,6 +145,24 @@ async function expectOrientation(apiContext, id, expected) {
     .toBe(expected)
 }
 
+/**
+ * Whether the grid's thumbnail of a picture is landscape: the file the card
+ * shows (`/pictures/thumbnails/<id>.webp`), fetched fresh and decoded. Read
+ * from the server rather than off a card, because a picture this spec made is
+ * the newest and the grid may well sort it out of the rendered rows.
+ */
+function thumbnailIsLandscape(page, id) {
+  return page.evaluate(async (pictureId) => {
+    const res = await fetch(`/api/v1/pictures/thumbnails/${pictureId}.webp`, {
+      cache: 'no-store',
+      credentials: 'include',
+    })
+    if (!res.ok) return null
+    const bitmap = await createImageBitmap(await res.blob())
+    return bitmap.width > bitmap.height
+  }, id)
+}
+
 /** Landscape once turned a quarter, portrait upright (the fixture's are portrait). */
 async function expectLandscape(lightbox, landscape) {
   await expect
@@ -175,6 +193,7 @@ test.describe('lightbox editing', () => {
       await openPicture(page, lightbox, pictureId)
       const [w0, h0] = await lightbox.mainImageSize()
       expect(w0, 'the fixture picture starts portrait').toBeLessThan(h0)
+      expect(await thumbnailIsLandscape(page, pictureId)).toBe(false)
 
       const turned = rotateResponse(page)
       await page.keyboard.press(']')
@@ -188,20 +207,14 @@ test.describe('lightbox editing', () => {
       await expect(lightbox.root).toBeVisible({ timeout: 15_000 })
       await expectLandscape(lightbox, true)
 
-      // The grid card behind it turned too: its thumbnail is now landscape.
-      await lightbox.close()
-      const thumb = grid.card(pictureId).locator('img').first()
-      await expect
-        .poll(() =>
-          thumb.evaluate((img) => img.complete && img.naturalWidth > img.naturalHeight),
-        )
-        .toBe(true)
+      // The grid's thumbnail turned too.
+      await expect.poll(() => thumbnailIsLandscape(page, pictureId)).toBe(true)
 
       // Undo, from the lightbox's own keyboard.
-      await lightbox.openFromGrid(grid.card(pictureId))
       await page.keyboard.press('Control+z')
       await expectOrientation(apiContext, pictureId, 1)
       await expectLandscape(lightbox, false)
+      await expect.poll(() => thumbnailIsLandscape(page, pictureId)).toBe(false)
     })
 
     test('the Edit tab rotates left and right', async ({ page, grid, lightbox, apiContext }) => {
