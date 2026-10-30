@@ -1106,11 +1106,12 @@ The middleware checks the same list first, by the path's shape (`auth.comfyui_sc
 
 ## Conditionally-mounted routes (added 2026-07-23)
 
-One declared route is **not mounted in the default configuration**:
+Two declared routes are **not mounted in the default configuration**:
 
 | Method | Path | Policy | Mounted when |
 |---|---|---|---|
 | POST | `/api/v1/test-hooks/ws-event` | `loopback_owner_only` | server-config `enable_test_hooks: true` |
+| POST | `/api/v1/test-hooks/reference-folders/{folder_id}/rescan` | `loopback_owner_only` | server-config `enable_test_hooks: true` |
 
 **Why it is declared even though it is usually absent.** The gate resolves declarations against the routes actually mounted at startup, and an undeclared route is denied at runtime *and* aborts boot. With the flag on and no declaration, `enforce_startup` aborted — which is precisely what took the Playwright e2e backend down (`frontend/e2e/serve_e2e_backend.py` sets the flag), pre-existing at `3803476f`. The gate behaved correctly; the route really was undeclared.
 
@@ -1122,6 +1123,8 @@ One declared route is **not mounted in the default configuration**:
 - **costs** only that a listed declaration will not be flagged as rot if its route is deleted outright. Keep the set tiny.
 
 **Why `loopback_owner_only` and not `owner_only`.** The hook calls `vault.notify` with a caller-supplied payload, i.e. it synthesises arbitrary grid WebSocket events broadcast to *every connected client*. That is authority over other clients' state, not over the caller's own data, which places it with the host-shell red line rather than with ordinary owner writes. Loopback is free: the router is mounted only by the e2e backend, which binds `127.0.0.1` and is driven by Playwright on the same host (CI runs Playwright directly on the runner, no container), so there is no legitimate remote caller by construction. `loopback` rather than `local_owner_only` specifically so that `allow_remote_host_ops` — a filesystem-operations flag — can never expose a test hook. Net effect: if `enable_test_hooks` were ever switched on in a network-reachable deployment, the hook still cannot be reached remotely; the safety stops depending on the flag being off. The handler's existing inline `require_unscoped_owner` remains as defence in depth.
+
+**The rescan hook** (`/test-hooks/reference-folders/{folder_id}/rescan`, #2325) marks one reference folder due for a rescan, which is what the filesystem watcher does when a file in it changes; the e2e Media specs use it because the watcher needs an inotify instance a busy machine may not have. It returns no resource data. It is `loopback_owner_only` for the same reasons as `ws-event`, and keeps the same inline `require_unscoped_owner`.
 
 Covered both directions by `tests/test_authz_host_capability_16_3.py`: loopback owner reaches the handler (200, event emitted); LAN / Tailscale / public owner is 403 *even with* `allow_remote_host_ops=true`; the route is absent from the mounted table without the flag; and the normal configuration still boots enforcing.
 

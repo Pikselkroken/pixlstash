@@ -90,6 +90,7 @@ _LOOPBACK_ROUTE_KEYS = {
     ("POST", "/api/v1/server-config/open"),
     ("POST", "/api/v1/pictures/export/folder"),
     ("POST", "/api/v1/test-hooks/ws-event"),
+    ("POST", "/api/v1/test-hooks/reference-folders/{folder_id}/rescan"),
     ("POST", "/api/v1/comfyui/pack/install"),
     ("POST", "/api/v1/comfyui/node-packs/{pack_id}/install"),
 }
@@ -530,6 +531,9 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     72 = 71 + 1 with ``POST /model-folders/{folder_id}/dirs/remove``, which
     trashes or deletes a directory inside a registered folder:
     ``POST /model-files/delete``' authority over a subtree.
+    82 = 72 + 10 with ``POST /test-hooks/reference-folders/{folder_id}/rescan``
+    (#2325), the second e2e hook: it marks a reference folder due for a rescan,
+    as the filesystem watcher does, and is loopback for ``ws-event``'s reasons.
 
     Arithmetic, not judgement."""
     loopback = {
@@ -543,7 +547,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
         if rp.policy is AccessPolicy.LOCAL_OWNER_ONLY
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
-    assert len(loopback) == 9, sorted(loopback)
+    assert len(loopback) == 10, sorted(loopback)
     assert len(local) == 72, sorted(local)
 
 
@@ -1428,6 +1432,52 @@ def test_test_hooks_non_loopback_owner_is_403_even_with_flag_on():
                 r = owner.post(_WS_HOOK, json=_WS_HOOK_BODY, headers=_xff(ip))
                 assert _is_loopback_403(r), (
                     f"{ip} must be 403'd on the test hook even with "
+                    f"allow_remote_host_ops=true; got {r.status_code}: {r.text}"
+                )
+
+
+_RESCAN_HOOK = f"{API}/test-hooks/reference-folders/{{folder_id}}/rescan"
+
+
+def test_rescan_hook_loopback_owner_marks_the_folder_due():
+    """POSITIVE direction: a loopback owner reaches the rescan hook, which
+    marks the folder due exactly as the watcher does, and 404s a folder that
+    does not exist (so the 200 is the handler's, not a catch-all's)."""
+    from pixlstash.db_models.reference_folder import ReferenceFolder
+
+    with _test_hooks_owner_env() as env:
+        server, owner = env["server"], env["owner"]
+
+        def insert(session):
+            rf = ReferenceFolder(folder=env["tmp"].name, label="r", last_scanned=1.0)
+            session.add(rf)
+            session.commit()
+            session.refresh(rf)
+            return rf.id
+
+        folder_id = server.vault.db.run_task(insert)
+        with _enforcing(server):
+            r = owner.post(_RESCAN_HOOK.format(folder_id=folder_id))
+            assert r.status_code == 200, r.text
+            assert r.json() == {"status": "success", "folder_id": folder_id}
+            missing = owner.post(_RESCAN_HOOK.format(folder_id=folder_id + 1))
+            assert missing.status_code == 404, missing.text
+        last_scanned = server.vault.db.run_task(
+            lambda session: session.get(ReferenceFolder, folder_id).last_scanned
+        )
+        assert last_scanned == 0.0
+
+
+def test_rescan_hook_non_loopback_owner_is_403_even_with_flag_on():
+    """NEGATIVE direction, as for the ws-event hook: no remote owner reaches
+    it, whatever allow_remote_host_ops says."""
+    with _test_hooks_owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server), _remote_host_ops(server, True):
+            for ip in (LAN_IPV4, PRIVATE_10_IPV4, "100.64.0.5", "8.8.8.8"):
+                r = owner.post(_RESCAN_HOOK.format(folder_id=1), headers=_xff(ip))
+                assert _is_loopback_403(r), (
+                    f"{ip} must be 403'd on the rescan hook even with "
                     f"allow_remote_host_ops=true; got {r.status_code}: {r.text}"
                 )
 

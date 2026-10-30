@@ -810,6 +810,28 @@ class Vault:
         once caption sync is turned on."""
         self._on_reference_folder_fs_changed(None)
 
+    def mark_reference_folder_changed(self, folder_id: int) -> bool:
+        """Do what the filesystem watcher does when a file in a reference
+        folder changes: mark the folder due, so the next scan is now.
+
+        Only the e2e test hook calls this, for a machine whose watcher could
+        not start.
+
+        Args:
+            folder_id: Primary key of the reference folder.
+
+        Returns:
+            bool: False when there is no such folder, and nothing was marked.
+        """
+        from pixlstash.db_models.reference_folder import ReferenceFolder
+
+        exists = self.db.run_immediate_read_task(
+            lambda session: session.get(ReferenceFolder, folder_id) is not None
+        )
+        if exists:
+            self._on_reference_folder_fs_changed(folder_id)
+        return exists
+
     def _on_model_folder_fs_changed(self, folder_id: int) -> None:
         """A model file in a registered model folder changed: scan it now."""
         finder = self._planner_work_finders.get(TaskType.MODEL_FOLDER_SCAN)
