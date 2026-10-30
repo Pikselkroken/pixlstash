@@ -127,6 +127,11 @@ checklist shrinks as coverage grows.
   across specs in a run), so keep mutations additive/idempotent. The logout
   spec mints an isolated session (`loginToFreshSession`) because the backend
   tracks sessions in-memory and logout would otherwise pop the shared session.
+- Models shelf specs that move or delete files act only on stubs they stage
+  themselves (`stageStub` in `pages/ModelShelfPage.js`, through
+  `POST /model-files` into the seeded folder) and delete them in `afterEach`.
+  Real removals are the permanent kind; a Trash path is checked at the request
+  and answered by the spec, because the Trash is that of whoever runs the suite.
 - Stable selectors in use: `.thumbnail-card` (grid cell), `.lightbox` /
   `.lightbox-back` (lightbox), `.search-overlay` (search), `.mdi-magnify`
   (toolbar search button).
