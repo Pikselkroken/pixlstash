@@ -553,13 +553,16 @@
                   >Sets</span
                 >
               </li>
-              <!-- The `v-for` sits on a wrapping template, not on the row, so a
-                   stack's expanded members can be siblings of their cover inside
-                   the same iteration and still see `row`. -->
-              <template
+              <!-- The `v-for` sits on a wrapper, not on the row, so a stack's
+                   expanded members can be siblings of their cover inside the
+                   same iteration and still see `row`. The wrapper is a
+                   `MemoBlock` rather than a template with `v-memo`, because
+                   this list is nested in the groups' and the directive's one
+                   cache slot per list would never hit (`rowMemo`). -->
+              <MemoBlock
                 v-for="row in group.rows"
                 :key="row.rowKey"
-                v-memo="rowMemo(row)"
+                :deps="rowMemo(row)"
               >
                 <li
                   class="shelf-row fav-host"
@@ -1039,7 +1042,7 @@
                     <span role="gridcell" class="shelf-col shelf-col--sets"></span>
                   </li>
                 </template>
-              </template>
+              </MemoBlock>
             </ul>
           </div>
         </div>
@@ -1237,6 +1240,7 @@ import MissingSetSelectionBar from "../panels/MissingSetSelectionBar.vue";
 import ReplaceMissingDialog from "../io/ReplaceMissingDialog.vue";
 import BaseModelInput from "../widgets/BaseModelInput.vue";
 import KindMenu from "../widgets/KindMenu.vue";
+import MemoBlock from "../widgets/MemoBlock.vue";
 import ShelfEditDialog from "../panels/ShelfEditDialog.vue";
 import MergeCopiesDialog from "../panels/MergeCopiesDialog.vue";
 import ShelfMoveDialog from "../panels/ShelfMoveDialog.vue";
@@ -1942,6 +1946,8 @@ function noticeUnmovable() {
   useNoticeStore().push({
     level: "info",
     text: "None of these files can be moved: they are missing, offline or in a locked folder.",
+    // A few stray drags count up on one card rather than stacking.
+    key: "shelf-unmovable",
   });
 }
 
@@ -3004,8 +3010,10 @@ const LOC_NOTE = {
  * @returns {string}
  */
 function lockedNote(row) {
+  // The drag's own scope, so the note and the refusal never disagree.
+  const scope = inFolder.value ? store.folderScope : null;
   return row.locState === "present" &&
-    !movableCopies([row], foldersById.value).items.length
+    !movableCopies([row], foldersById.value, scope).items.length
     ? "in a locked folder"
     : "";
 }
@@ -4309,9 +4317,9 @@ function setsCell(row) {
  * The rows are one component, so without it a selection change re-rendered all
  * of them: 1,500 rows cost a quarter of a second per click, and a drag that
  * selects its row paid it before the row would lift. `row` itself is a fresh
- * object on every refetch (`displayRow`), so its own fields need no entry; what
- * belongs here is each other value the row's template or its helpers read. A
- * value left out draws stale until the row next changes.
+ * object whenever `visibleRows` recomputes (`displayRow`), so its own fields
+ * need no entry; what belongs here is each other value the row's template or
+ * its helpers read. A value left out draws stale until the row next changes.
  *
  * An open run draws its members in the same iteration, each with its own
  * selection, so it is never memoised: the `{}` differs every render.

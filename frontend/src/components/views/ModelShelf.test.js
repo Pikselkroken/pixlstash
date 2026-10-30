@@ -4977,6 +4977,43 @@ describe("the list's Type, favourite and Sets columns (#2168)", () => {
     wrapper.unmount();
   });
 
+  it("redraws only the row a selection touched, in a list banded by Type", async () => {
+    // Two bands, because a memo nested in the groups' loop is what broke:
+    // `v-memo` keeps one cache slot per list, so each band compared its rows
+    // with the band before it and every row redrew on every click. A row
+    // that was not redrawn keeps the very same rendered tree.
+    const wrapper = await mountShelf([
+      adapter({ id: 1 }),
+      adapter({ id: 3, sha256: "c".repeat(64) }),
+      adapter({ id: 2, sha256: "b".repeat(64), file_kind: "checkpoint" }),
+    ]);
+    const store = useModelShelfStore();
+    store.setView({ groupBy: "type" });
+    await flushPromises();
+    expect(wrapper.findAll(".shelf-group").length).toBe(2);
+    const trees = () =>
+      new Map(
+        wrapper
+          .findAllComponents({ name: "MemoBlock" })
+          .map((block) => [block.find(".shelf-row").attributes("data-row-key"), block.vm.$.subTree]),
+      );
+    const before = trees();
+    expect([...before.keys()].sort()).toEqual(["1:lora", "2:checkpoint", "3:lora"]);
+
+    store.toggleSelected(1);
+    await flushPromises();
+    const after = trees();
+    // Booleans, because a failing vnode comparison cannot be printed.
+    const kept = (key) => after.get(key) === before.get(key);
+    expect(kept("1:lora")).toBe(false);
+    expect(kept("2:checkpoint")).toBe(true);
+    expect(kept("3:lora")).toBe(true);
+    expect(wrapper.find(".shelf-row[data-row-key='1:lora']").classes()).toContain(
+      "shelf-row--selected",
+    );
+    wrapper.unmount();
+  });
+
   it("redraws a row when something outside it changes", async () => {
     // The list memoises each row (`rowMemo`), so a value read from outside
     // the row object only reaches the screen if the memo lists it. Each of
