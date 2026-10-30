@@ -91,6 +91,27 @@ shrinks as automated coverage grows.
 The spec asserts the thumbnail URL shape before extracting its picture ID, so
 missing or placeholder sources fail with the actual `src` in the diagnostic.
 
+## Deleting pictures and the Scrapheap — `scrapheap.spec.js`
+
+| Test | Covers | Status |
+|------|--------|--------|
+| the Delete key sends the selected picture to the Scrapheap | Grid keyboard delete; the live card goes and `/scrapheap` lists it | ✅ |
+| the Selection menu's Delete sends the selection to the Scrapheap | Selection ▾ Delete on a two-picture selection | ✅ |
+| the context menu's Delete sends the picture to the Scrapheap | Right-click Delete | ✅ |
+| a picture in a locked set is refused, with a notice saying why | Delete key keeps it and says it is in a locked set; the context menu's Delete is disabled | ✅ |
+| the lightbox deletes its picture, and Restore in the Scrapheap brings it back | Lightbox context menu Delete closes the lightbox; Restore from the Scrapheap's lightbox | ✅ |
+| Restore all returns every picture with its sets, character and tags | Restore all on a heap holding only the test's pictures; membership and tags checked through the API | ✅ |
+| Empty scrapheap states the count, and Cancel deletes nothing | The confirm's count; Cancel sends no purge | ✅ |
+| Delete forever on a selection counts only the selection, and Cancel deletes nothing | Selection-scoped preview count; Cancel sends no purge | ✅ |
+| a cold load of /scrapheap renders the Scrapheap, not the library | Direct navigation to `/scrapheap` | ✅ |
+
+Every test puts back what it sent to the Scrapheap. The purge request is
+blocked at the network in the two Cancel tests, so a broken Cancel fails the
+test rather than destroying fixture pictures. Confirming Empty scrapheap or
+Delete forever, and the protected-original choice, need pictures the spec
+imported itself and a reference folder, which the e2e backend cannot provide
+yet (#2320), so they stay manual.
+
 ## Picture Detail (Lightbox) — `lightbox.spec.js` (plan §4)
 | Test | Covers | Status |
 |------|--------|--------|
