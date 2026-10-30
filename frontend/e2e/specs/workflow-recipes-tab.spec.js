@@ -3,8 +3,9 @@ import { readFileSync } from "node:fs";
 import { test, expect } from "../fixtures/test.js";
 
 // The Workflows view's Recipes tab against the real `/recipes*` routes
-// (#2316). Every other Workflows spec fakes `/recipes` as `[]`, so this is the
-// first time the tab draws real rows and its writes reach a real database.
+// (#2316). The other Workflows specs fake `/recipes` as `[]` or never open the
+// tab, so this is the first time it draws real rows and its writes reach a
+// real database.
 //
 // Nothing is stubbed. Each test stores its own workflow through the import
 // route and saves its recipes on it through `POST /recipes`, so the rows it
@@ -329,36 +330,42 @@ test("an unfiled recipe is listed once its workflow is deleted, and can still be
   test.skip(!process.env.CI, "deletes a workflow through the shared inbox until #2313");
 
   const { workflowId, names, recipes } = await seed(apiContext);
-  await ok(await apiContext.delete(`${API}/workflows/${encodeURIComponent(workflowId)}`), "delete the workflow");
+  try {
+    await ok(await apiContext.delete(`${API}/workflows/${encodeURIComponent(workflowId)}`), "delete the workflow");
 
-  await page.goto("/workflows");
-  const unfiled = page.locator(".wfv-unfiled");
-  await expect(unfiled.locator(".wfrt-name").filter({ hasText: names[0] })).toBeVisible({
-    timeout: 15_000,
-  });
-  for (const name of names) await expect(card(unfiled, name)).toBeVisible();
+    await page.goto("/workflows");
+    const unfiled = page.locator(".wfv-unfiled");
+    await expect(unfiled.locator(".wfrt-name").filter({ hasText: names[0] })).toBeVisible({
+      timeout: 15_000,
+    });
+    for (const name of names) await expect(card(unfiled, name)).toBeVisible();
 
-  // Still usable: a rename lands on the server.
-  const renamed = `${names[0]} kept`;
-  await menu(page, unfiled, names[0], "Rename");
-  const field = unfiled.getByRole("textbox", { name: "Name for this recipe" });
-  await field.fill(renamed);
-  await field.press("Enter");
-  await expect(card(unfiled, renamed)).toBeVisible();
-  await page.reload();
-  await expect(card(page.locator(".wfv-unfiled"), renamed)).toBeVisible({ timeout: 15_000 });
+    // Still usable: a rename lands on the server.
+    const renamed = `${names[0]} kept`;
+    await menu(page, unfiled, names[0], "Rename");
+    const field = unfiled.getByRole("textbox", { name: "Name for this recipe" });
+    await field.fill(renamed);
+    await field.press("Enter");
+    await expect(card(unfiled, renamed)).toBeVisible();
+    await page.reload();
+    await expect(card(page.locator(".wfv-unfiled"), renamed)).toBeVisible({ timeout: 15_000 });
 
-  const rows = await ok(
-    await apiContext.get(`${API}/recipes`, { params: { unfiled: "true" } }),
-    "list the unfiled recipes",
-  );
-  const row = rows.find((r) => r.id === recipes[0].id);
-  expect(row?.name).toBe(renamed);
-  // A deleted manual workflow takes the graph its recipes were saved from
-  // with it (#1687), so the row says Extract is refused rather than failing.
-  expect(row.extractable).toBe(false);
-  await card(page.locator(".wfv-unfiled"), renamed)
-    .getByRole("button", { name: `More for ${renamed}` })
-    .click();
-  await expect(page.getByTestId("wfrt-extract")).toHaveAttribute("aria-disabled", "true");
+    const rows = await ok(
+      await apiContext.get(`${API}/recipes`, { params: { unfiled: "true" } }),
+      "list the unfiled recipes",
+    );
+    const row = rows.find((r) => r.id === recipes[0].id);
+    expect(row?.name).toBe(renamed);
+    // A deleted manual workflow takes the graph its recipes were saved from
+    // with it (#1687), so the row says Extract is refused rather than failing.
+    expect(row.extractable).toBe(false);
+    await card(page.locator(".wfv-unfiled"), renamed)
+      .getByRole("button", { name: `More for ${renamed}` })
+      .click();
+    await expect(page.getByTestId("wfrt-extract")).toHaveAttribute("aria-disabled", "true");
+  } finally {
+    // An unfiled recipe is listed on every Workflows screen, under the cards:
+    // left behind, it would sit under the specs that run after this one.
+    for (const recipe of recipes) await apiContext.delete(`${API}/recipes/${recipe.id}`);
+  }
 });
