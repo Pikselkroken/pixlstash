@@ -933,6 +933,12 @@ def test_runnable_identity_ignores_layout_and_nothing_a_run_reads():
         # Moving it as well does not hide the change.
         assert identity(_moved(changed)) != identity(ui)
 
+    # A subgraph's nodes are not shape-checked: an odd `type` there is keyed,
+    # never raised on.
+    odd = copy.deepcopy(ui)
+    odd["definitions"]["subgraphs"][0]["nodes"][0]["type"] = ["odd"]
+    assert identity(odd) != identity(ui)
+
     graph = _t2i_graph()
     retitled = copy.deepcopy(graph)
     retitled["2"]["_meta"] = {"title": "Positive"}

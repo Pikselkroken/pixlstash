@@ -374,9 +374,6 @@
                   dropModels(entry.card) && onModelDragOver(entry.key, $event)
                 "
                 @dragleave="onModelDragLeave(entry.key, $event)"
-                @animationend.self="
-                  pulseKeys = pulseKeys.filter((key) => key !== entry.key)
-                "
               >
                 <WorkflowCard
                   :card="entry.card"
@@ -630,6 +627,10 @@ const alreadyHere = ref([]);
 const pulseKeys = ref([]);
 // Whether that import turned *Show hidden* on to reach a hidden one.
 const revealedHidden = ref(false);
+// Two beats of `--dur-4` (`.wfv-cell--pulse`) and a margin.
+const PULSE_MS = 1000;
+let pulseTimer = null;
+onBeforeUnmount(() => clearTimeout(pulseTimer));
 const watchedFolder = ref(null);
 
 const sortOptions = SORT_KEYS.map((key) => ({
@@ -1922,6 +1923,10 @@ async function addWorkflowFiles(files) {
   landOn(last ? last.workflow_id : refused[refused.length - 1].workflow_id);
   alreadyHere.value = refused;
   pulseKeys.value = [...new Set(refused.map((r) => r.workflow_id))];
+  // Off on a timer, not on `animationend`: a key left on would pulse the
+  // card again whenever it remounts (a filter toggled off and on).
+  clearTimeout(pulseTimer);
+  pulseTimer = setTimeout(() => (pulseKeys.value = []), PULSE_MS);
   // Opened on the last, but the live region says how many arrived and which
   // were here already.
   const parts = [];
@@ -1963,7 +1968,7 @@ const alreadyHereSentence = computed(() => {
     refused.length === 1
       ? `${refused[0].file} is already here as ${names}, so it was not added again.`
       : `${refused.length} files are already here, so they were not added again: ${names}.`;
-  if (revealedHidden.value) {
+  if (revealedHidden.value && store.filters.showHidden) {
     sentence += ` ${refused.length === 1 ? "It is" : "One is"} hidden, so hidden workflows are shown now.`;
   }
   if (alreadyHereFiltered.value) sentence += " A filter is hiding it.";
@@ -2238,12 +2243,12 @@ onBeforeUnmount(() => {
   outline-offset: 2px;
 }
 
-/* "This one is already here": the selection's olive ring, sent outward once
-   over `--dur-attention` (the closed-inspector nudge's beat), so the eye finds
-   the card the view just moved to. The selection ring stays; reduced motion
-   leaves only that and the note. */
+/* "This one is already here": the selection's olive ring, sent outward twice
+   as an expressive one-shot (`--dur-4`), so the eye finds the card the view
+   just moved to. The selection ring stays; the token file's global
+   reduced-motion rule leaves only that and the note. */
 .wfv-cell--pulse {
-  animation: wfv-cell-pulse var(--dur-attention) var(--ease-standard) 2;
+  animation: wfv-cell-pulse var(--dur-4) var(--ease-standard) 2;
 }
 @keyframes wfv-cell-pulse {
   from {
@@ -2255,12 +2260,6 @@ onBeforeUnmount(() => {
     outline-offset: var(--space-3);
   }
 }
-@media (prefers-reduced-motion: reduce) {
-  .wfv-cell--pulse {
-    animation: none;
-  }
-}
-
 /* Below the cards, on their columns: `--wf-columns` is set inline from the
    same measurement the grid uses. */
 .wfv-unfiled {

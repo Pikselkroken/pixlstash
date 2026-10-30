@@ -237,7 +237,7 @@ test.describe("import", () => {
     expect(await workflowIds(apiContext)).toEqual(before);
   });
 
-  test("a file already here is refused: the view lands on its card, which pulses, and the note names it", async ({
+  test("a file already here is refused: the view lands on its card and the note names it", async ({
     page,
     apiContext,
   }) => {
@@ -263,9 +263,6 @@ test.describe("import", () => {
 
     await expect(row(page, id)).toHaveAttribute("aria-selected", "true");
     await expect(row(page, id)).toBeFocused();
-    await expect(row(page, id).locator(".wfv-cell")).toHaveClass(
-      /wfv-cell--pulse/,
-    );
     await expect(alreadyHere(page)).toContainText(
       `Twice.json is already here as Here already ${seed}, so it was not added again.`,
     );
@@ -355,11 +352,9 @@ test.describe("import", () => {
     );
     expect(responses.map((res) => res.status())).toEqual([200, 409, 200]);
     const last = (await responses[2].json()).workflow_id;
-    // On the last new card, with the one already here pointed at.
+    // On the last new card; the note points at the one already here. (Which
+    // card pulses is the unit suite's: the pulse is gone within a second.)
     await expect(row(page, last)).toHaveAttribute("aria-selected", "true");
-    await expect(row(page, id).locator(".wfv-cell")).toHaveClass(
-      /wfv-cell--pulse/,
-    );
     await expect(alreadyHere(page)).toContainText(
       `Dup.json is already here as In the drop ${seed}`,
     );

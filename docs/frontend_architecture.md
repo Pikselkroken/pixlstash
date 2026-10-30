@@ -6886,9 +6886,8 @@ from the UI today and are not oversights**:
   refused** (the server's 409, read by `existingWorkflow` in `api/comfyui.js`;
   #2347): it is no error, the rest of the files still import, and when none
   did the view lands on the workflow it already is, turning *Show hidden* on
-  first for a hidden one. Each such card pulses once (`.wfv-cell--pulse`, the
-  olive selection ring sent outward over `--dur-attention`, none under reduced
-  motion), and the `wfv-already-here` note names them and the files, with
+  first for a hidden one. Each such card pulses (`.wfv-cell--pulse`, the
+  olive selection ring sent outward twice over `--dur-4`, cleared on a timer), and the `wfv-already-here` note names them and the files, with
   *Clear all* when a client-side filter hides one. The live region says both
   groups ("Added 2 workflows; 1 is already here as X"). Only the `.json` files of a drop are
   the view's (`isWorkflowFile`, `utils/media.js`): `useWindowFileImport`

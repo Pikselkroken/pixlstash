@@ -499,8 +499,9 @@ def manual_workflow_running(
             try:
                 document = json.loads(stored)
                 same = workflow_bindings.runnable_identity(document) == identity
-            except (ValueError, RecursionError, AttributeError) as exc:
-                # AttributeError: valid JSON that is not an object.
+            except (ValueError, TypeError, RecursionError, AttributeError) as exc:
+                # AttributeError: valid JSON that is not an object. One row
+                # that will not compare must not refuse every later import.
                 logger.warning(
                     "Manual workflow %s will not read to compare with an import: %s",
                     row["workflow_id"],

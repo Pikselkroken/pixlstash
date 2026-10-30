@@ -503,6 +503,8 @@ _LAYOUT_NODE_KEYS = {
     "order",
     "title",
     "shape",
+    "showAdvanced",
+    "selected",
 }
 # Bookkeeping a re-export rewrites: the S&R name, and the pack and version a
 # node came from, which an update of the pack bumps.
@@ -529,7 +531,9 @@ def runnable_identity(document: dict) -> str:
     this does not know makes two copies differ, which stores the second as
     before, where dropping an unknown key could refuse a different workflow.
     The two formats never key alike, so an API graph matches an editor
-    document only through the conversion stored beside it.
+    document only through the conversion stored beside it. ``extra`` is
+    dropped but for ``groupNodes``: a pack keeping run state there is not
+    told apart.
     """
     graph = api_graph(document)
     if graph is not None:
@@ -580,13 +584,20 @@ def _runnable_editor_graph(graph: dict) -> dict:
             (
                 _runnable_node(node) if isinstance(node, dict) else node
                 for node in body["nodes"]
-                if not (isinstance(node, dict) and node.get("type") in _NOTE_CLASSES)
+                if not (isinstance(node, dict) and _is_note(node))
             ),
             key=lambda node: json.dumps(
                 node.get("id") if isinstance(node, dict) else node, default=str
             ),
         )
     return body
+
+
+def _is_note(node: dict) -> bool:
+    """Whether *node* is a note. A ``type`` that is no string (a subgraph's
+    nodes are not shape-checked) is no note, and must not raise."""
+    node_type = node.get("type")
+    return isinstance(node_type, str) and node_type in _NOTE_CLASSES
 
 
 def _runnable_node(node: dict) -> dict:
