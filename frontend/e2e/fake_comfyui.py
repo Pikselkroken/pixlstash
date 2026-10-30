@@ -311,7 +311,11 @@ class Handler(BaseHTTPRequestHandler):
         with _lock:
             if path == "/prompt":
                 body = self._body()
-                prompt = body.get("prompt") or {}
+                prompt = body.get("prompt") if isinstance(body, dict) else None
+                if not isinstance(prompt, dict) or not prompt:
+                    # ComfyUI's own answer to a graph it cannot read.
+                    error = {"type": "invalid_prompt", "message": "Invalid prompt"}
+                    return self._send(400, {"error": error, "node_errors": {}})
                 if _fail["mode"] == "node_error":
                     return self._send(400, _node_error(prompt))
                 prompt_id = str(uuid.uuid4())
