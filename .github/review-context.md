@@ -1,8 +1,7 @@
 # Review context for the AI reviewer
 
 PixlStash: a FastAPI + SQLModel backend (`pixlstash/`) and a Vue 3 frontend
-(`frontend/`). Loaded by `.github/workflows/ai-review.yml` from the pull
-request's base branch.
+(`frontend/`). Loaded by `.github/workflows/ai-review.yml` from `main`.
 
 ## How to review
 
@@ -36,11 +35,12 @@ Each of these has come back across PRs and been wrong every time. None of them
 excuses an authorization, data-loss or secret-exposure defect in `pixlstash/` or
 `frontend/src/`: report those whatever this list says.
 
-- **Code that does not exist.** A suggestion that names a function, class,
-  config key or CSS selector must name one that exists in the repository.
-  Check before suggesting it; a suggestion built on an invented API (a
+- **Code that does not exist.** A suggestion that relies on an existing
+  function, class, config key or CSS selector must name one that exists in the
+  repository; check before suggesting it. One built on an invented API (a
   `paint-compare-after` element, a `run_task_now` method, a `needs_engine`
-  attribute) is wrong whatever it is for.
+  attribute) is wrong whatever it is for. Proposing a new helper is fine when
+  the suggestion includes it.
 - **The kind of confirm dialog.** Some flows confirm with the browser's own
   `confirm()`, others with an in-app dialog. Read the handler before saying a
   test drives the wrong one; for example, Restore all in the Scrapheap uses
