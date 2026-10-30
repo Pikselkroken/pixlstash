@@ -1593,6 +1593,11 @@ function registerIpc(): void {
             // pixlstash is not installed into the dev env; import it from the checkout.
             execFileP(file, args, { ...options, env: backendEnv() }),
           ),
+        recordInstallIdentity: () =>
+          execFileP(backendInterpreter(), ['-m', 'pixlstash.telemetry', serverConfigPath()], {
+            env: backendEnv(),
+            timeout: 30_000,
+          }),
         // Loopback HTTP; the active runtime drives the device (default_device
         // left as auto).
         writeConfig: (imageRoot) =>

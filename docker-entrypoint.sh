@@ -32,6 +32,9 @@ chmod 700 "$CONFIG_DIR" || echo "warning: could not chmod 700 $CONFIG_DIR - Pixl
 # If the config already exists it is left untouched so user edits survive restarts.
 if [ ! -f "$CONFIG_PATH" ]; then
     echo "Creating default server config at $CONFIG_PATH"
+    # Before the config exists, or the anonymous install ID is classed as an
+    # upgrade rather than a new install. Never fatal: telemetry is optional.
+    python -m pixlstash.telemetry "$CONFIG_PATH" || echo "warning: could not record the install ID" >&2
     # Default image_root mirrors what Server._init_server_config uses:
     # os.path.join(config_dir, "images")
     DEFAULT_IMAGE_ROOT="$(dirname "$CONFIG_PATH")/images"

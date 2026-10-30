@@ -20,6 +20,7 @@ gpu_select.apply()
 from pixlstash.pixl_logging import setup_logging, get_logger, hold_log_output  # noqa: E402
 from pixlstash.server import Server  # noqa: E402
 from pixlstash.startup_checks import StartupCheckError  # noqa: E402
+from pixlstash.telemetry import ensure_install_identity  # noqa: E402
 from pixlstash.hub.bootstrap import (  # noqa: E402
     HubBootstrapError,
     UnusableVaultError,
@@ -536,6 +537,10 @@ def main():
     _force_utf8_streams()
     args = build_parser().parse_args()
 
+    # First, before the bootstrap wizard or init_server_config can write the
+    # config: the identity is classed as a new install only while there is
+    # none. Server.__init__ calls it again, which is then a no-op.
+    ensure_install_identity(args.server_config)
     ran_bootstrap = _bootstrap_server_config(args.server_config, force=args.bootstrap)
     Server.DEFAULT_CLEANUP_MISSING_PICTURES = bool(args.cleanup_missing_pictures)
 
