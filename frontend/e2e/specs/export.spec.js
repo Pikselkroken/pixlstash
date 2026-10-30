@@ -134,13 +134,25 @@ test.describe('export', () => {
       await grid.goto()
       await grid.waitForThumbnailLoaded()
 
+      // Three pictures that carry tags, so each tag caption has something in
+      // it: the seeded reference-folder pictures at the top have none.
       const ids = []
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; ids.length < 3 && i < 30; i++) {
         const card = grid.thumbnails.nth(i)
         const src = await card.locator('img.thumbnail-img').getAttribute('src')
-        ids.push(Number(src.match(/\/thumbnails\/(\d+)\./)[1]))
+        const id = Number(src.match(/\/thumbnails\/(\d+)\./)[1])
+        const tags = await apiContext.get(`/api/v1/pictures/${id}/tags`)
+        expect(tags.ok(), await tags.text()).toBe(true)
+        const payload = await tags.json()
+        // `__tag…` rows are pending-retag sentinels, which captions leave out.
+        const real = (payload?.tags ?? payload ?? []).filter(
+          (t) => !String(t.tag ?? t).startsWith('__tag'),
+        )
+        if (!real.length) continue
+        ids.push(id)
         await card.click({ modifiers: ['ControlOrMeta'] })
       }
+      expect(ids, 'three tagged pictures near the top of the grid').toHaveLength(3)
       await expect(grid.selectionCountLabel).toHaveText('3 selected')
 
       const panel = await openExportPanel(page)
@@ -182,7 +194,7 @@ test.describe('export', () => {
         images.map((n) => parse(n).name).sort(),
       )
       expect(files).toHaveLength(6)
-      // Every fixture picture is tagged, so no caption may be blank.
+      // Each picture exported carries tags, so no caption may be blank.
       for (const name of captions) {
         expect(readFileSync(join(folder, name), 'utf8').trim(), name).not.toBe('')
       }
