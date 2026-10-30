@@ -11,12 +11,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 // ImageGrid.vue), asserting the "Drop files here to import" overlay appears
 // while dragging files and clears when the drag leaves.
 //
-// The *drop → import completes* half of §2 CANNOT run in this harness: the
-// import endpoint requires the face-extraction worker
-// (`POST /pictures/import` → 400 "Face worker is not running") and the e2e
-// backend boots with `disable_background_workers: true`. Import completion
-// stays in the manual release plan until the harness grows a worker-enabled
-// mode or a test hook.
+// An import completing is covered by media-fixture.spec.js, through the
+// Import dialog.
 
 const SOURCE_JPG = resolve(
   __dirname,

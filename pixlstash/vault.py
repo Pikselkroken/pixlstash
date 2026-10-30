@@ -9,7 +9,7 @@ import threading
 import numpy as np
 
 from pathlib import Path
-from typing import Optional
+from typing import Collection, Optional
 from concurrent.futures import Future
 
 from sqlmodel import Session, select
@@ -151,6 +151,7 @@ class Vault:
         server_config_path: Optional[str] = None,
         path_mapper=None,
         disable_background_workers: bool = False,
+        planner_finders: Optional[Collection[TaskType]] = None,
         force_cpu: bool = False,
         fast_captions: bool = False,
         daily_snapshots_enabled: bool = True,
@@ -171,6 +172,13 @@ class Vault:
                 WorkPlanner and ReferenceFolderWatcher are not started and
                 no models are ever loaded.  Intended for read-only deployments
                 where all processing is already complete.
+            planner_finders (Optional[Collection[TaskType]]): Register only
+                these finders with the work planner; ``None`` registers all of
+                them. A restricted vault also builds no inference engine, so a
+                model finder kept in the set registers but never queues work:
+                the import routes refuse unless FACE_EXTRACTION is registered,
+                and an e2e run must not load models. Only the e2e backend sets
+                it (``e2e_planner_finders``, under ``enable_test_hooks``).
             db_filename (Optional[str]): Name of the database file inside
                 *image_root*. ``None`` takes it from the hub registration when
                 the vault is opened through one, which is what puts a library
@@ -266,6 +274,9 @@ class Vault:
         self._anomaly_apply_thresholds_memo: tuple | None = None
         self._server_config_path = server_config_path
         self._disable_background_workers = disable_background_workers
+        self._planner_finders = (
+            frozenset(planner_finders) if planner_finders is not None else None
+        )
         self._daily_snapshots_enabled: bool = daily_snapshots_enabled
         # Scrapheap auto-purge retention window (days) or None = "Never", plus
         # the instant it was last LOWERED (puts a +1 day floor under EVERY
@@ -467,6 +478,12 @@ class Vault:
                     vault=self,
                 )
             )
+        if self._planner_finders is not None:
+            self._planner_work_finders = {
+                task_type: finder
+                for task_type, finder in self._planner_work_finders.items()
+                if task_type in self._planner_finders
+            }
         self._work_planner = WorkPlanner(
             task_runner=self._task_runner,
             task_finders=self._planner_work_finders,
@@ -491,7 +508,7 @@ class Vault:
         On Metal this blocks for a few seconds while the CPU query encoders
         load; see :meth:`_create_engine`.
         """
-        if self._disable_background_workers:
+        if self._disable_background_workers or self._planner_finders is not None:
             return
         if not self._engine:
             self._engine = self._create_engine()
@@ -1991,7 +2008,7 @@ class Vault:
         Returns:
             concurrent.futures.Future: Future set to True when completed.
         """
-        if not self._engine:
+        if not self._engine and self._planner_finders is None:
             self._engine = self._create_engine()
             self._bind_engine_services()
 
