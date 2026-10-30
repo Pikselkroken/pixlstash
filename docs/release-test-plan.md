@@ -39,6 +39,9 @@ plan; legacy § numbers are still cited in spec titles):
 | §15 Export — selection ZIP contents + set ZIP count | `export.spec.js` |
 | §19.1/19.4 Live-update own-change silence, pill choice, flood coalescing, overlay deferral | `grid-own-change-no-pill.spec.js`, `grid-external-change-pill.spec.js`, `grid-injection.spec.js`, `grid-lightbox-deferral.spec.js` |
 | §20.1 Tag-health board; §20.3/20.4 review create + binary decide + Escape | `review-board.spec.js`, `review-session.spec.js` |
+| Filter menu facets, chips, Clear all | `filters.spec.js` |
+| Deep links (`?overlay=` on entity routes, multi-entity URLs, `?review=`) | `deep-links.spec.js` |
+| Grid and lightbox keyboard shortcuts, typing safety | `grid-keys.spec.js`, `lightbox-keys.spec.js` |
 | §0.5 From source (Linux) | CI `e2e` job (pip install, `npm run build`, boots server, logs in, renders grid) |
 
 ---

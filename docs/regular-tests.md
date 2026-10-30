@@ -310,6 +310,47 @@ stays one click away in the rail's Archived list.
 | --- | --- | --- |
 | opens on F1 and lists the grid shortcuts | F1 reaches the global handler and `ShortcutsDialog` renders its table. The dialog is static markup with no unit coverage, so this is its only pin | ✅ |
 
+## Grid filters — `filters.spec.js`
+Every facet is checked the same way: the strip's "N of M" is the API's `/pictures/count` for the same filter over the same view, a chip names it, and its × restores the grid (no strip, menu header back to "M of M"). When the API's answer fits on screen the cards are compared by id too. The fixture records no LoRA and no workflow, so those two stub only the menu's list of choices; the listing and the count are the real server's (0).
+| Test | Covers | Status |
+| --- | --- | --- |
+| media type | Video (none in the fixture: empty grid) and Images, each with its chip | ✅ |
+| faces: No face / Has face | `face_filter` reaches the grid stream | ✅ |
+| stacks: Stacked / Unstacked | `stack_state` | ✅ |
+| sharing | Shares one picture through a READ token and revokes it after; the grid is exactly that picture | ✅ |
+| score | At least 3 stars; then At most 2 from 0, which takes the unrated with it | ✅ |
+| tags | Has tag, then flipped to Lacks tag from its menu chip; never both | ✅ |
+| tag confidence | Missing at the default 80% | ✅ |
+| checkpoint / LoRA / workflow | A ticked value reaches the listing and gets its chip | ✅ |
+| two facets combine, and Clear all clears both | AND across facets (a pair chosen to be narrower than either alone), and the strip's Clear all | ✅ |
+| filters survive a route change and reset on a reload | The filter store is the tab's, not the route's: a sidebar navigation keeps it, a reload starts clean | ✅ |
+
+## Deep links — `deep-links.spec.js`
+| Test | Covers | Status |
+| --- | --- | --- |
+| `?overlay=` on `/set/:id`, `/character/:id`, `/project/:pid/set/:id` | The lightbox opens on that picture (not the grid's first), and closing it lands on the entity's grid with `?overlay=` dropped | ✅ |
+| `/project/:pid/character/:id` cold load | The scope slot names the project, the person's row is active, the grid is the person's within the project | ✅ |
+| multi-set `?ids=…&mode=union\|intersection`, multi-character `?ids=…&mode=union` | The grid's own count is the API's count for the combined query | ✅ |
+| `?review=board`, `?review=<id>` | Cold loads open the board, and a review the spec created (aborted after) | ✅ |
+
+## Grid keys — `grid-keys.spec.js`
+| Test | Covers | Status |
+| --- | --- | --- |
+| G, the arrows, Space and Enter | The cursor tile holds the keyboard focus with `:focus-visible` after each key; Ctrl+Arrow moves it alone, Space toggles, Enter opens that picture | ✅ |
+| Home, End, PageDown and PageUp | End shows the whole last row; a page is one window | ✅ |
+| Ctrl+A | Selects every picture in the view, not just the tiles on screen | ✅ |
+| 0–5 | Rates the cursor picture, read back from the API | ✅ |
+| typing safety | With the pointer resting on a tile, every grid key typed into the search field types and does nothing else | ✅ |
+
+## Lightbox keys — `lightbox-keys.spec.js`
+| Test | Covers | Status |
+| --- | --- | --- |
+| Z | 100% and back to fit, on the fixture's tallest picture, which is larger than the stage (fit is the zoom floor) | ✅ |
+| Space, S, T | Chrome hidden and back; sidebar closed and back; caret in the tag field | ✅ |
+| 1–5 | Stars and the API's score | ✅ |
+| A | Adds the next picture to the set last added to, in a set the spec makes and deletes | ✅ |
+| typing safety | Every lightbox key typed into the tag field types and changes nothing | ✅ |
+
 ---
 
 ## Coverage gaps / testing debt (risk-based)

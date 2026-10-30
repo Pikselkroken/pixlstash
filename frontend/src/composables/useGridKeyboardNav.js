@@ -189,9 +189,12 @@ export function useGridKeyboardNav(
       // Justified rows don't follow cols × rowHeight; use the packed model's
       // exact pixel height so End/PageDown reach the true bottom.
       const packedLayout = activeJustifiedLayout();
-      const totalHeight = packedLayout
-        ? packedLayout.totalHeight
-        : totalRows * rowHeight.value;
+      // The scroller holds more than the rows (its own padding), so the rows
+      // alone stop End short and leave the last row cut off at the bottom.
+      const totalHeight = Math.max(
+        packedLayout ? packedLayout.totalHeight : totalRows * rowHeight.value,
+        scrollWrapper.value.scrollHeight || 0,
+      );
       const maxScroll = Math.max(
         0,
         totalHeight - scrollWrapper.value.clientHeight,
