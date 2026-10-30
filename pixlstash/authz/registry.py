@@ -2247,6 +2247,20 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
             "remains as defence in depth."
         ),
     ),
+    ("POST", "/api/v1/test-hooks/reference-folders/{folder_id}/rescan"): RoutePolicy(
+        _LOOPBACK,
+        justification=(
+            "E2E-only hook that marks a reference folder due for a rescan, "
+            "exactly as the filesystem watcher does when a file in it changes "
+            "(Vault._on_reference_folder_fs_changed). Returns no resource data: "
+            "only the folder id, or 404 when there is no such folder. Loopback for the same reasons as "
+            "/test-hooks/ws-event above: mounted only when enable_test_hooks is "
+            "true, which only frontend/e2e/serve_e2e_backend.py sets on a "
+            "127.0.0.1 backend, and allow_remote_host_ops must never expose a "
+            "test hook. The handler's inline require_unscoped_owner stays as "
+            "defence in depth."
+        ),
+    ),
     # ── routes/training.py (ai-toolkit LoRA training; owner-only, see the router docstring)
     ("GET", "/api/v1/training/jobs"): RoutePolicy(_OWNER),
     ("GET", "/api/v1/training/jobs/{job_id}"): RoutePolicy(_OWNER),
@@ -2312,6 +2326,7 @@ CONDITIONALLY_MOUNTED_ROUTES: frozenset[tuple[str, str]] = frozenset(
         # routes/test_hooks.py - mounted only when ``enable_test_hooks`` is true,
         # which only frontend/e2e/serve_e2e_backend.py sets.
         ("POST", "/api/v1/test-hooks/ws-event"),
+        ("POST", "/api/v1/test-hooks/reference-folders/{folder_id}/rescan"),
     }
 )
 

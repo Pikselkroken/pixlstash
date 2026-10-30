@@ -132,6 +132,14 @@ checklist shrinks as coverage grows.
   `POST /model-files` into the seeded folder) and delete them in `afterEach`.
   Real removals are the permanent kind; a Trash path is checked at the request
   and answered by the spec, because the Trash is that of whoever runs the suite.
+- A spec that registers a reference or import folder makes it with
+  `scratchFolder` (`fixtures/folders.js`), calls `expectScratch` on it before
+  any remove or relocate, and writes its pictures with `writePicture`. After
+  changing a reference folder's files on disk it calls `markFolderChanged`,
+  which does what the filesystem watcher would (`POST
+  /api/v1/test-hooks/reference-folders/{id}/rescan`): the watcher needs an
+  inotify instance a busy machine may not have, and without it the next scan
+  is five minutes away. Import folders poll and need neither.
 - Stable selectors in use: `.thumbnail-card` (grid cell), `.lightbox` /
   `.lightbox-back` (lightbox), `.search-overlay` (search), `.mdi-magnify`
   (toolbar search button).
