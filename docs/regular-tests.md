@@ -124,11 +124,18 @@ missing or placeholder sources fail with the actual `src` in the diagnostic.
 |------|--------|--------|
 | dragging files over the grid raises the import overlay; leaving clears it | A synthetic DataTransfer with a real JPEG File dispatched on the grid scroll wrapper raises the "Drop files here to import" overlay; dragleave clears it | ✅ |
 
-> ⚠️ **Drop → import completes is NOT automatable in this harness:**
-> `POST /pictures/import` returns 400 "Cannot import: …" (no face worker) and the e2e
-> backend boots with `disable_background_workers: true`. The import-completion
-> half of legacy §2 stays in the manual plan (Import & background processing)
-> until the harness grows a worker-enabled mode or a test hook.
+> An import through the Import dialog completing, and the picture reaching the
+> grid, is covered by `media-fixture.spec.js`. The e2e backend runs submitted
+> tasks but no model work, so faces, captions and tags on imported pictures
+> stay in the manual plan (Import & background processing).
+
+## Media fixture — `media-fixture.spec.js`
+| Test | Covers | Status |
+|------|--------|--------|
+| every registered reference and import folder lives under the throwaway work dir | Guard: Delete forever with *include protected* removes reference-folder originals, so no spec may register a folder outside the temp dir | ✅ |
+| the seeded reference folder is registered and holds its pictures | The launcher's seeded folder is active, laid out, and lists its three images | ✅ |
+| /moves lists the seeded move as an unambiguous review | The seed's move into a project-named folder reaches `GET /moves/pending` | ✅ |
+| an import completes and the picture appears in the grid | Import dialog → staging commit → `PictureImportTask` on the e2e task runner; the card appears; the picture is purged afterwards | ✅ |
 
 ## Export — `export.spec.js` (plan §15)
 | Test | Covers | Status |
@@ -320,8 +327,8 @@ Tracked so they aren't forgotten — weighted by blast radius:
   cover the deterministic core (own vs external, pill choice, flood coalescing,
   lightbox deferral). These are **not yet automated** and stay manual:
   - *Real bulk work with background workers ON (§19.3, #500)* — the e2e backend
-    runs `disable_background_workers: true`, so worker tag/quality/smart-score
-    events never fire. The injection spec proves frontend coalescing under a
+    runs only the folder sweeps and loads no models, so worker
+    tag/quality/smart-score events never fire. The injection spec proves frontend coalescing under a
     synthetic flood, but the real worker-driven path needs a live server run.
   - *Real two-tab / two-device observation (§19.2)* — automated coverage uses
     the no-client-id lever to fake "external"; genuine concurrent same-owner

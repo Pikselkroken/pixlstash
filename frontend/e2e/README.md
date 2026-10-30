@@ -29,18 +29,30 @@ The backend boots against the repo's `test-data/` fixture — a seeded vault
    (`<tmp>/pixlstash-e2e`, recreated every launch, backups excluded);
 2. **strips the `user` / `usertoken` rows** so the server boots in *first-run*
    state — this is why no credential is ever committed;
-3. writes a lean `server-config.json` (background workers + startup-thumbnail
-   generation disabled, CPU only, password auth on);
+3. writes a lean `server-config.json` (startup-thumbnail generation disabled,
+   CPU only, password auth on). The task runner runs, so an import or a folder
+   scan a spec starts completes, but `e2e_planner_finders` restricts the work
+   planner to the reference-folder scan, the import-folder pickup and the face
+   finder the import routes require. No inference engine is built, so the face
+   finder queues nothing, and the sweeps that would rewrite the fixture (tags,
+   embeddings, scores, thumbnails, dedup) never run;
 4. lays out a small model folder (`<work dir>/model-shelf`: stub LoRAs and a
    checkpoint in nested subfolders, an empty one, a preview `.png`) and names it
    in the config as `e2e_model_folder`. With `enable_test_hooks` on, the server
    registers it and scans it synchronously at start-up, so the Models shelf has
-   rows although background scans are off (`model-shelf-fixture.spec.js`);
-5. names `<work dir>/user-data` in the config as `e2e_data_dir`. With
+   rows although the model-folder scan is off (`model-shelf-fixture.spec.js`);
+5. lays out a reference folder (`<work dir>/reference-folder/Inbox`: three
+   flat images) and names it as `e2e_reference_folder`. The server registers it
+   with the default layout, scans it, moves `Inbox/fern.png` into a folder named
+   after the fixture's first project and scans again, so `/moves` has one
+   pending review (`media-fixture.spec.js`). A spec that registers a folder of
+   its own uses a `mkdtemp` folder: Delete forever with *include protected*
+   removes reference-folder originals from disk;
+6. names `<work dir>/user-data` in the config as `e2e_data_dir`. With
    `enable_test_hooks` on, the workflow inbox, the user workflow folder and the
    trash move there, so a run neither imports the machine's own workflows nor
    writes into or trashes from the folders the owner's server uses;
-6. execs `python -m pixlstash.app` against that temp copy.
+7. execs `python -m pixlstash.app` against that temp copy.
 
 Because the user table is stripped per run, `global-setup.js` registers a fresh
 admin (random password) and mints an `ALL` token — credentials live only for

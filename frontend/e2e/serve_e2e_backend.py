@@ -6,9 +6,10 @@ Playwright's ``webServer`` runs this script. It does NOT touch the committed
 work directory, strips any user/token rows so the server boots in *first-run*
 state (the e2e global-setup then registers an admin and mints an ALL-scope
 token per run — no credentials are committed), seeds a small model folder
-for the shelf specs, writes a lean server-config
-(background workers and startup thumbnail generation disabled, CPU only), and
-execs the real server. The server also serves the built SPA from
+for the shelf specs and a reference folder for the Media specs, writes a lean
+server-config (the task runner runs, the work planner keeps only the folder
+sweeps and an idle face finder, no models, no startup thumbnail generation, CPU
+only), and execs the real server. The server also serves the built SPA from
 ``pixlstash/frontend/dist`` on the same origin, so cookie auth just works.
 
 Env:
@@ -31,6 +32,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from PIL import Image
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_DATA = Path(os.environ.get("PIXLSTASH_E2E_DATA") or (REPO_ROOT / "test-data"))
 SRC_IMAGES = SRC_DATA / "images"
@@ -48,6 +51,9 @@ WORK_DIR = (
 )
 # Not ``models``: that is the managed store the server creates beside its hub.
 MODEL_FOLDER = WORK_DIR / "model-shelf"
+REFERENCE_FOLDER = WORK_DIR / "reference-folder"
+# The seeded file the server moves after its first scan, leaving a review.
+REFERENCE_MOVED = "Inbox/fern.png"
 # Stands in for the app's data directory: the workflow inbox, the user workflow
 # folder and the trash, all of which are otherwise shared with the owner.
 USER_DATA = WORK_DIR / "user-data"
@@ -126,6 +132,24 @@ def _seed_model_folder(root: Path) -> None:
     (root / "Empty").mkdir()
 
 
+def _seed_reference_folder(root: Path) -> None:
+    """Lay out a small reference folder for the Media specs, under the work dir.
+
+    Three flat images in different colours, so no two share pixels with each
+    other or with the fixture (the dedup specs count the fixture's pairs). The
+    server registers and scans it at start-up (``e2e_reference_folder``) and
+    moves ``REFERENCE_MOVED`` so ``/moves`` has a review to show.
+    """
+    for name, colour in (
+        ("fern.png", (52, 120, 61)),
+        ("moss.png", (98, 112, 40)),
+        ("stone.png", (128, 124, 118)),
+    ):
+        path = root / "Inbox" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (64, 48), colour).save(path)
+
+
 def _harden_permissions(root: Path) -> None:
     """Strip group/world write bits from the throwaway work directory.
 
@@ -159,13 +183,25 @@ def server_overrides(work_images: Path) -> dict:
         # global rate limiter (120 public requests / 60s) would otherwise
         # 429 later navigations. Safe to disable on this hermetic backend.
         "disable_rate_limit": True,
-        "disable_background_workers": True,
+        # The task runner runs, so an import or a folder scan a spec
+        # starts completes. The planner keeps only these finders: the
+        # folder sweeps, and the face finder the import routes require,
+        # which queues nothing because this vault builds no inference
+        # engine. The sweeps that would rewrite the fixture (tags,
+        # embeddings, scores, thumbnails) stay off. Read only with
+        # enable_test_hooks.
+        "disable_background_workers": False,
+        "e2e_planner_finders": [
+            "ReferenceFolderScanTask",
+            "WatchFolderImportTask",
+            "FaceExtractionTask",
+        ],
         # Register the e2e-only WS test-hooks router so specs can inject
-        # grid events deterministically (the disabled background workers
-        # otherwise never fire the tag/face/score events the grid reacts
-        # to). Off by default everywhere else: production configs MUST
-        # NEVER set this flag — it exposes /api/v1/test-hooks/ws-event,
-        # which emits arbitrary owner-only WebSocket events.
+        # grid events deterministically (the sweeps that fire the
+        # tag/face/score events the grid reacts to are off). Off by default
+        # everywhere else: production configs MUST NEVER set this flag — it
+        # exposes /api/v1/test-hooks/ws-event, which emits arbitrary
+        # owner-only WebSocket events.
         "enable_test_hooks": True,
         # Read only when enable_test_hooks is on: registered as a `user`
         # model folder and scanned synchronously at start-up.
@@ -173,6 +209,12 @@ def server_overrides(work_images: Path) -> dict:
         # Read only when enable_test_hooks is on: the workflow folders and the
         # trash move here, so nothing under the shared data directory changes.
         "e2e_data_dir": str(USER_DATA),
+        # Likewise: registered with a layout, scanned, one file moved and
+        # scanned again, so /moves lists a pending review.
+        "e2e_reference_folder": {
+            "path": str(REFERENCE_FOLDER),
+            "move": REFERENCE_MOVED,
+        },
         "generate_thumbnails_on_startup": False,
         "default_device": "cpu",
         "daily_snapshots": False,
@@ -203,6 +245,7 @@ def main() -> int:
     shutil.copytree(SRC_IMAGES, work_images, ignore=_ignore_backups)
     _strip_credentials(work_images / "vault.db")
     _seed_model_folder(MODEL_FOLDER)
+    _seed_reference_folder(REFERENCE_FOLDER)
 
     # Build a lean server-config from the fixture's own config, overriding the
     # fields that matter for a fast, hermetic, password-auth test server.

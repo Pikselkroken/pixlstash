@@ -2,7 +2,7 @@
 
 This router exists **solely** to let Playwright deterministically inject a
 WebSocket grid event by driving ``vault.notify`` with a controlled payload.
-The e2e backend boots with ``disable_background_workers: true``, so the
+The e2e backend runs only the folder sweeps and loads no models, so the
 tag/quality/smart-score/face events behind most "continuous refresh" and
 "pill-on-own-change" reports never fire on their own. This endpoint reproduces
 those flood / echo scenarios on demand, without real-timing nondeterminism.

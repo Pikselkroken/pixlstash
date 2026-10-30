@@ -264,11 +264,12 @@ inside the overlay directory), then launch:
 
 ## 5. Import & background processing
 
-The e2e harness runs with `disable_background_workers: true` and the import
-endpoint requires the face worker — so everything here needs a real server
+The e2e harness runs submitted tasks (an import through the Import dialog is
+automated, `media-fixture.spec.js`) but loads no models and runs none of the
+tagging, embedding or scoring sweeps — so everything here needs a real server
 run with workers ON.
 
-- [ ] Drag two or more image files from the OS file manager onto the grid and drop — import starts immediately, a progress indicator appears, and the pictures appear in the grid without a reload (the drag overlay itself is automated; the drop → import path is not)
+- [ ] Drag two or more image files from the OS file manager onto the grid and drop — import starts immediately, a progress indicator appears, and the pictures appear in the grid without a reload (the drag overlay and a one-file import through the Import dialog are automated; a real OS drop is not)
 - [ ] After importing a batch of 5+ pictures: the task indicator shows live progress; faces, a generated caption (Description section), and predicted tags appear on the new pictures once processing completes
 - [ ] Deleting all tags on a processed picture and requeueing (Reset and regenerate) produces fresh predictions
 
