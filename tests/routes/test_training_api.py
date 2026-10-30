@@ -1867,11 +1867,16 @@ def test_host_path_redaction_covers_spaces_file_uris_and_windows_paths():
 
 def test_job_error_with_spaced_path_and_file_uri_is_redacted():
     """The route-level half of the redaction test: a report and an error that
-    name a spaced path and a file:// URI carry neither name back."""
+    name a spaced path and a file:// URI carry neither name back. The job's name
+    and trigger word are the owner's own text and come back as written, even
+    where the path pattern would read them as a path (#2294)."""
     temp_dir, owner, server, read_token = _setup()
     try:
+        name, trigger = "Cats / Dogs (cdx)", "sky 1:1 / wide"
         job_id, _ = _seed_job(
             server,
+            name=name,
+            trigger_word=trigger,
             report="wrote /Users/Alice Smith/AI Toolkit/run.py",
             error="cannot open file:///home/alice/x",
         )
@@ -1880,6 +1885,25 @@ def test_job_error_with_spaced_path_and_file_uri_is_redacted():
         assert detail["error"] == "cannot open <host path>", detail["error"]
         for text in _walk_strings(detail):
             assert "Smith" not in text and "alice" not in text, text
+
+        (listed,) = [j for j in owner.get("/training/jobs").json() if j["id"] == job_id]
+        live = owner.get(f"/training/jobs/{job_id}/live").json()
+        for body in (detail, listed, live):
+            assert body["name"] == name, body["name"]
+            assert body["trigger_word"] == trigger, body["trigger_word"]
+
+        set_id = _make_picture_set(owner)
+        r = owner.post(
+            "/training/jobs",
+            json={
+                "set_id": set_id,
+                "name": name,
+                "trigger_word": trigger,
+                "subject": "style",
+            },
+        )
+        assert r.status_code == 200, r.text
+        assert (r.json()["name"], r.json()["trigger_word"]) == (name, trigger)
     finally:
         _teardown(temp_dir, server)
 
