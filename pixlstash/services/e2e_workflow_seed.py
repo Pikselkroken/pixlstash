@@ -13,6 +13,7 @@ import os
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+from pixlstash.db_models.picture import Picture
 from pixlstash.hub.workflow_cards import unidentified_variants
 from pixlstash.hub.workflow_group_writes import set_group_attributes
 from pixlstash.pixl_logging import get_logger
@@ -34,6 +35,32 @@ def add_pictures_in_session(session, pictures: list) -> list[int]:
     session.add_all(pictures)
     session.commit()
     return [picture.id for picture in pictures]
+
+
+def file_pictures_in_session(
+    session, picture_ids: list[int], workflow_id: str | None
+) -> list[int]:
+    """File the pictures on *workflow_id*, or unfile them with None.
+
+    Written whatever each picture held, unlike a run's import, which writes
+    only an empty field: a spec rerun against the same backend must be able to
+    move them. Writes nothing when any id is missing, and returns those ids.
+    """
+    pictures = [session.get(Picture, pid) for pid in picture_ids]
+    missing = [pid for pid, pic in zip(picture_ids, pictures) if pic is None]
+    if missing:
+        return missing
+    for pic in pictures:
+        pic.run_workflow_id = workflow_id
+        pic.run_workflow_version = None
+        session.add(pic)
+    session.commit()
+    return []
+
+
+def file_pictures(server, picture_ids: list[int], workflow_id: str | None) -> list:
+    """:func:`file_pictures_in_session` for the test hook; the missing ids."""
+    return server.vault.db.run_task(file_pictures_in_session, picture_ids, workflow_id)
 
 
 def seed_workflows(server, path: str) -> None:

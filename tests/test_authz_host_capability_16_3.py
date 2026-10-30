@@ -91,6 +91,7 @@ _LOOPBACK_ROUTE_KEYS = {
     ("POST", "/api/v1/pictures/export/folder"),
     ("POST", "/api/v1/test-hooks/ws-event"),
     ("POST", "/api/v1/test-hooks/reference-folders/{folder_id}/rescan"),
+    ("POST", "/api/v1/test-hooks/file-pictures"),
     ("POST", "/api/v1/comfyui/pack/install"),
     ("POST", "/api/v1/comfyui/node-packs/{pack_id}/install"),
     ("POST", "/api/v1/training/ai-toolkit/check"),
@@ -540,6 +541,8 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     82 = 70 + 12 with ``POST /test-hooks/reference-folders/{folder_id}/rescan``
     (#2325), the second e2e hook: it marks a reference folder due for a rescan,
     as the filesystem watcher does, and is loopback for ``ws-event``'s reasons.
+    83 = 70 + 13 with ``POST /test-hooks/file-pictures`` (#2315), the third: it
+    files pictures on a workflow, as a run's import does, for the same reasons.
 
     Arithmetic, not judgement."""
     loopback = {
@@ -553,7 +556,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
         if rp.policy is AccessPolicy.LOCAL_OWNER_ONLY
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
-    assert len(loopback) == 12, sorted(loopback)
+    assert len(loopback) == 13, sorted(loopback)
     assert len(local) == 70, sorted(local)
 
 
@@ -1403,6 +1406,7 @@ from pixlstash.server import Server  # noqa: E402
 _WS_HOOK = f"{API}/test-hooks/ws-event"
 _WS_HOOK_BODY = {"event_type": "CHANGED_PICTURES", "picture_ids": [1]}
 _RESCAN_HOOK = f"{API}/test-hooks/reference-folders/{{folder_id}}/rescan"
+_FILE_HOOK = f"{API}/test-hooks/file-pictures"
 
 
 @contextlib.contextmanager
@@ -1448,7 +1452,7 @@ def test_test_hooks_route_is_absent_unless_the_flag_is_on():
     with _owner_env() as env:
         server, owner = env["server"], env["owner"]
         mounted = api_endpoint_set(server.api)
-        for hook in (_WS_HOOK, _RESCAN_HOOK):
+        for hook in (_WS_HOOK, _RESCAN_HOOK, _FILE_HOOK):
             assert ("POST", hook) not in mounted, (
                 f"{hook} must not be mounted without the flag"
             )
@@ -1466,6 +1470,7 @@ def test_test_hooks_declaration_does_not_boot_fail_when_unmounted():
 
     assert ("POST", _WS_HOOK) in CONDITIONALLY_MOUNTED_ROUTES
     assert ("POST", _RESCAN_HOOK) in CONDITIONALLY_MOUNTED_ROUTES
+    assert ("POST", _FILE_HOOK) in CONDITIONALLY_MOUNTED_ROUTES
     with _owner_env() as env:
         server = env["server"]
         with _enforcing(server):
@@ -1551,6 +1556,66 @@ def test_rescan_hook_non_loopback_owner_is_403_even_with_flag_on():
                 )
 
 
+def _insert_picture(session):
+    """A picture row filed on no workflow; its id."""
+    pic = Picture(file_path="file-hook.png")
+    session.add(pic)
+    session.commit()
+    session.refresh(pic)
+    return pic.id
+
+
+def _filed_on(server, picture_id):
+    return server.vault.db.run_task(
+        lambda session: session.get(Picture, picture_id).run_workflow_id
+    )
+
+
+def test_file_hook_loopback_owner_files_and_unfiles_the_pictures():
+    """POSITIVE direction: a loopback owner files a picture on a workflow over
+    whatever it held, unfiles it with null, and gets a 404 for a picture that
+    does not exist (so the 200 is the handler's, not a catch-all's)."""
+    with _test_hooks_owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        picture_id = server.vault.db.run_task(_insert_picture)
+        with _enforcing(server):
+            for workflow_id in ("manual:a", "manual:b"):
+                r = owner.post(
+                    _FILE_HOOK,
+                    json={"picture_ids": [picture_id], "workflow_id": workflow_id},
+                )
+                assert r.status_code == 200, r.text
+                assert r.json() == {"status": "success", "filed": 1}
+                assert _filed_on(server, picture_id) == workflow_id
+            r = owner.post(_FILE_HOOK, json={"picture_ids": [picture_id]})
+            assert r.status_code == 200, r.text
+            assert _filed_on(server, picture_id) is None
+            missing = owner.post(
+                _FILE_HOOK,
+                json={"picture_ids": [picture_id, picture_id + 1], "workflow_id": "x"},
+            )
+            assert missing.status_code == 404, missing.text
+        # A refused call writes none of them.
+        assert _filed_on(server, picture_id) is None
+
+
+def test_file_hook_non_loopback_owner_is_403_even_with_flag_on():
+    """NEGATIVE direction, as for the other hooks: no remote owner reaches
+    it, whatever allow_remote_host_ops says, and nothing is written."""
+    with _test_hooks_owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        picture_id = server.vault.db.run_task(_insert_picture)
+        body = {"picture_ids": [picture_id], "workflow_id": "manual:a"}
+        with _enforcing(server), _remote_host_ops(server, True):
+            for ip in (LAN_IPV4, PRIVATE_10_IPV4, "100.64.0.5", "8.8.8.8"):
+                r = owner.post(_FILE_HOOK, json=body, headers=_xff(ip))
+                assert _is_loopback_403(r), (
+                    f"{ip} must be 403'd on the file hook even with "
+                    f"allow_remote_host_ops=true; got {r.status_code}: {r.text}"
+                )
+        assert _filed_on(server, picture_id) is None
+
+
 def test_test_hooks_refuse_read_and_share_tokens():
     """NEGATIVE direction for tokens: neither an unscoped READ token nor a
     resource-scoped share token reaches either hook, from loopback. The token
@@ -1562,9 +1627,11 @@ def test_test_hooks_refuse_read_and_share_tokens():
         folder_id = server.vault.db.run_task(
             lambda session: _insert_reference_folder(session, env["tmp"].name)
         )
+        picture_id = server.vault.db.run_task(_insert_picture)
         hooks = (
             (_WS_HOOK, _WS_HOOK_BODY),
             (_RESCAN_HOOK.format(folder_id=folder_id), None),
+            (_FILE_HOOK, {"picture_ids": [picture_id], "workflow_id": "manual:a"}),
         )
         minted = {
             "read": {"description": "read", "scope": "READ"},

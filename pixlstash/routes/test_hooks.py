@@ -1,6 +1,6 @@
 """E2E-only test hooks.
 
-This router exists **solely** for Playwright, and holds two hooks.
+This router exists **solely** for Playwright, and holds three hooks.
 
 ``ws-event`` deterministically injects a WebSocket grid event by driving
 ``vault.notify`` with a controlled payload. The e2e backend runs only the
@@ -14,6 +14,11 @@ disk, which is the filesystem watcher's job. The watcher needs an inotify
 instance, and a machine running many processes may have none left to give it,
 so a spec that changes a folder's files says so here instead of waiting for
 the five-minute rescan.
+
+``file-pictures`` files pictures on a workflow, as a ComfyUI run's import does
+(``Picture.run_workflow_id``). A run, the watch-folder import and the ComfyUI
+extraction are the only writers, and none of them runs in e2e, so a spec that
+deletes a workflow it made has no other way to give it pictures.
 
 Security posture (do not weaken):
 
@@ -50,7 +55,7 @@ from send2trash import send2trash
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
 from pixlstash.routes.model_folders import register_model_folder
-from pixlstash.services import workflow_inbox
+from pixlstash.services import e2e_workflow_seed, workflow_inbox
 from pixlstash.services.model_folder_scanner import ModelFolderScanner
 
 logger = get_logger(__name__)
@@ -159,6 +164,17 @@ class InjectWsEventResponse(BaseModel):
     event_type: str = Field(..., description="The event type that was emitted.")
     emitted: int = Field(
         ..., description="Number of ``vault.notify`` calls actually made."
+    )
+
+
+class FilePicturesRequest(BaseModel):
+    """Pictures to file on a workflow, or to take off whatever holds them."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    picture_ids: list[int] = Field(..., min_length=1)
+    workflow_id: Optional[str] = Field(
+        default=None, description="The workflow to file them on; null unfiles them."
     )
 
 
@@ -332,5 +348,28 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=404, detail="Reference folder not found.")
         logger.info("[test-hooks] marked reference folder %s changed", folder_id)
         return {"status": "success", "folder_id": folder_id}
+
+    @router.post(
+        "/test-hooks/file-pictures",
+        summary="[E2E ONLY] File pictures on a workflow",
+        description=(
+            "Owner-only, e2e-only hook. Sets ``Picture.run_workflow_id``, as a "
+            "ComfyUI run's import does, or clears it. Written whatever the "
+            "picture held, unlike a run, so a spec can rerun against the same "
+            "backend. Registered only when ``enable_test_hooks`` is true; "
+            "absent otherwise."
+        ),
+        include_in_schema=False,
+    )
+    def file_pictures(payload: FilePicturesRequest, request: Request) -> dict:
+        server.auth.require_unscoped_owner(request)
+        ids = list(dict.fromkeys(payload.picture_ids))
+        missing = e2e_workflow_seed.file_pictures(server, ids, payload.workflow_id)
+        if missing:
+            raise HTTPException(status_code=404, detail=f"No picture {missing}.")
+        logger.info(
+            "[test-hooks] filed pictures %s on workflow %r", ids, payload.workflow_id
+        )
+        return {"status": "success", "filed": len(ids)}
 
     return router
