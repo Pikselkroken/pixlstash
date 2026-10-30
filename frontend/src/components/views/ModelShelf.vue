@@ -586,17 +586,22 @@
                     <!-- Deck ticks behind the mark say "this is more than one
                          file" before the count is read, exactly as they do on a
                          picture tile. Count-only, so the component reuses cleanly
-                         here even though a model has no thumbnail. -->
-                    <StackEdgeTicks
-                      v-if="row.memberCount > 1"
-                      :count="row.memberCount"
-                    />
-                    <TypeMark
-                      v-if="typeOf(row)"
-                      :mark="typeOf(row).mark"
-                      :tint="typeOf(row).tint"
-                      ><Tooltip :text="typeOf(row).one" activator="parent"
-                    /></TypeMark>
+                         here even though a model has no thumbnail. The ticks
+                         fill their nearest positioned box, so they get one the
+                         letter's size: against the whole slot they drew a grey
+                         pill over the letter instead of a deck behind it. -->
+                    <span class="shelf-row-mark">
+                      <StackEdgeTicks
+                        v-if="row.memberCount > 1"
+                        :count="row.memberCount"
+                      />
+                      <TypeMark
+                        v-if="typeOf(row)"
+                        :mark="typeOf(row).mark"
+                        :tint="typeOf(row).tint"
+                        ><Tooltip :text="typeOf(row).one" activator="parent"
+                      /></TypeMark>
+                    </span>
                     <!-- Which file the run is being drawn from, said in words
                          rather than by position: once the strip is open the
                          reader is looking at six rows and choosing between
@@ -5036,6 +5041,24 @@ button.shelf-head-cell:hover {
   justify-content: center;
   width: calc(var(--entity-thumb) + var(--space-4));
   flex: none;
+}
+
+/* The box the deck ticks fill: the Type letter's own, so they peek out from
+   behind it. The letter is positioned so it paints over them in DOM order, and
+   the ticks take its corner rather than a picture tile's. */
+.shelf-row-mark {
+  position: relative;
+  display: inline-flex;
+  width: var(--gutter-glyph);
+  height: var(--gutter-glyph);
+}
+
+.shelf-row-mark .type-mark {
+  position: relative;
+}
+
+.shelf-row-mark :deep(.stick) {
+  border-radius: var(--radius-sm);
 }
 
 /* The cover chip is the grid's (App.css), but a 24px mark is not a tile: it
