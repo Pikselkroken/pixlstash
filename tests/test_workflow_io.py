@@ -2,12 +2,14 @@
 and the watched workflows folder (#1304)."""
 
 import copy
+import importlib.util
 import json
 import logging
 import sqlite3
 import os
 import pathlib
 import shutil
+import sys
 import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -592,6 +594,71 @@ def test_server_start_up_runs_the_migration_on_the_user_folder(tmp_path, monkeyp
         (stored,) = server.hub.fetchall("SELECT document FROM workflow_document")
         assert json.loads(stored["document"]) == _t2i_graph()
         assert server._workflow_inbox_watcher is not None
+    finally:
+        server.__exit__(None, None, None)
+
+
+def test_the_e2e_launcher_moves_the_workflow_folders_under_its_work_dir():
+    # The other half of the next test: the launcher must ask for the move.
+    path = pathlib.Path(__file__).parents[1] / "frontend/e2e/serve_e2e_backend.py"
+    spec = importlib.util.spec_from_file_location("serve_e2e_backend", path)
+    launcher = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(launcher)
+    overrides = launcher.server_overrides(launcher.WORK_DIR / "images")
+    assert overrides["enable_test_hooks"] is True
+    data = pathlib.Path(overrides["e2e_data_dir"])
+    assert data.is_relative_to(launcher.WORK_DIR) and data != launcher.WORK_DIR
+
+
+def test_e2e_data_dir_moves_the_workflow_folders_and_the_trash(tmp_path, monkeypatch):
+    # The server moves both for the whole process; undone at teardown. The
+    # data directory and the trash it moves away from are stand-ins, so a
+    # regression lands here rather than in the developer's own.
+    monkeypatch.setattr(workflow_inbox, "DATA_ROOT", None)
+    shared = tmp_path / "shared-data"
+    monkeypatch.setattr(workflow_inbox, "user_data_dir", lambda _app: str(shared))
+
+    def real_trash(path):
+        raise AssertionError(f"{path} reached the real trash")
+
+    for name, module in list(sys.modules.items()):
+        if name.startswith("pixlstash") and hasattr(module, "send2trash"):
+            monkeypatch.setattr(module, "send2trash", real_trash)
+    data = tmp_path / "user-data"
+    user_dir = data / "comfyui-workflows" / "user"
+    user_dir.mkdir(parents=True)
+    inbox = data / "workflows"
+    inbox.mkdir()
+    dropped = _t2i_graph()
+    dropped["2"]["inputs"]["text"] = "dropped in the inbox"
+    (inbox / "dropped.json").write_text(json.dumps(dropped), encoding="utf-8")
+    monkeypatch.setattr(server_module.Server, "DEFAULT_MIGRATE_WORKFLOW_TOKENS", True)
+    monkeypatch.setattr(server_module.Server, "DEFAULT_WATCH_WORKFLOW_INBOX", True)
+    config_path = tmp_path / "config" / "server-config.json"
+    config_path.parent.mkdir()
+    config = {"port": 8000, "enable_test_hooks": True, "e2e_data_dir": str(data)}
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    server = server_module.Server(str(config_path))
+    try:
+        assert workflow_inbox.workflow_inbox_dir() == str(inbox)
+        assert workflow_inbox.workflow_user_dir() == str(user_dir)
+        # The grid holds what the moved inbox held, and nothing else.
+        (stored,) = server.hub.fetchall("SELECT document FROM workflow_document")
+        assert json.loads(stored["document"]) == dropped
+        assert (user_dir / workflow_bindings.MIGRATION_MARKER).exists()
+        digest = workflow_inbox.content_hash(dropped)
+        assert [p.name for p in inbox.iterdir()] == [f"dropped.{digest}.json"]
+
+        with workflow_inbox.INBOX_LOCK:
+            workflow_inbox.trash_workflow(str(inbox), "dropped.json", dropped)
+        assert list(inbox.iterdir()) == []
+        trashed = sorted(p.name for p in (data / "trash").rglob("*.json"))
+        assert trashed == [f"dropped (2).{digest}.json", f"dropped.{digest}.json"]
+        # Every caller of the real trash is moved, not only the inbox's.
+        assert comfyui_module.send2trash is workflow_inbox.send2trash
+        assert comfyui_module.send2trash is not real_trash
+        assert not shared.exists()
     finally:
         server.__exit__(None, None, None)
 
