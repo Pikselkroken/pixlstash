@@ -675,6 +675,7 @@ jobs:
           tests/training/test_preset_updates.py
           tests/training/test_presets.py
           tests/training/test_sample_prompts.py
+          tests/training/test_trainer_detach.py
           tests/training/test_training_service.py
 
   # ---------------------------------------------------------------------------
@@ -1090,6 +1091,7 @@ jobs:
             tests/test_watch_folder_worker.py \
             tests/test_work_planner.py \
             tests/test_process_teardown.py \
+            tests/training/test_trainer_detach.py \
             2>&1 | tee pytest-windows.log
           status=${PIPESTATUS[0]}
           set -e
