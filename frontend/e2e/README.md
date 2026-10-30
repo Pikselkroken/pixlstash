@@ -116,11 +116,19 @@ e2e/
   fixtures/test.js   extended `test` — apiContext (ALL token), credentials,
                      grid/lightbox/settings page-object fixtures, and
                      loginToFreshSession() for the isolated logout spec
+  fixtures/workflowsApi.js
+                     the real workflow API for the Workflows specs that run
+                     without fakes: store/duplicate a workflow, clean up
+  fixtures/workflowStubs.js, workflowTabStubs.js
+                     the Run popup's and the Workflow tab's fake servers
   pages/             thin page objects (locators + actions, no assertions):
-                     GridPage, Lightbox, SettingsDialog
+                     GridPage, Lightbox, SettingsDialog, WorkflowsPage
   specs/             one file per release-test-plan section:
                      grid.spec.js (smoke), auth (§1), grid-browse (§3),
-                     overlay (§4), faces (§10), stacks (§11)
+                     overlay (§4), faces (§10), stacks (§11);
+                     workflows-card-lifecycle and workflows-change-bar run
+                     the card verbs and the change bar on the real API, and
+                     workflow-fakes-contract holds the two fakes against it
 ```
 
 Each spec maps to a section of `docs/release-test-plan.md` so the manual
@@ -138,7 +146,11 @@ checklist shrinks as coverage grows.
   Workflows run fakes (`fixtures/workflowRunFakes.json`, read by
   `specs/workflow-run.spec.js`) are held against the server's own models and
   producers by `tests/test_e2e_workflow_run_fakes.py`; change a fake's values
-  in a spec, never its keys.
+  in a spec, never its keys. The popup's and the Workflow tab's fakes
+  (`fixtures/workflowStubs.js`, `fixtures/workflowTabStubs.js`) are held
+  against the real API by `specs/workflow-fakes-contract.spec.js`: a key a fake
+  serves must be one the server sends, with the same JSON type. A fake for a
+  new route gets a call there too.
 - Selectors are CSS/ARIA-first; prefer stable classes and `aria-label` (a native `title` survives only to reveal clipped text).
 - The backend boots ONE throwaway DB per `playwright test` invocation (shared
   across specs in a run), so keep mutations additive/idempotent. The one
