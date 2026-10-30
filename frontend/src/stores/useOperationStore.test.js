@@ -256,6 +256,40 @@ describe("useOperationStore - receipts narrate this client only", () => {
     expect(store.receipt).toBeNull();
   });
 
+  it("raises no receipt on the first load of a non-empty log, nor on its re-read", async () => {
+    const store = useOperationStore();
+    serve([op({ id: 9 })]);
+    await store.refresh();
+    await store.refresh();
+    expect(store.receipt).toBeNull();
+  });
+
+  // A fresh library: the first load finds nothing, so the very first thing
+  // the user does is new and must narrate like any later action.
+  it("raises a receipt for the first operation after an empty first load", async () => {
+    const store = await primed([]);
+    expect(store.receipt).toBeNull();
+    serve([op({ id: 1 })]);
+    await store.refresh();
+    expect(store.receipt).toMatchObject({ mode: "did", operationId: 1 });
+  });
+
+  // The boot refresh does not narrate; an own action that lands while it is
+  // still in flight rides on its trailing refetch and must keep its receipt.
+  it("keeps the receipt of a narrating refresh queued behind a silent one", async () => {
+    const store = await primed([]);
+    const rows = deferred();
+    listOperations.mockReturnValueOnce(rows.promise);
+    const silent = store.refresh({ narrate: false });
+    store.refresh();
+    serve([op({ id: 1 })]);
+    rows.resolve([]);
+    await silent;
+    await vi.waitFor(() =>
+      expect(store.receipt).toMatchObject({ mode: "did", operationId: 1 }),
+    );
+  });
+
   it("raises a receipt for a new operation from this client", async () => {
     const store = await primed([op({ id: 9 })]);
     serve([op({ id: 10, summary: "Scored ★★★★" }), op({ id: 9 })]);
