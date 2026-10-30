@@ -43,6 +43,12 @@ function track(kind, entry) {
   return entry
 }
 
+/** A tracked entry the test renamed: cleanup must look for the new name. */
+function retrack(kind, id, name) {
+  const entry = created.find((c) => c.kind === kind && c.id === id)
+  if (entry) entry.name = name
+}
+
 async function apiProject(ctx, name) {
   return track('project', await body(await ctx.post(`${API}/projects`, { data: { name } })))
 }
@@ -202,6 +208,7 @@ test.describe('people', () => {
     await descriptionField(page).fill('renamed by e2e')
     await saveButton(page).click()
     await expect(editor(page)).toBeHidden()
+    retrack('person', person.id, renamed)
     await expect(personRow(sidebar, renamed)).toBeVisible()
     await expect(personRow(sidebar, person.name)).toHaveCount(0)
 
@@ -312,6 +319,7 @@ test.describe('picture sets', () => {
     await descriptionField(page).fill('renamed by e2e')
     await saveButton(page).click()
     await expect(editor(page)).toBeHidden()
+    retrack('set', set.id, renamed)
     await expect(setRow(sidebar, renamed)).toBeVisible()
 
     await page.reload()
@@ -525,6 +533,7 @@ test.describe('projects', () => {
     await descriptionField(page).fill('renamed by e2e')
     await saveButton(page).click()
     await expect(editor(page)).toBeHidden()
+    retrack('project', project.id, renamed)
     await expect(sidebar.scopeButton).toContainText(renamed)
 
     await page.reload()
