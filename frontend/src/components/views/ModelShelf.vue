@@ -1796,6 +1796,7 @@ watch(
     if (!request) return;
     const { copies, destination } = request;
     const fromCut = Boolean(request.fromCut);
+    const cut = store.cutCopies;
     const { how } = moveMechanism(
       copies,
       destination.folderId,
@@ -1810,7 +1811,8 @@ watch(
       copies.items,
       destination.path,
     );
-    if (started && fromCut) store.clearCut();
+    // Only the cut this pasted: a Ctrl X pressed during the POST is a new one.
+    if (started && fromCut && store.cutCopies === cut) store.clearCut();
   },
 );
 
@@ -2104,7 +2106,7 @@ function onShelfKeydown(event) {
     !event.shiftKey &&
     String(event.key).toLowerCase() === "a";
   // Ctrl X cuts the selection's movable copies, Ctrl V pastes them into the
-  // open folder through the Move dialog (#2204). Inside a text field the guard
+  // open folder, as a drop does (#2204). Inside a text field the guard
   // hands both back, so cutting text still cuts text.
   const clip =
     (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey

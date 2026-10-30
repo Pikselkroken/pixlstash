@@ -118,6 +118,17 @@ describe("ShelfMoveDialog", () => {
     expect(startModelMove).toHaveBeenCalledWith(1, ITEMS, "Lora");
   });
 
+  it("shows the tree again when reopened from Move to…", async () => {
+    mountDialog({ initialDestination: { folderId: 1, path: "Lora" } });
+    await flushPromises();
+    // The host clears the destination as it closes the dialog.
+    await wrapper.setProps({ open: false, initialDestination: null });
+    await wrapper.setProps({ open: true });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="shelf-move-route"]').exists()).toBe(false);
+    expect(wrapper.find('[role="treeitem"]').exists()).toBe(true);
+  });
+
   it("names how many files and folders when a drop carries several", async () => {
     mountDialog({
       items: [...ITEMS, { folder_id: 1, relpath: "Lora/bob.safetensors" }],

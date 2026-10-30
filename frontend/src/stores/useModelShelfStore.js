@@ -3568,9 +3568,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   /** The tip under the pointer while a drag is over a folder: `{x, y, text}`. */
   const dropTip = shallowRef(null);
   /**
-   * A move a drop asked for, `{copies, destination, at}`. The Folders tree is
-   * in the sidebar and the Move dialog in `ModelShelf`, so a drop asks here
-   * the way the sidebar asks for a dialog (`requestShell`).
+   * A move a drop or a paste asked for, `{copies, destination, at}`. The
+   * Folders tree is in the sidebar and the move (or its dialog) in
+   * `ModelShelf`, so a drop asks here the way the sidebar asks for a dialog
+   * (`requestShell`).
    */
   const moveRequest = shallowRef(null);
   let moveAsks = 0;

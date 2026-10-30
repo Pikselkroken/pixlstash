@@ -5824,7 +5824,9 @@ already named the place, so it asks only when the move would copy: a rename on
 one drive starts at once, as a file manager does and as a folder drop does.
 Across drives, or when a drive could not be measured, the dialog opens without
 its tree and says, in one sentence, what goes from where to where, then the
-bytes and that it copies. That decision is the `store.moveRequest` watcher in
+bytes and that it copies. A same-drive move needs no confirmation because it
+is cheap to put back (drag it back) and cannot overwrite: the server refuses a
+name already taken in the destination. That decision is the `store.moveRequest` watcher in
 `ModelShelf`, on `moveMechanism`; a move already running sends the drop to the
 dialog, which says so on its button.
 

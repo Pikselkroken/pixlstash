@@ -2,8 +2,8 @@
   <!-- The tip under the pointer while model rows are dragged over a folder
        (#2204): where they go, rename or copy, and what the other drive gets
        back. Its own component so the drag's pointer moves repaint only this,
-       never the shelf. Not announced: a drag is a pointer gesture, and the
-       Move dialog it opens states the same facts. -->
+       never the shelf. Not announced: a drag is a pointer gesture, and a
+       drop that copies opens the Move dialog, which states the same facts. -->
   <Teleport to="body">
     <div
       v-if="tip"
