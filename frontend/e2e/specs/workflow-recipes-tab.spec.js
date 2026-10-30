@@ -11,7 +11,7 @@ import { test, expect } from "../fixtures/test.js";
 // route and saves its recipes on it through `POST /recipes`, so the rows it
 // asserts on are its own whatever else the shared backend has listed by then.
 // Each test deletes what it stored (afterEach): a workflow left behind is listed
-// on every later Workflows screen and breaks the empty state's test.
+// on every later Workflows screen.
 //
 // Not here: the lightbox's "Matches your saved recipe X" banner (#1480). It
 // needs a picture made in ComfyUI, the fixture library has none, and the e2e
