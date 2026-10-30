@@ -20,6 +20,7 @@ from pixlstash.routes.comfyui import ComfyUIPixlstashNodeResponse
 from pixlstash.routes.resources import LeaseAnswer
 from pixlstash.routes.workflows import RunOpening, RunPreflight, RunResult, RunsCleared
 from pixlstash.services import run_log
+from pixlstash.services import workflow_run_service as run_service
 from tests.test_resource_arbiter import CARD, make
 
 FAKES = json.loads(
@@ -72,13 +73,27 @@ def _assert_same_shape(fake, real, where: str) -> None:
     ],
 )
 def test_a_fake_answer_is_one_its_response_model_sends(name, model):
-    """A key the model does not know is dropped by the round trip, and a value
-    of the wrong type is refused by the strict read."""
+    """A key the model does not declare fails the first check (a model that
+    allows extras would keep it through the round trip); a nested one is
+    dropped by the round trip, and a value of the wrong type is refused by the
+    strict read."""
     fake = FAKES[name]
+    assert set(fake) <= set(model.model_fields), sorted(
+        set(fake) - set(model.model_fields)
+    )
     sent = model.model_validate(fake, strict=True).model_dump(
         mode="json", exclude_unset=True
     )
     assert sent == fake
+
+
+def test_the_refusal_fake_is_the_reason_the_server_builds():
+    """`reasons` is untyped on the model, so the reason is held against the
+    run service's own."""
+    [group] = FAKES["refused"]["groups"]
+    assert group["reasons"] == [
+        run_service.Reason(run_service.COMFYUI_NOT_CONFIGURED).as_dict()
+    ]
 
 
 def test_the_live_run_fake_is_what_the_poll_lists(monkeypatch):

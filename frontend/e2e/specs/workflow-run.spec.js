@@ -20,8 +20,9 @@ import {
 // of #2318). The e2e library has no workflow a fake ComfyUI could run (#2314),
 // so the routes a run talks to are answered here: the pre-flight, the run,
 // the opening, `/workflows/runs*`, the lease actions under `/resources/leases`,
-// ComfyUI's pack check, and the `runs`, `finished` and `resources` of
-// `/workers/progress` (the rest of the poll is the real backend's). Every
+// ComfyUI's pack check, the ComfyUI address in `/users/me/config`, and the
+// `runs`, `finished` and `resources` of `/workers/progress` (the rest of the
+// config and the poll is the real backend's). Every
 // answer comes from `workflowRunFakes.json`, which
 // `tests/test_e2e_workflow_run_fakes.py` holds against the server's response
 // models and the code that builds the poll, so a fake that drifts from the
@@ -158,17 +159,27 @@ async function openTasks(page) {
  * while the dialog is still scaling in.
  */
 async function pressRefusedRun(page) {
-  const posted = page
+  const posted = sends(page, "POST", "/workflows/run");
+  await runButton(page).dispatchEvent("click");
+  expect(await posted, "Run sent a run it was refusing").toBe(false);
+}
+
+/**
+ * Whether a *method* request to the API's *path* goes out within a second: a
+ * negative waits out the request it guards rather than reading the record
+ * before that request could land.
+ */
+function sends(page, method, path) {
+  return page
     .waitForRequest(
-      (request) => request.method() === "POST" && request.url().endsWith("/api/v1/workflows/run"),
+      (request) =>
+        request.method() === method && new URL(request.url()).pathname === `/api/v1${path}`,
       { timeout: 1000 },
     )
     .then(
       () => true,
       () => false,
     );
-  await runButton(page).dispatchEvent("click");
-  expect(await posted, "Run sent a run it was refusing").toBe(false);
 }
 
 let net;
@@ -282,8 +293,10 @@ test.describe("Run anyway", () => {
     await ask.click();
     const confirm = page.getByTestId("ra-run-anyway");
     await expect(confirm).toBeVisible();
+    const started = sends(page, "POST", `/resources/leases/${LEASE_ID}/run-anyway`);
     await page.getByTestId("ra-keep-waiting").click();
     await expect(confirm).toHaveCount(0);
+    expect(await started, "Keep waiting started the run").toBe(false);
     await expect(row).toBeVisible();
     expect(sent.anyway).toEqual([]);
 
@@ -327,7 +340,7 @@ test.describe("the Tasks tab", () => {
     expect(sent.clears).toBe(0);
   });
 
-  test("Clear takes every finished run away", async ({ page }) => {
+  test("Clear takes the finished runs away", async ({ page }) => {
     net = await stubWorkflow(page);
     const sent = await stubRun(page, {
       finished: [finishedRun(), finishedRun({ id: "run-e2e-other", label: "Night street, rain" })],
@@ -365,6 +378,7 @@ test("Open in ComfyUI opens the run there, and queues nothing", async ({ page, c
   expect(sent.openings).toHaveLength(1);
   expect(sent.openings[0]).toMatchObject({ workflow_id: WF, count: 1 });
   // The popup stays: the run is still to make.
+  expect(await sends(page, "POST", "/workflows/run"), "Open in ComfyUI queued a run").toBe(false);
   await expect(dialog(page)).toBeVisible();
   expect(sent.runs).toEqual([]);
 });
