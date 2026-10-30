@@ -94,6 +94,16 @@ test.describe('deleting pictures and the Scrapheap', () => {
     return ids.slice(0, count)
   }
 
+  /** The first `count` unstacked library pictures, set up through the API. */
+  const unstackedIds = async (apiContext, count) => {
+    const ids = (await libraryPictures(apiContext))
+      .filter((picture) => !picture.stack_id)
+      .slice(0, count)
+      .map((picture) => picture.id)
+    expect(ids.length, 'not enough unstacked pictures').toBe(count)
+    return ids
+  }
+
   // A deleted card stays on screen, greyed, while its undo is one click away.
   // What has to go is the live card.
   const liveCard = (page, id) =>
@@ -299,6 +309,7 @@ test.describe('deleting pictures and the Scrapheap', () => {
     const tagsBefore = await tagsOf(rich.id)
     expect(tagsBefore.length).toBeGreaterThan(0)
     const plain = [...unstacked].find((id) => id !== rich.id)
+    expect(plain, 'the fixture has no second unstacked picture').toBeTruthy()
     const mine = [rich.id, plain]
 
     await softDelete(apiContext, mine)
@@ -332,10 +343,7 @@ test.describe('deleting pictures and the Scrapheap', () => {
     grid,
     apiContext,
   }) => {
-    const ids = (await libraryPictures(apiContext))
-      .filter((p) => !p.stack_id)
-      .slice(0, 2)
-      .map((p) => p.id)
+    const ids = await unstackedIds(apiContext, 2)
     await softDelete(apiContext, ids)
     const heap = await scrapheapIds(apiContext)
     const purges = await blockPurges(page)
@@ -362,10 +370,7 @@ test.describe('deleting pictures and the Scrapheap', () => {
     grid,
     apiContext,
   }) => {
-    const ids = (await libraryPictures(apiContext))
-      .filter((p) => !p.stack_id)
-      .slice(0, 2)
-      .map((p) => p.id)
+    const ids = await unstackedIds(apiContext, 2)
     await softDelete(apiContext, ids)
     const purges = await blockPurges(page)
 
@@ -394,9 +399,7 @@ test.describe('deleting pictures and the Scrapheap', () => {
     grid,
     apiContext,
   }) => {
-    const [id] = (await libraryPictures(apiContext))
-      .filter((p) => !p.stack_id)
-      .map((p) => p.id)
+    const [id] = await unstackedIds(apiContext, 1)
     await softDelete(apiContext, [id])
     const heap = await scrapheapIds(apiContext)
 
@@ -408,8 +411,11 @@ test.describe('deleting pictures and the Scrapheap', () => {
     const srcs = await grid.thumbnailImages.evaluateAll((imgs) =>
       imgs.map((img) => img.getAttribute('src')),
     )
-    const rendered = srcs.map((src) => Number(src?.match(/\/thumbnails\/(\d+)\./)?.[1]))
-    expect(rendered.length).toBeGreaterThan(0)
+    const rendered = srcs
+      .map((src) => src?.match(/\/thumbnails\/(\d+)\./)?.[1])
+      .filter(Boolean)
+      .map(Number)
+    expect(rendered.length, 'no thumbnail cards rendered').toBeGreaterThan(0)
     for (const renderedId of rendered) expect(heap).toContain(renderedId)
   })
 })
