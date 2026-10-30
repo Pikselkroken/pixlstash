@@ -39,12 +39,14 @@ import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
 import { SCRAPHEAP_PICTURES_ID } from "../../stores/useViewStore";
 import { useSelectionTags } from "../../composables/useSelectionTags";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 import { sessionContext } from "../../utils/apiClient";
 import { fitWords, pictureTitle } from "../../composables/useRailPicture";
 import {
   addPictureTag,
   confirmTagPrediction,
   listTagPredictions,
+  rejectTagPrediction,
 } from "../../api/tags";
 
 enableAutoUnmount(afterEach);
@@ -497,6 +499,65 @@ describe("the selection's tag reads", () => {
     });
     expect(tags.tagError.value).toMatch(/^1 of 6 tags were not added/);
     addPictureTag.mockReset();
+  });
+
+  it("skip a locked set's picture in a transient warning, not the rail's error", async () => {
+    const locked = Object.assign(new Error("locked"), {
+      response: { status: 423, data: { detail: { code: "pictures_locked" } } },
+    });
+    addPictureTag.mockReset().mockImplementation(async (id) => {
+      if (id === 1) throw locked;
+      return {};
+    });
+    const applied = vi.fn();
+    const tags = useSelectionTags(() => [1, 2, 3], { onApplied: applied });
+    expect(await tags.addTagsToAll(["sun"])).toBe(true);
+    expect(applied).toHaveBeenCalledWith({
+      tag: "sun",
+      pictureIds: [2, 3],
+      action: "add",
+    });
+    expect(tags.tagError.value).toBe("");
+    const notices = useNoticeStore();
+    expect(notices.notices).toHaveLength(1);
+    expect(notices.notices[0]).toMatchObject({
+      level: "warning",
+      text: "Tagged 2 pictures; 1 is in a locked set and was skipped.",
+      action: null,
+    });
+    expect(notices.notices[0].timeout).toBeGreaterThan(0);
+    // A second partial refusal collapses onto the same card.
+    await tags.addTagsToAll(["sea"]);
+    expect(notices.notices).toHaveLength(1);
+    expect(notices.notices[0].count).toBe(2);
+    expect(notices.notices[0].text).toBe(
+      "Tagged 2 pictures; 1 is in a locked set and was skipped.",
+    );
+    addPictureTag.mockReset();
+  });
+
+  it("say nothing was tagged when every picture is locked, and not twice for a drop", async () => {
+    const locked = Object.assign(new Error("locked"), {
+      response: { status: 423 },
+    });
+    addPictureTag.mockReset().mockRejectedValue(locked);
+    const tags = useSelectionTags(() => [1, 2]);
+    expect(await tags.addTagsToAll(["sun", "sea"])).toBe(true);
+    const notices = useNoticeStore();
+    expect(notices.notices.map((n) => n.text)).toEqual([
+      "Nothing was tagged; 2 pictures are in a locked set.",
+    ]);
+    // The reject after a removal is the same gesture: it reports nothing.
+    notices.clear();
+    rejectTagPrediction.mockReset().mockRejectedValue(locked);
+    await tags.rejectTagOnAll({
+      name: "sun",
+      tagsByImageId: new Map([[1, 10]]),
+    });
+    expect(notices.notices).toHaveLength(0);
+    expect(tags.tagError.value).toBe("");
+    addPictureTag.mockReset();
+    rejectTagPrediction.mockReset();
   });
 
   it("say a failed rejected-tag read failed, rather than show none", async () => {

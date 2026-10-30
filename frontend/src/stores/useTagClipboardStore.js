@@ -17,6 +17,12 @@ import {
 } from "../utils/apiClient";
 import { patchUserConfig } from "../api/config";
 import { addPictureTag, bulkFetchTags } from "../api/tags";
+import { errorDetail } from "../utils/apiError";
+import {
+  isLockedRefusal,
+  LOCKED_SKIP_NOTICE_KEY,
+  lockedSkipSentence,
+} from "../utils/dedup";
 import { useNoticeStore } from "./useNoticeStore";
 
 export const CHIP_SIZES = ["compact", "comfortable", "large"];
@@ -189,47 +195,79 @@ export const useTagClipboardStore = defineStore("tagClipboard", () => {
       const batchId = newOperationBatchId();
       const writes = [];
       const written = [];
-      const touched = new Set();
       for (const id of ids) {
         for (const tag of tags) {
           if (has.get(id)?.has(tag.toLowerCase())) continue;
-          touched.add(id);
-          written.push(tag);
+          written.push([id, tag]);
           writes.push(addPictureTag(id, tag, { batchId }));
         }
       }
       // One refused write (a locked set's picture answers 423) must not hide
       // the rest, so every write is waited for and the refusals counted.
       const results = await Promise.allSettled(writes);
-      const failed = results.filter((r) => r.status === "rejected");
-      if (failed.length) {
+      const ok = written.filter((_, i) => results[i].status === "fulfilled");
+      const locked = written.filter(
+        (_, i) =>
+          results[i].status === "rejected" && isLockedRefusal(results[i].reason),
+      );
+      const failed = results.filter(
+        (r) => r.status === "rejected" && !isLockedRefusal(r.reason),
+      );
+      if (locked.length || failed.length) {
         console.warn(
-          `${failed.length} of ${results.length} tag writes failed pasting`,
+          `${locked.length + failed.length} of ${results.length} tag writes refused pasting`,
           tags,
           "on",
           ids,
-          failed.map((r) => r.reason),
+          results.filter((r) => r.status === "rejected").map((r) => r.reason),
         );
       }
-      // The tags that reached at least one picture, not every tag copied: a
-      // picture that already had some of them got only the rest.
-      const added = new Set(
-        written.filter((_, i) => results[i].status === "fulfilled"),
+      const changed = new Set(ok.map(([id]) => id));
+      // A picture a locked set freezes is skipped, not failed: a transient
+      // warning in the reader's terms, collapsing with the rail's own.
+      // Skipped: refused for a lock and took none of the tags.
+      const skipped = new Set(
+        locked.map(([id]) => id).filter((id) => !changed.has(id)),
       ).size;
-      const where = ids.length === 1 ? "" : ` to ${plural(touched.size, "picture")}`;
-      let text = touched.size
-        ? `Added ${plural(added, "tag")}${where}`
-        : `Already ${ids.length === 1 ? "has" : "have"} ${tags.length === 1 ? "that tag" : "those tags"}`;
-      if (failed.length) {
-        text += ` (${failed.length} refused, e.g. a locked set's pictures)`;
+      if (skipped) {
+        notices.warning(lockedSkipSentence("Tagged", changed.size, skipped), {
+          key: LOCKED_SKIP_NOTICE_KEY,
+        });
       }
-      notices.push({
-        level: failed.length ? "warning" : "success",
-        key: "tag-clipboard-paste",
-        text,
-      });
-      if (failed.length && failed.length === results.length) return null;
-      return { pictureIds: [...touched], failed: failed.length };
+      if (failed.length) {
+        const reason = failed[0].reason;
+        const missed = new Set(
+          written
+            .filter(
+              (_, i) =>
+                results[i].status === "rejected" &&
+                !isLockedRefusal(results[i].reason),
+            )
+            .map(([id]) => id),
+        ).size;
+        notices.error(
+          `Couldn't tag ${plural(missed, "picture")}: ${
+            errorDetail(reason) || reason?.message || String(reason)
+          }`,
+          { key: "tag-clipboard-paste" },
+        );
+      } else if (!locked.length) {
+        // The tags that reached at least one picture, not every tag copied: a
+        // picture that already had some of them got only the rest.
+        const added = new Set(ok.map(([, tag]) => tag)).size;
+        const where =
+          ids.length === 1 ? "" : ` to ${plural(changed.size, "picture")}`;
+        notices.push({
+          level: "success",
+          key: "tag-clipboard-paste",
+          text: changed.size
+            ? `Added ${plural(added, "tag")}${where}`
+            : `Already ${ids.length === 1 ? "has" : "have"} ${tags.length === 1 ? "that tag" : "those tags"}`,
+        });
+      }
+      const refused = locked.length + failed.length;
+      if (refused && refused === results.length) return null;
+      return { pictureIds: [...changed], failed: refused };
     } catch (e) {
       console.error("Pasting the copied tags failed on", ids, tags, e);
       notices.push({ level: "error", text: "Couldn't paste the tags." });

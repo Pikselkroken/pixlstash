@@ -9,6 +9,12 @@ import {
   removePictureTag,
 } from "../api/tags";
 import { errorDetail } from "../utils/apiError";
+import {
+  isLockedRefusal,
+  LOCKED_SKIP_NOTICE_KEY,
+  lockedSkipSentence,
+} from "../utils/dedup";
+import { useNoticeStore } from "../stores/useNoticeStore";
 
 /** How many pictures' tags a selection reads at most. */
 export const MAX_TAG_FETCH = 100;
@@ -286,16 +292,54 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
    * picture skipped the notice and the re-read for the others that did
    * change, leaving the panel showing tags that were no longer true.
    *
+   * A picture a locked set freezes (423) is skipped, not failed: the gesture
+   * did what it could, so it says so in a transient warning and `tagError`
+   * stays for real failures, where the request itself went wrong.
+   *
    * @param {Array} ids - one per request: picture ids, or `[id, tag]` pairs.
    * @param {(id: *) => Promise} call
-   * @param {string} [what] - what a failed request failed to do, for `tagError`.
-   * @returns {Promise<Array>} the entries whose request succeeded;
-   *   `tagError` says how many did not, and why.
+   * @param {Object} [options]
+   * @param {string} [options.what] - what a failed request failed to do, for
+   *   `tagError`.
+   * @param {string|null} [options.verb] - past tense of the gesture for the
+   *   locked-set warning ("Tagged"); null when an earlier step of the same
+   *   gesture already reported those pictures.
+   * @returns {Promise<{done: Array, failed: number}>} the entries whose
+   *   request succeeded, and how many failed for a reason other than a lock.
    */
-  async function fanOut(ids, call, what = "pictures were not changed") {
+  async function fanOut(
+    ids,
+    call,
+    { what = "pictures were not changed", verb = "Tagged" } = {},
+  ) {
     const results = await Promise.allSettled(ids.map((id) => call(id)));
+    const pictureOf = (entry) => (Array.isArray(entry) ? entry[0] : entry);
     const done = ids.filter((_, i) => results[i].status === "fulfilled");
-    const failed = results.filter((r) => r.status === "rejected");
+    const locked = ids.filter(
+      (_, i) =>
+        results[i].status === "rejected" && isLockedRefusal(results[i].reason),
+    );
+    const failed = results.filter(
+      (r) => r.status === "rejected" && !isLockedRefusal(r.reason),
+    );
+    // A picture is skipped when none of its requests landed: a lock freezes
+    // the whole picture, so one that took a tag was not skipped.
+    const changed = new Set(done.map(pictureOf));
+    const skipped = new Set(
+      locked.map(pictureOf).filter((id) => !changed.has(id)),
+    ).size;
+    if (skipped) {
+      console.warn(
+        `${skipped} picture(s) skipped: a locked set freezes them`,
+        locked,
+      );
+      if (verb) {
+        useNoticeStore().warning(
+          lockedSkipSentence(verb, changed.size, skipped),
+          { key: LOCKED_SKIP_NOTICE_KEY },
+        );
+      }
+    }
     if (failed.length) {
       const reason = failed[0].reason;
       console.warn(`${failed.length} of ${ids.length} tag changes failed`, reason);
@@ -303,7 +347,7 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
         errorDetail(reason) || reason?.message || String(reason)
       }`;
     }
-    return done;
+    return { done, failed: failed.length };
   }
 
   /**
@@ -326,7 +370,7 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
     predActionLoading.value = [...predActionLoading.value, predEntry.tag];
     tagError.value = "";
     try {
-      const done = await fanOut(predEntry.ids, (id) =>
+      const { done } = await fanOut(predEntry.ids, (id) =>
         confirmTagPrediction(id, predEntry.tag, { batchId }),
       );
       if (done.length) {
@@ -360,8 +404,10 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
       [...tagEntry.tagsByImageId.entries()].filter(([, tagId]) => tagId != null),
     );
     try {
-      const done = await fanOut([...tagIdOf.keys()], (imgId) =>
-        removePictureTag(imgId, tagIdOf.get(imgId), { batchId }),
+      const { done } = await fanOut(
+        [...tagIdOf.keys()],
+        (imgId) => removePictureTag(imgId, tagIdOf.get(imgId), { batchId }),
+        { verb: "Untagged" },
       );
       if (done.length) {
         onApplied({ tag: tagEntry.name, pictureIds: done, action: "remove" });
@@ -390,7 +436,7 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
     // One gesture, one undo step, as with the siblings.
     const batchId = newOperationBatchId();
     try {
-      const done = await fanOut(missingIds, (id) =>
+      const { done } = await fanOut(missingIds, (id) =>
         addPictureTag(id, tagEntry.name, { batchId }),
       );
       if (done.length) {
@@ -421,8 +467,12 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
     }
     tagActionLoading.value = [...tagActionLoading.value, tagEntry.name];
     try {
-      await fanOut(imageIds, (id) =>
-        rejectTagPrediction(id, tagEntry.name, { batchId }),
+      // The removal this follows already said which pictures a locked set
+      // kept, so its refusals here are not reported twice.
+      await fanOut(
+        imageIds,
+        (id) => rejectTagPrediction(id, tagEntry.name, { batchId }),
+        { verb: null },
       );
       await fetchSelectedImagePredictions();
     } finally {
@@ -436,7 +486,8 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
    * Add these tags to every selected picture.
    *
    * @param {Array<string>} tags
-   * @returns {Promise<boolean>} whether they were added to every picture;
+   * @returns {Promise<boolean>} whether nothing failed: every picture took
+   *   them or was skipped for a locked set (which a warning reports);
    *   `tagError` says why not.
    */
   async function addTagsToAll(tags) {
@@ -453,17 +504,17 @@ export function useSelectionTags(selectedIds, { onApplied = () => {} } = {}) {
       // One request per picture and tag: a picture that took one tag of
       // several still changed, and is reported as changed.
       const pairs = ids.flatMap((id) => tags.map((tag) => [id, tag]));
-      const done = await fanOut(
+      const { done, failed } = await fanOut(
         pairs,
         ([id, tag]) => addPictureTag(id, tag, { batchId }),
-        "tags were not added",
+        { what: "tags were not added" },
       );
       const doneIds = [...new Set(done.map(([id]) => id))];
       if (doneIds.length) {
         onApplied({ tag: key, pictureIds: doneIds, action: "add" });
       }
       await refreshSelectionTags();
-      return done.length === pairs.length;
+      return failed === 0;
     } finally {
       tagActionLoading.value = tagActionLoading.value.filter((n) => n !== key);
     }

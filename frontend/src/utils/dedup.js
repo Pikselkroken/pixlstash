@@ -709,6 +709,33 @@ export function lockedSetsSentence(sets) {
 }
 
 /**
+ * The coalescing key of the warning a bulk tag gesture gives when it skipped
+ * pictures frozen by a locked set. Shared by every route (the rail's tag field,
+ * its chips, tag paste), so repeats collapse into one card.
+ */
+export const LOCKED_SKIP_NOTICE_KEY = "tags-locked-skipped";
+
+/**
+ * The sentence for a bulk gesture that changed some pictures and skipped the
+ * ones a locked set freezes.
+ *
+ * @param {string} verb - what was done, past tense and capitalised ("Tagged").
+ * @param {number} done - pictures that changed.
+ * @param {number} skipped - pictures refused because a locked set froze them.
+ * @returns {string}
+ */
+export function lockedSkipSentence(verb, done, skipped) {
+  if (!done) {
+    const which =
+      skipped === 1 ? "the picture is" : `${skipped} pictures are`;
+    return `Nothing was ${verb.toLowerCase()}; ${which} in a locked set.`;
+  }
+  const pictures = `${done} picture${done === 1 ? "" : "s"}`;
+  const was = skipped === 1 ? "is in a locked set and was" : "are in a locked set and were";
+  return `${verb} ${pictures}; ${skipped} ${was} skipped.`;
+}
+
+/**
  * The server's own explanation for a refusal, when it gave one.
  *
  * A dedup verdict is refused for reasons the user can act on ("a stack needs at

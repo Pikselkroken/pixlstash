@@ -98,16 +98,40 @@ describe("paste", () => {
     ]);
   });
 
-  it("counts a refused write without hiding the others", async () => {
+  it("says a locked set's picture was skipped, in a transient warning", async () => {
     const store = useTagClipboardStore();
     store.clipboardTags = ["rain"];
     bulkFetchTags.mockResolvedValue([]);
     addPictureTag
       .mockResolvedValueOnce({})
-      .mockRejectedValueOnce(Object.assign(new Error("locked"), { status: 423 }));
+      .mockRejectedValueOnce(
+        Object.assign(new Error("locked"), { response: { status: 423 } }),
+      );
     const result = await store.pasteClipboard([1, 2]);
-    expect(result.failed).toBe(1);
-    expect(lastNotice()).toContain("1 refused");
+    expect(result).toEqual({ pictureIds: [1], failed: 1 });
+    const notices = useNoticeStore().notices;
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({
+      level: "warning",
+      text: "Tagged 1 picture; 1 is in a locked set and was skipped.",
+    });
+    expect(notices[0].timeout).toBeGreaterThan(0);
+  });
+
+  it("reports a real failure as an error, not a skip", async () => {
+    const store = useTagClipboardStore();
+    store.clipboardTags = ["rain"];
+    bulkFetchTags.mockResolvedValue([]);
+    addPictureTag
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce(new Error("Network Error"));
+    await store.pasteClipboard([1, 2]);
+    const notices = useNoticeStore().notices;
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({
+      level: "error",
+      text: "Couldn't tag 1 picture: Network Error",
+    });
   });
 
   it("does nothing in a read-only session or with nothing copied", async () => {
