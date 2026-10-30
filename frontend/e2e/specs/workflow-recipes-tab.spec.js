@@ -343,6 +343,10 @@ test("an unfiled recipe is listed once its workflow is deleted, and can still be
   apiContext,
 }) => {
   const { workflowId, names, recipes } = await seed(apiContext);
+  // With no workflow left, the empty state replaces the grid and the Unfiled
+  // list with it (#2356); a second workflow keeps the grid up. afterEach
+  // deletes it.
+  await storeWorkflow(apiContext, `Recipes e2e keeps the grid ${tag()}`);
   try {
     await ok(await apiContext.delete(`${API}/workflows/${encodeURIComponent(workflowId)}`), "delete the workflow");
 
