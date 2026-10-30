@@ -582,7 +582,7 @@ class LocalAiToolkit(TrainerBackend):
             The trainer's pid.
 
         Raises:
-            OSError: The launcher failed or printed no pid.
+            OSError: The launcher printed no pid.
             subprocess.TimeoutExpired: The launcher did not finish in time
                 and printed no pid.
         """
@@ -615,10 +615,18 @@ class LocalAiToolkit(TrainerBackend):
             )
             return int(printed)
         printed = done.stdout.decode("ascii", "replace").strip()
-        if done.returncode != 0 or not printed.isdigit():
+        if not printed.isdigit():
             raise OSError(
                 f"trainer launcher exited {done.returncode} printing {printed!r}; "
                 f"its error is in {output.name}"
+            )
+        if done.returncode != 0:
+            # Failed after printing the pid, so the trainer is running: track it.
+            logger.warning(
+                "Trainer launcher exited %s after starting pid %s; its error is in %s",
+                done.returncode,
+                printed,
+                output.name,
             )
         return int(printed)
 

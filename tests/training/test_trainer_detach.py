@@ -106,6 +106,29 @@ def test_a_launcher_that_hangs_after_starting_the_trainer_keeps_it(
         backend.cancel(handle)
 
 
+def test_a_launcher_that_fails_after_starting_the_trainer_keeps_it(
+    tmp_path, monkeypatch
+):
+    """A nonzero exit after the pid was printed still leaves the trainer tracked."""
+    monkeypatch.setattr(local_ai_toolkit, "_ORPHAN_TRAINER", True)
+    monkeypatch.setattr(
+        local_ai_toolkit,
+        "_ORPHAN_LAUNCHER",
+        local_ai_toolkit._ORPHAN_LAUNCHER + "sys.exit(3)\n",
+    )
+    monkeypatch.setenv("FAKE_RUN_STEP_DELAY", "0.05")
+    backend = _make_backend()
+    spec = _make_spec(tmp_path, steps=20, save_every=0)
+    handle = backend.prepare(spec)
+    backend.submit(handle, spec)
+    try:
+        assert handle.pid is not None
+        assert _poll_until(lambda: not backend.is_alive(handle), timeout=30)
+        assert _job_status(handle) == "completed"
+    finally:
+        backend.cancel(handle)
+
+
 @pytest.mark.skipif(os.name != "nt", reason="taskkill is the Windows desktop quit")
 def test_a_run_outlives_taskkill_of_the_backend_tree(tmp_path, monkeypatch):
     """``taskkill /T /F`` on the backend, as the app's quit does, spares the run."""
