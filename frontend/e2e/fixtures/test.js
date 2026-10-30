@@ -10,6 +10,7 @@ import { ShareDialog } from '../pages/ShareDialog.js'
 import { ReviewSessions } from '../pages/ReviewSessions.js'
 import { NoticeHost } from '../pages/NoticeHost.js'
 import { DuplicateQueuePage } from '../pages/DuplicateQueuePage.js'
+import { WorkflowsPage } from '../pages/WorkflowsPage.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const TOKEN_PATH = resolve(__dirname, '../.auth/token.json')
@@ -221,6 +222,10 @@ export const test = base.extend({
   // over it, and shares none of its selectors.
   duplicates: async ({ page }, use) => {
     await use(new DuplicateQueuePage(page))
+  },
+  // The Workflows screen: its card grid, a card's verb menu and the rail.
+  workflows: async ({ page }, use) => {
+    await use(new WorkflowsPage(page))
   },
   // The notice surface (NoticeHost.vue). Call `notices.installHooks()` BEFORE
   // the first navigation — the store seam is an addInitScript.
