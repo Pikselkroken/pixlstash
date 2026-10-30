@@ -5858,6 +5858,8 @@ defineExpose({
   saveMediaAs,
   copyMedia,
   showRunResult,
+  // A picture just made from this one (a crop, a filter), without a compare.
+  showPicture: (id) => showEditResult(id, null),
   moveStackMember,
   // A Segment run started: press the toggle so its boxes show when they land.
   showSegmentation: () => {

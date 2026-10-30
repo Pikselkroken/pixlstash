@@ -39,6 +39,46 @@ export class Lightbox {
     // reference --v-theme-on-background, so filled stars are countable.
     this.starWidget = page.locator('.lightbox .star-overlay').first()
     this.stars = this.starWidget.locator('.v-icon')
+    // The inspector's tabs (AppInspector's .inspector-tab) and the Edit tab's
+    // Quick changes (rotate and crop), which need no ComfyUI.
+    this.editTab = page.locator('.lightbox .inspector-tab', { hasText: 'Edit' })
+    this.rotateLeftButton = page.getByRole('button', { name: 'Rotate left', exact: true })
+    this.rotateRightButton = page.getByRole('button', { name: 'Rotate right', exact: true })
+    this.cropButton = page.locator('.lightbox-quick-actions').getByRole('button', {
+      name: 'Crop',
+      exact: true,
+    })
+    // Crop's framings and its apply button float over the picture
+    // (PaintOptionsBar.vue's .paint-options strip).
+    this.cropOptions = page.locator('.lightbox .paint-options')
+    this.applyCropButton = this.cropOptions.getByRole('button', {
+      name: 'Crop to a new picture',
+    })
+    // The description (LightboxDescriptionPanel.vue): one textarea that turns
+    // editable on focus, Enter saves, and the regenerate button that resets it.
+    this.descriptionField = page.locator('.lightbox .description-editor textarea')
+    this.resetDescriptionButton = page.locator(
+      '.lightbox button[aria-label^="Regenerate description - deletes"]',
+    )
+    // The faces pencil and its panel (FacesPanel.vue), one person picker a face.
+    this.facesPencil = page.locator('.lightbox button[aria-label$="dit faces"]')
+    this.facesPanel = page.getByRole('dialog', { name: 'Faces' })
+  }
+
+  /** One crop framing chip, by its label ("Square on face", "3:4 on face"...). */
+  cropFraming(label) {
+    return this.cropOptions.getByRole('button', { name: label })
+  }
+
+  /** Show the Edit tab, where the Quick changes are. */
+  async openEditTab() {
+    await this.editTab.click()
+    await expect(this.editTab).toHaveAttribute('aria-pressed', 'true')
+  }
+
+  /** The natural size of the picture on screen, after the file's orientation. */
+  mainImageSize() {
+    return this.mainImage.evaluate((img) => [img.naturalWidth, img.naturalHeight])
   }
 
   /** A tag chip located by its visible label. */
