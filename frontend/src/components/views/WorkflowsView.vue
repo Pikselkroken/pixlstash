@@ -233,49 +233,62 @@
            bordered option rows `LibraryEmptyState` uses — that screen explains
            three unfamiliar choices at first run; these three are one verb each. -->
       <div v-if="showEmptyState" class="wfv-empty">
-        <div class="wfv-empty__card">
-          <div class="wfv-empty__illustration" aria-hidden="true">
-            <img src="/Empty.png" alt="" />
+        <div class="wfv-empty__stack">
+          <div class="wfv-empty__card">
+            <div class="wfv-empty__illustration" aria-hidden="true">
+              <img src="/Empty.png" alt="" />
+            </div>
+            <h2 class="wfv-empty__title">Nothing found yet</h2>
+            <p v-if="withheldNames" class="wfv-empty__lead">
+              Every workflow this library has is being left out of the grid:
+              {{ withheldNames }}. Nothing has been lost.
+            </p>
+            <p v-else class="wfv-empty__lead">
+              A workflow arrives with the pictures it made, or as a file of its own.
+            </p>
+            <div class="wfv-empty__actions">
+              <AppButton
+                size="sm"
+                variant="primary"
+                icon-left="tray-arrow-up"
+                @click="fileInput?.click()"
+              >
+                Drop a workflow file
+              </AppButton>
+              <AppButton
+                v-if="watchedFolder"
+                size="sm"
+                variant="secondary"
+                icon-left="folder-eye-outline"
+                @click="openWatchedFolder"
+              >
+                Open watched folder
+              </AppButton>
+              <!-- Gone once connected: there is nothing to offer somebody who has
+                   already done it. -->
+              <AppButton
+                v-if="!comfyuiConfigured"
+                size="sm"
+                variant="secondary"
+                icon-left="graph-outline"
+                @click="emit('open-settings', 'comfyui')"
+              >
+                Connect ComfyUI
+              </AppButton>
+            </div>
+            <p v-if="watchedFolder" class="wfv-empty__path">{{ watchedPath }}</p>
           </div>
-          <h2 class="wfv-empty__title">Nothing found yet</h2>
-          <p v-if="withheldNames" class="wfv-empty__lead">
-            Every workflow this library has is being left out of the grid:
-            {{ withheldNames }}. Nothing has been lost.
-          </p>
-          <p v-else class="wfv-empty__lead">
-            A workflow arrives with the pictures it made, or as a file of its own.
-          </p>
-          <div class="wfv-empty__actions">
-            <AppButton
-              size="sm"
-              variant="primary"
-              icon-left="tray-arrow-up"
-              @click="fileInput?.click()"
-            >
-              Drop a workflow file
-            </AppButton>
-            <AppButton
-              v-if="watchedFolder"
-              size="sm"
-              variant="secondary"
-              icon-left="folder-eye-outline"
-              @click="openWatchedFolder"
-            >
-              Open watched folder
-            </AppButton>
-            <!-- Gone once connected: there is nothing to offer somebody who has
-                 already done it. -->
-            <AppButton
-              v-if="!comfyuiConfigured"
-              size="sm"
-              variant="secondary"
-              icon-left="graph-outline"
-              @click="emit('open-settings', 'comfyui')"
-            >
-              Connect ComfyUI
-            </AppButton>
-          </div>
-          <p v-if="watchedFolder" class="wfv-empty__path">{{ watchedPath }}</p>
+
+          <!-- Deleting the last workflow leaves its recipes unfiled, and they
+               are still the reader's to rename, extract or delete (#2356). One
+               column at the card's width: no grid is measured here. Hidden
+               while there are none, so a bare library sees only the card. -->
+          <WorkflowRecipesTab
+            unfiled
+            class="wfv-unfiled wfv-empty__recipes"
+            workflow-name="Unfiled recipes"
+            :style="{ '--wf-columns': 1 }"
+          />
         </div>
       </div>
 
@@ -2180,6 +2193,33 @@ onBeforeUnmount(() => {
   color: rgb(var(--v-theme-on-background));
   text-align: center;
   box-shadow: var(--elevation-3);
+}
+
+/* The card and the Unfiled recipes under it, centred as one. `margin: auto`
+   rather than the parent's centring, so a stack taller than the pane scrolls
+   from its top instead of clipping it. */
+.wfv-empty__stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  margin: auto;
+}
+
+/* At the card's width. The gap and the bottom inset go on the header and the
+   list, which are only drawn while there are recipes: with none, the card sits
+   exactly where it always has. */
+.wfv-unfiled.wfv-empty__recipes {
+  width: min(480px, calc(100% - var(--space-7)));
+  margin-top: 0;
+}
+
+.wfv-empty__recipes :deep(.wfrt-head) {
+  margin-top: var(--space-6);
+}
+
+.wfv-empty__recipes :deep(.wfrt-list) {
+  margin-bottom: var(--space-6);
 }
 
 /* The cap `LibraryEmptyState` uses, so the two cards show the art at one size. */

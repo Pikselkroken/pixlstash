@@ -3336,6 +3336,12 @@ new code calls a *variant*. Owner-only, like everything under `/workflows`.
   and **nothing drawn at all while the list is empty** — only
   the tab's live region stays mounted, so the last Delete is still said. A
   failed read is quiet for the same reason. It re-reads on `recipesEpoch`.
+  With no workflow cards at all the empty state replaces the grid, and a
+  second instance sits under its card instead, in one column at the card's
+  width (#2356): deleting the last workflow unfiles its recipes, and they stay
+  listed. The spacing above and below it hangs on its header and list, which
+  only exist while it has rows, so a library with no recipes sees the card
+  exactly as before.
 
 #### Shared shell pieces (issue #1301)
 Four pieces every screen builds on, to the design system's shell contract (`ui_kits/app/unified-shell.html`, rules 2, 3, 8 and 9). Reuse them; do not re-roll them.
