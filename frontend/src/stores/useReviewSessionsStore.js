@@ -1186,7 +1186,8 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     const s = activeSession.value;
     if (!s) return;
     const stack = undoStacks.value[s.id] || [];
-    const last = stack[stack.length - 1];
+    const at = stack.length - 1;
+    const last = stack[at];
     if (!last) return;
     // Claim the entry before waiting, so a second U pressed meanwhile takes the
     // one before it rather than undoing this decision twice.
@@ -1198,10 +1199,10 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
       await reopenTagSuggestion(last.item.id);
     } catch (e) {
       error.value = e?.message || "Failed to undo";
-      undoStacks.value = {
-        ...undoStacks.value,
-        [s.id]: [...(undoStacks.value[s.id] || []), last],
-      };
+      // Back where it was claimed from, under any decision made meanwhile.
+      const now = [...(undoStacks.value[s.id] || [])];
+      now.splice(Math.min(at, now.length), 0, last);
+      undoStacks.value = { ...undoStacks.value, [s.id]: now };
       return;
     }
     bumpTally(s.id, last.delta, -1);

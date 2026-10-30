@@ -232,7 +232,7 @@ mutations) is unit-covered in `src/stores/useReviewSessionsStore.test.js`.
 | Escape closes the review first (back to tag health); a second Escape closes the overlay | In a session, Escape returns to the tag-health board; a second Escape dismisses the overlay | ✅ |
 | Undo reverses the last decision and decrements the tally | Undo (net counter) decrements the tally and re-disables when the stack empties; backend receipt returns to 0. Uses a multi-suspect tag so the decision bar is still there after one decision | ✅ |
 | Skip removes the card with no decision and is reported separately | Skip → `.rs-tally-skipped` + rail "done/found · N skipped"; receipt removed/added/kept unchanged, skipped++ | ✅ |
-| keyboard Y / N / S / U drive decisions and focus stays on the card | Keyboard parity with the buttons; focus stays on `.rs-card`. `U` straight after `N` undoes the decision even while its write is still in flight | ✅ |
+| keyboard Y / N / S / U drive decisions and focus stays on the card | Keyboard parity with the buttons; focus stays on `.rs-card`; `U` straight after `N` undoes it. The in-flight-write case itself is pinned by the store unit test, since a local backend usually answers before the next key | ✅ |
 | working through the queue reaches completion and archives to a receipt | Decide all → completion state → Archive → back on the board, session gone from the rail → rail Archived entry → `.rs-archived` receipt; backend status ARCHIVED | ✅ |
 
 **✅ BUG-RS-1 — RESOLVED.** The session card used to never render in a real
