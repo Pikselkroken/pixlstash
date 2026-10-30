@@ -3497,7 +3497,7 @@ def test_comfyui_model_roots_collapse_categories_to_their_root(monkeypatch):
     fake = _FolderPaths(
         {
             "checkpoints": ["/comfy/models/checkpoints"],
-            "loras": ["/comfy/models/loras", "/data/my-loras"],
+            "loras": ["/comfy/models/loras", "/data/my-loras", "/comfy/custom_nodes2"],
             "vae": ["/comfy/models/vae", "/comfy/models/vae/extra"],
             "custom_nodes": ["/comfy/custom_nodes"],
             "kjnodes_fonts": ["/comfy/custom_nodes/comfyui-kjnodes/fonts"],
@@ -3507,6 +3507,7 @@ def test_comfyui_model_roots_collapse_categories_to_their_root(monkeypatch):
     )
     monkeypatch.setattr(comfyui_service.requests, "get", fake)
     assert comfyui_service.comfyui_model_roots("http://comfy:8188") == [
+        "/comfy/custom_nodes2",
         "/comfy/models",
         "/data/my-loras",
     ]
@@ -3516,12 +3517,16 @@ def test_comfyui_model_roots_collapse_categories_to_their_root(monkeypatch):
 def test_comfyui_model_roots_group_by_category_not_by_folder_count(monkeypatch):
     """Two folders of one category under a parent are not a models root: the
     parent is somebody's home or data drive. A Windows ComfyUI's paths group
-    the same way on any backend."""
+    the same way on any backend, and its node-pack folders are matched without
+    regard to case."""
     fake = _FolderPaths(
         {
             "loras": ["/home/me/loras-a", "/home/me/loras-b"],
             "checkpoints": ["C:\\ComfyUI\\models\\checkpoints"],
             "vae": ["C:\\ComfyUI\\models\\vae"],
+            "custom_nodes": ["C:\\ComfyUI\\custom_nodes"],
+            "kjnodes_fonts": ["c:\\COMFYUI\\Custom_Nodes\\kj\\fonts"],
+            "intrinsic_loras": ["c:\\COMFYUI\\Custom_Nodes\\kj\\loras"],
         }
     )
     monkeypatch.setattr(comfyui_service.requests, "get", fake)

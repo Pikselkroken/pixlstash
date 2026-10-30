@@ -2791,7 +2791,7 @@ def comfyui_model_roots(base_url: str) -> list[str]:
         return []
     node_paths = folder_paths.get("custom_nodes")
     node_dirs = [
-        _path_module(path).normpath(path).rstrip("\\/")
+        _path_module(path).normcase(_path_module(path).normpath(path)).rstrip("\\/")
         for path in (node_paths if isinstance(node_paths, list) else [])
         if isinstance(path, str) and path.strip()
     ]
@@ -2805,7 +2805,10 @@ def comfyui_model_roots(base_url: str) -> list[str]:
             if isinstance(path, str) and path.strip():
                 pathmod = _path_module(path)
                 path = pathmod.normpath(path)
-                if any(path.startswith(d + pathmod.sep) for d in node_dirs):
+                folded = pathmod.normcase(path)
+                if any(
+                    folded == d or folded.startswith(d + pathmod.sep) for d in node_dirs
+                ):
                     continue
                 seps[path] = pathmod.sep
                 children = by_parent.setdefault(pathmod.dirname(path), {})
