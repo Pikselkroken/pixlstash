@@ -195,7 +195,8 @@ class LocalAiToolkit(TrainerBackend):
         # Popen handles for children we launched in this process, keyed by pid.
         # Held so we can reap them (poll()) and avoid mistaking a finished-but-
         # unreaped child (a zombie) for a live process. Empty after a restart,
-        # which is why liveness also has a zombie-aware PID probe fallback.
+        # and always on Windows (the trainer is not our child there), which is
+        # why liveness also has a zombie-aware PID probe fallback.
         self._processes: dict[int, subprocess.Popen] = {}
 
     # ------------------------------------------------------------------
@@ -547,8 +548,9 @@ class LocalAiToolkit(TrainerBackend):
 
         If we launched the process in this run, its ``Popen`` is polled (which
         also reaps it once it has exited, so it never lingers as a zombie). For
-        a PID inherited across a restart (no ``Popen``), a zombie-aware probe is
-        used: a finished-but-unreaped process counts as dead.
+        a PID inherited across a restart, or one started through the Windows
+        launcher (no ``Popen`` either way), a zombie-aware probe is used: a
+        finished-but-unreaped process counts as dead.
 
         Args:
             handle: The job handle.

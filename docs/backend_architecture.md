@@ -11538,14 +11538,17 @@ name must not share a directory. The dataset goes to
 `<repo>/datasets/pixlstash-<uuid>`. The per-job work dir (`job.db`, the rendered
 config, `trainer_output.log`) stays under `<image_root>/training/<uuid>`.
 
-The trainer runs in its own session with stdin closed and its stdout and stderr
+The trainer runs in its own session (on Windows, its own process group and
+hidden console) with stdin closed and its stdout and stderr
 in `trainer_output.log`, never the backend's streams: under the desktop app
 those are pipes that close when the app quits, and a trainer still writing to
 them would die mid-run (#2289). On Windows the desktop app stops the backend
 with `taskkill /T`, which follows parent-pid links, so there a launcher starts
 the trainer and exits, leaving it no live parent (#2382). The backend holds no
-`Popen` for it and tracks it by pid and cmdline, as after a restart. A run
-therefore outlives the app on every platform. The log tail the app
+`Popen` for it and tracks it by pid and cmdline, as after a restart. That holds
+only while no job object around the backend kills its children on close,
+which has not yet been checked on a real desktop install.
+The log tail the app
 shows still reads `log.txt`, ai-toolkit's own tee, so output printed before
 that tee starts is only in `trainer_output.log`.
 
