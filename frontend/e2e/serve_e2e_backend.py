@@ -7,8 +7,9 @@ work directory, strips any user/token rows so the server boots in *first-run*
 state (the e2e global-setup then registers an admin and mints an ALL-scope
 token per run — no credentials are committed), seeds a small model folder
 for the shelf specs and a reference folder for the Media specs, writes a lean
-server-config (only the task runner and the folder sweeps running, no models,
-no startup thumbnail generation, CPU only), and execs the real server. The server also serves the built SPA from
+server-config (the task runner runs, the work planner keeps only the folder
+sweeps and an idle face finder, no models, no startup thumbnail generation, CPU
+only), and execs the real server. The server also serves the built SPA from
 ``pixlstash/frontend/dist`` on the same origin, so cookie auth just works.
 
 Env:

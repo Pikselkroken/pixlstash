@@ -83,8 +83,11 @@ test('the seeded reference folder is registered and holds its pictures', async (
     params: { reference_folder_id: String(seeded.id), fields: 'id,file_path' },
   })
   expect(listed.ok(), await listed.text()).toBe(true)
-  const names = (await listed.json()).map((p) => p.file_path.split(sep).pop()).sort()
-  expect(names).toEqual(SEEDED)
+  const paths = (await listed.json()).map((p) => p.file_path)
+  expect(paths.map((path) => path.split(sep).pop()).sort()).toEqual(SEEDED)
+  // The seed's move was followed: fern's row points at its new folder.
+  const fern = paths.find((path) => path.endsWith(`${sep}fern.png`))
+  expect(fern.includes(`${sep}Inbox${sep}`), fern).toBe(false)
 })
 
 test('/moves lists the seeded move as an unambiguous review', async ({ apiContext }) => {

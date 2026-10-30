@@ -9,8 +9,8 @@ rather than of the feature:
    whose pixels are already in the library, so the grid never gets the pair.
 2. **A duplicate group only exists after a scan.** ``GET /dedup/groups`` reads
    persisted ``DedupGroup`` rows; the rows are written by ``DedupScanTask``,
-   which the e2e work planner (restricted to the folder finders by
-   ``serve_e2e_backend.py``) never runs. ``POST /dedup/scan`` writes
+   which the e2e work planner (restricted by ``serve_e2e_backend.py`` to the
+   folder sweeps and an idle face finder) never runs. ``POST /dedup/scan`` writes
    a ``pending`` row and nothing ever picks it up.
 
 Enabling the workers for the whole suite is not the answer: they would start
