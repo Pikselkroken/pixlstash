@@ -1042,7 +1042,7 @@ vanish — they **fold** into the ⋯ overflow (`TbOverflowMenu`, a
 - **The right-rail toggle is one glyph on every screen**, `mdi-dock-right`
   (where something will appear, not what is in it), with open as its pressed
   state and never a second glyph. Its name is fixed per screen and says what
-  the rail holds: *Stats and tasks*, *Inspector*, *Models*, *Stats*.
+  the rail holds: *Stats*, *Inspector*, *Models*.
 
 ### Closed inspector
 

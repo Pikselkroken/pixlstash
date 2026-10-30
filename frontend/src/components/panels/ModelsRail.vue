@@ -205,7 +205,7 @@
  * The rail holds no selection of its own: it reads the store's, so the shelf,
  * the set grid and this rail cannot disagree about what is picked.
  */
-import { computed, onBeforeUnmount, provide, reactive, watch } from "vue";
+import { computed, onBeforeUnmount, provide, reactive } from "vue";
 import { useRoute } from "vue-router";
 import { VIcon } from "vuetify/components";
 
@@ -246,15 +246,6 @@ const route = useRoute();
 store.loadWorkflowSets();
 store.setRailMounted(true);
 onBeforeUnmount(() => store.setRailMounted(false));
-
-// A notice's "show me" (`showTasksTab`) lands on the title bar's Tasks pill,
-// as on the Workflows screen (#2165).
-watch(
-  () => sidebarStore.tasksTabRequest,
-  () => {
-    sidebarStore.tasksPillRequest += 1;
-  },
-);
 
 /** Open or shut, per section key, for the life of the rail. */
 const shut = reactive({});

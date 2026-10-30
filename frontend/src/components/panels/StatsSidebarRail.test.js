@@ -147,7 +147,7 @@ describe("the rail's head row", () => {
     expect(tiles).toEqual(["111Pictures", "1,987Tags", "17.9Tags / picture"]);
     expect(
       wrapper.findAll("button.inspector-tab").map((t) => t.text()),
-    ).toEqual(["Tags", "Pictures", "Tasks"]);
+    ).toEqual(["Tags", "Pictures"]);
   });
 
   it("names one picture by its description, never by its file name", async () => {
@@ -392,21 +392,26 @@ describe("under the lightbox", () => {
   });
 });
 
-describe("the Tasks deep link over a selection", () => {
-  it("shows the Tasks tab until the selection next changes", async () => {
+// The task list is the title bar's pill: a notice's *Show* opens that, and
+// neither opens this rail nor takes it off the selection.
+describe("the Tasks deep link", () => {
+  it("leaves a shut rail shut", async () => {
+    const sidebar = useSidebarStore();
+    sidebar.statsOpen = false;
+    mountRail();
+    sidebar.showTasksTab();
+    await flush();
+    expect(sidebar.statsOpen).toBe(false);
+    expect(sidebar.tasksPillRequest).toBe(1);
+  });
+
+  it("leaves the selection on screen", async () => {
     const wrapper = mountRail();
     await select(wrapper, [7]);
-    expect(wrapper.find(".rail-picture").exists()).toBe(true);
-
     useSidebarStore().showTasksTab();
     await flush();
-    expect(wrapper.find(".rail-picture").exists()).toBe(false);
-    expect(wrapper.find("button.inspector-tab--active").text()).toBe("Tasks");
-    // The picture is still selected in the grid, so the rail can still clear it.
-    expect(wrapper.find(".rail-clear").exists()).toBe(true);
-
-    await select(wrapper, [8]);
     expect(wrapper.find(".rail-picture").exists()).toBe(true);
+    expect(wrapper.text()).not.toContain("No active tasks");
   });
 });
 
@@ -650,19 +655,6 @@ describe("T", () => {
     expect(input.exists()).toBe(true);
     expect(document.activeElement).toBe(input.element);
     expect(sidebar.tagFieldPending).toBe(false);
-  });
-
-  it("takes the selection back from a deep-linked Tasks tab", async () => {
-    const wrapper = mountRail({}, { attachTo: document.body });
-    await select(wrapper, [7]);
-    useSidebarStore().showTasksTab();
-    await flush();
-    expect(wrapper.find(".rail-picture").exists()).toBe(false);
-    useSidebarStore().requestTagField();
-    await flush();
-    expect(document.activeElement).toBe(
-      wrapper.find(".rail-picture .rail-tags__input").element,
-    );
   });
 });
 

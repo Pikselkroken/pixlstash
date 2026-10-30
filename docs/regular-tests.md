@@ -212,7 +212,7 @@ provides both since #2320; until #2353 runs them for real, they stay manual.
 ## Statistics sidebar — `stats.spec.js`
 | Test | Covers | Status |
 |------|--------|--------|
-| toggles the stats sidebar open and closed | Toolbar right-rail toggle ("Stats and tasks") shows/hides the stats inspector's content (`.stats-sidebar .inspector-content`) with its Tags/Pictures/Tasks tabs | ✅ |
+| toggles the stats sidebar open and closed | Toolbar right-rail toggle ("Stats") shows/hides the stats inspector's content (`.stats-sidebar .inspector-content`) with its Tags/Pictures tabs | ✅ |
 
 ## Boolean set operations — `set-operations.spec.js`
 | Test | Covers | Status |

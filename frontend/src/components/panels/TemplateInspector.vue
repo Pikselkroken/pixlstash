@@ -6,11 +6,7 @@
     :open="sidebarStore.workflowInspectorOpen"
     :tabs="tabs"
   >
-    <!-- The task manager, as on Mine: a run started there is still going
-         when the reader moves over to browse templates. -->
-    <TasksPanel v-if="tab === 'tasks'" />
-
-    <p v-else-if="!chosen.length" class="tpli-empty">
+    <p v-if="!chosen.length" class="tpli-empty">
       Pick a template to see what it would download, then add it to your
       workflows.
     </p>
@@ -160,7 +156,7 @@
  * too; both ask the view (`requestAdd`), which lands on Mine afterwards.
  *
  * A missing file PixlStash can fetch (`downloadable`) gets the run's own
- * download button, so it lands in the Tasks tab the same way before the
+ * download button, so it lands in the task list the same way before the
  * template is added as after; any other one links to where its template says
  * to get it, as does every one in a read-only session, which cannot download.
  * The design's *Download the missing*, all at once, is not here.
@@ -170,7 +166,6 @@ import { VIcon } from "vuetify/components";
 
 import { templateThumbnailUrl } from "../../api/comfyui";
 import { useSidebarStore } from "../../stores/useSidebarStore";
-import { useTasksStore } from "../../stores/useTasksStore";
 import { isReadOnly } from "../../utils/apiClient";
 import {
   missingCount,
@@ -183,22 +178,13 @@ import AppInspector from "../widgets/AppInspector.vue";
 import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
 import ModelDownloadButton from "../widgets/ModelDownloadButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
-import TasksPanel, { tasksTabFor } from "./TasksPanel.vue";
 
 const sidebarStore = useSidebarStore();
-const tasksStore = useTasksStore();
 const templates = useWorkflowTemplatesStore();
 const tab = ref("template");
-// A deep link to the Tasks tab, from a notice or a banner (`showTasksTab`).
-watch(
-  () => sidebarStore.tasksTabRequest,
-  () => (tab.value = "tasks"),
-);
-
-const tabs = computed(() => [
+const tabs = [
   { value: "template", label: "Template", icon: "mdi-sitemap-outline" },
-  tasksTabFor(tasksStore),
-]);
+];
 const thumbnailFailed = ref(false);
 
 const chosen = computed(() => templates.selectedTemplates);

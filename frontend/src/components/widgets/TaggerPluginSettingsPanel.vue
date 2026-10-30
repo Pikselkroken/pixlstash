@@ -150,7 +150,7 @@ async function offerFaceCropRetag() {
           : "Re-checking redoes its face quality tags in the background. They " +
             "disappear until it is done. ") +
         "It can't be stopped once started, and on a large library it takes a " +
-        "while; follow it in the sidebar's Tasks tab. Other tags and your " +
+        "while; follow it under Tasks in the title bar. Other tags and your " +
         "review decisions are kept.",
       confirmLabel: "Re-check now",
       cancelLabel: "Not now",
@@ -160,7 +160,7 @@ async function offerFaceCropRetag() {
     const { count: queued } = await retagFaceCrops();
     useNoticeStore().success(
       `Re-checking ${queued} ${queued !== 1 ? "pictures" : "picture"} with ` +
-        "faces. Follow it in the sidebar's Tasks tab.",
+        "faces. Follow it under Tasks in the title bar.",
     );
   } catch (e) {
     console.error("Whole-face close-up re-check failed:", errorDetail(e) || e);

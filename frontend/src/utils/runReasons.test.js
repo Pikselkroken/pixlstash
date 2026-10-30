@@ -96,7 +96,7 @@ describe("models_downloading refuses until the download lands", () => {
     const read = readReason({ code: "models_downloading", models: files });
     expect(read.text).toBe(
       "A model it needs is still downloading. Run it once it has finished: " +
-        "the Tasks tab shows how far.",
+        "the Tasks list in the title bar shows how far.",
     );
     expect(read.files).toEqual([{ ...files[0], downloading: true }]);
     expect(read.blocking).toBe(true);

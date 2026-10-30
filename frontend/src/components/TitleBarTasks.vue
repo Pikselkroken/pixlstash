@@ -1,8 +1,8 @@
 <template>
   <!-- The tasks pill (#2158): how much is running, and the task list as a
        popover under it. A popover and not a fourth workspace: the list is
-       glanced at from wherever you are, not gone to. The same TasksPanel the
-       inspectors' Tasks tabs mount, so the two cannot drift. -->
+       glanced at from wherever you are, not gone to. The one host of
+       TasksPanel; no right rail has a Tasks tab. -->
   <v-menu
     v-model="open"
     location="bottom end"

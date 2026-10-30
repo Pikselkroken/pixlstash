@@ -24,7 +24,7 @@
     <UpscaleChoice :disabled="sending" />
     <p v-if="offerRealEsrgan" class="upd-get" data-testid="upscale-get-model">
       <template v-if="realEsrganBusy"
-        >Downloading RealESRGAN: the Tasks tab shows how far.</template
+        >Downloading RealESRGAN: the Tasks list in the title bar shows how far.</template
       >
       <button v-else type="button" class="upd-link" @click="getRealEsrgan">
         Download RealESRGAN x4, a general-purpose upscaler

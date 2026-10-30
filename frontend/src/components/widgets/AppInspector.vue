@@ -53,32 +53,13 @@
           :disabled="tab.disabled"
           @click="emit('update:modelValue', tab.value)"
         >
-          <!-- While a tab is busy its count IS the thing to say, so it takes
-               the button's own description rather than hanging off the dot:
-               a bare span is not something a reader can reach. -->
-          <Tooltip
-            :text="(tab.busy ? tab.busyTooltip : tab.tooltip) || ''"
-            activator="parent"
-          />
-          <v-icon
-            v-if="tab.icon"
-            size="12"
-            :class="{ 'inspector-tab-icon--busy': tab.busy }"
-            >{{ tab.icon }}</v-icon
-          >
+          <Tooltip :text="tab.tooltip || ''" activator="parent" />
+          <v-icon v-if="tab.icon" size="12">{{ tab.icon }}</v-icon>
           {{ tab.label }}
           <!-- How many things the tab holds (the Models rail's shelf count). -->
           <span v-if="tab.count != null" class="inspector-tab-count num">{{
             tab.count.toLocaleString()
           }}</span>
-          <!-- `busy` is the tab's own live-work light: the Tasks tab wears it
-               while anything is running, in every inspector that offers the
-               tab, so the behaviour cannot drift between the two. -->
-          <span
-            v-if="tab.busy"
-            class="inspector-tab-pulse"
-            aria-hidden="true"
-          ></span>
         </button>
         <div v-if="$slots['tabs-end']" class="inspector-tabs-end">
           <slot name="tabs-end" />
@@ -104,10 +85,8 @@ defineProps({
   /** The accessible name of the pane ("Stats", "Inspector"). */
   label: { type: String, required: true },
   /**
-   * `[{ value, label, icon?, count?, disabled?, tooltip?, busy?, busyTooltip? }]`.
+   * `[{ value, label, icon?, count?, disabled?, tooltip? }]`.
    * `count` is drawn after the label, in the label's voice but untracked.
-   * `busy` pulses the tab's icon and adds an accent dot beside its label;
-   * `busyTooltip` then replaces `tooltip` as the button's description.
    */
   tabs: { type: Array, default: () => [] },
   /** The active tab's `value`. */
@@ -290,42 +269,6 @@ const emit = defineEmits(["update:modelValue"]);
 .inspector-tab:disabled {
   opacity: var(--opacity-disabled);
   cursor: default;
-}
-
-/* Live work wears the accent, never the olive: olive is the selection mark the
-   active tab's underline carries, and an attention light is accent
-   (visual-language §12). */
-.inspector-tab-icon--busy {
-  color: rgb(var(--v-theme-accent));
-  animation: inspector-tab-pulse 1.4s ease-in-out infinite;
-}
-
-.inspector-tab-pulse {
-  width: var(--badge-size-dot);
-  height: var(--badge-size-dot);
-  border-radius: var(--radius-pill);
-  background: rgb(var(--v-theme-accent));
-  box-shadow: 0 0 5px rgba(var(--v-theme-accent), 0.6);
-  animation: inspector-tab-pulse 1.4s ease-in-out infinite;
-}
-
-@keyframes inspector-tab-pulse {
-  0%,
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.45;
-    transform: scale(0.78);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .inspector-tab-icon--busy,
-  .inspector-tab-pulse {
-    animation: none;
-  }
 }
 
 /* The lightbox's tab band. Inked separately because the pane is dark in BOTH

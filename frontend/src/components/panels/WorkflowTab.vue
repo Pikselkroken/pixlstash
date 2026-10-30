@@ -1432,16 +1432,6 @@ watch(
   { immediate: true },
 );
 
-// The rail's own Tasks tab went with the Workflows rail (#2165). A notice's
-// "show me" lands on the title bar's Tasks pill, which is on every screen, so a
-// deep link to the task manager still has somewhere to go.
-watch(
-  () => sidebarStore.tasksTabRequest,
-  () => {
-    sidebarStore.tasksPillRequest += 1;
-  },
-);
-
 /**
  * Workflow first: the tab a selection opens on, because it is the one that says
  * what the card IS. Recipes answers for a selection of several too (the union

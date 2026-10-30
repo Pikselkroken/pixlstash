@@ -359,7 +359,7 @@
              queue, which is why it lives in its own component). Never folds
              (amendment #2). Undo left this bar with #2160: Ctrl+Z and the
              receipt carry it in the grid. -->
-        <TbGlobalActions rail-name="Stats and tasks" />
+        <TbGlobalActions />
       </div>
     </div>
   </div>

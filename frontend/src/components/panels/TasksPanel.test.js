@@ -1,4 +1,4 @@
-// The task manager's body, now that two inspectors mount it.
+// The task manager's body, as the title bar's Tasks pill mounts it.
 //
 // The rows themselves moved out of StatsSidebar untouched, so what is worth
 // asserting is what the move made possible to get wrong:
@@ -44,7 +44,7 @@ vi.mock("../../utils/apiClient", async (original) => {
   return { ...(await original()), isReadOnly: readOnly.ref };
 });
 
-import TasksPanel, { tasksTabFor } from "./TasksPanel.vue";
+import TasksPanel from "./TasksPanel.vue";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useTasksStore } from "../../stores/useTasksStore";
@@ -83,36 +83,10 @@ beforeEach(() => {
   nav.push = vi.fn();
 });
 
-describe("the tab the hosts declare", () => {
-  // Both inspectors take their descriptor from here, so this is the only place
-  // its wording is decided — and the only place it can be wrong. Asserting the
-  // tooltip as a hand-written prop on AppInspector tested the band, not this.
-  it("counts in words, and says one task in the singular", () => {
-    const tasksStore = useTasksStore();
-    expect(tasksTabFor(tasksStore)).toEqual({
-      value: "tasks",
-      label: "Tasks",
-      icon: "mdi-timeline-clock-outline",
-    });
-
-    tasksStore.comfyuiRuns = [{ prompt_id: "run-1", label: "One" }];
-    expect(tasksTabFor(tasksStore)).toMatchObject({
-      busy: true,
-      busyTooltip: "1 active task",
-    });
-
-    tasksStore.setImportRun("import-1", { label: "Two" });
-    expect(tasksTabFor(tasksStore)).toMatchObject({
-      busy: true,
-      busyTooltip: "2 active tasks",
-    });
-  });
-});
-
 describe("the task manager's poll cadence", () => {
-  // Mounted IS "the tab is on screen": an inspector unmounts its body when the
-  // rail collapses, so this follows what is visible rather than which tab was
-  // last picked. Nothing else in the app calls setTasksTabOpen.
+  // Mounted IS "the task list is on screen": the popover unmounts it when it
+  // closes, so this follows what is visible. Nothing else in the app calls
+  // setTasksTabOpen.
   it("asks for the fast cadence while it is mounted, and gives it back", () => {
     const tasksStore = useTasksStore();
     const spy = vi.spyOn(tasksStore, "setTasksTabOpen");
@@ -129,8 +103,8 @@ describe("the task manager's poll cadence", () => {
 
   // The store counts panels rather than holding a flag: one host's unmount
   // must not drop the cadence back to idle under another host that is still
-  // showing the panel. Not reachable while the two inspectors are `v-if` /
-  // `v-else` siblings; the panel is shared on purpose, so it is asserted.
+  // showing the panel. Not reachable with one host; the panel is shareable on
+  // purpose, so it is asserted.
   it("stays fast while any panel is still mounted", () => {
     const tasksStore = useTasksStore();
     const first = mount(TasksPanel, globalOpts);
@@ -194,9 +168,9 @@ describe("what the task manager shows", () => {
   });
 
   // A row leaves with its run, and a focused Stop leaves with it: focus falls
-  // to <body>, out of the tab order. Every host is an inspector whose band
-  // holds the Tasks tab, so the panel hands the keyboard back to that tab.
-  function inInspector() {
+  // to <body>, out of the tab order. The host is the title bar's popover, a
+  // dialog, so the panel hands the keyboard back to it.
+  function inPopover() {
     const tasksStore = useTasksStore();
     tasksStore.comfyuiRuns = [
       { prompt_id: "p-1", label: "Night market", status: "running", percent: 40 },
@@ -204,20 +178,17 @@ describe("what the task manager shows", () => {
     const wrapper = mount(
       {
         render: () =>
-          h("div", { class: "inspector" }, [
-            h("button", { class: "inspector-tab inspector-tab--active" }, "Tasks"),
-            h(TasksPanel),
-          ]),
+          h("div", { role: "dialog", tabindex: "-1" }, [h(TasksPanel)]),
       },
       { ...globalOpts, attachTo: document.body },
     );
     const stop = wrapper.find('button[aria-label="Stop ComfyUI"]').element;
     stop.focus();
-    return { tasksStore, wrapper, stop, tab: wrapper.find(".inspector-tab").element };
+    return { tasksStore, wrapper, stop, tab: wrapper.find('[role="dialog"]').element };
   }
 
-  it("hands focus to its tab when the focused control leaves with its row", async () => {
-    const { tasksStore, stop, tab } = inInspector();
+  it("hands focus to its popover when the focused control leaves with its row", async () => {
+    const { tasksStore, stop, tab } = inPopover();
     tasksStore.comfyuiRuns = [];
     // Chromium fires this as the button is removed; jsdom does not, so the
     // test fires it, before the render that removes the row.
@@ -228,7 +199,7 @@ describe("what the task manager shows", () => {
   });
 
   it("leaves focus alone when the control is still there", async () => {
-    const { stop, tab } = inInspector();
+    const { stop, tab } = inPopover();
     stop.blur();
     await flushPromises();
     expect(document.activeElement).not.toBe(tab);
@@ -237,7 +208,7 @@ describe("what the task manager shows", () => {
   // The panel's own hand-off (a save's receipt line takes focus as its offer
   // leaves) is not focus lost.
   it("leaves focus alone when the row left but focus already went somewhere", async () => {
-    const { tasksStore, stop } = inInspector();
+    const { tasksStore, stop } = inPopover();
     const elsewhere = document.createElement("button");
     document.body.appendChild(elsewhere);
     tasksStore.comfyuiRuns = [];

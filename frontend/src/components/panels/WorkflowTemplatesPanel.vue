@@ -358,7 +358,7 @@ const downloadTitle = computed(() => {
     .flatMap((t) => t.files ?? [])
     .filter((file) => !file.present);
   if (files.some((file) => file.downloadable)) {
-    return "Already downloading: the Tasks tab shows how far";
+    return "Already downloading: the Tasks list in the title bar shows how far";
   }
   return files.length
     ? "PixlStash does not know where to get the files missing from your shelf"

@@ -50,36 +50,6 @@ describe("AppInspector", () => {
     expect(wrapper.emitted("update:modelValue")).toBeUndefined();
   });
 
-  it("lights only the tab the host marks busy, and says how much work", async () => {
-    // The Tasks tab's live-work light. It lives here rather than in a host so
-    // every inspector offering that tab pulses the same way; a light drawn on
-    // the wrong tab, or on all of them, is the way this inverts silently.
-    const wrapper = mountInspector({
-      tabs: [
-        { value: "a", label: "Alpha", icon: "mdi-alpha" },
-        {
-          value: "b",
-          label: "Beta",
-          icon: "mdi-beta",
-          busy: true,
-          busyTooltip: "2 active tasks",
-        },
-      ],
-    });
-    await flushPromises();
-    const tabs = wrapper.findAll("button.inspector-tab");
-    expect(tabs[0].find(".inspector-tab-pulse").exists()).toBe(false);
-    expect(tabs[0].find(".inspector-tab-icon--busy").exists()).toBe(false);
-    expect(tabs[1].find(".inspector-tab-pulse").exists()).toBe(true);
-    expect(tabs[1].find(".inspector-tab-icon--busy").exists()).toBe(true);
-    expect(describedAs(tabs[1])).toBe("2 active tasks");
-    // The dot is the same fact the description already carries, so it must not
-    // be read out a second time as an unlabelled node.
-    expect(tabs[1].find(".inspector-tab-pulse").attributes("aria-hidden")).toBe(
-      "true",
-    );
-  });
-
   it("names the pane and collapses without unmounting the box", async () => {
     const wrapper = mountInspector();
     expect(wrapper.attributes("aria-label")).toBe("Stats");

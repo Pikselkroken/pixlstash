@@ -1,7 +1,7 @@
 // Starting downloads of missing models (`POST /model-downloads`), for the
 // one-file button and the menus' *Download missing models*.
 //
-// Says so with one passing notice whose Show opens the Tasks tab, where each
+// Says so with one passing notice whose Show opens the task list, where each
 // download's own bar and cancel are; `useTasksStore` tells how each ended.
 
 import { startModelDownload } from "../api/modelDownloads";
@@ -91,7 +91,7 @@ export async function downloadModels(files) {
     // Everything asked for is on its way already, which is not nothing.
     notices.push({
       level: "info",
-      text: "Already downloading: the Tasks tab shows how far.",
+      text: "Already downloading: the Tasks list in the title bar shows how far.",
       action: {
         label: "Show",
         handler: () => useSidebarStore().showTasksTab(),

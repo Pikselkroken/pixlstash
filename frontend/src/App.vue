@@ -476,7 +476,7 @@ function onRunStarted({ prompts = [], pictureIds = [], error = "" } = {}) {
     action: { label: "Show", handler: () => sidebarStore.showTasksTab() },
     // A confirmation, not an Undo: it expires rather than piling up, and an
     // identical repeat collapses into one card with a ×N count. "Show" is a
-    // shortcut; the Tasks tab is reachable without it.
+    // shortcut; the title bar's Tasks pill is reachable without it.
     timeout: DEFAULT_TIMEOUTS.success,
     key: `comfyui-run-started-${prompts.length}`,
   });
@@ -732,9 +732,8 @@ watch(
 // --- Lifecycle ---
 onMounted(async () => {
   markStart("pixlstash:app-mounted-to-interactive");
-  // Start the app-wide tasks poll so the activity indicators (Tasks-tab icon,
-  // stats-sidebar light) are live everywhere, not only while the Tasks tab is
-  // open. The store self-throttles when idle and pauses on a hidden tab.
+  // Start the app-wide tasks poll so the title bar's Tasks pill is live
+  // everywhere, not only while its list is open. The store self-throttles when idle and pauses on a hidden tab.
   tasksStore.startPolling();
   fetch("/version")
     .then((r) => r.json())
@@ -1077,8 +1076,7 @@ defineExpose({
              both became a popup in F5, so `/workflows` is the one branch left
              ahead of the stats panel. -->
         <!-- The Workflows view's Templates tab (#2000) has its own: a template
-             is not a workflow yet, so nothing of the Workflow tab applies.
-             It offers the Tasks tab all the same. -->
+             is not a workflow yet, so nothing of the Workflow tab applies. -->
         <!-- Everywhere else the stats panel also inspects the grid's
              selection (#2161). It rates, favourites and tags through the
              grid's own paths, so the rail and the tile cannot disagree. -->

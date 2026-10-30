@@ -1008,8 +1008,8 @@ async function onStart() {
     const profile = job?.resolved_profile?.profile_label;
     store.showQueuedToast(
       profile
-        ? `Training queued: ${profile}. Watch progress in the Tasks tab.`
-        : "Training queued. Watch progress in the Tasks tab.",
+        ? `Training queued: ${profile}. Watch progress under Tasks in the title bar.`
+        : "Training queued. Watch progress under Tasks in the title bar.",
     );
     emit("started");
   } catch (err) {
