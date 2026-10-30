@@ -1205,6 +1205,48 @@ def test_a_pending_commit_is_finished_by_the_next_start_up(tmp_path):
         assert people == ["Anna"], "and the person its assignments named"
 
 
+def test_a_start_up_with_background_workers_off_does_not_resume(tmp_path):
+    """A read-only deployment finishes nobody's import (#2352).
+
+    The guard used to read a ``Vault`` attribute that did not exist, so it
+    never fired and this server resumed the commit like any other.
+    """
+    from pixlstash.services import folder_structure_commit_service as svc
+
+    cfg = str(tmp_path / "server-config.json")
+    with open(cfg, "w") as fh:
+        json.dump({"port": 8000, "trusted_proxies": ["testclient"]}, fh)
+
+    with Server(cfg) as first:
+        image_root = first.vault.image_root
+        _make_tree(image_root, {"Anna": ["a.jpg"]})
+        svc.record_pending_commit(
+            first,
+            task_id="left-for-a-worker",
+            root_path=image_root,
+            mode="local_import",
+            label=None,
+            expected_pictures=1,
+            assignments=svc.parse_assignments(
+                [{"relative_path": "Anna", "kind": "person"}]
+            ),
+        )
+
+    # Keep whatever the first start-up wrote to the config; only add the flag.
+    with open(cfg) as fh:
+        config = json.load(fh)
+    config["disable_background_workers"] = True
+    with open(cfg, "w") as fh:
+        json.dump(config, fh)
+    with Server(cfg) as second:
+        assert second.vault.disable_background_workers is True
+        # The resume claims the commit slot synchronously, as the router is
+        # built, before its thread starts - so an empty slot here means it
+        # did not run, with nothing to wait for.
+        assert second.folder_structure_commit is None
+        assert _record_for(second, "left-for-a-worker")["state"] == "pending"
+
+
 def test_a_taken_project_name_does_not_wedge_the_commit(owner_env):
     """`Project.name` is unique case-insensitively across the library. Marking a
     folder as a project and choosing "start a new one" while that name is taken

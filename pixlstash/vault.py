@@ -993,6 +993,11 @@ class Vault:
         self._scrapheap_retention_reduced_at = reduced_at
 
     @property
+    def disable_background_workers(self) -> bool:
+        """Whether this vault was opened with its background workers off."""
+        return self._disable_background_workers
+
+    @property
     def hub(self):
         """The hub database this vault was opened through, or None."""
         return self._hub
