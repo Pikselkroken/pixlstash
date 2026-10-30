@@ -17,7 +17,7 @@ import {
 // a second restore path, so it comes from the pictures resource module (the
 // import module owns the staging session, not the whole picture domain).
 import { restoreScrapheap } from "../../api/pictures";
-import { errorDetail } from "../../utils/apiError";
+import { errorDetail, errorMessage } from "../../utils/apiError";
 import AppButton from "../widgets/AppButton.vue";
 
 // ── Async streaming-staging import (#459) ────────────────────────────────────
@@ -851,7 +851,9 @@ async function startImport(files, options = {}) {
       phase: importPhase.value,
     });
   } catch (error) {
-    const message = error?.message || String(error);
+    // The server's reason first: opening the session onto a locked set answers
+    // 409 with why, and axios's own message says only the status code.
+    const message = errorMessage(error, String(error));
     finalizeError(message);
     logImportTrace("Import failed", { message });
   }
