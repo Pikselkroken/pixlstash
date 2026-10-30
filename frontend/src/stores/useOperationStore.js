@@ -271,13 +271,17 @@ export const useOperationStore = defineStore("operation", () => {
 
   // Highest operation id seen by a completed refresh. Used to tell a genuinely
   // new operation from a re-read of the same history - an id we have already
-  // seen must never raise a second receipt.
+  // seen must never raise a second receipt. `null` means never loaded; `0`
+  // means loaded and the log was empty (ids start at 1), so the first
+  // operation a fresh library records still narrates.
   let highWaterMark = null;
 
   // Coalesce overlapping refreshes: WS bursts collapse into one in-flight
-  // request plus at most one trailing refetch.
+  // request plus at most one trailing refetch. A queued call that wanted a
+  // receipt keeps it: the refetch narrates if any caller behind it asked to.
   let inFlight = false;
   let refetchQueued = false;
+  let queuedNarrate = false;
 
   // Every request belongs to exactly one authentication epoch. Reset aborts
   // the transport where possible and the epoch check remains the backstop for
@@ -780,6 +784,7 @@ export const useOperationStore = defineStore("operation", () => {
     if (isReadOnly.value) return;
     if (inFlight) {
       refetchQueued = true;
+      queuedNarrate = queuedNarrate || narrate;
       return;
     }
     inFlight = true;
@@ -797,10 +802,7 @@ export const useOperationStore = defineStore("operation", () => {
       nextRedo.value = state?.next_redo ?? null;
       const previous = highWaterMark;
       const newest = operations.value[0];
-      if (newest?.id != null) {
-        highWaterMark =
-          previous == null ? newest.id : Math.max(previous, newest.id);
-      }
+      highWaterMark = Math.max(previous ?? 0, newest?.id ?? 0);
       loaded.value = true;
       if (narrate) narrateNewest(previous, newest);
     } catch (e) {
@@ -817,8 +819,10 @@ export const useOperationStore = defineStore("operation", () => {
       if (requestIsCurrent(request)) {
         inFlight = false;
         if (refetchQueued) {
+          const narrateNext = narrate || queuedNarrate;
           refetchQueued = false;
-          refresh({ narrate });
+          queuedNarrate = false;
+          refresh({ narrate: narrateNext });
         }
       }
     }
@@ -1151,6 +1155,7 @@ export const useOperationStore = defineStore("operation", () => {
     activeRequests.clear();
     inFlight = false;
     refetchQueued = false;
+    queuedNarrate = false;
     busy.value = false;
     dismissReceipt();
     resetGhostSet();

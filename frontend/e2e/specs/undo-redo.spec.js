@@ -204,22 +204,6 @@ const CHANGE_KINDS = [
   },
 ]
 
-// The receipt only narrates an operation newer than the newest one the tab saw
-// at boot, and a tab that booted on an EMPTY log has seen none, so the first
-// operation a library ever records raises no receipt (useOperationStore's
-// `narrateNewest`). Run on its own against the fresh fixture, this spec would
-// trip over that. One step of history, made and taken back, rules it out.
-test.beforeAll(async ({ apiContext }) => {
-  const ops = await (await apiContext.get(`${API}/operations`, { params: { limit: 1 } })).json()
-  if (ops.length) return
-  const [pictureId] = await livePictureIds(apiContext)
-  const res = await apiContext.post(`${API}/pictures/${pictureId}/tags`, {
-    data: { tag: PROBE_TAG },
-  })
-  expect(res.ok(), await res.text()).toBe(true)
-  await undoIfApplied(apiContext, await newestOperationId(apiContext))
-})
-
 test.describe('undo and redo from the keyboard', () => {
   for (const kind of CHANGE_KINDS) {
     test(`Ctrl+Z reverts ${kind.name} on the server, Ctrl+Y redoes it`, async ({
