@@ -4,6 +4,21 @@
 // is the folder listing's entry (null while a queued run has no folder yet),
 // `job` the PixlStash job that trained it (null for a run trained elsewhere).
 
+/** A job in one of these is training, or about to. */
+export const LIVE_STATUSES = ["queued", "running", "stopping"];
+
+/**
+ * True while the worker is not done with a job: it is training or about to,
+ * or it has trained and is still drawing its deferred previews or being
+ * imported. The backend stores that last state as `completed` with no
+ * `completed_at`, which it writes once the import lands (#2291).
+ */
+export function isBusyJob(job) {
+  if (!job) return false;
+  if (LIVE_STATUSES.includes(job.status)) return true;
+  return job.status === "completed" && !job.completed_at;
+}
+
 /** True when the run wrote the bare final file that confirms it finished. */
 export function hasBareFinal(run) {
   return (run?.checkpoints || []).some((cp) => cp.step === null);
@@ -40,6 +55,12 @@ export function jobStatus(job) {
         : "Stopped";
     case "error":
       return "Failed";
+    case "completed":
+      // Only the live view knows which: a job summary carries no phase.
+      if (job.completed_at) return "Trained by PixlStash";
+      if (job.phase === "previews") return "Generating previews";
+      if (job.phase === "importing") return "Importing to the shelf";
+      return "Finishing";
     default:
       return "Trained by PixlStash";
   }

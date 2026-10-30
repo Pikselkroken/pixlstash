@@ -1848,7 +1848,8 @@ def create_router(server) -> APIRouter:
             "ai-toolkit folder is left where it is, and so is anything else "
             "there: the run is listed by the shelf and its LoRA is a shelf "
             "model with its own copy. Returns 404 if the job is unknown, and "
-            "409 while it is queued, running or stopping: cancel it first. "
+            "409 while it is queued, running or stopping (cancel it first), "
+            "or still drawing its previews or being imported. "
             "Owner-only."
         ),
     )
@@ -1871,10 +1872,11 @@ def create_router(server) -> APIRouter:
             current = training_runs.get_run(hub, library_uuid, job_id)
             if current is None:
                 raise HTTPException(status_code=404, detail="Training job not found")
-            raise HTTPException(
-                status_code=409,
-                detail=f"Job is still {current['status']}; cancel it before deleting.",
-            )
+            if current["status"] == "completed":
+                detail = "Job is still drawing its previews or being imported."
+            else:
+                detail = f"Job is still {current['status']}; cancel it before deleting."
+            raise HTTPException(status_code=409, detail=detail)
 
         # Remove the job's work dir (validated under training/).
         _safe_remove_dir(training_root, job_uuid)

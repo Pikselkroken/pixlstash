@@ -9,7 +9,7 @@
           data-testid="mrr-stop"
           @click="stop"
         >
-          Stop
+          {{ current.job.status === "completed" ? "Skip previews" : "Stop" }}
         </button>
       </template>
       <span
@@ -193,13 +193,14 @@ const status = computed(() => {
   return "finished";
 });
 
-// Not while it is already stopping: a second cancel says nothing new.
-const canStop = computed(
-  () =>
-    current.value.live &&
-    current.value.job &&
-    current.value.job.status !== "stopping",
-);
+// Not while it is already stopping: a second cancel says nothing new. A
+// trained run's cancel skips its remaining previews; once it is importing (or
+// before the live view says which) there is nothing to stop.
+const canStop = computed(() => {
+  const job = current.value.job;
+  if (!current.value.live || !job || job.status === "stopping") return false;
+  return job.status !== "completed" || job.phase === "previews";
+});
 const percent = computed(() => progressOf(current.value));
 const steps = computed(() => stepsOf(current.value));
 const remaining = computed(() =>

@@ -1,6 +1,6 @@
 // The Training settings section reads the jobs when the dialog mounts it already
 // open, and polls while a job runs, including one started elsewhere while the
-// section is open.
+// section is open, or one still drawing its previews or being imported.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
@@ -24,7 +24,15 @@ const RUNNING = {
   step: 5,
   total_steps: 100,
 };
-const DONE = { ...RUNNING, id: 2, uuid: "run-2", status: "completed" };
+const DONE = {
+  ...RUNNING,
+  id: 2,
+  uuid: "run-2",
+  status: "completed",
+  completed_at: "2026-10-26T09:00:00+00:00",
+};
+// Trained, still drawing its previews or being imported (#2291).
+const FINISHING = { ...DONE, id: 3, uuid: "run-3", completed_at: null };
 
 const wrappers = [];
 
@@ -75,6 +83,23 @@ describe("the Training settings section", () => {
     await vi.advanceTimersByTimeAsync(0);
     const before = training.listTrainingJobs.mock.calls.length;
 
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(training.listTrainingJobs.mock.calls.length).toBeGreaterThan(before);
+  });
+
+  it("offers no delete or cancel for a run still being imported, and polls it", async () => {
+    vi.useFakeTimers();
+    training.listTrainingJobs.mockResolvedValue([FINISHING, DONE]);
+    const wrapper = mountSection(true);
+    await vi.advanceTimersByTimeAsync(0);
+
+    const [finishing, done] = wrapper.findAll(".training-row");
+    expect(finishing.text()).toContain("finishing");
+    expect(finishing.find('[aria-label="Delete job"]').exists()).toBe(false);
+    expect(finishing.text()).not.toContain("Cancel");
+    expect(done.find('[aria-label="Delete job"]').exists()).toBe(true);
+
+    const before = training.listTrainingJobs.mock.calls.length;
     await vi.advanceTimersByTimeAsync(4000);
     expect(training.listTrainingJobs.mock.calls.length).toBeGreaterThan(before);
   });

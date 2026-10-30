@@ -6497,8 +6497,13 @@ meters (teal for the run's own share, grey for everything else, hatched red for
 a RAM shortfall), seconds per update and the time-left range each carry a
 Measured / Estimated / Not measured mark drawn by shape; a figure the server
 sent as null reads "Unknown" over a dashed track, never 0. The page polls
-`GET /training/jobs/{id}/live` every 2 s while the run is live and the tab is
-visible, and stops once it has ended.
+`GET /training/jobs/{id}/live` every 2 s while the run is busy and the tab is
+visible, and stops once it has ended. Busy is `isBusyJob`
+(`utils/trainingRuns.js`), the one predicate the run page, the runs store and
+Settings share: queued, running or stopping, or `completed` with no
+`completed_at`, which is a trained run still drawing its deferred previews or
+being imported (#2291). While it draws them, *Stop training* reads *Skip
+previews*; while it imports there is nothing to stop.
 
 **Export dataset** sits under the *Trained on* strip once the run's payload
 names a `dataset_snapshot_id` (#2123): a ghost `AppButton` that fetches
@@ -6662,7 +6667,7 @@ set's own slot ＋ pickers; nothing drags from the rail any more.
   instead of the shelf's selection. Nothing picked: the output folder, the run
   count and how many train now. One run (`ModelsRailRun.vue`): *Training*
   (status, bar, steps, time left, loss chart and value; a red *Stop* while it
-  trains), *Samples* (prompts × the last four sampled steps, the no-trigger
+  trains, *Skip previews* while a trained run draws them), *Samples* (prompts × the last four sampled steps, the no-trigger
   check prompt marked, *Open run* for a run PixlStash trained), *Checkpoints*
   (each save with its size), *Set-up* (trained on, base, trigger, rank · LR,
   folder). A run PixlStash trains is read from `GET /training/jobs/{id}/live`,

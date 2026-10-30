@@ -11855,7 +11855,12 @@ skipped. Cancel stops the passes and imports the run as it is. A shutdown stops
 them and leaves the run completed with no `completed_at`, which
 `training_runs.unfinished_runs` returns, so the next start's reconcile imports
 it (without the previews still to draw); the same covers a restart during any
-import. `ponytail:` each pass loads the model again; one pass that swaps
+import. Until `completed_at` lands the run is busy, not finished:
+`training_runs.delete_run(only_finished=True)` refuses it (the route answers
+409), and the frontend's one predicate, `isBusyJob` in
+`frontend/src/utils/trainingRuns.js`, keeps the run page polling, the runs grid
+from importing it and Settings from offering Delete (#2291). `ponytail:` each
+pass loads the model again; one pass that swaps
 LoRAs would need ai-toolkit's generate job, if the time matters.
 
 **The AI-toolkit tenant.** `resources/aitoolkit_tenant.py` is the arbiter's

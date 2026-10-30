@@ -5,10 +5,8 @@ import { listRuns } from "../api/modelImports";
 import { listTrainingJobs } from "../api/training";
 import { onSessionReset } from "../utils/apiClient";
 import { errorDetail } from "../utils/apiError";
+import { isBusyJob } from "../utils/trainingRuns.js";
 import { useModelFoldersStore } from "./useModelFoldersStore";
-
-/** A job in one of these is training, or about to: it selects alone. */
-export const LIVE_STATUSES = ["queued", "running", "stopping"];
 
 /** A job that ended in one of these may have ended before it was started. */
 const ENDED_EARLY = ["error", "stopped"];
@@ -54,9 +52,12 @@ export const useTrainingRunsStore = defineStore("trainingRuns", () => {
   /** The registered ai-toolkit output root. One, by the folders store's rule. */
   const source = computed(() => folders.sourceFolder);
 
-  function isLive(job) {
-    return Boolean(job) && LIVE_STATUSES.includes(job.status);
-  }
+  /**
+   * A live job selects alone and is never importable: that includes one
+   * still drawing its previews or being imported, whose folder the worker
+   * is still reading.
+   */
+  const isLive = isBusyJob;
 
   /**
    * One card per run: every folder run, plus each job that has no folder - a

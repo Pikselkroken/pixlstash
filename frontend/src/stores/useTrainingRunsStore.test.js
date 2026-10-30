@@ -76,7 +76,8 @@ describe("the cards of jobs with no folder", () => {
       job("queued", "queued"),
       job("dataset-failed", "error"),
       job("cancelled", "stopped"),
-      job("finished", "completed"),
+      // Finished: imported, so it has its finish time (#2291).
+      { ...job("finished", "completed"), completed_at: STARTED },
       job("imported-away", "error", "gone_v1", STARTED),
       // A started run under an output root since moved names no run.
       job("root-moved", "stopped", null, STARTED),

@@ -623,6 +623,25 @@ describe("a picked training run (#2169)", () => {
     expect(cancelTrainingJob).toHaveBeenCalledWith(7);
   });
 
+  it("skips a trained run's previews from the rail, and offers nothing while it imports", async () => {
+    // Trained, not imported yet: `completed` with no completed_at (#2291).
+    const trained = { ...liveJob, status: "completed", completed_at: null };
+    getTrainingJobLive.mockResolvedValue({ ...trained, phase: "previews" });
+    cancelTrainingJob.mockResolvedValue({});
+    const { wrapper } = await mountOnRuns({ jobs: [trained], pick: ["job:u7"] });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const skip = wrapper.get('[data-testid="mrr-stop"]');
+    expect(skip.text()).toBe("Skip previews");
+    await skip.trigger("click");
+    expect(cancelTrainingJob).toHaveBeenCalledWith(7);
+
+    getTrainingJobLive.mockResolvedValue({ ...trained, phase: "importing" });
+    const importing = await mountOnRuns({ jobs: [trained], pick: ["job:u7"] });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(importing.wrapper.find('[data-testid="mrr-stop"]').exists()).toBe(false);
+  });
+
   it("draws no picture for a sample whose folder it cannot name, and keeps the grid", async () => {
     // A live job can report a drawn sample before its run folder resolves to a
     // model folder, and with no run on disk yet there is nothing else to

@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { jobStatus, progressOf, stepsOf } from "./trainingRuns.js";
+import { isBusyJob, jobStatus, progressOf, stepsOf } from "./trainingRuns.js";
 
 const saved = (...steps) => ({
   checkpoints: steps.map((step) => ({ filename: `r_${step}`, step })),
@@ -45,5 +45,31 @@ describe("a run's status", () => {
     expect(jobStatus({ status: "running", step: null, total_steps: 10 })).toBe(
       "Training 0 / 10",
     );
+  });
+});
+
+describe("whether the worker is done with a job (#2291)", () => {
+  const DONE_AT = "2026-10-26T09:00:00+00:00";
+
+  it("is busy while it trains, and while a trained run is not yet imported", () => {
+    for (const status of ["queued", "running", "stopping"]) {
+      expect(isBusyJob({ status })).toBe(true);
+    }
+    expect(isBusyJob({ status: "completed", completed_at: null })).toBe(true);
+  });
+
+  it("is done once it has a finish time, or ended any other way", () => {
+    expect(isBusyJob({ status: "completed", completed_at: DONE_AT })).toBe(false);
+    expect(isBusyJob({ status: "stopped", completed_at: null })).toBe(false);
+    expect(isBusyJob({ status: "error", completed_at: null })).toBe(false);
+    expect(isBusyJob(null)).toBe(false);
+  });
+
+  it("names what a trained run is still doing", () => {
+    const job = { status: "completed", completed_at: null };
+    expect(jobStatus(job)).toBe("Finishing");
+    expect(jobStatus({ ...job, phase: "previews" })).toBe("Generating previews");
+    expect(jobStatus({ ...job, phase: "importing" })).toBe("Importing to the shelf");
+    expect(jobStatus({ ...job, completed_at: DONE_AT })).toBe("Trained by PixlStash");
   });
 });

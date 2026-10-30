@@ -867,6 +867,21 @@ describe("the runs PixlStash trains (#2118)", () => {
     run_name: "Clementine_abcd1234",
     ...overrides,
   });
+  const DONE_AT = "2026-10-26T09:00:00+00:00";
+
+  it("offers no import for a run still drawing its previews or being imported", async () => {
+    // Trained, no completed_at yet: the worker still reads its folder (#2291).
+    listTrainingJobs.mockResolvedValue([job({ status: "completed", completed_at: null })]);
+    const wrapper = await openWith([run("Clementine_abcd1234"), run("Foxglove")]);
+    const card = wrapper
+      .findAll(".tr-card")
+      .find((c) => c.find(".tr-card-name").text() === "Clementine_abcd1234");
+    expect(card.find(".tr-card-chip").text()).toBe("Finishing");
+    await tick(wrapper, "Foxglove");
+    await card.trigger("click");
+    expect(card.attributes("aria-selected")).toBe("true");
+    expect(importBtn(wrapper)).toBeUndefined();
+  });
 
   it("picks a live run on its own, and offers no import for it", async () => {
     listTrainingJobs.mockResolvedValue([job()]);
@@ -914,7 +929,7 @@ describe("the runs PixlStash trains (#2118)", () => {
     listTrainingJobs.mockReturnValue(new Promise((r) => (release = r)));
     const wrapper = await openWith([run("Clementine_abcd1234"), run("Foxglove")]);
     await tick(wrapper, "Foxglove");
-    release([job({ status: "completed", run_name: "Clementine_abcd1234" })]);
+    release([job({ status: "completed", completed_at: DONE_AT, run_name: "Clementine_abcd1234" })]);
     await settle(wrapper);
     expect(useTrainingRunsStore().chosen).toEqual(["run:Foxglove"]);
     expect(importBtn(wrapper)).toBeDefined();
@@ -952,7 +967,7 @@ describe("the runs PixlStash trains (#2118)", () => {
   it("gives a queued run a card before it has a folder", async () => {
     listTrainingJobs.mockResolvedValue([
       job({ status: "queued", step: 0, run_name: null }),
-      job({ uuid: "old", status: "completed", run_name: null }),
+      job({ uuid: "old", status: "completed", completed_at: DONE_AT, run_name: null }),
     ]);
     const wrapper = await openWith([]);
     const cards = wrapper.findAll(".tr-card");

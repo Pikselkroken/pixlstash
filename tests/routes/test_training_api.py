@@ -234,6 +234,10 @@ def _seed_job(server, **overrides):
         "ai_toolkit_commit": "deadbeef",
     }
     fields.update(overrides)
+    # A completed run the worker is done with has a finish time; without one it
+    # is still drawing previews or being imported, so a test asks for that.
+    if fields["status"] == "completed":
+        fields.setdefault("completed_at", "2026-10-26T09:00:00+00:00")
     created = {key: fields.pop(key) for key in list(fields) if key in creating}
     job_uuid = _uuid.uuid4().hex
     hub = server.vault.hub
@@ -1013,6 +1017,23 @@ def test_delete_job_refuses_a_live_job(status):
 
         r = owner.delete(f"/training/jobs/{job_id}")
         assert r.status_code == 409, r.text
+        assert owner.get(f"/training/jobs/{job_id}").status_code == 200
+        assert os.path.isdir(work_dir)
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_delete_job_refuses_a_run_still_drawing_previews_or_importing():
+    """Completed with no completed_at: the worker still reads its work dir."""
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        job_id, job_uuid = _seed_job(server, completed_at=None)
+        work_dir = os.path.join(server.vault.image_root, "training", job_uuid)
+        os.makedirs(work_dir, exist_ok=True)
+
+        r = owner.delete(f"/training/jobs/{job_id}")
+        assert r.status_code == 409, r.text
+        assert "previews" in r.json()["detail"], r.text
         assert owner.get(f"/training/jobs/{job_id}").status_code == 200
         assert os.path.isdir(work_dir)
     finally:
