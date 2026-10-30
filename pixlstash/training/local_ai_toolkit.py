@@ -78,7 +78,7 @@ _ORPHAN_LAUNCHER = (
     "trainer = subprocess.Popen(sys.argv[2:], stdin=subprocess.DEVNULL,"
     " stdout=sys.stderr, stderr=subprocess.STDOUT, start_new_session=True,"
     " creationflags=int(sys.argv[1]))\n"
-    "print(trainer.pid)\n"
+    "print(trainer.pid, flush=True)\n"
 )
 # How long the launcher may take to start the trainer (seconds).
 _ORPHAN_LAUNCH_TIMEOUT_SECONDS = 60.0
@@ -583,25 +583,37 @@ class LocalAiToolkit(TrainerBackend):
 
         Raises:
             OSError: The launcher failed or printed no pid.
-            subprocess.TimeoutExpired: The launcher did not finish in time.
+            subprocess.TimeoutExpired: The launcher did not finish in time
+                and printed no pid.
         """
-        done = subprocess.run(  # noqa: S603 - argv list, never shell
-            [
-                self.ai_toolkit_python,
-                "-c",
-                _ORPHAN_LAUNCHER,
-                str(_DETACHED_FLAGS),
-                *cmd,
-            ],
-            cwd=self.ai_toolkit_repo_path,
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=output,
-            creationflags=_DETACHED_FLAGS,
-            timeout=_ORPHAN_LAUNCH_TIMEOUT_SECONDS,
-            check=False,
-        )
+        try:
+            done = subprocess.run(  # noqa: S603 - argv list, never shell
+                [
+                    self.ai_toolkit_python,
+                    "-c",
+                    _ORPHAN_LAUNCHER,
+                    str(_DETACHED_FLAGS),
+                    *cmd,
+                ],
+                cwd=self.ai_toolkit_repo_path,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=output,
+                creationflags=_DETACHED_FLAGS,
+                timeout=_ORPHAN_LAUNCH_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            # One that printed the pid and then hung has started the trainer:
+            # keep tracking it rather than leave it running unseen.
+            printed = (exc.stdout or b"").decode("ascii", "replace").strip()
+            if not printed.isdigit():
+                raise
+            logger.warning(
+                "Trainer launcher hung after starting pid %s and was killed", printed
+            )
+            return int(printed)
         printed = done.stdout.decode("ascii", "replace").strip()
         if done.returncode != 0 or not printed.isdigit():
             raise OSError(

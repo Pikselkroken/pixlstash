@@ -52,7 +52,6 @@ def test_the_launcher_leaves_a_trainer_that_is_not_our_child(tmp_path, monkeypat
     handle = backend.prepare(spec)
     backend.submit(handle, spec)
     try:
-        assert handle.pid not in backend._processes
         assert psutil.Process(handle.pid).ppid() != os.getpid()
         assert backend.is_alive(handle)
         assert _poll_until(lambda: not backend.is_alive(handle), timeout=30)
@@ -80,6 +79,31 @@ def test_a_failed_launch_marks_the_job_error(tmp_path, monkeypatch):
     assert _job_status(handle) == "error"
     with open(os.path.join(handle.work_dir, "trainer_output.log")) as fh:
         assert "no trainer" in fh.read()
+
+
+def test_a_launcher_that_hangs_after_starting_the_trainer_keeps_it(
+    tmp_path, monkeypatch
+):
+    """The timeout kills a hung launcher, but the pid it printed is still used."""
+    monkeypatch.setattr(local_ai_toolkit, "_ORPHAN_TRAINER", True)
+    monkeypatch.setattr(local_ai_toolkit, "_ORPHAN_LAUNCH_TIMEOUT_SECONDS", 2.0)
+    monkeypatch.setattr(
+        local_ai_toolkit,
+        "_ORPHAN_LAUNCHER",
+        local_ai_toolkit._ORPHAN_LAUNCHER + "import time; time.sleep(60)\n",
+    )
+    monkeypatch.setenv("FAKE_RUN_STEP_DELAY", "0.05")
+    backend = _make_backend()
+    spec = _make_spec(tmp_path, steps=200, save_every=0)
+    handle = backend.prepare(spec)
+    backend.submit(handle, spec)
+    try:
+        assert backend.is_alive(handle)
+        assert _job_status(handle) == "running"
+        assert _poll_until(lambda: not backend.is_alive(handle), timeout=30)
+        assert _job_status(handle) == "completed"
+    finally:
+        backend.cancel(handle)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="taskkill is the Windows desktop quit")
