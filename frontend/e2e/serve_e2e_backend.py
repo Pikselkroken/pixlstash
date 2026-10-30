@@ -454,7 +454,7 @@ def main() -> int:
     _seed_fake_ai_toolkit(AI_TOOLKIT)
     # Inherited by the trainer: slow enough for a spec to see a run in
     # progress, fast enough that a short run costs about a second.
-    os.environ.setdefault("FAKE_RUN_STEP_DELAY", "0.05")
+    os.environ["FAKE_RUN_STEP_DELAY"] = "0.05"
 
     # Build a lean server-config from the fixture's own config, overriding the
     # fields that matter for a fast, hermetic, password-auth test server.
