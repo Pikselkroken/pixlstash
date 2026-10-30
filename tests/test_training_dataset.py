@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 from sqlmodel import select
 
 from pixlstash.db_models import Face, Picture, Tag
@@ -62,6 +63,11 @@ def _create_set(client, name):
 def _add_to_set(client, set_id, pic_id):
     resp = client.post(f"/picture_sets/{set_id}/members/{pic_id}")
     assert resp.status_code == 200, resp.text
+
+
+def _write_bytes(path, data):
+    with open(path, "wb") as fh:
+        fh.write(data)
 
 
 def _assert_pairs(dest_dir, expected_count, trigger_word=None):
@@ -255,6 +261,81 @@ def test_build_training_dataset_skips_videos(env):
     facts = ExportUtils.training_facts(server, set_id=set_id)
     assert (facts["count"], facts["clips"]) == (1, 1)
     assert ExportUtils.training_counts(server, set_id=set_id) == (1, 1)
+
+
+def test_build_training_dataset_converts_what_ai_toolkit_would_skip(env):
+    """#2290: ai-toolkit lists only jpg/jpeg/png/webp and trains alpha as black.
+
+    Every other still is written as an RGB PNG, alpha is flattened onto grey,
+    a picture the trainer already reads is copied byte for byte, and one that
+    cannot be decoded is left out of the files, the count and the snapshot.
+    """
+    client, server = env
+    set_id = _create_set(client, "FormatSet")
+    image_root = server.vault.image_root
+    red = (200, 10, 10)
+    transparent = Image.new("RGBA", (8, 8), (0, 0, 0, 0))
+    transparent.paste((*red, 255), (0, 0, 4, 8))
+    sources = {
+        "photo.jpg": lambda path: Image.new("RGB", (8, 8), red).save(path),
+        "photo.heic": lambda path: Image.new("RGB", (8, 8), red).save(path),
+        "photo.avif": lambda path: Image.new("RGB", (8, 8), red).save(path),
+        "photo.bmp": lambda path: Image.new("RGB", (8, 8), red).save(path),
+        "photo.tiff": lambda path: Image.new("RGB", (8, 8), red).save(path),
+        "cutout.png": lambda path: transparent.save(path),
+        "cutout.gif": lambda path: transparent.save(path),
+        "grey16.tiff": lambda path: Image.new("I;16", (8, 8), 40000).save(path),
+        "grey16.png": lambda path: Image.new("I;16", (8, 8), 40000).save(path),
+        "broken.bmp": lambda path: _write_bytes(path, b"not a bitmap"),
+    }
+    ids = {}
+    for name, write in sources.items():
+        write(os.path.join(image_root, name))
+
+        def insert(session, name=name):
+            pic = Picture(file_path=name, imported_at=datetime.now(timezone.utc))
+            session.add(pic)
+            session.commit()
+            session.refresh(pic)
+            return pic.id
+
+        ids[name] = server.vault.db.run_task(insert)
+        _add_to_set(client, set_id, ids[name])
+
+    with tempfile.TemporaryDirectory() as dest_dir:
+        manifest = ExportUtils.build_training_dataset(
+            server, dest_dir=dest_dir, set_id=set_id, trigger_word="fmt"
+        )
+        by_id = {item["picture_id"]: item["file_name"] for item in manifest["items"]}
+        written = {name: by_id.get(pic_id) for name, pic_id in ids.items()}
+
+        assert written.pop("broken.bmp") is None
+        assert ids["broken.bmp"] not in manifest["picture_ids"]
+        assert manifest["image_count"] == len(written) == len(manifest["items"])
+        assert sorted(manifest["picture_ids"]) == sorted(ids[name] for name in written)
+        _assert_pairs(dest_dir, expected_count=len(written), trigger_word="fmt")
+
+        assert written["photo.jpg"].endswith(".jpg")
+        with open(os.path.join(image_root, "photo.jpg"), "rb") as fh:
+            original = fh.read()
+        with open(os.path.join(dest_dir, written["photo.jpg"]), "rb") as fh:
+            assert fh.read() == original
+        for name in ("photo.heic", "photo.avif", "photo.bmp", "photo.tiff"):
+            assert written[name].endswith(".png"), written[name]
+            with Image.open(os.path.join(dest_dir, written[name])) as img:
+                assert img.mode == "RGB"
+                r, g, b = img.getpixel((4, 4))
+                assert abs(r - red[0]) < 16 and g < 40 and b < 40, (name, r, g, b)
+        for name in ("grey16.tiff", "grey16.png"):
+            with Image.open(os.path.join(dest_dir, written[name])) as img:
+                # Scaled to 8-bit, not clipped to white by convert("RGB").
+                assert img.getpixel((4, 4)) == (156, 156, 156), name
+        for name in ("cutout.png", "cutout.gif"):
+            assert written[name].endswith(".png"), written[name]
+            with Image.open(os.path.join(dest_dir, written[name])) as img:
+                assert img.mode == "RGB"
+                assert img.getpixel((1, 4)) == red
+                assert img.getpixel((6, 4)) == (128, 128, 128)
 
 
 def test_build_training_dataset_no_trigger_word(env):

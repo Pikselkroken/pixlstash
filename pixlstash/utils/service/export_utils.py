@@ -11,7 +11,7 @@ import tempfile
 import unicodedata
 import zipfile
 
-from PIL import Image, PngImagePlugin
+from PIL import Image, ImageOps, PngImagePlugin
 
 from pixlstash.db_models.face import Face
 from pixlstash.db_models.picture import Picture, PictureSet
@@ -63,6 +63,16 @@ _WINDOWS_DEVICE_NAME_RE = re.compile(
     r"(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])\Z",
     re.IGNORECASE,
 )
+
+# What ai-toolkit's data loader lists (``image_extensions`` in
+# ``toolkit/data_loader.py``). Anything else in a dataset folder is skipped
+# without a word, so a training dataset converts the rest to PNG (#2290).
+TRAINER_IMAGE_EXTS = frozenset({".jpg", ".jpeg", ".png", ".webp"})
+
+# ai-toolkit loads every picture with ``convert("RGB")``, which drops alpha and
+# trains the transparent area as whatever colour sits under it (often black).
+# A training dataset flattens alpha onto this neutral grey instead.
+TRAINER_ALPHA_BACKGROUND = (128, 128, 128)
 
 
 def _safe_archive_stem(name: str, fallback: str, *, is_extension: bool = False) -> str:
@@ -226,6 +236,93 @@ class ExportUtils:
             save_kwargs = {}
         img.save(buffer, format=fmt, **save_kwargs)
         zip_file.writestr(arcname, buffer.getvalue())
+
+    @staticmethod
+    def _needs_trainer_conversion(full_path, ext) -> bool:
+        """Whether ai-toolkit would skip this still or train its alpha wrong.
+
+        Args:
+            full_path: The picture's source file.
+            ext: Its extension, as the export loop read it.
+
+        Returns:
+            True for a format outside :data:`TRAINER_IMAGE_EXTS`, a picture
+            with transparency, 16-bit grey (the trainer's ``convert("RGB")``
+            clips it to white), or one that cannot be read; False for one the
+            trainer reads as it is, and for a video, which the trainer cuts
+            frames from itself.
+        """
+        if VideoUtils.is_video_file(full_path):
+            return False
+        if ext.lower() not in TRAINER_IMAGE_EXTS:
+            return True
+        try:
+            with Image.open(full_path) as img:
+                return (
+                    img.mode in {"RGBA", "LA", "PA"}
+                    or img.mode.startswith("I;16")
+                    or "transparency" in img.info
+                )
+        except Exception as exc:
+            # A still the trainer cannot decode either: the conversion fails
+            # too, and leaves it out of the dataset rather than miscounted.
+            logger.warning(
+                "Could not read %s to check for transparency (%s).", full_path, exc
+            )
+            return True
+
+    @staticmethod
+    def _write_trainer_png(full_path, arcname, sink, scale) -> bool:
+        """Write *full_path* as an RGB PNG ai-toolkit trains on as it looks.
+
+        Orientation is baked into the pixels (the EXIF that carried it is not
+        written), the colour profile is kept, 16-bit grey is scaled to 8-bit
+        and alpha is flattened onto :data:`TRAINER_ALPHA_BACKGROUND`.
+        An animated GIF gives its first frame.
+
+        Args:
+            full_path: The picture's source file.
+            arcname: The member name to write, ending ``.png``.
+            sink: The dataset's :class:`_FolderSink`.
+            scale: The dataset's resolution factor (1.0 for the original).
+
+        Returns:
+            True when the PNG was written; False when the source could not be
+            decoded, so the picture is left out of the dataset.
+        """
+        try:
+            with Image.open(full_path) as img:
+                icc_profile = img.info.get("icc_profile")
+                img = ImageOps.exif_transpose(img)
+                if img.mode.startswith("I;16"):
+                    # 16-bit grey: convert("RGB") clips every value above 255
+                    # to white, so scale it down first. Plain "I" is left
+                    # alone: a 32-bit file can hold 0-255 already.
+                    img = img.convert("I").point(lambda v: v / 256).convert("L")
+                if img.mode in {"RGBA", "LA", "PA"} or "transparency" in img.info:
+                    rgba = img.convert("RGBA")
+                    img = Image.new("RGB", rgba.size, TRAINER_ALPHA_BACKGROUND)
+                    img.paste(rgba, mask=rgba.getchannel("A"))
+                else:
+                    img = img.convert("RGB")
+                ExportUtils._write_image_to_zip(
+                    img,
+                    arcname,
+                    sink,
+                    ext=".png",
+                    scale=scale,
+                    save_kwargs={"icc_profile": icc_profile} if icc_profile else None,
+                )
+            return True
+        except Exception as exc:
+            logger.warning(
+                "Could not convert %s to %s for the training dataset (%s); "
+                "leaving the picture out.",
+                full_path,
+                arcname,
+                exc,
+            )
+            return False
 
     @staticmethod
     def _write_detection_sidecar(
@@ -753,7 +850,15 @@ class ExportUtils:
                         # "image_00003" must not land on index 3's fallback.
                         name_stem = _unique_export_stem(f"image_{idx:05d}", used_names)
                         arcname = f"{name_stem}{ext}"
-                    if scale_factor < 1.0 and not VideoUtils.is_video_file(full_path):
+                    if params.get("trainer_images") and (
+                        ExportUtils._needs_trainer_conversion(full_path, ext)
+                    ):
+                        arcname = f"{name_stem}.png"
+                        if not ExportUtils._write_trainer_png(
+                            full_path, arcname, sink, scale_factor
+                        ):
+                            continue
+                    elif scale_factor < 1.0 and not VideoUtils.is_video_file(full_path):
                         try:
                             with Image.open(full_path) as img:
                                 save_kwargs = {}
@@ -1069,7 +1174,12 @@ class ExportUtils:
         ``image_NNNNN.<ext>`` plus ``image_NNNNN.txt`` caption per picture.
         Pictures whose source file is missing are skipped, and so are videos
         unless ``clips``: those are copied as they are, and ai-toolkit cuts
-        its frames from them.
+        its frames from them. A still ai-toolkit would skip (anything outside
+        :data:`TRAINER_IMAGE_EXTS`) or whose alpha it would train as black is
+        written as ``image_NNNNN.png`` instead, alpha flattened onto
+        :data:`TRAINER_ALPHA_BACKGROUND`; one that cannot be decoded is left
+        out, and the manifest counts only what was written. The rest are
+        copied as they are, or resized at a reduced ``resolution``.
 
         Captions default to the picture's tags.  When ``trigger_word`` is
         given it leads every caption as its first comma-separated token.
@@ -1129,6 +1239,7 @@ class ExportUtils:
             "tag_format_d": tag_format_d,
             "bbox_mode_d": "none",
             "trigger_word": trigger,
+            "trainer_images": True,
         }
 
         pics = ExportUtils._training_pictures(
@@ -1154,18 +1265,21 @@ class ExportUtils:
                 detections_by_pic,
             )
 
+        # Counted from the files written, so a picture the writer could not
+        # convert is in neither the count nor the snapshot (#2290).
+        items = ExportUtils._training_dataset_items(dest_dir, pics)
         manifest = {
             "dest_dir": dest_dir,
-            "image_count": len(pics),
-            "picture_ids": [pic.id for pic in pics],
+            "image_count": len(items),
+            "picture_ids": [item["picture_id"] for item in items],
             "caption_mode": caption_mode_d,
             "trigger_word": trigger,
-            "items": ExportUtils._training_dataset_items(dest_dir, pics),
+            "items": items,
         }
         logger.info(
             "Built training dataset in %s: %d images, caption_mode=%s, trigger=%r",
             dest_dir,
-            len(pics),
+            len(items),
             caption_mode_d,
             trigger,
         )
