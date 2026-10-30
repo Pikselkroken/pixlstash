@@ -24,7 +24,7 @@ plan; legacy § numbers are still cited in spec titles):
 | Legacy section | Now automated by |
 |---|---|
 | §1 Authentication (login/logout, tokens, session persistence) | `auth.spec.js` |
-| §2 Import — drag overlay affordance | `import.spec.js` (drop→import stays manual, see Import section) |
+| §2 Import — Import panel, grid drop, set/character/project targets, locked set, unsupported files, de-duplication, `.txt` sidecar tags, video | `import.spec.js` |
 | §3.1–3.3 Grid display, sort, search | `grid.spec.js`, `grid-browse.spec.js` |
 | §3.5 Context menu opens/lists actions | `context-menu.spec.js` |
 | §4 Selection ▾ / context-menu parity (was #403) | `menu-parity.spec.js` |
@@ -268,12 +268,12 @@ inside the overlay directory), then launch:
 
 ## 5. Import & background processing
 
-The e2e harness runs submitted tasks (an import through the Import dialog is
-automated, `media-fixture.spec.js`) but loads no models and runs none of the
-tagging, embedding or scoring sweeps — so everything here needs a real server
-run with workers ON.
+The e2e harness runs submitted tasks and the folder sweeps but loads no models
+and runs none of the tagging, embedding or scoring sweeps, so the import itself
+is automated (`import.spec.js`) and what follows it is not: everything here
+needs a real server run with workers ON.
 
-- [ ] Drag two or more image files from the OS file manager onto the grid and drop — import starts immediately, a progress indicator appears, and the pictures appear in the grid without a reload (the drag overlay and a one-file import through the Import dialog are automated; a real OS drop is not)
+- [ ] Drag two or more image files from the OS file manager onto the grid and drop — import starts immediately, a progress indicator appears, and the pictures appear in the grid without a reload (`import.spec.js` drops a synthetic DataTransfer; a drag from a real file manager is not automated)
 - [ ] After importing a batch of 5+ pictures: the task indicator shows live progress; faces, a generated caption (Description section), and predicted tags appear on the new pictures once processing completes
 - [ ] Deleting all tags on a processed picture and requeueing (Reset and regenerate) produces fresh predictions
 
