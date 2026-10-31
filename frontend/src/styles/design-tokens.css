@@ -158,9 +158,10 @@
      no spread and no edge of its own. Only the glow leaves the box, so a
      clipping container can cut nothing but the glow.
 
-     ONE COLOUR, BOTH THEMES, EVERY GROUND: `focus-ring` in main.js, #3880eb.
-     3.3:1 at worst against `panel`, 3.85 on `surface`, 4.3 on dark
-     `background`, 3.66 on light. On an amber, olive or brick fill the ring
+     ONE BLUE ON EVERY GROUND: `focus-ring` in main.js, #3880eb in dark (3.85
+     on `surface`, 4.3 on `background`). The light theme's silver chrome takes
+     the same hue deeper, #3273d2: 3.20:1 at worst on `sidebar`, 4.04 on
+     `surface`/`panel`. On an amber, olive or brick fill the ring
      meets the fill at 1.1-1.6:1; the ground outside the edge and the glow
      carry it there. So no surface restates it: the lightbox and the on-dark
      contexts take the same blue.
@@ -233,12 +234,12 @@
      (`on-background` / `on-surface` / `sidebar-text` over their canvases), not
      against the superseded contrast tables in visual-language.md §4:
 
-       0.6   light 4.22 / 4.30 / 4.01   dark 5.66 / 5.30 / 4.48   FAILS both themes
-       0.65  light 4.94 / 5.04 / 4.64   dark 6.40 / 5.95 / 5.00   passes, no headroom
-       0.7   light 5.80 / 5.94 / 5.41   dark 7.20 / 6.65 / 5.55   passes with headroom
+       0.6   light 3.96 / 4.09 / 3.75   dark 5.66 / 5.30 / 5.30   FAILS light
+       0.65  light 4.58 / 4.76 / 4.30   dark 6.40 / 5.95 / 5.95   FAILS the light sidebar
+       0.7   light 5.32 / 5.56 / 4.95   dark 7.20 / 6.65 / 6.65   passes with headroom
 
-     0.6 is the value the codebase kept copying - 37 sites, and it fails on both
-     sidebars. Use the token, never a raw number, in either form:
+     0.6 is the value the codebase kept copying - 37 sites, and it fails on the
+     light sidebar. Use the token, never a raw number, in either form:
      `opacity: var(--opacity-text-secondary)` or
      `rgba(var(--v-theme-on-surface), var(--opacity-text-secondary))`.
 

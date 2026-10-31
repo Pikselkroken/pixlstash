@@ -160,12 +160,13 @@ below.
 
 ### The system, not a swatch list
 - **Neutrals are warm.** Text is a warm near-black (`#23211d`), never `#000`.
-  Backgrounds are a warm near-white (`#faf9f7`), never cold grey. Borders and dividers
-  are warm low-contrast lines (`--v-theme-border`, `--v-theme-divider`).
-- **Elevation inverts between themes.** In **light**, the content canvas is the
-  *brightest* surface and chrome (sidebar, toolbar, panels) recedes to a warm tinted
-  grey; raised controls (cards, inputs) go pure white. In **dark**, chrome is a raised
-  dark surface and elevation reads by *lightness*, not heavy shadow.
+  Light backgrounds are a warm light-silver ramp (chrome `#d9d6d0`, canvas `#e7e5e1`,
+  surface `#f0efec`, fields `#f5f4f2`), never cold grey and never paper-white. Borders
+  and dividers are warm lines (`--v-theme-border`, `--v-theme-divider`).
+- **Elevation inverts between themes.** In **light**, chrome (sidebar, toolbar) is the
+  darkest neutral, the canvas one step lighter, and floating things (menus, dialogs,
+  panels) and fields lighter again. In **dark**, chrome is a raised dark surface and
+  elevation reads by *lightness*, not heavy shadow.
 - **One accent.** Amber: `#9e6727` (light) / `#c47a1e` (dark). It marks the primary
   action and key state. Spend it sparingly.
 
@@ -810,9 +811,10 @@ These get skipped and that is exactly why a UI looks cheap.
   one, follows the corners and moves nothing. Around it `--focus-glow`, the same blue
   blurred 8px outward (45% in dark, 35% in light), is the only part that leaves the
   box, so a clipping container cuts nothing but the glow. It fades in over `--dur-1`.
-  `--focus-stroke` is the theme's `focus-ring`, **`#3880eb` in both themes and on every
-  ground**, the lightbox and the on-dark contexts included: 3.3:1 at worst on `panel`,
-  3.85 on `surface`, 4.3 on dark `background`, 3.66 on light. On an amber, olive or brick
+  `--focus-stroke` is the theme's `focus-ring`, **one blue on every ground**, the
+  lightbox and the on-dark contexts included: `#3880eb` in dark (3.85 on `surface`, 4.3
+  on `background`), and the same hue deeper, `#3273d2`, on the light theme's silver
+  chrome (3.20:1 at worst on `sidebar`, 4.04 on `surface`). On an amber, olive or brick
   fill the ring meets the fill at 1.1-1.6:1, and the ground outside the edge and the
   glow carry it. **A component does not paint its own focus colour.** A control whose
   ring has to be a box-shadow (a 32px menu row flush in its menu, a field wrapper's
