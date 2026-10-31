@@ -314,6 +314,10 @@ The shipped app has not caught up with this system everywhere. Treat each of the
 - Hover (`--hover-wash`), focus (`--focus-ring`, `--focus-glow`) and, in dark, selection (`--active-bar`, `--active-wash`) are still amber in `style.css` and `styles/design-tokens.css`.
 - Light `error`, `warning` and `success` in `main.js`, and dark `error`, differ from the design system's unified status values.
 
+## Where the app is ahead
+
+- **The light theme ships a warm silver ramp** (2026-10-31, "Light mode is a bit too bright"), not the near-white ramp listed above: chrome #c2bfb8, canvas #d4d1cb, surface and panel #e2dfd9, input #ebe9e4, cancel #d4d1cb, border #a39e94, divider #b3aea5; muted text at 72%. The darker ground deepens light `accent` to #835722 and `primary` / `selected-ink` to #4a6308, light `surface-error` / `-warning` / `-success` to #76271e / #563c0f / #194b27, light `surface-tertiary` to #2d4951, light `focus-ring` to #2462c8 and `level-3` to #b81bb8. The design system's tokens owe the same update; until it lands, `main.js` is the reference for the light theme, not drift.
+
 ## Do's and Don'ts
 
 ### Do:

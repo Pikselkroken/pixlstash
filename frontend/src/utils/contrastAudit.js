@@ -26,9 +26,6 @@ const MAIN_JS = resolve(HERE, '../main.js')
 
 const LEVELS = ['error', 'warning', 'success', 'info']
 
-/** Surfaces a status hue is rendered against, per theme. */
-const THEME_SURFACE = { light: '#ffffff', dark: '#23282f' }
-
 /**
  * The ink a hovered row washes itself with (`--hover-wash`, style.css): the
  * text colour at 16%. A `surface-<status>` label on a hovered `panel` row is
@@ -223,7 +220,6 @@ export function auditContrast(
 
   for (const theme of ['light', 'dark']) {
     const c = themes[theme]
-    const surface = THEME_SURFACE[theme]
     const chrome = DARK_CHROME[theme]
 
     const need = (key) => {
@@ -231,6 +227,8 @@ export function auditContrast(
       if (!v) throw new Error(`${theme} theme is missing "${key}"`)
       return v
     }
+    // The ground a status hue is rendered against: the theme's own surface.
+    const surface = need('surface')
 
     // The authored label on its solid fill. This is the pair the stale
     // `// 5.51:1` comments described, and the one nothing was checking.

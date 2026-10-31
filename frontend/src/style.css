@@ -135,9 +135,9 @@ body {
 
      It sits between the canvas and the `surface-<status>` fill, and that
      range is too narrow for 3:1 on both sides (light tops out at 2.43 each).
-     40% is the value that keeps both adjacencies above 2.3, in both themes:
-       dark  on #23282f  canvas 3.18  fills 2.35 - 2.36
-       light on #f0ede9  canvas 2.36  fills 2.56 - 2.65
+     The alpha that keeps both adjacencies above 2.3 differs by theme:
+       dark  40% on #23282f  canvas 3.18  fills 2.35 - 2.36
+       light 44% on #c2bfb8  canvas 2.35  fills 2.34 - 2.38
      Gated by contrastAudit.js, which reads the alpha from here. */
   --drive-meter-track: rgba(var(--v-theme-on-surface), 0.4);
   /* The lightbox's inspector (an RGB triplet, like the theme keys). Dark chrome
@@ -153,7 +153,7 @@ body {
   /* See the dark block. 1.37x on chrome and panel, 1.35x over a selection. */
   --hover-wash: rgba(var(--v-theme-on-surface), 0.16);
   --hover-neutral: linear-gradient(rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0.2));
-  /* Olive in both themes; the deep olive clears a light ground (4.66:1 on panel). */
+  /* Olive in both themes; the deep olive clears a light ground (5.13:1 on panel). */
   --active-wash: rgba(var(--v-theme-primary), 0.16);
   --selected-ink: rgb(var(--v-theme-selected-ink));
   /* A light ground needs less of the glow. */
@@ -191,8 +191,13 @@ body {
   --band-meter-free-low: rgba(var(--v-theme-warning), 0.55);
   /* Track against canvas is 1.22:1 here. Frame, don't infer. 4.24:1. */
   --band-meter-edge: rgba(var(--v-theme-on-background), 0.6);
-  /* See the dark block: the same ink tint, which darkens here. */
-  --drive-meter-track: rgba(var(--v-theme-on-surface), 0.4);
+  /* See the dark block: the same ink tint, which darkens here. 44%, not 40%:
+     the silver chrome leaves less room between it and the status inks. */
+  --drive-meter-track: rgba(var(--v-theme-on-surface), 0.44);
+  /* A shadow shows less on a mid-grey ground than on near-white, so the two
+     floating levels take more weight here (design-tokens.css owns the scale). */
+  --elevation-2: 0 2px 6px rgba(var(--v-theme-shadow), 0.22);
+  --elevation-3: 0 4px 16px rgba(var(--v-theme-shadow), 0.3);
   /* Light chrome cannot carry the pane's dark-surface inks, so the lightbox
      inspector stays dark here, one with the stage. */
   --lightbox-chrome: var(--v-theme-dark-surface);

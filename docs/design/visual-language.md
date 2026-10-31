@@ -3,8 +3,8 @@
 > **⚠️ Colors superseded (2026-07-24).** The color system moved to the unified
 > "Camp B" palette: one brand palette shared by both themes, except amber, with
 > warm-white `#f7f1ea` labels — accent/amber **`#c47a1e`** (glow `#e08a2a`; the
-> light theme's is `#9e6727` since 2026-09-23, #1413), primary/olive
-> `#567309`, secondary/raspberry `#bb3566`, tertiary/teal `#46707a`, quaternary/violet
+> light theme's is `#835722` since its silver ramp, 2026-10-31), primary/olive
+> `#567309` (light `#4a6308`, same date), secondary/raspberry `#bb3566`, tertiary/teal `#46707a`, quaternary/violet
 > `#7c55ae` (added 2026-09-13, with `info` moved to `#30558c`). The canonical
 > color sources are now **`frontend/DESIGN.md`** and the design-system
 > `tokens/colors.css`; the running values live in the Vuetify themes in
@@ -130,7 +130,7 @@ two levels of them, waiting on its own screen design).
 .section-label { /* in style.css */
   font-size: var(--text-2xs); font-weight: var(--weight-semibold);
   text-transform: uppercase; letter-spacing: var(--tracking-label);
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary)); /* 0.7 */
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary)); /* 0.72 */
 }
 .section-label--on-dark { /* the lightbox: dark in both themes */
   color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
@@ -160,13 +160,15 @@ below.
 
 ### The system, not a swatch list
 - **Neutrals are warm.** Text is a warm near-black (`#23211d`), never `#000`.
-  Backgrounds are a warm near-white (`#faf9f7`), never cold grey. Borders and dividers
-  are warm low-contrast lines (`--v-theme-border`, `--v-theme-divider`).
-- **Elevation inverts between themes.** In **light**, the content canvas is the
-  *brightest* surface and chrome (sidebar, toolbar, panels) recedes to a warm tinted
-  grey; raised controls (cards, inputs) go pure white. In **dark**, chrome is a raised
-  dark surface and elevation reads by *lightness*, not heavy shadow.
-- **One accent.** Amber: `#9e6727` (light) / `#c47a1e` (dark). It marks the primary
+  Light backgrounds are a warm silver ramp around Windows 95's `#c0c0c0` (chrome
+  `#c2bfb8`, canvas `#d4d1cb`, surface `#e2dfd9`, fields `#ebe9e4`), never cold grey
+  and never paper-white. Borders and dividers are warm lines (`--v-theme-border`,
+  `--v-theme-divider`).
+- **Elevation inverts between themes.** In **light**, chrome (sidebar, toolbar) is the
+  darkest neutral, the canvas one step lighter, and floating things (menus, dialogs,
+  panels) and fields lighter again. In **dark**, chrome is a raised dark surface and
+  elevation reads by *lightness*, not heavy shadow.
+- **One accent.** Amber: `#835722` (light) / `#c47a1e` (dark). It marks the primary
   action and key state. Spend it sparingly.
 
 ### Token map (what to reach for)
@@ -810,9 +812,10 @@ These get skipped and that is exactly why a UI looks cheap.
   one, follows the corners and moves nothing. Around it `--focus-glow`, the same blue
   blurred 8px outward (45% in dark, 35% in light), is the only part that leaves the
   box, so a clipping container cuts nothing but the glow. It fades in over `--dur-1`.
-  `--focus-stroke` is the theme's `focus-ring`, **`#3880eb` in both themes and on every
-  ground**, the lightbox and the on-dark contexts included: 3.3:1 at worst on `panel`,
-  3.85 on `surface`, 4.3 on dark `background`, 3.66 on light. On an amber, olive or brick
+  `--focus-stroke` is the theme's `focus-ring`, **one blue on every ground**, the
+  lightbox and the on-dark contexts included: `#3880eb` in dark (3.85 on `surface`, 4.3
+  on `background`), and the same hue deeper, `#2462c8`, on the light theme's silver
+  chrome (3.13:1 at worst on `sidebar`, 4.32 on `surface`). On an amber, olive or brick
   fill the ring meets the fill at 1.1-1.6:1, and the ground outside the edge and the
   glow carry it. **A component does not paint its own focus colour.** A control whose
   ring has to be a box-shadow (a 32px menu row flush in its menu, a field wrapper's
@@ -854,7 +857,7 @@ These get skipped and that is exactly why a UI looks cheap.
   different grey. The fade is legal here and only here: WCAG 1.4.3 exempts an
   inactive control, so a disabled label may sit below the contrast floor.
 - **Secondary text:** a timestamp, a count, a hint, a reason — copy that is still
-  meant to be *read* — fades to `--opacity-text-secondary` (0.7) and to nothing
+  meant to be *read* — fades to `--opacity-text-secondary` (0.72) and to nothing
   else. Never a raw number: the repo copied `0.6` into 37 places and it fails AA
   in **both** themes, because the canvas that decides it is the **sidebar**, not
   the grid — 4.01:1 light and 4.48:1 dark, against the 4.5:1 floor (#836). At 0.7

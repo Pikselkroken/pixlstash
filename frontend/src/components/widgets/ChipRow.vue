@@ -68,10 +68,10 @@
 // the glyph at the inherited 11px, because `v-icon`'s numeric size sets the box
 // and not the font.
 //
-// In the LIGHT theme `input-background` and `surface` are both #ffffff, so the
-// fill does not separate a model chip from a fact chip there. The outline is
-// the same on both, so what is left is the glyph alone - a model chip has one
-// and a fact chip does not. That is the design's own light palette, not a
+// In the LIGHT theme `input-background` #ebe9e4 and `surface` #e2dfd9 are only
+// 1.10:1 apart, so the fill barely separates a model chip from a fact chip
+// there. The outline is the same on both, so what is left is the glyph - a
+// model chip has one and a fact chip does not. That is the design's own light palette, not a
 // mapping choice made here, and it is the part worth a designer's sign-off.
 
 import {

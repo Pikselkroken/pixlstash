@@ -40,10 +40,13 @@ if (typeof window !== "undefined" && window.pixlstashDesktop) {
 // the whole warm neutral ramp to pure black/white and re-breaks the status
 // foregrounds. See docs/design/notice-surface.md §3.3.
 //
-// Warm light theme. Elevation inverts vs dark: the content canvas is the
-// brightest surface and chrome (sidebar / toolbar / panels) recedes to a warm
-// tinted grey, with raised controls (cards, inputs) going pure white. Text is a
-// warm near-black ramp, never pure #000.
+// Warm silver light theme ("Silver ramp", after Windows 95's #c0c0c0 face).
+// Elevation inverts vs dark: chrome (sidebar / toolbar) is the darkest neutral,
+// the content canvas one step lighter, and floating things (menus, dialogs,
+// panels) and fields lighter again - but nothing paper-white: the brightest
+// fill is `input-background` at 0.82 luminance. Text is a warm near-black
+// ramp, never pure #000. The darker ground deepens the light theme's amber,
+// olive, teal ink and status inks one step each; every value says why.
 //
 // SOURCE OF TRUTH: the Claude Design system's `tokens/colors.css`. Every value
 // here is one of its tokens, or an app-only key that carries its reason inline.
@@ -56,17 +59,17 @@ const pixlStashLight = {
     // canvas. In the desktop shell these are remapped to `background` (see
     // style.css) so the titlebar + toolbar + sidebar read as one strip; these
     // values drive the browser layout.
-    sidebar: "#f0ede9",
+    sidebar: "#c2bfb8",
     "sidebar-text": "#23211d",
-    toolbar: "#f0ede9",
+    toolbar: "#c2bfb8",
     "toolbar-text": "#23211d",
     // `sidebar-hover` is the accent duplicated, so it moves with it.
-    "sidebar-hover": "#9e6727",
+    "sidebar-hover": "#835722",
     "on-sidebar-hover": "#f7f1ea",
-    // Raised controls: inputs and buttons sit above the canvas, pure/near white.
-    "input-background": "#ffffff",
+    // Raised controls: fields are the lightest fill, but not paper-white.
+    "input-background": "#ebe9e4",
     "input-text": "#23211d",
-    "cancel-button": "#e6e1d8",
+    "cancel-button": "#d4d1cb",
     "cancel-button-text": "#23211d",
     // Deliberately-dark surfaces (e.g. the full-screen image viewer chrome) stay
     // dark even in light mode.
@@ -86,7 +89,7 @@ const pixlStashLight = {
     "dark-surface-success": "#5d9c6c",
     "dark-surface-info": "#6890cc",
     // Amber on a deliberately-dark surface. Light's own accent is the deep
-    // #9e6727 (#1413), which measures only 3.20:1 on #242628; dark panels
+    // #835722, which measures only 2.42:1 on #242628; dark panels
     // re-point `--v-theme-accent` at this (4.45:1). Identical in both themes.
     "dark-surface-accent": "#c47a1e",
     // The fifth member of the family, same rationale: `primary` as a FOREGROUND
@@ -108,41 +111,48 @@ const pixlStashLight = {
     // is red: the heart as a verb (the selection pill) stays ink.
     "dark-surface-favourite": "#ff5a6e",
     // The same red as a mark on this theme's own chrome (the filter menu's
-    // Favourites only row): deepened for a light ground, 4.70:1.
+    // Favourites only row): deepened for a light ground, 4.12:1 on `surface`.
     favourite: "#c8283f",
     // Olive as a FOREGROUND (a selected option's glyph or label) on this
     // theme's own surfaces - design system `--selected-ink`. A light ground
-    // takes the deep olive; the dark theme lifts it.
-    "selected-ink": "#567309",
+    // takes the deep olive; the dark theme lifts it. 5.13:1 on `surface` and
+    // `panel`, 3.71:1 on `sidebar` (a mark there, never words).
+    "selected-ink": "#4a6308",
     // The keyboard focus ring and its glow (design system `--focus-stroke`,
-    // 2026-10-28): one blue in both themes and on every ground, never amber
-    // or olive. 3.3:1 at worst, on `panel`.
-    "focus-ring": "#3880eb",
+    // 2026-10-28): blue on every ground, never amber or olive. The shared
+    // #3880eb measures 2.1:1 on the silver `sidebar`, under the 3:1 floor for
+    // a focus indicator, so light takes a deeper blue of the same hue: 3.13:1
+    // on `sidebar`, 3.77:1 on `background`, 4.32:1 on `surface`/`panel`.
+    "focus-ring": "#2462c8",
     // Teal as a FOREGROUND, where it has one meaning: NOT SAVED YET (the dot
     // before a row's *Edited*, the glyph beside the count of unsaved changes,
     // the outline of *Save as new…*). The `tertiary` fill is a glyph at only
     // 2.73:1 on the dark rail, so the hue is deepened here and lifted in dark,
-    // the same shape as `surface-<status>`. 5.87:1 on `sidebar`, 4.21:1 on the
+    // the same shape as `surface-<status>`. 5.24:1 on `sidebar`, 4.07:1 on the
     // unsaved shelf's wash (`tertiary` at 26% over `sidebar`).
-    "surface-tertiary": "#3b606a",
-    surface: "#ffffff",
+    "surface-tertiary": "#2d4951",
+    // Menus, dialogs, pills: the nearest thing, so the lightest ground after
+    // fields (0.74 luminance, down from 1.0).
+    surface: "#e2dfd9",
     "on-surface": "#23211d",
-    background: "#faf9f7",
+    // Behind the grid: one step lighter than chrome, so the canvas still comes
+    // forward of it.
+    background: "#d4d1cb",
     "on-background": "#23211d",
     // ── The action-fill tier (unified Camp B palette) ───────────────────────
     // ONE brand palette shared by both themes (design-system parity, 2026-07-24):
-    // the same brand hues in light and dark, except amber. Olive, raspberry and
-    // teal carry the warm near-white label #f7f1ea: primary 4.86:1, secondary
-    // 4.91:1, tertiary 4.85:1 - all AA. Amber is the one hue that differs by
-    // theme (#1413): the shared #c47a1e measured 2.93:1 on this theme's
-    // sidebar/toolbar, under the 3:1 floor for the attention dot and the busy
-    // stats icon, so light takes the deep amber. It carries pure white at 4.75:1
-    // and clears 4.07:1 on the sidebar. These fills stay label-only (buttons,
-    // chips, rails, icons - never small body text on a canvas).
-    accent: "#9e6727", // white label 4.75:1, 4.07:1 on sidebar/toolbar (#1413)
-    "on-accent": "#ffffff", // 4.75:1 on the deep light amber
+    // the same brand hues in light and dark, except amber and olive. Raspberry
+    // and teal carry the warm near-white label #f7f1ea: secondary 4.91:1,
+    // tertiary 4.85:1 - all AA. Amber and olive differ by theme because they
+    // are also MARKS on the chrome (the attention dot, the busy stats icon, the
+    // selection bar), which owe 3:1 there: on the silver sidebar the shared
+    // amber measures 1.86:1 and the shared olive 2.97:1, so light takes a deep
+    // step of each. These fills stay label-only (buttons, chips, rails, icons -
+    // never small body text on a canvas).
+    accent: "#835722", // white label 6.27:1, 3.41:1 on sidebar/toolbar
+    "on-accent": "#ffffff", // 6.27:1 on the deep light amber
     "accent-bright": "#e08a2a", // brighter, more-orange amber glow: selection / active / focus (not a text/fill token)
-    primary: "#567309", // warm-white 4.86:1 (olive)
+    primary: "#4a6308", // warm-white 6.08:1, 3.71:1 on sidebar (deep olive)
     "on-primary": "#f7f1ea",
     secondary: "#bb3566", // warm-white 4.91:1 (raspberry)
     "on-secondary": "#f7f1ea",
@@ -168,19 +178,20 @@ const pixlStashLight = {
     // inks and the dark values are their pale mirrors, the same shape as the
     // `dark-surface-*` family above. Colour is never the only cue - the level
     // number is on the label whatever the hue does.
-    // Measured on `surface`/`input-background` #ffffff (and `background`
-    // #faf9f7), plus the warm near-white label on the solid fill:
-    "level-1": "#12507f", //    8.47:1 / 8.05:1, label 7.55:1
+    // Measured on `surface` #e2dfd9 / `input-background` #ebe9e4, plus the
+    // warm near-white label on the solid fill:
+    "level-1": "#12507f", //    6.37:1 / 6.98:1, label 7.55:1
     "on-level-1": "#f7f1ea",
-    "level-2": "#5138cf", //    7.46:1 / 7.09:1, label 6.65:1
+    "level-2": "#5138cf", //    5.61:1 / 6.15:1, label 6.65:1
     "on-level-2": "#f7f1ea",
-    "level-3": "#bb1bbb", //    5.27:1 / 5.01:1, label 4.70:1
+    "level-3": "#b81bb8", //    4.06:1 / 4.45:1, label 4.82:1
     "on-level-3": "#f7f1ea",
-    "level-4": "#77154e", //   10.49:1 / 9.97:1, label 9.35:1
+    "level-4": "#77154e", //    7.89:1 / 8.65:1, label 9.35:1
     "on-level-4": "#f7f1ea",
     // Warm, low-contrast borders: a visible-but-soft divider and a subtler line.
-    border: "#d8d3c8",
-    divider: "#e8e4dc",
+    // Darker than the silver they sit on, at today's edge strength.
+    border: "#a39e94",
+    divider: "#b3aea5",
     // App-only: Vuetify's own overlay key (dialog and menu backdrops).
     overlay: "#00000033",
     // Warm hover wash (rgba(45,32,15,.06)) instead of cold black.
@@ -201,16 +212,21 @@ const pixlStashLight = {
     // surfaces - design system `--surface-<status>`. None of the fills survives
     // being drawn as text on both canvases (light `warning` is 2.1:1 on white),
     // so whenever the hue is drawn rather than filled, use these. Deepened here
-    // because the canvas is light; the dark theme lifts them.
-    "surface-error": "#9a3327",
-    "surface-warning": "#755215",
-    "surface-success": "#226534",
+    // because the canvas is light; the dark theme lifts them. Error, warning
+    // and success are a step deeper again for the silver chrome: the drive
+    // meter draws them as fills beside its empty track, and 2.3:1 on both
+    // sides of that track needs the ink 5.3:1 off `toolbar`. 5.50 - 5.58:1 on
+    // `sidebar`/`toolbar`, 7.6:1 on `surface`. `info` (4.08:1) is not a meter
+    // fill and keeps the fill value.
+    "surface-error": "#76271e",
+    "surface-warning": "#563c0f",
+    "surface-success": "#194b27",
     "surface-info": "#30558c",
     // App-only: the pure-black ink the track-trough and drive-band tints in
     // style.css are mixed from.
     scrim: "#000000",
     shadow: "#1c160c",
-    panel: "#efede9",
+    panel: "#e2dfd9",
     "on-panel": "#23211d",
   },
 };
@@ -239,7 +255,7 @@ const pixlStashDark = {
     "dark-surface-success": "#5d9c6c",
     "dark-surface-info": "#6890cc",
     // Amber on a deliberately-dark surface. Light's own accent is the deep
-    // #9e6727 (#1413), which measures only 3.20:1 on #242628; dark panels
+    // #835722, which measures only 2.42:1 on #242628; dark panels
     // re-point `--v-theme-accent` at this (4.45:1). Identical in both themes.
     "dark-surface-accent": "#c47a1e",
     // Identical in both themes, like the four above. Keeps the retired bright
@@ -255,7 +271,7 @@ const pixlStashDark = {
     // The deep olive measures 2.72:1 on `surface`, so olive as a foreground
     // takes the lifted value here (5.37:1). See the light theme.
     "selected-ink": "#8EA604",
-    // The same blue as the light theme: the focus ring has one value.
+    // The design system's blue. Light deepens it for its silver chrome.
     "focus-ring": "#3880eb",
     // Teal as a foreground, lifted: 7.19:1 on `sidebar`, 5.63:1 on the
     // unsaved shelf's wash. See the light theme.
@@ -266,8 +282,8 @@ const pixlStashDark = {
     "on-background": "#f2e5da",
     // ── The action-fill tier (unified Camp B palette) ───────────────────────
     // Identical to the light theme by design - one brand palette in both themes
-    // (design-system parity, 2026-07-24) - except amber, which light deepens to
-    // #9e6727 (#1413). Same labels, same contrast (primary 4.86:1, secondary
+    // (design-system parity, 2026-07-24) - except amber and olive, which light
+    // deepens to #835722 and #4a6308. Same labels, same contrast (primary 4.86:1, secondary
     // 4.91:1, tertiary 4.85:1 on #f7f1ea; accent #c47a1e 3.41:1 on pure white,
     // the accepted key-action exception, and 4.34:1 on the dark sidebar).
     accent: "#c47a1e", // white label 3.41:1 (brightened, more orange)
