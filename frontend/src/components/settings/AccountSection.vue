@@ -182,7 +182,10 @@ const shareUrl = computed(() => {
   if (!newlyCreatedToken.value || tokenScope.value !== "READ") return null;
   // Prefer the configured public URL (Settings › Privacy & sharing) so the
   // link works from outside the LAN.
-  const origin = prefs.publicUrl || window.location.origin;
+  // Trimmed here too: the store holds whatever the config file says, and a
+  // trailing slash there would double the one the path starts with.
+  const origin =
+    prefs.publicUrl?.trim().replace(/\/$/, "") || window.location.origin;
   const base = origin + window.location.pathname;
   return `${base}?token=${newlyCreatedToken.value}`;
 });

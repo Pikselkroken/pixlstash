@@ -334,9 +334,10 @@ watch(
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  /* The one allowed exception: a translucent black scrim with a white icon. */
+  /* A translucent scrim (black in both themes) with the always-dark
+     ground's ink. */
   background: rgba(var(--v-theme-scrim), 0.6);
-  color: #fff;
+  color: rgb(var(--v-theme-on-dark-surface));
   backdrop-filter: blur(2px);
 }
 
