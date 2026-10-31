@@ -250,7 +250,10 @@ test.describe('deleting pictures and the Scrapheap', () => {
     const answered = bulkDeleteAnswered(page)
     await page.getByRole('menuitem', { name: 'Delete', exact: true }).click()
     expect((await answered).ok()).toBe(true)
-    // Whether the lightbox closes or moves on is #2346's to decide, not asserted.
+    // It moves on to the next picture rather than closing (#2346); the rest of
+    // that behaviour is lightbox-delete.spec.js's.
+    await expect(lightbox.root).toBeVisible()
+    await expect(lightbox.mainImage).not.toHaveAttribute('src', new RegExp(`/pictures/${id}[./?]`))
     await expectInScrapheap(page, grid, apiContext, [id])
 
     await lightbox.openFromGrid(grid.card(id).locator('.thumbnail-card'))
