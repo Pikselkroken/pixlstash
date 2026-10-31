@@ -65,6 +65,28 @@ EVIDENCE = ("measured", "reported", "derived", "none")
 
 PROMPTS_KEY = "sample.samples[*].prompt"
 _MAX_PROMPTS = 16
+SAMPLING_KEY = "train.disable_sampling"
+#: The preview size the Previews question offers (#2415), when drawing at it is
+#: what lets the fastest setup keep its previews while training.
+SMALLER_PREVIEW = 768
+#: A choice is offered only when it finishes this much sooner, as a share of
+#: the default's time and in seconds both: noise between two equal-speed
+#: profiles is neither.
+CHOICE_MIN_SHARE = 0.1
+CHOICE_MIN_SECONDS = 300
+#: Under this much VRAM left free, a card reads "Tight on this GPU".
+TIGHT_MB = 512
+#: Keys that only say where the model sits, not what the LoRA learns.
+_PLACEMENT_KEYS = frozenset(
+    {
+        "model.low_vram",
+        "model.layer_offloading",
+        "model.layer_offloading_transformer_percent",
+        "model.layer_offloading_text_encoder_percent",
+        "train.cache_text_embeddings",
+        SAMPLING_KEY,
+    }
+)
 EFFORT_STEP_KEYS = ("steps_per_picture", "min_steps", "max_steps")
 FIELDS = (
     "id",
@@ -643,6 +665,11 @@ def resolve(
             0,
         )
     flat = {key: entry["value"] for key, entry in values.items()}
+    preview_size = {
+        k: v
+        for k, v in preset["preview"][preset["inference_target"]].items()
+        if k in ("sample.width", "sample.height")
+    }
 
     def judged(name: str, profile: dict) -> dict:
         """The profile's needs, measured on this machine where they were."""
@@ -663,6 +690,19 @@ def resolve(
         key, measurement = lookup({**flat, **settings})
         entry["fingerprint"] = key
         if measurement is None:
+            # Previews pinned to another size are a setup of their own, but
+            # training peaks the same whatever size it previews at (#2415):
+            # the recipe's own size, measured, admits the training.
+            full = {k: v for k, v in preview_size.items() if flat.get(k) != v}
+            if not full:
+                return entry
+            _, sized_like = lookup({**flat, **settings, **full})
+            needs = measurements.needs(sized_like) if sized_like else {}
+            if needs.get("vram_mb") is not None:
+                entry["vram_mb"] = needs["vram_mb"]
+                entry["evidence"] = "measured"
+            if needs.get("ram_mb") is not None:
+                entry["ram_mb"] = needs["ram_mb"]
             return entry
         measured = measurements.needs(measurement)
         entry["measurement"] = measurement
@@ -713,7 +753,7 @@ def resolve(
     # Previews drawn while training are worth more offloading (#2411): the
     # first profile whose previews fit is picked over putting them off, unless
     # the owner pinned them off.
-    sampling = "train.disable_sampling"
+    sampling = SAMPLING_KEY
     picked = fitting[0]
     if not pins.get(sampling):
         picked = next((e for e in fitting if previews_fit(e)), picked)
@@ -775,6 +815,167 @@ def resolve(
             "basis": "measured" if seconds is not None else "none",
         },
         "values": values,
+    }
+
+
+def preview_choice(preset: dict, *, pins: dict | None = None, **choices) -> dict | None:
+    """The Train dialog's Previews question (#2415), or None when there is none.
+
+    It exists when the fastest profile that trains was measured with previews
+    that do not fit, so :func:`resolve` moved to a slower one to draw them
+    while training, and a route that keeps the fast profile finishes sooner by
+    :data:`CHOICE_MIN_SHARE` and :data:`CHOICE_MIN_SECONDS`. The routes:
+    ``while`` (the default, no pin), ``smaller`` (``sample.width`` and
+    ``sample.height`` pinned to :data:`SMALLER_PREVIEW`) and ``after``
+    (``train.disable_sampling`` pinned on). An unmeasured default has no time
+    to compare, so a first run asks nothing.
+
+    Args:
+        preset: A validated preset.
+        pins: The owner's pins; the ones a route writes are set aside to price
+            every route from the same start.
+        **choices: :func:`resolve`'s other keyword arguments, ``lookup``
+            included.
+
+    Returns:
+        None, or ``{"preset", "selected", "full_size", "smaller_size",
+        "trains_same", "differs", "options"}``, ``options`` starting with
+        ``while`` and holding only the routes that save time (and the
+        selected one). Each option is ``{"id", "profile", "profile_label",
+        "layers_in_ram", "seconds", "peak_vram_mb", "free_mb", "tight",
+        "basis"}``: ``basis`` is ``measured``, or ``estimated`` for a 768²
+        peak scaled from the full-size one by pixel count. ``differs`` names
+        the values other than placement that a route changes.
+    """
+    pins = dict(pins or {})
+    size_keys = ("sample.width", "sample.height")
+    smaller_pinned = all(pins.get(k) == SMALLER_PREVIEW for k in size_keys)
+    selected = (
+        "after" if pins.get(SAMPLING_KEY) else "smaller" if smaller_pinned else "while"
+    )
+    base = {
+        k: v
+        for k, v in pins.items()
+        if k != SAMPLING_KEY and not (smaller_pinned and k in size_keys)
+    }
+    try:
+        default = resolve(preset, pins=base, **choices)
+    except NoProfileFits:
+        return None
+    if not default["passed_over"] or default["estimate"]["seconds"] is None:
+        return None
+    fast = default["passed_over"][0]
+    vram_room = default["room"]["vram_mb"]
+
+    def option(route: str, res: dict, peak: int, basis: str, seconds) -> dict:
+        values = resolved_values(res)
+        in_ram = values.get("model.layer_offloading_transformer_percent")
+        return {
+            "id": route,
+            "profile": res["profile"],
+            "profile_label": res["profile_label"],
+            "layers_in_ram": (
+                round(float(in_ram) * 100)
+                if values.get("model.layer_offloading") and in_ram is not None
+                else 0
+            ),
+            "seconds": seconds,
+            "peak_vram_mb": peak,
+            "free_mb": vram_room - peak,
+            "tight": vram_room - peak < TIGHT_MB,
+            "basis": basis,
+            "values": values,
+        }
+
+    while_ = option(
+        "while",
+        default,
+        max(default["vram_mb"], default["preview_vram_mb"] or 0),
+        "measured",
+        default["estimate"]["seconds"],
+    )
+    after_res = resolve(
+        preset, pins={**base, SAMPLING_KEY: True}, profile=fast, **choices
+    )
+    after = None
+    if after_res["estimate"]["seconds"] is not None:
+        after = option(
+            "after",
+            after_res,
+            after_res["vram_mb"],
+            "measured",
+            after_res["estimate"]["seconds"],
+        )
+
+    smaller = None
+    values = default["values"]
+    width = (values.get("sample.width") or {}).get("value") or 0
+    height = (values.get("sample.height") or {}).get("value") or 0
+    if (
+        not any(k in base for k in size_keys)
+        and width * height > SMALLER_PREVIEW**2
+        and after_res["preview_vram_mb"] is not None
+    ):
+        small_pins = {**base, **{k: SMALLER_PREVIEW for k in size_keys}}
+        try:
+            small = resolve(preset, pins=small_pins, **choices)
+        except NoProfileFits:
+            small = None
+        if small is not None and small["profile"] == fast:
+            if small["probe"] or small["preview_vram_mb"] is None:
+                # Not drawn at 768² here yet: the weights stay as measured,
+                # and only what a full-size preview adds on top of them is
+                # scaled by pixel count, which errs high for a VAE decode.
+                train_mb = after_res["vram_mb"]
+                extra = max(0, after_res["preview_vram_mb"] - train_mb)
+                peak = train_mb + math.ceil(
+                    extra * SMALLER_PREVIEW**2 / (width * height)
+                )
+                # The full-size preview time on the fast profile: a little
+                # long for a smaller picture, never short.
+                timed = resolve(
+                    preset, pins={**base, SAMPLING_KEY: False}, profile=fast, **choices
+                )
+                basis, seconds = "estimated", timed["estimate"]["seconds"]
+            else:
+                peak = max(small["vram_mb"], small["preview_vram_mb"])
+                basis, seconds = "measured", small["estimate"]["seconds"]
+            if peak <= vram_room and seconds is not None:
+                smaller = option("smaller", small, peak, basis, seconds)
+
+    def saves(o: dict) -> bool:
+        gain = while_["seconds"] - o["seconds"]
+        return gain > CHOICE_MIN_SECONDS and gain > CHOICE_MIN_SHARE * while_["seconds"]
+
+    others = [o for o in (smaller, after) if o is not None]
+    if not any(saves(o) for o in others):
+        return None
+    options = [while_] + [o for o in others if saves(o) or o["id"] == selected]
+    trained = {
+        k: v
+        for k, v in while_["values"].items()
+        if k not in _PLACEMENT_KEYS and not k.startswith("sample.")
+    }
+    differs = sorted(
+        {
+            k
+            for o in options[1:]
+            for k in set(trained) | set(o["values"])
+            if k not in _PLACEMENT_KEYS
+            and not k.startswith("sample.")
+            and trained.get(k) != o["values"].get(k)
+        }
+    )
+    for o in options:
+        del o["values"]
+    return {
+        "preset": preset["id"],
+        "selected": selected,
+        "full_size": [width, height],
+        "smaller_size": SMALLER_PREVIEW,
+        "trains_same": not differs,
+        "differs": differs,
+        "options": options,
     }
 
 

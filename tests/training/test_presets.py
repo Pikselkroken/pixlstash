@@ -500,6 +500,94 @@ def test_previews_that_do_not_fit_wait_until_training_is_done():
     assert put_off["previews_deferred"] is True
 
 
+def _sized_lookup(full: dict, small: dict | None = None):
+    """Like :func:`_lookup`, with 768² previews a setup of their own."""
+
+    def lookup(values):
+        name = _profile_of(values)
+        if values.get("sample.width") == presets.SMALLER_PREVIEW:
+            return f"fp-{name}-768", (small or {}).get(name)
+        return f"fp-{name}", full.get(name)
+
+    return lookup
+
+
+# On a 16 GB card q8 trains (13.2 GB with the margin) but its previews do not
+# (15.4 GB); q8_cached draws them while training at a third of q8's speed.
+_FAST = _measurement(12_000, previews_mb=14_000, per_update=1.0)
+_SLOW = _measurement(9_000, previews_mb=12_000, per_update=3.0)
+
+
+def _choice(**kwargs):
+    args = {
+        "subject": "person",
+        "effort": "standard",
+        "fit": "auto",
+        "picture_count": 24,
+        "vram_mb": _16GB,
+        "ram_mb": 60_000,
+    }
+    args.update(kwargs)
+    return presets.preview_choice(_ZIT, **args)
+
+
+def test_the_previews_question_prices_each_route():
+    """#2415: previews while training cost q8's speed; smaller previews or
+    previews after training keep it."""
+    out = _choice(lookup=_sized_lookup({"q8": _FAST, "q8_cached": _SLOW}))
+    assert out["selected"] == "while" and out["full_size"] == [1024, 1024]
+    by_id = {o["id"]: o for o in out["options"]}
+    assert [o["id"] for o in out["options"]] == ["while", "smaller", "after"]
+    assert by_id["while"]["profile"] == "q8_cached"
+    assert by_id["after"]["profile"] == by_id["smaller"]["profile"] == "q8"
+    # The default peaks at its preview, after training at training alone.
+    assert by_id["while"]["peak_vram_mb"] == 13_200
+    assert by_id["after"]["peak_vram_mb"] == 13_200
+    # Nobody drew 768² here: what a 1024² preview adds is scaled by pixels.
+    assert by_id["smaller"]["basis"] == "estimated"
+    assert by_id["smaller"]["peak_vram_mb"] == 13_200 + 1238
+    assert by_id["smaller"]["free_mb"] == _16GB - 14_438
+    assert by_id["smaller"]["tight"] is True and by_id["after"]["tight"] is False
+    assert by_id["while"]["seconds"] > by_id["after"]["seconds"]
+    assert by_id["while"]["seconds"] > by_id["smaller"]["seconds"]
+    # q8 reads its captions each step and q8_cached encodes them once.
+    assert out["trains_same"] is False
+    assert out["differs"] == ["datasets[*].caption_dropout_rate"]
+
+
+def test_the_previews_question_follows_the_pins_that_answer_it():
+    lookup = _sized_lookup({"q8": _FAST, "q8_cached": _SLOW})
+    after = _choice(lookup=lookup, pins={"train.disable_sampling": True})
+    assert after["selected"] == "after"
+    # Priced from the same start, whichever route is pinned.
+    assert after["options"] == _choice(lookup=lookup)["options"]
+    small = {"sample.width": 768, "sample.height": 768}
+    assert _choice(lookup=lookup, pins=small)["selected"] == "smaller"
+    # The 768² pin keeps q8 although its seed (16 GB) does not fit: training
+    # was measured at full size, and only the preview is probed.
+    run = _resolve(vram_mb=_16GB, pins=small, lookup=lookup)
+    assert (run["profile"], run["probe"], run["evidence"]) == ("q8", True, "measured")
+    assert run["previews_deferred"] is False
+    # Drawn at 768² since and found too big: smaller is no route any more.
+    too_big = _measurement(12_000, previews_mb=14_500, per_update=1.0)
+    out = _choice(
+        lookup=_sized_lookup({"q8": _FAST, "q8_cached": _SLOW}, {"q8": too_big})
+    )
+    assert [o["id"] for o in out["options"]] == ["while", "after"]
+
+
+def test_the_previews_question_is_not_asked_when_nothing_is_gained():
+    # The default never measured here: its time is unknown, so a first run
+    # uses the default without asking.
+    assert _choice(lookup=_sized_lookup({"q8": _FAST})) is None
+    # The fast profile's previews fit: nothing was passed over.
+    assert _choice(lookup=_sized_lookup({"q8": _FAST}), vram_mb=_24GB) is None
+    # Equal speeds (Krea 2's 8-bit profiles): deferring only adds reloads.
+    same = _measurement(9_000, previews_mb=12_000, per_update=1.0)
+    assert _choice(lookup=_sized_lookup({"q8": _FAST, "q8_cached": same})) is None
+    assert _choice() is None
+
+
 def test_a_forced_profile_is_resolved_alone():
     out = _resolve(profile="q8_offload")
     assert out["profile"] == "q8_offload" and out["fallbacks"] == []

@@ -946,6 +946,14 @@ def create_router(server) -> APIRouter:
                 "what a reset returns to."
             ),
         )
+        previews: Optional[dict] = Field(
+            default=None,
+            description=(
+                "The Previews question (#2415): while training, smaller or "
+                "after training, each priced in time and VRAM peak; null when "
+                "only one of them is worth having here."
+            ),
+        )
         error: Optional[dict] = Field(
             default=None,
             description=(
@@ -2476,6 +2484,7 @@ def create_router(server) -> APIRouter:
             pins = presets.validate_pins(preset, payload.pins)
             out["resolution"] = presets.resolve(preset, pins=pins, **choices)
             keys |= set(out["resolution"]["values"])
+            out["previews"] = presets.preview_choice(preset, pins=pins, **choices)
         except presets.NoProfileFits as exc:
             out["error"] = {
                 "message": str(exc),

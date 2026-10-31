@@ -242,6 +242,49 @@
       </span>
     </div>
 
+    <!-- Previews cost time here (#2415): asked only when another route is
+         clearly faster than drawing them while training. -->
+    <div v-if="previewOptions.length" class="tld-field" data-testid="tld-previews">
+      <div class="tld-label-row">
+        <FieldLabel :id="previewsLabelId">Previews</FieldLabel>
+        <PinnedChip :keys="pinnedBy.previews" @unpin="pickPreviews('while')" />
+      </div>
+      <div
+        role="radiogroup"
+        class="tld-opts"
+        :aria-labelledby="previewsLabelId"
+        @keydown="onPreviewsKey"
+      >
+        <button
+          v-for="o in previewOptions"
+          :key="o.id"
+          type="button"
+          role="radio"
+          class="tld-opt"
+          :class="{ 'tld-opt--on': o.id === previewChoice.selected }"
+          :aria-checked="o.id === previewChoice.selected ? 'true' : 'false'"
+          :tabindex="o.id === previewsTabStop ? 0 : -1"
+          :data-testid="`tld-previews-${o.id}`"
+          @click="pickPreviews(o.id)"
+        >
+          <v-icon size="20" class="tld-opt__icon">{{ PREVIEW_ICONS[o.id] }}</v-icon>
+          <span>
+            <b>{{ o.label }}</b>
+            <small>{{ o.detail }}</small>
+            <span class="tld-price">{{ o.time }}</span>
+            <span class="tld-price tld-price--next"
+              >{{ o.peak }} <em>· {{ o.free }}</em></span
+            >
+            <small v-if="o.provenance" class="tld-price--next">{{ o.provenance }}</small>
+            <small v-if="o.tight" class="tld-price--next tld-price--tight"
+              >Tight on this GPU</small
+            >
+          </span>
+        </button>
+      </div>
+      <span class="tld-hint">{{ previewsHint }}</span>
+    </div>
+
     <!-- A recipe that trains on clips asks whether their sound trains too. -->
     <div v-if="soundOn !== null" class="tld-field" data-testid="tld-sound">
       <FieldLabel>Sound</FieldLabel>
@@ -528,6 +571,8 @@ import {
   FIT_LABELS,
   PRIMARY_ROWS,
   AUDIO_KEY,
+  PREVIEW_SIZE_KEYS,
+  SAMPLING_KEY,
   PROMPTS_KEY,
   SIZE_CHOICES,
   VERDICT_LABELS,
@@ -542,6 +587,8 @@ import {
   keyLabel,
   moreRows,
   parseTyped,
+  previewCards,
+  previewHint,
   sourceLabel,
   timeEstimate,
 } from "../../utils/trainingPlan";
@@ -555,6 +602,7 @@ const router = useRouter();
 const sourceLabelId = useId();
 const subjectLabelId = useId();
 const effortLabelId = useId();
+const previewsLabelId = useId();
 const advancedId = useId();
 
 const SUBJECT_OPTIONS = [
@@ -577,6 +625,14 @@ const SUBJECT_OPTIONS = [
     detail: "An object, outfit or place, kept recognisable.",
   },
 ];
+const PREVIEW_ICONS = {
+  while: "mdi-image-multiple-outline",
+  smaller: "mdi-image-size-select-small",
+  after: "mdi-clock-outline",
+};
+// The owner's pick per recipe, kept on this machine (so on this GPU): a
+// non-default pick comes back as the same pins next time (#2415).
+const PREVIEWS_STORAGE_KEY = "pixlstash.train.previews";
 const SOUND_OPTIONS = [
   { id: "sound", label: "Learn the sound too" },
   { id: "silent", label: "Picture only" },
@@ -602,6 +658,7 @@ watch(
     showAll.value = false;
     for (const key of Object.keys(drafts)) delete drafts[key];
     for (const key of Object.keys(fieldErrors)) delete fieldErrors[key];
+    previewsRestored.clear();
   },
 );
 
@@ -612,6 +669,68 @@ const values = computed(() => resolution.value?.values || null);
 const rules = computed(() => plan.value?.rules || {});
 const derived = computed(() => plan.value?.derived || {});
 const planError = computed(() => plan.value?.error?.message || "");
+const previewChoice = computed(() => plan.value?.previews || null);
+const previewOptions = computed(() => previewCards(previewChoice.value));
+const previewsHint = computed(() => previewHint(previewChoice.value));
+const previewsTabStop = computed(() =>
+  tabStopId(previewOptions.value, previewChoice.value?.selected),
+);
+
+function readRememberedPreviews() {
+  try {
+    return JSON.parse(localStorage.getItem(PREVIEWS_STORAGE_KEY) || "{}") || {};
+  } catch (err) {
+    console.warn("Could not read the remembered Previews choices:", err);
+    return {};
+  }
+}
+
+function rememberPreviews(presetId, id) {
+  try {
+    const all = readRememberedPreviews();
+    if (id === "while") delete all[presetId];
+    else all[presetId] = id;
+    localStorage.setItem(PREVIEWS_STORAGE_KEY, JSON.stringify(all));
+  } catch (err) {
+    console.warn("Could not remember the Previews choice:", err);
+  }
+}
+
+/** Answer the Previews question with the pins its route stands for. */
+function pickPreviews(id) {
+  const choice = previewChoice.value;
+  if (!choice) return;
+  // Only the 768² pins are the question's; a size typed in Advanced stays.
+  const drop = choice.selected === "smaller" ? [...PREVIEW_SIZE_KEYS] : [];
+  if (id !== "after") drop.push(SAMPLING_KEY);
+  store.unpin(drop);
+  if (id === "after") store.setPin(SAMPLING_KEY, true);
+  if (id === "smaller") {
+    for (const key of PREVIEW_SIZE_KEYS) store.setPin(key, choice.smaller_size);
+  }
+  rememberPreviews(choice.preset, id);
+}
+
+function onPreviewsKey(event) {
+  const id = arrowStep(event, previewOptions.value, previewChoice.value?.selected);
+  if (id !== undefined) pickPreviews(id);
+}
+
+// The remembered pick is put back once per opening, the first time the
+// question is asked for that recipe; after that the owner's clicks rule.
+const previewsRestored = new Set();
+watch(previewChoice, (choice) => {
+  if (!choice || previewsRestored.has(choice.preset)) return;
+  previewsRestored.add(choice.preset);
+  const id = readRememberedPreviews()[choice.preset];
+  if (
+    choice.selected === "while" &&
+    id &&
+    choice.options.some((o) => o.id === id)
+  ) {
+    pickPreviews(id);
+  }
+});
 /** The Sound choice, or null when the recipe trains on no clips. */
 const soundOn = computed(() => {
   const entry = values.value?.[AUDIO_KEY];
@@ -814,10 +933,20 @@ const sourceCtx = computed(() => ({
 
 /** Which pinned keys each choice set: its "N pinned · unpin". */
 const pinnedBy = computed(() => {
-  const out = { subject: [], effort: [], fit: [], model: [] };
+  const out = { subject: [], effort: [], fit: [], model: [], previews: [] };
+  const asked = previewChoice.value;
   for (const key of Object.keys(store.allPins)) {
     // The Sound choice is its own control, not a pin on the recipe.
     if (key === AUDIO_KEY) continue;
+    // The Previews question's own pins sit beside it.
+    if (
+      asked &&
+      (key === SAMPLING_KEY ||
+        (asked.selected === "smaller" && PREVIEW_SIZE_KEYS.includes(key)))
+    ) {
+      out.previews.push(key);
+      continue;
+    }
     const source =
       key === PROMPTS_KEY ? "subject" : derived.value[key]?.source || "model";
     const choice = choiceOfSource(source);
@@ -1160,6 +1289,29 @@ function goToSettings() {
   font-size: var(--text-xs);
   line-height: var(--leading-snug);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+/* A Previews card's prices: its time, then its VRAM peak (#2415). */
+.tld-price {
+  display: block;
+  margin-top: var(--space-3);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-xs);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.tld-price em {
+  font-style: normal;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.tld-price--next {
+  margin-top: 0;
+}
+
+.tld-opt small.tld-price--tight {
+  color: rgb(var(--v-theme-surface-warning));
 }
 
 .tld-lead__src {
