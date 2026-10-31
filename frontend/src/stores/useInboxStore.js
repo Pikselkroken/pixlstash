@@ -42,8 +42,11 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * @returns {{title: string, subtitle: string, wider: Object|null}}
  */
 export function inboxEmptyState(periodId, counts, now = new Date()) {
-  const at = INBOX_PERIODS.findIndex((p) => p.id === periodId);
-  const info = INBOX_PERIODS[at] ?? INBOX_PERIODS[2];
+  // An unknown id reads as the default; `INBOX_PERIODS[-1]` would not be
+  // undefined but Any time.
+  let at = INBOX_PERIODS.findIndex((p) => p.id === periodId);
+  if (at < 0) at = INBOX_PERIODS.findIndex((p) => p.id === DEFAULT_INBOX_PERIOD);
+  const info = INBOX_PERIODS[at];
   if (info.days == null) {
     return {
       title: "Nothing to file",

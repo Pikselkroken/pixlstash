@@ -107,6 +107,12 @@ describe("inboxEmptyState", () => {
     );
   });
 
+  it("reads an unknown period as the default, not as Any time", () => {
+    expect(inboxEmptyState("fortnight", {}, now).title).toBe(
+      "Nothing new in the last 2 weeks",
+    );
+  });
+
   it("has nowhere wider to go at any time", () => {
     expect(inboxEmptyState("all", { all: 0 }, now)).toEqual({
       title: "Nothing to file",
