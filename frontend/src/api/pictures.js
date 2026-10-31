@@ -797,6 +797,28 @@ export async function startFolderExport(query) {
 }
 
 /**
+ * Stage share-ready copies of pictures on the server host (#2417).
+ *
+ * Generation data is stripped unless `keep_generation_data` is set. Loopback
+ * owner only: the answer is host paths, for the desktop app to hand to the
+ * clipboard or a drag (integration_architecture.md §2.5).
+ *
+ * @param {Array<number|string>} pictureIds
+ * @param {Object} [options] - `keep_generation_data`, `max_long_edge`,
+ *   `watermark`, `file_names`.
+ * @returns {Promise<{batch: string, directory: string, files: Array<Object>,
+ *   skipped: Array<{picture_id, reason}>}>}
+ */
+export async function makeShareCopies(pictureIds, options = {}) {
+  return unwrap(
+    apiClient.post(`/pictures/share-copies`, {
+      picture_ids: pictureIds,
+      ...options,
+    }),
+  );
+}
+
+/**
  * Poll a running export.
  * @param {string} taskId
  * @returns {Promise<Object>} the response body: `status`, `processed`,

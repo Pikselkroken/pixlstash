@@ -1740,11 +1740,29 @@ starts the backend with `--server-config serverConfigPath()`, so it knows the
 root on its own (`shareCopiesRoot()` in `electron/src/config.ts`) and never
 takes it from the renderer. A path that reaches main for a drag or the
 clipboard comes *through* the renderer, so the IPC handler that hands it to the
-OS must resolve it and check it is inside that root before using it. Those
-handlers do not exist yet: they arrive with copy-as-files (#2419) and drag-out
-(#2420), and this is the rule they are built to. That
-keeps the `main.ts` rule: the renderer never supplies a filesystem path main
-acts on unchecked.
+OS must resolve it and check it is inside that root before using it
+(`requireShareCopyPaths` in `electron/src/fileClipboard.ts`, which follows
+symlinks and refuses anything that is not a regular file). Drag-out (#2420)
+uses the same check. That keeps the `main.ts` rule: the renderer never supplies
+a filesystem path main acts on unchecked.
+
+**Copy as files (#2419).** Ctrl/⌘+C on a grid selection in the desktop app
+(`useGridKeyboardNav` → `utils/copyAsFiles.js`) stages share copies, then
+hands their paths to `media:copyFiles` (app-window gated). There is no
+Electron API for a file list on the clipboard, and `clipboard.writeBuffer`
+keeps one custom format per call (each call replaces the clipboard), so main
+writes the one the file manager reads:
+
+| OS | Format |
+|---|---|
+| Windows | `CF_HDROP`, via `Set-Clipboard -LiteralPath` in Windows PowerShell 5.1 (paths passed in an environment variable). A `writeBuffer('CF_HDROP')` would register a new format by that name, not the standard one. |
+| macOS | `NSFilenamesPboardType` (a plist array of paths) |
+| Linux | `x-special/gnome-copied-files` (Nautilus, Nemo, Caja, Thunar); `text/uri-list` when `XDG_CURRENT_DESKTOP` names KDE (Dolphin) |
+
+So files and a bitmap cannot share the clipboard here. The grid copies files;
+the lightbox's Ctrl/⌘+C stays "Copy picture" (a PNG via `media:copyPng`) for
+apps that only take images. On Linux a GTK desktop's chat apps that read only
+`text/uri-list` get no files; offering both would need a native helper.
 
 Batches outlive the drop or paste (a receiving app may read the file later) and
 are removed after 12 hours, at start-up and before each new batch. The route

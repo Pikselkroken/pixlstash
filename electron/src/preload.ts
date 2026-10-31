@@ -50,6 +50,9 @@ contextBridge.exposeInMainWorld('pixlstashDesktop', {
     ipcRenderer.invoke('media:completeSaveAs', { saveId, data }),
   cancelMediaSaveAs: (saveId: string) => ipcRenderer.invoke('media:cancelSaveAs', saveId),
   copyPngToClipboard: (data: ArrayBuffer) => ipcRenderer.invoke('media:copyPng', data),
+  // Share copies (POST /pictures/share-copies paths) as files; main refuses any
+  // path outside its own staging root.
+  copyFilesToClipboard: (paths: string[]) => ipcRenderer.invoke('media:copyFiles', paths),
   // Where a dropped file actually lives. A `File` from a drop carries a name and
   // bytes but no path - a browser sandbox rule, and the reason dropping a model
   // file on the web app can only point at the Add file… menu. The shell can

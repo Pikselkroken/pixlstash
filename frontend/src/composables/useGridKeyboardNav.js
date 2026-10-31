@@ -11,6 +11,8 @@ import { useSearchStore } from "../stores/useSearchStore";
 import { FAVOURITE_KEY } from "../stores/useFavouritesStore";
 import { useTagClipboardStore } from "../stores/useTagClipboardStore";
 import { bareDigit } from "../utils/shortcutKeys";
+import { hasNativeCopyContext } from "../utils/dom.js";
+import { canCopyFiles, copyPicturesAsFiles } from "../utils/copyAsFiles.js";
 
 /**
  * Manages keyboard navigation and keyboard-driven actions for the image grid.
@@ -538,6 +540,24 @@ export function useGridKeyboardNav(
       if (!ids.length) return;
       event.preventDefault();
       toggleFavourite(ids);
+    } else if (
+      (event.ctrlKey || event.metaKey) &&
+      String(event.key).toLowerCase() === "c" &&
+      !event.shiftKey &&
+      !event.altKey &&
+      !event.repeat &&
+      selectedImageIds.value.length > 0 &&
+      canCopyFiles() &&
+      !hasNativeCopyContext(event.target)
+    ) {
+      // Ctrl/Cmd+C copies the selection as files (share copies) for pasting
+      // into a file manager, mail or chat. Desktop app only; selected tag chips
+      // take the key first (RailTags, capture phase).
+      event.preventDefault();
+      const ids = selectedImageIds.value
+        .map(Number)
+        .filter((id) => Number.isFinite(id) && id > 0);
+      if (ids.length) copyPicturesAsFiles(ids);
     } else if (
       (event.code === "KeyV" || event.key === "v" || event.key === "V") &&
       event.ctrlKey &&

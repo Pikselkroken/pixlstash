@@ -14,7 +14,13 @@ vi.mock("../utils/apiClient", () => ({
   onSessionReset: () => () => {},
 }));
 
+vi.mock("../utils/copyAsFiles.js", () => ({
+  canCopyFiles: vi.fn(() => true),
+  copyPicturesAsFiles: vi.fn(),
+}));
+
 import { isReadOnly } from "../utils/apiClient";
+import { canCopyFiles, copyPicturesAsFiles } from "../utils/copyAsFiles.js";
 import { useGridKeyboardNav } from "./useGridKeyboardNav.js";
 
 // Build a harness around handleKeyDown with the deps/callbacks it destructures.
@@ -607,5 +613,49 @@ describe("useGridKeyboardNav - star keys and Ctrl+V (#2139)", () => {
       isReadOnly.value = false;
     }
     expect(paste).not.toHaveBeenCalled();
+  });
+});
+
+describe("useGridKeyboardNav - Ctrl/Cmd+C copies the selection as files (#2419)", () => {
+  it("copies the selected picture ids with Ctrl+C and with Cmd+C", () => {
+    const { handleKeyDown, deps } = makeNav();
+    deps.selectedImageIds.value = ["3", "7"];
+    const event = keyEvent({ key: "c", ctrlKey: true });
+    handleKeyDown(event);
+    expect(event.preventDefault).toHaveBeenCalled();
+    expect(copyPicturesAsFiles).toHaveBeenCalledWith([3, 7]);
+    handleKeyDown(keyEvent({ key: "C", metaKey: true }));
+    expect(copyPicturesAsFiles).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves the key alone off the desktop, with no selection, on repeat or with Shift", () => {
+    const { handleKeyDown, deps } = makeNav();
+    deps.selectedImageIds.value = ["3"];
+    handleKeyDown(keyEvent({ key: "c", ctrlKey: true, repeat: true }));
+    handleKeyDown(keyEvent({ key: "c", ctrlKey: true, shiftKey: true }));
+    handleKeyDown(keyEvent({ key: "c" }));
+    canCopyFiles.mockReturnValueOnce(false);
+    const browser = keyEvent({ key: "c", ctrlKey: true });
+    handleKeyDown(browser);
+    expect(browser.preventDefault).not.toHaveBeenCalled();
+    deps.selectedImageIds.value = [];
+    handleKeyDown(keyEvent({ key: "c", ctrlKey: true }));
+    expect(copyPicturesAsFiles).not.toHaveBeenCalled();
+  });
+
+  it("lets the browser copy text the reader selected", () => {
+    const { handleKeyDown, deps } = makeNav();
+    deps.selectedImageIds.value = ["3"];
+    const p = document.createElement("p");
+    p.textContent = "some caption";
+    document.body.appendChild(p);
+    try {
+      window.getSelection().selectAllChildren(p);
+      handleKeyDown(keyEvent({ key: "c", ctrlKey: true }));
+    } finally {
+      window.getSelection().removeAllRanges();
+      p.remove();
+    }
+    expect(copyPicturesAsFiles).not.toHaveBeenCalled();
   });
 });
