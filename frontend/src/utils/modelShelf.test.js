@@ -1903,6 +1903,13 @@ describe("where a dragged model belongs", () => {
     expect(layoutKind(comfy, "clip")).toBe("text_encoder");
     // A folder registered at the Type folder itself.
     expect(layoutKind({ ...sm, path: `${sm.path}/Lora` }, "")).toBe("lora");
+    // A Models folder moved behind a symlink is stored at its resolved path,
+    // named for wherever it went.
+    const moved = { ...sm, path: "/home/me/.vault/Models/StabilityMatrix" };
+    expect(layoutKind(moved, "Lora")).toBe("lora");
+    expect(layoutKind(moved, "Lora/flux")).toBe("");
+    // A registered Type folder's own subfolders are the owner's sorting.
+    expect(layoutKind({ ...sm, path: `${sm.path}/Lora` }, "vae")).toBe("");
     // Deeper is the owner's own sorting, and no tool is never guessed.
     expect(layoutKind(sm, "Lora/vae")).toBe("");
     expect(layoutKind(sm, "Embeddings")).toBe("");

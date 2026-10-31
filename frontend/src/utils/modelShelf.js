@@ -1470,19 +1470,28 @@ const squash = (name) =>
 
 /**
  * The Type a known tool's layout files under a directory, or `""`: a
- * directory straight under a `models` folder that is StabilityMatrix's (by the
- * folder's `tool`) or ComfyUI's (a `ComfyUI` segment in its path). Anything
- * else has no known layout and is never guessed.
+ * directory straight under a `models` folder, or straight under the registered
+ * folder itself, that is StabilityMatrix's (by the folder's `tool`) or
+ * ComfyUI's (a `ComfyUI` segment in its path). The registered folder counts
+ * whatever its name, because it is stored at its resolved path and a `Models`
+ * moved behind a symlink resolves to the name of wherever it went; a library
+ * root holds `Models` and `Packages`, never a Type folder, so nothing there is
+ * mistaken. A registered Type folder's own subfolders are the owner's sorting.
+ * Anything else has no known layout and is never guessed.
  *
  * @param {{path: string, tool?: string}} folder - the registered folder.
  * @param {string} path - POSIX, relative to it, `""` for its root.
  * @returns {string} a {@link SHELF_TYPES} key, or `""`.
  */
 export function layoutKind(folder, path) {
-  const segments = `${folder?.path ?? ""}/${path ?? ""}`
+  const root = String(folder?.path ?? "")
     .split(/[\\/]+/)
     .filter(Boolean);
-  if (segments.length < 2 || squash(segments.at(-2)) !== "models") return "";
+  const segments = [...root, ...String(path ?? "").split("/").filter(Boolean)];
+  if (segments.length < 2) return "";
+  const inRoot =
+    segments.length === root.length + 1 && !LAYOUT_KINDS[squash(root.at(-1))];
+  if (!inRoot && squash(segments.at(-2)) !== "models") return "";
   const known =
     folder.tool === "StabilityMatrix" ||
     segments.some((segment) => /comfyui/i.test(segment));

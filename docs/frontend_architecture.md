@@ -5923,7 +5923,10 @@ dialog, which says so on its button.
   directories ComfyUI loads each Type from (`comfyuiReads`), or, for a folder
   none of those reads lands in, the directories its tool's layout names
   (`layoutKind`: a directory straight under StabilityMatrix's `Models` or
-  ComfyUI's `models`, by name). A folder with no known layout is never guessed.
+  ComfyUI's `models`, or straight under the registered folder itself, by name;
+  a registered folder is stored at its resolved path, so a `Models` moved
+  behind a symlink arrives under another name). A folder with no known layout
+  is never guessed.
   A destination for a dragged copy's Type (from `dragCopies.kinds`) swaps its
   glyph for `mdi-folder-download-outline` and turns its Type words green
   (`--v-theme-surface-success`, semibold); the blue `.drop-ring` still marks only
