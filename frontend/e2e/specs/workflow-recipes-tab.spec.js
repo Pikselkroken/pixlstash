@@ -94,11 +94,19 @@ async function ok(response, what) {
   return response.json();
 }
 
-/** Store a manual workflow through the import route; its id. */
+/**
+ * Store a manual workflow through the import route; its id. Its output prefix
+ * is its name, so no two are the same graph: a copy of one already stored is
+ * refused (#2347).
+ */
 async function storeWorkflow(api, name) {
+  const workflow = {
+    ...GRAPH,
+    8: { ...GRAPH[8], inputs: { ...GRAPH[8].inputs, filename_prefix: name } },
+  };
   const body = await ok(
     await api.post(`${API}/comfyui/workflows/import`, {
-      data: { name, workflow: GRAPH },
+      data: { name, workflow },
     }),
     "import the workflow",
   );

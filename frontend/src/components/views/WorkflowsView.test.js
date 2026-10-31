@@ -116,8 +116,10 @@ const importWorkflow = vi.fn();
 const getPixlstashNode = vi.fn();
 const listTemplates = vi.fn();
 const addTemplates = vi.fn();
-vi.mock("../../api/comfyui", () => ({
+vi.mock("../../api/comfyui", async () => ({
   importWorkflow: (...args) => importWorkflow(...args),
+  // The real reader of a refusal: what the view does with a 409 is the test.
+  existingWorkflow: (await vi.importActual("../../api/comfyui")).existingWorkflow,
   getPixlstashNode: (...args) => getPixlstashNode(...args),
   // The Templates tab (#2000).
   listTemplates: (...args) => listTemplates(...args),
@@ -1940,6 +1942,100 @@ describe("Add…, a dropped file, and Unfiled recipes", () => {
     });
     expect(store.selectedKeys).toEqual(["d"]);
     expect(wrapper.find('[role="status"]').text()).toBe("Added flow");
+  });
+
+  /** A rejection as axios hands over the server's "already here" 409. */
+  function alreadyHere(workflowId, name, hidden = false) {
+    return Object.assign(new Error("Request failed with status code 409"), {
+      response: {
+        status: 409,
+        data: {
+          detail: {
+            code: "workflow_exists",
+            message: `This workflow is already here as ${name}.`,
+            workflow_id: workflowId,
+            name,
+            hidden,
+          },
+        },
+      },
+    });
+  }
+
+  async function chooseFiles(wrapper, names) {
+    const input = wrapper.find(".wfv-file-input");
+    Object.defineProperty(input.element, "files", {
+      value: names.map(
+        (name) =>
+          new File(['{"nodes": []}'], name, { type: "application/json" }),
+      ),
+      configurable: true,
+    });
+    await input.trigger("change");
+    await flush();
+    await flush();
+  }
+
+  it("lands on the workflow a refused file already is, and names it", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    importWorkflow.mockReset();
+    importWorkflow.mockRejectedValue(alreadyHere("c", "Card c"));
+    await chooseFiles(wrapper, ["flow.json"]);
+
+    expect(store.selectedKeys).toEqual(["c"]);
+    expect(cursorKey(wrapper)).toBe("c");
+    expect(store.error).toBe("");
+    const note = wrapper.find('[data-testid="wfv-already-here"]');
+    expect(note.text()).toContain(
+      "flow.json is already here as Card c, so it was not added again.",
+    );
+    expect(wrapper.find('[role="status"]').text()).toBe(
+      "flow.json is already here as Card c",
+    );
+    // The card it is pulses; no other does.
+    const pulsing = wrapper.findAll(".wfv-cell--pulse");
+    expect(pulsing).toHaveLength(1);
+    expect(pulsing[0].element.closest(".wfv-row").dataset.key).toBe("c");
+    await note.findAll("button").at(-1).trigger("click");
+    expect(wrapper.find('[data-testid="wfv-already-here"]').exists()).toBe(false);
+  });
+
+  it("adds the new files of a drop and names the ones already here", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    importWorkflow.mockReset();
+    importWorkflow
+      .mockResolvedValueOnce({ name: "a", workflow_id: "a" })
+      .mockRejectedValueOnce(alreadyHere("c", "Card c"))
+      .mockResolvedValueOnce({ name: "b", workflow_id: "b" });
+    await chooseFiles(wrapper, ["a.json", "dup.json", "b.json"]);
+
+    // On the last NEW card, with the duplicate still pointed at.
+    expect(store.selectedKeys).toEqual(["b"]);
+    expect(wrapper.find('[role="status"]').text()).toBe(
+      "Added 2 workflows; 1 is already here as Card c",
+    );
+    expect(
+      wrapper.find(".wfv-cell--pulse").element.closest(".wfv-row").dataset.key,
+    ).toBe("c");
+  });
+
+  it("turns Show hidden on to reach a hidden workflow a file already is", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    importWorkflow.mockReset();
+    importWorkflow.mockRejectedValue(alreadyHere("e", "Card e", true));
+    await chooseFiles(wrapper, ["flow.json"]);
+
+    expect(store.filters.showHidden).toBe(true);
+    expect(listWorkflowCards).toHaveBeenLastCalledWith(
+      expect.objectContaining({ includeHidden: true }),
+    );
+    expect(store.selectedKeys).toEqual(["e"]);
+    expect(wrapper.find('[data-testid="wfv-already-here"]').text()).toContain(
+      "It is hidden, so hidden workflows are shown now.",
+    );
   });
 
   it("puts the wash out when the window importer claims the drop", async () => {

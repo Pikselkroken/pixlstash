@@ -213,6 +213,24 @@
         </button>
       </p>
 
+      <!-- Files an import refused because the library has them already. The
+           view lands on the card and pulses it; this names it, so the reader
+           knows why nothing new appeared. -->
+      <p v-if="alreadyHere.length" class="wfv-note" data-testid="wfv-already-here">
+        {{ alreadyHereSentence }}
+        <button
+          v-if="alreadyHereFiltered"
+          class="wfv-note-clear"
+          type="button"
+          @click="store.clearFilters()"
+        >
+          Clear all
+        </button>
+        <button class="wfv-note-clear" type="button" @click="alreadyHere = []">
+          Dismiss
+        </button>
+      </p>
+
       <!-- The fifth kind of empty: the library HAS workflows and the filters
            leave none. Not the empty state below - that screen offers three ways
            to get a first workflow, and this reader already has some. The strip
@@ -346,7 +364,10 @@
                    workflow's models (useModelDropTarget). -->
               <div
                 class="wfv-cell"
-                :class="{ 'wfv-cell--drop': modelDropKey === entry.key }"
+                :class="{
+                  'wfv-cell--drop': modelDropKey === entry.key,
+                  'wfv-cell--pulse': pulseKeys.includes(entry.key),
+                }"
                 role="gridcell"
                 :data-model-drop-models="dropModels(entry.card)"
                 @dragover="
@@ -474,7 +495,7 @@ import {
 import { useRoute, useRouter } from "vue-router";
 import { VIcon, VMenu } from "vuetify/components";
 
-import { importWorkflow } from "../../api/comfyui";
+import { existingWorkflow, importWorkflow } from "../../api/comfyui";
 import { listImportFolders } from "../../api/folders";
 import {
   exportWorkflow,
@@ -600,6 +621,16 @@ const announcement = ref("");
 const linkMissed = ref(false);
 // The same link, but the card IS in the payload and a filter is hiding it.
 const linkFiltered = ref(false);
+// Files an import refused because the library has them already, and the cards
+// that are them: the note names them, and those cards pulse once.
+const alreadyHere = ref([]);
+const pulseKeys = ref([]);
+// Whether that import turned *Show hidden* on to reach a hidden one.
+const revealedHidden = ref(false);
+// Two beats of `--dur-4` (`.wfv-cell--pulse`) and a margin.
+const PULSE_MS = 1000;
+let pulseTimer = null;
+onBeforeUnmount(() => clearTimeout(pulseTimer));
 const watchedFolder = ref(null);
 
 const sortOptions = SORT_KEYS.map((key) => ({
@@ -1844,23 +1875,36 @@ function filesChosen(event) {
 /**
  * Add workflow files, from the file picker or a drop: each one is a new manual
  * workflow, and the last to land is opened.
+ *
+ * A file the library already has (the server's 409) is not added: the view
+ * lands on the workflow it already is when nothing new landed, that card
+ * pulses, and the note names it. A hidden one turns *Show hidden* on, since a
+ * card the grid leaves out cannot be shown.
  */
 async function addWorkflowFiles(files) {
   let last = null;
   let added = 0;
+  const refused = [];
+  alreadyHere.value = [];
+  pulseKeys.value = [];
+  revealedHidden.value = false;
   for (const file of files) {
     if (file.size > MAX_WORKFLOW_BYTES) {
       store.error = `${file.name} is too large to be a workflow.`;
       continue;
     }
     try {
-      // Every import is a new manual workflow; the last one is opened.
       last = await importWorkflow({
         name: file.name.replace(/\.json$/i, ""),
         workflow: JSON.parse(await file.text()),
       });
       added += 1;
     } catch (err) {
+      const existing = existingWorkflow(err);
+      if (existing) {
+        refused.push({ file: file.name, ...existing });
+        continue;
+      }
       store.error = errorMessage(
         err,
         `Could not add ${file.name}: it may not be a workflow.`,
@@ -1868,14 +1912,68 @@ async function addWorkflowFiles(files) {
       console.warn(`[workflows] could not add ${file.name}`, err);
     }
   }
-  if (!last) return;
+  if (!last && !refused.length) return;
   // A drop on the Templates tab still adds to Mine, so show Mine.
   if (onTemplates.value) showSource("mine");
+  if (refused.some((r) => r.hidden) && !store.filters.showHidden) {
+    store.setFilters({ showHidden: true });
+    revealedHidden.value = true;
+  }
   await store.refetch();
-  landOn(last.workflow_id);
-  // Opened on the last, but the live region says how many arrived.
-  announcement.value = added > 1 ? `Added ${added} workflows` : `Added ${last.name}`;
+  landOn(last ? last.workflow_id : refused[refused.length - 1].workflow_id);
+  alreadyHere.value = refused;
+  pulseKeys.value = [...new Set(refused.map((r) => r.workflow_id))];
+  // Off on a timer, not on `animationend`: a key left on would pulse the
+  // card again whenever it remounts (a filter toggled off and on).
+  clearTimeout(pulseTimer);
+  pulseTimer = setTimeout(() => (pulseKeys.value = []), PULSE_MS);
+  // Opened on the last, but the live region says how many arrived and which
+  // were here already.
+  const parts = [];
+  if (added) parts.push(added > 1 ? `Added ${added} workflows` : `Added ${last.name}`);
+  if (refused.length) {
+    const subject = added
+      ? refused.length
+      : refused.length > 1
+        ? `${refused.length} files`
+        : refused[0].file;
+    parts.push(
+      `${subject} ${refused.length > 1 ? "are" : "is"} already here as ${refusedNames(refused)}`,
+    );
+  }
+  announcement.value = parts.join("; ");
 }
+
+/** The names of the workflows refused files already are, once each. */
+function refusedNames(refused) {
+  return [...new Set(refused.map((r) => r.name || "an unnamed workflow"))].join(
+    ", ",
+  );
+}
+
+/** Whether a client-side filter hides a card the note names. */
+const alreadyHereFiltered = computed(() =>
+  alreadyHere.value.some(
+    (r) =>
+      !store.sortedCards.some((card) => card.id === r.workflow_id) &&
+      store.cards.some((card) => card.id === r.workflow_id),
+  ),
+);
+
+const alreadyHereSentence = computed(() => {
+  const refused = alreadyHere.value;
+  if (!refused.length) return "";
+  const names = refusedNames(refused);
+  let sentence =
+    refused.length === 1
+      ? `${refused[0].file} is already here as ${names}, so it was not added again.`
+      : `${refused.length} files are already here, so they were not added again: ${names}.`;
+  if (revealedHidden.value && store.filters.showHidden) {
+    sentence += ` ${refused.length === 1 ? "It is" : "One is"} hidden, so hidden workflows are shown now.`;
+  }
+  if (alreadyHereFiltered.value) sentence += " A filter is hiding it.";
+  return sentence;
+});
 
 // ── Drop a workflow file ──────────────────────────────────────────────────
 //
@@ -2145,6 +2243,23 @@ onBeforeUnmount(() => {
   outline-offset: 2px;
 }
 
+/* "This one is already here": the selection's olive ring, sent outward twice
+   as an expressive one-shot (`--dur-4`), so the eye finds the card the view
+   just moved to. The selection ring stays; the token file's global
+   reduced-motion rule leaves only that and the note. */
+.wfv-cell--pulse {
+  animation: wfv-cell-pulse var(--dur-4) var(--ease-standard) 2;
+}
+@keyframes wfv-cell-pulse {
+  from {
+    outline: 2px solid var(--active-bar);
+    outline-offset: 2px;
+  }
+  to {
+    outline: 2px solid transparent;
+    outline-offset: var(--space-3);
+  }
+}
 /* Below the cards, on their columns: `--wf-columns` is set inline from the
    same measurement the grid uses. */
 .wfv-unfiled {

@@ -25,6 +25,44 @@ const TEMPLATES = "/api/v1/comfyui/templates";
 /** A minimal API-format graph: one node with a class and inputs. */
 const graph = (seed) => ({ 3: { class_type: "KSampler", inputs: { seed } } });
 
+/**
+ * A seed no earlier run against this backend used: a copy of a stored graph
+ * is refused (#2347), so a retry must not meet its own first attempt.
+ */
+const fresh = () => Date.now() * 1000 + Math.floor(Math.random() * 1000);
+
+/** A minimal editor-format document, laid out at *x*. */
+const editorDoc = (seed, x = 0) => ({
+  last_node_id: 3,
+  last_link_id: 0,
+  nodes: [
+    {
+      id: 3,
+      type: "KSampler",
+      pos: [x, 40],
+      size: [315, 262],
+      mode: 0,
+      inputs: [],
+      outputs: [],
+      properties: { "Node name for S&R": "KSampler" },
+      widgets_values: [seed, "fixed", 20, 8, "euler", "normal", 1],
+    },
+  ],
+  links: [],
+  groups: x ? [{ title: "Moved", bounding: [x, 0, 400, 400] }] : [],
+  extra: { ds: { scale: 1, offset: [x, 0] } },
+  version: 0.4,
+});
+
+/** Store *workflow* as *name* through the import route; its id. */
+async function stored(apiContext, name, workflow) {
+  const res = await apiContext.post(IMPORT, { data: { name, workflow } });
+  expect(res.ok(), await res.text()).toBe(true);
+  return (await res.json()).workflow_id;
+}
+
+const alreadyHere = (page) => page.getByTestId("wfv-already-here");
+
 /** The ids `GET /workflows` lists, straight from the server. */
 async function workflowIds(apiContext) {
   const res = await apiContext.get(WORKFLOWS);
@@ -113,7 +151,7 @@ test.describe("import", () => {
     await (await chooser).setFiles({
       name: "First import.json",
       mimeType: "application/json",
-      buffer: Buffer.from(JSON.stringify(graph(1))),
+      buffer: Buffer.from(JSON.stringify(graph(fresh()))),
     });
     const body = await (await imported).json();
     expect(body.name).toBe("First import");
@@ -149,8 +187,8 @@ test.describe("import", () => {
     });
 
     await dropFiles(page, [
-      { name: "Dropped one.json", text: JSON.stringify(graph(3)) },
-      { name: "Dropped two.json", text: JSON.stringify(graph(4)) },
+      { name: "Dropped one.json", text: JSON.stringify(graph(fresh())) },
+      { name: "Dropped two.json", text: JSON.stringify(graph(fresh())) },
     ]);
     await expect(announcement(page)).toHaveText("Added 2 workflows");
     expect(posts).toHaveLength(2);
@@ -199,24 +237,153 @@ test.describe("import", () => {
     expect(await workflowIds(apiContext)).toEqual(before);
   });
 
-  test("the same file imported twice is two workflows: the server keeps identical copies", async ({
+  test("a file already here is refused: the view lands on its card and the note names it", async ({
     page,
+    apiContext,
   }) => {
+    const seed = fresh();
+    const id = await stored(apiContext, `Here already ${seed}`, graph(seed));
+    await page.goto("/workflows");
+    await expect(row(page, id)).toBeVisible({ timeout: 15_000 });
+    const before = await workflowIds(apiContext);
+
+    const refused = page.waitForResponse(
+      (res) => new URL(res.url()).pathname === IMPORT,
+    );
+    await dropFiles(page, [
+      { name: "Twice.json", text: JSON.stringify(graph(seed)) },
+    ]);
+    const res = await refused;
+    expect(res.status()).toBe(409);
+    expect((await res.json()).detail).toMatchObject({
+      code: "workflow_exists",
+      workflow_id: id,
+      name: `Here already ${seed}`,
+    });
+
+    await expect(row(page, id)).toHaveAttribute("aria-selected", "true");
+    await expect(row(page, id)).toBeFocused();
+    await expect(alreadyHere(page)).toContainText(
+      `Twice.json is already here as Here already ${seed}, so it was not added again.`,
+    );
+    await expect(announcement(page)).toHaveText(
+      `Twice.json is already here as Here already ${seed}`,
+    );
+    // Not an error: nothing failed, the file is simply here already.
+    await expect(page.locator(".wfv-error")).toHaveCount(0);
+    expect(await workflowIds(apiContext)).toEqual(before);
+  });
+
+  test("a layout-only difference is still the same workflow", async ({
+    page,
+    apiContext,
+  }) => {
+    const seed = fresh();
+    const id = await stored(apiContext, `Laid out ${seed}`, editorDoc(seed));
+    await page.goto("/workflows");
+    await expect(row(page, id)).toBeVisible({ timeout: 15_000 });
+    const refused = page.waitForResponse(
+      (res) => new URL(res.url()).pathname === IMPORT,
+    );
+    // The node moved, a group drawn round it, the canvas panned.
+    await dropFiles(page, [
+      { name: "Moved.json", text: JSON.stringify(editorDoc(seed, 640)) },
+    ]);
+    expect((await refused).status()).toBe(409);
+    await expect(row(page, id)).toHaveAttribute("aria-selected", "true");
+    await expect(alreadyHere(page)).toContainText(`as Laid out ${seed}`);
+  });
+
+  test("once the workflow is saved over, its original file imports as a new workflow", async ({
+    page,
+    apiContext,
+  }) => {
+    const seed = fresh();
+    const original = graph(seed);
+    const id = await stored(apiContext, `Edited ${seed}`, original);
+    const saved = await apiContext.put(
+      `${WORKFLOWS}/${encodeURIComponent(id)}/graph`,
+      {
+        data: {
+          workflow: { 3: { class_type: "KSampler", inputs: { seed, steps: 41 } } },
+          read_version: 1,
+        },
+      },
+    );
+    expect(saved.ok(), await saved.text()).toBe(true);
+
+    await page.goto("/workflows");
+    await expect(row(page, id)).toBeVisible({ timeout: 15_000 });
+    const imported = page.waitForResponse(
+      (res) => new URL(res.url()).pathname === IMPORT,
+    );
+    await dropFiles(page, [
+      { name: "Original.json", text: JSON.stringify(original) },
+    ]);
+    const res = await imported;
+    expect(res.status()).toBe(200);
+    const added = (await res.json()).workflow_id;
+    expect(added).not.toBe(id);
+    await expect(row(page, added)).toHaveAttribute("aria-selected", "true");
+    await expect(announcement(page)).toHaveText("Added Original");
+    await expect(alreadyHere(page)).toHaveCount(0);
+  });
+
+  test("a drop with one file already here adds the others and names the one", async ({
+    page,
+    apiContext,
+  }) => {
+    const seed = fresh();
+    const id = await stored(apiContext, `In the drop ${seed}`, graph(seed));
+    await page.goto("/workflows");
+    await expect(row(page, id)).toBeVisible({ timeout: 15_000 });
+    const responses = [];
+    page.on("response", (res) => {
+      if (new URL(res.url()).pathname === IMPORT) responses.push(res);
+    });
+
+    await dropFiles(page, [
+      { name: "New one.json", text: JSON.stringify(graph(fresh())) },
+      { name: "Dup.json", text: JSON.stringify(graph(seed)) },
+      { name: "New two.json", text: JSON.stringify(graph(fresh())) },
+    ]);
+    await expect(announcement(page)).toHaveText(
+      `Added 2 workflows; 1 is already here as In the drop ${seed}`,
+    );
+    expect(responses.map((res) => res.status())).toEqual([200, 409, 200]);
+    const last = (await responses[2].json()).workflow_id;
+    // On the last new card; the note points at the one already here. (Which
+    // card pulses is the unit suite's: the pulse is gone within a second.)
+    await expect(row(page, last)).toHaveAttribute("aria-selected", "true");
+    await expect(alreadyHere(page)).toContainText(
+      `Dup.json is already here as In the drop ${seed}`,
+    );
+  });
+
+  test("a file that is a hidden workflow turns Show hidden on to reach it", async ({
+    page,
+    apiContext,
+  }) => {
+    const seed = fresh();
+    const id = await stored(apiContext, `Hidden ${seed}`, graph(seed));
+    const hidden = await apiContext.patch(
+      `${WORKFLOWS}/${encodeURIComponent(id)}`,
+      { data: { hidden: true } },
+    );
+    expect(hidden.ok(), await hidden.text()).toBe(true);
     await page.goto("/workflows");
     await expect(page.locator(".wfv-scroll")).toBeVisible({ timeout: 15_000 });
-    const file = { name: "Twice.json", text: JSON.stringify(graph(5)) };
-    const ids = [];
-    for (let i = 0; i < 2; i += 1) {
-      const imported = page.waitForResponse(
-        (res) => new URL(res.url()).pathname === IMPORT,
-      );
-      await dropFiles(page, [file]);
-      ids.push((await (await imported).json()).workflow_id);
-    }
-    expect(ids[0]).not.toBe(ids[1]);
-    for (const id of ids) {
-      await expect(row(page, id).locator(".wf-card__name")).toHaveText("Twice");
-    }
+    await expect(row(page, id)).toHaveCount(0);
+
+    await dropFiles(page, [
+      { name: "Hidden.json", text: JSON.stringify(graph(seed)) },
+    ]);
+    await expect(row(page, id)).toHaveAttribute("aria-selected", "true", {
+      timeout: 15_000,
+    });
+    await expect(alreadyHere(page)).toContainText(
+      "It is hidden, so hidden workflows are shown now.",
+    );
   });
 });
 

@@ -30,6 +30,7 @@ from pixlstash.hub import (
 from pixlstash.hub.workflow_card_reads import (
     find_workflow,
     manual_documents_holding,
+    manual_workflow_running,
     run_filed_workflow_ids,
     workflow_of_variant,
 )
@@ -334,7 +335,9 @@ def store_manual_workflow(
     What every way a workflow arrives goes through - an import, the watched
     inbox, a built-in, a duplicate, a fixed copy, a clone, a LoRA
     edit, an extract - so each stores the same kind of record. Always a new
-    record: identical copies are allowed. No file is written.
+    record, even for a copy of one already stored: refusing a copy is the
+    import route's decision (``manual_workflow_running``), since a duplicate
+    or a clone is a copy on purpose. No file is written.
 
     **The shape check and the placeholder migration are not skipped**: a
     workflow stored with placeholder tokens is one that will not run.
@@ -1909,7 +1912,8 @@ class ComfyUIWorkflowImportResponse(BaseModel):
     status: str
     # What the new manual workflow is called.
     name: str
-    # Always False: an import is a new workflow, identical copies allowed.
+    # Always False: an import is a new workflow, and a copy of one already
+    # stored is refused with 409 rather than matched.
     matched: bool = False
     # The manual workflow it is now.
     workflow_id: Optional[str] = None
@@ -3172,11 +3176,19 @@ def create_router(server) -> APIRouter:
         description=(
             "Stores a workflow JSON, UI or API format, as a new manual "
             "workflow named `name` (a document still carrying placeholder "
-            "tokens is stored with them migrated to bindings). Always a new "
-            "workflow: identical copies are allowed, and no file is written. "
+            "tokens is stored with them migrated to bindings). No file is "
+            "written. A document whose runnable graph is already a manual "
+            "workflow's saved graph (the same nodes, values and links, "
+            "whatever the layout) is refused with 409 naming that workflow. "
             "A document not shaped like a ComfyUI workflow is refused with 400."
         ),
         response_model=ComfyUIWorkflowImportResponse,
+        responses={
+            409: {
+                "description": "Already in the library: `detail` is "
+                "`{code: workflow_exists, message, workflow_id, name, hidden}`."
+            },
+        },
     )
     def import_comfyui_workflow(request: Request, payload: dict = Body(...)):
         name = _normalize_workflow_name(payload.get("name"))
@@ -3189,6 +3201,32 @@ def create_router(server) -> APIRouter:
             )
         hub = require_hub(server, "The workflow library is not open.")
         try:
+            check_comfy_workflow(workflow)
+            existing = manual_workflow_running(
+                hub,
+                workflow_bindings.runnable_identity(
+                    workflow_bindings.migrate_placeholders(workflow)[0]
+                ),
+                getattr(server.vault, "library_uuid", None),
+            )
+            if existing is not None:
+                logger.info(
+                    "Refused importing %s: it is workflow %s (%s) already.",
+                    name,
+                    existing["workflow_id"],
+                    existing["name"],
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "workflow_exists",
+                        "message": f"This workflow is already here as "
+                        f"{existing['name'] or 'an unnamed workflow'}.",
+                        **existing,
+                    },
+                )
+            # ponytail: two imports of one file at the same instant can both
+            # pass the check; a lock or a stored identity column if that bites.
             workflow_id = store_manual_workflow(hub, _stem(name), workflow, "import")
         except WorkflowFileTooLarge as exc:
             logger.warning("Refused importing %s: %s", name, exc)

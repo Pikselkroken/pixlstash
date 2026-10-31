@@ -452,8 +452,9 @@ def create_manual_workflow(
 ) -> str:
     """Store *document* as a new manual workflow called *name*; return its id.
 
-    Always a new row, even for a document already stored: identical copies are
-    allowed, and deduplicating is the importer's decision, not this one's. The
+    Always a new row, even for a document already stored: refusing a copy is
+    the import route's decision, not this one's (a duplicate is a copy on
+    purpose). The
     row and the name go in one transaction, so a workflow never shows nameless.
 
     Args:

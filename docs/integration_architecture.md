@@ -1403,8 +1403,12 @@ the two sides have agreed:
 
    **Every way in makes a manual workflow, and no file.** `POST
    /api/v1/comfyui/workflows/import` answers `{status, name, matched: false,
-   workflow_id}`, always a new manual workflow (identical copies allowed;
-   `overwrite` and `keep_both` are gone with the folder). The watched inbox
+   workflow_id}`, a new manual workflow (`overwrite` and `keep_both` are gone
+   with the folder), or **409** `{code: "workflow_exists", message,
+   workflow_id, name, hidden}` when its runnable graph is a manual workflow's
+   saved graph already, layout aside (#2347; backend §5). The Workflows view
+   lands on that card, turning on *Show hidden* for a hidden one, and pulses
+   it beside a note naming it; the MCP import tool reports the same detail. The watched inbox
    deduplicates on `workflow_origin` only, so a restart
    re-imports nothing. `POST /api/v1/comfyui/workflows/{workflow_name}/card`
    (`OWNER_ONLY`) makes a **built-in** workflow file a manual workflow once

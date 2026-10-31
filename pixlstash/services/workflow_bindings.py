@@ -478,3 +478,156 @@ def canonical(document: dict) -> str:
         if not str(key).startswith("pixlstash_")
     }
     return json.dumps(body, sort_keys=True, separators=(",", ":"))
+
+
+# What an editor export carries that changes how the graph LOOKS, never what it
+# runs: moving a node, resizing, recolouring, grouping or panning the canvas.
+_LAYOUT_GRAPH_KEYS = {
+    "groups",
+    "extra",
+    "config",
+    "state",
+    "version",
+    "revision",
+    "last_node_id",
+    "last_link_id",
+    "inputNode",
+    "outputNode",
+}
+_LAYOUT_NODE_KEYS = {
+    "pos",
+    "size",
+    "color",
+    "bgcolor",
+    "flags",
+    "order",
+    "title",
+    "shape",
+    "showAdvanced",
+    "selected",
+}
+# Bookkeeping a re-export rewrites: the S&R name, and the pack and version a
+# node came from, which an update of the pack bumps.
+_LAYOUT_PROPERTIES = {"Node name for S&R", "cnr_id", "ver", "aux_id"}
+# Editor furniture: a note runs nothing, so editing its text is layout too
+# (``comfyui_ui_graph._ANNOTATION_CLASSES``).
+_NOTE_CLASSES = {"Note", "MarkdownNote"}
+# Of a node's (or a subgraph's) input and output slots, what wires the graph.
+_SLOT_KEYS = {"name", "type", "link", "links", "widget", "linkIds"}
+
+
+def runnable_identity(document: dict) -> str:
+    """What makes two workflows logically the same graph, as one string.
+
+    Two documents are copies of one workflow when these match: the same nodes,
+    the same values in their inputs and widgets (prompt, model and seed
+    included), the same links and the same bypass state. Layout and notes are
+    not part of it, so a node moved in ComfyUI and exported again still
+    matches, and neither is anything :func:`canonical` ignores (whitespace, key
+    order, PixlStash's own keys). An API graph keys on ``class_type`` and
+    ``inputs`` alone; its ``_meta`` titles are layout.
+
+    **A known layout key is dropped, everything else counts**: an editor key
+    this does not know makes two copies differ, which stores the second as
+    before, where dropping an unknown key could refuse a different workflow.
+    The two formats never key alike, so an API graph matches an editor
+    document only through the conversion stored beside it. ``extra`` is
+    dropped but for ``groupNodes``: a pack keeping run state there is not
+    told apart.
+    """
+    graph = api_graph(document)
+    if graph is not None:
+        body = {
+            str(node_id): {
+                "class_type": node.get("class_type"),
+                "inputs": node.get("inputs"),
+            }
+            for node_id, node in graph.items()
+            if isinstance(node, dict) and not str(node_id).startswith("pixlstash_")
+        }
+        return json.dumps(body, sort_keys=True, separators=(",", ":"), default=str)
+    # The top-level id names the file, and ComfyUI keeps it across saves; a
+    # subgraph definition's id is what its instances' ``type`` names, so stays.
+    body = _runnable_editor_graph(document)
+    body.pop("id", None)
+    extra = document.get("extra")
+    group_nodes = extra.get("groupNodes") if isinstance(extra, dict) else None
+    if isinstance(group_nodes, dict) and group_nodes:
+        # Legacy group nodes, by name: what each definition's nodes run, its
+        # layout aside as for any graph.
+        body["groupNodes"] = {
+            name: _runnable_editor_graph(definition)
+            if isinstance(definition, dict)
+            else definition
+            for name, definition in group_nodes.items()
+        }
+    elif group_nodes:
+        # Not the shape ComfyUI writes: kept whole, so it still counts.
+        body["groupNodes"] = group_nodes
+    definitions = document.get("definitions")
+    if isinstance(definitions, dict) and isinstance(definitions.get("subgraphs"), list):
+        body["definitions"] = {
+            **definitions,
+            "subgraphs": [
+                _runnable_editor_graph(sub) if isinstance(sub, dict) else sub
+                for sub in definitions["subgraphs"]
+            ],
+        }
+    return json.dumps(body, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _runnable_editor_graph(graph: dict) -> dict:
+    """An editor graph (or subgraph definition) without its layout keys."""
+    body = {
+        key: value
+        for key, value in graph.items()
+        if key not in _LAYOUT_GRAPH_KEYS
+        and key != "definitions"
+        and not str(key).startswith("pixlstash_")
+    }
+    for key in ("inputs", "outputs"):
+        if isinstance(body.get(key), list):
+            body[key] = [_runnable_slot(slot) for slot in body[key]]
+    if isinstance(body.get("nodes"), list):
+        # In id order: the list's order is the canvas's drawing order.
+        body["nodes"] = sorted(
+            (
+                _runnable_node(node) if isinstance(node, dict) else node
+                for node in body["nodes"]
+                if not (isinstance(node, dict) and _is_note(node))
+            ),
+            key=lambda node: json.dumps(
+                node.get("id") if isinstance(node, dict) else node, default=str
+            ),
+        )
+    return body
+
+
+def _is_note(node: dict) -> bool:
+    """Whether *node* is a note. A ``type`` that is no string (a subgraph's
+    nodes are not shape-checked) is no note, and must not raise."""
+    node_type = node.get("type")
+    return isinstance(node_type, str) and node_type in _NOTE_CLASSES
+
+
+def _runnable_node(node: dict) -> dict:
+    """One editor node without its layout: position, size, colour, title."""
+    body = {key: value for key, value in node.items() if key not in _LAYOUT_NODE_KEYS}
+    for key in ("inputs", "outputs"):
+        if isinstance(body.get(key), list):
+            body[key] = [_runnable_slot(slot) for slot in body[key]]
+    properties = body.get("properties")
+    if isinstance(properties, dict):
+        body["properties"] = {
+            key: value
+            for key, value in properties.items()
+            if key not in _LAYOUT_PROPERTIES
+        }
+    return body
+
+
+def _runnable_slot(slot):
+    """An input or output slot as it wires the graph, without its label."""
+    if not isinstance(slot, dict):
+        return slot
+    return {key: value for key, value in slot.items() if key in _SLOT_KEYS}

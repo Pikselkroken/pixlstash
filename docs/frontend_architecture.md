@@ -6882,7 +6882,14 @@ from the UI today and are not oversights**:
   Every import is a new manual workflow (no overwrite or keep-both choice);
   the view re-reads the grid and lands on the last one's `workflow_id`
   (`landOn`: select it, cursor on its card), as Duplicate and the Workflow
-  tab's *Save as new…* do with theirs. Only the `.json` files of a drop are
+  tab's *Save as new…* do with theirs. **A file the library already has is
+  refused** (the server's 409, read by `existingWorkflow` in `api/comfyui.js`;
+  #2347): it is no error, the rest of the files still import, and when none
+  did the view lands on the workflow it already is, turning *Show hidden* on
+  first for a hidden one. Each such card pulses (`.wfv-cell--pulse`, the
+  olive selection ring sent outward twice over `--dur-4`, cleared on a timer), and the `wfv-already-here` note names them and the files, with
+  *Clear all* when a client-side filter hides one. The live region says both
+  groups ("Added 2 workflows; 1 is already here as X"). Only the `.json` files of a drop are
   the view's (`isWorkflowFile`, `utils/media.js`): `useWindowFileImport`
   stands aside for a drop of JSON alone onto `.wfv`, and anything else in a
   mixed drop is still its to import. A dropped folder is not walked for
