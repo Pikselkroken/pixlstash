@@ -1537,7 +1537,7 @@ defineExpose({ reveal });
    bottom of the scrolling sidebar while the tree runs past it. */
 .mft-edge {
   position: sticky;
-  z-index: 1;
+  z-index: var(--z-sticky);
   height: 0;
 }
 
