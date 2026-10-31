@@ -316,7 +316,7 @@ The shipped app has not caught up with this system everywhere. Treat each of the
 
 ## Where the app is ahead
 
-- **The light theme ships a warm silver ramp** (2026-10-31, "Light mode is a bit too bright"), not the near-white ramp listed above: chrome #c2bfb8, canvas #d4d1cb, surface and panel #e2dfd9, input #ebe9e4, cancel #d4d1cb, border #a39e94, divider #b3aea5; muted text at 72%. The darker ground deepens light `accent` to #835722 and `primary` / `selected-ink` to #4a6308, light `surface-error` / `-warning` / `-success` to #76271e / #563c0f / #194b27, light `surface-tertiary` to #2d4951, light `focus-ring` to #2462c8 and `level-3` to #b81bb8. The design system's tokens owe the same update; until it lands, `main.js` is the reference for the light theme, not drift.
+- **The light theme ships a warm light-silver ramp** (2026-10-31, "Light mode is a bit too bright"), not the near-white ramp listed above: chrome #d9d6d0, canvas #e7e5e1, surface and panel #f0efec, input #f5f4f2, cancel #ddd9d2, border #beb8ae, divider #cec9c0. Amber, olive and the muted-text alpha are unchanged. The darker ground deepens light `surface-error` / `-warning` / `-success` to #8f2f24 / #6a4b13 / #1f5c30, light `surface-tertiary` to #35565f and light `focus-ring` to #3273d2. The design system's tokens owe the same update; until it lands, `main.js` is the reference for the light theme, not drift.
 
 ## Do's and Don'ts
 
