@@ -572,7 +572,6 @@
                     'shelf-row--broken': BROKEN_STATES.has(row.locState),
                     'shelf-row--cut': store.isCut(row.id),
                   }"
-                  draggable="true"
                   role="row"
                   aria-level="1"
                   :aria-expanded="
@@ -583,8 +582,7 @@
                   :tabindex="row.rowKey === rovingRowKey ? 0 : -1"
                   :data-row-key="row.rowKey"
                   @click="pickRow(row, $event)"
-                  @dragstart="onRowDragStart($event, row)"
-                  @dragend="onRowDragEnd"
+                  @pointerdown="onRowPointerDown($event, row)"
                   @contextmenu.prevent="openRowMenu(row, $event)"
                   @keydown="onRowKeydown(row, $event)"
                   @focus="focusedRowKey = row.rowKey"
@@ -986,7 +984,6 @@
                       'shelf-row--selected': store.isSelected(member.id),
                       'shelf-row--cut': store.isCut(member.id),
                     }"
-                    draggable="true"
                     role="row"
                     aria-level="2"
                     aria-keyshortcuts="Shift+F10"
@@ -994,8 +991,7 @@
                     :tabindex="memberKey(row, member) === rovingRowKey ? 0 : -1"
                     :data-row-key="memberKey(row, member)"
                     @click="pickMember(row, member, $event)"
-                    @dragstart="onRowDragStart($event, member)"
-                    @dragend="onRowDragEnd"
+                    @pointerdown="onRowPointerDown($event, member)"
                     @contextmenu.prevent="openMemberMenu(row, member, $event)"
                     @keydown="onMemberKeydown(row, member, $event)"
                     @focus="focusedRowKey = memberKey(row, member)"
@@ -1222,6 +1218,7 @@
 import {
   computed,
   nextTick,
+  onBeforeUnmount,
   onMounted,
   onUnmounted,
   provide,
@@ -1292,7 +1289,10 @@ import {
   MIN_COLUMN_WIDTHS,
   useModelShelfStore,
 } from "../../stores/useModelShelfStore";
-import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
+import {
+  basename,
+  useModelFoldersStore,
+} from "../../stores/useModelFoldersStore";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useOperationStore } from "../../stores/useOperationStore";
@@ -1324,7 +1324,6 @@ import {
   modelName,
   GROUP_BY_LABELS,
   modelVersion,
-  MODEL_COPIES_TYPE,
   movableCopies,
   moveMechanism,
   quantBadge,
@@ -1348,6 +1347,7 @@ const emit = defineEmits(["open-settings"]);
 const store = useModelShelfStore();
 const entityLists = useEntityListsStore();
 const foldersStore = useModelFoldersStore();
+const favourites = useFavouritesStore();
 const moves = useModelMovesStore();
 // Both read by the window-level Escape, which has to know what else on screen
 // owns the key before it clears anything. See `onShelfEscape`.
@@ -1908,39 +1908,163 @@ async function moveModelsOutFirst(copies) {
 
 // ── Drag and cut (#2204) ─────────────────────────────────────────────────
 
+// A pointer drag, not the browser's. HTML5 drag-and-drop hands the gesture and
+// its image to the window system, which on the desktop shell (X11) lifted the
+// row late and lagged the whole drag, as it once did the Models rail's. Here
+// the drop tip follows the pointer as the drag's preview, `elementFromPoint`
+// finds the folder under it (`data-model-copies-drop`), and that folder takes
+// `model-copies-over`, `-leave` and `-drop` events, accepting a drop with
+// `preventDefault` as a `dragover` would (`useModelCopyDrop`).
+
+/** How far the pointer moves before a press becomes a drag. */
+const DRAG_START_PX = 4;
+
+/** `{row, x, y}` from the press, until it becomes a drag or is let go. */
+let press = null;
+let dragging = false;
+/** The folder row under the pointer, and whether it takes the drop. */
+let overEl = null;
+let overOk = false;
+
+function onRowPointerDown(event, row) {
+  // A mouse or pen press with the main button. Touch scrolls the list, and a
+  // press in the rename field selects its text.
+  if (event.button !== 0 || event.pointerType === "touch") return;
+  if (event.target.closest?.("input, textarea, button")) return;
+  endDrag();
+  press = { row, x: event.clientX, y: event.clientY };
+  window.addEventListener("pointermove", onDragMove);
+  window.addEventListener("pointerup", onDragRelease);
+  window.addEventListener("pointercancel", endDrag);
+  window.addEventListener("keydown", onDragKeydown, true);
+}
+
+function onDragMove(event) {
+  if (!press) return;
+  if (!dragging) {
+    const travel = Math.hypot(
+      event.clientX - press.x,
+      event.clientY - press.y,
+    );
+    if (travel < DRAG_START_PX) return;
+    if (!startDrag(press.row)) {
+      endDrag();
+      return;
+    }
+  }
+  trackDrag(event.clientX, event.clientY);
+}
+
 /**
  * A row picks up the selection's movable copies. An unselected row is made the
  * selection first, alone, as a file manager does: what is dragged is what is
  * under the pointer. A drop on the same drive moves at once, as a file manager
  * does; across drives it asks first.
+ *
+ * @returns {boolean} whether anything was picked up.
  */
-function onRowDragStart(event, row) {
+function startDrag(row) {
   if (!store.isSelected(row.id)) {
     // A row that cannot move refuses here, before it takes the selection: a
     // stray drag on an offline row must not drop forty selected ones.
     const scope = inFolder.value ? store.folderScope : null;
     if (!movableCopies([row], foldersById.value, scope).items.length) {
-      event.preventDefault();
       noticeUnmovable();
-      return;
+      return false;
     }
     store.selectFromClick(row.id, {}, orderedRowIds.value);
   }
   const copies = store.movableSelection(foldersById.value);
   if (!copies.items.length) {
-    event.preventDefault();
     noticeUnmovable();
-    return;
+    return false;
   }
   store.dragCopies = copies;
-  event.dataTransfer.setData(MODEL_COPIES_TYPE, JSON.stringify(copies.items));
-  event.dataTransfer.effectAllowed = "move";
+  dragging = true;
+  return true;
 }
 
-function onRowDragEnd() {
-  store.dragCopies = null;
-  store.dropTip = null;
+/** Light the folder under the pointer, and move the tip along with it. */
+function trackDrag(x, y) {
+  // The tip is `pointer-events: none`, so this is what is really underneath.
+  const hit =
+    document
+      .elementFromPoint?.(x, y)
+      ?.closest?.("[data-model-copies-drop]") ?? null;
+  if (overEl && overEl !== hit) {
+    overEl.dispatchEvent(new CustomEvent("model-copies-leave"));
+  }
+  overEl = hit;
+  // A folder that takes the drop writes the tip itself: where they go.
+  overOk = hit
+    ? !hit.dispatchEvent(
+        new CustomEvent("model-copies-over", {
+          cancelable: true,
+          detail: { x, y },
+        }),
+      )
+    : false;
+  // No drag cursor: a class on <html> restyles every element on the page,
+  // which cost more than the drag it decorated. The tip and the folder's ring
+  // or hatch say where the drop goes.
+  if (!overOk) store.dropTip = { x, y, text: carriedWords(store.dragCopies) };
 }
+
+/** What the tip says away from a folder: the file, or how many. */
+function carriedWords(copies) {
+  const items = copies?.items ?? [];
+  return items.length === 1
+    ? basename(items[0].relpath)
+    : `${items.length} files`;
+}
+
+function onDragRelease() {
+  const target = dragging && overOk ? overEl : null;
+  const wasDragging = dragging;
+  // Handed over before the drag is cleared: the folder reads `dragCopies`.
+  target?.dispatchEvent(
+    new CustomEvent("model-copies-drop", { cancelable: true }),
+  );
+  endDrag();
+  // The release would otherwise land as a click where the drag began, and
+  // narrow the selection to that row.
+  if (wasDragging) {
+    window.addEventListener("click", swallowClick, true);
+    setTimeout(() => window.removeEventListener("click", swallowClick, true));
+  }
+}
+
+function swallowClick(event) {
+  event.stopPropagation();
+  event.preventDefault();
+  window.removeEventListener("click", swallowClick, true);
+}
+
+function onDragKeydown(event) {
+  if (event.key !== "Escape" || !dragging) return;
+  // Escape puts the files back; it must not also clear the selection or a cut.
+  event.stopPropagation();
+  event.preventDefault();
+  endDrag();
+}
+
+function endDrag() {
+  window.removeEventListener("pointermove", onDragMove);
+  window.removeEventListener("pointerup", onDragRelease);
+  window.removeEventListener("pointercancel", endDrag);
+  window.removeEventListener("keydown", onDragKeydown, true);
+  overEl?.dispatchEvent(new CustomEvent("model-copies-leave"));
+  press = null;
+  overEl = null;
+  overOk = false;
+  if (dragging) {
+    dragging = false;
+    store.dragCopies = null;
+    store.dropTip = null;
+  }
+}
+
+onBeforeUnmount(endDrag);
 
 /** Why a drag or a cut took nothing: otherwise the gesture just fails. */
 function noticeUnmovable() {
@@ -2303,7 +2427,7 @@ const ownSelection = computed(() => store.selectedRows);
 
 onMounted(() => window.addEventListener("keydown", onShelfKeydown));
 // The favourites are read once for the shelf; the store shares that read.
-onMounted(() => useFavouritesStore().ensureLoaded());
+onMounted(() => favourites.ensureLoaded());
 onUnmounted(() => window.removeEventListener("keydown", onShelfKeydown));
 
 // ── Hand-made workflow sets (#1520) ─────────────────────────────────────────
@@ -3014,13 +3138,31 @@ const LOC_NOTE = {
  * @returns {string}
  */
 function lockedNote(row) {
+  return lockedRows.value.has(row) ? "in a locked folder" : "";
+}
+
+/**
+ * The rows {@link lockedNote} speaks for, worked out when the rows, folders or
+ * scope change rather than per row on every render: `rowMemo` reads the note
+ * for every row on each click, and `movableCopies` over 1,500 rows was a third
+ * of what a drag paid before its row lifted.
+ */
+const lockedRows = computed(() => {
   // The drag's own scope, so the note and the refusal never disagree.
   const scope = inFolder.value ? store.folderScope : null;
-  return row.locState === "present" &&
-    !movableCopies([row], foldersById.value, scope).items.length
-    ? "in a locked folder"
-    : "";
-}
+  const locked = new Set();
+  for (const group of shownGroups.value) {
+    for (const row of group.rows) {
+      if (
+        row.locState === "present" &&
+        !movableCopies([row], foldersById.value, scope).items.length
+      ) {
+        locked.add(row);
+      }
+    }
+  }
+  return locked;
+});
 
 const LOC_TITLE = {
   present: "",
@@ -4333,11 +4475,14 @@ function setsCell(row) {
  */
 function rowMemo(row) {
   const key = row.rowKey;
+  // The sets themselves rather than `isSelected`, `isCut` and `isFavouriteRow`:
+  // a store function is a Pinia action, and its wrapper, paid three times per
+  // row on every render, cost more than the rest of this list together.
   return [
     row,
-    store.isSelected(row.id),
-    store.isCut(row.id),
-    store.isFavouriteRow(row),
+    store.selectedIds.has(row.id),
+    store.cutCopies?.ids.has(row.id) ?? false,
+    favourites.byKind.model?.has(row.sha256) ?? false,
     key === rovingRowKey.value,
     key === editingRowKey.value && editingName.value,
     key === editingBaseKey.value && editingBase.value,
@@ -5557,3 +5702,4 @@ button.shelf-head-cell:hover {
   background: rgba(var(--v-theme-background), 0.55);
 }
 </style>
+

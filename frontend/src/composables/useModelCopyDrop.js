@@ -4,6 +4,10 @@
 // what refuses, and what the tip under the pointer says. The drop hands the
 // move to `ModelShelf`, which starts a rename on one drive at once, as a file
 // manager does, and asks first only for a copy across drives.
+//
+// The shelf drags with the pointer, not HTML5 drag-and-drop, so a target hears
+// `model-copies-over` (with the pointer in `detail`), `model-copies-leave` and
+// `model-copies-drop`, and takes the drop by `preventDefault` on the first.
 
 import { ref } from "vue";
 
@@ -17,7 +21,6 @@ import {
   comfyuiName,
   copyKey,
   formatModelSize,
-  MODEL_COPIES_TYPE,
   moveMechanism,
 } from "../utils/modelShelf";
 
@@ -99,11 +102,6 @@ export function useModelCopyDrop() {
   const overKey = ref(null);
   const overOk = ref(false);
 
-  function carries(event) {
-    const types = Array.from(event.dataTransfer?.types ?? []);
-    return types.includes(MODEL_COPIES_TYPE) && store.dragCopies != null;
-  }
-
   function refused(destination) {
     return (
       !destination ||
@@ -113,24 +111,20 @@ export function useModelCopyDrop() {
   }
 
   function onDragOver(event, key, destination) {
-    if (!carries(event)) return;
+    if (store.dragCopies == null) return;
     overKey.value = key;
     overOk.value = !refused(destination);
-    if (!overOk.value) {
-      event.dataTransfer.dropEffect = "none";
-      store.dropTip = null;
-      return;
-    }
+    // Refused, the shelf's tip goes on saying what is carried.
+    if (!overOk.value) return;
     event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
     const comfyui = comfyuiNameWords(
       store.dragCopies,
       destination,
       folders.comfyuiReads,
     );
     store.dropTip = {
-      x: event.clientX,
-      y: event.clientY,
+      x: event.detail.x,
+      y: event.detail.y,
       text: `Move to ${destinationName(folders.folders, destination)} · ${mechanismWords(
         store.dragCopies,
         destination.folderId,
@@ -139,25 +133,19 @@ export function useModelCopyDrop() {
     };
   }
 
-  function onDragLeave(event, key) {
-    if (overKey.value !== key) return;
-    if (event.currentTarget?.contains?.(event.relatedTarget)) return;
-    overKey.value = null;
-    store.dropTip = null;
+  function onDragLeave(key) {
+    if (overKey.value === key) overKey.value = null;
   }
 
   function onDrop(event, destination) {
-    if (!carries(event)) return;
+    if (store.dragCopies == null) return;
     const copies = store.dragCopies;
     const ok = !refused(destination);
     overKey.value = null;
     store.dropTip = null;
-    // Cleared here as well as on `dragend`: a row refetched away mid-drag
-    // never fires its own.
     store.dragCopies = null;
     if (!ok) return;
     event.preventDefault();
-    event.stopPropagation();
     store.requestMove(copies, {
       folderId: Number(destination.folderId),
       path: destination.path ?? "",

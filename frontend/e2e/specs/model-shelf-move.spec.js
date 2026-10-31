@@ -4,9 +4,10 @@
 // no dialog asks first (one would only for a copy across drives, which this
 // suite's single disk cannot stage). So the drag test follows the gesture
 // through to the disk, and the refusals assert that nothing moves.
-// Real HTML5 drag had not been exercised in this suite before, so the drag
-// test also records that `dragstart` and `drop` fired: a spec whose drag never
-// started would otherwise pass every refusal for the wrong reason.
+// The shelf drags rows with the pointer, not HTML5 drag-and-drop (whose image
+// lifted late on the desktop shell), so the drag test also records that the
+// browser's own `dragstart` never fired: a row that went back to native drag
+// would pass every assertion here and lag again.
 
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
@@ -36,7 +37,7 @@ test.afterEach(async ({ apiContext }) => {
   dirs = []
 })
 
-/** Record the drag events the window sees, in the capture phase. */
+/** Record the native drag events the window sees, in the capture phase. */
 async function recordDrags(page) {
   await page.addInitScript(() => {
     window.__drags = []
@@ -46,11 +47,7 @@ async function recordDrags(page) {
   })
 }
 
-/**
- * Pick `source` up and hold it over `target`, button still down. Entering the
- * target fires only `dragenter`; the stepped move inside it is what fires the
- * `dragover` the refusal is drawn on.
- */
+/** Pick `source` up and hold it over `target`, button still down. */
 async function holdDragOver(page, source, target) {
   await source.hover()
   await page.mouse.down()
@@ -73,8 +70,11 @@ test('a row dropped on a subfolder moves its file there on disk', async ({ page,
   const row = shelf.row(stub.filename)
   await expect(row).toHaveCount(1)
 
-  await row.dragTo(shelf.treeRow(folder.id, dest))
-  expect(await page.evaluate(() => window.__drags)).toEqual(['dragstart', 'drop'])
+  await holdDragOver(page, row, shelf.treeRow(folder.id, dest))
+  // The tip under the pointer is the drag's preview, and says where it goes.
+  await expect(page.getByTestId('model-drop-tip')).toContainText(`Move to`)
+  await page.mouse.up()
+  expect(await page.evaluate(() => window.__drags)).toEqual([])
 
   const landed = join(folder.path, dest, stub.filename)
   await expect.poll(() => existsSync(landed)).toBe(true)
@@ -105,9 +105,8 @@ test('drops on a locked folder, the source folder or nothing are refused', async
   const row = shelf.row(stub.filename)
   await expect(row).toHaveCount(1)
 
-  // A refused folder never takes the drop, so the browser fires no `drop`
-  // there. What proves the drag reached it is the refusal hatch drawn while
-  // the drag is held over it; then the release must open nothing.
+  // What proves the drag reached a refused folder is the refusal hatch drawn
+  // while the drag is held over it; then the release must open nothing.
   //
   // The managed store the server keeps beside its hub is always registered,
   // and always locked. The second target is the folder the file is already in.
@@ -122,11 +121,7 @@ test('drops on a locked folder, the source folder or nothing are refused', async
   await holdDragOver(page, row, page.locator('.shelf-toolbar'))
   await page.mouse.up()
 
-  expect(await page.evaluate(() => window.__drags)).toEqual([
-    'dragstart',
-    'dragstart',
-    'dragstart',
-  ])
+  expect(await page.evaluate(() => window.__drags)).toEqual([])
   await expect(shelf.moveDialog).toHaveCount(0)
   expect(imports).toEqual([])
   expect(existsSync(stub.diskPath)).toBe(true)

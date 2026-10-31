@@ -5839,8 +5839,13 @@ dialog, which says so on its button.
 - **Move to…**, on the selection pill and in the row menu, calls `openMove`. The
   dialog opens with **nothing chosen**: the destination is always the reader's
   own pick. (It used to pre-select the managed store, which takes no moves now.)
-- **Drag.** Every row of the shelf list is `draggable` (the set grid's cards
-  are not). Dragging an unselected row makes it the selection first, alone, as
+- **Drag.** Every row of the shelf list can be dragged (the set grid's cards
+  cannot), and it is a pointer drag, not HTML5 drag-and-drop: the browser's
+  drag hands its image to the window system, which on the desktop shell (X11)
+  lifted the row late and lagged the gesture, as it once did the Models rail's.
+  A main-button mouse or pen press becomes a drag after 4 px; Escape puts the
+  files back, and the click the release fires is swallowed so it cannot narrow
+  the selection. Dragging an unselected row makes it the selection first, alone, as
   a file manager does, unless it has nothing movable, when it refuses before
   touching the selection and says why in a notice (the cut's sentence). A row
   that is there but cannot move ends its file line `· in a locked folder`
@@ -5856,17 +5861,23 @@ dialog, which says so on its button.
   `row` is a fresh object whenever `visibleRows` recomputes, so `rowMemo` lists
   only what a row reads from outside itself; **a new outside read in the row's
   template must be added there**, or that row draws stale until it next
-  changes. The drag carries the
-  selection's movable copies under the private type `application/x-pixlstash-model-copies`
-  (`MODEL_COPIES_TYPE`). `store.dragCopies` holds them for the drag, because a
-  drop target cannot read `dataTransfer` data before the drop. Folders tree rows
-  (in `browse` mode) take the drop, through
+  changes. `rowMemo` reads the selection, cut and favourite sets directly
+  rather than through `isSelected`, `isCut` and `isFavouriteRow`, because every
+  store function is a Pinia action and its wrapper, paid per row per render,
+  cost more than the rest of the list; the locked note is a computed set
+  (`lockedRows`) for the same reason. The drag carries the selection's movable
+  copies in `store.dragCopies`. Folders tree rows (in `browse` mode) mark
+  themselves `data-model-copies-drop`; the shelf finds the one under the pointer
+  with `elementFromPoint` and sends it `model-copies-over` (the pointer in
+  `detail`), `model-copies-leave` and `model-copies-drop`, and a row takes the
+  drop by `preventDefault` on the first, as a `dragover` would. The rules are
   `useModelCopyDrop`: a drive row, a locked folder and the folder every dragged
   copy is already in refuse with the shared `.not-droppable` hatch; a folder
   that takes it draws `.drop-ring`, the focus stroke inset (without the glow)
-  over the hover wash (not olive, the selection, nor amber, an action). `ModelDropTip` follows
-  the pointer with the destination, rename or copy, and what the other drive
-  gets back (`moveMechanism`, on `device_id` as the server's `same_device`
+  over the hover wash (not olive, the selection, nor amber, an action). `ModelDropTip` is the
+  drag's only preview: it follows the pointer with the file's name (or how
+  many files), and over a folder that takes them with the destination, rename
+  or copy, and what the other drive gets back (`moveMechanism`, on `device_id` as the server's `same_device`
   measures it). It is its own component so the drag's pointer moves repaint the
   tip and never the shelf. The drop calls `store.requestMove`, and `ModelShelf`
   (which owns the dialog; the tree is in the sidebar) starts a same-drive move

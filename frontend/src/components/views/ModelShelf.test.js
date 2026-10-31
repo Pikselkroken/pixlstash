@@ -4640,21 +4640,78 @@ describe("the open folder (#2203)", () => {
       wrapper.unmount();
     });
 
+    /** A main-button press on `el`, and the pointer moved to `x`, `y`. */
+    const pointer = (el, type, x = 0, y = 0) =>
+      el.dispatchEvent(
+        new MouseEvent(type, { button: 0, clientX: x, clientY: y, bubbles: true }),
+      );
+
     it("drags an unselected row alone, selecting it first", async () => {
       const { wrapper, store } = await openFolder();
       expect(store.selectedRows).toEqual([]);
       const row = wrapper.find(".shelf-row");
-      expect(row.attributes("draggable")).toBe("true");
-      const setData = vi.fn();
-      const start = new Event("dragstart", { bubbles: true, cancelable: true });
-      start.dataTransfer = { setData, effectAllowed: "" };
-      row.element.dispatchEvent(start);
-      expect(start.defaultPrevented).toBe(false);
+      // Not the browser's drag: its image lifted late on the desktop shell.
+      expect(row.attributes("draggable")).toBeUndefined();
+      pointer(row.element, "pointerdown");
+      // Under 4 px a press is still a click.
+      pointer(window, "pointermove", 3, 0);
+      expect(store.dragCopies).toBe(null);
+      pointer(window, "pointermove", 10, 0);
       expect(store.selectedRows.map((one) => one.id)).toEqual([1]);
-      expect(setData).toHaveBeenCalledWith(
-        "application/x-pixlstash-model-copies",
-        JSON.stringify([LOOSE]),
+      expect(store.dragCopies.items).toEqual([LOOSE]);
+      // Away from a folder the tip is the preview: what is carried.
+      expect(store.dropTip).toEqual({ x: 10, y: 0, text: "loose.safetensors" });
+      pointer(window, "pointerup", 10, 0);
+      expect(store.dragCopies).toBe(null);
+      expect(store.dropTip).toBe(null);
+      wrapper.unmount();
+    });
+
+    it("hands the drop to the folder under the pointer, and eats the release's click", async () => {
+      const { wrapper, store } = await openFolder();
+      const folder = document.createElement("div");
+      folder.dataset.modelCopiesDrop = "";
+      const heard = [];
+      folder.addEventListener("model-copies-over", (event) => {
+        heard.push(["over", event.detail]);
+        event.preventDefault();
+      });
+      folder.addEventListener("model-copies-drop", () =>
+        heard.push(["drop", store.dragCopies?.items]),
       );
+      document.body.appendChild(folder);
+      const was = document.elementFromPoint;
+      document.elementFromPoint = (x) => (x > 100 ? folder : document.body);
+      const clicked = vi.fn();
+      document.body.addEventListener("click", clicked);
+      try {
+        pointer(wrapper.find(".shelf-row").element, "pointerdown");
+        pointer(window, "pointermove", 20, 0);
+        expect(store.dropTip.text).toBe("loose.safetensors");
+        pointer(window, "pointermove", 120, 5);
+        pointer(window, "pointerup", 120, 5);
+        expect(heard).toEqual([
+          ["over", { x: 120, y: 5 }],
+          ["drop", [LOOSE]],
+        ]);
+        document.body.click();
+        expect(clicked).not.toHaveBeenCalled();
+      } finally {
+        document.elementFromPoint = was;
+        document.body.removeEventListener("click", clicked);
+        folder.remove();
+      }
+      wrapper.unmount();
+    });
+
+    it("puts a drag back with Escape, keeping the selection", async () => {
+      const { wrapper, store } = await selectLoose();
+      pointer(wrapper.find(".shelf-row").element, "pointerdown");
+      pointer(window, "pointermove", 10, 0);
+      expect(store.dragCopies).not.toBe(null);
+      await press("Escape");
+      expect(store.dragCopies).toBe(null);
+      expect(store.selectedRows.map((one) => one.id)).toEqual([1]);
       wrapper.unmount();
     });
 
@@ -4734,10 +4791,11 @@ describe("the open folder (#2203)", () => {
       const gone = wrapper
         .findAll(".shelf-row[data-row-key]")
         .find((one) => !one.classes("shelf-row--selected"));
-      const start = new Event("dragstart", { bubbles: true, cancelable: true });
-      start.dataTransfer = { setData: vi.fn(), effectAllowed: "" };
-      gone.element.dispatchEvent(start);
-      expect(start.defaultPrevented).toBe(true);
+      gone.element.dispatchEvent(
+        new MouseEvent("pointerdown", { button: 0, bubbles: true }),
+      );
+      window.dispatchEvent(new MouseEvent("pointermove", { clientX: 10 }));
+      expect(store.dragCopies).toBe(null);
       expect(store.selectedRows.map((one) => one.id)).toEqual([1]);
       // Says why, rather than the row simply refusing to lift.
       expect(useNoticeStore().notices.at(-1).text).toBe(
@@ -5029,6 +5087,10 @@ describe("the list's Type, favourite and Sets columns (#2168)", () => {
         ],
       }),
     ]);
+    // Favourites leading re-sorts, which rebuilds every row object and would
+    // redraw the heart whether or not the memo lists it.
+    useModelShelfStore().setView({ favouritesFirst: false });
+    await flushPromises();
     const row = () => wrapper.find(".shelf-row");
     expect(row().find(".shelf-row-heart").exists()).toBe(false);
     expect(row().find(".shelf-row-file").text()).not.toContain("locked");
