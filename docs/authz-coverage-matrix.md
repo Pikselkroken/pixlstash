@@ -359,6 +359,7 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 | GET | `/api/v1/pictures/export` | scoped_list |  |  |
 | GET | `/api/v1/pictures/export/download/{task_id}` | any_token |  |  |
 | POST | `/api/v1/pictures/export/folder` | **loopback_owner_only** |  | §16.3 RED LINE (#291): writes exported pictures straight onto the host disk and, once done, opens the destination in the host file manager (same host-GUI spawn as `pictures/{id}/open-location`, via `pixlstash/utils/host_open.py`); loopback-only, `allow_remote_host_ops` can NOT loosen it |
+| POST | `/api/v1/pictures/share-copies` | **loopback_owner_only** |  | §16.3 host write (#2417): writes picture copies into the staging folder beside `server-config.json` and returns their absolute host paths, which only a process on that machine (the desktop app) can use; loopback-only like `pictures/export/folder`, `allow_remote_host_ops` can NOT loosen it. Takes picture ids, never a path. Remote and scoped sessions use the ZIP export |
 | GET | `/api/v1/pictures/export/status` | any_token |  |  |
 | POST | `/api/v1/pictures/face-search` | scoped_list |  |  |
 | POST | `/api/v1/pictures/import` | owner_only |  | Import pictures; POST blocked for READ tokens; owner only |

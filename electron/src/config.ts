@@ -479,6 +479,19 @@ export function serverConfigPath(): string {
   return join(app.getPath('userData'), 'server-config.json');
 }
 
+/**
+ * Where the backend stages share-ready copies (`POST /pictures/share-copies`).
+ *
+ * Main knows this without asking anyone: the backend puts them beside the
+ * config file it is started with, and main always starts it with
+ * `--server-config serverConfigPath()`. A path to drag or put on the clipboard
+ * arrives from the renderer, which main never trusts with a filesystem path, so
+ * whoever hands one to the OS must first check it resolves inside this root.
+ */
+export function shareCopiesRoot(): string {
+  return join(dirname(serverConfigPath()), 'share-copies');
+}
+
 /** Library location offered on first run when nothing is imported. */
 export function defaultLibraryDir(): string {
   let base: string;
