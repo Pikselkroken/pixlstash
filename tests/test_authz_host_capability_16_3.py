@@ -1224,13 +1224,21 @@ def test_open_tree_folder_is_loopback_only_and_opens_the_rendered_folder(
             assert r.status_code == 404, r.text
 
             # A symlink inside the library that leads out of it is refused.
+            # Creating one needs a privilege Windows runners may lack; there
+            # the escape is not set up, so it is not asserted, and says so.
             outside = tempfile.mkdtemp()
+            link = os.path.join(root, "Unassigned")
             try:
-                os.symlink(outside, os.path.join(root, "Unassigned"))
-                r = owner.post(_OPEN_TREE_FOLDER, json={"kind": "unassigned"})
-                assert r.status_code == 404, r.text
+                os.symlink(outside, link, target_is_directory=True)
+            except OSError as e:
+                print(f"symlink refused on this host ({e}); escape check skipped")
+            else:
+                try:
+                    r = owner.post(_OPEN_TREE_FOLDER, json={"kind": "unassigned"})
+                    assert r.status_code == 404, r.text
+                finally:
+                    os.unlink(link)
             finally:
-                os.unlink(os.path.join(root, "Unassigned"))
                 os.rmdir(outside)
 
             # A host with no desktop says so rather than answering ok.

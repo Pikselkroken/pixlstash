@@ -2952,6 +2952,14 @@ function onFindKeydown(event) {
   }
 }
 
+/** Leave Find; true when there was a search to leave. Esc anywhere outside a
+ * text field reaches here through the app's global keydown. */
+function clearFind() {
+  if (!findQuery.value) return false;
+  findQuery.value = "";
+  return true;
+}
+
 /** No name matched: hand the words to the toolbar's picture search. */
 function searchPicturesForFind() {
   searchStore.searchInput = findQuery.value.trim();
@@ -3116,8 +3124,13 @@ function railNodeActive(node) {
   const character = selectionStore.selectedCharacter;
   if (node.kind === "scope")
     return isAllPicturesRowActive.value && projectViewMode.value === "project";
+  // A person is selected when the selection names a listed person: the
+  // places' ids are strings, and no selection at all (null) is not one.
   if (node.kind === "people")
-    return Number.isFinite(Number(character)) && selectedSetIdSet.value.size === 0;
+    return (
+      selectedSetIdSet.value.size === 0 &&
+      characters.value.some((c) => c.id === Number(character) && character != null)
+    );
   if (node.kind === "sets") return selectedSetIdSet.value.size > 0;
   if (!branchIsScope(node.projectId)) return false;
   const onUnassigned = character === UNASSIGNED_PICTURES_ID;
@@ -4275,6 +4288,7 @@ defineExpose({
   startLocalImport,
   currentProjectId,
   openCurrentSelectionEditor,
+  clearFind,
 });
 </script>
 

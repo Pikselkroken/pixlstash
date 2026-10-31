@@ -89,6 +89,7 @@ vi.mock("vue-router", () => ({
 
 import { isReadOnly, sessionContext } from "../../utils/apiClient";
 import { useSidebarStore } from "../../stores/useSidebarStore";
+import { useSelectionStore } from "../../stores/useSelectionStore";
 import SideBar from "./SideBar.vue";
 
 const PROJECTS = [
@@ -222,6 +223,21 @@ describe("the docked rail (#2448)", () => {
     const wrapper = mountSidebar({ docked: true });
     await refreshAndSettle(wrapper);
     expect(railNames(wrapper)).toContain("Any project");
+    wrapper.unmount();
+  });
+
+  it("lights People only for a listed person, never for a place or no selection", async () => {
+    const wrapper = mountSidebar({ docked: true });
+    await refreshAndSettle(wrapper);
+    const selection = useSelectionStore();
+    const people = wrapper.vm.railNodes.find((n) => n.kind === "people");
+
+    for (const id of [null, "", "ALL", "UNASSIGNED", "SCRAPHEAP"]) {
+      selection.selectedCharacter = id;
+      expect(wrapper.vm.railNodeActive(people), `lit for ${id}`).toBe(false);
+    }
+    selection.selectedCharacter = 1;
+    expect(wrapper.vm.railNodeActive(people)).toBe(true);
     wrapper.unmount();
   });
 
