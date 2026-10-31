@@ -388,10 +388,10 @@ describe("rename and edit address, in place", () => {
 });
 
 describe("notes under a row", () => {
-  it("says a row is not answering, and that its key stays", () => {
+  it("says a row is not answering, and how to fix it", () => {
     const wrapper = mountTable([{ ...PC, status: "offline" }, BOX], "box");
     expect(byTestId(wrapper, "comfyui-note-offline-pc").text()).toContain(
-      "Its key stays linked",
+      "Start ComfyUI with --listen, or edit the address.",
     );
     expect(byTestId(wrapper, "comfyui-note-offline-box").exists()).toBe(false);
     wrapper.unmount();

@@ -234,17 +234,13 @@ watch(
           ref="addButton"
           variant="outline"
           size="sm"
-          icon-left="mdi-plus"
+          icon-left="plus"
           data-testid="comfyui-add-connection"
           @click="adding = true"
         >
           Add connection
         </AppButton>
       </div>
-      <p class="cf-small cf-muted">
-        Run on picks where workflows go, the same choice as the Workflows
-        sidebar. Test checks a connection's status, card and nodes.
-      </p>
       <ComfyuiConnectionsTable
         ref="table"
         :connections="connections"
@@ -259,11 +255,9 @@ watch(
           >mdi-information-outline</v-icon
         >
         <p class="cf-small">
-          Each linked ComfyUI has its own key for its PixlStash nodes. A key
-          works only from that ComfyUI's address, covers the open library, and
-          cannot delete, change settings or make tokens. Switching Run on never
-          touches a key, so every linked connection keeps working, including
-          one that is offline. The keys are listed under
+          Each linked ComfyUI has its own key, which works only from its
+          address and cannot delete, change settings or make tokens. Keys are
+          listed under
           <button
             type="button"
             class="cf-link"
