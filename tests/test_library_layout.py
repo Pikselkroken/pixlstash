@@ -3135,6 +3135,7 @@ def test_the_folders_tree_nests_by_the_librarys_own_layout(library):
     session.commit()
     _file(session, "2024 Shoots/Mira/Beach/x.png")
     _file(session, "2024 Shoots/Anna/y.png")
+    _file(session, "2024 Shoots/Global/Beach/z.png")
 
     by_path = {
         folder["path"]: folder
@@ -3146,3 +3147,6 @@ def test_the_folders_tree_nests_by_the_librarys_own_layout(library):
     shared = by_path["2024 Shoots/Anna"]
     assert (shared["kind"], shared["entity_id"]) == ("folder", None)
     assert shared["project_id"] == library["project_id"]
+    # A Global inside a project is no person within it, not "in no project".
+    inner = by_path["2024 Shoots/Global"]
+    assert (inner["kind"], inner["project_id"]) == ("folder", library["project_id"])

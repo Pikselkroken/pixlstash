@@ -8655,9 +8655,13 @@ share is a plain `folder` rather than a guess, everything below the layout's
 reach is a `folder`, and a top-level unreadable `layout.unfiled` is
 `unassigned`. `GET /library/folders` (owner only) serves it; `POST
 /library/folders/open` (loopback only) opens a `path` only if that list holds
-it, then contains its realpath in the library root. With a `TAG` facet in the
-layout the read costs folders × tags, since `read_components` rebuilds its name
-index per call.
+it, then contains its realpath in the library root. It builds the name index once
+(`library_layout.name_index`) and reads every folder against it: about 0.5 s
+for 100k pictures in 2.4k folders, run on each sidebar refresh while Folders is
+showing and once per open. A top-level `Global` is `global`; one below a project
+(`Nordvik/Global/Beach`) is a plain folder of that project. A stored path that
+only reaches the root through a symlink (so climbs out of it relatively) is
+left out.
 
 ### 24.5 Reconciling moves made outside PixlStash
 

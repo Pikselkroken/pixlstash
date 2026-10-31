@@ -3033,10 +3033,11 @@ function searchPicturesForFind() {
 
 /**
  * A set row, in either tree: the whole set. A set is a collection made by
- * hand, its row counts all of it (`picture_count`), and nothing counts it
- * inside one project, so narrowing it to the branch's project would show a
- * grid the number beside it does not describe. A person row stays in its
- * branch's project, where its count is read.
+ * hand and nothing counts it inside one project, so a set is not narrowed to
+ * a branch's project. In Library its row counts all of it (`picture_count`);
+ * in Folders the row counts what is filed in that folder (#2458), so the
+ * grid can hold more than the number. A person row stays in its branch's
+ * project.
  */
 function openSetRow(pset, event = null) {
   inScope(showsTree.value ? WHOLE_LIBRARY : undefined, () =>

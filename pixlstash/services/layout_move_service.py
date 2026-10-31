@@ -73,6 +73,7 @@ from pixlstash.utils.library_layout import (
     Layout,
     folder_name,
     parse_layout,
+    name_index,
     read_components,
     relocate,
     render,
@@ -1150,9 +1151,11 @@ def library_folder_tree(session: Session, image_root: Optional[str]) -> list:
         if not path_is_within(absolute, root_path):
             continue
         relative = os.path.relpath(os.path.dirname(absolute), root_path)
-        if relative in (".", os.curdir):
-            continue
         parts = relative.replace(os.sep, "/").split("/")
+        # The root itself, or a path that reached the root only through a
+        # symlink and so climbs out of it relatively: neither is a folder.
+        if relative in (".", os.curdir) or ".." in parts:
+            continue
         for depth in range(1, len(parts) + 1):
             path = "/".join(parts[:depth])
             counts[path] = counts.get(path, 0) + 1
@@ -1169,15 +1172,18 @@ def library_folder_tree(session: Session, image_root: Optional[str]) -> list:
         ids[facet] = by_name
     kinds = {Facet.PROJECT: "project", Facet.PERSON: "character", Facet.SET: "set"}
     unfiled_key = _match_key(layout.unfiled)
+    index = name_index(vocabulary)
 
     folders = []
     for path in sorted(counts):
         parts = path.split("/")
-        readings = read_components(parts, layout, vocabulary)
+        readings = read_components(parts, layout, vocabulary, index)
         kind, entity_id, project_id = "folder", None, None
         for depth, reading in enumerate(readings[: len(parts)], start=1):
             if reading is None:
-                kind, entity_id = "global", None
+                # Only a top-level Global is "in no project"; one below a
+                # project (``Nordvik/Global/Beach``) is that project's.
+                kind, entity_id = ("global" if depth == 1 else "folder"), None
                 continue
             facet, name = reading
             matches = ids.get(facet, {}).get(name, [])

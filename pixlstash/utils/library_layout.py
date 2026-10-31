@@ -644,15 +644,12 @@ def read_named_components(
     ]
 
 
-def read_components(
-    components: Sequence[str], layout: Layout, known_names: FacetVocabulary
-) -> list[tuple[Facet, str] | None]:
-    """:func:`read_named_components`, one entry per component consumed.
+def name_index(known_names: FacetVocabulary) -> dict[Facet, dict[str, str]]:
+    """Map each facet's folder match keys to the one name they read as.
 
-    A ``Global`` component consumes its segment and names nothing, so it is
-    ``None`` here and absent there. The Media sidebar's Folders tree (#2458)
-    labels every level of a real folder with this, so it has to know which
-    component each reading belongs to.
+    A key two distinct names share is left out: unreadable rather than a guess
+    (see :func:`read_named_components`). Built once by a caller reading many
+    paths against one vocabulary and passed to :func:`read_components`.
     """
     _AMBIGUOUS = object()
     name_by_key: dict[Facet, dict[str, str]] = {}
@@ -671,6 +668,24 @@ def read_components(
         name_by_key[facet] = {
             key: name for key, name in keyed.items() if name is not _AMBIGUOUS
         }
+    return name_by_key
+
+
+def read_components(
+    components: Sequence[str],
+    layout: Layout,
+    known_names: FacetVocabulary,
+    index: dict[Facet, dict[str, str]] | None = None,
+) -> list[tuple[Facet, str] | None]:
+    """:func:`read_named_components`, one entry per component consumed.
+
+    A ``Global`` component consumes its segment and names nothing, so it is
+    ``None`` here and absent there. The Media sidebar's Folders tree (#2458)
+    labels every level of a real folder with this, so it has to know which
+    component each reading belongs to, and passes *index* (from
+    :func:`name_index` over *known_names*) so it is not rebuilt per folder.
+    """
+    name_by_key = index if index is not None else name_index(known_names)
     result: list[tuple[Facet, str] | None] = []
     global_key = _match_key(GLOBAL_FOLDER)
     next_segment = 0
