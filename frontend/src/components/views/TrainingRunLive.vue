@@ -395,6 +395,7 @@ import { useNoticeStore } from "../../stores/useNoticeStore";
 import { errorDetail } from "../../utils/apiError";
 import { copyText } from "../../utils/clipboard";
 import {
+  failureText,
   FOLDER_RUN_STATUS,
   folderRunLive,
   isBusyJob,
@@ -754,9 +755,8 @@ const notice = computed(() => {
   // One sentence, written by the backend from the trainer's text, which sits
   // behind Full message when it says more.
   if (run.status === "error") {
-    const title = run.error || "The run failed.";
-    const full = run.report && run.report.trim() !== title ? run.report : "";
-    return { kind: "err", icon: "mdi-alert", title, text: "", full };
+    const { short, full } = failureText(run);
+    return { kind: "err", icon: "mdi-alert", title: short || "The run failed.", text: "", full };
   }
   return null;
 });

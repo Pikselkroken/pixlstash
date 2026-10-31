@@ -100,13 +100,28 @@
         compact
         :height="40"
       />
-      <p
-        v-if="!current.live && current.job?.error"
-        class="mrs-hint"
-        data-testid="mrr-reason"
-      >
-        {{ current.job.error }}
-      </p>
+      <template v-if="!current.live && reason.short">
+        <p class="mrs-hint mrr-reason" data-testid="mrr-reason">
+          {{ reason.short }}
+        </p>
+        <!-- The trainer's own text, for pasting into an issue. -->
+        <pre
+          v-if="reason.full && showFull"
+          class="mrs-hint mrr-full"
+          data-testid="mrr-full"
+          >{{ reason.full }}</pre
+        >
+        <button
+          v-if="reason.full"
+          class="mrs-link-btn mrr-full-toggle"
+          type="button"
+          :aria-expanded="String(showFull)"
+          data-testid="mrr-full-toggle"
+          @click="showFull = !showFull"
+        >
+          {{ showFull ? "Hide full message" : "Full message" }}
+        </button>
+      </template>
       <p v-if="!card.job" class="mrs-hint">
         Trained outside PixlStash, so its loss was not recorded.
       </p>
@@ -238,6 +253,7 @@ import { formatModelSize } from "../../utils/modelShelf";
 import {
   baseOf,
   defaultDestination,
+  failureText,
   importDestinations,
   jobStatus,
   lastCheckpoint,
@@ -304,6 +320,8 @@ const canStop = computed(() => {
   if (!current.value.live || !job || job.status === "stopping") return false;
   return job.status !== "completed" || job.phase === "previews";
 });
+const reason = computed(() => failureText(current.value.job));
+const showFull = ref(false);
 const percent = computed(() => progressOf(current.value));
 const steps = computed(() => stepsOf(current.value));
 const remaining = computed(() =>
@@ -608,6 +626,7 @@ watch(
     generation += 1;
     clearTimeout(timer);
     live.value = null;
+    showFull.value = false;
     load().then(schedule);
   },
 );
@@ -653,6 +672,24 @@ onBeforeUnmount(() => {
 
 .mrr-stop {
   color: rgb(var(--v-theme-error));
+}
+
+/* An unsummarised trainer paragraph breaks anywhere rather than overflow. */
+.mrr-reason {
+  overflow-wrap: anywhere;
+}
+
+.mrr-full {
+  max-height: 240px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.mrr-full-toggle {
+  align-self: flex-start;
+  padding: 0;
 }
 
 .mrr-grid {

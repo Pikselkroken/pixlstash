@@ -29,6 +29,32 @@ export function failed(card) {
   return card?.job?.status === "error";
 }
 
+/** The backend's own cap on a failure summary (`live_view._FAILURE_CHARS`). */
+const FAILURE_CHARS = 200;
+
+/**
+ * Why a job failed, short enough to show, and the whole text when it says more.
+ *
+ * The backend writes `error` as one sentence and keeps the trainer's text in
+ * `report`, but a run that failed before it summarised (or on another path)
+ * carries the whole paragraph in `error`. That is cut at a word, like the
+ * backend cuts, and its full text is offered instead.
+ *
+ * @returns {{short: string, full: string}} `full` is "" when `short` is all of it.
+ */
+export function failureText(job) {
+  const error = String(job?.error ?? "").trim();
+  const report = String(job?.report ?? "").trim();
+  let short = error;
+  if (short.length > FAILURE_CHARS) {
+    const cut = short.slice(0, FAILURE_CHARS - 1);
+    const space = cut.lastIndexOf(" ");
+    short = `${(space > FAILURE_CHARS / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;
+  }
+  const whole = report || error;
+  return { short, full: whole && whole !== short ? whole : "" };
+}
+
 /** The highest step a run saved a checkpoint at, or 0. */
 export function lastSavedStep(run) {
   return Math.max(

@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  failureText,
   folderRunLive,
   isBusyJob,
   jobStatus,
@@ -126,5 +127,33 @@ describe("a run trained elsewhere, as the run page draws it", () => {
     expect(live.loss_curve).toEqual([]);
     expect(live.dataset_picture_ids).toEqual([]);
     expect(isBusyJob(live)).toBe(false);
+  });
+});
+
+describe("why a run failed, short enough for a card", () => {
+  it("keeps a summary whole and offers the trainer's text when it says more", () => {
+    expect(failureText({ error: "Ran out of GPU memory.", report: "CUDA out of memory. Tried…" })).toEqual({
+      short: "Ran out of GPU memory.",
+      full: "CUDA out of memory. Tried…",
+    });
+    expect(failureText({ error: "Training failed.", report: null })).toEqual({
+      short: "Training failed.",
+      full: "",
+    });
+    expect(failureText({ error: "Same.", report: " Same.\n" }).full).toBe("");
+    expect(failureText(null)).toEqual({ short: "", full: "" });
+  });
+
+  it("cuts an unsummarised paragraph at a word and offers all of it", () => {
+    const dump = "word ".repeat(100).trim();
+    const { short, full } = failureText({ error: dump, report: dump });
+    expect(short.length).toBeLessThanOrEqual(200);
+    expect(short).toMatch(/word…$/);
+    expect(full).toBe(dump);
+  });
+
+  it("cuts a paragraph with no spaces mid-word rather than not at all", () => {
+    const { short } = failureText({ error: "x".repeat(500) });
+    expect(short).toBe(`${"x".repeat(199)}…`);
   });
 });

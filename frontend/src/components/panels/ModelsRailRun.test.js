@@ -286,6 +286,32 @@ describe("the rail's training card", () => {
     expect(wrapper.find('[data-testid="mrr-shelve"]').exists()).toBe(false);
   });
 
+  it("cuts a trainer's whole paragraph and keeps it behind Full message", async () => {
+    const dump = `CUDA out of memory. Tried to allocate 5.06 GiB. ${"Process 1 has 498.00 MiB memory in use. ".repeat(12)}`.trim();
+    const report = `${dump}\nTraceback (most recent call last): …`;
+    const wrapper = await openRail({ card: failedCard }, { ...failedLive, error: dump, report });
+    const reason = wrapper.find('[data-testid="mrr-reason"]').text();
+    expect(reason.length).toBeLessThanOrEqual(200);
+    expect(reason.endsWith("…")).toBe(true);
+    expect(dump.startsWith(reason.slice(0, -1))).toBe(true);
+    expect(wrapper.find('[data-testid="mrr-full"]').exists()).toBe(false);
+
+    const toggle = wrapper.find('[data-testid="mrr-full-toggle"]');
+    expect(toggle.attributes("aria-expanded")).toBe("false");
+    await toggle.trigger("click");
+    expect(wrapper.find('[data-testid="mrr-full"]').text()).toBe(report);
+    expect(toggle.attributes("aria-expanded")).toBe("true");
+  });
+
+  it("shows a short reason whole, with nothing more to open", async () => {
+    const wrapper = await openRail(
+      { card: failedCard },
+      { ...failedLive, error: "Training failed.", report: null },
+    );
+    expect(wrapper.find('[data-testid="mrr-reason"]').text()).toBe("Training failed.");
+    expect(wrapper.find('[data-testid="mrr-full-toggle"]').exists()).toBe(false);
+  });
+
   it("exports the frozen dataset from the rail", async () => {
     const blob = new Blob(["zip"]);
     exportTrainingSnapshot.mockResolvedValue({ blob, filename: "run_dataset.zip" });
