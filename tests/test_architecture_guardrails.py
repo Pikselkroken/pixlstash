@@ -1837,10 +1837,6 @@ _PICTURE_METADATA_FIELDS = {
     # The owner's heart beside the score: a fact about this one picture, the
     # same class as `score`, naming nothing else.
     "favourite",
-    # In the Inbox: an import folder brought it in and the owner has not looked
-    # at it yet. The owner's own review state about this one picture, the class
-    # of `favourite`, naming nothing else.
-    "unseen",
     "file_path",
     "format",
     "height",

@@ -4,8 +4,6 @@ import { createPinia, setActivePinia } from "pinia";
 
 const api = vi.hoisted(() => ({
   listImportFolders: vi.fn(),
-  getInbox: vi.fn(),
-  markInboxSeen: vi.fn(),
   listReferenceFolders: vi.fn(),
   createFolder: vi.fn(),
   patchFolder: vi.fn(),
@@ -55,7 +53,6 @@ function button(wrapper, text) {
 beforeEach(() => {
   setActivePinia(createPinia());
   api.listImportFolders.mockResolvedValue({ folders: [RENDERS] });
-  api.getInbox.mockResolvedValue({ total: 0, folder_count: 0, batches: [] });
   api.listReferenceFolders.mockResolvedValue({ folders: [], in_docker: false });
   api.createFolder.mockResolvedValue({});
   api.patchFolder.mockResolvedValue({});

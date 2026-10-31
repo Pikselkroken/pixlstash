@@ -315,8 +315,6 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         "/api/v1/dedup/policy",
         "/api/v1/dedup/sweep/policy",
         "/api/v1/favourites",
-        # The Inbox: the owner's review queue, owner_only in the gate.
-        "/api/v1/import-folders/inbox",
         "/api/v1/insights",
         "/api/v1/libraries",
         "/api/v1/model-folders",

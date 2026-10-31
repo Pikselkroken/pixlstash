@@ -84,6 +84,7 @@ def register_routes(router, server):
         comfyui_loras = []
         tags_filter = []
         stack_state = None
+        imported_since = None
         if request.query_params:
             query_params = dict(request.query_params)
             query = query_params.pop("query", query)
@@ -115,6 +116,12 @@ def register_routes(router, server):
             tags_filter = _predicate_filter.tags_filter or []
             tags_rejected_filter = _predicate_filter.tags_rejected_filter or []
             stack_state = _predicate_filter.stack_state
+            # A search in the Inbox searches the Inbox: the unassigned view
+            # (both halves) added within its period, as the listing reads it.
+            if request.query_params.get("inbox") is not None:
+                character_id = "UNASSIGNED"
+                unassigned_by = None
+                imported_since = _predicate_filter.imported_since
         min_score = int(min_score_raw) if min_score_raw is not None else None
         if not query:
             raise HTTPException(
@@ -182,6 +189,10 @@ def register_routes(router, server):
                         *unassigned_conditions,
                         Picture.deleted.is_(False),
                     )
+                    if imported_since is not None:
+                        query_stmt = query_stmt.where(
+                            Picture.imported_at >= imported_since
+                        )
                     return list(session.exec(query_stmt).all())
 
                 candidate_ids = set(

@@ -37,6 +37,7 @@ import { useUserPrefsStore } from "../stores/useUserPrefsStore";
 import { useSortStore } from "../stores/useSortStore";
 import { useProjectStore } from "../stores/useProjectStore";
 import { useSearchStore } from "../stores/useSearchStore";
+import { useInboxStore } from "../stores/useInboxStore";
 import {
   ALL_PICTURES_ID,
   SCRAPHEAP_PICTURES_ID,
@@ -123,6 +124,7 @@ export function useGridFetch(
   const gridStore = useGridStore();
   const selectionStore = useSelectionStore();
   const userPrefsStore = useUserPrefsStore();
+  const inboxStore = useInboxStore();
 
   // The three folder facets are one selection in the sidebar; the query wants
   // them as separate params.
@@ -132,18 +134,15 @@ export function useGridFetch(
   const filePathPrefixFilter = computed(
     () => selectionStore.selectedFolderFilter?.pathPrefix ?? null,
   );
-  // The Inbox narrows to one folder through the facet; the Filter menu's
-  // "Imported from" narrows any view. The facet is the view, so the filter
-  // menu's own counts start from it and not from the filter.
-  const importSourceFolderFacet = computed(
-    () => selectionStore.selectedFolderFilter?.importSourceFolder ?? null,
-  );
+  // The Filter menu's "Imported from" narrows any view, the Inbox included.
   const importSourceFolderFilter = computed(
-    () => importSourceFolderFacet.value ?? filterStore.importedFromFilter ?? null,
+    () => filterStore.importedFromFilter ?? null,
   );
-  // The Inbox: only what import folders brought in that is not seen yet.
-  const inboxFilter = computed(() =>
-    Boolean(selectionStore.selectedFolderFilter?.inbox),
+  // The Inbox: the period it is narrowed to (`inbox=`), or null outside it.
+  // The backend reads it as the unassigned view (no person, no set) added
+  // within that period.
+  const inboxPeriod = computed(() =>
+    selectionStore.selectedFolderFilter?.inbox ? inboxStore.period : null,
   );
 
   // ============================================================
@@ -234,7 +233,7 @@ export function useGridFetch(
       referenceFolderIdFilter: referenceFolderIdFilter.value ?? null,
       filePathPrefixFilter: filePathPrefixFilter.value ?? null,
       importSourceFolderFilter: importSourceFolderFilter.value ?? null,
-      inboxFilter: inboxFilter.value,
+      inboxPeriod: inboxPeriod.value,
       noCharacterFilter: filterStore.noCharacterFilter ?? false,
       noSetFilter: filterStore.noSetFilter ?? false,
       applyTagFilter: userPrefsStore.applyTagFilter ?? false,
@@ -488,7 +487,7 @@ export function useGridFetch(
     if (importSourceFolderFilter.value != null) {
       params.append("import_source_folder", importSourceFolderFilter.value);
     }
-    if (inboxFilter.value) params.append("unseen", "1");
+    if (inboxPeriod.value) params.append("inbox", inboxPeriod.value);
     if (filterStore.faceBboxFilter != null) {
       params.append("face_filter", filterStore.faceBboxFilter);
     }
@@ -551,10 +550,7 @@ export function useGridFetch(
     if (filePathPrefixFilter.value != null) {
       params.append("file_path_prefix", filePathPrefixFilter.value);
     }
-    if (importSourceFolderFacet.value != null) {
-      params.append("import_source_folder", importSourceFolderFacet.value);
-    }
-    if (inboxFilter.value) params.append("unseen", "1");
+    if (inboxPeriod.value) params.append("inbox", inboxPeriod.value);
     if (userPrefsStore.applyTagFilter) {
       params.append("apply_tag_filter", "true");
     }
@@ -1116,7 +1112,7 @@ export function useGridFetch(
             String(importSourceFolderFilter.value),
           );
         }
-        if (inboxFilter.value) _charP.set("unseen", "1");
+        if (inboxPeriod.value) _charP.set("inbox", inboxPeriod.value);
         // Filter params
         if (filePathPrefixFilter.value != null) {
           _charP.set("file_path_prefix", String(filePathPrefixFilter.value));

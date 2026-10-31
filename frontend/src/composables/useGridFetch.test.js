@@ -4,6 +4,7 @@ import { setActivePinia, createPinia } from "pinia";
 import { useSortStore } from "../stores/useSortStore.js";
 import { useFilterStore } from "../stores/useFilterStore.js";
 import { useSelectionStore } from "../stores/useSelectionStore.js";
+import { useInboxStore } from "../stores/useInboxStore.js";
 import { useDedupStore } from "../stores/useDedupStore.js";
 import { useGridFetch } from "./useGridFetch.js";
 import { useSearchStore } from "../stores/useSearchStore.js";
@@ -402,20 +403,25 @@ describe("useGridFetch text search: narrowing to text matches (#1197)", () => {
 });
 
 describe("useGridFetch: the Inbox and Imported from", () => {
-  it("asks for the unseen pictures of the Inbox, narrowed to its folder", () => {
+  it("asks for the Inbox's period, and follows it when it changes", () => {
     const { grid } = makeHarness();
-    useSelectionStore().selectedFolderFilter = {
-      inbox: true,
-      importSourceFolder: "/home/me/renders",
-      label: "Inbox",
-    };
+    useSelectionStore().selectedFolderFilter = { inbox: true, label: "Inbox" };
     const listing = new URLSearchParams(grid.buildPictureIdsQueryParams());
-    expect(listing.get("unseen")).toBe("1");
-    expect(listing.get("import_source_folder")).toBe("/home/me/renders");
+    expect(listing.get("inbox")).toBe("14d");
     // The filter menu counts from the view, and the Inbox IS the view.
     const base = new URLSearchParams(grid.buildFilterCountBaseQuery());
-    expect(base.get("unseen")).toBe("1");
-    expect(base.get("import_source_folder")).toBe("/home/me/renders");
+    expect(base.get("inbox")).toBe("14d");
+    useInboxStore().period = "90d";
+    expect(
+      new URLSearchParams(grid.buildPictureIdsQueryParams()).get("inbox"),
+    ).toBe("90d");
+  });
+
+  it("asks for no Inbox outside it, whatever the period", () => {
+    const { grid } = makeHarness();
+    useInboxStore().period = "90d";
+    const listing = new URLSearchParams(grid.buildPictureIdsQueryParams());
+    expect(listing.has("inbox")).toBe(false);
   });
 
   it("narrows any view by Imported from, without moving the menu's base", () => {
@@ -423,7 +429,7 @@ describe("useGridFetch: the Inbox and Imported from", () => {
     useFilterStore().importedFromFilter = "/home/me/renders";
     const listing = new URLSearchParams(grid.buildPictureIdsQueryParams());
     expect(listing.get("import_source_folder")).toBe("/home/me/renders");
-    expect(listing.has("unseen")).toBe(false);
+    expect(listing.has("inbox")).toBe(false);
     // A filter, not the view: its row in the menu adds it to the base itself.
     const base = new URLSearchParams(grid.buildFilterCountBaseQuery());
     expect(base.has("import_source_folder")).toBe(false);

@@ -30,6 +30,7 @@ with a pre-resolved set via the caller's own ``Picture.id.in_(...)`` clause.
 
 import json
 import os
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Sequence
 
 from fastapi import HTTPException
@@ -48,6 +49,42 @@ from pixlstash.utils.service.person_tags import (
 )
 
 _WORKFLOW_ID_PREFIXES = (AUTO_PREFIX, MANUAL_PREFIX)
+
+# The Inbox's periods (``?inbox=``): how far back "recently added" reaches.
+# ``all`` is the Inbox with no cutoff, every picture with no person and no set.
+INBOX_PERIODS: dict[str, Optional[timedelta]] = {
+    "24h": timedelta(hours=24),
+    "7d": timedelta(days=7),
+    "14d": timedelta(days=14),
+    "30d": timedelta(days=30),
+    "90d": timedelta(days=90),
+    "all": None,
+}
+
+
+def inbox_cutoff(period: Optional[str]) -> Optional[datetime]:
+    """The earliest ``imported_at`` an Inbox ``period`` admits.
+
+    Args:
+        period: A key of :data:`INBOX_PERIODS`, or ``None`` for no Inbox.
+
+    Returns:
+        The cutoff in UTC, or ``None`` for no Inbox and for ``all``.
+
+    Raises:
+        HTTPException: 422 for a period that is not one of the keys, rather
+            than an Inbox silently widened to every picture.
+    """
+    if period is None:
+        return None
+    if period not in INBOX_PERIODS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid inbox: must be one of {', '.join(INBOX_PERIODS)}",
+        )
+    span = INBOX_PERIODS[period]
+    return None if span is None else datetime.now(timezone.utc) - span
+
 
 # In a workflow filter's key list, a workflow whose runs file on it and whose
 # pictures are therefore NOT a plain variant's (``!manual:<uuid>``,
@@ -295,8 +332,8 @@ class PredicateFilter(BaseModel):
     # ``startswith`` behaviour.
     file_path_prefix_children_only: bool = True
     import_source_folder: Optional[str] = None
-    # The Inbox: only pictures an import folder brought in that are not seen.
-    unseen_only: bool = False
+    # Added at or after this time (the Inbox's period, see ``inbox_cutoff``).
+    imported_since: Optional[datetime] = None
 
     # --- scope / lifecycle flags ---
     include_deleted: bool = False
@@ -420,8 +457,8 @@ class PredicateFilter(BaseModel):
         if self.import_source_folder:
             preds.append(Picture.import_source_folder == self.import_source_folder)
 
-        if self.unseen_only:
-            preds.append(Picture.unseen.is_(True))
+        if self.imported_since is not None:
+            preds.append(Picture.imported_at >= self.imported_since)
 
         if self.format:
             preds.append(Picture.format.in_(self.format))
@@ -682,5 +719,5 @@ class PredicateFilter(BaseModel):
             file_path_prefix=qp.get("file_path_prefix") or None,
             file_path_prefix_children_only=children_only,
             import_source_folder=qp.get("import_source_folder") or None,
-            unseen_only=is_truthy_flag(qp.get("unseen")),
+            imported_since=inbox_cutoff(qp.get("inbox")),
         )

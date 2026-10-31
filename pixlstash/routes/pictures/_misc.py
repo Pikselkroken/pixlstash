@@ -1097,6 +1097,10 @@ def register_routes(router, server):
         only_deleted = character_id_raw == "SCRAPHEAP"
         if only_deleted:
             character_id_raw = None
+        # The Inbox is the unassigned view narrowed to its period, as the
+        # listing reads it (`select_pictures_for_listing`).
+        if request.query_params.get("inbox") is not None:
+            character_id_raw = "UNASSIGNED"
         set_mode = normalize_set_mode(set_mode_raw)
         set_filter_ids = collect_set_filter_ids(
             set_id_value=set_id_raw,
@@ -1140,7 +1144,7 @@ def register_routes(router, server):
             resolution_bucket=resolution_bucket,
             file_path_prefix=file_path_prefix,
             import_source_folder=import_source_folder,
-            unseen_only=_predicate_filter.unseen_only,
+            imported_since=_predicate_filter.imported_since,
             tags_filter=tags_filter,
             rejected_tags=rejected_tags,
             face_filter=face_filter,

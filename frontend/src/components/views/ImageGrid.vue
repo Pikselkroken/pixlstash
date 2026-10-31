@@ -283,14 +283,6 @@
       @restore-scrapheap="confirmRestoreScrapheap"
       @open-retention-settings="emit('open-settings', 'scrapheap')"
     />
-    <InboxBar
-      v-if="isInboxView"
-      :folder="inboxFolder"
-      @narrow="narrowInbox"
-      @manage="emit('open-settings', 'import-folders')"
-      @marked="refetchAfterInboxChange"
-      @resize="inboxBarHeight = $event"
-    />
     <SnapshotsWithDeletedDialog
       v-model="snapshotsWithDeletedOpen"
       :snapshots="snapshotsWithDeleted"
@@ -509,8 +501,19 @@
           <div class="empty-state-subtitle">
             {{ emptyStateSubtitle }}
           </div>
+          <!-- An empty Inbox offers the next period that holds anything, so a
+               narrow period never hides an older pile of unfiled work. -->
           <AppButton
-            v-if="canShowAllPicturesButton"
+            v-if="inboxWiderPeriod"
+            class="empty-state-action"
+            variant="primary"
+            data-testid="inbox-widen"
+            @click.stop="inboxStore.setPeriod(inboxWiderPeriod.id)"
+          >
+            Show {{ inboxWiderPeriod.label.toLowerCase() }}
+          </AppButton>
+          <AppButton
+            v-else-if="canShowAllPicturesButton && !inboxEmptyUnfiltered"
             class="empty-state-action"
             variant="primary"
             @click.stop="handleEmptyStateReset"
@@ -1334,9 +1337,7 @@ import {
 import ImageImporter from "../io/ImageImporter.vue";
 import Lightbox from "./Lightbox.vue";
 import EmptyScrapHeap from "../widgets/EmptyScrapHeap.vue";
-import InboxBar from "../widgets/InboxBar.vue";
-import { markInboxSeen } from "../../api/folders";
-import { useImportFoldersStore } from "../../stores/useImportFoldersStore";
+import { inboxEmptyState, useInboxStore } from "../../stores/useInboxStore";
 import FilterStrip from "../panels/FilterStrip.vue";
 import { filterChips } from "../../utils/filterChips";
 import Toolbar from "../panels/Toolbar.vue";
@@ -3807,7 +3808,8 @@ function handleLightboxAddedToSet(payload) {
   }
 
   if (
-    selectionStore.selectedCharacter === UNASSIGNED_PICTURES_ID &&
+    (selectionStore.selectedCharacter === UNASSIGNED_PICTURES_ID ||
+      isInboxView.value) &&
     !hasSetSelection.value
   ) {
     if (lightboxOpen.value) {
@@ -3825,7 +3827,8 @@ function handleAddToCharacter(payload) {
     : [];
   if (!pictureIds.length) return;
   if (
-    selectionStore.selectedCharacter === UNASSIGNED_PICTURES_ID &&
+    (selectionStore.selectedCharacter === UNASSIGNED_PICTURES_ID ||
+      isInboxView.value) &&
     !hasSetSelection.value
   ) {
     removeImagesById(pictureIds);
@@ -5001,29 +5004,13 @@ const isScrapheapView = computed(() => {
 });
 
 // ── Inbox ───────────────────────────────────────────────────────────────────
-// The grid narrowed to what import folders brought in and nobody has looked at
-// yet (`/inbox`), with its band of batches above the tiles.
-const importFoldersStore = useImportFoldersStore();
+// The grid narrowed to what was added within the chosen period and has no
+// person and no set (`/inbox`). Filing a picture takes it out, as in the
+// Unassigned view; an unfiled one ages out of the period on its own.
+const inboxStore = useInboxStore();
 const isInboxView = computed(() =>
   Boolean(selectionStore.selectedFolderFilter?.inbox),
 );
-const inboxFolder = computed(() =>
-  isInboxView.value
-    ? (selectionStore.selectedFolderFilter?.importSourceFolder ?? null)
-    : null,
-);
-// Measured by the band itself: it grows with the batches it lists.
-const inboxBarHeight = ref(0);
-
-function narrowInbox(folder) {
-  _lightboxRouter.push({ name: "inbox", query: folder ? { folder } : {} });
-}
-
-/** Re-read the grid after Mark seen, so the seen pictures leave it. */
-function refetchAfterInboxChange() {
-  _resetGridState();
-  fetchAllGridImages({ force: true, showProgress: true });
-}
 
 // ── Scrapheap auto-empty policy ─────────────────────────────────────────────
 // Two separate things, deliberately not conflated:
@@ -5514,9 +5501,7 @@ const scrollWrapperStyle = computed(() => ({
   position: "absolute",
   top: showScrapheapBar.value
     ? `calc(var(--selbar-height, 48px) + var(--filter-strip-h, 0px) + ${SCRAPHEAP_BAR_HEIGHT_PX}px)`
-    : isInboxView.value
-      ? `calc(var(--selbar-height, 48px) + var(--filter-strip-h, 0px) + ${inboxBarHeight.value}px)`
-      : "calc(var(--selbar-height, 48px) + var(--filter-strip-h, 0px))",
+    : "calc(var(--selbar-height, 48px) + var(--filter-strip-h, 0px))",
   left: "0",
   right: "0",
   bottom: "0",
@@ -7216,24 +7201,6 @@ async function openLightbox(img) {
 // it, and honouring `?from=` would send that result to a screen with no grid.
 // The default is the reader's own close (the X, Escape, the `close` emit, which
 // carries no payload), which is the one that goes back where it came from.
-// Opening a picture is looking at it, wherever it is opened: it leaves the
-// Inbox. Only asked while the Inbox holds anything, so browsing the library
-// with an empty Inbox costs no requests. In the Inbox itself the grid is
-// re-read once the lightbox closes, as for any change made under it.
-watch(
-  () => (lightboxOpen.value ? lightboxRef.value?.currentPicture?.() : null),
-  (picture) => {
-    const id = picture?.id;
-    if (id == null || isReadOnly.value || !importFoldersStore.unseenCount)
-      return;
-    if (picture.unseen === false) return;
-    markInboxSeen({ picture_ids: [id] }).catch((err) =>
-      console.warn("Could not take an opened picture out of the Inbox", id, err),
-    );
-    if (isInboxView.value) pendingLightboxGridRefresh.value = true;
-  },
-);
-
 function closeLightbox(returnToOrigin = true) {
   // Read before the lightbox goes: the picture it ended on, not the one it
   // was opened on.
@@ -7358,15 +7325,14 @@ watch(
     () => selectionStore.selectedSetIds,
     // The folder facet, by value. A sidebar folder click also writes a fresh
     // `selectedSetIds`, which is what used to set this off; a route that only
-    // changes the facet (the Inbox, `/inbox?folder=`) writes nothing else.
+    // changes the facet (the Inbox, or its period) writes nothing else.
     () => {
       const f = selectionStore.selectedFolderFilter;
       return f
         ? [
             f.referenceFolderId ?? "",
             f.pathPrefix ?? "",
-            f.importSourceFolder ?? "",
-            f.inbox ? "inbox" : "",
+            f.inbox ? `inbox:${inboxStore.period}` : "",
           ].join("|")
         : "";
     },
@@ -7717,6 +7683,29 @@ function importChosenFiles(chosen) {
   emit("local-import", { files });
 }
 
+// The Inbox is empty for its period with no filter or search on: the one
+// empty grid whose way out is a wider period rather than clearing a filter.
+// The per-period counts ignore both, so with either on they would offer a
+// period the narrowed grid cannot fill.
+const inboxEmptyUnfiltered = computed(
+  () =>
+    isInboxView.value &&
+    !filterChips(filterStore).length &&
+    !searchStore.isSearchActive,
+);
+const inboxEmpty = computed(() =>
+  inboxEmptyUnfiltered.value
+    ? inboxEmptyState(inboxStore.period, inboxStore.counts)
+    : null,
+);
+const inboxWiderPeriod = computed(() => inboxEmpty.value?.wider ?? null);
+watch(
+  () => showEmptyState.value && inboxEmptyUnfiltered.value,
+  (empty) => {
+    if (empty) void inboxStore.refreshAllCounts();
+  },
+);
+
 const emptyStateTitle = computed(() => {
   if (isSetOverlapView.value) {
     return "No overlap";
@@ -7724,9 +7713,7 @@ const emptyStateTitle = computed(() => {
   if (isScrapheapView.value) {
     return "No pictures in the scrap heap";
   }
-  if (isInboxView.value && !filterChips(filterStore).length) {
-    return "You're caught up";
-  }
+  if (inboxEmpty.value) return inboxEmpty.value.title;
   // The `totalAllPicturesCount === 0` arm is what `LibraryEmptyState` now
   // answers; this branch is only reached for a view that has its own empty
   // question (scrap heap, set overlap) or a filter that matched nothing.
@@ -7740,9 +7727,7 @@ const emptyStateSubtitle = computed(() => {
   if (isScrapheapView.value) {
     return "Are all your pictures that good?";
   }
-  if (isInboxView.value && !filterChips(filterStore).length) {
-    return "New pictures from your import folders will wait here.";
-  }
+  if (inboxEmpty.value) return inboxEmpty.value.subtitle;
   return "Try clearing filters, adjusting your search, or switching sets.";
 });
 

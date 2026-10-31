@@ -21,8 +21,7 @@ import App from "../App.vue";
 //   /duplicates?scope=set&scope_id=12       → …scoped to one collection object
 //   /insights                               → About your library (read-only findings)
 //   /moves                                  → Moves made outside PixlStash (reconciliation queue)
-//   /inbox                                  → What import folders brought in, not yet seen
-//   /inbox?folder=<import folder path>      → …from that one import folder
+//   /inbox                                  → Added lately, no person and no set
 //   /models                                 → Model shelf (adapters/checkpoints)
 //   /models?model=<id>                      → …opened on that model (a Recipe chip's link)
 //   /models/runs                            → ai-toolkit training runs, the shelf's second view
