@@ -1218,6 +1218,14 @@ def test_open_tree_folder_is_loopback_only_and_opens_the_rendered_folder(
             assert r.status_code == 404, r.text
             r = owner.post(_OPEN_TREE_FOLDER, json={"kind": "project"})
             assert r.status_code == 422, r.text
+            # An id the kind does not use is refused, not ignored.
+            for stray in (
+                {"kind": "global", "project_id": 1},
+                {"kind": "unassigned", "project_id": 1},
+                {"kind": "global", "entity_id": 1},
+            ):
+                r = owner.post(_OPEN_TREE_FOLDER, json=stray)
+                assert r.status_code == 422, (stray, r.text)
             r = owner.post(
                 _OPEN_TREE_FOLDER, json={"kind": "project", "project_id": 999999}
             )

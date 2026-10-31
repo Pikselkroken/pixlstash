@@ -1126,7 +1126,8 @@ def tree_node_relative_folder(
         entity_id: The person or set of a ``character`` or ``set`` node.
 
     Raises:
-        ValueError: An unknown kind, or a node missing the id it needs.
+        ValueError: An unknown kind, a node missing the id it needs, or one
+            given an id it does not use.
         LookupError: A project, person or set id that names nothing.
     """
     if kind not in ("project", "global", "unassigned", "character", "set"):
@@ -1135,6 +1136,12 @@ def tree_node_relative_folder(
         raise ValueError("A project node needs project_id")
     if kind in ("character", "set") and entity_id is None:
         raise ValueError(f"A {kind} node needs entity_id")
+    # An id the kind does not use is refused rather than ignored: this names
+    # the folder a host file manager is about to open.
+    if kind in ("global", "unassigned") and project_id is not None:
+        raise ValueError(f"A {kind} node takes no project_id")
+    if kind not in ("character", "set") and entity_id is not None:
+        raise ValueError(f"A {kind} node takes no entity_id")
 
     def _names(session: Session) -> dict:
         if kind == "unassigned":
