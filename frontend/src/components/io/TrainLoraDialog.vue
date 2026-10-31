@@ -50,12 +50,24 @@
           @click="pickSource(o)"
         >
           <img
+            v-if="o.thumb && !broken.has(o.id)"
             class="tld-source__img"
             :class="{ 'tld-source__img--person': o.type === 'character' }"
             :src="o.thumb"
             alt=""
             loading="lazy"
+            @error="broken.add(o.id)"
           />
+          <span
+            v-else
+            class="tld-source__img tld-source__img--blank"
+            :class="{ 'tld-source__img--person': o.type === 'character' }"
+            aria-hidden="true"
+          >
+            <v-icon size="20">{{
+              o.type === "character" ? "mdi-account-outline" : "mdi-image-album"
+            }}</v-icon>
+          </span>
           <span class="tld-source__text">
             <span class="tld-source__name">{{ o.name }}</span>
             <small>{{ o.detail }}</small>
@@ -71,10 +83,19 @@
          a question. -->
     <div v-if="character" class="tld-lead" data-testid="tld-lead">
       <img
+        v-if="!broken.has(`character:${character.id}`)"
         class="tld-lead__img"
         :src="characterThumbnailUrl(character.id)"
         alt=""
+        @error="broken.add(`character:${character.id}`)"
       />
+      <span
+        v-else
+        class="tld-lead__img tld-source__img--blank"
+        aria-hidden="true"
+      >
+        <v-icon size="20">mdi-account-outline</v-icon>
+      </span>
       <div class="tld-lead__text">
         <b>Character LoRA of {{ character.name }}</b>
         <small>Learns this person's face and likeness.</small>
@@ -809,9 +830,20 @@ const sourceOptions = computed(() => [
       entityId: Number(set.id),
       name: set.name,
       detail: `Set · ${plural(set.picture_count ?? 0)}`,
-      thumb: pictureSetThumbnailUrl(set.id),
+      // An empty set has no thumbnail: the route answers 404.
+      thumb: set.picture_count ? pictureSetThumbnailUrl(set.id) : "",
     })),
 ]);
+
+/** Sources whose thumbnail would not load: they keep their tile, with a glyph. */
+const broken = reactive(new Set());
+// The dialog stays mounted between opens: each open retries every thumbnail.
+watch(
+  () => store.trainDialogOpen,
+  (open) => {
+    if (open) broken.clear();
+  },
+);
 
 const pickedSource = computed(() =>
   store.scopeType && store.scopeId != null
@@ -1434,6 +1466,14 @@ function goToSettings() {
   border-radius: var(--radius-sm);
   object-fit: cover;
   object-position: top center;
+  background: rgba(var(--v-theme-on-surface), 0.08);
+}
+
+.tld-source__img--blank {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
   background: rgba(var(--v-theme-on-surface), 0.08);
 }
 
