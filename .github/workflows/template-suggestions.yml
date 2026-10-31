@@ -3,7 +3,7 @@ name: Refresh ComfyUI workflow templates
 # Rebuilds pixlstash/data/workflow_templates.json and the graphs beside it from
 # the latest comfyui-workflow-templates-json release (#1999), and opens or
 # updates ONE pull request against develop on a fixed branch when the output
-# changed. Nothing changed: no PR. Last week's PR still open: it is updated,
+# changed. Nothing changed: no PR. Yesterday's PR still open: it is updated,
 # not joined by a second. The app never fetches the list; this is the only
 # thing that refreshes it.
 #
@@ -16,8 +16,9 @@ permissions: {}
 on:
   workflow_dispatch:
   schedule:
-    # 06:41 UTC every Monday: off the hour, and after the ROCm check's slot.
-    - cron: '41 6 * * 1'
+    # 06:41 UTC daily: off the hour, and after the ROCm check's slot. Daily, not
+    # weekly: a template ComfyUI ships is otherwise a week from downloadable.
+    - cron: '41 6 * * *'
 
 concurrency:
   group: template-suggestions
