@@ -73,7 +73,9 @@ dependencies = [
     "bcrypt>=3.2.2,<4.0.0",
     "nvidia-ml-py>=13.590.48",
     "piexif>=1.1.3",
-    "watchdog>=4.0.0",
+    # 7.0.0 shares one inotify thread per process, and an exception in any
+    # watch's callback kills it: every watcher then goes deaf until restart.
+    "watchdog>=4.0.0,<7",
     "click~=8.1.8",
     "zstandard>=0.23.0",
 ]

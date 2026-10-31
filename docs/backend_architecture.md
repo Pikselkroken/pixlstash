@@ -287,7 +287,7 @@ Modules **off** the server import path (`tagger_plugins/wd14.py`, `tagger_plugin
 |------------|---------|
 | Numerical | **NumPy** ≥ 2.4, **SciPy** ≥ 1.17 |
 | Fuzzy matching | **rapidfuzz** ≥ 3.14 |
-| File watching | **watchdog** ≥ 4.0 |
+| File watching | **watchdog** ≥ 4.0, < 7 (7.0.0 shares one inotify thread that one failing watch kills) |
 | HTTP client | **httpx** ≥ 0.28, **requests** |
 | GPU monitor | **nvidia-ml-py** |
 | Config dirs | **platformdirs** |
