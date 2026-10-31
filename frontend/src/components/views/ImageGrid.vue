@@ -162,6 +162,7 @@
       @find-similar-faces="handleFindSimilarFaces"
       @rotate-left="rotateSelectedPictures(ROTATE_CCW)"
       @rotate-right="rotateSelectedPictures(ROTATE_CW)"
+      @open-with="openPictureInApp"
     />
 
     <!-- ── Lightbox context menu ─────────────────────
@@ -193,6 +194,7 @@
       @delete-selected="handleLightboxDelete()"
       @remove-from-group="handleLightboxScrapheapRestore"
       @use-as-input="runWorkflowOnPicture"
+      @open-with="openPictureInApp"
     />
 
     <!-- ── New person from the context menu (#645) ─────────────
@@ -1373,6 +1375,7 @@ import {
   purgeScrapheap,
   restoreScrapheap,
   openPictureLocation,
+  openPictureWith,
   detectPictures,
   listPicturePlugins,
   runPicturePlugin,
@@ -5839,6 +5842,26 @@ async function openReferenceLocation(picId) {
       "Couldn't open that folder - the server has no desktop file manager.",
       { key: "open-location" },
     );
+  }
+}
+
+// Open with ▸ (both context menus). The edit comes back on its own: the
+// server imports a save and the realtime path stacks it on the original.
+async function openPictureInApp({ pictureId, appId, appName, other } = {}) {
+  try {
+    const body = await openPictureWith(pictureId, { appId, other });
+    const name = body?.app_name || appName;
+    noticeStore.success(
+      name
+        ? `Opened in ${name}. Save over the file and the edit comes back stacked on the original.`
+        : "Choose an app. Save over the file there and the edit comes back stacked on the original.",
+      { key: "open-with" },
+    );
+  } catch (err) {
+    console.warn(`Failed to open picture ${pictureId} in another app`, err);
+    noticeStore.warning(`Couldn't open it there. ${errorDetail(err)}`, {
+      key: "open-with",
+    });
   }
 }
 

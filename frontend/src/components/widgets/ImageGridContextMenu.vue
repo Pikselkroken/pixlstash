@@ -55,6 +55,13 @@
           <v-icon class="ctx-icon">mdi-content-save-edit-outline</v-icon>
           Save {{ lightboxMediaNoun }} as…
         </button>
+        <OpenWithMenu
+          v-if="showOpenWith"
+          :image="contextImage"
+          :open="openGroup === 'open-with'"
+          @update:open="openGroup = $event ? 'open-with' : null"
+          @pick="onAction('open-with', $event)"
+        />
         <!-- The slot form, so the reason span below keeps `aria-describedby`:
              a parent-activated tip would overwrite it. -->
         <Tooltip
@@ -785,6 +792,15 @@
           Remove all shares
         </button>
       </template>
+      <!-- Sends the picture out of the library, so it sits with Share rather
+           than among the tools that act inside it. One picture only. -->
+      <OpenWithMenu
+        v-if="showOpenWith && selectedImageIds.length === 1"
+        :image="contextImage"
+        :open="openGroup === 'open-with'"
+        @update:open="openGroup = $event ? 'open-with' : null"
+        @pick="onAction('open-with', $event)"
+      />
       <!-- Mirrored in SelectionMenu.vue. Absent rather than disabled with one
            library: there is nowhere to move to and nothing to explain. -->
       <div
@@ -870,11 +886,14 @@ import { faceBoxColor } from "../../utils/utils.js";
 import { isApplePlatform } from "../../utils/shortcutHints.js";
 import { COMPARE_NOTES } from "../../utils/compare";
 import { ROTATE_CCW, ROTATE_CW, rotateMenuLabel } from "../../utils/rotate";
+import { isVideo } from "../../utils/media";
+import { serverIsOnThisMachine } from "../../utils/serverLocation";
 import { useSnapshotsStore } from "../../stores/useSnapshotsStore";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useLibrariesStore } from "../../stores/useLibrariesStore";
 import AddToEntityControl from "./AddToEntityControl.vue";
 import EditStackMenu from "./EditStackMenu.vue";
+import OpenWithMenu from "./OpenWithMenu.vue";
 import Tooltip from "./Tooltip.vue";
 
 const props = defineProps({
@@ -1000,6 +1019,7 @@ const emit = defineEmits([
   "find-similar-faces",
   "rotate-left",
   "rotate-right",
+  "open-with",
 ]);
 
 const menuRef = ref(null);
@@ -1008,7 +1028,8 @@ const adjustedY = ref(props.y);
 const submenusFlip = ref(false);
 const tooltipSide = ref("top");
 // The grid's open submenu, by its wrap's `data-group` (analyse, generate,
-// adjust, find, move), or null. One at a time, so one ref.
+// adjust, find, move, open-with), or null. One at a time, so one ref. The
+// lightbox menu uses it for Open with too.
 const openGroup = ref(null);
 // The lightbox's own two submenus.
 const findFacesSubmenuOpen = ref(false);
@@ -1459,7 +1480,20 @@ const rotateRightTitle = computed(
   () => props.rotateBlockReason || rotateRightLabel.value,
 );
 
-// Share image and Move to library are one group with one rule under it.
+// Open with ▸ launches an app on the machine the server runs on, so it is
+// offered only where that machine is this one; the server refuses everyone
+// else anyway. Videos are not opened with (nothing saves back over one).
+const showOpenWith = computed(
+  () =>
+    !!props.contextImage?.id &&
+    !isReadOnly.value &&
+    !isScrapheapView.value &&
+    !isVideo(props.contextImage) &&
+    serverIsOnThisMachine(),
+);
+
+// Share image, Open with and Move to library are one group with one rule
+// under it.
 const showShareOrMoveGroup = computed(
   () =>
     (!!props.contextImage?.id && selectedCount.value === 1) ||
