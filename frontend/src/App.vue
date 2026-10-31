@@ -424,6 +424,8 @@ const tagReviewBackLabel = computed(() => {
   if (isMovesView.value) return "Moves";
   if (isInsightsView.value) return "About your library";
   if (isInboxView.value) return "Inbox";
+  if (isWorkflowsView.value) return "Workflows";
+  if (isModelsView.value) return "Models";
   return activeCategoryLabel.value;
 });
 

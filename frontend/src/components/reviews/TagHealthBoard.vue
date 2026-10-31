@@ -916,7 +916,7 @@ const TAIL_TOGGLE_TITLE =
 .rs-board-scope {
   max-width: 110px;
   text-overflow: ellipsis;
-  font-weight: 400;
+  font-weight: var(--weight-regular);
 }
 
 .rs-board-building {

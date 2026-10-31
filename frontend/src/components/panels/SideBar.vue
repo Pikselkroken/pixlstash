@@ -229,9 +229,9 @@ const isInboxView = computed(
   () => route.name === "inbox" && !isTagReviewView.value,
 );
 
-// The board lights the "Tags to review" row; a review lights its own child.
+// The board is the "Tags to review" row's page; a review is its own child's.
 const reviewBoardShown = computed(
-  () => reviewSessionsStore.view.type !== "session",
+  () => reviewSessionsStore.view.type === "board",
 );
 function isReviewSessionShown(id) {
   return (

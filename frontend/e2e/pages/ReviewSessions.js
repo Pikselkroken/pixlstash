@@ -9,8 +9,8 @@ import { expect } from '@playwright/test'
  * ReviewSessionsOverlay.vue + components/reviews/*.vue. Holds no assertions of
  * its own beyond readiness waits.
  *
- * The overlay opens from a Pinia store flag (reviewSessionsStore.overlayOpen),
- * which `?review=board` sets (useReviewRoute). The toolbar button that used to
+ * The view opens from a Pinia store flag (reviewSessionsStore.overlayOpen),
+ * which `?review=board` sets (useReviewRoute), as does the sidebar row. The toolbar button that used to
  * toggle it left the browse-only toolbar (#2160). There are no data-testid
  * attributes in the feature; selectors are class/title/kbd based.
  *

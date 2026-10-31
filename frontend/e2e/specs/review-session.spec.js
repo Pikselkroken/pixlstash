@@ -222,6 +222,9 @@ test.describe('review sessions — session loop', () => {
     await reviews.createReview('closed eyes')
     const rid = await openReviewId(apiContext, 'closed eyes')
 
+    // The session mounts before its queue lands: wait for the first card (or
+    // the completion state) so the loop below does not read "no button" as done.
+    await expect(reviews.noButton.or(reviews.doneState).first()).toBeVisible()
     // Decide every remaining card (No = remove) until the completion state shows.
     for (let i = 0; i < 25; i++) {
       if (await reviews.doneState.isVisible().catch(() => false)) break
