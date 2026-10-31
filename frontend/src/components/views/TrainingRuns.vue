@@ -11,7 +11,7 @@
     @close="closeRun"
   />
   <p v-else-if="openFolderRun" class="tr-note tr-note--pad" role="status">
-    <template v-if="error || jobsFailed">
+    <template v-if="error || jobsFailed || folders.error">
       Could not read the training runs.
       <AppButton size="sm" variant="secondary" @click="closeRun">All runs</AppButton>
     </template>
@@ -649,9 +649,15 @@ const openFolderRun = computed(() =>
   typeof route.query["folder-run"] === "string" ? route.query["folder-run"] : "",
 );
 // Not until the job list is read: a run PixlStash trained has a job, and its
-// own page says more than its folder does.
+// own page says more than its folder does. Unread, every run would look
+// trained elsewhere, so the page would say so of runs PixlStash trained.
 const openFolderCard = computed(() => {
-  if (!openFolderRun.value || !jobsLoaded.value || source.value?.id == null) {
+  if (
+    !openFolderRun.value ||
+    !jobsLoaded.value ||
+    jobsFailed.value ||
+    source.value?.id == null
+  ) {
     return null;
   }
   return (

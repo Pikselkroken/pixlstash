@@ -1114,6 +1114,14 @@ describe("the runs PixlStash trains (#2118)", () => {
     expect(wrapper.text()).toContain("That run is not in the training folder.");
   });
 
+  it("does not call a folder run trained elsewhere when the job list could not be read", async () => {
+    listTrainingJobs.mockRejectedValue(new Error("offline"));
+    nav.route.query = { "folder-run": "Foxglove" };
+    const wrapper = await openWith([run("Foxglove")]);
+    expect(wrapper.find(".live-stub").exists()).toBe(false);
+    expect(wrapper.text()).toContain("Could not read the training runs.");
+  });
+
   it("opens the job's own page when ?folder-run= names a run PixlStash trained", async () => {
     listTrainingJobs.mockResolvedValue([job()]);
     nav.route.query = { "folder-run": "Clementine_abcd1234" };

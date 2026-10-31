@@ -6510,11 +6510,11 @@ bar (amber while live), base / steps / date chips and an amber-outlined
 that saved checkpoints stays importable, as a stopped one is.
 
 **Selection.** A click, Enter or Space picks; a double-click picks and opens a
-run PixlStash trained (the pair's second click does not toggle). The view does
+run's page (the pair's second click does not toggle). The view does
 not follow the picture grid's `gridOpenGesture`: like the Workflow set grid, a
 click here always picks. Right-click, the ContextMenu key or Shift+F10 opens a menu anchored to
 the pointer: the card becomes the selection unless it is already in it, and the
-menu offers **Open run** (a job's run), the pill's **Import** verb, **Stop
+menu offers **Open run**, the pill's **Import** verb, **Stop
 training** (a run still training; Skip previews stays on the rail, which polls
 the phase the job list lacks) and Select all / Clear selection. It reads its
 card by key from the live list, so a reload while it is open acts on the job as
@@ -6540,7 +6540,7 @@ A run PixlStash trains opens **its own page inside the Training runs place**:
 string, not a new route, because it is a modifier on the runs view and
 `MODEL_SHELF_ROUTES` stays the one list the shelf answers to. Several doors lead
 there: a double-click on the card or its menu's **Open run**, the rail's
-**Open run** on a picked run a job trained (a single click picks rather than
+**Open run** on a picked run (a single click picks rather than
 opens since #2169), and the **Watch** button on the Tasks
 tab's AI Toolkit row (the lease's `job_id`).
 The tab wears the amber attention dot while any AI Toolkit lease is held or
@@ -6616,7 +6616,9 @@ reads Unknown / Not measured, and the status bar, the end phases, the set-up
 time and *Use this step* are left out. The rail beside it is the open-run rail
 (`ModelsRail` finds the card by name), whose *Trained on* says the pictures were
 not recorded. The page
-waits for the job list: a name a job trained opens that job's page instead.
+waits for the job list: a name a job trained opens that job's page instead, and
+while the job list cannot be read (or the folders or the listing cannot) it
+says so rather than calling the run trained elsewhere.
 
 #### Registering the folders the shelf reads
 
