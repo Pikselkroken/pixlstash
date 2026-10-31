@@ -1,5 +1,6 @@
 """Share-ready copies (#2417): generation data stripped by default, pixels kept."""
 
+import datetime
 import json
 import os
 import tempfile
@@ -169,6 +170,27 @@ def test_strip_drops_what_follows_a_jpeg_and_keeps_a_progressive_one_intact():
     assert _pixels(stripped) == _pixels(original)
 
 
+def test_a_png_cut_off_before_iend_is_skipped_as_unreadable(library):
+    png = _comfy_png()
+    iend = png.rindex(b"IEND") - 4  # the start of the IEND chunk
+    with pytest.raises(ValueError, match="IEND"):
+        strip_generation_data(png[:iend])
+    library["add"](png[:iend], "cut.png")
+
+    result = _copy(library)
+
+    assert result["files"] == []
+    assert result["skipped"] == [{"picture_id": 1, "reason": "unreadable"}]
+
+
+def test_a_webp_cut_off_before_its_image_data_is_refused():
+    webp = _webp()
+    cut = webp[: webp.index(b"VP8L")]  # VP8X and ICCP survive, the image does not
+    assert b"VP8X" in cut
+    with pytest.raises(ValueError, match="image data"):
+        strip_generation_data(cut)
+
+
 def test_strip_leaves_formats_it_does_not_handle():
     buf = BytesIO()
     _pattern().save(buf, format="GIF", comment=b"Steps: 20")
@@ -184,13 +206,14 @@ def library(tmp_path):
     image_root.mkdir()
     pictures = []
 
-    def add(data: bytes, file_name: str, original_file_name=None):
+    def add(data: bytes, file_name: str, original_file_name=None, created_at=None):
         (image_root / file_name).write_bytes(data)
         pictures.append(
             {
                 "id": len(pictures) + 1,
                 "file_path": file_name,
                 "original_file_name": original_file_name,
+                "created_at": created_at,
             }
         )
         return pictures[-1]
@@ -258,6 +281,20 @@ def test_names_collide_into_suffixes_and_can_be_pixlstash_names(library):
 
     own = [f["name"] for f in _copy(library, file_names="pixlstash")["files"]]
     assert own == ["aa11.png", "bb22.png", "cc33.png", "dd44.png"]
+
+
+def test_a_picture_without_an_original_name_is_named_by_when_it_was_made(library):
+    made = datetime.datetime(2026, 10, 24, 14, 22, 42, tzinfo=datetime.timezone.utc)
+    stem = made.astimezone().strftime("PixlStash %Y-%m-%d %H.%M.%S")
+    library["add"](_comfy_png(), "1fea4e4c.png", None, made)
+    library["add"](_comfy_png(), "598fcee3.png", None, made.replace(tzinfo=None))
+    library["add"](_comfy_png(), "be143717.png", "mine.png", made)
+
+    names = [f["name"] for f in _copy(library)["files"]]
+    # Same moment twice (the naive one is read as UTC): the suffix separates them.
+    assert names == [f"{stem}.png", f"{stem}_2.png", "mine.png"]
+    own = [f["name"] for f in _copy(library, file_names="pixlstash")["files"]]
+    assert own == ["1fea4e4c.png", "598fcee3.png", "be143717.png"]
 
 
 def test_max_long_edge_shrinks_and_strips(library):

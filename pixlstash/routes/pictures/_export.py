@@ -330,15 +330,19 @@ def register_routes(router, server):
 
         def fetch(session):
             rows = session.exec(
-                select(Picture.id, Picture.file_path, Picture.original_file_name).where(
-                    Picture.id.in_(ids)
-                )
+                select(
+                    Picture.id,
+                    Picture.file_path,
+                    Picture.original_file_name,
+                    Picture.created_at,
+                ).where(Picture.id.in_(ids))
             ).all()
             return {
                 row[0]: {
                     "id": row[0],
                     "file_path": row[1],
                     "original_file_name": row[2],
+                    "created_at": row[3],
                 }
                 for row in rows
             }

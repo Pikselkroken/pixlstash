@@ -8,6 +8,7 @@ import {
   undoKeyHint,
 } from "../../utils/shortcutHints";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
+import { canCopyFiles } from "../../utils/copyAsFiles";
 import AppDialog from "./AppDialog.vue";
 
 const userPrefs = useUserPrefsStore();
@@ -22,6 +23,7 @@ const undoKeyHintKeys = undoKeyHint();
 const stackModKey = isApplePlatform() ? "⌘" : "Ctrl";
 const redoKeyHintKeys = redoKeyHint();
 const selectAllKeyHintKeys = selectAllKeyHint();
+const copyFiles = canCopyFiles();
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -57,6 +59,10 @@ const open = computed(() => props.modelValue);
         <tr :class="{ 'shortcut-disabled': isReadOnly }">
           <td><kbd>T</kbd></td>
           <td>Tag selected images</td>
+        </tr>
+        <tr v-if="copyFiles">
+          <td><kbd>{{ stackModKey }}</kbd>+<kbd>C</kbd></td>
+          <td>Copy selected images as files, to paste into a folder, mail or chat</td>
         </tr>
         <tr :class="{ 'shortcut-disabled': isReadOnly }">
           <td><kbd>Ctrl</kbd>+<kbd>V</kbd></td>

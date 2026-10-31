@@ -26,6 +26,11 @@ import { uniqueDownloadPath } from './downloads';
 import { restoredWindowSize } from './windowState';
 import { ipcBytes, pngClipboardPayload, safeMediaFilename } from './mediaIpc';
 import {
+  WINDOWS_COPY_FILES_SCRIPT,
+  fileClipboardPayload,
+  requireShareCopyPaths,
+} from './fileClipboard';
+import {
   comfyuiOpenTarget,
   isAllowedNavigation,
   isBackendOrigin,
@@ -71,6 +76,7 @@ import {
   serverConfigPath,
   serverLogPath,
   setBackendsRoot,
+  shareCopiesRoot,
 } from './config';
 import { inspectFolder } from './setup/InspectFolder';
 import { readLibraryFolder } from './setup/ReadLibraryFolder';
@@ -1754,6 +1760,33 @@ function registerIpc(): void {
     if (image.isEmpty()) throw new Error('The PNG image could not be decoded.');
     clipboard.writeImage(image);
     return { copied: true };
+  });
+  // Copy a grid selection as files (#2419): the share copies the backend just
+  // staged, checked to be inside shareCopiesRoot() before the OS sees them.
+  ipcMain.handle('media:copyFiles', async (event, paths: unknown) => {
+    requireAppRenderer(event, 'media:copyFiles');
+    const files = await requireShareCopyPaths(paths, shareCopiesRoot());
+    if (process.platform === 'win32') {
+      const list = join(app.getPath('temp'), `pixlstash-copy-${randomUUID()}.txt`);
+      await writeFile(list, files.join('\r\n'), 'utf8');
+      try {
+        await execFileP(
+          'powershell',
+          ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_COPY_FILES_SCRIPT],
+          { env: { ...process.env, PIXLSTASH_COPY_FILES: list }, windowsHide: true },
+        );
+      } finally {
+        await rm(list, { force: true });
+      }
+    } else {
+      const { format, data } = fileClipboardPayload(
+        files,
+        process.platform,
+        process.env.XDG_CURRENT_DESKTOP,
+      );
+      clipboard.writeBuffer(format, data);
+    }
+    return { copied: files.length };
   });
 
   // Desktop-shell preferences (e.g. hide-to-tray-on-close).
