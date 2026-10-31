@@ -1775,9 +1775,17 @@ file drag of the selection's original files, so it lands in a file manager, a
 mail or a chat as files, the way a file manager's own drag does. It stages
 through the same `stageShareFiles` as copy-as-files (`utils/copyAsFiles.js`),
 so the names are the same, and neither has a cap: the route links rather than
-copies (a copy only where no link can be made, an original on another drive,
-and that is logged), and reads the ids in chunks under SQLite's parameter
-limit. A link is the original under a second name: the sweep removing the
+copies, and reads the ids in chunks under SQLite's parameter limit. A hard link
+works only within one drive, so the links go **inside the library**, in
+`<image_root>/.pixlstash-share/<batch>/` (`share_links_root`): every walk of a
+picture tree skips dot-folders, so nothing there is read back as a picture.
+Failing that the link goes into the staging root, and only an original on a
+drive neither is on is copied (logged). Linking 981 pictures takes about 11 ms
+on an NVMe drive whatever their size; the receiving app does the copying, with
+its own progress, after the drop. Main cannot know every library's folder (its
+config names only the first), so it trusts a library link by its shape,
+`.../.pixlstash-share/<32-hex batch>/<name>`, after resolving symlinks
+(`requireShareCopyPaths`). A link is the original under a second name: the sweep removing the
 batch removes that name only, and the OS drag offers copy and link, never move.
 The paths go to `media:startShareDrag` (app-window gated,
 `requireShareCopyPaths`), which calls `webContents.startDrag({files})` with the

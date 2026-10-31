@@ -51,6 +51,46 @@ describe('requireShareCopyPaths: only share copies reach the clipboard', () => {
   });
 });
 
+describe('requireShareCopyPaths: a library\'s staged links (#2420)', () => {
+  const library = join(base, 'library');
+  const linkBatch = join(library, '.pixlstash-share', '0123456789abcdef0123456789abcdef');
+  mkdirSync(linkBatch, { recursive: true });
+  writeFileSync(join(linkBatch, 'ComfyUI_00001_.png'), 'l');
+  writeFileSync(join(library, 'original.png'), 'o');
+
+  it('accepts a file in a .pixlstash-share batch, wherever the library is', async () => {
+    const path = join(linkBatch, 'ComfyUI_00001_.png');
+    assert.deepEqual(await requireShareCopyPaths([path], root), [path]);
+  });
+
+  it('refuses the library\'s own files and anything not shaped like a batch', async () => {
+    const notHex = join(library, '.pixlstash-share', 'not-a-batch');
+    mkdirSync(notHex, { recursive: true });
+    writeFileSync(join(notHex, 'a.png'), 'a');
+    const deeper = join(linkBatch, 'sub');
+    mkdirSync(deeper, { recursive: true });
+    writeFileSync(join(deeper, 'a.png'), 'a');
+    // A batch-named folder anywhere else is not one of ours.
+    const looseBatch = join(library, '0123456789abcdef0123456789abcdef');
+    mkdirSync(looseBatch, { recursive: true });
+    writeFileSync(join(looseBatch, 'a.png'), 'a');
+    for (const bad of [
+      join(library, 'original.png'),
+      join(notHex, 'a.png'),
+      join(deeper, 'a.png'),
+      join(looseBatch, 'a.png'),
+    ]) {
+      await assert.rejects(requireShareCopyPaths([bad], root), /Only share copies/, bad);
+    }
+  });
+
+  it('refuses a symlink in a batch that points out of it', { skip: process.platform === 'win32' }, async () => {
+    const link = join(linkBatch, 'sneaky.png');
+    symlinkSync(join(library, 'original.png'), link);
+    await assert.rejects(requireShareCopyPaths([link], root), /Only share copies/);
+  });
+});
+
 describe('fileClipboardPayload', () => {
   const paths = ['/home/me/share-copies/x/a b.png', '/home/me/share-copies/x/c#1.png'];
 

@@ -20,6 +20,7 @@ from pixlstash.utils.library_roots import refuse_path_inside_a_library
 from pixlstash.utils.service.share_copies import (
     make_share_copies,
     share_copies_root,
+    share_links_root,
     sweep_share_copies,
 )
 from pixlstash.utils.watermark import get_watermark_bytes
@@ -345,6 +346,13 @@ def register_routes(router, server):
         # library reads come straight back as pictures.
         refuse_path_inside_a_library(os.path.realpath(root), server, vault)
         sweep_share_copies(root)
+        # Links go inside the library, on its originals' drive, in a dot-folder
+        # no scan reads (share_copies.SHARE_LINKS_DIRNAME).
+        link_root = (
+            share_links_root(vault.image_root) if payload.link_originals else None
+        )
+        if link_root:
+            sweep_share_copies(link_root)
 
         ids = list(dict.fromkeys(payload.picture_ids))
 
@@ -388,6 +396,7 @@ def register_routes(router, server):
             watermark_bytes=watermark_bytes,
             file_names=payload.file_names,
             link_originals=payload.link_originals,
+            link_root=link_root,
         )
         result["skipped"] += [
             {"picture_id": i, "reason": "not_found"} for i in ids if i not in found

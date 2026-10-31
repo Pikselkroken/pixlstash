@@ -42,6 +42,13 @@ from pixlstash.utils.watermark import apply_watermark
 logger = get_logger(__name__)
 
 SHARE_COPIES_DIRNAME = "share-copies"
+# Inside a library: where its originals are hard-linked under their share names
+# (``link_originals``). A link only works within one drive, and the library's
+# drive is the one its originals are on. Every walk of a picture tree skips
+# dot-folders (``is_hidden_entry``, the root watcher), so nothing here is ever
+# read back as a picture. Electron trusts a file by this shape:
+# ``.../.pixlstash-share/<batch>/<name>`` (``requireShareCopyPaths``).
+SHARE_LINKS_DIRNAME = ".pixlstash-share"
 
 # ponytail: swept at start-up and on each new batch, not on a timer, so an
 # idle app keeps its last batch until the next share or restart.
@@ -64,6 +71,11 @@ _REENCODE_EXT = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
 def share_copies_root(config_dir: str) -> str:
     """The staging root for a server whose config file lives in *config_dir*."""
     return os.path.join(config_dir, SHARE_COPIES_DIRNAME)
+
+
+def share_links_root(image_root: str) -> str:
+    """Where *image_root*'s originals are hard-linked for a drag or a copy."""
+    return os.path.join(image_root, SHARE_LINKS_DIRNAME)
 
 
 def sweep_share_copies(
@@ -106,6 +118,7 @@ def make_share_copies(
     watermark_bytes: bytes | None = None,
     file_names: str = FILE_NAMES_ORIGINAL,
     link_originals: bool = False,
+    link_root: str | None = None,
 ) -> dict:
     """Write one share-ready copy of each picture into a new batch under *root*.
 
@@ -125,8 +138,10 @@ def make_share_copies(
         link_originals: Hand over the originals themselves, generation data and
             all, as hard links under the share names: nothing is copied, so a
             drag of a whole view starts at once (#2420). Overrides resizing,
-            watermarking and stripping. Where a link cannot be made (the
-            original is on another drive) the file is copied, and that is logged.
+            watermarking and stripping. Each link goes into *link_root*'s batch
+            (the library's drive) or else *root*'s; an original on a drive
+            neither is on is copied, and that is logged.
+        link_root: :func:`share_links_root` of the library, for ``link_originals``.
 
     Returns:
         ``{"batch", "directory", "files", "skipped"}``. Each file entry carries
@@ -140,6 +155,9 @@ def make_share_copies(
     os.mkdir(directory, mode=0o700)
     claimed: dict = {}
     files, skipped = [], []
+    # Where a link may go, best first. The library's batch is made on first use.
+    link_dirs = [os.path.join(link_root, batch)] if link_root else []
+    link_dirs.append(directory)
     for pic in pictures:
         source = ImageUtils.resolve_picture_path(image_root, pic.get("file_path"))
         if not source or not os.path.isfile(source):
@@ -155,7 +173,7 @@ def make_share_copies(
                 max_long_edge=max_long_edge,
                 watermark_bytes=watermark_bytes,
                 file_names=file_names,
-                link_originals=link_originals,
+                link_dirs=link_dirs if link_originals else None,
             )
         except Exception as exc:
             logger.warning(
@@ -210,15 +228,16 @@ def _copy_one(
     max_long_edge,
     watermark_bytes,
     file_names,
-    link_originals=False,
+    link_dirs=None,
 ) -> dict:
     ext = os.path.splitext(source)[1].lower()
     entry = {"picture_id": pic["id"], "resized": False, "watermarked": False}
 
-    if link_originals:
+    if link_dirs:
         name = _copy_name(pic, source, ext, file_names, claimed)
-        _link_or_copy(source, os.path.join(directory, name))
-        return _finish(entry, directory, name, METADATA_KEPT)
+        return _finish(
+            entry, _link_or_copy(source, name, link_dirs), name, METADATA_KEPT
+        )
 
     if VideoUtils.is_video_file(source):
         # No container metadata writer here, so a video goes as it is.
@@ -258,21 +277,29 @@ def _copy_one(
     return _finish(entry, directory, name, metadata)
 
 
-def _link_or_copy(source: str, target: str) -> None:
-    """Hard-link *source* at *target*, or copy it where a link cannot be made.
+def _link_or_copy(source: str, name: str, link_dirs: list[str]) -> str:
+    """Hard-link *source* as *name* in the first of *link_dirs* that takes it.
 
-    The link is the original file under a second name: removing the batch
-    later removes only that name. A copy is the one way across drives.
+    A link is the original under a second name, so removing the batch later
+    removes only that name, and making one writes no data. A link only works
+    within one drive; an original on a drive none of *link_dirs* is on is
+    copied into the last of them, which is logged. Returns the directory used.
     """
-    try:
-        os.link(source, target)
-    except OSError as exc:
-        logger.info(
-            "Could not hard-link %s into the share copies (%s); copying it instead",
-            source,
-            exc,
-        )
-        shutil.copyfile(source, target)
+    for directory in link_dirs:
+        os.makedirs(directory, mode=0o700, exist_ok=True)
+        try:
+            os.link(source, os.path.join(directory, name))
+            return directory
+        except OSError as exc:
+            logger.debug("Could not hard-link %s into %s: %s", source, directory, exc)
+    directory = link_dirs[-1]
+    logger.info(
+        "Could not hard-link %s into any share folder (%s); copying it instead",
+        source,
+        ", ".join(link_dirs),
+    )
+    shutil.copyfile(source, os.path.join(directory, name))
+    return directory
 
 
 def _finish(entry: dict, directory: str, name: str, metadata: str) -> dict:
