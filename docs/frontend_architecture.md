@@ -4616,8 +4616,9 @@ undo by accident:
 **The list draws no assignment ring and no favourite column (#2168).** Who a model is
 attached to is read where it is edited: the set card and the Models rail (*In sets*) say
 which sets a model is in. `assignmentRing` (`utils/modelShelf.js`) still builds the ring
-that the set grid's open tray draws (`ModelSetGrid.vue`), and nothing on the list does. The
-Type letter, the Sets column and the rail are what the list offers instead.
+that the set grid's open tray draws (`ModelSetGrid.vue`). The list calls it only for the
+FACE: each row draws `ModelMark` with `bare`, which borrows the attached person's or set's
+picture and draws no ring, tooltip or label. The Sets column and the rail say the rest.
 
 **A row is flex, not a grid, and its columns are STATED ONCE.** Grouping makes
 one `role="treegrid"` list per group, so `auto` tracks would be measured against
@@ -5950,9 +5951,13 @@ at the top of an 1,800-row document.
 
 #### The thumbnail verb, on the shelf
 
-The shelf's list draws no picture. Its identity cell is the Type letter (`typeOf(row)`), so a
-model's thumbnail, its set's icon and the generated mark are drawn where ModelMark is used: the set
-cards and set slots. The rules below are `ModelMark`'s.
+Each row of the shelf's list leads with its `ModelMark` at `--space-8` (48px, the height of the
+row's two text lines; `.shelf-head` resolves the same value so the headings stay over the names):
+the model's own icon, else the face or icon of the person or set it is attached to, else the
+generated mark. A row whose file is gone (`missing`, `forgotten`) draws its absence glyph there
+instead, at the same size; an offline or not-downloaded row keeps its mark and leads its name with
+the glyph. The Type letter is the Type column's and the sidebar's, not the row's. The rules below
+are `ModelMark`'s.
 
 **The mark is a pure function of the row**, and deliberately not
 `character_color`'s rule. Characters take the *first unused* colour, which needs
