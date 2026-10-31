@@ -300,38 +300,47 @@ const trainingLease = computed(() => {
 const trainingNow = computed(() => trainingLease.value != null);
 
 // The lease is labelled for the Tasks tab, so the run's own name comes from
-// its job: one started since the jobs were read is read again for it.
+// its job: one started since the jobs were read is read again for it, once.
+// The tasks poll replaces the lease every few seconds, so the watch is on the
+// id string, which a poll does not change.
 watch(
-  () => [trainingLease.value?.job_id, runsStore.jobsLoaded],
-  ([jobId, loaded]) => {
-    if (jobId && loaded && !runsStore.jobs.some((job) => job.uuid === jobId)) {
-      runsStore.loadJobs();
-    }
+  () => (runsStore.jobsLoaded ? (trainingLease.value?.job_id ?? "") : ""),
+  (jobId) => {
+    if (!jobId || runsStore.jobs.some((job) => job.uuid === jobId)) return;
+    runsStore.loadJobs();
   },
+  { immediate: true },
 );
 
-/** The runs row's second line: "aria_v4 · 41%" live, else "Last run 2h ago". */
+/**
+ * The runs row's second line: "aria_v4 · 41%" training, "aria_v4 · waiting"
+ * queued for the card, else "Last run 2h ago".
+ */
 const runsStatus = computed(() => {
   const lease = trainingLease.value;
   if (lease) {
     const job = runsStore.jobs.find((one) => one.uuid === lease.job_id);
-    const name = job?.name || "Training now";
+    const name = job?.name || "A run";
+    if (lease.state !== "granted") return `${name} · waiting`;
     const total = Number(lease.progress?.total);
     if (!(total > 0)) return name;
     const done = Number(lease.progress.step) || 0;
     return `${name} · ${Math.min(100, Math.round((done / total) * 100))}%`;
   }
-  const newest = Math.max(
-    0,
-    ...runsStore.cards.map(
-      (card) =>
-        card.run?.modified_at ??
-        (Date.parse(card.job?.created_at ?? "") / 1000 || 0),
-    ),
-  );
+  const whenOf = (card) =>
+    card.run?.modified_at != null
+      ? card.run.modified_at * 1000
+      : utcMs(card.job?.created_at ?? "");
+  const newest = Math.max(0, ...runsStore.cards.map(whenOf).filter(Boolean));
   if (!newest) return "";
-  return `Last run ${relativeDate(new Date(newest * 1000).toISOString())}`;
+  return `Last run ${relativeDate(new Date(newest).toISOString())}`;
 });
+
+/** An ISO time in ms, a naive one read as UTC as relativeDate reads it; 0 if none. */
+function utcMs(at) {
+  const naive = at.includes("T") && !/(Z|[+-]\d{2}:\d{2})$/.test(at);
+  return Date.parse(naive ? `${at}Z` : at) || 0;
+}
 
 // ── The Model folders slot and the tree ──────────────────────────────────
 

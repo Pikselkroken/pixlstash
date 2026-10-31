@@ -382,15 +382,55 @@ describe("ModelsSideBar", () => {
     const wrapper = mountBar();
     await flushPromises();
     listTrainingJobs.mockClear();
-    useTasksStore().resources = {
-      leases: [{ tenant: "aitoolkit", state: "granted", job_id: "u9" }],
-    };
-    await flushPromises();
+    // The tasks poll replaces the lease object on every tick.
+    for (let tick = 0; tick < 3; tick += 1) {
+      useTasksStore().resources = {
+        leases: [{ tenant: "aitoolkit", state: "granted", job_id: "u9" }],
+      };
+      await flushPromises();
+    }
     expect(listTrainingJobs).toHaveBeenCalledTimes(1);
     // Still unknown after the read: no loop, and a plain line meanwhile.
     expect(
       wrapper.find("[data-testid='models-sidebar-runs-status']").text(),
-    ).toBe("Training now");
+    ).toBe("A run");
+  });
+
+  it("says a run queued for the card is waiting, not training", async () => {
+    const wrapper = mountBar();
+    await flushPromises();
+    useTasksStore().resources = {
+      leases: [
+        { tenant: "aitoolkit", state: "waiting", job_id: "u1" },
+        { tenant: "comfyui", state: "granted" },
+      ],
+    };
+    await flushPromises();
+    expect(
+      wrapper.find("[data-testid='models-sidebar-runs-status']").text(),
+    ).toBe("aria_v4 · waiting");
+  });
+
+  it("reads a job's naive time as UTC for the last run", async () => {
+    const { useTrainingRunsStore } = await import(
+      "../../stores/useTrainingRunsStore"
+    );
+    const wrapper = mountBar();
+    await flushPromises();
+    const runs = useTrainingRunsStore();
+    runs.runs = [];
+    // A failed job that never got a folder: its card is dated by created_at,
+    // which the server writes without a zone.
+    const at = new Date(Date.now() - 3 * 3600 * 1000 - 60_000)
+      .toISOString()
+      .replace("Z", "");
+    runs.jobs = [
+      { id: 2, uuid: "u2", name: "x", status: "error", created_at: at },
+    ];
+    await flushPromises();
+    expect(
+      wrapper.find("[data-testid='models-sidebar-runs-status']").text(),
+    ).toBe("Last run 3h ago");
   });
 
   it("says when the last run was while nothing trains", async () => {

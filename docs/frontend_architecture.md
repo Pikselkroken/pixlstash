@@ -4972,8 +4972,10 @@ neither edge moves on a workspace switch.
   something to say: live, the run's name and percent (`aria_v4 · 41%`, the
   name from the runs store's job by the lease's `job_id`, since the lease's
   own label is the Tasks tab's sentence; a lease naming a job the store has
-  not read re-reads the jobs once); idle, *Last run 2h ago* from the newest
-  card. The sidebar calls `runsStore.ensureLoaded()` on mount so the count is
+  not read re-reads the jobs once, the watch keyed on the id since every
+  tasks poll replaces the lease); queued for the card, *aria_v4 · waiting*;
+  idle, *Last run 2h ago* from the newest card (a job's naive `created_at`
+  read as UTC, as `relativeDate` reads it). The sidebar calls `runsStore.ensureLoaded()` on mount so the count is
   there on every place, not only after the runs view has been opened.
 
 #### Folder verbs in the tree (`panels/ModelFolderTree.vue`, #2206)
