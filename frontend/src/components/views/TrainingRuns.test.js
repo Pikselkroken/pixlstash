@@ -131,14 +131,16 @@ async function openWith(runs, folders = FOLDERS) {
   return wrapper;
 }
 
-/** Tick the card whose name matches, the way a pointer would. */
-async function tick(wrapper, name) {
+/** Ctrl+click the card whose name matches: adds it to the selection. */
+async function tick(wrapper, name, modifiers = { ctrlKey: true }) {
   const card = wrapper
     .findAll(".tr-card")
     .find((c) => c.find(".tr-card-name").text() === name);
-  await card.trigger("click");
+  await card.trigger("click", modifiers);
   return card;
 }
+
+const chosenNow = () => useTrainingRunsStore().chosen;
 
 const importBtn = (wrapper) =>
   wrapper.findAll("button").find((b) => b.text().startsWith("Import"));
@@ -455,6 +457,46 @@ describe("choosing runs", () => {
       .find((b) => b.text().includes("Clear selection"))
       .trigger("click");
     expect(wrapper.findAll(".tr-card--checked")).toHaveLength(0);
+  });
+
+  it("selects the clicked card alone on a plain click", async () => {
+    const wrapper = await openWith([run(), run("Foxglove"), run("Hazel")]);
+    await tick(wrapper, "Clementine", {});
+    await tick(wrapper, "Foxglove", {});
+    expect(chosenNow()).toEqual(["run:Foxglove"]);
+    // A second plain click keeps it, rather than unticking it.
+    await tick(wrapper, "Foxglove", {});
+    expect(chosenNow()).toEqual(["run:Foxglove"]);
+  });
+
+  it("adds and removes with Ctrl or Cmd", async () => {
+    const wrapper = await openWith([run(), run("Foxglove"), run("Hazel")]);
+    await tick(wrapper, "Clementine", {});
+    await tick(wrapper, "Hazel", { metaKey: true });
+    expect(chosenNow()).toEqual(["run:Clementine", "run:Hazel"]);
+    await tick(wrapper, "Clementine");
+    expect(chosenNow()).toEqual(["run:Hazel"]);
+  });
+
+  it("takes a range with Shift, from the last card clicked", async () => {
+    const wrapper = await openWith([run(), run("Foxglove"), run("Hazel")]);
+    const order = wrapper
+      .findAll(".tr-card")
+      .map((c) => c.find(".tr-card-name").text());
+    await tick(wrapper, order[0], {});
+    await tick(wrapper, order[2], { shiftKey: true });
+    expect(chosenNow()).toEqual(order.map((name) => `run:${name}`));
+    // The anchor stays put: a shorter range replaces the longer one.
+    await tick(wrapper, order[1], { shiftKey: true });
+    expect(chosenNow()).toEqual(order.slice(0, 2).map((name) => `run:${name}`));
+  });
+
+  it("selects all shown on Ctrl+A", async () => {
+    const wrapper = await openWith([run(), run("Foxglove"), run("Hazel")]);
+    await wrapper
+      .find(".tr-grid")
+      .trigger("keydown", { key: "a", ctrlKey: true });
+    expect(wrapper.findAll(".tr-card--checked")).toHaveLength(3);
   });
 
   it("clears on Escape", async () => {

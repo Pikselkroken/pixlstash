@@ -49,6 +49,8 @@ export const useTrainingRunsStore = defineStore("trainingRuns", () => {
    */
   const chosen = ref([]);
   const chosenSteps = ref([]);
+  /** The card a Shift+click range runs from: the last plain or Ctrl click. */
+  const anchor = ref("");
 
   /** The registered ai-toolkit output root. One, by the folders store's rule. */
   const source = computed(() => folders.sourceFolder);
@@ -164,6 +166,29 @@ export const useTrainingRunsStore = defineStore("trainingRuns", () => {
     chosen.value = [...chosen.value.filter((key) => !live.has(key)), card.key];
   }
 
+  /**
+   * A click, as everywhere else in the app: a plain click selects the card
+   * alone, Ctrl (or Cmd) adds or removes it, and Shift takes every card from
+   * the last one clicked. A range skips live runs, which select alone.
+   */
+  function pick(card, { ctrl = false, shift = false } = {}) {
+    const from = cards.value.findIndex((c) => c.key === anchor.value);
+    const to = cards.value.indexOf(card);
+    if (ctrl) {
+      toggle(card);
+    } else if (shift && from >= 0 && to >= 0 && !card.live) {
+      const [start, end] = from <= to ? [from, to] : [to, from];
+      chosen.value = cards.value
+        .slice(start, end + 1)
+        .filter((c) => !c.live)
+        .map((c) => c.key);
+      return;
+    } else {
+      chosen.value = [card.key];
+    }
+    anchor.value = card.key;
+  }
+
   /** "Select all shown": every finished run there is something to import of. */
   function selectAll() {
     chosen.value = cards.value
@@ -173,6 +198,7 @@ export const useTrainingRunsStore = defineStore("trainingRuns", () => {
 
   function clearSelection() {
     chosen.value = [];
+    anchor.value = "";
   }
 
   // Whenever the importable selection narrows to exactly one run, the step
@@ -253,6 +279,7 @@ export const useTrainingRunsStore = defineStore("trainingRuns", () => {
     chosen.value = [
       ...new Set(chosen.value.map((key) => byJob.get(key) ?? key)),
     ].filter((key) => keys.has(key));
+    anchor.value = byJob.get(anchor.value) ?? anchor.value;
   }
 
   let jobsGeneration = 0;
@@ -348,6 +375,7 @@ export const useTrainingRunsStore = defineStore("trainingRuns", () => {
     jobsFailed.value = false;
     chosen.value = [];
     chosenSteps.value = [];
+    anchor.value = "";
     // Explicitly, as the source watcher does: left to the `single` watcher,
     // a run of the same name picked before it runs would keep empty steps.
     stepsFilledFor = "";
@@ -378,6 +406,7 @@ export const useTrainingRunsStore = defineStore("trainingRuns", () => {
     isLive,
     isChosen,
     toggle,
+    pick,
     selectAll,
     clearSelection,
     loadRuns,
