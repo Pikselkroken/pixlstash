@@ -154,6 +154,7 @@
               </button>
               <div
                 v-if="findFacesSubmenuOpen"
+                v-submenu-fit
                 class="ctx-submenu ctx-face-submenu"
                 role="menu"
               >
@@ -239,7 +240,7 @@
               Restore from snapshot
               <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
             </button>
-            <div v-if="restoreSubmenuOpen" class="ctx-submenu" role="menu">
+            <div v-if="restoreSubmenuOpen" v-submenu-fit class="ctx-submenu" role="menu">
               <button
                 v-for="cp in recentSnapshots"
                 :key="cp.id"
@@ -456,7 +457,7 @@
             Analyse
             <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
           </button>
-          <div v-if="openGroup === 'analyse'" class="ctx-submenu" role="menu">
+          <div v-if="openGroup === 'analyse'" v-submenu-fit class="ctx-submenu" role="menu">
             <template v-if="taggerPlugins.length">
               <div class="ctx-label section-label">Tag automatically</div>
               <button
@@ -541,7 +542,7 @@
             Generate
             <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
           </button>
-          <div v-if="openGroup === 'generate'" class="ctx-submenu" role="menu">
+          <div v-if="openGroup === 'generate'" v-submenu-fit class="ctx-submenu" role="menu">
             <button
               v-if="comfyuiConfigured"
               class="ctx-item"
@@ -597,7 +598,7 @@
             Adjust
             <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
           </button>
-          <div v-if="openGroup === 'adjust'" class="ctx-submenu" role="menu">
+          <div v-if="openGroup === 'adjust'" v-submenu-fit class="ctx-submenu" role="menu">
             <!-- Rotate in place: applied on click, no dialog and no
                  confirmation. The label counts the selection because a bare
                  "Rotate left" over twelve tiles reads as an action on the one
@@ -652,7 +653,7 @@
             Restore from snapshot
             <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
           </button>
-          <div v-if="openGroup === 'restore'" class="ctx-submenu" role="menu">
+          <div v-if="openGroup === 'restore'" v-submenu-fit class="ctx-submenu" role="menu">
             <button
               v-for="cp in recentSnapshots"
               :key="cp.id"
@@ -700,7 +701,7 @@
             Find &amp; compare
             <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
           </button>
-          <div v-if="openGroup === 'find'" class="ctx-submenu" role="menu">
+          <div v-if="openGroup === 'find'" v-submenu-fit class="ctx-submenu" role="menu">
             <!-- Faces act on the one right-clicked picture. A clicked face, or
                  the only one, is a single row; several are listed inline. -->
             <template v-if="contextImage?.id && selectedImageIds.length === 1">
@@ -825,7 +826,7 @@
           Move to library
           <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
         </button>
-        <div v-if="openGroup === 'move'" class="ctx-submenu">
+        <div v-if="openGroup === 'move'" v-submenu-fit class="ctx-submenu">
           <button
             v-for="library in otherLibraries"
             :key="library.uuid"
@@ -888,6 +889,7 @@ import { COMPARE_NOTES } from "../../utils/compare";
 import { ROTATE_CCW, ROTATE_CW, rotateMenuLabel } from "../../utils/rotate";
 import { isVideo } from "../../utils/media";
 import { serverIsOnThisMachine } from "../../utils/serverLocation";
+import { vSubmenuFit } from "../../utils/submenuFit";
 import { useSnapshotsStore } from "../../stores/useSnapshotsStore";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useLibrariesStore } from "../../stores/useLibrariesStore";

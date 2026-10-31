@@ -23,7 +23,7 @@
       Open with
       <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
     </button>
-    <div v-if="open" class="ctx-submenu ctx-open-with" role="menu">
+    <div v-if="open" v-submenu-fit class="ctx-submenu ctx-open-with" role="menu">
       <div
         v-if="loading"
         class="ctx-item ctx-item--muted"
@@ -98,6 +98,7 @@ export function clearOpenWithCache() {
 import { computed, ref, watch } from "vue";
 import { listOpenWithApps } from "../../api/pictures";
 import { MediaFormat } from "../../utils/media";
+import { vSubmenuFit } from "../../utils/submenuFit";
 import Tooltip from "./Tooltip.vue";
 
 const props = defineProps({
