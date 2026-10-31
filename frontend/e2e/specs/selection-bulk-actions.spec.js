@@ -355,11 +355,21 @@ test.describe('bulk actions on a selection (#2324)', () => {
     await field.fill(TAG)
     await field.press('Enter')
 
-    await expect(page.getByRole('alert').filter({ hasText: '1 of 3 tags were not added' })).toBeVisible()
+    // A skip, not a failure: a warning that goes by itself, and no lasting
+    // error under the tag field.
+    const warning = page.locator('.notice-card--warning')
+      .filter({ hasText: 'Tagged 2 pictures; 1 is in a locked set and was skipped.' })
+    await expect(warning).toBeVisible()
+    await expect(page.locator('.rail-tags__note--error')).toHaveCount(0)
+    await expect(field).toHaveValue('')
     for (const id of pics.ids.slice(1)) {
       await expect.poll(async () => (await pictureTags(apiContext, id)).map((t) => t.tag)).toContain(TAG)
     }
     expect((await pictureTags(apiContext, pics.ids[0])).map((t) => t.tag)).not.toContain(TAG)
+    // The countdown is paused while the pointer is over the card (WCAG 2.2.1).
+    await page.mouse.move(0, 0)
+    await expect(warning).toHaveCount(0, { timeout: 15_000 })
+    await expect(page.locator('.rail-tags__note--error')).toHaveCount(0)
   })
 })
 
