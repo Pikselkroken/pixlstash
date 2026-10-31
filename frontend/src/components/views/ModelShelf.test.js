@@ -4972,6 +4972,22 @@ describe("the list's Type, favourite and Sets columns (#2168)", () => {
     wrapper.unmount();
   });
 
+  it("puts a set's icon on a row drawn before the sets arrived", async () => {
+    // The rows are memoised, so a list landing after them must still repaint.
+    let land;
+    listPictureSets.mockReturnValue(new Promise((resolve) => (land = resolve)));
+    const wrapper = await mountShelf([
+      adapter({ attachments: [{ entity_type: "set", entity_id: 7 }] }),
+    ]);
+    land([{ id: 7, name: "Kit", set_icon: "mdi-star" }]);
+    await flushPromises();
+    const mark = wrapper.find(".shelf-row-mark .mmark");
+    // The set's icon, not the thumbnail the icon replaced.
+    expect(mark.find(".mmark-icon").exists()).toBe(true);
+    expect(mark.find("img").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
   it("draws a heart after the name of a favourite, and none on the rest", async () => {
     listFavourites.mockResolvedValue({
       model: ["a".repeat(64)],

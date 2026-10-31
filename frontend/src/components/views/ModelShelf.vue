@@ -334,9 +334,8 @@
           role="group"
           aria-label="Sort and size the columns"
         >
-          <!-- The favourite column's track (#1578): the same 24px lead the rows
-               draw before the mark, so the headings keep their left edges. -->
-          <!-- Matches `.shelf-row-ident`, which holds the mark and the ring.
+          <!-- Matches `.shelf-row-ident`, which holds the mark, so the
+               headings keep their left edges over the names.
                There is nothing to name: the mark IS the row's identity and the
                hidden `Model` columnheader already says so. -->
           <span class="shelf-head-ident" aria-hidden="true"></span>
@@ -4365,9 +4364,9 @@ function rowMemo(row) {
     misplacedIds.value.has(row.id),
     lockedNote(row),
     setsCell(row),
-    // The faces `ringFor` borrows land after the rows do.
-    entityLists.characters,
-    entityLists.pictureSets,
+    // The one thing a bare mark reads from the entity lists, which land after
+    // the rows: a set's chosen icon. A face is addressed by id alone.
+    ringFor(row).icon,
     store.view.sortKey,
     userPrefs.dateFormat,
     isStackOpen(row.stack_id) && {},
@@ -5053,8 +5052,8 @@ button.shelf-head-cell:hover {
    Flex rather than a grid, because the three data columns are fixed widths and
    the name takes the rest: a grid would have to be declared identically on the
    member rows and on the empty-folder row, and one of the three would drift. */
-/* The mark fills the row's two text lines (#2168 drew a 16px letter in a
-   slot sized for 24): `--space-8`, so the row keeps its height. The headings
+/* The mark at `--space-8`, about the row's own height, where #2168 drew a
+   16px letter in a slot sized for 24. The headings
    resolve the same value, so their left edges stay over the names. */
 .shelf-head,
 .shelf-row {
@@ -5171,11 +5170,10 @@ button.shelf-head-cell:hover {
 
 /* The cover chip is the grid's (App.css), but a row's mark is not a tile: it
    sits on the slot's own corner rather than inset from it, and straddles the
-   mark's bottom edge so the top of the face still shows. The slot plus the row
-   gap leave 48px before the name, and "COVER" at the grid's tracking and
-   padding measures up to 53px on DejaVu, so here it drops the tracking, takes
-   the hairline padding and starts in the row's own left padding: about 42px
-   at its widest, ending short of the name. The row's bottom padding (8px) is
+   mark's bottom edge so the top of the face still shows. It drops the grid's
+   tracking, takes the hairline padding and starts in the row's own left
+   padding, so it covers the mark's bottom-start corner and leaves the version
+   pill on the other one. The row's bottom padding (8px) is
    what keeps the 4px overhang out of `content-visibility`'s paint clip.
    Not hoverable, like the grid's: it overlaps the mark, whose own tooltip names
    the assignments, and the chip's tip still describes it to assistive tech. */

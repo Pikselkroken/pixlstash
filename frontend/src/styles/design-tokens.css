@@ -55,7 +55,8 @@
                            names off the end of a 240px rail. Rank is carried
                            by type, depth by this. */
   --entity-thumb: 24px; /* identity slot for a row carrying a picture; the
-                           sidebar overrides it from its thumbnail slider. */
+                           sidebar overrides it from its thumbnail slider,
+                           the model list sets it to --space-8. */
 
   /* ---------------------------------------------------------------------------
      TREE - the sidebar's child sets (#2124). A guide line drops from a parent's

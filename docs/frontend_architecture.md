@@ -2315,7 +2315,7 @@ filtered by.
 - **`.stack-cover-flag` lives in `App.css` (global)** so the picture grid and
   the model shelf wear one chip rather than two copies. `ImageGrid.css` still
   owns where it sits in a picture tile's stacking order; the shelf tightens it
-  to fit a 24px mark (`.shelf-row-ident .stack-cover-flag`).
+  to fit a row's mark (`.shelf-row-ident .stack-cover-flag`).
 - **Grid-level counts.** The bar has no subtitle since #2165: the sidebar
   counts the places and facets, and the payload's `one_offs` is said only in
   the empty state's note while the One-offs filter is leaving them out. The
@@ -5951,8 +5951,8 @@ at the top of an 1,800-row document.
 
 #### The thumbnail verb, on the shelf
 
-Each row of the shelf's list leads with its `ModelMark` at `--space-8` (48px, the height of the
-row's two text lines; `.shelf-head` resolves the same value so the headings stay over the names):
+Each row of the shelf's list leads with its `ModelMark` at `--space-8` (48px, the row's height
+less its padding; `.shelf-head` resolves the same value so the headings stay over the names):
 the model's own icon, else the face or icon of the person or set it is attached to, else the
 generated mark. A row whose file is gone (`missing`, `forgotten`) draws its absence glyph there
 instead, at the same size; an offline or not-downloaded row keeps its mark and leads its name with
