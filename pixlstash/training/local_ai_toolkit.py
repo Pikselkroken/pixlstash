@@ -64,10 +64,24 @@ _TRAINER_OUTPUT_NAME = "trainer_output.log"
 # Windows has no sessions: these give the trainer its own hidden console, so a
 # Ctrl+C in the backend's or closing its window does not reach it, and console
 # tools it starts open no window (DETACHED_PROCESS would give each one its own).
-# It stays the backend's child: `taskkill /T` still ends it. 0 elsewhere.
+# 0 elsewhere.
 _DETACHED_FLAGS = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(
     subprocess, "CREATE_NO_WINDOW", 0
 )
+# The desktop app stops the backend with `taskkill /T`, which follows parent-pid
+# links and no creation flag cuts. So on Windows the trainer is started by a
+# launcher that prints its pid and exits: its parent is then gone and the kill
+# no longer reaches it. Its stdout and stderr are the launcher's stderr.
+_ORPHAN_TRAINER = os.name == "nt"
+_ORPHAN_LAUNCHER = (
+    "import subprocess, sys\n"
+    "trainer = subprocess.Popen(sys.argv[2:], stdin=subprocess.DEVNULL,"
+    " stdout=sys.stderr, stderr=subprocess.STDOUT, start_new_session=True,"
+    " creationflags=int(sys.argv[1]))\n"
+    "print(trainer.pid, flush=True)\n"
+)
+# How long the launcher may take to start the trainer (seconds).
+_ORPHAN_LAUNCH_TIMEOUT_SECONDS = 60.0
 
 # The trainer's CUDA allocator setting, unless the owner set their own.
 _ALLOC_CONF = "expandable_segments:True"
@@ -181,7 +195,8 @@ class LocalAiToolkit(TrainerBackend):
         # Popen handles for children we launched in this process, keyed by pid.
         # Held so we can reap them (poll()) and avoid mistaking a finished-but-
         # unreaped child (a zombie) for a live process. Empty after a restart,
-        # which is why liveness also has a zombie-aware PID probe fallback.
+        # and always on Windows (the trainer is not our child there), which is
+        # why liveness also has a zombie-aware PID probe fallback.
         self._processes: dict[int, subprocess.Popen] = {}
 
     # ------------------------------------------------------------------
@@ -320,7 +335,8 @@ class LocalAiToolkit(TrainerBackend):
         in its own process group (so cancel can signal the group), records the
         PID onto *handle* and into ``pid.txt``, and marks the job ``running``.
         Its stdout/stderr go to ``<work_dir>/trainer_output.log`` and its stdin
-        is closed, so it outlives the backend's streams.
+        is closed, so it outlives the backend's streams. On Windows a launcher
+        starts it and exits, so it also outlives ``taskkill /T`` on the backend.
 
         ``HF_TOKEN`` is forwarded to the child env when set but is NEVER logged;
         only the names of the env keys we set are logged.
@@ -364,17 +380,22 @@ class LocalAiToolkit(TrainerBackend):
         try:
             # The child keeps its own copy of the descriptor; ours closes here.
             with open(output_path, "wb") as output:
-                process = subprocess.Popen(  # noqa: S603 - argv list, never shell
-                    cmd,
-                    cwd=self.ai_toolkit_repo_path,
-                    env=env,
-                    stdin=subprocess.DEVNULL,
-                    stdout=output,
-                    stderr=subprocess.STDOUT,
-                    start_new_session=True,
-                    creationflags=_DETACHED_FLAGS,
-                )
-        except OSError as exc:
+                if _ORPHAN_TRAINER:
+                    pid = self._launch_orphan(cmd, env, output)
+                else:
+                    process = subprocess.Popen(  # noqa: S603 - argv list, never shell
+                        cmd,
+                        cwd=self.ai_toolkit_repo_path,
+                        env=env,
+                        stdin=subprocess.DEVNULL,
+                        stdout=output,
+                        stderr=subprocess.STDOUT,
+                        start_new_session=True,
+                        creationflags=_DETACHED_FLAGS,
+                    )
+                    pid = process.pid
+                    self._processes[pid] = process
+        except (OSError, subprocess.SubprocessError) as exc:
             logger.error(
                 "Failed to launch trainer job %s (output %s): %s",
                 handle.job_id,
@@ -384,11 +405,10 @@ class LocalAiToolkit(TrainerBackend):
             self._set_job_status(handle.sqlite_db_path, handle.job_id, "error")
             raise
 
-        handle.pid = process.pid
-        self._processes[process.pid] = process
-        self._write_pid_file(handle.work_dir, process.pid)
+        handle.pid = pid
+        self._write_pid_file(handle.work_dir, pid)
         self._set_job_status(handle.sqlite_db_path, handle.job_id, "running")
-        logger.info("Trainer job %s started with pid %d", handle.job_id, process.pid)
+        logger.info("Trainer job %s started with pid %d", handle.job_id, pid)
 
     def progress(self, handle: TrainingHandle) -> TrainingProgress:
         """Read a fresh progress snapshot from the Job table, loss DB, and disk.
@@ -528,8 +548,9 @@ class LocalAiToolkit(TrainerBackend):
 
         If we launched the process in this run, its ``Popen`` is polled (which
         also reaps it once it has exited, so it never lingers as a zombie). For
-        a PID inherited across a restart (no ``Popen``), a zombie-aware probe is
-        used: a finished-but-unreaped process counts as dead.
+        a PID inherited across a restart, or one started through the Windows
+        launcher (no ``Popen`` either way), a zombie-aware probe is used: a
+        finished-but-unreaped process counts as dead.
 
         Args:
             handle: The job handle.
@@ -545,6 +566,69 @@ class LocalAiToolkit(TrainerBackend):
     # ------------------------------------------------------------------
     # Private helpers: process / filesystem
     # ------------------------------------------------------------------
+
+    def _launch_orphan(self, cmd: list[str], env: dict[str, str], output) -> int:
+        """Start the trainer through :data:`_ORPHAN_LAUNCHER` and return its pid.
+
+        The trainer is not our child, so no ``Popen`` is kept: it is tracked
+        like a pid inherited across a restart.
+
+        Args:
+            cmd: The trainer's argv.
+            env: The trainer's environment.
+            output: The open ``trainer_output.log``, the launcher's stderr.
+
+        Returns:
+            The trainer's pid.
+
+        Raises:
+            OSError: The launcher printed no pid.
+            subprocess.TimeoutExpired: The launcher did not finish in time
+                and printed no pid.
+        """
+        try:
+            done = subprocess.run(  # noqa: S603 - argv list, never shell
+                [
+                    self.ai_toolkit_python,
+                    "-c",
+                    _ORPHAN_LAUNCHER,
+                    str(_DETACHED_FLAGS),
+                    *cmd,
+                ],
+                cwd=self.ai_toolkit_repo_path,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=output,
+                creationflags=_DETACHED_FLAGS,
+                timeout=_ORPHAN_LAUNCH_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            # One that printed the pid and then hung has started the trainer:
+            # keep tracking it rather than leave it running unseen.
+            printed = (exc.stdout or b"").decode("ascii", "replace").strip()
+            if not printed.isdigit():
+                raise
+            logger.warning(
+                "Trainer launcher hung after starting pid %s and was killed", printed
+            )
+            return int(printed)
+        printed = done.stdout.decode("ascii", "replace").strip()
+        if not printed.isdigit():
+            raise OSError(
+                f"trainer launcher exited {done.returncode} printing {printed!r}; "
+                f"its error is in {output.name}"
+            )
+        if done.returncode != 0:
+            # Failed after printing the pid, so the trainer is running: track it.
+            logger.warning(
+                "Trainer launcher exited %s after starting pid %s; its error is in %s",
+                done.returncode,
+                printed,
+                output.name,
+            )
+        return int(printed)
 
     @staticmethod
     def _rotate_existing_log(log_path: str) -> None:

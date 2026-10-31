@@ -32,8 +32,10 @@ those are pipes that close when the app quits, and the trainer's next print woul
 `BrokenPipeError` and end the run. `--log` tees into `log.txt` (deleted and reopened by the trainer,
 so not shared with our redirect); `trainer_output.log` also holds what is printed before that tee
 starts. On Windows the spawn adds `CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW`, keeping console
-Ctrl+C and close events away from it. They do not take it out of the backend's process tree, so
-the desktop app's `taskkill /T` on quit still ends it there.
+Ctrl+C and close events away from it. No flag takes it out of the backend's process tree, which
+the desktop app's `taskkill /T` on quit follows by parent pid, so there a short-lived launcher
+(`<ai_toolkit_python> -c …`) starts the trainer, prints its pid and exits. The trainer then has no
+live parent, and the backend tracks it like a pid inherited across a restart.
 
 ## Config (skeleton: `built-in/zimage-turbo-lora.json`, values: `../training-presets/`)
 

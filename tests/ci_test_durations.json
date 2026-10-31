@@ -18,10 +18,11 @@
     "local run (2026-10-17): the 19 gated files the map had no timings for, --force-cpu --fast-captions to match CI",
     "local run (2026-10-27): tests/test_child_sets.py, which this branch newly gates, --force-cpu --fast-captions to match CI",
     "local run (2026-10-27): tests/test_desktop_dev_scratch.py, which this branch newly gates, --force-cpu --fast-captions to match CI",
-    "local run (2026-10-30): tests/test_e2e_workflow_run_fakes.py, which this branch newly gates, --force-cpu --fast-captions to match CI"
+    "local run (2026-10-30): tests/test_e2e_workflow_run_fakes.py, which this branch newly gates, --force-cpu --fast-captions to match CI",
+    "local run (2026-10-30): tests/training/test_trainer_detach.py, which this branch newly gates, --force-cpu --fast-captions to match CI"
   ],
-  "test_count": 5619,
-  "total_seconds": 8145.36,
+  "test_count": 5622,
+  "total_seconds": 8146.48,
   "durations": {
     "tests/multi_project_authz/test_generic_field_reader_allowlist.py::test_bbox_is_serialised_exactly_as_the_relationship_path_did": 19.33,
     "tests/multi_project_authz/test_generic_field_reader_allowlist.py::test_character_relationships_are_refused": 14.27,
@@ -5641,6 +5642,9 @@
     "tests/test_ws_broadcaster.py::test_operation_log_emit_stays_silent_about_stacks_when_nothing_is_stacked": 0.0,
     "tests/test_ws_broadcaster.py::test_operation_log_undo_emits_origin_in_data_not_from_the_contextvar": 0.0,
     "tests/test_ws_broadcaster.py::test_origin_from_defaults_to_none_and_reads_data": 0.0,
-    "tests/test_ws_broadcaster.py::test_source_from_defaults_to_external_and_reads_data": 0.0
+    "tests/test_ws_broadcaster.py::test_source_from_defaults_to_external_and_reads_data": 0.0,
+    "tests/training/test_trainer_detach.py::test_a_failed_launch_marks_the_job_error": 0.01,
+    "tests/training/test_trainer_detach.py::test_a_run_outlives_taskkill_of_the_backend_tree": 0.0,
+    "tests/training/test_trainer_detach.py::test_the_launcher_leaves_a_trainer_that_is_not_our_child": 1.11
   }
 }
