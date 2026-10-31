@@ -191,9 +191,10 @@
               </span>
             </div>
             <!-- Where the track ends: the final save and the import. A run
-                 that failed or was stopped never gets there. -->
+                 that failed or was stopped never gets there, and one read from
+                 its folder was not trained here. -->
             <div
-              v-if="!['error', 'stopped'].includes(live.status)"
+              v-if="!fromFolder && !['error', 'stopped'].includes(live.status)"
               class="trl-endph"
               :style="{ gridRow: 1, gridColumn: columns.length + 2 }"
             >
@@ -288,8 +289,9 @@
 
       </div>
 
-      <!-- Memory and speed describe now, not a step: a status bar. -->
-      <div class="trl-statusbar">
+      <!-- Memory and speed describe now, not a step: a status bar. A run
+           read from its folder has none of it, and the notice says so. -->
+      <div v-if="!fromFolder" class="trl-statusbar">
         <span class="trl-it">
           <span class="trl-lab2">GPU</span>
           <Meter :figure="gpu" />
@@ -393,14 +395,21 @@ import { useNoticeStore } from "../../stores/useNoticeStore";
 import { errorDetail } from "../../utils/apiError";
 import { copyText } from "../../utils/clipboard";
 import {
+  FOLDER_RUN_STATUS,
+  folderRunLive,
   isBusyJob,
   isQueuedBehindRun,
   LIVE_STATUSES,
+  stepsOf,
   WAITING_BEHIND_RUN,
 } from "../../utils/trainingRuns.js";
 
+// Either a job PixlStash trained, read from its live view, or a run trained
+// elsewhere, drawn once from its folder listing entry (`run` + `folderId`).
 const props = defineProps({
-  jobId: { type: Number, required: true },
+  jobId: { type: Number, default: null },
+  run: { type: Object, default: null },
+  folderId: { type: Number, default: null },
 });
 const emit = defineEmits(["close"]);
 
@@ -420,6 +429,15 @@ const SETUP = ["waiting_gpu", "checking", "loading", "caching"];
 
 const live = ref(null);
 const error = ref("");
+const fromFolder = computed(() => Boolean(props.run));
+// The tab re-lists its folder when it is looked at again: follow it.
+watch(
+  () => [props.run, props.folderId],
+  () => {
+    if (props.run) live.value = folderRunLive(props.run, props.folderId);
+  },
+  { immediate: true },
+);
 // Whether the shelf has a bar slot for this page. Not read off the document:
 // opened from another tab, the shelf mounts together with this page and its
 // slot is not in the document yet, so a probe here drew the bar in the page.
@@ -607,10 +625,12 @@ const rowCount = computed(() =>
 
 const phaseLog = computed(() => live.value?.phases ?? []);
 const lastPhase = computed(() => phaseLog.value[phaseLog.value.length - 1]?.phase);
+// A run read from its folder kept no set-up timings to claim.
 const setupDone = computed(
   () =>
-    phaseLog.value.some((entry) => !SETUP.includes(entry.phase)) ||
-    (live.value?.step ?? 0) > 0,
+    !fromFolder.value &&
+    (phaseLog.value.some((entry) => !SETUP.includes(entry.phase)) ||
+      (live.value?.step ?? 0) > 0),
 );
 const setupSeconds = computed(() =>
   phaseLog.value
@@ -659,6 +679,8 @@ const headline = computed(() => {
     case "completed":
       if (run.completed_at) return "Finished";
       return PHASE_LABELS[run.phase] ?? PHASE_LABELS.importing;
+    case FOLDER_RUN_STATUS:
+      return stepsOf({ run: props.run, job: null, live: false });
     default:
       return SETUP.includes(run.phase) ? PHASE_LABELS[run.phase] : progress;
   }
@@ -683,6 +705,14 @@ const subline = computed(() => {
 const notice = computed(() => {
   const run = live.value;
   if (!run) return null;
+  if (fromFolder.value) {
+    return {
+      kind: "info",
+      icon: "mdi-information-outline",
+      title: "Trained outside PixlStash.",
+      text: "This page is read from the run's folder: its checkpoints, previews and settings. PixlStash did not watch it train, so there is no loss curve, no memory or speed figures, and no record of the pictures it was trained on.",
+    };
+  }
   // A read that failed after the page drew: say so, or the board sits on
   // stale figures looking current.
   if (error.value) {
@@ -902,6 +932,8 @@ let notFound = false;
 let disposed = false;
 
 async function load() {
+  // A run read from its folder has no job to ask about.
+  if (props.jobId == null) return;
   const gen = ++generation;
   try {
     const body = await getTrainingJobLive(props.jobId);

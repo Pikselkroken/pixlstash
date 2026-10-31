@@ -1,8 +1,26 @@
 <template>
   <!-- A run PixlStash trains opens its own page inside the tab; the toolbar's
        back arrow returns here. The Tasks tab's AI Toolkit row and the tab's
-       amber dot lead to it through `?run=<uuid>`. -->
+       amber dot lead to it through `?run=<uuid>`. A run trained elsewhere
+       opens the same page drawn from its folder, through `?folder-run=<name>`. -->
   <TrainingRunLive v-if="openJob" :job-id="openJob.id" @close="closeRun" />
+  <TrainingRunLive
+    v-else-if="openFolderCard"
+    :run="openFolderCard.run"
+    :folder-id="source.id"
+    @close="closeRun"
+  />
+  <p v-else-if="openFolderRun" class="tr-note tr-note--pad" role="status">
+    <template v-if="error || jobsFailed || folders.error">
+      Could not read the training runs.
+      <AppButton size="sm" variant="secondary" @click="closeRun">All runs</AppButton>
+    </template>
+    <template v-else-if="folderRunsRead">
+      That run is not in the training folder.
+      <AppButton size="sm" variant="secondary" @click="closeRun">All runs</AppButton>
+    </template>
+    <template v-else>Reading the run…</template>
+  </p>
   <p v-else-if="openUuid" class="tr-note tr-note--pad" role="status">
     <template v-if="jobsFailed">
       Could not read the training runs.
@@ -231,7 +249,7 @@
         @keydown="onMenuKeydown"
       >
         <button
-          v-if="menuCard?.job"
+          v-if="menuCard?.job || menuCard?.run"
           class="ctx-item"
           type="button"
           role="menuitem"
@@ -627,8 +645,34 @@ const router = useRouter();
 const openUuid = computed(() =>
   typeof route.query.run === "string" ? route.query.run : "",
 );
+const openFolderRun = computed(() =>
+  typeof route.query["folder-run"] === "string" ? route.query["folder-run"] : "",
+);
+// Not until the job list is read: a run PixlStash trained has a job, and its
+// own page says more than its folder does. Unread, every run would look
+// trained elsewhere, so the page would say so of runs PixlStash trained.
+const openFolderCard = computed(() => {
+  if (
+    !openFolderRun.value ||
+    !jobsLoaded.value ||
+    jobsFailed.value ||
+    source.value?.id == null
+  ) {
+    return null;
+  }
+  return (
+    cards.value.find((card) => card.run?.name === openFolderRun.value) ?? null
+  );
+});
 const openJob = computed(
-  () => jobs.value.find((job) => job.uuid === openUuid.value) ?? null,
+  () =>
+    jobs.value.find((job) => job.uuid === openUuid.value) ??
+    openFolderCard.value?.job ??
+    null,
+);
+/** The folder has been listed, so a run missing from it is really missing. */
+const folderRunsRead = computed(
+  () => folders.loaded && !loading.value && jobsLoaded.value,
 );
 
 function closeRun() {
@@ -653,9 +697,12 @@ function onCardDblClick(card) {
   openCard(card);
 }
 
-/** A run PixlStash trained has its own page; one trained elsewhere has none. */
+/** A run PixlStash trained opens its job; one trained elsewhere its folder. */
 function openCard(card) {
   if (card?.job) router.push({ name: "models-runs", query: { run: card.job.uuid } });
+  else if (card?.run) {
+    router.push({ name: "models-runs", query: { "folder-run": card.run.name } });
+  }
 }
 
 /**
@@ -908,8 +955,8 @@ watch(
 );
 
 // Back from a run page: what it trained may have landed meanwhile.
-watch(openUuid, (uuid) => {
-  if (!uuid) reload();
+watch([openUuid, openFolderRun], ([uuid, name]) => {
+  if (!uuid && !name) reload();
 });
 
 // While a run trains its card follows it: the job's step for the bar, the

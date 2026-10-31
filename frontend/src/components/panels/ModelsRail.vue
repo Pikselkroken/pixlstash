@@ -301,13 +301,20 @@ const hasSelection = computed(() =>
 const pickedRuns = computed(() => runsStore.chosenCards);
 
 /**
- * The run whose page is open (`?run=<uuid>`), whatever the grid has ticked:
- * the Tasks pill opens a run nobody picked.
+ * The run whose page is open (`?run=<uuid>`, or `?folder-run=<name>` for one
+ * trained elsewhere), whatever the grid has ticked: the Tasks pill opens a run
+ * nobody picked.
  */
 const openRun = computed(() => {
-  const uuid = onRuns.value ? route.query.run : null;
-  if (typeof uuid !== "string" || !uuid) return null;
-  return runsStore.cards.find((card) => card.job?.uuid === uuid) ?? null;
+  if (!onRuns.value) return null;
+  const { run: uuid, "folder-run": name } = route.query;
+  if (typeof uuid === "string" && uuid) {
+    return runsStore.cards.find((card) => card.job?.uuid === uuid) ?? null;
+  }
+  if (typeof name === "string" && name) {
+    return runsStore.cards.find((card) => card.run?.name === name) ?? null;
+  }
+  return null;
 });
 
 const runCheckpoints = computed(() => {

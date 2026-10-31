@@ -66,8 +66,9 @@ const globalOpts = {
       "v-icon": true,
       AiToolkitIcon: true,
       TrainingRunLive: {
-        props: ["jobId"],
-        template: "<div class='live-stub'>{{ jobId }}</div>",
+        props: ["jobId", "run", "folderId"],
+        template:
+          "<div class='live-stub'>{{ jobId ?? `${folderId}/${run?.name}` }}</div>",
       },
       // Renders the activator AND the panel inline. The real one teleports, so
       // nothing inside a menu would be findable.
@@ -1090,11 +1091,42 @@ describe("the runs PixlStash trains (#2118)", () => {
     expect(wrapper.find("[data-testid='tr-menu-stop']").exists()).toBe(false);
   });
 
-  it("opens nothing for a run trained elsewhere", async () => {
+  it("opens a run trained elsewhere from its folder", async () => {
     const wrapper = await openWith([run("Foxglove")]);
     await cardNamed(wrapper, "Foxglove").trigger("dblclick");
-    expect(nav.push).not.toHaveBeenCalled();
-    expect(wrapper.find("[data-testid='tr-menu-open']").exists()).toBe(false);
+    expect(nav.push).toHaveBeenCalledWith({
+      name: "models-runs",
+      query: { "folder-run": "Foxglove" },
+    });
+    await cardNamed(wrapper, "Foxglove").trigger("contextmenu");
+    expect(wrapper.find("[data-testid='tr-menu-open']").exists()).toBe(true);
+  });
+
+  it("draws a folder run's page for ?folder-run=, and says so when it is not there", async () => {
+    nav.route.query = { "folder-run": "Foxglove" };
+    const wrapper = await openWith([run("Foxglove")]);
+    expect(wrapper.find(".live-stub").text()).toBe("1/Foxglove");
+    expect(wrapper.find(".tr-grid").exists()).toBe(false);
+
+    nav.route.query = { "folder-run": "Gone" };
+    await settle(wrapper);
+    expect(wrapper.find(".live-stub").exists()).toBe(false);
+    expect(wrapper.text()).toContain("That run is not in the training folder.");
+  });
+
+  it("does not call a folder run trained elsewhere when the job list could not be read", async () => {
+    listTrainingJobs.mockRejectedValue(new Error("offline"));
+    nav.route.query = { "folder-run": "Foxglove" };
+    const wrapper = await openWith([run("Foxglove")]);
+    expect(wrapper.find(".live-stub").exists()).toBe(false);
+    expect(wrapper.text()).toContain("Could not read the training runs.");
+  });
+
+  it("opens the job's own page when ?folder-run= names a run PixlStash trained", async () => {
+    listTrainingJobs.mockResolvedValue([job()]);
+    nav.route.query = { "folder-run": "Clementine_abcd1234" };
+    const wrapper = await openWith([run("Clementine_abcd1234")]);
+    expect(wrapper.find(".live-stub").text()).toBe("7");
   });
 
   it("draws no check disc on a selected card", async () => {
