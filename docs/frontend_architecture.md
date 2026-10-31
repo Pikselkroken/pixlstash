@@ -6575,7 +6575,7 @@ of a view that stands in for another: a chevron, the name of where it goes
 ("Training runs", the lightbox's view label) and an Esc keycap. The keycap is a
 promise, so the page binds Escape on the window in the capture phase and steps
 aside for whatever is in front of it (an overlay, the lightbox, the review
-overlay, the auto-hide sidebar, a text field, the Models rail); capture,
+overlay, the auto-hide sidebar, a text field, focus in the Models rail); capture,
 because the app's own handler hides the sidebar on the same press.
 
 **Every figure is labelled and none is invented.** The status bar's GPU and RAM

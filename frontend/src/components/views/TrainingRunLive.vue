@@ -957,7 +957,7 @@ const sidebarStore = useSidebarStore();
  * Escape leaves the run, as the back button's keycap says, unless something
  * in front of the page owns the key: a dialog or menu (the sample viewer is
  * one), the lightbox, the review overlay, the auto-hide sidebar, a text
- * field, the Models rail's own list.
+ * field, a focused row in the Models rail.
  *
  * Capture phase, so this reads that state BEFORE the owners act on the key:
  * the app's handler hides the sidebar on the same press and does not stop
@@ -965,7 +965,7 @@ const sidebarStore = useSidebarStore();
  * already read as hidden and the one press would also leave the run.
  */
 function onKeydown(event) {
-  if (event.key !== "Escape" || event.defaultPrevented) return;
+  if (event.key !== "Escape") return;
   if (isTypingTarget(event.target)) return;
   if (event.target?.closest?.(".mrail")) return;
   if (sidebarStore.sidebarOverlay && sidebarStore.sidebarVisible) return;

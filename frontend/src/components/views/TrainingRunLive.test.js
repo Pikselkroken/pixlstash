@@ -609,12 +609,27 @@ describe("leaving the run with Escape, as the back button's keycap says", () => 
     expect(wrapper.emitted("close")).toHaveLength(1);
   });
 
-  it("leaves the key to a dialog or menu in front of the page", async () => {
+  it.each([
+    ["a dialog or menu", "v-overlay v-overlay--active v-dialog"],
+    ["the lightbox", "lightbox"],
+    ["the review overlay", "rs-overlay"],
+  ])("leaves the key to %s in front of the page", async (_name, className) => {
     const wrapper = await open(payload());
     const overlay = document.createElement("div");
-    overlay.className = "v-overlay v-overlay--active v-dialog";
+    overlay.className = className;
     document.body.appendChild(overlay);
     press();
+    expect(wrapper.emitted("close")).toBeUndefined();
+  });
+
+  it("leaves the key to a focused row in the Models rail", async () => {
+    const wrapper = await open(payload());
+    const rail = document.createElement("div");
+    rail.className = "mrail";
+    const row = document.createElement("button");
+    rail.appendChild(row);
+    document.body.appendChild(rail);
+    press(row);
     expect(wrapper.emitted("close")).toBeUndefined();
   });
 
