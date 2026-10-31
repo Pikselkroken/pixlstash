@@ -495,16 +495,7 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
         hosting PixlStash.
       </p>
 
-      <AppButton
-        v-if="cliCommands.length"
-        size="sm"
-        variant="secondary"
-        icon-left="console"
-        @click="commandsOpen = true"
-      >
-        Show the commands
-      </AppButton>
-      <p v-else class="libraries-note">
+      <p v-if="!cliCommands.length" class="libraries-note">
         Open the documentation on the machine hosting PixlStash for the command
         appropriate to that installation. Host paths and command details are
         not shown to remote sessions.
@@ -512,14 +503,26 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
 
       <!-- Guidance and the documentation link stay in the section rather than
            moving into the dialog: they are exactly what a remote session needs,
-           and that session never gets a dialog to open. -->
-      <p class="libraries-note">
-        <a
-          :href="LIBRARIES_DOCUMENTATION_URL"
-          target="_blank"
-          rel="noopener noreferrer"
-        >Open the PixlStash command-line documentation</a>.
-      </p>
+           and that session never gets a dialog to open. The button shares the
+           link's line, so the pane keeps its height for the two lists. -->
+      <div class="libraries-cli-row">
+        <AppButton
+          v-if="cliCommands.length"
+          size="sm"
+          variant="secondary"
+          icon-left="console"
+          @click="commandsOpen = true"
+        >
+          Show the commands
+        </AppButton>
+        <p class="libraries-note">
+          <a
+            :href="LIBRARIES_DOCUMENTATION_URL"
+            target="_blank"
+            rel="noopener noreferrer"
+          >Open the PixlStash command-line documentation</a>.
+        </p>
+      </div>
 
       <p class="libraries-note">
         Run it on the machine hosting PixlStash, signed in as the user that owns
@@ -642,10 +645,26 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
   padding: var(--space-3) 0;
 }
 
+/* About three libraries, then the list scrolls in its own box so the pane,
+   which it shares with the import folders, does not. */
+.libraries-cli-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-top: var(--space-2);
+}
+
+.libraries-cli-row .libraries-note {
+  margin: 0;
+}
+
 .libraries-list {
   list-style: none;
   margin: 0;
   padding: 0;
+  max-height: calc(3 * var(--space-8));
+  overflow-y: auto;
 }
 
 .library-row {

@@ -263,9 +263,9 @@ async function clearGuestSession() {
 
         <div class="pair-title">Chip size</div>
         <div class="pair-body">
+          <!-- Not `full`: equal thirds of a half-width column cut
+               "Comfortable" short, so each option takes its own label's width. -->
           <Segmented
-            class="pair-seg"
-            full
             :model-value="tagClipboard.chipSize"
             :options="CHIP_SIZE_OPTIONS"
             aria-label="Chip size"

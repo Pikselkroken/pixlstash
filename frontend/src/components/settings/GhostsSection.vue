@@ -3,11 +3,7 @@
        and prompt of a destroyed picture, or the name of a model not on the
        shelf. Rendered only once the server has answered; a hubless server
        answers with null counts, so it gets the setting and no purges. -->
-  <SettingsSection
-    v-if="ghosts"
-    title="Ghosts"
-    desc="Leave a trace of pictures you deleted. Workflows, recipes and thumbnails. Allows recreation of deleted pictures at a fraction of the size."
-  >
+  <SettingsSection v-if="ghosts" title="Ghosts">
     <SettingsRow
       label="Keep picture ghosts"
       :sub="RETENTION_SUBS[ghosts.workflow_ghost_retention] || ''"
@@ -26,7 +22,7 @@
       <SettingsRow
         v-if="ghosts.picture_ghosts != null"
         label="Picture ghosts"
-        sub="Thumbnails and prompts kept for pictures deleted from this library."
+        sub="Thumbnails and prompts of deleted pictures."
       >
         <AppButton
           variant="secondary"
@@ -39,7 +35,7 @@
       <SettingsRow
         v-if="ghosts.model_ghosts != null"
         label="Model ghosts"
-        sub="Names and file hashes of models that are not on your shelf, including models from imported pictures you never added."
+        sub="Names and hashes of models not on your shelf."
       >
         <AppButton
           variant="secondary"

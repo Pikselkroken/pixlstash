@@ -560,9 +560,10 @@ watch(
         </p>
       </div>
 
-      <!-- How this install trains. The same for every local install. -->
-      <div class="ait-how">
-        <FieldLabel>How this install trains</FieldLabel>
+      <!-- How this install trains. The same for every local install, so it is
+           read once: a closed disclosure, which keeps the pane from scrolling. -->
+      <details class="ait-how">
+        <summary class="ait-how__summary">How this install trains</summary>
         <div class="ait-how__item">
           <v-icon size="16" class="ait-how__icon">mdi-play-circle-outline</v-icon>
           <div>
@@ -581,7 +582,7 @@ watch(
             through AI-toolkit's web UI instead, and runs are queued there.
           </p>
         </div>
-      </div>
+      </details>
     </div>
 
     <FolderBrowser
@@ -724,9 +725,20 @@ watch(
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
-  padding: var(--space-4);
+  padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-md);
   background: rgb(var(--v-theme-panel));
+}
+
+/* Closed, the hidden content box would still take the flex gap. */
+.ait-how:not([open]) {
+  gap: 0;
+}
+
+.ait-how__summary {
+  cursor: pointer;
+  font-size: var(--text-sm);
+  color: rgb(var(--v-theme-on-surface));
 }
 
 .ait-how__item {

@@ -4201,7 +4201,7 @@ build instead of being dropped silently by the next re-key.
 **A row carries what the ghosts filter needs** (#1309): `ghosts` (the active
 library's picture ghosts, joined to a topology through the ghost's
 `structural_hash`, so a ghost whose recipe was never filed is counted in the
-Privacy pane and not here), `model_ghosts` (names in the row's `assets` for
+Recovery pane and not here), `model_ghosts` (names in the row's `assets` for
 models not on the shelf) and `forgotten_models`. The last is read off the stored
 documents: every asset there is an `asset_reference`, so a reference with no
 `workflow_recipe_asset` row behind it is a forgotten name

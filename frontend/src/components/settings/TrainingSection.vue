@@ -172,7 +172,9 @@ async function deleteJob(job) {
 
     <!-- ── (b) Jobs ──────────────────────────────────────────────────────── -->
     <section class="training-block" aria-labelledby="training-jobs-heading">
-      <h3 id="training-jobs-heading" class="training-block-heading">Jobs</h3>
+      <h3 id="training-jobs-heading" class="training-block-heading section-label">
+        Jobs
+      </h3>
 
       <div v-if="store.jobsError" class="training-inline-error">
         {{ store.jobsError }}
@@ -281,9 +283,9 @@ async function deleteJob(job) {
   margin-bottom: var(--space-5);
 }
 
+/* The global `.section-label` (the design system's SectionLabel) sets the
+   type; this only spaces it. */
 .training-block-heading {
-  font-size: var(--text-base);
-  font-weight: 600;
   margin: 0 0 var(--space-2);
 }
 

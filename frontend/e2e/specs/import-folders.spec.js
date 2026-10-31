@@ -44,7 +44,7 @@ test.describe('an import folder', () => {
 
     await page.goto('/')
     await settings.open()
-    await settings.openTab('Import folders')
+    await settings.openTab('Libraries & imports')
     await settings.card.getByRole('button', { name: 'Add import folder…' }).click()
     const dialog = page.getByRole('dialog', { name: 'Add import folder', exact: true })
     await dialog.getByLabel('Folder', { exact: true }).fill(folder)

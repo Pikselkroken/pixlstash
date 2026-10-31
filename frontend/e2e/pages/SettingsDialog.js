@@ -7,7 +7,7 @@ import { expect } from '@playwright/test'
  * .settings-nav-item) instead of Vuetify tabs, a header "Log out" AppButton,
  * and a table-based token list whose create form now lives in its own
  * AppDialog reached via the "New token" button. Selectors verified in source:
- * .settings-nav-item ("Account Settings", "Snapshots"), the "Token description"
+ * .settings-nav-item ("Account & tokens", "Recovery"), the "Token description"
  * field, the "New token"/"Create token" buttons, .account-token-table rows, and
  * .snapshots-section / .snapshot-row.
  */
@@ -19,16 +19,16 @@ export class SettingsDialog {
     this.card = page.locator('.app-dialog:has(.settings-nav)')
     this.logoutButton = page.getByRole('button', { name: 'Log out' })
     this.accountTab = page.locator('.settings-nav-item', {
-      hasText: 'Account Settings',
+      hasText: 'Account & tokens',
     })
     // Token creation is a two-step flow now: "New token" opens a create dialog.
     this.newTokenButton = page.getByRole('button', { name: 'New token' })
     this.tokenDescription = page.getByLabel('Token description')
     this.createTokenButton = page.getByRole('button', { name: 'Create token' })
     this.tokenRows = page.locator('.account-token-table tbody tr')
-    // Snapshots tab (SnapshotsSection.vue).
+    // Snapshots live in the Recovery pane (SnapshotsSection.vue).
     this.snapshotsTab = page.locator('.settings-nav-item', {
-      hasText: 'Snapshots',
+      hasText: 'Recovery',
     })
     this.snapshotsSection = page.locator('.snapshots-section')
     this.snapshotRows = page.locator('.snapshot-row')
@@ -56,7 +56,7 @@ export class SettingsDialog {
   }
 
   /**
-   * Open any pane by its rail label ("Compute", "Backend", "Privacy", …).
+   * Open any pane by its rail label ("GPU & compute", "Server", …).
    * The rail is plain buttons in a <nav>, not a tablist, so getByRole('tab')
    * matches nothing — go through .settings-nav-item, scoped to this dialog.
    *

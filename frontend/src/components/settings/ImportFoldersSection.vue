@@ -1,7 +1,7 @@
 <template>
   <div class="ifs">
     <div class="ifs-head">
-      <h3 class="ifs-title">Import folders</h3>
+      <h3 class="ifs-title section-label">Import folders</h3>
       <AppButton
         class="ifs-add"
         size="sm"
@@ -316,10 +316,14 @@ async function removeFolder(folder) {
 </script>
 
 <style scoped>
+/* Second section of the Libraries & imports pane: the same divider and
+   rhythm as a SettingsSection. */
 .ifs {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: var(--space-2);
+  border-top: 1px solid rgb(var(--v-theme-divider));
+  padding-top: var(--space-3);
 }
 
 .ifs-head {
@@ -328,10 +332,9 @@ async function removeFolder(folder) {
   gap: var(--space-3);
 }
 
+/* The global `.section-label` sets the type; this only resets the h3. */
 .ifs-title {
   margin: 0;
-  font-size: var(--text-md);
-  font-weight: var(--weight-semibold);
 }
 
 .ifs-add {
@@ -341,7 +344,8 @@ async function removeFolder(folder) {
 .ifs-lead,
 .ifs-state {
   margin: 0;
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
   color: rgba(var(--v-theme-on-surface), 0.7);
 }
 
@@ -352,10 +356,14 @@ async function removeFolder(folder) {
   overflow: hidden;
 }
 
+/* Two rows, then the list scrolls in its own box so the pane, which it
+   shares with the libraries, does not. */
 .ifs-list {
   list-style: none;
   padding: 0;
   margin: 0;
+  max-height: calc(2 * var(--space-8));
+  overflow-y: auto;
 }
 
 /* Folder, then three facts in columns that line up down the table, then ⋮. */

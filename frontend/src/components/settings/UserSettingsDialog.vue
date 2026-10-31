@@ -331,17 +331,21 @@ watch(
         v-if="!isReadOnly"
         v-show="settingsTab === 'recovery'"
         id="settings-pane-recovery"
-        class="settings-pane"
+        class="settings-pane settings-pane--stack"
         role="region"
         aria-labelledby="settings-nav-recovery"
       >
         <div id="settings-anchor-scrapheap">
           <ScrapheapSection :open="dialogOpen" />
         </div>
-        <div id="settings-anchor-snapshots">
+        <div id="settings-anchor-snapshots" class="settings-pane__grow">
           <SnapshotsSection :open="dialogOpen" />
         </div>
-        <GhostsSection :open="dialogOpen && settingsTab === 'recovery'" />
+        <!-- A plain block around the section: SettingsRow's `height: 100%`
+             would otherwise resolve against a flex item and stretch. -->
+        <div>
+          <GhostsSection :open="dialogOpen && settingsTab === 'recovery'" />
+        </div>
       </div>
       <div
         v-if="!isReadOnly"
@@ -527,6 +531,22 @@ watch(
    have a full-height box to push that content against. */
 .settings-pane {
   height: 100%;
+}
+
+/* A pane of stacked sections where one of them (Recovery's snapshot list)
+   takes the height the others leave. */
+.settings-pane--stack {
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-pane--stack > * {
+  flex: none;
+}
+
+.settings-pane--stack > .settings-pane__grow {
+  flex: 1 1 0;
+  min-height: 0;
 }
 
 /* Vuetify's switch label defaults to 1rem / 0.6 opacity, which reads oversized
