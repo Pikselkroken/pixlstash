@@ -53,6 +53,7 @@ vi.mock("vuetify/components", async () => {
 
 import * as training from "../../api/training";
 import * as config from "../../api/config";
+import * as pictureSets from "../../api/pictureSets";
 import { useTrainingStore } from "../../stores/useTrainingStore";
 import TrainLoraDialog from "./TrainLoraDialog.vue";
 
@@ -539,6 +540,37 @@ describe("opened from the Models workspace (#2169)", () => {
     expect(wrapper.find('[data-testid="tld-lead"]').text()).toContain(
       "Character LoRA of Grandad",
     );
+  });
+
+  it("draws a glyph, never a broken image, for a set or face with no thumbnail", async () => {
+    pictureSets.listPictureSets.mockResolvedValueOnce([
+      { id: 9, name: "Pub nights", picture_count: 112 },
+      { id: 12, name: "Empty", picture_count: 0 },
+    ]);
+    const wrapper = mount(TrainLoraDialog, globalOpts);
+    useTrainingStore().openToPick();
+    await flushPromises();
+
+    const tile = (id) => wrapper.find(`[data-testid="tld-source-${id}"]`);
+    // An empty set has no thumbnail to ask for: the route answers 404.
+    expect(tile("set:12").find("img").exists()).toBe(false);
+    expect(tile("set:12").find(".tld-source__img--blank").exists()).toBe(true);
+    expect(tile("set:9").find("img").attributes("src")).toBe(
+      "/api/v1/picture_sets/9/thumbnail",
+    );
+    // A thumbnail that fails to load is swapped for the glyph.
+    await tile("character:4").find("img").trigger("error");
+    expect(tile("character:4").find("img").exists()).toBe(false);
+    expect(tile("character:4").find(".tld-source__img--blank").exists()).toBe(true);
+    expect(tile("set:9").find("img").exists()).toBe(true);
+
+    // Picked, the person's face leads the dialog, with the same fallback.
+    training.getTrainingDataset.mockResolvedValue(dataset());
+    await tile("character:4").trigger("click");
+    await flushPromises();
+    const lead = wrapper.find('[data-testid="tld-lead"]');
+    expect(lead.find("img").exists()).toBe(false);
+    expect(lead.find(".tld-source__img--blank").exists()).toBe(true);
   });
 
   it("lands on Training runs when Start is pressed from there", async () => {
