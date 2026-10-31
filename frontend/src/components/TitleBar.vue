@@ -10,7 +10,7 @@
 // region and draws min/maximize/close on non-mac platforms (macOS keeps its
 // native traffic lights). All desktop calls go through
 // `window.pixlstashDesktop?.…`, so they no-op in a browser.
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 import { useVersionCheck } from "../composables/useVersionCheck";
 import { MODEL_SHELF_ROUTES, WORKFLOW_ROUTES } from "../router/routeNames";
@@ -45,20 +45,55 @@ const modelShelfStore = useModelShelfStore();
 const userPrefsStore = useUserPrefsStore();
 
 // Every route outside the workflow library and the model shelf is Media: the
-// grid, a set, a person, the Scrapheap, Duplicates, Insights, Moves. The
-// paths are the ones these places already had, so a bookmark still lands. A
-// share session's credential lives in `?token=` and only boot reads it, so a
-// link without it would open a session that 401s on reload or in a new tab.
-const workspaces = computed(() => {
-  const token = route.query.token;
-  const at = (path) => (token ? { path, query: { token } } : path);
-  const current = WORKFLOW_ROUTES.includes(route.name)
+// grid, a set, a person, the Scrapheap, Duplicates, Insights, Moves.
+const currentWorkspace = computed(() =>
+  WORKFLOW_ROUTES.includes(route.name)
     ? "workflows"
     : MODEL_SHELF_ROUTES.includes(route.name)
       ? "models"
-      : "media";
+      : "media",
+);
+
+// Where Media and Models were left, so switching back lands on the sidebar
+// row you were on (Favourites in a project, a set, Duplicates, the shelf's
+// Runs) rather than on the workspace's front page. Overlays over the grid -
+// the lightbox with its one-close `?from=`, and a tag review - are not where
+// you were, and the shelf keeps only its
+// row: `?run=` opens one run. Workflows needs nothing, its places live in
+// its store.
+const OVERLAY_QUERY = [
+  "overlay",
+  "from",
+  "review",
+  "review_project",
+  "review_set",
+  "review_character",
+];
+const leftAt = ref({});
+watch(
+  () => route.fullPath,
+  () => {
+    if (currentWorkspace.value === "media") {
+      const query = { ...route.query };
+      for (const key of OVERLAY_QUERY) delete query[key];
+      leftAt.value.media = { path: route.path, query };
+    } else if (currentWorkspace.value === "models") {
+      leftAt.value.models = route.path;
+    }
+  },
+  { immediate: true },
+);
+
+// The front-page paths are the ones these places already had, so a bookmark
+// still lands. A share session's credential lives in `?token=` and only boot
+// reads it, so a link without it would open a session that 401s on reload or
+// in a new tab; a remembered Media route carries its own.
+const workspaces = computed(() => {
+  const token = route.query.token;
+  const at = (path) => (token ? { path, query: { token } } : path);
+  const current = currentWorkspace.value;
   return [
-    { id: "media", label: "Media", to: at("/") },
+    { id: "media", label: "Media", to: leftAt.value.media ?? at("/") },
     {
       id: "workflows",
       label: "Workflows",
@@ -73,7 +108,7 @@ const workspaces = computed(() => {
     {
       id: "models",
       label: "Models",
-      to: at("/models"),
+      to: at(leftAt.value.models ?? "/models"),
       locked: isReadOnly.value
         ? "The model shelf is only available in your own library"
         : "",

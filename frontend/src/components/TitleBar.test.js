@@ -242,6 +242,28 @@ describe("the workspace switch", () => {
     expect(router.currentRoute.value.path).toBe("/set/3");
   });
 
+  it.each([
+    ["/set/3", "Workflows", "/set/3"],
+    ["/scrapheap", "Models", "/scrapheap"],
+    // A lightbox open over the grid is not where you were.
+    ["/set/3?overlay=12&from=/workflows&review=board", "Workflows", "/set/3"],
+  ])("returns Media to %s after a visit to %s", async (start, away, back) => {
+    const wrapper = await mountBar(start);
+    await segment(wrapper, away).trigger("click");
+    await flushPromises();
+    expect(segment(wrapper, "Media").attributes("href")).toBe(back);
+    await segment(wrapper, "Media").trigger("click");
+    await flushPromises();
+    expect(router.currentRoute.value.fullPath).toBe(back);
+  });
+
+  it("returns Models to the row it was left on", async () => {
+    const wrapper = await mountBar("/models/runs?run=7");
+    await segment(wrapper, "Media").trigger("click");
+    await flushPromises();
+    expect(segment(wrapper, "Models").attributes("href")).toBe("/models/runs");
+  });
+
   it("changes nothing in the bar but the lit segment", async () => {
     // jsdom has no layout, so "moves no control by a pixel" is pinned as its
     // cause: no element, class or text in the strip depends on the workspace.
@@ -316,12 +338,12 @@ describe("a read-only session", () => {
       activeLibraryName: "",
     });
     expect(segment(wrapper, "Media").attributes("href")).toBe(
-      "/?token=example-share",
+      "/set/3?token=example-share",
     );
     isReadOnly.value = false;
     const owner = await mountBar("/set/3?token=example-share");
     expect(segments(owner).map((el) => el.attributes("href"))).toEqual([
-      "/?token=example-share",
+      "/set/3?token=example-share",
       "/workflows?token=example-share",
       "/models?token=example-share",
     ]);
