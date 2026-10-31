@@ -1,12 +1,12 @@
 """Import folder CRUD API for automatic watch-folder imports."""
 
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Body, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, field_validator
-from sqlalchemy import Integer, cast, func, update
+from pydantic import BaseModel, ConfigDict
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
@@ -50,8 +50,6 @@ class ImportFolderResponse(BaseModel):
     delete_after_import: bool
     last_checked: Optional[float]
     picture_count: int = 0
-    # How many of its pictures are still in the Inbox.
-    unseen_count: int = 0
     # When the newest picture it brought in arrived, or None before the first.
     last_imported_at: Optional[datetime] = None
     # The folder is not on disk (unplugged drive, renamed, deleted).
@@ -60,54 +58,6 @@ class ImportFolderResponse(BaseModel):
 
 class ImportFoldersListResponse(BaseModel):
     folders: list[ImportFolderResponse]
-
-
-class InboxBatch(BaseModel):
-    """One arrival: unseen pictures from one folder with no hour-long gap."""
-
-    import_source_folder: str
-    label: str
-    count: int
-    first_imported_at: datetime
-    last_imported_at: datetime
-
-
-class InboxResponse(BaseModel):
-    total: int
-    folder_count: int
-    batches: list[InboxBatch]
-
-
-class InboxSeenRequest(BaseModel):
-    """What to take out of the Inbox; at least one field must be given.
-
-    ``all`` empties it, and is refused beside any other field. Otherwise the
-    request names pictures (a non-empty list), or a folder, optionally narrowed
-    to one batch by its ``since``/``until`` arrival times.
-    """
-
-    all: bool = False
-    picture_ids: Optional[list[int]] = None
-    import_source_folder: Optional[str] = None
-    since: Optional[datetime] = None
-    until: Optional[datetime] = None
-
-    @field_validator("since", "until")
-    @classmethod
-    def _read_naive_as_utc(cls, value: Optional[datetime]) -> Optional[datetime]:
-        # `imported_at` is stored in UTC and refuses a naive bind, so a time
-        # without an offset is read as UTC, as the server writes them.
-        if value is not None and value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc)
-        return value
-
-
-class InboxSeenResponse(BaseModel):
-    marked: int
-
-
-# A gap longer than this between two arrivals from one folder starts a batch.
-INBOX_BATCH_GAP = timedelta(hours=1)
 
 
 class ImportFolderDeleteResponse(BaseModel):
@@ -146,7 +96,6 @@ def create_router(server) -> APIRouter:
     def _to_response(
         folder: ImportFolder,
         picture_count: int = 0,
-        unseen_count: int = 0,
         last_imported_at: Optional[datetime] = None,
     ) -> ImportFolderResponse:
         return ImportFolderResponse(
@@ -157,7 +106,6 @@ def create_router(server) -> APIRouter:
             delete_after_import=folder.delete_after_import,
             last_checked=folder.last_checked,
             picture_count=picture_count,
-            unseen_count=unseen_count,
             last_imported_at=last_imported_at,
             missing=not os.path.isdir(folder.folder),
         )
@@ -190,7 +138,6 @@ def create_router(server) -> APIRouter:
                 select(
                     Picture.import_source_folder,
                     func.count(Picture.id),
-                    func.sum(cast(Picture.unseen, Integer)),
                     func.max(Picture.imported_at),
                 )
                 .where(
@@ -200,8 +147,7 @@ def create_router(server) -> APIRouter:
                 .group_by(Picture.import_source_folder)
             ).all()
             stats_by_folder = {
-                str(path): (int(count), int(unseen or 0), latest)
-                for path, count, unseen, latest in count_rows
+                str(path): (int(count), latest) for path, count, latest in count_rows
             }
             return folders, stats_by_folder
 
@@ -211,112 +157,15 @@ def create_router(server) -> APIRouter:
         )
         responses = []
         for folder in folders:
-            count, unseen, latest = stats_by_folder.get(folder.folder, (0, 0, None))
+            count, latest = stats_by_folder.get(folder.folder, (0, None))
             responses.append(
                 _to_response(
                     folder,
                     picture_count=count,
-                    unseen_count=unseen,
                     last_imported_at=latest,
                 )
             )
         return ImportFoldersListResponse(folders=responses)
-
-    @router.get(
-        "/import-folders/inbox",
-        summary="What is in the Inbox",
-        description=(
-            "Pictures import folders brought in that the owner has not looked "
-            "at yet, grouped by folder and then by batch: a gap of more than an "
-            "hour between two arrivals starts a new batch. Newest batch first."
-        ),
-        response_model=InboxResponse,
-        tags=["folders"],
-    )
-    def get_inbox(request: Request):
-        server.auth.require_user_id(request)
-
-        def fetch(session: Session):
-            rows = session.exec(
-                select(Picture.import_source_folder, Picture.imported_at)
-                .where(
-                    Picture.unseen.is_(True),
-                    Picture.deleted.is_(False),
-                    Picture.import_source_folder.is_not(None),
-                    Picture.imported_at.is_not(None),
-                )
-                .order_by(Picture.import_source_folder, Picture.imported_at)
-            ).all()
-            labels = {
-                folder.folder: folder.label
-                for folder in session.exec(select(ImportFolder)).all()
-            }
-            return rows, labels
-
-        rows, labels = server.vault.db.run_task(fetch, priority=DBPriority.IMMEDIATE)
-        return InboxResponse(
-            total=len(rows),
-            folder_count=len({folder for folder, _ in rows}),
-            batches=_group_into_batches(rows, labels),
-        )
-
-    @router.post(
-        "/import-folders/inbox/seen",
-        summary="Take pictures out of the Inbox",
-        description=(
-            "Marks pictures seen: all of them, the ones named, or one folder's, "
-            "optionally only one batch of it. They stay in the library."
-        ),
-        response_model=InboxSeenResponse,
-        tags=["folders"],
-    )
-    def mark_inbox_seen(request: Request, payload: InboxSeenRequest = Body(...)):
-        conditions = [Picture.unseen.is_(True)]
-        narrowed = (
-            payload.picture_ids is not None
-            or payload.import_source_folder
-            or payload.since is not None
-            or payload.until is not None
-        )
-        # Over-broad by mistake must fail rather than clear the whole Inbox:
-        # `all` with a narrowing field, or an id list that came out empty.
-        if payload.all and narrowed:
-            raise HTTPException(
-                status_code=400,
-                detail="all cannot be combined with picture_ids, "
-                "import_source_folder, since or until.",
-            )
-        if payload.picture_ids == []:
-            raise HTTPException(status_code=400, detail="picture_ids is empty.")
-        if not payload.all:
-            if payload.picture_ids is None and not payload.import_source_folder:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Name pictures or a folder, or set all.",
-                )
-            if payload.picture_ids is not None:
-                conditions.append(Picture.id.in_(payload.picture_ids))
-            if payload.import_source_folder:
-                conditions.append(
-                    Picture.import_source_folder == payload.import_source_folder
-                )
-            if payload.since is not None:
-                conditions.append(Picture.imported_at >= payload.since)
-            if payload.until is not None:
-                conditions.append(Picture.imported_at <= payload.until)
-
-        def mark(session: Session) -> int:
-            result = session.exec(
-                update(Picture).where(*conditions).values(unseen=False)
-            )
-            session.commit()
-            return int(result.rowcount or 0)
-
-        marked = server.vault.db.run_task(mark, priority=DBPriority.IMMEDIATE)
-        if marked:
-            logger.info("Inbox: marked %d picture(s) seen", marked)
-            _notify_changed(request)
-        return InboxSeenResponse(marked=marked)
 
     @router.post(
         "/import-folders",
@@ -448,37 +297,3 @@ def create_router(server) -> APIRouter:
         return {"status": "success", "id": folder_id}
 
     return router
-
-
-def _group_into_batches(rows, labels: dict[str, str]) -> list[InboxBatch]:
-    """Split ``(folder, imported_at)`` rows, sorted by both, into batches.
-
-    Args:
-        rows: Unseen pictures' import folder and arrival time, ordered by
-            folder and then by time.
-        labels: Import-folder path to its label. A folder removed since keeps
-            its pictures' batches under the folder's own name.
-
-    Returns:
-        The batches, newest arrival first.
-    """
-    batches: list[InboxBatch] = []
-    current: Optional[InboxBatch] = None
-    for folder, imported_at in rows:
-        if (
-            current is None
-            or current.import_source_folder != folder
-            or imported_at - current.last_imported_at > INBOX_BATCH_GAP
-        ):
-            current = InboxBatch(
-                import_source_folder=folder,
-                label=labels.get(folder) or os.path.basename(folder) or folder,
-                count=0,
-                first_imported_at=imported_at,
-                last_imported_at=imported_at,
-            )
-            batches.append(current)
-        current.count += 1
-        current.last_imported_at = imported_at
-    batches.sort(key=lambda batch: batch.last_imported_at, reverse=True)
-    return batches

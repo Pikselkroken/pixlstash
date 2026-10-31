@@ -924,11 +924,6 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         "GET",
         "/api/v1/import-folders",
     ): _LIST_AWARE,  # self-filters to empty for scoped tokens
-    # The Inbox: which of the owner's pictures are not looked at yet, and the
-    # owner marking them seen. Takes and returns no host path beyond the
-    # import-folder roots GET /import-folders already serves the owner.
-    ("GET", "/api/v1/import-folders/inbox"): RoutePolicy(_OWNER),
-    ("POST", "/api/v1/import-folders/inbox/seen"): RoutePolicy(_OWNER),
     ("POST", "/api/v1/import-folders"): RoutePolicy(
         _LOCAL,
         justification="§16.3 import-folder create; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3)",

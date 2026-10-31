@@ -60,6 +60,7 @@ import { useFolderMappingStore } from "./useFolderMappingStore";
 import { useModelMovesStore } from "./useModelMovesStore";
 import { useMovesStore } from "./useMovesStore";
 import { useImportFoldersStore } from "./useImportFoldersStore";
+import { useInboxStore } from "./useInboxStore";
 import { useWorkflowsStore } from "./useWorkflowsStore";
 import { useWorkflowTemplatesStore } from "./useWorkflowTemplatesStore";
 import { useRunDialogStore } from "./useRunDialogStore";
@@ -424,20 +425,24 @@ const STORES = [
       s.loaded === false,
   },
   {
-    // Import-folder roots on the previous credential's host, and the Inbox
-    // count of its library.
+    // Import-folder roots on the previous credential's host.
     name: "useImportFoldersStore",
     use: useImportFoldersStore,
     seed: (s) => {
       s.folders = [{ id: 1, folder: "/home/me/renders" }];
-      s.inbox = { total: 3, folder_count: 1, batches: [{ count: 3 }] };
       s.loaded = true;
     },
-    isEmpty: (s) =>
-      s.folders.length === 0 &&
-      s.inbox.total === 0 &&
-      s.inbox.batches.length === 0 &&
-      s.loaded === false,
+    isEmpty: (s) => s.folders.length === 0 && s.loaded === false,
+  },
+  {
+    // The Inbox counts of the previous credential's library. The period is
+    // the reader's view setting and stays.
+    name: "useInboxStore",
+    use: useInboxStore,
+    seed: (s) => {
+      s.counts = { "14d": 56, "90d": 403 };
+    },
+    isEmpty: (s) => Object.keys(s.counts).length === 0,
   },
 ];
 

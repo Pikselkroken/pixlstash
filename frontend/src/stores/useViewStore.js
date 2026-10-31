@@ -291,18 +291,13 @@ export function parseRouteView(route) {
     return view;
   }
 
-  // The Inbox: everything import folders brought in that has not been looked
-  // at, or `?folder=` one folder's. A facet of the grid like `?path=`, so the
-  // route owns it and no sidebar payload is waited for.
+  // The Inbox: what was added within its period and has no person and no
+  // set (the period is `useInboxStore`'s). A facet of the grid like `?path=`,
+  // so the route owns it and no sidebar payload is waited for.
   if (name === "inbox") {
-    const folder = Array.isArray(query.folder) ? query.folder[0] : query.folder;
     view.characterLabel = "All Pictures";
     view.clearFolderFilter = false;
-    view.folderFilter = {
-      inbox: true,
-      importSourceFolder: folder ? String(folder) : null,
-      label: "Inbox",
-    };
+    view.folderFilter = { inbox: true, label: "Inbox" };
     return view;
   }
 
@@ -387,9 +382,7 @@ function applyView(view, selectionStore, projectStore, filterStore) {
     const next = view.folderFilter;
     if (
       current?.pathPrefix !== next.pathPrefix ||
-      Boolean(current?.inbox) !== Boolean(next.inbox) ||
-      (current?.importSourceFolder ?? null) !==
-        (next.importSourceFolder ?? null)
+      Boolean(current?.inbox) !== Boolean(next.inbox)
     ) {
       selectionStore.selectedFolderFilter = next;
     }

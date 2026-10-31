@@ -114,23 +114,13 @@ describe("a reference-folder click", () => {
     wrapper.unmount();
   });
 
-  it("keeps the Inbox on its own route, narrowed to a folder or not", () => {
+  it("keeps the Inbox on its own route", () => {
     // The Inbox facet is a grid view of its own: a selection change made while
-    // it shows (or Back onto it) keeps `/inbox`, with `?folder=` only when it
-    // is narrowed to one import folder.
+    // it shows (or Back onto it) keeps `/inbox`.
     const { wrapper, api } = mountNav();
 
-    api.handleSelectFolder({ inbox: true, importSourceFolder: null });
-    expect(nav.push).toHaveBeenLastCalledWith({ name: "inbox", query: {} });
-
-    api.handleSelectFolder({
-      inbox: true,
-      importSourceFolder: "/home/me/renders",
-    });
-    expect(nav.push).toHaveBeenLastCalledWith({
-      name: "inbox",
-      query: { folder: "/home/me/renders" },
-    });
+    api.handleSelectFolder({ inbox: true });
+    expect(nav.push).toHaveBeenLastCalledWith({ name: "inbox" });
 
     wrapper.unmount();
   });

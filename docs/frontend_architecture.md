@@ -235,7 +235,8 @@ All state consumed by more than one component lives in a Pinia store. The stores
 | `useSearchStore` | `useSearchStore.js` | `searchQuery`, `searchInput`, `searchHistory`, `isSearchActive`, `searchOverlayVisible` |
 | `useSnapshotsStore` | `useSnapshotsStore.js` | `snapshots`, `loading`, `activeJob`, `error`, `dailySnapshotsEnabled`; drives the shared `RestoreConfirmDialog` hoisted in `App.vue` (`restoreDialogOpen`, `restoreDialogSnapshotId`, `restoreDialogResources`). Owns snapshot list load / create / restore and the snapshot WebSocket event handlers (called from `App.vue`). |
 | `useMovesStore` | `useMovesStore.js` | v1.11 Phase 5, the reconciliation queue for moves made outside PixlStash. `unambiguous` / `ambiguous` / `offLayout`, `loading`, `error`, `loaded`; `hasPending`/`pendingCount` deliberately **exclude `offLayout`** — that bucket carries no decision (backend_architecture.md §24.5), so a sidebar badge counting it would nag about nothing. `fetchPending` never invents or corrects a verdict; it re-fetches `GET /moves/pending`, which the backend reclassifies live on every call. `applyAllUnambiguous`/`applyReview`/`dismissReviews`/`dismissAll` all re-fetch afterward rather than mutating the local lists — see §13.5. |
-| `useImportFoldersStore` | `useImportFoldersStore.js` | Import folders (`GET /import-folders`) and the Inbox summary (`GET /import-folders/inbox`): `folders`, `inbox`, `loaded`, `hasFolders`, `unseenCount`; `refresh`, a debounced `refreshSoon` the WebSocket calls on picture events, `markSeen` / `markBatchSeen`. See §13.6. |
+| `useImportFoldersStore` | `useImportFoldersStore.js` | Import folders (`GET /import-folders`): `folders`, `loaded`, `hasFolders`; `refresh`, and a debounced `refreshSoon` the WebSocket calls on picture events. |
+| `useInboxStore` | `useInboxStore.js` | The Inbox's `period` (remembered in `localStorage`) and `counts` per period (`/pictures/count?inbox=`), `count` for the sidebar row; `setPeriod`, `refreshCount`, `refreshAllCounts`, and the pure `inboxEmptyState`. See §13.6. |
 | `useReviewSessionsStore` | `useReviewSessionsStore.js` | Tag-review state: the tag-health board, the rail of open review sessions (each = one tag + frozen scope + one scan's results), and the per-session binary/pair card queues. Per-item decisions write through `/tag_suggestions`; session bookkeeping talks to `/reviews`, the board to `/tag_health`. Also owns the opt-in gamification — variable-ratio sticker awards with monotonic XP / level / streak counters; the sticker vocabulary is imported from `setAppearance.js` so sets and stickers never drift. |
 | `useUpscaleStore` | `useUpscaleStore.js` | The one upscale (#1868): `factor` and the model last used (`localStorage`, the owner's own preference), the shelf's upscalers (`loadModels`, `GET /adapters?file_kind=upscaler`), `model` (the remembered one while the shelf has it, else the first, else none: the Lanczos resize), `body()` for a request, and `pictureIds`, the Upscale… dialog's pictures (`openFor`, `close`). `UpscaleChoice.vue` draws the factor and model the same in the Run popup's added-upscale row and in `UpscaleDialog.vue`, mounted once in `App.vue` and opened from the selection pill and the lightbox toolbar; its runs are followed as a Run popup's (`useGridComfyuiRuns`). The dialog shows the pictures' thumbnails (five, or four and a "+n"), puts the size they go to ("→ W × H") in its subtitle when every picture is one size (the Run popup's row keeps `UpscaleChoice`'s inline target), and, while the shelf holds no RealESRGAN, offers `RealESRGAN_x4plus.safetensors` through `downloadModels`; each `downloadsLanded` bump re-reads the shelf, and the model the link fetched is picked once it lands. Session reset drops the shelf's rows and closes the dialog. |
 | `useNewBatchStore` | `useNewBatchStore.js` | The last run's pictures (#1868), read off `useTasksStore.finishedRuns`: the newest completed batch of a workflow's runs that ended after the page opened replaces `ids`, which the grid marks with a New chip. Session reset drops `ids`. |
@@ -303,7 +304,7 @@ It is split in two so the URL contract is testable on its own:
 
 - The store **never pushes a route**. Route *pushing* stays in `App.vue` (`pushAppRoute` / `pushRouteForCurrentSelection`), next to the nav handlers that own navigation decisions.
 - The folder route (`ref-folder`) deliberately does **not** clear `selectedFolderFilter`. The sidebar owns that payload and emits `select-folder` once the folder has loaded, so the route must not wipe what the sidebar just set.
-- `/inbox` (and `/inbox?folder=<import folder path>`) sets the folder facet itself: `{inbox: true, importSourceFolder, label: "Inbox"}`, which `useGridFetch` sends as `unseen=1` (plus `import_source_folder`). Nothing waits on a sidebar payload, so the route owns it the way `?path=` does.
+- `/inbox` sets the folder facet itself: `{inbox: true, label: "Inbox"}`, which `useGridFetch` sends as `inbox=<useInboxStore.period>`. Nothing waits on a sidebar payload, so the route owns it the way `?path=` does.
 
 **`?stack_state=` is the one filter the route owns**, and it is **additive only**: an absent or unrecognised value resolves to `null`, which means "leave `useFilterStore.stackStateFilter` alone". Resetting it on every route tick would silently clear a filter the user set in the filter panel the moment they navigated anywhere, which no other filter does. It exists because the Duplicates queue-clear screen routes to All Pictures with the stacked filter applied (`docs/design/keep-cover-only.md` → "The route from Duplicates"), and that destination has to be reloadable and Back-able rather than a state only one click can produce. It is read for every grid route, not just `/`. Adding a second route-owned filter is a design decision, not a copy-paste: the store is otherwise the writer of selection/project state only.
 
@@ -637,7 +638,7 @@ Responsibilities:
   - **Share tokens**: a project token keeps the switch, without the dropdown; Folders is rooted at its project. A token for a person, set or picture gets no switch and no tree, only its flat People / Sets list (`showsTree`).
 - **Docked rail**: Expand, a Find button (expands with the cursor in Find), the places, the queues, one boxed mode button, then `railNodes`: in Library the dropdown as one button (its flyout is *Limit view to*) and People and Sets buttons listing the scope's; in Folders one button per top-level folder with a one-level flyout (*All of …*, People, Sets). Flyouts are built from each node's `items()`.
 - *New project…* is in the dropdown, on a project's and the empty space's context menu, and in the import dialog's project picker.
-- **One list, its places rows 32px** (`--control-h-bar`): places (All media, Favourites, Scrapheap), a **Review** group (Inbox once an import folder exists, Duplicates, Tags to review, and Moves while its queue holds anything), then the Library / Folders switch and its tree, with the scoped project's **Project files** in its branch. Reference folders are not listed: adding a folder is *Add a library*, and a reference folder view is reached only by URL. Import folders are managed in Settings › Libraries & imports, and what they bring in is the Inbox (§13.6). A pending folder read for this library shows as a "Finish organising…" row below the list. Section heads are uppercase labels with a `+` at the right edge. The places rows wear a 20px mark. People and Sets' top-level rows take the thumbnail-size setting (S, 20 to 64px; `--sidebar-entity-thumb`), which #2159 had left sizing only the docked rail, and every tree size follows from it: a child set's mark is 0.6 S (`--tree-kid-thumb`, at least 16px), a row is its mark plus `--space-3`, a set glyph its mark less 4px. Under S = 40px their type shrinks with it too (`--sidebar-font-scale`, floored at 0.85, scoped to `.sidebar-section-scroll`); everything else in the sidebar (places rows, section heads, notices, the Import band) keeps the ramp's size, so All media reads the same as the Models and Workflows sidebars' All rows.
+- **One list, its places rows 32px** (`--control-h-bar`): places (All media, Favourites, Scrapheap), a **Review** group (Inbox, Duplicates, Tags to review, and Moves while its queue holds anything), then the Library / Folders switch and its tree, with the scoped project's **Project files** in its branch. Reference folders are not listed: adding a folder is *Add a library*, and a reference folder view is reached only by URL. Import folders are managed in Settings › Libraries & imports, and what they bring in is the Inbox (§13.6). A pending folder read for this library shows as a "Finish organising…" row below the list. Section heads are uppercase labels with a `+` at the right edge. The places rows wear a 20px mark. People and Sets' top-level rows take the thumbnail-size setting (S, 20 to 64px; `--sidebar-entity-thumb`), which #2159 had left sizing only the docked rail, and every tree size follows from it: a child set's mark is 0.6 S (`--tree-kid-thumb`, at least 16px), a row is its mark plus `--space-3`, a set glyph its mark less 4px. Under S = 40px their type shrinks with it too (`--sidebar-font-scale`, floored at 0.85, scoped to `.sidebar-section-scroll`); everything else in the sidebar (places rows, section heads, notices, the Import band) keeps the ramp's size, so All media reads the same as the Models and Workflows sidebars' All rows.
 - **People and Sets are trees (#2124).** `utils/setTree.js` splits the listed sets into roots, children of a set and children of a person (`buildSetTree`; a set whose parent is not listed, or is caught in a stored cycle, is a root, so none vanish) and flattens an open branch into rows with their level, elbow and the ancestor rails that run past them (`flattenBranch`). A parent row carries a chevron in the gutter its depth already leaves empty, and "N sets" under its name; ArrowRight and ArrowLeft open and close it. An open top-level parent and its rows become one `.sidebar-tree-group` on `--group-surface`, its rows taking the group's inset off through `--row-pad` (the row system's one hook for it) so marks, names and counts stay on the outer columns. A child row's spacer hangs its own caret slot, then its mark, just past the centre of its parent's mark (half that mark, `--space-1` and `--gutter-glyph`; under the parent's name was ruled too deep, and carets in the far-left gutter read as belonging to nothing) and draws the `--tree-guide` line from `treeGuideX` / `treeSpacerWidth`; real elements, not row pseudo-elements, carry the parent's stub, because `.not-droppable` owns `::after`. Opening the branch the selected set lives in is automatic (`ancestorsOf`), and which parents are open persists (`composables/useSetTreeExpansion.js`, localStorage `pixlstash:sidebar:tree`). Child rows are ordinary set rows: they select, drop, and open the set menu, which leads with **Train LoRA…** and **New set inside "…"…** and offers **Move out of "…"** on a child (disabled with its reason on a locked set). **New set inside** is disabled with its reason on a set already at the third level, the server's limit. An open group takes its 1px border back with a negative top margin, so opening a parent does not move it. The person menu gains **New set in "…"…** beside its **Train LoRA…**. The docked rail stays flat.
 - **Favourites** is All media with the `favourite=1` filter on (#2155), not a container: the two rows split All media's highlight on `filterStore.favouriteOnlyFilter`, and the filter chip still shows it. Its count is a `/pictures/count?favourite=1` in the current scope, refreshed when a heart changes (`useGridScoring.setFavourite` emits `refresh-sidebar`). Clicking Scrapheap drops the filter (`handleSelectCharacter`), since both are places; a person or set keeps it. The filter is not in the URL, so Back and forward neither restore nor drop it.
 - In a project's scope the People and Sets `+` open the add-or-remove menus for that project (`menuProjectId`: make a new one in the project, or tick existing ones in and out); elsewhere they create one.
@@ -8051,30 +8052,32 @@ and dismiss actually operate on.
 
 ### 13.6 The Inbox
 
-**What import folders bring in waits here until the owner has looked at it.**
-`/inbox` is the ordinary `ImageGrid` narrowed by the folder facet
-`{inbox: true}` (`unseen=1`), so opening, rating, tagging and filing work as on
-every other view; `InboxBar.vue` hangs over the tiles like the Scrapheap bar
-and reports its own height (`resize`) so the scroller starts below it. The
-sidebar row (Review › Inbox, `useImportFoldersStore.unseenCount`) exists only
-once an import folder does, and stays with a 0 when caught up. Read-only
-sessions are bounced off `/inbox` with the other owner-only destinations.
+**What was added lately and has no person and no set.** `/inbox` is the
+ordinary `ImageGrid` narrowed by the folder facet `{inbox: true}`, which
+`useGridFetch` (and `StatsSidebar`) send as `inbox=<period>`; the backend reads
+that as the unassigned view with a cutoff on `imported_at`
+(backend_architecture.md, `import_folders.py`). Sort, Filter and View work on
+top of it; the Filter menu's Imported from narrows it to one import folder.
+Read-only sessions are bounced off `/inbox` with the other owner-only
+destinations.
 
-- **The band.** "N new from K import folders", one row per batch (a folder's
-  arrivals with no gap over an hour, from `GET /import-folders/inbox`), each
-  with Mark seen (`{import_source_folder, since, until}`), Mark all seen, and an
-  *Import folders* status menu whose last row, *Manage import folders…*, opens
-  Settings › Libraries & imports. A batch's name narrows to that folder
-  (`/inbox?folder=`). After a Mark seen the grid is re-read (`marked`).
-- **Leaving it.** The backend clears `unseen` on any recorded edit that reviews
-  the picture (backend_architecture.md, `import_folders.py`). Opening a picture
-  in the lightbox is the frontend's half: `ImageGrid` posts its id to
-  `POST /import-folders/inbox/seen` while the Inbox holds anything (zero
-  requests when it is empty), and in the Inbox itself the grid is re-read when
-  the lightbox closes rather than under it. A tile rated in the grid stays until
-  the next read; the count moves at once.
-- **`useImportFoldersStore`** holds the folder list and the Inbox summary for
-  the sidebar row, the band, Settings, the Filter menu's Imported from and the
-  Workflows empty state. It re-reads, debounced, on every `pictures_changed` /
-  `picture_imported` event (`useUpdatesSocket`), and resets on a credential
-  change.
+- **The period** is `useInboxStore.period`, one of `INBOX_PERIODS` (last 24
+  hours, 7 days, 2 weeks (the default), 30 days, 3 months, any time), kept in
+  `localStorage` across visits and session resets. The toolbar shows it only in
+  the Inbox, as `Added: <period>` beside View: a dim-prefix `AppBarButton`
+  opening the shared `.ctx-menu`, one `menuitemradio` row per period with the
+  count it would hold, read as the menu opens (`refreshAllCounts`, one
+  `/pictures/count` per row).
+- **The sidebar row** (Review › Inbox) is there for every owner and shows the
+  chosen period's count (`useInboxStore.count`), read with the other sidebar
+  counts, on a period change, and (debounced, `refreshSoon`, re-reading every
+  count on show) on the `pictures_changed` / `picture_imported` /
+  `characters_changed` events that arrivals and filings send. Counts are stack leaders inside the
+  sidebar's project, like the tiles (`countQuery`).
+- **Leaving it.** Filing a picture in a set or under a person drops its tile
+  at once, as the Unassigned view does; an unfiled picture ages out of the
+  period. There is no Mark seen.
+- **Empty.** With no filter or search on, an empty Inbox names its period and the date it
+  reaches back to, and offers the narrowest wider period that holds anything
+  (`inboxEmptyState`), so a narrow period never hides an older pile.
+

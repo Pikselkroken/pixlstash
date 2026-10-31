@@ -2,8 +2,8 @@
 // disk (#2325).
 //
 // Import folders are added in Settings › Libraries & imports, and what they bring
-// in waits in the Inbox (/inbox; the old /import-folder/:id route redirects
-// there). The pickup is the planner's import-folder sweep, which polls, so
+// in is a recent picture with no person and no set, so it is in the Inbox
+// (/inbox; the old /import-folder/:id route redirects there). The pickup is the planner's import-folder sweep, which polls, so
 // nothing here waits on a filesystem watcher. The folder is a mkdtemp folder.
 
 import { existsSync, rmSync } from 'node:fs'
@@ -82,22 +82,33 @@ test.describe('an import folder', () => {
     // "Keep original": the file the owner dropped is still where they put it.
     expect(existsSync(file)).toBe(true)
 
-    // The Inbox lists the batch from this folder, and narrowed to the folder
-    // the grid holds exactly that picture.
+    // Just arrived and filed nowhere, it is in the Inbox for every period.
+    const inboxIds = async (period) =>
+      (
+        await (
+          await apiContext.get('/api/v1/pictures', {
+            params: { inbox: period, fields: 'grid' },
+          })
+        ).json()
+      ).map((p) => p.id)
+    expect(await inboxIds('24h')).toContain(pictureId)
+
+    // The Inbox's toolbar names its period, and its menu changes it.
     await page.goto('/inbox')
-    const batch = page.locator('.inbox-batch', { hasText: registered.label || folder })
-    await expect(batch).toContainText('1 new')
-    await expect(page.locator(`.image-card img[src*="/thumbnails/${pictureId}."]`)).toBeVisible()
-    await batch.locator('.inbox-batch__name').click()
-    await expect(page).toHaveURL(/\/inbox\?folder=/)
-    expect(new URL(page.url()).searchParams.get('folder')).toBe(folder)
-    await expect(page.locator('.image-card img[src*="/thumbnails/"]')).toHaveCount(1)
-    await expect(page.locator(`.image-card img[src*="/thumbnails/${pictureId}."]`)).toBeVisible()
+    const period = page.getByTestId('inbox-period')
+    await expect(period).toContainText('Last 2 weeks')
+    await period.click()
+    await expect(page.getByTestId('inbox-period-14d')).toHaveAttribute('aria-checked', 'true')
+    await page.getByTestId('inbox-period-24h').click()
+    await expect(period).toContainText('Last 24 hours')
+    // Remembered: the period survives a reload.
+    await page.reload()
+    await expect(page.getByTestId('inbox-period')).toContainText('Last 24 hours')
   })
 
   test('the old /import-folder/:id address lands on the Inbox', async ({ page }) => {
     await page.goto('/import-folder/1')
     await expect(page).toHaveURL(/\/inbox$/)
-    await expect(page.locator('.inbox-bar')).toBeVisible()
+    await expect(page.getByTestId('inbox-period')).toBeVisible()
   })
 })

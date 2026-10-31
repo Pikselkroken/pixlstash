@@ -227,6 +227,29 @@ describe("useUpdatesSocket: routing to the duplicate queue", () => {
   });
 });
 
+describe("useUpdatesSocket: the Inbox counts follow arrivals and filings", () => {
+  it("re-reads them on an import, a set change and a person change", async () => {
+    const { useInboxStore } = await import("../stores/useInboxStore");
+    const refreshSoon = vi.spyOn(useInboxStore(), "refreshSoon");
+    connect();
+    receive({ type: "picture_imported", picture_ids: [7] });
+    receive({ type: "pictures_changed", change_kind: "updated", picture_ids: [7] });
+    receive({ type: "characters_changed" });
+    expect(refreshSoon).toHaveBeenCalledTimes(3);
+    receive({ type: "tags_changed", picture_ids: [7] });
+    expect(refreshSoon).toHaveBeenCalledTimes(3);
+  });
+
+  it("stays out of a read-only session", async () => {
+    const { useInboxStore } = await import("../stores/useInboxStore");
+    const refreshSoon = vi.spyOn(useInboxStore(), "refreshSoon");
+    isReadOnly.value = true;
+    connect();
+    receive({ type: "picture_imported", picture_ids: [7] });
+    expect(refreshSoon).not.toHaveBeenCalled();
+  });
+});
+
 describe("useUpdatesSocket: connection lifecycle", () => {
   it("opens the socket on the configured backend origin", () => {
     connect();

@@ -1477,6 +1477,44 @@ def test_0133_adds_mouse_preferences_on_a_fresh_and_a_populated_vault():
         assert again.returncode == 0, again.stderr
 
 
+def test_0140_drops_picture_unseen_and_its_index_keeping_the_pictures():
+    """The column and its partial index go, a picture flagged unseen survives
+    the drop, and a re-run is a no-op."""
+    before = "0139_add_keep_workflow_on_export"
+
+    def unseen_parts(conn):
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(picture)")}
+        indexes = {row[1] for row in conn.execute("PRAGMA index_list(picture)")}
+        return "unseen" in cols, "ix_picture_unseen" in indexes
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        db_url = f"sqlite:///{db_path}"
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert unseen_parts(conn) == (False, False), "the baseline"
+
+        down = _run_alembic(["downgrade", before], db_url, _MIGRATIONS_DIR)
+        assert down.returncode == 0, down.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert unseen_parts(conn) == (True, True)
+            _insert_minimal_row(conn, "picture", file_path="a.png", unseen=1)
+            conn.commit()
+
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert unseen_parts(conn) == (False, False), "migration 0140"
+            assert conn.execute("SELECT file_path FROM picture").fetchall() == [
+                ("a.png",)
+            ]
+            conn.execute("UPDATE alembic_version SET version_num = ?", (before,))
+            conn.commit()
+        again = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert again.returncode == 0, again.stderr
+
+
 def test_0139_adds_keep_workflow_on_export_on_a_fresh_and_a_populated_vault():
     """The column arrives either way, an existing user reads NULL (strip), and
     a re-run is a no-op."""
