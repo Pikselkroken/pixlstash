@@ -1562,8 +1562,9 @@ def _resolve_small(hub, *, vram_mb=22_800, profile=None):
     )
 
 
-def _record_big_previews(hub, profile):
-    """Record *profile* as measured: training fits, previews do not."""
+def _record_big_previews(hub, profile, previews_mb=30000):
+    """Record *profile* as measured: training fits, previews (by default) do
+    not."""
     measurements.record(
         hub,
         _resolve_small(hub, profile=profile)["fingerprint"],
@@ -1572,7 +1573,7 @@ def _record_big_previews(hub, profile):
         device=None,
         phase_peaks={
             "training": {"vram_mb": 9000, "ram_mb": 12000},
-            "previews": {"vram_mb": 30000, "ram_mb": 12000},
+            "previews": {"vram_mb": previews_mb, "ram_mb": 12000},
         },
         seconds_per_update=1.0,
         setup_seconds=10.0,
@@ -1774,6 +1775,36 @@ def test_a_failed_check_of_the_next_profile_keeps_the_one_that_trains(
     assert (settled["profile"], settled["previews_deferred"]) == ("q8", True)
     # The stopped check, the run, then its previews from each checkpoint.
     assert watched()[:2] == [f"steps={training_service_module.PROBE_STEPS}", "steps=4"]
+
+
+def test_out_of_probes_a_measured_profile_further_on_still_counts(
+    hub, repo_dir, watched, monkeypatch
+):
+    """The probe budget bounds probes only: with one left after q8 runs out of
+    memory, q8_cached (unmeasured) is skipped and the measured q8_offload is
+    still taken."""
+    monkeypatch.setenv("FAKE_RUN_OOM_UNLESS_OFFLOAD", "1")
+    monkeypatch.setattr(training_service_module, "MAX_PROBES", 1)
+    _record_big_previews(hub, "q8_offload", previews_mb=9000)
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    resolution = _resolve_small(hub)
+    assert resolution["profile"] == "q8"
+    job = _enqueue_resolved(
+        service, resolution, _write_template(repo_dir, steps=4, save_every=2)
+    )
+
+    row = _run_to_end(hub, service, job)
+
+    assert row.status == "completed", row.error
+    assert json.loads(row.resolved_profile)["profile"] == "q8_offload"
+    # The one probe (q8, out of memory), then the run.
+    assert watched() == [f"steps={training_service_module.PROBE_STEPS}", "steps=4"]
 
 
 def test_a_loader_error_stops_the_search(hub, repo_dir, watched, monkeypatch):

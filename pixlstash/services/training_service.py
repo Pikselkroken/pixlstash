@@ -1173,7 +1173,8 @@ class TrainingService:
                 settled = self._reresolve(info, resolution, preset, lookup, name)
                 if settled["probe"]:
                     if probes == MAX_PROBES:
-                        break
+                        # Out of probes; a measured profile further on costs none.
+                        continue
                     probes += 1
                     self._note_phase(job_uuid, "checking")
                     outcome, reason = self._probe_once(
