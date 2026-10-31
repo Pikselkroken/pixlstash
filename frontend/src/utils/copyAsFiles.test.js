@@ -44,7 +44,10 @@ describe("copyPicturesAsFiles", () => {
       skipped: [],
     });
     expect(await copyPicturesAsFiles([1, 2])).toBe(2);
-    expect(makeShareCopies).toHaveBeenCalledWith([1, 2], {});
+    expect(makeShareCopies).toHaveBeenCalledWith([1, 2], {
+      link_originals: true,
+      file_names: "made",
+    });
     expect(copyFilesToClipboard).toHaveBeenCalledWith([
       "/home/me/a.png",
       "/home/me/b.png",
@@ -105,12 +108,14 @@ describe("copyPicturesAsFiles", () => {
     expect(n.error).toHaveBeenCalled();
   });
 
-  it("refuses more pictures than the server takes in one batch", async () => {
-    const n = notices();
-    const ids = Array.from({ length: 501 }, (_, i) => i + 1);
-    expect(await copyPicturesAsFiles(ids)).toBe(0);
-    expect(makeShareCopies).not.toHaveBeenCalled();
-    expect(n.error.mock.calls[0][0]).toContain("501 are selected");
+  it("hands over any number of pictures, as links to the originals", async () => {
+    makeShareCopies.mockResolvedValue({
+      files: [{ path: "/home/me/a.png" }],
+      skipped: [],
+    });
+    const ids = Array.from({ length: 5000 }, (_, i) => i + 1);
+    expect(await copyPicturesAsFiles(ids)).toBe(1);
+    expect(makeShareCopies).toHaveBeenCalledWith(ids, { link_originals: true, file_names: "made" });
   });
 
   it("reports the server's reason when staging is refused", async () => {

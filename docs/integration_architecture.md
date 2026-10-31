@@ -1715,13 +1715,18 @@ the route would refuse. Backend: `docs/backend_architecture.md`
 
 ### 2.5 The share-copies contract (#2417)
 
-Every desktop way of sharing (the Share dialog, copying as files, dragging out,
-sending to a folder) hands over **copies**, never the vault's files.
-`POST /pictures/share-copies` makes them:
+Every desktop way of handing pictures to another app goes through a staging
+batch made by `POST /pictures/share-copies`, never the vault's own paths.
+**Copying as files and dragging out hand over the originals** (owner ruling
+2026-10-31): `link_originals: true` hard-links each one into the batch under its
+share name, nothing is copied and nothing is stripped, at any selection size;
+stripping generation data is the job of an explicit export (the Share dialog,
+the Export panel). Without that flag the route writes stripped copies:
 
 ```
 {"picture_ids": [..], "keep_generation_data": false, "max_long_edge": null,
- "watermark": false, "file_names": "original" | "pixlstash"}
+ "watermark": false, "file_names": "original" | "pixlstash" | "made",
+ "link_originals": false}
 -> {"batch", "directory",
     "files": [{"picture_id", "path", "name", "size", "metadata", "resized", "watermarked"}],
     "skipped": [{"picture_id", "reason": "missing" | "unreadable" | "not_found"}]}
@@ -1743,12 +1748,13 @@ takes it from the renderer. A path that reaches main for a drag or the
 clipboard comes *through* the renderer, so the IPC handler that hands it to the
 OS must resolve it and check it is inside that root before using it
 (`requireShareCopyPaths` in `electron/src/fileClipboard.ts`, which follows
-symlinks and refuses anything that is not a regular file). Drag-out (#2420)
-is to use the same check. That keeps the `main.ts` rule: the renderer never supplies
+symlinks and refuses anything that is not a regular file); copy and drag-out
+both use it. That keeps the `main.ts` rule: the renderer never supplies
 a filesystem path main acts on unchecked.
 
 **Copy as files (#2419).** Ctrl/⌘+C on a grid selection in the desktop app
-(`useGridKeyboardNav` → `utils/copyAsFiles.js`) stages share copies, then
+(`useGridKeyboardNav` → `utils/copyAsFiles.js`) links the originals into a
+batch (`link_originals`), then
 hands their paths to `media:copyFiles` (app-window gated). There is no
 Electron API for a file list on the clipboard, and `clipboard.writeBuffer`
 keeps one custom format per call (each call replaces the clipboard), so main
@@ -1764,6 +1770,53 @@ So files and a bitmap cannot share the clipboard here. The grid copies files;
 the lightbox's Ctrl/⌘+C stays "Copy picture" (a PNG via `media:copyPng`) for
 apps that only take images. On Linux a GTK desktop's chat apps that read only
 `text/uri-list` get no files; offering both would need a native helper.
+
+**Drag-out (#2420).** In the desktop app a picture drag from the grid is an OS
+file drag of the selection's original files, so it lands in a file manager, a
+mail or a chat as files, the way a file manager's own drag does. It stages
+through the same `stageShareFiles` as copy-as-files (`utils/copyAsFiles.js`),
+so the names are the same: `file_names: "made"` names every file after when
+the picture was made, `PixlStash-2026-10-24-14.22.42.png`, with `-2`, `-3` only
+where two pictures share a second (owner ruling: sensible and unique, so a drop
+into an empty folder never asks to replace anything; an imported picture's
+original name is not used). Neither has a cap: the route links rather than
+copies, and reads the ids in chunks under SQLite's parameter limit. A hard link
+works only within one drive, so the links go **inside the library**, in
+`<image_root>/.pixlstash-share/<batch>/` (`share_links_root`): every walk of a
+picture tree skips dot-folders, so nothing there is read back as a picture.
+Failing that the link goes into the staging root, and only an original on a
+drive neither is on is copied (logged). Linking 981 pictures takes about 11 ms
+on an NVMe drive whatever their size; the receiving app does the copying, with
+its own progress, after the drop. Main cannot know every library's folder (its
+config names only the first), so it trusts a library link by its shape,
+`.../.pixlstash-share/<32-hex batch>/<name>`, after resolving symlinks
+(`requireShareCopyPaths`). A link is the original under a second name: the sweep removing the
+batch removes that name only, and the OS drag offers copy and link, never move.
+The paths go to `media:startShareDrag` (app-window gated,
+`requireShareCopyPaths`), which calls `webContents.startDrag({files})` with the
+tile's thumbnail as the icon. The files must exist before the OS drag begins,
+so the HTML5 `dragstart` is cancelled, the request is made with a busy cursor,
+and the drag starts once it answers, unless the button was let go meanwhile. A
+browser or a read-only session, or a remote backend, keeps the HTML5 drag.
+
+`startDrag` replaces the HTML5 drag and its JSON payload, so the in-app targets
+(sets, people, projects, stack reorder) read the payload through
+`readInternalDragPayload` and judge it with `isPictureDrag` /
+`isInternalImageDrag` (`utils/media.js`), which answer for a drag-out from
+`utils/shareDrag.js`. During dragover the files are hidden and the drag in
+flight is all there is; on drop every file must be one the drag handed out
+(matched by batch folder and name), so a stranger's file can never be filed as
+the dragged pictures. Electron's Linux and Windows `startDrag` run the OS drag
+in a nested loop and return when it ends, which is when the renderer forgets
+it. A `startDrag` that returns within 300 ms did not (macOS), so the drag ends
+at the first sign it is over: a pointer press or a move with no button held, a
+drop on the window, or 30 s. Until then a file dragged in from outside is
+refused on dragover, never filed as the dragged pictures: dragover sees only
+the in-flight drag, so this is the price of not being told. Over a spot no
+target claims, the window refuses the drag-out, so the browser never opens the
+file. The copies themselves never import: `extractSupportedImportFilesFromDataTransfer`
+returns nothing for a drop made only of them, and the project files panel,
+which reads `dataTransfer.files` itself, checks `isOwnShareCopyDrop`.
 
 **Only an export strips.** Copying as files (#2419) and dragging out (#2420)
 always hand over the generation data: stripping during a drag costs too much,

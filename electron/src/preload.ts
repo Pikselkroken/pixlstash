@@ -53,6 +53,10 @@ contextBridge.exposeInMainWorld('pixlstashDesktop', {
   // Share copies (POST /pictures/share-copies paths) as files; main refuses any
   // path outside its own staging root.
   copyFilesToClipboard: (paths: string[]) => ipcRenderer.invoke('media:copyFiles', paths),
+  // Drag share copies out of the window as files (#2420), the same paths and
+  // the same check as copyFilesToClipboard. `icon` is optional PNG bytes.
+  startShareDrag: (paths: string[], icon?: ArrayBuffer) =>
+    ipcRenderer.invoke('media:startShareDrag', { paths, icon }),
   // Where a dropped file actually lives. A `File` from a drop carries a name and
   // bytes but no path - a browser sandbox rule, and the reason dropping a model
   // file on the web app can only point at the Add file… menu. The shell can

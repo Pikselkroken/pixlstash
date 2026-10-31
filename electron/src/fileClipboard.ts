@@ -1,6 +1,23 @@
 import { realpath, stat } from 'node:fs/promises';
-import { isAbsolute, relative, sep } from 'node:path';
+import { basename, dirname, isAbsolute, relative, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
+
+/** The folder inside a library its originals are hard-linked into, for a drag or a copy. */
+export const LIBRARY_SHARE_DIRNAME = '.pixlstash-share';
+
+/**
+ * Whether `real` (already resolved) is a staged link inside a library:
+ * `<library>/.pixlstash-share/<32-hex batch>/<name>`. Main cannot know every
+ * library's folder (the config names only the first), so it knows the shape,
+ * which only the backend makes; a symlink planted there resolves elsewhere.
+ */
+function isLibraryShareLink(real: string): boolean {
+  const batch = dirname(real);
+  return (
+    /^[0-9a-f]{32}$/.test(basename(batch)) &&
+    basename(dirname(batch)) === LIBRARY_SHARE_DIRNAME
+  );
+}
 
 /**
  * Narrow renderer-supplied paths to share copies main itself knows about.
@@ -8,8 +25,9 @@ import { pathToFileURL } from 'node:url';
  * The paths come from `POST /pictures/share-copies` *through* the renderer,
  * which main never trusts with a filesystem path (integration_architecture.md
  * §2.5). Each one must resolve, symlinks followed, to a regular file inside
- * `root` (`shareCopiesRoot()`), so a page cannot put a vault file or anything
- * else on the clipboard by naming it.
+ * `root` (`shareCopiesRoot()`) or to a library's staged link
+ * (`isLibraryShareLink`), so a page cannot put any other file on the
+ * clipboard or into a drag by naming it.
  */
 export async function requireShareCopyPaths(value: unknown, root: string): Promise<string[]> {
   if (!Array.isArray(value) || value.length === 0) {
@@ -23,8 +41,9 @@ export async function requireShareCopyPaths(value: unknown, root: string): Promi
     }
     const real = await realpath(item);
     const rel = relative(realRoot, real);
-    if (!rel || rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) {
-      throw new Error('Only share copies can be put on the clipboard.');
+    const inRoot = !(!rel || rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel));
+    if (!inRoot && !isLibraryShareLink(real)) {
+      throw new Error('Only share copies can be put on the clipboard or dragged out.');
     }
     if (!(await stat(real)).isFile()) throw new Error('A share copy is not a file.');
     out.push(real);

@@ -1,6 +1,7 @@
 import { onMounted, onUnmounted } from "vue";
 import {
   extractSupportedImportFilesFromDataTransfer,
+  isFileDrag,
   isInternalImageDrag,
   isModelFile,
   isSupportedImportFile,
@@ -17,6 +18,11 @@ import { useNoticeStore } from "../stores/useNoticeStore";
 import { useReviewSessionsStore } from "../stores/useReviewSessionsStore";
 import { useSelectionStore } from "../stores/useSelectionStore";
 import { resolveImportTarget } from "../utils/importTarget.js";
+import {
+  isOutgoingDragActive,
+  isOwnShareCopyDrop,
+  outgoingDragIds,
+} from "../utils/shareDrag.js";
 import {
   modelDropTargetOf,
   resolveModelDropFolder,
@@ -257,6 +263,15 @@ export function useWindowFileImport({ sidebarRef }) {
   }
 
   function handleWindowDragOver(event) {
+    // A drag-out over the window is a file drag no target has claimed yet:
+    // refuse it here, so letting go over empty space does not hand the file to
+    // the browser to open. A target that takes it (a set, a stack) sets its own
+    // drop effect after this.
+    if (isOutgoingDragActive() && isFileDrag(event.dataTransfer)) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "none";
+      return;
+    }
     if (!isExternalFileDragEvent(event)) return;
     // The review overlay is a modal review surface; dropping files into it
     // must never start an import. Skip preventDefault so the drag is not shown as
@@ -266,7 +281,24 @@ export function useWindowFileImport({ sidebarRef }) {
   }
 
   async function handleWindowDrop(event) {
+    // The drag-out landed somewhere that does not take it: nothing to do, and
+    // the browser must not open the file.
+    if (outgoingDragIds(event.dataTransfer)) {
+      event.preventDefault();
+      return;
+    }
     if (!isExternalFileDragEvent(event)) return;
+    // Copies from an earlier drag-out dropped back (from a file manager window
+    // still showing the staging folder): they are of pictures already here. The
+    // import paths refuse them too (media.js); this says why.
+    if (isOwnShareCopyDrop(event.dataTransfer)) {
+      event.preventDefault();
+      noticeStore.info(
+        "Those are copies of pictures already in your library, so nothing was imported.",
+        { key: "share-copy-drop-back" },
+      );
+      return;
+    }
     // While the review overlay is open, swallow the drop without importing
     // (still preventDefault so the browser does not navigate to the dropped file).
     if (reviewSessionsStore.overlayOpen) {

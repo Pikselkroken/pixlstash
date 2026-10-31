@@ -42,6 +42,13 @@ from pixlstash.utils.watermark import apply_watermark
 logger = get_logger(__name__)
 
 SHARE_COPIES_DIRNAME = "share-copies"
+# Inside a library: where its originals are hard-linked under their share names
+# (``link_originals``). A link only works within one drive, and the library's
+# drive is the one its originals are on. Every walk of a picture tree skips
+# dot-folders (``is_hidden_entry``, the root watcher), so nothing here is ever
+# read back as a picture. Electron trusts a file by this shape:
+# ``.../.pixlstash-share/<batch>/<name>`` (``requireShareCopyPaths``).
+SHARE_LINKS_DIRNAME = ".pixlstash-share"
 
 # ponytail: swept at start-up and on each new batch, not on a timer, so an
 # idle app keeps its last batch until the next share or restart.
@@ -49,6 +56,9 @@ SHARE_COPY_MAX_AGE_SECONDS = 12 * 60 * 60
 
 FILE_NAMES_ORIGINAL = "original"
 FILE_NAMES_PIXLSTASH = "pixlstash"
+# ``PixlStash-2026-10-24-14.22.42.png``, ``-2`` on only where two share a
+# second: what a drag or a copy names every file (owner ruling, #2420).
+FILE_NAMES_MADE = "made"
 
 # What a copy says about its generation data.
 METADATA_REMOVED = "removed"
@@ -64,6 +74,11 @@ _REENCODE_EXT = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
 def share_copies_root(config_dir: str) -> str:
     """The staging root for a server whose config file lives in *config_dir*."""
     return os.path.join(config_dir, SHARE_COPIES_DIRNAME)
+
+
+def share_links_root(image_root: str) -> str:
+    """Where *image_root*'s originals are hard-linked for a drag or a copy."""
+    return os.path.join(image_root, SHARE_LINKS_DIRNAME)
 
 
 def sweep_share_copies(
@@ -105,6 +120,8 @@ def make_share_copies(
     max_long_edge: int | None = None,
     watermark_bytes: bytes | None = None,
     file_names: str = FILE_NAMES_ORIGINAL,
+    link_originals: bool = False,
+    link_root: str | None = None,
 ) -> dict:
     """Write one share-ready copy of each picture into a new batch under *root*.
 
@@ -119,8 +136,17 @@ def make_share_copies(
             enlarges.
         watermark_bytes: Composite this watermark onto each image.
         file_names: :data:`FILE_NAMES_ORIGINAL` (the imported file's name, or
-            for a picture without one when it was made) or
-            :data:`FILE_NAMES_PIXLSTASH` (the vault's own file name).
+            for a picture without one when it was made),
+            :data:`FILE_NAMES_PIXLSTASH` (the vault's own file name) or
+            :data:`FILE_NAMES_MADE` (always when it was made, see
+            :func:`_made_name`).
+        link_originals: Hand over the originals themselves, generation data and
+            all, as hard links under the share names: nothing is copied, so a
+            drag of a whole view starts at once (#2420). Overrides resizing,
+            watermarking and stripping. Each link goes into *link_root*'s batch
+            (the library's drive) or else *root*'s; an original on a drive
+            neither is on is copied, and that is logged.
+        link_root: :func:`share_links_root` of the library, for ``link_originals``.
 
     Returns:
         ``{"batch", "directory", "files", "skipped"}``. Each file entry carries
@@ -134,6 +160,9 @@ def make_share_copies(
     os.mkdir(directory, mode=0o700)
     claimed: dict = {}
     files, skipped = [], []
+    # Where a link may go, best first. The library's batch is made on first use.
+    link_dirs = [os.path.join(link_root, batch)] if link_root else []
+    link_dirs.append(directory)
     for pic in pictures:
         source = ImageUtils.resolve_picture_path(image_root, pic.get("file_path"))
         if not source or not os.path.isfile(source):
@@ -149,6 +178,7 @@ def make_share_copies(
                 max_long_edge=max_long_edge,
                 watermark_bytes=watermark_bytes,
                 file_names=file_names,
+                link_dirs=link_dirs if link_originals else None,
             )
         except Exception as exc:
             logger.warning(
@@ -181,7 +211,26 @@ def _made_at_stem(created_at) -> str | None:
     return created_at.astimezone().strftime("PixlStash %Y-%m-%d %H.%M.%S")
 
 
+def _made_name(pic: dict, ext: str, claimed: dict) -> str:
+    """``PixlStash-2026-10-24-14.22.42.png``, when the picture was made.
+
+    Local time, one name per file of a batch: a second picture from the same
+    second gets ``-2``, and only then. A picture with no time is named by its
+    id, which is just as unique.
+    """
+    made = pic.get("created_at")
+    if isinstance(made, datetime.datetime):
+        if made.tzinfo is None:
+            made = made.replace(tzinfo=datetime.timezone.utc)
+        stem = made.astimezone().strftime("PixlStash-%Y-%m-%d-%H.%M.%S")
+    else:
+        stem = f"PixlStash-{pic['id']}"
+    return f"{_unique_export_stem(stem, claimed, sep='-')}{ext}"
+
+
 def _copy_name(pic: dict, source: str, ext: str, file_names: str, claimed: dict):
+    if file_names == FILE_NAMES_MADE:
+        return _made_name(pic, ext, claimed)
     fallback = f"picture_{pic['id']}"
     if file_names == FILE_NAMES_ORIGINAL and pic.get("original_file_name"):
         stem = os.path.splitext(pic["original_file_name"])[0]
@@ -203,9 +252,16 @@ def _copy_one(
     max_long_edge,
     watermark_bytes,
     file_names,
+    link_dirs=None,
 ) -> dict:
     ext = os.path.splitext(source)[1].lower()
     entry = {"picture_id": pic["id"], "resized": False, "watermarked": False}
+
+    if link_dirs:
+        name = _copy_name(pic, source, ext, file_names, claimed)
+        return _finish(
+            entry, _link_or_copy(source, name, link_dirs), name, METADATA_KEPT
+        )
 
     if VideoUtils.is_video_file(source):
         # No container metadata writer here, so a video goes as it is.
@@ -243,6 +299,31 @@ def _copy_one(
     with open(os.path.join(directory, name), "wb") as fh:
         fh.write(data)
     return _finish(entry, directory, name, metadata)
+
+
+def _link_or_copy(source: str, name: str, link_dirs: list[str]) -> str:
+    """Hard-link *source* as *name* in the first of *link_dirs* that takes it.
+
+    A link is the original under a second name, so removing the batch later
+    removes only that name, and making one writes no data. A link only works
+    within one drive; an original on a drive none of *link_dirs* is on is
+    copied into the last of them, which is logged. Returns the directory used.
+    """
+    for directory in link_dirs:
+        os.makedirs(directory, mode=0o700, exist_ok=True)
+        try:
+            os.link(source, os.path.join(directory, name))
+            return directory
+        except OSError as exc:
+            logger.debug("Could not hard-link %s into %s: %s", source, directory, exc)
+    directory = link_dirs[-1]
+    logger.info(
+        "Could not hard-link %s into any share folder (%s); copying it instead",
+        source,
+        ", ".join(link_dirs),
+    )
+    shutil.copyfile(source, os.path.join(directory, name))
+    return directory
 
 
 def _finish(entry: dict, directory: str, name: str, metadata: str) -> dict:

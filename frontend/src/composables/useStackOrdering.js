@@ -18,7 +18,7 @@ import {
   getStackColorIndexFromId,
   shiftRangesForDelta,
 } from "../utils/utils.js";
-import { getPictureId } from "../utils/media.js";
+import { getPictureId, readInternalDragPayload } from "../utils/media.js";
 import {
   isLockedRefusal,
   lockedSetsSentence,
@@ -869,18 +869,10 @@ export function useStackOrdering(
   }
 
   function getDragImageIdFromEvent(event) {
-    const raw = event?.dataTransfer?.getData("application/json");
-    if (!raw) return null;
-    try {
-      const payload = JSON.parse(raw);
-      if (payload?.type === "image-ids") {
-        const ids = Array.isArray(payload.imageIds) ? payload.imageIds : [];
-        if (ids.length === 1) return String(ids[0]);
-      }
-    } catch {
-      return null;
-    }
-    return null;
+    const payload = readInternalDragPayload(event?.dataTransfer);
+    if (payload?.type !== "image-ids") return null;
+    const ids = Array.isArray(payload.imageIds) ? payload.imageIds : [];
+    return ids.length === 1 ? String(ids[0]) : null;
   }
 
   function buildStackReorderDragState(sourceId) {

@@ -61,6 +61,7 @@ import {
   isFileDrag,
   isInternalImageDrag,
   isPictureDrag,
+  readInternalDragPayload,
 } from "../../utils/media.js";
 import {
   characterCountUpdates,
@@ -3389,10 +3390,9 @@ function handleSetThumbnailError(setId) {
 
 async function handleDropOnSet(setId, event) {
   dragOverSet.value = null;
-  // If this is an internal grid drag (has application/json payload), skip the
-  // file-import path - browsers also populate dataTransfer.files for <img> drags.
-  const isInternalDrag =
-    event?.dataTransfer?.types?.includes("application/json");
+  // An internal grid drag skips the file-import path: browsers also populate
+  // dataTransfer.files for <img> drags, and a desktop drag-out IS a file drag.
+  const isInternalDrag = isInternalImageDrag(event?.dataTransfer);
   if (
     !isInternalDrag &&
     event?.dataTransfer?.files &&
@@ -3458,18 +3458,11 @@ function handleDragLeaveCharacter(event) {
 
 
 function readDraggedImageIds(event) {
-  try {
-    const data = JSON.parse(
-      event?.dataTransfer?.getData("application/json") || "{}",
-    );
-    // A face drag carries imageIds too (the pictures the faces were found in),
-    // so the payload kind, not the presence of imageIds, decides.
-    if (data.type !== "image-ids") return [];
-    return Array.isArray(data.imageIds) ? data.imageIds.filter(Boolean) : [];
-  } catch (e) {
-    console.error("Could not parse drag data:", e);
-    return [];
-  }
+  const data = readInternalDragPayload(event?.dataTransfer);
+  // A face drag carries imageIds too (the pictures the faces were found in),
+  // so the payload kind, not the presence of imageIds, decides.
+  if (data?.type !== "image-ids") return [];
+  return Array.isArray(data.imageIds) ? data.imageIds.filter(Boolean) : [];
 }
 
 // Marks the currently hovered row as one that will not take this payload, so
@@ -3515,10 +3508,9 @@ function leftDropRow(event) {
 
 async function onCharacterDrop(characterId, event) {
   dragOverCharacter.value = null;
-  // If this is an internal grid drag (has application/json payload), skip the
-  // file-import path - browsers also populate dataTransfer.files for <img> drags.
-  const isInternalDrag =
-    event?.dataTransfer?.types?.includes("application/json");
+  // An internal grid drag skips the file-import path: browsers also populate
+  // dataTransfer.files for <img> drags, and a desktop drag-out IS a file drag.
+  const isInternalDrag = isInternalImageDrag(event?.dataTransfer);
   if (
     !isInternalDrag &&
     event?.dataTransfer?.files &&
@@ -3541,8 +3533,8 @@ async function onCharacterDrop(characterId, event) {
   let imageIds = [];
   let dragType;
   try {
-    const rawDataStr = event.dataTransfer.getData("application/json");
-    const data = JSON.parse(rawDataStr);
+    const data = readInternalDragPayload(event.dataTransfer);
+    if (!data) throw new Error("The drag carried nothing to assign.");
     dragType = data.type || null;
     if (
       dragType === "face-bbox" &&

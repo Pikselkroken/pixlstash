@@ -20,10 +20,12 @@ from pixlstash.utils.library_roots import refuse_path_inside_a_library
 from pixlstash.utils.service.share_copies import (
     make_share_copies,
     share_copies_root,
+    share_links_root,
     sweep_share_copies,
 )
 from pixlstash.utils.watermark import get_watermark_bytes
 from pixlstash.utils.reference_folder_validator import validate_reference_folder_path
+from pixlstash.utils.sql_chunking import chunked
 
 
 logger = get_logger(__name__)
@@ -63,13 +65,16 @@ class ExportStatusResponse(BaseModel):
 
 
 class ShareCopiesRequest(BaseModel):
-    # A share is a handful of pictures; a whole library belongs to the export.
-    picture_ids: list[int] = Field(min_length=1, max_length=500)
+    # No cap: a drag or a copy of a whole view links the originals (#2420).
+    picture_ids: list[int] = Field(min_length=1)
     keep_generation_data: bool = False
     # The longer side of each image, at most; None keeps the original size.
     max_long_edge: Optional[int] = Field(default=None, ge=64, le=16384)
     watermark: bool = False
-    file_names: Literal["original", "pixlstash"] = "original"
+    file_names: Literal["original", "pixlstash", "made"] = "original"
+    # The originals themselves, hard-linked under the share names: a drag-out
+    # (#2420) starts at once, generation data included. Overrides the rest.
+    link_originals: bool = False
 
 
 class ShareCopyFile(BaseModel):
@@ -341,18 +346,30 @@ def register_routes(router, server):
         # library reads come straight back as pictures.
         refuse_path_inside_a_library(os.path.realpath(root), server, vault)
         sweep_share_copies(root)
+        # Links go inside the library, on its originals' drive, in a dot-folder
+        # no scan reads (share_copies.SHARE_LINKS_DIRNAME).
+        link_root = (
+            share_links_root(vault.image_root) if payload.link_originals else None
+        )
+        if link_root:
+            sweep_share_copies(link_root)
 
         ids = list(dict.fromkeys(payload.picture_ids))
 
         def fetch(session):
-            rows = session.exec(
-                select(
-                    Picture.id,
-                    Picture.file_path,
-                    Picture.original_file_name,
-                    Picture.created_at,
-                ).where(Picture.id.in_(ids))
-            ).all()
+            # Chunked: the id list has no cap, and SQLite's has one.
+            rows = [
+                row
+                for chunk in chunked(ids)
+                for row in session.exec(
+                    select(
+                        Picture.id,
+                        Picture.file_path,
+                        Picture.original_file_name,
+                        Picture.created_at,
+                    ).where(Picture.id.in_(chunk))
+                ).all()
+            ]
             return {
                 row[0]: {
                     "id": row[0],
@@ -378,6 +395,8 @@ def register_routes(router, server):
             max_long_edge=payload.max_long_edge,
             watermark_bytes=watermark_bytes,
             file_names=payload.file_names,
+            link_originals=payload.link_originals,
+            link_root=link_root,
         )
         result["skipped"] += [
             {"picture_id": i, "reason": "not_found"} for i in ids if i not in found

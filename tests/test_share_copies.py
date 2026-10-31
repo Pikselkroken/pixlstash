@@ -21,6 +21,7 @@ from pixlstash.utils.service.share_copies import (
     METADATA_UNCHANGED,
     make_share_copies,
     share_copies_root,
+    share_links_root,
     sweep_share_copies,
 )
 from pixlstash.utils.service.export_utils import ExportUtils
@@ -272,6 +273,95 @@ def test_keep_generation_data_copies_byte_for_byte(library):
             assert fh.read() == original
 
 
+def _link(library, **kwargs):
+    return _copy(
+        library,
+        link_originals=True,
+        link_root=share_links_root(library["image_root"]),
+        **kwargs,
+    )
+
+
+def test_link_originals_hands_over_the_originals_under_the_share_names(library):
+    # A drag-out (#2420): the vault file itself, named as Ctrl+C names it, linked
+    # inside the library so the link is on the original's own drive.
+    comfy, a1111 = _comfy_png(), _a1111_png()
+    library["add"](comfy, "aa11.png", "ComfyUI_00001_.png")
+    library["add"](a1111, "bb22.png", "ComfyUI_00001_.png")
+    plain = _copy(library)
+
+    result = _link(library)
+
+    assert [f["name"] for f in result["files"]] == [f["name"] for f in plain["files"]]
+    links = os.path.join(share_links_root(library["image_root"]), result["batch"])
+    for entry, stored in zip(result["files"], ("aa11.png", "bb22.png")):
+        original = os.path.join(library["image_root"], stored)
+        assert entry["metadata"] == METADATA_KEPT
+        assert os.path.dirname(entry["path"]) == links
+        assert os.path.samefile(entry["path"], original)
+    # Removing the batch removes the second name only.
+    sweep_share_copies(share_links_root(library["image_root"]), max_age_seconds=-1)
+    assert not os.path.exists(links)
+    with open(os.path.join(library["image_root"], "aa11.png"), "rb") as fh:
+        assert fh.read() == comfy
+
+
+def test_link_originals_falls_back_link_by_link_and_copies_only_last(
+    library, monkeypatch
+):
+    comfy = _comfy_png()
+    library["add"](comfy, "aa11.png", "ComfyUI_00001_.png")
+    original = os.path.join(library["image_root"], "aa11.png")
+    real_link = os.link
+    links_root = share_links_root(library["image_root"])
+
+    # The library's folder refuses (say, a mount inside it): the staging root
+    # still takes a link.
+    def no_link_in_library(source, target):
+        if target.startswith(links_root):
+            raise OSError(18, "Invalid cross-device link")
+        real_link(source, target)
+
+    monkeypatch.setattr(os, "link", no_link_in_library)
+    (entry,) = _link(library)["files"]
+    assert os.path.dirname(os.path.dirname(entry["path"])) == library["root"]
+    assert os.path.samefile(entry["path"], original)
+
+    # Nowhere takes a link (an original on a third drive): only then a copy.
+    def cross_device(source, target):
+        raise OSError(18, "Invalid cross-device link")
+
+    monkeypatch.setattr(os, "link", cross_device)
+    (entry,) = _link(library)["files"]
+    assert not os.path.samefile(entry["path"], original)
+    with open(entry["path"], "rb") as fh:
+        assert fh.read() == comfy
+
+
+def test_made_names_are_when_it_was_made_with_a_suffix_only_when_needed(library):
+    # Drag and Ctrl/Cmd+C (#2420): PixlStash-<date>-<time>[-n], whatever the
+    # picture's original name, so a drop never asks to replace anything.
+    made = datetime.datetime(2026, 10, 24, 14, 22, 42, tzinfo=datetime.timezone.utc)
+    stem = made.astimezone().strftime("PixlStash-%Y-%m-%d-%H.%M.%S")
+    library["add"](_comfy_png(), "a.png", "ComfyUI_00001_.png", made)
+    library["add"](_comfy_png(), "b.png", "ComfyUI_00001_.png", made)
+    library["add"](_a1111_jpeg(), "c.jpg", "1fea4e4c-a7a3-47b3-a909.jpg", made)
+    library["add"](_comfy_png(), "d.png", None, made + datetime.timedelta(seconds=1))
+    library["add"](_comfy_png(), "e.png", "x.png", None)
+
+    names = [f["name"] for f in _link(library, file_names="made")["files"]]
+
+    later = (made + datetime.timedelta(seconds=1)).astimezone()
+    assert names == [
+        f"{stem}.png",
+        f"{stem}-2.png",
+        f"{stem}-3.jpg",
+        later.strftime("PixlStash-%Y-%m-%d-%H.%M.%S") + ".png",
+        "PixlStash-5.png",
+    ]
+    assert len({n.casefold() for n in names}) == len(names)
+
+
 def test_names_collide_into_suffixes_and_can_be_pixlstash_names(library):
     library["add"](_a1111_png(), "aa11.png", "photo.png")
     library["add"](_a1111_png(), "bb22.png", "Photo.jpg")
@@ -481,6 +571,31 @@ def test_route_stages_stripped_copies_beside_the_server_config(env):
     ).json()["files"][0]
     with open(kept["path"], "rb") as fh:
         assert b"KSampler" in fh.read()
+
+    linked = client.post(
+        f"{API_PREFIX}/pictures/share-copies",
+        json={"picture_ids": [picture_id], "link_originals": True},
+    ).json()["files"][0]
+    assert linked["name"] == "ComfyUI_00042_.png"
+    assert linked["metadata"] == METADATA_KEPT
+    assert os.stat(linked["path"]).st_nlink >= 2
+    # Inside the library, on its originals' drive, in the folder no scan reads.
+    assert os.path.basename(os.path.dirname(os.path.dirname(linked["path"]))) == (
+        ".pixlstash-share"
+    )
+
+    # No cap. (The route also reads ids in chunks for SQLite builds with the
+    # 999-parameter limit; this machine's build is not one, so that is unproven here.)
+    many = client.post(
+        f"{API_PREFIX}/pictures/share-copies",
+        json={
+            "picture_ids": [picture_id, *range(10**6, 10**6 + 2500)],
+            "link_originals": True,
+        },
+    )
+    assert many.status_code == 200, many.text
+    assert [f["picture_id"] for f in many.json()["files"]] == [picture_id]
+    assert len(many.json()["skipped"]) == 2500
 
 
 def test_user_config_remembers_whether_an_export_keeps_the_workflow(env):
