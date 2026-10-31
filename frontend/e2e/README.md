@@ -77,7 +77,10 @@ The backend boots against the repo's `test-data/` fixture — a seeded vault
    row, which does not exist at launch, so a spec connects it with
    `PUT /training/ai-toolkit/config` and disconnects it after
    (`training-fixture.spec.js`). Datasets, runs, the job database and the
-   imported LoRA all land in the work dir;
+   imported LoRA all land in the work dir. Each checkpoint the stand-in writes
+   carries its own file name, so no two runs' LoRAs share a hash. A run made to
+   fail connects a second interpreter in the same `.venv`, a wrapper that sets
+   `FAKE_RUN_FAIL` (`training.spec.js`);
 9. names the fake ComfyUI as `e2e_comfyui_url`. With `enable_test_hooks` on,
    it replaces the `127.0.0.1:8188` an owner with no ComfyUI address of their
    own reaches, so no run, read or abort reaches a real ComfyUI on the machine;

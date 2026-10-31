@@ -193,7 +193,10 @@ def _write_safetensors(path: str) -> None:
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path, "wb") as handle:
         # A minimal, recognisable placeholder; the adapter only globs by name.
-        handle.write(b"FAKE_SAFETENSORS\x00")
+        # The file name makes each one unique, as real checkpoints are: the
+        # shelf keys models by hash, so identical bytes would make a second
+        # run's LoRA a copy of the first's.
+        handle.write(b"FAKE_SAFETENSORS\x00" + os.path.basename(path).encode())
 
 
 def main(argv: list[str]) -> int:
