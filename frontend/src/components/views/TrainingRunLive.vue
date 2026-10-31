@@ -6,12 +6,12 @@
          cannot move a teleport to a target it did not find at mount. -->
     <Teleport defer to="#shelf-run-bar" :disabled="!hasBar">
       <div class="trl-bar">
-        <AppBarButton
-          icon="arrow-left"
-          tooltip="All runs"
-          aria-label="All runs"
+        <ViewBackButton
+          label="Training runs"
+          tooltip="Back to all runs (Esc)"
           @click="emit('close')"
         />
+        <span class="trl-vsep" aria-hidden="true"></span>
         <span class="trl-name">{{ live?.name || "Training run" }}</span>
         <template v-if="live">
           <span class="trl-vsep" aria-hidden="true"></span>
@@ -378,11 +378,11 @@ import {
 } from "vue";
 import { VIcon } from "vuetify/components";
 
-import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
 import LoraLossChart from "../widgets/LoraLossChart.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import TrainingSampleDialog from "../widgets/TrainingSampleDialog.vue";
+import ViewBackButton from "../widgets/ViewBackButton.vue";
 import {
   cancelTrainingJob,
   getTrainingJobLive,
@@ -390,8 +390,10 @@ import {
 } from "../../api/training";
 import { runSampleUrl } from "../../api/modelImports";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useSidebarStore } from "../../stores/useSidebarStore";
 import { errorDetail } from "../../utils/apiError";
 import { copyText } from "../../utils/clipboard";
+import { isTypingTarget } from "../../utils/dom.js";
 import {
   isBusyJob,
   isQueuedBehindRun,
@@ -949,9 +951,38 @@ watch(
   },
 );
 
+const sidebarStore = useSidebarStore();
+
+/**
+ * Escape leaves the run, as the back button's keycap says, unless something
+ * in front of the page owns the key: a dialog or menu (the sample viewer is
+ * one), the lightbox, the review overlay, the auto-hide sidebar, a text
+ * field, the Models rail's own list.
+ *
+ * Capture phase, so this reads that state BEFORE the owners act on the key:
+ * the app's handler hides the sidebar on the same press and does not stop
+ * it, and it registered first, so in the bubble phase the sidebar would
+ * already read as hidden and the one press would also leave the run.
+ */
+function onKeydown(event) {
+  if (event.key !== "Escape" || event.defaultPrevented) return;
+  if (isTypingTarget(event.target)) return;
+  if (event.target?.closest?.(".mrail")) return;
+  if (sidebarStore.sidebarOverlay && sidebarStore.sidebarVisible) return;
+  if (
+    document.querySelector(
+      ".v-overlay--active:not(.v-tooltip), .lightbox, .rs-overlay",
+    )
+  ) {
+    return;
+  }
+  emit("close");
+}
+
 onMounted(() => {
   load().then(schedule);
   document.addEventListener("visibilitychange", onVisible);
+  window.addEventListener("keydown", onKeydown, true);
 });
 
 onBeforeUnmount(() => {
@@ -959,6 +990,7 @@ onBeforeUnmount(() => {
   generation += 1;
   clearTimeout(timer);
   document.removeEventListener("visibilitychange", onVisible);
+  window.removeEventListener("keydown", onKeydown, true);
 });
 </script>
 

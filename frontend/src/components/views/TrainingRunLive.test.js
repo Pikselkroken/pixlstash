@@ -35,6 +35,7 @@ vi.mock("../../api/modelImports", () => ({
 
 
 import TrainingRunLive from "./TrainingRunLive.vue";
+import { useSidebarStore } from "../../stores/useSidebarStore";
 
 const stubs = {
   "v-icon": true,
@@ -591,5 +592,46 @@ describe("TrainingRunLive", () => {
     await flushPromises();
     expect(wrapper.find("#shelf-run-bar .trl-status").exists()).toBe(true);
     expect(wrapper.find(".trl > .trl-bar").exists()).toBe(false);
+  });
+});
+
+describe("leaving the run with Escape, as the back button's keycap says", () => {
+  const press = (target = window) =>
+    target.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("closes the run", async () => {
+    const wrapper = await open(payload());
+    press();
+    expect(wrapper.emitted("close")).toHaveLength(1);
+  });
+
+  it("leaves the key to a dialog or menu in front of the page", async () => {
+    const wrapper = await open(payload());
+    const overlay = document.createElement("div");
+    overlay.className = "v-overlay v-overlay--active v-dialog";
+    document.body.appendChild(overlay);
+    press();
+    expect(wrapper.emitted("close")).toBeUndefined();
+  });
+
+  it("leaves the key to the auto-hide sidebar it dismisses", async () => {
+    const wrapper = await open(payload());
+    const sidebar = useSidebarStore();
+    sidebar.setSidebarPinned(false);
+    expect(sidebar.sidebarVisible && sidebar.sidebarOverlay).toBe(true);
+    press();
+    expect(wrapper.emitted("close")).toBeUndefined();
+  });
+
+  it("leaves the key to a text field", async () => {
+    const wrapper = await open(payload());
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    press(input);
+    expect(wrapper.emitted("close")).toBeUndefined();
   });
 });

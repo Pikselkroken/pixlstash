@@ -32,16 +32,12 @@
            the picture sits in the view, then the picture's own tools and the
            rail toggle in the grid's place. No rating here: it heads the rail. -->
       <header class="lightbox-topbar" role="toolbar" aria-label="Picture">
-        <AppBarButton
+        <ViewBackButton
           class="lightbox-back"
-          icon="chevron-left"
-          aria-keyshortcuts="Escape"
+          :label="viewLabel"
           tooltip="Back to the grid (Esc)"
           @click="emit('close')"
-        >
-          <span class="lightbox-back-label">{{ viewLabel }}</span>
-          <kbd class="lightbox-kbd" aria-hidden="true">Esc</kbd>
-        </AppBarButton>
+        />
         <span class="bar-separator" aria-hidden="true"></span>
         <AppBarButton
           icon="chevron-left"
@@ -293,7 +289,7 @@
             @click.stop="toggleFullscreen"
           >
             Exit full screen
-            <kbd class="lightbox-kbd" aria-hidden="true">Esc</kbd>
+            <kbd class="bar-btn-kbd" aria-hidden="true">Esc</kbd>
           </AppBarButton>
         </template>
       </header>
@@ -1196,6 +1192,7 @@ import RailPicture from "../panels/RailPicture.vue";
 import { isDescriptionSentinel } from "../../utils/descriptions";
 import { FAVOURITE_KEY } from "../../stores/useFavouritesStore";
 import Tooltip from "../widgets/Tooltip.vue";
+import ViewBackButton from "../widgets/ViewBackButton.vue";
 import {
   applyStackBackgroundAlpha,
   faceBoxColor,
