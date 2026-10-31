@@ -10,6 +10,9 @@ This reproduces, in miniature, exactly the on-disk side effects PixlStash's
   ``process[0].sqlite_db_path``: sets ``status='running'`` with step/info/speed
   as it advances, polls ``stop`` every step and exits cleanly
   (``status='stopped'``) when set, otherwise finishes ``status='completed'``.
+- Writes the job config to ``<save_root>/config.yaml``, as ai-toolkit's
+  ``save_training_config`` does: the shelf's import reads the base model and
+  trigger word from it. JSON, which is YAML too.
 - Writes ``<save_root>/loss_log.db`` in WAL mode with the real
   ``steps`` / ``metric_keys`` / ``metrics`` schema, one row per step, plus a
   decaying ``loss/loss`` metric.
@@ -222,6 +225,8 @@ def main(argv: list[str]) -> int:
 
     save_root = os.path.join(training_folder, name)
     os.makedirs(save_root, exist_ok=True)
+    with open(os.path.join(save_root, "config.yaml"), "w", encoding="utf-8") as fh:
+        json.dump(config, fh)
 
     job_id = os.environ.get("AITK_JOB_ID")
     step_delay = float(os.environ.get("FAKE_RUN_STEP_DELAY", "0.001"))

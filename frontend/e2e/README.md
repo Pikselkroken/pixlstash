@@ -78,7 +78,9 @@ The backend boots against the repo's `test-data/` fixture — a seeded vault
    `PUT /training/ai-toolkit/config` and disconnects it after
    (`training-fixture.spec.js`). Datasets, runs, the job database and the
    imported LoRA all land in the work dir. Each checkpoint the stand-in writes
-   carries its own file name, so no two runs' LoRAs share a hash. A run made to
+   carries its own file name, so no two runs' LoRAs share a hash, and the run
+   folder holds the job's `config.yaml`, as ai-toolkit's does, so the imported
+   LoRA records the recipe's base model. A run made to
    fail connects a second interpreter in the same `.venv`, a wrapper that sets
    `FAKE_RUN_FAIL` (`training.spec.js`);
 9. names the fake ComfyUI as `e2e_comfyui_url`. With `enable_test_hooks` on,
@@ -91,7 +93,8 @@ The backend boots against the repo's `test-data/` fixture — a seeded vault
 Playwright starts it beside the backend, on the backend's port + 200
 (`PIXLSTASH_E2E_COMFYUI_PORT` pins it; it refuses 8188), bound to 127.0.0.1.
 It answers what PixlStash calls: `system_stats`, `object_info` (the stock
-loaders and samplers with the seeded model folder's files, and the Picture
+loaders and samplers with the seeded model folder's files, the pack's Adapter
+Loader, which loads a shelf LoRA by its digest wherever it lies, and the Picture
 Saver), `extensions` (the ComfyUI-PixlStash scripts, so the pack reads as
 installed), `queue`, `interrupt`, `prompt`, `history` and `view`. A prompt
 "runs" as it is queued: each `SaveImage` makes one small random PNG with the

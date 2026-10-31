@@ -162,6 +162,23 @@ def _object_info() -> dict:
             [],
             output_node=True,
         ),
+        # The pack's LoRA loader, which loads a shelf file by its digest: how a
+        # run adds a LoRA this ComfyUI's folders do not hold, such as one just
+        # trained (round-trip.spec.js).
+        "PixlStashAdapterLoader": _node(
+            {
+                "model": ["MODEL"],
+                "adapter_kind": [["— Any —", "lora"]],
+                "base_model": [["(loading…)"]],
+                "adapter_sha256": ["STRING", {"default": ""}],
+            },
+            ["MODEL", "CLIP", "STRING"],
+            optional={
+                "clip": ["CLIP"],
+                "strength_model": strength,
+                "strength_clip": strength,
+            },
+        ),
         "PixlStashPictureSaver": _node(
             {
                 "images": ["IMAGE"],
