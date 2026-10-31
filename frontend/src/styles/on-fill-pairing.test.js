@@ -65,3 +65,48 @@ describe("on-<x> pairing", () => {
     ).toEqual([]);
   });
 });
+
+// `on-surface-variant` is the one `on-*` neither PixlStash theme authors, so it
+// is Vuetify's stock grey: `#424242` in dark and `#EEEEEE` in light, the ink
+// for a solid stock `surface-variant` fill. Used as muted text on an ordinary
+// surface it nearly vanishes in both themes (the shelf's run members, and every
+// muted line of five dialogs). Muted text is `--opacity-text-secondary`.
+const ON_SURFACE_VARIANT = /v-theme-on-surface-variant\b/;
+const SOLID_SURFACE_VARIANT =
+  /background(-color)?\s*:\s*rgb\(var\(--v-theme-surface-variant\)\)/;
+
+/** Rules that use `on-surface-variant` without painting its own fill. */
+function strayOnSurfaceVariant(css) {
+  return [...css.matchAll(/([^{}]*)\{([^{}]*)\}/g)]
+    .filter(
+      ([, , body]) =>
+        ON_SURFACE_VARIANT.test(body) && !SOLID_SURFACE_VARIANT.test(body),
+    )
+    .map(([, selector]) => selector.trim());
+}
+
+describe("on-surface-variant pairing", () => {
+  it("only inks a rule that paints the solid surface-variant fill", () => {
+    const offenders = styleFiles(SRC).flatMap((file) =>
+      strayOnSurfaceVariant(readFileSync(file, "utf8")).map(
+        (sel) => `${relative(SRC, file)}: ${sel}`,
+      ),
+    );
+    expect(offenders).toEqual([]);
+  });
+
+  it("catches the shape it guards", () => {
+    expect(
+      strayOnSurfaceVariant(`.x {
+  padding-left: var(--space-7);
+  color: rgb(var(--v-theme-on-surface-variant));
+}`),
+    ).toEqual([".x"]);
+    expect(
+      strayOnSurfaceVariant(`.y {
+  background: rgb(var(--v-theme-surface-variant));
+  color: rgb(var(--v-theme-on-surface-variant));
+}`),
+    ).toEqual([]);
+  });
+});

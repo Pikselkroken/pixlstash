@@ -5548,7 +5548,7 @@ button.shelf-head-cell:hover {
    selected treatment. */
 .shelf-row--member {
   padding-left: var(--space-7);
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 /* The run's loss chart: a full-width band, not a grid cell, so the chart takes

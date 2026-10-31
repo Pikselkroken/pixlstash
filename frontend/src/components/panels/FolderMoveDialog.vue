@@ -223,7 +223,7 @@ async function submit() {
   margin-bottom: var(--space-2);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 /* The tree scrolls inside the dialog rather than growing it past the viewport:
