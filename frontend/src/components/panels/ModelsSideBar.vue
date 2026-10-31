@@ -475,11 +475,12 @@ function ask(what, el = null) {
 
 // ── Places ───────────────────────────────────────────────────────────────
 
+// All models first, as All media and All workflows lead their sidebars.
 const PLACES = [
-  { id: "sets", label: "Sets", icon: "mdi-view-grid-outline" },
   { id: "all", label: "All models", icon: "mdi-format-list-bulleted" },
   { id: "favourites", label: "Favourites", icon: "mdi-heart-outline" },
   { id: "recent", label: "Recently added", icon: "mdi-clock-outline" },
+  { id: "sets", label: "Sets", icon: "mdi-view-grid-outline" },
   { id: "loose", label: "In no set yet", icon: "mdi-plus-box-outline" },
 ];
 
