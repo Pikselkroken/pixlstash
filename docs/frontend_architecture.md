@@ -6510,8 +6510,13 @@ bar (amber while live), base / steps / date chips and an amber-outlined
 *Training* chip while live. A failed run carries a *Failed* chip outlined in
 `surface-error` instead. A run that has ended shows its job's `error`, which
 `GET /training/jobs` carries redacted like the rest, as its note in place of
-"No final file yet", and the rail's Training section repeats it. A failed run
-that saved checkpoints stays importable, as a stopped one is.
+"No final file yet", and the rail's Training section repeats it. An `error`
+the backend did not summarise (a run that failed before it did, or a path that
+keeps the raw exception) can be a whole paragraph: `failureText`
+(`utils/trainingRuns.js`) cuts it at a word to 200 characters, the rail offers
+the whole text (`report`, else `error`) behind *Full message*, and the run
+page's notice uses the same cut. A
+failed run that saved checkpoints stays importable, as a stopped one is.
 
 **Selection.** A click, Enter or Space picks; a double-click picks and opens a
 run's page (the pair's second click does not toggle). The view does
