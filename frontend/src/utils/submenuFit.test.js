@@ -48,6 +48,18 @@ describe("vSubmenuFit", () => {
     vSubmenuFit.updated(sub);
     expect(sub.style.top).toBe("");
   });
+  it("measures again on resize while open, and stops once unmounted", () => {
+    const sub = place(100, 300);
+    expect(sub.style.top).toBe("");
+    window.innerHeight = 350;
+    window.dispatchEvent(new Event("resize"));
+    // Row 100-132, 300 tall: down ends at 400 > 342; up would start at -168.
+    expect(sub.style.top).toBe("-92px");
+    vSubmenuFit.unmounted(sub);
+    window.innerHeight = WINDOW_HEIGHT;
+    window.dispatchEvent(new Event("resize"));
+    expect(sub.style.top).toBe("-92px");
+  });
 });
 
 function vueFiles(dir = SRC) {
