@@ -615,6 +615,8 @@ def test_the_trainer_writes_the_allocator_peak_a_poll_would_miss(tmp_path):
     fake = tmp_path / "fake"
     fake.mkdir()
     (fake / "torch.py").write_text(_FAKE_TORCH)
+    # Stands in for the interpreter's own, which the hook shadows.
+    (fake / "sitecustomize.py").write_text("")
     peaks = tmp_path / "peaks"
     peaks.mkdir()
     probe = (
@@ -642,7 +644,7 @@ def test_the_trainer_writes_the_allocator_peak_a_poll_would_miss(tmp_path):
     lines = log.read_text().splitlines()
     assert lines[0] == "3072 1024"
     assert set(lines[1:]) <= {"1024 1024"}
-    assert local_ai_toolkit_module._TRAINER_HOOK_DIR not in done.stdout
+    assert done.stdout.strip() == str(fake / "sitecustomize.py")
     # Off without the folder: nothing is written.
     env.pop("TRAINER_PEAKS_DIR")
     log.unlink()

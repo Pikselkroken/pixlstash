@@ -328,6 +328,11 @@ def gpu_mb(pids: set[int], device: str | None) -> int | None:
     return sum(held) if held else None
 
 
+#: Polls a trainer may hold GPU memory without peaks before that is logged.
+_UNHOOKED_POLLS = 3
+_unhooked: dict[str, int] = {}
+
+
 def allocator_overshoot_mb(folder: str, pids: set[int], offsets: dict) -> int:
     """How far *pids*' CUDA allocators rose above what they reserve now.
 
@@ -418,11 +423,37 @@ def trainer_usage(
     pids = {process.pid for process in tree}
     vram = gpu_mb(pids, device)
     peak = vram
-    if vram is not None and peaks_folder:
-        peak = vram + allocator_overshoot_mb(
+    if peaks_folder:
+        # Read even when NVML has no figure, so the lines are not all credited
+        # to the first poll that has one.
+        overshoot = allocator_overshoot_mb(
             peaks_folder, pids, offsets if offsets is not None else {}
         )
+        if vram is not None:
+            peak = vram + overshoot
+            _check_hooked(peaks_folder, pids)
     return {"pids": pids, "vram_mb": vram, "peak_vram_mb": peak, "ram_mb": rss_mb(tree)}
+
+
+def _check_hooked(folder: str, pids: set[int]) -> None:
+    """Warn once when a trainer holds GPU memory but writes no peaks.
+
+    Its phase peaks are then polls alone, which miss a preview's VAE decode.
+    A few polls are allowed first: the hook writes within a quarter second of
+    the CUDA context, which a poll can come before.
+    """
+    if any(os.path.exists(os.path.join(folder, f"{pid}.log")) for pid in pids):
+        _unhooked.pop(folder, None)
+        return
+    misses = _unhooked.get(folder, 0) + 1
+    _unhooked[folder] = misses
+    if misses == _UNHOOKED_POLLS:
+        logger.warning(
+            "The trainer holds GPU memory but writes no allocator peaks to %s; "
+            "its measurement is polls alone and can miss a preview's VAE decode "
+            "(see the trainer's output for why the hook stopped).",
+            folder,
+        )
 
 
 __all__ = [

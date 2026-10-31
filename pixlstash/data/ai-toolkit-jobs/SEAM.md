@@ -27,7 +27,9 @@ version bump is a single-file change. Verified against the local clone
 `trainer_hook/sitecustomize.py` starts a thread that, once the process has a CUDA context,
 appends `<peak reserved since the last line> <reserved now>` (MB) a few times a second, so
 PixlStash sees a spike that is freed between two of its polls. It imports the interpreter's own
-`sitecustomize` after itself and changes nothing in the trainer.
+`sitecustomize` after itself. Its one effect on the trainer is resetting torch's peak memory
+counters each time it writes; ai-toolkit's training code does not read them. If it stops (it says
+why in `trainer_output.log`), the backend logs that the run is measured by polls alone.
 
 The install check (the torch probe and `run.py --help`) runs with the same parent env minus those
 keys, so it sees the torch the trainer will.

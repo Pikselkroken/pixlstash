@@ -11838,8 +11838,10 @@ reserves now to `<work dir>/allocator_peaks/<pid>.log` four times a second.
 Each poll adds how far the new lines rose above the latest figure to NVML's
 reading (`measurements.allocator_overshoot_mb`, `peak_vram_mb`), so every
 phase peak includes what was freed between polls. A run re-attached after a
-restart starts at the end of those files (`peaks_read_to_end`). The fingerprint
-carries `MEASURED_BY`, so a setup measured by polls alone is probed again.
+restart starts at the end of those files (`peaks_read_to_end`). A trainer that
+holds GPU memory for three polls with no peaks file is logged once as measured
+by polls alone. The fingerprint carries `MEASURED_BY`, so a setup measured by
+polls alone is probed again.
 
 **Admission.** `presets.resolve(lookup=...)` asks `measurements.make_lookup`
 for each candidate profile's fingerprint and measurement. A measured profile's

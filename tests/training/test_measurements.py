@@ -130,6 +130,28 @@ def test_a_spike_freed_between_two_polls_still_reaches_the_peak(tmp_path, monkey
     # Without a folder the poll is all there is.
     usage = measurements.trainer_usage(4242, "GPU-test")
     assert usage["peak_vram_mb"] == 20_000
+    # Lines written while NVML had no figure are read then, not credited later.
+    with log.open("a") as out:
+        out.write("26000 19500\n")
+    monkeypatch.setattr(measurements, "gpu_mb", lambda pids, device: None)
+    usage = measurements.trainer_usage(4242, "GPU-test", str(tmp_path), offsets)
+    assert usage["peak_vram_mb"] is None
+    monkeypatch.setattr(measurements, "gpu_mb", lambda pids, device: 20_000)
+    usage = measurements.trainer_usage(4242, "GPU-test", str(tmp_path), offsets)
+    assert usage["peak_vram_mb"] == 20_000
+
+
+def test_a_trainer_on_the_gpu_without_peaks_is_named_once(
+    tmp_path, monkeypatch, caplog
+):
+    monkeypatch.setattr(
+        measurements, "process_tree", lambda pid: [type("P", (), {"pid": 4242})()]
+    )
+    monkeypatch.setattr(measurements, "rss_mb", lambda tree: None)
+    monkeypatch.setattr(measurements, "gpu_mb", lambda pids, device: 20_000)
+    for _ in range(5):
+        measurements.trainer_usage(4242, "GPU-test", str(tmp_path), {})
+    assert caplog.text.count("writes no allocator peaks") == 1
 
 
 def test_a_run_watched_from_its_middle_skips_the_peaks_before(tmp_path):

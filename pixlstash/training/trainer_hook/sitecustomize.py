@@ -11,6 +11,8 @@ The allocator's own peak cannot miss a spike between two lines.
 
 Nothing runs without ``TRAINER_PEAKS_DIR``. A ``sitecustomize`` this one
 shadows (the interpreter's own) is imported after it, as it would have been.
+Reading resets torch's peak memory counters, which ai-toolkit's training code
+does not read.
 """
 
 import importlib.util
