@@ -49,6 +49,7 @@ from send2trash import send2trash
 
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
+from pixlstash.resources.arbiter import Lease, LeaseKind, LeaseState, Tenant
 from pixlstash.routes.model_folders import register_model_folder
 from pixlstash.services import workflow_inbox
 from pixlstash.services.model_folder_scanner import ModelFolderScanner
@@ -189,6 +190,38 @@ def seed_model_folder(server, path: str) -> None:
         result.adapters,
         result.checkpoints,
     )
+
+
+def fake_training_card(server, card: dict) -> None:
+    """Train on a pretend card instead of leasing this machine's GPU.
+
+    *card* is ``{"vram_mb", "ram_mb"}``: what ``POST /training/jobs`` sizes a
+    run against. A CI runner has no GPU, so the arbiter reads no card and the
+    route refuses every run; a developer's machine has one, and an exclusive
+    lease on it would make PixlStash yield its GPU work for a trainer that is
+    ``tests/training/fake_run.py`` and uses none. The run's lease is granted at
+    once, holds nothing and has no arbiter, so the Tasks tab lists no lease for
+    it and its shrink and release do nothing. Called at start-up, only when
+    ``enable_test_hooks`` is on.
+    """
+    vault = server.vault
+    vault.training_room = lambda: dict(card)
+
+    def lease(label: str, job_uuid: str, vram_mb: int, ram_mb: int) -> Lease:
+        return Lease(
+            tenant=Tenant.AITOOLKIT,
+            label=label,
+            kind=LeaseKind.EXCLUSIVE,
+            device=None,
+            need_mb=vram_mb,
+            ram_mb=ram_mb,
+            job_id=job_uuid,
+            state=LeaseState.GRANTED,
+        )
+
+    vault.training_service._request_gpu = lease
+    vault.training_service._adopt_gpu = lease
+    logger.warning("[test-hooks] training runs on a pretend card: %s", card)
 
 
 def isolate_e2e_data(path: str) -> None:

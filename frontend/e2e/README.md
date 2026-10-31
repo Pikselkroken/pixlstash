@@ -64,7 +64,18 @@ The backend boots against the repo's `test-data/` fixture — a seeded vault
    (`workflows-seed.spec.js`). The pictures carry the fixture's median date,
    so they sit mid-grid in either date order and the specs that open, rate or
    tag the first or last few pictures still get fixture ones;
-8. execs `python -m pixlstash.app` against that temp copy.
+8. lays out a fake ai-toolkit checkout (`<work dir>/ai-toolkit`) whose `run.py`
+   links to the backend suite's CPU stand-in, `tests/training/fake_run.py`, and
+   whose `.venv/bin/python` is the launcher's own interpreter. It sets
+   `FAKE_RUN_STEP_DELAY` (0.05 s) so a short run is seen in progress, and names
+   a pretend card as `e2e_training_card`: with `enable_test_hooks` on, training
+   sizes runs against it and is granted a lease at once, so a run needs no GPU
+   and never leases the machine's own. The checkout is connected on the owner's
+   row, which does not exist at launch, so a spec connects it with
+   `PUT /training/ai-toolkit/config` and disconnects it after
+   (`training-fixture.spec.js`). Datasets, runs, the job database and the
+   imported LoRA all land in the work dir;
+9. execs `python -m pixlstash.app` against that temp copy.
 
 Because the user table is stripped per run, `global-setup.js` registers a fresh
 admin (random password) and mints an `ALL` token — credentials live only for
