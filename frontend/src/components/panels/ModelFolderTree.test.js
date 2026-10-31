@@ -1109,3 +1109,188 @@ describe("the folder verbs (#2206)", () => {
     wrapper.unmount();
   });
 });
+
+describe("ModelFolderTree welcomes the dragged model", () => {
+  const SM = {
+    id: 1,
+    path: "/home/me/StabilityMatrix/Data/Models",
+    kind: "user",
+    movable: "per_item",
+    tool: "StabilityMatrix",
+  };
+  const SM_DIRS = [
+    { name: "DiffusionModels", path: "DiffusionModels", direct_model_count: 6, has_dirs: false },
+    { name: "Lora", path: "Lora", direct_model_count: 42, has_dirs: false },
+    { name: "StableDiffusion", path: "StableDiffusion", direct_model_count: 14, has_dirs: false },
+  ];
+
+  beforeEach(() => {
+    useModelFoldersStore().folders = [SM, FOLDERS[1]];
+    listModelFolderDirs.mockImplementation(async (id, path) => ({
+      folder_id: id,
+      path,
+      locked: id === 2,
+      model_count: 65,
+      direct_model_count: 3,
+      bytes: 0,
+      dirs: id === 1 && path === "" ? SM_DIRS : [],
+    }));
+  });
+
+  const copies = (...kinds) => ({
+    items: kinds.map((_, i) => ({ folder_id: 1, relpath: `inbox/m${i}.safetensors` })),
+    totalBytes: 1,
+    bytesByFolderId: new Map([[1, 1]]),
+    kinds: new Map(kinds.map((kind, i) => [`1\u0000inbox/m${i}.safetensors`, kind])),
+  });
+
+  // The shelf's pointer drag sends the row under it these events.
+  function drag(el, type) {
+    const event = new CustomEvent(`model-copies-${type}`, {
+      cancelable: true,
+      detail: { x: 5, y: 6 },
+    });
+    el.element.dispatchEvent(event);
+    return event;
+  }
+
+  const welcomed = (wrapper) =>
+    wrapper
+      .findAll(".mft-row--welcome")
+      .map((row) => row.attributes("data-key"));
+  const green = (row) => row.findAll(".mft-welcome").map((one) => one.text());
+
+  async function open(wrapper) {
+    await item(wrapper, 1).find(".mft-twist").trigger("click");
+    await flushPromises();
+  }
+
+  it("says what a folder holds where its name does not, at rest", async () => {
+    const wrapper = mountTree();
+    await flushPromises();
+    await open(wrapper);
+    const type = (path) =>
+      item(wrapper, 1, path).find('[data-testid="model-folder-type"]');
+    expect(type("DiffusionModels").text()).toBe("Checkpoints");
+    expect(type("StableDiffusion").text()).toBe("Checkpoints");
+    expect(type("Lora").exists()).toBe(false);
+    expect(item(wrapper, 1, "DiffusionModels").attributes("aria-label")).toContain(
+      "Checkpoints",
+    );
+    expect(welcomed(wrapper)).toEqual([]);
+    wrapper.unmount();
+  });
+
+  it("marks a collapsed parent and files a drop on it into the destination", async () => {
+    const shelf = useModelShelfStore();
+    shelf.dragCopies = copies("lora");
+    const wrapper = mountTree();
+    await flushPromises();
+    expect(welcomed(wrapper)).toEqual(["f:1:"]);
+    expect(green(item(wrapper, 1))).toEqual(["StabilityMatrix"]);
+    expect(item(wrapper, 1).find(".mft-glyph--in").exists()).toBe(true);
+
+    drag(item(wrapper, 1), "over");
+    expect(shelf.dropTip.text).toContain("Move to StabilityMatrix/Lora");
+    drag(item(wrapper, 1), "drop");
+    expect(shelf.moveRequest.destination).toEqual({ folderId: 1, path: "Lora" });
+    wrapper.unmount();
+  });
+
+  it("marks only the real destinations once the parent is open, where a drop stays", async () => {
+    const shelf = useModelShelfStore();
+    shelf.dragCopies = copies("checkpoint");
+    const wrapper = mountTree();
+    await flushPromises();
+    await open(wrapper);
+    expect(welcomed(wrapper)).toEqual(["f:1:DiffusionModels", "f:1:StableDiffusion"]);
+    // The Type words turn green, never the name that does not say it.
+    expect(green(item(wrapper, 1, "DiffusionModels"))).toEqual(["Checkpoints"]);
+    drag(item(wrapper, 1), "drop");
+    expect(shelf.moveRequest.destination).toEqual({ folderId: 1, path: "" });
+    wrapper.unmount();
+  });
+
+  it("routes a collapsed parent to the destination holding the most", async () => {
+    const shelf = useModelShelfStore();
+    shelf.dragCopies = copies("checkpoint");
+    const wrapper = mountTree();
+    await flushPromises();
+    drag(item(wrapper, 1), "drop");
+    expect(shelf.moveRequest.destination).toEqual({
+      folderId: 1,
+      path: "StableDiffusion",
+    });
+    wrapper.unmount();
+  });
+
+  it("leaves a parent plain for a drag of two Types, and the folder they are in", async () => {
+    const shelf = useModelShelfStore();
+    shelf.dragCopies = copies("lora", "checkpoint");
+    const wrapper = mountTree();
+    await flushPromises();
+    expect(welcomed(wrapper)).toEqual([]);
+    await open(wrapper);
+    expect(welcomed(wrapper)).toEqual([
+      "f:1:DiffusionModels",
+      "f:1:Lora",
+      "f:1:StableDiffusion",
+    ]);
+    // Already in Lora: no welcome there.
+    shelf.dragCopies = {
+      ...copies("lora"),
+      items: [{ folder_id: 1, relpath: "Lora/m0.safetensors" }],
+      kinds: new Map([["1\u0000Lora/m0.safetensors", "lora"]]),
+    };
+    await flushPromises();
+    expect(welcomed(wrapper)).toEqual([]);
+    wrapper.unmount();
+  });
+
+  it("opens a marked parent on a rest, and folds it back unless the drop went inside", async () => {
+    vi.useFakeTimers();
+    try {
+      const shelf = useModelShelfStore();
+      shelf.dragCopies = copies("lora");
+      const wrapper = mountTree();
+      await flushPromises();
+      drag(item(wrapper, 1), "over");
+      vi.advanceTimersByTime(599);
+      await flushPromises();
+      expect(item(wrapper, 1).attributes("aria-expanded")).toBe("false");
+      vi.advanceTimersByTime(1);
+      await flushPromises();
+      expect(item(wrapper, 1).attributes("aria-expanded")).toBe("true");
+      // Esc, or a release elsewhere: what the rest opened folds back.
+      shelf.dragCopies = null;
+      await flushPromises();
+      expect(item(wrapper, 1).attributes("aria-expanded")).toBe("false");
+
+      shelf.dragCopies = copies("lora");
+      await flushPromises();
+      drag(item(wrapper, 1), "over");
+      vi.advanceTimersByTime(600);
+      await flushPromises();
+      drag(item(wrapper, 1, "Lora"), "drop");
+      await flushPromises();
+      expect(item(wrapper, 1).attributes("aria-expanded")).toBe("true");
+      wrapper.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("takes ComfyUI's reads over the layout for a folder they land in", async () => {
+    useModelFoldersStore().comfyuiReads = {
+      known: true,
+      reads: [{ folder_id: 1, subpath: "Lora", category: "loras", kind: "lora" }],
+    };
+    useModelShelfStore().dragCopies = copies("checkpoint");
+    const wrapper = mountTree();
+    await flushPromises();
+    await open(wrapper);
+    expect(welcomed(wrapper)).toEqual([]);
+    expect(wrapper.find('[data-testid="model-folder-type"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+});

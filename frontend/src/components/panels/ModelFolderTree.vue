@@ -4,19 +4,39 @@
        `aria-level`, which is the tree pattern without nested groups: the
        roving focus walks one list, and a row never re-mounts on expand. -->
   <div
+    ref="treeEl"
     class="mft"
     role="tree"
     :aria-label="label"
     data-testid="model-folder-tree"
     @keydown="onKeydown"
   >
+    <!-- A destination for the dragged models above the view: an arrow pinned
+         to the top edge, in that row's glyph column. Dragging over it scrolls
+         towards it. -->
+    <div
+      v-if="offview.up != null"
+      class="mft-edge mft-edge--up"
+      role="presentation"
+      aria-hidden="true"
+    >
+      <span
+        class="mft-offview"
+        data-testid="model-folder-offview"
+        :style="{ '--at': `${offview.up}px` }"
+        data-model-copies-drop
+        @model-copies-over="scrollToward(-1)"
+        ><v-icon size="14">mdi-arrow-up</v-icon></span
+      >
+    </div>
     <template v-for="node in nodes" :key="node.key">
       <div
         class="ps-row mft-row model-drop-target"
         :class="[
           {
             'mft-row--drive': node.kind === 'drive',
-            'mft-row--two': Boolean(node.origin),
+            'mft-row--two': Boolean(node.origin) || node.typeLine?.length > 0,
+            'mft-row--welcome': welcomes.has(node.key),
             'mft-row--verbs': menuFor(node).length > 0,
             active: isSelected(node),
             'mft-row--off': node.disabled,
@@ -46,11 +66,9 @@
         @dragover="onDragOver($event, node)"
         @dragleave="onDragLeave($event, node)"
         @drop="onDrop($event, node)"
-        @model-copies-over="
-          drop.onDragOver($event, node.key, dropDestination(node))
-        "
-        @model-copies-leave="drop.onDragLeave(node.key)"
-        @model-copies-drop="drop.onDrop($event, dropDestination(node))"
+        @model-copies-over="onModelOver($event, node)"
+        @model-copies-leave="onModelLeave(node)"
+        @model-copies-drop="onModelDrop($event, node)"
       >
         <span
           class="ps-row-glyph mft-twist"
@@ -91,13 +109,16 @@
             size="16"
             class="mft-glyph"
             aria-hidden="true"
+            :class="{ 'mft-glyph--in': welcomes.has(node.key) }"
             :data-testid="node.locked ? 'model-folder-lock' : undefined"
             >{{
               node.locked
                 ? "mdi-folder-lock-outline"
-                : node.expanded
-                  ? "mdi-folder-open-outline"
-                  : "mdi-folder-outline"
+                : welcomes.has(node.key)
+                  ? "mdi-folder-download-outline"
+                  : node.expanded
+                    ? "mdi-folder-open-outline"
+                    : "mdi-folder-outline"
             }}</v-icon
           >
           <!-- A registered folder is two lines: its name, and where it is from
@@ -105,13 +126,47 @@
                already carries. Subfolders take theirs from the row above. -->
           <span v-if="node.origin" class="mft-stack">
             <Tooltip :text="node.fullPath" activator="parent" />
-            <span class="mft-label">{{ node.name }}</span>
+            <span
+              class="mft-label"
+              :class="{ 'mft-welcome': nameWelcomes(node) }"
+              >{{ node.name }}</span
+            >
             <span class="mft-origin" data-testid="model-folder-origin"
               ><span class="mft-origin-head">{{ node.origin.head }}</span
               ><span class="mft-origin-tail">{{ node.origin.tail }}</span></span
             >
           </span>
-          <span v-else class="mft-label">{{ node.name }}</span>
+          <!-- A folder whose name does not say what it holds says it on a
+               second line, in the shelf's Type words; while a model of that
+               Type is dragged, the words are what turn green. -->
+          <span v-else-if="node.typeLine.length" class="mft-stack">
+            <span
+              class="mft-label"
+              :class="{ 'mft-welcome': nameWelcomes(node) }"
+              >{{ node.name }}</span
+            >
+            <span
+              class="mft-origin"
+              :class="{ 'mft-origin--welcome': welcomes.has(node.key) }"
+              data-testid="model-folder-type"
+              ><template v-for="(type, index) in node.typeLine" :key="type.key"
+                >{{ index ? ", " : ""
+                }}<span
+                  :class="{
+                    'mft-welcome':
+                      welcomes.has(node.key) && dragKinds.has(type.key),
+                  }"
+                  >{{ type.label }}</span
+                ></template
+              ></span
+            >
+          </span>
+          <span
+            v-else
+            class="mft-label"
+            :class="{ 'mft-welcome': nameWelcomes(node) }"
+            >{{ node.name }}</span
+          >
           <!-- What ComfyUI loads from this very folder (#2205), in a slot that
                keeps its width when empty. -->
           <span class="mft-marks">
@@ -180,6 +235,21 @@
         />
       </div>
     </template>
+    <div
+      v-if="offview.down != null"
+      class="mft-edge mft-edge--down"
+      role="presentation"
+      aria-hidden="true"
+    >
+      <span
+        class="mft-offview"
+        data-testid="model-folder-offview"
+        :style="{ '--at': `${offview.down}px` }"
+        data-model-copies-drop
+        @model-copies-over="scrollToward(1)"
+        ><v-icon size="14">mdi-arrow-down</v-icon></span
+      >
+    </div>
 
     <!-- One menu for the tree, positioned where the right-click or the ⋯ was.
          The rows of it depend on the row it was opened from. -->
@@ -226,7 +296,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, ref, toRef, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, toRef, watch } from "vue";
 import { VIcon, VMenu } from "vuetify/components";
 
 import {
@@ -254,6 +324,8 @@ import {
   comfyuiLoadsTitle,
   comfyuiMarks,
   formatModelSize,
+  modelDestinations,
+  unsaidTypes,
 } from "../../utils/modelShelf";
 import { isApplePlatform } from "../../utils/shortcutHints";
 import { folderOrigin } from "../../utils/folderPath";
@@ -280,7 +352,10 @@ import TypeMark from "../widgets/TypeMark.vue";
  * `selected` back so the parent owns the choice.
  *
  * In `browse` the rows also take model rows dragged off the shelf (#2204): a
- * drop asks for a move to that folder.
+ * drop asks for a move to that folder. While they are dragged, the folders
+ * their Type belongs in welcome them: the glyph gains an arrow in and the Type
+ * words turn green. A collapsed folder with one inside is marked the same way,
+ * opens when the pointer rests on it, and a drop on it files into that one.
  */
 const props = defineProps({
   mode: {
@@ -402,6 +477,11 @@ function pushFolderRows(out, entry) {
     entry.path,
     foldersStore.comfyuiReads,
   );
+  // A registered folder's second line is where it is; a subfolder's says what
+  // it holds when its name does not.
+  const typeLine = entry.origin
+    ? []
+    : unsaidTypes(entry.name, kindsAt(entry.folderId, entry.path));
   out.push({
     ...entry,
     key,
@@ -410,9 +490,11 @@ function pushFolderRows(out, entry) {
     disabled: Boolean(refused),
     count: count(n),
     marks,
+    typeLine,
     aria: [
       entry.name,
       entry.origin ? entry.origin.head + entry.origin.tail : "",
+      typeLine.map((type) => type.label).join(", "),
       n == null ? "" : `${count(n)} ${Number(n) === 1 ? "model" : "models"}`,
       entry.locked ? "locked" : "",
       ...marks.map(comfyuiLoadsTitle),
@@ -433,6 +515,27 @@ function pushFolderRows(out, entry) {
       count: dir.direct_model_count,
     });
   }
+}
+
+/**
+ * Where each Type belongs in the folders the tree lists. A locked folder takes
+ * no file, so nothing in it is a destination.
+ */
+const destinations = computed(() =>
+  modelDestinations(
+    shelfFolders.value.filter((folder) => !isLocked(folder)),
+    foldersStore.dirListings,
+    foldersStore.comfyuiReads,
+  ),
+);
+
+/** The Types that belong in exactly this directory. */
+function kindsAt(folderId, path) {
+  return new Set(
+    destinations.value
+      .filter((one) => one.folderId === folderId && one.path === path)
+      .map((one) => one.kind),
+  );
 }
 
 /** Every visible row, in reading order: what the arrows walk. */
@@ -1022,6 +1125,67 @@ function dropClassFor(key) {
   return drop.dropClass(key) ?? folderDrop.dropClass(key);
 }
 
+/** The Types of the models being dragged off the shelf. */
+const dragKinds = computed(
+  () =>
+    new Set(
+      [...(shelf.dragCopies?.kinds?.values() ?? [])].filter(Boolean),
+    ),
+);
+
+/**
+ * The rows that welcome the models being dragged, by key: `{route}`, where
+ * `route` is the destination a drop on a collapsed parent files into, and null
+ * on a destination itself. A folder every copy is already in is no welcome.
+ *
+ * A parent is marked only while it is collapsed, and only for a drag of one
+ * Type, so its mark and where a drop on it lands never disagree: open, it is
+ * an ordinary folder and the drop lands in it. Of several destinations inside
+ * it, the one holding the most models takes the drop.
+ */
+const welcomes = computed(() => {
+  const out = new Map();
+  if (props.mode !== "browse" || !dragKinds.value.size) return out;
+  const items = shelf.dragCopies.items ?? [];
+  const fits = destinations.value.filter(
+    (one) => dragKinds.value.has(one.kind) && !allAlreadyIn(items, one),
+  );
+  for (const node of nodes.value) {
+    if (node.kind === "drive") continue;
+    const mine = fits.filter((one) => one.folderId === node.folderId);
+    if (mine.some((one) => one.path === node.path)) {
+      out.set(node.key, { route: null });
+      continue;
+    }
+    if (dragKinds.value.size > 1 || node.expanded) continue;
+    const inside = mine.filter((one) =>
+      node.path === ""
+        ? one.path !== ""
+        : one.path.startsWith(`${node.path}/`),
+    );
+    if (!inside.length) continue;
+    out.set(node.key, {
+      route: inside.reduce((best, one) => (one.count > best.count ? one : best)),
+    });
+  }
+  return out;
+});
+
+/** The name turns green when no Type word on the row is the one dragged. */
+function nameWelcomes(node) {
+  return (
+    welcomes.value.has(node.key) &&
+    !node.typeLine?.some((type) => dragKinds.value.has(type.key))
+  );
+}
+
+/** Where a model drop on this row lands: a marked parent routes it inside. */
+function modelDropDestination(node) {
+  const route = welcomes.value.get(node.key)?.route;
+  if (!route) return dropDestination(node);
+  return { folderId: route.folderId, path: route.path, locked: false };
+}
+
 function onDragOver(event, node) {
   if (props.mode !== "browse") return;
   folderDrop.onDragOver(event, node.key, dropDestination(node));
@@ -1035,6 +1199,161 @@ function onDrop(event, node) {
   if (props.mode !== "browse") return;
   folderDrop.onDrop(event, dropDestination(node));
 }
+
+// Model rows dragged off the shelf arrive as the shelf's pointer-drag events
+// (`model-copies-over`, `-leave`, `-drop`), not native drag events.
+
+function onModelOver(event, node) {
+  drop.onDragOver(event, node.key, modelDropDestination(node));
+  dwellOn(node);
+}
+
+function onModelLeave(node) {
+  drop.onDragLeave(node.key);
+  if (dwell?.key === node.key) stopDwell();
+}
+
+function onModelDrop(event, node) {
+  stopDwell();
+  const destination = modelDropDestination(node);
+  if (shelf.dragCopies) landedAt = destination;
+  drop.onDrop(event, destination);
+}
+
+// ── Opening a marked parent on the way to a destination ─────────────────────
+
+/** How long the pointer rests on a marked, collapsed parent to open it. */
+const DWELL_MS = 600;
+/** `{key, timer}` of the parent the pointer rests on, or null. */
+let dwell = null;
+/** Rows a dwell opened during this drag, closed again when it ends. */
+const dragOpened = new Set();
+/** Where this drag's models were dropped, whose way down stays open. */
+let landedAt = null;
+
+function stopDwell() {
+  if (dwell) clearTimeout(dwell.timer);
+  dwell = null;
+}
+
+function dwellOn(node) {
+  if (!welcomes.value.get(node.key)?.route) {
+    stopDwell();
+    return;
+  }
+  if (dwell?.key === node.key) return;
+  stopDwell();
+  dwell = {
+    key: node.key,
+    timer: setTimeout(() => {
+      dwell = null;
+      const now = nodes.value.find((one) => one.key === node.key);
+      if (!now || now.expanded || !shelf.dragCopies) return;
+      setExpanded(now, true);
+      dragOpened.add(now.key);
+    }, DWELL_MS),
+  };
+}
+
+/** Whether a row is the landed folder or one on the way down to it. */
+function leadsTo(key, landed) {
+  const prefix = `f:${Number(landed.folderId)}:`;
+  if (!key.startsWith(prefix)) return false;
+  const path = key.slice(prefix.length);
+  return (
+    path === "" || landed.path === path || landed.path.startsWith(`${path}/`)
+  );
+}
+
+// The drag is over when the shelf lets go of its copies: on a drop, on Esc and
+// on a release anywhere else. What a dwell opened folds back, except the way
+// to where the models went.
+watch(
+  () => shelf.dragCopies,
+  (now, before) => {
+    if (now || !before) return;
+    stopDwell();
+    const landed = landedAt;
+    landedAt = null;
+    if (!dragOpened.size) return;
+    const next = new Set(expanded.value);
+    for (const key of dragOpened) {
+      if (!landed || !leadsTo(key, landed)) next.delete(key);
+    }
+    dragOpened.clear();
+    expanded.value = next;
+  },
+);
+
+// ── Destinations out of view ────────────────────────────────────────────────
+
+const treeEl = ref(null);
+/** The arrows' left edge in the tree, per edge, or null for no arrow. */
+const offview = ref({ up: null, down: null });
+/** Width of the arrow's disc, centred on the glyph column. */
+const OFFVIEW_DISC = 20;
+/** Pixels scrolled per `dragover` on an arrow, about the browser's own pace. */
+const OFFVIEW_STEP = 16;
+
+/** The nearest ancestor that scrolls the tree, or null. */
+function scrollerOf(el) {
+  for (let at = el?.parentElement; at; at = at.parentElement) {
+    if (/(auto|scroll)/.test(getComputedStyle(at).overflowY)) return at;
+  }
+  return null;
+}
+
+/**
+ * Which edges have a welcoming row beyond them, each arrow lined up with the
+ * nearest such row's glyph.
+ */
+function measureOffview() {
+  const scroller = treeEl.value && scrollerOf(treeEl.value);
+  if (!welcomes.value.size || !scroller) {
+    if (offview.value.up != null || offview.value.down != null) {
+      offview.value = { up: null, down: null };
+    }
+    return;
+  }
+  const view = scroller.getBoundingClientRect();
+  const tree = treeEl.value.getBoundingClientRect();
+  let up = null;
+  let down = null;
+  for (const key of welcomes.value.keys()) {
+    const row = rowEls.get(key);
+    if (!row) continue;
+    const at = row.getBoundingClientRect();
+    const glyph = row.querySelector(".mft-glyph")?.getBoundingClientRect() ?? at;
+    const left = glyph.left - tree.left + glyph.width / 2 - OFFVIEW_DISC / 2;
+    if (at.bottom <= view.top && (!up || at.bottom > up.edge)) {
+      up = { left, edge: at.bottom };
+    } else if (at.top >= view.bottom && (!down || at.top < down.edge)) {
+      down = { left, edge: at.top };
+    }
+  }
+  offview.value = { up: up?.left ?? null, down: down?.left ?? null };
+}
+
+function scrollToward(direction) {
+  scrollerOf(treeEl.value)?.scrollBy(0, direction * OFFVIEW_STEP);
+}
+
+watch(welcomes, measureOffview, { flush: "post" });
+
+// Scrolling does not bubble; captured on the document, only while a drag of
+// models is on.
+watch(
+  () => dragKinds.value.size > 0,
+  (dragging) => {
+    if (dragging) document.addEventListener("scroll", measureOffview, true);
+    else document.removeEventListener("scroll", measureOffview, true);
+  },
+);
+
+onBeforeUnmount(() => {
+  stopDwell();
+  document.removeEventListener("scroll", measureOffview, true);
+});
 
 // ── Keys ────────────────────────────────────────────────────────────────────
 
@@ -1198,6 +1517,61 @@ defineExpose({ reveal });
   flex-shrink: 0;
   margin-right: var(--space-3);
   opacity: var(--opacity-text-secondary);
+}
+
+/* A folder the dragged models belong in: the glyph (an arrow into the folder)
+   and its Type words turn green, and nothing else changes. Green says
+   "belongs here"; the blue drop ring still says "drops here now". */
+.mft-glyph--in {
+  color: rgb(var(--v-theme-surface-success));
+  opacity: 1;
+}
+
+.mft-welcome {
+  color: rgb(var(--v-theme-surface-success));
+  font-weight: var(--weight-semibold);
+}
+
+.mft-origin--welcome {
+  opacity: 1;
+}
+
+/* The off-view arrow's edge: no height of its own, pinned to the top or the
+   bottom of the scrolling sidebar while the tree runs past it. */
+.mft-edge {
+  position: sticky;
+  z-index: 1;
+  height: 0;
+}
+
+.mft-edge--up {
+  top: 0;
+}
+
+.mft-edge--down {
+  bottom: 0;
+}
+
+.mft-offview {
+  position: absolute;
+  left: var(--at);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(var(--gutter-glyph) + var(--space-2));
+  height: calc(var(--gutter-glyph) + var(--space-2));
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-pill);
+  background: rgb(var(--v-theme-sidebar));
+  color: rgb(var(--v-theme-surface-success));
+}
+
+.mft-edge--up .mft-offview {
+  top: var(--space-2);
+}
+
+.mft-edge--down .mft-offview {
+  bottom: var(--space-2);
 }
 
 .mft-drive {
