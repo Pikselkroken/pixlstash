@@ -1044,7 +1044,9 @@ vanish — they **fold** into the ⋯ overflow (`TbOverflowMenu`, a
 - **The right-rail toggle is one glyph on every screen**, `mdi-dock-right`
   (where something will appear, not what is in it), with open as its pressed
   state and never a second glyph. Its name is fixed per screen and says what
-  the rail holds: *Stats*, *Inspector*, *Models*.
+  the rail holds: *Inspector* (the Media grid's rail, which inspects the
+  selection and shows stats only when nothing is selected, and the Workflows
+  inspector), *Models*, *Picture details* (the lightbox).
 
 ### Closed inspector
 

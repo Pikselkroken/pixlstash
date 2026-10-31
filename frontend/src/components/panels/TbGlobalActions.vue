@@ -49,7 +49,7 @@ const props = defineProps({
   // grid it carries the workflow inspector, so a reader there was offered
   // "Show stats sidebar" for a control that opens the inspector (#1415).
   // A fixed name with no Show/Hide: `aria-pressed` says which way it is.
-  railName: { type: String, default: "Stats" },
+  railName: { type: String, default: "Inspector" },
   // WHICH rail the toggle drives. The Workflows inspector has its own open
   // flag (it defaults open; the stats sidebar defaults closed), so the host
   // says which one is on its screen.
