@@ -127,7 +127,9 @@ class ModelFolderScanFinder(BaseTaskFinder):
         # folder id -> time.time() a scan of it finished leaving a file that
         # was still arriving.
         self._arriving_at: dict[int, float] = {}
-        self._watched: set[int] = set()
+        # folder id -> the path its watch was set up on, so a renamed folder
+        # is watched again at its new path.
+        self._watched: dict[int, str] = {}
         # Folders whose watch could not be set up (an inotify limit, say), so
         # the failure is logged once rather than every check.
         self._unwatchable: set[int] = set()
@@ -209,12 +211,15 @@ class ModelFolderScanFinder(BaseTaskFinder):
     def _sync_watches(self, folders: list[dict], ids: set[int]) -> None:
         if self._watcher is None:
             return
-        for gone in self._watched - ids:
+        for gone in set(self._watched) - ids:
             self._watcher.unwatch_folder(gone)
-            self._watched.discard(gone)
+            del self._watched[gone]
         self._unwatchable &= ids
         for row in folders:
             folder_id = row["id"]
+            if self._watched.get(folder_id, row["path"]) != row["path"]:
+                self._watcher.unwatch_folder(folder_id)
+                del self._watched[folder_id]
             if folder_id in self._watched or folder_id in self._unwatchable:
                 continue
             try:
@@ -233,7 +238,7 @@ class ModelFolderScanFinder(BaseTaskFinder):
             # A folder that is not a directory right now (an unplugged drive)
             # is not watched; it is asked again next check.
             if folder_id in self._watcher.watched_ids():
-                self._watched.add(folder_id)
+                self._watched[folder_id] = row["path"]
                 # Scanned once the watch is up, so nothing that changed before
                 # it was (at start-up, while it was unplugged, in the second
                 # after it was added) goes unseen until the timer.

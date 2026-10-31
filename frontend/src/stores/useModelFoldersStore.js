@@ -11,6 +11,7 @@ import {
   listModelFolderDirs,
   listModelFolders,
   MANAGED_KIND,
+  renameModelFolder,
   setDefaultModelFolder,
   setDownloadModelFolder,
   SOURCE_KIND,
@@ -492,6 +493,25 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
   }
 
   /**
+   * Rename a registered folder on disk. Refusals throw, with the server's
+   * `detail`, so the field that asked shows them and stays open. The list
+   * (and with it the settings dialog), where ComfyUI loads from and the
+   * shelf's copies are all re-read, since each names the folder's path.
+   *
+   * @param {number} folderId
+   * @param {string} name - one segment.
+   * @returns {Promise<Object>} the folder as now registered.
+   */
+  async function renameFolder(folderId, name) {
+    const renamed = await renameModelFolder(folderId, name);
+    await refresh({ quiet: true });
+    void loadComfyuiReads();
+    useModelShelfStore().fetchRows();
+    useNoticeStore().push({ level: "success", text: `Renamed to ${name}.` });
+    return renamed;
+  }
+
+  /**
    * Drop everything the previous credential could see.
    *
    * The paths are host facts about this machine and the registry is owner-only,
@@ -551,6 +571,7 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
     setDefault,
     setDownloadTarget,
     createDir,
+    renameFolder,
     resetForSession,
   };
 });

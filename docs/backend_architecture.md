@@ -674,6 +674,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/model-folders/{folder_id}/dirs/remove                                 | model_shelf     | Remove a directory inside a model folder                      |
 | POST   | /api/v1/model-folders/{folder_id}/open                                        | model_shelf     | Open a model folder in the file manager                       |
 | POST   | /api/v1/model-folders/{folder_id}/relocate                                    | model_shelf     | Move a folder PixlStash owns to another location              |
+| POST   | /api/v1/model-folders/{folder_id}/rename                                      | model_shelf     | Rename a registered model folder on disk                      |
 | GET    | /api/v1/model-folders/{folder_id}/runs                                        | model_shelf     | List the training runs in an ai-toolkit output folder         |
 | GET    | /api/v1/model-folders/{folder_id}/runs/{run_name}/samples/{filename}          | model_shelf     | One preview image from a training run                         |
 | GET    | /api/v1/model-icons/{sha256}                                                  | model_shelf     | Serve one stored icon                                         |
@@ -5386,7 +5387,7 @@ Without it, a filter needs no payload to answer the hidden question: `GET /pictu
 | Query parameter | `?project_id=7` | `enforce_project_filter_scope` (the gate, every declared route) |
 | Path segment, numeric | `/projects/{project_id}/summary` | the registry's `PROJECT_SCOPED` declaration; the gate resolves the id before the handler, so a missing project and an invisible one both 403 |
 | Path segment, name or id-or-name | `/projects/{project_name}/picture_sets/{set_name}`, `/projects/{id_or_name}` | `enforce_project_path_scope`, inline in the 4 `resolved_inline` handlers (§16.1) — see below |
-| Body / form field, **declared** | `POST /pictures/import`, `POST /pictures/import/staging`, `POST /reviews`, `POST /tag_suggestions/bulk-accept`, `POST /tag_suggestions/scan`, `POST /workflows/run`, `POST /workflows/run/preflight` | **nothing.** They are safe only because they are writes: a resource-scoped token can only be minted `READ` (§16.2 item 4) and `auth.py` blocks a non-`GET` for a `READ` token unless the path is in `READ_SAFE_POST_PATHS`, which none of these is. Adding one of them to that frozenset opens the hole. |
+| Body / form field, **declared** | `POST /pictures/import`, `POST /pictures/import/staging`, `POST /reviews`, `POST /tag_suggestions/bulk-accept`, `POST /tag_suggestions/scan`, `POST /workflows/run`, `POST /workflows/run/preflight`, `POST /library/folders/open` | **nothing.** They are safe only because they are writes: a resource-scoped token can only be minted `READ` (§16.2 item 4) and `auth.py` blocks a non-`GET` for a `READ` token unless the path is in `READ_SAFE_POST_PATHS`, which none of these is. Adding one of them to that frozenset opens the hole. |
 | Body / form field, **opaque (`payload: dict`)** | known: `PATCH /pictures/project`, `POST /characters`, `POST /picture_sets`, `PATCH /picture_sets/{id}` — **and this list cannot be shown complete** | **nothing, and nothing can enumerate them.** Same write-only argument as the row above, but the *set* is a blind spot: see below. |
 | Value-typed discriminator | `?resource_type=project&resource_id=7` | **nothing, and nothing name-based can.** An argument for keeping that pattern off read-filter routes. |
 
@@ -12269,7 +12270,7 @@ bytes, and the route answers 400 with it. The route is refused in Docker, as
 /api/v1/model-folders/{folder_id}/dirs/move {path, destination_folder_id,
 destination_path, new_name?, dry_run?}` moves a directory into another directory
 of the same or another registered folder. A rename is a move into the same
-parent with `new_name`; there is no rename route. The work is
+parent with `new_name`; there is no rename route for a directory inside a folder (the registered folder itself has one, below). The work is
 `pixlstash/services/model_dir_mover.py`, in the two phases `ModelMover` has.
 
 - **`plan_directory_move` refuses before anything is touched:** the registered
@@ -12325,6 +12326,26 @@ parent with `new_name`; there is no rename route. The work is
 Both routes are `LOCAL_OWNER_ONLY` (§16.3): the create is the
 `POST /filesystem/folders` mkdir narrowed to a registered folder, and the move is
 `POST /model-moves`' authority over a subtree.
+
+**Renaming the registered folder itself.** `POST
+/api/v1/model-folders/{folder_id}/rename {name}` renames a `per_item` (owner-added)
+folder within its own parent and answers 200 with the folder. It is synchronous,
+not a job: within one parent it is always one `os.rename` and one `UPDATE
+model_folder SET path`. Nothing else needs repointing, because everything in
+PixlStash names the folder by id (`model_file.model_folder_id`, `is_default`,
+`is_download_target`, the scan state) and its files by relpath, and the folder
+list, the settings dialog and the ComfyUI reads are all derived from the row on
+the next read. The scan finder's watch is keyed by id and re-set when the row's
+path changes. The name goes through `refusal_for_folder_name`; a locked folder,
+a name on disk, and a path that overlaps a registered row (one on an unplugged
+drive included, `_validate_folder_conflicts`) are 409; a folder not on disk is
+404; it is refused in Docker. The route takes `SHELF_IO_LOCK` without blocking and
+**claims the folder's scan slot** for the rename (`claim_scan`, released after), so
+the finder cannot hand out a scan of the old path that would mark every copy
+`unreachable`. If the row cannot be written the directory is renamed back. Tools
+outside PixlStash that name the old path (ComfyUI's model paths, StabilityMatrix)
+are not edited. A running download into the folder (`model_downloads.live_downloads`) is also a 409, since it publishes to the old path by name.
+`LOCAL_OWNER_ONLY`, the tier of the `dirs/move` rename.
 
 ### 25.27 Removing a folder inside a model folder (#2207)
 

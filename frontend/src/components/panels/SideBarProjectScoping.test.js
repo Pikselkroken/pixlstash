@@ -89,6 +89,7 @@ vi.mock("vue-router", () => ({
 
 import { isReadOnly, sessionContext } from "../../utils/apiClient";
 import { useSidebarStore } from "../../stores/useSidebarStore";
+import { useSelectionStore } from "../../stores/useSelectionStore";
 import SideBar from "./SideBar.vue";
 
 const PROJECTS = [
@@ -154,6 +155,9 @@ async function refreshAndSettle(wrapper) {
 
 beforeEach(() => {
   setActivePinia(createPinia());
+  // The tree's open branches and its mode are persisted; start each test
+  // from a closed Library tree.
+  window.localStorage.clear();
   isReadOnly.value = false;
   sessionContext.value = null;
   for (const fn of [apiGet, apiPost, apiPatch, apiPut, apiDelete]) fn.mockReset();
@@ -167,36 +171,89 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("the docked sidebar's project switcher", () => {
-  it("is offered to the owner", async () => {
+describe("the docked rail (#2448)", () => {
+  /** The rail's buttons, by their accessible names. */
+  function railNames(wrapper) {
+    return wrapper
+      .findAll(".sidebar-collapsed-item")
+      .map((b) => b.attributes("aria-label"));
+  }
+
+  it("offers the owner the dropdown, People and Sets in Library, a folder each in Folders", async () => {
     const wrapper = mountSidebar({ docked: true });
+    await refreshAndSettle(wrapper);
+    expect(railNames(wrapper)).toEqual(
+      expect.arrayContaining([
+        "Showing Library. Switch to Folders",
+        "Any project",
+        "People",
+        "Sets",
+      ]),
+    );
+    wrapper.vm.setTreeMode("folders");
     await flushPromises();
-    expect(wrapper.find(".sidebar-collapsed-project-wrap").exists()).toBe(true);
+    expect(railNames(wrapper)).toEqual(
+      expect.arrayContaining(["Book", "Cards", "Global", "Unassigned"]),
+    );
+    expect(railNames(wrapper)).not.toContain("Any project");
+    wrapper.vm.setTreeMode("library");
     wrapper.unmount();
   });
 
   it("is omitted for a token scoped to another resource", async () => {
-    // The same rule the expanded sidebar already applied to its tab strip: with
-    // no project list to show and no Folders tab to reach, the switcher leads
-    // nowhere.
     for (const resourceType of ["character", "picture_set", "picture"]) {
       setActivePinia(createPinia());
       scopeSessionTo(resourceType);
       const wrapper = mountSidebar({ docked: true });
       await flushPromises();
-      expect(
-        wrapper.find(".sidebar-collapsed-project-wrap").exists(),
-        `a ${resourceType}-scoped token was still offered the switcher`,
-      ).toBe(false);
+      const names = railNames(wrapper);
+      expect(names, `a ${resourceType}-scoped token was offered the dropdown`).not.toContain(
+        "Any project",
+      );
+      expect(names, `a ${resourceType}-scoped token was offered the switch`).not.toContain(
+        "Showing Library. Switch to Folders",
+      );
       wrapper.unmount();
     }
   });
 
-  it("stays for an unscoped read-only token, which can read every project", () => {
+  it("stays for an unscoped read-only token, which can read every project", async () => {
     isReadOnly.value = true;
     sessionContext.value = { scope: "READ", resource_type: null };
     const wrapper = mountSidebar({ docked: true });
-    expect(wrapper.find(".sidebar-collapsed-project-wrap").exists()).toBe(true);
+    await refreshAndSettle(wrapper);
+    expect(railNames(wrapper)).toContain("Any project");
+    wrapper.unmount();
+  });
+
+  it("lights People only for a listed person, never for a place or no selection", async () => {
+    const wrapper = mountSidebar({ docked: true });
+    await refreshAndSettle(wrapper);
+    const selection = useSelectionStore();
+    const people = wrapper.vm.railNodes.find((n) => n.kind === "people");
+
+    for (const id of [null, "", "ALL", "UNASSIGNED", "SCRAPHEAP"]) {
+      selection.selectedCharacter = id;
+      expect(wrapper.vm.railNodeActive(people), `lit for ${id}`).toBe(false);
+    }
+    selection.selectedCharacter = 1;
+    expect(wrapper.vm.railNodeActive(people)).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("chooses a project from the dropdown's flyout", async () => {
+    const wrapper = mountSidebar({ docked: true });
+    await refreshAndSettle(wrapper);
+    const scope = wrapper
+      .findAll(".sidebar-collapsed-item")
+      .find((b) => b.attributes("aria-label") === "Any project");
+    await scope.trigger("click");
+    const book = wrapper.vm.railFlyout.items.find((i) => i.label === "Book");
+    wrapper.vm.pickRailEntry(book.run);
+    const [payload] = wrapper.emitted("select-character").at(-1);
+    expect(payload.id).toBe("ALL");
+    expect(payload.projectContext).toEqual({ mode: "project", projectId: 3 });
+    expect(wrapper.vm.railFlyout).toBeNull();
     wrapper.unmount();
   });
 });
@@ -217,9 +274,9 @@ describe("the sidebar's project reads", () => {
     wrapper.unmount();
   });
 
-  it("asks for the not-in-a-project count once, for the scope menu", async () => {
-    // The header slot's "Not in a project" row (#2159) is the number's one
-    // consumer; it lands in the scope counts, not in the per-project map.
+  it("asks for the not-in-a-project count once, for the tree", async () => {
+    // Not in a project (Library) and Global (Folders) both show it; it lands
+    // in its own ref, not in the per-project map.
     apiGet.mockImplementation((url) =>
       Promise.resolve(
         String(url).includes("/projects/UNASSIGNED/summary")
@@ -234,7 +291,7 @@ describe("the sidebar's project reads", () => {
       u.includes("UNASSIGNED"),
     );
     expect(unassignedSummaries).toHaveLength(1);
-    expect(wrapper.vm.scopeCounts.none).toBe(9);
+    expect(wrapper.vm.notInProjectCount).toBe(9);
 
     wrapper.unmount();
   });
@@ -267,7 +324,20 @@ describe("the sidebar's project reads", () => {
   });
 });
 
-describe("the project scope in the header slot (#2159)", () => {
+describe("the project dropdown under the switch (#2159, #2448)", () => {
+  it("shows in Library mode only, with each project's count", async () => {
+    const wrapper = mountSidebar();
+    await refreshAndSettle(wrapper);
+    expect(wrapper.findComponent({ name: "SidebarScopeSlot" }).exists()).toBe(true);
+    expect(wrapper.vm.scopeCounts.byId).toMatchObject({ 3: 118, 4: 0 });
+
+    wrapper.vm.setTreeMode("folders");
+    await flushPromises();
+    expect(wrapper.findComponent({ name: "SidebarScopeSlot" }).exists()).toBe(false);
+    wrapper.vm.setTreeMode("library");
+    wrapper.unmount();
+  });
+
   it("navigates to All media in the project chosen", async () => {
     const wrapper = mountSidebar();
     await refreshAndSettle(wrapper);
@@ -276,12 +346,11 @@ describe("the project scope in the header slot (#2159)", () => {
     const [payload] = wrapper.emitted("select-character").at(-1);
     expect(payload.id).toBe("ALL");
     expect(payload.projectContext).toEqual({ mode: "project", projectId: 3 });
-    expect(wrapper.vm.scopeCounts.current).toBe(118);
 
     wrapper.unmount();
   });
 
-  it("scopes to the pictures in no project, and back to any", async () => {
+  it("scopes to the pictures in no project, and All media back to any", async () => {
     const wrapper = mountSidebar();
     await refreshAndSettle(wrapper);
 
@@ -290,7 +359,7 @@ describe("the project scope in the header slot (#2159)", () => {
       { mode: "project", projectId: null },
     );
 
-    wrapper.vm.chooseScope("any");
+    wrapper.vm.selectAllMedia(false);
     expect(wrapper.emitted("select-character").at(-1)[0].projectContext).toEqual(
       { mode: "global", projectId: null },
     );
@@ -298,11 +367,16 @@ describe("the project scope in the header slot (#2159)", () => {
     wrapper.unmount();
   });
 
-  it("opens a person inside the scope, not the person's own project", async () => {
-    // Ada's own project_id is unset; seen from project 4 she must stay in 4.
+  it("narrows People to the scope and opens a person inside it", async () => {
+    // Ada is in no project: listed under Any project and Not in a project,
+    // not in project 4, and seen from a scope she opens inside it.
     const wrapper = mountSidebar();
     await refreshAndSettle(wrapper);
+    expect(wrapper.vm.libraryBranches[0].characters.map((c) => c.id)).toEqual([1]);
+
     wrapper.vm.chooseScope(4);
+    await flushPromises();
+    expect(wrapper.vm.libraryBranches[0].characters).toEqual([]);
 
     wrapper.vm.selectCharacter(1, "Ada");
     expect(wrapper.emitted("select-character").at(-1)[0].projectContext).toEqual(
@@ -312,26 +386,7 @@ describe("the project scope in the header slot (#2159)", () => {
     wrapper.unmount();
   });
 
-  it("blanks the favourites count until the new scope's arrives", async () => {
-    apiGet.mockImplementation((url) =>
-      Promise.resolve(
-        String(url).startsWith("/pictures/count")
-          ? { data: { count: 6 } }
-          : respond(url),
-      ),
-    );
-    const wrapper = mountSidebar();
-    await refreshAndSettle(wrapper);
-    expect(wrapper.vm.favouriteCount).toBe(6);
-
-    wrapper.vm.chooseScope(3);
-    await wrapper.vm.$nextTick();
-    expect(wrapper.vm.favouriteCount).toBeNull();
-
-    wrapper.unmount();
-  });
-
-  it("asks for the favourites count in the current scope", async () => {
+  it("reads the favourites count library-wide, whatever the scope", async () => {
     const wrapper = mountSidebar();
     await refreshAndSettle(wrapper);
     wrapper.vm.chooseScope(3);
@@ -340,8 +395,139 @@ describe("the project scope in the header slot (#2159)", () => {
     const counts = apiGet.mock.calls
       .map(([url]) => String(url))
       .filter((u) => u.startsWith("/pictures/count"));
-    expect(counts.at(-1)).toBe("/pictures/count?favourite=1&project_id=3");
+    expect(counts.at(-1)).toBe("/pictures/count?favourite=1");
 
+    wrapper.unmount();
+  });
+});
+
+describe("the Folders tree (#2448)", () => {
+  it("draws Project, then Global and Unassigned, and remembers the mode", async () => {
+    const wrapper = mountSidebar();
+    await refreshAndSettle(wrapper);
+    wrapper.vm.setTreeMode("folders");
+    await flushPromises();
+
+    const kinds = wrapper
+      .findAll(".sidebar-folder-row")
+      .map((row) => row.attributes("data-testid"));
+    expect(kinds).toEqual([
+      "sidebar-folder-project",
+      "sidebar-folder-project",
+      "sidebar-folder-global",
+      "sidebar-folder-unassigned",
+    ]);
+    expect(
+      Object.entries(window.localStorage).some(
+        ([key, value]) =>
+          key.startsWith("pixlstash:sidebar:treeMode") && value === "folders",
+      ),
+    ).toBe(true);
+    wrapper.vm.setTreeMode("library");
+    wrapper.unmount();
+  });
+
+  it("opens Unassigned as no project, no person, no set", async () => {
+    const wrapper = mountSidebar();
+    await refreshAndSettle(wrapper);
+    wrapper.vm.setTreeMode("folders");
+    await flushPromises();
+
+    await wrapper.find('[data-testid="sidebar-folder-unassigned"]').trigger("click");
+    const [payload] = wrapper.emitted("select-character").at(-1);
+    expect(payload.id).toBe("UNASSIGNED");
+    expect(payload.projectContext).toEqual({ mode: "project", projectId: null });
+
+    // And its count is read in no project, whatever the scope.
+    expect(
+      apiGet.mock.calls.some(([url, config]) =>
+        String(url).includes("/characters/UNASSIGNED/summary") &&
+        config?.params?.project_id === "UNASSIGNED",
+      ),
+    ).toBe(true);
+    wrapper.vm.setTreeMode("library");
+    wrapper.unmount();
+  });
+});
+
+describe("Open in file manager on a Folders row (#2448)", () => {
+  it("names the node by kind and ids, never by path", async () => {
+    const wrapper = mountSidebar();
+    await refreshAndSettle(wrapper);
+    wrapper.vm.setTreeMode("folders");
+    wrapper.vm.expandTreeKeys(["f:global"]);
+    await flushPromises();
+
+    const book = wrapper.vm.folderRows.find((r) => r.key === "f:p:3");
+    wrapper.vm.openFolderRowMenu(book, { clientX: 1, clientY: 1 });
+    expect(wrapper.vm.sidebarCtxFolderRow.key).toBe("f:p:3");
+    await wrapper.vm.openFolderInFileManager(book);
+    expect(apiPost).toHaveBeenLastCalledWith("/library/folders/open", {
+      kind: "project",
+      project_id: 3,
+      entity_id: undefined,
+    });
+
+    const ada = wrapper.vm.folderRows.find((r) => r.key === "f:global/c:1");
+    await wrapper.vm.openFolderInFileManager(ada);
+    expect(apiPost).toHaveBeenLastCalledWith("/library/folders/open", {
+      kind: "character",
+      project_id: null,
+      entity_id: 1,
+    });
+    wrapper.vm.setTreeMode("library");
+    wrapper.unmount();
+  });
+});
+
+describe("Find in library (#2448)", () => {
+  it("keeps only the names that match, and Enter opens the first", async () => {
+    const wrapper = mountSidebar();
+    await refreshAndSettle(wrapper);
+    await wrapper.find('[data-testid="sidebar-find"]').setValue("ad");
+
+    expect(wrapper.vm.libraryBranches[0].characters.map((c) => c.name)).toEqual([
+      "Ada",
+    ]);
+    expect(wrapper.find(".sidebar-find-line").text()).toContain("1 match");
+
+    await wrapper
+      .find('[data-testid="sidebar-find"]')
+      .trigger("keydown", { key: "Enter" });
+    const [payload] = wrapper.emitted("select-character").at(-1);
+    expect(payload.id).toBe(1);
+    expect(payload.projectContext).toEqual({ mode: "global", projectId: null });
+
+    await wrapper
+      .find('[data-testid="sidebar-find"]')
+      .trigger("keydown", { key: "Escape" });
+    expect(wrapper.vm.findQuery).toBe("");
+    wrapper.unmount();
+  });
+
+  it("underlines a Folders project that matches by name", async () => {
+    const wrapper = mountSidebar();
+    await refreshAndSettle(wrapper);
+    wrapper.vm.setTreeMode("folders");
+    await wrapper.find('[data-testid="sidebar-find"]').setValue("boo");
+
+    const rows = wrapper.findAll('[data-testid="sidebar-folder-project"]');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].find(".sidebar-find-mark").text()).toBe("Boo");
+    expect(rows[0].classes()).not.toContain("sidebar-row--dim");
+    wrapper.vm.setTreeMode("library");
+    wrapper.unmount();
+  });
+
+  it("hands words that match no name to the picture search", async () => {
+    const wrapper = mountSidebar();
+    await refreshAndSettle(wrapper);
+    await wrapper.find('[data-testid="sidebar-find"]').setValue("harbour");
+    expect(wrapper.find(".sidebar-find-none").text()).toContain("harbour");
+
+    wrapper.vm.searchPicturesForFind();
+    expect(wrapper.vm.searchStore.searchQuery).toBe("harbour");
+    expect(wrapper.vm.findQuery).toBe("");
     wrapper.unmount();
   });
 });

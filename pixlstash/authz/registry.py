@@ -333,6 +333,18 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
             "allow_remote_host_ops=true (§16.3.1)."
         ),
     ),
+    ("POST", "/api/v1/library/folders/open"): RoutePolicy(
+        _LOOPBACK,
+        justification=(
+            "§16.3.1 RED LINE (#2448): the Folders tree's Open in File Manager "
+            "shows a node's folder in the host file manager (open_in_file_manager "
+            "→ os.startfile/open/xdg-open - the same host-GUI spawn as "
+            "pictures/{id}/open-location). Takes ids, never a path: the folder "
+            "is rendered from entity names through folder_name and contained "
+            "in the library root. Loopback-only, allow_remote_host_ops can NOT "
+            "loosen it"
+        ),
+    ),
     ("GET", "/api/v1/server-config/captions"): RoutePolicy(
         _LOCAL,
         justification=(
@@ -664,6 +676,13 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("PATCH", "/api/v1/model-folders/{folder_id}"): RoutePolicy(
         _LOCAL,
         justification="§16.3 model-folder update; sets the Docker bind host path; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    # Renames the registered folder itself on the host (a folder the owner
+    # added, never a locked one) and repoints its row: the dirs/move rename,
+    # one level up.
+    ("POST", "/api/v1/model-folders/{folder_id}/rename"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 renames a registered model folder on the host within its own parent and repoints its model_folder row - the rename half of POST /model-folders/{folder_id}/dirs/move, applied to the registered root; one named segment, only per-item folders the owner added, refused in Docker; takes no host path; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
     ("DELETE", "/api/v1/model-folders/{folder_id}"): RoutePolicy(
         _LOCAL,

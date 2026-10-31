@@ -272,6 +272,49 @@ def render(facets: FacetValues, layout: Layout) -> str:
     return "/".join(part if part is not None else GLOBAL_FOLDER for part in parts)
 
 
+def tree_node_folder(
+    layout: Layout,
+    *,
+    project: str | None = None,
+    person: str | None = None,
+    picture_set: str | None = None,
+    unassigned: bool = False,
+) -> str:
+    """Return the folder a node of the sidebar's Folders tree stands for.
+
+    The tree (#2448) draws ``Project › Person or Set``, then ``Global`` and
+    ``Unassigned``, from assignments. Each node is the folder :func:`render`
+    gives a picture with exactly that node's names, so a project node is
+    ``Nordvik``, a person in it ``Nordvik/Mira``, a person in no project
+    ``Global/Mira``. ``Global`` itself is a folder no picture renders to (a
+    picture with nothing past its empty project segment drops the segment), so
+    it is named directly, and ``Unassigned`` is ``layout.unfiled``.
+
+    Args:
+        layout: The library's own layout, or ``DEFAULT_LAYOUT`` when it has none.
+        project: The project's name, or None for a node in no project.
+        person: A person node's name.
+        picture_set: A set node's name.
+        unassigned: True for the Unassigned node; the names are then ignored.
+
+    Returns:
+        A ``/``-separated path relative to the library root, every component
+        passed through :func:`folder_name`, so it can never climb out of it.
+    """
+    if unassigned:
+        return layout.unfiled
+    facets: dict[Facet, list[str]] = {}
+    if project:
+        facets[Facet.PROJECT] = [project]
+    if person:
+        facets[Facet.PERSON] = [person]
+    if picture_set:
+        facets[Facet.SET] = [picture_set]
+    if not facets:
+        return GLOBAL_FOLDER
+    return render(facets, layout)
+
+
 def _components(folder: str) -> tuple[str, ...]:
     """Split a relative folder path into components, either separator.
 

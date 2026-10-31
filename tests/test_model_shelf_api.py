@@ -11489,6 +11489,204 @@ def test_a_folder_move_refusal_is_answered_before_the_job_starts(shelf_env, tmp_
 
 
 # ---------------------------------------------------------------------------
+# POST /model-folders/{id}/rename - renaming the registered folder itself
+# ---------------------------------------------------------------------------
+
+_RENAME = f"{API}/model-folders/1/rename"
+
+
+def _rename_root(shelf_env, tmp_path, name: str = "Loras", **kwargs):
+    """Folder 1 at ``<tmp>/loras`` holding one catalogued copy, renamed."""
+    root = tmp_path / "loras"
+    (root / "sdxl").mkdir(parents=True)
+    (root / "sdxl" / "a.safetensors").write_bytes(b"a" * 64)
+    _seeded_folder_at(shelf_env.server, str(root))
+    _set_copies(shelf_env, 1, [(os.path.join("sdxl", "a.safetensors"), 64)])
+    return root, shelf_env.owner.post(_RENAME, json={"name": name}, **kwargs)
+
+
+def _folder_one(shelf_env) -> dict:
+    return dict(
+        shelf_env.server.hub.fetchone(
+            "SELECT path, is_default FROM model_folder WHERE id = 1"
+        )
+    )
+
+
+def test_renaming_a_folder_renames_it_on_disk_and_repoints_its_row(shelf_env, tmp_path):
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute("UPDATE model_folder SET is_default = 1 WHERE id = 1")
+    root, r = _rename_root(shelf_env, tmp_path)
+    assert r.status_code == 200, r.text
+    renamed = tmp_path / "Loras"
+    assert r.json()["path"] == str(renamed)
+    assert not root.exists() and (renamed / "sdxl" / "a.safetensors").is_file()
+    # The settings dialog and the tree read the row; the default mark is by id.
+    assert _folder_one(shelf_env) == {"path": str(renamed), "is_default": 1}
+    listed = {
+        f["id"]: f
+        for f in shelf_env.owner.get(f"{API}/model-folders").json()["folders"]
+    }
+    assert listed[1]["path"] == str(renamed)
+    # The copies name their folder by id and their file by relpath: untouched.
+    rows = shelf_env.server.hub.fetchall(
+        "SELECT relpath, state FROM model_file WHERE model_folder_id = 1"
+    )
+    assert [(row["relpath"], row["state"]) for row in rows] == [
+        (os.path.join("sdxl", "a.safetensors"), "present")
+    ]
+    assert _listing(shelf_env).status_code == 200, "the tree cannot list it now"
+    # The slot it held for the rename is free again.
+    claim = model_folder_scan_task.claim_scan(
+        shelf_env.server.hub, 1, str(renamed), "user"
+    )
+    assert claim is not None, "the rename left the folder's scan slot held"
+    model_folder_scan_task.release_scan(claim)
+
+
+@pytest.mark.parametrize("name", ["con", "a/b", "..", ".hidden", ""])
+def test_a_root_rename_to_a_name_the_drive_cannot_hold_is_refused(
+    shelf_env, tmp_path, name
+):
+    root, r = _rename_root(shelf_env, tmp_path, name)
+    assert r.status_code == 400, r.text
+    assert root.is_dir() and _folder_one(shelf_env)["path"] == str(root)
+
+
+def test_a_root_rename_onto_a_taken_name_merges_nothing(shelf_env, tmp_path):
+    (tmp_path / "Loras").mkdir()
+    root, r = _rename_root(shelf_env, tmp_path)
+    assert r.status_code == 409, r.text
+    assert (root / "sdxl" / "a.safetensors").is_file()
+    assert list((tmp_path / "Loras").iterdir()) == [], "an empty target was replaced"
+    assert _folder_one(shelf_env)["path"] == str(root)
+
+
+def test_a_root_rename_onto_a_dangling_link_is_a_conflict(shelf_env, tmp_path):
+    os.symlink(str(tmp_path / "nowhere"), str(tmp_path / "Loras"))
+    root, r = _rename_root(shelf_env, tmp_path)
+    assert r.status_code == 409, r.text
+    assert root.is_dir() and os.path.islink(tmp_path / "Loras")
+    assert _folder_one(shelf_env)["path"] == str(root)
+
+
+def test_a_root_rename_onto_a_registered_path_on_an_unplugged_drive_is_refused(
+    shelf_env, tmp_path
+):
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model_folder (path, kind, movable, created_at) "
+            "VALUES (?, 'user', 'per_item', '2026-08-09T00:00:00Z')",
+            (str(tmp_path / "Loras"),),
+        )
+    root, r = _rename_root(shelf_env, tmp_path)
+    assert r.status_code == 409, r.text
+    assert root.is_dir() and not (tmp_path / "Loras").exists()
+
+
+@pytest.mark.parametrize(
+    "column, value", [("movable", "root_only"), ("owner", "pixlstash")]
+)
+def test_a_locked_folder_is_not_renamed(shelf_env, tmp_path, column, value):
+    root = tmp_path / "loras"
+    root.mkdir()
+    _seeded_folder_at(shelf_env.server, str(root))
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(f"UPDATE model_folder SET {column} = ? WHERE id = 1", (value,))
+    r = shelf_env.owner.post(_RENAME, json={"name": "Loras"})
+    assert r.status_code == 409, r.text
+    assert root.is_dir() and not (tmp_path / "Loras").exists()
+
+
+def test_a_root_rename_waits_for_a_scan_a_move_and_docker(
+    shelf_env, tmp_path, monkeypatch
+):
+    root = tmp_path / "loras"
+    root.mkdir()
+    _seeded_folder_at(shelf_env.server, str(root))
+    scan = model_folder_scan_task.claim_scan(shelf_env.server.hub, 1, str(root), "user")
+    try:
+        r = shelf_env.owner.post(_RENAME, json={"name": "Loras"})
+        assert r.status_code == 409 and "scanned" in r.text, r.text
+    finally:
+        model_folder_scan_task.release_scan(scan)
+    with SHELF_IO_LOCK:
+        r = shelf_env.owner.post(_RENAME, json={"name": "Loras"})
+        assert r.status_code == 409 and "move or an import" in r.text, r.text
+    monkeypatch.setattr(shelf_env.server, "running_in_docker", lambda: True)
+    assert shelf_env.owner.post(_RENAME, json={"name": "Loras"}).status_code == 403
+    assert root.is_dir() and not (tmp_path / "Loras").exists()
+
+
+def test_a_root_rename_waits_for_a_download_into_the_folder(
+    shelf_env, tmp_path, monkeypatch
+):
+    root = tmp_path / "loras"
+    root.mkdir()
+    _seeded_folder_at(shelf_env.server, str(root))
+    running = [{"status": "running", "folder_path": str(root)}]
+    monkeypatch.setattr(model_downloads, "live_downloads", lambda: running)
+    r = shelf_env.owner.post(_RENAME, json={"name": "Loras"})
+    assert r.status_code == 409 and "downloading" in r.text, r.text
+    assert root.is_dir() and not (tmp_path / "Loras").exists()
+    # One into another folder, or one that has ended, is no reason to wait.
+    running[0] = {"status": "running", "folder_path": str(tmp_path / "other")}
+    assert shelf_env.owner.post(_RENAME, json={"name": "Loras"}).status_code == 200
+
+
+def test_a_case_only_root_rename_is_not_refused_as_overlapping_itself(
+    shelf_env, tmp_path, monkeypatch
+):
+    """Windows compares paths case-folded, so the folder's own row reads as the
+    new path; that row must be left out of the overlap check."""
+
+    def within_folded(path, base):
+        path, base = path.casefold(), base.casefold()
+        return path == base or path.startswith(base.rstrip(os.sep) + os.sep)
+
+    monkeypatch.setattr(model_folders_routes, "path_is_within", within_folded)
+    root, r = _rename_root(shelf_env, tmp_path, "LORAS")
+    assert r.status_code == 200, r.text
+    assert _folder_one(shelf_env)["path"] == str(tmp_path / "LORAS")
+
+
+def test_a_root_rename_the_hub_refuses_is_renamed_back(
+    shelf_env, tmp_path, monkeypatch
+):
+    root = tmp_path / "loras"
+    root.mkdir()
+    _seeded_folder_at(shelf_env.server, str(root))
+    hub = shelf_env.server.hub
+
+    def refuse():
+        raise model_folders_routes.sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(hub, "transaction", refuse)
+    r = shelf_env.owner.post(_RENAME, json={"name": "Loras"})
+    monkeypatch.undo()
+    assert r.status_code == 500, r.text
+    assert root.is_dir() and not (tmp_path / "Loras").exists()
+    assert _folder_one(shelf_env)["path"] == str(root)
+
+
+def test_a_remote_owner_is_refused_the_root_rename(shelf_env, tmp_path):
+    root = tmp_path / "loras"
+    root.mkdir()
+    _seeded_folder_at(shelf_env.server, str(root))
+    assert_real_route(
+        shelf_env.server.api,
+        "POST",
+        _RENAME,
+        template=f"{API}/model-folders/{{folder_id}}/rename",
+    )
+    r = shelf_env.owner.post(_RENAME, json={"name": "Loras"}, headers=_xff("8.8.8.8"))
+    assert r.status_code == 403 and "allow_remote_host_ops" in r.text, r.text
+    assert root.is_dir()
+    r = shelf_env.owner.post(_RENAME, json={"name": "Loras"}, headers=_xff(LAN_IPV4))
+    assert r.status_code == 200, "the positive control: a LAN owner renames it"
+
+
+# ---------------------------------------------------------------------------
 # POST /model-folders/{id}/dirs/remove - removing a folder (#2207)
 # ---------------------------------------------------------------------------
 

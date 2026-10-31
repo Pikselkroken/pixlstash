@@ -258,6 +258,25 @@ export async function createModelFolderDir(id, { path = "", name }) {
 }
 
 /**
+ * Rename a registered folder you added, on disk and in the registry. Its
+ * models, its default and download marks and its curation follow, because
+ * everything names the folder by id. Refusals answer their reason in `detail`
+ * (400 for a name the drive cannot hold, 409 for a taken name, a locked
+ * folder, or a scan or move in progress), for the field to show.
+ *
+ * @param {number|string} id - the registered folder.
+ * @param {string} name - its new name, one segment.
+ * @returns {Promise<Object>} the folder as now registered.
+ */
+export async function renameModelFolder(id, name) {
+  return unwrap(
+    apiClient.post(`${MODEL_FOLDERS_URL}/${encodeURIComponent(id)}/rename`, {
+      name,
+    }),
+  );
+}
+
+/**
  * Ask the server host to show a folder, or a directory inside it, in its
  * desktop file manager. Loopback-only at the gate, as
  * `openModelLocation` is: a LAN client gets 403, a headless server 500.

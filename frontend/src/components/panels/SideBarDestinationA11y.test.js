@@ -123,7 +123,13 @@ const DESTINATIONS = [
   "Duplicates",
   "Tags to review",
 ];
-const DOCKED_DESTINATIONS = ["All Pictures", "Duplicates", "Scrapheap"];
+const DOCKED_DESTINATIONS = [
+  "Find in library",
+  "All media",
+  "Favourites",
+  "Scrapheap",
+  "Duplicates",
+];
 
 function respond(url) {
   const u = String(url ?? "");

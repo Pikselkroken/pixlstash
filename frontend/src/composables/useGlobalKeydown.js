@@ -119,6 +119,15 @@ export function useGlobalKeydown({
       sidebarStore.hideAutoSidebar();
     }
 
+    // Escape leaves the sidebar's Find in library from anywhere, not only from
+    // its field (#2448): the filter keeps the sidebar narrowed after focus has
+    // moved to the grid. Not while typing elsewhere or under a dialog, and not
+    // preventDefault-ed, so the other Escape owners (the grid's selection)
+    // keep theirs.
+    if (e.key === "Escape" && !isEditable && !isModalOverlayOpen()) {
+      sidebarRef.value?.clearFind?.();
+    }
+
     // Undo / redo. Global by design: the shortcut has to work with no receipt on
     // screen, and every undo raises one, so the result is always narrated. Ctrl
     // and Meta are both accepted (the HINT is platform-specific, the binding is

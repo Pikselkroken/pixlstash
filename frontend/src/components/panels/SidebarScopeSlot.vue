@@ -1,8 +1,9 @@
 <template>
-  <!-- The Media sidebar's header slot (#2159): which project the view is
-       limited to. It replaced the Global / Projects / Folders tabs. A chosen
-       project tints the slot with its colour; the list below takes a fainter
-       wash of the same colour from SideBar. -->
+  <!-- Which project the Media sidebar's Library view is limited to (#2159).
+       Since #2448 it sits under the Library / Folders switch, in Library mode
+       only; the header slot holds Find in library. A chosen project tints it
+       with its colour; the People and Sets below take a fainter wash of the
+       same colour from SideBar. -->
   <div
     class="scope-slot"
     :class="{ 'scope-slot--project': color }"
@@ -192,17 +193,22 @@ function onTriggerContext(event) {
 
 <style scoped>
 .scope-slot {
+  /* A bar-height trigger on the list's own left edge (past the selection
+     rail), under the Library / Folders switch. */
   flex-shrink: 0;
-  height: var(--sidebar-slot-h);
+  height: var(--control-h-bar);
   box-sizing: border-box;
-  border-bottom: 1px solid rgb(var(--v-theme-divider));
+  margin: var(--space-3) var(--space-3) 0 calc(var(--rail-w) + var(--space-3));
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-sm);
+  overflow: hidden;
 }
 
-/* The project's colour, worn as a tint: the slot carries the stronger one,
-   the list under it (SideBar's .sidebar-media-list) a faint wash. */
+/* The project's colour, worn as a tint: the trigger carries the stronger one,
+   the People and Sets under it a faint wash. */
 .scope-slot--project {
-  background: color-mix(in srgb, var(--scope-color) 22%, transparent);
-  border-bottom-color: color-mix(in srgb, var(--scope-color) 45%, transparent);
+  background: color-mix(in srgb, var(--scope-color) 16%, transparent);
+  border-color: color-mix(in srgb, var(--scope-color) 45%, transparent);
 }
 
 .scope-trigger {
@@ -211,7 +217,7 @@ function onTriggerContext(event) {
   gap: var(--space-3);
   width: 100%;
   height: 100%;
-  padding: 0 var(--space-4) 0 var(--space-4);
+  padding: 0 var(--space-3);
   border: 0;
   background: transparent;
   color: rgb(var(--v-theme-sidebar-text));

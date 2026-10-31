@@ -302,12 +302,12 @@ describe("the shelf's two routes are one destination", () => {
   });
 });
 
-describe("the docked library menu", () => {
-  it("uses menu semantics and supports arrow, submenu, and Escape focus", async () => {
+describe("the docked rail's node flyout (#2448)", () => {
+  it("uses menu semantics, arrow keys, and Escape back to its button", async () => {
     const wrapper = await mountSidebar({ docked: true });
-    const trigger = wrapper.find(
-      ".sidebar-collapsed-row--project .sidebar-collapsed-item",
-    );
+    const trigger = wrapper
+      .findAll(".sidebar-collapsed-item")
+      .find((b) => b.attributes("aria-label") === "People");
 
     expect(trigger.element.tagName).toBe("BUTTON");
     expect(trigger.attributes()).toMatchObject({
@@ -315,51 +315,30 @@ describe("the docked library menu", () => {
       "aria-expanded": "false",
     });
 
-    await trigger.trigger("keydown", { key: "ArrowDown" });
+    await trigger.trigger("click");
     await flushPromises();
 
-    const menu = document.querySelector("#sidebar-project-menu");
+    const menu = document.querySelector(".sidebar-rail-flyout");
     expect(menu.getAttribute("role")).toBe("menu");
-    expect(menu.getAttribute("aria-label")).toBe("Library navigation");
-    const rootItems = Array.from(
-      menu.querySelectorAll(':scope > [role="menuitem"]'),
-    );
-    // Global and Projects; Folders left the sidebar.
-    expect(
-      rootItems.map((item) => item.querySelector(".ctx-label-text").textContent),
-    ).toEqual([
-      "Global",
-      "Projects",
+    expect(menu.getAttribute("aria-label")).toBe("People");
+    const items = Array.from(menu.querySelectorAll('[role="menuitem"]'));
+    // The people of the dropdown's scope (Any project: everyone).
+    expect(items.map((item) => item.textContent.trim())).toEqual([
+      "Ada",
+      "Grace",
     ]);
-    expect(rootItems.map((item) => item.tagName)).toEqual(["BUTTON", "BUTTON"]);
-    expect(document.activeElement).toBe(rootItems[0]);
+    expect(document.activeElement).toBe(items[0]);
 
-    rootItems[0].dispatchEvent(
+    items[0].dispatchEvent(
       new KeyboardEvent("keydown", {
         key: "ArrowDown",
         bubbles: true,
         cancelable: true,
       }),
     );
-    expect(document.activeElement).toBe(rootItems[1]);
+    expect(document.activeElement).toBe(items[1]);
 
-    rootItems[1].dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "ArrowRight",
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
-    await flushPromises();
-
-    const submenu = document.querySelector("#sidebar-project-submenu");
-    expect(submenu.getAttribute("role")).toBe("menu");
-    expect(submenu.getAttribute("aria-label")).toBe("Projects");
-    const submenuItem = submenu.querySelector('[role="menuitem"]');
-    expect(submenuItem.tagName).toBe("BUTTON");
-    expect(document.activeElement).toBe(submenuItem);
-
-    submenuItem.dispatchEvent(
+    items[1].dispatchEvent(
       new KeyboardEvent("keydown", {
         key: "Escape",
         bubbles: true,
@@ -367,18 +346,7 @@ describe("the docked library menu", () => {
       }),
     );
     await flushPromises();
-    expect(document.querySelector("#sidebar-project-submenu")).toBeNull();
-    expect(document.activeElement).toBe(rootItems[1]);
-
-    rootItems[1].dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "Escape",
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
-    await flushPromises();
-    expect(document.querySelector("#sidebar-project-menu")).toBeNull();
+    expect(document.querySelector(".sidebar-rail-flyout")).toBeNull();
     expect(document.activeElement).toBe(trigger.element);
 
     wrapper.unmount();
