@@ -411,24 +411,30 @@ def trainer_usage(
         device: The card it trains on.
         peaks_folder: Where its allocator peaks are written
             (:func:`allocator_overshoot_mb`); None reads none.
-        offsets: Where each peaks file was read to, kept between calls.
+        offsets: Where each peaks file was read to, kept between calls;
+            required with *peaks_folder*, or every poll re-reads the history.
 
     Returns:
         ``{pids, vram_mb, peak_vram_mb, ram_mb}``; ``pids`` is the set read, so
         a caller can look for the same processes after the trainer exits.
         ``peak_vram_mb`` is ``vram_mb`` plus how far the allocators rose above
         it since the last call.
+
+    Raises:
+        ValueError: *peaks_folder* without *offsets*.
     """
     tree = process_tree(pid)
     pids = {process.pid for process in tree}
     vram = gpu_mb(pids, device)
     peak = vram
     if peaks_folder:
+        if offsets is None:
+            raise ValueError("peaks_folder needs offsets to read each line once")
+        if not pids:
+            _unhooked.pop(peaks_folder, None)  # the trainer is gone
         # Read even when NVML has no figure, so the lines are not all credited
         # to the first poll that has one.
-        overshoot = allocator_overshoot_mb(
-            peaks_folder, pids, offsets if offsets is not None else {}
-        )
+        overshoot = allocator_overshoot_mb(peaks_folder, pids, offsets)
         if vram is not None:
             peak = vram + overshoot
             _check_hooked(peaks_folder, pids)

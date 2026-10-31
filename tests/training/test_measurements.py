@@ -152,6 +152,14 @@ def test_a_trainer_on_the_gpu_without_peaks_is_named_once(
     for _ in range(5):
         measurements.trainer_usage(4242, "GPU-test", str(tmp_path), {})
     assert caplog.text.count("writes no allocator peaks") == 1
+    # Once the trainer is gone its count is dropped, not kept for the next run.
+    monkeypatch.setattr(measurements, "process_tree", lambda pid: [])
+    monkeypatch.setattr(measurements, "gpu_mb", lambda pids, device: None)
+    measurements.trainer_usage(4242, "GPU-test", str(tmp_path), {})
+    assert str(tmp_path) not in measurements._unhooked
+    # A folder without offsets would re-read every line on every poll.
+    with pytest.raises(ValueError):
+        measurements.trainer_usage(4242, "GPU-test", str(tmp_path))
 
 
 def test_a_run_watched_from_its_middle_skips_the_peaks_before(tmp_path):
