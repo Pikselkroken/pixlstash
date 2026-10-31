@@ -91,6 +91,8 @@ _LOOPBACK_ROUTE_KEYS = {
     ("POST", "/api/v1/server-config/open"),
     ("POST", "/api/v1/pictures/export/folder"),
     ("POST", "/api/v1/pictures/share-copies"),
+    ("GET", "/api/v1/pictures/{id}/open-with"),
+    ("POST", "/api/v1/pictures/{id}/open-with"),
     ("POST", "/api/v1/test-hooks/ws-event"),
     ("POST", "/api/v1/test-hooks/reference-folders/{folder_id}/rescan"),
     ("POST", "/api/v1/test-hooks/file-pictures"),
@@ -554,6 +556,10 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     ``export/folder``'s write without the caller-named destination and without
     the spawn, on that route's tier because the paths it hands back are useless
     and owner data anywhere but loopback.
+    87 = 70 + 17 with ``GET`` and ``POST /pictures/{id}/open-with``: the GET
+    lists the applications installed on the host, the POST writes an edit copy
+    to the host disk and spawns one of those applications on it, which is
+    ``open-location``'s authority.
 
     Arithmetic, not judgement."""
     loopback = {
@@ -567,7 +573,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
         if rp.policy is AccessPolicy.LOCAL_OWNER_ONLY
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
-    assert len(loopback) == 15, sorted(loopback)
+    assert len(loopback) == 17, sorted(loopback)
     assert len(local) == 70, sorted(local)
 
 
@@ -1288,6 +1294,53 @@ def test_share_copies_is_loopback_only_even_with_the_flag_on():
                 assert _is_loopback_403(r), (
                     f"{ip} must be 403'd on share-copies; got {r.status_code}: {r.text}"
                 )
+
+
+_OPEN_WITH = f"{API}/pictures/999999/open-with"
+
+
+def test_open_with_is_loopback_only_and_closed_to_a_read_token():
+    """Both open-with routes pass a loopback owner and 403 RFC1918, Tailscale
+    and public even with ``allow_remote_host_ops`` on. The GET lists the host's
+    installed applications, so a READ token is refused too: it is templated,
+    so no READ belt names it and the gate alone has to refuse it, which the
+    gate-off half proves (the same token then reaches the handler's 404).
+
+    The id is one no vault holds, so the loopback owner gets the handler's 404:
+    the route resolves, and nothing is listed or launched."""
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server), _remote_host_ops(server, True):
+            assert owner.get(_OPEN_WITH).status_code == 404
+            assert owner.post(_OPEN_WITH, json={"app_id": "x"}).status_code == 404
+            for ip in (LAN_IPV4, "100.64.0.5", "8.8.8.8"):
+                for r in (
+                    owner.get(_OPEN_WITH, headers=_xff(ip)),
+                    owner.post(_OPEN_WITH, json={"app_id": "x"}, headers=_xff(ip)),
+                ):
+                    assert _is_loopback_403(r), (
+                        f"{ip} must be 403'd on open-with; got {r.status_code}: {r.text}"
+                    )
+
+        minted = owner.post(
+            f"{API}/users/me/token",
+            json={"description": "full read", "scope": "READ"},
+        )
+        assert minted.status_code == 200, minted.text
+        anon = TestClient(server.api, raise_server_exceptions=True)
+        share = {"Authorization": f"Bearer {minted.json()['token']}"}
+        assert anon.get(f"{API}/pictures", headers=share).status_code == 200, (
+            "the READ token is dead; the refusal below would prove nothing"
+        )
+        with _enforcing(server):
+            refused = anon.get(_OPEN_WITH, headers=share)
+            assert refused.status_code == 403, refused.text
+        previously_enforcing = server.authz._enforcing
+        server.authz._enforcing = False
+        try:
+            assert anon.get(_OPEN_WITH, headers=share).status_code == 404
+        finally:
+            server.authz._enforcing = previously_enforcing
 
 
 _SHELF_OPEN = f"{API}/models/999999/open-location"  # the #933 red-line route

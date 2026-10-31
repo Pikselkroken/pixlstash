@@ -582,6 +582,7 @@ jobs:
           tests/test_mps_memory_and_providers.py
           tests/test_node_pack_install.py
           tests/test_ocr_text.py
+          tests/test_open_with.py
           tests/test_openapi_response_schemas.py
           tests/test_operation_log.py
           tests/test_orientation.py

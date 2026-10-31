@@ -1089,6 +1089,18 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _LOOPBACK,
         justification="§16.3 host write (#2417): writes picture copies into a staging folder on the host disk and returns their absolute host paths, which only a process on that machine (the desktop app) can use; loopback-only like its sibling export/folder, allow_remote_host_ops can NOT loosen it. Remote and scoped sessions use the ZIP export",
     ),
+    # Open with (edit copies): the GET reveals which applications the host has
+    # installed, the POST writes an edit copy to the host disk and spawns a host
+    # GUI program on it. Both are about the host, not about any row, so they
+    # sit on the share-copies / open-location tier.
+    ("GET", "/api/v1/pictures/{id}/open-with"): RoutePolicy(
+        _LOOPBACK,
+        justification="§16.3 host capability: lists the applications installed on the machine running PixlStash for a picture's file type, which is owner data about the host; loopback-only like its POST sibling, allow_remote_host_ops can NOT loosen it",
+    ),
+    ("POST", "/api/v1/pictures/{id}/open-with"): RoutePolicy(
+        _LOOPBACK,
+        justification="§16.3.1 RED LINE: writes an edit copy of a picture onto the host disk and spawns a host GUI program on it (gio launch / open -a / IAssocHandler.Invoke - the same host-GUI authority as pictures/{id}/open-location); the program is only ever one the OS listed for the file type, never one the request names; loopback-only, allow_remote_host_ops can NOT loosen it",
+    ),
     ("POST", "/api/v1/pictures/import"): RoutePolicy(
         _OWNER,
         justification="Import pictures; POST blocked for READ tokens; owner only",
