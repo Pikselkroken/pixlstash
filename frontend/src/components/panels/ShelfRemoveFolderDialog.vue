@@ -301,7 +301,7 @@ function moveModelsOut() {
 .srf-note {
   margin: 0;
   font-size: var(--text-sm);
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .srf-columns {
@@ -331,7 +331,7 @@ function moveModelsOut() {
   margin: var(--space-3) 0 var(--space-1);
   font-size: var(--text-xs);
   font-weight: var(--weight-medium);
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .srf-files,
@@ -375,13 +375,13 @@ function moveModelsOut() {
 .srf-tag {
   flex-shrink: 0;
   font-size: var(--text-2xs);
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .srf-size {
   flex-shrink: 0;
   font-variant-numeric: tabular-nums;
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .srf-breaks li {
@@ -393,13 +393,13 @@ function moveModelsOut() {
 
 .srf-uses {
   font-size: var(--text-xs);
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .srf-calm {
   margin: var(--space-3) 0 0;
   font-size: var(--text-xs);
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .srf-type {
@@ -410,7 +410,7 @@ function moveModelsOut() {
 
 .srf-type-hint {
   font-size: var(--text-xs);
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 /* The input DeleteForeverDialog draws for its typed confirmation. */

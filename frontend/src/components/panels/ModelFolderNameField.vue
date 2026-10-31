@@ -126,7 +126,7 @@ onMounted(async () => {
 .mnf-hint {
   margin: 0;
   font-size: var(--text-2xs);
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .mnf--error .mnf-hint {

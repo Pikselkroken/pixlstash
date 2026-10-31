@@ -330,7 +330,7 @@ async function submit() {
   margin-bottom: var(--space-2);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 /* The tree scrolls inside the dialog rather than growing it past the
@@ -350,7 +350,7 @@ async function submit() {
 
 .smd-fact dt {
   font-size: var(--text-xs);
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .smd-fact dd {
@@ -369,6 +369,6 @@ async function submit() {
 .smd-note {
   margin: 0;
   font-size: var(--text-sm);
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 </style>

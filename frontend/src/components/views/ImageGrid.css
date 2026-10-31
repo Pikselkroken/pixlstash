@@ -1206,7 +1206,7 @@
 .multi-select-toolbar__label {
   padding: 0 var(--space-4);
   white-space: nowrap;
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: inherit;
   font-size: var(--text-sm);
 }
 
@@ -1226,7 +1226,7 @@
   padding: 0 6px 0 var(--space-2);
   font-size: var(--text-xs);
   font-weight: 600;
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: inherit;
   white-space: nowrap;
   flex: 0 0 auto;
 }
@@ -1237,7 +1237,7 @@
   border: none;
   border-right: 1px solid rgba(var(--v-theme-on-surface), 0.12);
   background: transparent;
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: inherit;
   font-size: var(--text-sm);
   cursor: pointer;
   appearance: auto;
