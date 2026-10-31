@@ -153,6 +153,7 @@ def serialize_user_config(user) -> dict:
         "grid_open_gesture",
         "viewer_wheel_action",
         "embed_watermark",
+        "keep_workflow_on_export",
     }
 
     # ``getattr(..., None)`` (not bare ``getattr``) so a source object that
@@ -284,6 +285,7 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "grid_open_gesture",
         "viewer_wheel_action",
         "embed_watermark",
+        "keep_workflow_on_export",
         "tagger_settings",
     }
 
@@ -434,9 +436,10 @@ def apply_user_config_patch(user, patch_data) -> bool:
                 user.max_vram_gb = new_value
                 updated = True
             continue
-        if key in telemetry_fields:
+        if key in telemetry_fields or key == "keep_workflow_on_export":
             # Coerce like the other boolean toggles, so a client PATCHing the
-            # string "false" cannot silently enable a telemetry category.
+            # string "false" cannot silently enable a telemetry category or
+            # start exporting workflows.
             if value in ("", None, "null", "false", "False", "0", 0):
                 new_value = False
             else:

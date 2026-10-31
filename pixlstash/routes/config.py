@@ -291,6 +291,14 @@ def create_router(server) -> APIRouter:
         grid_open_gesture: Optional[str] = None
         viewer_wheel_action: Optional[str] = None
         embed_watermark: Optional[bool] = None
+        keep_workflow_on_export: Optional[bool] = Field(
+            default=None,
+            description=(
+                "Exports keep generation data (ComfyUI workflow, prompt, "
+                "A1111 parameters). Off by default; the Export panel's switch "
+                "reads and writes it."
+            ),
+        )
         smart_score_penalised_tags: Optional[dict] = None
         hidden_tags: Optional[list] = None
         tagger_settings: Optional[dict] = None

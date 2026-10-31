@@ -301,6 +301,10 @@ export const useNoticeStore = defineStore("notice", () => {
    *   this is passed explicitly, which overrides that default (§6 rule 1).
    * @param {{label: string, handler: Function}} [opts.action] - single optional
    *   action. Invoking it dismisses the notice unless the handler returns false.
+   * @param {{icon: string, label: string}} [opts.badge] - a small glyph in
+   *   warning ink after the message, for a privacy fact the sentence does not
+   *   carry (copied files that keep their workflow). `label` is what assistive
+   *   tech reads and the tooltip shows.
    * @param {string} [opts.key] - coalescing key (§9.1). Pushing with a key that
    *   is already live updates that notice and increments its `count` instead of
    *   appending a second card. This is what stops a bulk operation over 50
@@ -312,6 +316,7 @@ export const useNoticeStore = defineStore("notice", () => {
     text = "",
     timeout,
     action = null,
+    badge = null,
     key,
   } = {}) {
     const safeLevel = LEVELS.has(level) ? level : "info";
@@ -345,6 +350,7 @@ export const useNoticeStore = defineStore("notice", () => {
         existing.level = safeLevel;
         existing.timeout = resolved;
         existing.action = hasAction ? action : null;
+        existing.badge = badge;
         // Restart the countdown: the event just happened again, so the reading
         // window starts over rather than expiring mid-burst.
         //
@@ -376,6 +382,7 @@ export const useNoticeStore = defineStore("notice", () => {
       text: message,
       timeout: resolved,
       action: hasAction ? action : null,
+      badge,
       key: key ?? null,
       count: 1,
       // True while the auto-dismiss countdown is ticking (see `setRunning`).

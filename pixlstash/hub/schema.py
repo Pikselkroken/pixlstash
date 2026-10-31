@@ -166,6 +166,7 @@ CREATE TABLE IF NOT EXISTS user (
     telemetry_consent_prompted INTEGER,
     embed_watermark             INTEGER,
     watermark_image             BLOB,
+    keep_workflow_on_export     INTEGER,
 
     -- Library-scoped by §5; present only so the shared ``User`` model maps.
     -- Never read from the hub; the vault's library_settings row owns them.
@@ -2123,6 +2124,9 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     for column in ("grid_open_gesture", "viewer_wheel_action"):
         if column not in user_columns:
             conn.execute(f"ALTER TABLE user ADD COLUMN {column} TEXT")
+    # An export keeps the workflow (#2417): NULL reads as strip.
+    if "keep_workflow_on_export" not in user_columns:
+        conn.execute("ALTER TABLE user ADD COLUMN keep_workflow_on_export INTEGER")
     # A hub an earlier build opened also has ``user.pull_comfyui_workflows``
     # (NOT NULL DEFAULT 1), the switch of the removed pull of ComfyUI's saved
     # workflows (#1854). Nothing reads or adds it; it is not worth a migration

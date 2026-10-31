@@ -5,7 +5,11 @@ vi.mock("../api/pictures", () => ({ makeShareCopies: vi.fn() }));
 
 import { makeShareCopies } from "../api/pictures";
 import { useNoticeStore } from "../stores/useNoticeStore";
-import { canCopyFiles, copyPicturesAsFiles } from "./copyAsFiles";
+import {
+  KEPT_DATA_BADGE,
+  canCopyFiles,
+  copyPicturesAsFiles,
+} from "./copyAsFiles";
 
 const copyFilesToClipboard = vi.fn(async () => ({ copied: 1 }));
 
@@ -46,6 +50,35 @@ describe("copyPicturesAsFiles", () => {
       "/home/me/b.png",
     ]);
     expect(n.success).toHaveBeenCalledWith("Copied 2 files.", expect.anything());
+  });
+
+  it("badges the receipt when a file kept its generation data", async () => {
+    const n = notices();
+    makeShareCopies.mockResolvedValue({
+      files: [
+        { path: "/home/me/a.png", metadata: "removed" },
+        { path: "/home/me/b.png", metadata: "kept" },
+      ],
+      skipped: [],
+    });
+    await copyPicturesAsFiles([1, 2]);
+    expect(n.success).toHaveBeenCalledWith(
+      "Copied 2 files.",
+      expect.objectContaining({ badge: KEPT_DATA_BADGE }),
+    );
+  });
+
+  it("leaves the badge off when every file was stripped", async () => {
+    const n = notices();
+    makeShareCopies.mockResolvedValue({
+      files: [{ path: "/home/me/a.png", metadata: "removed" }],
+      skipped: [],
+    });
+    await copyPicturesAsFiles([1]);
+    expect(n.success).toHaveBeenCalledWith(
+      "Copied 1 file.",
+      expect.objectContaining({ badge: null }),
+    );
   });
 
   it("says how many could not be read", async () => {

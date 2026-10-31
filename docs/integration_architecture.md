@@ -1764,6 +1764,19 @@ the lightbox's Ctrl/⌘+C stays "Copy picture" (a PNG via `media:copyPng`) for
 apps that only take images. On Linux a GTK desktop's chat apps that read only
 `text/uri-list` get no files; offering both would need a native helper.
 
+**Only an export strips.** Copying as files (#2419) and dragging out (#2420)
+always hand over the generation data: stripping during a drag costs too much,
+so stripping is what an explicit export does (owner ruling 2026-10-31). Whether
+an export keeps it is one user-config boolean, `keep_workflow_on_export`, false
+by default, held as `useUserPrefsStore().keepWorkflowOnExport` and saved with
+`saveKeepWorkflowOnExport(value)`, which changes the local value only once the
+PATCH succeeds. The Export panel sends it as `keep_generation_data`; the backend
+does not look it up. It is set in Settings › Sharing (`SharingSection.vue`) or
+by the Export panel's *Keep the workflow* switch, which reads and writes it.
+A copy receipt whose files kept their data (`metadata` other than `removed`)
+carries the notice `badge` (`KEPT_DATA_BADGE` in `utils/copyAsFiles.js`), a
+shield in warning ink that `NoticeHost.vue` reads out by its label.
+
 Batches outlive the drop or paste (a receiving app may read the file later) and
 are removed after 12 hours, at start-up and before each new batch. The route
 answers `409` if the root sits inside a library, a reference folder or an

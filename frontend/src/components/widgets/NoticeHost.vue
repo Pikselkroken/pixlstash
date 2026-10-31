@@ -25,6 +25,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { VIcon } from "vuetify/components";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import AppBarButton from "./AppBarButton.vue";
+import Tooltip from "./Tooltip.vue";
 import { NARROW_VIEWPORT_MAX_PX } from "../../utils/floatingBottom";
 
 const props = defineProps({
@@ -136,6 +137,19 @@ const hostEl = ref(null);
           {{ GLYPHS[card.level] || GLYPHS.info }}
         </v-icon>
         <span class="notice-message" :title="card.text">{{ card.text }}</span>
+        <span
+          v-if="card.badge"
+          class="notice-badge"
+          role="img"
+          :aria-label="card.badge.label"
+        >
+          <v-icon size="16" aria-hidden="true">{{ card.badge.icon }}</v-icon>
+          <Tooltip
+            :text="card.badge.label"
+            :describe="false"
+            activator="parent"
+          />
+        </span>
         <span
           v-if="card.count > 1"
           class="notice-count"
@@ -300,6 +314,17 @@ const hostEl = ref(null);
   color: rgb(var(--v-theme-on-surface));
   /* Optical centre on the message's first line. */
   margin-top: 1px;
+}
+
+/* A privacy fact the sentence does not carry, in warning ink (#2417). */
+.notice-badge {
+  display: inline-flex;
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: rgb(var(--v-theme-surface-warning));
+}
+.notice-host--on-dark .notice-badge {
+  color: rgb(var(--v-theme-dark-surface-warning));
 }
 
 .notice-message {

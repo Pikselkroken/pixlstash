@@ -25,6 +25,10 @@ export const useUserPrefsStore = defineStore("userPrefs", () => {
   // a purge. Persisted server-side per user (hydrated from the user config in
   // App.vue), so it follows the account across devices/browsers.
   const hidePurgeSnapshotWarning = ref(false);
+  // Whether an export (the Export panel, the Share panel) keeps the ComfyUI
+  // workflow, prompt and A1111 parameters. Strips by default (#2417); copy and
+  // drag-out always keep them.
+  const keepWorkflowOnExport = ref(false);
 
   // Opt-in telemetry. Every category is off until the user turns it on, on
   // every install and every install type. `telemetryConsentPrompted` records
@@ -89,6 +93,25 @@ export const useUserPrefsStore = defineStore("userPrefs", () => {
       cfg?.telemetry_send_hardware_profile,
     );
     telemetryConsentPrompted.value = Boolean(cfg?.telemetry_consent_prompted);
+  }
+
+  /**
+   * Persist whether an export keeps the workflow. The local value changes only
+   * once the server has it, so a failed save never shows "Keeps" while files
+   * still leave stripped, or the reverse.
+   * @returns {Promise<boolean>} whether it was saved.
+   */
+  async function saveKeepWorkflowOnExport(value) {
+    if (isReadOnly.value) return false;
+    const next = Boolean(value);
+    try {
+      await patchUserConfig({ keep_workflow_on_export: next });
+    } catch (e) {
+      console.error("Failed to persist keep_workflow_on_export:", e);
+      return false;
+    }
+    keepWorkflowOnExport.value = next;
+    return true;
   }
 
   async function setHidePurgeSnapshotWarning(val) {
@@ -173,6 +196,8 @@ export const useUserPrefsStore = defineStore("userPrefs", () => {
     embedWatermark,
     hidePurgeSnapshotWarning,
     setHidePurgeSnapshotWarning,
+    keepWorkflowOnExport,
+    saveKeepWorkflowOnExport,
     telemetrySendInstallId,
     telemetrySendFeatureUsage,
     telemetrySendErrorReports,

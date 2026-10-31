@@ -92,6 +92,10 @@ class User(SQLModel, table=True):
     grid_open_gesture: Optional[str] = Field(default="double")
     viewer_wheel_action: Optional[str] = Field(default="zoom")
     embed_watermark: bool = Field(default=True)
+    # Whether an export (the Export panel, the Share panel) keeps the ComfyUI
+    # workflow, prompt and A1111 parameters. Off (strip) by default (#2417);
+    # NULL reads as off. Copy and drag-out always keep them.
+    keep_workflow_on_export: bool = Field(default=False)
     watermark_image: Optional[bytes] = Field(
         default=None,
         sa_column=Column(LargeBinary, nullable=True),

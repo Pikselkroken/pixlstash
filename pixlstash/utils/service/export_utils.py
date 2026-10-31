@@ -17,6 +17,7 @@ from pixlstash.db_models.face import Face
 from pixlstash.db_models.picture import Picture, PictureSet
 from pixlstash.db_models.picture_set import PictureSetMember
 from pixlstash.utils.host_open import open_in_file_manager
+from pixlstash.utils.image_processing.generation_data import strip_generation_data
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.utils.service.caption_utils import CaptionUtils
@@ -182,6 +183,70 @@ class _FolderSink:
         kwargs = {} if mode == "wb" else {"encoding": "utf-8"}
         with open(os.path.join(self.root, arcname), mode, **kwargs) as f:
             f.write(data)
+
+
+_STRIPPABLE_EXTS = frozenset({".png", ".jpg", ".jpeg", ".webp"})
+
+
+class _StripGenerationDataSink:
+    """Wrap an export sink so every image member leaves without generation data.
+
+    The export's "Keep the workflow" off (the Share panel and Export row in
+    Settings › Privacy). Wrapping the sink rather than each write site covers
+    every branch of :meth:`ExportUtils._write_export_pictures` - the original
+    file, a resized re-encode, a trainer PNG, a face crop - in one place. A
+    format :func:`strip_generation_data` does not handle (videos, GIF, TIFF)
+    goes through unchanged, as it does for share copies.
+    """
+
+    def __init__(self, sink):
+        self._sink = sink
+
+    @staticmethod
+    def _strippable(arcname: str) -> bool:
+        return os.path.splitext(arcname)[1].lower() in _STRIPPABLE_EXTS
+
+    @staticmethod
+    def _strip(data: bytes, arcname: str, source: str):
+        """Stripped bytes, ``None`` for an unhandled format, ``False`` if broken."""
+        try:
+            return strip_generation_data(data)
+        except ValueError as exc:
+            # Fail closed: a file whose structure cannot be walked cannot be
+            # promised clean, so it is left out rather than sent as it is, and
+            # one broken picture does not fail the rest of the export.
+            logger.warning(
+                "Left %s (%s) out of the export: could not strip its "
+                "generation data: %s",
+                arcname,
+                source,
+                exc,
+            )
+            return False
+
+    def write(self, full_path: str, arcname: str) -> None:
+        if not self._strippable(arcname):
+            self._sink.write(full_path, arcname=arcname)
+            return
+        # ponytail: reads the whole image into memory; fine for pictures, a
+        # streaming chunk walker if huge originals ever show up here.
+        with open(full_path, "rb") as fh:
+            stripped = self._strip(fh.read(), arcname, full_path)
+        if stripped is False:
+            return
+        if stripped is None:
+            self._sink.write(full_path, arcname=arcname)
+            return
+        self._sink.writestr(arcname, stripped)
+
+    def writestr(self, arcname: str, data) -> None:
+        if isinstance(data, (bytes, bytearray)) and self._strippable(arcname):
+            stripped = self._strip(bytes(data), arcname, "re-encoded")
+            if stripped is False:
+                return
+            if stripped is not None:
+                data = stripped
+        self._sink.writestr(arcname, data)
 
 
 class ExportUtils:
@@ -449,6 +514,9 @@ class ExportUtils:
         )
 
         use_original_file_names = background_data.get("use_original_file_names", False)
+        # Strip unless asked to keep (#2417): the export is a way out like any
+        # other share.
+        keep_generation_data = bool(background_data.get("keep_generation_data", False))
 
         if export_type_d != Picture.ExportType.FULL:
             caption_mode_d = "tags"
@@ -503,6 +571,7 @@ class ExportUtils:
             "picture_ids": picture_ids,
             "select_fields": select_fields,
             "use_original_file_names": use_original_file_names,
+            "keep_generation_data": keep_generation_data,
             "tag_format_d": tag_format_d,
             "bbox_mode_d": bbox_mode_d,
         }
@@ -802,7 +871,13 @@ class ExportUtils:
         ``zipfile.ZipFile`` for :meth:`generate_zip`, or :class:`_FolderSink`
         for :meth:`generate_folder_export`. Neither this loop nor the member
         sidecar helpers it calls care which.
+
+        ``params["keep_generation_data"]`` false strips every image member; a
+        caller that never sets it (the training dataset) keeps the files as
+        they are.
         """
+        if not params.get("keep_generation_data", True):
+            sink = _StripGenerationDataSink(sink)
         export_type_d = params["export_type_d"]
         caption_mode_d = params["caption_mode_d"]
         include_character_name_enabled = params["include_character_name_enabled"]

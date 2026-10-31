@@ -13,6 +13,7 @@ import ComputeSection from "./ComputeSection.vue";
 import ModelFoldersSection from "./ModelFoldersSection.vue";
 import TrainingSection from "./TrainingSection.vue";
 import PrivacySection from "./PrivacySection.vue";
+import SharingSection from "./SharingSection.vue";
 import ScrapheapSection from "./ScrapheapSection.vue";
 import SnapshotsSection from "./SnapshotsSection.vue";
 import SmartScoreSection from "./SmartScoreSection.vue";
@@ -135,6 +136,14 @@ const navItems = computed(() =>
       id: "privacy",
       icon: "shield-lock-outline",
       label: "Privacy",
+      show: !isReadOnly.value,
+    },
+    {
+      // What leaves with a shared file, per way out (#2417). Beside Privacy,
+      // whose pane has no room left for it.
+      id: "sharing",
+      icon: "share-variant-outline",
+      label: "Sharing",
       show: !isReadOnly.value,
     },
     {
@@ -350,6 +359,16 @@ watch(
         aria-labelledby="settings-nav-privacy"
       >
         <PrivacySection :open="dialogOpen && settingsTab === 'privacy'" />
+      </div>
+      <div
+        v-if="!isReadOnly"
+        v-show="settingsTab === 'sharing'"
+        id="settings-pane-sharing"
+        class="settings-pane"
+        role="region"
+        aria-labelledby="settings-nav-sharing"
+      >
+        <SharingSection />
       </div>
       <div
         v-if="!isReadOnly"

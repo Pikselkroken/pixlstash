@@ -30,6 +30,7 @@ vi.mock("./LibrariesSection.vue", () => ({ default: sectionStub }));
 vi.mock("./ImportFoldersSection.vue", () => ({ default: sectionStub }));
 vi.mock("./ModelFoldersSection.vue", () => ({ default: sectionStub }));
 vi.mock("./PrivacySection.vue", () => ({ default: sectionStub }));
+vi.mock("./SharingSection.vue", () => ({ default: sectionStub }));
 vi.mock("./ScrapheapSection.vue", () => ({ default: sectionStub }));
 vi.mock("./SnapshotsSection.vue", () => ({ default: sectionStub }));
 vi.mock("./TrainingSection.vue", () => ({ default: sectionStub }));

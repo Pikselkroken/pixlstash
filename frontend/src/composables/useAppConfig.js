@@ -294,6 +294,7 @@ export function useAppConfig({
       userPrefsStore.checkForUpdates =
         cfu === true ? true : cfu === false ? false : null;
       userPrefsStore.hydrateTelemetry(cfg);
+      userPrefsStore.keepWorkflowOnExport = cfg?.keep_workflow_on_export === true;
       if (!userPrefsStore.telemetryConsentPrompted) {
         // On desktop the question is asked by the startup screen, before the
         // app loads, and the answer waits for us here. Applying it is what

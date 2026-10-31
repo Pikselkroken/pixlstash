@@ -8963,6 +8963,7 @@ async function exportCurrentViewToZip(options = {}) {
   const useOriginalFileNames = options.useOriginalFileNames === true;
   const resolution = options.resolution || "original";
   const bboxMode = options.bboxMode || "none";
+  const keepGenerationData = options.keepGenerationData === true;
   const params = exportPictureParams();
   const extraParams = new URLSearchParams();
   if (exportType) {
@@ -8985,6 +8986,10 @@ async function exportCurrentViewToZip(options = {}) {
   }
   if (bboxMode && bboxMode !== "none") {
     extraParams.append("bbox_mode", bboxMode);
+  }
+  // Stripped unless the Share panel and Export row says keep (#2417).
+  if (keepGenerationData) {
+    extraParams.append("keep_generation_data", "true");
   }
   const extraParamString = extraParams.toString();
   const exportQuery = [params, extraParamString].filter(Boolean).join("&");
@@ -9088,6 +9093,7 @@ async function exportCurrentViewToFolder(options = {}) {
   const useOriginalFileNames = options.useOriginalFileNames === true;
   const resolution = options.resolution || "original";
   const bboxMode = options.bboxMode || "none";
+  const keepGenerationData = options.keepGenerationData === true;
   const params = exportPictureParams();
   const extraParams = new URLSearchParams();
   extraParams.append("destination", destination);
@@ -9111,6 +9117,10 @@ async function exportCurrentViewToFolder(options = {}) {
   }
   if (bboxMode && bboxMode !== "none") {
     extraParams.append("bbox_mode", bboxMode);
+  }
+  // Stripped unless the Share panel and Export row says keep (#2417).
+  if (keepGenerationData) {
+    extraParams.append("keep_generation_data", "true");
   }
   const extraParamString = extraParams.toString();
   const exportQuery = [params, extraParamString].filter(Boolean).join("&");
