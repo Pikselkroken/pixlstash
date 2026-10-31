@@ -51,7 +51,9 @@
       </div>
 
       <!-- WatermarkDrop: the thumbnail IS the control. Click opens the file
-           picker, a reset overlay clears it. -->
+           picker, a reset overlay clears it. It takes no drop: the window's
+           import handler claims a dropped file first and imports it into the
+           library, so the hint promises only the click. -->
       <div class="sh__wm">
         <FieldLabel>Watermark</FieldLabel>
         <div class="wm-drop">
@@ -75,7 +77,7 @@
             />
             <template v-if="!watermarkPreviewUrl">
               <v-icon size="26">mdi-image-plus-outline</v-icon>
-              <span class="wm-drop__hint">Click or drop an image</span>
+              <span class="wm-drop__hint">Click to choose an image</span>
             </template>
           </button>
           <button
@@ -150,6 +152,12 @@ async function savePublicUrl() {
   const trimmed = publicUrlValue.value.trim().replace(/\/$/, "");
   publicUrlValue.value = trimmed;
   if ((trimmed || null) === (prefs.publicUrl || null)) return;
+  // A share link is this plus a path, so without a scheme it is a relative
+  // link that works for nobody outside.
+  if (trimmed && !/^https?:\/\/[^/]/i.test(trimmed)) {
+    publicUrlError.value = "Enter a full address starting with https:// or http://.";
+    return;
+  }
   publicUrlLoading.value = true;
   try {
     await patchUserConfig({ public_url: trimmed || null });

@@ -98,6 +98,29 @@ describe("public base URL", () => {
     expect(prefs.publicUrl).toBe("https://new.example.com");
   });
 
+  it.each(["my-tunnel.example.com", "ftp://share.example.com", "https://"])(
+    "refuses %s, which would make share links that work for nobody",
+    async (typed) => {
+      const { wrapper, prefs, input } = await mountOpen();
+      await input.setValue(typed);
+      await input.trigger("blur");
+      await flushPromises();
+      expect(config.patchUserConfig).not.toHaveBeenCalled();
+      expect(prefs.publicUrl).toBe("https://old.example.com");
+      expect(wrapper.text()).toContain("starting with https://");
+    },
+  );
+
+  it("still clears the URL when the field is emptied", async () => {
+    config.patchUserConfig.mockResolvedValue({});
+    const { prefs, input } = await mountOpen();
+    await input.setValue("  ");
+    await input.trigger("blur");
+    await flushPromises();
+    expect(config.patchUserConfig).toHaveBeenCalledWith({ public_url: null });
+    expect(prefs.publicUrl).toBe(null);
+  });
+
   it("keeps the store's URL when the save fails", async () => {
     config.patchUserConfig.mockRejectedValue(new Error("offline"));
     const { wrapper, prefs, input } = await mountOpen();
