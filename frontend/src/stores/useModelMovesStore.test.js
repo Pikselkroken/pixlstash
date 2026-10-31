@@ -398,6 +398,18 @@ describe("watching one to its end", () => {
     store.job = snapshot({ total: 4, done: 1, bytes_to_copy: 0 });
     expect(store.percent).toBe(25);
   });
+
+  it("fills while one large file copies, from the bytes read", () => {
+    const store = useModelMovesStore();
+    // Copied and half verified: 1.5 of the 2 passes over 1000 bytes.
+    store.job = snapshot({
+      total: 1,
+      done: 0,
+      bytes_to_copy: 1000,
+      bytes_done: 1500,
+    });
+    expect(store.percent).toBe(75);
+  });
 });
 
 describe("the move receipt", () => {

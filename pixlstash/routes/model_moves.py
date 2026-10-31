@@ -322,6 +322,14 @@ class MoveStatusResponse(BaseModel):
         ),
     )
     done: int = Field(default=0, description="Items decided so far.")
+    bytes_done: int = Field(
+        default=0,
+        description=(
+            "Bytes read so far by the copies and by the read-back that verifies "
+            "each one, so it climbs towards twice `bytes_to_copy` while a large "
+            "file is in flight. Renames add nothing."
+        ),
+    )
     bytes_to_copy: int = Field(
         default=0,
         description=(
@@ -356,6 +364,7 @@ def _snapshot(job: Optional[dict]) -> MoveStatusResponse:
         destination_subpath=job.get("destination_subpath", ""),
         total=job["total"],
         done=len(job["results"]),
+        bytes_done=job["bytes_done"],
         bytes_to_copy=job["bytes_to_copy"],
         cancel_requested=job["cancel"].is_set(),
         results=[MoveItemResult(**result) for result in job["results"]],
@@ -383,6 +392,12 @@ def _record_result(job: dict, outcome: MoveOutcome) -> None:
                 "detail": outcome.detail,
             }
         )
+
+
+def _add_bytes(job: dict, count: int) -> None:
+    """Count bytes the job's copy or verify read, under the readers' lock."""
+    with _job_lock:
+        job["bytes_done"] += count
 
 
 def _done_count(job: dict) -> int:
@@ -463,6 +478,7 @@ def _start_job(
             "destination_subpath": destination_subpath,
             "total": total,
             "bytes_to_copy": bytes_to_copy,
+            "bytes_done": 0,
             "results": [],
             "cancel": threading.Event(),
             "started_at": _utcnow(),
@@ -662,6 +678,7 @@ def create_router(server) -> APIRouter:
                 plan,
                 should_cancel=job["cancel"].is_set,
                 on_progress=lambda outcome: _record_result(job, outcome),
+                on_bytes=lambda count: _add_bytes(job, count),
             )
             # The cancelled tail is decided in one go rather than reported
             # file by file, so append whatever `on_progress` did not see.

@@ -240,13 +240,13 @@ def test_the_steps_happen_in_the_only_safe_order(
     original_repoint = ModelMover._repoint
     original_unlink = mover_module.unlink_source
 
-    def traced_copy(source, destination):
+    def traced_copy(source, destination, **kwargs):
         events.append("copy")
-        return original_copy(source, destination)
+        return original_copy(source, destination, **kwargs)
 
-    def traced_digest(path):
+    def traced_digest(path, **kwargs):
         events.append("verify")
-        return original_digest(path)
+        return original_digest(path, **kwargs)
 
     def traced_repoint(self, *args, **kwargs):
         events.append("commit")
@@ -302,6 +302,44 @@ def test_a_cross_device_move_ends_with_one_copy_and_a_repointed_row(
     assert_no_dangling_rows(two_folders["hub"])
 
 
+def test_a_copy_reports_its_bytes_as_they_are_copied_and_verified(
+    two_folders, cross_device
+):
+    """A single large file must fill the progress bar while it copies, rather
+    than sitting at ``0 / 1`` until it lands. Every byte is counted once by the
+    copy and once by the read-back that verifies it, and the count arrives in
+    chunks, before the outcome does."""
+    size = os.path.getsize(two_folders["source_path"])
+    counts: list[int] = []
+    decided_after: list[int] = []
+    mover = ModelMover(two_folders["hub"])
+    mover.execute(
+        mover.plan(
+            [(two_folders["source_id"], "alice.safetensors")],
+            two_folders["destination_id"],
+        ),
+        on_bytes=counts.append,
+        on_progress=lambda _outcome: decided_after.append(sum(counts)),
+    )
+
+    assert size > 0
+    assert sum(counts) == 2 * size
+    assert decided_after == [2 * size], "the bytes were reported after the outcome"
+
+
+def test_a_rename_reports_no_bytes(two_folders):
+    counts: list[int] = []
+    mover = ModelMover(two_folders["hub"])
+    mover.execute(
+        mover.plan(
+            [(two_folders["source_id"], "alice.safetensors")],
+            two_folders["destination_id"],
+        ),
+        on_bytes=counts.append,
+    )
+    assert counts == []
+
+
 def test_a_same_drive_move_is_a_rename_and_copies_nothing(two_folders):
     """The ruling: same drive skips the copy, the verify and the space check.
     Proved by the inode surviving - a copy would allocate a new one - and by no
@@ -329,7 +367,7 @@ def test_a_copy_that_does_not_verify_leaves_the_original_alone(
     """A bad write must cost the copy, never the original. The failure is
     reported per file and the source is still exactly where the row says."""
     # The destination reads back as something else entirely.
-    monkeypatch.setattr(mover_module, "file_digest", lambda path: "0" * 64)
+    monkeypatch.setattr(mover_module, "file_digest", lambda path, **_: "0" * 64)
     mover = ModelMover(two_folders["hub"])
     report = mover.execute(
         mover.plan(

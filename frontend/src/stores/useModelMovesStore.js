@@ -190,16 +190,22 @@ export const useModelMovesStore = defineStore("modelMoves", () => {
   const cancelRequested = computed(() => Boolean(job.value?.cancel_requested));
 
   /**
-   * How far along, as a percentage of items decided.
+   * How far along: items decided, or bytes read, whichever is further.
    *
-   * Items and not bytes, because `bytes_to_copy` is ZERO for a same-drive move
-   * - those are renames - so a byte-based bar would sit at 0% for the whole of
-   * the fastest case and then jump. Items are the unit the server actually
-   * reports progress in.
+   * Items alone left one large cross-drive file at 0% for the whole minute it
+   * took to copy - it read as stuck. Bytes alone sit at 0% through a same-drive
+   * move, where `bytes_to_copy` is ZERO because those are renames. The server
+   * counts every copied byte twice, once copying and once reading it back to
+   * verify, so `bytes_done` climbs to twice `bytes_to_copy`.
    */
-  const percent = computed(() =>
-    total.value ? Math.round((done.value / total.value) * 100) : 0,
-  );
+  const percent = computed(() => {
+    const items = total.value ? done.value / total.value : 0;
+    const toCopy = Number(job.value?.bytes_to_copy) || 0;
+    const bytes = toCopy
+      ? (Number(job.value?.bytes_done) || 0) / (2 * toCopy)
+      : 0;
+    return Math.round(Math.min(1, Math.max(items, bytes)) * 100);
+  });
 
   function stopPolling() {
     pollDelay = POLL_MS;
