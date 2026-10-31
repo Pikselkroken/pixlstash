@@ -86,12 +86,12 @@ test.describe('selection rail', () => {
 
     await grid.selectCards(1)
     await expect(tab).toBeVisible()
-    await expect(tab).toHaveAttribute('aria-label', /^Show stats: \S/)
+    await expect(tab).toHaveAttribute('aria-label', /^Show inspector: \S/)
     await expect(tab).toBeHidden({ timeout: 8000 })
 
     await grid.thumbnails.nth(1).click({ modifiers: ['ControlOrMeta'] })
     await expect(tab).toBeVisible()
-    await expect(tab).toHaveAttribute('aria-label', 'Show stats: 2 pictures')
+    await expect(tab).toHaveAttribute('aria-label', 'Show inspector: 2 pictures')
     await tab.click()
     await expect(grid.statsContent).toHaveCount(1)
     await expect(tab).toHaveCount(0)
@@ -110,7 +110,7 @@ test.describe('selection rail', () => {
     const shown = name.replace(/…$/, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     await expect(tab).toHaveAttribute(
       'aria-label',
-      new RegExp(`^Show stats: ${shown}`),
+      new RegExp(`^Show inspector: ${shown}`),
     )
   })
 

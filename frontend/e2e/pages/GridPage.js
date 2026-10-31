@@ -47,8 +47,8 @@ export class GridPage {
     this.selectionMenuPanel = page.locator('.selection-menu-panel')
     this.selectionCountLabel = page.locator('.selection-ctx-bar .selection-count')
     // Statistics sidebar — toggled from the toolbar. Its name is fixed
-    // ("Stats"; open is `aria-pressed`).
-    this.statsToggle = page.getByRole('button', { name: 'Stats', exact: true })
+    // ("Inspector"; open is `aria-pressed`).
+    this.statsToggle = page.getByRole('button', { name: 'Inspector', exact: true })
     this.statsSidebar = page.locator('.stats-sidebar')
     this.statsContent = page.locator('.stats-sidebar .inspector-content')
     this.statsTabs = page.locator('.stats-sidebar .inspector-tab')

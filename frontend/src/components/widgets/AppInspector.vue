@@ -82,7 +82,7 @@ import Tooltip from "./Tooltip.vue";
 defineProps({
   /** Open or collapsed to zero width. The pane keeps its place in the row. */
   open: { type: Boolean, default: true },
-  /** The accessible name of the pane ("Stats", "Inspector"). */
+  /** The accessible name of the pane ("Inspector", "Models"). */
   label: { type: String, required: true },
   /**
    * `[{ value, label, icon?, count?, disabled?, tooltip? }]`.

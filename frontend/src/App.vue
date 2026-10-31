@@ -1057,8 +1057,8 @@ defineExpose({
                 :nudge="sidebarStore.inspectorNudge"
                 :name="
                   statsEdgeTabLabel
-                    ? `Show stats: ${statsEdgeTabLabel}`
-                    : 'Show stats'
+                    ? `Show inspector: ${statsEdgeTabLabel}`
+                    : 'Show inspector'
                 "
                 @open="openStatsFromTab"
               />

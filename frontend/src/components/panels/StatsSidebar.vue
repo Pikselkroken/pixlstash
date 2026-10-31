@@ -1110,7 +1110,7 @@ function handleResolutionBarClick(label) {
   <AppInspector
     v-model="activeTab"
     class="stats-sidebar"
-    label="Stats"
+    label="Inspector"
     :open="sidebarStore.statsOpen"
     :tabs="railMode === 'none' ? tabs : []"
   >
