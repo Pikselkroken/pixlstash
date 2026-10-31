@@ -199,7 +199,7 @@ describe("the Open with submenu", () => {
     expect(listOpenWithApps).toHaveBeenCalledTimes(1);
   });
 
-  it("says when there is nothing to open it with", async () => {
+  it("says when there is nothing to open it with, and asks again next time", async () => {
     listOpenWithApps.mockResolvedValue({ apps: [], other: false });
     const wrapper = mountMenu();
     await openWithWrap(wrapper).trigger("mouseenter");
@@ -208,6 +208,16 @@ describe("the Open with submenu", () => {
     expect(
       openWithWrap(wrapper).find(".ctx-submenu button").attributes("disabled"),
     ).toBeDefined();
+
+    // An empty answer may be a tool that failed once: never cached.
+    listOpenWithApps.mockResolvedValue({
+      apps: [{ id: "gimp", name: "GIMP", default: false, editor: true }],
+      other: false,
+    });
+    const again = mountMenu();
+    await openWithWrap(again).trigger("mouseenter");
+    await flushPromises();
+    expect(rowTexts(again)).toEqual(["GIMP"]);
   });
 
   it("emits open-with with the picture and the chosen app, or the chooser", async () => {

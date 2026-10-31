@@ -285,7 +285,8 @@ class _PinnedVaultServer:
 def reconcile_all(server, root: str) -> int:
     """Run :func:`process_session` once over every session; how many imported.
 
-    At start-up, for an edit saved while the backend was not running.
+    At start-up, for an edit saved while the backend was not running. One
+    session that cannot be read is logged and skipped; the others still run.
     """
     try:
         entries = [e for e in os.scandir(root) if _is_batch_name(e.name)]
@@ -296,8 +297,19 @@ def reconcile_all(server, root: str) -> int:
         return 0
     imported = 0
     for entry in entries:
-        if entry.is_dir() and not entry.is_symlink():
-            imported += len(process_session(server, entry.path))
+        try:
+            if entry.is_dir() and not entry.is_symlink():
+                imported += len(process_session(server, entry.path))
+        except Exception as exc:
+            # Left in place: the next save into it, or the next start, retries.
+            logger.error(
+                "Could not reconcile edit copy session %s (%s: %s); the other "
+                "sessions are still reconciled.",
+                entry.path,
+                type(exc).__name__,
+                exc,
+                exc_info=True,
+            )
     return imported
 
 

@@ -148,7 +148,9 @@ async function load() {
       apps: Array.isArray(body?.apps) ? body.apps : [],
       other: body?.other === true,
     };
-    appsByFormat.set(key, entry);
+    // Not an empty answer: the server answers empty when the OS tool failed,
+    // and asks again next time, so this list must too.
+    if (entry.apps.length) appsByFormat.set(key, entry);
     apps.value = entry.apps;
     other.value = entry.other;
   } catch (err) {

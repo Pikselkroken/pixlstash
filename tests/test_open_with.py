@@ -370,6 +370,25 @@ def test_a_sweep_that_cannot_read_a_session_logs_and_carries_on(tmp_path, monkey
     assert edit_copies.sweep_edit_sessions(str(tmp_path)) == 0
 
 
+def test_reconcile_skips_a_session_it_cannot_read_and_runs_the_rest(
+    tmp_path, monkeypatch
+):
+    good, bad = tmp_path / ("e" * 32), tmp_path / ("f" * 32)
+    good.mkdir()
+    bad.mkdir()
+    seen = []
+
+    def process(server, path):
+        if path == str(bad):
+            raise PermissionError("denied")
+        seen.append(path)
+        return [1]
+
+    monkeypatch.setattr(edit_copies, "process_session", process)
+    assert edit_copies.reconcile_all(object(), str(tmp_path)) == 1
+    assert seen == [str(good)]
+
+
 def test_stop_waits_for_an_import_in_flight_and_runs_none_after(tmp_path):
     session = tmp_path / ("c" * 32)
     session.mkdir()
