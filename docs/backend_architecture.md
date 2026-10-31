@@ -346,8 +346,8 @@ Key endpoints (see the auto-generated index below for the full set):
 | GET | `/pictures/export/status?task_id=…` | Export progress |
 | GET | `/pictures/export/download/{task_id}` | Download finished ZIP |
 | POST | `/pictures/share-copies` | Share-ready copies in a staging folder (see below) |
-| GET | `/pictures/{id}/open-with` | Apps the host OS offers for the picture's type (see below) |
-| POST | `/pictures/{id}/open-with` | Open an edit copy in one of them (see below) |
+| GET | `/open-with?picture_id=` | Apps the host OS offers for the picture's type (see below) |
+| POST | `/open-with` | Open an edit copy in one of them (see below) |
 | GET | `/pictures/thumbnails/{id}.webp` | Cached thumbnail |
 | POST | `/pictures/thumbnails` | Batch thumbnails |
 | GET | `/pictures/{id}.{ext}` | Serve original (optionally watermarked) |
@@ -388,7 +388,7 @@ Authorization is unchanged: the route is already declared `SCOPED_LIST` in `auth
 
 **Share copies: `POST /pictures/share-copies` (#2417).** Writes one copy per picture into a new batch under `<config dir>/share-copies/` and returns the paths; the contract and the Electron side are `integration_architecture.md` §2.5. The work is `utils/service/share_copies.py`; the route only reads `(id, file_path, original_file_name)` and checks the root is outside every library root (`refuse_path_inside_a_library`, the folder export's check).
 
-**Open with: `GET`/`POST /pictures/{id}/open-with`.** Beside `open-location` in `routes/pictures/_misc.py`, both `loopback_owner_only`. The GET lists what the OS registers for the picture's file type (`utils/open_with.py`: `gio`, JXA, a PowerShell helper; cached per extension for 10 minutes; a tool that fails is logged and answers an empty list). The POST resolves `app_id` against that list (`find_app`, `400` otherwise), checks the edit root is outside every library (`409`), makes the session (`services/edit_copies.create_session`, a byte-identical `make_share_copies` copy plus `session.json` under `<config dir>/edit-copies/`) and spawns the app detached. `EditCopyWatcher` (one recursive `watchdog` observer, a 2 s timer per session folder) calls `process_session`, which imports each changed, fully decodable image through `import_derived_outputs` and records its hash in `seen`. Contract: `integration_architecture.md` §2.5.
+**Open with: `GET`/`POST /open-with`.** Beside `open-location` in `routes/pictures/_misc.py`, both `loopback_owner_only`, the GET also in `READ_BLOCKED_GET_PATHS` (the picture is a parameter, not a path segment, so the path can be named there). The GET lists what the OS registers for the picture's file type (`utils/open_with.py`: `gio`, JXA, a PowerShell helper; cached per extension for 10 minutes; a tool that fails is logged and answers an empty list). The POST resolves `app_id` against that list (`find_app`, `400` otherwise), checks the edit root is outside every library (`409`), makes the session (`services/edit_copies.create_session`, a byte-identical `make_share_copies` copy plus `session.json` under `<config dir>/edit-copies/`) and spawns the app detached. `EditCopyWatcher` (one recursive `watchdog` observer, a 2 s timer per session folder) calls `process_session`, which imports each changed, fully decodable image through `import_derived_outputs` on a vault pinned for the pass and checked to be the session's library, and records its hash in `seen`. `sweep_edit_sessions` judges a session by the newest time of its folder and every file in it, so a save over the copy keeps it. Contract: `integration_architecture.md` §2.5.
 
 - **Generation data is stripped by default** by `utils/image_processing/generation_data.py`, which edits the container and never decodes the pixels: PNG chunks, JPEG segments and WebP chunks are kept from a **keep-list** (image data, colour profile, gamma/chromaticity, transparency, animation control), so a tool's own text block cannot slip through a drop-list. The EXIF orientation survives as a block holding nothing else, because PixlStash's in-place rotate *is* that tag (§21.5); camera, GPS and the A1111 `UserComment` go. JPEG, PNG and WebP only; anything else, and every video, is copied unchanged and reported `metadata: "unchanged"` (no container writer exists here for MP4/WebM).
 - **`keep_generation_data`** with no resize and no watermark copies byte for byte.
@@ -4735,7 +4735,7 @@ been answered - held, never dropped. It only covers the logging path, so a bare
 window rather than sealing it. The credentials prompt also prints its own
 heading, so it reads as a question rather than as one more line of start-up.
 
-   - Once the vault's workers have started, `_start_edit_copies()` sweeps Open-with edit sessions older than a day, imports any edit saved while the server was down (`reconcile_all`) and starts the `EditCopyWatcher` (`Server.DEFAULT_WATCH_EDIT_COPIES`, off in the test suite). `close()` stops it before the vault closes, so a late debounce cannot write into a closed database.
+   - Once the vault's workers have started, `_start_edit_copies()` imports any edit saved while the server was down (`reconcile_all`), then sweeps Open-with edit sessions untouched for a day, and starts the `EditCopyWatcher` (`Server.DEFAULT_WATCH_EDIT_COPIES`, off in the test suite). `close()` stops it before the vault closes; `stop()` waits out an import in flight and no callback starts after it, so nothing writes into a closed database.
 4. A retained `uvicorn.Server` listener enters the **lifespan** (Electron retains both listeners):
    - Optional `_cleanup_missing_pictures()`.
    - Optional `_generate_missing_thumbnails()`.

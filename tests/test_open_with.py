@@ -26,7 +26,6 @@ from pixlstash.services.edit_copies import (
 from pixlstash.utils import open_with
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.open_with import OpenWithApp
-from pixlstash.utils.service.share_copies import sweep_share_copies
 
 GIO_OUTPUT = """Default application for "image/png": xviewer.desktop
 Registered applications:
@@ -323,19 +322,53 @@ def test_which_files_count_as_a_saved_edit(tmp_path):
     )
 
 
-def test_the_sweep_keeps_a_session_an_import_touched(tmp_path):
+def test_the_sweep_keeps_a_session_an_import_or_a_save_touched(tmp_path):
     picture, image_root = _picture(tmp_path)
     root = str(tmp_path / "edit-copies")
-    stale = create_session(picture, image_root, root, library_uuid=None, app_name=None)
-    live = create_session(picture, image_root, root, library_uuid=None, app_name=None)
+    made = [
+        create_session(picture, image_root, root, library_uuid=None, app_name=None)
+        for _ in range(3)
+    ]
     day_ago = time.time() - edit_copies.EDIT_COPY_MAX_AGE_SECONDS - 60
-    for made in (stale, live):
-        os.utime(os.path.dirname(made["path"]), (day_ago, day_ago))
-    live_dir = os.path.dirname(live["path"])
-    edit_copies.write_session(live_dir, read_session(live_dir))
+    for session in made:
+        folder = os.path.dirname(session["path"])
+        for path in [folder, *(os.path.join(folder, n) for n in os.listdir(folder))]:
+            os.utime(path, (day_ago, day_ago))
+    stale, imported, saved = made
+    imported_dir = os.path.dirname(imported["path"])
+    edit_copies.write_session(imported_dir, read_session(imported_dir))
+    # Saved over in place while nothing imported it: the folder stays old.
+    with open(saved["path"], "wb") as fh:
+        fh.write(_png((1, 2, 3)))
+    os.utime(os.path.dirname(saved["path"]), (day_ago, day_ago))
 
-    assert sweep_share_copies(root, edit_copies.EDIT_COPY_MAX_AGE_SECONDS) == 1
-    assert sorted(os.listdir(root)) == [live["session"]]
+    assert edit_copies.sweep_edit_sessions(root) == 1
+    assert sorted(os.listdir(root)) == sorted([imported["session"], saved["session"]])
+
+
+def test_stop_waits_for_an_import_in_flight_and_runs_none_after(tmp_path):
+    session = tmp_path / ("c" * 32)
+    session.mkdir()
+    started, release = threading.Event(), threading.Event()
+    calls = []
+
+    def on_settled(path):
+        calls.append(path)
+        started.set()
+        release.wait(5)
+
+    watcher = EditCopyWatcher(str(tmp_path), on_settled, debounce_s=0)
+    watcher._schedule(session.name)
+    assert started.wait(5)
+    stopper = threading.Thread(target=watcher.stop)
+    stopper.start()
+    stopper.join(0.2)
+    assert stopper.is_alive(), "stop() returned while an import was running"
+    release.set()
+    stopper.join(5)
+    assert not stopper.is_alive()
+    watcher._run(session.name)
+    assert len(calls) == 1
 
 
 def test_the_watcher_debounces_per_session_and_survives_a_raising_callback(tmp_path):

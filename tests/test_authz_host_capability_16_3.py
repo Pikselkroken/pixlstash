@@ -91,8 +91,8 @@ _LOOPBACK_ROUTE_KEYS = {
     ("POST", "/api/v1/server-config/open"),
     ("POST", "/api/v1/pictures/export/folder"),
     ("POST", "/api/v1/pictures/share-copies"),
-    ("GET", "/api/v1/pictures/{id}/open-with"),
-    ("POST", "/api/v1/pictures/{id}/open-with"),
+    ("GET", "/api/v1/open-with"),
+    ("POST", "/api/v1/open-with"),
     ("POST", "/api/v1/test-hooks/ws-event"),
     ("POST", "/api/v1/test-hooks/reference-folders/{folder_id}/rescan"),
     ("POST", "/api/v1/test-hooks/file-pictures"),
@@ -556,7 +556,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     ``export/folder``'s write without the caller-named destination and without
     the spawn, on that route's tier because the paths it hands back are useless
     and owner data anywhere but loopback.
-    87 = 70 + 17 with ``GET`` and ``POST /pictures/{id}/open-with``: the GET
+    87 = 70 + 17 with ``GET`` and ``POST /open-with``: the GET
     lists the applications installed on the host, the POST writes an edit copy
     to the host disk and spawns one of those applications on it, which is
     ``open-location``'s authority.
@@ -1296,27 +1296,32 @@ def test_share_copies_is_loopback_only_even_with_the_flag_on():
                 )
 
 
-_OPEN_WITH = f"{API}/pictures/999999/open-with"
+_OPEN_WITH = f"{API}/open-with"
+_OPEN_WITH_LIST = {"picture_id": 999999}
+_OPEN_WITH_BODY = {"picture_id": 999999, "app_id": "x"}
 
 
-def test_open_with_is_loopback_only_and_closed_to_a_read_token():
+def test_open_with_is_loopback_only_and_closed_to_a_read_token(monkeypatch):
     """Both open-with routes pass a loopback owner and 403 RFC1918, Tailscale
     and public even with ``allow_remote_host_ops`` on. The GET lists the host's
-    installed applications, so a READ token is refused too: it is templated,
-    so no READ belt names it and the gate alone has to refuse it, which the
-    gate-off half proves (the same token then reaches the handler's 404).
+    installed applications, so a READ token is refused by each belt on its
+    own: the gate with the READ belt emptied of it, and the READ belt with the
+    gate rolled back. Emptying both lets the same token reach the handler's
+    404, which is what proves each refusal above was a refusal.
 
     The id is one no vault holds, so the loopback owner gets the handler's 404:
     the route resolves, and nothing is listed or launched."""
     with _owner_env() as env:
         server, owner = env["server"], env["owner"]
         with _enforcing(server), _remote_host_ops(server, True):
-            assert owner.get(_OPEN_WITH).status_code == 404
-            assert owner.post(_OPEN_WITH, json={"app_id": "x"}).status_code == 404
+            listed = owner.get(_OPEN_WITH, params=_OPEN_WITH_LIST)
+            assert listed.status_code == 404, listed.text
+            opened = owner.post(_OPEN_WITH, json=_OPEN_WITH_BODY)
+            assert opened.status_code == 404, opened.text
             for ip in (LAN_IPV4, "100.64.0.5", "8.8.8.8"):
                 for r in (
-                    owner.get(_OPEN_WITH, headers=_xff(ip)),
-                    owner.post(_OPEN_WITH, json={"app_id": "x"}, headers=_xff(ip)),
+                    owner.get(_OPEN_WITH, params=_OPEN_WITH_LIST, headers=_xff(ip)),
+                    owner.post(_OPEN_WITH, json=_OPEN_WITH_BODY, headers=_xff(ip)),
                 ):
                     assert _is_loopback_403(r), (
                         f"{ip} must be 403'd on open-with; got {r.status_code}: {r.text}"
@@ -1330,15 +1335,27 @@ def test_open_with_is_loopback_only_and_closed_to_a_read_token():
         anon = TestClient(server.api, raise_server_exceptions=True)
         share = {"Authorization": f"Bearer {minted.json()['token']}"}
         assert anon.get(f"{API}/pictures", headers=share).status_code == 200, (
-            "the READ token is dead; the refusal below would prove nothing"
+            "the READ token is dead; the refusals below would prove nothing"
         )
-        with _enforcing(server):
-            refused = anon.get(_OPEN_WITH, headers=share)
-            assert refused.status_code == 403, refused.text
+
+        def read_as_token():
+            return anon.get(_OPEN_WITH, params=_OPEN_WITH_LIST, headers=share)
+
+        assert "/api/v1/open-with" in READ_BLOCKED_GET_PATHS
         previously_enforcing = server.authz._enforcing
-        server.authz._enforcing = False
         try:
-            assert anon.get(_OPEN_WITH, headers=share).status_code == 404
+            # The READ belt alone, with the gate rolled back.
+            server.authz._enforcing = False
+            assert read_as_token().status_code == 403
+            monkeypatch.setattr(
+                "pixlstash.auth.READ_BLOCKED_GET_PATHS",
+                READ_BLOCKED_GET_PATHS - {"/api/v1/open-with"},
+            )
+            # Neither: the token reaches the handler.
+            assert read_as_token().status_code == 404
+            # The gate alone.
+            server.authz._enforcing = True
+            assert read_as_token().status_code == 403
         finally:
             server.authz._enforcing = previously_enforcing
 

@@ -21,6 +21,7 @@ from pixlstash.services.edit_copies import (
     process_session,
     read_session,
     reconcile_all,
+    write_session,
 )
 from pixlstash.utils import open_with
 from pixlstash.utils.image_processing.generation_data import strip_generation_data
@@ -647,8 +648,8 @@ def opened(env, monkeypatch):
     )
     picture_id = result["results"][0]["picture_id"]
     resp = client.post(
-        f"{API_PREFIX}/pictures/{picture_id}/open-with",
-        json={"app_id": _GIMP.id},
+        f"{API_PREFIX}/open-with",
+        json={"picture_id": picture_id, "app_id": _GIMP.id},
     )
     assert resp.status_code == 200, resp.text
     ((app_id, path),) = launches
@@ -686,7 +687,9 @@ def test_open_with_launches_the_listed_app_on_a_byte_identical_copy(env, opened)
     with open(opened.path, "rb") as fh:
         assert fh.read() == opened.original
 
-    listing = env["client"].get(f"{API_PREFIX}/pictures/{opened.picture_id}/open-with")
+    listing = env["client"].get(
+        f"{API_PREFIX}/open-with", params={"picture_id": opened.picture_id}
+    )
     assert listing.status_code == 200, listing.text
     assert listing.json()["apps"] == [
         {"id": _GIMP.id, "name": "GIMP", "default": False, "editor": True}
@@ -696,12 +699,13 @@ def test_open_with_launches_the_listed_app_on_a_byte_identical_copy(env, opened)
 def test_open_with_refuses_an_app_the_os_did_not_list(env, opened):
     for body in ({"app_id": "/usr/bin/xterm"}, {"app_id": ""}, {}):
         resp = env["client"].post(
-            f"{API_PREFIX}/pictures/{opened.picture_id}/open-with", json=body
+            f"{API_PREFIX}/open-with",
+            json={"picture_id": opened.picture_id, **body},
         )
         assert resp.status_code == 400, resp.text
     assert len(opened.launches) == 1
     missing = env["client"].post(
-        f"{API_PREFIX}/pictures/987654/open-with", json={"app_id": _GIMP.id}
+        f"{API_PREFIX}/open-with", json={"picture_id": 987654, "app_id": _GIMP.id}
     )
     assert missing.status_code == 404
     assert len(opened.launches) == 1
@@ -711,8 +715,8 @@ def test_open_with_refuses_an_edit_root_inside_a_library(env, opened, monkeypatc
     inside = os.path.join(env["config_dir"], "images", "edit-copies")
     monkeypatch.setattr(pictures_misc, "edit_copies_root", lambda config_dir: inside)
     resp = env["client"].post(
-        f"{API_PREFIX}/pictures/{opened.picture_id}/open-with",
-        json={"app_id": _GIMP.id},
+        f"{API_PREFIX}/open-with",
+        json={"picture_id": opened.picture_id, "app_id": _GIMP.id},
     )
     assert resp.status_code == 409, resp.text
     assert not os.path.exists(inside)
@@ -769,6 +773,19 @@ def test_an_edit_of_a_deleted_picture_is_still_imported_unstacked(env, opened):
     edit = _row(server, new_id)
     assert edit.stack_id is None and not edit.deleted
     assert edit.source_picture_id == opened.picture_id
+
+
+def test_an_edit_for_another_library_waits_rather_than_landing_here(env, opened):
+    server = env["server"]
+    session_dir = os.path.dirname(opened.path)
+    session = read_session(session_dir)
+    assert session["library_uuid"] == server.vault.library_uuid
+    write_session(session_dir, {**session, "library_uuid": "another-library"})
+    with open(opened.path, "wb") as fh:
+        fh.write(_png_bytes(0x0D0D0D))
+    assert process_session(server, session_dir) == []
+    write_session(session_dir, session)
+    assert len(process_session(server, session_dir)) == 1
 
 
 def test_an_edit_saved_while_the_server_was_down_is_reconciled_and_touches_its_session(

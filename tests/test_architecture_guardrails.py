@@ -142,6 +142,9 @@ def test_services_no_direct_db_calls():
     # set once it is migrated to accept a Session.
     _direct_db_call_service_allowlist = {
         "pixlstash/services/config_service.py",  # vault-injection pattern
+        # vault-injection pattern; a watcher-thread orchestrator with one read
+        # (the edit's original) beside an import that is import_derived_outputs'
+        "pixlstash/services/edit_copies.py",
         # vault-injection pattern; owns the register -> wait-for-scan -> assign
         # commit lifecycle across separate transactions over time (the
         # scan-status poll cannot share a session with the later write), so no

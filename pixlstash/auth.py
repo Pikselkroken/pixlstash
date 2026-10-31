@@ -245,6 +245,10 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         # without this entry, taking it would hand the folder straight back to
         # every share token.
         "/api/v1/taggers/plugin-diagnostics",
+        # The applications installed on this host for a picture's file type
+        # (Open with). LOOPBACK_OWNER_ONLY at the gate; untemplated (the picture
+        # is a query parameter) precisely so it can sit on this belt.
+        "/api/v1/open-with",
         # The plugin list carries the caller's own tagger_settings, which is
         # user settings exactly like /users/me/config above - a plugin may
         # declare a free-text parameter and the owner may have typed a path

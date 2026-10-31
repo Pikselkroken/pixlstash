@@ -1,6 +1,6 @@
 """Open with…: an edit copy of a picture, watched, its saves imported stacked.
 
-``POST /pictures/{id}/open-with`` makes a byte-identical copy of the picture in
+``POST /open-with`` makes a byte-identical copy of the picture in
 a session folder of its own, launches the chosen app on it
 (``pixlstash/utils/open_with.py``) and records the session in
 ``session.json``. :class:`EditCopyWatcher` watches every session folder; when
@@ -12,10 +12,10 @@ plugin's output goes through. See ``docs/integration_architecture.md`` §2.5.
 
 **Where.** ``<config dir>/edit-copies/<session>/``, beside ``share-copies/``
 but a root of its own: share copies are swept after 12 h, which would delete a
-file still open in an editor. A session lives 24 h after its last launch or
-import (every import rewrites ``session.json``, which touches the folder), and
-:func:`~pixlstash.utils.service.share_copies.sweep_share_copies` removes older
-ones at start-up and before each new session.
+file still open in an editor. A session lives 24 h after the last change to its
+folder or any file in it (a launch, an import, a save), and
+:func:`sweep_edit_sessions` removes older ones at start-up, after the
+start-up import, and before each new session.
 
 **The edit is the person's work.** It is never imported half-written (a 2 s
 debounce, then a full decode), never imported twice (``seen`` holds the hash
@@ -29,7 +29,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import threading
+import time
 from io import BytesIO
 from typing import Callable
 
@@ -51,11 +53,7 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.atomic_write import write_json_atomic
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.media_files import SUPPORTED_IMAGE_EXTS, is_hidden_entry
-from pixlstash.utils.service.share_copies import (
-    _is_batch_name,
-    make_share_copies,
-    sweep_share_copies,
-)
+from pixlstash.utils.service.share_copies import _is_batch_name, make_share_copies
 
 logger = get_logger(__name__)
 
@@ -103,7 +101,7 @@ def create_session(
     Raises:
         FileNotFoundError: The picture's file is missing or unreadable.
     """
-    sweep_share_copies(root, EDIT_COPY_MAX_AGE_SECONDS)
+    sweep_edit_sessions(root)
     result = make_share_copies([picture], image_root, root, keep_generation_data=True)
     if not result["files"]:
         raise FileNotFoundError(f"No copy could be made of picture {picture['id']}")
@@ -193,8 +191,13 @@ def process_session(server, session_dir: str) -> list[int]:
         session = read_session(session_dir)
         if session is None:
             return []
+        # One vault for the whole pass, checked to be the session's library:
+        # a library switch mid-pass then fails the write on the closed vault
+        # (logged, retried on the next save) instead of importing into the
+        # library that replaced it.
+        vault = server.vault
         library_uuid = session.get("library_uuid")
-        active = server._active_library_uuid()
+        active = vault.library_uuid
         if library_uuid and active and library_uuid != active:
             logger.info(
                 "Edit copy session %s belongs to library %s, not the active "
@@ -217,10 +220,61 @@ def process_session(server, session_dir: str) -> list[int]:
             if found is None:
                 continue
             data, ext, sha = found
-            created += _import_edit(server, session, data, ext, name)
+            created += _import_edit(
+                _PinnedVaultServer(server, vault), session, data, ext, name
+            )
             session["seen"][name] = sha
             write_session(session_dir, session)
         return created
+
+
+def sweep_edit_sessions(
+    root: str, max_age_seconds: float = EDIT_COPY_MAX_AGE_SECONDS
+) -> int:
+    """Remove sessions untouched for *max_age_seconds*; how many were removed.
+
+    Untouched means the folder and every file in it: a save over the copy
+    changes the file's time, not the folder's, and an edit not yet imported
+    (the server was down, another library was active) must survive.
+    """
+    try:
+        entries = [e for e in os.scandir(root) if _is_batch_name(e.name)]
+    except FileNotFoundError:
+        return 0
+    except OSError as exc:
+        logger.warning("Could not list edit copies in %s: %s", root, exc)
+        return 0
+    cutoff = time.time() - max_age_seconds
+    removed = 0
+    for entry in entries:
+        if entry.is_symlink() or not entry.is_dir():
+            continue
+        try:
+            newest = max(
+                [entry.stat().st_mtime]
+                + [
+                    f.stat(follow_symlinks=False).st_mtime
+                    for f in os.scandir(entry.path)
+                ]
+            )
+            if newest >= cutoff:
+                continue
+            shutil.rmtree(entry.path)
+            removed += 1
+        except OSError as exc:
+            logger.warning("Could not sweep edit copy session %s: %s", entry.path, exc)
+    return removed
+
+
+class _PinnedVaultServer:
+    """The server, with ``vault`` fixed to one vault across a library switch."""
+
+    def __init__(self, server, vault):
+        self._server = server
+        self.vault = vault
+
+    def __getattr__(self, name):
+        return getattr(self._server, name)
 
 
 def reconcile_all(server, root: str) -> int:
@@ -346,6 +400,10 @@ class EditCopyWatcher:
         self._observer = Observer()
         self._timers: dict[str, threading.Timer] = {}
         self._lock = threading.Lock()
+        # Held around each callback, so stop() waits out one in flight and no
+        # callback starts after it (the vault closes next).
+        self._run_lock = threading.Lock()
+        self._stopped = False
 
     def start(self) -> None:
         """Watch the root, creating it when missing."""
@@ -365,8 +423,8 @@ class EditCopyWatcher:
             timers, self._timers = list(self._timers.values()), {}
         for timer in timers:
             timer.cancel()
-            if timer.is_alive():
-                timer.join()
+        with self._run_lock:
+            self._stopped = True
 
     def _schedule(self, session: str) -> None:
         with self._lock:
@@ -384,8 +442,9 @@ class EditCopyWatcher:
                 del self._timers[session]
         path = os.path.join(self._root, session)
         try:
-            if os.path.isdir(path):
-                self._on_settled(path)
+            with self._run_lock:
+                if not self._stopped and os.path.isdir(path):
+                    self._on_settled(path)
         except Exception as exc:
             # A raising callback can deafen every watchdog watcher (the pin
             # note in pyproject.toml); the next save tries again.

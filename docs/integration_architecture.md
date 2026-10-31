@@ -1847,11 +1847,15 @@ involved: the backend lists, copies, launches, watches and imports, so no path
 crosses the renderer.
 
 ```
-GET  /pictures/{id}/open-with
+GET  /open-with?picture_id=42
 -> {"apps": [{"id", "name", "default", "editor"}], "other": bool}
-POST /pictures/{id}/open-with  {"app_id": str} | {"other": true}
+POST /open-with  {"picture_id": 42, "app_id": str} | {"picture_id": 42, "other": true}
 -> {"session", "app_name"}       400 unknown app · 404 · 409 root in a library · 415 video
 ```
+
+Not `/pictures/{id}/open-with`: the listing is owner data about the host, so
+the GET is also on the READ-token belt (`READ_BLOCKED_GET_PATHS`), which an id
+in the path would have kept it off.
 
 The `id` is opaque (a desktop id, a bundle path, a handler name) and the POST
 only launches an app the OS lists for that file type, re-read through a
@@ -1872,11 +1876,17 @@ The copy is byte-identical, in its own session folder under
 `<dir of server-config.json>/edit-copies/<session>/` with a `session.json`
 (picture, library, the hash last imported per file). That root is separate from
 `share-copies/` because those are swept after 12 h, which would delete a file
-still open in an editor; a session lives 24 h after its last launch or import.
+still open in an editor; a session lives 24 h after the last change to its
+folder or any file in it, and the start-up import runs before the start-up
+sweep, so an edit saved while the server was down is never swept unread.
 A save over the copy, a temp-file rename over it, or an export to a new image
 file in the same folder is imported after a 2 s quiet period and a full decode,
 once per distinct content, through the same import an image plugin's output
-takes; an edit of a picture deleted meanwhile is still imported, unstacked. The
+takes (so a reference-folder picture's edit is written beside it as
+`<stem>_edit<n><ext>`); an edit of a picture deleted meanwhile is still
+imported, unstacked. Each pass pins one vault and checks it is the session's
+library; an edit for a library that is not active waits for its next save or a
+restart with that library active. The
 grid hears about it as a UI-sourced `PICTURE_IMPORTED` plus `CHANGED_PICTURES`
 with no origin client, so every tab inserts it. The row shows only in the
 desktop shell or on a loopback page (`utils/serverLocation.js`), never for a

@@ -178,10 +178,11 @@ class OpenWithListResponse(BaseModel):
 
 
 class OpenWithRequest(BaseModel):
-    """An app from ``GET /pictures/{id}/open-with``, or the OS's chooser."""
+    """An app from ``GET /open-with``, or the OS's chooser."""
 
     model_config = ConfigDict(extra="forbid")
 
+    picture_id: int
     app_id: Optional[str] = None
     other: bool = False
 
@@ -940,8 +941,12 @@ def register_routes(router, server):
             raise HTTPException(status_code=404, detail="Picture file not found")
         return picture, source
 
+    # Not under /pictures/{id}/: the listing is owner data about the host, so
+    # the GET has to sit on the READ-token belt (auth.READ_BLOCKED_GET_PATHS),
+    # which matches exact paths and prefixes and so cannot single out one
+    # route under a path share tokens also read.
     @router.get(
-        "/pictures/{id}/open-with",
+        "/open-with",
         include_in_schema=False,
         summary="List the apps that can open a picture",
         description=(
@@ -951,8 +956,8 @@ def register_routes(router, server):
         ),
         response_model=OpenWithListResponse,
     )
-    def list_open_with_apps(request: Request, id: int):
-        _picture, source = _open_with_picture(request, id)
+    def list_open_with_apps(request: Request, picture_id: int):
+        _picture, source = _open_with_picture(request, picture_id)
         if VideoUtils.is_video_file(source):
             return {"apps": [], "other": False}
         return {
@@ -961,19 +966,19 @@ def register_routes(router, server):
         }
 
     @router.post(
-        "/pictures/{id}/open-with",
+        "/open-with",
         include_in_schema=False,
         summary="Open a picture in another app",
         description=(
             "Copies the picture into an edit folder on the machine running "
-            "PixlStash and opens the copy in an app from GET "
-            "/pictures/{id}/open-with (app_id), or in the OS's own chooser "
+            "PixlStash and opens the copy in an app from GET /open-with "
+            "(app_id), or in the OS's own chooser "
             "(other). Saving the copy imports the edit stacked on the original."
         ),
         response_model=OpenWithResponse,
     )
-    def open_picture_with(request: Request, id: int, payload: OpenWithRequest):
-        picture, source = _open_with_picture(request, id)
+    def open_picture_with(request: Request, payload: OpenWithRequest):
+        picture, source = _open_with_picture(request, payload.picture_id)
         if VideoUtils.is_video_file(source):
             raise HTTPException(status_code=415, detail="Videos cannot be opened with")
         app = None
@@ -1002,7 +1007,9 @@ def register_routes(router, server):
                 app_name=app.name if app else None,
             )
         except FileNotFoundError as exc:
-            logger.warning("Open with: no edit copy of picture %s: %s", id, exc)
+            logger.warning(
+                "Open with: no edit copy of picture %s: %s", payload.picture_id, exc
+            )
             raise HTTPException(status_code=404, detail="Picture file not found")
         try:
             if app is None:

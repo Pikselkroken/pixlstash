@@ -181,11 +181,11 @@ from pixlstash.utils.rate_limiter import RateLimitMiddleware
 from pixlstash.utils.request_origin import OriginClientMiddleware
 from pixlstash.utils.service.share_copies import share_copies_root, sweep_share_copies
 from pixlstash.services.edit_copies import (
-    EDIT_COPY_MAX_AGE_SECONDS,
     EditCopyWatcher,
     edit_copies_root,
     process_session,
     reconcile_all as reconcile_edit_copies,
+    sweep_edit_sessions,
 )
 
 
@@ -1027,13 +1027,12 @@ class Server(
         """Sweep, reconcile and watch the Open-with edit copies.
 
         An edit saved while the backend was down is imported by the reconcile;
-        sessions older than a day are swept first (services/edit_copies.py).
+        sessions untouched for a day are swept after it (services/edit_copies.py).
         """
         self._edit_copy_watcher = None
         if not Server.DEFAULT_WATCH_EDIT_COPIES:
             return
         root = edit_copies_root(os.path.dirname(self._server_config_path))
-        sweep_share_copies(root, EDIT_COPY_MAX_AGE_SECONDS)
         try:
             reconcile_edit_copies(self, root)
         except Exception as exc:
@@ -1044,6 +1043,8 @@ class Server(
                 exc,
                 exc_info=True,
             )
+        # After the import, which touches every session it imports into.
+        sweep_edit_sessions(root)
         try:
             watcher = EditCopyWatcher(root, lambda path: process_session(self, path))
             watcher.start()

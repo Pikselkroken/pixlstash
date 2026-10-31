@@ -574,13 +574,13 @@ export async function openPictureLocation(id) {
 
 /**
  * The apps the server's operating system offers for a picture's file type,
- * editors first (`GET /pictures/{id}/open-with`). Loopback only.
+ * editors first (`GET /open-with`). Loopback only.
  *
  * @param {number|string} id
  * @returns {Promise<{apps: Array<{id: string, name: string, default: boolean, editor: boolean}>, other: boolean}>}
  */
 export async function listOpenWithApps(id) {
-  return unwrap(apiClient.get(`/pictures/${id}/open-with`));
+  return unwrap(apiClient.get(`/open-with`, { params: { picture_id: id } }));
 }
 
 /**
@@ -595,8 +595,8 @@ export async function listOpenWithApps(id) {
 export async function openPictureWith(id, { appId, other } = {}) {
   return unwrap(
     apiClient.post(
-      `/pictures/${id}/open-with`,
-      other ? { other: true } : { app_id: appId },
+      `/open-with`,
+      other ? { picture_id: id, other: true } : { picture_id: id, app_id: appId },
     ),
   );
 }
