@@ -35,6 +35,7 @@ vi.mock("../../api/modelImports", () => ({
 
 
 import TrainingRunLive from "./TrainingRunLive.vue";
+import { useSidebarStore } from "../../stores/useSidebarStore";
 
 const stubs = {
   "v-icon": true,
@@ -629,5 +630,61 @@ describe("TrainingRunLive", () => {
     expect(wrapper.find(".trl-setup").exists()).toBe(false);
     expect(wrapper.text()).not.toContain("Stop training");
     expect(wrapper.text()).not.toContain("Use this step");
+  });
+});
+
+describe("leaving the run with Escape, as the back button's keycap says", () => {
+  const press = (target = window) =>
+    target.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("closes the run", async () => {
+    const wrapper = await open(payload());
+    press();
+    expect(wrapper.emitted("close")).toHaveLength(1);
+  });
+
+  it.each([
+    ["a dialog or menu", "v-overlay v-overlay--active v-dialog"],
+    ["the lightbox", "lightbox"],
+    ["the review overlay", "rs-overlay"],
+  ])("leaves the key to %s in front of the page", async (_name, className) => {
+    const wrapper = await open(payload());
+    const overlay = document.createElement("div");
+    overlay.className = className;
+    document.body.appendChild(overlay);
+    press();
+    expect(wrapper.emitted("close")).toBeUndefined();
+  });
+
+  it("leaves the key to a focused row in the Models rail", async () => {
+    const wrapper = await open(payload());
+    const rail = document.createElement("div");
+    rail.className = "mrail";
+    const row = document.createElement("button");
+    rail.appendChild(row);
+    document.body.appendChild(rail);
+    press(row);
+    expect(wrapper.emitted("close")).toBeUndefined();
+  });
+
+  it("leaves the key to the auto-hide sidebar it dismisses", async () => {
+    const wrapper = await open(payload());
+    const sidebar = useSidebarStore();
+    sidebar.setSidebarPinned(false);
+    expect(sidebar.sidebarVisible && sidebar.sidebarOverlay).toBe(true);
+    press();
+    expect(wrapper.emitted("close")).toBeUndefined();
+  });
+
+  it("leaves the key to a text field", async () => {
+    const wrapper = await open(payload());
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    press(input);
+    expect(wrapper.emitted("close")).toBeUndefined();
   });
 });

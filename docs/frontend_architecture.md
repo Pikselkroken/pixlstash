@@ -6567,11 +6567,19 @@ is a file in the run folder, not a library picture, so it opens full size in
 *Samples* grid opens the same dialog. A *Trained on* picture is a library
 picture and opens in the lightbox by way of `?from=` (below).
 
-**Run status is in the shelf's toolbar.** The page teleports its back arrow,
+**Run status is in the shelf's toolbar.** The page teleports its way back,
 run name, progress and Stop into `#shelf-run-bar`, a slot `ModelShelf` renders
 while a run is open (hiding the count; the bar's shelf-tab controls are not drawn on the runs tab either). The teleport is
 `disabled` where that slot is absent and is never toggled after mount: Vue
 cannot move a teleport to a target it did not find when it mounted.
+
+**The way back is the lightbox's.** `widgets/ViewBackButton.vue` is the exit
+of a view that stands in for another: a chevron, the name of where it goes
+("Training runs", the lightbox's view label) and an Esc keycap. The keycap is a
+promise, so the page binds Escape on the window in the capture phase and steps
+aside for whatever is in front of it (an overlay, the lightbox, the review
+overlay, the auto-hide sidebar, a text field, focus in the Models rail); capture,
+because the app's own handler hides the sidebar on the same press.
 
 **Every figure is labelled and none is invented.** The status bar's GPU and RAM
 meters (teal for the run's own share, grey for everything else, hatched red for

@@ -1214,6 +1214,18 @@ kbd {
   flex-shrink: 0;
 }
 
+/* The Esc keycap on a bar button that is the way out of a view
+   (ViewBackButton, the lightbox's Exit full screen). */
+.bar-btn-kbd {
+  margin-left: var(--space-2);
+  padding: 0 var(--space-2);
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
 .bar-split-toggle {
   border-radius: var(--radius-sm) 0 0 var(--radius-sm);
   padding-right: var(--space-2);
