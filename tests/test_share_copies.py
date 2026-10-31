@@ -13,7 +13,17 @@ from fastapi.testclient import TestClient
 from PIL import Image, ImageCms, PngImagePlugin
 
 from pixlstash.db_models.picture import Picture
+from pixlstash.routes.pictures import _misc as pictures_misc
 from pixlstash.server import Server
+from pixlstash.services.edit_copies import (
+    EDIT_COPY_MAX_AGE_SECONDS,
+    edit_copies_root,
+    process_session,
+    read_session,
+    reconcile_all,
+    write_session,
+)
+from pixlstash.utils import open_with
 from pixlstash.utils.image_processing.generation_data import strip_generation_data
 from pixlstash.utils.service.share_copies import (
     METADATA_KEPT,
@@ -535,7 +545,7 @@ def env():
                 "/login", json={"username": "testuser", "password": "testpassword"}
             )
             assert resp.status_code == 200
-            yield {"client": client, "config_dir": temp_dir}
+            yield {"client": client, "config_dir": temp_dir, "server": server}
 
 
 def test_route_stages_stripped_copies_beside_the_server_config(env):
@@ -613,6 +623,190 @@ def test_user_config_remembers_whether_an_export_keeps_the_workflow(env):
         assert client.get(url).json()["keep_workflow_on_export"] is False
     finally:
         client.patch(url, json={"keep_workflow_on_export": False})
+
+
+# ---- Open with: edit copies -------------------------------------------------
+
+_GIMP = open_with.OpenWithApp(
+    id="org.gimp.GIMP.desktop", name="GIMP", launch="/usr/share/gimp.desktop"
+)
+
+
+@pytest.fixture
+def opened(env, monkeypatch):
+    """A fresh picture opened with a stand-in app: nothing real is launched."""
+    launches = []
+    monkeypatch.setattr(open_with, "list_apps", lambda path: [_GIMP])
+    monkeypatch.setattr(
+        open_with, "launch", lambda app, path: launches.append((app.id, path))
+    )
+    client = env["client"]
+    # A colour no other test uses, so every run gets its own picture.
+    original = _png_bytes((time.time_ns() // 1000) % 2**24)
+    result = upload_pictures_and_wait(
+        client, [("file", ("sunset.png", BytesIO(original), "image/png"))]
+    )
+    picture_id = result["results"][0]["picture_id"]
+    resp = client.post(
+        f"{API_PREFIX}/open-with",
+        json={"picture_id": picture_id, "app_id": _GIMP.id},
+    )
+    assert resp.status_code == 200, resp.text
+    ((app_id, path),) = launches
+    return SimpleNamespace(
+        picture_id=picture_id,
+        original=original,
+        path=path,
+        session=resp.json()["session"],
+        launches=launches,
+        app_id=app_id,
+        body=resp.json(),
+    )
+
+
+def _png_bytes(seed: int) -> bytes:
+    buf = BytesIO()
+    Image.new("RGB", (16, 16), (seed & 255, (seed >> 8) & 255, seed >> 16)).save(
+        buf, format="PNG"
+    )
+    return buf.getvalue()
+
+
+def _row(server, picture_id):
+    return server.vault.db.run_immediate_read_task(
+        lambda session: session.get(Picture, picture_id)
+    )
+
+
+def test_open_with_launches_the_listed_app_on_a_byte_identical_copy(env, opened):
+    assert opened.app_id == _GIMP.id
+    assert opened.body == {"session": opened.session, "app_name": "GIMP"}
+    root = edit_copies_root(env["config_dir"])
+    assert os.path.dirname(os.path.dirname(opened.path)) == root
+    assert os.path.basename(opened.path) == "sunset.png"
+    with open(opened.path, "rb") as fh:
+        assert fh.read() == opened.original
+
+    listing = env["client"].get(
+        f"{API_PREFIX}/open-with", params={"picture_id": opened.picture_id}
+    )
+    assert listing.status_code == 200, listing.text
+    assert listing.json()["apps"] == [
+        {"id": _GIMP.id, "name": "GIMP", "default": False, "editor": True}
+    ]
+
+
+def test_open_with_refuses_an_app_the_os_did_not_list(env, opened):
+    for body in ({"app_id": "/usr/bin/xterm"}, {"app_id": ""}, {}):
+        resp = env["client"].post(
+            f"{API_PREFIX}/open-with",
+            json={"picture_id": opened.picture_id, **body},
+        )
+        assert resp.status_code == 400, resp.text
+    assert len(opened.launches) == 1
+    missing = env["client"].post(
+        f"{API_PREFIX}/open-with", json={"picture_id": 987654, "app_id": _GIMP.id}
+    )
+    assert missing.status_code == 404
+    assert len(opened.launches) == 1
+
+
+def test_open_with_refuses_an_edit_root_inside_a_library(env, opened, monkeypatch):
+    inside = os.path.join(env["config_dir"], "images", "edit-copies")
+    monkeypatch.setattr(pictures_misc, "edit_copies_root", lambda config_dir: inside)
+    resp = env["client"].post(
+        f"{API_PREFIX}/open-with",
+        json={"picture_id": opened.picture_id, "app_id": _GIMP.id},
+    )
+    assert resp.status_code == 409, resp.text
+    assert not os.path.exists(inside)
+    assert len(opened.launches) == 1
+
+
+def test_a_saved_edit_comes_back_on_top_of_the_original_once(env, opened):
+    server = env["server"]
+    session_dir = os.path.dirname(opened.path)
+    # Written back unchanged on open: nothing.
+    with open(opened.path, "wb") as fh:
+        fh.write(opened.original)
+    assert process_session(server, session_dir) == []
+
+    edited = _png_bytes(0x123456)
+    with open(opened.path, "wb") as fh:
+        fh.write(edited)
+    (new_id,) = process_session(server, session_dir)
+    assert process_session(server, session_dir) == []
+
+    original, edit = _row(server, opened.picture_id), _row(server, new_id)
+    assert edit.source_picture_id == opened.picture_id
+    assert edit.stack_id is not None and edit.stack_id == original.stack_id
+    assert (edit.stack_position, original.stack_position) == (0, 1)
+    assert read_session(session_dir)["seen"]["sunset.png"] == edit.pixel_sha
+
+
+def test_an_editor_that_saves_by_renaming_over_the_copy_imports_once(env, opened):
+    server = env["server"]
+    session_dir = os.path.dirname(opened.path)
+    temp = os.path.join(session_dir, ".sunset.png.tmp")
+    with open(temp, "wb") as fh:
+        fh.write(_png_bytes(0x654321))
+    # The half-way state, as a debounce might catch it: the temp is hidden.
+    assert process_session(server, session_dir) == []
+    os.replace(temp, opened.path)
+    assert len(process_session(server, session_dir)) == 1
+    assert process_session(server, session_dir) == []
+
+
+def test_an_edit_of_a_deleted_picture_is_still_imported_unstacked(env, opened):
+    server = env["server"]
+
+    def delete(session):
+        picture = session.get(Picture, opened.picture_id)
+        picture.deleted = True
+        session.add(picture)
+        session.commit()
+
+    server.vault.db.run_task(delete)
+    with open(opened.path, "wb") as fh:
+        fh.write(_png_bytes(0xABCDEF))
+    (new_id,) = process_session(server, os.path.dirname(opened.path))
+    edit = _row(server, new_id)
+    assert edit.stack_id is None and not edit.deleted
+    assert edit.source_picture_id == opened.picture_id
+
+
+def test_an_edit_for_another_library_waits_rather_than_landing_here(env, opened):
+    server = env["server"]
+    session_dir = os.path.dirname(opened.path)
+    session = read_session(session_dir)
+    assert session["library_uuid"] == server.vault.library_uuid
+    write_session(session_dir, {**session, "library_uuid": "another-library"})
+    with open(opened.path, "wb") as fh:
+        fh.write(_png_bytes(0x0D0D0D))
+    assert process_session(server, session_dir) == []
+    write_session(session_dir, session)
+    assert len(process_session(server, session_dir)) == 1
+
+
+def test_an_edit_saved_while_the_server_was_down_is_reconciled_and_touches_its_session(
+    env, opened
+):
+    server = env["server"]
+    session_dir = os.path.dirname(opened.path)
+    with open(opened.path, "wb") as fh:
+        fh.write(_png_bytes(0x0F0F0F))
+    # Nearly a day old: the import is what keeps it from the next sweep.
+    day_ago = time.time() - EDIT_COPY_MAX_AGE_SECONDS + 60
+    os.utime(session_dir, (day_ago, day_ago))
+    assert reconcile_all(server, edit_copies_root(env["config_dir"])) == 1
+    assert os.stat(session_dir).st_mtime > time.time() - 60
+    assert reconcile_all(server, edit_copies_root(env["config_dir"])) == 0
+
+    # A folder with no session file is never imported.
+    os.remove(os.path.join(session_dir, "session.json"))
+    with open(opened.path, "wb") as fh:
+        fh.write(_png_bytes(0x0E0E0E))
+    assert process_session(server, session_dir) == []
 
 
 def _export(library, scale_factor, **extra):

@@ -28,7 +28,11 @@ from pixlstash.scoring import (
     get_smart_score_penalised_tags_from_request,
     prepare_smart_score_inputs,
 )
+from pixlstash.services.edit_copies import create_session, edit_copies_root
+from pixlstash.utils import open_with
 from pixlstash.utils.host_open import open_in_file_manager
+from pixlstash.utils.image_processing.video_utils import VideoUtils
+from pixlstash.utils.library_roots import refuse_path_inside_a_library
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.quality.smart_score_utils import SmartScoreUtils
 from pixlstash.utils.serialization_utils import safe_model_dict
@@ -159,6 +163,33 @@ class OpenLocationResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     status: str
+
+
+class OpenWithApp(BaseModel):
+    id: str
+    name: str
+    default: bool = False
+    editor: bool = True
+
+
+class OpenWithListResponse(BaseModel):
+    apps: list[OpenWithApp]
+    other: bool
+
+
+class OpenWithRequest(BaseModel):
+    """An app from ``GET /open-with``, or the OS's chooser."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    picture_id: int
+    app_id: Optional[str] = None
+    other: bool = False
+
+
+class OpenWithResponse(BaseModel):
+    session: str
+    app_name: Optional[str] = None
 
 
 def register_routes(router, server):
@@ -886,6 +917,117 @@ def register_routes(router, server):
             raise HTTPException(status_code=500, detail="Failed to open location")
 
         return {"status": "ok"}
+
+    def _open_with_picture(request: Request, pic_id: int) -> tuple[dict, str]:
+        """The picture's copy fields and its file on disk; 404 when either is gone."""
+        vault = request.state.library_lease.vault
+
+        def fetch(session: Session):
+            pic = session.get(Picture, pic_id)
+            if pic is None or pic.deleted:
+                return None
+            return {
+                "id": pic.id,
+                "file_path": pic.file_path,
+                "original_file_name": pic.original_file_name,
+                "created_at": pic.created_at,
+            }
+
+        picture = vault.db.run_immediate_read_task(fetch)
+        if picture is None or not picture["file_path"]:
+            raise HTTPException(status_code=404, detail="Picture not found")
+        source = ImageUtils.resolve_picture_path(vault.image_root, picture["file_path"])
+        if not source or not os.path.isfile(source):
+            raise HTTPException(status_code=404, detail="Picture file not found")
+        return picture, source
+
+    # Not under /pictures/{id}/: the listing is owner data about the host, so
+    # the GET has to sit on the READ-token belt (auth.READ_BLOCKED_GET_PATHS),
+    # which matches exact paths and prefixes and so cannot single out one
+    # route under a path share tokens also read.
+    @router.get(
+        "/open-with",
+        include_in_schema=False,
+        summary="List the apps that can open a picture",
+        description=(
+            "The applications the operating system of the machine running "
+            "PixlStash offers for this picture's file type, editors first. "
+            "Videos answer an empty list."
+        ),
+        response_model=OpenWithListResponse,
+    )
+    def list_open_with_apps(request: Request, picture_id: int):
+        _picture, source = _open_with_picture(request, picture_id)
+        if VideoUtils.is_video_file(source):
+            return {"apps": [], "other": False}
+        return {
+            "apps": [app.public() for app in open_with.list_apps(source)],
+            "other": open_with.has_other_chooser(),
+        }
+
+    @router.post(
+        "/open-with",
+        include_in_schema=False,
+        summary="Open a picture in another app",
+        description=(
+            "Copies the picture into an edit folder on the machine running "
+            "PixlStash and opens the copy in an app from GET /open-with "
+            "(app_id), or in the OS's own chooser "
+            "(other). Saving the copy imports the edit stacked on the original."
+        ),
+        response_model=OpenWithResponse,
+    )
+    def open_picture_with(request: Request, payload: OpenWithRequest):
+        picture, source = _open_with_picture(request, payload.picture_id)
+        if VideoUtils.is_video_file(source):
+            raise HTTPException(status_code=415, detail="Videos cannot be opened with")
+        app = None
+        if payload.other:
+            if not open_with.has_other_chooser():
+                raise HTTPException(
+                    status_code=400, detail="This system has no app chooser"
+                )
+        else:
+            # The id must be one the OS lists for this type right now; nothing
+            # the request names is ever executed.
+            app = open_with.find_app(source, payload.app_id or "")
+            if app is None:
+                raise HTTPException(status_code=400, detail="Unknown app")
+        lease = request.state.library_lease
+        root = edit_copies_root(os.path.dirname(server.server_config_path))
+        # Copies written where a library reads would come straight back as
+        # pictures, before the edit does.
+        refuse_path_inside_a_library(os.path.realpath(root), server, lease.vault)
+        try:
+            session = create_session(
+                picture,
+                lease.vault.image_root,
+                root,
+                library_uuid=lease.library_uuid,
+                app_name=app.name if app else None,
+            )
+        except FileNotFoundError as exc:
+            logger.warning(
+                "Open with: no edit copy of picture %s: %s", payload.picture_id, exc
+            )
+            raise HTTPException(status_code=404, detail="Picture file not found")
+        try:
+            if app is None:
+                open_with.launch_other(session["path"])
+            else:
+                open_with.launch(app, session["path"])
+        except OSError as exc:
+            logger.error(
+                "Open with: could not start %s on %s: %s",
+                app.name if app else "the app chooser",
+                session["path"],
+                exc,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=f"Could not start {app.name if app else 'the app chooser'}",
+            )
+        return {"session": session["session"], "app_name": app.name if app else None}
 
     @router.get(
         "/pictures/stats",

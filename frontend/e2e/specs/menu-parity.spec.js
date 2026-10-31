@@ -108,6 +108,7 @@ async function groupMenuLabels(rootLocator) {
 // instead of printing a bare diff.
 const CONTEXT_ONLY_SINGLE_IMAGE_ACTIONS = [
   'Share image',
+  'Open with',
   'Find similar faces',
   'Remove all shares',
 ]

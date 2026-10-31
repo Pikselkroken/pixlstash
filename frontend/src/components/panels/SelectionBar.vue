@@ -80,11 +80,11 @@
         every selection-scoped action (Export and Train LoRA are the pill's
         own and in neither menu, as they were in neither before), so a keyboard user reaches the same
         actions as a right-click on the same selection. The context menu
-        additionally offers three single-image actions (Share image, Find
-        similar faces, Remove all shares) that are deliberately context-only:
-        they act on a specific right-clicked image and its per-image face /
-        share state, which the selection-scoped dropdown has no single target
-        for. Multi-select parity is asserted by e2e/specs/menu-parity.spec.js.
+        additionally offers four single-image actions (Share image, Open with,
+        Find similar faces, Remove all shares) that are deliberately
+        context-only: they act on a specific right-clicked image and its
+        per-image face / share state, or open that one file in another app,
+        which the selection-scoped dropdown has no single target for. Multi-select parity is asserted by e2e/specs/menu-parity.spec.js.
       -->
       <div
         class="selection-ctx-bar"

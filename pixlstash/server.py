@@ -180,6 +180,13 @@ from pixlstash.utils.path_mapper import PathMapper
 from pixlstash.utils.rate_limiter import RateLimitMiddleware
 from pixlstash.utils.request_origin import OriginClientMiddleware
 from pixlstash.utils.service.share_copies import share_copies_root, sweep_share_copies
+from pixlstash.services.edit_copies import (
+    EditCopyWatcher,
+    edit_copies_root,
+    process_session,
+    reconcile_all as reconcile_edit_copies,
+    sweep_edit_sessions,
+)
 
 
 # Logging will be set up after config is loaded
@@ -342,6 +349,10 @@ class Server(
         DEFAULT_WATCH_WORKFLOW_INBOX: Whether start-up imports the watched
             ``workflows/`` folder and keeps watching it. ``False`` in the test
             suite: that folder is machine-global too.
+        DEFAULT_WATCH_EDIT_COPIES: Whether start-up imports edits saved in an
+            Open-with edit copy and keeps watching them. ``False`` in the test
+            suite, which calls the import directly rather than waiting on a
+            filesystem watch per Server.
     """
 
     DEFAULT_MAX_VRAM_GB: float | None = None
@@ -353,6 +364,7 @@ class Server(
     DEFAULT_DECLARE_MODEL_ROOTS: bool = True
     DEFAULT_MIGRATE_WORKFLOW_TOKENS: bool = True
     DEFAULT_WATCH_WORKFLOW_INBOX: bool = True
+    DEFAULT_WATCH_EDIT_COPIES: bool = True
 
     @staticmethod
     def running_in_docker() -> bool:
@@ -805,6 +817,7 @@ class Server(
         self.reconcile_library_settings(self.vault)
         self.vault.start()
         _log_stage("auth wired + background workers started")
+        self._start_edit_copies()
 
         # Owns replacing the vault when the active library changes, and the
         # state requests are refused in while that is happening.
@@ -999,11 +1012,50 @@ class Server(
         if watcher is not None:
             self._workflow_inbox_watcher = None
             watcher.stop()
+        # Before the vault closes, so a late debounce cannot write into it.
+        watcher = getattr(self, "_edit_copy_watcher", None)
+        if watcher is not None:
+            self._edit_copy_watcher = None
+            watcher.stop()
         if getattr(self, "vault", None) is not None:
             logger.info("Closing the vault and cleaning up resources")
             self._close_active_vault()
         self._close_hub()
         gc.collect()
+
+    def _start_edit_copies(self) -> None:
+        """Sweep, reconcile and watch the Open-with edit copies.
+
+        An edit saved while the backend was down is imported by the reconcile;
+        sessions untouched for a day are swept after it (services/edit_copies.py).
+        """
+        self._edit_copy_watcher = None
+        if not Server.DEFAULT_WATCH_EDIT_COPIES:
+            return
+        root = edit_copies_root(os.path.dirname(self._server_config_path))
+        try:
+            reconcile_edit_copies(self, root)
+        except Exception as exc:
+            logger.error(
+                "Reconciling the edit copies in %s failed with %s: %s",
+                root,
+                type(exc).__name__,
+                exc,
+                exc_info=True,
+            )
+        # After the import, which touches every session it imports into.
+        sweep_edit_sessions(root)
+        try:
+            watcher = EditCopyWatcher(root, lambda path: process_session(self, path))
+            watcher.start()
+            self._edit_copy_watcher = watcher
+        except OSError as exc:
+            logger.error(
+                "Could not watch the edit copies in %s; an edit saved in another "
+                "app is imported at the next start only: %s",
+                root,
+                exc,
+            )
 
     def _store_inbox_workflow(self, name: str, workflow: dict) -> dict:
         """Store one inbox file as a manual workflow, once per content.

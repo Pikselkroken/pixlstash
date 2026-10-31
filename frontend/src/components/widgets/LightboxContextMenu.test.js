@@ -580,7 +580,11 @@ describe("lightbox-mode find-similar-faces payload", () => {
       { id: 7, frame_index: 0, bbox: [0, 0, 1, 1] },
       { id: 9, frame_index: 0, bbox: [1, 1, 2, 2] },
     ]);
-    await wrapper.find(".ctx-submenu-wrap").trigger("mouseenter");
+    // Open with ▸ is a submenu too, and comes first; pick the faces one.
+    await wrapper
+      .findAll(".ctx-submenu-wrap")
+      .find((wrap) => wrap.text().includes("Find similar faces"))
+      .trigger("mouseenter");
     const faceItems = wrapper.findAll(".ctx-face-item");
     expect(faceItems.length).toBe(2);
     await faceItems[1].trigger("click");

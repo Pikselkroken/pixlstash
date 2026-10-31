@@ -573,6 +573,35 @@ export async function openPictureLocation(id) {
 }
 
 /**
+ * The apps the server's operating system offers for a picture's file type,
+ * editors first (`GET /open-with`). Loopback only.
+ *
+ * @param {number|string} id
+ * @returns {Promise<{apps: Array<{id: string, name: string, default: boolean, editor: boolean}>, other: boolean}>}
+ */
+export async function listOpenWithApps(id) {
+  return unwrap(apiClient.get(`/open-with`, { params: { picture_id: id } }));
+}
+
+/**
+ * Open an edit copy of a picture in an app from {@link listOpenWithApps}, or
+ * in the OS's own chooser. Saving the copy there imports the edit stacked on
+ * the original. Loopback only.
+ *
+ * @param {number|string} id
+ * @param {{appId?: string, other?: boolean}} choice
+ * @returns {Promise<{session: string, app_name: string|null}>}
+ */
+export async function openPictureWith(id, { appId, other } = {}) {
+  return unwrap(
+    apiClient.post(
+      `/open-with`,
+      other ? { picture_id: id, other: true } : { picture_id: id, app_id: appId },
+    ),
+  );
+}
+
+/**
  * Queue object detection over a set of pictures.
  *
  * Runs as a background GPU task: this resolves once the work is accepted, and
