@@ -34,6 +34,7 @@ import { useProjectStore } from "../../stores/useProjectStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useWsStore } from "../../stores/useWsStore";
+import { useInboxStore } from "../../stores/useInboxStore";
 import {
   ALL_PICTURES_ID,
   SCRAPHEAP_PICTURES_ID,
@@ -48,6 +49,7 @@ const projectStore = useProjectStore();
 const userPrefsStore = useUserPrefsStore();
 const sidebarStore = useSidebarStore();
 const wsStore = useWsStore();
+const inboxStore = useInboxStore();
 
 // The two folder facets are derived from the sidebar's folder selection, same
 // as App.vue used to compute them for the old props.
@@ -55,13 +57,11 @@ const filePathPrefixFilter = computed(
   () => selectionStore.selectedFolderFilter?.pathPrefix ?? null,
 );
 const importSourceFolderFilter = computed(
-  () =>
-    selectionStore.selectedFolderFilter?.importSourceFolder ??
-    filterStore.importedFromFilter ??
-    null,
+  () => filterStore.importedFromFilter ?? null,
 );
-const inboxFilter = computed(() =>
-  Boolean(selectionStore.selectedFolderFilter?.inbox),
+// The Inbox's period, as the grid sends it (`useGridFetch.inboxPeriod`).
+const inboxPeriod = computed(() =>
+  selectionStore.selectedFolderFilter?.inbox ? inboxStore.period : null,
 );
 
 // ─── PIL / Video extension lists ─────────────────────────────────────────────
@@ -405,7 +405,7 @@ function buildQueryParams() {
     params.append("file_path_prefix", filePathPrefixFilter.value);
   if (importSourceFolderFilter.value != null)
     params.append("import_source_folder", importSourceFolderFilter.value);
-  if (inboxFilter.value) params.append("unseen", "1");
+  if (inboxPeriod.value) params.append("inbox", inboxPeriod.value);
   (filterStore.tagFilter || []).forEach((t) => params.append("tag", t));
   (filterStore.tagRejectedFilter || []).forEach((t) =>
     params.append("rejected_tag", t),

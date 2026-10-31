@@ -576,3 +576,80 @@ describe("Toolbar - the funnel is lit by the filter strip's chips", () => {
     expect(funnel(wrapper).classes()).not.toContain("bar-btn--active");
   });
 });
+
+describe("Toolbar - the Inbox's Added menu", () => {
+  // What each period holds, keyed by the `inbox=` the count asks for.
+  const COUNTS = { "24h": 12, "7d": 36, "14d": 56, "30d": 271, "90d": 403, all: 1903 };
+
+  beforeEach(async () => {
+    setActivePinia(createPinia());
+    const { apiClient } = await import("../../utils/apiClient");
+    apiClient.get.mockImplementation(async (url) => {
+      const period = new URLSearchParams(String(url).split("?")[1]).get("inbox");
+      return { data: { count: COUNTS[period] ?? 0 } };
+    });
+    window.localStorage.removeItem("pixlstash:inboxPeriod");
+  });
+
+  async function openInbox() {
+    const { useSelectionStore } = await import("../../stores/useSelectionStore");
+    useSelectionStore().selectedFolderFilter = { inbox: true, label: "Inbox" };
+  }
+
+  it("is only there in the Inbox", async () => {
+    const wrapper = mountToolbar();
+    expect(wrapper.find('[data-testid="inbox-period"]').exists()).toBe(false);
+    await openInbox();
+    await flushPromises();
+    const button = wrapper.find('[data-testid="inbox-period"]');
+    expect(button.text()).toContain("Added:");
+    expect(button.text()).toContain("Last 2 weeks");
+  });
+
+  it("counts every period as it opens, and marks the current one", async () => {
+    await openInbox();
+    const wrapper = mountToolbar();
+    await wrapper.find('[data-testid="inbox-period"]').trigger("click");
+    await flushPromises();
+    const rows = wrapper.findAll('.ctx-item[role="menuitemradio"]');
+    expect(rows.map((r) => r.find(".ctx-label-text").text())).toEqual([
+      "Last 24 hours",
+      "Last 7 days",
+      "Last 2 weeks",
+      "Last 30 days",
+      "Last 3 months",
+      "Any time",
+    ]);
+    expect(rows.map((r) => r.find(".ctx-meta").text())).toEqual([
+      "12",
+      "36",
+      "56",
+      "271",
+      "403",
+      "1,903",
+    ]);
+    expect(rows.map((r) => r.attributes("aria-checked"))).toEqual([
+      "false",
+      "false",
+      "true",
+      "false",
+      "false",
+      "false",
+    ]);
+  });
+
+  it("picks a period, closes, and remembers it", async () => {
+    await openInbox();
+    const wrapper = mountToolbar();
+    await wrapper.find('[data-testid="inbox-period"]').trigger("click");
+    await wrapper.find('[data-testid="inbox-period-30d"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.find('[data-testid="inbox-period-30d"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="inbox-period"]').text()).toContain(
+      "Last 30 days",
+    );
+    expect(window.localStorage.getItem("pixlstash:inboxPeriod")).toBe("30d");
+    const { useInboxStore } = await import("../../stores/useInboxStore");
+    expect(useInboxStore().count).toBe(271);
+  });
+});

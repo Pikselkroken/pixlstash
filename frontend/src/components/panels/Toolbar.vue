@@ -335,6 +335,66 @@
             </div>
           </div>
         </v-menu>
+        <!-- ── Inbox period (the Inbox only) ─────────────────────────────
+             A view setting like Sort, so the same dim-prefix bar button; the
+             menu is the shared one (`.ctx-menu`), a radio row per period with
+             how many pictures it would hold. Leaving the Inbox drops the
+             button; the store keeps the period for next time. -->
+        <template v-if="isInboxView">
+          <div class="bar-separator"></div>
+          <v-menu
+            v-model="inboxMenuOpen"
+            location="bottom start"
+            origin="top start"
+            :offset="8"
+          >
+            <template #activator="{ props: menuProps }">
+              <AppBarButton
+                v-bind="menuProps"
+                chevron
+                :open="inboxMenuOpen"
+                :aria-label="`Added: ${inboxStore.periodInfo.label}`"
+                data-testid="inbox-period"
+                ><span class="bar-btn-prefix tb-label">Added:</span
+                >{{ inboxStore.periodInfo.label }}</AppBarButton
+              >
+            </template>
+            <div
+              ref="inboxMenuEl"
+              class="ctx-menu"
+              role="menu"
+              tabindex="-1"
+              aria-label="Added in"
+              @keydown="onMenuKeydown"
+            >
+              <div class="ctx-label section-label">Added in</div>
+              <template v-for="option in INBOX_PERIODS" :key="option.id">
+                <div v-if="option.id === 'all'" class="ctx-sep"></div>
+                <button
+                  class="ctx-item"
+                  type="button"
+                  role="menuitemradio"
+                  :aria-checked="option.id === inboxStore.period"
+                  :data-autofocus="
+                    option.id === inboxStore.period ? '' : undefined
+                  "
+                  :data-testid="`inbox-period-${option.id}`"
+                  @click="pickInboxPeriod(option.id)"
+                >
+                  <span class="ctx-icon" aria-hidden="true"></span>
+                  <span class="ctx-label-text">{{ option.label }}</span>
+                  <span class="ctx-meta">{{ inboxCountText(option.id) }}</span>
+                  <v-icon
+                    v-if="option.id === inboxStore.period"
+                    class="ctx-check"
+                    >mdi-check</v-icon
+                  >
+                  <span v-else class="ctx-check" aria-hidden="true"></span>
+                </button>
+              </template>
+            </div>
+          </v-menu>
+        </template>
         <!-- No ⋯ overflow here: View was its only member, and a burger
              holding one control is that control's glyph behind an extra
              click. View keeps its glyph at every width instead. The toolbar
@@ -366,12 +426,15 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useSortStore } from "../../stores/useSortStore";
 import { useGridStore } from "../../stores/useGridStore";
 import { useSearchStore } from "../../stores/useSearchStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
+import { useSelectionStore } from "../../stores/useSelectionStore";
+import { INBOX_PERIODS, useInboxStore } from "../../stores/useInboxStore";
+import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import {
   MAX_THUMBNAIL_SIZE_LEVEL,
   DEFAULT_THUMBNAIL_SIZE_LEVEL,
@@ -400,6 +463,38 @@ const emit = defineEmits([
   "collapse-all-stacks",
   "open-duplicates",
 ]);
+
+// ── Inbox period ──────────────────────────────────────────────────────────
+const selectionStore = useSelectionStore();
+const inboxStore = useInboxStore();
+const isInboxView = computed(() =>
+  Boolean(selectionStore.selectedFolderFilter?.inbox),
+);
+const inboxMenuOpen = ref(false);
+const inboxMenuEl = ref(null);
+
+// Every row's count is read as the menu opens, so each period says what it
+// would hold before it is picked. The current period is focused, as a menu of
+// choices opens on its value; `v-menu` mounts its content on open.
+watch(inboxMenuOpen, async (isOpen) => {
+  if (!isOpen) return;
+  void inboxStore.refreshAllCounts();
+  await nextTick();
+  requestAnimationFrame(() =>
+    inboxMenuEl.value?.querySelector("[data-autofocus]")?.focus(),
+  );
+});
+
+function pickInboxPeriod(id) {
+  inboxMenuOpen.value = false;
+  inboxStore.setPeriod(id);
+}
+
+/** A row's count, or nothing until it has been read. */
+function inboxCountText(id) {
+  const n = inboxStore.counts[id];
+  return n == null ? "" : n.toLocaleString();
+}
 
 // Shown once per browser and then never again. A migration nudge that came back
 // after a reload would be an ad, so the flag is persisted rather than held in

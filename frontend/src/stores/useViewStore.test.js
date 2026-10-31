@@ -135,19 +135,11 @@ describe("parseRouteView", () => {
     });
   });
 
-  it("reads the Inbox, and one folder's part of it, as a folder facet", () => {
+  it("reads the Inbox as a folder facet", () => {
     expect(parseRouteView(routeOf("inbox"))).toMatchObject({
       clearFolderFilter: false,
       folderKey: null,
-      folderFilter: { inbox: true, importSourceFolder: null, label: "Inbox" },
-    });
-    expect(
-      parseRouteView(routeOf("inbox", {}, { folder: "/home/me/renders" }))
-        .folderFilter,
-    ).toEqual({
-      inbox: true,
-      importSourceFolder: "/home/me/renders",
-      label: "Inbox",
+      folderFilter: { inbox: true, label: "Inbox" },
     });
   });
 
