@@ -9,6 +9,9 @@ vi.mock("vuetify/components", () => ({
   VIcon: { template: "<i><slot /></i>" },
 }));
 vi.mock("./AppBarButton.vue", () => ({ default: { template: "<button />" } }));
+vi.mock("./Tooltip.vue", () => ({
+  default: { props: ["text"], template: '<span class="tip">{{ text }}</span>' },
+}));
 
 import NoticeHost from "./NoticeHost.vue";
 import { useNoticeStore } from "../../stores/useNoticeStore";
@@ -29,7 +32,8 @@ describe("NoticeHost badge", () => {
     const badges = wrapper.findAll(".notice-badge");
     expect(badges).toHaveLength(1);
     expect(badges[0].attributes("aria-label")).toBe("Workflow kept");
-    expect(badges[0].text()).toBe("mdi-shield-alert-outline");
+    expect(badges[0].text()).toContain("mdi-shield-alert-outline");
+    expect(badges[0].find(".tip").text()).toBe("Workflow kept");
     expect(wrapper.findAll(".notice-card")[0].find(".notice-badge").exists()).toBe(
       true,
     );

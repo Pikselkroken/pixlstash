@@ -25,6 +25,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { VIcon } from "vuetify/components";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import AppBarButton from "./AppBarButton.vue";
+import Tooltip from "./Tooltip.vue";
 import { NARROW_VIEWPORT_MAX_PX } from "../../utils/floatingBottom";
 
 const props = defineProps({
@@ -136,16 +137,19 @@ const hostEl = ref(null);
           {{ GLYPHS[card.level] || GLYPHS.info }}
         </v-icon>
         <span class="notice-message" :title="card.text">{{ card.text }}</span>
-        <v-icon
+        <span
           v-if="card.badge"
           class="notice-badge"
-          size="16"
           role="img"
           :aria-label="card.badge.label"
-          :title="card.badge.label"
         >
-          {{ card.badge.icon }}
-        </v-icon>
+          <v-icon size="16" aria-hidden="true">{{ card.badge.icon }}</v-icon>
+          <Tooltip
+            :text="card.badge.label"
+            :describe="false"
+            activator="parent"
+          />
+        </span>
         <span
           v-if="card.count > 1"
           class="notice-count"
@@ -314,6 +318,7 @@ const hostEl = ref(null);
 
 /* A privacy fact the sentence does not carry, in warning ink (#2417). */
 .notice-badge {
+  display: inline-flex;
   flex-shrink: 0;
   margin-top: 1px;
   color: rgb(var(--v-theme-surface-warning));
