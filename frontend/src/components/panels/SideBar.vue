@@ -19,6 +19,7 @@ import SidebarScopeSlot from "./SidebarScopeSlot.vue";
 import SidebarResizeHandle from "./SidebarResizeHandle.vue";
 import UserSettingsDialog from "../settings/UserSettingsDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
+import Segmented from "../widgets/Segmented.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import FolderMappingWizard from "../folders/FolderMappingWizard.vue";
@@ -2674,19 +2675,10 @@ function setTreeMode(mode) {
   }
 }
 
-// The switch is a radiogroup: Left/Right move the choice, focus follows.
-function onTreeModeKeydown(event) {
-  if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key))
-    return;
-  event.preventDefault();
-  const next = treeMode.value === "library" ? "folders" : "library";
-  setTreeMode(next);
-  nextTick(() =>
-    event.currentTarget
-      ?.querySelector?.(`[data-tree-mode="${next}"]`)
-      ?.focus(),
-  );
-}
+const TREE_MODE_OPTIONS = [
+  { id: "library", label: "Library", icon: "bookshelf", testid: "tree-mode-library" },
+  { id: "folders", label: "Folders", icon: "folder-outline", testid: "tree-mode-folders" },
+];
 
 // A token for a person, a set or a picture gets no switch and no tree, only
 // its own flat list; a project token keeps both, rooted at its project.
@@ -4825,29 +4817,18 @@ defineExpose({
 
           <!-- Below Review, one switch chooses how the rest is drawn (#2448):
                Library is PixlStash's own structure, Folders the tree as the
-               default layout files it on disk. A radiogroup, since it sets a
-               value rather than switching panels; drawn like the title bar's
-               workspace switch. -->
-          <div
-            v-if="showsTree"
-            class="sidebar-tree-switch"
-            role="radiogroup"
-            aria-label="Show the library as"
-            @keydown="onTreeModeKeydown"
-          >
-            <button
-              v-for="mode in ['library', 'folders']"
-              :key="mode"
-              type="button"
-              role="radio"
-              :data-tree-mode="mode"
-              :aria-checked="treeMode === mode ? 'true' : 'false'"
-              :tabindex="treeMode === mode ? 0 : -1"
-              :class="['sidebar-tree-switch-seg', { on: treeMode === mode }]"
-              @click="setTreeMode(mode)"
-            >
-              {{ mode === "library" ? "Library" : "Folders" }}
-            </button>
+               default layout files it on disk. The design system's Segmented:
+               a radiogroup, since it sets a value rather than switching
+               panels. -->
+          <div v-if="showsTree" class="sidebar-tree-switch">
+            <Segmented
+              :options="TREE_MODE_OPTIONS"
+              :model-value="treeMode"
+              variant="icon-label"
+              full
+              aria-label="Show the library as"
+              @update:model-value="setTreeMode"
+            />
           </div>
           <div
             v-if="isFinding && findMatches.length"
