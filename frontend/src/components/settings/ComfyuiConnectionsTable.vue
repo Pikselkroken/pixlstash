@@ -729,7 +729,8 @@ function onMenuKey(event, row) {
               <td colspan="5">
                 <p class="cct-problem cct-problem--bad">
                   {{ row.detail || `Nothing answered at ${hostPort(row.url)}.` }}
-                  Start ComfyUI with <code>--listen</code>, or edit the address.
+                  If ComfyUI is running there, start it with <code>--listen</code>,
+                  or edit the address.
                 </p>
               </td>
             </tr>
@@ -846,9 +847,8 @@ function onMenuKey(event, row) {
 }
 
 /* The Connection column takes whatever the others leave and ellipsizes its
-   name and address, so the table never outgrows the pane: an overflowing
-   table scrolled Test and ⋯ out of sight (with an overlay scrollbar, there
-   was nothing to show they were there). */
+   name and address, so a long name or address cannot push Test and ⋯ past
+   the pane, where an overlay scrollbar gives no sign they are there. */
 .cct-conn {
   width: 100%;
   max-width: 0;
