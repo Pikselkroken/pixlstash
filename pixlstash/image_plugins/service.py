@@ -553,92 +553,29 @@ def _set_source_picture_ids_on_new_outputs(
     server.vault.db.run_task(update)
 
 
-def apply_plugin_to_pictures(
+def import_derived_outputs(
     server,
-    plugin: ImagePlugin,
-    picture_ids: list[int],
-    parameters: dict[str, Any] | None,
-    captions: list[str] | None = None,
-    progress_reporter=None,
-    error_reporter=None,
+    sources: list[Picture],
+    output_entries: list[tuple[bytes, str]],
+    *,
     stack: bool = True,
-) -> dict[str, Any]:
-    loaded = _load_input_images(server, picture_ids)
+) -> tuple[list[int], list[int], list[int]]:
+    """Import encoded outputs as new pictures derived from ``sources``.
 
-    progress_events: list[dict[str, Any]] = []
-    errors: list[dict[str, Any]] = []
+    One output per source, in order. A reference-folder source gets its output
+    written beside the original as ``{stem}_edit{n}{ext}``; set and project
+    memberships are copied from the source, ``source_picture_id`` is set on new
+    outputs, and with ``stack`` each output goes to the top of its source's
+    stack. Shared by the image plugins and the Open-with edit copies.
 
-    params = parameters or {}
-
-    # Build per-image captions: use caller-supplied list when provided,
-    # otherwise fall back to each picture's stored description (or "").
-    if captions and len(captions) == len(loaded):
-        resolved_captions: list[str] = [str(c or "") for c in captions]
-    else:
-        resolved_captions = [str(pic.description or "") for pic, *_ in loaded]
-
-    def progress_cb(payload):
-        progress_events.append(payload)
-        if progress_reporter is not None:
-            progress_reporter(payload)
-
-    def error_cb(payload):
-        errors.append(payload)
-        if error_reporter is not None:
-            error_reporter(payload)
-
-    outputs: list[Any] = [None] * len(loaded)
-    image_indices: list[int] = []
-    image_inputs: list[Image.Image] = []
-
-    for idx, (_pic, pil_image, source_format, source_path) in enumerate(loaded):
-        if source_format in _VIDEO_FORMATS and plugin.supports_videos:
-            if type(plugin).run_video is not ImagePlugin.run_video:
-                outputs[idx] = plugin.run_video(
-                    source_path,
-                    parameters=params,
-                    progress_callback=progress_cb,
-                    error_callback=error_cb,
-                )
-            else:
-                image_indices.append(idx)
-                image_inputs.append(pil_image)
-        else:
-            image_indices.append(idx)
-            image_inputs.append(pil_image)
-
-    if image_inputs:
-        input_captions = [resolved_captions[i] for i in image_indices]
-        image_outputs = plugin.run(
-            image_inputs,
-            parameters=params,
-            progress_callback=progress_cb,
-            error_callback=error_cb,
-            captions=input_captions,
-        )
-        if len(image_outputs) != len(image_inputs):
-            raise ValueError(
-                f"Plugin '{plugin.name}' returned {len(image_outputs)} images for {len(image_inputs)} inputs"
-            )
-        for out_idx, loaded_idx in enumerate(image_indices):
-            outputs[loaded_idx] = image_outputs[out_idx]
-
-    if any(output is None for output in outputs):
-        raise ValueError(
-            f"Plugin '{plugin.name}' did not return outputs for all inputs"
-        )
-
-    output_entries: list[tuple[bytes, str]] = []
+    Returns:
+        ``(new_ids, duplicate_ids, ordered_output_ids)``.
+    """
     output_dirs: list[str | None] = []
     reference_folder_ids: list[int | None] = []
     source_file_names: list[str | None] = []
     source_picture_ids: list[int] = []
-    for idx, output in enumerate(outputs):
-        pic, _, source_format, source_path = loaded[idx]
-        # The in-memory PIL image came from ``Image.fromarray`` and so has an
-        # empty ``.info``; embedded metadata has to be re-read from the file.
-        output_bytes, ext = _save_output_images(output, source_format, source_path)
-        output_entries.append((output_bytes, ext))
+    for pic in sources:
         source_picture_ids.append(pic.id)
         if (
             pic.reference_folder_id is not None
@@ -740,6 +677,95 @@ def apply_plugin_to_pictures(
             _assign_outputs_to_stack_top(
                 server, sid, [out_id for _, _, out_id in items]
             )
+
+    return new_ids, duplicate_ids, ordered_output_ids
+
+
+def apply_plugin_to_pictures(
+    server,
+    plugin: ImagePlugin,
+    picture_ids: list[int],
+    parameters: dict[str, Any] | None,
+    captions: list[str] | None = None,
+    progress_reporter=None,
+    error_reporter=None,
+    stack: bool = True,
+) -> dict[str, Any]:
+    loaded = _load_input_images(server, picture_ids)
+
+    progress_events: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+
+    params = parameters or {}
+
+    # Build per-image captions: use caller-supplied list when provided,
+    # otherwise fall back to each picture's stored description (or "").
+    if captions and len(captions) == len(loaded):
+        resolved_captions: list[str] = [str(c or "") for c in captions]
+    else:
+        resolved_captions = [str(pic.description or "") for pic, *_ in loaded]
+
+    def progress_cb(payload):
+        progress_events.append(payload)
+        if progress_reporter is not None:
+            progress_reporter(payload)
+
+    def error_cb(payload):
+        errors.append(payload)
+        if error_reporter is not None:
+            error_reporter(payload)
+
+    outputs: list[Any] = [None] * len(loaded)
+    image_indices: list[int] = []
+    image_inputs: list[Image.Image] = []
+
+    for idx, (_pic, pil_image, source_format, source_path) in enumerate(loaded):
+        if source_format in _VIDEO_FORMATS and plugin.supports_videos:
+            if type(plugin).run_video is not ImagePlugin.run_video:
+                outputs[idx] = plugin.run_video(
+                    source_path,
+                    parameters=params,
+                    progress_callback=progress_cb,
+                    error_callback=error_cb,
+                )
+            else:
+                image_indices.append(idx)
+                image_inputs.append(pil_image)
+        else:
+            image_indices.append(idx)
+            image_inputs.append(pil_image)
+
+    if image_inputs:
+        input_captions = [resolved_captions[i] for i in image_indices]
+        image_outputs = plugin.run(
+            image_inputs,
+            parameters=params,
+            progress_callback=progress_cb,
+            error_callback=error_cb,
+            captions=input_captions,
+        )
+        if len(image_outputs) != len(image_inputs):
+            raise ValueError(
+                f"Plugin '{plugin.name}' returned {len(image_outputs)} images for {len(image_inputs)} inputs"
+            )
+        for out_idx, loaded_idx in enumerate(image_indices):
+            outputs[loaded_idx] = image_outputs[out_idx]
+
+    if any(output is None for output in outputs):
+        raise ValueError(
+            f"Plugin '{plugin.name}' did not return outputs for all inputs"
+        )
+
+    output_entries: list[tuple[bytes, str]] = []
+    for idx, output in enumerate(outputs):
+        _pic, _, source_format, source_path = loaded[idx]
+        # The in-memory PIL image came from ``Image.fromarray`` and so has an
+        # empty ``.info``; embedded metadata has to be re-read from the file.
+        output_entries.append(_save_output_images(output, source_format, source_path))
+
+    new_ids, duplicate_ids, ordered_output_ids = import_derived_outputs(
+        server, [pic for pic, *_ in loaded], output_entries, stack=stack
+    )
 
     return {
         "plugin": plugin.name,
