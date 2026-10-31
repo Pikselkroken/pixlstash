@@ -758,3 +758,57 @@ def test_a_reference_folder_cannot_be_given_a_layout_over_http(server, tmp_path)
         f"/api/v1/reference-folders/{folder_id}", json={"label": "still editable"}
     )
     assert relabelled.status_code == 200, relabelled.text
+
+
+def test_removing_a_folder_deletes_its_pictures_and_keeps_its_files(server, tmp_path):
+    """DELETE /reference-folders/{id} deletes the rows, never the files (#2355).
+
+    The pictures go for good, curation included, not to the Scrapheap. A second
+    folder's picture is the control: removal is scoped to the folder named.
+    """
+    doomed_dir = str(tmp_path / "refs-removed")
+    kept_dir = str(tmp_path / "refs-kept")
+    doomed_folder = _make_folder(server, doomed_dir)
+    kept_folder = _make_folder(server, kept_dir)
+    doomed_file = _make_image(os.path.join(doomed_dir, "gone.png"), (10, 20, 30))
+    _make_image(os.path.join(kept_dir, "kept.png"), (200, 100, 50))
+    _run_scan(server, doomed_folder, doomed_dir)
+    _run_scan(server, kept_folder, kept_dir)
+    doomed_id = _pictures(server, doomed_dir)[0].id
+    kept_id = _pictures(server, kept_dir)[0].id
+    _tag(server, doomed_id, "curated")
+
+    def _add_to_set(session: Session):
+        picture_set = PictureSet(name="Removed folder set")
+        session.add(picture_set)
+        session.commit()
+        session.add(PictureSetMember(set_id=picture_set.id, picture_id=doomed_id))
+        session.commit()
+
+    server.vault.db.run_task(_add_to_set)
+
+    client = TestClient(server.api)
+    login = client.post(
+        "/login", json={"username": "testuser", "password": "testpassword"}
+    )
+    assert login.status_code == 200, login.text
+    removed = client.delete(f"/api/v1/reference-folders/{doomed_folder}")
+    assert removed.status_code == 200, removed.text
+
+    assert server.vault.db.run_task(lambda s: s.get(Picture, doomed_id)) is None, (
+        "the row must be deleted outright, not kept or sent to the Scrapheap"
+    )
+    assert _tags(server, doomed_id) == []
+    members = server.vault.db.run_task(
+        lambda s: s.exec(
+            select(PictureSetMember).where(PictureSetMember.picture_id == doomed_id)
+        ).all()
+    )
+    assert members == []
+    assert (
+        server.vault.db.run_task(lambda s: s.get(ReferenceFolder, doomed_folder))
+        is None
+    )
+    assert os.path.exists(doomed_file), "the owner's file must stay on disk"
+
+    assert server.vault.db.run_task(lambda s: s.get(Picture, kept_id)) is not None
