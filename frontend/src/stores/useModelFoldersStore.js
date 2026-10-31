@@ -149,6 +149,14 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
   /** Per key, the newest request: only it may write its answer. */
   const dirsLatest = new Map();
 
+  /**
+   * The sidebar tree's open rows, kept here so they outlive the sidebar: a
+   * trip to another view and back finds the tree as it was left. Expanded
+   * folder keys, and the drives closed (drives start open).
+   */
+  const treeExpanded = ref(new Set());
+  const treeClosedDrives = ref(new Set());
+
   /** The cache key for one listing. */
   function dirsKey(id, path = "") {
     return `${Number(id)}:${path}`;
@@ -503,6 +511,8 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
     devices.value = [];
     announcing.clear();
     dirListings.value = new Map();
+    treeExpanded.value = new Set();
+    treeClosedDrives.value = new Set();
     comfyuiReads.value = NO_COMFYUI_READS;
     loading.value = false;
     loaded.value = false;
@@ -532,6 +542,8 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
     defaultCandidates,
     registeredPaths,
     dirListings,
+    treeExpanded,
+    treeClosedDrives,
     dirsKey,
     comfyuiReads,
     loadComfyuiReads,

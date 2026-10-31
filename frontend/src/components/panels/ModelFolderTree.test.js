@@ -198,6 +198,36 @@ describe("ModelFolderTree", () => {
     wrapper.unmount();
   });
 
+  it("keeps the sidebar's open rows across a trip away, re-reading their listings", async () => {
+    let wrapper = mountTree();
+    await flushPromises();
+    await item(wrapper, 1).find(".mft-twist").trigger("click");
+    await flushPromises();
+    await item(wrapper, 1, "Lora").find(".mft-twist").trigger("click");
+    await flushPromises();
+    wrapper.unmount();
+    // The sidebar forgets every listing when it comes back, in its onMounted:
+    // after the tree's setup has seen the old listings.
+    wrapper = mountTree();
+    useModelFoldersStore().clearDirs();
+    await flushPromises();
+    expect(item(wrapper, 1).attributes("aria-expanded")).toBe("true");
+    expect(item(wrapper, 1, "Lora").attributes("aria-expanded")).toBe("true");
+    expect(item(wrapper, 1, "Lora/flux").exists()).toBe(true);
+    // A closed drive stays closed too.
+    await wrapper.find('[data-key="drive:d1"] .mft-twist').trigger("click");
+    wrapper.unmount();
+    wrapper = mountTree();
+    await flushPromises();
+    expect(keys(wrapper)).toEqual(["drive:d1"]);
+    wrapper.unmount();
+    // A picker opens on its own state, not the sidebar's.
+    wrapper = mountTree({ mode: "pick" });
+    await flushPromises();
+    expect(item(wrapper, 1).attributes("aria-expanded")).toBe("false");
+    wrapper.unmount();
+  });
+
   it("draws a locked folder with its lock, never expandable, and opens it whole", async () => {
     const wrapper = mountTree();
     // Not even before its listing answers, when an unread folder is offered.

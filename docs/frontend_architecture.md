@@ -4915,7 +4915,12 @@ neither edge moves on a workspace switch.
   per row. **Two modes**: `browse` (the sidebar) opens what is clicked, a
   locked folder included; `pick` (the move work, #2204) refuses a locked folder
   and anything its `disabled(node)` refuses. Both emit `select` with
-  `{folderId, path, locked}` and read `selected` back.
+  `{folderId, path, locked}` and read `selected` back. **The sidebar's open
+  rows outlive it**: in `browse` the expanded folder keys and closed drives are
+  `useModelFoldersStore().treeExpanded` / `treeClosedDrives`, so a trip to
+  another view and back finds the tree as it was left (cleared on session
+  reset); a `pick` tree keeps its own. Since the sidebar's mount clears the
+  listings, any drawn open row without one reads it again.
 - **The folder view.** `store.setFolderScope({folderId, path, locked})` opens
   the `folder` place (never reachable through `setPlace`), leaving the set
   grid for the list: "Sets mode never shows folders" is read as the grid
