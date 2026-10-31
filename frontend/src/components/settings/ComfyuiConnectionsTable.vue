@@ -486,7 +486,7 @@ function onMenuKey(event, row) {
                   v-else
                   variant="outline"
                   size="sm"
-                  icon-left="mdi-key-variant"
+                  icon-left="key-variant"
                   :disabled="linking === row.id"
                   :data-testid="`comfyui-link-${row.id}`"
                   @click="link(row)"
@@ -499,7 +499,7 @@ function onMenuKey(event, row) {
                   variant="ghost"
                   size="sm"
                   icon-only
-                  icon-left="mdi-refresh"
+                  icon-left="refresh"
                   :tooltip="`Test ${row.name}`"
                   :loading="testing[row.id]"
                   :disabled="linking === row.id"
@@ -513,7 +513,7 @@ function onMenuKey(event, row) {
                       variant="ghost"
                       size="sm"
                       icon-only
-                      icon-left="mdi-dots-horizontal"
+                      icon-left="dots-horizontal"
                       :tooltip="`More for ${row.name}`"
                       :disabled="linking === row.id"
                       aria-haspopup="menu"
@@ -707,7 +707,7 @@ function onMenuKey(event, row) {
                     </AppButton>
                     <AppButton
                       variant="danger"
-                      icon-left="mdi-delete-outline"
+                      icon-left="delete-outline"
                       :loading="removing"
                       data-testid="comfyui-remove-confirm-button"
                       @click="remove(row)"
@@ -729,9 +729,8 @@ function onMenuKey(event, row) {
               <td colspan="5">
                 <p class="cct-problem cct-problem--bad">
                   {{ row.detail || `Nothing answered at ${hostPort(row.url)}.` }}
-                  If ComfyUI is running there, start it with
-                  <code>--listen</code>, or edit the address.
-                  <template v-if="row.link.linked">Its key stays linked.</template>
+                  If ComfyUI is running there, start it with <code>--listen</code>,
+                  or edit the address.
                 </p>
               </td>
             </tr>
@@ -847,9 +846,12 @@ function onMenuKey(event, row) {
   cursor: pointer;
 }
 
+/* The Connection column takes whatever the others leave and ellipsizes its
+   name and address, so a long name or address cannot push Test and ⋯ past
+   the pane, where an overlay scrollbar gives no sign they are there. */
 .cct-conn {
-  min-width: 0;
-  max-width: 220px;
+  width: 100%;
+  max-width: 0;
 }
 
 .cct-name,
