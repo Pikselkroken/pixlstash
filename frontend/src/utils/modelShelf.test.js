@@ -21,6 +21,9 @@ import {
   collapseStacks,
   comfyuiLoadsTitle,
   comfyuiMarks,
+  layoutKind,
+  modelDestinations,
+  unsaidTypes,
   comfyuiName,
   comfyuiReadFor,
   copyPathsTitle,
@@ -1880,5 +1883,68 @@ describe("a key from the Folders tree (#2206)", () => {
     // A press with nothing focused lands on the body, which is nobody's tree.
     expect(isInFoldersTree({ target: document.body })).toBe(false);
     expect(isInFoldersTree({})).toBe(false);
+  });
+});
+
+describe("where a dragged model belongs", () => {
+  const sm = { id: 1, path: "/home/me/StabilityMatrix/Data/Models", tool: "StabilityMatrix" };
+  const comfy = { id: 2, path: "D:\\ComfyUI\\models" };
+  const plain = { id: 3, path: "/home/me/models" };
+  const listing = (dirs, direct = 0) => ({
+    listing: { direct_model_count: direct, dirs },
+  });
+  const dir = (path, direct) => ({ name: path.split("/").pop(), path, direct_model_count: direct });
+
+  it("reads a known tool's layout straight under its models folder", () => {
+    expect(layoutKind(sm, "DiffusionModels")).toBe("checkpoint");
+    expect(layoutKind(sm, "LyCORIS")).toBe("lora");
+    expect(layoutKind(sm, "ESRGAN")).toBe("upscaler");
+    expect(layoutKind(comfy, "diffusion_models")).toBe("checkpoint");
+    expect(layoutKind(comfy, "clip")).toBe("text_encoder");
+    // A folder registered at the Type folder itself.
+    expect(layoutKind({ ...sm, path: `${sm.path}/Lora` }, "")).toBe("lora");
+    // A Models folder moved behind a symlink is stored at its resolved path,
+    // named for wherever it went.
+    const moved = { ...sm, path: "/home/me/.vault/Models/StabilityMatrix" };
+    expect(layoutKind(moved, "Lora")).toBe("lora");
+    expect(layoutKind(moved, "Lora/flux")).toBe("");
+    // A registered Type folder's own subfolders are the owner's sorting.
+    expect(layoutKind({ ...sm, path: `${sm.path}/Lora` }, "vae")).toBe("");
+    // Deeper is the owner's own sorting, and no tool is never guessed.
+    expect(layoutKind(sm, "Lora/vae")).toBe("");
+    expect(layoutKind(sm, "Embeddings")).toBe("");
+    expect(layoutKind(plain, "loras")).toBe("");
+  });
+
+  it("asks ComfyUI first, and the layout only for a folder its reads miss", () => {
+    const listings = new Map([
+      ["1:", listing([dir("Lora", 40), dir("DiffusionModels", 6), dir("Embeddings", 2)], 3)],
+      ["2:", listing([dir("loras", 9), dir("unet", 1)])],
+    ]);
+    const reads = {
+      known: true,
+      reads: [{ folder_id: 2, subpath: "loras", kind: "lora" }],
+    };
+    expect(modelDestinations([sm, comfy], listings, reads)).toEqual([
+      { folderId: 1, path: "Lora", kind: "lora", count: 40 },
+      { folderId: 1, path: "DiffusionModels", kind: "checkpoint", count: 6 },
+      // ComfyUI does not load from unet here, so the layout is not asked.
+      { folderId: 2, path: "loras", kind: "lora", count: 9 },
+    ]);
+    expect(modelDestinations([comfy], listings, { known: false, reads: [] })).toEqual([
+      { folderId: 2, path: "loras", kind: "lora", count: 9 },
+      { folderId: 2, path: "unet", kind: "checkpoint", count: 1 },
+    ]);
+  });
+
+  it("puts a Type on a second line only where the name does not say it", () => {
+    const words = (name, ...kinds) =>
+      unsaidTypes(name, new Set(kinds)).map((type) => type.label);
+    expect(words("DiffusionModels", "checkpoint")).toEqual(["Checkpoints"]);
+    expect(words("CLIP", "text_encoder")).toEqual(["Text encoders"]);
+    expect(words("LyCORIS", "lora")).toEqual(["LoRAs"]);
+    expect(words("Lora", "lora")).toEqual([]);
+    expect(words("text_encoders", "text_encoder")).toEqual([]);
+    expect(words("upscale_models", "upscaler")).toEqual([]);
   });
 });

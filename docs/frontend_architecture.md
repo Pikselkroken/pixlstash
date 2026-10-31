@@ -5917,6 +5917,32 @@ dialog, which says so on its button.
   tip and never the shelf. The drop calls `store.requestMove`, and `ModelShelf`
   (which owns the dialog; the tree is in the sidebar) starts a same-drive move
   or opens the dialog on that folder with focus on **Move**, so Enter confirms.
+
+  **While the rows are dragged, the tree marks where they belong.**
+  `modelDestinations` (`utils/modelShelf.js`) lists, per registered folder, the
+  directories ComfyUI loads each Type from (`comfyuiReads`), or, for a folder
+  none of those reads lands in, the directories its tool's layout names
+  (`layoutKind`: a directory straight under StabilityMatrix's `Models` or
+  ComfyUI's `models`, or straight under the registered folder itself, by name;
+  a registered folder is stored at its resolved path, so a `Models` moved
+  behind a symlink arrives under another name). A folder with no known layout
+  is never guessed.
+  A destination for a dragged copy's Type (from `dragCopies.kinds`) swaps its
+  glyph for `mdi-folder-download-outline` and turns its Type words green
+  (`--v-theme-surface-success`, semibold); the blue `.drop-ring` still marks only
+  the row under the pointer. A **collapsed** row with a destination inside is
+  marked the same way, only for a drag of one Type (a file no Type row takes
+  counts as another), and a drop on it files into
+  the destination inside holding the most models (`modelDropDestination`); an
+  open parent is plain and keeps its drop. Resting on a marked parent for 600 ms
+  (from its first `model-copies-over`) opens it, and what that opened folds back
+  when `dragCopies` clears, except the way to where the drop landed. A
+  destination scrolled out of the sidebar gets a sticky arrow at that edge, in
+  its glyph column. The arrow takes no pointer and sits inside the shelf drag's
+  edge-scroll band, so holding the pointer on it scrolls towards the
+  destination, and the row under it still takes the drop. At rest, a subfolder whose name does not say its Type
+  (`unsaidTypes`: `DiffusionModels`, `clip`, `LyCORIS`) carries it on a muted
+  second line, in `pick` mode (the Move dialog) as well.
 - **Cut and paste**, from the keyboard and from the menus. `Ctrl X`, or
   **Cut** in the row menu and the pill's `⋯`, holds the selection's movable
   copies in `store.cutCopies`, and those rows draw at `--opacity-disabled`

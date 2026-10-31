@@ -1430,6 +1430,131 @@ export function comfyuiMarks(folderId, path, reads) {
 }
 
 /**
+ * The Type a known tool files under each directory of its models folder:
+ * StabilityMatrix's `Models/<name>` and ComfyUI's `models/<name>`, by the
+ * name squashed to lowercase letters and digits. Only for a folder ComfyUI's
+ * own reads do not cover; those are asked first.
+ */
+const LAYOUT_KINDS = {
+  stablediffusion: "checkpoint",
+  diffusionmodels: "checkpoint",
+  checkpoints: "checkpoint",
+  unet: "checkpoint",
+  lora: "lora",
+  loras: "lora",
+  lycoris: "lora",
+  vae: "vae",
+  textencoders: "text_encoder",
+  clip: "text_encoder",
+  esrgan: "upscaler",
+  realesrgan: "upscaler",
+  swinir: "upscaler",
+  upscalemodels: "upscaler",
+  controlnet: "controlnet",
+};
+
+/** What a directory name must contain to already say it holds a Type. */
+const TYPE_STEMS = {
+  checkpoint: "checkpoint",
+  lora: "lora",
+  vae: "vae",
+  text_encoder: "textencoder",
+  upscaler: "upscale",
+  controlnet: "controlnet",
+};
+
+const squash = (name) =>
+  String(name ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+
+/**
+ * The Type a known tool's layout files under a directory, or `""`: a
+ * directory straight under a `models` folder, or straight under the registered
+ * folder itself, that is StabilityMatrix's (by the folder's `tool`) or
+ * ComfyUI's (a `ComfyUI` segment in its path). The registered folder counts
+ * whatever its name, because it is stored at its resolved path and a `Models`
+ * moved behind a symlink resolves to the name of wherever it went; a library
+ * root holds `Models` and `Packages`, never a Type folder, so nothing there is
+ * mistaken. A registered Type folder's own subfolders are the owner's sorting.
+ * Anything else has no known layout and is never guessed.
+ *
+ * @param {{path: string, tool?: string}} folder - the registered folder.
+ * @param {string} path - POSIX, relative to it, `""` for its root.
+ * @returns {string} a {@link SHELF_TYPES} key, or `""`.
+ */
+export function layoutKind(folder, path) {
+  const root = String(folder?.path ?? "")
+    .split(/[\\/]+/)
+    .filter(Boolean);
+  const segments = [...root, ...String(path ?? "").split("/").filter(Boolean)];
+  if (segments.length < 2) return "";
+  const inRoot =
+    segments.length === root.length + 1 && !LAYOUT_KINDS[squash(root.at(-1))];
+  if (!inRoot && squash(segments.at(-2)) !== "models") return "";
+  const known =
+    folder.tool === "StabilityMatrix" ||
+    segments.some((segment) => /comfyui/i.test(segment));
+  return known ? (LAYOUT_KINDS[squash(segments.at(-1))] ?? "") : "";
+}
+
+/**
+ * Where models of each Type belong in the registered folders: the directories
+ * ComfyUI loads them from, or for a folder none of its reads lands in, the
+ * directories its tool's layout names. A layout directory is only found once
+ * its parent has been listed.
+ *
+ * @param {Array<{id: number, path: string, tool?: string}>} folders
+ * @param {Map<string, {listing?: Object}>} listings - the folders store's
+ *   `dirListings`, keyed `"<folder id>:<path>"`.
+ * @param {Object} reads - see {@link comfyuiReadFor}.
+ * @returns {Array<{folderId: number, path: string, kind: string,
+ *   count: number}>} `count` is the models directly in it, 0 when unlisted.
+ */
+export function modelDestinations(folders, listings, reads) {
+  const out = [];
+  for (const folder of folders) {
+    const id = Number(folder.id);
+    const counts = new Map();
+    for (const [key, entry] of listings ?? []) {
+      if (!key.startsWith(`${id}:`) || !entry?.listing) continue;
+      counts.set(key.slice(`${id}:`.length), entry.listing.direct_model_count);
+      for (const dir of entry.listing.dirs ?? []) {
+        if (!counts.has(dir.path)) counts.set(dir.path, dir.direct_model_count);
+      }
+    }
+    const read = reads?.known
+      ? (reads.reads ?? []).filter((one) => Number(one.folder_id) === id)
+      : [];
+    const found = read.length
+      ? read.map((one) => [one.subpath ?? "", one.kind])
+      : [...counts.keys()].map((path) => [path, layoutKind(folder, path)]);
+    const seen = new Set();
+    for (const [path, kind] of found) {
+      if (!kind || seen.has(`${path}\u0000${kind}`)) continue;
+      seen.add(`${path}\u0000${kind}`);
+      out.push({ folderId: id, path, kind, count: Number(counts.get(path)) || 0 });
+    }
+  }
+  return out;
+}
+
+/**
+ * The Types a directory holds that its name does not already say, for the
+ * second line under it: `DiffusionModels` reads Checkpoints, `Lora` nothing.
+ *
+ * @param {string} name - the directory's name.
+ * @param {Set<string>} kinds - {@link SHELF_TYPES} keys it holds.
+ * @returns {Array<Object>} {@link SHELF_TYPES} entries, in their order.
+ */
+export function unsaidTypes(name, kinds) {
+  const said = squash(name);
+  return SHELF_TYPES.filter(
+    (type) => kinds.has(type.key) && !said.includes(TYPE_STEMS[type.key]),
+  );
+}
+
+/**
  * Whether every copy is already directly in a destination, so a move there
  * would do nothing: the server skips such a copy rather than moving it.
  *
