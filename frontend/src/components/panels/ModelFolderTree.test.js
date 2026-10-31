@@ -3,6 +3,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
+import { nextTick } from "vue";
 import { createPinia, setActivePinia } from "pinia";
 
 const listModelFolderDirs = vi.fn();
@@ -198,7 +199,7 @@ describe("ModelFolderTree", () => {
     wrapper.unmount();
   });
 
-  it("keeps the sidebar's open rows across a trip away, re-reading their listings", async () => {
+  it("keeps the sidebar's open rows across a trip away, drawn whole at once", async () => {
     let wrapper = mountTree();
     await flushPromises();
     await item(wrapper, 1).find(".mft-twist").trigger("click");
@@ -206,13 +207,16 @@ describe("ModelFolderTree", () => {
     await item(wrapper, 1, "Lora").find(".mft-twist").trigger("click");
     await flushPromises();
     wrapper.unmount();
-    // The sidebar forgets every listing when it comes back, in its onMounted:
-    // after the tree's setup has seen the old listings.
+    // The sidebar re-reads every listing when it comes back, in its onMounted.
+    // The open rows are drawn whole on the first frame and stay drawn while
+    // the reads are out, rather than opening one level per answer.
     wrapper = mountTree();
-    useModelFoldersStore().clearDirs();
-    await flushPromises();
+    useModelFoldersStore().reloadDirs();
+    await nextTick();
     expect(item(wrapper, 1).attributes("aria-expanded")).toBe("true");
     expect(item(wrapper, 1, "Lora").attributes("aria-expanded")).toBe("true");
+    expect(item(wrapper, 1, "Lora/flux").exists()).toBe(true);
+    await flushPromises();
     expect(item(wrapper, 1, "Lora/flux").exists()).toBe(true);
     // A closed drive stays closed too.
     await wrapper.find('[data-key="drive:d1"] .mft-twist').trigger("click");

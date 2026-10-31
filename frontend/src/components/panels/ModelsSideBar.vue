@@ -246,9 +246,11 @@ let addTrigger = null;
 
 onMounted(() => {
   // The counts need the sets ("In no set yet"); the tree needs the folders,
-  // their drives and a fresh read of each folder's own level.
+  // their drives and a fresh read of each listing it shows. Re-read in place,
+  // not dropped: the open rows draw whole from the last visit's listings
+  // rather than opening one level at a time.
   store.loadWorkflowSets();
-  foldersStore.clearDirs();
+  foldersStore.reloadDirs();
   foldersStore.refresh({ quiet: true });
   foldersStore.refreshDevices();
   // The Training runs row counts them wherever the workspace is.

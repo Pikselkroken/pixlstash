@@ -4884,7 +4884,7 @@ neither edge moves on a workspace switch.
   registered folder on that drive with its model count, then its subfolders on
   expand. Subfolders come from `GET /model-folders/{id}/dirs?path=` one level
   per request, through `useModelFoldersStore().loadDirs(id, path)`, a cache
-  keyed `"<id>:<path>"` shared with the folder view (`clearDirs()` on each
+  keyed `"<id>:<path>"` shared with the folder view (`reloadDirs()` on each
   sidebar mount, `force` when the view opens a folder, and `reloadDirs()`, a
   re-read of every cached listing in place, whenever the shelf's rows are
   refetched, which every scan, move, added file and edit does). Every registered
@@ -4919,8 +4919,9 @@ neither edge moves on a workspace switch.
   rows outlive it**: in `browse` the expanded folder keys and closed drives are
   `useModelFoldersStore().treeExpanded` / `treeClosedDrives`, so a trip to
   another view and back finds the tree as it was left (cleared on session
-  reset); a `pick` tree keeps its own. Since the sidebar's mount clears the
-  listings, any drawn open row without one reads it again.
+  reset); a `pick` tree keeps its own. The sidebar's mount re-reads the cached
+  listings in place rather than dropping them, so the open rows are drawn
+  whole at once and only their counts move when the fresh reads land.
 - **The folder view.** `store.setFolderScope({folderId, path, locked})` opens
   the `folder` place (never reachable through `setPlace`), leaving the set
   grid for the list: "Sets mode never shows folders" is read as the grid

@@ -1086,22 +1086,6 @@ watch(
   { immediate: true },
 );
 
-// An open row whose listing is gone (the sidebar forgets them all on each
-// visit) reads it again, so a remembered open folder shows its subfolders.
-watch(
-  () =>
-    nodes.value.filter(
-      (node) =>
-        node.expanded &&
-        node.kind !== "drive" &&
-        !listingOf(node.folderId, node.path),
-    ),
-  (missing) => {
-    for (const node of missing) foldersStore.loadDirs(node.folderId, node.path);
-  },
-  { immediate: true },
-);
-
 defineExpose({ reveal });
 </script>
 

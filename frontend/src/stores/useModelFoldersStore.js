@@ -228,11 +228,6 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
     if (startedAt === epoch) comfyuiReads.value = answer;
   }
 
-  /** Forget every listing, so the next look reads the disk again. */
-  function clearDirs() {
-    dirListings.value = new Map();
-  }
-
   /**
    * Re-read every listing already shown, in place: a scan, a move or an added
    * file changes counts and folders under rows that are open. Clearing instead
@@ -548,7 +543,6 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
     comfyuiReads,
     loadComfyuiReads,
     loadDirs,
-    clearDirs,
     reloadDirs,
     refresh,
     refreshDevices,
