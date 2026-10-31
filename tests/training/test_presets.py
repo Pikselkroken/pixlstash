@@ -449,6 +449,8 @@ def test_a_profile_whose_previews_fit_is_picked_over_deferring_them():
     assert (out["profile"], out["probe"]) == ("q8_cached", True)
     assert out["previews_deferred"] is False
     assert out["fallbacks"] == ["q8_offload"]
+    # q8 trains, so the probe keeps it to fall back on.
+    assert out["passed_over"] == ["q8"]
     fits = _measurement(9_000, previews_mb=12_000)
     out = _resolve(
         vram_mb=_16GB,

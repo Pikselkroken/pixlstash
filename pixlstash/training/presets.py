@@ -544,11 +544,14 @@ def resolve(
         ``{"preset", "subject", "effort", "fit", "picture_count", "profile",
         "profile_label", "evidence", "vram_mb", "ram_mb", "preview_vram_mb",
         "room", "steps_clamp", "fingerprint", "probe", "fallbacks",
-        "previews_deferred", "estimate", "values"}``; ``steps_clamp`` is
+        "passed_over", "previews_deferred", "estimate", "values"}``;
+        ``steps_clamp`` is
         ``cap`` or ``floor`` when the effort's step range held the
         picture-scaled count, else None; ``probe`` is True when the profile's
         setup has never been measured here; ``fallbacks`` are the profiles a
-        probe that runs out of memory steps to; ``estimate`` is ``{seconds,
+        probe that runs out of memory steps to; ``passed_over`` are the
+        profiles before it that train but were measured with previews that do
+        not fit, which the probe keeps to fall back on; ``estimate`` is ``{seconds,
         basis}``, basis ``measured`` or ``none``; ``values`` maps each key to
         ``{"value", "source"}``, the source being ``model``, ``subject``,
         ``effort``, ``pictures``, ``captions``, ``gpu`` or ``pinned``.
@@ -714,6 +717,7 @@ def resolve(
     picked = fitting[0]
     if not pins.get(sampling):
         picked = next((e for e in fitting if previews_fit(e)), picked)
+    passed_over = fitting[: fitting.index(picked)]
     name, profile = picked["name"], picked["profile"]
     for key, value in profile["settings"].items():
         if key not in pins:
@@ -764,6 +768,7 @@ def resolve(
         # The profiles a probe that runs out of memory steps to, in the fit
         # choice's order: each offloads more than the one before.
         "fallbacks": [e["name"] for e in judgedall[judgedall.index(picked) + 1 :]],
+        "passed_over": [e["name"] for e in passed_over],
         "previews_deferred": bool(deferred),
         "estimate": {
             "seconds": round(seconds) if seconds is not None else None,

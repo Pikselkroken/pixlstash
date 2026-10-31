@@ -64,7 +64,7 @@ _LOG_TAIL_BYTES = 8192
 ADOPT_QUIET_S = 120.0
 #: Updates a probe trains: enough for a warm speed after the first.
 PROBE_STEPS = 6
-#: The most memory profiles one probe search tries.
+#: The most probes one search runs; a measured profile costs none.
 MAX_PROBES = 3
 #: A probe is stopped when the machine's available RAM falls below this.
 RAM_GUARD_MB = 1024
@@ -1156,15 +1156,25 @@ class TrainingService:
         )
         # Resolved again at launch even when it was measured at enqueue: the
         # checkout or the card may have changed since, which is a new setup.
-        names = [resolution["profile"], *(resolution.get("fallbacks") or [])]
+        # The profiles passed over for their previews come first: measured,
+        # they cost no probe and are kept to fall back on (#2411).
+        names = [
+            *(resolution.get("passed_over") or []),
+            resolution["profile"],
+            *(resolution.get("fallbacks") or []),
+        ]
         reason = None
         # The first profile that held but whose previews do not fit: kept while
         # the next ones are tried for previews drawn while training (#2411).
         deferred = None
-        for name in names[:MAX_PROBES]:
+        probes = 0
+        for name in names:
             try:
                 settled = self._reresolve(info, resolution, preset, lookup, name)
                 if settled["probe"]:
+                    if probes == MAX_PROBES:
+                        break
+                    probes += 1
                     self._note_phase(job_uuid, "checking")
                     outcome, reason = self._probe_once(
                         backend, info, work_dir, manifest, lease, settled

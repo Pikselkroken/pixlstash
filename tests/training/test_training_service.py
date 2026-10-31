@@ -1738,12 +1738,14 @@ def test_previews_that_do_not_fit_step_to_the_next_profile(hub, repo_dir, watche
     assert "train.disable_sampling" not in settled["values"]
 
 
+@pytest.mark.parametrize("measured_before_queueing", [False, True])
 def test_a_failed_check_of_the_next_profile_keeps_the_one_that_trains(
-    hub, repo_dir, watched, monkeypatch
+    hub, repo_dir, watched, monkeypatch, measured_before_queueing
 ):
     """#2411: q8 trains but its previews do not fit; the RAM guard stops the
     check of q8_cached. The run trains on q8 with its previews put off
-    instead of failing."""
+    instead of failing, also when q8 was measured before the run was queued
+    and so was passed over for q8_cached there."""
     monkeypatch.setattr(
         training_service_module,
         "read_ram",
@@ -1756,8 +1758,12 @@ def test_a_failed_check_of_the_next_profile_keeps_the_one_that_trains(
         notify=_CapturingNotify(),
         dataset_builder=_make_dataset_builder(),
     )
+    if measured_before_queueing:
+        _record_big_previews(hub, "q8")
+    resolution = _resolve_small(hub)
+    assert resolution["profile"] == ("q8_cached" if measured_before_queueing else "q8")
     job = _enqueue_resolved(
-        service, _resolve_small(hub), _write_template(repo_dir, steps=4, save_every=2)
+        service, resolution, _write_template(repo_dir, steps=4, save_every=2)
     )
     _record_big_previews(hub, "q8")
 
