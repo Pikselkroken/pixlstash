@@ -382,9 +382,16 @@ def _target_size(nodes: dict, resizers: set[str], empty: str | None) -> tuple[in
 
     A resize of the picture says it (``ImageScaleToTotalPixels``' megapixels,
     an ``ImageScale*``'s literal width and height), else the empty latent's
-    literal size. A graph that says neither gets 1024 x 1024.
+    literal size. A graph that says neither gets 1024 x 1024. In a chain of
+    resizes the last one (no other resize reads it) is asked first, since it is
+    the size the graph works at.
     """
-    for node_id in sorted(resizers):
+    fed = {
+        nodes[node_id]["inputs"]["image"][0]
+        for node_id in resizers
+        if is_link(nodes[node_id]["inputs"].get("image"))
+    }
+    for node_id in sorted(resizers, key=lambda node_id: (node_id in fed, node_id)):
         inputs = nodes[node_id]["inputs"]
         megapixels = inputs.get("megapixels")
         if nodes[node_id]["class_type"] == "ImageScaleToTotalPixels" and isinstance(

@@ -324,6 +324,28 @@ def test_an_image_scales_own_size_sets_the_target():
     assert (inputs["output_target_width"], inputs["output_target_height"]) == (512, 768)
 
 
+def test_the_last_resize_in_a_chain_sets_the_target():
+    """Ids chosen so the intermediate resize sorts first as a string."""
+    graph = _sdxl_img2img()
+    graph["10"] = {
+        "class_type": "ImageScale",
+        "inputs": {"image": ["4", 0], "width": 512, "height": 768},
+    }
+    graph["9"] = {
+        "class_type": "ImageScale",
+        "inputs": {"image": ["10", 0], "width": 2048, "height": 2048},
+    }
+    graph["5"]["inputs"]["pixels"] = ["9", 0]
+    converted = convert_to_inpaint(graph)
+    crop = _one(converted, "InpaintCropImproved")
+    assert "9" not in converted and "10" not in converted
+    inputs = converted[crop]["inputs"]
+    assert (inputs["output_target_width"], inputs["output_target_height"]) == (
+        2048,
+        2048,
+    )
+
+
 def test_the_input_is_untouched_and_the_output_is_the_same_every_time():
     graph = _built_in("Flux2-Klein-Image-Edit.json")
     before = copy.deepcopy(graph)
