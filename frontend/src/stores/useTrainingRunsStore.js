@@ -2,11 +2,12 @@ import { computed, onScopeDispose, ref, watch } from "vue";
 import { defineStore } from "pinia";
 
 import { listRuns } from "../api/modelImports";
-import { listTrainingJobs } from "../api/training";
+import { cancelTrainingJob, listTrainingJobs } from "../api/training";
 import { onSessionReset } from "../utils/apiClient";
 import { errorDetail } from "../utils/apiError";
 import { isBusyJob } from "../utils/trainingRuns.js";
 import { useModelFoldersStore } from "./useModelFoldersStore";
+import { useNoticeStore } from "./useNoticeStore";
 
 /** A job that ended in one of these may have ended before it was started. */
 const ENDED_EARLY = ["error", "stopped"];
@@ -278,6 +279,36 @@ export const useTrainingRunsStore = defineStore("trainingRuns", () => {
     return Promise.all([loadRuns(), loadJobs()]);
   }
 
+  /**
+   * Stop a live job, or skip a trained one's remaining previews.
+   *
+   * The same confirmation as Settings' Cancel: a stopped run cannot resume.
+   * Skip previews (a `completed` job) keeps the model, so it does not ask.
+   *
+   * @returns {Promise<boolean>} whether the job was asked to stop.
+   */
+  async function stopJob(job, name) {
+    if (
+      job.status !== "completed" &&
+      !window.confirm(
+        `Stop training "${name}"? The run will stop and cannot be resumed.`,
+      )
+    ) {
+      return false;
+    }
+    try {
+      await cancelTrainingJob(job.id);
+      await loadJobs();
+      return true;
+    } catch (err) {
+      useNoticeStore().push({
+        level: "error",
+        text: errorDetail(err) || "Could not stop the run.",
+      });
+      return false;
+    }
+  }
+
   /** Read once, for a surface that only counts (the sidebar). */
   function ensureLoaded() {
     if (!asked.value) reload();
@@ -352,6 +383,7 @@ export const useTrainingRunsStore = defineStore("trainingRuns", () => {
     loadRuns,
     loadJobs,
     reload,
+    stopJob,
     ensureLoaded,
   };
 });

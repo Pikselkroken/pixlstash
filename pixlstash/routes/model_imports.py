@@ -18,9 +18,9 @@ happens at all when the source folder carries ``delete_after_import``.
 path is ever taken from the caller. The join is contained: a run name that
 resolves outside its registered output root is refused rather than read.
 
-**A run's previews come with it**, into ``<stem>_samples/`` beside each imported
-checkpoint, and ``GET /models/{model_id}/samples`` reads them back off the shelf.
-That pair is addressed by ``model.id`` rather than by sha256, because a
+**A run's previews stay in the run.** Imports before 2026-10-30 copied them into
+``<stem>_samples/`` beside each checkpoint, and ``GET /models/{model_id}/samples``
+still reads those back off the shelf. That pair is addressed by ``model.id`` rather than by sha256, because a
 checkpoint nobody has hashed has no sha256 to be addressed by.
 
 Authorization: every route here is `LOCAL_OWNER_ONLY`, declared in
@@ -201,21 +201,7 @@ class ImportedFile(BaseModel):
     model_id: Optional[int] = Field(
         default=None, description="The hub `model.id` the file landed on."
     )
-    detail: Optional[str] = Field(
-        default=None,
-        description=(
-            "Why, when it failed - and, on a file that imported, why its "
-            "previews did not come with it."
-        ),
-    )
-    sample_count: int = Field(
-        default=0,
-        description=(
-            "Previews copied into this checkpoint's `<stem>_samples/` directory. "
-            "Zero for a run with no samples, and for a copy that failed - "
-            "`detail` says which."
-        ),
-    )
+    detail: Optional[str] = Field(default=None, description="Why, when it failed.")
 
 
 class ImportResponse(BaseModel):
@@ -695,7 +681,6 @@ def create_router(server) -> APIRouter:
                     status=outcome.status,
                     model_id=outcome.model_id,
                     detail=outcome.detail,
-                    sample_count=outcome.sample_count,
                 )
                 for outcome in report.outcomes
             ],

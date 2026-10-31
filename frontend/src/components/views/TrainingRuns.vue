@@ -78,7 +78,6 @@
       v-if="!(source && loading && !cards.length) && !error"
       ref="gridEl"
       class="tr-grid"
-      :class="{ 'tr-grid--selecting': chosen.length > 0 }"
       @keydown="onGridKeydown"
     >
       <!-- The door into training from here (#2169). This screen has no set or
@@ -121,7 +120,9 @@
           :tabindex="index === cursor ? 0 : -1"
           :data-run-index="index"
           :data-run-key="card.key"
-          @click="toggle(card)"
+          @click="$event.detail > 1 || toggle(card)"
+          @dblclick="onCardDblClick(card)"
+          @contextmenu.prevent="openMenu(card, $event.clientX, $event.clientY)"
           @focus="cursor = index"
           @keydown.enter.prevent="toggle(card)"
           @keydown.space.prevent="toggle(card)"
@@ -158,15 +159,6 @@
                   : "No previews"
               }}</span>
             </div>
-
-            <!-- The countable half of the checked state. The rail says "this
-                 one is in"; a disc per card is what makes "seven of them are
-                 in" readable at a glance. Hidden by opacity and never by
-                 `v-if`, so the target does not pop into existence under the
-                 pointer. -->
-            <span class="tr-card-check" aria-hidden="true">
-              <v-icon v-if="isChosen(card)" size="16">mdi-check</v-icon>
-            </span>
           </div>
 
           <div class="tr-card-body">
@@ -219,6 +211,79 @@
         </div>
       </div>
     </div>
+
+    <!-- The card context menu, anchored to the pointer. A card right-clicked
+         outside the selection becomes the selection first, as on the shelf, so
+         Import here and on the pill always mean the same runs. -->
+    <v-menu
+      v-model="cardMenuOpen"
+      :target="cardMenuAt"
+      location="bottom end"
+      origin="top start"
+      :offset="2"
+    >
+      <div
+        class="ctx-menu shelf-menu"
+        role="menu"
+        tabindex="-1"
+        data-testid="tr-card-menu"
+        @keydown="onMenuKeydown"
+      >
+        <button
+          v-if="menuCard?.job"
+          class="ctx-item"
+          type="button"
+          role="menuitem"
+          data-testid="tr-menu-open"
+          @click="openCard(menuCard)"
+        >
+          <v-icon class="ctx-icon">mdi-open-in-new</v-icon>
+          <span class="ctx-label-text">Open run</span>
+        </button>
+        <button
+          v-if="importable.length"
+          class="ctx-item"
+          type="button"
+          role="menuitem"
+          data-testid="tr-menu-import"
+          :disabled="!canSubmit"
+          @click="submit"
+        >
+          <v-icon class="ctx-icon">mdi-tray-arrow-down</v-icon>
+          <span class="ctx-label-text">{{ confirmLabel }}</span>
+        </button>
+        <button
+          v-if="canStop(menuCard)"
+          class="ctx-item"
+          type="button"
+          role="menuitem"
+          data-testid="tr-menu-stop"
+          @click="runsStore.stopJob(menuCard.job, menuCard.name)"
+        >
+          <v-icon class="ctx-icon">mdi-stop</v-icon>
+          <span class="ctx-label-text">Stop training</span>
+        </button>
+        <div
+          v-if="menuCard?.job || importable.length"
+          class="ctx-sep"
+          role="separator"
+        ></div>
+        <button class="ctx-item" type="button" role="menuitem" @click="selectAll">
+          <v-icon class="ctx-icon">mdi-select-all</v-icon>
+          <span class="ctx-label-text">Select all shown</span>
+        </button>
+        <button
+          class="ctx-item"
+          type="button"
+          role="menuitem"
+          @click="clearSelection"
+        >
+          <v-icon class="ctx-icon">mdi-close</v-icon>
+          <span class="ctx-label-text">Clear selection</span>
+          <span class="ctx-shortcut">Esc</span>
+        </button>
+      </div>
+    </v-menu>
 
     <!-- The same floating pill the shelf docks over its rows, in the same
          strip. Centred, which is also what keeps it clear of the fixed
@@ -484,6 +549,13 @@ const destinationId = ref(null);
 const cursor = ref(0);
 const working = ref(false);
 const countMenuOpen = ref(false);
+const cardMenuOpen = ref(false);
+const cardMenuAt = ref([0, 0]);
+const menuKey = ref("");
+/** Read live, so a reload while the menu is open acts on the current job. */
+const menuCard = computed(
+  () => cards.value.find((card) => card.key === menuKey.value) ?? null,
+);
 const stepMenuOpen = ref(false);
 const destMenuOpen = ref(false);
 
@@ -502,6 +574,54 @@ const openJob = computed(
 function closeRun() {
   router.push({ name: "models-runs" });
 }
+
+/**
+ * The pair's first click toggled (the second is ignored), so a card that was
+ * already selected is picked again before its page opens.
+ */
+function onCardDblClick(card) {
+  if (!isChosen(card)) toggle(card);
+  openCard(card);
+}
+
+/** A run PixlStash trained has its own page; one trained elsewhere has none. */
+function openCard(card) {
+  if (card?.job) router.push({ name: "models-runs", query: { run: card.job.uuid } });
+}
+
+/**
+ * Whether the menu offers Stop: a run that is training. A trained job still
+ * drawing previews or importing has a phase the job list does not carry, so
+ * skipping its previews stays on the rail, which polls it.
+ */
+function canStop(card) {
+  return Boolean(
+    card?.live && card.job && !["completed", "stopping"].includes(card.job.status),
+  );
+}
+
+/** Right-click: the card becomes the selection unless it is already in it. */
+async function openMenu(card, x, y) {
+  cursor.value = cards.value.indexOf(card);
+  if (!isChosen(card)) {
+    unpick();
+    toggle(card);
+  }
+  cardMenuOpen.value = false;
+  await nextTick();
+  menuKey.value = card.key;
+  cardMenuAt.value = [x, y];
+  cardMenuOpen.value = true;
+}
+
+// A menu anchored to coordinates has no element to hand focus back to, so it
+// would land on <body>; give it back to the card the menu was opened on.
+watch(cardMenuOpen, (open, wasOpen) => {
+  if (open || !wasOpen) return;
+  nextTick(() => {
+    gridEl.value?.querySelector(`[data-run-index="${cursor.value}"]`)?.focus();
+  });
+});
 
 /**
  * Where an import may land.
@@ -632,6 +752,15 @@ function clearSelection() {
 
 /** Arrow keys move the cursor; Space and Enter tick. Escape clears. */
 function onGridKeydown(event) {
+  const menuKey =
+    event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey);
+  const cardEl = event.target?.closest?.("[data-run-index]");
+  if (menuKey && cardEl) {
+    event.preventDefault();
+    const rect = cardEl.getBoundingClientRect();
+    openMenu(cards.value[Number(cardEl.dataset.runIndex)], rect.left, rect.bottom);
+    return;
+  }
   if (event.key === "Escape" && chosen.value.length) {
     event.preventDefault();
     clearSelection();
@@ -881,10 +1010,15 @@ function batchReceipt(imported, failed) {
 
 /* auto-fill rather than auto-fit: a single run keeps a card's width instead of
    stretching one preview across the whole view. */
+/* The padding is the selection ring's room (two `--space-1`), which the scroll
+   container would otherwise clip on the outer cards; the negative margin keeps
+   the cards on the edge the comment above lines them up with. */
 .tr-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: var(--space-4);
+  padding: var(--space-2);
+  margin: calc(var(--space-2) * -1);
   overflow-y: auto;
   flex: 1;
   min-height: 0;
@@ -911,19 +1045,21 @@ function batchReceipt(imported, failed) {
   border-color: rgb(var(--v-theme-border));
 }
 
-/* The global ink outline, drawn inside the card: the grid is the scroll
-   container, so an outside ring on the first row would be clipped. An outline
-   rather than the inset shadow, so it cannot fight the checked rail. */
+/* The global ink outline, drawn inside the card so it stays clear of the
+   selection ring outside it, and both show on a focused selected card. */
 .tr-card:focus-visible {
   outline-offset: calc(var(--focus-width) * -1);
 }
 
-/* The shelf row's own recipe, verbatim: a `--rail-w` rail down the left edge.
-   The same object, which is the strongest cue that these are two views of one
-   shelf - and it survives desaturation, which a wash alone does not. */
+/* The Workflow set card's selection mark (`ModelSetCard`'s `.msc--on`): a ring
+   off the card in the active ink, `--space-1` wide and `--space-1` out. Drawn as
+   two spread shadows rather than an outline, because the focus ring above is
+   the outline. A left rail ran down the previews and stopped at the body's
+   wash, which read as a stray edge. */
 .tr-card--checked {
-  border-color: var(--active-bar);
-  box-shadow: var(--selection-edge);
+  box-shadow:
+    0 0 0 var(--space-1) rgb(var(--v-theme-background)),
+    0 0 0 calc(var(--space-1) * 2) var(--active-bar);
 }
 
 /* The New tile leads the grid, dashed like the set grid's New workflow set:
@@ -1012,41 +1148,6 @@ function batchReceipt(imported, failed) {
   gap: var(--space-1);
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-background), 0.7);
-}
-
-/* Hidden by opacity, never by `v-if` or `visibility`: a target that pops into
-   existence under the pointer is a mis-click. It appears on hover, on keyboard
-   focus, and on every card once anything is ticked - so the grid says plainly
-   that it is in a selecting mode. */
-.tr-card-check {
-  position: absolute;
-  top: var(--space-3);
-  right: var(--space-3);
-  width: var(--space-6);
-  height: var(--space-6);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-pill);
-  z-index: var(--z-raised);
-  opacity: 0;
-  transition: opacity var(--dur-1) var(--ease-standard);
-  /* The 2px ring in the page colour is what lets an opaque disc read against an
-     arbitrary photo without a scrim: it needs a boundary, not a darkening. */
-  border: 2px solid rgb(var(--v-theme-background));
-  box-shadow: var(--elevation-2);
-}
-
-.tr-card:hover .tr-card-check,
-.tr-card:focus-visible .tr-card-check,
-.tr-grid--selecting .tr-card-check {
-  opacity: 1;
-}
-
-.tr-card--checked .tr-card-check {
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
-  opacity: 1;
 }
 
 .tr-card-body {

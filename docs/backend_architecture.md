@@ -9559,41 +9559,24 @@ the shelf when the call returns and the owner never has to rescan.
 ### 25.7 A trained model's previews: `<stem>_samples/`
 
 An ai-toolkit run is a directory of `.safetensors` **and** a `samples/` directory
-of the previews the trainer rendered at each step. One measured run was 1.9 GB of
-which `samples/` was 15 MB, so the provenance costs 0.8 % of the bytes and the
-import takes the whole run rather than only the weights
-([`services/run_importer.py`](../pixlstash/services/run_importer.py)).
+of the previews the trainer rendered at each step. **An import takes the weights
+only** ([`services/run_importer.py`](../pixlstash/services/run_importer.py)): the
+previews are the trainer's working output, the Training runs view reads them in
+the run folder, and copying every step's set onto the shelf put a folder of
+pictures beside each checkpoint that nothing on the shelf shows (owner ruling,
+2026-10-30). `delete_after_import` unlinks the checkpoints it took and nothing
+else, so the samples stay on disk in the run folder either way. A folder left
+with no checkpoint is no longer listed as a run (`read_output_root` needs one),
+so after a deleting import its previews are reachable from the file manager and
+not from the app.
 
-- **On disk in the destination folder, not in a hub store and not in a new
-  table.** One directory per imported checkpoint, named from that checkpoint's
-  own stem — `JimmyVehicle.safetensors` → `JimmyVehicle_samples/`,
-  `JimmyVehicle_0001500.safetensors` → `JimmyVehicle_0001500_samples/` — holding
-  ai-toolkit's own filenames unchanged. `model_mover.samples_relpath` is the one
-  place that name is derived; nothing else spells the suffix. The cost of this
-  choice is that a person opening the folder sees the previews too, which is
-  also the point: they survive PixlStash not being there.
-- **Which previews go where.** A sample goes to the checkpoint whose step it
-  names. The **bare final takes the highest sample step's** — it carries no step
-  of its own and it is the stack cover, so a rule that left it blank would make
-  the most visible row of a fresh import the only empty one. Importing that same
-  step as well copies its previews twice; that duplication is accepted.
-  `TrainingRun.samples_for` is the whole rule.
-- **Ordered inside the existing crash window, never widening it.** Per
-  checkpoint: after the `model`/`model_file` rows commit and **before**
-  `unlink_source`, so `delete_after_import` can never outrun the copy. That
-  ordering is the reason this was a data-loss fix rather than a feature: before
-  it, a source folder carrying `delete_after_import` destroyed the run's
-  previews outright.
-- **A failed copy is logged and non-fatal**, reported in the outcome's `detail`
-  with `sample_count: 0` while the checkpoint stays `imported`. Losing a preview
-  must not cost the weights. The copy is written to a `.pixlstash-partial`
-  directory and renamed into place, so a failure half-way leaves no
-  half-populated directory to be read as the whole set.
-- **A pre-existing `<stem>_samples/` refuses the whole batch**, in the same pass
-  as the filename collision and before the first byte. It is the sharper of the
-  two refusals: a checkpoint collision refuses a file the owner can see, while
-  merging into an existing directory would write into one they may have put
-  there. There is no undo for shelf operations.
+Imports before that ruling copied each checkpoint's previews into a directory
+named from its own stem — `JimmyVehicle.safetensors` → `JimmyVehicle_samples/`,
+`JimmyVehicle_0001500.safetensors` → `JimmyVehicle_0001500_samples/` — holding
+ai-toolkit's own filenames. Those directories are still on owners' disks, so the
+rest of the shelf still handles them. `model_mover.samples_relpath` is the one
+place that name is derived; nothing else spells the suffix.
+
 - **A move carries them** (`model_mover.carry_samples`, on both the same-drive
   rename and the cross-drive copy paths, in the same position in the ordering
   and under the same non-fatal rule), and their bytes are counted into

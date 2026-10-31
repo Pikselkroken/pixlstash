@@ -35,8 +35,10 @@ vi.mock("../../api/modelImports", () => ({
 }));
 
 const listTrainingJobs = vi.fn();
+const cancelTrainingJob = vi.fn();
 vi.mock("../../api/training", () => ({
   listTrainingJobs: (...args) => listTrainingJobs(...args),
+  cancelTrainingJob: (...args) => cancelTrainingJob(...args),
 }));
 
 // The route the tab is on: `?run=<uuid>` opens a run's page.
@@ -147,6 +149,7 @@ beforeEach(() => {
   importRun.mockReset();
   listTrainingJobs.mockReset();
   listTrainingJobs.mockResolvedValue([]);
+  cancelTrainingJob.mockReset();
   nav.push.mockReset();
   nav.route.query = {};
   useModelShelfStore().fetchRows = vi.fn();
@@ -997,5 +1000,116 @@ describe("the runs PixlStash trains (#2118)", () => {
     const wrapper = await openWith([]);
     expect(wrapper.text()).toContain("Could not read the training runs.");
     expect(wrapper.text()).not.toContain("not in this library");
+  });
+
+  const cardNamed = (wrapper, name) =>
+    wrapper
+      .findAll(".tr-card")
+      .find((c) => c.find(".tr-card-name").text() === name);
+
+  it("opens a run it trained on a double-click, and only selects on the first click", async () => {
+    listTrainingJobs.mockResolvedValue([job()]);
+    const wrapper = await openWith([run("Clementine_abcd1234")]);
+    const card = cardNamed(wrapper, "Clementine_abcd1234");
+    // A real double-click: two clicks, the second with `detail: 2`, then dblclick.
+    for (const detail of [1, 2]) {
+      card.element.dispatchEvent(new MouseEvent("click", { detail, bubbles: true }));
+    }
+    await card.trigger("dblclick");
+    expect(nav.push).toHaveBeenCalledWith({
+      name: "models-runs",
+      query: { run: "abcd1234ef" },
+    });
+    expect(card.attributes("aria-selected")).toBe("true");
+  });
+
+  it("keeps an already-selected card selected when it is double-clicked open", async () => {
+    listTrainingJobs.mockResolvedValue([job()]);
+    const wrapper = await openWith([run("Clementine_abcd1234")]);
+    const card = cardNamed(wrapper, "Clementine_abcd1234");
+    await card.trigger("click");
+    for (const detail of [1, 2]) {
+      card.element.dispatchEvent(new MouseEvent("click", { detail, bubbles: true }));
+    }
+    await card.trigger("dblclick");
+    expect(card.attributes("aria-selected")).toBe("true");
+    expect(nav.push).toHaveBeenCalledTimes(1);
+  });
+
+  it("acts on the job as it is now, not as it was when the menu opened", async () => {
+    listTrainingJobs.mockResolvedValue([job()]);
+    const wrapper = await openWith([run("Clementine_abcd1234")]);
+    await cardNamed(wrapper, "Clementine_abcd1234").trigger("contextmenu");
+    expect(wrapper.find("[data-testid='tr-menu-stop']").exists()).toBe(true);
+    listTrainingJobs.mockResolvedValue([job({ status: "stopping" })]);
+    await useTrainingRunsStore().loadJobs();
+    await settle(wrapper);
+    expect(wrapper.find("[data-testid='tr-menu-stop']").exists()).toBe(false);
+  });
+
+  it("opens nothing for a run trained elsewhere", async () => {
+    const wrapper = await openWith([run("Foxglove")]);
+    await cardNamed(wrapper, "Foxglove").trigger("dblclick");
+    expect(nav.push).not.toHaveBeenCalled();
+    expect(wrapper.find("[data-testid='tr-menu-open']").exists()).toBe(false);
+  });
+
+  it("draws no check disc on a selected card", async () => {
+    const wrapper = await openWith([run("Foxglove")]);
+    const card = await tick(wrapper, "Foxglove");
+    expect(card.classes()).toContain("tr-card--checked");
+    expect(card.find(".tr-card-check").exists()).toBe(false);
+  });
+
+  it("selects a right-clicked card and offers to open it from the menu", async () => {
+    listTrainingJobs.mockResolvedValue([job()]);
+    const wrapper = await openWith([run("Clementine_abcd1234"), run("Foxglove")]);
+    await tick(wrapper, "Foxglove");
+    const card = cardNamed(wrapper, "Clementine_abcd1234");
+    await card.trigger("contextmenu");
+    expect(useTrainingRunsStore().chosen).toEqual(["run:Clementine_abcd1234"]);
+    await wrapper.find("[data-testid='tr-menu-open']").trigger("click");
+    expect(nav.push).toHaveBeenCalledWith({
+      name: "models-runs",
+      query: { run: "abcd1234ef" },
+    });
+  });
+
+  it("keeps the batch when the right-clicked card is already in it", async () => {
+    const wrapper = await openWith([run("Clementine"), run("Foxglove")]);
+    await tick(wrapper, "Clementine");
+    await tick(wrapper, "Foxglove");
+    await cardNamed(wrapper, "Foxglove").trigger("contextmenu");
+    expect(useTrainingRunsStore().chosen).toEqual([
+      "run:Clementine",
+      "run:Foxglove",
+    ]);
+    expect(wrapper.find("[data-testid='tr-menu-import']").text()).toBe(
+      "Import 2 runs · 4 checkpoints",
+    );
+  });
+
+  it("stops a training run from the menu, after asking", async () => {
+    listTrainingJobs.mockResolvedValue([job()]);
+    cancelTrainingJob.mockResolvedValue({});
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    try {
+      const wrapper = await openWith([run("Clementine_abcd1234")]);
+      await cardNamed(wrapper, "Clementine_abcd1234").trigger("contextmenu");
+      await wrapper.find("[data-testid='tr-menu-stop']").trigger("click");
+      await settle(wrapper);
+      expect(confirm).toHaveBeenCalled();
+      expect(cancelTrainingJob).toHaveBeenCalledWith(7);
+    } finally {
+      confirm.mockRestore();
+    }
+  });
+
+  it("offers no Stop for a trained run still finishing", async () => {
+    listTrainingJobs.mockResolvedValue([job({ status: "completed", completed_at: null })]);
+    const wrapper = await openWith([run("Clementine_abcd1234")]);
+    await cardNamed(wrapper, "Clementine_abcd1234").trigger("contextmenu");
+    expect(wrapper.find("[data-testid='tr-menu-stop']").exists()).toBe(false);
+    expect(wrapper.find("[data-testid='tr-menu-open']").exists()).toBe(true);
   });
 });

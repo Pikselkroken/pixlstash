@@ -143,11 +143,9 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 
 import { runSampleUrl } from "../../api/modelImports";
-import { cancelTrainingJob, getTrainingJobLive } from "../../api/training";
+import { getTrainingJobLive } from "../../api/training";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
-import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useTrainingRunsStore } from "../../stores/useTrainingRunsStore";
-import { errorDetail } from "../../utils/apiError";
 import { formatModelSize } from "../../utils/modelShelf";
 import {
   baseOf,
@@ -271,25 +269,9 @@ function openRun() {
 
 async function stop() {
   if (stopping.value) return;
-  // The same confirmation as Settings' Cancel: a stopped run cannot resume.
-  // Skip previews (a trained run) keeps the model, so it does not ask.
-  if (
-    current.value.job?.status !== "completed" &&
-    !window.confirm(
-      `Stop training "${props.card.name}"? The run will stop and cannot be resumed.`,
-    )
-  ) {
-    return;
-  }
   stopping.value = true;
   try {
-    await cancelTrainingJob(props.card.job.id);
-    await Promise.all([load(), runsStore.loadJobs()]);
-  } catch (err) {
-    useNoticeStore().push({
-      level: "error",
-      text: errorDetail(err) || "Could not stop the run.",
-    });
+    if (await runsStore.stopJob(current.value.job, props.card.name)) await load();
   } finally {
     stopping.value = false;
   }

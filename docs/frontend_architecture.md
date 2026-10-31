@@ -6283,15 +6283,16 @@ FAB that the previous full-width bar ran underneath. The count control carries
 *Select all shown* and *Clear selection* (`Esc`), the same shape the shelf's own
 pill uses.
 
-**The checked card is the shelf row's own recipe**: a `--rail-w` `primary` rail
-inset on the left edge, plus a `primary` 0.12 wash on the metadata body and
-**never on the preview** — the image is the evidence the choice is being made
-on, and tinting it changes the thing being judged. The card sits on `background`
-with a `divider` hairline like a row, not filled with `surface`: on dark,
-`surface` is 1.12:1 from `background`, so the fill bought nothing visually and
-cost the rail its contrast (`primary` measures 2.72:1 on `surface`, under WCAG
-1.4.11's 3:1, and 3.04:1 on `background`). A hover-revealed check disc makes the
-*count* readable at a glance, which a rail alone does not.
+**The checked card wears the Workflow set card's mark** (`ModelSetCard`'s
+`.msc--on`): a `--space-1` `--active-bar` outline offset by `--space-1`, plus
+`--active-wash` on the metadata body and **never on the preview** — the image is
+the evidence the choice is being made on, and tinting it changes the thing being
+judged. No check disc: the app does not use one. The left rail it used to wear
+ran down the previews and stopped at the wash, which read as a stray edge. The
+grid carries `--space-2` of padding (cancelled by a negative margin) so its
+scroll box does not clip the ring on the outer cards. The card sits on
+`background` with a `divider` hairline like a row, not filled with `surface`: on
+dark, `surface` is 1.12:1 from `background`.
 
 **An unconfirmed cover is stated, never resolved silently.** ai-toolkit writes a
 bare final file when a run finishes, so a run without one is still training or
@@ -6314,16 +6315,6 @@ the deletion only when something actually landed: the server unlinks last and
 only after each row is committed, so "nothing imported" and "the run is gone"
 cannot both be true, and saying it anyway would tell the reader their run was
 destroyed for nothing.
-
-**A checkpoint that landed without its previews gets its own sentence.** The
-import copies each checkpoint's samples into `<stem>_samples/` beside it, and a
-failed copy is deliberately *not* a failed file — losing a preview must not cost
-the weights, so the server leaves the outcome `imported` with `sample_count: 0`
-and a `detail`. That means the status counts the receipt is otherwise built from
-cannot see it, and a receipt built from them alone would call a run whose
-previews were lost a clean import. It is named separately rather than folded
-into the failure count, because the checkpoint is genuinely on the shelf and
-telling someone otherwise is the worse error.
 
 **`Add file` is the same step's loose-file half, and it reuses `FolderBrowser`
 in a file mode rather than an `<input type=file>`.** The file is on the machine
@@ -6474,7 +6465,16 @@ bar (amber while live), base / steps / date chips and an amber-outlined
 "No final file yet", and the rail's Training section repeats it. A failed run
 that saved checkpoints stays importable, as a stopped one is.
 
-**Selection.** A click, Enter or Space picks. Finished runs gather into a
+**Selection.** A click, Enter or Space picks; a double-click picks and opens a
+run PixlStash trained (the pair's second click does not toggle). The view does
+not follow the picture grid's `gridOpenGesture`: like the Workflow set grid, a
+click here always picks. Right-click, the ContextMenu key or Shift+F10 opens a menu anchored to
+the pointer: the card becomes the selection unless it is already in it, and the
+menu offers **Open run** (a job's run), the pill's **Import** verb, **Stop
+training** (a run still training; Skip previews stays on the rail, which polls
+the phase the job list lacks) and Select all / Clear selection. It reads its
+card by key from the live list, so a reload while it is open acts on the job as
+it is now. Focus returns to the card when it closes. Finished runs gather into a
 batch; a live run is picked on its own (picking it replaces the batch, and a
 finished run picked next replaces it), and is never importable. The pill shows
 only while something importable is picked: "N runs · M checkpoints ▾" (Select
@@ -6494,9 +6494,10 @@ anything.
 A run PixlStash trains opens **its own page inside the Training runs place**:
 `views/TrainingRunLive.vue`, reached at `/models/runs?run=<job uuid>`. The query
 string, not a new route, because it is a modifier on the runs view and
-`MODEL_SHELF_ROUTES` stays the one list the shelf answers to. Two doors lead
-there: the rail's **Open run** on a picked run a job trained (a card click
-picks rather than opens since #2169), and the **Watch** button on the Tasks
+`MODEL_SHELF_ROUTES` stays the one list the shelf answers to. Several doors lead
+there: a double-click on the card or its menu's **Open run**, the rail's
+**Open run** on a picked run a job trained (a single click picks rather than
+opens since #2169), and the **Watch** button on the Tasks
 tab's AI Toolkit row (the lease's `job_id`).
 The tab wears the amber attention dot while any AI Toolkit lease is held or
 waiting, read from `useTasksStore().resources`, the poll that already runs; the
