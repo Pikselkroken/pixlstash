@@ -239,6 +239,7 @@ const emit = defineEmits([
   "hide",
   "export",
   "duplicate",
+  "inpaint-copy",
   "use-set",
   "download-missing",
   "delete",
@@ -621,6 +622,30 @@ const duplicateTitle = computed(() =>
 );
 
 /**
+ * *Convert to Inpainting workflow* (#2446). Gated by the types that can never
+ * convert, not by the ones that can: an edit workflow that starts from an
+ * empty latent is typed `txt2img`, and it is exactly what this is for. The
+ * server's 422 says why anything else is refused.
+ */
+const NOT_CONVERTIBLE = {
+  inpaint: "This workflow already works on a selection",
+  outpaint: "This workflow already works on part of a picture",
+  video: "A video workflow cannot be converted to inpainting",
+  upscale: "An upscale workflow has no sampler to inpaint with",
+};
+const inpaintRefusal = computed(() =>
+  single.value && Object.hasOwn(NOT_CONVERTIBLE, cards.value[0]?.type ?? "")
+    ? NOT_CONVERTIBLE[cards.value[0].type]
+    : undefined,
+);
+const inpaintTitle = computed(() =>
+  !single.value
+    ? "Select one workflow to convert it to inpainting"
+    : (inpaintRefusal.value ??
+      "Make a new manual workflow from this one that redraws only a selection"),
+);
+
+/**
  * *Change model set…* is the Workflow tab's: it fills that tab's model rows, and
  * nothing is written until the tab's bar saves them (#1850).
  */
@@ -950,6 +975,11 @@ const VerbMenu = () => {
         verb: "duplicate",
         disabled: !single.value,
         title: duplicateTitle.value,
+      }),
+      item("mdi-brush-outline", "Convert to Inpainting workflow", {
+        verb: "inpaint-copy",
+        disabled: !single.value || Boolean(inpaintRefusal.value),
+        title: inpaintTitle.value,
       }),
       sep(),
       item("mdi-delete-outline", "Delete…", {

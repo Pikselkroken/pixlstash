@@ -514,6 +514,55 @@ describe("the pill's face", () => {
   });
 });
 
+describe("Convert to Inpainting workflow", () => {
+  const rowOf = (wrapper) =>
+    verbMenus(wrapper)[0]
+      .findAll(".ctx-item")
+      .find((el) => el.attributes("data-verb") === "inpaint-copy");
+
+  const one = (extra) => {
+    const store = useWorkflowsStore();
+    store.cards = [...CARDS, card("x", extra)];
+    store.selectRange(["x"]);
+    return mount(WorkflowSelectionBar, globalOpts);
+  };
+
+  it("is offered for an edit workflow typed text to image, and asks for it", async () => {
+    // An edit graph starting from an empty latent is typed txt2img: the server
+    // decides whether it converts, not the badge.
+    const wrapper = one({ type: "txt2img" });
+    const row = rowOf(wrapper);
+    expect(row.find(".ctx-label-text").text()).toBe("Convert to Inpainting workflow");
+    expect(row.attributes("aria-disabled")).toBeUndefined();
+    await row.trigger("click");
+    expect(wrapper.emitted("inpaint-copy")).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it.each(["inpaint", "outpaint", "video", "upscale"])(
+    "is refused for the %s type, with why",
+    async (type) => {
+      const wrapper = one({ type });
+      const row = rowOf(wrapper);
+      expect(row.attributes("aria-disabled")).toBe("true");
+      expect(row.find(".tip").attributes("data-text")).not.toContain("Make a new");
+      await row.trigger("click");
+      expect(wrapper.emitted("inpaint-copy")).toBeUndefined();
+      wrapper.unmount();
+    },
+  );
+
+  it("is refused for several", async () => {
+    const { wrapper } = bar(["a", "b"]);
+    const row = rowOf(wrapper);
+    expect(row.attributes("aria-disabled")).toBe("true");
+    expect(row.find(".tip").attributes("data-text")).toBe(
+      "Select one workflow to convert it to inpainting",
+    );
+    wrapper.unmount();
+  });
+});
+
 describe("Change model set…", () => {
   const rowOf = (wrapper, name) =>
     verbMenus(wrapper)[0]
@@ -556,6 +605,7 @@ describe("Change model set…", () => {
       "use-set",
       "export",
       "duplicate",
+      "inpaint-copy",
       "delete",
     ]);
     wrapper.unmount();
