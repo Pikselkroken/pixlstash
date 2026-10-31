@@ -405,13 +405,16 @@ const plan = computed(() => {
   const steps = `${total.toLocaleString()} steps`;
   // The columns are step 0, every preview step and the last. Without the
   // run's config they are only the steps its samples name, which need not be
-  // even, so the interval is said only when every column keeps to it.
+  // even, so the interval is said only when every gap keeps to it (the last
+  // step may fall short of the pitch).
   const columns = live.value.columns ?? [];
   const every = columns[1];
   const even =
     columns[0] === 0 &&
     every > 0 &&
-    columns.every((step) => step % every === 0 || step === total);
+    columns.every(
+      (step, i) => i === 0 || step === total || step - columns[i - 1] === every,
+    );
   return even ? `${steps}, a sample every ${every.toLocaleString()}` : steps;
 });
 

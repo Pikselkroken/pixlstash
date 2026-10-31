@@ -250,6 +250,15 @@ describe("the rail's training card", () => {
     expect(setup).toContain("oldsailor");
     expect(setup).toContain("16 · 0.0001");
     expect(setup).toContain("1,500 steps, a sample every 250");
+
+    // Every column a multiple of the first gap is not an even pitch.
+    const uneven = await openRail(
+      { card: failedCard, open: true },
+      { ...failedLive, total_steps: 1500, columns: [0, 100, 500, 1500] },
+    );
+    const plan = uneven.find("[data-section='setup']").text();
+    expect(plan).toContain("1,500 steps");
+    expect(plan).not.toContain("a sample every");
     expect(setup).not.toContain("Trained on");
     // Twelve pictures: eight shown and a cell counting the other four.
     const trained = wrapper.find("[data-section='trained']");

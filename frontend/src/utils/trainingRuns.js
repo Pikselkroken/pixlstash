@@ -41,7 +41,7 @@ export function lastSavedStep(run) {
 export function lastCheckpoint(run) {
   const checkpoints = run?.checkpoints || [];
   return (
-    checkpoints.find((cp) => cp.step === null) ??
+    checkpoints.find((cp) => cp.step == null) ??
     checkpoints.reduce(
       (best, cp) => (best == null || cp.step > best.step ? cp : best),
       null,
