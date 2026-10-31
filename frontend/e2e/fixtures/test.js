@@ -170,7 +170,23 @@ export const test = base.extend({
   // A spec's route handler that passes a poll through (`route.fetch()`) can
   // still be waiting on the server when the test ends: the context closes
   // under it and the test fails after it passed. Drop the handlers first.
-  page: async ({ page }, use) => {
+  //
+  // The sidebar's Library tree (#2448) starts with every branch closed. Specs
+  // that only need a person or set row get every project that exists now
+  // opened, as a person would have, before the first navigation; a spec about
+  // the tree itself sets the key back to closed.
+  page: async ({ page, apiContext }, use) => {
+    const res = await apiContext.get('/api/v1/projects')
+    if (!res.ok()) {
+      throw new Error(`Seeding the sidebar tree: /projects answered ${res.status()}`)
+    }
+    const projects = await res.json()
+    const open = ['p:none', ...projects.map((p) => `p:${p.id}`)]
+    await page.addInitScript((keys) => {
+      if (window.localStorage.getItem('pixlstash:sidebar:tree') == null) {
+        window.localStorage.setItem('pixlstash:sidebar:tree', JSON.stringify(keys))
+      }
+    }, open)
     await use(page)
     await page.unrouteAll({ behavior: 'ignoreErrors' })
   },

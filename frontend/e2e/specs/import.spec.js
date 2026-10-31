@@ -408,7 +408,9 @@ test.describe('picture import', () => {
   }) => {
     const project = await createProject(apiContext, 'e2e import into project')
     await page.goto(`/project/${project.id}`)
-    await expect(page.getByTestId('sidebar-scope')).toContainText(project.name)
+    await expect(
+      page.getByTestId('sidebar-project-row').filter({ hasText: project.name }),
+    ).toHaveAttribute('aria-current', 'page')
     const before = await pictureIds(apiContext)
 
     await page.locator('.sidebar-import-btn').click()

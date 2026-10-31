@@ -31,7 +31,7 @@ test.describe('entity navigation', () => {
     await expect(grid.thumbnails.first()).toBeVisible()
   })
 
-  test('opens a project from the scope menu (§8)', async ({ page, grid, sidebar }) => {
+  test('opens a project from its row in the tree (§8)', async ({ page, grid, sidebar }) => {
     await sidebar.chooseFirstProject()
     await expect.poll(() => page.url()).toContain('/project/')
     // A project view still renders the grid; some seeded projects may be empty,

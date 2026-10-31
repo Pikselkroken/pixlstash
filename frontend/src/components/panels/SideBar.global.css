@@ -182,3 +182,13 @@
 .sidebar-project-tree-files .pf-spacer {
   display: none !important;
 }
+
+/* Find in library's underlined match (#2448), in the Library and Folders
+   trees alike. */
+.sidebar-find-mark {
+  background: none;
+  color: inherit;
+  font-weight: var(--weight-semibold);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}

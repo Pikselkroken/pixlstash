@@ -75,6 +75,7 @@ from pixlstash.utils.library_layout import (
     parse_layout,
     relocate,
     render,
+    tree_node_folder,
 )
 
 logger = get_logger(__name__)
@@ -1102,6 +1103,60 @@ def picture_exists(vault, picture_id: int) -> bool:
             lambda session: session.get(Picture, int(picture_id)) is not None
         )
     )
+
+
+def tree_node_relative_folder(
+    vault,
+    kind: str,
+    project_id: Optional[int] = None,
+    entity_id: Optional[int] = None,
+) -> str:
+    """The folder a node of the Media sidebar's Folders tree (#2448) stands for.
+
+    Rendered from the node's names with ``DEFAULT_LAYOUT``, which is what the
+    tree is drawn by, so the folder opened is always the one the row names. On
+    a library with a layout of its own that folder may not exist, which the
+    caller answers as "nothing filed there". Relative to the library root;
+    whether anything is there is the caller's question.
+
+    Args:
+        vault: The open library.
+        kind: ``project``, ``global``, ``unassigned``, ``character`` or ``set``.
+        project_id: The node's project; None for one under Global.
+        entity_id: The person or set of a ``character`` or ``set`` node.
+
+    Raises:
+        ValueError: An unknown kind, or a node missing the id it needs.
+        LookupError: A project, person or set id that names nothing.
+    """
+    if kind not in ("project", "global", "unassigned", "character", "set"):
+        raise ValueError(f"Unknown Folders node kind {kind!r}")
+    if kind == "project" and project_id is None:
+        raise ValueError("A project node needs project_id")
+    if kind in ("character", "set") and entity_id is None:
+        raise ValueError(f"A {kind} node needs entity_id")
+
+    def _names(session: Session) -> dict:
+        if kind == "unassigned":
+            return {"unassigned": True}
+        if kind == "global":
+            return {}
+        names = {}
+        if project_id is not None:
+            project = session.get(Project, int(project_id))
+            if project is None:
+                raise LookupError(f"Project {project_id} not found")
+            names["project"] = project.name
+        if kind in ("character", "set"):
+            model = Character if kind == "character" else PictureSet
+            entity = session.get(model, int(entity_id))
+            if entity is None:
+                raise LookupError(f"{kind} {entity_id} not found")
+            names["person" if kind == "character" else "picture_set"] = entity.name
+        return names
+
+    names = vault.db.run_immediate_read_task(_names)
+    return tree_node_folder(DEFAULT_LAYOUT, **names)
 
 
 def move_to_match(vault, picture_ids: Iterable[int], **operation_context) -> tuple:

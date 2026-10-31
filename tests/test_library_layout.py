@@ -53,6 +53,7 @@ from pixlstash.utils.library_layout import (
     reconcile_move,
     relocate,
     render,
+    tree_node_folder,
 )
 
 # The library the cases below are judged against: two projects, two people, one
@@ -3027,3 +3028,21 @@ def test_a_move_still_in_flight_is_deferred_rather_than_purged(library):
     assert result["deferred"] == 1
     assert session.get(Picture, picture_id) is not None
     assert session.exec(select(DeletedFileLog)).all() == []
+
+
+def test_tree_node_folder_names_each_folders_tree_node():
+    """The sidebar's Folders tree (#2448): every node is the folder render()
+    gives a picture with exactly its names, plus Global and Unassigned."""
+    layout = DEFAULT_LAYOUT
+    assert tree_node_folder(layout, project="Nordvik") == "Nordvik"
+    assert tree_node_folder(layout, project="Nordvik", person="Mira") == "Nordvik/Mira"
+    assert tree_node_folder(layout, project="Nordvik", picture_set="Shoot") == (
+        "Nordvik/Shoot"
+    )
+    assert tree_node_folder(layout, person="Mira") == "Global/Mira"
+    assert tree_node_folder(layout) == "Global"
+    assert tree_node_folder(layout, project="Nordvik", unassigned=True) == (
+        layout.unfiled
+    )
+    # A name never climbs out of the library root.
+    assert ".." not in tree_node_folder(layout, project="..", person="../x").split("/")

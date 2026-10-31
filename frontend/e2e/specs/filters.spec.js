@@ -380,7 +380,7 @@ test.describe('grid filters', () => {
 
     // A sidebar entry is a navigation; the filter store is not the route's,
     // so the filter rides along and narrows the set too.
-    const row = await sidebar.firstNonEmpty(sidebar.setItems)
+    const row = await sidebar.firstNonEmptyByName(sidebar.setItems)
     await row.click()
     await expect.poll(() => page.url()).toMatch(/\/set\/\d+/)
     const setId = /\/set\/(\d+)/.exec(page.url())[1]

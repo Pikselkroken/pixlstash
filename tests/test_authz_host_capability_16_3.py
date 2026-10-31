@@ -93,6 +93,7 @@ _LOOPBACK_ROUTE_KEYS = {
     ("POST", "/api/v1/pictures/share-copies"),
     ("GET", "/api/v1/open-with"),
     ("POST", "/api/v1/open-with"),
+    ("POST", "/api/v1/library/folders/open"),
     ("POST", "/api/v1/test-hooks/ws-event"),
     ("POST", "/api/v1/test-hooks/reference-folders/{folder_id}/rescan"),
     ("POST", "/api/v1/test-hooks/file-pictures"),
@@ -563,6 +564,9 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     88 = 71 + 17 with ``POST /model-folders/{folder_id}/rename``, which renames a
     registered folder on the host within its parent: the ``dirs/move`` rename
     applied to the registered root.
+    89 = 71 + 18 with ``POST /library/folders/open`` (#2448), the Folders
+    tree's ``Open in File Manager``: the host-GUI spawn of
+    ``pictures/{id}/open-location`` for a folder rendered from ids.
 
     Arithmetic, not judgement."""
     loopback = {
@@ -576,7 +580,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
         if rp.policy is AccessPolicy.LOCAL_OWNER_ONLY
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
-    assert len(loopback) == 17, sorted(loopback)
+    assert len(loopback) == 18, sorted(loopback)
     assert len(local) == 71, sorted(local)
 
 
@@ -1178,6 +1182,71 @@ def test_loopback_owner_only_public_403():
             assert _is_loopback_403(r), (
                 f"public owner must be 403'd on the red line; got {r.status_code}: {r.text}"
             )
+
+
+# ---- library/folders/open - the Folders tree's Open in File Manager (#2448) --
+
+_OPEN_TREE_FOLDER = f"{API}/library/folders/open"
+
+
+def test_open_tree_folder_is_loopback_only_and_opens_the_rendered_folder(
+    monkeypatch,
+):
+    """Both directions on one server. A loopback owner reaches the handler,
+    which opens the folder the node renders to inside the library root, and
+    404s one not on disk; a LAN owner is refused with the flag on."""
+    from pixlstash.routes import library_layout as layout_routes
+
+    opened = []
+
+    def fake_open(path):
+        opened.append(path)
+        return True
+
+    monkeypatch.setattr(layout_routes, "open_in_file_manager", fake_open)
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        root = server.vault.image_root
+        os.makedirs(os.path.join(root, "Global"), exist_ok=True)
+        with _enforcing(server):
+            r = owner.post(_OPEN_TREE_FOLDER, json={"kind": "global"})
+            assert r.status_code == 200, r.text
+            assert r.json()["folder"] == "Global"
+            assert opened == [os.path.realpath(os.path.join(root, "Global"))]
+
+            r = owner.post(_OPEN_TREE_FOLDER, json={"kind": "unassigned"})
+            assert r.status_code == 404, r.text
+            r = owner.post(_OPEN_TREE_FOLDER, json={"kind": "project"})
+            assert r.status_code == 422, r.text
+            r = owner.post(
+                _OPEN_TREE_FOLDER, json={"kind": "project", "project_id": 999999}
+            )
+            assert r.status_code == 404, r.text
+
+            # A symlink inside the library that leads out of it is refused.
+            outside = tempfile.mkdtemp()
+            try:
+                os.symlink(outside, os.path.join(root, "Unassigned"))
+                r = owner.post(_OPEN_TREE_FOLDER, json={"kind": "unassigned"})
+                assert r.status_code == 404, r.text
+            finally:
+                os.unlink(os.path.join(root, "Unassigned"))
+                os.rmdir(outside)
+
+            # A host with no desktop says so rather than answering ok.
+            monkeypatch.setattr(layout_routes, "open_in_file_manager", lambda p: False)
+            r = owner.post(_OPEN_TREE_FOLDER, json={"kind": "global"})
+            assert r.status_code == 500, r.text
+            monkeypatch.setattr(layout_routes, "open_in_file_manager", fake_open)
+
+            with _remote_host_ops(server, True):
+                r = owner.post(
+                    _OPEN_TREE_FOLDER,
+                    json={"kind": "global"},
+                    headers=_xff(LAN_IPV4),
+                )
+                assert _is_loopback_403(r), f"{r.status_code}: {r.text}"
+            assert len(opened) == 1
 
 
 # ---- comfyui/node-packs install - third-party code into ComfyUI (#2054) ----

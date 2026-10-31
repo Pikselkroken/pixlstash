@@ -109,6 +109,9 @@ async function mountSidebar() {
   });
   wrapper.vm.refreshSidebar();
   for (let i = 0; i < 5; i += 1) await flushPromises();
+  // Ada and Shoot are in no project; open that branch of the Library tree.
+  wrapper.vm.expandTreeKeys(["p:none"]);
+  await flushPromises();
   return wrapper;
 }
 
