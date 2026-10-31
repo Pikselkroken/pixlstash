@@ -562,7 +562,24 @@ function sizeMenu() {
     const el = menuRef.value;
     if (!el) return;
     if (!floating.value) {
-      const top = el.getBoundingClientRect().top;
+      // A flyout hangs down from its row; with too little room below it opens
+      // upwards, its bottom level with the row's, as `v-submenu-fit` does for
+      // every `.ctx-submenu`. Measured off the row, never the menu, which the
+      // flip itself moves.
+      const row = flyout.value ? rootRef.value?.getBoundingClientRect() : null;
+      if (row) {
+        const below = window.innerHeight - row.top - 12;
+        const above = row.bottom - 12;
+        if (below < MENU_MIN_HEIGHT_PX && above > below) {
+          menuStyle.value = {
+            top: "auto",
+            bottom: "0",
+            maxHeight: `${Math.round(above)}px`,
+          };
+          return;
+        }
+      }
+      const top = row?.top ?? el.getBoundingClientRect().top;
       const avail = window.innerHeight - top - 12;
       menuStyle.value = {
         maxHeight: `${Math.max(MENU_MIN_HEIGHT_PX, Math.round(avail))}px`,

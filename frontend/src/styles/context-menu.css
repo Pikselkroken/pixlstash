@@ -137,6 +137,9 @@
 }
 
 /* ── Submenu (e.g. "Tag automatically" tagger picker) ──────────────── */
+/* `top: 0` hangs a submenu down from its row; put `v-submenu-fit`
+   (`utils/submenuFit.js`) on every `.ctx-submenu` so one near the bottom of
+   the window opens upwards instead. */
 .ctx-submenu-wrap {
   position: relative;
 }

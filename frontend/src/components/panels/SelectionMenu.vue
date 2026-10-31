@@ -148,7 +148,7 @@
           Analyse
           <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
         </button>
-        <div v-if="openGroup === 'analyse'" class="ctx-submenu" role="menu">
+        <div v-if="openGroup === 'analyse'" v-submenu-fit class="ctx-submenu" role="menu">
           <template v-if="taggerPlugins.length">
             <div class="ctx-label section-label">Tag automatically</div>
             <button
@@ -241,7 +241,7 @@
           Generate
           <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
         </button>
-        <div v-if="openGroup === 'generate'" class="ctx-submenu" role="menu">
+        <div v-if="openGroup === 'generate'" v-submenu-fit class="ctx-submenu" role="menu">
           <button
             v-if="comfyuiConfigured"
             class="ctx-item"
@@ -298,7 +298,7 @@
           Adjust
           <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
         </button>
-        <div v-if="openGroup === 'adjust'" class="ctx-submenu" role="menu">
+        <div v-if="openGroup === 'adjust'" v-submenu-fit class="ctx-submenu" role="menu">
           <!-- Rotate in place: applied on click - no dialog, no direction
                picker, no confirmation, because two clicks give 180° and undo
                is the safety net. Greyed rather than hidden when nothing in the
@@ -361,7 +361,7 @@
           Restore from snapshot
           <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
         </button>
-        <div v-if="openGroup === 'restore'" class="ctx-submenu" role="menu">
+        <div v-if="openGroup === 'restore'" v-submenu-fit class="ctx-submenu" role="menu">
           <button
             v-for="cp in recentSnapshots"
             :key="cp.id"
@@ -408,7 +408,7 @@
           Find &amp; compare
           <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
         </button>
-        <div v-if="openGroup === 'find'" class="ctx-submenu" role="menu">
+        <div v-if="openGroup === 'find'" v-submenu-fit class="ctx-submenu" role="menu">
           <button
             class="ctx-item"
             :disabled="selectedCount === 0"
@@ -469,7 +469,7 @@
           Move to library
           <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
         </button>
-        <div v-if="openGroup === 'move'" class="ctx-submenu">
+        <div v-if="openGroup === 'move'" v-submenu-fit class="ctx-submenu">
           <button
             v-for="library in otherLibraries"
             :key="library.uuid"
@@ -531,6 +531,7 @@ import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useLibrariesStore } from "../../stores/useLibrariesStore";
 import { COMPARE_NOTES } from "../../utils/compare";
 import { ROTATE_CCW, ROTATE_CW, rotateMenuLabel } from "../../utils/rotate";
+import { vSubmenuFit } from "../../utils/submenuFit";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
 import EditStackMenu from "../widgets/EditStackMenu.vue";
 import Tooltip from "../widgets/Tooltip.vue";

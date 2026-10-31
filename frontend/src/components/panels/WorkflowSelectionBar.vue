@@ -208,7 +208,7 @@
 // there, and is what lets this component be mounted in a test with nothing but
 // a store.
 
-import { computed, h, nextTick, ref, watch } from "vue";
+import { computed, h, nextTick, ref, watch, withDirectives } from "vue";
 import { VIcon, VMenu } from "vuetify/components";
 
 import AppBarButton from "../widgets/AppBarButton.vue";
@@ -224,6 +224,7 @@ import {
 import { formatKeyHint, selectAllKeyHint } from "../../utils/shortcutHints";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import { outputNoun } from "../../utils/workflowCard";
+import { vSubmenuFit } from "../../utils/submenuFit";
 
 const emit = defineEmits([
   "select-all",
@@ -838,32 +839,35 @@ const VerbMenu = () => {
           ],
         ),
         open
-          ? h(
-              "div",
-              {
-                class: "ctx-submenu",
-                role: "menu",
-                "aria-label": "Open in ComfyUI",
-                onKeydown: subKeydown,
-              },
-              [
-                item(
-                  h("img", {
-                    src: "/Logo.png",
-                    alt: "",
-                    class: "ctx-icon wf-menu-logo",
+          ? withDirectives(
+              h(
+                "div",
+                {
+                  class: "ctx-submenu",
+                  role: "menu",
+                  "aria-label": "Open in ComfyUI",
+                  onKeydown: subKeydown,
+                },
+                [
+                  item(
+                    h("img", {
+                      src: "/Logo.png",
+                      alt: "",
+                      class: "ctx-icon wf-menu-logo",
+                    }),
+                    "Adapted for PixlStash",
+                    {
+                      verb: "open-comfyui",
+                      title: adaptedTitle.value,
+                    },
+                  ),
+                  item(h(ComfyuiIcon, { class: "ctx-icon" }), "Original", {
+                    verb: "open-comfyui-original",
+                    title: "With its own savers and loaders instead of PixlStash's",
                   }),
-                  "Adapted for PixlStash",
-                  {
-                    verb: "open-comfyui",
-                    title: adaptedTitle.value,
-                  },
-                ),
-                item(h(ComfyuiIcon, { class: "ctx-icon" }), "Original", {
-                  verb: "open-comfyui-original",
-                  title: "With its own savers and loaders instead of PixlStash's",
-                }),
-              ],
+                ],
+              ),
+              [[vSubmenuFit]],
             )
           : null,
       ],
