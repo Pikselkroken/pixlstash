@@ -337,7 +337,7 @@ export function readReason(reason) {
         .map((file) => ({ ...file, downloading: true }));
       const one = files.length === 1;
       return read(
-        `${one ? "A model it needs is" : `${files.length} models it needs are`} still downloading. Run it once ${one ? "it has" : "they have"} finished: the Tasks tab shows how far.`,
+        `${one ? "A model it needs is" : `${files.length} models it needs are`} still downloading. Run it once ${one ? "it has" : "they have"} finished: the Tasks list in the title bar shows how far.`,
         null,
         files,
       );

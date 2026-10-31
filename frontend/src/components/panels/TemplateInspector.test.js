@@ -139,33 +139,19 @@ describe("the template inspector", () => {
     );
   });
 
-  // A run started on Mine is still going when the reader moves over here, and
-  // this rail is the only one on the screen.
-  it("offers Tasks last, with the task manager in place of the template", async () => {
+  // The task list is the title bar's pill, on every screen, so this rail has
+  // only the template to show and a Tasks deep link does not change that.
+  it("offers the template alone, and keeps it under a Tasks deep link", async () => {
     const { wrapper } = mounted(["default/krea"]);
     const band = wrapper.findAll("button.inspector-tab");
     // The stubbed icon prints its name ahead of the label.
     expect(band.map((t) => t.text().replace(/^mdi-\S+ /, ""))).toEqual([
       "Template",
-      "Tasks",
     ]);
-
-    await band[1].trigger("click");
-    expect(wrapper.text()).toContain("No active tasks");
-    expect(wrapper.find('[data-testid="tpli-title"]').exists()).toBe(false);
-    // Add acts on the template, so it goes with it.
-    expect(wrapper.find('[data-testid="tpli-add"]').exists()).toBe(false);
-
-    await wrapper.findAll("button.inspector-tab")[0].trigger("click");
-    expect(wrapper.find('[data-testid="tpli-add"]').exists()).toBe(true);
-  });
-
-  it("follows the store's deep link onto the Tasks tab", async () => {
-    const { wrapper } = mounted(["default/krea"]);
-    expect(wrapper.text()).not.toContain("No active tasks");
     useSidebarStore().showTasksTab();
     await wrapper.vm.$nextTick();
-    expect(wrapper.text()).toContain("No active tasks");
+    expect(wrapper.text()).not.toContain("No active tasks");
+    expect(wrapper.find('[data-testid="tpli-add"]').exists()).toBe(true);
   });
 
   it("offers nothing to add with nothing selected", () => {

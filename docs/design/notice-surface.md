@@ -617,7 +617,7 @@ only if measured; do not build it speculatively.
   action is sticky by default. Without that rule, a keyboard-only user can be structurally
   unable to reach an "Undo". A caller that overrides it with an explicit timeout must only
   do so for an action that is a shortcut to something reachable elsewhere (the run-started
-  card's "Show" opens the Tasks tab, which has its own control).
+  card's "Show" opens the title bar's task list, which has its own control).
 - `:focus-within` pauses the timer, so tabbing into a notice does not race it.
 
 **Contrast, verified against the shipped themes** (WCAG floors: text 4.5:1, non-text 3:1):

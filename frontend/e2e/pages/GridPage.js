@@ -46,10 +46,9 @@ export class GridPage {
     this.selectionMenuButton = page.locator('.selection-ctx-bar .selection-menu-trigger')
     this.selectionMenuPanel = page.locator('.selection-menu-panel')
     this.selectionCountLabel = page.locator('.selection-ctx-bar .selection-count')
-    // Statistics sidebar — toggled from the toolbar. Its name is fixed ("Stats
-    // and tasks"; open is `aria-pressed`), and while tasks run it is prefixed
-    // with their count, so match the end of it.
-    this.statsToggle = page.getByRole('button', { name: /Stats and tasks$/ })
+    // Statistics sidebar — toggled from the toolbar. Its name is fixed
+    // ("Stats"; open is `aria-pressed`).
+    this.statsToggle = page.getByRole('button', { name: 'Stats', exact: true })
     this.statsSidebar = page.locator('.stats-sidebar')
     this.statsContent = page.locator('.stats-sidebar .inspector-content')
     this.statsTabs = page.locator('.stats-sidebar .inspector-tab')

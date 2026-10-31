@@ -392,17 +392,6 @@ describe("the lightbox and the task list", () => {
     wrapper.unmount();
   });
 
-  it("asks nothing of the pill while it is closed", async () => {
-    mount(Lightbox, {
-      props: { open: false, initialImageId: 7, allImages: [{ id: 7, tags: [] }] },
-      global: { stubs: STUBS },
-    });
-    const sidebar = useSidebarStore();
-    sidebar.showTasksTab();
-    await flush();
-    expect(sidebar.tasksPillRequest).toBe(0);
-  });
-
   // Space was the chrome toggle's even on a focused button, so no button in
   // the pane could be pressed with it.
   it("leaves Space to a keyboard-focused button in the pane", async () => {

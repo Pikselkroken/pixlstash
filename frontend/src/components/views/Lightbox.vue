@@ -1462,17 +1462,6 @@ const editPanelRef = ref(null);
 const editTabShowsRun = computed(
   () => editRunning.value && inspectorShown.value && sidebarTab.value === "edit",
 );
-// ── Tasks ──────────────────────────────────────────────────────────────────
-//
-// No Tasks tab here: the task list is the title bar's pill (#2163). A deep
-// link to the Tasks tab (a notice's *Show*, `showTasksTab`) would otherwise
-// select a tab in the stats rail under the lightbox, so it opens the pill.
-watch(
-  () => sidebarStore.tasksTabRequest,
-  () => {
-    if (open.value) sidebarStore.tasksPillRequest += 1;
-  },
-);
 // The reader's CHOICE is remembered even while the tab it names is gone, so
 // stepping over a photo in a run of ComfyUI pictures does not silently move
 // them to Info for the rest of the walk.

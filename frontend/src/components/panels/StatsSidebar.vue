@@ -11,7 +11,6 @@ import {
 import AppInspector from "../widgets/AppInspector.vue";
 import AppButton from "../widgets/AppButton.vue";
 import SectionHeader from "../widgets/SectionHeader.vue";
-import TasksPanel, { tasksTabFor } from "./TasksPanel.vue";
 import RailPicture from "./RailPicture.vue";
 import RailPictures from "./RailPictures.vue";
 import StatsHistogram from "../widgets/StatsHistogram.vue";
@@ -29,7 +28,6 @@ import {
   useRailPicture,
 } from "../../composables/useRailPicture";
 import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
-import { useTasksStore } from "../../stores/useTasksStore";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useProjectStore } from "../../stores/useProjectStore";
@@ -50,10 +48,6 @@ const projectStore = useProjectStore();
 const userPrefsStore = useUserPrefsStore();
 const sidebarStore = useSidebarStore();
 const wsStore = useWsStore();
-// The Tasks tab's body is `TasksPanel`, shared with the Workflows view's
-// inspector, and `tasksTabFor` is the tab itself. Nothing else about the task
-// manager is left in this file.
-const tasksStore = useTasksStore();
 
 // The two folder facets are derived from the sidebar's folder selection, same
 // as App.vue used to compute them for the old props.
@@ -111,18 +105,14 @@ const emit = defineEmits([
 // Nothing selected, the rail describes the view; one picture, that picture;
 // several, what they share.
 const selectedIds = computed(() => selectionStore.selectedImageIds);
-// A deep link to the Tasks tab (`showTasksTab`) shows the view's tabs over a
-// selection until the selection next changes; the tabs exist only there.
-const tasksOverSelection = ref(false);
 watch(selectedIds, () => {
-  tasksOverSelection.value = false;
   // A T that no tag field took (the rail was under the lightbox) is spent:
   // it must not take the caret when some later selection mounts one.
   sidebarStore.tagFieldPending = false;
 });
 const railMode = computed(() => {
   const n = selectedIds.value.length;
-  if (n === 0 || tasksOverSelection.value) return "none";
+  if (n === 0) return "none";
   return n === 1 ? "one" : "many";
 });
 const oneId = computed(() =>
@@ -215,14 +205,6 @@ watch(titleRef, (el) => {
 });
 onUnmounted(() => titleObserver?.disconnect());
 
-// T over a deep-linked Tasks tab means the selection: back to it.
-watch(
-  () => sidebarStore.tagFieldPending,
-  (pending) => {
-    if (pending) tasksOverSelection.value = false;
-  },
-);
-
 // The sections in this rail keep their own collapsed state, apart from the
 // same sections in the lightbox.
 provide(SECTION_SCOPE, "rail");
@@ -250,7 +232,6 @@ const activeTab = ref("tags");
 const tabs = computed(() => [
   { value: "tags", label: "Tags", icon: "mdi-tag-multiple-outline" },
   { value: "pictures", label: "Pictures", icon: "mdi-image-multiple-outline" },
-  tasksTabFor(tasksStore),
 ]);
 
 // Picture stats
@@ -1123,16 +1104,6 @@ function handleResolutionBarClick(label) {
     filterStore.resolutionBucketFilter = key;
   }
 }
-
-// A deep link to the Tasks tab (the "View progress" notice action). Opening the rail is the store's half of `showTasksTab`;
-// this is the half only the mounted inspector can do.
-watch(
-  () => sidebarStore.tasksTabRequest,
-  () => {
-    activeTab.value = "tasks";
-    if (selectedIds.value.length) tasksOverSelection.value = true;
-  },
-);
 </script>
 
 <template>
@@ -1850,9 +1821,6 @@ watch(
         </div>
       </template>
     </template>
-
-    <!-- ── Tasks tab ─────────────────────────────────────────────────── -->
-    <TasksPanel v-if="activeTab === 'tasks'" />
     </template>
   </AppInspector>
 </template>

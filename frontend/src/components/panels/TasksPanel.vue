@@ -1,14 +1,7 @@
 <template>
   <div ref="root" class="tm" @focusout="onFocusOut">
-    <!-- One root, but no box of its own in a rail (`display: contents`): the
-         rows stay the inspector body's own flex children, exactly as they were
-         when they lived in `StatsSidebar`, so the body's gap spaces them. It also
-         means `.tm-system-bar`'s `margin-top: auto` still resolves against the
-         body: inert in the stats rail, which never gives `.inspector-body` a
-         height, and a real pin to the bottom on `/workflows`, where the
-         inspector's footer slot makes the body `flex: 1`
-         (`.inspector-content--footed`). That difference is pre-existing and
-         left alone. -->
+    <!-- One root, but no box of its own (`display: contents`): the rows are
+         the popover body's own flex children, so its gap spaces them. -->
     <!-- A finished run is not an active task, and the panel is not empty with
          one in it either: the idle line gives way. -->
     <div
@@ -665,42 +658,10 @@
   </div>
 </template>
 
-<script>
-/**
- * The tab that shows this panel, so its word and its glyph are declared once
- * for every inspector that offers it. `tasksTabFor` lights it up while work is
- * running, and is what a host imports.
- */
-const TASKS_TAB = {
-  value: "tasks",
-  label: "Tasks",
-  icon: "mdi-timeline-clock-outline",
-};
-
-/**
- * The descriptor an inspector declares for its Tasks tab, lit while the store
- * has work. One function so the two hosts cannot drift apart on the wording or
- * on when the light comes on.
- */
-export function tasksTabFor(tasksStore) {
-  if (!tasksStore.hasActiveTasks) return TASKS_TAB;
-  const n = tasksStore.activeCount;
-  return {
-    ...TASKS_TAB,
-    busy: true,
-    busyTooltip: `${n} active task${n === 1 ? "" : "s"}`,
-  };
-}
-</script>
-
 <script setup>
-// The task manager: the body of the Tasks tab, wherever an inspector offers it.
-//
-// It started inside StatsSidebar and is a component of its own because the
-// Workflows view's inspector offers the same tab: somebody browsing
-// workflows or recipes has to be able to watch the work their last run started
-// without leaving the screen to do it. The lightbox has none: there the task
-// list is the title bar's pill (#2163), which mounts this panel too.
+// The task manager: the body of the title bar's Tasks pill (`TitleBarTasks`),
+// which is on every screen. It started as a Tasks tab in the right rails; those
+// tabs are gone, so a run can be watched from anywhere without a rail open.
 //
 // The data (worker snapshots, rate series, active-state, ComfyUI runs) lives in
 // the shared tasks store, which is the single poller of /workers/progress. This
@@ -752,21 +713,16 @@ const root = ref(null);
 
 // A row goes when its run does, and takes a focused Stop or Cancel with it;
 // focus then falls to <body>: the ring is gone and a keyboard user is out of
-// the tab order with nothing saying so. In an inspector the keyboard goes back
-// to the band's Tasks tab; in the title bar's popover (#2158), which has no
-// band, to the popover itself. Checked a tick later, after any hand-off of the
-// panel's own (a save's receipt line) has had its turn.
+// the tab order with nothing saying so. The keyboard goes back to the title
+// bar's popover (#2158) that holds the panel. Checked a tick later, after any
+// hand-off of the panel's own (a save's receipt line) has had its turn.
 function onFocusOut(event) {
   const left = event.target;
   nextTick(() => {
     if (left.isConnected) return;
     const now = document.activeElement;
     if (now && now !== document.body) return;
-    const inspector = root.value?.closest(".inspector");
-    (inspector
-      ? inspector.querySelector(".inspector-tab--active")
-      : root.value?.closest('[role="dialog"]')
-    )?.focus();
+    root.value?.closest('[role="dialog"]')?.focus();
   });
 }
 
@@ -1311,9 +1267,9 @@ async function saveAsNew(offer) {
 const TM_WINDOW_SECONDS = 120; // sparkline x-axis span, seconds
 const tmCanvasRefs = new Map(); // key → { el, observer }
 
-// Mounted is exactly "the Tasks tab is on screen": the inspector unmounts its
-// body when the rail is collapsed, so the fast cadence follows what is actually
-// visible rather than which tab was last picked. The store keeps polling either
+// Mounted is exactly "the task list is on screen": the popover unmounts it when
+// it closes, so the fast cadence follows what is actually visible. The store
+// keeps polling either
 // way (that's what drives the app-wide activity light); this only changes how
 // often.
 onMounted(() => tasksStore.setTasksTabOpen(true));
@@ -1554,7 +1510,7 @@ const tmSystemItems = computed(() => {
 </script>
 
 <style scoped>
-/* No box in a rail: the rows are the inspector body's own flex children. */
+/* No box of its own: the rows are the popover body's own flex children. */
 .tm {
   display: contents;
 }

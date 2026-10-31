@@ -92,7 +92,7 @@ describe("downloadModels", () => {
     expect(await downloadModels(["loras/running.safetensors"])).toBe(0);
     expect(startModelDownload).not.toHaveBeenCalled();
     expect(useNoticeStore().notices.map((n) => n.text)).toEqual([
-      "Already downloading: the Tasks tab shows how far.",
+      "Already downloading: the Tasks list in the title bar shows how far.",
     ]);
   });
 

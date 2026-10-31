@@ -268,7 +268,7 @@ describe("WorkflowTemplatesPanel card menu", () => {
     const download = menuRow(wrapper, "download-missing");
     expect(download.attributes("aria-disabled")).toBe("true");
     expect(download.find(".tip").attributes("data-text")).toBe(
-      "Already downloading: the Tasks tab shows how far",
+      "Already downloading: the Tasks list in the title bar shows how far",
     );
   });
 

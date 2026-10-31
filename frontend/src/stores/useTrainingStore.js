@@ -650,7 +650,7 @@ export const useTrainingStore = defineStore("training", () => {
   // ── Cross-component coordination ──────────────────────────────────────────────
 
   // A confirmation notice, not a banner: it expires on its own, and its action
-  // opens the Tasks tab where the run's progress is.
+  // opens the title bar's task list, where the run's progress is.
   function showQueuedToast(message) {
     noticeStore.push({
       level: "success",
