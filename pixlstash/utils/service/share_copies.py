@@ -20,6 +20,7 @@ every new batch.
 
 from __future__ import annotations
 
+import datetime
 import os
 import shutil
 import time
@@ -108,8 +109,8 @@ def make_share_copies(
     """Write one share-ready copy of each picture into a new batch under *root*.
 
     Args:
-        pictures: ``{"id", "file_path", "original_file_name"}`` per picture, in
-            the order the copies should be named.
+        pictures: ``{"id", "file_path", "original_file_name", "created_at"}``
+            per picture, in the order the copies should be named.
         image_root: The vault's image root, to resolve relative file paths.
         root: The staging root (:func:`share_copies_root`).
         keep_generation_data: Leave generation data in. With no resize and no
@@ -117,7 +118,8 @@ def make_share_copies(
         max_long_edge: Shrink images whose longer side exceeds this. Never
             enlarges.
         watermark_bytes: Composite this watermark onto each image.
-        file_names: :data:`FILE_NAMES_ORIGINAL` (the imported file's name) or
+        file_names: :data:`FILE_NAMES_ORIGINAL` (the imported file's name, or
+            for a picture without one when it was made) or
             :data:`FILE_NAMES_PIXLSTASH` (the vault's own file name).
 
     Returns:
@@ -165,10 +167,26 @@ def _is_batch_name(name: str) -> bool:
     return len(name) == 32 and all(c in "0123456789abcdef" for c in name)
 
 
+def _made_at_stem(created_at) -> str | None:
+    """``PixlStash 2026-10-24 14.22.42``, in this machine's local time.
+
+    The name of a picture that has no original file name (one PixlStash made):
+    the vault's own name is a UUID, and the prompt would leak the generation
+    data the copy was stripped of. A naive timestamp is read as UTC.
+    """
+    if not isinstance(created_at, datetime.datetime):
+        return None
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=datetime.timezone.utc)
+    return created_at.astimezone().strftime("PixlStash %Y-%m-%d %H.%M.%S")
+
+
 def _copy_name(pic: dict, source: str, ext: str, file_names: str, claimed: dict):
     fallback = f"picture_{pic['id']}"
     if file_names == FILE_NAMES_ORIGINAL and pic.get("original_file_name"):
         stem = os.path.splitext(pic["original_file_name"])[0]
+    elif file_names == FILE_NAMES_ORIGINAL and _made_at_stem(pic.get("created_at")):
+        stem = _made_at_stem(pic.get("created_at"))
     else:
         stem = os.path.splitext(os.path.basename(source))[0]
     # The extension is the copy's real format, never the stored name's.

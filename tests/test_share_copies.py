@@ -1,5 +1,6 @@
 """Share-ready copies (#2417): generation data stripped by default, pixels kept."""
 
+import datetime
 import json
 import os
 import tempfile
@@ -184,13 +185,14 @@ def library(tmp_path):
     image_root.mkdir()
     pictures = []
 
-    def add(data: bytes, file_name: str, original_file_name=None):
+    def add(data: bytes, file_name: str, original_file_name=None, created_at=None):
         (image_root / file_name).write_bytes(data)
         pictures.append(
             {
                 "id": len(pictures) + 1,
                 "file_path": file_name,
                 "original_file_name": original_file_name,
+                "created_at": created_at,
             }
         )
         return pictures[-1]
@@ -258,6 +260,20 @@ def test_names_collide_into_suffixes_and_can_be_pixlstash_names(library):
 
     own = [f["name"] for f in _copy(library, file_names="pixlstash")["files"]]
     assert own == ["aa11.png", "bb22.png", "cc33.png", "dd44.png"]
+
+
+def test_a_picture_without_an_original_name_is_named_by_when_it_was_made(library):
+    made = datetime.datetime(2026, 10, 24, 14, 22, 42, tzinfo=datetime.timezone.utc)
+    stem = made.astimezone().strftime("PixlStash %Y-%m-%d %H.%M.%S")
+    library["add"](_comfy_png(), "1fea4e4c.png", None, made)
+    library["add"](_comfy_png(), "598fcee3.png", None, made.replace(tzinfo=None))
+    library["add"](_comfy_png(), "be143717.png", "mine.png", made)
+
+    names = [f["name"] for f in _copy(library)["files"]]
+    # Same moment twice (the naive one is read as UTC): the suffix separates them.
+    assert names == [f"{stem}.png", f"{stem}_2.png", "mine.png"]
+    own = [f["name"] for f in _copy(library, file_names="pixlstash")["files"]]
+    assert own == ["1fea4e4c.png", "598fcee3.png", "be143717.png"]
 
 
 def test_max_long_edge_shrinks_and_strips(library):
