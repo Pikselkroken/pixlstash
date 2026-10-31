@@ -4579,8 +4579,10 @@ undo by accident:
   by clicking elsewhere would drag the reader back. It is seeded from what the
   cell shows (`baseModelCell`), unlike the name field: the file's own string,
   or for a guessed row the guess, so a correction is one word rather than a
-  retype, leaving a guess untouched writes nothing, and emptying the field
-  stores "none of these", which sticks across rescans.
+  retype. Enter on an untouched guess accepts it, the same write as the
+  `guessed` tag's confirm, so the tag goes; clicking away from it writes
+  nothing and leaves it a guess. Emptying the field stores "none of these",
+  which sticks across rescans.
   The bulk verb keeps its dialog, which is a different gesture with the
   overwrite count in front of it.
 - **`unknown` is never rendered as a checkpoint.** `file_kind='unknown'` is a
