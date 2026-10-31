@@ -1772,3 +1772,21 @@ class TestModelFolderScanFinder:
             conn.execute("DELETE FROM model_folder WHERE id = ?", (own,))
         finder.find_task()
         assert set(watcher.watched) == {unplugged}
+
+    def test_a_renamed_folder_is_watched_at_its_new_path(self, hub, tmp_path):
+        a = tmp_path / "a"
+        a.mkdir()
+        own = register_folder(hub, a)
+        watcher = _FakeWatcher()
+        finder = self._finder(hub, watcher)
+        finder.find_task()
+        assert watcher.watched == {own: str(a)}
+
+        renamed = tmp_path / "b"
+        a.rename(renamed)
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model_folder SET path = ? WHERE id = ?", (str(renamed), own)
+            )
+        finder.find_task()
+        assert watcher.watched == {own: str(renamed)}

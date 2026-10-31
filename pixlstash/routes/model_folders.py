@@ -294,6 +294,20 @@ class ModelFolderUpdateRequest(BaseModel):
     )
 
 
+class ModelFolderRenameRequest(BaseModel):
+    """Body of ``POST /model-folders/{folder_id}/rename``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(
+        description=(
+            "The folder's new name, one segment; it stays in the same parent "
+            "directory. A name the drive cannot hold is refused with the "
+            "reason, never rewritten."
+        )
+    )
+
+
 class ModelFolderResponse(BaseModel):
     """One registered folder, with what the shelf holds in it."""
 
@@ -1763,6 +1777,142 @@ def create_router(server) -> APIRouter:
                 "UPDATE model_folder SET is_default = 1 WHERE id = ?",
                 (folder["id"],),
             )
+
+    @router.post(
+        "/model-folders/{folder_id}/rename",
+        summary="Rename a registered model folder on disk",
+        description=(
+            "Renames a folder you added, in place, and points its registration "
+            "at the new name. Everything in PixlStash refers to the folder by "
+            "its id and to its files by their path inside it, so the default "
+            "and download marks, the shelf's copies and their curation follow "
+            "without a rescan. 409 for a locked folder, a name already taken or "
+            "a registered path, and while a move, an import or a scan of this "
+            "folder runs; 400 with the reason for a name the drive cannot hold; "
+            "404 when the folder is not on disk. Refused in Docker, as creating "
+            "a host folder is. Tools outside PixlStash that name the old path "
+            "(ComfyUI, StabilityMatrix) are not told."
+        ),
+        tags=["model_shelf"],
+        response_model=ModelFolderResponse,
+    )
+    def rename_model_folder(
+        folder_id: int,
+        request: Request,
+        payload: ModelFolderRenameRequest = Body(...),
+    ):
+        server.auth.ensure_secure_when_required(request)
+        if server.running_in_docker():
+            raise HTTPException(
+                status_code=403,
+                detail="Renaming folders is not available in Docker mode.",
+            )
+        folder = _fetch_folder(folder_id)
+        # An owner is a subsystem that records where the folder is (the engine
+        # download folder's pointer file), and a rename would strand it.
+        if folder["movable"] != "per_item" or folder["owner"] is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="This folder is locked; PixlStash does not rename it.",
+            )
+        reason = refusal_for_folder_name(payload.name)
+        if reason:
+            raise HTTPException(status_code=400, detail=reason)
+        old_path = folder["path"]
+        new_path = os.path.join(os.path.dirname(old_path), payload.name)
+        if new_path == old_path:
+            return _to_response(folder)
+        if not os.path.isdir(old_path):
+            raise HTTPException(
+                status_code=404,
+                detail="The folder is not on disk; plug its drive in and try again.",
+            )
+        # A row naming the new path, or a folder inside it, may be registered
+        # while its drive is unplugged, so the disk alone cannot rule it out.
+        _validate_folder_conflicts(server, new_path)
+        # The slot a move or an import takes: either may be writing a path
+        # under the old name.
+        if not SHELF_IO_LOCK.acquire(blocking=False):
+            raise HTTPException(
+                status_code=409,
+                detail="A move or an import is running. Try again when it is done.",
+            )
+        try:
+            # Holding the folder's scan slot keeps the finder from handing out a
+            # scan of the old path while it is renamed: that scan would find the
+            # folder gone and mark every model in it unreachable.
+            hold = claim_scan(server.hub, folder_id, old_path, folder["kind"])
+            if hold is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="This folder is being scanned. Try again in a moment.",
+                )
+            try:
+                _rename_on_disk_and_hub(folder_id, old_path, new_path)
+            finally:
+                release_scan(hold)
+        finally:
+            SHELF_IO_LOCK.release()
+        logger.info(
+            "Model folder %s (id=%s) renamed to %s.", old_path, folder_id, new_path
+        )
+        return _to_response(_fetch_folder(folder_id))
+
+    def _rename_on_disk_and_hub(folder_id: int, old_path: str, new_path: str) -> None:
+        """Rename the directory, then the row; put the directory back if the row
+        cannot follow, so the registration never names a folder that is gone."""
+        # Checked, not left to the rename: on POSIX a rename onto an empty
+        # directory replaces it. A case-only rename on a case-insensitive drive
+        # "exists" but is the same directory. The window between the check and
+        # the rename is the one `model_dir_mover` accepts too.
+        if os.path.lexists(new_path) and not os.path.samefile(old_path, new_path):
+            raise HTTPException(
+                status_code=409,
+                detail=f"{os.path.basename(new_path)!r} already exists there.",
+            )
+        try:
+            os.rename(old_path, new_path)
+        except OSError as exc:
+            logger.error(
+                "Could not rename model folder %s (id=%s) to %s: %s",
+                old_path,
+                folder_id,
+                new_path,
+                exc,
+            )
+            raise HTTPException(
+                status_code=409, detail=f"Could not rename the folder: {exc.strerror}"
+            ) from exc
+        try:
+            with server.hub.transaction() as conn:
+                conn.execute(
+                    "UPDATE model_folder SET path = ? WHERE id = ?",
+                    (new_path, folder_id),
+                )
+        except sqlite3.Error as exc:
+            logger.error(
+                "Renamed model folder %s (id=%s) to %s but could not record it "
+                "(%s); renaming it back.",
+                old_path,
+                folder_id,
+                new_path,
+                exc,
+            )
+            try:
+                os.rename(new_path, old_path)
+            except OSError as undo_exc:
+                logger.error(
+                    "Could not rename %s back to %s (%s). The registration "
+                    "still names %s; rename the folder back by hand or add it "
+                    "again at its new name.",
+                    new_path,
+                    old_path,
+                    undo_exc,
+                    old_path,
+                )
+            raise HTTPException(
+                status_code=500, detail="Could not record the new name."
+            ) from exc
 
     @router.delete(
         "/model-folders/{folder_id}",

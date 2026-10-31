@@ -662,8 +662,9 @@ const OPEN_ENTRY = {
 /**
  * The menu a row offers, in the order the design draws it. Empty for a drive,
  * a locked folder (it shows its lock and nothing else), and every row in pick
- * mode. A registered root has no Move, Rename or Remove: it is a place the
- * owner registered, and leaving the registry is Stop watching.
+ * mode. A registered root has no Move or Remove: it is a place the owner
+ * registered, and leaving the registry is Stop watching. Its Rename renames the
+ * directory on disk and the registration with it.
  *
  * A reason is what the gate says right now; an entry carrying one is drawn
  * disabled with that reason, not left out, so the reader can see why.
@@ -700,6 +701,7 @@ function menuFor(node) {
         reason: busy,
       },
       OPEN_ENTRY,
+      { key: "rename", label: "Rename", icon: "", shortcut: "F2", reason: busy },
       {
         key: "stop",
         label: "Stop watching…",
@@ -1056,13 +1058,15 @@ function startNew(node) {
 }
 
 function startRename(node) {
-  if (node.kind === "drive" || node.path === "") return;
+  if (node.kind === "drive") return;
   editor.value = {
     mode: "rename",
     key: node.key,
     folderId: node.folderId,
     path: node.path,
-    name: node.name,
+    // A registered folder's row may wear its tool's name; the field renames
+    // the directory, so it starts from the directory's own.
+    name: node.path === "" ? basename(node.fullPath) : node.name,
     error: "",
     busy: false,
   };
@@ -1156,7 +1160,11 @@ async function commitEditor() {
   const open = editor.value;
   if (!open || open.busy) return;
   const name = open.name;
-  if (open.mode === "rename" && name === basename(open.path)) {
+  const current =
+    open.path === ""
+      ? basename(registeredOf(open.folderId)?.path)
+      : basename(open.path);
+  if (open.mode === "rename" && name === current) {
     cancelEditor();
     return;
   }
@@ -1174,6 +1182,13 @@ async function commitEditor() {
       if (editor.value !== open) return;
       editor.value = null;
       reveal(open.folderId, open.path, created.path);
+    } else if (open.path === "") {
+      // The registered folder itself: its row key is its id, so nothing in
+      // the tree's open state moves with it.
+      await foldersStore.renameFolder(open.folderId, name);
+      if (editor.value !== open) return;
+      editor.value = null;
+      focusEditorRow(open.key);
     } else {
       await moves.moveFolder(
         { folderId: open.folderId, path: open.path },
