@@ -332,7 +332,8 @@ export async function stubWorkflow(page, world = {}) {
           pictures: 12,
           shared: [],
           varying: [],
-          no_lora: 0,
+          without: null,
+          cover_asset: null,
         });
       }
       if (rest === "/model-swap" && method === "GET") {
