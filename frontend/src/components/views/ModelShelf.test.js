@@ -5278,4 +5278,25 @@ describe("the folder removal dialog the tree asks for", () => {
     await expect(removed).resolves.toBe(true);
     wrapper.unmount();
   });
+
+  it("leaves a request that arrives while the last dialog closes to its own dialog", async () => {
+    const wrapper = await mountShelf([]);
+    const store = useModelShelfStore();
+    const first = store.requestFolderRemove(SOURCE, PLAN);
+    await flushPromises();
+    // The close waits a tick for the focus; the next request lands in it.
+    dialog(wrapper).vm.$emit("close");
+    const second = store.requestFolderRemove({ ...SOURCE, path: "VAE" }, PLAN);
+    await expect(first).resolves.toBe(false);
+    let answered = null;
+    second.then((value) => (answered = value));
+    await flushPromises();
+    expect(answered).toBe(null);
+    expect(dialog(wrapper).props("open")).toBe(true);
+    expect(dialog(wrapper).props("source").path).toBe("VAE");
+    dialog(wrapper).vm.$emit("removed");
+    dialog(wrapper).vm.$emit("close");
+    await expect(second).resolves.toBe(true);
+    wrapper.unmount();
+  });
 });

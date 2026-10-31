@@ -1924,13 +1924,19 @@ watch(
 /** Close the removal dialog and give the focus back to what opened it. */
 async function closeFolderRemove() {
   const returnTo = folderRemoveInvoker.value;
+  const closingAt = folderRemoveAt.value;
+  const removed = folderRemoved.value;
   folderRemoveOpen.value = false;
   folderRemoveInvoker.value = null;
   folderRemovePlan.value = null;
   await nextTick();
   (returnTo?.isConnected ? returnTo : rootEl.value)?.focus();
-  // Last, so a next picked folder's dialog opens after this one has gone.
-  store.settleFolderRemove(folderRemoved.value);
+  // Last, so a next picked folder's dialog opens after this one has gone. A
+  // request that replaced this one meanwhile was answered when it arrived,
+  // and its own dialog settles it.
+  if (store.folderRemoveRequest?.at === closingAt) {
+    store.settleFolderRemove(removed);
+  }
 }
 
 // A batch waiting on a dialog that is going away stops rather than hanging.
