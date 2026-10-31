@@ -1546,7 +1546,7 @@ _SMALL = {"train.steps": 4, "save.save_every": 2, "sample.sample_every": 2}
 _HOLDS_MB = 9000
 
 
-def _resolve_small(hub, *, vram_mb=22_800):
+def _resolve_small(hub, *, vram_mb=22_800, profile=None):
     """The recipe resolved for a two-picture set, with this hub's measurements."""
     return presets.resolve(
         _ZIT,
@@ -1558,6 +1558,27 @@ def _resolve_small(hub, *, vram_mb=22_800):
         ram_mb=60_000,
         pins=dict(_SMALL),
         lookup=measurements.make_lookup(hub, _ZIT, commit=None, device=None),
+        profile=profile,
+    )
+
+
+def _record_big_previews(hub, profile, previews_mb=30000):
+    """Record *profile* as measured: training fits, previews (by default) do
+    not."""
+    measurements.record(
+        hub,
+        _resolve_small(hub, profile=profile)["fingerprint"],
+        preset=presets.preset_ref(_ZIT),
+        profile=profile,
+        device=None,
+        phase_peaks={
+            "training": {"vram_mb": 9000, "ram_mb": 12000},
+            "previews": {"vram_mb": previews_mb, "ram_mb": 12000},
+        },
+        seconds_per_update=1.0,
+        setup_seconds=10.0,
+        seconds_per_preview=1.0,
+        source="probe",
     )
 
 
@@ -1690,6 +1711,102 @@ def test_running_out_of_memory_steps_to_more_offloading(
     assert measurements.read(hub, resolution["fingerprint"]) is None
 
 
+def test_previews_that_do_not_fit_step_to_the_next_profile(hub, repo_dir, watched):
+    """#2411: measured after the run was queued, q8's previews do not fit
+    beside training. The next profile is probed before they are put off, and
+    the run draws its previews while training on it."""
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    resolution = _resolve_small(hub)
+    assert resolution["profile"] == "q8"
+    job = _enqueue_resolved(
+        service, resolution, _write_template(repo_dir, steps=4, save_every=2)
+    )
+    _record_big_previews(hub, "q8")
+
+    row = _run_to_end(hub, service, job)
+
+    assert row.status == "completed", row.error
+    # One probe of q8_cached, then the run with previews (the stub's are small).
+    assert watched() == [f"steps={training_service_module.PROBE_STEPS}", "steps=4"]
+    settled = json.loads(row.resolved_profile)
+    assert (settled["profile"], settled["previews_deferred"]) == ("q8_cached", False)
+    assert "train.disable_sampling" not in settled["values"]
+
+
+@pytest.mark.parametrize("measured_before_queueing", [False, True])
+def test_a_failed_check_of_the_next_profile_keeps_the_one_that_trains(
+    hub, repo_dir, watched, monkeypatch, measured_before_queueing
+):
+    """#2411: q8 trains but its previews do not fit; the RAM guard stops the
+    check of q8_cached. The run trains on q8 with its previews put off
+    instead of failing, also when q8 was measured before the run was queued
+    and so was passed over for q8_cached there."""
+    monkeypatch.setattr(
+        training_service_module,
+        "read_ram",
+        lambda: {"total_mb": 64_000, "available_mb": 500},
+    )
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    if measured_before_queueing:
+        _record_big_previews(hub, "q8")
+    resolution = _resolve_small(hub)
+    assert resolution["profile"] == ("q8_cached" if measured_before_queueing else "q8")
+    job = _enqueue_resolved(
+        service, resolution, _write_template(repo_dir, steps=4, save_every=2)
+    )
+    _record_big_previews(hub, "q8")
+
+    row = _run_to_end(hub, service, job)
+
+    assert row.status == "completed", row.error
+    settled = json.loads(row.resolved_profile)
+    assert (settled["profile"], settled["previews_deferred"]) == ("q8", True)
+    # The stopped check, the run, then its previews from each checkpoint.
+    assert watched()[:2] == [f"steps={training_service_module.PROBE_STEPS}", "steps=4"]
+
+
+def test_out_of_probes_a_measured_profile_further_on_still_counts(
+    hub, repo_dir, watched, monkeypatch
+):
+    """The probe budget bounds probes only: with one left after q8 runs out of
+    memory, q8_cached (unmeasured) is skipped and the measured q8_offload is
+    still taken."""
+    monkeypatch.setenv("FAKE_RUN_OOM_UNLESS_OFFLOAD", "1")
+    monkeypatch.setattr(training_service_module, "MAX_PROBES", 1)
+    _record_big_previews(hub, "q8_offload", previews_mb=9000)
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    resolution = _resolve_small(hub)
+    assert resolution["profile"] == "q8"
+    job = _enqueue_resolved(
+        service, resolution, _write_template(repo_dir, steps=4, save_every=2)
+    )
+
+    row = _run_to_end(hub, service, job)
+
+    assert row.status == "completed", row.error
+    assert json.loads(row.resolved_profile)["profile"] == "q8_offload"
+    # The one probe (q8, out of memory), then the run.
+    assert watched() == [f"steps={training_service_module.PROBE_STEPS}", "steps=4"]
+
+
 def test_a_loader_error_stops_the_search(hub, repo_dir, watched, monkeypatch):
     monkeypatch.setenv("FAKE_RUN_FAIL", "Error loading model: unexpected tensor")
     service = _make_service(
@@ -1751,22 +1868,9 @@ def test_deferred_previews_are_drawn_from_each_checkpoint_after_training(
             uuid, "uuid4", lambda: uuid.UUID(id_prefix + real_uuid4().hex[8:])
         )
     seen = _spy_pass_pids(hub, monkeypatch)
-    first = _resolve_small(hub)
-    measurements.record(
-        hub,
-        first["fingerprint"],
-        preset=first["preset"],
-        profile="q8",
-        device=None,
-        phase_peaks={
-            "training": {"vram_mb": 9000, "ram_mb": 12000},
-            "previews": {"vram_mb": 30000, "ram_mb": 12000},
-        },
-        seconds_per_update=1.0,
-        setup_seconds=10.0,
-        seconds_per_preview=1.0,
-        source="probe",
-    )
+    # No profile's previews fit, so none is worth trying for them (#2411).
+    for profile in _ZIT["fit"]["auto"]:
+        _record_big_previews(hub, profile)
     resolution = _resolve_small(hub)
     assert (resolution["probe"], resolution["previews_deferred"]) == (False, True)
     importer = _RecordingImport()
@@ -1785,6 +1889,9 @@ def test_deferred_previews_are_drawn_from_each_checkpoint_after_training(
     row = _run_to_end(hub, service, job)
 
     assert row.status == "completed", row.error
+    # Each profile was looked at for previews while training and none had
+    # room, so the first that trains is kept.
+    assert json.loads(row.resolved_profile)["profile"] == "q8"
     # The run, then one pass per checkpoint step: 2, and 4 once (the final
     # shares its step with the last save).
     assert watched() == ["steps=4", "steps=2", "steps=4"]

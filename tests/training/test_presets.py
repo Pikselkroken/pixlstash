@@ -441,13 +441,42 @@ def test_without_measurements_nothing_is_probed():
     assert out["fallbacks"] == ["q8_cached", "q8_offload"]
 
 
-def test_previews_that_do_not_fit_wait_until_training_is_done():
+def test_a_profile_whose_previews_fit_is_picked_over_deferring_them():
+    """#2411: q8 trains in 16 GB but its previews do not; q8_cached is tried
+    for previews while training before they are put off."""
+    big_previews = _measurement(12_000, previews_mb=16_000)
+    out = _resolve(vram_mb=_16GB, lookup=_lookup({"q8": big_previews}))
+    assert (out["profile"], out["probe"]) == ("q8_cached", True)
+    assert out["previews_deferred"] is False
+    assert out["fallbacks"] == ["q8_offload"]
+    # q8 trains, so the probe keeps it to fall back on.
+    assert out["passed_over"] == ["q8"]
+    fits = _measurement(9_000, previews_mb=12_000)
     out = _resolve(
         vram_mb=_16GB,
         lookup=_lookup(
-            {"q8": _measurement(12_000, previews_mb=16_000, per_update=2.0)}
+            {"q8": big_previews, "q8_cached": big_previews, "q8_offload": fits}
         ),
     )
+    assert (out["profile"], out["previews_deferred"]) == ("q8_offload", False)
+    # Previews pinned off: nothing to make room for, so q8 stays.
+    off = _resolve(
+        vram_mb=_16GB,
+        pins={"train.disable_sampling": True},
+        lookup=_lookup({"q8": big_previews}),
+    )
+    assert off["profile"] == "q8"
+
+
+def test_previews_that_do_not_fit_wait_until_training_is_done():
+    big_previews = _measurement(12_000, previews_mb=16_000, per_update=2.0)
+    out = _resolve(
+        vram_mb=_16GB,
+        lookup=_lookup(
+            {"q8": big_previews, "q8_cached": big_previews, "q8_offload": big_previews}
+        ),
+    )
+    # No profile fits them: the first that trains is kept, previews put off.
     assert out["profile"] == "q8" and out["previews_deferred"] is True
     assert out["values"]["train.disable_sampling"] == {"value": True, "source": "gpu"}
     assert out["preview_vram_mb"] == 17_600

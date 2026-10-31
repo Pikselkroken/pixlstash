@@ -544,11 +544,14 @@ def resolve(
         ``{"preset", "subject", "effort", "fit", "picture_count", "profile",
         "profile_label", "evidence", "vram_mb", "ram_mb", "preview_vram_mb",
         "room", "steps_clamp", "fingerprint", "probe", "fallbacks",
-        "previews_deferred", "estimate", "values"}``; ``steps_clamp`` is
+        "passed_over", "previews_deferred", "estimate", "values"}``;
+        ``steps_clamp`` is
         ``cap`` or ``floor`` when the effort's step range held the
         picture-scaled count, else None; ``probe`` is True when the profile's
         setup has never been measured here; ``fallbacks`` are the profiles a
-        probe that runs out of memory steps to; ``estimate`` is ``{seconds,
+        probe that runs out of memory steps to; ``passed_over`` are the
+        profiles before it that train but were measured with previews that do
+        not fit, which the probe keeps to fall back on; ``estimate`` is ``{seconds,
         basis}``, basis ``measured`` or ``none``; ``values`` maps each key to
         ``{"value", "source"}``, the source being ``model``, ``subject``,
         ``effort``, ``pictures``, ``captions``, ``gpu`` or ``pinned``.
@@ -697,7 +700,24 @@ def resolve(
             need,
             vram_mb,
         )
+
+    def previews_fit(entry: dict) -> bool:
+        """Whether *entry*'s previews fit the room, as far as it was measured."""
+        vram = entry["preview_vram_mb"]
+        ram = entry["preview_ram_mb"]
+        return not (
+            (vram is not None and vram > vram_mb)
+            or (ram is not None and ram_mb is not None and ram > ram_mb)
+        )
+
+    # Previews drawn while training are worth more offloading (#2411): the
+    # first profile whose previews fit is picked over putting them off, unless
+    # the owner pinned them off.
+    sampling = "train.disable_sampling"
     picked = fitting[0]
+    if not pins.get(sampling):
+        picked = next((e for e in fitting if previews_fit(e)), picked)
+    passed_over = fitting[: fitting.index(picked)]
     name, profile = picked["name"], picked["profile"]
     for key, value in profile["settings"].items():
         if key not in pins:
@@ -709,16 +729,9 @@ def resolve(
     ):
         values[dropout] = {"value": 0.0, "source": "gpu"}
     # Previews are admitted apart: a run whose training fits but whose
-    # previews do not trains without them, and its checkpoints are sampled
-    # once training is done.
-    deferred = (
-        picked["preview_vram_mb"] is not None and picked["preview_vram_mb"] > vram_mb
-    ) or (
-        picked["preview_ram_mb"] is not None
-        and ram_mb is not None
-        and picked["preview_ram_mb"] > ram_mb
-    )
-    sampling = "train.disable_sampling"
+    # previews do not in any profile trains without them, and its checkpoints
+    # are sampled once training is done.
+    deferred = not previews_fit(picked)
     if sampling in pins:
         # The owner's word on previews stands, either way.
         deferred = bool(pins[sampling])
@@ -755,6 +768,7 @@ def resolve(
         # The profiles a probe that runs out of memory steps to, in the fit
         # choice's order: each offloads more than the one before.
         "fallbacks": [e["name"] for e in judgedall[judgedall.index(picked) + 1 :]],
+        "passed_over": [e["name"] for e in passed_over],
         "previews_deferred": bool(deferred),
         "estimate": {
             "seconds": round(seconds) if seconds is not None else None,

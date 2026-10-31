@@ -64,7 +64,7 @@ _LOG_TAIL_BYTES = 8192
 ADOPT_QUIET_S = 120.0
 #: Updates a probe trains: enough for a warm speed after the first.
 PROBE_STEPS = 6
-#: The most memory profiles one probe search tries.
+#: The most probes one search runs; a measured profile costs none.
 MAX_PROBES = 3
 #: A probe is stopped when the machine's available RAM falls below this.
 RAM_GUARD_MB = 1024
@@ -1122,9 +1122,11 @@ class TrainingService:
         of previews and saves once, under a RAM guard, and records what each
         phase peaked at. Running out of GPU memory steps to the next profile
         of the fit choice (more offloading); a loader error, a Triton error or
-        the RAM guard ends the search. The run then trains with the profile
-        that held, re-resolved on its measurement, so previews that do not fit
-        are deferred.
+        the RAM guard ends the search. A profile that held but whose previews
+        do not fit beside training steps on too, so previews are drawn while
+        training wherever a profile allows it. The run then trains with the
+        first profile that held with its previews, or else the first that held,
+        re-resolved on its measurement, its previews deferred.
 
         Returns:
             True to train. False when the run was stopped, failed (the row says
@@ -1154,12 +1156,26 @@ class TrainingService:
         )
         # Resolved again at launch even when it was measured at enqueue: the
         # checkout or the card may have changed since, which is a new setup.
-        names = [resolution["profile"], *(resolution.get("fallbacks") or [])]
+        # The profiles passed over for their previews come first: measured,
+        # they cost no probe and are kept to fall back on (#2411).
+        names = [
+            *(resolution.get("passed_over") or []),
+            resolution["profile"],
+            *(resolution.get("fallbacks") or []),
+        ]
         reason = None
-        for name in names[:MAX_PROBES]:
+        # The first profile that held but whose previews do not fit: kept while
+        # the next ones are tried for previews drawn while training (#2411).
+        deferred = None
+        probes = 0
+        for name in names:
             try:
                 settled = self._reresolve(info, resolution, preset, lookup, name)
                 if settled["probe"]:
+                    if probes == MAX_PROBES:
+                        # Out of probes; a measured profile further on costs none.
+                        continue
+                    probes += 1
                     self._note_phase(job_uuid, "checking")
                     outcome, reason = self._probe_once(
                         backend, info, work_dir, manifest, lease, settled
@@ -1172,6 +1188,19 @@ class TrainingService:
                             name,
                         )
                         continue
+                    if outcome == "failed" and deferred is not None:
+                        # A profile that trains is in hand: its previews wait.
+                        logger.warning(
+                            "Job %s: checking %s failed (%s); training with %s, "
+                            "previews after training.",
+                            job_uuid,
+                            name,
+                            reason,
+                            deferred["profile"],
+                        )
+                        break
+                    if outcome == "failed":
+                        self._fail(job_uuid, reason)
                     if outcome != "ok":
                         return False
                     settled = self._reresolve(info, resolution, preset, lookup, name)
@@ -1179,7 +1208,20 @@ class TrainingService:
                 reason = str(exc)
                 logger.info("Job %s: %s does not fit: %s", job_uuid, name, exc)
                 continue
+            sampling = settled["values"].get("train.disable_sampling") or {}
+            if settled["previews_deferred"] and sampling.get("source") == "gpu":
+                logger.info(
+                    "Job %s: %s's previews do not fit while training; trying "
+                    "the next profile.",
+                    job_uuid,
+                    name,
+                )
+                deferred = deferred or settled
+                continue
             self._settle(job_uuid, settled)
+            return True
+        if deferred is not None:
+            self._settle(job_uuid, deferred)
             return True
         self._fail(
             job_uuid,
@@ -1298,8 +1340,10 @@ class TrainingService:
 
         Returns:
             ``(outcome, reason)``: ``ok`` (measured and recorded), ``oom`` (try
-            more offloading) or ``stopped`` (the run was cancelled, failed or
-            PixlStash is shutting down; the row already says which).
+            more offloading), ``failed`` (the RAM guard or a trainer error
+            stopped it; *reason* is the run's error) or ``stopped`` (the run
+            was cancelled, failed or PixlStash is shutting down; the row
+            already says which).
         """
         job_uuid = info["uuid"]
         pending = self._load_pending_spec(job_uuid)
@@ -1358,29 +1402,25 @@ class TrainingService:
             logger.info("Job %s: probe stopped by shutdown; stays queued.", job_uuid)
             return "stopped", None
         if guard == "ram":
-            self._fail(
-                job_uuid,
+            return "failed", (
                 "Not enough system RAM to start: less than "
                 f"{RAM_GUARD_MB // 1024} GB was free while checking memory and "
                 "speed, so the check was stopped. Close other programs or choose "
-                "a fit that offloads less.",
+                "a fit that offloads less."
             )
-            return "stopped", None
         text = f"{progress.info or ''}\n{self._read_log_tail(handle.log_path) or ''}"
         if live_view.OOM_RE.search(text):
             return "oom", settled["profile_label"]
         if progress.status != "completed" or not progress.final_checkpoint:
-            self._fail(
-                job_uuid,
+            return "failed", (
                 "Checking memory and speed failed: "
                 + (
                     live_view.failure_summary(progress.info, progress.step)
                     if progress.info
                     else "the trainer stopped with an error"
                 ).rstrip(".")
-                + ". See the trainer log.",
+                + ". See the trainer log."
             )
-            return "stopped", None
         step_times = live_view.read_step_times(handle.loss_db_path)
         images = len(progress.samples)
         try:

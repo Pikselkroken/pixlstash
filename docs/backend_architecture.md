@@ -11861,12 +11861,15 @@ polls alone is probed again.
 for each candidate profile's fingerprint and measurement. A measured profile's
 need is its highest peak outside previews ×1.1 (`NEED_MARGIN`, as for a learned
 ComfyUI need), and its evidence becomes `measured`; previews are admitted
-apart, on the previews phase's peak. A profile whose training fits but whose
-previews do not is picked with `previews_deferred` and
-`train.disable_sampling` (source `gpu`); a pinned `train.disable_sampling`
-decides either way. The result also carries `fingerprint`,
+apart, on the previews phase's peak. Previews drawn while training are worth
+more offloading (#2411): of the profiles whose training fits, the first whose
+previews also fit (or were never measured) is picked. Only when none has room
+for them is the first that trains picked with `previews_deferred` and
+`train.disable_sampling` (source `gpu`). A pinned `train.disable_sampling`
+decides either way, and pinned on it skips the preference. The result also carries `fingerprint`,
 `probe` (the picked profile was never measured), `fallbacks` (the profiles after
-it in the fit choice, each offloading more) and `estimate` (`{seconds, basis}`:
+it in the fit choice, each offloading more), `passed_over` (those before it,
+skipped for their previews) and `estimate` (`{seconds, basis}`:
 setup, steps at the warm speed and every preview picture, plus a model load per
 checkpoint when previews are deferred; basis `measured`, or `none` with no
 seconds). `POST /training/resolve` and `POST /training/jobs` both pass the
@@ -11887,13 +11890,22 @@ and a pass stops a trainer that row names (when `psutil` says its command line
 is that job's) before it clears its folder, so a pass orphaned by a crash is not
 joined by a second trainer on the same card (#2295). It is stopped when available RAM
 falls below `RAM_GUARD_MB` (1 GB), which fails the run as "Not enough system
-RAM to start". **The search is bounded** (`MAX_PROBES`, 3): running out of
+RAM to start". **The search is bounded** (`MAX_PROBES`, 3 probes; a measured
+profile costs none): running out of
 memory (ai-toolkit's `out of memory`, `OutOfMemoryError` or its `OOM during
 training step`, which it prints when it skips a batch and carries on, so a probe
 that completed with a skipped batch counts as out of memory too) steps to the
 next fallback; any other failure (a loader error,
 a Triton error) fails the run without trying more; a fallback that does not fit
-the room the run was resolved against is skipped. A probe that completes is
+the room the run was resolved against is skipped. The profiles `resolve`
+passed over for their previews (`passed_over`: measured to train) are taken
+first, so one is in hand before anything is probed. A profile that holds but
+whose previews do not fit beside training steps on as well, so a profile that
+can draw them while training (Krea 2's `q8_low_vram`, whose `low_vram` tiles
+the preview decode) is tried before they are put off. When none in the bound
+can, or once one is in hand a later check is stopped by the RAM guard or a
+trainer error, the run settles on the first that held, previews deferred,
+rather than failing. A probe that completes is
 recorded (`source` `probe`), the run is resolved again on that profile alone
 (`resolve(profile=...)`) with the measurement in, and that resolution becomes
 the row's `resolved_profile` and the config it renders. A setup measured since
