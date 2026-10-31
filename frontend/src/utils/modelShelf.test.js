@@ -1888,7 +1888,7 @@ describe("a key from the Folders tree (#2206)", () => {
 
 describe("where a dragged model belongs", () => {
   const sm = { id: 1, path: "/home/me/StabilityMatrix/Data/Models", tool: "StabilityMatrix" };
-  const comfy = { id: 2, path: "C:\\Users\\me\\ComfyUI\\models" };
+  const comfy = { id: 2, path: "D:\\ComfyUI\\models" };
   const plain = { id: 3, path: "/home/me/models" };
   const listing = (dirs, direct = 0) => ({
     listing: { direct_model_count: direct, dirs },

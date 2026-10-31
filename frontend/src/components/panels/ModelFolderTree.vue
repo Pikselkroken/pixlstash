@@ -12,8 +12,9 @@
     @keydown="onKeydown"
   >
     <!-- A destination for the dragged models above the view: an arrow pinned
-         to the top edge, in that row's glyph column. Dragging over it scrolls
-         towards it. -->
+         to the top edge, in that row's glyph column. It sits in the shelf
+         drag's edge-scroll band, so holding the pointer on it scrolls there;
+         it takes no pointer, so the row under it still takes the drop. -->
     <div
       v-if="offview.up != null"
       class="mft-edge mft-edge--up"
@@ -24,8 +25,6 @@
         class="mft-offview"
         data-testid="model-folder-offview"
         :style="{ '--at': `${offview.up}px` }"
-        data-model-copies-drop
-        @model-copies-over="scrollToward(-1)"
         ><v-icon size="14">mdi-arrow-up</v-icon></span
       >
     </div>
@@ -245,8 +244,6 @@
         class="mft-offview"
         data-testid="model-folder-offview"
         :style="{ '--at': `${offview.down}px` }"
-        data-model-copies-drop
-        @model-copies-over="scrollToward(1)"
         ><v-icon size="14">mdi-arrow-down</v-icon></span
       >
     </div>
@@ -1125,6 +1122,14 @@ function dropClassFor(key) {
   return drop.dropClass(key) ?? folderDrop.dropClass(key);
 }
 
+/**
+ * How many Types the drag holds, a file no Type row takes counted as one more:
+ * a LoRA dragged with it has no single destination to route to.
+ */
+const dragTypeCount = computed(
+  () => new Set(shelf.dragCopies?.kinds?.values() ?? []).size,
+);
+
 /** The Types of the models being dragged off the shelf. */
 const dragKinds = computed(
   () =>
@@ -1157,7 +1162,7 @@ const welcomes = computed(() => {
       out.set(node.key, { route: null });
       continue;
     }
-    if (dragKinds.value.size > 1 || node.expanded) continue;
+    if (dragTypeCount.value > 1 || node.expanded) continue;
     const inside = mine.filter((one) =>
       node.path === ""
         ? one.path !== ""
@@ -1288,12 +1293,8 @@ watch(
 // ── Destinations out of view ────────────────────────────────────────────────
 
 const treeEl = ref(null);
-/** The arrows' left edge in the tree, per edge, or null for no arrow. */
+/** The glyph column each arrow centres on, per edge, or null for no arrow. */
 const offview = ref({ up: null, down: null });
-/** Width of the arrow's disc, centred on the glyph column. */
-const OFFVIEW_DISC = 20;
-/** Pixels scrolled per `dragover` on an arrow, about the browser's own pace. */
-const OFFVIEW_STEP = 16;
 
 /** The nearest ancestor that scrolls the tree, or null. */
 function scrollerOf(el) {
@@ -1324,7 +1325,7 @@ function measureOffview() {
     if (!row) continue;
     const at = row.getBoundingClientRect();
     const glyph = row.querySelector(".mft-glyph")?.getBoundingClientRect() ?? at;
-    const left = glyph.left - tree.left + glyph.width / 2 - OFFVIEW_DISC / 2;
+    const left = glyph.left - tree.left + glyph.width / 2;
     if (at.bottom <= view.top && (!up || at.bottom > up.edge)) {
       up = { left, edge: at.bottom };
     } else if (at.top >= view.bottom && (!down || at.top < down.edge)) {
@@ -1334,16 +1335,12 @@ function measureOffview() {
   offview.value = { up: up?.left ?? null, down: down?.left ?? null };
 }
 
-function scrollToward(direction) {
-  scrollerOf(treeEl.value)?.scrollBy(0, direction * OFFVIEW_STEP);
-}
-
 watch(welcomes, measureOffview, { flush: "post" });
 
 // Scrolling does not bubble; captured on the document, only while a drag of
 // models is on.
 watch(
-  () => dragKinds.value.size > 0,
+  () => props.mode === "browse" && dragKinds.value.size > 0,
   (dragging) => {
     if (dragging) document.addEventListener("scroll", measureOffview, true);
     else document.removeEventListener("scroll", measureOffview, true);
@@ -1554,7 +1551,7 @@ defineExpose({ reveal });
 
 .mft-offview {
   position: absolute;
-  left: var(--at);
+  left: calc(var(--at) - (var(--gutter-glyph) + var(--space-2)) / 2);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1564,6 +1561,7 @@ defineExpose({ reveal });
   border-radius: var(--radius-pill);
   background: rgb(var(--v-theme-sidebar));
   color: rgb(var(--v-theme-surface-success));
+  pointer-events: none;
 }
 
 .mft-edge--up .mft-offview {

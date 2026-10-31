@@ -1280,6 +1280,38 @@ describe("ModelFolderTree welcomes the dragged model", () => {
     }
   });
 
+  it("routes nothing for a LoRA dragged with a file no Type takes", async () => {
+    useModelShelfStore().dragCopies = copies("lora", "");
+    const wrapper = mountTree();
+    await flushPromises();
+    expect(welcomed(wrapper)).toEqual([]);
+    wrapper.unmount();
+  });
+
+  it("folds a rested-open parent back when the drop lands in another folder", async () => {
+    vi.useFakeTimers();
+    try {
+      const plain = { id: 7, path: "/home/me/inbox", kind: "user", movable: "per_item" };
+      useModelFoldersStore().folders = [SM, FOLDERS[1], plain];
+      useModelFoldersStore().devices = [{ ...DEVICES[0], folder_ids: [1, 2, 7] }];
+      const shelf = useModelShelfStore();
+      shelf.dragCopies = copies("lora");
+      const wrapper = mountTree();
+      await flushPromises();
+      drag(item(wrapper, 1), "over");
+      vi.advanceTimersByTime(600);
+      await flushPromises();
+      expect(item(wrapper, 1).attributes("aria-expanded")).toBe("true");
+      drag(item(wrapper, 7), "drop");
+      await flushPromises();
+      expect(shelf.moveRequest.destination).toEqual({ folderId: 7, path: "" });
+      expect(item(wrapper, 1).attributes("aria-expanded")).toBe("false");
+      wrapper.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("takes ComfyUI's reads over the layout for a folder they land in", async () => {
     useModelFoldersStore().comfyuiReads = {
       known: true,
