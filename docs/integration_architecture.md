@@ -1839,6 +1839,50 @@ scoped sessions use the ZIP export (`GET /pictures/export`). Backend:
 `docs/backend_architecture.md` §5, the *Share copies* paragraph under
 `pictures/` package.
 
+**Open with (edit copies).** *Open with ▸* on one picture, in the grid and the
+lightbox context menus, opens a copy in an app the server's OS offers for the
+file type and brings each save back as a new picture on top of the original's
+stack. Two routes, both `loopback_owner_only`, and the Electron shell is not
+involved: the backend lists, copies, launches, watches and imports, so no path
+crosses the renderer.
+
+```
+GET  /pictures/{id}/open-with
+-> {"apps": [{"id", "name", "default", "editor"}], "other": bool}
+POST /pictures/{id}/open-with  {"app_id": str} | {"other": true}
+-> {"session", "app_name"}       400 unknown app · 404 · 409 root in a library · 415 video
+```
+
+The `id` is opaque (a desktop id, a bundle path, a handler name) and the POST
+only launches an app the OS lists for that file type, re-read through a
+10-minute per-extension cache; nothing a request names is executed. `editor` is
+false only when the app says it is a viewer or a browser, and the menu puts
+editors first under *Editors* / *Other apps* labels when both kinds are there
+(the OS default for an image is usually a viewer, which cannot save an edit
+back). `other` says whether the OS has its own chooser. Per OS
+(`pixlstash/utils/open_with.py`):
+
+| OS | List | Viewer / browser | Launch | Other app… |
+|---|---|---|---|---|
+| Linux | `gio mime`, Recommended then Registered, names from each `.desktop` file | `Categories=Viewer` / `WebBrowser` | `gio launch <desktop file> <copy>` | none (the XDG portal needs fd passing) |
+| macOS | JXA over `NSWorkspace.URLsForApplicationsToOpenURL` | `CFBundleTypeRole=Viewer` for the type; apps that open `https` | `open -a` | `choose application` |
+| Windows | PowerShell `Add-Type` helper over `SHAssocEnumHandlers` | browsers only (`Clients\StartMenuInternet`) | the handler's `IAssocHandler.Invoke` | `OpenAs_RunDLL` |
+
+The copy is byte-identical, in its own session folder under
+`<dir of server-config.json>/edit-copies/<session>/` with a `session.json`
+(picture, library, the hash last imported per file). That root is separate from
+`share-copies/` because those are swept after 12 h, which would delete a file
+still open in an editor; a session lives 24 h after its last launch or import.
+A save over the copy, a temp-file rename over it, or an export to a new image
+file in the same folder is imported after a 2 s quiet period and a full decode,
+once per distinct content, through the same import an image plugin's output
+takes; an edit of a picture deleted meanwhile is still imported, unstacked. The
+grid hears about it as a UI-sourced `PICTURE_IMPORTED` plus `CHANGED_PICTURES`
+with no origin client, so every tab inserts it. The row shows only in the
+desktop shell or on a loopback page (`utils/serverLocation.js`), never for a
+video, a read-only session or a multi-selection. Backend:
+`docs/backend_architecture.md` §5, the *Open with* paragraph.
+
 ---
 
 
