@@ -220,7 +220,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, ref, toRef, watch } from "vue";
 import { VIcon, VMenu } from "vuetify/components";
 
 import { DOWNLOADS_KIND, SOURCE_KIND } from "../../api/modelFolders";
@@ -294,9 +294,18 @@ const moves = useModelMovesStore();
 const notices = useNoticeStore();
 const gates = useModelFolderGates();
 const focusedKey = ref(null);
-/** Expanded folder keys. Drives start open, so they are tracked closed. */
-const expanded = ref(new Set());
-const closedDrives = ref(new Set());
+/**
+ * Expanded folder keys. Drives start open, so they are tracked closed. The
+ * sidebar's live in the store and survive a trip to another view; a picker's
+ * are its own.
+ */
+const browsing = props.mode === "browse";
+const expanded = browsing
+  ? toRef(foldersStore, "treeExpanded")
+  : ref(new Set());
+const closedDrives = browsing
+  ? toRef(foldersStore, "treeClosedDrives")
+  : ref(new Set());
 /** The row being dragged, for its lifted look. */
 const dragKey = ref(null);
 /**
