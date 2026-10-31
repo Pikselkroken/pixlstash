@@ -1280,6 +1280,39 @@ describe("ModelFolderTree welcomes the dragged model", () => {
     }
   });
 
+  it("does not open a parent whose mark went while the pointer rested", async () => {
+    vi.useFakeTimers();
+    try {
+      const shelf = useModelShelfStore();
+      shelf.dragCopies = copies("lora");
+      const wrapper = mountTree();
+      await flushPromises();
+      drag(item(wrapper, 1), "over");
+      // The drag now holds two Types: the parent is no longer marked.
+      shelf.dragCopies = copies("lora", "checkpoint");
+      await flushPromises();
+      vi.advanceTimersByTime(600);
+      await flushPromises();
+      expect(item(wrapper, 1).attributes("aria-expanded")).toBe("false");
+      wrapper.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("follows the scroll for its edge arrows when drawn mid-drag", async () => {
+    const listen = vi.spyOn(document, "addEventListener");
+    try {
+      useModelShelfStore().dragCopies = copies("lora");
+      const wrapper = mountTree();
+      await flushPromises();
+      expect(listen).toHaveBeenCalledWith("scroll", expect.any(Function), true);
+      wrapper.unmount();
+    } finally {
+      listen.mockRestore();
+    }
+  });
+
   it("routes nothing for a LoRA dragged with a file no Type takes", async () => {
     useModelShelfStore().dragCopies = copies("lora", "");
     const wrapper = mountTree();

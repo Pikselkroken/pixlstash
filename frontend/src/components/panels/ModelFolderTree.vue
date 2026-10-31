@@ -1253,7 +1253,9 @@ function dwellOn(node) {
     timer: setTimeout(() => {
       dwell = null;
       const now = nodes.value.find((one) => one.key === node.key);
-      if (!now || now.expanded || !shelf.dragCopies) return;
+      // The drag or the tree may have changed under the still pointer: open
+      // only a row that is still a marked parent, as its mark promised.
+      if (!now || now.expanded || !welcomes.value.get(now.key)?.route) return;
       setExpanded(now, true);
       dragOpened.add(now.key);
     }, DWELL_MS),
@@ -1345,6 +1347,8 @@ watch(
     if (dragging) document.addEventListener("scroll", measureOffview, true);
     else document.removeEventListener("scroll", measureOffview, true);
   },
+  // A tree drawn while a drag is already on arms the listener at once.
+  { immediate: true },
 );
 
 onBeforeUnmount(() => {
