@@ -83,8 +83,11 @@
             <img
               v-if="file && sampleUrl(file)"
               :src="sampleUrl(file)"
-              alt=""
+              :alt="`${row.prompt}, step ${grid.steps[c]}`"
               loading="lazy"
+              tabindex="0"
+              @dblclick="openSample(row, c, file)"
+              @keydown.enter="openSample(row, c, file)"
             />
           </span>
         </template>
@@ -128,6 +131,7 @@
         </div>
       </dl>
     </ModelsRailSection>
+    <TrainingSampleDialog :sample="openedSample" @close="openedSample = null" />
   </div>
 </template>
 
@@ -156,6 +160,7 @@ import {
   timeLeft,
 } from "../../utils/trainingRuns.js";
 import LoraLossChart from "../widgets/LoraLossChart.vue";
+import TrainingSampleDialog from "../widgets/TrainingSampleDialog.vue";
 import ModelsRailSection from "./ModelsRailSection.vue";
 
 const props = defineProps({
@@ -227,6 +232,17 @@ function sampleUrl(filename) {
   const sourceId = runsStore.source?.id;
   if (sourceId == null || !props.card.run) return "";
   return runSampleUrl(sourceId, props.card.run.name, filename);
+}
+
+/** The sample a double-click opened at full size, or null. */
+const openedSample = ref(null);
+
+function openSample(row, column, file) {
+  openedSample.value = {
+    src: sampleUrl(file),
+    step: grid.value.steps[column],
+    prompt: row.prompt,
+  };
 }
 
 const checkpoints = computed(() => props.card.run?.checkpoints ?? []);
@@ -404,6 +420,7 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  cursor: zoom-in;
 }
 
 .mrr-mono {

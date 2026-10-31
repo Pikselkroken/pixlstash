@@ -38,6 +38,21 @@ describe("lightboxCloseTarget", () => {
     });
   });
 
+  it("returns to the query the origin had, not just its path", () => {
+    // The open training run is `/models/runs?run=<uuid>`: without its query the
+    // close would land on the list of runs instead of the run.
+    expect(
+      lightboxCloseTarget({
+        overlay: "812",
+        from: "/models/runs?run=abcd",
+        token: "example-share-token",
+      }),
+    ).toEqual({
+      path: "/models/runs",
+      query: { run: "abcd", token: "example-share-token" },
+    });
+  });
+
   it("only drops ?overlay= when there is nowhere to go back to", () => {
     expect(
       lightboxCloseTarget({ overlay: "812", path: "/home/me/shots" }),

@@ -53,7 +53,14 @@ export function lightboxCloseTarget(
     // lives in `?token=`, so a navigation that drops it leaves the visitor on a
     // URL that 401s on the next reload". This close does not go through that
     // helper (it is the router's own `replace`), so it carries it itself.
-    return { path: from, query: rest.token ? { token: rest.token } : {} };
+    //
+    // `from` may carry its own query - an open training run is `?run=` - and
+    // that query is part of the place being returned to, so it comes back too.
+    const q = from.indexOf("?");
+    const query =
+      q < 0 ? {} : Object.fromEntries(new URLSearchParams(from.slice(q + 1)));
+    if (rest.token) query.token = rest.token;
+    return { path: q < 0 ? from : from.slice(0, q), query };
   }
   return { query: rest };
 }
