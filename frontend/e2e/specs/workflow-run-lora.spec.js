@@ -9,10 +9,11 @@ import { WorkflowsPage } from "../pages/WorkflowsPage.js";
 // builds and hands to ComfyUI (`GET /__fake/prompts`) and where the server
 // files what comes back.
 //
-// The LoRAs are the two the launcher's model folder seeds. Each test makes its
-// own workflow, people and set, attaches the LoRAs to its people, and puts all
-// of it back afterwards with the pictures its runs made: the backend and the
-// fake are shared by every spec in the run.
+// The LoRAs are the two the launcher's model folder seeds. Each test makes the
+// workflow and people it needs (and a set, where it names one), gives the
+// seeded models a base model, attaches the LoRAs to its people, and puts all of
+// it back afterwards with the pictures its runs made and their Tasks rows: the
+// backend and the fake are shared by every spec in the run.
 
 const API = "/api/v1";
 const FAKE = process.env.PIXLSTASH_E2E_COMFYUI_URL;
@@ -60,7 +61,7 @@ const TWO_CLIPS_GRAPH = {
 /** The base model the shelf rows are given, so the popup can match people to the workflow. */
 const BASE_MODEL = "SDXL";
 
-const made = { workflows: [], people: [], sets: [], pictures: [] };
+const made = { workflows: [], people: [], sets: [], runs: [], pictures: [] };
 /** The shelf rows of `LORAS`, as the shelf had them before the test: put back after. */
 let shelf = [];
 /** The seeded checkpoint's shelf row, likewise. */
@@ -99,58 +100,105 @@ test.beforeEach(async ({ apiContext }) => {
 });
 
 test.afterEach(async ({ apiContext }) => {
+  // Every step is tried whatever failed before it, so one failure does not
+  // leave the rest behind for the specs after this one; the first is thrown.
+  const failures = [];
+  const attempt = async (what, step) => {
+    try {
+      await step();
+    } catch (error) {
+      console.error(`clean-up: ${what} failed`, error);
+      failures.push(error);
+    }
+  };
   // The shelf rows first: an attachment names a person deleted below.
   for (const row of [checkpoint, ...shelf.splice(0)].filter(Boolean)) {
-    await ok(
-      await apiContext.patch(`${API}/models`, {
-        data: { ids: [row.id], base_model: row.base_model ?? null },
-      }),
-      `put back ${row.filename}'s base model`,
+    await attempt(`base model of ${row.filename}`, async () =>
+      ok(
+        await apiContext.patch(`${API}/models`, {
+          data: { ids: [row.id], base_model: row.base_model ?? null },
+        }),
+        `put back ${row.filename}'s base model`,
+      ),
     );
     if (row === checkpoint) continue;
-    await ok(
-      await apiContext.put(`${API}/adapters/${row.sha256}/attachments`, {
-        data: row.attachments.map(({ entity_type, entity_id }) => ({ entity_type, entity_id })),
-      }),
-      `put back ${row.filename}'s attachments`,
+    await attempt(`attachments of ${row.filename}`, async () =>
+      ok(
+        await apiContext.put(`${API}/adapters/${row.sha256}/attachments`, {
+          data: row.attachments.map(({ entity_type, entity_id }) => ({ entity_type, entity_id })),
+        }),
+        `put back ${row.filename}'s attachments`,
+      ),
     );
-    await ok(
-      await apiContext.patch(`${API}/models`, {
-        data: { ids: [row.id], trigger_words: row.trigger_words ?? [] },
-      }),
-      `put back ${row.filename}'s trigger words`,
+    await attempt(`trigger words of ${row.filename}`, async () =>
+      ok(
+        await apiContext.patch(`${API}/models`, {
+          data: { ids: [row.id], trigger_words: row.trigger_words ?? [] },
+        }),
+        `put back ${row.filename}'s trigger words`,
+      ),
     );
   }
-  const ids = made.pictures.splice(0);
+  checkpoint = null;
+  // A run's pictures, whether or not the test got as far as reading them, and
+  // its row in the Tasks list.
+  for (const runId of made.runs.splice(0)) {
+    await attempt(`run ${runId}`, async () => {
+      await expect
+        .poll(
+          async () => {
+            const outcome = await ok(
+              await apiContext.get(`${API}/workflows/runs/${runId}`),
+              "run outcome",
+            );
+            made.pictures.push(...(outcome.picture_ids ?? []));
+            return outcome.status;
+          },
+          { timeout: 20_000 },
+        )
+        .toMatch(/^(completed|failed)$/);
+      await ok(await apiContext.delete(`${API}/workflows/runs/${runId}`), `dismiss ${runId}`);
+    });
+  }
+  const ids = [...new Set(made.pictures.splice(0))];
   if (ids.length) {
-    // Delete forever, and only these: to the Scrapheap, then purged by id.
-    for (const id of ids)
-      await ok(await apiContext.delete(`${API}/pictures/${id}`), `delete ${id}`);
-    const { confirm_token: confirmToken } = await ok(
-      await apiContext.post(`${API}/pictures/scrapheap/delete-preview`, {
-        data: { picture_ids: ids },
-      }),
-      "preview the purge",
-    );
-    await ok(
-      await apiContext.delete(`${API}/pictures/scrapheap`, {
-        data: { picture_ids: ids, include_protected: false, confirm_token: confirmToken },
-      }),
-      "purge",
-    );
+    await attempt("the pictures", async () => {
+      // Delete forever, and only these: to the Scrapheap, then purged by id.
+      for (const id of ids)
+        await ok(await apiContext.delete(`${API}/pictures/${id}`), `delete ${id}`);
+      const { confirm_token: confirmToken } = await ok(
+        await apiContext.post(`${API}/pictures/scrapheap/delete-preview`, {
+          data: { picture_ids: ids },
+        }),
+        "preview the purge",
+      );
+      await ok(
+        await apiContext.delete(`${API}/pictures/scrapheap`, {
+          data: { picture_ids: ids, include_protected: false, confirm_token: confirmToken },
+        }),
+        "purge",
+      );
+    });
   }
   for (const id of made.sets.splice(0)) {
-    await ok(await apiContext.delete(`${API}/picture_sets/${id}`), `delete set ${id}`);
-  }
-  for (const id of made.people.splice(0)) {
-    await ok(await apiContext.delete(`${API}/characters/${id}`), `delete person ${id}`);
-  }
-  for (const id of made.workflows.splice(0)) {
-    await ok(
-      await apiContext.delete(`${API}/workflows/${encodeURIComponent(id)}`),
-      `delete workflow ${id}`,
+    await attempt(`set ${id}`, async () =>
+      ok(await apiContext.delete(`${API}/picture_sets/${id}`), `delete set ${id}`),
     );
   }
+  for (const id of made.people.splice(0)) {
+    await attempt(`person ${id}`, async () =>
+      ok(await apiContext.delete(`${API}/characters/${id}`), `delete person ${id}`),
+    );
+  }
+  for (const id of made.workflows.splice(0)) {
+    await attempt(`workflow ${id}`, async () =>
+      ok(
+        await apiContext.delete(`${API}/workflows/${encodeURIComponent(id)}`),
+        `delete workflow ${id}`,
+      ),
+    );
+  }
+  if (failures.length) throw failures[0];
 });
 
 /** Store *graph* as a workflow of its own: `{id, name}`. */
@@ -250,6 +298,7 @@ async function run(page) {
   const response = await answer;
   const body = await response.json();
   expect(response.ok(), JSON.stringify(body)).toBe(true);
+  made.runs.push(...(body.prompts ?? []).map((entry) => entry.run_id).filter(Boolean));
   expect(body.status, JSON.stringify(body)).toBe("success");
   await expect(dialog(page)).toHaveCount(0);
   return body.prompts;
@@ -432,6 +481,12 @@ test("a person whose LoRA the workflow has no place for is refused by the server
 }) => {
   const { id: workflowId } = await storeWorkflow(apiContext, TWO_CLIPS_GRAPH);
   const [person] = await seedPeople(apiContext, 1);
+  // Without the person the same workflow would run: the refusal is the LoRA's.
+  const alone = await ok(
+    await apiContext.post(`${API}/workflows/run/preflight`, { data: { workflow_id: workflowId } }),
+    "pre-flight the workflow alone",
+  );
+  expect(alone.ok, JSON.stringify(alone)).toBe(true);
   const before = await ok(await apiContext.get(`${FAKE}/__fake/prompts`), "read the fake");
 
   await openRun(page, workflowId);
@@ -446,6 +501,8 @@ test("a person whose LoRA the workflow has no place for is refused by the server
   );
   await runButton(page).click();
   const refused = await (await answer).json();
+  // Recorded for clean-up in case it ran after all.
+  made.runs.push(...(refused.prompts ?? []).map((entry) => entry.run_id).filter(Boolean));
   expect(refused.status, JSON.stringify(refused)).toBe("refused");
   expect(refused.prompts).toEqual([]);
   const reasons = refused.groups.flatMap((group) => group.reasons);
