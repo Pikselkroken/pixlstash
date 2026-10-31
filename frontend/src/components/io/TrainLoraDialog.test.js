@@ -703,6 +703,18 @@ describe("the Previews question (#2415)", () => {
     expect(store.pins).toEqual({});
   });
 
+  it("keeps a typed 'previews after training: no' when going back to the default", async () => {
+    const { wrapper, store } = await openDialog(
+      { type: "character", id: 4, name: "Grandad" },
+      dataset(),
+    );
+    store.setPin("train.disable_sampling", false);
+    await store.resolvePlan();
+    await flushPromises();
+    await card(wrapper, "while").trigger("click");
+    expect(store.pins).toEqual({ "train.disable_sampling": false });
+  });
+
   it("is not asked when the server has no question", async () => {
     training.resolveTraining.mockImplementation(async () => ({ ...plan(), previews: null }));
     const { wrapper } = await openDialog(

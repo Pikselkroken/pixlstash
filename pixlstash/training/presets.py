@@ -801,6 +801,7 @@ def resolve(
         "vram_mb": picked["vram_mb"],
         "ram_mb": picked["ram_mb"],
         "preview_vram_mb": picked["preview_vram_mb"],
+        "preview_ram_mb": picked["preview_ram_mb"],
         "room": {"vram_mb": vram_mb, "ram_mb": ram_mb},
         "steps_clamp": clamp,
         "fingerprint": picked["fingerprint"],
@@ -866,6 +867,7 @@ def preview_choice(preset: dict, *, pins: dict | None = None, **choices) -> dict
         return None
     fast = default["passed_over"][0]
     vram_room = default["room"]["vram_mb"]
+    ram_room = default["room"]["ram_mb"]
 
     def option(route: str, res: dict, peak: int, basis: str, seconds) -> dict:
         values = resolved_values(res)
@@ -915,6 +917,12 @@ def preview_choice(preset: dict, *, pins: dict | None = None, **choices) -> dict
         not any(k in base for k in size_keys)
         and width * height > SMALLER_PREVIEW**2
         and after_res["preview_vram_mb"] is not None
+        # A smaller picture is no answer to previews that need more RAM.
+        and not (
+            ram_room is not None
+            and after_res["preview_ram_mb"] is not None
+            and after_res["preview_ram_mb"] > ram_room
+        )
     ):
         small_pins = {**base, **{k: SMALLER_PREVIEW for k in size_keys}}
         try:

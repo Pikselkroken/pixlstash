@@ -2484,7 +2484,6 @@ def create_router(server) -> APIRouter:
             pins = presets.validate_pins(preset, payload.pins)
             out["resolution"] = presets.resolve(preset, pins=pins, **choices)
             keys |= set(out["resolution"]["values"])
-            out["previews"] = presets.preview_choice(preset, pins=pins, **choices)
         except presets.NoProfileFits as exc:
             out["error"] = {
                 "message": str(exc),
@@ -2494,6 +2493,17 @@ def create_router(server) -> APIRouter:
             }
         except (TunableOverrideError, ValueError) as exc:
             out["error"] = {"message": str(exc)}
+        if "resolution" in out:
+            # The question is extra: pricing it never spoils a plan that holds.
+            try:
+                out["previews"] = presets.preview_choice(preset, pins=pins, **choices)
+            except (TunableOverrideError, ValueError) as exc:
+                logger.warning(
+                    "Could not price the Previews question for %s with pins %s: %s",
+                    preset["id"],
+                    sorted(pins),
+                    exc,
+                )
         out["rules"] = {
             key: _rule(TUNABLE_KEYS[key]) for key in sorted(keys) if key in TUNABLE_KEYS
         }

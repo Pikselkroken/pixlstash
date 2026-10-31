@@ -630,8 +630,8 @@ const PREVIEW_ICONS = {
   smaller: "mdi-image-size-select-small",
   after: "mdi-clock-outline",
 };
-// The owner's pick per recipe, kept on this machine (so on this GPU): a
-// non-default pick comes back as the same pins next time (#2415).
+// The owner's pick per recipe, kept in this browser: a non-default pick comes
+// back as the same pins the next time the question is asked (#2415).
 const PREVIEWS_STORAGE_KEY = "pixlstash.train.previews";
 const SOUND_OPTIONS = [
   { id: "sound", label: "Learn the sound too" },
@@ -700,9 +700,10 @@ function rememberPreviews(presetId, id) {
 function pickPreviews(id) {
   const choice = previewChoice.value;
   if (!choice) return;
-  // Only the 768² pins are the question's; a size typed in Advanced stays.
+  // Only the 768² pins are the question's (a size of any other kind hides the
+  // smaller route), and a typed "previews after training: no" is kept.
   const drop = choice.selected === "smaller" ? [...PREVIEW_SIZE_KEYS] : [];
-  if (id !== "after") drop.push(SAMPLING_KEY);
+  if (id !== "after" && store.pins[SAMPLING_KEY]) drop.push(SAMPLING_KEY);
   store.unpin(drop);
   if (id === "after") store.setPin(SAMPLING_KEY, true);
   if (id === "smaller") {

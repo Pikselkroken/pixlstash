@@ -588,6 +588,27 @@ def test_the_previews_question_is_not_asked_when_nothing_is_gained():
     assert _choice() is None
 
 
+def test_a_route_must_save_both_a_share_and_minutes(monkeypatch):
+    lookup = _sized_lookup({"q8": _FAST, "q8_cached": _SLOW})
+    out = _choice(lookup=lookup)
+    slowest = out["options"][0]["seconds"]
+    gain = slowest - min(o["seconds"] for o in out["options"])
+    monkeypatch.setattr(presets, "CHOICE_MIN_SECONDS", gain + 1)
+    assert _choice(lookup=lookup) is None
+    monkeypatch.setattr(presets, "CHOICE_MIN_SECONDS", 0)
+    monkeypatch.setattr(presets, "CHOICE_MIN_SHARE", gain / slowest + 0.01)
+    assert _choice(lookup=lookup) is None
+
+
+def test_smaller_previews_are_no_answer_to_previews_short_of_ram():
+    hungry = _measurement(12_000, previews_mb=14_000, per_update=1.0)
+    hungry["phase_peaks"]["previews"]["ram_mb"] = 50_000
+    out = _choice(
+        lookup=_sized_lookup({"q8": hungry, "q8_cached": _SLOW}), ram_mb=40_000
+    )
+    assert [o["id"] for o in out["options"]] == ["while", "after"]
+
+
 def test_a_forced_profile_is_resolved_alone():
     out = _resolve(profile="q8_offload")
     assert out["profile"] == "q8_offload" and out["fallbacks"] == []

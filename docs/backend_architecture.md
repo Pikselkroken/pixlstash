@@ -11885,11 +11885,13 @@ preference costs. `POST /training/resolve` answers it as `previews`, null unless
 default was measured, passed a profile over for its previews, and a route that keeps
 the fast profile finishes sooner by more than both `CHOICE_MIN_SHARE` (10%) and
 `CHOICE_MIN_SECONDS` (5 min): so a first run asks nothing, and Krea 2's equal-speed
-8-bit profiles never do. The routes are `while` (the default, no pin), `after`
+8-bit profiles never do. The routes are `while` (the default: `train.disable_sampling` not pinned on), `after`
 (`train.disable_sampling` pinned on) and `smaller` (`sample.width`/`sample.height`
 pinned to `SMALLER_PREVIEW`, 768, offered only when `resolve` then keeps the fast
-profile and its peak fits). Each is priced from the pins without the question's own,
-with `seconds`, `peak_vram_mb` (the higher of training's and the preview's),
+profile and its peak fits, and never when the full-size previews were short of RAM).
+Each is priced from the pins without the question's own,
+with `seconds`, `peak_vram_mb` (the higher of training's and the preview's; training's
+alone for `after`, whose previews are drawn once training has let go of the card),
 `free_mb`, `tight` (under `TIGHT_MB` free) and `basis`: a 768² peak not measured here
 is `estimated`, the measured training peak plus what a full-size preview adds scaled
 by pixel count, timed at the full-size preview speed. `differs` lists the non-placement
