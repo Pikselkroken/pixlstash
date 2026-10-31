@@ -427,6 +427,12 @@ beforeEach(() => {
   setFavourites.mockReset().mockResolvedValue({ model: [], workflow: [], set: [] });
 });
 
+// A paste starts a move, and the move store polls it a second later. A fresh
+// pinia does not stop that timer: it fires in whichever test is running by
+// then, reads the idle status, and pushes "Nothing moved." into THAT test's
+// notices - which a starved runner turned into a random failure.
+afterEach(() => useModelMovesStore().resetForSession());
+
 describe("a row with nothing in its header", () => {
   it("shows a name derived from the filename, never a blank", async () => {
     const wrapper = await mountShelf([
