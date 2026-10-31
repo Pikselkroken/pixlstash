@@ -26,18 +26,9 @@ const props = defineProps({
   // (acceleration) and 'backend' (remote access + desktop + updates). Each
   // instance loads and renders only its own half.
   view: { type: String, default: "compute" },
-  checkForUpdates: { type: Boolean, default: null },
 });
-
-const emit = defineEmits(["update:check-for-updates"]);
 
 const isBackend = computed(() => props.view === "backend");
-
-// "Check for updates automatically" - lives on the Backend tab's Desktop block.
-const checkForUpdatesModel = computed({
-  get: () => props.checkForUpdates ?? false,
-  set: (value) => emit("update:check-for-updates", value),
-});
 
 const desktop = typeof window !== "undefined" ? window.pixlstashDesktop : null;
 
@@ -758,35 +749,22 @@ watch(
       <div v-else class="compute-loading">Loading…</div>
     </SettingsSection>
 
+    <!-- "Check for updates" is not here: it lives once, under Privacy. -->
     <SettingsSection title="Desktop">
-      <SettingsTwoCol>
-        <SettingsRow
-          label="Hide to tray on close"
-          sub="Keeps PixlStash and any remote server running; reopen it from the tray icon."
-        >
-          <v-switch
-            :model-value="hideToTrayOnClose"
-            color="primary"
-            density="compact"
-            hide-details
-            @update:model-value="setHideToTray($event)"
-          />
-        </SettingsRow>
-        <SettingsRow
-          label="Check for updates"
-          sub="Checks daily. Sends only your version and install type, anonymously."
-        >
-          <v-switch
-            v-model="checkForUpdatesModel"
-            color="primary"
-            density="compact"
-            hide-details
-          />
-        </SettingsRow>
-      </SettingsTwoCol>
-      <!-- Full width, not a half of the pair above: its sub names a path, and
-           the Windows one wraps to four lines in a half-width row - most of what
-           pushed this pane past its fixed height. -->
+      <SettingsRow
+        label="Hide to tray on close"
+        sub="Keeps PixlStash and any remote server running; reopen it from the tray icon."
+      >
+        <v-switch
+          :model-value="hideToTrayOnClose"
+          color="primary"
+          density="compact"
+          hide-details
+          @update:model-value="setHideToTray($event)"
+        />
+      </SettingsRow>
+      <!-- Full width: its sub names a path, and the Windows one wraps to four
+           lines in a half-width row. -->
       <SettingsRow
         v-if="shellCommand !== null"
         label="Shell command"

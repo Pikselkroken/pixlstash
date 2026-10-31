@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { isReadOnly, logout } from "../../utils/apiClient";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
@@ -16,13 +16,14 @@ import PrivacySection from "./PrivacySection.vue";
 import SharingSection from "./SharingSection.vue";
 import ScrapheapSection from "./ScrapheapSection.vue";
 import SnapshotsSection from "./SnapshotsSection.vue";
+import GhostsSection from "./GhostsSection.vue";
 import SmartScoreSection from "./SmartScoreSection.vue";
 import { VIcon } from "vuetify/components";
 
 const appVersion = __APP_VERSION__;
 
 // The desktop app injects this bridge (Electron preload); a plain browser does
-// not, so the Backend and Compute tabs are desktop-only.
+// not, so the Server pane is desktop-only.
 const isDesktop = typeof window !== "undefined" && !!window.pixlstashDesktop;
 
 const props = defineProps({
@@ -30,7 +31,6 @@ const props = defineProps({
   sidebarThumbnailSize: { type: Number, default: 32 },
   dateFormat: { type: String, default: "locale" },
   themeMode: { type: String, default: "dark" },
-  checkForUpdates: { type: Boolean, default: null },
   showKeyboardHint: { type: Boolean, default: true },
   thumbnailMode: { type: String, default: "square" },
   /**
@@ -50,9 +50,7 @@ const emit = defineEmits([
   "update:hidden-tags",
   "update:apply-tag-filter",
   "update:comfyui-configured",
-  "update:check-for-updates",
   "update:show-keyboard-hint",
-  "update:public-url",
   "update:thumbnail-mode",
 ]);
 
@@ -63,131 +61,159 @@ const dialogOpen = computed({
 
 const settingsTab = ref("appearance");
 
-// The left nav rail. Each entry: id, MDI icon, label, and a visibility flag.
-const navItems = computed(() =>
+// The left nav rail: five headed groups, one level deep, every pane one click
+// away. Each entry: id, MDI icon, label, and a visibility flag. Ids outlive
+// labels on purpose: deep links name them (the server's library insights open
+// `behaviour`, every "connect ComfyUI" link opens `comfyui`).
+const navGroups = computed(() =>
   [
     {
-      id: "appearance",
-      icon: "palette-outline",
-      label: "Appearance",
-      show: true,
+      heading: "General",
+      items: [
+        {
+          id: "appearance",
+          icon: "palette-outline",
+          label: "Appearance",
+          show: true,
+        },
+        {
+          // The update check and install ID, and what leaves with a shared
+          // picture: the export switch, the public base URL and the watermark.
+          id: "privacy",
+          icon: "shield-lock-outline",
+          label: "Privacy & sharing",
+          show: !isReadOnly.value,
+        },
+      ],
     },
     {
-      // The model folders. The shelf's folder button lands here.
-      id: "models",
-      icon: "folder-multiple-outline",
-      label: "Models",
-      show: !isReadOnly.value,
+      heading: "Library",
+      items: [
+        {
+          // The libraries, and the import folders that flow into the open one.
+          id: "libraries",
+          icon: "bookshelf",
+          label: "Libraries & imports",
+          show: !isReadOnly.value,
+        },
+        {
+          // What happens to a picture after you delete it: the scrapheap
+          // timer, snapshots, and the ghosts kept of destroyed pictures.
+          id: "recovery",
+          icon: "delete-clock-outline",
+          label: "Recovery",
+          show: !isReadOnly.value,
+        },
+      ],
     },
     {
-      // The LoRA training feature: the ai-toolkit checkout, and the jobs and
-      // trained LoRAs it has made. It sits beside Models because it writes
-      // models; the ai-toolkit output folder itself is set under Models.
-      id: "training",
-      icon: "school-outline",
-      label: "AI-toolkit",
-      show: !isReadOnly.value,
+      heading: "Tags",
+      items: [
+        {
+          // Memory, VRAM and the taggers.
+          id: "behaviour",
+          icon: "tag-outline",
+          label: "Tagging",
+          show: !isReadOnly.value,
+        },
+        {
+          id: "smart-score",
+          icon: "star-four-points-outline",
+          label: "Smart score & filters",
+          show: !isReadOnly.value,
+        },
+      ],
     },
     {
-      // Memory, VRAM and the taggers. The id predates the label and is kept:
-      // the server's library insights deep-link to it.
-      id: "behaviour",
-      icon: "tag-outline",
-      label: "Tagging",
-      show: !isReadOnly.value,
+      heading: "Models & AI",
+      items: [
+        {
+          // The model folders. The shelf's folder button lands here.
+          id: "models",
+          icon: "folder-multiple-outline",
+          label: "Model folders",
+          show: !isReadOnly.value,
+        },
+        {
+          // The LoRA training feature: the ai-toolkit checkout, and the jobs
+          // and trained LoRAs it has made. The output folder is under Models.
+          id: "training",
+          icon: "school-outline",
+          label: "AI-toolkit",
+          show: !isReadOnly.value,
+        },
+        {
+          id: "comfyui",
+          icon: "sitemap-outline",
+          label: "ComfyUI",
+          show: !isReadOnly.value,
+        },
+        {
+          // Which GPU PixlStash uses and what it may take work on every
+          // install; the acceleration runtime inside it is desktop-only.
+          id: "compute",
+          icon: "expansion-card-variant",
+          label: "GPU & compute",
+          show: !isReadOnly.value,
+        },
+      ],
     },
     {
-      id: "smart-score",
-      icon: "star-four-points-outline",
-      label: "Smart Score & Filters",
-      show: !isReadOnly.value,
+      heading: "Access",
+      items: [
+        {
+          // Remote access, hide to tray, the library folder and the logs.
+          id: "backend",
+          icon: "server-outline",
+          label: "Server",
+          show: isDesktop && !isReadOnly.value,
+        },
+        {
+          id: "account",
+          icon: "account-circle-outline",
+          label: "Account & tokens",
+          show: !isReadOnly.value,
+        },
+      ],
     },
-    {
-      // Ordered next to Scrapheap and Snapshots - the open library's bin and
-      // its backups - so the container sits with the panes that describe it.
-      // Adjacency is the only cue: the rail is one flat list, deliberately, so
-      // nothing here may style an item by its position.
-      id: "libraries",
-      icon: "bookshelf",
-      label: "Libraries",
-      show: !isReadOnly.value,
-    },
-    {
-      // What flows into the open library, beside the library itself. The
-      // Inbox's "Manage import folders…" lands here.
-      id: "import-folders",
-      icon: "folder-download-outline",
-      label: "Import folders",
-      show: !isReadOnly.value,
-    },
-    {
-      id: "scrapheap",
-      icon: "delete-clock-outline",
-      label: "Scrapheap",
-      show: !isReadOnly.value,
-    },
-    {
-      id: "snapshots",
-      icon: "camera-outline",
-      label: "Snapshots",
-      show: !isReadOnly.value,
-    },
-    {
-      id: "privacy",
-      icon: "shield-lock-outline",
-      label: "Privacy",
-      show: !isReadOnly.value,
-    },
-    {
-      // What leaves with a shared file, per way out (#2417). Beside Privacy,
-      // whose pane has no room left for it.
-      id: "sharing",
-      icon: "share-variant-outline",
-      label: "Sharing",
-      show: !isReadOnly.value,
-    },
-    {
-      // Its own pane rather than a section under Compute: the acceleration
-      // runtime alone fills that pane, and a browser has no runtime at all.
-      id: "comfyui",
-      icon: "sitemap-outline",
-      label: "ComfyUI",
-      show: !isReadOnly.value,
-    },
-    {
-      // Which GPU PixlStash uses and what it may take work on every install;
-      // the acceleration runtime inside it is desktop-only.
-      id: "compute",
-      icon: "expansion-card-variant",
-      label: "Compute",
-      show: !isReadOnly.value,
-    },
-    {
-      id: "backend",
-      icon: "server-outline",
-      label: "Backend",
-      show: isDesktop && !isReadOnly.value,
-    },
-    {
-      id: "account",
-      icon: "account-circle-outline",
-      label: "Account Settings",
-      show: !isReadOnly.value,
-    },
-  ].filter((n) => n.show),
+  ]
+    .map((g) => ({ ...g, items: g.items.filter((n) => n.show) }))
+    .filter((g) => g.items.length),
 );
+
+const navItems = computed(() => navGroups.value.flatMap((g) => g.items));
+
+// A read-only session sees one group holding one pane; a heading over a
+// single item is noise, so the rail drops headings unless there is a choice.
+const showHeadings = computed(() => navGroups.value.length > 1);
+
+// Panes that were folded into a neighbour keep their old ids as deep links:
+// each lands on the merged pane, scrolled to its own section.
+const MERGED_TABS = {
+  "import-folders": "libraries",
+  scrapheap: "recovery",
+  snapshots: "recovery",
+  sharing: "privacy",
+};
 
 watch(
   () => dialogOpen.value,
-  (isOpen) => {
+  async (isOpen) => {
     if (!isOpen) return;
     // Only honour a requested tab that actually exists in this session - a
     // read-only or browser session hides several entries, and landing on a
     // hidden pane would show an empty dialog body.
     const requested = props.initialTab;
-    settingsTab.value = navItems.value.some((n) => n.id === requested)
-      ? requested
+    const tab = MERGED_TABS[requested] || requested;
+    settingsTab.value = navItems.value.some((n) => n.id === tab)
+      ? tab
       : "appearance";
+    if (tab !== requested && settingsTab.value === tab) {
+      await nextTick();
+      document
+        .getElementById(`settings-anchor-${requested}`)
+        ?.scrollIntoView({ block: "nearest" });
+    }
   },
   { immediate: true },
 );
@@ -218,23 +244,32 @@ watch(
     </template>
 
     <nav class="settings-nav" aria-label="Settings sections">
-      <button
-        v-for="item in navItems"
-        :key="item.id"
-        type="button"
-        class="settings-nav-item"
-        :class="{ 'settings-nav-item--active': settingsTab === item.id }"
-        :id="`settings-nav-${item.id}`"
-        :aria-current="settingsTab === item.id ? 'page' : undefined"
-        :aria-controls="`settings-pane-${item.id}`"
-        @click="settingsTab = item.id"
-      >
-        <span v-if="settingsTab === item.id" class="settings-nav-item__bar" />
-        <v-icon size="16" class="settings-nav-item__icon">
-          mdi-{{ item.icon }}
-        </v-icon>
-        {{ item.label }}
-      </button>
+      <template v-for="group in navGroups" :key="group.heading">
+        <div
+          v-if="showHeadings"
+          class="settings-nav-heading section-label"
+          aria-hidden="true"
+        >
+          {{ group.heading }}
+        </div>
+        <button
+          v-for="item in group.items"
+          :key="item.id"
+          type="button"
+          class="settings-nav-item"
+          :class="{ 'settings-nav-item--active': settingsTab === item.id }"
+          :id="`settings-nav-${item.id}`"
+          :aria-current="settingsTab === item.id ? 'page' : undefined"
+          :aria-controls="`settings-pane-${item.id}`"
+          @click="settingsTab = item.id"
+        >
+          <span v-if="settingsTab === item.id" class="settings-nav-item__bar" />
+          <v-icon size="16" class="settings-nav-item__icon">
+            mdi-{{ item.icon }}
+          </v-icon>
+          {{ item.label }}
+        </button>
+      </template>
     </nav>
 
     <div class="settings-content">
@@ -266,23 +301,47 @@ watch(
       </div>
       <div
         v-if="!isReadOnly"
-        v-show="settingsTab === 'models'"
-        id="settings-pane-models"
+        v-show="settingsTab === 'privacy'"
+        id="settings-pane-privacy"
         class="settings-pane"
         role="region"
-        aria-labelledby="settings-nav-models"
+        aria-labelledby="settings-nav-privacy"
       >
-        <ModelFoldersSection :open="dialogOpen && settingsTab === 'models'" />
+        <PrivacySection :open="dialogOpen && settingsTab === 'privacy'" />
+        <div id="settings-anchor-sharing">
+          <SharingSection :open="dialogOpen && settingsTab === 'privacy'" />
+        </div>
       </div>
       <div
         v-if="!isReadOnly"
-        v-show="settingsTab === 'training'"
-        id="settings-pane-training"
+        v-show="settingsTab === 'libraries'"
+        id="settings-pane-libraries"
         class="settings-pane"
         role="region"
-        aria-labelledby="settings-nav-training"
+        aria-labelledby="settings-nav-libraries"
       >
-        <TrainingSection :open="dialogOpen && settingsTab === 'training'" />
+        <LibrariesSection :open="dialogOpen && settingsTab === 'libraries'" />
+        <div id="settings-anchor-import-folders">
+          <ImportFoldersSection
+            :open="dialogOpen && settingsTab === 'libraries'"
+          />
+        </div>
+      </div>
+      <div
+        v-if="!isReadOnly"
+        v-show="settingsTab === 'recovery'"
+        id="settings-pane-recovery"
+        class="settings-pane"
+        role="region"
+        aria-labelledby="settings-nav-recovery"
+      >
+        <div id="settings-anchor-scrapheap">
+          <ScrapheapSection :open="dialogOpen" />
+        </div>
+        <div id="settings-anchor-snapshots">
+          <SnapshotsSection :open="dialogOpen" />
+        </div>
+        <GhostsSection :open="dialogOpen && settingsTab === 'recovery'" />
       </div>
       <div
         v-if="!isReadOnly"
@@ -310,65 +369,23 @@ watch(
       </div>
       <div
         v-if="!isReadOnly"
-        v-show="settingsTab === 'libraries'"
-        id="settings-pane-libraries"
+        v-show="settingsTab === 'models'"
+        id="settings-pane-models"
         class="settings-pane"
         role="region"
-        aria-labelledby="settings-nav-libraries"
+        aria-labelledby="settings-nav-models"
       >
-        <LibrariesSection :open="dialogOpen && settingsTab === 'libraries'" />
+        <ModelFoldersSection :open="dialogOpen && settingsTab === 'models'" />
       </div>
       <div
         v-if="!isReadOnly"
-        v-show="settingsTab === 'import-folders'"
-        id="settings-pane-import-folders"
+        v-show="settingsTab === 'training'"
+        id="settings-pane-training"
         class="settings-pane"
         role="region"
-        aria-labelledby="settings-nav-import-folders"
+        aria-labelledby="settings-nav-training"
       >
-        <ImportFoldersSection
-          :open="dialogOpen && settingsTab === 'import-folders'"
-        />
-      </div>
-      <div
-        v-if="!isReadOnly"
-        v-show="settingsTab === 'scrapheap'"
-        id="settings-pane-scrapheap"
-        class="settings-pane"
-        role="region"
-        aria-labelledby="settings-nav-scrapheap"
-      >
-        <ScrapheapSection :open="dialogOpen" />
-      </div>
-      <div
-        v-if="!isReadOnly"
-        v-show="settingsTab === 'snapshots'"
-        id="settings-pane-snapshots"
-        class="settings-pane"
-        role="region"
-        aria-labelledby="settings-nav-snapshots"
-      >
-        <SnapshotsSection :open="dialogOpen" />
-      </div>
-      <div
-        v-if="!isReadOnly"
-        v-show="settingsTab === 'privacy'"
-        id="settings-pane-privacy"
-        class="settings-pane"
-        role="region"
-        aria-labelledby="settings-nav-privacy"
-      >
-        <PrivacySection :open="dialogOpen && settingsTab === 'privacy'" />
-      </div>
-      <div
-        v-if="!isReadOnly"
-        v-show="settingsTab === 'sharing'"
-        id="settings-pane-sharing"
-        class="settings-pane"
-        role="region"
-        aria-labelledby="settings-nav-sharing"
-      >
-        <SharingSection />
+        <TrainingSection :open="dialogOpen && settingsTab === 'training'" />
       </div>
       <div
         v-if="!isReadOnly"
@@ -403,12 +420,7 @@ watch(
         role="region"
         aria-labelledby="settings-nav-backend"
       >
-        <ComputeSection
-          :open="dialogOpen"
-          view="backend"
-          :check-for-updates="props.checkForUpdates"
-          @update:check-for-updates="emit('update:check-for-updates', $event)"
-        />
+        <ComputeSection :open="dialogOpen" view="backend" />
       </div>
       <div
         v-if="!isReadOnly"
@@ -418,18 +430,15 @@ watch(
         role="region"
         aria-labelledby="settings-nav-account"
       >
-        <AccountSection
-          :open="dialogOpen"
-          @update:public-url="emit('update:public-url', $event)"
-        />
+        <AccountSection :open="dialogOpen" />
       </div>
     </div>
   </AppDialog>
 </template>
 
 <style scoped>
-/* Two-pane Settings: a left nav rail and a scrolling content area, both inside
-   the flush AppDialog body. */
+/* Two-pane Settings: a left nav rail and a content area, both inside the
+   flush AppDialog body. */
 .settings-nav {
   width: 196px;
   flex-shrink: 0;
@@ -439,14 +448,28 @@ watch(
   overflow-y: auto;
 }
 
+/* A group heading: the design system's SectionLabel. Decorative for assistive
+   tech (aria-hidden): each item's own label already names the pane. */
+.settings-nav-heading {
+  padding: 0 var(--space-4) 0 var(--space-5);
+  margin: var(--space-4) 0 var(--space-2);
+}
+
+.settings-nav-heading:first-child {
+  margin-top: var(--space-2);
+}
+
+/* One bar-control height per item, so twelve items under five headings fit
+   the rail without it scrolling. */
 .settings-nav-item {
   display: flex;
   align-items: center;
   gap: var(--space-3);
   width: 100%;
+  min-height: var(--control-h-bar);
   text-align: left;
   position: relative;
-  padding: var(--space-3) var(--space-4) var(--space-3) var(--space-5);
+  padding: var(--space-2) var(--space-4) var(--space-2) var(--space-5);
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
@@ -487,12 +510,16 @@ watch(
   flex-shrink: 0;
 }
 
+/* Fixed so the dialog does not resize as the rail is clicked, and tall enough
+   that no pane scrolls: a list that can grow scrolls in its own box instead.
+   On a short window the dialog (24px overlay margins each side, a 57px
+   header) takes what is left, and only then does a pane scroll. */
 .settings-content {
   flex: 1;
   min-width: 0;
   padding: var(--space-4) var(--space-6);
   overflow-y: auto;
-  height: 524px;
+  height: min(600px, calc(100vh - 112px));
 }
 
 /* Each pane fills the content height so panes that pin content to the bottom
@@ -532,7 +559,7 @@ watch(
 
   .settings-content {
     width: 100%;
-    height: min(58vh, 524px);
+    height: min(58vh, 600px);
     padding: var(--space-4);
   }
 }

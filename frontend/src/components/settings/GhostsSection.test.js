@@ -1,4 +1,4 @@
-// Settings › Privacy: the ghost retention position and its two counted purges.
+// Settings › Recovery: the ghost retention position and its two counted purges.
 //
 // The purge is the destructive half, so what is pinned is that a press alone
 // destroys nothing (the confirm does), that each button reaches its own route,
@@ -19,17 +19,9 @@ vi.mock("vuetify/components", () => ({
   VSwitch: { template: "<input />" },
 }));
 
-vi.mock("../../stores/useUserPrefsStore", () => ({
-  useUserPrefsStore: () => ({ checkForUpdates: false }),
-}));
-vi.mock("../../api/config", () => ({ patchUserConfig: vi.fn() }));
 const workflows = vi.hoisted(() => ({ invalidate: vi.fn() }));
 vi.mock("../../stores/useWorkflowsStore", () => ({
   useWorkflowsStore: () => workflows,
-}));
-vi.mock("../../api/telemetry", () => ({
-  getInstallId: vi.fn().mockResolvedValue({ available: false }),
-  recreateInstallId: vi.fn(),
 }));
 
 const api = vi.hoisted(() => ({
@@ -40,7 +32,7 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock("../../api/serverConfig", () => api);
 
-import PrivacySection from "./PrivacySection.vue";
+import GhostsSection from "./GhostsSection.vue";
 
 function payload(overrides = {}) {
   return {
@@ -53,7 +45,7 @@ function payload(overrides = {}) {
 }
 
 async function mountPane() {
-  const wrapper = mount(PrivacySection, { props: { open: true } });
+  const wrapper = mount(GhostsSection, { props: { open: true } });
   await flushPromises();
   return wrapper;
 }

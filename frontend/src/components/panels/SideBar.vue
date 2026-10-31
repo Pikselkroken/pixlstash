@@ -231,7 +231,6 @@ const emit = defineEmits([
   "suggest-pictures-for-character",
   "suggest-pictures-for-set",
   "view-project",
-  "update:check-for-updates",
   "select-folder",
   "open-import",
   "open-tag-review",
@@ -4131,7 +4130,6 @@ defineExpose({
     v-model:sidebar-thumbnail-size="sidebarThumbnailSizeModel"
     v-model:date-format="dateFormatModel"
     v-model:theme-mode="themeModeModel"
-    :checkForUpdates="userPrefsStore.checkForUpdates"
     v-model:show-keyboard-hint="showKeyboardHintModel"
     :thumbnail-mode="gridStore.thumbnailMode"
     @update:thumbnail-mode="(value) => gridStore.setThumbnailMode(value)"
@@ -4142,10 +4140,6 @@ defineExpose({
     "
     @update:comfyui-configured="
       (value) => (filterStore.comfyuiConfigured = value)
-    "
-    @update:public-url="(value) => (userPrefsStore.publicUrl = value)"
-    @update:check-for-updates="
-      (value) => emit('update:check-for-updates', value)
     "
   />
   <FolderMappingWizard

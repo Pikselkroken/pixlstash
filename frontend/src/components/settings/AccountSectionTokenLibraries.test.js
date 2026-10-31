@@ -41,6 +41,9 @@ vi.mock("../../api/pictureSets", () => ({ listPictureSets: vi.fn(async () => [])
 vi.mock("../../api/projects", () => ({ listProjects: vi.fn(async () => []) }));
 vi.mock("../../api/characters", () => ({ listCharacters: vi.fn(async () => []) }));
 vi.mock("../../utils/clipboard", () => ({ copyText: vi.fn() }));
+vi.mock("../../stores/useUserPrefsStore", () => ({
+  useUserPrefsStore: () => ({ publicUrl: null }),
+}));
 
 const store = reactive({ libraries: [], canManage: true });
 vi.mock("../../stores/useLibrariesStore", () => ({

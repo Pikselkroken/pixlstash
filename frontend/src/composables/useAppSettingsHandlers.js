@@ -1,7 +1,5 @@
 import { nextTick } from "vue";
-import { patchUserConfig } from "../api/config";
 import { useGridStore } from "../stores/useGridStore";
-import { useUserPrefsStore } from "../stores/useUserPrefsStore";
 
 /**
  * The handlers behind the sidebar's and settings dialog's controls.
@@ -20,7 +18,6 @@ import { useUserPrefsStore } from "../stores/useUserPrefsStore";
  */
 export function useAppSettingsHandlers({ gridContainer, pushAppRoute }) {
   const gridStore = useGridStore();
-  const userPrefsStore = useUserPrefsStore();
 
   // Explicit "view this project" entry click → navigate. useViewStore (watching
   // the route) sets projectViewMode/selectedProjectId from the URL, which scopes
@@ -37,15 +34,6 @@ export function useAppSettingsHandlers({ gridContainer, pushAppRoute }) {
       ? Math.max(0, expanded)
       : 0;
     gridStore.totalStackCount = Number.isFinite(total) ? Math.max(0, total) : 0;
-  }
-
-  async function handleUpdateCheckForUpdates(value) {
-    userPrefsStore.checkForUpdates = value;
-    try {
-      await patchUserConfig({ check_for_updates: value });
-    } catch (e) {
-      console.error("Failed to save check_for_updates preference:", e);
-    }
   }
 
   // The sidebar's Scrapheap context menu asks to empty the heap. The sidebar has
@@ -86,7 +74,6 @@ export function useAppSettingsHandlers({ gridContainer, pushAppRoute }) {
   return {
     handleViewProject,
     handleStackStatsUpdate,
-    handleUpdateCheckForUpdates,
     handleEmptyScrapheapFromSidebar,
     handleSuggestPicturesForCharacter,
     handleSuggestPicturesForSet,
