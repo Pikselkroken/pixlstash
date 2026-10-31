@@ -697,7 +697,23 @@ def resolve(
             need,
             vram_mb,
         )
+
+    def previews_fit(entry: dict) -> bool:
+        """Whether *entry*'s previews fit the room, as far as it was measured."""
+        vram = entry["preview_vram_mb"]
+        ram = entry["preview_ram_mb"]
+        return not (
+            (vram is not None and vram > vram_mb)
+            or (ram is not None and ram_mb is not None and ram > ram_mb)
+        )
+
+    # Previews drawn while training are worth more offloading (#2411): the
+    # first profile whose previews fit is picked over putting them off, unless
+    # the owner pinned them off.
+    sampling = "train.disable_sampling"
     picked = fitting[0]
+    if not pins.get(sampling):
+        picked = next((e for e in fitting if previews_fit(e)), picked)
     name, profile = picked["name"], picked["profile"]
     for key, value in profile["settings"].items():
         if key not in pins:
@@ -709,16 +725,9 @@ def resolve(
     ):
         values[dropout] = {"value": 0.0, "source": "gpu"}
     # Previews are admitted apart: a run whose training fits but whose
-    # previews do not trains without them, and its checkpoints are sampled
-    # once training is done.
-    deferred = (
-        picked["preview_vram_mb"] is not None and picked["preview_vram_mb"] > vram_mb
-    ) or (
-        picked["preview_ram_mb"] is not None
-        and ram_mb is not None
-        and picked["preview_ram_mb"] > ram_mb
-    )
-    sampling = "train.disable_sampling"
+    # previews do not in any profile trains without them, and its checkpoints
+    # are sampled once training is done.
+    deferred = not previews_fit(picked)
     if sampling in pins:
         # The owner's word on previews stands, either way.
         deferred = bool(pins[sampling])

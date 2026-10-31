@@ -1546,7 +1546,7 @@ _SMALL = {"train.steps": 4, "save.save_every": 2, "sample.sample_every": 2}
 _HOLDS_MB = 9000
 
 
-def _resolve_small(hub, *, vram_mb=22_800):
+def _resolve_small(hub, *, vram_mb=22_800, profile=None):
     """The recipe resolved for a two-picture set, with this hub's measurements."""
     return presets.resolve(
         _ZIT,
@@ -1558,6 +1558,26 @@ def _resolve_small(hub, *, vram_mb=22_800):
         ram_mb=60_000,
         pins=dict(_SMALL),
         lookup=measurements.make_lookup(hub, _ZIT, commit=None, device=None),
+        profile=profile,
+    )
+
+
+def _record_big_previews(hub, profile):
+    """Record *profile* as measured: training fits, previews do not."""
+    measurements.record(
+        hub,
+        _resolve_small(hub, profile=profile)["fingerprint"],
+        preset=presets.preset_ref(_ZIT),
+        profile=profile,
+        device=None,
+        phase_peaks={
+            "training": {"vram_mb": 9000, "ram_mb": 12000},
+            "previews": {"vram_mb": 30000, "ram_mb": 12000},
+        },
+        seconds_per_update=1.0,
+        setup_seconds=10.0,
+        seconds_per_preview=1.0,
+        source="probe",
     )
 
 
@@ -1690,6 +1710,34 @@ def test_running_out_of_memory_steps_to_more_offloading(
     assert measurements.read(hub, resolution["fingerprint"]) is None
 
 
+def test_previews_that_do_not_fit_step_to_the_next_profile(hub, repo_dir, watched):
+    """#2411: measured after the run was queued, q8's previews do not fit
+    beside training. The next profile is probed before they are put off, and
+    the run draws its previews while training on it."""
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    resolution = _resolve_small(hub)
+    assert resolution["profile"] == "q8"
+    job = _enqueue_resolved(
+        service, resolution, _write_template(repo_dir, steps=4, save_every=2)
+    )
+    _record_big_previews(hub, "q8")
+
+    row = _run_to_end(hub, service, job)
+
+    assert row.status == "completed", row.error
+    # One probe of q8_cached, then the run with previews (the stub's are small).
+    assert watched() == [f"steps={training_service_module.PROBE_STEPS}", "steps=4"]
+    settled = json.loads(row.resolved_profile)
+    assert (settled["profile"], settled["previews_deferred"]) == ("q8_cached", False)
+    assert "train.disable_sampling" not in settled["values"]
+
+
 def test_a_loader_error_stops_the_search(hub, repo_dir, watched, monkeypatch):
     monkeypatch.setenv("FAKE_RUN_FAIL", "Error loading model: unexpected tensor")
     service = _make_service(
@@ -1751,22 +1799,9 @@ def test_deferred_previews_are_drawn_from_each_checkpoint_after_training(
             uuid, "uuid4", lambda: uuid.UUID(id_prefix + real_uuid4().hex[8:])
         )
     seen = _spy_pass_pids(hub, monkeypatch)
-    first = _resolve_small(hub)
-    measurements.record(
-        hub,
-        first["fingerprint"],
-        preset=first["preset"],
-        profile="q8",
-        device=None,
-        phase_peaks={
-            "training": {"vram_mb": 9000, "ram_mb": 12000},
-            "previews": {"vram_mb": 30000, "ram_mb": 12000},
-        },
-        seconds_per_update=1.0,
-        setup_seconds=10.0,
-        seconds_per_preview=1.0,
-        source="probe",
-    )
+    # No profile's previews fit, so none is worth trying for them (#2411).
+    for profile in _ZIT["fit"]["auto"]:
+        _record_big_previews(hub, profile)
     resolution = _resolve_small(hub)
     assert (resolution["probe"], resolution["previews_deferred"]) == (False, True)
     importer = _RecordingImport()
@@ -1785,6 +1820,9 @@ def test_deferred_previews_are_drawn_from_each_checkpoint_after_training(
     row = _run_to_end(hub, service, job)
 
     assert row.status == "completed", row.error
+    # Each profile was looked at for previews while training and none had
+    # room, so the first that trains is kept.
+    assert json.loads(row.resolved_profile)["profile"] == "q8"
     # The run, then one pass per checkpoint step: 2, and 4 once (the final
     # shares its step with the last save).
     assert watched() == ["steps=4", "steps=2", "steps=4"]

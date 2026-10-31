@@ -1122,9 +1122,11 @@ class TrainingService:
         of previews and saves once, under a RAM guard, and records what each
         phase peaked at. Running out of GPU memory steps to the next profile
         of the fit choice (more offloading); a loader error, a Triton error or
-        the RAM guard ends the search. The run then trains with the profile
-        that held, re-resolved on its measurement, so previews that do not fit
-        are deferred.
+        the RAM guard ends the search. A profile that held but whose previews
+        do not fit beside training steps on too, so previews are drawn while
+        training wherever a profile allows it. The run then trains with the
+        first profile that held with its previews, or else the first that held,
+        re-resolved on its measurement, its previews deferred.
 
         Returns:
             True to train. False when the run was stopped, failed (the row says
@@ -1156,6 +1158,9 @@ class TrainingService:
         # checkout or the card may have changed since, which is a new setup.
         names = [resolution["profile"], *(resolution.get("fallbacks") or [])]
         reason = None
+        # The first profile that held but whose previews do not fit: kept while
+        # the next ones are tried for previews drawn while training (#2411).
+        deferred = None
         for name in names[:MAX_PROBES]:
             try:
                 settled = self._reresolve(info, resolution, preset, lookup, name)
@@ -1179,7 +1184,20 @@ class TrainingService:
                 reason = str(exc)
                 logger.info("Job %s: %s does not fit: %s", job_uuid, name, exc)
                 continue
+            sampling = settled["values"].get("train.disable_sampling") or {}
+            if settled["previews_deferred"] and sampling.get("source") == "gpu":
+                logger.info(
+                    "Job %s: %s's previews do not fit while training; trying "
+                    "the next profile.",
+                    job_uuid,
+                    name,
+                )
+                deferred = deferred or settled
+                continue
             self._settle(job_uuid, settled)
+            return True
+        if deferred is not None:
+            self._settle(job_uuid, deferred)
             return True
         self._fail(
             job_uuid,
