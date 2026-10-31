@@ -10,6 +10,11 @@
  * Places and facets are state in `useWorkflowsStore`; the Templates place is
  * `useWorkflowTemplatesStore().shown`, which the grid's view reads too. Picking
  * a place or a facet leaves the Templates place.
+ *
+ * A click picks one row, as the Media rail's does: a facet alone, or a place
+ * alone. Ctrl/Cmd-click keeps the rest lit: a facet row toggles in beside the
+ * place and the other facet, a place row swaps only the place. Each section
+ * still holds one value, so a Ctrl-click within one swaps it.
  */
 import { computed, onMounted, ref, watch } from "vue";
 import AppButton from "../widgets/AppButton.vue";
@@ -54,6 +59,10 @@ const PLACES = [
   { id: "recent", label: "Recently used", icon: "mdi-history" },
 ];
 
+const facetLit = computed(
+  () => store.filters.type != null || store.filters.checkpoint != null,
+);
+
 const placeRows = computed(() => {
   const counts = {
     all: store.cards.length,
@@ -63,7 +72,11 @@ const placeRows = computed(() => {
   return PLACES.map((place) => ({
     ...place,
     count: counts[place.id],
-    lit: !tpl.shown && store.place === place.id,
+    // All workflows is the absence of a filter, so a lit facet puts it out.
+    lit:
+      !tpl.shown &&
+      store.place === place.id &&
+      !(place.id === "all" && facetLit.value),
   }));
 });
 
@@ -149,19 +162,49 @@ const baseRows = computed(() => {
   }));
 });
 
-function pickPlace(id) {
+const isAdd = (event) => Boolean(event?.ctrlKey || event?.metaKey);
+
+/** A place clears the facets; Ctrl/Cmd keeps them and swaps only the place. */
+function pickPlace(id, event) {
   tpl.shown = false;
-  store.setPlace(id);
+  if (!isAdd(event)) {
+    store.setPlace(id);
+    return;
+  }
+  store.setFilters({
+    favouritesOnly: id === "favourites",
+    recent: id === "recent",
+  });
 }
 
 function pickTemplates() {
   tpl.shown = true;
 }
 
-/** A facet toggles; picking one while Templates is on goes back to the grid. */
-function pickFacet(key, id) {
+/**
+ * A click lights this facet alone: the place goes back to All and the other
+ * facet clears. Clicking the one lit row turns it off. Ctrl/Cmd toggles it
+ * and leaves the place and the other facet lit. Either way the grid comes
+ * back from Templates.
+ */
+function pickFacet(key, id, event) {
+  // Read as drawn: under Templates a stored facet shows unlit, so a click on
+  // it lights it rather than clearing it.
+  const lit = !tpl.shown && store.filters[key] === id;
   tpl.shown = false;
-  store.setFilters({ [key]: store.filters[key] === id ? null : id });
+  if (isAdd(event)) {
+    store.setFilters({ [key]: lit ? null : id });
+    return;
+  }
+  const other = key === "type" ? "checkpoint" : "type";
+  const alone = lit && store.place === "all" && store.filters[other] == null;
+  store.setFilters({
+    favouritesOnly: false,
+    recent: false,
+    type: null,
+    checkpoint: null,
+    [key]: alone ? null : id,
+  });
 }
 </script>
 
@@ -189,7 +232,7 @@ function pickFacet(key, id) {
         class="sidebar-list-item"
         :class="{ active: place.lit }"
         :aria-current="place.lit ? 'page' : undefined"
-        @click="pickPlace(place.id)"
+        @click="pickPlace(place.id, $event)"
       >
         <span class="sidebar-list-icon" aria-hidden="true"
           ><v-icon size="16">{{ place.icon }}</v-icon></span
@@ -232,7 +275,7 @@ function pickFacet(key, id) {
         class="sidebar-list-item"
         :class="{ active: option.lit }"
         :aria-current="option.lit ? 'page' : undefined"
-        @click="pickFacet('type', option.id)"
+        @click="pickFacet('type', option.id, $event)"
       >
         <span class="sidebar-list-icon" aria-hidden="true"
           ><v-icon size="16">{{ option.icon }}</v-icon></span
@@ -266,7 +309,7 @@ function pickFacet(key, id) {
         class="sidebar-list-item"
         :class="{ active: option.lit }"
         :aria-current="option.lit ? 'page' : undefined"
-        @click="pickFacet('checkpoint', option.id)"
+        @click="pickFacet('checkpoint', option.id, $event)"
       >
         <!-- The card strip's tile for this model, so a row and the cards it
              narrows to wear the same mark. Hidden: the label names it. -->

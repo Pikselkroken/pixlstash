@@ -1,8 +1,9 @@
 // The Workflows workspace's own rail (#2165): the places, the ComfyUI
 // templates with their "N new" pill, the Type and Base model facets, and the
 // footer's Add workflow. The thing that can silently go wrong is which state a
-// row writes: a place must clear the facets and leave Templates, and the pill
-// must count what was not seen, not what is listed.
+// row writes: a plain click lights that row alone (Ctrl/Cmd keeps the rest),
+// every row leaves Templates, and the pill must count what was not seen, not
+// what is listed.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
@@ -242,11 +243,83 @@ describe("facets", () => {
     await type.trigger("click");
     expect(store.filters.type).toBe("txt2img");
     expect(row(wrapper, "Text to Image").classes()).toContain("active");
-    // The place stays where it was: a facet narrows, it does not move the place.
-    expect(row(wrapper, "All workflows").attributes("aria-current")).toBe("page");
+    // One row lit: All workflows is the absence of a filter, not a second pick.
+    expect(row(wrapper, "All workflows").attributes("aria-current")).toBeUndefined();
     await row(wrapper, "Text to Image").trigger("click");
     expect(store.filters.type).toBeNull();
     expect(row(wrapper, "Text to Image").attributes("aria-current")).toBeUndefined();
+  });
+
+  // A plain click is single-select, as the Media rail's: the row it lands on
+  // is the only one lit.
+  it("a click picks that facet alone, clearing the place and the other facet", async () => {
+    const { wrapper, store } = await mountSidebar();
+    await row(wrapper, "Favourites").trigger("click");
+    await row(wrapper, "flux1-dev.safetensors").trigger("click");
+    expect(store.filters.favouritesOnly).toBe(false);
+    expect(store.filters.checkpoint).toBe("flux1-dev.safetensors");
+    await row(wrapper, "Text to Image").trigger("click");
+    expect(store.filters.type).toBe("txt2img");
+    expect(store.filters.checkpoint).toBeNull();
+    expect(wrapper.findAll(".sidebar-list-item.active").map((el) => el.text())).toEqual([
+      expect.stringContaining("Text to Image"),
+    ]);
+    // Another type replaces it rather than turning it off.
+    await row(wrapper, "Upscale").trigger("click");
+    expect(store.filters.type).toBe("upscale");
+  });
+
+  it("a click on a facet turns Recently used off", async () => {
+    const { wrapper, store } = await mountSidebar();
+    await row(wrapper, "Recently used").trigger("click");
+    await row(wrapper, "Upscale").trigger("click");
+    expect(store.filters.recent).toBe(false);
+    expect(store.filters.type).toBe("upscale");
+  });
+
+  // Templates hides the facets' lights; the row the reader sees unlit must
+  // light on a click, not clear the filter it was hiding.
+  it("a click on a facet hidden by Templates lights it", async () => {
+    const { wrapper, store, templates } = await mountSidebar();
+    await row(wrapper, "Text to Image").trigger("click");
+    await templatesRow(wrapper).trigger("click");
+    await row(wrapper, "Text to Image").trigger("click");
+    expect(templates.shown).toBe(false);
+    expect(store.filters.type).toBe("txt2img");
+  });
+
+  it("a click on a lit row among several makes it the only one", async () => {
+    const { wrapper, store } = await mountSidebar();
+    await row(wrapper, "Text to Image").trigger("click");
+    await row(wrapper, "flux1-dev.safetensors").trigger("click", { ctrlKey: true });
+    await row(wrapper, "Text to Image").trigger("click");
+    expect(store.filters.type).toBe("txt2img");
+    expect(store.filters.checkpoint).toBeNull();
+  });
+
+  it("Ctrl or Cmd-click adds a row to what is lit, and takes it off again", async () => {
+    const { wrapper, store } = await mountSidebar();
+    await row(wrapper, "Favourites").trigger("click");
+    await row(wrapper, "Text to Image").trigger("click", { ctrlKey: true });
+    await row(wrapper, "flux1-dev.safetensors").trigger("click", { metaKey: true });
+    expect(store.filters).toMatchObject({
+      favouritesOnly: true,
+      type: "txt2img",
+      checkpoint: "flux1-dev.safetensors",
+    });
+    const lit = wrapper.findAll(".sidebar-list-item.active").map((el) => el.text());
+    expect(lit).toHaveLength(3);
+    // A Ctrl-click place swaps the place and keeps the facets.
+    await row(wrapper, "Recently used").trigger("click", { ctrlKey: true });
+    expect(store.filters).toMatchObject({
+      favouritesOnly: false,
+      recent: true,
+      type: "txt2img",
+      checkpoint: "flux1-dev.safetensors",
+    });
+    await row(wrapper, "Text to Image").trigger("click", { ctrlKey: true });
+    expect(store.filters.type).toBeNull();
+    expect(store.filters.checkpoint).toBe("flux1-dev.safetensors");
   });
 
   it("toggles the Base model facet by its file name, shown by its label", async () => {
