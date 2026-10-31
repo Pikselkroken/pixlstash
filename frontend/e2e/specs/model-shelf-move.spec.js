@@ -47,8 +47,16 @@ async function recordDrags(page) {
   })
 }
 
-/** Pick `source` up and hold it over `target`, button still down. */
+/**
+ * Pick `source` up and hold it over `target`, button still down.
+ *
+ * The target is centred in its list first. A drag held within the edge band
+ * of a scrolling list scrolls it (the shelf's `edgeScroll`), so a target that
+ * is the last visible tree row slides away under a still pointer and the
+ * release lands on the folder below it.
+ */
 async function holdDragOver(page, source, target) {
+  await target.evaluate((el) => el.scrollIntoView({ block: 'center' }))
   await source.hover()
   await page.mouse.down()
   await target.hover()
@@ -72,7 +80,9 @@ test('a row dropped on a subfolder moves its file there on disk', async ({ page,
 
   await holdDragOver(page, row, shelf.treeRow(folder.id, dest))
   // The tip under the pointer is the drag's preview, and says where it goes.
-  await expect(page.getByTestId('model-drop-tip')).toContainText(`Move to`)
+  await expect(page.getByTestId('model-drop-tip')).toContainText(
+    new RegExp(`Move to \\S*/${dest} `),
+  )
   await page.mouse.up()
   expect(await page.evaluate(() => window.__drags)).toEqual([])
 
