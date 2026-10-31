@@ -55,6 +55,7 @@ from send2trash import send2trash
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
 from pixlstash.resources.arbiter import Lease, LeaseKind, LeaseState, Tenant
+from pixlstash.routes import comfyui as comfyui_routes
 from pixlstash.routes.model_folders import register_model_folder
 from pixlstash.services import e2e_workflow_seed, workflow_inbox
 from pixlstash.services.model_folder_scanner import ModelFolderScanner
@@ -269,6 +270,18 @@ def isolate_e2e_data(path: str) -> None:
         ):
             module.send2trash = fake_trash
     logger.warning("[test-hooks] workflow folders and trash moved under %s", path)
+
+
+def point_comfyui_default(url: str) -> None:
+    """Make *url* the ComfyUI an owner with no address of their own reaches.
+
+    Otherwise that is ``127.0.0.1:8188``, where a developer's own ComfyUI may
+    answer the e2e backend's reads, or take its runs. The e2e launcher points
+    it at the fake ComfyUI Playwright starts (``frontend/e2e/fake_comfyui.py``).
+    Called at start-up, only when ``enable_test_hooks`` is on.
+    """
+    comfyui_routes.DEFAULT_COMFYUI_URL = url
+    logger.warning("[test-hooks] ComfyUI default address is now %s", url)
 
 
 def create_router(server) -> APIRouter:

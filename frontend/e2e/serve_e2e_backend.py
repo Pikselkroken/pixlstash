@@ -18,6 +18,9 @@ cookie auth just works.
 
 Env:
     PIXLSTASH_E2E_PORT   Port to bind (default 9600).
+    PIXLSTASH_E2E_COMFYUI_PORT
+                         The fake ComfyUI's port (default 9800), which the
+                         backend reaches instead of 127.0.0.1:8188.
     PIXLSTASH_E2E_DATA   Fixture directory to serve (default ``test-data``).
                          The screenshot-reproduction harness points this at
                          ``demo-data`` for a richer, more varied library.
@@ -43,6 +46,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_DATA = Path(os.environ.get("PIXLSTASH_E2E_DATA") or (REPO_ROOT / "test-data"))
 SRC_IMAGES = SRC_DATA / "images"
 PORT = int(os.environ.get("PIXLSTASH_E2E_PORT", "9600"))
+# The fake ComfyUI's (fake_comfyui.py), which playwright.config.js starts.
+COMFYUI_PORT = int(os.environ.get("PIXLSTASH_E2E_COMFYUI_PORT", "9800"))
 # Isolate the work dir per fixture AND per checkout. Per fixture so a
 # screenshots run (demo-data) never stomps an e2e run (test-data); per checkout
 # because the fixture folder is called "test-data" in every clone, so two
@@ -418,6 +423,9 @@ def server_overrides(work_images: Path) -> dict:
         # Likewise: what POST /training/jobs sizes a run against, and a lease
         # granted without touching this machine's GPU (CI has none).
         "e2e_training_card": {"vram_mb": 24000, "ram_mb": 64000},
+        # Read only when enable_test_hooks is on: the ComfyUI an owner with no
+        # address of their own reaches, instead of 127.0.0.1:8188.
+        "e2e_comfyui_url": f"http://127.0.0.1:{COMFYUI_PORT}",
         "generate_thumbnails_on_startup": False,
         "default_device": "cpu",
         "daily_snapshots": False,
