@@ -58,6 +58,23 @@ def test_rocm_passes_and_labels_experimental(patch_runtime):
     assert "ONNX face-extraction and WD14 tagger models run on CPU" in notes
     # ONNX-on-CPU is expected on ROCm: it must NOT be reported as a CUDA warning.
     assert not any("CUDAExecutionProvider unavailable" in w for w in outcome.warnings)
+    # And it says how to get them onto the GPU.
+    assert "pip install onnxruntime-migraphx" in notes
+
+
+def test_rocm_with_the_amd_onnx_runtime_names_its_provider(patch_runtime):
+    # #458: an AMD ORT build puts face extraction and WD14 on the GPU too.
+    patch_runtime(
+        _make_torch(hip="6.4.43482", available=True),
+        fake_ort(["MIGraphXExecutionProvider", "CPUExecutionProvider"]),
+    )
+    outcome = StartupCheckOutcome()
+    _checks("cuda")._check_device_and_vram(outcome)
+
+    notes = " ".join(outcome.notes)
+    assert "WD14 tagger models will try MIGraphXExecutionProvider" in notes
+    assert "run on CPU" not in notes
+    assert not any("CUDAExecutionProvider unavailable" in w for w in outcome.warnings)
 
 
 def test_rocm_probe_failure_falls_back_to_cpu(patch_runtime):

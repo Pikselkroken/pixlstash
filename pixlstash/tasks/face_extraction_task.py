@@ -20,6 +20,7 @@ from pixlstash.db_models.face import Face
 from pixlstash.db_models.picture import Picture
 from pixlstash.inference.engine import InferenceEngine
 from pixlstash.inference.vram_budget import ORT_ARENA_SHARE
+from pixlstash.utils.accelerator import CUDA, onnx_execution_providers
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.face_utils import FaceUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
@@ -374,6 +375,7 @@ class FaceExtractionTask(BaseTask):
         # Local imports: insightface (which drags in onnxruntime) and torch each
         # cost seconds to import, and this module is on the server's import
         # path. Both are only needed once face detection actually initialises.
+        import onnxruntime as ort
         import torch
         from insightface.app import FaceAnalysis
 
@@ -416,9 +418,10 @@ class FaceExtractionTask(BaseTask):
             logger.debug("Reusing global InsightFace app")
             return cls._global_insightface_app
 
-        # CUDA only, and Apple Silicon is deliberately NOT included. This looks
-        # like one more `torch.cuda.is_available()` to sweep up, and it was
-        # measured rather than assumed: `buffalo_l` under the CoreML provider
+        # The CUDA-API GPU only (NVIDIA, or AMD through ROCm's HIP), and Apple
+        # Silicon is deliberately NOT included. This looks like one more
+        # `torch.cuda.is_available()` to sweep up, and it was measured rather
+        # than assumed: `buffalo_l` under the CoreML provider
         # (`MLProgram`, `CPUAndGPU`) does not merely run slowly, it **fails**.
         # The detector is the blocker - `det_10g` has a dynamic input shape
         # (`[1, 3, '?', '?']`) and CoreML raises
@@ -434,29 +437,39 @@ class FaceExtractionTask(BaseTask):
         # the whole pack on the CPU. A benchmark written that way reports a
         # CoreML speed-up that is not CoreML at all. Use `ctx_id=0` to keep the
         # providers, which is what surfaced the failure above.
-        use_cuda = not engine.force_cpu and torch.cuda.is_available()
-        providers = (
-            ["CUDAExecutionProvider", "CPUExecutionProvider"]
-            if use_cuda
-            else ["CPUExecutionProvider"]
-        )
-        # One dict per provider; the CUDA one bounds each of the five ORT
-        # sessions' arenas so the pack can stay resident for a pass.
-        provider_options = (
+        #
+        # Which GPU provider is the shared ladder's call, from what this ONNX
+        # Runtime build offers: CUDA on NVIDIA, ROCm or MIGraphX on AMD (#458).
+        # A ROCm torch with the CPU-only `onnxruntime` gets the CPU provider and
+        # `ctx_id=-1` rather than a CUDA provider ORT cannot load. OpenVINO,
+        # which the ladder ranks first for WD14, is held out: like CoreML it is
+        # unmeasured on `det_10g`'s dynamic input, and face extraction never
+        # used it.
+        use_gpu = not engine.force_cpu and torch.cuda.is_available()
+        ladder = onnx_execution_providers(
+            CUDA if use_gpu else "cpu",
             [
-                engine.vram_budget.ort_cuda_provider_options(
-                    ORT_ARENA_SHARE["insightface_session"]
-                ),
-                {},
-            ]
-            if use_cuda
-            else [{}]
+                p
+                for p in ort.get_available_providers()
+                if p != "OpenVINOExecutionProvider"
+            ],
+            # Bounds each of the five ORT sessions' arenas so the pack can stay
+            # resident for a pass. The ladder hands it to CUDA only.
+            cuda_options=engine.vram_budget.ort_cuda_provider_options(
+                ORT_ARENA_SHARE["insightface_session"]
+            )
+            if use_gpu
+            else None,
         )
+        # FaceAnalysis takes names and options as two parallel lists.
+        providers = [p if isinstance(p, str) else p[0] for p in ladder]
+        provider_options = [{} if isinstance(p, str) else p[1] for p in ladder]
+        on_gpu = providers[0] != "CPUExecutionProvider"
         logger.debug(
             "Initialising InsightFace with providers=%s options=%s (ctx_id=%d, pack=%s, root=%s)",
             providers,
             provider_options,
-            0 if use_cuda else -1,
+            0 if on_gpu else -1,
             model_pack,
             root,
         )
@@ -467,10 +480,23 @@ class FaceExtractionTask(BaseTask):
             provider_options=provider_options,
         )
         app.prepare(
-            ctx_id=0 if use_cuda else -1,
+            ctx_id=0 if on_gpu else -1,
             det_thresh=0.25,
             det_size=(256, 256),
         )
+        # Advertised is not loaded: a provider whose libraries are missing (the
+        # CUDA one needs libcublasLt, MIGraphX needs the system ROCm's) is
+        # dropped by ORT without an error. Only the session knows.
+        if on_gpu:
+            active = app.det_model.session.get_providers()
+            if active and active[0] == "CPUExecutionProvider":
+                logger.warning(
+                    "InsightFace asked onnxruntime for %s, but the detector "
+                    "loaded with %s: face extraction will run on the CPU. The "
+                    "provider's libraries are probably not installed.",
+                    providers[0],
+                    active,
+                )
         cls._global_insightface_app = app
         return app
 

@@ -281,7 +281,7 @@ export const TORCH_INDEX: Record<Accel, string | null> = {
 export const ONNX_PACKAGE: Record<Accel, string> = {
   cpu: 'onnxruntime',
   cu128: 'onnxruntime-gpu',
-  rocm: 'onnxruntime', // ROCm onnxruntime is not on PyPI - bundled CPU ORT.
+  rocm: 'onnxruntime', // onnxruntime-migraphx needs system MIGraphX - bundled CPU ORT.
   metal: 'onnxruntime',
 };
 

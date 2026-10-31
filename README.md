@@ -983,6 +983,19 @@ Expected output should include `CUDAExecutionProvider`.
 
 If you prefer CPU mode, set `"default_device": "cpu"` in `server-config.json`.
 
+### Face extraction and WD14 on an AMD GPU (ROCm, experimental)
+
+The bundled ONNX Runtime is the CPU build, so on ROCm face extraction and the
+WD14 tagger run on the CPU while everything else uses the GPU. If MIGraphX is
+part of your ROCm install, the AMD build of ONNX Runtime moves them to the GPU:
+
+```bash
+pip uninstall -y onnxruntime
+pip install onnxruntime-migraphx
+```
+
+The startup log then names `MIGraphXExecutionProvider`.
+
 ### Import Folders and Reference Folders in Docker
 
 Because Docker containers have an isolated filesystem, folders on your host machine must be explicitly bind-mounted into the container before PixlStash can read them.

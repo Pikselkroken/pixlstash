@@ -117,10 +117,15 @@ def test_get_or_init_bounds_every_cuda_session_by_the_budget():
         mock.patch("pixlstash.tasks.face_extraction_task.ensure_model_pack_available"),
         mock.patch("insightface.app.FaceAnalysis") as fa,
         mock.patch("torch.cuda.is_available", return_value=True),
+        mock.patch(
+            "onnxruntime.get_available_providers",
+            return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
+        ),
     ):
         FaceExtractionTask.get_or_init_insightface(engine)
     kwargs = fa.call_args.kwargs
     assert kwargs["providers"] == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    assert fa.return_value.prepare.call_args.kwargs["ctx_id"] == 0
     cuda_options, cpu_options = kwargs["provider_options"]
     assert cuda_options == budget.ort_cuda_provider_options(
         ORT_ARENA_SHARE["insightface_session"]
@@ -132,6 +137,82 @@ def test_get_or_init_bounds_every_cuda_session_by_the_budget():
     assert "arena_extend_strategy" not in cuda_options
     assert cuda_options["cudnn_conv_algo_search"] == "HEURISTIC"
     assert cpu_options == {}
+    _reset_face_globals()
+
+
+@pytest.mark.parametrize(
+    "available, expected, ctx_id",
+    [
+        # A ROCm torch beside the bundled CPU ORT: no CUDA provider ORT cannot
+        # load, and ctx_id=-1 so InsightFace does not pretend it is on a GPU.
+        (["CPUExecutionProvider"], ["CPUExecutionProvider"], -1),
+        # The AMD ORT build (#458): the GPU, and ctx_id=0 so prepare() keeps it.
+        (
+            ["MIGraphXExecutionProvider", "CPUExecutionProvider"],
+            ["MIGraphXExecutionProvider", "CPUExecutionProvider"],
+            0,
+        ),
+        # OpenVINO stays out of face extraction: unmeasured on det_10g.
+        (
+            ["OpenVINOExecutionProvider", "CPUExecutionProvider"],
+            ["CPUExecutionProvider"],
+            -1,
+        ),
+    ],
+)
+def test_get_or_init_on_a_rocm_host_uses_what_ort_offers(available, expected, ctx_id):
+    from pixlstash.inference.vram_budget import VramBudget
+
+    _reset_face_globals()
+    budget = VramBudget.__new__(VramBudget)
+    budget._device = "cuda"
+    budget._max_vram_usage_mb = 8192
+    engine = _make_engine("buffalo_l", force_cpu=False)
+    engine.vram_budget = budget
+    with (
+        mock.patch("pixlstash.tasks.face_extraction_task.ensure_model_pack_available"),
+        mock.patch("insightface.app.FaceAnalysis") as fa,
+        # ROCm torch answers through the CUDA API.
+        mock.patch("torch.cuda.is_available", return_value=True),
+        mock.patch("onnxruntime.get_available_providers", return_value=available),
+    ):
+        FaceExtractionTask.get_or_init_insightface(engine)
+    kwargs = fa.call_args.kwargs
+    assert kwargs["providers"] == expected
+    # The CUDA arena options never reach an AMD or CPU provider.
+    assert kwargs["provider_options"] == [{}] * len(expected)
+    assert fa.return_value.prepare.call_args.kwargs["ctx_id"] == ctx_id
+    _reset_face_globals()
+
+
+def test_get_or_init_says_so_when_the_gpu_provider_did_not_load():
+    """An advertised provider whose libraries are missing loads as CPU silently."""
+    from pixlstash.inference.vram_budget import VramBudget
+    from pixlstash.tasks import face_extraction_task
+
+    budget = VramBudget.__new__(VramBudget)
+    budget._device = "cuda"
+    budget._max_vram_usage_mb = 8192
+    engine = _make_engine("buffalo_l", force_cpu=False)
+    engine.vram_budget = budget
+    for loaded, warned in (
+        (["CPUExecutionProvider"], True),
+        (["MIGraphXExecutionProvider", "CPUExecutionProvider"], False),
+    ):
+        _reset_face_globals()
+        with (
+            mock.patch.object(face_extraction_task, "ensure_model_pack_available"),
+            mock.patch("insightface.app.FaceAnalysis") as fa,
+            mock.patch("torch.cuda.is_available", return_value=True),
+            mock.patch(
+                "onnxruntime.get_available_providers",
+                return_value=["MIGraphXExecutionProvider", "CPUExecutionProvider"],
+            ),
+            mock.patch.object(face_extraction_task.logger, "warning") as warning,
+        ):
+            fa.return_value.det_model.session.get_providers.return_value = loaded
+            FaceExtractionTask.get_or_init_insightface(engine)
+        assert warning.called is warned, loaded
     _reset_face_globals()
 
 

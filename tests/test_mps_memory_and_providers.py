@@ -416,6 +416,22 @@ def test_rocm_keeps_its_branch():
     assert providers[0][0] == "ROCMExecutionProvider"
 
 
+def test_migraphx_is_the_amd_provider_from_ort_1_23_on():
+    """ORT 1.23 removed the ROCm provider; ``onnxruntime-migraphx`` is AMD's build."""
+    providers = onnx_execution_providers(
+        CUDA, ["MIGraphXExecutionProvider", "CPUExecutionProvider"]
+    )
+    assert providers == [("MIGraphXExecutionProvider", {}), "CPUExecutionProvider"]
+
+
+def test_rocm_is_preferred_over_migraphx():
+    """MIGraphX recompiles per input shape, so a build offering both uses ROCm."""
+    providers = onnx_execution_providers(
+        CUDA, ["MIGraphXExecutionProvider", "ROCMExecutionProvider"]
+    )
+    assert providers[0][0] == "ROCMExecutionProvider"
+
+
 def test_forcing_cpu_pins_the_cpu_provider():
     """How --force-cpu reaches ONNX Runtime, on a host that advertises CoreML."""
     providers = onnx_execution_providers(
