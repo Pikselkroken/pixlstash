@@ -6,7 +6,6 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
-import { createPinia, setActivePinia } from "pinia";
 
 vi.mock("vuetify/components", () => ({
   VCard: { template: "<div><slot /></div>" },
@@ -17,16 +16,13 @@ vi.mock("vuetify/components", () => ({
   },
   VIcon: { template: "<i />" },
   VProgressCircular: { template: "<i />" },
-  VSwitch: {
-    props: ["modelValue"],
-    emits: ["update:modelValue"],
-    template:
-      '<input type="checkbox" :checked="modelValue" @change="$emit(\'update:modelValue\', $event.target.checked)" />',
-  },
+  VSwitch: { template: "<input />" },
 }));
 
-const config = vi.hoisted(() => ({ patchUserConfig: vi.fn() }));
-vi.mock("../../api/config", () => config);
+vi.mock("../../stores/useUserPrefsStore", () => ({
+  useUserPrefsStore: () => ({ checkForUpdates: false }),
+}));
+vi.mock("../../api/config", () => ({ patchUserConfig: vi.fn() }));
 const workflows = vi.hoisted(() => ({ invalidate: vi.fn() }));
 vi.mock("../../stores/useWorkflowsStore", () => ({
   useWorkflowsStore: () => workflows,
@@ -45,7 +41,6 @@ const api = vi.hoisted(() => ({
 vi.mock("../../api/serverConfig", () => api);
 
 import PrivacySection from "./PrivacySection.vue";
-import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 
 function payload(overrides = {}) {
   return {
@@ -68,8 +63,6 @@ function button(wrapper, text) {
 }
 
 beforeEach(() => {
-  setActivePinia(createPinia());
-  config.patchUserConfig.mockReset();
   for (const fn of Object.values(api)) fn.mockReset();
   workflows.invalidate.mockReset();
   api.getGhostRetention.mockResolvedValue(payload());
@@ -175,53 +168,5 @@ describe("ghost retention", () => {
     const wrapper = await mountPane();
     expect(wrapper.text()).not.toContain("Picture ghosts");
     expect(wrapper.text()).not.toContain("Model ghosts");
-  });
-});
-
-describe("shared copies", () => {
-  const state = (wrapper, way) =>
-    wrapper.find(`[data-way="${way}"] .pv__state`).text();
-
-  it("strips on every way out until told otherwise", async () => {
-    const wrapper = await mountPane();
-    expect(["copy", "drag", "share"].map((w) => state(wrapper, w))).toEqual([
-      "Strips",
-      "Strips",
-      "Strips",
-    ]);
-  });
-
-  it("reads each way out from the user config on its own", async () => {
-    useUserPrefsStore().hydrateKeepWorkflow({ keep_workflow_drag: true });
-    const wrapper = await mountPane();
-    expect(["copy", "drag", "share"].map((w) => state(wrapper, w))).toEqual([
-      "Strips",
-      "Keeps",
-      "Strips",
-    ]);
-  });
-
-  it("saves only the row that was switched", async () => {
-    config.patchUserConfig.mockResolvedValue({});
-    const wrapper = await mountPane();
-    await wrapper.find('[data-way="copy"] input').setValue(true);
-    await flushPromises();
-    expect(config.patchUserConfig).toHaveBeenCalledWith({
-      keep_workflow_copy: true,
-    });
-    expect(state(wrapper, "copy")).toBe("Keeps");
-    expect(state(wrapper, "drag")).toBe("Strips");
-  });
-
-  it("keeps saying Strips when the save fails", async () => {
-    config.patchUserConfig.mockRejectedValue(new Error("offline"));
-    const wrapper = await mountPane();
-    await wrapper.find('[data-way="share"] input').setValue(true);
-    await flushPromises();
-    expect(state(wrapper, "share")).toBe("Strips");
-    expect(useUserPrefsStore().keepWorkflow.share).toBe(false);
-    expect(wrapper.find("[role='alert']").text()).toContain(
-      "previous choice was kept",
-    );
   });
 });

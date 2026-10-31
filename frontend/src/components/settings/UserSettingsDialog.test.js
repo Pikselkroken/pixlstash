@@ -33,6 +33,7 @@ vi.mock("./LibrariesSection.vue", () => ({ default: sectionStub }));
 vi.mock("./ImportFoldersSection.vue", () => ({ default: sectionStub }));
 vi.mock("./ModelFoldersSection.vue", () => ({ default: sectionStub }));
 vi.mock("./PrivacySection.vue", () => ({ default: sectionStub }));
+vi.mock("./SharingSection.vue", () => ({ default: sectionStub }));
 vi.mock("./ScrapheapSection.vue", () => ({ default: sectionStub }));
 vi.mock("./SnapshotsSection.vue", () => ({ default: sectionStub }));
 vi.mock("./TrainingSection.vue", () => ({ default: sectionStub }));
@@ -105,6 +106,7 @@ describe("UserSettingsDialog library navigation", () => {
       "settings-nav-scrapheap",
       "settings-nav-snapshots",
       "settings-nav-privacy",
+      "settings-nav-sharing",
       "settings-nav-comfyui",
       "settings-nav-compute",
       "settings-nav-account",
@@ -171,6 +173,7 @@ describe("UserSettingsDialog library navigation", () => {
         "settings-nav-scrapheap",
         "settings-nav-snapshots",
         "settings-nav-privacy",
+        "settings-nav-sharing",
         "settings-nav-comfyui",
         "settings-nav-compute",
         "settings-nav-backend",

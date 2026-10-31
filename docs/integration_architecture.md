@@ -1771,7 +1771,7 @@ panel and the Export panel), all false by default. The frontend holds them as
 `useUserPrefsStore().keepWorkflow.{copy,drag,share}` and saves one with
 `saveKeepWorkflow(way, value)`, which changes the local value only once the
 PATCH succeeds. A gesture sends its row as `keep_generation_data`; the backend
-does not look the row up. They are set in Settings › Privacy › Shared copies;
+does not look the row up. They are set in Settings › Sharing (`SharingSection.vue`);
 the Export panel's *Keep the workflow* switch starts from the share row and
 writes it back.
 
