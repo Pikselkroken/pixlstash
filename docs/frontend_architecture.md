@@ -5842,7 +5842,21 @@ dialog, which says so on its button.
 - **Drag.** Every row of the shelf list is `draggable` (the set grid's cards
   are not). Dragging an unselected row makes it the selection first, alone, as
   a file manager does, unless it has nothing movable, when it refuses before
-  touching the selection; the drag carries the
+  touching the selection and says why in a notice (the cut's sentence). A row
+  that is there but cannot move ends its file line `· in a locked folder`
+  (`lockedNote`), so All models tells the two apart before the drag is tried.
+  Selecting is what the drag waits on, so it has to be cheap: the rows are one
+  component, and each iteration of the list's `v-for` is wrapped in
+  `widgets/MemoBlock.vue` with `:deps="rowMemo(row)"`, so a selection change
+  redraws only the rows it touched (and any open run) rather than all of them.
+  Measured on 1,542 rows: 260-470 ms of main-thread work per click before,
+  under 50 ms after. Not `v-memo` on the template itself: the directive keeps
+  one cache slot per `v-for`, and this one is nested in the groups' loop, so
+  each group compared its rows with the previous group's and nothing ever hit.
+  `row` is a fresh object whenever `visibleRows` recomputes, so `rowMemo` lists
+  only what a row reads from outside itself; **a new outside read in the row's
+  template must be added there**, or that row draws stale until it next
+  changes. The drag carries the
   selection's movable copies under the private type `application/x-pixlstash-model-copies`
   (`MODEL_COPIES_TYPE`). `store.dragCopies` holds them for the drag, because a
   drop target cannot read `dataTransfer` data before the drop. Folders tree rows

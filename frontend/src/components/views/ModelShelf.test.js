@@ -213,6 +213,7 @@ vi.mock("../../api/modelIcons", async (importOriginal) => ({
 import ModelShelf from "./ModelShelf.vue";
 import KindMenu from "../widgets/KindMenu.vue";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
+import { useFavouritesStore } from "../../stores/useFavouritesStore";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
@@ -4738,6 +4739,35 @@ describe("the open folder (#2203)", () => {
       gone.element.dispatchEvent(start);
       expect(start.defaultPrevented).toBe(true);
       expect(store.selectedRows.map((one) => one.id)).toEqual([1]);
+      // Says why, rather than the row simply refusing to lift.
+      expect(useNoticeStore().notices.at(-1).text).toBe(
+        "None of these files can be moved: they are missing, offline or in a locked folder.",
+      );
+      wrapper.unmount();
+    });
+
+    it("says on the row that its file is in a locked folder", async () => {
+      // All models mixes rows that drag with rows that cannot; the file line
+      // is where the reader can tell them apart before trying.
+      listModelFolders.mockResolvedValue([
+        FOLDER,
+        { id: 2, path: "/hf", kind: "foreign", movable: "fixed" },
+      ]);
+      const wrapper = await mountShelf([
+        adapter({ id: 1, locations: at("Loose_One.safetensors") }),
+        adapter({
+          id: 2,
+          sha256: "b".repeat(64),
+          locations: [
+            { state: "present", folder_id: 2, folder_path: "/hf", relpath: "Held.safetensors" },
+          ],
+        }),
+      ]);
+      await flushPromises();
+      const fileLine = (id) =>
+        wrapper.find(`.shelf-row[data-row-key='${id}'] .shelf-row-file`).text();
+      expect(fileLine(2)).toContain("in a locked folder");
+      expect(fileLine(1)).not.toContain("locked");
       wrapper.unmount();
     });
 
@@ -4944,6 +4974,78 @@ describe("the list's Type, favourite and Sets columns (#2168)", () => {
     expect(create).toHaveBeenCalled();
     expect(store.place).toBe("sets");
     expect(store.view.groupBy).toBe("workflow_set");
+    wrapper.unmount();
+  });
+
+  it("redraws only the row a selection touched, in a list banded by Type", async () => {
+    // Two bands, because a memo nested in the groups' loop is what broke:
+    // `v-memo` keeps one cache slot per list, so each band compared its rows
+    // with the band before it and every row redrew on every click. A row
+    // that was not redrawn keeps the very same rendered tree.
+    const wrapper = await mountShelf([
+      adapter({ id: 1 }),
+      adapter({ id: 3, sha256: "c".repeat(64) }),
+      adapter({ id: 2, sha256: "b".repeat(64), file_kind: "checkpoint" }),
+    ]);
+    const store = useModelShelfStore();
+    store.setView({ groupBy: "type" });
+    await flushPromises();
+    expect(wrapper.findAll(".shelf-group").length).toBe(2);
+    const trees = () =>
+      new Map(
+        wrapper
+          .findAllComponents({ name: "MemoBlock" })
+          .map((block) => [block.find(".shelf-row").attributes("data-row-key"), block.vm.$.subTree]),
+      );
+    const before = trees();
+    expect([...before.keys()].sort()).toEqual(["1:lora", "2:checkpoint", "3:lora"]);
+
+    store.toggleSelected(1);
+    await flushPromises();
+    const after = trees();
+    // Booleans, because a failing vnode comparison cannot be printed.
+    const kept = (key) => after.get(key) === before.get(key);
+    expect(kept("1:lora")).toBe(false);
+    expect(kept("2:checkpoint")).toBe(true);
+    expect(kept("3:lora")).toBe(true);
+    expect(wrapper.find(".shelf-row[data-row-key='1:lora']").classes()).toContain(
+      "shelf-row--selected",
+    );
+    wrapper.unmount();
+  });
+
+  it("redraws a row when something outside it changes", async () => {
+    // The list memoises each row (`rowMemo`), so a value read from outside
+    // the row object only reaches the screen if the memo lists it. Each of
+    // these changes after mount with the row object itself untouched.
+    useUserPrefsStore().dateFormat = "eu";
+    const wrapper = await mountShelf([
+      adapter({
+        id: 1,
+        // Local noon, as the date column's own block builds its stamps.
+        added_at: new Date(2026, 6, 30, 12, 0).toISOString().slice(0, 19),
+        locations: [
+          { state: "present", folder_id: 2, folder_path: "/hf", relpath: "Held.safetensors" },
+        ],
+      }),
+    ]);
+    const row = () => wrapper.find(".shelf-row");
+    expect(row().find(".shelf-row-heart").exists()).toBe(false);
+    expect(row().find(".shelf-row-file").text()).not.toContain("locked");
+
+    // One at a time: changed together, any one listed value would redraw
+    // the row for all of them.
+    useFavouritesStore().keys = { model: ["a".repeat(64)], workflow: [], set: [] };
+    await flushPromises();
+    expect(row().find(".shelf-row-heart").exists()).toBe(true);
+    useUserPrefsStore().dateFormat = "iso";
+    await flushPromises();
+    expect(row().find(".shelf-col--date").text()).toBe("2026-07-30");
+    useModelFoldersStore().folders = [
+      { id: 2, path: "/hf", kind: "foreign", movable: "fixed" },
+    ];
+    await flushPromises();
+    expect(row().find(".shelf-row-file").text()).toContain("in a locked folder");
     wrapper.unmount();
   });
 

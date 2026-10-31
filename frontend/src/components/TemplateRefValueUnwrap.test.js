@@ -40,6 +40,7 @@ const VALUE_WRITE = /\.value\.value\s*=[^=]/;
 const NOTHING_TO_CHECK = [
   "/components/settings/SettingsTwoCol.vue",
   "/components/widgets/FieldLabel.vue",
+  "/components/widgets/MemoBlock.vue",
 ];
 
 function vueFiles(dir) {
