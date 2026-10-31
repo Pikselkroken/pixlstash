@@ -1137,8 +1137,8 @@ it, 4500 becomes the new 99999 within two sprints.
 The title bar needs a rung above `--z-modal` because in the desktop build it carries
 the window drag region and the window controls: an overlay painting over it costs the
 user the ability to move or close the window. `--z-modal` is not enough, because
-`ReviewSessionsOverlay` is itself a 4000 stacking context and its full-viewport
-sub-scrims would win that tie on DOM order. A notice then needs one rung above that.
+`ReviewSessionsOverlay`'s full-viewport sub-scrims (the shortcut sheet, the
+zoom) sit on that rung and would win the tie on DOM order. A notice then needs one rung above that.
 
 **The ladder lives inside one stacking context.** `.app-viewport` is
 `position: fixed; z-index: 0`, so every value here competes only with its siblings

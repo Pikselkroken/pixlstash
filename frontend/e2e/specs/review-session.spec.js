@@ -86,14 +86,15 @@ test.describe('review sessions — session loop', () => {
 
   test('creating a review opens a session with a scan receipt and progress', async ({ reviews, apiContext }) => {
     await reviews.createReview('man')
-    await expect(reviews.sessionTitle).toContainText('man')
+    await expect(reviews.toolbarTitle).toContainText('man')
     // The cover-sheet receipt reports the scan.
     await expect(reviews.sessionReceipt).toContainText('Scanned')
     await expect(reviews.sessionReceipt).toContainText('suspects')
-    // The rail shows this session with a done/found progress hint.
-    const rail = reviews.railSessions.filter({ hasText: 'man' }).first()
-    await expect(rail).toBeVisible()
-    await expect(rail.locator('.rs-rail-session-count')).toContainText('/')
+    // The sidebar nests this session under "Tags to review", lit, with a
+    // done/found progress hint.
+    const row = reviews.sidebarSessions.filter({ hasText: 'man' }).first()
+    await expect(row).toHaveAttribute('aria-current', 'page')
+    await expect(row.locator('.sidebar-review-session-count')).toContainText('/')
     // A decision card is presented; Undo starts disabled (empty undo stack).
     await expect(reviews.card).toBeVisible()
     await expect(reviews.undoButton).toBeDisabled()
@@ -172,7 +173,8 @@ test.describe('review sessions — session loop', () => {
     const beforeSkipped = await tallyNum(reviews.tallySkipped)
     await reviews.skipButton.click()
     await expect.poll(async () => tallyNum(reviews.tallySkipped)).toBe(beforeSkipped + 1)
-    // The rail progress hint reads "done/found · N skipped".
+    // The board footer's progress hint reads "done/found · N skipped".
+    await reviews.back.click()
     const rail = reviews.railSessions.filter({ hasText: 'smile' }).first()
     await expect(rail.locator('.rs-rail-session-count')).toContainText(`${beforeSkipped + 1} skipped`)
     // Skip writes nothing to the receipt's decided counts.

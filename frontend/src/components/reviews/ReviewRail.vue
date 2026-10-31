@@ -1,37 +1,10 @@
 <template>
-  <nav ref="railRootRef" class="rs-rail">
-    <!-- Close + title live in the rail (the rail owns the overlay chrome). -->
-    <div class="rs-rail-head">
-      <button
-        class="rs-rail-close"
-        type="button"
-        aria-label="Close"
-        aria-keyshortcuts="Escape"
-        @click="emit('close')"
-      >
-        <Tooltip
-          text="Close"
-          shortcut="Esc"
-          activator="parent"
-          :describe="false"
-        />
-        <v-icon size="18">mdi-close</v-icon>
-      </button>
-      <h1 class="rs-rail-title">Review tags</h1>
-    </div>
-
-    <!-- Scrollable middle - navigation keeps priority over the sticker shelf. -->
+  <section ref="railRootRef" class="rs-rail" aria-label="Your reviews">
+    <!-- The board's footer: the open reviews with their scope and Abort, the
+         archived receipts and the sticker shelf. Getting to a review is the
+         sidebar's job (its rows under "Tags to review"); the way out of the
+         view is the toolbar's back button. -->
     <div class="rs-rail-scroll">
-      <button
-        class="rs-rail-item rs-rail-board"
-        :class="{ 'rs-rail-item--active': store.view.type === 'board' }"
-        type="button"
-        @click="store.showBoard()"
-      >
-        <v-icon size="16" class="rs-rail-board-icon">mdi-heart-pulse</v-icon>
-        <span class="rs-rail-board-label">Tag health</span>
-      </button>
-
       <div class="rs-rail-label">Open reviews</div>
       <!-- Each row is a wrapper DIV so the discard control can be a real
            sibling <button> (never nested inside the session button), revealed
@@ -305,7 +278,7 @@
         />
       </div>
     </div>
-  </nav>
+  </section>
 </template>
 
 <script setup>
@@ -314,7 +287,7 @@ import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import ReviewSticker from "./ReviewSticker.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 
-const emit = defineEmits(["close", "new-review"]);
+const emit = defineEmits(["new-review"]);
 const store = useReviewSessionsStore();
 
 const abortDialog = ref(null); // { id, tag, changes } | null
@@ -505,56 +478,13 @@ function archivedSummary(a) {
 
 <style scoped>
 .rs-rail {
-  width: 244px;
-  flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  padding: var(--space-3);
-  background: rgba(var(--v-theme-on-dark-surface), 0.04);
-  border-right: 1px solid rgba(var(--v-theme-on-dark-surface), 0.14);
-}
-
-.rs-rail-head {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  margin-bottom: var(--space-2);
-  border-radius: var(--radius-sm);
-  background: color-mix(
-    in srgb,
-    rgb(var(--v-theme-primary)) 12%,
-    rgb(var(--v-theme-dark-surface))
-  );
-  border: 1px solid
-    color-mix(in srgb, rgb(var(--v-theme-primary)) 25%, transparent);
-}
-.rs-rail-close {
-  width: 30px;
-  height: 30px;
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-sm);
-  color: rgb(var(--v-theme-on-primary));
-  background: rgb(var(--v-theme-primary));
-}
-.rs-rail-close:hover {
-  background-image: var(--hover-shade);
-}
-.rs-rail-title {
-  font-size: var(--text-md);
-  font-weight: var(--weight-bold);
-  letter-spacing: 0.01em;
-  white-space: nowrap;
+  max-width: 480px;
+  color: rgb(var(--v-theme-on-dark-surface));
 }
 
 .rs-rail-scroll {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
@@ -581,19 +511,6 @@ function archivedSummary(a) {
 .rs-rail-item--active:hover {
   background: linear-gradient(rgba(var(--v-theme-on-dark-surface), 0.16), rgba(var(--v-theme-on-dark-surface), 0.16))
     rgba(var(--v-theme-dark-surface-primary), 0.2);
-}
-
-.rs-rail-board {
-  flex-direction: row;
-  align-items: center;
-  gap: var(--space-2);
-}
-.rs-rail-board-icon {
-  color: rgb(var(--v-theme-accent));
-}
-.rs-rail-board-label {
-  font-size: var(--text-sm);
-  font-weight: var(--weight-semibold);
 }
 
 .rs-rail-label {
@@ -900,8 +817,6 @@ function archivedSummary(a) {
 /* Sticker shelf: hard-capped height + own scroll so navigation always wins
    the space fight. */
 .rs-shelf {
-  flex-shrink: 0;
-  max-height: 34%;
   display: flex;
   flex-direction: column;
   padding-top: var(--space-2);

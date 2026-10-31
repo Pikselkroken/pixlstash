@@ -6,10 +6,10 @@
       :award="store.activeAward"
     />
 
-    <!-- Session header: title + scan receipt + staleness + gamify pill + tally,
-         all in normal flow (nothing absolutely positioned over anything). -->
+    <!-- Session header: scan receipt + staleness + gamify pill + tally, all in
+         normal flow (nothing absolutely positioned over anything). The title
+         is the view's toolbar's. -->
     <div class="rs-session-head">
-      <span class="rs-session-title">Review: “{{ session.tag }}”</span>
       <span class="rs-session-receipt">{{ receiptLine }}</span>
       <span class="rs-session-spacer"></span>
       <span v-if="session.stale" class="rs-session-stale">
@@ -738,10 +738,6 @@ defineExpose({ handleKey });
   gap: var(--space-4);
   flex-wrap: wrap;
   padding: 20px var(--space-6) var(--space-4);
-}
-.rs-session-title {
-  font-size: var(--text-lg);
-  font-weight: var(--weight-bold);
 }
 .rs-session-receipt {
   font-size: var(--text-2xs);

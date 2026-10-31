@@ -222,7 +222,7 @@ test.describe('deep links: cold loads', () => {
       await page.goto(`/?review=${id}`)
       await expect(reviews.overlay).toBeVisible({ timeout: 15_000 })
       await expect(reviews.session).toBeVisible()
-      await expect(reviews.sessionTitle).toContainText(tag)
+      await expect(reviews.toolbarTitle).toContainText(tag)
     } finally {
       const res = await apiContext.post(`/api/v1/reviews/${id}/abort`)
       expect(res.ok()).toBe(true)

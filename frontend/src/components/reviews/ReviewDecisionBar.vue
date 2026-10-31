@@ -279,7 +279,9 @@ onUnmounted(() => {
   align-items: center;
   justify-content: flex-end;
   gap: var(--space-3);
-  flex-wrap: nowrap;
+  /* The review shares the centre column with the app's sidebar, so on a
+     narrow window the verbs wrap rather than run off the left edge. */
+  flex-wrap: wrap;
   min-height: 44px;
 }
 

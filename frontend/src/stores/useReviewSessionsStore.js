@@ -217,6 +217,9 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   // lists have landed - an id can only be resolved to an open session vs an
   // archived receipt vs nothing once both lists exist.
   const pendingRestoreViewId = ref(null);
+  // Bumped by the sidebar's "New review…" row; the view, which owns the
+  // dialog, opens it on each bump.
+  const newReviewTick = ref(0);
 
   // Bumped by resetSession(). Every server read here belongs to exactly one
   // authentication epoch; a response that lands after the credential changed
@@ -1299,6 +1302,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     overlayOpen,
     view,
     pendingRestoreViewId,
+    newReviewTick,
     error,
     sessions,
     archived,
