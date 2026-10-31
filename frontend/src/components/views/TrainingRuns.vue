@@ -120,7 +120,7 @@
           :tabindex="index === cursor ? 0 : -1"
           :data-run-index="index"
           :data-run-key="card.key"
-          @click="$event.detail > 1 || toggle(card)"
+          @click="$event.detail > 1 || onCardClick(card, $event)"
           @dblclick="onCardDblClick(card)"
           @contextmenu.prevent="openMenu(card, $event.clientX, $event.clientY)"
           @focus="cursor = index"
@@ -542,8 +542,13 @@ const {
   jobsFailed,
   source,
 } = storeToRefs(runsStore);
-const { isChosen, toggle, selectAll: pickAll, clearSelection: unpick } =
-  runsStore;
+const {
+  isChosen,
+  toggle,
+  pick,
+  selectAll: pickAll,
+  clearSelection: unpick,
+} = runsStore;
 
 const gridEl = ref(null);
 const destinationId = ref(null);
@@ -576,9 +581,18 @@ function closeRun() {
   router.push({ name: "models-runs" });
 }
 
+/** Click, Ctrl+click, Shift+click: the same three gestures as every grid. */
+function onCardClick(card, event) {
+  pick(card, {
+    ctrl: event.ctrlKey || event.metaKey,
+    shift: event.shiftKey,
+  });
+}
+
 /**
- * The pair's first click toggled (the second is ignored), so a card that was
- * already selected is picked again before its page opens.
+ * The pair's first click selected (the second is ignored); a Ctrl+double-click
+ * unticked a card that was already selected, so it is picked again before its
+ * page opens.
  */
 function onCardDblClick(card) {
   if (!isChosen(card)) toggle(card);
@@ -604,10 +618,7 @@ function canStop(card) {
 /** Right-click: the card becomes the selection unless it is already in it. */
 async function openMenu(card, x, y) {
   cursor.value = cards.value.indexOf(card);
-  if (!isChosen(card)) {
-    unpick();
-    toggle(card);
-  }
+  if (!isChosen(card)) pick(card);
   cardMenuOpen.value = false;
   await nextTick();
   menuKey.value = card.key;
@@ -751,7 +762,7 @@ function clearSelection() {
   countMenuOpen.value = false;
 }
 
-/** Arrow keys move the cursor; Space and Enter tick. Escape clears. */
+/** Arrow keys move the cursor; Space and Enter tick. Ctrl+A selects all, Escape clears. */
 function onGridKeydown(event) {
   const menuKey =
     event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey);
@@ -760,6 +771,15 @@ function onGridKeydown(event) {
     event.preventDefault();
     const rect = cardEl.getBoundingClientRect();
     openMenu(cards.value[Number(cardEl.dataset.runIndex)], rect.left, rect.bottom);
+    return;
+  }
+  if (
+    (event.ctrlKey || event.metaKey) &&
+    !event.altKey &&
+    event.key?.toLowerCase() === "a"
+  ) {
+    event.preventDefault();
+    selectAll();
     return;
   }
   if (event.key === "Escape" && chosen.value.length) {
