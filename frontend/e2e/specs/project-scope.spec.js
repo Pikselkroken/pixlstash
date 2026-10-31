@@ -67,17 +67,37 @@ test.describe('the sidebar project scope', () => {
 })
 
 // Below Review, Library | Folders (#2448): Library is the dropdown and the
-// People and Sets it narrows, Folders the DEFAULT_LAYOUT tree. Flipping it is
-// a display choice and never moves the grid; Find filters names in either.
+// People and Sets it narrows, Folders the folders pictures are filed in
+// (#2458). Flipping it is a display choice and never moves the grid; Find
+// filters names in either.
 test.describe('the Library / Folders switch', () => {
   test.beforeEach(async ({ grid }) => {
     await grid.goto()
   })
 
-  test('Folders draws Global and Unassigned and never moves the grid', async ({
+  test('Folders draws where pictures are filed and never moves the grid', async ({
     page,
     sidebar,
+    apiContext,
   }) => {
+    // The fixture library is flat (nothing in a folder), so the tree the
+    // server would read is stood in for: each project's folder holding a set
+    // folder, then Global and Unassigned. The real read is tests/
+    // test_library_layout.py's.
+    const projects = await (await apiContext.get('/api/v1/projects')).json()
+    const folders = projects.flatMap((p) => [
+      { path: p.name, name: p.name, kind: 'project', entity_id: p.id, project_id: p.id, count: 2 },
+      { path: `${p.name}/2024`, name: '2024', kind: 'folder', entity_id: null, project_id: p.id, count: 1 },
+    ])
+    folders.push(
+      { path: 'Global', name: 'Global', kind: 'global', entity_id: null, project_id: null, count: 1 },
+      { path: 'Unassigned', name: 'Unassigned', kind: 'unassigned', entity_id: null, project_id: null, count: 3 },
+    )
+    await page.route(
+      (url) => url.pathname === '/api/v1/library/folders',
+      (route) => route.fulfill({ json: { folders } }),
+    )
+
     await sidebar.chooseFirstProject()
     await expect.poll(() => page.url()).toContain('/project/')
     const url = page.url()
@@ -85,10 +105,13 @@ test.describe('the Library / Folders switch', () => {
     await page.getByRole('radio', { name: 'Folders' }).click()
     await expect(sidebar.scopeButton).toBeHidden()
     await expect(page.getByTestId('sidebar-folder-global')).toBeVisible()
-    await expect(page.getByTestId('sidebar-folder-unassigned')).toBeVisible()
-    await expect(
-      page.locator('[data-testid="sidebar-folder-project"][aria-current="page"]'),
-    ).toHaveCount(1)
+    await expect(page.getByTestId('sidebar-folder-unassigned')).toContainText('3')
+    const current = page.locator(
+      '[data-testid="sidebar-folder-project"][aria-current="page"]',
+    )
+    await expect(current).toHaveCount(1)
+    // The chosen project's branch opens on the folder filed inside it.
+    await expect(page.getByTestId('sidebar-folder-folder')).toHaveCount(1)
     expect(page.url()).toBe(url)
 
     await page.getByTestId('sidebar-folder-unassigned').click()

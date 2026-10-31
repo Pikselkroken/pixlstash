@@ -1189,12 +1189,13 @@ def test_loopback_owner_only_public_403():
 _OPEN_TREE_FOLDER = f"{API}/library/folders/open"
 
 
-def test_open_tree_folder_is_loopback_only_and_opens_the_rendered_folder(
+def test_open_tree_folder_is_loopback_only_and_opens_only_a_listed_folder(
     monkeypatch,
 ):
-    """Both directions on one server. A loopback owner reaches the handler,
-    which opens the folder the node renders to inside the library root, and
-    404s one not on disk; a LAN owner is refused with the flag on."""
+    """Both directions on one server. A loopback owner opens a folder the
+    Folders tree lists (one a picture is filed in, or above one), and nothing
+    else: an unlisted path, a climb out and an empty folder on disk are all
+    404. A LAN owner is refused with the flag on."""
     from pixlstash.routes import library_layout as layout_routes
 
     opened = []
@@ -1207,58 +1208,71 @@ def test_open_tree_folder_is_loopback_only_and_opens_the_rendered_folder(
     with _owner_env() as env:
         server, owner = env["server"], env["owner"]
         root = server.vault.image_root
-        os.makedirs(os.path.join(root, "Global"), exist_ok=True)
+        os.makedirs(os.path.join(root, "Global", "Mira"), exist_ok=True)
+        os.makedirs(os.path.join(root, "Empty"), exist_ok=True)
+
+        def _add(session):
+            pic = Picture(file_path="Global/Mira/a.png")
+            session.add(pic)
+            session.commit()
+            return pic.id
+
+        server.vault.db.run_task(_add)
         with _enforcing(server):
-            r = owner.post(_OPEN_TREE_FOLDER, json={"kind": "global"})
+            r = owner.get(f"{API}/library/folders")
             assert r.status_code == 200, r.text
-            assert r.json()["folder"] == "Global"
-            assert opened == [os.path.realpath(os.path.join(root, "Global"))]
+            assert [f["path"] for f in r.json()["folders"]] == [
+                "Global",
+                "Global/Mira",
+            ]
 
-            r = owner.post(_OPEN_TREE_FOLDER, json={"kind": "unassigned"})
-            assert r.status_code == 404, r.text
-            r = owner.post(_OPEN_TREE_FOLDER, json={"kind": "project"})
+            r = owner.post(_OPEN_TREE_FOLDER, json={"path": "Global/Mira"})
+            assert r.status_code == 200, r.text
+            assert r.json()["folder"] == "Global/Mira"
+            assert opened == [os.path.realpath(os.path.join(root, "Global", "Mira"))]
+
+            # On disk but holding no picture, a climb out, and the root itself.
+            for path in ("Empty", "..", "Global/..", "", "/"):
+                r = owner.post(_OPEN_TREE_FOLDER, json={"path": path})
+                assert r.status_code == 404, (path, r.text)
+            r = owner.post(_OPEN_TREE_FOLDER, json={"kind": "global"})
             assert r.status_code == 422, r.text
-            # An id the kind does not use is refused, not ignored.
-            for stray in (
-                {"kind": "global", "project_id": 1},
-                {"kind": "unassigned", "project_id": 1},
-                {"kind": "global", "entity_id": 1},
-            ):
-                r = owner.post(_OPEN_TREE_FOLDER, json=stray)
-                assert r.status_code == 422, (stray, r.text)
-            r = owner.post(
-                _OPEN_TREE_FOLDER, json={"kind": "project", "project_id": 999999}
-            )
-            assert r.status_code == 404, r.text
 
-            # A symlink inside the library that leads out of it is refused.
-            # Creating one needs a privilege Windows runners may lack; there
-            # the escape is not set up, so it is not asserted, and says so.
+            # A listed folder replaced by a symlink leading out of the library
+            # is refused. Creating one needs a privilege Windows runners may
+            # lack; there the escape is not set up, so it is not asserted.
             outside = tempfile.mkdtemp()
-            link = os.path.join(root, "Unassigned")
+            moved = os.path.join(root, "Global", "Mira-moved")
+            link = os.path.join(root, "Global", "Mira")
+            os.rename(link, moved)
             try:
-                os.symlink(outside, link, target_is_directory=True)
-            except OSError as e:
-                print(f"symlink refused on this host ({e}); escape check skipped")
-            else:
                 try:
-                    r = owner.post(_OPEN_TREE_FOLDER, json={"kind": "unassigned"})
-                    assert r.status_code == 404, r.text
-                finally:
-                    os.unlink(link)
+                    os.symlink(outside, link, target_is_directory=True)
+                except OSError as e:
+                    print(f"symlink refused on this host ({e}); escape check skipped")
+                else:
+                    try:
+                        r = owner.post(_OPEN_TREE_FOLDER, json={"path": "Global/Mira"})
+                        assert r.status_code == 404, r.text
+                    finally:
+                        os.unlink(link)
+                # Listed, but gone from disk.
+                r = owner.post(_OPEN_TREE_FOLDER, json={"path": "Global/Mira"})
+                assert r.status_code == 404, r.text
             finally:
+                os.rename(moved, link)
                 os.rmdir(outside)
 
             # A host with no desktop says so rather than answering ok.
             monkeypatch.setattr(layout_routes, "open_in_file_manager", lambda p: False)
-            r = owner.post(_OPEN_TREE_FOLDER, json={"kind": "global"})
+            r = owner.post(_OPEN_TREE_FOLDER, json={"path": "Global"})
             assert r.status_code == 500, r.text
             monkeypatch.setattr(layout_routes, "open_in_file_manager", fake_open)
 
             with _remote_host_ops(server, True):
                 r = owner.post(
                     _OPEN_TREE_FOLDER,
-                    json={"kind": "global"},
+                    json={"path": "Global"},
                     headers=_xff(LAN_IPV4),
                 )
                 assert _is_loopback_403(r), f"{r.status_code}: {r.text}"

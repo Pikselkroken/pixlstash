@@ -317,6 +317,8 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         "/api/v1/favourites",
         "/api/v1/insights",
         "/api/v1/libraries",
+        # The Folders tree (#2458): the owner's folder names and counts.
+        "/api/v1/library/folders",
         "/api/v1/model-folders",
         "/api/v1/model-folders/comfyui-reads",
         "/api/v1/model-folders/devices",

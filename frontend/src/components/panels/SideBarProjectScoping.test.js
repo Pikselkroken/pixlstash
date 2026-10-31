@@ -101,10 +101,20 @@ const PROJECTS = [
 const CHARACTERS = [
   { id: 1, name: "Ada", image_count: 40, project_image_count: 7 },
 ];
+// GET /library/folders: Book holding Ada's folder, which holds the owner's
+// own "2024"; Global; Unassigned. Cards has nothing filed, so no folder.
+const FOLDERS = [
+  { path: "Book", name: "Book", kind: "project", entity_id: 3, project_id: 3, count: 6 },
+  { path: "Book/Ada", name: "Ada", kind: "character", entity_id: 1, project_id: 3, count: 5 },
+  { path: "Book/Ada/2024", name: "2024", kind: "folder", entity_id: null, project_id: 3, count: 2 },
+  { path: "Global", name: "Global", kind: "global", entity_id: null, project_id: null, count: 1 },
+  { path: "Unassigned", name: "Unassigned", kind: "unassigned", entity_id: null, project_id: null, count: 4 },
+];
 
 /** Route each GET to a plausible, well-shaped body for its endpoint. */
 function respond(url) {
   const u = String(url ?? "");
+  if (u.includes("/library/folders")) return { data: { folders: FOLDERS } };
   if (u.includes("/projects")) return { data: PROJECTS };
   if (u.includes("/characters")) return { data: CHARACTERS };
   if (u.includes("/picture_sets")) return { data: [] };
@@ -192,9 +202,13 @@ describe("the docked rail (#2448)", () => {
     );
     wrapper.vm.setTreeMode("folders");
     await flushPromises();
+    // One button per top-level folder: Cards has nothing filed, so none.
     expect(railNames(wrapper)).toEqual(
-      expect.arrayContaining(["Book", "Cards", "Global", "Unassigned"]),
+      expect.arrayContaining(["Book", "Global", "Unassigned"]),
     );
+    expect(railNames(wrapper)).not.toContain("Cards");
+    const book = wrapper.vm.railNodes.find((n) => n.label === "Book");
+    expect(book.items().map((i) => i.label)).toEqual(["All of Book", "Ada"]);
     expect(railNames(wrapper)).not.toContain("Any project");
     wrapper.vm.setTreeMode("library");
     wrapper.unmount();
@@ -401,22 +415,25 @@ describe("the project dropdown under the switch (#2159, #2448)", () => {
   });
 });
 
-describe("the Folders tree (#2448)", () => {
-  it("draws Project, then Global and Unassigned, and remembers the mode", async () => {
+describe("the Folders tree (#2448, #2458)", () => {
+  it("draws the folders pictures are filed in, and remembers the mode", async () => {
     const wrapper = mountSidebar();
     await refreshAndSettle(wrapper);
     wrapper.vm.setTreeMode("folders");
     await flushPromises();
+    wrapper.vm.expandTreeKeys(["f:Book", "f:Book/Ada"]);
+    await flushPromises();
 
-    const kinds = wrapper
-      .findAll(".sidebar-folder-row")
-      .map((row) => row.attributes("data-testid"));
-    expect(kinds).toEqual([
+    const rows = wrapper.findAll(".sidebar-folder-row");
+    expect(rows.map((row) => row.attributes("data-testid"))).toEqual([
       "sidebar-folder-project",
-      "sidebar-folder-project",
+      "sidebar-folder-character",
+      "sidebar-folder-folder",
       "sidebar-folder-global",
       "sidebar-folder-unassigned",
     ]);
+    // The count is what is filed there, not the person's total (7 in Book).
+    expect(rows[1].find(".sidebar-list-count").text()).toBe("5");
     expect(
       Object.entries(window.localStorage).some(
         ([key, value]) =>
@@ -427,53 +444,73 @@ describe("the Folders tree (#2448)", () => {
     wrapper.unmount();
   });
 
-  it("opens Unassigned as no project, no person, no set", async () => {
+  it("opens a person inside the project it is filed under, and Unassigned in none", async () => {
+    const wrapper = mountSidebar();
+    await refreshAndSettle(wrapper);
+    wrapper.vm.setTreeMode("folders");
+    wrapper.vm.expandTreeKeys(["f:Book"]);
+    await flushPromises();
+
+    await wrapper.find('[data-testid="sidebar-folder-character"]').trigger("click");
+    let [payload] = wrapper.emitted("select-character").at(-1);
+    expect(payload.id).toBe(1);
+    expect(payload.projectContext).toEqual({ mode: "project", projectId: 3 });
+
+    await wrapper.find('[data-testid="sidebar-folder-unassigned"]').trigger("click");
+    [payload] = wrapper.emitted("select-character").at(-1);
+    expect(payload.id).toBe("UNASSIGNED");
+    expect(payload.projectContext).toEqual({ mode: "project", projectId: null });
+    wrapper.vm.setTreeMode("library");
+    wrapper.unmount();
+  });
+
+  it("says so when nothing is filed in a folder", async () => {
+    apiGet.mockImplementation((url) =>
+      Promise.resolve(
+        String(url).includes("/library/folders")
+          ? { data: { folders: [] } }
+          : respond(url),
+      ),
+    );
     const wrapper = mountSidebar();
     await refreshAndSettle(wrapper);
     wrapper.vm.setTreeMode("folders");
     await flushPromises();
-
-    await wrapper.find('[data-testid="sidebar-folder-unassigned"]').trigger("click");
-    const [payload] = wrapper.emitted("select-character").at(-1);
-    expect(payload.id).toBe("UNASSIGNED");
-    expect(payload.projectContext).toEqual({ mode: "project", projectId: null });
-
-    // And its count is read in no project, whatever the scope.
-    expect(
-      apiGet.mock.calls.some(([url, config]) =>
-        String(url).includes("/characters/UNASSIGNED/summary") &&
-        config?.params?.project_id === "UNASSIGNED",
-      ),
-    ).toBe(true);
+    expect(wrapper.find('[data-testid="sidebar-folders-empty"]').exists()).toBe(true);
     wrapper.vm.setTreeMode("library");
+    wrapper.unmount();
+  });
+
+  it("is not offered to a read-only session, which cannot read it", async () => {
+    // Unscoped READ: it can read every project, but not the owner's disk.
+    isReadOnly.value = true;
+    sessionContext.value = { scope: "READ", resource_type: null };
+    window.localStorage.setItem("pixlstash:sidebar:treeMode:", "folders");
+    const wrapper = mountSidebar();
+    await refreshAndSettle(wrapper);
+    expect(wrapper.find(".sidebar-tree-switch").exists()).toBe(false);
+    expect(wrapper.find(".sidebar-folder-row").exists()).toBe(false);
+    expect(
+      apiGet.mock.calls.some(([url]) => String(url).includes("/library/folders")),
+    ).toBe(false);
     wrapper.unmount();
   });
 });
 
-describe("Open in file manager on a Folders row (#2448)", () => {
-  it("names the node by kind and ids, never by path", async () => {
+describe("Open in file manager on a Folders row (#2448, #2458)", () => {
+  it("names the folder by the path the tree was given", async () => {
     const wrapper = mountSidebar();
     await refreshAndSettle(wrapper);
     wrapper.vm.setTreeMode("folders");
-    wrapper.vm.expandTreeKeys(["f:global"]);
+    wrapper.vm.expandTreeKeys(["f:Book", "f:Book/Ada"]);
     await flushPromises();
 
-    const book = wrapper.vm.folderRows.find((r) => r.key === "f:p:3");
-    wrapper.vm.openFolderRowMenu(book, { clientX: 1, clientY: 1 });
-    expect(wrapper.vm.sidebarCtxFolderRow.key).toBe("f:p:3");
-    await wrapper.vm.openFolderInFileManager(book);
+    const own = wrapper.vm.folderRows.find((r) => r.key === "f:Book/Ada/2024");
+    wrapper.vm.openFolderRowMenu(own, { clientX: 1, clientY: 1 });
+    expect(wrapper.vm.sidebarCtxFolderRow.key).toBe("f:Book/Ada/2024");
+    await wrapper.vm.openFolderInFileManager(own);
     expect(apiPost).toHaveBeenLastCalledWith("/library/folders/open", {
-      kind: "project",
-      project_id: 3,
-      entity_id: undefined,
-    });
-
-    const ada = wrapper.vm.folderRows.find((r) => r.key === "f:global/c:1");
-    await wrapper.vm.openFolderInFileManager(ada);
-    expect(apiPost).toHaveBeenLastCalledWith("/library/folders/open", {
-      kind: "character",
-      project_id: null,
-      entity_id: 1,
+      path: "Book/Ada/2024",
     });
     wrapper.vm.setTreeMode("library");
     wrapper.unmount();
@@ -509,6 +546,7 @@ describe("Find in library (#2448)", () => {
     const wrapper = mountSidebar();
     await refreshAndSettle(wrapper);
     wrapper.vm.setTreeMode("folders");
+    await flushPromises();
     await wrapper.find('[data-testid="sidebar-find"]').setValue("boo");
 
     const rows = wrapper.findAll('[data-testid="sidebar-folder-project"]');

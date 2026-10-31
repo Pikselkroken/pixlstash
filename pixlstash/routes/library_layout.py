@@ -32,8 +32,8 @@ from pixlstash.services.layout_migration_service import (
 from pixlstash.services.layout_move_service import (
     move_to_match,
     picture_exists,
+    library_folders,
     picture_layout,
-    tree_node_relative_folder,
 )
 from pixlstash.services.library_settings_service import get_layout, set_layout
 from pixlstash.services.operation_log_service import request_context
@@ -340,16 +340,29 @@ class MoveToMatchResponse(BaseModel):
     operation_id: Optional[int] = None
 
 
-class OpenTreeFolderRequest(BaseModel):
-    """A node of the Media sidebar's Folders tree (#2448), by ids, never a path."""
-
-    kind: Literal["project", "global", "unassigned", "character", "set"]
-    project_id: Optional[int] = Field(
-        default=None,
-        description="The node's project; null for one under Global.",
-    )
+class LibraryFolder(BaseModel):
+    path: str = Field(description="Relative to the library root, `/`-joined.")
+    name: str = Field(description="The folder's own name on disk.")
+    kind: Literal["project", "character", "set", "global", "unassigned", "folder"]
     entity_id: Optional[int] = Field(
-        default=None, description="The person or set of a character or set node."
+        default=None,
+        description="The project, person or set this level names, by the layout.",
+    )
+    project_id: Optional[int] = Field(
+        default=None, description="The nearest project level at or above it."
+    )
+    count: int = Field(description="Pictures filed in this folder and below it.")
+
+
+class LibraryFoldersResponse(BaseModel):
+    folders: list[LibraryFolder]
+
+
+class OpenTreeFolderRequest(BaseModel):
+    """A folder of the Media sidebar's Folders tree (#2458), as that tree listed it."""
+
+    path: str = Field(
+        description="A `path` from GET /library/folders; anything else is 404."
     )
 
 
@@ -562,33 +575,48 @@ def create_router(server) -> APIRouter:
             operation_id=result["operation_id"],
         )
 
+    @router.get(
+        "/library/folders",
+        include_in_schema=False,
+        summary="The folders pictures are filed in",
+        description=(
+            "Every folder of the library root that holds a picture, or holds a "
+            "folder that does, read from the pictures' stored paths rather "
+            "than the disk. Each level is read through the library's layout, "
+            "so one naming a project, person or set carries its id. Backs the "
+            "Media sidebar's Folders tree."
+        ),
+        response_model=LibraryFoldersResponse,
+    )
+    def list_library_folders():
+        folders = library_folders(server.vault)
+        return LibraryFoldersResponse(folders=folders)
+
     @router.post(
         "/library/folders/open",
         include_in_schema=False,
-        summary="Open a Folders-tree node in the file manager",
+        summary="Open a Folders-tree folder in the file manager",
         description=(
-            "Shows the folder a node of the Media sidebar's Folders tree "
-            "stands for in the file manager of the machine PixlStash runs on. "
-            "The node is named by ids; the folder is rendered from their names "
-            "with the default layout, which is how the tree draws it, and must "
-            "lie inside the library root after symlinks are resolved. A folder "
-            "nothing has been filed into yet is 404, not an empty window."
+            "Shows a folder of the Media sidebar's Folders tree in the file "
+            "manager of the machine PixlStash runs on. Only a `path` that GET "
+            "/library/folders lists is opened, and it must lie inside the "
+            "library root after symlinks are resolved."
         ),
         response_model=OpenTreeFolderResponse,
         responses={
-            404: {"description": "No such node, or its folder is not on disk."},
+            404: {"description": "No picture is filed there, or it is gone."},
             500: {"description": "This host has no file manager to open."},
         },
     )
     def open_tree_folder(body: OpenTreeFolderRequest = Body(...)):
-        try:
-            relative = tree_node_relative_folder(
-                server.vault, body.kind, body.project_id, body.entity_id
+        relative = body.path
+        listed = library_folders(server.vault)
+        # Only a folder the tree lists: the path comes from the client and
+        # names what a host file manager is about to open.
+        if relative not in {folder["path"] for folder in listed}:
+            raise HTTPException(
+                status_code=404, detail=f"No picture is filed in {relative}"
             )
-        except LookupError as e:
-            raise HTTPException(status_code=404, detail=str(e))
-        except ValueError as e:
-            raise HTTPException(status_code=422, detail=str(e))
         root = os.path.realpath(server.vault.image_root)
         folder = os.path.realpath(os.path.join(root, *relative.split("/")))
         try:
@@ -597,8 +625,8 @@ def create_router(server) -> APIRouter:
             # Windows: a junction to another drive has no common path at all.
             inside = False
         if not inside:
-            # folder_name keeps every component inside the root; a symlinked
-            # directory in the library is the one way out, and it is refused.
+            # A symlinked directory in the library is the one way out, and it
+            # is refused.
             logger.warning(
                 "Refusing to open %r: it resolves outside the library root %r.",
                 relative,
@@ -607,8 +635,7 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=404, detail="Folder not found on disk")
         if not os.path.isdir(folder):
             raise HTTPException(
-                status_code=404,
-                detail=f"Nothing is filed in {relative} yet",
+                status_code=404, detail=f"{relative} is no longer on disk"
             )
         if not open_in_file_manager(folder):
             raise HTTPException(status_code=500, detail="Failed to open the folder")
