@@ -6583,8 +6583,20 @@ Settings share: queued, running or stopping, or `completed` with no
 being imported (#2291). While it draws them, *Stop training* reads *Skip
 previews*; while it imports there is nothing to stop.
 
-**Export dataset** sits under the *Trained on* strip once the run's payload
-names a `dataset_snapshot_id` (#2123): a ghost `AppButton` that fetches
+**The page and the rail split by question.** With a run open, the page says
+how it went (the failure, the loss, the samples) and the rail what it was made
+of (set-up, the pictures it trained on, the checkpoints it left), so nothing
+is said in both; see the rail's *On Training runs* below. A failure is one
+notice: the backend's one-sentence `error` (`live_view.failure_summary`) in
+bold, with the trainer's whole text (`report`, host paths redacted) behind
+*Full message* and *Copy* when it says more. A step the run never reached is a
+quiet dashed cell; one it passed without a picture says "not drawn", and the
+column a failed run broke at says "failed here". The end phases (*Saving*,
+*Importing to the shelf*) sit after the last column, and are not drawn for a
+run that failed or was stopped.
+
+**Export dataset** is the rail's *Trained on* section action once the run's
+payload names a `dataset_snapshot_id` (#2123): it fetches
 `GET /training/jobs/{id}/snapshot/export` and hands the zip to `saveFileAs`.
 It exports the frozen record, not the set as it is now: the captions as
 recorded, and each image from the run's dataset folder only while its bytes
@@ -6747,11 +6759,25 @@ set's own slot ＋ pickers; nothing drags from the rail any more.
   (status, bar, steps, time left, loss chart and value; a red *Stop* while it
   trains, *Skip previews* while a trained run draws them), *Samples* (prompts × the last four sampled steps, the no-trigger
   check prompt marked, *Open run* for a run PixlStash trained), *Checkpoints*
-  (each save with its size), *Set-up* (trained on, base, trigger, rank · LR,
-  folder). A run PixlStash trains is read from `GET /training/jobs/{id}/live`,
-  polled every 2 s while it trains; one trained elsewhere is described from the
-  folder listing alone. Several runs: the checkpoint count, the base models and
-  the stacking rule. *Clear* lets go of the runs.
+  (each save with its step and size), *Set-up* (trained on, base, trigger, rank ·
+  LR, folder). The loss is the chart's smoothed value, the one the run page
+  shows, and says so. A run PixlStash trains is read from
+  `GET /training/jobs/{id}/live`, polled every 2 s while it trains; one trained
+  elsewhere is described from the folder listing alone. Several runs: the
+  checkpoint count, the base models and the stacking rule. *Clear* lets go of
+  the runs.
+- **With a run's page open** (`?run=<uuid>`) the rail describes that run whether
+  or not the grid ticked it, with `open`: *Training* and *Samples* go (the page
+  shows them larger), *Set-up* moves to the top and gains the plan (steps and
+  the preview interval), *Trained on* holds the dataset's pictures as a 3 × 3
+  grid with *Export* (a click opens a picture in the lightbox, `?from=` bringing
+  it back to the run), and *Checkpoints* offers *Put step N on the shelf* for a
+  run that is not training: its last checkpoint, unless that checkpoint is on
+  the shelf already (per checkpoint, from the live view's `coverable`), imported
+  with `POST /model-imports` into the default destination (`defaultDestination`
+  in `utils/trainingRuns.js`, the grid's own default). A source folder with
+  `delete_after_import` asks first, since the file then leaves the run.
+  There is no *Clear*: the grid's ticks are not on screen.
 - Not built yet: the narrow-window drawer (`statsForcedHidden`), and refusing a
   set on another base model in *Add to set…*, which the old drag did.
 

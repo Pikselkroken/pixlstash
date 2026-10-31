@@ -37,6 +37,44 @@ export function lastSavedStep(run) {
   );
 }
 
+/** The checkpoint a run's last save left: the bare final, else the highest step. */
+export function lastCheckpoint(run) {
+  const checkpoints = run?.checkpoints || [];
+  return (
+    checkpoints.find((cp) => cp.step == null) ??
+    checkpoints.reduce(
+      (best, cp) => (best == null || cp.step > best.step ? cp : best),
+      null,
+    )
+  );
+}
+
+/**
+ * The folders an import may land in: the same two exclusions a move applies,
+ * for the same reasons. A `source` folder is taken from rather than written
+ * into (the server refuses it), and an `external` folder is shared with other
+ * software.
+ */
+export function importDestinations(folders) {
+  return (folders || []).filter(
+    (folder) => folder.kind !== "source" && folder.movable !== "external",
+  );
+}
+
+/**
+ * Where an import lands unless the owner picks: the default folder from the
+ * Model folders dialog, which is the managed store until the owner picks
+ * another.
+ */
+export function defaultDestination(destinations) {
+  return (
+    destinations.find((f) => f.is_default) ??
+    destinations.find((f) => f.kind === "managed") ??
+    destinations[0] ??
+    null
+  );
+}
+
 /** A queued run that is held by another run ahead of it, not by the GPU. */
 export const WAITING_BEHIND_RUN = "Waiting for the run ahead of it";
 

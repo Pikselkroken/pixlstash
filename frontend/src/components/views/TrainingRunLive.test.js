@@ -19,27 +19,20 @@ vi.mock("vuetify/components", async (importOriginal) => ({
 const getTrainingJobLive = vi.fn();
 const setTrainingJobCover = vi.fn();
 const cancelTrainingJob = vi.fn();
-const exportTrainingSnapshot = vi.fn();
 vi.mock("../../api/training", () => ({
   getTrainingJobLive: (...args) => getTrainingJobLive(...args),
   setTrainingJobCover: (...args) => setTrainingJobCover(...args),
   cancelTrainingJob: (...args) => cancelTrainingJob(...args),
-  exportTrainingSnapshot: (...args) => exportTrainingSnapshot(...args),
 }));
-const saveFileAs = vi.fn();
-vi.mock("../../utils/downloadFile", () => ({
-  saveFileAs: (...args) => saveFileAs(...args),
+const copyText = vi.fn();
+vi.mock("../../utils/clipboard", () => ({
+  copyText: (...args) => copyText(...args),
 }));
 vi.mock("../../api/modelImports", () => ({
   runSampleUrl: (folderId, runName, filename) =>
     `/samples/${folderId}/${runName}/${filename}`,
 }));
 
-const routerPush = vi.fn();
-vi.mock("vue-router", () => ({
-  useRoute: () => ({ fullPath: "/models/runs?run=abcd" }),
-  useRouter: () => ({ push: routerPush }),
-}));
 
 import TrainingRunLive from "./TrainingRunLive.vue";
 
@@ -141,9 +134,7 @@ beforeEach(() => {
   getTrainingJobLive.mockReset();
   setTrainingJobCover.mockReset();
   cancelTrainingJob.mockReset();
-  exportTrainingSnapshot.mockReset();
-  saveFileAs.mockReset();
-  routerPush.mockReset();
+  copyText.mockReset();
 });
 
 afterEach(() => {
@@ -195,15 +186,6 @@ describe("TrainingRunLive", () => {
     });
   });
 
-  it("opens a training picture in the lightbox, coming back to this run", async () => {
-    const wrapper = await open(payload());
-    await wrapper.findAll(".trl-strip-pic")[1].trigger("click");
-    expect(routerPush).toHaveBeenCalledWith({
-      name: "all-pictures",
-      query: { overlay: "2", from: "/models/runs?run=abcd" },
-    });
-  });
-
   it("labels every figure, and an unreadable one is Unknown, never 0", async () => {
     const wrapper = await open(payload());
     const bar = wrapper.find(".trl-statusbar").text();
@@ -226,18 +208,76 @@ describe("TrainingRunLive", () => {
     expect(wrapper.findAll(".trl-step")[3].text()).not.toContain("Cover");
   });
 
-  it("exports the frozen dataset once the run has one", async () => {
-    const before = await open(payload({ dataset_snapshot_id: null }));
-    expect(before.find(".trl-export").exists()).toBe(false);
-
-    const blob = new Blob(["zip"]);
-    exportTrainingSnapshot.mockResolvedValue({ blob, filename: "run_dataset.zip" });
-    saveFileAs.mockResolvedValue(true);
-    const wrapper = await open(payload({ dataset_snapshot_id: 4 }));
-    await wrapper.find(".trl-export").trigger("click");
+  it("says a failure once, as one sentence, with the trainer's text behind it", async () => {
+    const sentence = "Ran out of GPU memory at step 500: it needed 5.06 GiB more.";
+    const report = "torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 5.06 GiB";
+    copyText.mockResolvedValue(true);
+    const wrapper = await open(
+      payload({
+        status: "error",
+        phase: null,
+        previews: null,
+        step: 500,
+        error: sentence,
+        report,
+        rows: [
+          {
+            index: 0,
+            prompt: "photo of ohwx woman",
+            with_trigger: true,
+            cells: cells(["sample", "sample", "missing", "missing", "missing", "missing", "missing"]),
+          },
+        ],
+      }),
+    );
+    const notice = wrapper.find(".trl-notice");
+    expect(notice.find("b").text()).toBe(sentence);
+    expect(wrapper.find('[data-testid="trl-full"]').exists()).toBe(false);
+    await wrapper.find('[data-testid="trl-full-toggle"]').trigger("click");
+    expect(wrapper.find('[data-testid="trl-full"]').text()).toBe(report);
+    await wrapper.find('[data-testid="trl-full-copy"]').trigger("click");
     await flushPromises();
-    expect(exportTrainingSnapshot).toHaveBeenCalledWith(7);
-    expect(saveFileAs).toHaveBeenCalledWith(blob, "run_dataset.zip");
+    expect(copyText).toHaveBeenCalledWith(report);
+
+    // The step it broke at says so; the steps it never reached stay quiet.
+    expect(wrapper.findAll(".trl-step")[2].text()).toContain("failed here");
+    const empty = wrapper.findAll(".trl-cell--future").map((c) => c.text());
+    expect(empty).toEqual(["not drawn", "", "", "", ""]);
+    // The trained-on pictures are the rail's, and the end of the track is
+    // somewhere a failed run never gets to.
+    expect(wrapper.find("[aria-label='Training pictures']").exists()).toBe(false);
+    expect(wrapper.find(".trl-endph").exists()).toBe(false);
+  });
+
+  it("puts 'failed here' past a step it finished drawing", async () => {
+    const wrapper = await open(
+      payload({
+        status: "error",
+        phase: null,
+        previews: null,
+        step: 500,
+        error: "Training failed.",
+        rows: [
+          {
+            index: 0,
+            prompt: "photo of ohwx woman",
+            with_trigger: true,
+            cells: cells(["sample", "sample", "sample", "missing", "missing", "missing", "missing"]),
+          },
+        ],
+      }),
+    );
+    const steps = wrapper.findAll(".trl-step");
+    expect(steps[2].text()).not.toContain("failed here");
+    expect(steps[3].text()).toContain("failed here");
+  });
+
+  it("offers no full message when the trainer said nothing more", async () => {
+    const wrapper = await open(
+      payload({ status: "error", phase: null, previews: null, error: "Training failed.", report: null }),
+    );
+    expect(wrapper.find(".trl-notice b").text()).toBe("Training failed.");
+    expect(wrapper.find('[data-testid="trl-full-toggle"]').exists()).toBe(false);
   });
 
   it("says when the machine is short of RAM to start", async () => {
