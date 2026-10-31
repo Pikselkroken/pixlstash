@@ -1432,7 +1432,7 @@ def _shelf_name_in(filenames: list[str], options: list[str]) -> str | None:
 
 
 def apply_adapter(
-    prompt_graph: dict, targets: list[dict], adapter: dict, object_info: dict
+    prompt_graph: dict, targets: list[dict], adapter: dict, object_info: dict | None
 ) -> int:
     """Put one shelf adapter into every LoRA slot of *prompt_graph*.
 
@@ -1449,7 +1449,11 @@ def apply_adapter(
             digest and the names it is known by (its own filename and each
             copy's path relative to the folder holding it).
         object_info: The map from :func:`fetch_object_info`, for resolving a
-            filename slot against what this ComfyUI actually has.
+            filename slot against what this ComfyUI actually has. ``None`` is
+            a graph stored rather than run (an extract): a filename slot keeps
+            its name when that already names the file, else takes the shelf's
+            first name for it, and a run of the stored graph resolves it
+            against its own ComfyUI.
 
     Returns:
         How many slots were written.
@@ -1459,7 +1463,8 @@ def apply_adapter(
             file is not on that ComfyUI, its name is ambiguous there, or the
             loader does not enumerate its files. Refusing is the point: a name
             ComfyUI does not have comes back as an opaque 400 from ``/prompt``
-            after the run has been queued.
+            after the run has been queued. With no *object_info*, when the
+            shelf has no name for the file at all.
     """
     written = 0
     for target in targets or []:
@@ -1471,6 +1476,16 @@ def apply_adapter(
             continue
         if target.get("by") == "digest":
             inputs[target["field"]] = adapter["sha256"]
+            written += 1
+            continue
+        if object_info is None:
+            filenames = adapter.get("filenames") or []
+            if not filenames:
+                raise LookupError("That LoRA has no file name on the shelf.")
+            # A slot already naming this file keeps the spelling it has.
+            current = inputs.get(target["field"])
+            kept = isinstance(current, str) and _shelf_name_in(filenames, [current])
+            inputs[target["field"]] = kept or filenames[0]
             written += 1
             continue
         class_type = target.get("class_type")

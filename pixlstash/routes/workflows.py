@@ -6212,6 +6212,8 @@ def create_router(server) -> APIRouter:
         loras: list[RunLora],
         object_info: dict | None,
         swaps: list[dict] | None = None,
+        *,
+        by_name: bool = False,
     ) -> list[run_service.Reason]:
         """Fill each named slot with its shelf adapter, then its strengths.
 
@@ -6224,6 +6226,10 @@ def create_router(server) -> APIRouter:
         that split is the module's rule: a request that cannot be interpreted
         against this card is a request error, while a card that will not run is
         a reason code.
+
+        *by_name* is an extract's: the graph is stored, not run, so with no
+        ``object_info`` a filename slot takes the shelf's name for the file
+        (``apply_adapter``) rather than being refused.
         """
         hub = getattr(server, "hub", None)
         targets = {
@@ -6241,7 +6247,20 @@ def create_router(server) -> APIRouter:
                     ),
                 )
             adapter = _shelf_adapter(hub, item.sha256)
-            if object_info is None and target.get("by") != "digest":
+            unlisted = object_info is None and target.get("by") != "digest"
+            if unlisted and by_name and not adapter["filenames"]:
+                # An extract asks no ComfyUI, so starting one would not help:
+                # the shelf has no name to write for the file.
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "The model shelf has no file name for this LoRA, so "
+                        f"PixlStash cannot write it into LoRA slot {item.field} "
+                        f"on node {item.node_id}. Choose another LoRA in the "
+                        "recipe, or remove it."
+                    ),
+                )
+            if unlisted and not by_name:
                 # A filename slot is resolved against what THIS ComfyUI lists,
                 # and with no `object_info` there is no list. Refused rather
                 # than skipped: the caller asked for LoRA X and consented to
@@ -6258,7 +6277,7 @@ def create_router(server) -> APIRouter:
                     ),
                 )
             try:
-                apply_adapter(graph, [target], adapter, object_info or {})
+                apply_adapter(graph, [target], adapter, object_info)
             except LookupError as exc:
                 # The adapter is on the shelf and not on this ComfyUI. Where
                 # ComfyUI-PixlStash is installed, the loader is swapped to its
@@ -7686,13 +7705,16 @@ def create_router(server) -> APIRouter:
                         ],
                         object_info,
                         recipe_swaps,
+                        by_name=extract,
                     )
             if body.loras and slots_in_graph:
                 # NOT gated on `object_info`: skipping the application when
                 # ComfyUI could not be asked is how a consented run silently
                 # kept the stored graph's LoRA instead of the one that was
                 # asked for. `_apply_loras` answers for that state itself.
-                found += _apply_loras(graph, body.loras, object_info, lora_swaps)
+                found += _apply_loras(
+                    graph, body.loras, object_info, lora_swaps, by_name=extract
+                )
             # Not gated on `found`: an added LoRA is applied, or its own reason
             # reported, whatever else refused. Skipped behind an earlier
             # refusal, a consented run would go ahead without it unsaid.

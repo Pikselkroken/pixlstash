@@ -26,21 +26,32 @@ const API = "/api/v1";
  * (extract builds on the planner) and for the Run popup to find a prompt;
  * nothing here ever reaches a ComfyUI.
  *
- * No LoRA loader: without a ComfyUI to list its LoRAs the planner refuses to
- * fill one, and extract with it.
+ * Its LoRA loader names a LoRA the shelf holds, so the workflow's default
+ * recipe places it and extract writes it with no ComfyUI to ask which files
+ * it lists (#2350).
  */
 const GRAPH = {
   1: {
     class_type: "CheckpointLoaderSimple",
     inputs: { ckpt_name: "RealVisXL_V4.safetensors" },
   },
+  2: {
+    class_type: "LoraLoader",
+    inputs: {
+      lora_name: "DetailTweaker_v2.safetensors",
+      strength_model: 0.8,
+      strength_clip: 0.8,
+      model: ["1", 0],
+      clip: ["1", 1],
+    },
+  },
   3: {
     class_type: "CLIPTextEncode",
-    inputs: { text: "a lighthouse at dusk", clip: ["1", 1] },
+    inputs: { text: "a lighthouse at dusk", clip: ["2", 1] },
   },
   4: {
     class_type: "CLIPTextEncode",
-    inputs: { text: "blurry", clip: ["1", 1] },
+    inputs: { text: "blurry", clip: ["2", 1] },
   },
   5: {
     class_type: "EmptyLatentImage",
@@ -55,7 +66,7 @@ const GRAPH = {
       sampler_name: "euler",
       scheduler: "normal",
       denoise: 1,
-      model: ["1", 0],
+      model: ["2", 0],
       positive: ["3", 0],
       negative: ["4", 0],
       latent_image: ["5", 0],
@@ -291,6 +302,12 @@ test("Extract workflow stores a new workflow and selects its card", async ({ pag
   made.workflows.push(body.workflow_id);
   expect(body.name).toBe(names[2]);
   expect(body.workflow_id).not.toBe(workflowId);
+  // The recipe's LoRA, in the slot by the name the graph had, ComfyUI unasked.
+  const stored = await ok(
+    await apiContext.get(`${API}/workflows/${encodeURIComponent(body.workflow_id)}/export`),
+    "export the extracted workflow",
+  );
+  expect(stored.workflow["2"].inputs.lora_name).toBe("DetailTweaker_v2.safetensors");
 
   await expect(notices(page).filter({ hasText: `Extracted “${names[2]}”` })).toBeVisible();
   await expect
