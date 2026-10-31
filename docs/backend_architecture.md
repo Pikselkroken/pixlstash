@@ -11897,8 +11897,10 @@ a Triton error) fails the run without trying more; a fallback that does not fit
 the room the run was resolved against is skipped. A profile that holds but
 whose previews do not fit beside training steps on as well, so a profile that
 can draw them while training (Krea 2's `q8_low_vram`, whose `low_vram` tiles
-the preview decode) is tried before they are put off; when none in the bound
-can, the run settles on the first that held, previews deferred. A probe that completes is
+the preview decode) is tried before they are put off. When none in the bound
+can, or once one is in hand a later check is stopped by the RAM guard or a
+trainer error, the run settles on the first that held, previews deferred,
+rather than failing. A probe that completes is
 recorded (`source` `probe`), the run is resolved again on that profile alone
 (`resolve(profile=...)`) with the measurement in, and that resolution becomes
 the row's `resolved_profile` and the config it renders. A setup measured since

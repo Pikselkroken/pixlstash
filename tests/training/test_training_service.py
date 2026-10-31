@@ -1738,6 +1738,38 @@ def test_previews_that_do_not_fit_step_to_the_next_profile(hub, repo_dir, watche
     assert "train.disable_sampling" not in settled["values"]
 
 
+def test_a_failed_check_of_the_next_profile_keeps_the_one_that_trains(
+    hub, repo_dir, watched, monkeypatch
+):
+    """#2411: q8 trains but its previews do not fit; the RAM guard stops the
+    check of q8_cached. The run trains on q8 with its previews put off
+    instead of failing."""
+    monkeypatch.setattr(
+        training_service_module,
+        "read_ram",
+        lambda: {"total_mb": 64_000, "available_mb": 500},
+    )
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    job = _enqueue_resolved(
+        service, _resolve_small(hub), _write_template(repo_dir, steps=4, save_every=2)
+    )
+    _record_big_previews(hub, "q8")
+
+    row = _run_to_end(hub, service, job)
+
+    assert row.status == "completed", row.error
+    settled = json.loads(row.resolved_profile)
+    assert (settled["profile"], settled["previews_deferred"]) == ("q8", True)
+    # The stopped check, the run, then its previews from each checkpoint.
+    assert watched()[:2] == [f"steps={training_service_module.PROBE_STEPS}", "steps=4"]
+
+
 def test_a_loader_error_stops_the_search(hub, repo_dir, watched, monkeypatch):
     monkeypatch.setenv("FAKE_RUN_FAIL", "Error loading model: unexpected tensor")
     service = _make_service(

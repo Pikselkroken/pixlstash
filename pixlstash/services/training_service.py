@@ -1177,6 +1177,19 @@ class TrainingService:
                             name,
                         )
                         continue
+                    if outcome == "failed" and deferred is not None:
+                        # A profile that trains is in hand: its previews wait.
+                        logger.warning(
+                            "Job %s: checking %s failed (%s); training with %s, "
+                            "previews after training.",
+                            job_uuid,
+                            name,
+                            reason,
+                            deferred["profile"],
+                        )
+                        break
+                    if outcome == "failed":
+                        self._fail(job_uuid, reason)
                     if outcome != "ok":
                         return False
                     settled = self._reresolve(info, resolution, preset, lookup, name)
@@ -1316,8 +1329,10 @@ class TrainingService:
 
         Returns:
             ``(outcome, reason)``: ``ok`` (measured and recorded), ``oom`` (try
-            more offloading) or ``stopped`` (the run was cancelled, failed or
-            PixlStash is shutting down; the row already says which).
+            more offloading), ``failed`` (the RAM guard or a trainer error
+            stopped it; *reason* is the run's error) or ``stopped`` (the run
+            was cancelled, failed or PixlStash is shutting down; the row
+            already says which).
         """
         job_uuid = info["uuid"]
         pending = self._load_pending_spec(job_uuid)
@@ -1376,29 +1391,25 @@ class TrainingService:
             logger.info("Job %s: probe stopped by shutdown; stays queued.", job_uuid)
             return "stopped", None
         if guard == "ram":
-            self._fail(
-                job_uuid,
+            return "failed", (
                 "Not enough system RAM to start: less than "
                 f"{RAM_GUARD_MB // 1024} GB was free while checking memory and "
                 "speed, so the check was stopped. Close other programs or choose "
-                "a fit that offloads less.",
+                "a fit that offloads less."
             )
-            return "stopped", None
         text = f"{progress.info or ''}\n{self._read_log_tail(handle.log_path) or ''}"
         if live_view.OOM_RE.search(text):
             return "oom", settled["profile_label"]
         if progress.status != "completed" or not progress.final_checkpoint:
-            self._fail(
-                job_uuid,
+            return "failed", (
                 "Checking memory and speed failed: "
                 + (
                     live_view.failure_summary(progress.info, progress.step)
                     if progress.info
                     else "the trainer stopped with an error"
                 ).rstrip(".")
-                + ". See the trainer log.",
+                + ". See the trainer log."
             )
-            return "stopped", None
         step_times = live_view.read_step_times(handle.loss_db_path)
         images = len(progress.samples)
         try:
