@@ -258,6 +258,10 @@ def _strip_webp(data: bytes) -> bytes:
         if fourcc in _WEBP_KEEP:
             chunks.append([fourcc, bytearray(data[position + 8 : position + 8 + size])])
         position = end
+    # Cut off on a chunk boundary before the image: say so, as PNG and JPEG
+    # do, rather than hand on a picture-less container reported clean.
+    if not any(c[0] in (b"VP8 ", b"VP8L", b"ANMF") for c in chunks):
+        raise ValueError("WebP ended before its image data")
 
     vp8x = next((c for c in chunks if c[0] == b"VP8X"), None)
     if vp8x is None:

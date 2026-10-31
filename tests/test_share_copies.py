@@ -183,6 +183,14 @@ def test_a_png_cut_off_before_iend_is_skipped_as_unreadable(library):
     assert result["skipped"] == [{"picture_id": 1, "reason": "unreadable"}]
 
 
+def test_a_webp_cut_off_before_its_image_data_is_refused():
+    webp = _webp()
+    cut = webp[: webp.index(b"VP8L")]  # VP8X and ICCP survive, the image does not
+    assert b"VP8X" in cut
+    with pytest.raises(ValueError, match="image data"):
+        strip_generation_data(cut)
+
+
 def test_strip_leaves_formats_it_does_not_handle():
     buf = BytesIO()
     _pattern().save(buf, format="GIF", comment=b"Steps: 20")
