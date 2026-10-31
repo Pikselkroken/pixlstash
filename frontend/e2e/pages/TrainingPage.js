@@ -1,7 +1,8 @@
 /**
  * Training a LoRA: the Train a LoRA dialog (TrainLoraDialog.vue), the Training
  * runs view (TrainingRuns.vue, `/models/runs`) and one run's live page
- * (TrainingRunLive.vue, `/models/runs?run=<uuid>`). Locators only.
+ * (TrainingRunLive.vue, `/models/runs?run=<uuid>`). Locators and the steps
+ * that reach them; no assertions.
  */
 export class TrainingPage {
   constructor(page) {

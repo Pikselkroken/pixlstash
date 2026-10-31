@@ -118,11 +118,21 @@ test.describe('training a LoRA of a person', () => {
   })
 
   test.afterAll(async ({ apiContext }) => {
-    try {
-      const runFolders = []
-      for (const id of jobIds) {
+    // Every step runs whatever the one before it did; the first failure is
+    // rethrown at the end, so a stuck run never leaves the person behind.
+    let failure = null
+    const step = async (fn) => {
+      try {
+        await fn()
+      } catch (err) {
+        failure ??= err
+      }
+    }
+    const runFolders = []
+    for (const id of jobIds) {
+      await step(async () => {
         const row = await listed(apiContext, id)
-        if (!row) continue
+        if (!row) return
         if (row.run_name) runFolders.push(join(status.runs.path, row.run_name))
         modelIds.push(...(row.model_ids ?? []))
         if (LIVE.includes(row.status)) {
@@ -134,28 +144,39 @@ test.describe('training a LoRA of a person', () => {
             timeout: 30_000,
           })
           .toBe(200)
-      }
-      // The LoRA and its checkpoints: permanently, and only from the work dir.
+      })
+    }
+    // The LoRA and its checkpoints, and anything else now attached to the
+    // person: permanently, and only from the work dir.
+    await step(async () => {
+      if (person) modelIds.push(...(await adapterIds(apiContext, { character_id: person.id })))
       const ids = [...new Set(modelIds)]
-      if (ids.length) {
-        const rows = (await body(await apiContext.get(`${API}/adapters`))).adapters
-        for (const row of rows.filter((r) => ids.includes(r.id))) {
-          for (const loc of row.locations) expectUnder(workDir, join(loc.folder_path, loc.relpath))
-        }
-        await deleteModels(apiContext, ids)
+      if (!ids.length) return
+      const rows = (await body(await apiContext.get(`${API}/adapters`))).adapters
+      for (const row of rows.filter((r) => ids.includes(r.id))) {
+        for (const loc of row.locations) expectUnder(workDir, join(loc.folder_path, loc.relpath))
       }
-      for (const folder of runFolders) {
+      await deleteModels(apiContext, ids)
+    })
+    for (const folder of runFolders) {
+      await step(async () => {
         expectUnder(workDir, folder)
         rmSync(folder, { recursive: true, force: true })
-      }
+      })
+    }
+    await step(async () => {
       if (set) await body(await apiContext.delete(`${API}/picture_sets/${set.id}`))
+    })
+    await step(async () => {
       if (person) await body(await apiContext.delete(`${API}/characters/${person.id}`))
-    } finally {
+    })
+    await step(async () => {
       const disconnected = await apiContext.put(`${API}/training/ai-toolkit/config`, {
         data: { repo_path: null, python: null },
       })
       expect(disconnected.ok(), await disconnected.text()).toBe(true)
-    }
+    })
+    if (failure) throw failure
   })
 
   test('a run started from a set under a person trains, and its LoRA lands on the shelf as theirs', async ({
@@ -205,7 +226,7 @@ test.describe('training a LoRA of a person', () => {
 
     // Short enough to finish in the test, long enough to be seen training.
     await training.advanced.click()
-    await training.steps.fill('200')
+    await training.steps.fill('400')
     await training.steps.press('Tab')
     await expect(training.start).toBeEnabled()
     const posted = page.waitForResponse(
@@ -224,7 +245,7 @@ test.describe('training a LoRA of a person', () => {
       set_id: set.id,
       trigger_word: trigger,
     })
-    expect(started.advanced_pins).toEqual({ 'train.steps': 200 })
+    expect(started.advanced_pins).toEqual({ 'train.steps': 400 })
     expect(started.preset.split('@')[0]).toBe(recipe.id)
 
     // 2. It shows on Training runs as training, and its page shows steps
@@ -236,10 +257,15 @@ test.describe('training a LoRA of a person', () => {
     await training.openRun(uuid)
     let first = null
     await expect
-      .poll(async () => (first = await liveStep(training)) ?? -1, { timeout: 30_000 })
+      .poll(async () => (first = await liveStep(training)) ?? -1, {
+        intervals: [100],
+        timeout: 30_000,
+      })
       .toBeGreaterThan(0)
+    // A number, and a later one: a headline that stops reading "Training n /
+    // total" is not steps advancing.
     await expect
-      .poll(async () => (await liveStep(training)) ?? 201, { timeout: 15_000 })
+      .poll(async () => (await liveStep(training)) ?? -1, { intervals: [100], timeout: 15_000 })
       .toBeGreaterThan(first)
     await expect(training.lossChart).toHaveAttribute(
       'aria-label',
@@ -331,14 +357,15 @@ test.describe('training a LoRA of a person', () => {
     const training = new TrainingPage(page)
     // A second interpreter in the checkout's own .venv, which the config PUT
     // accepts, that makes the fake trainer fail with TRAINER_REASON.
+    // POSIX sh, as on the e2e job's ubuntu runner.
     const wrapper = join(checkout, '.venv', 'bin', 'python-e2e-fails')
     expectUnder(workDir, wrapper)
-    writeFileSync(
-      wrapper,
-      `#!/bin/sh\nFAKE_RUN_FAIL='${TRAINER_REASON}' exec '${join(checkout, '.venv', 'bin', 'python')}' "$@"\n`,
-    )
-    chmodSync(wrapper, 0o755)
     try {
+      writeFileSync(
+        wrapper,
+        `#!/bin/sh\nFAKE_RUN_FAIL='${TRAINER_REASON}' exec '${join(checkout, '.venv', 'bin', 'python')}' "$@"\n`,
+      )
+      chmodSync(wrapper, 0o755)
       const switched = await connect(apiContext, wrapper)
       expect(switched.ok(), await switched.text()).toBe(true)
       const { id, uuid } = await startRun(apiContext, 'failing', 20)
