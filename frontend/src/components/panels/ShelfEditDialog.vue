@@ -485,7 +485,10 @@ async function submit() {
   color: rgb(var(--v-theme-on-panel));
 }
 
-.sed-input {
+/* `:deep()` for the base-model field: `BaseModelInput` is not a root this
+   file's scope reaches. */
+.sed-input,
+.sed-field :deep(.sed-input) {
   width: 100%;
   min-height: 36px;
   padding: 0 var(--space-3);
