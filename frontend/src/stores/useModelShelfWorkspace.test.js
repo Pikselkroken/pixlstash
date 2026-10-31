@@ -130,6 +130,33 @@ describe("the open folder", () => {
     expect(ids()).toEqual([3, 4]);
   });
 
+  it("lists a moved model where its file is, not where it was", () => {
+    // Moved from the root into `Lora`: the old copy stays on record, missing.
+    // Model 7 went missing outright and still lists where it was.
+    store.rows = [
+      ...ROWS,
+      {
+        id: 6,
+        file_kind: "checkpoint",
+        sha256: "f",
+        locations: [
+          { folder_id: 1, relpath: "moved.safetensors", state: "missing" },
+          { folder_id: 1, relpath: "Lora/moved.safetensors", state: "present" },
+        ],
+      },
+      {
+        id: 7,
+        file_kind: "checkpoint",
+        sha256: "g",
+        locations: [{ folder_id: 1, relpath: "gone.safetensors", state: "missing" }],
+      },
+    ];
+    store.setFolderScope({ folderId: 1, path: "" });
+    expect(ids()).toEqual([1, 7]);
+    store.setFolderScope({ folderId: 1, path: "Lora" });
+    expect(ids()).toEqual([3, 6]);
+  });
+
   it("leaves Sets when it opens, and All models leaves it", () => {
     store.setPlace("sets");
     store.setFolderScope({ folderId: 1, path: "Lora" });
