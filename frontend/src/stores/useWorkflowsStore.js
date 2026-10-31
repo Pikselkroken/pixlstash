@@ -4,6 +4,7 @@ import { defineStore } from "pinia";
 import {
   deleteWorkflow,
   duplicateWorkflow,
+  inpaintCopyWorkflow,
   listWorkflowCards,
   patchWorkflowCard,
   setWorkflowThumbnail,
@@ -644,6 +645,21 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   }
 
   /**
+   * Store a Crop & Stitch inpaint workflow made from one workflow (#2446).
+   *
+   * Like `duplicateCard`: the grid is re-read and the answer's `workflow_id`
+   * is handed back to select it. A refusal's reason lands in `error`.
+   */
+  function inpaintCopyCard(key) {
+    return busyCall(
+      "inpaint-copy",
+      key,
+      "Could not convert that workflow to inpainting.",
+      () => inpaintCopyWorkflow(key),
+    );
+  }
+
+  /**
    * Delete every selected MANUAL workflow.
    *
    * Their pictures stay, back on their automatic workflows. An automatic
@@ -899,6 +915,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     setThumbnail,
     pinThumbnail,
     duplicateCard,
+    inpaintCopyCard,
     deleteSelected,
     select,
     selectRange,

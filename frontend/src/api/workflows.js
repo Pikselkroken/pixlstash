@@ -385,6 +385,20 @@ export async function duplicateWorkflow(workflowId, version) {
 }
 
 /**
+ * Store a new MANUAL workflow that inpaints with Crop & Stitch (`… (inpaint)`).
+ *
+ * The server rewrites this workflow's graph to redraw only the selection and
+ * stitch it back; this workflow is not changed. A graph it cannot convert is
+ * a 422 whose detail says why.
+ *
+ * @param {string} workflowId
+ * @returns {Promise<{name: string, workflow_id: string}>}
+ */
+export async function inpaintCopyWorkflow(workflowId) {
+  return unwrap(apiClient.post(wf(workflowId, "/inpaint-copy")));
+}
+
+/**
  * What a workflow's model files could be changed to.
  *
  * Without `checkpointId`: the model files the card's graph names (each

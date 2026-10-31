@@ -431,6 +431,7 @@
         @hide="hideSelected"
         @export="exportSelected"
         @duplicate="duplicateSelected"
+        @inpaint-copy="inpaintCopySelected"
         @use-set="useSetOnSelected"
         @download-missing="downloadMissingSelected"
         @favourite="toggleFavourites([...store.selectedKeys])"
@@ -1639,6 +1640,15 @@ async function duplicateSelected() {
   const body = await store.duplicateCard(card.id);
   if (!body) return;
   notices.push({ level: "success", text: `Duplicated as ${body.name}.` });
+  landOn(body.workflow_id);
+}
+
+async function inpaintCopySelected() {
+  const card = onlyCard.value;
+  if (!card) return;
+  const body = await store.inpaintCopyCard(card.id);
+  if (!body) return;
+  notices.push({ level: "success", text: `Converted as ${body.name}.` });
   landOn(body.workflow_id);
 }
 

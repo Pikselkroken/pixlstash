@@ -53,6 +53,7 @@ const listWorkflowCards = vi.fn();
 const getWorkflowCard = vi.fn();
 const patchWorkflowCard = vi.fn();
 const duplicateWorkflow = vi.fn();
+const inpaintCopyWorkflow = vi.fn();
 const deleteWorkflow = vi.fn();
 const exportWorkflow = vi.fn();
 const setWorkflowThumbnail = vi.fn();
@@ -70,6 +71,7 @@ vi.mock("../../api/workflows", () => ({
   // imports and this factory omits is `undefined` at the call - which fails
   // as "not a function" inside a handler rather than as a missing mock.
   duplicateWorkflow: (...args) => duplicateWorkflow(...args),
+  inpaintCopyWorkflow: (...args) => inpaintCopyWorkflow(...args),
   deleteWorkflow: (...args) => deleteWorkflow(...args),
   exportWorkflow: (...args) => exportWorkflow(...args),
   setWorkflowThumbnail: (...args) => setWorkflowThumbnail(...args),
@@ -1548,6 +1550,37 @@ describe("the verbs the bar fires", () => {
     // Said as the verb is named (rule 9 of #1846).
     const { useNoticeStore } = await import("../../stores/useNoticeStore");
     expect(useNoticeStore().notices.at(-1).text).toBe("Duplicated as a (2).");
+  });
+
+  it("Convert to Inpainting selects the new workflow and says so", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    store.select("a");
+    inpaintCopyWorkflow.mockResolvedValue({ name: "a (inpaint)", workflow_id: "e" });
+
+    await bar(wrapper).vm.$emit("inpaint-copy");
+    await flush();
+    await flush();
+    expect(inpaintCopyWorkflow).toHaveBeenCalledWith("a");
+    expect(store.selectedKeys).toEqual(["e"]);
+    const { useNoticeStore } = await import("../../stores/useNoticeStore");
+    expect(useNoticeStore().notices.at(-1).text).toBe("Converted as a (inpaint).");
+  });
+
+  it("Convert to Inpainting shows the server's reason when it refuses", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    store.select("a");
+    const refusal = Object.assign(new Error("422"), {
+      response: { status: 422, data: { detail: "This workflow loads 2 pictures." } },
+    });
+    inpaintCopyWorkflow.mockRejectedValue(refusal);
+
+    await bar(wrapper).vm.$emit("inpaint-copy");
+    await flush();
+    await flush();
+    expect(store.selectedKeys).toEqual(["a"]);
+    expect(wrapper.find(".wfv-error").text()).toBe("This workflow loads 2 pictures.");
   });
 
   it("Choose thumbnail… uploads the picked image onto the one card", async () => {
