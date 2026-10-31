@@ -83,8 +83,9 @@
             <img
               v-if="file && sampleUrl(file)"
               :src="sampleUrl(file)"
-              :alt="`${row.prompt}, step ${grid.steps[c]}`"
+              :alt="`${row.prompt}, step ${grid.steps[c].toLocaleString()}`"
               loading="lazy"
+              role="button"
               tabindex="0"
               @dblclick="openSample(row, c, file)"
               @keydown.enter="openSample(row, c, file)"

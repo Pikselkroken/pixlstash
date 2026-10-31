@@ -56,11 +56,20 @@ export function lightboxCloseTarget(
     //
     // `from` may carry its own query - an open training run is `?run=` - and
     // that query is part of the place being returned to, so it comes back too.
-    const q = from.indexOf("?");
-    const query =
-      q < 0 ? {} : Object.fromEntries(new URLSearchParams(from.slice(q + 1)));
+    // Not its `overlay`, `from` or `token`, though: `from` arrives from the URL
+    // bar, so those would let a link reopen a picture or plant a share token.
+    const target = from.split("#")[0];
+    const q = target.indexOf("?");
+    const {
+      overlay: _o,
+      from: _f,
+      token: _t,
+      ...query
+    } = q < 0
+      ? {}
+      : Object.fromEntries(new URLSearchParams(target.slice(q + 1)));
     if (rest.token) query.token = rest.token;
-    return { path: q < 0 ? from : from.slice(0, q), query };
+    return { path: q < 0 ? target : target.slice(0, q), query };
   }
   return { query: rest };
 }

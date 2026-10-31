@@ -6984,7 +6984,9 @@ for, with Workflows two clicks away.
   (`TrainingRunLive.openPicture`, a double-click on a *Trained on* picture)
   sends its full path, `/models/runs?run=<uuid>`, because without `?run=` the
   close lands on the list of runs rather than the run. `lightboxCloseTarget`
-  splits it into `path` and `query` (the share token still wins).
+  splits it into `path` and `query`, drops any hash, and never takes
+  `overlay`, `from` or `token` out of it: `from` comes from the URL bar, and
+  those would let a link reopen a picture or plant a share token.
 
 **Only the reader's own close goes back, and that rule is live regardless.**
 `closeLightbox(returnToOrigin = true)` takes the default from the lightbox's

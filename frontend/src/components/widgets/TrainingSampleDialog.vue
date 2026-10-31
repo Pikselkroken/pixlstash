@@ -24,14 +24,35 @@
  * show it; this is what a double-click on one opens, in the run page and in
  * the Models rail.
  */
+import { nextTick, watch } from "vue";
+
 import AppDialog from "./AppDialog.vue";
 
-defineProps({
+const props = defineProps({
   /** `{ src, step, prompt }`, or null when closed. */
   sample: { type: Object, default: null },
 });
 
 const emit = defineEmits(["close"]);
+
+// Opened from code, so no activator owns the focus; it goes back to the
+// picture that opened it by hand when the dialog closes.
+let returnFocus = null;
+watch(
+  () => props.sample,
+  async (value, previous) => {
+    if (value && !previous) {
+      returnFocus =
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
+    } else if (!value && previous) {
+      await nextTick();
+      if (returnFocus?.isConnected) returnFocus.focus();
+      returnFocus = null;
+    }
+  },
+);
 </script>
 
 <style scoped>

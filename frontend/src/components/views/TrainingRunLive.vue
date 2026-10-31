@@ -209,6 +209,7 @@
                     :src="sampleUrl(cell)"
                     :alt="`${row.prompt || `Prompt ${row.index + 1}`}, step ${columns[i]}`"
                     loading="lazy"
+                    role="button"
                     tabindex="0"
                     @dblclick="openSample(row, i, cell)"
                     @keydown.enter="openSample(row, i, cell)"
@@ -262,8 +263,9 @@
               :key="id"
               class="trl-strip-pic"
               :src="pictureThumbnailUrl(id)"
-              :alt="`Picture ${id}`"
+              alt="Training picture"
               loading="lazy"
+              role="button"
               tabindex="0"
               @dblclick="openPicture(id)"
               @keydown.enter="openPicture(id)"
@@ -837,7 +839,7 @@ function openSample(row, column, cell) {
   openedSample.value = {
     src: sampleUrl(cell),
     step: columns.value[column],
-    prompt: row.prompt,
+    prompt: row.prompt || `Prompt ${row.index + 1}`,
   };
 }
 
