@@ -727,7 +727,7 @@ describe("editing a base model in place", () => {
     expect(edit).toHaveBeenCalledWith([7], { base_model: "SDXL 1.0" });
   });
 
-  it("starts a guess from the guess, and clearing it says 'none of these'", async () => {
+  it("starts a guess from the guess, Enter accepts it, and clearing it says 'none of these'", async () => {
     // A guessed row stores no base model of its own, so comparing against the
     // stored value made an emptied field look unchanged and wrote nothing.
     const wrapper = await mountShelf([
@@ -744,14 +744,37 @@ describe("editing a base model in place", () => {
     await wrapper.find(".shelf-base-text").trigger("dblclick");
     let field = wrapper.find(".shelf-row-base-edit");
     expect(field.element.value).toBe("Sana");
-    await field.trigger("keydown", { key: "Enter" });
+    // Clicking away from the untouched guess leaves it a guess...
+    await field.trigger("blur");
     expect(edit).not.toHaveBeenCalled();
+
+    // ...while Enter on it is a confirmation, the same write as the tag's.
+    await wrapper.find(".shelf-base-text").trigger("dblclick");
+    field = wrapper.find(".shelf-row-base-edit");
+    await field.trigger("keydown", { key: "Enter" });
+    await wrapper.vm.$nextTick();
+    expect(edit).toHaveBeenCalledWith([7], { base_model: "Sana" });
+    edit.mockClear();
 
     await wrapper.find(".shelf-base-text").trigger("dblclick");
     field = wrapper.find(".shelf-row-base-edit");
     await field.setValue("");
     await field.trigger("keydown", { key: "Enter" });
     expect(edit).toHaveBeenCalledWith([7], { base_model: null });
+  });
+
+  it("writes nothing on Enter when a stated base model is left as it is", async () => {
+    // Only a guess has anything to accept; a stated value is already decided.
+    const wrapper = await mountShelf([adapter({ id: 7 })]);
+    const store = useModelShelfStore();
+    const edit = vi.spyOn(store, "editModelIds").mockResolvedValue(true);
+
+    await wrapper.find(".shelf-col--base span").trigger("dblclick");
+    await wrapper.find(".shelf-row-base-edit").trigger("keydown", {
+      key: "Enter",
+    });
+    await wrapper.vm.$nextTick();
+    expect(edit).not.toHaveBeenCalled();
   });
 
   it("confirms a guess with one click, writing the label it shows", async () => {

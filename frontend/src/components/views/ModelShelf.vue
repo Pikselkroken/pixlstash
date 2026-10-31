@@ -3776,9 +3776,10 @@ let editingBaseRow = null;
  *
  * That is the file's own string, or for a GUESSED row the label it was read
  * as (`baseModelCell`), so a correction is one word rather than a retype and
- * the commit below compares against the same value: leaving a guess as it is
- * writes nothing, and emptying the field says "none of these", which then
- * sticks across rescans.
+ * the commit below compares against the same value. Enter on a guess left as
+ * it is accepts it, the same write as the tag's confirm; clicking away leaves
+ * it a guess. Emptying the field says "none of these", which then sticks
+ * across rescans.
  */
 function startBaseModelEdit(row) {
   editingBaseRow = row;
@@ -3807,14 +3808,16 @@ function cancelBaseModel() {
 }
 
 /**
- * Commit the field, on Enter or on losing focus.
+ * Commit the field, on Enter (`byKey`) or on losing focus.
  *
- * Closes BEFORE it writes, so the blur the unmount fires finds nothing to do
- * and the row cannot be written twice - the same order the rename above uses.
+ * An unchanged value writes nothing, except that Enter on an untouched guess
+ * accepts it, as the tag's confirm does. Closes BEFORE it writes, so the blur
+ * the unmount fires finds nothing to do and the row cannot be written twice -
+ * the same order the rename above uses.
  * An empty box clears the base model back to `NULL`, which is the state the
  * shelf draws as "not set" and filters as `UNASSIGNED`.
  */
-async function commitBaseModel(restoreFocus = false) {
+async function commitBaseModel(byKey = false) {
   const row = editingBaseRow;
   if (!row) return;
   const next = editingBase.value.trim();
@@ -3823,8 +3826,11 @@ async function commitBaseModel(restoreFocus = false) {
   // Only when a KEY committed it. A blur committed it by moving the focus
   // somewhere the reader chose, and dragging it back to the row would undo
   // their click.
-  if (restoreFocus) nextTick(() => focusDrawnRow(key));
-  if (next === String(baseModelCell(row).text).trim()) return;
+  if (byKey) nextTick(() => focusDrawnRow(key));
+  const cell = baseModelCell(row);
+  // Enter on an untouched guess is the reader saying "yes, that one"; a blur
+  // is only them leaving, so it keeps the guess a guess.
+  if (next === String(cell.text).trim() && !(byKey && cell.guess)) return;
   // A cover stands for every file of the run, and one run was trained against
   // one base model.
   await store.editModelIds(row.memberIds ?? [row.id], {
