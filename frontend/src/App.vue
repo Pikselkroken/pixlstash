@@ -233,6 +233,7 @@ const {
   isModelsView,
   isInsightsView,
   isMovesView,
+  isInboxView,
   isWorkflowsView,
   handleSelectInsights,
   handleSelectMoves,
@@ -414,6 +415,18 @@ const activeCategoryLabel = computed(() => {
     return selectionStore.lastSelectedCharacterLabel || "Category";
   }
   return "All Pictures";
+});
+
+// Where Tags to review's back button and Esc go from the board: the view it was
+// opened over, named as that view names itself.
+const tagReviewBackLabel = computed(() => {
+  if (isDuplicatesView.value) return "Duplicates";
+  if (isMovesView.value) return "Moves";
+  if (isInsightsView.value) return "About your library";
+  if (isInboxView.value) return "Inbox";
+  if (isWorkflowsView.value) return "Workflows";
+  if (isModelsView.value) return "Models";
+  return activeCategoryLabel.value;
 });
 
 // A library being imported for the first time is not in the registry listing
@@ -613,6 +626,7 @@ const noticeOnDark = computed(() => lightboxOpen.value);
 // deselect that only shrinks the selection is not news.
 const isGridView = computed(
   () =>
+    !reviewSessionsStore.overlayOpen &&
     !isDuplicatesView.value &&
     !isModelsView.value &&
     !isInsightsView.value &&
@@ -971,11 +985,22 @@ defineExpose({
                 overflow: hidden;
               "
             >
+              <!-- Tags to review is a destination like Duplicates: it replaces
+                   the grid (or whichever view it was opened from, which it
+                   names on its back button) and the grid remounts when it
+                   closes. It rides on `?review=` over the current route
+                   (useReviewRoute.js), so it is checked first. -->
+              <ReviewSessionsOverlay
+                v-if="reviewSessionsStore.overlayOpen"
+                :back-label="tagReviewBackLabel"
+                :inert="librarySwitchOverlayOpen"
+                @close="reviewSessionsStore.overlayOpen = false"
+              />
               <!-- Duplicates is a destination, not a filter, so it replaces
                    the grid rather than floating over it. The grid stays
                    unmounted while the queue is open, which is also what keeps
                    its fetches and its WebSocket reconciliation quiet. -->
-              <DuplicateQueue v-if="isDuplicatesView" />
+              <DuplicateQueue v-else-if="isDuplicatesView" />
               <!-- The model shelf lists files on this machine rather than
                    pictures in the library, so like Duplicates it replaces the
                    grid instead of floating over it, and the grid stays
@@ -1078,6 +1103,10 @@ defineExpose({
         <!-- Everywhere else the stats panel also inspects the grid's
              selection (#2161). It rates, favourites and tags through the
              grid's own paths, so the rail and the tile cannot disagree. -->
+        <!-- Tags to review owns the centre column and takes no rail on any
+             route it rides over: it has no pictures for the stats rail to
+             inspect, and the board needs the width for every column. -->
+        <template v-if="!reviewSessionsStore.overlayOpen">
         <TemplateInspector
           v-if="isWorkflowsView && workflowTemplatesStore.shown"
         />
@@ -1097,6 +1126,7 @@ defineExpose({
           @lightbox-change="(change) => gridContainer?.handleLightboxChange(change)"
           @tags-applied="(change) => gridContainer?.handleTagsApplied(change)"
         />
+        </template>
         <!-- Lightbox teleports here: it lies over the centre column and
              the rail, and draws its own inspector where the rail is. -->
         <div :id="LIGHTBOX_HOST_ID" class="lightbox-host"></div>
@@ -1121,11 +1151,6 @@ defineExpose({
         @open-settings="openSettingsDialog"
       />
       <UpscaleDialog v-if="upscaleStore.pictureIds" />
-      <ReviewSessionsOverlay
-        v-if="reviewSessionsStore.overlayOpen"
-        :inert="librarySwitchOverlayOpen"
-        @close="reviewSessionsStore.overlayOpen = false"
-      />
       <!-- The notice surface. LAST child of `.app-viewport` on purpose
            (notice-surface.md §8): its buttons then come last in DOM order, so a
            keyboard user reaches them after the page content, not before it. It

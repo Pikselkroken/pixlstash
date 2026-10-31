@@ -1,8 +1,32 @@
 <template>
-  <div class="rs-overlay">
-    <div class="rs-shell">
-      <ReviewRail @close="emit('close')" @new-review="openNewReview()" />
+  <!-- Tags to review is a view like Duplicates and Moves: App.vue draws it in
+       the centre column in place of the grid, so the title bar and the
+       sidebar never move. The sidebar's "Tags to review" row lights while it
+       is up, and its open reviews nest under that row. -->
+  <div
+    class="rs-overlay"
+    role="region"
+    aria-label="Tags to review"
+    data-testid="tags-to-review"
+  >
+    <!-- The grid's toolbar line, its contents swapped as the Lightbox swaps
+         them: the way back (named for where it goes, with Esc), the title,
+         then the board's own controls, which TagHealthBoard teleports into
+         `.rs-toolbar-tools`. -->
+    <header class="rs-toolbar" role="toolbar" aria-label="Tags to review">
+      <ViewBackButton
+        class="rs-toolbar-back"
+        :label="backTarget"
+        :tooltip="`Back to ${backTarget} (Esc)`"
+        on-dark
+        @click="goBack"
+      />
+      <span class="rs-toolbar-sep" aria-hidden="true"></span>
+      <h2 class="rs-toolbar-title">{{ toolbarTitle }}</h2>
+      <div :id="TOOLBAR_TOOLS_ID" class="rs-toolbar-tools"></div>
+    </header>
 
+    <div class="rs-shell">
       <ReviewSessionView
         v-if="store.activeSession"
         ref="sessionRef"
@@ -15,7 +39,9 @@
       <TagHealthBoard
         v-else
         ref="boardRef"
+        :toolbar-target="`#${TOOLBAR_TOOLS_ID}`"
         @start-review="openNewReview($event)"
+        @new-review="openNewReview()"
       />
     </div>
 
@@ -112,10 +138,11 @@
 </template>
 
 <script setup>
-// The "Review sessions" overlay shell: left rail (sessions + sticker shelf) +
-// main area (tag health board / one session / an archived receipt), plus the
-// overlay-level layers - new-review dialog, direct-tagging panel (T), keyboard
-// cheat-sheet (?), and the full-screen zoom.
+// The Tags to review view: a toolbar line (back, title, the board's controls)
+// over the main area (tag health board / one session / an archived receipt),
+// plus the view-level layers - new-review dialog, direct-tagging panel (T),
+// keyboard cheat-sheet (?), and the full-screen zoom. It replaces the grid in
+// App.vue's centre column; the open reviews are listed in the app sidebar.
 //
 // Keyboard: one capture-phase window handler (same discipline as the old
 // overlay). It bails for genuine text entry (input/textarea/contenteditable -
@@ -131,13 +158,13 @@ import {
   ref,
   watch,
 } from "vue";
-import ReviewRail from "../reviews/ReviewRail.vue";
 import TagHealthBoard from "../reviews/TagHealthBoard.vue";
 import ReviewSessionView from "../reviews/ReviewSessionView.vue";
 import ReviewArchivedReceipt from "../reviews/ReviewArchivedReceipt.vue";
 import NewReviewDialog from "../reviews/NewReviewDialog.vue";
 import RailTags from "../panels/RailTags.vue";
 import Tooltip from "../widgets/Tooltip.vue";
+import ViewBackButton from "../widgets/ViewBackButton.vue";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useSelectionStore } from "../../stores/useSelectionStore";
@@ -149,8 +176,13 @@ const ALL_PICTURES_ID = "ALL";
 const UNASSIGNED_PICTURES_ID = "UNASSIGNED";
 const SCRAPHEAP_PICTURES_ID = "SCRAPHEAP";
 
+const TOOLBAR_TOOLS_ID = "rs-toolbar-tools";
+
 const props = defineProps({
   backendUrl: { type: String, default: () => API_BASE_URL },
+  // The view underneath, named as it names itself: where back and Esc go
+  // from the board.
+  backLabel: { type: String, default: "All Pictures" },
 });
 const emit = defineEmits(["close", "tags-applied"]);
 
@@ -184,6 +216,35 @@ watch(tagApplyOpen, (open) => {
 });
 
 provide("rs-backend-url", props.backendUrl);
+
+// Inside a review or a receipt the way back is the board; on the board it is
+// the view the review was opened from.
+const onBoard = computed(
+  () => !store.activeSession && store.view.type !== "archived",
+);
+const backTarget = computed(() =>
+  onBoard.value ? props.backLabel : "Tags to review",
+);
+const toolbarTitle = computed(() => {
+  if (store.activeSession) return `Review: “${store.activeSession.tag}”`;
+  if (archivedReview.value) return `Archived: “${archivedReview.value.tag}”`;
+  return "Tags to review";
+});
+
+function goBack() {
+  if (onBoard.value) emit("close");
+  else store.showBoard();
+}
+
+// The sidebar's "New review…" row asks through the store, since the dialog
+// lives here. A dialog already up is left alone: reopening it would wipe the
+// tag and scope picked so far.
+watch(
+  () => store.newReviewTick,
+  () => {
+    if (!dialog.value) openNewReview();
+  },
+);
 
 const archivedReview = computed(() =>
   store.view.type === "archived"
@@ -518,12 +579,11 @@ function handleKeyDown(event) {
     else if (tagApplyOpen.value) tagApplyOpen.value = false;
     else if (sessionRef.value?.handleKey("escape")) {
       // The session consumed it (a pending consistency confirm).
-    } else if (store.activeSession) {
-      // A review is open with nothing pending inside it: close just the
-      // review, back to the tag health board underneath - not the whole
-      // overlay. A second Esc (no active review) falls through to close.
-      store.showBoard();
-    } else emit("close");
+    } else {
+      // Same exit as the toolbar's back button: a review (or a receipt) steps
+      // back to the board, the board back to the view underneath.
+      goBack();
+    }
   } else if (shortcutsOpen.value || dialog.value) {
     // A modal layer is up: swallow nothing else, let it be.
     handled = false;
@@ -565,24 +625,75 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+/* Fills the grid's place in the centre column. The review stays a dark
+   surface in both themes, as the Lightbox's stage does, and its toolbar band
+   with it: the board's controls live on that band. */
 .rs-overlay {
-  position: fixed;
-  /* Anchor below the desktop title bar (0px in a browser). */
-  inset: var(--titlebar-h) 0 0 0;
-  z-index: var(--z-modal);
-  background: rgba(var(--v-theme-scrim), 0.82);
+  /* Amber on a dark panel keeps the bright amber in both themes (#1413). */
+  --v-theme-accent: var(--v-theme-dark-surface-accent);
+  position: absolute;
+  inset: 0;
   display: flex;
-  align-items: stretch;
-  justify-content: center;
+  flex-direction: column;
+  background: rgb(var(--v-theme-dark-surface));
+  color: rgb(var(--v-theme-on-dark-surface));
+}
+
+/* The grid toolbar's box (height, padding, rule), on the review's surface. */
+.rs-toolbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--toolbar-height);
+  padding: 0 var(--space-3);
+  box-sizing: border-box;
+  border-bottom: 1px solid rgba(var(--v-theme-on-dark-surface), 0.14);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  white-space: nowrap;
+}
+.rs-toolbar::-webkit-scrollbar {
+  display: none;
+}
+.rs-toolbar :deep(:focus-visible) {
+  outline: none;
+  box-shadow: var(--focus-ring-inset);
+}
+/* The back button's Esc keycap takes the review's dark ink, as the bar
+   button does through `on-dark`. */
+.rs-toolbar :deep(.bar-btn-kbd) {
+  border-color: rgba(var(--v-theme-on-dark-surface), 0.28);
+  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
+}
+.rs-toolbar-sep {
+  flex-shrink: 0;
+  width: 1px;
+  height: 20px;
+  margin: 0 var(--space-2);
+  background: rgba(var(--v-theme-on-dark-surface), 0.14);
+}
+.rs-toolbar-title {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.rs-toolbar-tools {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 
 .rs-shell {
-  /* Amber on a dark panel keeps the bright amber in both themes (#1413). */
-  --v-theme-accent: var(--v-theme-dark-surface-accent);
+  flex: 1;
+  min-height: 0;
   display: flex;
-  width: 100%;
-  background: rgb(var(--v-theme-dark-surface));
-  color: rgb(var(--v-theme-on-dark-surface));
 }
 
 /* Positioning anchor only now - the visible bottom-right "Apply tags" button

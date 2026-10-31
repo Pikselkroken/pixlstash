@@ -21,7 +21,9 @@ test.describe('review sessions — tag health board', () => {
 
   test('opens from the toolbar and renders the ranked board', async ({ reviews }) => {
     await expect(reviews.board).toBeVisible()
-    await expect(reviews.boardTitle).toHaveText('Which tags need review?')
+    await expect(reviews.toolbarTitle).toHaveText('Tags to review')
+    // A view in the centre column, not an overlay: its sidebar row lights.
+    await expect(reviews.sidebarRow).toHaveAttribute('aria-current', 'page')
     // The header row carries the redesigned column labels — "Priority", not
     // the old "Est. fixes" (docs/reviews/tag-review-board-redesign-ux-spec.md
     // Spec C), and no "Verified" column (Spec E 7a).

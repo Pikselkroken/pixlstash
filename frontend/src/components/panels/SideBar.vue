@@ -105,6 +105,7 @@ import { useSidebarWidth } from "../../composables/useSidebarWidth";
 import { useRoute } from "vue-router";
 import { useDedupStore, scopeKey } from "../../stores/useDedupStore";
 import { useMovesStore } from "../../stores/useMovesStore";
+import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useImportFoldersStore } from "../../stores/useImportFoldersStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useSelectionStore } from "../../stores/useSelectionStore";
@@ -146,6 +147,7 @@ function noticeDetail(e) {
 
 const dedupStore = useDedupStore();
 const movesStore = useMovesStore();
+const reviewSessionsStore = useReviewSessionsStore();
 const importFoldersStore = useImportFoldersStore();
 const modelShelfStore = useModelShelfStore();
 
@@ -168,9 +170,15 @@ const route = useRoute();
 const hasFolderFilter = computed(
   () => selectionStore.selectedFolderFilter != null,
 );
+// Tags to review is a view drawn over whichever route it was opened from
+// (`?review=` on that route, useReviewRoute.js), so while it is up it owns the
+// highlight and the route's own destination row must not light beside it.
+const isTagReviewView = computed(() => reviewSessionsStore.overlayOpen);
 // Duplicates is addressed by route name, not by a selection sentinel: it shows
 // no pictures, so there is no selection to express.
-const isDuplicatesView = computed(() => route.name === "duplicates");
+const isDuplicatesView = computed(
+  () => route.name === "duplicates" && !isTagReviewView.value,
+);
 // Both of the shelf's routes, from the one list, so the runs tab cannot fall
 // out of this the way it did when the two predicates were separate literals.
 const isModelsView = computed(() => MODEL_SHELF_ROUTES.includes(route.name));
@@ -195,7 +203,9 @@ const READ_ONLY_DEDUP_HINT =
 
 // "About your library" is a destination too: it reads the library rather than
 // showing it, so it has no selection to express.
-const isInsightsView = computed(() => route.name === "insights");
+const isInsightsView = computed(
+  () => route.name === "insights" && !isTagReviewView.value,
+);
 
 // Same show-but-disable rule again. GET /insights is owner-only because its
 // numbers ARE the vault-wide aggregate - narrowing them to a share token's
@@ -211,9 +221,36 @@ const READ_ONLY_INSIGHTS_HINT =
 // the opposite rule - hidden rather than shown-and-disabled - gated on
 // movesStore.hasAnyPending, which itself never becomes true for a read-only
 // session because nothing here ever calls GET /moves/pending for one.
-const isMovesView = computed(() => route.name === "moves");
+const isMovesView = computed(
+  () => route.name === "moves" && !isTagReviewView.value,
+);
 // The Inbox row: what import folders brought in and nobody has looked at yet.
-const isInboxView = computed(() => route.name === "inbox");
+const isInboxView = computed(
+  () => route.name === "inbox" && !isTagReviewView.value,
+);
+
+// The board is the "Tags to review" row's page; a review is its own child's.
+const reviewBoardShown = computed(
+  () => reviewSessionsStore.view.type === "board",
+);
+function isReviewSessionShown(id) {
+  return (
+    isTagReviewView.value &&
+    reviewSessionsStore.view.type === "session" &&
+    reviewSessionsStore.view.id === id
+  );
+}
+function openTagReviewBoard() {
+  if (isTagReviewView.value) reviewSessionsStore.showBoard();
+  else emit("open-tag-review");
+}
+function reviewProgressPct(review) {
+  const found = review.stats?.found ?? 0;
+  return found ? Math.round(((review.progress?.done ?? 0) / found) * 100) : 0;
+}
+function reviewProgressText(review) {
+  return `${review.progress?.done ?? 0}/${review.stats?.found ?? 0}`;
+}
 
 const props = defineProps({
   backendUrl: { type: String, default: () => API_BASE_URL },
@@ -2556,6 +2593,7 @@ function isCountSelected(id) {
 const selectionOwnsHighlight = computed(
   () =>
     !hasFolderFilter.value &&
+    !isTagReviewView.value &&
     !isDuplicatesView.value &&
     !isModelsView.value &&
     !isInsightsView.value &&
@@ -4793,19 +4831,67 @@ defineExpose({
               <Tooltip text="There are duplicates to review" activator="parent" />
             </span>
           </button>
-          <!-- The tag-review board, which the toolbar's Review button also
-               opens. An overlay, not a view, so it never lights as current. -->
+          <!-- Tags to review: a view like Duplicates, so it lights while it is
+               up. Its open reviews nest under it, each lit while it is the one
+               on screen, then "New review…". The list is the view's own data,
+               so the children show while the view is open. -->
           <button
             v-if="!isReadOnly"
             type="button"
-            class="sidebar-list-item"
-            @click="emit('open-tag-review')"
+            :class="['sidebar-list-item', { active: isTagReviewView }]"
+            :aria-current="
+              isTagReviewView && reviewBoardShown ? 'page' : undefined
+            "
+            @click="openTagReviewBoard"
           >
             <span class="sidebar-list-icon"
               ><v-icon size="16">mdi-tag-check-outline</v-icon></span
             >
             <span class="sidebar-list-label">Tags to review</span>
           </button>
+          <template v-if="!isReadOnly && isTagReviewView">
+            <button
+              v-for="review in reviewSessionsStore.sessions"
+              :key="review.id"
+              type="button"
+              :class="[
+                'sidebar-list-item',
+                'sidebar-review-session',
+                { active: isReviewSessionShown(review.id) },
+              ]"
+              :aria-current="
+                isReviewSessionShown(review.id) ? 'page' : undefined
+              "
+              :aria-label="`Review “${review.tag}”, ${reviewProgressText(review)} decided`"
+              @click="reviewSessionsStore.openSession(review.id)"
+            >
+              <span class="sidebar-list-icon"
+                ><v-icon size="14">mdi-tag-outline</v-icon></span
+              >
+              <span class="sidebar-list-label">
+                <span class="sidebar-list-label-text">{{ review.tag }}</span>
+              </span>
+              <span class="sidebar-review-progress" aria-hidden="true"
+                ><span
+                  class="sidebar-review-progress-fill"
+                  :style="{ width: `${reviewProgressPct(review)}%` }"
+                ></span
+              ></span>
+              <span class="sidebar-list-count sidebar-review-session-count">{{
+                reviewProgressText(review)
+              }}</span>
+            </button>
+            <button
+              type="button"
+              class="sidebar-list-item sidebar-review-session sidebar-review-new"
+              @click="reviewSessionsStore.newReviewTick++"
+            >
+              <span class="sidebar-list-icon"
+                ><v-icon size="14">mdi-plus</v-icon></span
+              >
+              <span class="sidebar-list-label">New review…</span>
+            </button>
+          </template>
           <!-- Moves: a to-do queue, not a permanent destination, so it earns
                its row while the queue holds anything at all - including an
                off_layout-only backlog, which has nothing to decide but still

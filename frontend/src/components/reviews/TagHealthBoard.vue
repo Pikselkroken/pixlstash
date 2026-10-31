@@ -1,10 +1,12 @@
 <template>
   <div class="rs-board">
     <div class="rs-board-inner">
-      <div class="rs-board-heading">
-        <h2 class="rs-board-title">Which tags need review?</h2>
-        <span class="rs-board-subtitle">{{ subtitle }}</span>
-        <span class="rs-board-heading-spacer"></span>
+      <!-- The board's controls sit on the view's toolbar line, the app
+           toolbar's order: freshness and scope on the left, then the filter,
+           Anomalies and Sort on the right where search sits on the grid.
+           Drawn in place when there is no toolbar (a component test). -->
+      <Teleport :to="toolbarTarget" :disabled="!toolbarTarget" defer>
+      <div class="rs-board-controls">
         <button
           class="rs-board-rebuild-persistent"
           :class="{
@@ -27,9 +29,7 @@
               : "Never built"
           }}
         </button>
-      </div>
-
-      <div class="rs-board-controls">
+        <span class="rs-board-controls-sep" aria-hidden="true"></span>
         <Tooltip text="Only count pictures in this project">
           <template #activator="{ props: tipProps }">
             <select
@@ -83,6 +83,7 @@
             </select>
           </template>
         </Tooltip>
+        <span class="rs-board-controls-spacer"></span>
         <div class="rs-board-filter">
           <v-icon size="16" class="rs-board-filter-icon">mdi-magnify</v-icon>
           <input
@@ -106,7 +107,7 @@
             activator="parent"
           />
           <v-icon size="16">mdi-alert-octagon-outline</v-icon>
-          Anomalies only
+          Anomalies
         </button>
         <Tooltip text="Sort the board">
           <template #activator="{ props: tipProps }">
@@ -123,6 +124,9 @@
           </template>
         </Tooltip>
       </div>
+      </Teleport>
+
+      <p class="rs-board-subtitle">{{ subtitle }}</p>
 
       <!-- Terminal state: the board is scoped to a LOCKED set. A locked set's
            pictures are read-only, so no tag on them can be reviewed - showing
@@ -379,6 +383,11 @@
           review for the tag was last archived.
         </p>
       </template>
+
+      <!-- Below the table: the open reviews with their scope and Abort, the
+           archived receipts, and the sticker shelf. The sidebar lists the open
+           reviews for getting to them; this is where they are managed. -->
+      <ReviewRail class="rs-board-reviews" @new-review="emit('new-review')" />
     </div>
   </div>
 </template>
@@ -395,6 +404,7 @@ import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 // source so the two surfaces can't drift apart.
 import { LOCKED_SET_HEADLINE, lockedSetTitle } from "./lockedSetCopy";
 import Tooltip from "../widgets/Tooltip.vue";
+import ReviewRail from "./ReviewRail.vue";
 // relativeDate already solves the "naive ISO string = UTC" quirk backend
 // timestamps carry (computed_at is the same shape as the snapshot timestamps
 // this helper was written for) - reuse it rather than re-deriving the same
@@ -412,7 +422,11 @@ import {
   zeroTailStart,
 } from "./tagHealthBoardLogic";
 
-const emit = defineEmits(["start-review"]);
+defineProps({
+  // Where the controls draw: the view's toolbar line. Null draws them in place.
+  toolbarTarget: { type: String, default: null },
+});
+const emit = defineEmits(["start-review", "new-review"]);
 const store = useReviewSessionsStore();
 
 const anomalyOnly = ref(false);
@@ -764,38 +778,25 @@ const TAIL_TOGGLE_TITLE =
      the surrounding margin coming from `.rs-board`'s own padding. */
   width: 100%;
 }
-.rs-board-heading {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-3);
-  flex-wrap: wrap;
-  margin-bottom: var(--space-2);
-}
-.rs-board-title {
-  font-size: var(--text-lg);
-  font-weight: var(--weight-bold);
-}
 .rs-board-subtitle {
+  margin: 0 0 var(--space-4);
   font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
-}
-.rs-board-heading-spacer {
-  flex: 1;
-  min-width: var(--space-3);
 }
 /* Always rendered (row count 0, 1, or many) - the escape hatch stays visible
    even after the board has been built once, unlike the empty-state's
    one-time-only .rs-board-rebuild button below. Quieter, ambient copy since
    it's on screen at all times. */
 .rs-board-rebuild-persistent {
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  height: 24px;
-  padding: 0 var(--space-3);
+  gap: var(--space-2);
+  height: var(--control-h-sm);
+  padding: 0 var(--space-2);
   border-radius: var(--radius-sm);
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.14);
-  background: rgba(var(--v-theme-on-dark-surface), 0.05);
+  border: 1px solid transparent;
+  background: transparent;
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
   font-size: var(--text-2xs);
   white-space: nowrap;
@@ -821,16 +822,32 @@ const TAIL_TOGGLE_TITLE =
 }
 
 .rs-board-controls {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  flex-wrap: wrap;
-  margin: 6px 0 14px;
+  gap: var(--space-2);
+}
+.rs-board-controls-sep {
+  flex-shrink: 0;
+  width: 1px;
+  height: 20px;
+  margin: 0 var(--space-2);
+  background: rgba(var(--v-theme-on-dark-surface), 0.14);
+}
+.rs-board-controls-spacer {
+  flex: 1;
+}
+.rs-board-reviews {
+  margin-top: var(--space-6);
 }
 .rs-board-filter {
   position: relative;
   display: inline-flex;
   align-items: center;
+  /* The one control on the toolbar line that gives way on a narrow window. */
+  flex: 0 1 130px;
+  min-width: 80px;
 }
 .rs-board-filter-icon {
   position: absolute;
@@ -839,8 +856,8 @@ const TAIL_TOGGLE_TITLE =
   pointer-events: none;
 }
 .rs-board-filter-input {
-  height: 30px;
-  width: 190px;
+  height: var(--control-h);
+  width: 100%;
   padding: 0 var(--space-2) 0 28px;
   border-radius: var(--radius-sm);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
@@ -854,8 +871,8 @@ const TAIL_TOGGLE_TITLE =
 .rs-board-anomaly-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  height: 30px;
+  gap: var(--space-2);
+  height: var(--control-h);
   padding: 0 11px;
   border-radius: var(--radius-sm);
   font-size: var(--text-2xs);
@@ -871,7 +888,7 @@ const TAIL_TOGGLE_TITLE =
 }
 .rs-board-sort,
 .rs-board-scope {
-  height: 30px;
+  height: var(--control-h);
   padding: 0 var(--space-2);
   border-radius: var(--radius-sm);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
@@ -892,9 +909,14 @@ const TAIL_TOGGLE_TITLE =
 .rs-board-scope--set {
   border-color: rgb(var(--v-theme-dark-surface-primary));
 }
-.rs-board-scope {
-  max-width: 150px;
+.rs-board-sort {
+  max-width: 130px;
   text-overflow: ellipsis;
+}
+.rs-board-scope {
+  max-width: 110px;
+  text-overflow: ellipsis;
+  font-weight: var(--weight-regular);
 }
 
 .rs-board-building {

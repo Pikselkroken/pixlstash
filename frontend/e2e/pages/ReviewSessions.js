@@ -1,14 +1,16 @@
 import { expect } from '@playwright/test'
 
 /**
- * The Review Sessions overlay (tag-review redesign): the tag-health board, the
- * new-review dialog, the session rail, and the binary/pair decision cards.
+ * The Tags to review view: the tag-health board (its controls on the view's
+ * toolbar line), the new-review dialog, the open reviews nested under the
+ * sidebar's "Tags to review" row, and the binary/pair decision cards. The view
+ * replaces the grid in the centre column.
  * Thin wrapper around the stable selectors verified in
  * ReviewSessionsOverlay.vue + components/reviews/*.vue. Holds no assertions of
  * its own beyond readiness waits.
  *
- * The overlay opens from a Pinia store flag (reviewSessionsStore.overlayOpen),
- * which `?review=board` sets (useReviewRoute). The toolbar button that used to
+ * The view opens from a Pinia store flag (reviewSessionsStore.overlayOpen),
+ * which `?review=board` sets (useReviewRoute), as does the sidebar row. The toolbar button that used to
  * toggle it left the browse-only toolbar (#2160). There are no data-testid
  * attributes in the feature; selectors are class/title/kbd based.
  *
@@ -26,7 +28,9 @@ export class ReviewSessions {
 
     // Board
     this.board = page.locator('.rs-board')
-    this.boardTitle = page.locator('.rs-board-title')
+    this.toolbar = page.locator('.rs-toolbar')
+    this.toolbarTitle = page.locator('.rs-toolbar-title')
+    this.back = page.locator('.rs-toolbar-back')
     this.boardRows = page.locator('.rs-board-row:not(.rs-board-row--head)')
     this.boardHeadRow = page.locator('.rs-board-row--head')
     this.sortableHeaders = page.locator('.rs-board-row--head button.rs-board-hdr')
@@ -48,19 +52,21 @@ export class ReviewSessions {
     this.dialogCreate = page.locator('.rs-dialog-btn--go')
     this.dialogCancel = page.locator('.rs-dialog-btn', { hasText: 'Cancel' })
 
-    // Rail
-    this.rail = page.locator('nav.rs-rail')
-    this.railClose = page.locator('.rs-rail-close')
-    this.railBoardTab = page.locator('.rs-rail-board')
+    // The board's footer: open reviews (scope, Abort), archived, stickers
+    this.rail = page.locator('.rs-rail')
     this.railSessions = page.locator('.rs-rail-session')
     this.railNewReview = page.locator('.rs-rail-new')
     this.railArchived = page.locator('.rs-rail-archived')
     this.shelf = page.locator('.rs-shelf')
     this.shelfStickers = page.locator('.rs-shelf .rs-sticker')
 
+    // The sidebar: "Tags to review" and the open reviews nested under it
+    this.sidebarRow = page.locator('.sidebar-list-item', { hasText: 'Tags to review' })
+    this.sidebarSessions = page.locator('.sidebar-review-session:not(.sidebar-review-new)')
+    this.sidebarNewReview = page.locator('.sidebar-review-new')
+
     // Session view
     this.session = page.locator('.rs-session')
-    this.sessionTitle = page.locator('.rs-session-title')
     this.sessionReceipt = page.locator('.rs-session-receipt')
     this.tally = page.locator('.rs-session-tally')
     this.tallyRemoved = page.locator('.rs-tally-removed')
@@ -119,9 +125,9 @@ export class ReviewSessions {
     await expect(this.overlay).toBeVisible()
   }
 
-  /** Close via the rail close button. */
+  /** Leave through the toolbar's back button (from the board). */
   async close() {
-    await this.railClose.click()
+    await this.back.click()
     await expect(this.overlay).toBeHidden()
   }
 
@@ -148,7 +154,7 @@ export class ReviewSessions {
     return this.boardRows.filter({ has: this.page.locator('.rs-board-tag-name', { hasText: tag }) }).first()
   }
 
-  /** Open the new-review dialog from the rail. */
+  /** Open the new-review dialog from the board's footer. */
   async openNewReview() {
     await this.railNewReview.click()
     await expect(this.dialog).toBeVisible()

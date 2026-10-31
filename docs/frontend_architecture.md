@@ -79,7 +79,7 @@ frontend/src/
 │   ├── useGridKeyboardNav.js    # Keyboard navigation and keyboard-driven actions for ImageGrid
 │   ├── useGridRealtimeSync.js   # WebSocket picture-event decision table for ImageGrid (see §9)
 │   ├── useBreadcrumb.js         # Current-view breadcrumb trail from route + id→name maps; drawn by the in-grid nav
-│   ├── useReviewRoute.js        # URL ⇄ tag-review overlay (`?review=…`); mirrors ImageGrid's `?overlay=` mechanics (+ *.test.js)
+│   ├── useReviewRoute.js        # URL ⇄ Tags to review view (`?review=…`); mirrors ImageGrid's `?overlay=` mechanics (+ *.test.js)
 │   ├── useActionReceipt.js      # The receipt contract (wording, keycaps, drain, pause, focus) shared by the grid pill and the lightbox's own narration
 │   ├── useVersionCheck.js       # "New version available" check (pixlstash.dev poll); single owner gated by `enabled`
 │   ├── useDedupQueueKeyboard.js # The duplicate queue's key model, as a dependency-injected factory (+ *.test.js)
@@ -136,7 +136,7 @@ frontend/src/
     ├── panels/      # Large structural panels that form the app shell: SideBar, Toolbar + extracted TbExportPanel/FilterMenu/FilterStrip/WorkflowFilterMenu/UndoControl, SelectionBar, SelectionMenu, StatsSidebar, TasksPanel, ProjectFiles, …
     ├── reviews/     # Tag-review surfaces (see below)
     │   ├── ReviewSessionView.vue      # One open review session: header, rail, and card queue
-    │   ├── ReviewRail.vue             # Rail of open review sessions
+    │   ├── ReviewRail.vue             # Board footer: open reviews (scope, Abort), archived, stickers
     │   ├── ReviewBinaryCard.vue       # Single-tag accept/dismiss decision card
     │   ├── ReviewPairCard.vue         # Twin/near-duplicate pair decision card
     │   ├── ReviewDecisionBar.vue      # Accept/dismiss/fix/undo action bar
@@ -646,7 +646,7 @@ Responsibilities:
 - Settings dialog trigger, sort selector.
 - Embeds: `ImageImporter`, `CharacterEditor`, `PictureSetEditor`, `ProjectEditor`, `FolderMappingWizard`, `UserSettingsDialog`.
 - Exposes: `refreshSidebar()`, `openSettingsDialog()`, `startLocalImport()`, `currentProjectId`, `openCurrentSelectionEditor()`, `clearFind()`
-- Emits `open-import` (the footer's Import, alone in the band: App opens `PhotosImportDialog` with `currentProjectId` as its default project; the button reads *Import to Nordvik* in a project's scope and its tooltip names the destination, "Import into Library 1 › Nordvik") and `open-tag-review` (App opens the tag-review board).
+- Emits `open-import` (the footer's Import, alone in the band: App opens `PhotosImportDialog` with `currentProjectId` as its default project; the button reads *Import to Nordvik* in a project's scope and its tooltip names the destination, "Import into Library 1 › Nordvik") and `open-tag-review` (App opens the Tags to review view on its board; while it is open the row only steps back to the board).
 - Emits: 30+ events including `select-character`, `select-set`, `select-folder`, `update:theme-mode`, `update:sort-options`, `update:hidden-tags`, `toggle-dock`, `update:project-view-mode`, etc.
 
 ##### Project scope, and what stays display-only
@@ -3473,12 +3473,16 @@ Login/registration form. On mount calls `checkLoginStatus()` to detect first-run
 
 Tag review is modelled as first-class **review sessions** (one tag + a frozen scope + one scan's results), backed by `useReviewSessionsStore` (§4). State lives in the store; these components are the surface.
 
-#### `ReviewSessionsOverlay.vue` (`views/`, ~580 lines)
-Full-screen entry point for tag review. Hosts the tag-health board (landing view) and the open-session rail, and switches between them.
+#### `ReviewSessionsOverlay.vue` (`views/`, ~830 lines)
+The **Tags to review** view. Despite the file name it is no longer an overlay: like Duplicates and Moves it is a destination that `App.vue` draws in the centre column in place of the grid (first in the grid wrapper's `v-if` chain, since it rides on `?review=` over whatever route it was opened from), so the title bar and the sidebar never move and the stats rail is not drawn. The grid remounts when it closes. The view keeps the review's dark surface in both themes, as the Lightbox's stage does.
+
+- **Toolbar line:** `ViewBackButton` first, named for where it goes (`backLabel`, App's `tagReviewBackLabel`: the view underneath on the board, "Tags to review" inside a review or a receipt), then the title, then `#rs-toolbar-tools`, which `TagHealthBoard` fills through a deferred `<Teleport>` (freshness/rebuild, the three scope selects, the tag filter, Anomalies, Sort). Without a `toolbarTarget` the board draws them in place, which is what its component tests see.
+- **Exit:** back and `Esc` are one gesture (`goBack()`): a review or receipt steps back to the board, the board closes the view. Picking another sidebar row also leaves, since that navigation drops `?review`.
+- **Sidebar:** `SideBar.vue`'s "Tags to review" row lights while `overlayOpen` (and takes `aria-current` on the board); the open reviews nest under it one level deep (`--depth: 1`), each with a teal progress meter and `done/found`, lit while it is on screen, then "New review…", which bumps `store.newReviewTick` for the view to open its dialog. The nested rows are the view's own data, so they show while it is open. While it is up the route's own destination row (Duplicates, Moves, Inbox, Insights) and the selection rows yield the highlight.
 
 ##### Review overlay URL state (`composables/useReviewRoute.js`)
 
-The overlay is addressable, the same way the image lightbox is via `?overlay=<pictureId>`. `useReviewRoute()` is called once from `App.vue` (the overlay's mount point, since `overlayOpen` gates the `v-if`) and syncs both directions:
+The view is addressable, the same way the image lightbox is via `?overlay=<pictureId>`. `useReviewRoute()` is called once from `App.vue` (the view's mount point, since `overlayOpen` gates the `v-if`) and syncs both directions:
 
 | Param | Meaning |
 |---|---|
@@ -3499,8 +3503,8 @@ The overlay is addressable, the same way the image lightbox is via `?overlay=<pi
 #### `ReviewSessionView.vue` (`reviews/`, ~700 lines)
 One open review session: header, progress, and the queue of decision cards. Drives accept/dismiss/fix through the store, which writes to `/tag_suggestions`.
 
-#### `ReviewRail.vue` (`reviews/`, ~740 lines)
-Rail of open review sessions — each entry is one tag's in-progress review; select to resume, archive to close.
+#### `ReviewRail.vue` (`reviews/`, ~870 lines)
+The board's footer, below the table: the open reviews with their scope and Abort, "New review", the archived receipts (open, delete, clear all) and the sticker shelf. Getting to a review is the sidebar's job; this is where reviews are managed.
 
 #### `ReviewBinaryCard.vue` (`reviews/`, ~685 lines)
 Single-tag accept/dismiss decision card for one picture.
@@ -3880,7 +3884,7 @@ A 40px title bar (`TitleBar.vue`, `.titlebar`) sits at the top of `.app-viewport
 
 - **`--titlebar-h`** — the reserved title-bar height, `40px` on `:root` in both shells (it was `0px` in a browser until #2158 gave the browser the bar). Defined at the root so it inherits everywhere, including Vuetify overlays teleported to `<body>`. It must stay in sync with `.titlebar { height }` in `TitleBar.vue` (both carry a comment saying so).
 - **The title bar is top-most.** `.titlebar` is `position: relative` on `--z-titlebar`, a closed rung above `--z-modal` (`visual-language.md` §14). It is a child of `.app-viewport` alongside the in-app overlays, so it wins over all of them. Vuetify's own overlays (and `StackLayer`) live outside that context and are kept off it by the inset below, not by z-index.
-- **Full-screen overlays anchor their top at `var(--titlebar-h)`.** Any new full-viewport modal backdrop (`position: fixed` + `inset: 0` / `top:0;left:0;right:0;bottom:0` / `100vw`×`100vh`) must start below the title bar: use `inset: var(--titlebar-h) 0 0 0` (or `top: var(--titlebar-h)` with a matching height reduction) so its own top content (close buttons, toolbars) and its centred/scrolled content land in the visible area below the bar. Current insets: `ReviewSessionsOverlay` `.rs-overlay` / `.rs-zoom` (both `inset: var(--titlebar-h) 0 0 0`; its centred child scrims — `.rs-keys-backdrop`, `NewReviewDialog` `.rs-dialog-backdrop`, `ReviewRail` `.rs-abort-backdrop` — stay `inset: 0` because they only centre content and the title bar's higher z-index covers the scrim), `CharacterEditor` `.ref-preview-overlay`, `DedupCompareDialog` `.dc-zv`, `ImageImporter` `.import-progress-modal`.
+- **Full-screen overlays anchor their top at `var(--titlebar-h)`.** Any new full-viewport modal backdrop (`position: fixed` + `inset: 0` / `top:0;left:0;right:0;bottom:0` / `100vw`×`100vh`) must start below the title bar: use `inset: var(--titlebar-h) 0 0 0` (or `top: var(--titlebar-h)` with a matching height reduction) so its own top content (close buttons, toolbars) and its centred/scrolled content land in the visible area below the bar. Current insets: `ReviewSessionsOverlay` `.rs-zoom` (`inset: var(--titlebar-h) 0 0 0`; the view itself, `.rs-overlay`, is `position: absolute; inset: 0` inside the centre column, under the bar by construction; its centred child scrims — `.rs-keys-backdrop`, `NewReviewDialog` `.rs-dialog-backdrop`, `ReviewRail` `.rs-abort-backdrop` — stay `inset: 0` because they only centre content and the title bar's higher z-index covers the scrim), `CharacterEditor` `.ref-preview-overlay`, `DedupCompareDialog` `.dc-zv`, `ImageImporter` `.import-progress-modal`.
 
 **The drag region yields to an open menu.** Electron never delivers a click on a `-webkit-app-region: drag` area to the page, so a menu's click-outside could not see a click on the title bar and the menu stayed open. While any Vuetify menu is open (`:root:has(.v-menu.v-overlay--active)`) the strip is `no-drag`, so that click lands and closes it; the window drags again once it shuts. Hand-built popovers (`ctx-menu` without a `v-menu`, such as `ImageGridContextMenu` or `TbOverflowMenu`) are not covered and keep the old behaviour. Matching `.ctx-menu` is not a safe extension: `AddToEntityControl` keeps its `.ate-menu.ctx-menu` mounted and only toggles `.open`, so the window would stop dragging whenever that control is on screen. Cover one only with a selector for its open state.
 
