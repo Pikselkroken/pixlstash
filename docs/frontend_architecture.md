@@ -4914,9 +4914,10 @@ neither edge moves on a workspace switch.
   "per_item"`: the managed store, the HuggingFace cache, the InsightFace packs)
   draws `mdi-folder-lock-outline` as its glyph and never expands. **The counts
   are one column**: nothing trails them, the ComfyUI marks sit in a slot one
-  mark wide whether or not it holds one, and a row's ⋯ is laid over its count
-  on pointer hover rather than taking a width of its own (never on keyboard
-  focus, which keeps the count; the menu there is Shift+F10). **Rows are flat**, carrying `aria-level`, under one `role="tree"`
+  mark wide whether or not it holds one, and in browse mode every row keeps a
+  column after its count for the ⋯ (locked rows too), so the ⋯ shown on
+  pointer hover never covers the count (never on keyboard focus; the menu
+  there is Shift+F10). Pick mode has no menus and no such column. **Rows are flat**, carrying `aria-level`, under one `role="tree"`
   rather than nested `group`s: the roving tabindex walks one list (Up/Down,
   Home/End, Right opens then enters, Left closes then goes to the parent,
   Enter/Space opens) and a row never re-mounts on expand. The recursion is in
@@ -4994,8 +4995,8 @@ neither edge moves on a workspace switch.
 #### Folder verbs in the tree (`panels/ModelFolderTree.vue`, #2206)
 
 **One menu, four ways in.** A folder row's menu opens by right-click, by the
-⋯ (shown on hover or on the row's focus, and kept out of the tab order: the
-row is the one stop), or by Shift+F10 and the Menu key on the focused row. F2
+⋯ (shown on pointer hover, beside the count, and kept out of the tab order:
+the row is the one stop), or by Shift+F10 and the Menu key on the focused row. F2
 renames and Ctrl+Shift+N makes a folder, on the focused row. `menuFor(node)`
 decides what a row offers. A subfolder gets *New folder*, *Open in file manager*,
 *Move folder to…*, *Rename*, a rule, and *Remove folder…* (`Del`, below). A

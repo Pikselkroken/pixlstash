@@ -6,6 +6,7 @@
   <div
     ref="treeEl"
     class="mft"
+    :class="{ 'mft--browse': browsing }"
     role="tree"
     :aria-label="label"
     data-testid="model-folder-tree"
@@ -36,7 +37,6 @@
             'mft-row--drive': node.kind === 'drive',
             'mft-row--two': Boolean(node.origin) || node.typeLine?.length > 0,
             'mft-row--welcome': welcomes.has(node.key),
-            'mft-row--verbs': menuFor(node).length > 0,
             active: isSelected(node),
             'mft-row--off': node.disabled,
             'mft-row--lifted': dragKey === node.key,
@@ -182,11 +182,11 @@
             /></span>
           </span>
           <span class="mft-count">{{ node.count }}</span>
-          <!-- The row's own menu, for a pointer. Hidden until hover, when it
-               takes the count's place rather than a width of its own,
-               so a locked row's count stays in the same column. Out of the tab
-               order: the row is the one stop, and the menu is Shift+F10 or the
-               Menu key on it. -->
+          <!-- The row's own menu, for a pointer. Hidden until hover, in a
+               column of its own after the count, so the count stays readable
+               while the row is pointed at and selected. Out of the tab order:
+               the row is the one stop, and the menu is Shift+F10 or the Menu
+               key on it. -->
           <button
             v-if="menuFor(node).length"
             type="button"
@@ -1672,8 +1672,10 @@ defineExpose({ reveal });
   opacity: 1;
 }
 
-.mft-row--verbs:hover .mft-count {
-  visibility: hidden;
+.mft--browse .mft-count {
+  /* The ⋯ column, kept on every row (locked ones too) so the counts stay one
+     column. Pick mode has no menus and keeps the edge. */
+  margin-right: calc(var(--control-h-sm) + var(--space-1));
 }
 
 .mft-count,
@@ -1692,8 +1694,8 @@ defineExpose({ reveal });
 }
 
 /* The row's ⋯: a 24px control (`--control-h-sm`) for a pointer, shown on hover
-   over the count column at the row's right edge. Not on keyboard focus: there
-   it would only hide the count, and the menu is Shift+F10. */
+   in the column reserved after the count, at the row's right edge. Not on
+   keyboard focus: the menu is Shift+F10. */
 .mft-more {
   position: absolute;
   top: 50%;
