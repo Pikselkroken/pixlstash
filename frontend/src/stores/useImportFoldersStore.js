@@ -1,6 +1,6 @@
 // useImportFoldersStore.js - import folders and the Inbox they feed.
 //
-// An import folder is configured once, in Settings › Import folders, and what
+// An import folder is configured once, in Settings › Libraries & imports, and what
 // it brings in waits in the Inbox (sidebar › Review) until the owner has looked
 // at it. The sidebar row, the Inbox header, the Settings table, the Filter
 // menu's "Imported from" and the Import panel all read this one store, and it

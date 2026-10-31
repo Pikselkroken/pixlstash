@@ -29,10 +29,10 @@ const hasItems = computed(() => {
   grid-template-columns: 1fr 1fr;
   gap: var(--space-1) var(--space-2);
   margin-bottom: var(--space-3);
-  /* Each list caps and scrolls on its own so the whole tab stays within the
-     pane height (no outer/global scrollbar). Tall enough to hold four full
-     penalised-tag rows (~28px each + row gaps) without clipping the fourth. */
-  max-height: 125px;
+  /* Scrolls inside itself once its parent bounds it: the penalised list by
+     shrinking with the pane, the hidden-tag list by a cap (SmartScoreSection).
+     Two rows stay visible however squeezed. */
+  min-height: calc(4 * var(--space-5));
   overflow-y: auto;
 }
 

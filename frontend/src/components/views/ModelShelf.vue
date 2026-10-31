@@ -3180,7 +3180,7 @@ async function onFilePicked(path) {
 // need its trigger to hand focus back to.
 
 /**
- * The folder registry lives in Settings › Models; every shelf door opens it
+ * The folder registry lives in Settings › Model folders; every shelf door opens it
  * there. Settings gives focus back to whatever held it when it opened, and a
  * menu item is gone by the time it closes, so a door names the durable control
  * it hangs off and that takes focus first.

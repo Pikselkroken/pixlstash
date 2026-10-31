@@ -129,7 +129,7 @@ whichever library is open. Only the owner, signed in from the local network,
 can change that (a token cannot change it, its own included). A share link and
 the ComfyUI link key always stay with their library.
 
-**Settings → Libraries** does all of it: add a library, rename one, switch
+**Settings → Libraries & imports** does all of it: add a library, rename one, switch
 between them, and stop using one. **Add a library…** takes a single folder and
 works out what it is — a library you already made is added as it is, with its
 tags, scores and people; a folder of pictures is brought in as it stands; an
@@ -152,7 +152,7 @@ library's share links offline. It also sees no folder paths. Set
 ### The library command line
 
 The same things can be done from a terminal, which is what a script or a cron
-job wants. **Settings → Libraries** shows the exact command for your
+job wants. **Settings → Libraries & imports** shows the exact command for your
 installation, with a copy button.
 
 Run these on the machine hosting PixlStash, as the OS user that owns `hub.db`,
@@ -227,7 +227,7 @@ the environment PixlStash is installed into is active.
   (`~/.local/bin` on Linux and macOS, `%LOCALAPPDATA%\PixlStash\bin` — added to
   your user `PATH` — on Windows) and type `pixlstash libraries list` instead;
   open a new terminal afterwards. Either form targets the desktop app's own hub;
-  there is no need to pass `--hub`. Settings › Libraries always shows the exact
+  there is no need to pass `--hub`. Settings › Libraries & imports always shows the exact
   command for your install.
 - **A different hub** than the default: put global options *before* `libraries`,
   e.g. `pixlstash-cli --hub /path/to/hub.db libraries list`. Without `--hub` the

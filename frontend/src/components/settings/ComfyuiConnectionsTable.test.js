@@ -36,6 +36,7 @@ vi.mock("../../stores/useUserPrefsStore", () => ({
 }));
 
 import ComfyuiConnectionsTable from "./ComfyuiConnectionsTable.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 
 const LINKED = {
   linked: true,
@@ -388,12 +389,20 @@ describe("rename and edit address, in place", () => {
 });
 
 describe("notes under a row", () => {
-  it("says a row is not answering, and how to fix it", () => {
+  it("says a row is not answering, and how to fix it, on the status", () => {
     const wrapper = mountTable([{ ...PC, status: "offline" }, BOX], "box");
-    expect(byTestId(wrapper, "comfyui-note-offline-pc").text()).toContain(
+    const status = byTestId(wrapper, "comfyui-offline-pc");
+    expect(status.text()).toBe("Not answering");
+    const tip = wrapper
+      .findAllComponents(Tooltip)
+      .find((t) => t.find('[data-testid="comfyui-offline-pc"]').exists());
+    expect(tip.props("text")).toContain("Nothing answered at");
+    expect(tip.props("text")).toContain(
       "start it with --listen, or edit the address.",
     );
-    expect(byTestId(wrapper, "comfyui-note-offline-box").exists()).toBe(false);
+    expect(byTestId(wrapper, "comfyui-offline-box").exists()).toBe(false);
+    // No note row under it any more: the table stays one line per ComfyUI.
+    expect(wrapper.find(".cct-note").exists()).toBe(false);
     wrapper.unmount();
   });
 

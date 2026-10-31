@@ -31,7 +31,7 @@ const emit = defineEmits(["update:modelValue", "update:dontShowAgain"]);
       </p>
       <p class="snap-del-hint">
         The snapshots can be deleted from from
-        <strong>Settings → Snapshots</strong>.
+        <strong>Settings → Recovery</strong>.
       </p>
     </div>
 

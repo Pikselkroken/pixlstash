@@ -13,7 +13,7 @@
       </AppButton>
       <span class="inbox-bar__spacer"></span>
       <!-- Reports what each folder is doing and edits nothing: folders are
-           added and changed in one place, Settings › Import folders. -->
+           added and changed in one place, Settings › Libraries & imports. -->
       <v-menu location="bottom end" origin="top end" :offset="6">
         <template #activator="{ props: menuProps }">
           <AppButton
@@ -105,7 +105,7 @@
  * The Inbox's band over the grid: how many pictures import folders brought in
  * that have not been looked at, one row per batch (a folder's arrivals with no
  * hour-long gap), Mark seen per batch and for everything, and a status menu
- * whose last row opens Settings › Import folders.
+ * whose last row opens Settings › Libraries & imports.
  *
  * The grid underneath is the ordinary grid narrowed to the Inbox, so opening,
  * rating, tagging and filing work as everywhere else. The parent re-reads it

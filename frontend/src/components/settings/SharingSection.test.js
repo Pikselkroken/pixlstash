@@ -1,4 +1,4 @@
-// Settings › Sharing: whether an export keeps the workflow (#2417).
+// Settings › Privacy & sharing: whether an export keeps the workflow (#2417).
 //
 // What is pinned: it strips until told otherwise, reads the remembered value,
 // saves its own key, and a failed save never shows "Keeps".
@@ -69,5 +69,42 @@ describe("keep the workflow when exporting", () => {
     expect(wrapper.find("[role='alert']").text()).toContain(
       "previous choice was kept",
     );
+  });
+});
+
+describe("public base URL", () => {
+  async function mountOpen() {
+    const prefs = useUserPrefsStore();
+    prefs.publicUrl = "https://old.example.com";
+    const wrapper = mount(SharingSection, {
+      props: { open: true },
+      global: { stubs: { "v-icon": true } },
+    });
+    await flushPromises();
+    return { wrapper, prefs, input: wrapper.find('input[placeholder^="https://"]') };
+  }
+
+  it("starts from the saved URL, and saving writes the server and the store share links read", async () => {
+    config.patchUserConfig.mockResolvedValue({});
+    const { prefs, input } = await mountOpen();
+    expect(input.element.value).toBe("https://old.example.com");
+
+    await input.setValue("https://new.example.com/");
+    await input.trigger("blur");
+    await flushPromises();
+    expect(config.patchUserConfig).toHaveBeenCalledWith({
+      public_url: "https://new.example.com",
+    });
+    expect(prefs.publicUrl).toBe("https://new.example.com");
+  });
+
+  it("keeps the store's URL when the save fails", async () => {
+    config.patchUserConfig.mockRejectedValue(new Error("offline"));
+    const { wrapper, prefs, input } = await mountOpen();
+    await input.setValue("https://new.example.com");
+    await input.trigger("blur");
+    await flushPromises();
+    expect(prefs.publicUrl).toBe("https://old.example.com");
+    expect(wrapper.text()).toContain("Failed to save.");
   });
 });

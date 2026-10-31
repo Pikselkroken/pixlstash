@@ -1,6 +1,6 @@
 <script setup>
 /**
- * Settings › Libraries.
+ * Settings › Libraries & imports.
  *
  * The whole lifecycle: list, add, rename, switch, stop using. It used to be a
  * list and a lesson in the CLI, because adding a library points the server at a
@@ -290,6 +290,7 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
 <template>
   <div class="libraries-pane">
     <SettingsSection
+      class="libraries-main"
       first
       title="Libraries"
       desc="A library is a folder holding your pictures and their database. PixlStash keeps one open at a time."
@@ -631,9 +632,19 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
 </template>
 
 <style scoped>
+/* The list is as tall as it needs to be, and gives way only when the pane
+   (shared with the import folders) runs out: every box between the pane and
+   the list may shrink, and the list scrolls inside itself. */
 .libraries-pane {
   display: flex;
   flex-direction: column;
+  min-height: 0;
+}
+
+.libraries-main {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .libraries-loading {
@@ -645,8 +656,6 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
   padding: var(--space-3) 0;
 }
 
-/* About three libraries, then the list scrolls in its own box so the pane,
-   which it shares with the import folders, does not. */
 .libraries-cli-row {
   display: flex;
   align-items: center;
@@ -663,7 +672,8 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
   list-style: none;
   margin: 0;
   padding: 0;
-  max-height: calc(3 * var(--space-8));
+  /* At least a row and a half, so a squeezed list still shows it scrolls. */
+  min-height: calc(2 * var(--space-8));
   overflow-y: auto;
 }
 

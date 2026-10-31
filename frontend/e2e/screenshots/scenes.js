@@ -337,9 +337,9 @@ export const scenes = [
     async setup({ grid, settings, page }) {
       await readyGrid(grid)
       await settings.open()
-      // The desktop-only "Backend" rail item. Compute acceleration used to
-      // share this pane; it is its own "Compute" item now (backend-cuda /
-      // backend-rocm below), so this one shows remote access + desktop.
+      // The desktop-only "Server" rail item: remote access + desktop.
+      // Compute acceleration is under "GPU & compute" (backend-cuda /
+      // backend-rocm below).
       await settings.openTab('Server')
       await expect(page.getByText('Remote access')).toBeVisible()
       await page.waitForTimeout(400)
@@ -350,7 +350,7 @@ export const scenes = [
     id: 'backend-cuda',
     assets: ['ScreenshotBackendCuda.jpg'],
     title: 'Desktop Backend settings — NVIDIA CUDA acceleration available',
-    // Show the Backend tab on an NVIDIA machine: the CUDA overlay is offered
+    // Show GPU & compute on an NVIDIA machine: the CUDA overlay is offered
     // with an "Install (recommended)" action (the post-install "active" state
     // can't be shown without a real lightbox download).
     bridge: { accelerators: cudaAccelerators },

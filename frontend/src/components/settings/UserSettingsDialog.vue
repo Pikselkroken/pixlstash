@@ -11,7 +11,7 @@ import BehaviourSection from "./BehaviourSection.vue";
 import ComfyuiHostSection from "./ComfyuiHostSection.vue";
 import ComputeSection from "./ComputeSection.vue";
 import ModelFoldersSection from "./ModelFoldersSection.vue";
-import TrainingSection from "./TrainingSection.vue";
+import AiToolkitSetup from "./AiToolkitSetup.vue";
 import PrivacySection from "./PrivacySection.vue";
 import SharingSection from "./SharingSection.vue";
 import ScrapheapSection from "./ScrapheapSection.vue";
@@ -135,8 +135,8 @@ const navGroups = computed(() =>
           show: !isReadOnly.value,
         },
         {
-          // The LoRA training feature: the ai-toolkit checkout, and the jobs
-          // and trained LoRAs it has made. The output folder is under Models.
+          // The ai-toolkit install LoRA training runs on. Runs themselves are
+          // in the Training runs view; the output folder is under Models.
           id: "training",
           icon: "school-outline",
           label: "AI-toolkit",
@@ -245,11 +245,7 @@ watch(
 
     <nav class="settings-nav" aria-label="Settings sections">
       <template v-for="group in navGroups" :key="group.heading">
-        <div
-          v-if="showHeadings"
-          class="settings-nav-heading section-label"
-          aria-hidden="true"
-        >
+        <div v-if="showHeadings" class="settings-nav-heading section-label">
           {{ group.heading }}
         </div>
         <button
@@ -316,11 +312,14 @@ watch(
         v-if="!isReadOnly"
         v-show="settingsTab === 'libraries'"
         id="settings-pane-libraries"
-        class="settings-pane"
+        class="settings-pane settings-pane--stack"
         role="region"
         aria-labelledby="settings-nav-libraries"
       >
-        <LibrariesSection :open="dialogOpen && settingsTab === 'libraries'" />
+        <LibrariesSection
+          class="settings-pane__shrink"
+          :open="dialogOpen && settingsTab === 'libraries'"
+        />
         <div id="settings-anchor-import-folders">
           <ImportFoldersSection
             :open="dialogOpen && settingsTab === 'libraries'"
@@ -361,11 +360,12 @@ watch(
         v-if="!isReadOnly"
         v-show="settingsTab === 'smart-score'"
         id="settings-pane-smart-score"
-        class="settings-pane"
+        class="settings-pane settings-pane--stack"
         role="region"
         aria-labelledby="settings-nav-smart-score"
       >
         <SmartScoreSection
+          class="settings-pane__shrink"
           :open="dialogOpen"
           @update:hidden-tags="emit('update:hidden-tags', $event)"
           @update:apply-tag-filter="emit('update:apply-tag-filter', $event)"
@@ -389,7 +389,7 @@ watch(
         role="region"
         aria-labelledby="settings-nav-training"
       >
-        <TrainingSection :open="dialogOpen && settingsTab === 'training'" />
+        <AiToolkitSetup :open="dialogOpen && settingsTab === 'training'" />
       </div>
       <div
         v-if="!isReadOnly"
@@ -452,8 +452,8 @@ watch(
   overflow-y: auto;
 }
 
-/* A group heading: the design system's SectionLabel. Decorative for assistive
-   tech (aria-hidden): each item's own label already names the pane. */
+/* A group heading: the design system's SectionLabel. Plain text in the nav,
+   so a screen reader walking the rail hears the group before its items. */
 .settings-nav-heading {
   padding: 0 var(--space-4) 0 var(--space-5);
   margin: var(--space-4) 0 var(--space-2);
@@ -527,14 +527,15 @@ watch(
 }
 
 /* Each pane fills the content height so panes that pin content to the bottom
-   (e.g. the Backend tab's library/log links, the Snapshots retention notes)
+   (e.g. the Server pane's library/log links)
    have a full-height box to push that content against. */
 .settings-pane {
   height: 100%;
 }
 
-/* A pane of stacked sections where one of them (Recovery's snapshot list)
-   takes the height the others leave. */
+/* A pane of stacked sections where one of them takes the height the others
+   leave (__grow: Recovery's snapshot list), or keeps its own height and gives
+   way only when the pane runs out (__shrink: the library and tag lists). */
 .settings-pane--stack {
   display: flex;
   flex-direction: column;
@@ -546,6 +547,11 @@ watch(
 
 .settings-pane--stack > .settings-pane__grow {
   flex: 1 1 0;
+  min-height: 0;
+}
+
+.settings-pane--stack > .settings-pane__shrink {
+  flex: 0 1 auto;
   min-height: 0;
 }
 

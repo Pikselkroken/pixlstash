@@ -157,7 +157,7 @@ export const useLibrarySwitchStore = defineStore("library-switch", () => {
 
   /**
    * Ask, then switch: the one confirmation every switch control shows
-   * (Settings › Libraries and the title bar's library picker), so the two
+   * (Settings › Libraries & imports and the title bar's library picker), so the two
    * cannot word the reload or the share-link warning differently.
    *
    * @returns {Promise<boolean>} false when the owner declined.

@@ -879,7 +879,7 @@ def picture_ghosts_by_variant(hub: HubDatabase, library_uuid: str) -> dict[str, 
     here on purpose (see the table), and a ghost whose variant was never filed
     as a card's belongs to no card either - both land under a key no card's
     variants can match. So these counts can sum to less than
-    :func:`picture_ghost_count`, which is the number Settings › Privacy shows
+    :func:`picture_ghost_count`, which is the number Settings › Recovery shows
     and the number an erase destroys. That is the same hole
     :func:`picture_ghosts_by_topology` above carries, for the same reason:
     this answers "which cards keep something", never "how many ghosts exist".

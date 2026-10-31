@@ -37,7 +37,7 @@ vi.mock("./SharingSection.vue", () => ({ default: sectionStub }));
 vi.mock("./ScrapheapSection.vue", () => ({ default: sectionStub }));
 vi.mock("./SnapshotsSection.vue", () => ({ default: sectionStub }));
 vi.mock("./GhostsSection.vue", () => ({ default: sectionStub }));
-vi.mock("./TrainingSection.vue", () => ({ default: sectionStub }));
+vi.mock("./AiToolkitSetup.vue", () => ({ default: sectionStub }));
 vi.mock("./SmartScoreSection.vue", () => ({ default: sectionStub }));
 vi.mock("./ComfyuiHostSection.vue", () => ({
   default: {
@@ -131,20 +131,23 @@ describe("UserSettingsDialog library navigation", () => {
         global: { stubs: { VIcon: true } },
         attachTo: document.body,
       });
-      await nextTick();
-      await nextTick();
+      try {
+        await nextTick();
+        await nextTick();
 
-      expect(
-        wrapper.find(`#settings-nav-${pane}`).attributes("aria-current"),
-      ).toBe("page");
-      const anchor = wrapper.find(`#settings-anchor-${oldId}`);
-      expect(anchor.exists()).toBe(true);
-      expect(
-        wrapper.find(`#settings-pane-${pane}`).element.contains(anchor.element),
-      ).toBe(true);
-      expect(scrolled.mock.contexts).toEqual([anchor.element]);
-      wrapper.unmount();
-      delete Element.prototype.scrollIntoView;
+        expect(
+          wrapper.find(`#settings-nav-${pane}`).attributes("aria-current"),
+        ).toBe("page");
+        const anchor = wrapper.find(`#settings-anchor-${oldId}`);
+        expect(anchor.exists()).toBe(true);
+        expect(
+          wrapper.find(`#settings-pane-${pane}`).element.contains(anchor.element),
+        ).toBe(true);
+        expect(scrolled.mock.contexts).toEqual([anchor.element]);
+      } finally {
+        wrapper.unmount();
+        delete Element.prototype.scrollIntoView;
+      }
     },
   );
 

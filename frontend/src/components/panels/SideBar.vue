@@ -768,7 +768,7 @@ async function chooseLibraryFolder() {
   openFolderMappingWizard();
 }
 
-// The wizard's open state is the store's, so Settings › Libraries and the
+// The wizard's open state is the store's, so Settings › Libraries & imports and the
 // empty library's "Choose a folder…" open this same mounted instance.
 function openFolderMappingWizard(resume = null) {
   mappingStore.openWizard(resume);

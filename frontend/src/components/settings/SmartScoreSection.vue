@@ -245,8 +245,9 @@ watch(
 </script>
 
 <template>
-  <div>
+  <div class="smart-score">
     <SettingsSection
+      class="smart-score__grow"
       title="Penalised Tags"
       desc="Tags listed here reduce Smart Score when present on a picture. Adjust the importance to control how much they hurt the score."
       first
@@ -308,7 +309,7 @@ watch(
           @update:model-value="setApplyTagFilter"
         />
       </div>
-      <SettingsChipGrid empty="No hidden tags yet.">
+      <SettingsChipGrid class="smart-score__capped" empty="No hidden tags yet.">
         <SettingsChip
           v-for="tag in hiddenTags"
           :key="tag"
@@ -339,6 +340,27 @@ watch(
 </template>
 
 <style scoped>
+/* The penalised list keeps its full height until the pane runs out, then
+   shrinks and scrolls inside itself (SettingsChipGrid), so the pane never
+   scrolls. Only that section may shrink: a shrunk Tag filter section would
+   spill its own rows past the pane. */
+.smart-score {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.smart-score__grow {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* The hidden-tag list: four rows, then it scrolls in its own box. */
+.smart-score__capped {
+  max-height: calc(4 * (var(--control-h) + var(--space-1)));
+}
+
 /* Fixed-width wrapper for the inline importance select inside each chip,
    matching the proposal's 96px slot. */
 .smart-score-importance {

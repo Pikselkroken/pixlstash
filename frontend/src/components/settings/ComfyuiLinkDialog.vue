@@ -235,7 +235,7 @@ async function installPack() {
   }
 }
 
-// The same bridge call Settings › Backend's Apply makes: it rewrites the
+// The same bridge call Settings › Server's Apply makes: it rewrites the
 // server config and restarts the backend, which reloads this page. The port is
 // kept as it is; only remote access and HTTPS change.
 async function turnOnRemoteHttps() {

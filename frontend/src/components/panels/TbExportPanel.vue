@@ -124,7 +124,7 @@
         density="compact"
         hide-details
       />
-      <!-- Starts from, and writes, Settings › Sharing (#2417). -->
+      <!-- Starts from, and writes, Settings › Privacy & sharing (#2417). -->
       <v-switch
         class="tb-export-keep-workflow"
         :model-value="prefs.keepWorkflowOnExport"
@@ -137,7 +137,7 @@
         @update:model-value="(v) => prefs.saveKeepWorkflowOnExport(v)"
       />
       <p id="tb-export-keep-workflow-hint" class="tb-export-hint">
-        Starts from Settings › Sharing.
+        Starts from Settings › Privacy & sharing.
       </p>
     </div>
 
