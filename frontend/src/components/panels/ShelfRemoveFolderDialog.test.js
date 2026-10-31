@@ -115,7 +115,23 @@ describe("ShelfRemoveFolderDialog", () => {
     expect(removals()).toEqual([
       [1, { path: "Lora/old", permanent: false, expect: "fp-1" }],
     ]);
+    expect(wrapper.emitted("removed")).toHaveLength(1);
     expect(wrapper.emitted("close")).toBeTruthy();
+  });
+
+  it("says how many picked folders wait behind this one, and only then", async () => {
+    mountDialog(plan());
+    const dialog = () => wrapper.findComponent(AppDialogStub);
+    expect(dialog().attributes("subtitle")).toBe("Lora/old");
+    await wrapper.setProps({ remaining: 2 });
+    expect(dialog().attributes("subtitle")).toBe("Lora/old · 2 more folders after this");
+  });
+
+  it("closes without `removed` on a cancel", async () => {
+    mountDialog(plan());
+    wrapper.findComponent(AppDialogStub).vm.$emit("close");
+    expect(wrapper.emitted("close")).toHaveLength(1);
+    expect(wrapper.emitted("removed")).toBeFalsy();
   });
 
   it("needs the folder's name typed when something outside breaks", async () => {

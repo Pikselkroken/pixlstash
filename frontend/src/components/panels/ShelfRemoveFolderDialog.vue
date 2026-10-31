@@ -6,7 +6,7 @@
     :open="open"
     role="alertdialog"
     title="Remove folder"
-    :subtitle="source.path"
+    :subtitle="subtitle"
     size="lg"
     :persistent="working"
     @close="dismiss"
@@ -126,9 +126,12 @@ const props = defineProps({
   source: { type: Object, default: () => ({ folderId: 0, path: "", name: "" }) },
   /** The dry run's answer, read before the dialog opened. */
   plan: { type: Object, default: null },
+  /** Picked folders still to come after this one, each asked in turn. */
+  remaining: { type: Number, default: 0 },
 });
 
-const emit = defineEmits(["close", "move-models"]);
+/** `removed` comes just before the `close` of a removal that went through. */
+const emit = defineEmits(["close", "removed", "move-models"]);
 
 const EMPTY = { files: [], models: [], copies: [], breaks: {}, pictures: 0, name: "" };
 
@@ -177,6 +180,13 @@ onUnmounted(() => listen(false));
 
 const plural = (n, one, many) =>
   `${Number(n).toLocaleString()} ${n === 1 ? one : many}`;
+
+// Cancel stops the folders after this one too, so the reader is told they wait.
+const subtitle = computed(() =>
+  props.remaining > 0
+    ? `${props.source.path} · ${plural(props.remaining, "more folder", "more folders")} after this`
+    : props.source.path,
+);
 
 const lead = computed(() => {
   const files = facts.value.files?.length ?? 0;
@@ -256,6 +266,7 @@ async function confirm(event) {
   refusal.value = "";
   try {
     await removeFolder(props.source, facts.value, permanent);
+    emit("removed");
     emit("close");
   } catch (err) {
     const said = errorMessage(err, `Could not remove ${facts.value.name}.`);

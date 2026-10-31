@@ -8,6 +8,7 @@
     class="mft"
     role="tree"
     :aria-label="label"
+    :aria-multiselectable="mode === 'browse' ? 'true' : undefined"
     data-testid="model-folder-tree"
     @keydown="onKeydown"
   >
@@ -38,6 +39,7 @@
             'mft-row--welcome': welcomes.has(node.key),
             'mft-row--verbs': menuFor(node).length > 0,
             active: isSelected(node),
+            'mft-row--picked': picked.has(node.key),
             'mft-row--off': node.disabled,
             'mft-row--lifted': dragKey === node.key,
           },
@@ -47,7 +49,11 @@
         role="treeitem"
         :aria-level="node.level"
         :aria-expanded="node.expandable ? String(node.expanded) : undefined"
-        :aria-selected="node.kind === 'drive' ? undefined : String(isSelected(node))"
+        :aria-selected="
+          node.kind === 'drive'
+            ? undefined
+            : String(isSelected(node) || picked.has(node.key))
+        "
         :aria-disabled="node.disabled ? 'true' : undefined"
         :aria-label="node.aria"
         :tabindex="node.key === tabStopKey ? 0 : -1"
@@ -57,7 +63,7 @@
         :data-path="node.path"
         :draggable="canDrag(node) ? 'true' : undefined"
         :data-model-copies-drop="mode === 'browse' ? '' : undefined"
-        @click="activate(node)"
+        @click="onRowClick($event, node)"
         @contextmenu="onContextMenu($event, node)"
         @focus="focusedKey = node.key"
         @dragstart="onDragStart($event, node)"
@@ -312,7 +318,10 @@ import {
   blockedAttrs,
   useModelFolderGates,
 } from "../../composables/useModelFolderGates";
-import { startFolderRemove } from "../../composables/useModelFolderRemove";
+import {
+  startFolderRemove,
+  startFoldersRemove,
+} from "../../composables/useModelFolderRemove";
 import { errorMessage } from "../../utils/apiError";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import { driveFullness } from "../../utils/libraryChrome";
@@ -353,6 +362,12 @@ import TypeMark from "../widgets/TypeMark.vue";
  * their Type belongs in welcome them: the glyph gains an arrow in and the Type
  * words turn green. A collapsed folder with one inside is marked the same way,
  * opens when the pointer rests on it, and a drop on it files into that one.
+ *
+ * Also in `browse`, subfolders can be picked several at a time, Ctrl (Cmd)
+ * click to add or drop one, Shift click or Shift+arrows for a run, Ctrl+Space
+ * on the focused row, Escape to let go. The menu or Del on a picked row then
+ * removes them all, one dialog per folder that holds files. Picking is not
+ * opening: the folder open on the shelf stays what it was.
  */
 const props = defineProps({
   mode: {
@@ -724,13 +739,19 @@ function menuFor(node) {
   ];
 }
 
-const menuEntries = computed(() =>
-  menuNode.value ? menuFor(menuNode.value) : [],
-);
+const menuEntries = computed(() => {
+  if (!menuNode.value) return [];
+  return isManyPicked(menuNode.value)
+    ? manyMenu.value
+    : menuFor(menuNode.value);
+});
 
 /** Open the menu for a row at a point, if the row has one. */
 function openMenuFor(node, x, y, trigger) {
   if (!menuFor(node).length) return false;
+  // A row outside the picked ones speaks for itself alone, as in a file
+  // manager: the pick lets go.
+  if (!picked.value.has(node.key)) clearPicks();
   menuNode.value = node;
   openContextMenu(x, y, trigger);
   return true;
@@ -759,6 +780,11 @@ function act(key, node, options = {}) {
   else if (key === "move") shelf.requestFolderMove(sourceOf(node));
   else if (key === "open") void openInFileManager(node);
   else if (key === "remove") void startFolderRemove(sourceOf(node), options);
+  else if (key === "remove-many") {
+    const sources = [...picked.value.values()];
+    clearPicks();
+    void startFoldersRemove(sources, options);
+  }
   else if (key === "stop") {
     shelf.requestShell("manage-folders", rowEls.get(node.key) ?? null);
   }
@@ -844,7 +870,9 @@ function verbKey(event, node) {
   // own button reads Shift; an empty one goes at once, permanently on Shift.
   // Never the shelf's file delete.
   if (event.key === "Delete" && !chord && !event.altKey) {
-    return verbFor(node, "remove", { permanent: event.shiftKey });
+    return verbFor(node, isManyPicked(node) ? "remove-many" : "remove", {
+      permanent: event.shiftKey,
+    });
   }
   if ((event.key === "F10" && event.shiftKey) || event.key === "ContextMenu") {
     const trigger = rowEls.get(node.key);
@@ -860,7 +888,8 @@ function verbKey(event, node) {
  * refused says why in a notice; a row that does not offer it lets the key on.
  */
 function verbFor(node, key, options = {}) {
-  const entry = menuFor(node).find((one) => one.key === key);
+  const entries = isManyPicked(node) ? manyMenu.value : menuFor(node);
+  const entry = entries.find((one) => one.key === key);
   if (!entry) return false;
   if (entry.reason) {
     notices.push({ level: "info", text: entry.reason });
@@ -902,6 +931,105 @@ function onDragEnd() {
   shelf.dragFolder = null;
   shelf.dropTip = null;
 }
+
+// ── Picking several (multi-select) ──────────────────────────────────────────
+
+/**
+ * Subfolders picked together for one verb, by row key, each with its move
+ * source. Only rows that offer Remove can be picked: a registered root, a
+ * locked folder and a drive have nothing a pick could do.
+ */
+const picked = ref(new Map());
+/** The row a Shift run reaches from: the last one picked alone. */
+const pickAnchor = ref(null);
+
+function canPick(node) {
+  return menuFor(node).some((entry) => entry.key === "remove");
+}
+
+function clearPicks() {
+  if (picked.value.size) picked.value = new Map();
+  pickAnchor.value = null;
+}
+
+/** True when this row is one of two or more picked, so verbs take them all. */
+function isManyPicked(node) {
+  return picked.value.size > 1 && picked.value.has(node.key);
+}
+
+function togglePick(node) {
+  if (!canPick(node)) return;
+  const next = new Map(picked.value);
+  if (next.has(node.key)) next.delete(node.key);
+  else next.set(node.key, sourceOf(node));
+  picked.value = next;
+  pickAnchor.value = node.key;
+}
+
+/**
+ * Pick every pickable row from the anchor to this one, in reading order. With
+ * no anchor yet the open folder is where the run starts, if it can be picked.
+ */
+function pickRun(node, { add = false } = {}) {
+  const list = nodes.value;
+  const open = list.find((one) => isSelected(one) && canPick(one));
+  const from = pickAnchor.value ?? open?.key ?? node.key;
+  const a = list.findIndex((one) => one.key === from);
+  const b = list.findIndex((one) => one.key === node.key);
+  if (a < 0 || b < 0) {
+    togglePick(node);
+    return;
+  }
+  const next = add ? new Map(picked.value) : new Map();
+  for (const one of list.slice(Math.min(a, b), Math.max(a, b) + 1)) {
+    if (canPick(one)) next.set(one.key, sourceOf(one));
+  }
+  picked.value = next;
+  pickAnchor.value = from;
+}
+
+/** A plain click opens and lets the pick go; Ctrl and Shift pick instead. */
+function onRowClick(event, node) {
+  const chord = event.ctrlKey || event.metaKey;
+  if (props.mode === "browse" && (chord || event.shiftKey)) {
+    if (event.shiftKey) pickRun(node, { add: chord });
+    else togglePick(node);
+    return;
+  }
+  clearPicks();
+  activate(node);
+}
+
+/** The menu for two or more picked folders: the one verb they share. */
+const manyMenu = computed(() => {
+  const n = picked.value.size;
+  const busy =
+    [...picked.value.values()]
+      .map((source) => gates.folderVerbReason({ id: source.folderId }))
+      .find(Boolean) ?? "";
+  return [
+    {
+      key: "remove-many",
+      label: `Remove ${n} folders…`,
+      icon: "mdi-minus-circle-outline",
+      shortcut: "Del",
+      danger: true,
+      reason: busy,
+    },
+  ];
+});
+
+// A picked row that is no longer drawn (its parent closed, or it went) leaves
+// the pick, so a verb never reaches a folder the reader cannot see.
+watch(nodes, (list) => {
+  if (!picked.value.size) return;
+  const shown = new Set(list.filter(canPick).map((one) => one.key));
+  const next = new Map(
+    [...picked.value].filter(([key]) => shown.has(key)),
+  );
+  if (next.size !== picked.value.size) picked.value = next;
+  if (pickAnchor.value && !shown.has(pickAnchor.value)) pickAnchor.value = null;
+});
 
 // ── The name field ──────────────────────────────────────────────────────────
 
@@ -1389,6 +1517,11 @@ function onKeydown(event) {
       .slice(0, at)
       .reverse()
       .find((one) => one.level < node.level);
+  if (props.mode === "browse" && pickKey(event, node, list, at)) {
+    event.preventDefault();
+    event.stopPropagation();
+    return;
+  }
   switch (event.key) {
     case "ArrowDown":
       focusNode(list[at + 1]);
@@ -1420,6 +1553,37 @@ function onKeydown(event) {
       return;
   }
   event.preventDefault();
+}
+
+/**
+ * The picking keys: Shift+Up/Down extends a run, Ctrl+Space picks or drops the
+ * focused row, Escape lets the pick go (and is only the tree's while there is
+ * one). Returns whether the key was taken.
+ */
+function pickKey(event, node, list, at) {
+  const chord = event.ctrlKey || event.metaKey;
+  if (
+    event.shiftKey &&
+    !chord &&
+    !event.altKey &&
+    (event.key === "ArrowDown" || event.key === "ArrowUp")
+  ) {
+    const next = list[event.key === "ArrowDown" ? at + 1 : at - 1];
+    if (!next) return true;
+    if (!pickAnchor.value && canPick(node)) pickAnchor.value = node.key;
+    focusNode(next);
+    if (pickAnchor.value) pickRun(next);
+    return true;
+  }
+  if (chord && !event.shiftKey && !event.altKey && event.key === " ") {
+    togglePick(node);
+    return true;
+  }
+  if (event.key === "Escape" && picked.value.size) {
+    clearPicks();
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -1495,6 +1659,17 @@ defineExpose({ reveal });
 
 .mft-row--off:hover {
   background: transparent;
+}
+
+/* A picked row wears the shelf's selected-row look: the wash and the inset
+   rail. The open folder keeps its own, so the two never read as one. */
+.mft-row--picked {
+  background: var(--active-wash);
+  box-shadow: var(--selection-edge);
+}
+
+.mft-row--picked:focus-visible {
+  box-shadow: var(--selection-edge), var(--focus-ring-inset);
 }
 
 /* The dragged row dims while it is carried, so the drop target reads as the

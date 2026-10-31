@@ -1183,6 +1183,8 @@
       :open="folderRemoveOpen"
       :source="folderRemoveSource"
       :plan="folderRemovePlan"
+      :remaining="folderRemoveRemaining"
+      @removed="folderRemoved = true"
       @move-models="moveModelsOutFirst"
       @close="closeFolderRemove"
     />
@@ -1892,6 +1894,10 @@ const folderRemoveOpen = ref(false);
 const folderRemoveSource = ref({ folderId: 0, path: "", name: "" });
 const folderRemovePlan = shallowRef(null);
 const folderRemoveInvoker = shallowRef(null);
+/** Picked folders still waiting behind the one shown. */
+const folderRemoveRemaining = ref(0);
+/** Whether the open dialog removed its folder, told to the tree on close. */
+const folderRemoved = ref(false);
 
 watch(
   () => store.folderRemoveRequest,
@@ -1903,6 +1909,8 @@ watch(
         : null;
     folderRemoveSource.value = request.source;
     folderRemovePlan.value = request.plan;
+    folderRemoveRemaining.value = request.remaining ?? 0;
+    folderRemoved.value = false;
     folderRemoveOpen.value = true;
   },
 );
@@ -1915,6 +1923,8 @@ async function closeFolderRemove() {
   folderRemovePlan.value = null;
   await nextTick();
   (returnTo?.isConnected ? returnTo : rootEl.value)?.focus();
+  // Last, so a next picked folder's dialog opens after this one has gone.
+  store.settleFolderRemove(folderRemoved.value);
 }
 
 /** *Move the models out first…*: the move dialog, on the folder's copies. */

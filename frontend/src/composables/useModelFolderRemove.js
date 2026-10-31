@@ -84,17 +84,59 @@ export async function removeFolder(source, plan, permanent) {
  * @returns {Promise<void>}
  */
 export async function startFolderRemove(source, { permanent = false } = {}) {
-  try {
-    const plan = await planFolderRemove(source);
-    if (Number(plan.file_count) === 0) {
-      await removeFolder(source, plan, Boolean(permanent));
-      return;
+  await startFoldersRemove([source], { permanent });
+}
+
+/** True when `inner` is `outer` or a folder somewhere under it. */
+function isWithin(inner, outer) {
+  if (Number(inner.folderId) !== Number(outer.folderId)) return false;
+  return inner.path === outer.path || inner.path.startsWith(`${outer.path}/`);
+}
+
+/**
+ * Remove several folders picked in the tree, one after another, each exactly
+ * as {@link startFolderRemove} removes one: an empty folder goes at once, one
+ * with files gets its own dialog. A folder under another picked one goes with
+ * it and is not asked about twice.
+ *
+ * Cancelling a dialog (or leaving it for *Move the models out first…*) stops
+ * the rest: the reader stopped agreeing, so nothing after it is removed. A
+ * folder whose dry run fails is reported and skipped; nothing of it was
+ * touched.
+ *
+ * @param {Array<{folderId: number, path: string, name: string}>} sources
+ * @param {{permanent?: boolean}} [options]
+ * @returns {Promise<void>}
+ */
+export async function startFoldersRemove(sources, { permanent = false } = {}) {
+  const outer = sources.filter(
+    (one, index) =>
+      !sources.some(
+        (other, at) =>
+          at !== index &&
+          isWithin(one, other) &&
+          // Of two equal entries, the first stays.
+          (other.path !== one.path || at < index),
+      ),
+  );
+  for (const [index, source] of outer.entries()) {
+    try {
+      const plan = await planFolderRemove(source);
+      if (Number(plan.file_count) === 0) {
+        await removeFolder(source, plan, Boolean(permanent));
+        continue;
+      }
+      const removed = await useModelShelfStore().requestFolderRemove(
+        source,
+        plan,
+        { remaining: outer.length - index - 1 },
+      );
+      if (!removed) return;
+    } catch (err) {
+      useNoticeStore().push({
+        level: "error",
+        text: errorMessage(err, `Could not remove ${source.name}.`),
+      });
     }
-    useModelShelfStore().requestFolderRemove(source, plan);
-  } catch (err) {
-    useNoticeStore().push({
-      level: "error",
-      text: errorMessage(err, `Could not remove ${source.name}.`),
-    });
   }
 }

@@ -5252,3 +5252,30 @@ describe("the list's Type, favourite and Sets columns (#2168)", () => {
     wrapper.unmount();
   });
 });
+
+describe("the folder removal dialog the tree asks for", () => {
+  const SOURCE = { folderId: 1, path: "Lora", name: "Lora" };
+  const PLAN = { file_count: 2, files: [], fingerprint: "fp", name: "Lora" };
+  const dialog = (wrapper) =>
+    wrapper.findComponent({ name: "ShelfRemoveFolderDialog" });
+
+  it("answers the request on close: removed only after the dialog said so", async () => {
+    const wrapper = await mountShelf([]);
+    const store = useModelShelfStore();
+
+    const cancelled = store.requestFolderRemove(SOURCE, PLAN, { remaining: 2 });
+    await flushPromises();
+    expect(dialog(wrapper).props("open")).toBe(true);
+    expect(dialog(wrapper).props("remaining")).toBe(2);
+    dialog(wrapper).vm.$emit("close");
+    await expect(cancelled).resolves.toBe(false);
+    expect(dialog(wrapper).props("open")).toBe(false);
+
+    const removed = store.requestFolderRemove(SOURCE, PLAN);
+    await flushPromises();
+    dialog(wrapper).vm.$emit("removed");
+    dialog(wrapper).vm.$emit("close");
+    await expect(removed).resolves.toBe(true);
+    wrapper.unmount();
+  });
+});

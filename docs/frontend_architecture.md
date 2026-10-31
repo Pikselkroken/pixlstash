@@ -5081,6 +5081,23 @@ shown with a note that it changed. *Move the models out first…* closes the
 dialog and opens `ShelfMoveDialog` on the plan's `copies`. After a removal the
 open folder view, if it was inside, steps up to the folder that held it.
 
+**Several folders can be picked and removed together.** In `browse` mode the
+tree keeps `picked` (row key → move source), separate from the open folder:
+Ctrl (Cmd) click adds or drops a row, Shift click and Shift+Up/Down pick a run
+from the anchor, Ctrl+Space toggles the focused row, Escape lets go, and a
+plain click lets go and opens. Only rows that offer *Remove folder…* can be
+picked. A picked row wears the shelf's selected look (`--active-wash` and
+`--selection-edge`); a row that stops being drawn leaves the pick. With two or
+more picked, the menu on a picked row (right-click, ⋯, Shift+F10) offers only
+*Remove N folders…*, and `Del` takes the same verb; a menu opened on an
+unpicked row lets the pick go first. Both call `startFoldersRemove`, which drops
+any folder under another picked one and then removes them in turn exactly as
+one is removed: an empty folder at once, one with files through its own
+dialog. `requestFolderRemove` returns a promise that `ModelShelf` settles on
+close (`settleFolderRemove`, true only after the dialog's `removed`), and the
+dialog's subtitle counts the folders still waiting. Cancel, or *Move the models
+out first…*, stops the rest.
+
 #### Sorting and grouping (the `Sort` split-button)
 
 **Sorting is client-side, and that is the correct answer rather than a
