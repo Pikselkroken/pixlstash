@@ -939,14 +939,15 @@ def test_a_file_only_the_live_templates_link_is_found_there(live_listing):
         }
     )
     assert download_source("fresh_edit_lora.safetensors") is None
-    found = live_download_source("loras/fresh_edit_lora.safetensors", COMFYUI)
+    found = live_download_source("loras/fresh_edit_lora.safetensors", COMFYUI, {})
     assert found == {
         "url": HF_LINK.format("Fresh_Edit_LoRA.safetensors"),
         "directory": "loras",
         "sha256": None,
+        "live": True,
     }
-    assert live_download_source("elsewhere.safetensors", COMFYUI) is None
-    assert live_download_source("fresh_edit_lora.safetensors", None) is None
+    assert live_download_source("elsewhere.safetensors", COMFYUI, {}) is None
+    assert live_download_source("fresh_edit_lora.safetensors", None, {}) is None
 
 
 def test_no_live_templates_is_no_live_link(monkeypatch):
@@ -954,7 +955,15 @@ def test_no_live_templates_is_no_live_link(monkeypatch):
         raise comfyui_templates.TemplatesUnavailable("nothing answers")
 
     monkeypatch.setattr(comfyui_templates, "read_listing", unavailable)
-    assert live_download_source("fresh.safetensors", COMFYUI) is None
+    assert live_download_source("fresh.safetensors", COMFYUI, {}) is None
+
+
+def test_no_templates_are_asked_while_comfyui_is_down(monkeypatch):
+    def never(url, object_info=None):
+        raise AssertionError("asked a ComfyUI that is not answering")
+
+    monkeypatch.setattr(comfyui_templates, "read_listing", never)
+    assert live_download_source("fresh.safetensors", COMFYUI, None) is None
 
 
 def test_a_download_falls_back_to_the_live_templates(hub, target, live_listing):
@@ -963,7 +972,7 @@ def test_a_download_falls_back_to_the_live_templates(hub, target, live_listing):
     # Already there: refused only after a link was found, so nothing is fetched.
     (chosen / "loras" / "fresh.safetensors").write_bytes(b"x")
     with pytest.raises(DownloadRefused) as caught:
-        start_download(hub, "fresh.safetensors", comfyui_url=COMFYUI)
+        start_download(hub, "fresh.safetensors", comfyui_url=COMFYUI, object_info={})
     assert caught.value.status_code == 409
     with pytest.raises(DownloadRefused) as caught:
         start_download(hub, "fresh.safetensors")
@@ -1004,3 +1013,91 @@ def test_the_preflight_asks_no_templates_while_comfyui_is_down(monkeypatch):
     group = RunGroup(bypassed_loras=[{"file": "fresh.safetensors"}])
     _mark_live_downloads([group], COMFYUI, object_info=None)
     assert "downloadable" not in group.bypassed_loras[0]
+
+
+@pytest.mark.parametrize(
+    "url, allowed",
+    [
+        ("https://huggingface.co/a/b/resolve/main/x.safetensors", True),
+        ("https://us.aws.cdn.hf.co/xet-bridge-us/abc", True),
+        ("https://cdn-lfs.huggingface.co/repos/abc", True),
+        ("http://us.aws.cdn.hf.co/abc", False),
+        ("https://example.com/abc", False),
+        ("https://hf.co.example.com/abc", False),
+        ("https://evilhf.co/abc", False),
+        ("https://user@cdn.hf.co/abc", False),
+        ("https://cdn.hf.co:8443/abc", False),
+    ],
+)
+def test_a_live_link_may_only_hop_within_hugging_face(url, allowed):
+    assert model_downloads._live_hop(url) is allowed
+
+
+class _Hop:
+    """A response that redirects to *location*, or ends with *location* None."""
+
+    def __init__(self, location=None):
+        self.is_redirect = location is not None
+        self.headers = {"Location": location} if location else {}
+
+    def close(self):
+        pass
+
+
+def test_a_live_link_redirected_off_hugging_face_is_never_asked(monkeypatch):
+    asked = []
+    hops = {
+        "https://huggingface.co/a/resolve/main/x.safetensors": "/b/resolve/main/x.safetensors",
+        "https://huggingface.co/b/resolve/main/x.safetensors": "https://example.com/x",
+    }
+
+    def get(url, **kwargs):
+        assert kwargs["allow_redirects"] is False
+        asked.append(url)
+        return _Hop(hops.get(url))
+
+    monkeypatch.setattr(model_downloads.requests, "get", get)
+    with pytest.raises(ValueError, match="example.com"):
+        model_downloads._open(
+            "https://huggingface.co/a/resolve/main/x.safetensors", live=True
+        )
+    assert asked == list(hops)
+
+
+def test_a_live_link_redirected_to_the_hugging_face_cdn_is_followed(monkeypatch):
+    asked = []
+    hops = {
+        "https://huggingface.co/a/resolve/main/x.safetensors": "https://us.aws.cdn.hf.co/x",
+    }
+
+    def get(url, **kwargs):
+        asked.append(url)
+        return _Hop(hops.get(url))
+
+    monkeypatch.setattr(model_downloads.requests, "get", get)
+    final = model_downloads._open(
+        "https://huggingface.co/a/resolve/main/x.safetensors", live=True
+    )
+    assert not final.is_redirect
+    assert asked == [*hops, "https://us.aws.cdn.hf.co/x"]
+
+
+def test_a_live_source_reaches_the_fetch_as_live(
+    hub, target, live_listing, monkeypatch
+):
+    live_listing({"fresh.safetensors": HF_LINK.format("fresh.safetensors")})
+    seen = threading.Event()
+    calls = []
+
+    def fetch(url, partial, entry, cancel, live=False):
+        calls.append((url, live))
+        seen.set()
+        raise ValueError("not fetched in a test")
+
+    monkeypatch.setattr(model_downloads, "_fetch", fetch)
+    entry = start_download(
+        hub, "fresh.safetensors", comfyui_url=COMFYUI, object_info={}
+    )
+    assert seen.wait(5)
+    _wait(entry["id"])
+    assert calls == [(HF_LINK.format("fresh.safetensors"), True)]

@@ -23,6 +23,7 @@ from pixlstash.routes.comfyui import _comfyui_url, _read_object_info
 from pixlstash.services.model_downloads import (
     DownloadRefused,
     cancel_download,
+    download_source,
     start_download,
 )
 
@@ -112,14 +113,18 @@ def create_router(server) -> APIRouter:
         request: Request, payload: ModelDownloadRequest = Body(...)
     ):
         server.auth.ensure_secure_when_required(request)
-        comfyui_url = _comfyui_url(server.auth.get_user_for_request(request))
+        comfyui_url = object_info = None
+        if download_source(payload.file) is None:
+            # Only for the live templates' fallback: whether ComfyUI answers.
+            comfyui_url = _comfyui_url(server.auth.get_user_for_request(request))
+            object_info = _read_object_info(comfyui_url, cached=True)[0]
         try:
             return start_download(
                 server.hub,
                 payload.file,
                 on_arrived=_arrived,
                 comfyui_url=comfyui_url,
-                object_info=_read_object_info(comfyui_url, cached=True)[0],
+                object_info=object_info,
             )
         except DownloadRefused as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc

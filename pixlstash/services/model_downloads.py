@@ -50,7 +50,7 @@ import time
 import uuid
 from functools import lru_cache
 from typing import Callable, Optional
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import requests
 
@@ -86,6 +86,11 @@ FINISHED_KEEP_SECONDS = 30
 # What a link from a live ComfyUI template may be (`trusted_live_link`).
 LIVE_HOSTS = frozenset({"huggingface.co"})
 LIVE_SUFFIXES = (".safetensors", ".gguf")
+# Where a live link's redirects may go: Hugging Face and its CDN. Every hop is
+# checked before it is asked, since a live link has no digest to catch a file
+# that came from somewhere else.
+LIVE_HOP_DOMAINS = ("huggingface.co", "hf.co")
+_MAX_HOPS = 10
 
 _CHUNK_BYTES = 1 << 20
 # Connect, then the longest silence between two reads.
@@ -152,40 +157,55 @@ def trusted_live_link(name: str, url: Optional[str]) -> bool:
     return parsed.scheme == "https" and parsed.netloc in LIVE_HOSTS
 
 
-def live_download_source(
-    file: str, comfyui_url: Optional[str], object_info: Optional[dict] = None
-) -> Optional[dict]:
-    """Where *file* can be downloaded from by the templates *comfyui_url* serves.
+def live_sources(comfyui_url: Optional[str], object_info: Optional[dict]) -> dict:
+    """Every file the templates *comfyui_url* serves link trustably, by name.
 
     The fallback to :func:`download_source`, for a template ComfyUI shipped
-    after the committed list was last rebuilt. ``{url, directory, sha256}``
-    with ``sha256`` None (a live template records no digest), or None when no
-    template the listing holds links the name through :func:`trusted_live_link`.
+    after the committed list was last rebuilt: ``{case-folded name: {url,
+    directory, sha256: None, live: True}}`` for each file whose link passes
+    :func:`trusted_live_link` (a live template records no digest), the first
+    template's link where two share a name, as the committed list does.
 
     The listing is the one ``GET /comfyui/templates`` keeps for ten minutes
-    (:func:`~pixlstash.services.comfyui_templates.read_listing`); *object_info*
-    goes to it only to say which packs loaded, should this call be the one that
-    reads it.
+    (:func:`~pixlstash.services.comfyui_templates.read_listing`). Empty while
+    ComfyUI is not answering (*object_info* None): the read would only wait
+    out its timeouts, and the listing it kept would say no pack loaded.
     """
-    name = os.path.basename((file or "").replace("\\", "/")).casefold()
-    if not name or not comfyui_url:
-        return None
+    if not comfyui_url or object_info is None:
+        return {}
     try:
         listing = comfyui_templates.read_listing(comfyui_url, object_info)
     except comfyui_templates.TemplatesUnavailable as exc:
         logger.info(
-            "No templates from ComfyUI at %s to find a link for %s: %s",
+            "No templates from ComfyUI at %s to find download links in: %s",
             comfyui_url,
-            file,
             exc,
         )
-        return None
+        return {}
+    found: dict[str, dict] = {}
     for template in listing.templates:
         for item in template.files:
-            item_name = os.path.basename(item.name.replace("\\", "/"))
-            if item_name.casefold() == name and trusted_live_link(item_name, item.url):
-                return {"url": item.url, "directory": item.directory, "sha256": None}
-    return None
+            name = os.path.basename(item.name.replace("\\", "/"))
+            if trusted_live_link(name, item.url):
+                found.setdefault(
+                    name.casefold(),
+                    {
+                        "url": item.url,
+                        "directory": item.directory,
+                        "sha256": None,
+                        "live": True,
+                    },
+                )
+    return found
+
+
+def live_download_source(
+    file: str, comfyui_url: Optional[str], object_info: Optional[dict]
+) -> Optional[dict]:
+    """Where *file* can be downloaded from by the templates *comfyui_url*
+    serves (:func:`live_sources`), or None."""
+    name = os.path.basename((file or "").replace("\\", "/")).casefold()
+    return live_sources(comfyui_url, object_info).get(name) if name else None
 
 
 def digest_source(sha256: str) -> Optional[dict]:
@@ -325,6 +345,7 @@ def start_download(
             relpath,
             on_arrived,
             source.get("sha256"),
+            bool(source.get("live")),
         ),
         name=f"model-download-{entry['id'][:8]}",
         daemon=True,
@@ -434,12 +455,13 @@ def _run(
     relpath: str,
     on_arrived: Optional[Callable[[int], None]],
     expected: Optional[str] = None,
+    live: bool = False,
 ) -> None:
     target = entry["_target"]
     partial = target + PARTIAL_SUFFIX
     cancel = entry["_cancel"]
     try:
-        digest = _fetch(url, partial, entry, cancel)
+        digest = _fetch(url, partial, entry, cancel, live=live)
         # The file the list names, or nothing: another file under the same
         # link would land on the shelf and leave a loader that asks for the
         # listed digest still missing, with nothing said.
@@ -492,18 +514,52 @@ def _left_https(url: str, response) -> bool:
     )
 
 
-def _fetch(url: str, partial: str, entry: dict, cancel: threading.Event) -> str:
+def _live_hop(url: str) -> bool:
+    """Whether a live link may be asked at *url*: https on Hugging Face."""
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    return (
+        parsed.scheme == "https"
+        and parsed.netloc == host
+        and any(
+            host == domain or host.endswith("." + domain) for domain in LIVE_HOP_DOMAINS
+        )
+    )
+
+
+def _open(url: str, live: bool) -> requests.Response:
+    """GET *url* as a stream; for a *live* link, redirects followed by hand,
+    each hop's host checked (:func:`_live_hop`) before it is asked."""
+    kwargs = {
+        "stream": True,
+        "timeout": _TIMEOUT_SECONDS,
+        # Content-Length counts the bytes sent and requests decodes what it
+        # is sent, so a compressed body would outgrow the space checked for it.
+        "headers": {"User-Agent": "PixlStash", "Accept-Encoding": "identity"},
+    }
+    if not live:
+        return requests.get(url, **kwargs)
+    for _hop in range(_MAX_HOPS):
+        if not _live_hop(url):
+            raise ValueError(
+                f"The link led to {urlparse(url).netloc or url}, which is not "
+                "Hugging Face, so it was not followed."
+            )
+        response = requests.get(url, allow_redirects=False, **kwargs)
+        if not response.is_redirect:
+            return response
+        url = urljoin(url, response.headers.get("Location", ""))
+        response.close()
+    raise ValueError(f"The link redirected more than {_MAX_HOPS} times.")
+
+
+def _fetch(
+    url: str, partial: str, entry: dict, cancel: threading.Event, live: bool = False
+) -> str:
     """Stream *url* into *partial* and return the SHA-256 of what was written."""
     os.makedirs(os.path.dirname(partial), exist_ok=True)
     sha = hashlib.sha256()
-    with requests.get(
-        url,
-        stream=True,
-        timeout=_TIMEOUT_SECONDS,
-        # Content-Length counts the bytes sent and requests decodes what it
-        # is sent, so a compressed body would outgrow the space checked for it.
-        headers={"User-Agent": "PixlStash", "Accept-Encoding": "identity"},
-    ) as response:
+    with _open(url, live) as response:
         response.raise_for_status()
         if _left_https(url, response):
             raise ValueError("The download was redirected away from https.")

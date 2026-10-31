@@ -206,7 +206,7 @@ from pixlstash.services.inpaint_conversion import (
     InpaintConversionRefused,
     convert_to_inpaint,
 )
-from pixlstash.services.model_downloads import live_download_source
+from pixlstash.services.model_downloads import live_sources
 from pixlstash.services.edit_selection import (
     UNREADABLE_PICTURE,
     Selection,
@@ -2516,7 +2516,7 @@ def _mark_live_downloads(
 
     The run service marks a missing model or a left-out LoRA downloadable
     from the committed template list alone; one ComfyUI shipped since is
-    found in the templates it serves (``live_download_source``), asked only
+    found in the templates it serves (``live_sources``), read once and only
     when something is still unmarked and ComfyUI answered. A model a loader
     names by digest is left alone: a live template records no digest to
     match.
@@ -2530,15 +2530,19 @@ def _mark_live_downloads(
         if reason.get("code") == run_service.MISSING_MODELS
         for model in reason.get("models") or []
     ] + [lora for group in groups for lora in group.bypassed_loras]
-    for entry in entries:
-        if (
-            isinstance(entry, dict)
-            and entry.get("file")
-            and not entry.get("downloadable")
-            and "sha256" not in entry
-            and not entry.get("requested")
-            and live_download_source(str(entry["file"]), comfyui_url, object_info)
-        ):
+    unmarked = [
+        entry
+        for entry in entries
+        if isinstance(entry, dict)
+        and entry.get("file")
+        and not entry.get("downloadable")
+        and "sha256" not in entry
+        and not entry.get("requested")
+    ]
+    sources = live_sources(comfyui_url, object_info) if unmarked else {}
+    for entry in unmarked:
+        name = os.path.basename(str(entry["file"]).replace("\\", "/")).casefold()
+        if name in sources:
             entry["downloadable"] = True
 
 
