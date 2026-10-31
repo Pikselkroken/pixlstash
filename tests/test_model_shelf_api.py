@@ -5119,6 +5119,37 @@ def test_a_move_relocates_the_file_and_the_row(shelf_env, move_folders):
     ]
 
 
+def test_a_cross_drive_move_reports_bytes_done(shelf_env, move_folders, monkeypatch):
+    """The status carries byte progress, so one big file does not read as stuck."""
+    from pixlstash.services import model_mover
+
+    monkeypatch.setattr(model_mover, "same_device", lambda *_: False)
+    source = move_folders.source_dir / "moving.safetensors"
+    size = source.stat().st_size
+    # The fixture's hash is a stand-in; a copy is verified against it, so give
+    # the row the file's real one.
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET sha256 = ? WHERE sha256 = ?",
+            (model_mover.file_digest(str(source)), _h("movingfile")),
+        )
+    r = shelf_env.owner.post(
+        f"{API}/model-moves",
+        json={
+            "destination_folder_id": move_folders.destination_id,
+            "items": [
+                {"folder_id": move_folders.source_id, "relpath": "moving.safetensors"}
+            ],
+        },
+    )
+    assert r.status_code == 202, r.text
+
+    body = _await_move(shelf_env)
+    assert [item["status"] for item in body["results"]] == ["moved"]
+    assert body["bytes_to_copy"] == size
+    assert body["bytes_done"] == 2 * size
+
+
 def test_a_move_into_a_subfolder_lands_there_and_says_so(shelf_env, move_folders):
     """``destination_subpath`` reaches the mover and comes back in the status."""
     (move_folders.destination_dir / "Lora").mkdir()
@@ -6302,7 +6333,7 @@ def test_a_relocation_with_a_failed_file_does_not_promote_the_new_folder(
     from pixlstash.services import model_mover
 
     monkeypatch.setattr(model_mover, "same_device", lambda *_: False)
-    monkeypatch.setattr(model_mover, "file_digest", lambda path: "0" * 64)
+    monkeypatch.setattr(model_mover, "file_digest", lambda path, **_: "0" * 64)
 
     r = shelf_env.owner.post(
         f"{API}/model-folders/{relocatable_store.managed_id}/relocate",

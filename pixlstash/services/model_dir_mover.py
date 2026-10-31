@@ -59,6 +59,7 @@ from pixlstash.services.model_mover import (
     MoveOutcome,
     MoveRefused,
     RepointLost,
+    copy_and_digest,
     discard_partial_tree,
     file_digest,
     require_space,
@@ -407,7 +408,11 @@ def _refuse_if_taken(plan: DirectoryMovePlan) -> None:
         )
 
 
-def _verify(plan: DirectoryMovePlan, copy_root: str) -> None:
+def _verify(
+    plan: DirectoryMovePlan,
+    copy_root: str,
+    on_bytes: Optional[Callable[[int], None]] = None,
+) -> None:
     """Check every catalogued file in the copy against what the hub says it is."""
     old_prefix = subpath_prefix(plan.source_subpath)
     for entry in plan.catalogued:
@@ -417,7 +422,7 @@ def _verify(plan: DirectoryMovePlan, copy_root: str) -> None:
             # copied for it and there is nothing to check.
             continue
         if entry.sha256 is not None:
-            arrived = file_digest(copied)
+            arrived = file_digest(copied, on_bytes=on_bytes)
             if arrived != entry.sha256:
                 raise OSError(
                     f"{entry.relpath} arrived as {arrived} but is registered as "
@@ -466,6 +471,7 @@ def _copy(
     hub: HubDatabase,
     plan: DirectoryMovePlan,
     should_cancel: Optional[Callable[[], bool]],
+    on_bytes: Optional[Callable[[int], None]] = None,
 ) -> Optional[str]:
     """The cross-drive move. Returns None when cancelled, else the detail."""
     cancelled = should_cancel or (lambda: False)
@@ -478,7 +484,10 @@ def _copy(
         if cancelled():
             raise _CopyCancelled()
         copied_mtimes[source] = os.stat(source).st_mtime_ns
-        return shutil.copy2(source, destination)
+        # Chunked rather than ``shutil.copy2`` so one large model in the folder
+        # fills the progress bar as it copies. Mode and times are kept the same.
+        copy_and_digest(source, destination, on_bytes=on_bytes)
+        return destination
 
     # Made before the handlers below can discard it: a tree that appeared at
     # this name since the plan is somebody else's, and the mkdir refuses it.
@@ -491,7 +500,7 @@ def _copy(
             copy_function=copy_one,
             dirs_exist_ok=True,
         )
-        _verify(plan, partial)
+        _verify(plan, partial, on_bytes=on_bytes)
         if cancelled():
             raise _CopyCancelled()
         _refuse_if_taken(plan)
@@ -591,8 +600,12 @@ def execute_directory_move(
     plan: DirectoryMovePlan,
     *,
     should_cancel: Optional[Callable[[], bool]] = None,
+    on_bytes: Optional[Callable[[int], None]] = None,
 ) -> MoveOutcome:
     """Carry out a planned directory move. Never raises for a failed move.
+
+    *on_bytes* is called with a byte count as each chunk is copied, and again
+    as each hashed model file is read back to verify. A rename reports nothing.
 
     Returns:
         One outcome for the directory: ``moved`` (``detail`` set when the
@@ -604,7 +617,7 @@ def execute_directory_move(
             _rename(hub, plan)
             detail = ""
         else:
-            detail = _copy(hub, plan, should_cancel)
+            detail = _copy(hub, plan, should_cancel, on_bytes)
             if detail is None:
                 return MoveOutcome(
                     plan.source_folder_id,

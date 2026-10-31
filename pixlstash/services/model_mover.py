@@ -350,7 +350,11 @@ def same_device(source_path: str, destination_dir: str) -> bool:
     return os.stat(source_path).st_dev == os.stat(destination_dir).st_dev
 
 
-def copy_and_digest(source_path: str, destination_path: str) -> str:
+def copy_and_digest(
+    source_path: str,
+    destination_path: str,
+    on_bytes: Optional[Callable[[int], None]] = None,
+) -> str:
     """Copy the file and return the SHA-256 of the bytes that were *read*.
 
     One pass. Hashing the source in a separate read would double the cost of a
@@ -361,21 +365,30 @@ def copy_and_digest(source_path: str, destination_path: str) -> str:
     Mode and timestamps are copied too. The scanner's re-hash short circuit
     compares ``st_mtime_ns`` against the stored value, so a move that reset the
     mtime would make the next scan re-read every byte it just moved.
+
+    *on_bytes*, when given, is called with each chunk's length as it is written,
+    so a caller can show a single large file filling rather than sitting at
+    ``0 / 1`` for the minute it takes.
     """
     digest = hashlib.sha256()
     with open(source_path, "rb") as source, open(destination_path, "wb") as destination:
         while chunk := source.read(_COPY_CHUNK_BYTES):
             digest.update(chunk)
             destination.write(chunk)
+            if on_bytes is not None:
+                on_bytes(len(chunk))
     shutil.copystat(source_path, destination_path)
     return digest.hexdigest()
 
 
-def file_digest(path: str) -> str:
+def file_digest(path: str, on_bytes: Optional[Callable[[int], None]] = None) -> str:
+    """SHA-256 of *path*, calling *on_bytes* with each chunk's length as read."""
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
         while chunk := handle.read(_COPY_CHUNK_BYTES):
             digest.update(chunk)
+            if on_bytes is not None:
+                on_bytes(len(chunk))
     return digest.hexdigest()
 
 
@@ -1161,6 +1174,7 @@ class ModelMover:
         delete_source: bool = True,
         should_cancel: Optional[Callable[[], bool]] = None,
         on_progress: Optional[Callable[[MoveOutcome], None]] = None,
+        on_bytes: Optional[Callable[[int], None]] = None,
     ) -> MoveReport:
         """Carry out a planned batch, one file at a time.
 
@@ -1175,6 +1189,10 @@ class ModelMover:
                 which is the ruling, and is also the only answer that does not
                 need a second crash-window argument for the rollback.
             on_progress: Called with each :class:`MoveOutcome` as it is decided.
+            on_bytes: Called with a byte count as each chunk of a model file is
+                copied and again as it is read back to verify. Renames report
+                nothing, and nor does a ``<stem>_samples/`` carry, so the sum
+                stays short of twice ``bytes_to_copy`` when previews travel.
 
         Returns:
             A :class:`MoveReport` with one outcome per planned file.
@@ -1202,7 +1220,9 @@ class ModelMover:
                         )
                     )
                 break
-            outcome = self._move_one(move, plan, delete_source=delete_source)
+            outcome = self._move_one(
+                move, plan, delete_source=delete_source, on_bytes=on_bytes
+            )
             report.outcomes.append(outcome)
             if on_progress is not None:
                 on_progress(outcome)
@@ -1215,7 +1235,12 @@ class ModelMover:
         return report
 
     def _move_one(
-        self, move: PlannedMove, plan: MovePlan, *, delete_source: bool
+        self,
+        move: PlannedMove,
+        plan: MovePlan,
+        *,
+        delete_source: bool,
+        on_bytes: Optional[Callable[[int], None]] = None,
     ) -> MoveOutcome:
         try:
             self._check_destination_free(
@@ -1244,7 +1269,7 @@ class ModelMover:
             if move.same_device and delete_source:
                 return self._rename(move, plan)
             return self._copy_verify_repoint_unlink(
-                move, plan, delete_source=delete_source
+                move, plan, delete_source=delete_source, on_bytes=on_bytes
             )
         except (OSError, sqlite3.IntegrityError, RepointLost) as exc:
             logger.error(
@@ -1325,16 +1350,21 @@ class ModelMover:
         )
 
     def _copy_verify_repoint_unlink(
-        self, move: PlannedMove, plan: MovePlan, *, delete_source: bool
+        self,
+        move: PlannedMove,
+        plan: MovePlan,
+        *,
+        delete_source: bool,
+        on_bytes: Optional[Callable[[int], None]] = None,
     ) -> MoveOutcome:
         """The invariant, in the only order that has no dangling-row window."""
         partial = move.destination_path + PARTIAL_SUFFIX
         try:
-            written = copy_and_digest(move.source_path, partial)
+            written = copy_and_digest(move.source_path, partial, on_bytes=on_bytes)
             # Read the destination back. The source digest above proves what left;
             # only re-reading proves what arrived, which is the entire point of
             # verifying a copy rather than trusting the write.
-            arrived = file_digest(partial)
+            arrived = file_digest(partial, on_bytes=on_bytes)
             if arrived != written:
                 raise OSError(
                     f"Copy of {move.source_path} verified as {arrived} but "

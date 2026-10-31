@@ -5831,9 +5831,15 @@ completed move announces itself forever.
 two concurrent moves would race for the same free space that both of them
 checked before either started. `busy` is what every entry point tests first.
 
-**Progress is counted in ITEMS, never bytes.** `bytes_to_copy` is *zero* for a
-same-drive move, because those are renames — a byte-based bar would sit at 0%
-through the entire fastest case and then jump.
+**Progress is items decided or bytes read, whichever is further.** Neither
+alone works: `bytes_to_copy` is *zero* for a same-drive move, because those are
+renames, so a byte-only bar would sit at 0% through the fastest case; and an
+item-only bar sat at `0 / 1` for the minute one large cross-drive file took to
+copy, which read as stuck. The server's `bytes_done` counts a model file's
+bytes twice, once copying and once reading it back to verify, so it climbs
+towards `2 × bytes_to_copy`; previews and other files are copied but never read
+back, so it stops short and the item count finishes the bar. Folder moves
+report bytes the same way.
 
 **The watch is a self-scheduling timeout, and a failed reading does not end it
 (#1018).** The next status read is booked only once the current one has landed,
