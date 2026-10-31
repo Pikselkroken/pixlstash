@@ -481,6 +481,29 @@ describe("the Folders tree (#2448, #2458)", () => {
     wrapper.unmount();
   });
 
+  it("says so when the folders cannot be read, rather than drawing nothing", async () => {
+    apiGet.mockImplementation((url) =>
+      String(url).includes("/library/folders")
+        ? Promise.reject(Object.assign(new Error("boom"), { response: { status: 500 } }))
+        : Promise.resolve(respond(url)),
+    );
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const wrapper = mountSidebar();
+    await refreshAndSettle(wrapper);
+    wrapper.vm.setTreeMode("folders");
+    await flushPromises();
+    expect(wrapper.find('[data-testid="sidebar-folders-failed"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="sidebar-folders-empty"]').exists()).toBe(false);
+
+    // The next read that works takes the line away.
+    apiGet.mockImplementation((url) => Promise.resolve(respond(url)));
+    await refreshAndSettle(wrapper);
+    expect(wrapper.find('[data-testid="sidebar-folders-failed"]').exists()).toBe(false);
+    expect(wrapper.findAll(".sidebar-folder-row").length).toBeGreaterThan(0);
+    wrapper.vm.setTreeMode("library");
+    wrapper.unmount();
+  });
+
   it("is not offered to a read-only session, which cannot read it", async () => {
     // Unscoped READ: it can read every project, but not the owner's disk.
     isReadOnly.value = true;

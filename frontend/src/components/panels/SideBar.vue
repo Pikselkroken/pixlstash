@@ -2861,6 +2861,9 @@ const scopeCounts = computed(() => ({
 // Folders mode (#2458): the folders pictures are filed in, from the server.
 const libraryFolders = ref([]);
 const libraryFoldersRead = ref(false);
+// The last read failed: said in the tree, so a blank tree is never mistaken
+// for an empty library. The next refresh or mode switch reads again.
+const libraryFoldersFailed = ref(false);
 let libraryFoldersEpoch = 0;
 
 async function fetchLibraryFolders() {
@@ -2871,7 +2874,10 @@ async function fetchLibraryFolders() {
     if (epoch !== libraryFoldersEpoch) return;
     libraryFolders.value = folders ?? [];
     libraryFoldersRead.value = true;
+    libraryFoldersFailed.value = false;
   } catch (err) {
+    if (epoch !== libraryFoldersEpoch) return;
+    libraryFoldersFailed.value = true;
     console.warn("Failed to read the library's folders for the Folders tree", err);
   }
 }
@@ -5784,7 +5790,15 @@ defineExpose({
               <span class="sidebar-list-count">{{ folderRowCount(row) }}</span>
             </div>
             <p
-              v-if="libraryFoldersRead && !libraryFolders.length"
+              v-if="libraryFoldersFailed"
+              class="sidebar-find-none"
+              data-testid="sidebar-folders-failed"
+            >
+              Couldn't read the library's folders. They are read again on the
+              next refresh.
+            </p>
+            <p
+              v-else-if="libraryFoldersRead && !libraryFolders.length"
               class="sidebar-find-none"
               data-testid="sidebar-folders-empty"
             >
