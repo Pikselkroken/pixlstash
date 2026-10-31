@@ -230,7 +230,18 @@
   flex: 0 0 auto;
 }
 
+/* People and Sets scale their type with their thumbnails, driven by
+   --sidebar-font-scale (set from the thumbnail size in the inline style;
+   1 = unchanged). Only these lists: the places rows and section heads keep
+   the ramp's size, so All media reads like All models and All workflows.
+   Values mirror docs/design/design-tokens.css. */
 .sidebar-section-scroll {
+  --text-2xs: calc(0.6875rem * var(--sidebar-font-scale));
+  --text-xs: calc(0.75rem * var(--sidebar-font-scale));
+  --text-sm: calc(0.8125rem * var(--sidebar-font-scale));
+  --text-base: calc(0.875rem * var(--sidebar-font-scale));
+  --text-md: calc(1rem * var(--sidebar-font-scale));
+  --text-xl: calc(1.375rem * var(--sidebar-font-scale));
   flex: 0 0 auto;
   overflow-x: hidden;
   overflow-y: visible;
@@ -394,19 +405,7 @@
   --sidebar-thumb-size-large: calc(var(--sidebar-thumb-size) + 4px);
   --sidebar-space-y: 2px;
   --sidebar-item-radius: 25%;
-  /* Rescale the type ramp for the whole sidebar in one place, driven by
-     --sidebar-font-scale (set from the thumbnail size in the inline style;
-     defaults to 1 = unchanged). Every sidebar text rule uses these tokens, so
-     this scales them all at once, except the header slot (SidebarScopeSlot),
-     which keeps the ramp size like the other workspaces' slots. Values mirror
-     docs/design/design-tokens.css. */
   --sidebar-font-scale: 1;
-  --text-2xs: calc(0.6875rem * var(--sidebar-font-scale));
-  --text-xs: calc(0.75rem * var(--sidebar-font-scale));
-  --text-sm: calc(0.8125rem * var(--sidebar-font-scale));
-  --text-base: calc(0.875rem * var(--sidebar-font-scale));
-  --text-md: calc(1rem * var(--sidebar-font-scale));
-  --text-xl: calc(1.375rem * var(--sidebar-font-scale));
   padding: 0;
   margin: 0;
   align-items: stretch;

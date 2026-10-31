@@ -295,6 +295,15 @@ describe("ModelsSideBar", () => {
     expect(countOf(wrapper, "place", "sets")).toBe("1");
   });
 
+  it("leads with All models, as the other sidebars lead with their All row", async () => {
+    const wrapper = mountBar();
+    await flushPromises();
+    const order = wrapper
+      .findAll(".msb-fixed > [data-place]")
+      .map((el) => el.attributes("data-place"));
+    expect(order).toEqual(["all", "favourites", "recent", "sets", "loose", "runs"]);
+  });
+
   it("opens a place and lights only its row", async () => {
     const wrapper = mountBar();
     await flushPromises();

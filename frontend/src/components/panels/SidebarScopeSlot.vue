@@ -192,10 +192,6 @@ function onTriggerContext(event) {
 
 <style scoped>
 .scope-slot {
-  /* A header like the Workflows and Models slots, so its name keeps the
-     ramp's own size where SideBar.css scales the sidebar's type with the
-     thumbnails. */
-  --text-base: 0.875rem;
   flex-shrink: 0;
   height: var(--sidebar-slot-h);
   box-sizing: border-box;

@@ -1835,10 +1835,10 @@ const showKeyboardHintModel = computed({
   set: (value) => (userPrefsStore.showKeyboardHint = value ?? true),
 });
 
-// Scale sidebar text with the thumbnail size: full size at 40px-and-up thumbnails,
+// Scale People and Sets text with the thumbnail size: full size at 40px-and-up thumbnails,
 // smaller below (≈0.8% per px under 40, floored at 0.85) so dense small-thumb
 // layouts stay balanced. Feeds --sidebar-font-scale, which rescales the type-ramp
-// tokens on the .sidebar scope (see the stylesheet).
+// tokens inside the People and Sets lists only (see the stylesheet).
 const sidebarFontScale = computed(() => {
   const t = sidebarThumbnailSizeModel.value;
   if (t >= 40) return 1;
