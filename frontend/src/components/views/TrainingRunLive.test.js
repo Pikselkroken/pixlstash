@@ -592,4 +592,42 @@ describe("TrainingRunLive", () => {
     expect(wrapper.find("#shelf-run-bar .trl-status").exists()).toBe(true);
     expect(wrapper.find(".trl > .trl-bar").exists()).toBe(false);
   });
+
+  it("draws a run trained elsewhere from its folder, and says what it cannot show", async () => {
+    const run = {
+      name: "walter_v2",
+      checkpoints: [
+        { filename: "walter_v2_000000500.safetensors", step: 500 },
+        { filename: "walter_v2.safetensors", step: null },
+      ],
+      samples: [
+        { filename: "a_0_0.jpg", step: 0, index: 0 },
+        { filename: "a_500_0.jpg", step: 500, index: 0 },
+      ],
+      trigger_words: ["w4lt"],
+      sample_prompts: ["w4lt on a bike"],
+      total_steps: 1000,
+    };
+    const wrapper = mount(TrainingRunLive, {
+      props: { run, folderId: 1 },
+      global: { stubs },
+    });
+    mounted.push(wrapper);
+    await flushPromises();
+    expect(getTrainingJobLive).not.toHaveBeenCalled();
+    expect(wrapper.find(".trl-name").text()).toBe("walter_v2");
+    expect(wrapper.find(".trl-status b").text()).toBe("1,000 steps");
+    expect(wrapper.find(".trl-notice").text()).toContain("Trained outside PixlStash.");
+    expect(wrapper.find(".trl-notice").text()).toContain("no loss curve");
+    expect(wrapper.findAll(".trl-cell").map((img) => img.attributes("src"))).toEqual([
+      "/samples/1/walter_v2/a_0_0.jpg",
+      "/samples/1/walter_v2/a_500_0.jpg",
+    ]);
+    // Nothing a job would have measured or done is drawn as if it had.
+    expect(wrapper.find(".trl-statusbar").exists()).toBe(false);
+    expect(wrapper.find(".trl-endph").exists()).toBe(false);
+    expect(wrapper.find(".trl-setup").exists()).toBe(false);
+    expect(wrapper.text()).not.toContain("Stop training");
+    expect(wrapper.text()).not.toContain("Use this step");
+  });
 });

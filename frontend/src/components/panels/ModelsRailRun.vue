@@ -118,7 +118,7 @@
       title="Samples"
       :count="sampleStep"
     >
-      <template v-if="card.job" #end>
+      <template v-if="card.job || card.run" #end>
         <button
           class="mrs-link-btn"
           type="button"
@@ -544,8 +544,12 @@ function openPicture(pictureId) {
   });
 }
 
+/** A run trained elsewhere has no job, so its page is drawn from its folder. */
 function openRun() {
-  router.push({ name: "models-runs", query: { run: props.card.job.uuid } });
+  const query = props.card.job
+    ? { run: props.card.job.uuid }
+    : { "folder-run": props.card.run.name };
+  router.push({ name: "models-runs", query });
 }
 
 async function stop() {

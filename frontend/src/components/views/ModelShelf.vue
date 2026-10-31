@@ -3020,8 +3020,9 @@ const isShelfTab = computed(() => route.name !== "models-runs");
 const runOpen = computed(
   () =>
     !isShelfTab.value &&
-    typeof route.query.run === "string" &&
-    route.query.run !== "",
+    [route.query.run, route.query["folder-run"]].some(
+      (value) => typeof value === "string" && value !== "",
+    ),
 );
 // TrainingRunLive teleports its status into `#shelf-run-bar` while it is
 // rendered, and draws it in place otherwise.

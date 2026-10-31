@@ -580,6 +580,15 @@ describe("a picked training run (#2169)", () => {
     expect(ticked.wrapper.find('[data-testid="mrail-clear"]').exists()).toBe(false);
   });
 
+  it("describes a run trained elsewhere whose page is open, from its folder", async () => {
+    routeState.query = { "folder-run": "walter_v2" };
+    const { wrapper } = await mountOnRuns({ runs: [finished] });
+    expect(title(wrapper)).toBe("walter_v2");
+    expect(wrapper.find('[data-testid="mrr-samples"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain("w4lt3r");
+    expect(wrapper.text()).toContain("The pictures were not recorded.");
+  });
+
   it("with nothing picked names the folder and counts the runs", async () => {
     const { wrapper } = await mountOnRuns({ runs: [finished], jobs: [liveJob] });
     const pane = wrapper.get('[data-testid="mrail-runs-hint"]');
@@ -595,8 +604,8 @@ describe("a picked training run (#2169)", () => {
     expect(title(wrapper)).toBe("walter_v2");
     expect(wrapper.get('[data-testid="mrr-steps"]').text()).toBe("2,000 steps");
     expect(wrapper.find('[data-testid="mrr-stop"]').exists()).toBe(false);
-    // Trained elsewhere: there is no run page to open.
-    expect(wrapper.find('[data-testid="mrr-open"]').exists()).toBe(false);
+    // Trained elsewhere: its page is drawn from the folder.
+    expect(wrapper.find('[data-testid="mrr-open"]').exists()).toBe(true);
     const grid = wrapper.get('[data-testid="mrr-samples"]');
     expect(grid.text()).toContain("a red bicycle · no trigger");
     expect(grid.findAll("img").map((img) => img.attributes("src"))).toEqual([

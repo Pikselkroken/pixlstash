@@ -6602,6 +6602,22 @@ It exports the frozen record, not the set as it is now: the captions as
 recorded, and each image from the run's dataset folder only while its bytes
 still match the recorded sha256 (`snapshot.json` marks any left out).
 
+**A run trained elsewhere opens the same page from its folder**, at
+`/models/runs?folder-run=<run name>`, from the same doors (double-click, the
+card menu's and the rail's *Open run*). There is no job, so `TrainingRuns`
+hands `TrainingRunLive` the folder listing's entry (`run` + `folderId`) instead
+of a `jobId`, and `folderRunLive` (`utils/trainingRuns.js`) shapes it as a live
+payload: the columns are the steps it saved or sampled at, the cells its
+previews, the trigger-word groups judged only where a prompt and a trigger word
+are both known. Nothing is polled. What only a job records is not drawn as if
+it were: an info notice says it was trained outside PixlStash and names what is
+missing (loss, memory, speed, the pictures it was trained on), the loss row
+reads Unknown / Not measured, and the status bar, the end phases, the set-up
+time and *Use this step* are left out. The rail beside it is the open-run rail
+(`ModelsRail` finds the card by name), whose *Trained on* says the pictures were
+not recorded. The page
+waits for the job list: a name a job trained opens that job's page instead.
+
 #### Registering the folders the shelf reads
 
 The registry is **Settings › Models** (`settings/ModelFoldersSection.vue`); the
@@ -6758,7 +6774,8 @@ set's own slot ＋ pickers; nothing drags from the rail any more.
   count and how many train now. One run (`ModelsRailRun.vue`): *Training*
   (status, bar, steps, time left, loss chart and value; a red *Stop* while it
   trains, *Skip previews* while a trained run draws them), *Samples* (prompts × the last four sampled steps, the no-trigger
-  check prompt marked, *Open run* for a run PixlStash trained), *Checkpoints*
+  check prompt marked, *Open run*, which opens a run trained elsewhere from its
+  folder), *Checkpoints*
   (each save with its step and size), *Set-up* (trained on, base, trigger, rank ·
   LR, folder). The loss is the chart's smoothed value, the one the run page
   shows, and says so. A run PixlStash trains is read from
@@ -6766,7 +6783,8 @@ set's own slot ＋ pickers; nothing drags from the rail any more.
   elsewhere is described from the folder listing alone. Several runs: the
   checkpoint count, the base models and the stacking rule. *Clear* lets go of
   the runs.
-- **With a run's page open** (`?run=<uuid>`) the rail describes that run whether
+- **With a run's page open** (`?run=<uuid>`, or `?folder-run=<name>` for one
+  trained elsewhere) the rail describes that run whether
   or not the grid ticked it, with `open`: *Training* and *Samples* go (the page
   shows them larger), *Set-up* moves to the top and gains the plan (steps and
   the preview interval), *Trained on* holds the dataset's pictures as a 3 × 3

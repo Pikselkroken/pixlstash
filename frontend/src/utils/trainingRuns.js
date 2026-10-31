@@ -183,6 +183,61 @@ export function timeLeft(speed) {
   return `about ${minutes((low + high) / 2)}`;
 }
 
+/** Status of a page drawn from a run's folder alone: no job ever trained it. */
+export const FOLDER_RUN_STATUS = "folder";
+
+/**
+ * A run trained outside PixlStash, in the shape `GET /training/jobs/{id}/live`
+ * answers, so the run page can draw it: the columns are the steps it saved or
+ * sampled at, the cells its previews. Everything only a job records (loss,
+ * memory, speed, the pictures it was trained on) is empty, never 0.
+ */
+export function folderRunLive(run, folderId) {
+  const samples = run.samples || [];
+  const columns = [
+    ...new Set([
+      ...samples.map((s) => s.step),
+      ...(run.checkpoints || []).map((cp) => cp.step).filter((step) => step != null),
+    ]),
+  ].sort((a, b) => a - b);
+  const last = columns[columns.length - 1] ?? 0;
+  const words = (run.trigger_words || []).map((w) => w.toLowerCase());
+  const indexes = [...new Set(samples.map((s) => s.index))].sort((a, b) => a - b);
+  return {
+    name: run.name,
+    status: FOLDER_RUN_STATUS,
+    phase: null,
+    step: hasBareFinal(run) ? Math.max(last, run.total_steps ?? 0) : last,
+    total_steps: run.total_steps ?? null,
+    trigger_word: run.trigger_words?.[0] || "",
+    columns,
+    rows: indexes.map((index) => {
+      const prompt = run.sample_prompts?.[index] || "";
+      return {
+        index,
+        prompt,
+        // Unknown without a prompt or a trigger word to look for.
+        with_trigger:
+          prompt && words.length
+            ? words.some((w) => prompt.toLowerCase().includes(w))
+            : null,
+        cells: columns.map((step) => {
+          const filename =
+            samples.find((s) => s.step === step && s.index === index)?.filename || null;
+          return { state: filename ? "sample" : "missing", filename };
+        }),
+      };
+    }),
+    run_folder: { folder_id: folderId, run_name: run.name },
+    coverable: [],
+    cover_step: null,
+    loss_curve: [],
+    phases: [],
+    dataset_picture_ids: [],
+    dataset_snapshot_id: null,
+  };
+}
+
 /**
  * The samples as prompts × steps, at most the last `columns` sampled steps.
  *
