@@ -14,6 +14,7 @@ import AppInput from "../widgets/AppInput.vue";
 import FieldLabel from "../widgets/FieldLabel.vue";
 import FolderBrowser from "../editors/FolderBrowser.vue";
 import SettingsSection from "./SettingsSection.vue";
+import SettingsRow from "./SettingsRow.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -316,253 +317,236 @@ watch(
 </script>
 
 <template>
-  <SettingsSection title="AI-toolkit" :desc="SETUP_DESC" first>
-    <div class="ait-card" :aria-busy="showSpinner ? 'true' : 'false'">
-      <!-- Always present, so a line that arrives in it is announced. -->
-      <div role="status" class="ait-status">
-        <p v-if="liveText" class="ait-pending">
-          <v-progress-circular v-if="showSpinner" indeterminate size="16" width="2" />
-          <span>{{ liveText }}</span>
-        </p>
-      </div>
+  <div>
+    <SettingsSection title="AI-toolkit" :desc="SETUP_DESC" first>
+      <div class="ait-card" :aria-busy="showSpinner ? 'true' : 'false'">
+        <!-- Always present, so a line that arrives in it is announced. -->
+        <div role="status" class="ait-status">
+          <p v-if="liveText" class="ait-pending">
+            <v-progress-circular v-if="showSpinner" indeterminate size="16" width="2" />
+            <span>{{ liveText }}</span>
+          </p>
+        </div>
 
-      <!-- Found: the two steps before Connect. -->
-      <template v-if="phase === 'found'">
-        <span class="ait-pip">
-          <v-icon size="16">mdi-circle-outline</v-icon>
-          Not connected
-        </span>
-        <div class="ait-stack">
-          <p class="ait-title">Find AI-toolkit</p>
-          <p class="ait-small ait-muted" data-testid="ait-found-version">
-            On this computer, version {{ discovery?.version }}.
-          </p>
-          <p class="ait-mono ait-muted" data-testid="ait-found-path">
-            {{ candidate?.repo_path }}
-          </p>
-        </div>
-        <div class="ait-stack">
-          <p class="ait-title">Check it can train</p>
-          <p
-            v-if="checkSentence"
-            class="ait-small ait-muted"
-            data-testid="ait-check-sentence"
-          >
-            {{ checkSentence }}
-          </p>
-          <p
-            v-if="checkSentence && recipesSentence"
-            class="ait-small ait-muted"
-            data-testid="ait-recipes-sentence"
-          >
-            {{ recipesSentence }}
-          </p>
-        </div>
-      </template>
+        <!-- Found: the two steps before Connect. -->
+        <template v-if="phase === 'found'">
+          <span class="ait-pip">
+            <v-icon size="16">mdi-circle-outline</v-icon>
+            Not connected
+          </span>
+          <div class="ait-stack">
+            <p class="ait-title">Find AI-toolkit</p>
+            <p class="ait-small ait-muted" data-testid="ait-found-version">
+              On this computer, version {{ discovery?.version }}.
+            </p>
+            <p class="ait-mono ait-muted" data-testid="ait-found-path">
+              {{ candidate?.repo_path }}
+            </p>
+          </div>
+          <div class="ait-stack">
+            <p class="ait-title">Check it can train</p>
+            <p
+              v-if="checkSentence"
+              class="ait-small ait-muted"
+              data-testid="ait-check-sentence"
+            >
+              {{ checkSentence }}
+            </p>
+            <p
+              v-if="checkSentence && recipesSentence"
+              class="ait-small ait-muted"
+              data-testid="ait-recipes-sentence"
+            >
+              {{ recipesSentence }}
+            </p>
+          </div>
+        </template>
 
-      <!-- Not found: say where it looked and offer a folder. -->
-      <template v-if="phase === 'not-found'">
-        <div class="ait-stack">
-          <p class="ait-title">AI-toolkit not found on this computer</p>
-          <p v-if="searched.length" class="ait-small ait-muted">
-            Searched
-          </p>
-          <p
-            v-for="place in searched"
-            :key="place"
-            class="ait-mono ait-muted"
-          >
-            {{ place }}
-          </p>
-        </div>
-        <div class="ait-field">
-          <AppInput
-            v-model="folderPath"
-            label="AI-toolkit folder"
-            placeholder="/home/you/ai-toolkit"
-            mono
-            :error="!!formError"
-            :disabled="busy || checking"
-            data-testid="ait-folder-input"
-            @enter="checkTyped"
-          />
-          <p v-if="formError" class="ait-error" role="alert">
-            <v-icon size="16" class="ait-error__icon">mdi-alert-rhombus-outline</v-icon>
-            <span>{{ formError }}</span>
-          </p>
-        </div>
-      </template>
+        <!-- Not found: say where it looked and offer a folder. -->
+        <template v-if="phase === 'not-found'">
+          <div class="ait-stack">
+            <p class="ait-title">AI-toolkit not found on this computer</p>
+            <p v-if="searched.length" class="ait-small ait-muted">
+              Searched
+            </p>
+            <p
+              v-for="place in searched"
+              :key="place"
+              class="ait-mono ait-muted"
+            >
+              {{ place }}
+            </p>
+          </div>
+          <div class="ait-field">
+            <AppInput
+              v-model="folderPath"
+              label="AI-toolkit folder"
+              placeholder="/home/you/ai-toolkit"
+              mono
+              :error="!!formError"
+              :disabled="busy || checking"
+              data-testid="ait-folder-input"
+              @enter="checkTyped"
+            />
+            <p v-if="formError" class="ait-error" role="alert">
+              <v-icon size="16" class="ait-error__icon">mdi-alert-rhombus-outline</v-icon>
+              <span>{{ formError }}</span>
+            </p>
+          </div>
+        </template>
 
-      <!-- Connected: the Ready to train card's header and install facts. -->
-      <template v-if="phase === 'connected'">
-        <div class="ait-row">
-          <span v-if="checkPassed" class="ait-pip ait-pip--ok">
-            <v-icon size="16">mdi-check-circle</v-icon>
-            Ready to train
-          </span>
-          <span v-else-if="checking" class="ait-pip">
-            <v-progress-circular indeterminate size="16" width="2" />
-            Checking
-          </span>
-          <span v-else class="ait-pip ait-pip--bad">
-            <v-icon size="16">mdi-alert-rhombus-outline</v-icon>
-            Not ready to train
-          </span>
-          <span v-if="store.aiToolkitCheck?.version" class="ait-mono ait-muted">
-            AI-toolkit {{ store.aiToolkitCheck.version }}
-          </span>
-        </div>
-        <dl class="ait-facts">
-          <dt>Install</dt>
-          <dd>On this computer</dd>
-          <dt>Trains by</dt>
-          <dd>
-            starting the trainer itself
-            <span v-if="store.aiToolkitCheck?.cuda" class="ait-pip ait-pip--ok">
-              <v-icon size="14">mdi-check-circle</v-icon>
-              CUDA
+        <!-- Connected: the Ready to train card's header and install facts. -->
+        <template v-if="phase === 'connected'">
+          <div class="ait-row">
+            <span v-if="checkPassed" class="ait-pip ait-pip--ok">
+              <v-icon size="16">mdi-check-circle</v-icon>
+              Ready to train
             </span>
-          </dd>
-          <template v-if="recipesSentence">
-            <dt>Models</dt>
-            <dd data-testid="ait-recipes-sentence">{{ recipesSentence }}</dd>
-          </template>
-        </dl>
-      </template>
-
-      <!-- Folders: from the check before Connect, from the status after it. -->
-      <div v-if="showFolders" class="ait-stack" data-testid="ait-folders">
-        <p class="ait-title">Folders</p>
-        <dl class="ait-facts">
-          <template v-if="folders.datasets">
-            <dt>Datasets</dt>
+            <span v-else-if="checking" class="ait-pip">
+              <v-progress-circular indeterminate size="16" width="2" />
+              Checking
+            </span>
+            <span v-else class="ait-pip ait-pip--bad">
+              <v-icon size="16">mdi-alert-rhombus-outline</v-icon>
+              Not ready to train
+            </span>
+            <span v-if="store.aiToolkitCheck?.version" class="ait-mono ait-muted">
+              AI-toolkit {{ store.aiToolkitCheck.version }}
+            </span>
+          </div>
+          <dl class="ait-facts">
+            <dt>Install</dt>
+            <dd>On this computer</dd>
+            <dt>Trains by</dt>
             <dd>
-              <span class="ait-mono">{{ folders.datasets.path }}</span>
-              <span
-                :class="folders.datasets.writable ? 'ait-pip ait-pip--ok' : 'ait-pip ait-pip--bad'"
-                data-testid="ait-datasets-writable"
-              >
-                {{ folders.datasets.writable ? "writable" : "not writable" }}
+              starting the trainer itself
+              <span v-if="store.aiToolkitCheck?.cuda" class="ait-pip ait-pip--ok">
+                <v-icon size="14">mdi-check-circle</v-icon>
+                CUDA
               </span>
             </dd>
-          </template>
-          <template v-if="folders.runs">
-            <dt>Runs</dt>
-            <dd>
-              <span class="ait-mono">{{ folders.runs.path }}</span>
-              <span class="ait-pip ait-pip--ok" data-testid="ait-runs-count">
-                {{ folders.runs.run_count }} runs
-              </span>
-            </dd>
-          </template>
-        </dl>
-        <p v-if="folders.runs" class="ait-small ait-muted" data-testid="ait-shelf-line">
-          {{ shelfLine }}
-        </p>
-      </div>
+            <template v-if="recipesSentence">
+              <dt>Models</dt>
+              <dd data-testid="ait-recipes-sentence">{{ recipesSentence }}</dd>
+            </template>
+          </dl>
+        </template>
 
-      <p v-if="checkError" class="ait-error" role="alert" data-testid="ait-check-error">
-        <v-icon size="16" class="ait-error__icon">mdi-alert-rhombus-outline</v-icon>
-        <span>{{ checkError }}</span>
-      </p>
-      <p v-if="statusError" class="ait-error" role="alert">
-        <v-icon size="16" class="ait-error__icon">mdi-alert-rhombus-outline</v-icon>
-        <span>{{ statusError }}</span>
-      </p>
-      <p v-if="connectError" class="ait-error" role="alert" data-testid="ait-connect-error">
-        <v-icon size="16" class="ait-error__icon">mdi-alert-rhombus-outline</v-icon>
-        <span>{{ connectError }}</span>
-      </p>
-      <p v-if="showNoPython" class="ait-small ait-muted" data-testid="ait-no-python">
-        PixlStash could not find a Python for this folder, so it cannot connect it.
-      </p>
+        <!-- Folders: from the check before Connect, from the status after it. -->
+        <div v-if="showFolders" class="ait-stack" data-testid="ait-folders">
+          <p class="ait-title">Folders</p>
+          <dl class="ait-facts">
+            <template v-if="folders.datasets">
+              <dt>Datasets</dt>
+              <dd>
+                <span class="ait-mono">{{ folders.datasets.path }}</span>
+                <span
+                  :class="folders.datasets.writable ? 'ait-pip ait-pip--ok' : 'ait-pip ait-pip--bad'"
+                  data-testid="ait-datasets-writable"
+                >
+                  {{ folders.datasets.writable ? "writable" : "not writable" }}
+                </span>
+              </dd>
+            </template>
+            <template v-if="folders.runs">
+              <dt>Runs</dt>
+              <dd>
+                <span class="ait-mono">{{ folders.runs.path }}</span>
+                <span class="ait-pip ait-pip--ok" data-testid="ait-runs-count">
+                  {{ folders.runs.run_count }} runs
+                </span>
+              </dd>
+            </template>
+          </dl>
+          <p v-if="folders.runs" class="ait-small ait-muted" data-testid="ait-shelf-line">
+            {{ shelfLine }}
+          </p>
+        </div>
 
-      <div v-if="phase === 'found' || phase === 'not-found'" class="ait-row">
-        <AppButton
-          v-if="checkPassed"
-          ref="connectButton"
-          variant="primary"
-          :loading="busy"
-          :disabled="!canConnect || checking"
-          data-testid="ait-connect"
-          @click="connect"
-        >
-          Connect
-        </AppButton>
-        <AppButton
-          v-if="phase === 'not-found'"
-          variant="secondary"
-          :loading="checking"
-          :disabled="busy"
-          data-testid="ait-check-folder"
-          @click="checkTyped"
-        >
-          Check this folder
-        </AppButton>
-        <AppButton
-          ref="chooseButton"
-          variant="ghost"
-          :disabled="busy || checking"
-          data-testid="ait-choose-folder"
-          @click="browseOpen = true"
-        >
-          Choose folder…
-        </AppButton>
-        <AppButton
-          v-if="phase === 'not-found'"
-          variant="ghost"
-          :disabled="busy || checking"
-          data-testid="ait-search-again"
-          @click="detect"
-        >
-          Search again
-        </AppButton>
-      </div>
-
-      <div v-if="phase === 'connected'" class="ait-row">
-        <AppButton
-          ref="checkAgainButton"
-          variant="secondary"
-          :loading="busy || checking"
-          data-testid="ait-check-again"
-          @click="checkAgain"
-        >
-          Check again
-        </AppButton>
-        <span class="ait-spacer" />
-        <AppButton
-          variant="ghost"
-          :disabled="busy || checking"
-          data-testid="ait-disconnect"
-          @click="disconnect"
-        >
-          Disconnect
-        </AppButton>
-      </div>
-
-      <div class="ait-stack">
-        <v-switch
-          :model-value="store.presetsAutoCheck === true"
-          color="primary"
-          density="compact"
-          hide-details
-          label="Check pixlstash.dev for recipe updates automatically"
-          data-testid="ait-recipe-auto-check"
-          @update:model-value="setAutoCheck"
-        />
-        <p class="ait-small ait-muted">
-          Once a day, when you open Train a LoRA. A newer recipe can correct
-          settings and memory figures; it never changes which model is trained.
-        </p>
-        <p v-if="autoCheckError" class="ait-error" role="alert">
+        <p v-if="checkError" class="ait-error" role="alert" data-testid="ait-check-error">
           <v-icon size="16" class="ait-error__icon">mdi-alert-rhombus-outline</v-icon>
-          <span>{{ autoCheckError }}</span>
+          <span>{{ checkError }}</span>
         </p>
+        <p v-if="statusError" class="ait-error" role="alert">
+          <v-icon size="16" class="ait-error__icon">mdi-alert-rhombus-outline</v-icon>
+          <span>{{ statusError }}</span>
+        </p>
+        <p v-if="connectError" class="ait-error" role="alert" data-testid="ait-connect-error">
+          <v-icon size="16" class="ait-error__icon">mdi-alert-rhombus-outline</v-icon>
+          <span>{{ connectError }}</span>
+        </p>
+        <p v-if="showNoPython" class="ait-small ait-muted" data-testid="ait-no-python">
+          PixlStash could not find a Python for this folder, so it cannot connect it.
+        </p>
+
+        <div v-if="phase === 'found' || phase === 'not-found'" class="ait-row">
+          <AppButton
+            v-if="checkPassed"
+            ref="connectButton"
+            variant="primary"
+            :loading="busy"
+            :disabled="!canConnect || checking"
+            data-testid="ait-connect"
+            @click="connect"
+          >
+            Connect
+          </AppButton>
+          <AppButton
+            v-if="phase === 'not-found'"
+            variant="secondary"
+            :loading="checking"
+            :disabled="busy"
+            data-testid="ait-check-folder"
+            @click="checkTyped"
+          >
+            Check this folder
+          </AppButton>
+          <AppButton
+            ref="chooseButton"
+            variant="ghost"
+            :disabled="busy || checking"
+            data-testid="ait-choose-folder"
+            @click="browseOpen = true"
+          >
+            Choose folder…
+          </AppButton>
+          <AppButton
+            v-if="phase === 'not-found'"
+            variant="ghost"
+            :disabled="busy || checking"
+            data-testid="ait-search-again"
+            @click="detect"
+          >
+            Search again
+          </AppButton>
+        </div>
+
+        <div v-if="phase === 'connected'" class="ait-row">
+          <AppButton
+            ref="checkAgainButton"
+            variant="secondary"
+            :loading="busy || checking"
+            data-testid="ait-check-again"
+            @click="checkAgain"
+          >
+            Check again
+          </AppButton>
+          <span class="ait-spacer" />
+          <AppButton
+            variant="ghost"
+            :disabled="busy || checking"
+            data-testid="ait-disconnect"
+            @click="disconnect"
+          >
+            Disconnect
+          </AppButton>
+        </div>
       </div>
 
-      <!-- How this install trains. The same for every local install. -->
-      <div class="ait-how">
-        <FieldLabel>How this install trains</FieldLabel>
+      <!-- How this install trains. The same for every local install, so it is
+           read once: a closed disclosure, which keeps the pane from scrolling. -->
+      <details class="ait-how">
+        <summary class="ait-how__summary">How this install trains</summary>
         <div class="ait-how__item">
           <v-icon size="16" class="ait-how__icon">mdi-play-circle-outline</v-icon>
           <div>
@@ -581,23 +565,45 @@ watch(
             through AI-toolkit's web UI instead, and runs are queued there.
           </p>
         </div>
-      </div>
-    </div>
+      </details>
 
-    <FolderBrowser
-      :open="browseOpen"
-      @select="chooseFolder"
-      @close="closeBrowser"
-    />
-  </SettingsSection>
+      <FolderBrowser
+        :open="browseOpen"
+        @select="chooseFolder"
+        @close="closeBrowser"
+      />
+    </SettingsSection>
+
+    <!-- Its own setting, not a step of the setup above, so an ordinary row. -->
+    <SettingsSection title="Recipe updates">
+      <SettingsRow
+        label="Check pixlstash.dev for recipe updates"
+        sub="Once a day, when you open Train a LoRA. A newer recipe can correct settings and memory figures; it never changes which model is trained."
+      >
+        <v-switch
+          :model-value="store.presetsAutoCheck === true"
+          aria-label="Check pixlstash.dev for recipe updates automatically"
+          color="primary"
+          density="compact"
+          hide-details
+          data-testid="ait-recipe-auto-check"
+          @update:model-value="setAutoCheck"
+        />
+      </SettingsRow>
+      <p v-if="autoCheckError" class="ait-error" role="alert">
+        <v-icon size="16" class="ait-error__icon">mdi-alert-rhombus-outline</v-icon>
+        <span>{{ autoCheckError }}</span>
+      </p>
+    </SettingsSection>
+  </div>
 </template>
 
 <style scoped>
 .ait-card {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
-  padding: var(--space-5);
+  gap: var(--space-3);
+  padding: var(--space-4);
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-md);
 }
@@ -644,8 +650,10 @@ watch(
   gap: var(--space-2);
 }
 
+/* A step's name inside the card: the settings-row label size, not a heading
+   competing with the pane's own section label. */
 .ait-title {
-  font-size: var(--text-md);
+  font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
   line-height: var(--leading-snug);
 }
@@ -719,14 +727,27 @@ watch(
   margin: 0;
 }
 
-/* The explainer card: the panel ground, not a second bordered card. */
+/* The explainer under the setup card: the panel ground, not a second
+   bordered card. */
 .ait-how {
+  margin-top: var(--space-3);
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
-  padding: var(--space-4);
+  padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-md);
   background: rgb(var(--v-theme-panel));
+}
+
+/* Closed, the hidden content box would still take the flex gap. */
+.ait-how:not([open]) {
+  gap: 0;
+}
+
+.ait-how__summary {
+  cursor: pointer;
+  font-size: var(--text-sm);
+  color: rgb(var(--v-theme-on-surface));
 }
 
 .ait-how__item {

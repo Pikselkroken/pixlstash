@@ -41,6 +41,10 @@ vi.mock("../../api/pictureSets", () => ({ listPictureSets: vi.fn(async () => [])
 vi.mock("../../api/projects", () => ({ listProjects: vi.fn(async () => []) }));
 vi.mock("../../api/characters", () => ({ listCharacters: vi.fn(async () => []) }));
 vi.mock("../../utils/clipboard", () => ({ copyText: vi.fn() }));
+const prefs = vi.hoisted(() => ({ publicUrl: null }));
+vi.mock("../../stores/useUserPrefsStore", () => ({
+  useUserPrefsStore: () => prefs,
+}));
 
 const store = reactive({ libraries: [], canManage: true });
 vi.mock("../../stores/useLibrariesStore", () => ({
@@ -168,5 +172,39 @@ describe("the Every library switch", () => {
 
     expect(librarySwitch(wrapper, 0).attributes("aria-checked")).toBe("false");
     expect(wrapper.find(".account-tokens-error").text()).toMatch(/a token cannot/);
+  });
+});
+
+// A share link starts from the public URL set in Privacy & sharing, read off
+// the prefs store, and never doubles the slash the path starts with.
+describe("the share link", () => {
+  async function shareLink(publicUrl) {
+    prefs.publicUrl = publicUrl;
+    const wrapper = mount(AccountSection, {
+      props: { open: true },
+      global: {
+        stubs: { ...stubs, AppDialog: { template: "<div><slot /></div>" } },
+      },
+    });
+    for (let i = 0; i < 4; i += 1) await nextTick();
+    wrapper.vm.tokenScope = "READ";
+    wrapper.vm.newlyCreatedToken = "example-token";
+    await nextTick();
+    const text = wrapper.find(".account-token-value--url").text();
+    wrapper.unmount();
+    prefs.publicUrl = null;
+    return text;
+  }
+
+  it("uses the public URL, trimmed of spaces and a trailing slash", async () => {
+    expect(await shareLink(" https://share.example.com/ ")).toBe(
+      `https://share.example.com${window.location.pathname}?token=example-token`,
+    );
+  });
+
+  it("falls back to this page's address without one", async () => {
+    expect(await shareLink(null)).toBe(
+      `${window.location.origin}${window.location.pathname}?token=example-token`,
+    );
   });
 });

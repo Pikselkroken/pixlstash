@@ -177,7 +177,7 @@ def build_parser() -> argparse.ArgumentParser:
             "register it. A folder that already holds vault.db is refused; "
             "use `attach` for that one. The first library on an installation "
             "becomes the active one; any later library has to be switched to "
-            "in Settings › Libraries."
+            "in Settings › Libraries & imports."
         ),
     )
     create_parser.add_argument("folder", help="Folder to create the library in.")
@@ -1873,7 +1873,7 @@ def _print_activation_note(library: Library) -> None:
     if library.is_active:
         print("It is the active library.")
     else:
-        print("Switch to it in Settings › Libraries.")
+        print("Switch to it in Settings › Libraries & imports.")
 
 
 if __name__ == "__main__":

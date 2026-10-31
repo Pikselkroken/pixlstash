@@ -297,7 +297,6 @@ useWindowFileImport({ sidebarRef });
 const {
   handleViewProject,
   handleStackStatsUpdate,
-  handleUpdateCheckForUpdates,
   handleEmptyScrapheapFromSidebar,
   handleSuggestPicturesForCharacter,
   handleSuggestPicturesForSet,
@@ -927,7 +926,6 @@ defineExpose({
             @faces-assigned-to-character="handleFacesAssignedToCharacter"
             @update:set-error="error = $event"
             @update:set-loading="loading = $event"
-            @update:check-for-updates="handleUpdateCheckForUpdates"
           />
           </div>
         </div>

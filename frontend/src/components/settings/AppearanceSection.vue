@@ -186,20 +186,10 @@ async function clearGuestSession() {
 
 <template>
   <div>
-    <SettingsSection title="Sidebar Thumbnails" first>
-      <SettingsSliderRow
-        v-model="sidebarThumbnailSizeModel"
-        :min="20"
-        :max="64"
-        :step="4"
-        suffix="px"
-      />
-    </SettingsSection>
-
-    <!-- Thumbnail layout + Sidebar Width share one row, side by side. The grid
-         flows by column, so each setting's title, desc and control line up
-         with its neighbour's. -->
-    <SettingsSection class="pair-section">
+    <!-- Grid: two pairs. Thumbnail layout + Sidebar width, then the sidebar
+         thumbnail slider + Chip size. Each pair's grid flows by column, so a
+         setting's title, desc and control line up with its neighbour's. -->
+    <SettingsSection title="Grid" class="pair-section" first>
       <div class="pair-set">
         <div class="pair-title">Thumbnail layout</div>
         <div class="pair-desc">How pictures sit in the grid.</div>
@@ -236,7 +226,7 @@ async function clearGuestSession() {
           </p>
         </div>
 
-        <div class="pair-title">Sidebar Width</div>
+        <div class="pair-title">Sidebar width</div>
         <div class="pair-desc">Full width, or a narrow icon dock.</div>
         <div class="pair-body">
           <Segmented
@@ -259,37 +249,63 @@ async function clearGuestSession() {
           </Segmented>
         </div>
       </div>
+      <div class="pair-set pair-set--short">
+        <div class="pair-title">Sidebar thumbnails</div>
+        <div class="pair-body">
+          <SettingsSliderRow
+            v-model="sidebarThumbnailSizeModel"
+            :min="20"
+            :max="64"
+            :step="4"
+            suffix="px"
+          />
+        </div>
+
+        <div class="pair-title">Chip size</div>
+        <div class="pair-body">
+          <!-- Not `full`: equal thirds of a half-width column cut
+               "Comfortable" short, so each option takes its own label's width. -->
+          <Segmented
+            :model-value="tagClipboard.chipSize"
+            :options="CHIP_SIZE_OPTIONS"
+            aria-label="Chip size"
+            @update:model-value="(id) => tagClipboard.setChipSize(id)"
+          />
+        </div>
+      </div>
     </SettingsSection>
 
-    <div class="appearance-selects">
-      <AppSelect
-        v-model="themeModeModel"
-        label="Theme"
-        :options="themeSelectOptions"
-      />
-      <AppSelect
-        v-model="dateFormatModel"
-        label="Date Format"
-        :options="dateSelectOptions"
-      />
-    </div>
+    <SettingsSection title="Interface">
+      <div class="appearance-selects">
+        <AppSelect
+          v-model="themeModeModel"
+          label="Theme"
+          :options="themeSelectOptions"
+        />
+        <AppSelect
+          v-model="dateFormatModel"
+          label="Date Format"
+          :options="dateSelectOptions"
+        />
+      </div>
 
-    <div class="appearance-switch-row">
-      <v-switch
-        v-model="sidebarAutoHideModel"
-        color="primary"
-        density="compact"
-        hide-details
-        label="Auto hide sidebar"
-      />
-      <v-switch
-        v-model="showKeyboardHintModel"
-        color="primary"
-        density="compact"
-        hide-details
-        label="Show keyboard shortcut indicator"
-      />
-    </div>
+      <div class="appearance-switch-row">
+        <v-switch
+          v-model="sidebarAutoHideModel"
+          color="primary"
+          density="compact"
+          hide-details
+          label="Auto hide sidebar"
+        />
+        <v-switch
+          v-model="showKeyboardHintModel"
+          color="primary"
+          density="compact"
+          hide-details
+          label="Show keyboard shortcut indicator"
+        />
+      </div>
+    </SettingsSection>
 
     <SettingsSection title="Mouse" class="pair-section">
       <div class="pair-set">
@@ -322,19 +338,6 @@ async function clearGuestSession() {
     </SettingsSection>
 
     <SettingsSection
-      title="Chip size"
-      desc="How large tag chips read in the lightbox and the tag dialog."
-    >
-      <Segmented
-        full
-        :model-value="tagClipboard.chipSize"
-        :options="CHIP_SIZE_OPTIONS"
-        aria-label="Chip size"
-        @update:model-value="(id) => tagClipboard.setChipSize(id)"
-      />
-    </SettingsSection>
-
-    <SettingsSection
       v-if="isReadOnly"
       title="Privacy"
       desc="If you previously accepted the ratings cookie, your scores are remembered across visits. Clicking below clears the cookie so your next visit starts fresh with no scores retrieved."
@@ -358,13 +361,7 @@ async function clearGuestSession() {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: var(--space-5);
-  border-top: 1px solid rgb(var(--v-theme-divider));
-  padding: var(--space-5) 0;
-}
-
-.appearance-switch {
-  border-top: 1px solid rgb(var(--v-theme-divider));
-  padding-top: var(--space-5);
+  padding-bottom: var(--space-3);
 }
 
 /* Two switches side by side (auto-hide + keyboard hint), mirroring the
@@ -374,8 +371,6 @@ async function clearGuestSession() {
   grid-template-columns: 1fr 1fr;
   gap: var(--space-3) var(--space-5);
   align-items: center;
-  border-top: 1px solid rgb(var(--v-theme-divider));
-  padding-top: var(--space-5);
 }
 
 .appearance-note {
@@ -398,6 +393,11 @@ async function clearGuestSession() {
   grid-auto-flow: column;
   column-gap: var(--space-7);
   align-items: start;
+}
+/* A pair with no descriptions: title and control only. */
+.pair-set--short {
+  grid-template-rows: auto auto;
+  margin-top: var(--space-4);
 }
 .pair-title {
   display: flex;

@@ -4,7 +4,7 @@ import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test, expect } from '../fixtures/test.js'
 
-// Snapshots — Settings → Snapshots. Create a snapshot, change the library,
+// Snapshots — Settings → Recovery. Create a snapshot, change the library,
 // restore the snapshot, and the library is back to what it was.
 //
 // A full restore replaces the whole vault database, and the backend is shared

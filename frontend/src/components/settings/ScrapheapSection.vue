@@ -15,7 +15,6 @@ import AppSelect from "../widgets/AppSelect.vue";
 import AppButton from "../widgets/AppButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import SettingsSection from "./SettingsSection.vue";
-import SettingsInfoCard from "./SettingsInfoCard.vue";
 import RetentionReductionDialog from "../widgets/RetentionReductionDialog.vue";
 import { useScrapheapRetentionStore } from "../../stores/useScrapheapRetentionStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
@@ -228,7 +227,7 @@ function cancelReduction() {
   <div>
     <SettingsSection
       title="Scrapheap"
-      desc="Pictures you delete land in the scrapheap first. If you want, PixlStash can empty it for you after a set time."
+      desc="Pictures you delete land here first, and PixlStash can empty it after a set time. Reference-folder originals are never auto-deleted, and their tiles say so."
       first
     >
       <div class="sr-row">
@@ -277,13 +276,6 @@ function cancelReduction() {
         @confirm="confirmReduction"
         @cancel="cancelReduction"
       />
-
-      <div class="sr-note">
-        <SettingsInfoCard>
-          Reference-folder originals in the scrapheap are protected: they are
-          never auto-deleted, and their tiles say so.
-        </SettingsInfoCard>
-      </div>
     </SettingsSection>
   </div>
 </template>
@@ -329,10 +321,6 @@ function cancelReduction() {
   /* Optical: lifts the glyph onto the first line's cap height. */
   margin-top: var(--space-1);
   color: rgba(var(--v-theme-on-surface), 0.6);
-}
-
-.sr-note {
-  margin-top: var(--space-5);
 }
 
 .sr-error {

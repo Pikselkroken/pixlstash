@@ -113,7 +113,7 @@ default (`computeDefaultBackendsRoot`):
   install folder to use.
 
 Users can override the default anywhere: the first-run wizard shows an install-location
-picker when GPU is selected, and Settings → Compute → *Install location* changes it later.
+picker when GPU is selected, and Settings → GPU & compute → *Install location* changes it later.
 Changing it after an overlay is installed **moves** the existing overlay (rename, falling
 back to copy+delete across drives) so the multi-GB torch isn't re-downloaded — this also
 replaces the "move it manually + symlink" workaround users were doing. The chosen path is

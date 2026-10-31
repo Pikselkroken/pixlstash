@@ -712,8 +712,8 @@ are automatic; nothing moves a topology between them). Forgetting ghosts is not 
 purges beside the retention setting,
 `DELETE /server-config/ghost-retention/ghosts` and
 `.../model-ghosts?expected=N`, whose counts `GET /server-config/ghost-retention`
-returns as `picture_ghosts` and `model_ghosts` (Settings › Privacy,
-`PrivacySection`). The client sends the model count it showed as `expected`,
+returns as `picture_ghosts` and `model_ghosts` (Settings › Recovery,
+`GhostsSection`). The client sends the model count it showed as `expected`,
 and a `409` means the set changed and nothing was forgotten.
 
 | Route | Purpose | Response |
@@ -1825,7 +1825,7 @@ an export keeps it is one user-config boolean, `keep_workflow_on_export`, false
 by default, held as `useUserPrefsStore().keepWorkflowOnExport` and saved with
 `saveKeepWorkflowOnExport(value)`, which changes the local value only once the
 PATCH succeeds. The Export panel sends it as `keep_generation_data`; the backend
-does not look it up. It is set in Settings › Sharing (`SharingSection.vue`) or
+does not look it up. It is set in Settings › Privacy & sharing (`SharingSection.vue`) or
 by the Export panel's *Keep the workflow* switch, which reads and writes it.
 A copy receipt whose files kept their data (`metadata` other than `removed`)
 carries the notice `badge` (`KEPT_DATA_BADGE` in `utils/copyAsFiles.js`), a
@@ -2408,7 +2408,7 @@ PixlStash admits the GPU work it starts against the card's measured free memory 
 
 PixlStash's own tasks appear as `light` leases (one per running GPU task, `worker_type` set; `on_cpu: true` for one that spilled to the CPU) and never wait. `preempted` lists work paused to make room until the lease that caused it is granted.
 
-`resources` sits beside the response's older `process` block, which it does not replace. `process` is this process's usage (`vram_used_gb`, `vram_total_gb`, `vram_percent`, null without a GPU), and the VRAM limit slider in Settings › Compute reads its upper bound from `process.vram_total_gb`.
+`resources` sits beside the response's older `process` block, which it does not replace. `process` is this process's usage (`vram_used_gb`, `vram_total_gb`, `vram_percent`, null without a GPU), and the VRAM limit slider in Settings › GPU & compute reads its upper bound from `process.vram_total_gb`.
 
 **Workflow cards** carry `vram: {need_mb, measured_runs, exclusive, exclusive_source, exclusive_at, trend, peaks}` (peaks on the detail read only, each with the `pixels` it was measured at); `PATCH /workflows/{id}` takes `exclusive`, and `forget_vram_peaks: true`, the GPU memory section's Reset. The owner's `auto_exclusive_after_oom` rides `GET`/`PATCH /users/me/config`.
 

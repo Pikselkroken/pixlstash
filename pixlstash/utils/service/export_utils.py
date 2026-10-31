@@ -193,7 +193,7 @@ class _StripGenerationDataSink:
     """Wrap an export sink so every image member leaves without generation data.
 
     The export's "Keep the workflow" off (the Share panel and Export row in
-    Settings › Privacy). Wrapping the sink rather than each write site covers
+    Settings › Privacy & sharing). Wrapping the sink rather than each write site covers
     every branch of :meth:`ExportUtils._write_export_pictures` - the original
     file, a resized re-encode, a trainer PNG, a face crop - in one place. A
     format :func:`strip_generation_data` does not handle (videos, GIF, TIFF)

@@ -10,10 +10,7 @@ import {
   patchToken,
   deleteToken,
   setTokenLibraries,
-  uploadWatermark,
-  deleteWatermark,
 } from "../../api/users";
-import { getUserConfig, patchUserConfig } from "../../api/config";
 import { listPictureSets } from "../../api/pictureSets";
 import { listProjects } from "../../api/projects";
 import { listCharacters } from "../../api/characters";
@@ -27,12 +24,13 @@ import SettingsSection from "./SettingsSection.vue";
 import ConnectAgentDialog from "./ConnectAgentDialog.vue";
 import { errorDetail } from "../../utils/apiError";
 import { useLibrariesStore } from "../../stores/useLibrariesStore";
+import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
 });
 
-const emit = defineEmits(["update:public-url"]);
+const prefs = useUserPrefsStore();
 
 // --- Account auth state ---
 const settingsUsername = ref("");
@@ -69,15 +67,6 @@ const shareResourceOptions = ref([]);
 const shareResourceLoading = ref(false);
 const shareLinkCopied = ref(false);
 
-// --- Public URL / watermark state ---
-const publicUrlValue = ref("");
-const publicUrlLoading = ref(false);
-const publicUrlError = ref("");
-const publicUrlSuccess = ref("");
-const watermarkPreviewUrl = ref("");
-const watermarkInputRef = ref(null);
-const watermarkUploading = ref(false);
-const watermarkUploadError = ref("");
 
 function resetForm() {
   settingsError.value = "";
@@ -101,11 +90,6 @@ function resetForm() {
   tokenWatermark.value = false;
   shareResourceOptions.value = [];
   shareLinkCopied.value = false;
-  publicUrlValue.value = "";
-  publicUrlError.value = "";
-  publicUrlSuccess.value = "";
-  watermarkPreviewUrl.value = "";
-  watermarkUploadError.value = "";
 }
 
 async function fetchSettingsAuth() {
@@ -132,71 +116,6 @@ async function fetchUserTokens() {
     tokensError.value = "Failed to load tokens.";
   } finally {
     tokensLoading.value = false;
-  }
-}
-
-async function fetchPublicUrl() {
-  publicUrlLoading.value = true;
-  try {
-    const cfg = await getUserConfig();
-    publicUrlValue.value = cfg?.public_url || "";
-  } catch {
-    /* silent */
-  } finally {
-    publicUrlLoading.value = false;
-  }
-}
-
-function refreshWatermarkPreview() {
-  watermarkPreviewUrl.value = `/api/v1/users/me/watermark?cb=${Date.now()}`;
-}
-
-async function savePublicUrl() {
-  publicUrlError.value = "";
-  publicUrlSuccess.value = "";
-  const trimmed = publicUrlValue.value.trim().replace(/\/$/, "");
-  publicUrlValue.value = trimmed;
-  publicUrlLoading.value = true;
-  try {
-    await patchUserConfig({ public_url: trimmed || null });
-    emit("update:public-url", trimmed || null);
-    publicUrlSuccess.value = "Saved.";
-    setTimeout(() => {
-      publicUrlSuccess.value = "";
-    }, 2500);
-  } catch {
-    publicUrlError.value = "Failed to save.";
-  } finally {
-    publicUrlLoading.value = false;
-  }
-}
-
-async function handleWatermarkUpload(event) {
-  const file = event.target.files?.[0];
-  if (!file) return;
-  watermarkUploadError.value = "";
-  watermarkUploading.value = true;
-  try {
-    await uploadWatermark(file);
-    refreshWatermarkPreview();
-  } catch {
-    watermarkUploadError.value = "Upload failed.";
-  } finally {
-    watermarkUploading.value = false;
-    if (watermarkInputRef.value) watermarkInputRef.value.value = "";
-  }
-}
-
-async function clearWatermark() {
-  watermarkUploadError.value = "";
-  watermarkUploading.value = true;
-  try {
-    await deleteWatermark();
-    refreshWatermarkPreview();
-  } catch {
-    watermarkUploadError.value = "Failed to remove watermark.";
-  } finally {
-    watermarkUploading.value = false;
   }
 }
 
@@ -261,9 +180,12 @@ async function loadShareResourceOptions(type) {
 
 const shareUrl = computed(() => {
   if (!newlyCreatedToken.value || tokenScope.value !== "READ") return null;
-  // Prefer the configured public URL so the link works from outside the LAN.
+  // Prefer the configured public URL (Settings › Privacy & sharing) so the
+  // link works from outside the LAN.
+  // Trimmed here too: the store holds whatever the config file says, and a
+  // trailing slash there would double the one the path starts with.
   const origin =
-    publicUrlValue.value?.trim().replace(/\/$/, "") || window.location.origin;
+    prefs.publicUrl?.trim().replace(/\/$/, "") || window.location.origin;
   const base = origin + window.location.pathname;
   return `${base}?token=${newlyCreatedToken.value}`;
 });
@@ -466,8 +388,6 @@ watch(
       if (!isReadOnly.value) {
         fetchSettingsAuth();
         fetchUserTokens();
-        fetchPublicUrl();
-        refreshWatermarkPreview();
       }
     }
   },
@@ -523,103 +443,6 @@ watch(
       </div>
       <div v-if="settingsSuccess" class="account-success">
         {{ settingsSuccess }}
-      </div>
-    </SettingsSection>
-
-    <!-- ── Sharing + Watermark ───────────────────────────────────────── -->
-    <SettingsSection>
-      <div class="account-share-heads">
-        <div class="account-share-heads__main">Sharing</div>
-        <div class="account-share-heads__wm">Watermark</div>
-      </div>
-      <div class="account-share-row">
-        <div class="account-share-left">
-          <div class="account-share-desc">
-            Share links use your browser's current address. Set this to a public
-            URL (e.g. a
-            <a
-              href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/"
-              target="_blank"
-              rel="noopener noreferrer"
-              >Cloudflare Tunnel</a
-            >
-            address) so links work for people outside your network.
-          </div>
-          <AppInput
-            v-model="publicUrlValue"
-            label="Public base URL (optional)"
-            placeholder="https://my-tunnel.example.com"
-            :disabled="publicUrlLoading"
-            @enter="savePublicUrl"
-            @blur="savePublicUrl"
-          />
-          <div
-            v-if="publicUrlError || publicUrlSuccess"
-            class="account-share-status"
-          >
-            <span v-if="publicUrlError" class="account-error">
-              {{ publicUrlError }}
-            </span>
-            <span v-else-if="publicUrlSuccess" class="account-success">
-              {{ publicUrlSuccess }}
-            </span>
-          </div>
-        </div>
-        <!-- WatermarkDrop: 184px click-or-drop target with reset overlay.
-             Logic (file input ref, change handler, preview src, clear) is
-             unchanged from the script. -->
-        <div class="account-share-right">
-          <div class="wm-drop">
-            <button
-              type="button"
-              class="wm-drop__target"
-              :class="{ 'wm-drop__target--has-image': watermarkPreviewUrl }"
-              :style="
-                watermarkPreviewUrl
-                  ? { backgroundImage: `url(${watermarkPreviewUrl})` }
-                  : null
-              "
-              aria-label="Upload watermark"
-              :disabled="watermarkUploading"
-              @click="watermarkInputRef?.click()"
-            >
-              <Tooltip
-                text="Upload watermark"
-                activator="parent"
-                :describe="false"
-              />
-              <template v-if="!watermarkPreviewUrl">
-                <v-icon size="26">mdi-image-plus-outline</v-icon>
-                <span class="wm-drop__hint">Click or drop an image</span>
-              </template>
-            </button>
-            <button
-              v-if="watermarkPreviewUrl"
-              type="button"
-              class="wm-drop__reset"
-              aria-label="Reset to default watermark"
-              :disabled="watermarkUploading"
-              @click="clearWatermark"
-            >
-              <Tooltip
-                text="Reset to default watermark"
-                activator="parent"
-                :describe="false"
-              />
-              <v-icon size="15">mdi-close</v-icon>
-            </button>
-            <input
-              ref="watermarkInputRef"
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              class="wm-drop__input"
-              @change="handleWatermarkUpload"
-            />
-          </div>
-          <div v-if="watermarkUploadError" class="account-error">
-            {{ watermarkUploadError }}
-          </div>
-        </div>
       </div>
     </SettingsSection>
 
@@ -1016,142 +839,6 @@ watch(
 .account-success {
   font-size: var(--text-xs);
   color: rgb(var(--v-theme-on-surface));
-}
-
-/* ── Sharing + Watermark ──────────────────────────────────────────────── */
-.account-share-heads {
-  display: flex;
-  gap: var(--space-6);
-  margin-bottom: var(--space-3);
-}
-
-.account-share-heads__main {
-  flex: 1;
-  min-width: 0;
-  font-weight: var(--weight-semibold);
-  font-size: var(--text-base);
-}
-
-.account-share-heads__wm {
-  flex-shrink: 0;
-  width: 184px;
-  font-weight: var(--weight-semibold);
-  font-size: var(--text-base);
-}
-
-.account-share-row {
-  display: flex;
-  gap: var(--space-6);
-  align-items: stretch;
-}
-
-.account-share-left {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-}
-
-.account-share-desc {
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-surface), 0.6);
-  line-height: var(--leading-snug);
-}
-
-.account-share-desc a {
-  color: rgb(var(--v-theme-accent));
-}
-
-.account-share-status {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  min-height: 1em;
-}
-
-.account-share-right {
-  flex-shrink: 0;
-  width: 184px;
-  display: flex;
-  flex-direction: column;
-}
-
-/* WatermarkDrop - the thumbnail IS the control: click opens the file picker,
-   drop sets the image, a reset overlay clears it. */
-.wm-drop {
-  position: relative;
-  width: 184px;
-  flex: 1;
-  min-height: 96px;
-}
-
-.wm-drop__target {
-  width: 100%;
-  height: 100%;
-  min-height: 96px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-2);
-  padding: var(--space-3);
-  border: 1.5px solid rgb(var(--v-theme-border));
-  border-radius: var(--radius-md);
-  background: rgb(var(--v-theme-input-background));
-  color: rgba(var(--v-theme-on-surface), 0.6);
-  transition:
-    border-color var(--dur-1) var(--ease-standard),
-    background var(--dur-1) var(--ease-standard);
-}
-
-/* `background-color`, not the shorthand: the shorthand would reset the
-   watermark preview's `background-size` while hovered. */
-.wm-drop__target:hover:not(:disabled) {
-  color: rgb(var(--v-theme-on-surface));
-  background-color: var(--hover-wash);
-}
-
-.wm-drop__target:disabled {
-  cursor: default;
-  opacity: 0.6;
-}
-
-.wm-drop__target--has-image {
-  background-size: contain;
-  background-repeat: no-repeat;
-  background-position: center;
-}
-
-.wm-drop__hint {
-  font-size: var(--text-xs);
-  line-height: var(--leading-snug);
-  text-align: center;
-}
-
-.wm-drop__reset {
-  position: absolute;
-  top: var(--space-2);
-  right: var(--space-2);
-  width: 24px;
-  height: 24px;
-  border-radius: var(--radius-pill);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  /* The one allowed exception: a translucent black scrim with a white icon. */
-  background: rgba(var(--v-theme-scrim), 0.6);
-  color: #fff;
-  backdrop-filter: blur(2px);
-}
-
-.wm-drop__reset:disabled {
-  cursor: default;
-  opacity: 0.6;
-}
-
-.wm-drop__input {
-  display: none;
 }
 
 /* ── API Tokens table ─────────────────────────────────────────────────── */

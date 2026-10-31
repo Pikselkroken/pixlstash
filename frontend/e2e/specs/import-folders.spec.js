@@ -1,7 +1,7 @@
 // An import folder, added the way the owner adds one and fed a picture on
 // disk (#2325).
 //
-// Import folders are added in Settings › Import folders, and what they bring
+// Import folders are added in Settings › Libraries & imports, and what they bring
 // in waits in the Inbox (/inbox; the old /import-folder/:id route redirects
 // there). The pickup is the planner's import-folder sweep, which polls, so
 // nothing here waits on a filesystem watcher. The folder is a mkdtemp folder.
@@ -44,7 +44,7 @@ test.describe('an import folder', () => {
 
     await page.goto('/')
     await settings.open()
-    await settings.openTab('Import folders')
+    await settings.openTab('Libraries & imports')
     await settings.card.getByRole('button', { name: 'Add import folder…' }).click()
     const dialog = page.getByRole('dialog', { name: 'Add import folder', exact: true })
     await dialog.getByLabel('Folder', { exact: true }).fill(folder)

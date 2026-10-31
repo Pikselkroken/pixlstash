@@ -1,7 +1,7 @@
 <template>
   <!-- The library picker (#2158): the open library's name over a 3px bar of
        how full its drive is, and a menu of every library with its free space.
-       It used to be a label that deep-linked to Settings › Libraries; it now
+       It used to be a label that deep-linked to Settings › Libraries & imports; it now
        switches itself, through the same confirmation that pane uses. -->
   <v-menu v-model="open" location="bottom start" :offset="4">
     <template #activator="{ props: menuProps }">
@@ -146,7 +146,7 @@ const triggerLabel = computed(() => {
 });
 
 // A library cannot be switched to when its drive is unplugged, or when this
-// caller may not switch at all (a remote owner: Settings › Libraries says why,
+// caller may not switch at all (a remote owner: Settings › Libraries & imports says why,
 // and Manage libraries… is the way there).
 const rows = computed(() =>
   librariesStore.libraries.map((library) => {

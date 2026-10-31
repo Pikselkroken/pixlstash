@@ -29,6 +29,7 @@ import { withRef } from "../../utils/withRef.js";
 import AppButton from "../widgets/AppButton.vue";
 import AppInput from "../widgets/AppInput.vue";
 import Segmented from "../widgets/Segmented.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 
 const props = defineProps({
   // `GET /comfyui/connections`' `connections` and `current`.
@@ -83,6 +84,11 @@ function hostPort(url) {
   } catch {
     return url;
   }
+}
+
+function offlineTip(row) {
+  const why = row.detail || `Nothing answered at ${hostPort(row.url)}.`;
+  return `${why} If ComfyUI is running there, start it with --listen, or edit the address.`;
 }
 
 const rows = computed(() =>
@@ -451,13 +457,25 @@ function onMenuKey(event, row) {
                   ><v-icon size="16" aria-hidden="true">mdi-check-circle</v-icon
                   >Connected</span
                 >
-                <span
+                <!-- Why, and what to do, on the status itself rather than a
+                     note row under it: the table stays one line per ComfyUI. -->
+                <Tooltip
                   v-else-if="row.status === 'offline'"
-                  class="cct-st cct-st--bad"
-                  ><v-icon size="16" aria-hidden="true"
-                    >mdi-alert-rhombus-outline</v-icon
-                  >Not answering</span
+                  :text="offlineTip(row)"
+                  location="bottom"
                 >
+                  <template #activator="{ props: tipProps }">
+                    <span
+                      v-bind="tipProps"
+                      class="cct-st cct-st--bad"
+                      tabindex="0"
+                      :data-testid="`comfyui-offline-${row.id}`"
+                      ><v-icon size="16" aria-hidden="true"
+                        >mdi-alert-rhombus-outline</v-icon
+                      >Not answering</span
+                    >
+                  </template>
+                </Tooltip>
                 <span v-else class="cct-st cct-muted">Not checked</span>
                 <span v-if="row.status === 'connected' && row.card" class="cct-sub">{{
                   row.card
@@ -720,20 +738,6 @@ function onMenuKey(event, row) {
             </tr>
 
             <!-- Problems, under the row they belong to. -->
-            <tr
-              v-else-if="row.status === 'offline'"
-              class="cct-note"
-              :data-testid="`comfyui-note-offline-${row.id}`"
-            >
-              <td></td>
-              <td colspan="5">
-                <p class="cct-problem cct-problem--bad">
-                  {{ row.detail || `Nothing answered at ${hostPort(row.url)}.` }}
-                  If ComfyUI is running there, start it with <code>--listen</code>,
-                  or edit the address.
-                </p>
-              </td>
-            </tr>
             <tr
               v-else-if="row.link.refused_from"
               class="cct-note"

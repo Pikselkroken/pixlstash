@@ -464,7 +464,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
 
   /**
    * Forget what was read and read the grid again, after something OUTSIDE this
-   * view changed what the cards say (a ghost purge in Settings › Privacy).
+   * view changed what the cards say (a ghost purge in Settings › Recovery).
    *
    * **Only re-read when the grid has been read**, so a purge made by somebody
    * who has never opened Workflows fires no request.

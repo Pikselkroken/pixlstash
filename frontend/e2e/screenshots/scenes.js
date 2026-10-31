@@ -82,7 +82,7 @@ function wizardDialog(page) {
 async function openAddLibrary({ grid, settings, page }) {
   await readyGrid(grid)
   await settings.open()
-  await settings.openTab('Libraries')
+  await settings.openTab('Libraries & imports')
   await page.getByRole('button', { name: '+ Add a library…' }).click()
 
   const wizard = wizardDialog(page)
@@ -337,10 +337,10 @@ export const scenes = [
     async setup({ grid, settings, page }) {
       await readyGrid(grid)
       await settings.open()
-      // The desktop-only "Backend" rail item. Compute acceleration used to
-      // share this pane; it is its own "Compute" item now (backend-cuda /
-      // backend-rocm below), so this one shows remote access + desktop.
-      await settings.openTab('Backend')
+      // The desktop-only "Server" rail item: remote access + desktop.
+      // Compute acceleration is under "GPU & compute" (backend-cuda /
+      // backend-rocm below).
+      await settings.openTab('Server')
       await expect(page.getByText('Remote access')).toBeVisible()
       await page.waitForTimeout(400)
       return settings.card
@@ -350,14 +350,14 @@ export const scenes = [
     id: 'backend-cuda',
     assets: ['ScreenshotBackendCuda.jpg'],
     title: 'Desktop Backend settings — NVIDIA CUDA acceleration available',
-    // Show the Backend tab on an NVIDIA machine: the CUDA overlay is offered
+    // Show GPU & compute on an NVIDIA machine: the CUDA overlay is offered
     // with an "Install (recommended)" action (the post-install "active" state
     // can't be shown without a real lightbox download).
     bridge: { accelerators: cudaAccelerators },
     async setup({ grid, settings, page }) {
       await readyGrid(grid)
       await settings.open()
-      await settings.openTab('Compute')
+      await settings.openTab('GPU & compute')
       await expect(page.getByText('NVIDIA GPU (CUDA 12.8)')).toBeVisible()
       await page.waitForTimeout(400)
       return settings.card
@@ -372,7 +372,7 @@ export const scenes = [
     async setup({ grid, settings, page }) {
       await readyGrid(grid)
       await settings.open()
-      await settings.openTab('Compute')
+      await settings.openTab('GPU & compute')
       await expect(page.getByText('AMD GPU (ROCm, experimental)')).toBeVisible()
       await page.waitForTimeout(400)
       return settings.card
@@ -420,7 +420,7 @@ export const scenes = [
     async setup({ grid, settings, page }) {
       await readyGrid(grid)
       await settings.open()
-      await settings.openTab('Libraries')
+      await settings.openTab('Libraries & imports')
       // The full menu (open / rename / stop using) only exists on a row that is
       // NOT the active library, and demo-data registers exactly one. Add a
       // second so the menu has every verb in it — an EMPTY folder, which is the
@@ -436,7 +436,7 @@ export const scenes = [
       expect(res.ok(), `could not add the second library: ${res.status()}`).toBe(true)
       await page.reload()
       await settings.open()
-      await settings.openTab('Libraries')
+      await settings.openTab('Libraries & imports')
       const row = page.locator('.library-row:not(.library-row--active)').first()
       await row.locator('.library-row__more').click()
       // Named, not `getByRole('menu')`: the shared surface puts `role=menu` on
@@ -471,7 +471,7 @@ export const scenes = [
     async setup({ grid, settings }) {
       await readyGrid(grid)
       await settings.open()
-      await settings.openTab('Privacy')
+      await settings.openTab('Privacy & sharing')
       await grid.page.waitForTimeout(400)
       return settings.card
     },

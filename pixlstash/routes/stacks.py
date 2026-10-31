@@ -1593,7 +1593,7 @@ def create_router(server) -> APIRouter:
             # judged the copies under the old position. A failure here raises
             # out of the call with nothing moved, which is the recoverable
             # order. Not part of the undo: it is a privacy setting for every
-            # library, turned back down in Settings > Privacy.
+            # library, turned back down in Settings > Recovery.
             def before_write():  # noqa: F811 - the None above is the default
                 workflow_ghost_service.apply_ghost_retention(
                     server, workflow_ghost_service.GHOST_RETENTION_ON

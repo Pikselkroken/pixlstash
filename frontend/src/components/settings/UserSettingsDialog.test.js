@@ -36,7 +36,8 @@ vi.mock("./PrivacySection.vue", () => ({ default: sectionStub }));
 vi.mock("./SharingSection.vue", () => ({ default: sectionStub }));
 vi.mock("./ScrapheapSection.vue", () => ({ default: sectionStub }));
 vi.mock("./SnapshotsSection.vue", () => ({ default: sectionStub }));
-vi.mock("./TrainingSection.vue", () => ({ default: sectionStub }));
+vi.mock("./GhostsSection.vue", () => ({ default: sectionStub }));
+vi.mock("./AiToolkitSetup.vue", () => ({ default: sectionStub }));
 vi.mock("./SmartScoreSection.vue", () => ({ default: sectionStub }));
 vi.mock("./ComfyuiHostSection.vue", () => ({
   default: {
@@ -79,39 +80,76 @@ describe("UserSettingsDialog library navigation", () => {
     );
   });
 
-  it("orders the rail with Libraries ahead of Scrapheap, and no layout tab", async () => {
+  it("groups the rail under five headings, and has no layout tab", async () => {
     sessionContext.value = { scope: "ALL" };
     const wrapper = mountDialog();
     await nextTick();
 
-    // The whole order, not an adjacency: an index comparison between two
-    // entries also holds when one of them is missing from the rail entirely.
-    // Backend is desktop-only and absent under jsdom. Compute is on a browser
-    // too: its GPU picker and sharing controls are the server's. ComfyUI stays,
-    // because a browser connects ComfyUI too.
+    // The whole order, headings included, not an adjacency: an index
+    // comparison between two entries also holds when one of them is missing.
+    // Server is desktop-only and absent under jsdom; GPU & compute and
+    // ComfyUI stay, because a browser has a GPU picker and connects ComfyUI.
+    // No Library layout item: the layout belongs to whichever library is
+    // open, so it is a dialog off the active library's overflow menu.
     expect(
-      wrapper.findAll(".settings-nav-item").map((n) => n.attributes("id")),
+      wrapper
+        .findAll(".settings-nav-heading, .settings-nav-item")
+        .map((n) => n.attributes("id") || n.text()),
     ).toEqual([
+      "General",
       "settings-nav-appearance",
-      "settings-nav-models",
-      "settings-nav-training",
+      "settings-nav-privacy",
+      "Library",
+      "settings-nav-libraries",
+      "settings-nav-recovery",
+      "Tags",
       "settings-nav-behaviour",
       "settings-nav-smart-score",
-      "settings-nav-libraries",
-      // What flows into the open library sits beside the library itself.
-      "settings-nav-import-folders",
-      // No Library layout rail item: the layout is a property of whichever
-      // library is *open*, so it is a dialog off the active library's overflow
-      // menu rather than a tab beside the list that opens one.
-      "settings-nav-scrapheap",
-      "settings-nav-snapshots",
-      "settings-nav-privacy",
-      "settings-nav-sharing",
+      "Models & AI",
+      "settings-nav-models",
+      "settings-nav-training",
       "settings-nav-comfyui",
       "settings-nav-compute",
+      "Access",
       "settings-nav-account",
     ]);
   });
+
+  it.each([
+    ["import-folders", "libraries"],
+    ["scrapheap", "recovery"],
+    ["snapshots", "recovery"],
+    ["sharing", "privacy"],
+  ])(
+    "lands a link to the old %s pane on %s, at its section",
+    async (oldId, pane) => {
+      sessionContext.value = { scope: "ALL" };
+      const scrolled = vi.fn();
+      Element.prototype.scrollIntoView = scrolled;
+      const wrapper = mount(UserSettingsDialog, {
+        props: { open: true, initialTab: oldId },
+        global: { stubs: { VIcon: true } },
+        attachTo: document.body,
+      });
+      try {
+        await nextTick();
+        await nextTick();
+
+        expect(
+          wrapper.find(`#settings-nav-${pane}`).attributes("aria-current"),
+        ).toBe("page");
+        const anchor = wrapper.find(`#settings-anchor-${oldId}`);
+        expect(anchor.exists()).toBe(true);
+        expect(
+          wrapper.find(`#settings-pane-${pane}`).element.contains(anchor.element),
+        ).toBe(true);
+        expect(scrolled.mock.contexts).toEqual([anchor.element]);
+      } finally {
+        wrapper.unmount();
+        delete Element.prototype.scrollIntoView;
+      }
+    },
+  );
 
   it("gives every rail item a pane matching its aria-controls", async () => {
     sessionContext.value = { scope: "ALL" };
@@ -164,16 +202,13 @@ describe("UserSettingsDialog library navigation", () => {
         wrapper.findAll(".settings-nav-item").map((n) => n.attributes("id")),
       ).toEqual([
         "settings-nav-appearance",
-        "settings-nav-models",
-      "settings-nav-training",
+        "settings-nav-privacy",
+        "settings-nav-libraries",
+        "settings-nav-recovery",
         "settings-nav-behaviour",
         "settings-nav-smart-score",
-        "settings-nav-libraries",
-        "settings-nav-import-folders",
-        "settings-nav-scrapheap",
-        "settings-nav-snapshots",
-        "settings-nav-privacy",
-        "settings-nav-sharing",
+        "settings-nav-models",
+        "settings-nav-training",
         "settings-nav-comfyui",
         "settings-nav-compute",
         "settings-nav-backend",
@@ -206,5 +241,8 @@ describe("UserSettingsDialog library navigation", () => {
     expect(wrapper.find("#settings-nav-appearance").attributes("aria-current")).toBe(
       "page",
     );
+    // One item left: a heading over it would be noise.
+    expect(wrapper.findAll(".settings-nav-item")).toHaveLength(1);
+    expect(wrapper.find(".settings-nav-heading").exists()).toBe(false);
   });
 });

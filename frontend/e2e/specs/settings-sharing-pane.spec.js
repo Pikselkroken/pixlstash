@@ -1,15 +1,14 @@
 import { test, expect } from '../fixtures/test.js'
 
-// Shared copies has its own pane because Privacy has no room for it (#2417).
-// It must fit the fixed 524px box too, and read Strips until told to keep the
-// workflow.
-test('Sharing pane fits without scrolling and strips by default', async ({
+// Shared copies (#2417) sits under Privacy & sharing, and reads Strips until
+// told to keep the workflow.
+test('Sharing reads Strips by default', async ({
   page,
   settings,
 }) => {
   await page.goto('/')
   await settings.open()
-  await settings.openTab('Sharing')
+  await settings.openTab('Privacy & sharing')
 
   // Vuetify's switch is a checkbox to assistive tech.
   const toggle = page.getByRole('checkbox', {
@@ -18,9 +17,4 @@ test('Sharing pane fits without scrolling and strips by default', async ({
   await expect(toggle).toBeVisible()
   await expect(toggle).not.toBeChecked()
   await expect(page.getByText('Strips', { exact: true })).toBeVisible()
-
-  const { scroll, client } = await page
-    .locator('.settings-content')
-    .evaluate((el) => ({ scroll: el.scrollHeight, client: el.clientHeight }))
-  expect(scroll, 'Sharing pane scrolls').toBeLessThanOrEqual(client)
 })

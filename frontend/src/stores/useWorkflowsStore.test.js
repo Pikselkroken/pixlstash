@@ -227,7 +227,7 @@ describe("refetch", () => {
 
 // ── invalidate(): the one door in from outside the view ───────────────────
 //
-// A ghost purge in Settings › Privacy forgets a model name or a picture ghost,
+// A ghost purge in Settings › Recovery forgets a model name or a picture ghost,
 // which changes what a card names and how many pictures it counts.
 describe("invalidate", () => {
   it("reads the grid again once it has been read", async () => {

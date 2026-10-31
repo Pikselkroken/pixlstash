@@ -1,7 +1,7 @@
 // What may be done to a registered model folder right now, and why not.
 //
 // One copy, read by the two places that offer the registry's verbs: the folder
-// list in Settings › Models and the shelf's folder-header menu (#1270). Every
+// list in Settings › Model folders and the shelf's folder-header menu (#1270). Every
 // reason here is said beforehand because the server would otherwise answer the
 // click with a 403 or a 409.
 

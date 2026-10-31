@@ -1,4 +1,4 @@
-// Settings › Models: folder registration, and the two states it has to render
+// Settings › Model folders: folder registration, and the two states it has to render
 // rather than hit.
 //
 // `LOCAL_OWNER_ONLY` means a remote owner reads the list and 403s on every

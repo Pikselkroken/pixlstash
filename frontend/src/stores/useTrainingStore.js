@@ -40,7 +40,7 @@ const PROMPTS_DEBOUNCE_MS = 400;
 
 /**
  * Cross-component state for the LoRA training feature: the Train a LoRA dialog
- * (TrainLoraDialog), the training registry settings section (TrainingSection),
+ * (TrainLoraDialog), the AI-toolkit settings pane (AiToolkitSetup),
  * and the entry points in the Toolbar / SideBar.
  *
  * The dialog holds the owner's choices and typed values; the server resolves

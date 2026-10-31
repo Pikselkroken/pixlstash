@@ -59,6 +59,9 @@ vi.mock("../../api/pictureSets", () => ({ listPictureSets: vi.fn(async () => [])
 vi.mock("../../api/projects", () => ({ listProjects: vi.fn(async () => []) }));
 vi.mock("../../api/characters", () => ({ listCharacters: vi.fn(async () => []) }));
 vi.mock("../../utils/clipboard", () => ({ copyText: vi.fn() }));
+vi.mock("../../stores/useUserPrefsStore", () => ({
+  useUserPrefsStore: () => ({ publicUrl: null }),
+}));
 // One library: the token table has no "Every library" column to render.
 vi.mock("../../stores/useLibrariesStore", () => ({
   useLibrariesStore: () => ({ libraries: [], canManage: false }),
