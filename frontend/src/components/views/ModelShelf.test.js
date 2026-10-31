@@ -211,6 +211,8 @@ vi.mock("../../api/modelIcons", async (importOriginal) => ({
 }));
 
 import ModelShelf from "./ModelShelf.vue";
+import { characterThumbnailUrl } from "../../api/characters";
+import { modelIconUrl } from "../../api/modelIcons";
 import KindMenu from "../widgets/KindMenu.vue";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
 import { useFavouritesStore } from "../../stores/useFavouritesStore";
@@ -1054,6 +1056,12 @@ describe("location state", () => {
     expect(slots[1].classes()).toContain("shelf-row-loc--unreachable");
     const rows = wrapper.findAll(".shelf-row");
     expect(rows[2].find(".shelf-row-loc").exists()).toBe(false);
+    // A file that is gone has nothing to picture: its glyph takes the mark's
+    // place. One that is only out of reach keeps its mark.
+    expect(rows[0].find(".shelf-row-mark .shelf-row-loc").exists()).toBe(true);
+    expect(rows[0].find(".shelf-row-mark .mmark").exists()).toBe(false);
+    expect(rows[1].find(".shelf-row-label .shelf-row-loc").exists()).toBe(true);
+    expect(rows[1].find(".shelf-row-mark .mmark").exists()).toBe(true);
   });
 
   it("says where the file is on an axis that draws no folder header", async () => {
@@ -3807,17 +3815,15 @@ describe("acting inside a run", () => {
     return wrapper;
   }
 
-  it("draws the deck behind the Type letter, not across the whole slot", async () => {
+  it("draws the deck behind the mark, not across the whole slot", async () => {
     // The ticks fill their nearest positioned box. Left in the slot they drew
-    // a grey pill over the letter, which read as a broken thumbnail.
+    // a grey pill over the mark, which read as a broken thumbnail.
     const wrapper = await openRun();
     const ticks = wrapper.find(
       ".shelf-row:not(.shelf-row--member) [data-testid='stack-edge-ticks']",
     );
     expect(ticks.element.parentElement.classList).toContain("shelf-row-mark");
-    expect(
-      ticks.element.parentElement.querySelector(".type-mark")?.textContent,
-    ).toBe("L");
+    expect(ticks.element.parentElement.querySelector(".mmark")).not.toBeNull();
     wrapper.unmount();
   });
 
@@ -4938,11 +4944,47 @@ describe("the list's Type, favourite and Sets columns (#2168)", () => {
     wrapper.unmount();
   });
 
-  it("marks a row with its Type letter, in the Type row's tint", async () => {
-    const wrapper = await mountShelf([adapter({ id: 1 })]);
-    const mark = wrapper.find(".shelf-row .type-mark");
-    expect(mark.text()).toBe("L");
-    expect(mark.attributes("data-tint")).toBe("secondary");
+  it("draws a row's picture: its own icon, else its person's face, else a mark", async () => {
+    listCharacters.mockResolvedValue([{ id: 5, name: "Sarah" }]);
+    const wrapper = await mountShelf([
+      adapter({ id: 1, icon_sha256: "f".repeat(64) }),
+      adapter({
+        id: 2,
+        sha256: "b".repeat(64),
+        attachments: [{ entity_type: "character", entity_id: 5 }],
+      }),
+      adapter({ id: 3, sha256: "c".repeat(64) }),
+    ]);
+    await flushPromises();
+    const marks = wrapper.findAll(".shelf-row .shelf-row-mark .mmark");
+    expect(marks).toHaveLength(3);
+    expect(marks[0].find("img").attributes("src")).toBe(
+      modelIconUrl("f".repeat(64)),
+    );
+    expect(marks[1].find("img").attributes("src")).toBe(
+      characterThumbnailUrl(5),
+    );
+    expect(marks[2].find(".mmark-initials").exists()).toBe(true);
+    // #2168 took the assignment ring off the list; the face comes back alone.
+    for (const mark of marks) {
+      expect(mark.classes()).not.toContain("mmark--ring");
+    }
+    wrapper.unmount();
+  });
+
+  it("puts a set's icon on a row drawn before the sets arrived", async () => {
+    // The rows are memoised, so a list landing after them must still repaint.
+    let land;
+    listPictureSets.mockReturnValue(new Promise((resolve) => (land = resolve)));
+    const wrapper = await mountShelf([
+      adapter({ attachments: [{ entity_type: "set", entity_id: 7 }] }),
+    ]);
+    land([{ id: 7, name: "Kit", set_icon: "mdi-star" }]);
+    await flushPromises();
+    const mark = wrapper.find(".shelf-row-mark .mmark");
+    // The set's icon, not the thumbnail the icon replaced.
+    expect(mark.find(".mmark-icon").exists()).toBe(true);
+    expect(mark.find("img").exists()).toBe(false);
     wrapper.unmount();
   });
 

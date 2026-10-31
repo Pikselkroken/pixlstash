@@ -334,9 +334,8 @@
           role="group"
           aria-label="Sort and size the columns"
         >
-          <!-- The favourite column's track (#1578): the same 24px lead the rows
-               draw before the mark, so the headings keep their left edges. -->
-          <!-- Matches `.shelf-row-ident`, which holds the mark and the ring.
+          <!-- Matches `.shelf-row-ident`, which holds the mark, so the
+               headings keep their left edges over the names.
                There is nothing to name: the mark IS the row's identity and the
                hidden `Model` columnheader already says so. -->
           <span class="shelf-head-ident" aria-hidden="true"></span>
@@ -592,22 +591,36 @@
                   <span role="gridcell" class="shelf-row-ident">
                     <!-- Deck ticks behind the mark say "this is more than one
                          file" before the count is read, exactly as they do on a
-                         picture tile. Count-only, so the component reuses cleanly
-                         here even though a model has no thumbnail. The ticks
-                         fill their nearest positioned box, so they get one the
-                         letter's size: against the whole slot they drew a grey
-                         pill over the letter instead of a deck behind it. -->
+                         picture tile. The ticks fill their nearest positioned
+                         box, so they get one the mark's size: against the whole
+                         slot they drew a grey pill over it instead of a deck
+                         behind it. -->
                     <span class="shelf-row-mark">
                       <StackEdgeTicks
                         v-if="row.memberCount > 1"
                         :count="row.memberCount"
                       />
-                      <TypeMark
-                        v-if="typeOf(row)"
-                        :mark="typeOf(row).mark"
-                        :tint="typeOf(row).tint"
-                        ><Tooltip :text="typeOf(row).one" activator="parent"
-                      /></TypeMark>
+                      <!-- A file that is gone has nothing to picture, so the
+                           absence glyph takes the mark's place rather than
+                           leading the name. -->
+                      <Tooltip
+                        v-if="BROKEN_STATES.has(row.locState)"
+                        :text="LOC_TITLE[row.locState]"
+                      >
+                        <template #activator="{ props: tipProps }">
+                          <v-icon
+                            v-bind="tipProps"
+                            class="shelf-row-loc shelf-row-gone"
+                            :class="`shelf-row-loc--${row.locState}`"
+                            >{{ LOC_ICON[row.locState] }}</v-icon
+                          >
+                        </template>
+                      </Tooltip>
+                      <!-- The model's own picture, else the face of the person
+                           or set it is attached to, else the generated mark
+                           (#2168 took the ring off the list; `bare` keeps it
+                           off). -->
+                      <ModelMark v-else :row="row" :ring="ringFor(row)" bare />
                     </span>
                     <!-- Which file the run is being drawn from, said in words
                          rather than by position: once the strip is open the
@@ -640,9 +653,13 @@
                   <span role="gridcell" class="shelf-row-label">
                     <!-- The absence glyph leads the line, because it changes what
                          everything after it means: the name is still true, the
-                         file behind it is not there. -->
+                         file behind it is out of reach. A file that is gone
+                         draws it in the mark's place instead. -->
                     <Tooltip
-                      v-if="row.locState !== 'present'"
+                      v-if="
+                        row.locState !== 'present' &&
+                        !BROKEN_STATES.has(row.locState)
+                      "
                       :text="LOC_TITLE[row.locState]"
                     >
                       <template #activator="{ props: tipProps }">
@@ -1268,7 +1285,7 @@ import PicturePicker from "../widgets/PicturePicker.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
-import TypeMark from "../widgets/TypeMark.vue";
+import ModelMark from "../widgets/ModelMark.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
 import StackEdgeTicks from "../widgets/StackEdgeTicks.vue";
 import { useConfirm } from "../../composables/useConfirm";
@@ -1331,13 +1348,13 @@ import {
   triggerChip,
   releaseReceipt,
   SORT_LABELS,
-  SHELF_TYPES,
   shelfTypeOf,
   stackReceipt,
   trainingStep,
   unstackReceipt,
   sortDirectionLabel,
   isInFoldersTree,
+  assignmentRing,
 } from "../../utils/modelShelf";
 
 // Settings lives in App.vue's sidebar dialog, so the toolbar's Settings button
@@ -4295,9 +4312,12 @@ function resetColumn(key) {
   store.setColumnWidth(key, DEFAULT_COLUMN_WIDTHS[key]);
 }
 
-/** The Type row a shelf row sits under, or undefined for an engine or an unclassified file. */
-function typeOf(row) {
-  return SHELF_TYPES.find((type) => type.key === shelfTypeOf(row));
+/** What a row's mark borrows a face from: the person or set it is attached to. */
+function ringFor(row) {
+  return assignmentRing(row.attachments, {
+    characters: entityLists.characters,
+    sets: entityLists.pictureSets,
+  });
 }
 
 /**
@@ -4344,6 +4364,9 @@ function rowMemo(row) {
     misplacedIds.value.has(row.id),
     lockedNote(row),
     setsCell(row),
+    // The one thing a bare mark reads from the entity lists, which land after
+    // the rows: a set's chosen icon. A face is addressed by id alone.
+    ringFor(row).icon,
     store.view.sortKey,
     userPrefs.dateFormat,
     isStackOpen(row.stack_id) && {},
@@ -5029,6 +5052,14 @@ button.shelf-head-cell:hover {
    Flex rather than a grid, because the three data columns are fixed widths and
    the name takes the rest: a grid would have to be declared identically on the
    member rows and on the empty-folder row, and one of the three would drift. */
+/* The mark at `--space-8`, about the row's own height, where #2168 drew a
+   16px letter in a slot sized for 24. The headings
+   resolve the same value, so their left edges stay over the names. */
+.shelf-head,
+.shelf-row {
+  --entity-thumb: var(--space-8);
+}
+
 .shelf-row {
   display: flex;
   align-items: center;
@@ -5105,9 +5136,8 @@ button.shelf-head-cell:hover {
   color: rgba(var(--v-theme-on-background), 0.7);
 }
 
-/* The identity slot, sized to hold the ring's widest treatment: the mark is
-   24px and a `thick`/`double` ring stands 6px off it on every side. Anything
-   narrower clips the ring on the two rows that most need it read. */
+/* The identity slot: the mark plus 6px either side, which is how far its
+   version pill hangs past the corner. */
 .shelf-row-ident {
   position: relative;
   display: flex;
@@ -5117,31 +5147,33 @@ button.shelf-head-cell:hover {
   flex: none;
 }
 
-/* The box the deck ticks fill: the Type letter's own, so they peek out from
-   behind it. The letter is positioned so it paints over them in DOM order, and
-   the ticks take its corner rather than a picture tile's. */
+/* The box the deck ticks fill: the mark's own, so they peek out from behind
+   it. The mark is positioned so it paints over them in DOM order, and the
+   ticks take its corner rather than a picture tile's. */
 .shelf-row-mark {
   position: relative;
   display: inline-flex;
-  width: var(--gutter-glyph);
-  height: var(--gutter-glyph);
+  width: var(--entity-thumb);
+  height: var(--entity-thumb);
 }
 
-.shelf-row-mark .type-mark {
+/* A missing file's glyph, in the mark's place and at its size. */
+.shelf-row-gone {
   position: relative;
+  margin: auto;
+  font-size: var(--entity-thumb);
 }
 
 .shelf-row-mark :deep(.stick) {
   border-radius: var(--radius-sm);
 }
 
-/* The cover chip is the grid's (App.css), but a 24px mark is not a tile: it
+/* The cover chip is the grid's (App.css), but a row's mark is not a tile: it
    sits on the slot's own corner rather than inset from it, and straddles the
-   mark's bottom edge so the top of the face still shows. The slot plus the row
-   gap leave 48px before the name, and "COVER" at the grid's tracking and
-   padding measures up to 53px on DejaVu, so here it drops the tracking, takes
-   the hairline padding and starts in the row's own left padding: about 42px
-   at its widest, ending short of the name. The row's bottom padding (8px) is
+   mark's bottom edge so the top of the face still shows. It drops the grid's
+   tracking, takes the hairline padding and starts in the row's own left
+   padding, so it covers the mark's bottom-start corner and leaves the version
+   pill on the other one. The row's bottom padding (8px) is
    what keeps the 4px overhang out of `content-visibility`'s paint clip.
    Not hoverable, like the grid's: it overlaps the mark, whose own tooltip names
    the assignments, and the chip's tip still describes it to assistive tech. */
@@ -5275,7 +5307,8 @@ button.shelf-head-cell:hover {
 }
 
 /* The absence glyph leads the name line, because it changes what everything
-   after it means: the name is still true, the file behind it is not there. */
+   after it means: the name is still true, the file behind it is out of reach.
+   A file that is gone draws it in the mark's place instead. */
 .shelf-row-loc {
   flex: none;
 }

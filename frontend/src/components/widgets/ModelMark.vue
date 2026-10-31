@@ -9,7 +9,12 @@
        the row that says what the model is assigned to now that the column is
        gone (#904). -->
   <span class="mmark" :class="ringClass">
-    <Tooltip :text="ring?.label || ''" activator="parent" :describe="false" />
+    <Tooltip
+      v-if="!bare"
+      :text="ring?.label || ''"
+      activator="parent"
+      :describe="false"
+    />
     <span class="mmark-face" aria-hidden="true">
       <!-- KEYED on the URL, so each candidate in the fallback chain gets its
            own element. Reusing one element across two srcs is what makes an
@@ -122,7 +127,7 @@
     <!-- The full stop is load-bearing: this text is concatenated into the
          cell's accessible name, and without a separator it runs into whatever
          the next cell says. -->
-    <span v-if="ring" class="visually-hidden">{{ ring.label }}. </span>
+    <span v-if="ring && !bare" class="visually-hidden">{{ ring.label }}. </span>
   </span>
 </template>
 
@@ -187,6 +192,12 @@ const props = defineProps({
    * name already.
    */
   named: { type: Boolean, default: false },
+  /**
+   * Borrow the ring's face (step 2 and 3 of `faceUrl`) but draw no ring, no
+   * tooltip and no label: for a host that says who the model belongs to
+   * elsewhere on the row (the shelf's list, #2168).
+   */
+  bare: { type: Boolean, default: false },
 });
 
 const iconUrl = computed(() =>
@@ -301,7 +312,7 @@ const showVersion = computed(
 );
 
 const ringClass = computed(() =>
-  props.ring ? `mmark--ring mmark--${props.ring.style}` : "",
+  props.ring && !props.bare ? `mmark--ring mmark--${props.ring.style}` : "",
 );
 </script>
 
