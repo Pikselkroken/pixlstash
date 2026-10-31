@@ -44,7 +44,6 @@ async function pickPictures(api) {
         ids: picked.map((f) => f.picture_id),
         personId: person.id,
         personName: person.name,
-        personProjectIds: person.project_ids ?? [],
         faceIds: picked.map((f) => f.id),
       }
     }
@@ -60,15 +59,8 @@ async function createSet(api, name, pictureIds = []) {
   return set
 }
 
-/**
- * A throwaway person in the fixture person's projects. A person's row counts
- * their pictures inside the branch it sits in (#2448), so the throwaway is
- * filed where the three pictures are.
- */
 async function createPerson(api) {
-  const { character } = await ok(await api.post(`${API}/characters`, {
-    data: { name: `${PREFIX} person`, project_ids: pics.personProjectIds },
-  }))
+  const { character } = await ok(await api.post(`${API}/characters`, { data: { name: `${PREFIX} person` } }))
   return character
 }
 
@@ -254,7 +246,10 @@ test.describe('bulk actions on a selection (#2324)', () => {
     await page.keyboard.press('Escape')
     await page.keyboard.press('Escape')
     await expect(grid.selectionMenuPanel).toBeHidden()
-    await expect(sidebar.count(sidebar.projectRow(project.name))).toHaveText('3')
+    await sidebar.openScopeMenu()
+    await expect(
+      sidebar.scopeMenu.getByRole('menuitemradio', { name: new RegExp(project.name) }),
+    ).toContainText('3')
   })
 
   // The menus' "Remove from <group>" row is the Scrapheap's Restore now; in a

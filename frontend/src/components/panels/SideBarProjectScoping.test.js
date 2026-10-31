@@ -170,22 +170,32 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("the docked rail's tree (#2448)", () => {
-  /** The rail's node buttons, by their accessible names. */
-  function railNodeNames(wrapper) {
+describe("the docked rail (#2448)", () => {
+  /** The rail's buttons, by their accessible names. */
+  function railNames(wrapper) {
     return wrapper
       .findAll(".sidebar-collapsed-item")
       .map((b) => b.attributes("aria-label"));
   }
 
-  it("offers the owner one button per project, then Not in a project", async () => {
+  it("offers the owner the dropdown, People and Sets in Library, a folder each in Folders", async () => {
     const wrapper = mountSidebar({ docked: true });
     await refreshAndSettle(wrapper);
-    const names = railNodeNames(wrapper);
-    expect(names).toEqual(
-      expect.arrayContaining(["Book", "Cards", "Not in a project"]),
+    expect(railNames(wrapper)).toEqual(
+      expect.arrayContaining([
+        "Showing Library. Switch to Folders",
+        "Any project",
+        "People",
+        "Sets",
+      ]),
     );
-    expect(names).toContain("Showing Library. Switch to Folders");
+    wrapper.vm.setTreeMode("folders");
+    await flushPromises();
+    expect(railNames(wrapper)).toEqual(
+      expect.arrayContaining(["Book", "Cards", "Global", "Unassigned"]),
+    );
+    expect(railNames(wrapper)).not.toContain("Any project");
+    wrapper.vm.setTreeMode("library");
     wrapper.unmount();
   });
 
@@ -195,10 +205,13 @@ describe("the docked rail's tree (#2448)", () => {
       scopeSessionTo(resourceType);
       const wrapper = mountSidebar({ docked: true });
       await flushPromises();
-      expect(
-        railNodeNames(wrapper),
-        `a ${resourceType}-scoped token was still offered the tree`,
-      ).not.toContain("Not in a project");
+      const names = railNames(wrapper);
+      expect(names, `a ${resourceType}-scoped token was offered the dropdown`).not.toContain(
+        "Any project",
+      );
+      expect(names, `a ${resourceType}-scoped token was offered the switch`).not.toContain(
+        "Showing Library. Switch to Folders",
+      );
       wrapper.unmount();
     }
   });
@@ -208,25 +221,22 @@ describe("the docked rail's tree (#2448)", () => {
     sessionContext.value = { scope: "READ", resource_type: null };
     const wrapper = mountSidebar({ docked: true });
     await refreshAndSettle(wrapper);
-    expect(railNodeNames(wrapper)).toContain("Book");
+    expect(railNames(wrapper)).toContain("Any project");
     wrapper.unmount();
   });
 
-  it("opens a node's one-level flyout, and a person in it opens in that project", async () => {
+  it("chooses a project from the dropdown's flyout", async () => {
     const wrapper = mountSidebar({ docked: true });
     await refreshAndSettle(wrapper);
-    const book = wrapper
+    const scope = wrapper
       .findAll(".sidebar-collapsed-item")
-      .find((b) => b.attributes("aria-label") === "Book");
-    await book.trigger("click");
-    expect(wrapper.vm.railFlyout.node.projectId).toBe(3);
-
-    wrapper.vm.pickRailEntry(() =>
-      wrapper.vm.inScope(3, () => wrapper.vm.selectCharacter(1, "Ada")),
-    );
-    expect(wrapper.emitted("select-character").at(-1)[0].projectContext).toEqual(
-      { mode: "project", projectId: 3 },
-    );
+      .find((b) => b.attributes("aria-label") === "Any project");
+    await scope.trigger("click");
+    const book = wrapper.vm.railFlyout.items.find((i) => i.label === "Book");
+    wrapper.vm.pickRailEntry(book.run);
+    const [payload] = wrapper.emitted("select-character").at(-1);
+    expect(payload.id).toBe("ALL");
+    expect(payload.projectContext).toEqual({ mode: "project", projectId: 3 });
     expect(wrapper.vm.railFlyout).toBeNull();
     wrapper.unmount();
   });
@@ -298,21 +308,25 @@ describe("the sidebar's project reads", () => {
   });
 });
 
-describe("the Library tree (#2448)", () => {
-  /** Open a branch the way a person does, by its chevron. */
-  async function openBranch(wrapper, testId, index = 0) {
-    const row = wrapper.findAll(`[data-testid="${testId}"]`)[index];
-    await row.find(".sidebar-branch-toggle").trigger("click");
-  }
+describe("the project dropdown under the switch (#2159, #2448)", () => {
+  it("shows in Library mode only, with each project's count", async () => {
+    const wrapper = mountSidebar();
+    await refreshAndSettle(wrapper);
+    expect(wrapper.findComponent({ name: "SidebarScopeSlot" }).exists()).toBe(true);
+    expect(wrapper.vm.scopeCounts.byId).toMatchObject({ 3: 118, 4: 0 });
 
-  it("lands on All media in the project whose row is chosen", async () => {
+    wrapper.vm.setTreeMode("folders");
+    await flushPromises();
+    expect(wrapper.findComponent({ name: "SidebarScopeSlot" }).exists()).toBe(false);
+    wrapper.vm.setTreeMode("library");
+    wrapper.unmount();
+  });
+
+  it("navigates to All media in the project chosen", async () => {
     const wrapper = mountSidebar();
     await refreshAndSettle(wrapper);
 
-    const book = wrapper.findAll('[data-testid="sidebar-project-row"]')[0];
-    expect(book.text()).toContain("Book");
-    expect(book.text()).toContain("118");
-    await book.trigger("click");
+    wrapper.vm.chooseScope(3);
     const [payload] = wrapper.emitted("select-character").at(-1);
     expect(payload.id).toBe("ALL");
     expect(payload.projectContext).toEqual({ mode: "project", projectId: 3 });
@@ -324,7 +338,7 @@ describe("the Library tree (#2448)", () => {
     const wrapper = mountSidebar();
     await refreshAndSettle(wrapper);
 
-    await wrapper.find('[data-testid="sidebar-no-project-row"]').trigger("click");
+    wrapper.vm.chooseScope("none");
     expect(wrapper.emitted("select-character").at(-1)[0].projectContext).toEqual(
       { mode: "project", projectId: null },
     );
@@ -337,36 +351,16 @@ describe("the Library tree (#2448)", () => {
     wrapper.unmount();
   });
 
-  it("opens a person in the branch it is clicked in, not the current scope", async () => {
-    // Ada is in no project. Seen from project 4, her row under Not in a
-    // project opens all of her: that branch names people with no project,
-    // whose pictures may sit in projects, so it lends no project scope.
+  it("narrows People to the scope and opens a person inside it", async () => {
+    // Ada is in no project: listed under Any project and Not in a project,
+    // not in project 4, and seen from a scope she opens inside it.
     const wrapper = mountSidebar();
     await refreshAndSettle(wrapper);
+    expect(wrapper.vm.libraryBranches[0].characters.map((c) => c.id)).toEqual([1]);
+
     wrapper.vm.chooseScope(4);
-    await openBranch(wrapper, "sidebar-no-project-row");
-
-    // The name sits in a Tooltip's slot, which the shallow mount stubs; the
-    // row's own tooltip names it.
-    const ada = wrapper
-      .findAll(".sidebar-character-group > .sidebar-list-item")
-      .find((row) =>
-        row
-          .findAll("tooltip-stub")
-          .some((t) => String(t.attributes("text")).startsWith("Ada")),
-      );
-    await ada.trigger("click");
-    expect(wrapper.emitted("select-character").at(-1)[0].projectContext).toEqual(
-      { mode: "global", projectId: null },
-    );
-
-    wrapper.unmount();
-  });
-
-  it("opens a person inside the scope when no branch lends one", async () => {
-    const wrapper = mountSidebar();
-    await refreshAndSettle(wrapper);
-    wrapper.vm.chooseScope(4);
+    await flushPromises();
+    expect(wrapper.vm.libraryBranches[0].characters).toEqual([]);
 
     wrapper.vm.selectCharacter(1, "Ada");
     expect(wrapper.emitted("select-character").at(-1)[0].projectContext).toEqual(
@@ -471,13 +465,14 @@ describe("Open in file manager on a Folders row (#2448)", () => {
 });
 
 describe("Find in library (#2448)", () => {
-  it("keeps only the branches holding a match, and Enter opens the first", async () => {
+  it("keeps only the names that match, and Enter opens the first", async () => {
     const wrapper = mountSidebar();
     await refreshAndSettle(wrapper);
     await wrapper.find('[data-testid="sidebar-find"]').setValue("ad");
 
-    const projectRows = wrapper.findAll('[data-testid="sidebar-project-row"]');
-    expect(projectRows).toHaveLength(0);
+    expect(wrapper.vm.libraryBranches[0].characters.map((c) => c.name)).toEqual([
+      "Ada",
+    ]);
     expect(wrapper.find(".sidebar-find-line").text()).toContain("1 match");
 
     await wrapper
@@ -494,15 +489,17 @@ describe("Find in library (#2448)", () => {
     wrapper.unmount();
   });
 
-  it("underlines a project that matches by name and dims none of it", async () => {
+  it("underlines a Folders project that matches by name", async () => {
     const wrapper = mountSidebar();
     await refreshAndSettle(wrapper);
+    wrapper.vm.setTreeMode("folders");
     await wrapper.find('[data-testid="sidebar-find"]').setValue("boo");
 
-    const rows = wrapper.findAll('[data-testid="sidebar-project-row"]');
+    const rows = wrapper.findAll('[data-testid="sidebar-folder-project"]');
     expect(rows).toHaveLength(1);
     expect(rows[0].find(".sidebar-find-mark").text()).toBe("Boo");
     expect(rows[0].classes()).not.toContain("sidebar-row--dim");
+    wrapper.vm.setTreeMode("library");
     wrapper.unmount();
   });
 

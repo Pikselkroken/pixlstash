@@ -142,17 +142,9 @@ test.describe('deep links: cold loads', () => {
 
     await page.goto(`/project/${character.project_id}/character/${character.id}`)
     await grid.waitForLoaded()
-    // The project's branch opens in place, and the person lights inside it.
-    await expect(sidebar.projectRow(project.name)).toHaveAttribute(
-      'aria-expanded',
-      'true',
-    )
+    await expect(sidebar.scopeButton).toContainText(project.name)
     await expect(
-      sidebar
-        .branch(project.name)
-        .locator('.sidebar-character-group > .sidebar-list-item')
-        .filter({ hasText: character.name })
-        .first(),
+      sidebar.characterItems.filter({ hasText: character.name }).first(),
     ).toHaveClass(/active/)
     expect(members).toEqual(expect.arrayContaining(await cardIds(page)))
     expect(await gridSize(page)).toBe(`${members.length} of ${members.length}`)

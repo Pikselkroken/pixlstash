@@ -15,6 +15,7 @@ import CharacterEditor from "../editors/CharacterEditor.vue";
 import PictureSetEditor from "../editors/PictureSetEditor.vue";
 import ProjectEditor from "../editors/ProjectEditor.vue";
 import ProjectFiles from "./ProjectFiles.vue";
+import SidebarScopeSlot from "./SidebarScopeSlot.vue";
 import SidebarResizeHandle from "./SidebarResizeHandle.vue";
 import UserSettingsDialog from "../settings/UserSettingsDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
@@ -2699,10 +2700,10 @@ const findInputRef = ref(null);
 const isFinding = computed(() => findQuery.value.trim() !== "");
 
 /**
- * Does a row in this branch stand for what the grid shows? In a project's
- * scope, only that project's branch. With no scope (a deep link to a person,
- * say), a person or set lights in its own project's branch, `entity` being
- * the row's character or set.
+ * Does a Folders row stand for what the grid shows? In a project's scope, only
+ * the rows under that project. With no scope (a deep link to a person, say),
+ * a person or set lights under its own project, `entity` being the row's
+ * character or set. `undefined` is the Library list, which is the scope.
  */
 function branchIsScope(projectId, entity = null) {
   if (projectId === undefined) return true;
@@ -2712,7 +2713,7 @@ function branchIsScope(projectId, entity = null) {
   return entity != null && (entity.project_id ?? null) === projectId;
 }
 
-/** The branch the selection lives in, by the rule above; undefined if none. */
+/** The Folders branch the selection lives in, by the rule above. */
 const selectionBranchId = computed(() => {
   if (projectViewMode.value === "project") return selectedProjectId.value ?? null;
   const setId = selectedSetIdSet.value.values().next().value;
@@ -2726,34 +2727,38 @@ const selectionBranchId = computed(() => {
 });
 
 /**
- * A person's count as their row opens them (read off the list rows, which
- * carry both scopes): the whole library for a flat list or Library's Not in a
- * project, and inside the project otherwise. The list only carries the
- * project-scoped number for their own project (or for "in no project"), so
- * in another project it is blank, not wrong.
+ * A person's count in a scope (read off the list rows, which carry both): the
+ * whole library with no project scope, and inside the project otherwise. The
+ * list only carries the project-scoped number for the person's own project
+ * (or for "in no project"), so in another project it is blank, not wrong.
  */
-function personCountIn(navScope, char) {
-  if (navScope === undefined || navScope === WHOLE_LIBRARY)
-    return char.image_count ?? "";
-  if ((char.project_id ?? null) !== navScope) return "";
+function personCountIn(scope, char) {
+  if (scope === undefined) return char.image_count ?? "";
+  if ((char.project_id ?? null) !== scope) return "";
   return char.project_image_count ?? "";
 }
 
-function makeBranch(key, projectId, project, alwaysOpen = false) {
-  const header = projectId !== undefined;
-  const allChars = header
-    ? sortedCharacters.value.filter((c) => inProjectBranch(c, projectId))
-    : sortedCharacters.value;
-  const allSets = header
-    ? nonReferenceSets.value.filter((s) => inProjectBranch(s, projectId))
-    : nonReferenceSets.value;
+/** The dropdown's scope as a filter: undefined for Any project, null for
+ * Not in a project, else the project's id. */
+const libraryScope = computed(() =>
+  projectViewMode.value !== "project" ? undefined : (selectedProjectId.value ?? null),
+);
+
+/**
+ * Library mode's People and Sets: everyone in the dropdown's scope, narrowed
+ * by Find. One list, as it shipped; a share token for a person or set gets the
+ * same list without the switch or the dropdown.
+ */
+function makeLibraryList(scope) {
+  const inScope = (e) => scope === undefined || inProjectBranch(e, scope);
+  const allChars = sortedCharacters.value.filter(inScope);
+  const allSets = nonReferenceSets.value.filter(inScope);
   const query = findQuery.value;
   const finding = isFinding.value;
-  const match = finding && project ? findMatch(project.name, query) : null;
   const chars = finding
     ? allChars.filter((c) => findMatch(c.name, query))
     : allChars;
-  // While finding, a matched set is drawn flat in SETS, not under a parent
+  // While finding, a matched set is drawn flat in Sets, not under a parent
   // the search did not open.
   const sets = finding
     ? allSets
@@ -2783,48 +2788,33 @@ function makeBranch(key, projectId, project, alwaysOpen = false) {
     };
   });
   return {
-    key,
-    projectId,
-    // Where its rows open. Not in a project names people and sets with no
-    // project, so they open whole, as the flat lists did: their pictures may
-    // well sit in projects.
-    navScope: projectId === null ? WHOLE_LIBRARY : projectId,
-    project,
-    header,
-    label: project ? project.name : "Not in a project",
-    open:
-      !header ||
-      (finding
-        ? chars.length + sets.length > 0
-        : alwaysOpen || isTreeOpen(key)),
-    hidden: finding && !match && chars.length + sets.length === 0,
-    match,
-    dim: finding && !match,
+    key: "library",
+    // Rows light by the scope itself, and open in it.
+    projectId: undefined,
+    countScope: scope,
+    // The "+" acts on the scope's project: undefined and null create.
+    addProjectId: scope,
     characters: chars,
     sets,
-    peopleTotal: allChars.length,
-    setsTotal: allSets.length,
     rowsByCharacter,
     setSections,
     childCount: (charId) => tree.byCharacter.get(Number(charId))?.length ?? 0,
   };
 }
 
-// Library mode: each project, then Not in a project. A share token for a
-// person or set gets one headless branch, its old flat list. A library with
-// no projects yet keeps Not in a project open: it is the whole library.
-const libraryBranches = computed(() => {
-  if (!showsTree.value) return [makeBranch("all", undefined, null)];
-  const branches = sortedProjects.value.map((p) =>
-    makeBranch(`p:${p.id}`, p.id, p),
-  );
-  if (scopedResourceType.value !== "project") {
-    branches.push(
-      makeBranch("p:none", null, null, sortedProjects.value.length === 0),
-    );
-  }
-  return branches.filter((b) => !b.hidden);
-});
+const libraryBranches = computed(() => [makeLibraryList(libraryScope.value)]);
+
+// The Library list wears a faint wash of the scoped project's colour; the
+// dropdown carries the stronger tint.
+const scopeWashStyle = computed(() => washStyle(scopedProjectObj.value?.id));
+
+// What the dropdown shows: Any project's and Not in a project's numbers, and
+// each project's.
+const scopeCounts = computed(() => ({
+  any: categoryCounts.value[ALL_PICTURES_ID],
+  none: notInProjectCount.value,
+  byId: projectCounts.value,
+}));
 
 // Folders mode: the DEFAULT_LAYOUT tree.
 const folderRows = computed(() =>
@@ -2926,30 +2916,16 @@ function findParts(name) {
   );
 }
 
-// A project's branch carries a faint wash of its colour, as the scope did.
+// A project's rows carry a faint wash of its colour.
 function washStyle(projectId) {
   return projectId != null
     ? { "--wash": `color-mix(in srgb, ${projectColor(projectId)} 6%, transparent)` }
     : null;
 }
 
-function branchWashStyle(branch) {
-  return branch.project && branch.open ? washStyle(branch.projectId) : null;
-}
-
 function folderWashStyle(row) {
   if (row.kind === "project") return row.open ? washStyle(row.projectId) : null;
   return row.depth > 0 ? washStyle(row.projectId) : null;
-}
-
-/** The project row is "all of the project": lit on All media in its scope. */
-function branchRowActive(branch) {
-  return isAllPicturesRowActive.value && branchIsScope(branch.projectId);
-}
-
-function branchCount(branch) {
-  if (branch.project) return projectCounts.value[branch.projectId] ?? "";
-  return notInProjectCount.value ?? "";
 }
 
 // Every match, in the order drawn, as the navigation it opens.
@@ -2960,15 +2936,12 @@ const findMatches = computed(() => {
       .filter((row) => row.match)
       .map((row) => () => openFolderRow(row));
   }
-  const out = [];
-  for (const branch of libraryBranches.value) {
-    if (branch.match) out.push(() => openProjectBranch(branch.projectId));
-    for (const c of branch.characters)
-      out.push(() => inScope(branch.navScope, () => selectCharacter(c.id, c.name)));
-    for (const s of branch.sets)
-      out.push(() => openSetRow(s));
-  }
-  return out;
+  // Library: the people and sets of the dropdown's scope, opened in it.
+  const [list] = libraryBranches.value;
+  return [
+    ...list.characters.map((c) => () => selectCharacter(c.id, c.name)),
+    ...list.sets.map((s) => () => selectSet(s.id, s.name)),
+  ];
 });
 
 function matchCountLabel(n) {
@@ -3013,15 +2986,13 @@ function expandToFind() {
   nextTick(() => findInputRef.value?.focus());
 }
 
-// The branch holding the selection is forced open: a project chosen from
-// anywhere (a row, Back, a deep link) opens in place in both trees.
+// The Folders branch holding the selection is forced open: a project chosen
+// from anywhere (the dropdown, Back, a deep link) opens in place there.
 watch(
   selectionBranchId,
   (id) => {
     if (id === undefined) return;
-    expandTreeKeys(
-      id == null ? ["p:none", "f:global"] : [`p:${id}`, `f:p:${id}`],
-    );
+    expandTreeKeys([id == null ? "f:global" : `f:p:${id}`]);
   },
   { immediate: true },
 );
@@ -3038,35 +3009,103 @@ function projectInitial(project) {
   return (project?.name || "?").trim().charAt(0).toUpperCase() || "?";
 }
 
+/** A Folders node's flyout: all of it, then its people and sets. */
+function folderNodeItems(node) {
+  const people = sortedCharacters.value.filter((c) =>
+    inProjectBranch(c, node.projectId),
+  );
+  const sets = nonReferenceSets.value.filter((pset) =>
+    inProjectBranch(pset, node.projectId),
+  );
+  return [
+    { key: "all", label: `All of ${node.label}`, run: () => openProjectBranch(node.projectId) },
+    ...(people.length ? [{ key: "h-people", section: "People" }] : []),
+    ...people.map((c) => ({
+      key: `c-${c.id}`,
+      label: c.name,
+      run: () => inScope(node.projectId, () => selectCharacter(c.id, c.name)),
+    })),
+    ...(sets.length ? [{ key: "h-sets", section: "Sets" }] : []),
+    ...sets.map((pset) => ({
+      key: `s-${pset.id}`,
+      label: pset.name,
+      run: () => openSetRow(pset),
+    })),
+  ];
+}
+
+/** The dropdown on the rail: Limit view to, as the expanded one offers it. */
+function scopeNodeItems() {
+  const scope = libraryScope.value;
+  return [
+    { key: "h", section: "Limit view to" },
+    { key: "any", label: "Any project", checked: scope === undefined, run: () => chooseScope("any") },
+    ...sortedProjects.value.map((p) => ({
+      key: `p-${p.id}`,
+      label: p.name,
+      checked: scope === p.id,
+      run: () => chooseScope(p.id),
+    })),
+    { key: "none", label: "Not in a project", checked: scope === null, run: () => chooseScope("none") },
+  ];
+}
+
 const railNodes = computed(() => {
+  if (treeMode.value === "library") {
+    const [list] = libraryBranches.value;
+    const nodes = [];
+    // A project token has one project to see, so no dropdown.
+    if (scopedResourceType.value !== "project") {
+      nodes.push({
+        key: "r:scope",
+        kind: "scope",
+        label: scopedProjectObj.value?.name ?? (libraryScope.value === null ? "Not in a project" : "Any project"),
+        project: scopedProjectObj.value,
+        icon: libraryScope.value === null ? "mdi-folder-off-outline" : "mdi-folder-multiple-outline",
+        items: scopeNodeItems,
+      });
+    }
+    nodes.push(
+      {
+        key: "r:people",
+        kind: "people",
+        label: "People",
+        icon: "mdi-account-multiple-outline",
+        items: () =>
+          list.characters.map((c) => ({
+            key: `c-${c.id}`,
+            label: c.name,
+            run: () => selectCharacter(c.id, c.name),
+          })),
+      },
+      {
+        key: "r:sets",
+        kind: "sets",
+        label: "Sets",
+        icon: "mdi-image-album",
+        items: () =>
+          list.sets.map((pset) => ({
+            key: `s-${pset.id}`,
+            label: pset.name,
+            run: () => selectSet(pset.id, pset.name),
+          })),
+      },
+    );
+    return nodes;
+  }
   const nodes = sortedProjects.value.map((p) => ({
     key: `r:p:${p.id}`,
+    kind: "folder",
     projectId: p.id,
     project: p,
     label: p.name,
-    count: projectCounts.value[p.id] ?? "",
   }));
-  if (scopedResourceType.value === "project") return nodes;
-  if (treeMode.value === "library") {
-    nodes.push({
-      key: "r:none",
-      projectId: null,
-      navScope: WHOLE_LIBRARY,
-      label: "Not in a project",
-      icon: "mdi-folder-off-outline",
-      count: notInProjectCount.value ?? "",
-    });
-  } else {
+  if (scopedResourceType.value !== "project") {
     nodes.push(
-      {
-        key: "r:global",
-        projectId: null,
-        label: "Global",
-        icon: "mdi-earth",
-        count: notInProjectCount.value ?? "",
-      },
+      { key: "r:global", kind: "folder", projectId: null, label: "Global", icon: "mdi-earth" },
       {
         key: "r:unassigned",
+        kind: "unassigned",
         projectId: null,
         label: "Unassigned",
         icon: "mdi-folder-question-outline",
@@ -3074,14 +3113,22 @@ const railNodes = computed(() => {
       },
     );
   }
+  for (const node of nodes) {
+    if (node.kind === "folder") node.items = () => folderNodeItems(node);
+  }
   return nodes;
 });
 
 function railNodeActive(node) {
-  if (!selectionOwnsHighlight.value || !branchIsScope(node.projectId))
-    return false;
-  const onUnassigned =
-    selectionStore.selectedCharacter === UNASSIGNED_PICTURES_ID;
+  if (!selectionOwnsHighlight.value) return false;
+  const character = selectionStore.selectedCharacter;
+  if (node.kind === "scope")
+    return isAllPicturesRowActive.value && projectViewMode.value === "project";
+  if (node.kind === "people")
+    return Number.isFinite(Number(character)) && selectedSetIdSet.value.size === 0;
+  if (node.kind === "sets") return selectedSetIdSet.value.size > 0;
+  if (!branchIsScope(node.projectId)) return false;
+  const onUnassigned = character === UNASSIGNED_PICTURES_ID;
   return node.leaf ? onUnassigned : !onUnassigned;
 }
 
@@ -3121,17 +3168,10 @@ function openRailNode(node, event) {
     // Kept on screen: the flyout scrolls past 70% of the window's height.
     top: Math.max(8, Math.min(rect.top, window.innerHeight * 0.3 - 8)),
     left: rect.right + 4,
-    people: sortedCharacters.value.filter((c) =>
-      inProjectBranch(c, node.projectId),
-    ),
-    sets: nonReferenceSets.value.filter((s) =>
-      inProjectBranch(s, node.projectId),
-    ),
+    items: node.items(),
   };
   document.addEventListener("pointerdown", onRailOutsidePointer, true);
-  nextTick(() =>
-    railFlyoutRef.value?.querySelector('[role="menuitem"]')?.focus(),
-  );
+  nextTick(() => railFlyoutRef.value?.querySelector(".ctx-item")?.focus());
 }
 
 function pickRailEntry(open) {
@@ -4577,59 +4617,36 @@ defineExpose({
               :style="{ top: railFlyout.top + 'px', left: railFlyout.left + 'px' }"
               @keydown="onRailFlyoutKeydown"
             >
-              <div class="section-label ctx-label" role="presentation">
-                {{ railFlyout.node.label }}
-                <span class="sidebar-rail-flyout-count">{{
-                  railFlyout.node.count
-                }}</span>
-              </div>
-              <button
-                type="button"
-                role="menuitem"
-                tabindex="-1"
-                class="ctx-item"
-                @click="pickRailEntry(() => openProjectBranch(railFlyout.node.projectId))"
+              <template v-for="item in railFlyout.items" :key="item.key">
+                <div
+                  v-if="item.section"
+                  class="section-label ctx-label"
+                  role="presentation"
+                >
+                  {{ item.section }}
+                </div>
+                <button
+                  v-else
+                  type="button"
+                  :role="item.checked === undefined ? 'menuitem' : 'menuitemradio'"
+                  :aria-checked="
+                    item.checked === undefined ? undefined : String(item.checked)
+                  "
+                  tabindex="-1"
+                  class="ctx-item"
+                  @click="pickRailEntry(item.run)"
+                >
+                  <span class="ctx-label-text">{{ item.label }}</span>
+                  <v-icon v-if="item.checked" class="ctx-check">mdi-check</v-icon>
+                </button>
+              </template>
+              <div
+                v-if="!railFlyout.items.length"
+                class="section-label ctx-label"
+                role="presentation"
               >
-                <span class="ctx-label-text">All of {{ railFlyout.node.label }}</span>
-              </button>
-              <template v-if="railFlyout.people.length">
-                <div class="section-label ctx-label" role="presentation">People</div>
-                <button
-                  v-for="char in railFlyout.people"
-                  :key="`c-${char.id}`"
-                  type="button"
-                  role="menuitem"
-                  tabindex="-1"
-                  class="ctx-item"
-                  @click="
-                    pickRailEntry(() =>
-                      inScope(railFlyout.node.navScope ?? railFlyout.node.projectId, () =>
-                        selectCharacter(char.id, char.name),
-                      ),
-                    )
-                  "
-                >
-                  <span class="ctx-label-text">{{ char.name }}</span>
-                </button>
-              </template>
-              <template v-if="railFlyout.sets.length">
-                <div class="section-label ctx-label" role="presentation">Sets</div>
-                <button
-                  v-for="pset in railFlyout.sets"
-                  :key="`s-${pset.id}`"
-                  type="button"
-                  role="menuitem"
-                  tabindex="-1"
-                  class="ctx-item"
-                  @click="
-                    pickRailEntry(() =>
-                      openSetRow(pset),
-                    )
-                  "
-                >
-                  <span class="ctx-label-text">{{ pset.name }}</span>
-                </button>
-              </template>
+                Nothing here yet
+              </div>
             </div>
           </Teleport>
         </div>
@@ -4862,82 +4879,30 @@ defineExpose({
             {{ sidebarError }}
           </div>
 
-          <!-- Library: each project opens in place, holding its PEOPLE and
-               SETS, then Not in a project. Rows keep their entity
-               behaviour; a row opens in its own branch's project. -->
+          <!-- Library (#2448): the project dropdown that shipped in the header
+               slot (#2159), moved under the switch, over the People and Sets
+               it narrows. A project token has one project to see, so no
+               dropdown; a person or set token has no switch either. -->
           <template v-if="treeMode === 'library' || !showsTree">
+            <SidebarScopeSlot
+              v-if="showsTree && scopedResourceType !== 'project'"
+              :projects="sortedProjects"
+              :mode="projectViewMode"
+              :project-id="selectedProjectId"
+              :counts="scopeCounts"
+              :read-only="isReadOnly"
+              @choose="chooseScope"
+              @new-project="createProject"
+              @edit-project="openProjectEditor"
+              @project-menu="(p, e) => openSidebarCtxMenu('project', p, e)"
+            />
             <div
               v-for="branch in libraryBranches"
               :key="branch.key"
-              :class="['sidebar-branch', { 'sidebar-branch--open': branch.open }]"
-              :style="branchWashStyle(branch)"
+              class="sidebar-branch"
+              :style="scopeWashStyle"
             >
-              <div
-                v-if="branch.header"
-                :class="[
-                  'sidebar-list-item',
-                  'sidebar-branch-row',
-                  {
-                    active: branchRowActive(branch),
-                    'sidebar-row--dim': branch.dim,
-                  },
-                ]"
-                role="button"
-                tabindex="0"
-                :aria-expanded="String(branch.open)"
-                :aria-current="branchRowActive(branch) ? 'page' : undefined"
-                :data-testid="branch.project ? 'sidebar-project-row' : 'sidebar-no-project-row'"
-                @click="openProjectBranch(branch.projectId)"
-                @keydown="onTreeRowKeydown(branch.key, 1, $event)"
-                @contextmenu.prevent="
-                  branch.project
-                    ? openSidebarCtxMenu('project', branch.project, $event)
-                    : openSidebarCtxMenu('empty', null, $event)
-                "
-              >
-                <span class="ps-row-glyph">
-                  <button
-                    type="button"
-                    class="sidebar-branch-toggle"
-                    tabindex="-1"
-                    :aria-label="`${branch.open ? 'Close' : 'Open'} ${branch.label}`"
-                    @click.stop="toggleTreeKey(branch.key)"
-                  >
-                    <v-icon size="16">{{
-                      branch.open ? "mdi-chevron-down" : "mdi-chevron-right"
-                    }}</v-icon>
-                  </button>
-                </span>
-                <span class="sidebar-list-icon">
-                  <span
-                    v-if="branch.project"
-                    class="sidebar-project-tile"
-                    :style="{ '--tile-color': projectColor(branch.project.id) }"
-                    aria-hidden="true"
-                    >{{ projectInitial(branch.project) }}</span
-                  >
-                  <v-icon v-else size="16">mdi-folder-off-outline</v-icon>
-                </span>
-                <span class="sidebar-list-label">
-                  <span class="sidebar-list-label-text"
-                    ><template v-for="part in [findParts(branch.label)]" :key="0"
-                            >{{ part.before
-                            }}<mark v-if="part.match" class="sidebar-find-mark">{{
-                              part.match
-                            }}</mark>{{ part.after }}</template
-                          ></span>
-                </span>
-                <span
-                  v-if="branch.project && sharedProjectIds.has(branch.project.id)"
-                  class="sidebar-character-actions"
-                >
-                  <v-icon class="sidebar-shared-icon" size="11"
-                    >mdi-link-variant</v-icon
-                  >
-                </span>
-                <span class="sidebar-list-count">{{ branchCount(branch) }}</span>
-              </div>
-              <div v-if="branch.open" class="sidebar-branch-body">
+              <div>
               <div
                 v-if="
                   scopedResourceType !== 'picture_set' &&
@@ -4952,9 +4917,6 @@ defineExpose({
                   "
                 >
                   <span class="sidebar-section-title">People</span>
-                  <span v-if="branch.header" class="sidebar-section-count">{{
-                    branch.peopleTotal
-                  }}</span>
                   <span
                     v-if="!isReadOnly"
                     class="sidebar-header-actions sidebar-move-to-project-wrap"
@@ -4962,17 +4924,17 @@ defineExpose({
                     <button
                       type="button"
                       class="sidebar-section-add"
-                      :aria-label="sectionAddLabel('people', branch.projectId)"
-                      :aria-haspopup="branch.projectId != null ? 'menu' : undefined"
+                      :aria-label="sectionAddLabel('people', branch.addProjectId)"
+                      :aria-haspopup="branch.addProjectId != null ? 'menu' : undefined"
                       :aria-expanded="
-                        branch.projectId != null ? characterMoveMenuOpen : undefined
+                        branch.addProjectId != null ? characterMoveMenuOpen : undefined
                       "
                       @click.stop="
-                        addFromSectionHead('people', branch.projectId, $event)
+                        addFromSectionHead('people', branch.addProjectId, $event)
                       "
                     >
                       <Tooltip
-                        :text="sectionAddLabel('people', branch.projectId)"
+                        :text="sectionAddLabel('people', branch.addProjectId)"
                         activator="parent"
                         :describe="false"
                       />
@@ -4982,7 +4944,7 @@ defineExpose({
                 </div>
                 <div class="sidebar-section-scroll">
                   <div
-                    v-if="!branch.header && branch.characters.length === 0"
+                    v-if="!isFinding && branch.characters.length === 0"
                     class="sidebar-collections-help-row"
                   >
                     <span class="sidebar-collections-help"
@@ -5030,9 +4992,7 @@ defineExpose({
                           : 'false'
                       "
                       @click="
-                        inScope(branch.navScope, () =>
-                          selectCharacter(char.id, char.name || 'Character', $event),
-                        )
+                        selectCharacter(char.id, char.name || 'Character', $event)
                       "
                       :aria-expanded="
                         branch.childCount(char.id)
@@ -5144,7 +5104,7 @@ defineExpose({
                           <span v-if="isCountNew(char.id)" class="sidebar-new-tag"
                             >new</span
                           >
-                          <span>{{ personCountIn(branch.navScope, char) }}</span>
+                          <span>{{ personCountIn(branch.countScope, char) }}</span>
                         </span>
                       </span>
                     </div>
@@ -5184,7 +5144,7 @@ defineExpose({
                       "
                       :aria-expanded="row.childCount ? String(row.expanded) : undefined"
                       @click="
-                        openSetRow(row.set, $event)
+                        selectSet(row.set.id, row.set.name || 'Picture Set', $event)
                       "
                       @keydown="
                         onTreeRowKeydown(`s:${row.set.id}`, row.childCount, $event)
@@ -5340,9 +5300,6 @@ defineExpose({
                   "
                 >
                   <span class="sidebar-section-title">Sets</span>
-                  <span v-if="branch.header" class="sidebar-section-count">{{
-                    branch.setsTotal
-                  }}</span>
                   <span
                     v-if="!isReadOnly"
                     class="sidebar-header-actions sidebar-move-to-project-wrap"
@@ -5350,15 +5307,15 @@ defineExpose({
                     <button
                       type="button"
                       class="sidebar-section-add"
-                      :aria-label="sectionAddLabel('sets', branch.projectId)"
-                      :aria-haspopup="branch.projectId != null ? 'menu' : undefined"
+                      :aria-label="sectionAddLabel('sets', branch.addProjectId)"
+                      :aria-haspopup="branch.addProjectId != null ? 'menu' : undefined"
                       :aria-expanded="
-                        branch.projectId != null ? setMoveMenuOpen : undefined
+                        branch.addProjectId != null ? setMoveMenuOpen : undefined
                       "
-                      @click.stop="addFromSectionHead('sets', branch.projectId, $event)"
+                      @click.stop="addFromSectionHead('sets', branch.addProjectId, $event)"
                     >
                       <Tooltip
-                        :text="sectionAddLabel('sets', branch.projectId)"
+                        :text="sectionAddLabel('sets', branch.addProjectId)"
                         activator="parent"
                         :describe="false"
                       />
@@ -5368,7 +5325,7 @@ defineExpose({
                 </div>
                 <div class="sidebar-section-scroll">
                   <div
-                    v-if="!branch.header && branch.sets.length === 0"
+                    v-if="!isFinding && branch.sets.length === 0"
                     class="sidebar-collections-help-row"
                   >
                     <span class="sidebar-collections-help"
@@ -5418,7 +5375,7 @@ defineExpose({
                       "
                       :aria-expanded="row.childCount ? String(row.expanded) : undefined"
                       @click="
-                        openSetRow(row.set, $event)
+                        selectSet(row.set.id, row.set.name || 'Picture Set', $event)
                       "
                       @keydown="
                         onTreeRowKeydown(`s:${row.set.id}`, row.childCount, $event)
@@ -5563,13 +5520,12 @@ defineExpose({
                      the grid is in. -->
                 <div
                   v-if="
-                    branch.project &&
-                    branchIsScope(branch.projectId) &&
+                    scopedProjectObj &&
                     (!isReadOnly || sessionContext?.include_attachments)
                   "
                   class="sidebar-project-tree-files"
                 >
-                  <ProjectFiles :projectId="branch.project.id" compact />
+                  <ProjectFiles :projectId="scopedProjectObj.id" compact />
                 </div>
               </div>
             </div>

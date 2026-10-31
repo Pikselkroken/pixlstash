@@ -81,7 +81,7 @@ test.describe('export', () => {
     sidebar,
   }, testInfo) => {
     await grid.goto()
-    const row = await sidebar.firstNonEmptyByName(sidebar.setItems)
+    const row = await sidebar.firstNonEmpty(sidebar.setItems)
     const countText = (await sidebar.count(row).innerText()).trim()
     const expected = Number(countText.match(/\d+/)?.[0])
     expect(expected).toBeGreaterThan(0)

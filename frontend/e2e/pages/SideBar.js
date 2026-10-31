@@ -4,9 +4,8 @@ import { expect } from '@playwright/test'
  * The left sidebar (SideBar.vue) — navigation that filters the grid by picture
  * set (§7), project (§8), and character/person (§9). Thin wrapper around the
  * stable selectors verified in source: .sidebar-set-item, the character rows in
- * .sidebar-character-group, and the Library tree's project rows (#2448), each
- * of which opens in place to hold its people and sets. Per-row counts live in
- * .sidebar-list-count.
+ * .sidebar-character-group, and the project scope in the header slot
+ * (SidebarScopeSlot.vue, #2159; under the Library / Folders switch since #2448). Per-row counts live in .sidebar-list-count.
  */
 export class SideBar {
   constructor(page) {
@@ -15,14 +14,15 @@ export class SideBar {
     this.characterItems = page.locator(
       '.sidebar-character-group > .sidebar-list-item:not(.sidebar-set-item)',
     )
-    // The Library tree's project rows and its Not in a project row (#2448).
-    // Choosing one is "all of that project"; it lights with aria-current.
-    this.projectRows = page.getByTestId('sidebar-project-row')
-    this.noProjectRow = page.getByTestId('sidebar-no-project-row')
-    this.allMedia = page
-      .locator('.sidebar-media-list .sidebar-list-item')
-      .filter({ hasText: /^All media/ })
+    // The header slot's project scope and its "Limit view to" menu (#2159).
+    this.scopeButton = page.getByTestId('sidebar-scope')
+    this.scopeMenu = page.getByTestId('sidebar-scope-menu')
+    // Find in library, in the header slot since #2448.
     this.find = page.getByTestId('sidebar-find')
+    // The menu's project rows: every radio item but Any / Not in a project.
+    this.scopeProjects = this.scopeMenu
+      .getByRole('menuitemradio')
+      .filter({ hasNotText: /^(Any project|Not in a project)/ })
     // Right-click context menu (teleported to <body>) and the trailing lock
     // indicator that a set row renders when the set is locked (SideBar.vue:
     // .sidebar-lock-icon on a .sidebar-set-item).
@@ -51,53 +51,19 @@ export class SideBar {
     return items.first()
   }
 
-  /**
-   * The non-empty row whose name sorts first, as the flat lists before the
-   * Library tree (#2448) listed them. The tree files rows under their projects,
-   * so DOM order is no longer alphabetical; a spec whose fixture choice depends
-   * on which entry comes first picks it this way.
-   */
-  async firstNonEmptyByName(items) {
-    const rows = []
-    const n = await items.count()
-    for (let i = 0; i < n; i++) {
-      const row = items.nth(i)
-      const name = (await row.locator('.sidebar-list-label-text').first().innerText()).trim()
-      const m = (await this.count(row).innerText().catch(() => '')).match(/\d+/)
-      if (m && Number(m[0]) > 0) rows.push({ row, name })
-    }
-    rows.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
-    return rows[0]?.row ?? items.first()
+  /** Open the project scope menu and wait for its rows. */
+  async openScopeMenu() {
+    await this.scopeButton.click()
+    await expect(this.scopeMenu).toBeVisible()
   }
 
-  /** A project's row in the Library tree, by name. */
-  projectRow(name) {
-    return this.projectRows.filter({ hasText: name }).first()
-  }
-
-  /** The project's whole branch: its row and, when open, its people and sets. */
-  branch(name) {
-    return this.page
-      .locator('.sidebar-branch')
-      .filter({ has: this.projectRow(name) })
-  }
-
-  /** Open a project's branch in place, without navigating, if it is closed. */
-  async openBranch(name) {
-    const row = this.projectRow(name)
-    await expect(row).toBeVisible()
-    if ((await row.getAttribute('aria-expanded')) !== 'true') {
-      await row.locator('.sidebar-branch-toggle').click()
-    }
-    await expect(row).toHaveAttribute('aria-expanded', 'true')
-  }
-
-  /** Open the first project's branch: all of that project. */
+  /** Limit the view to the first project in the scope menu. */
   async chooseFirstProject() {
-    const project = this.projectRows.first()
+    await this.openScopeMenu()
+    const project = this.scopeProjects.first()
     await expect(project).toBeVisible()
     await project.click()
-    await expect(project).toHaveAttribute('aria-current', 'page')
+    await expect(this.scopeMenu).toBeHidden()
   }
 
   /** Right-click a set row to open the sidebar context menu. */

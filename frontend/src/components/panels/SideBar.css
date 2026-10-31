@@ -198,7 +198,7 @@
    `.sidebar-character-group` rule. */
 .sidebar-section-scroll .sidebar-tree-group {
   --tree-group-inset: var(--space-2);
-  --row-pad: calc(var(--branch-pad, var(--space-3)) - var(--tree-group-inset));
+  --row-pad: calc(var(--space-3) - var(--tree-group-inset));
   /* Restated here, not inherited: a custom property is computed where it is
      declared, so the section's --tree-row-start was built from the section's
      own padding and put every stub and caret in a group 5px off its line. */
@@ -276,13 +276,6 @@
   min-width: 220px;
   max-height: 70vh;
   overflow-y: auto;
-}
-
-.sidebar-rail-flyout-count {
-  margin-left: var(--space-2);
-  font-weight: var(--weight-regular);
-  letter-spacing: 0;
-  color: rgba(var(--v-theme-sidebar-text), var(--opacity-text-secondary));
 }
 
 .sidebar-collapsed-item--scrapheap {
@@ -1325,32 +1318,11 @@
 }
 
 /* ---------------------------------------------------------------------------
-   THE TREES (#2448). A project's branch wears a faint wash of its colour and
-   moves its rows one indent step in, through the row system's `--row-pad`
-   hook (`--branch-pad` carries it into an open person's group).
+   THE TREES (#2448). Library's list wears a faint wash of the scoped project's
+   colour; in Folders, an open project and its children carry their own.
    --------------------------------------------------------------------------- */
 .sidebar-branch {
   background: var(--wash, transparent);
-}
-
-.sidebar-branch-body {
-  --branch-pad: calc(var(--space-3) + var(--indent-step));
-  --row-pad: var(--branch-pad);
-  padding-bottom: var(--space-2);
-}
-
-/* PEOPLE and SETS inside a project: small group labels with a count. */
-.sidebar-branch-body .sidebar-section-header {
-  min-height: var(--control-h-sm);
-  margin-top: 0;
-  color: rgba(var(--v-theme-sidebar-text), var(--opacity-text-secondary));
-}
-
-.sidebar-section-count {
-  margin-left: var(--space-2);
-  font-weight: var(--weight-regular);
-  letter-spacing: 0;
-  text-transform: none;
 }
 
 .sidebar-project-tile {

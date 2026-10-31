@@ -307,7 +307,7 @@ describe("the docked rail's node flyout (#2448)", () => {
     const wrapper = await mountSidebar({ docked: true });
     const trigger = wrapper
       .findAll(".sidebar-collapsed-item")
-      .find((b) => b.attributes("aria-label") === "Not in a project");
+      .find((b) => b.attributes("aria-label") === "People");
 
     expect(trigger.element.tagName).toBe("BUTTON");
     expect(trigger.attributes()).toMatchObject({
@@ -320,11 +320,10 @@ describe("the docked rail's node flyout (#2448)", () => {
 
     const menu = document.querySelector(".sidebar-rail-flyout");
     expect(menu.getAttribute("role")).toBe("menu");
-    expect(menu.getAttribute("aria-label")).toBe("Not in a project");
+    expect(menu.getAttribute("aria-label")).toBe("People");
     const items = Array.from(menu.querySelectorAll('[role="menuitem"]'));
-    // All of the branch, then its people (Ada, Grace), one level only.
+    // The people of the dropdown's scope (Any project: everyone).
     expect(items.map((item) => item.textContent.trim())).toEqual([
-      "All of Not in a project",
       "Ada",
       "Grace",
     ]);

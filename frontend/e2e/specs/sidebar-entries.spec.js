@@ -192,8 +192,6 @@ test.describe('people', () => {
     })
     const renamed = uniq('E2E renamed')
     await grid.goto()
-    // Made after the page's tree state was seeded, so its branch is closed.
-    await sidebar.openBranch(project.name)
 
     await openEditor(sidebar, personRow(sidebar, person.name))
     await nameField(page).fill('   ')
@@ -305,7 +303,6 @@ test.describe('picture sets', () => {
     })
     const renamed = uniq('E2E renamed set')
     await grid.goto()
-    await sidebar.openBranch(project.name)
 
     await openEditor(sidebar, setRow(sidebar, set.name))
     await nameField(page).fill('')
@@ -475,7 +472,7 @@ test.describe('picture sets', () => {
 })
 
 test.describe('projects', () => {
-  test('a project made from the tree menu opens and survives a reload', async ({
+  test('a project made from the scope menu opens and survives a reload', async ({
     page,
     grid,
     sidebar,
@@ -484,8 +481,8 @@ test.describe('projects', () => {
     const name = uniq('E2E project')
     await grid.goto()
 
-    await sidebar.noProjectRow.click({ button: 'right' })
-    await sidebar.ctxButton('New project…').click()
+    await sidebar.openScopeMenu()
+    await sidebar.scopeMenu.getByRole('menuitem', { name: 'New project…' }).click()
     await expect(editor(page)).toContainText('New project')
     await nameField(page).fill(name)
     await descriptionField(page).fill('made by e2e')
@@ -498,10 +495,10 @@ test.describe('projects', () => {
     expect(project.description).toBe('made by e2e')
 
     await expect.poll(() => pathname(page)).toBe(`/project/${project.id}`)
-    await expect(sidebar.projectRow(name)).toHaveAttribute('aria-current', 'page')
+    await expect(sidebar.scopeButton).toContainText(name)
 
     await page.reload()
-    await expect(sidebar.projectRow(name)).toHaveAttribute('aria-current', 'page')
+    await expect(sidebar.scopeButton).toContainText(name)
   })
 
   test('the editor renames a project and refuses an empty or taken name', async ({
@@ -513,13 +510,12 @@ test.describe('projects', () => {
     const project = await apiProject(apiContext, uniq('E2E rename project'))
     const renamed = uniq('E2E renamed project')
     await page.goto(`/project/${project.id}`)
-    await expect(sidebar.projectRow(project.name)).toHaveAttribute(
-      'aria-current',
-      'page',
-    )
+    await expect(sidebar.scopeButton).toContainText(project.name)
 
-    await sidebar.projectRow(project.name).click({ button: 'right' })
-    await sidebar.ctxButton('Edit').click()
+    await sidebar.openScopeMenu()
+    await sidebar.scopeMenu
+      .getByRole('menuitem', { name: `Edit “${project.name}”…` })
+      .click()
     await expect(editor(page)).toContainText('Edit project')
 
     // This editor reports in place rather than disabling Save.
@@ -538,10 +534,10 @@ test.describe('projects', () => {
     await saveButton(page).click()
     await expect(editor(page)).toBeHidden()
     retrack('project', project.id, renamed)
-    await expect(sidebar.projectRow(renamed)).toHaveAttribute('aria-current', 'page')
+    await expect(sidebar.scopeButton).toContainText(renamed)
 
     await page.reload()
-    await expect(sidebar.projectRow(renamed)).toHaveAttribute('aria-current', 'page')
+    await expect(sidebar.scopeButton).toContainText(renamed)
     const saved = await find(apiContext, 'project', project.id)
     expect(saved).toMatchObject({ name: renamed, description: 'renamed by e2e' })
   })
@@ -563,14 +559,11 @@ test.describe('projects', () => {
     const total = await totalPictures(apiContext)
 
     await page.goto(`/project/${project.id}`)
-    await expect(sidebar.projectRow(project.name)).toHaveAttribute(
-      'aria-current',
-      'page',
-    )
+    await expect(sidebar.scopeButton).toContainText(project.name)
     await expect(setRow(sidebar, set.name)).toBeVisible()
 
-    // Right-click on the project's row opens its own menu.
-    await sidebar.projectRow(project.name).click({ button: 'right' })
+    // Right-click on the slot opens the current project's own menu.
+    await sidebar.scopeButton.click({ button: 'right' })
     await expect(sidebar.ctxMenu).toBeVisible()
     const confirmed = acceptConfirm(page)
     await sidebar.ctxButton('Delete').click()
@@ -578,9 +571,9 @@ test.describe('projects', () => {
       `Delete project "${project.name}"? Its people, sets and pictures stay in the library; its attachments are deleted.`,
     )
 
-    await expect(sidebar.allMedia).toHaveAttribute('aria-current', 'page')
+    await expect(sidebar.scopeButton).toContainText('Any project')
     await expect.poll(() => pathname(page)).not.toContain('/project/')
-    // Kept, and now outside any project, so they list under Not in a project.
+    // Kept, and now outside any project, so they list under Any project.
     await expect(setRow(sidebar, set.name)).toBeVisible()
     await expect(personRow(sidebar, person.name)).toBeVisible()
 
