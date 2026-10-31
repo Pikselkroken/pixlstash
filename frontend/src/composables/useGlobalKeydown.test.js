@@ -146,3 +146,49 @@ describe("the undo chord", () => {
     expect(store.undo).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("Escape and the sidebar's Find in library (#2448)", () => {
+  let sidebar;
+  let host;
+
+  beforeEach(() => {
+    sidebar = { clearFind: vi.fn(() => true) };
+    const sidebarRef = ref(sidebar);
+    host = mount(
+      {
+        setup() {
+          useGlobalKeydown({
+            gridContainer: ref(null),
+            sidebarRef,
+            shortcutsDialogOpen: ref(false),
+          });
+          return () => null;
+        },
+      },
+      { attachTo: document.body },
+    );
+  });
+
+  afterEach(() => host.unmount());
+
+  it("clears Find from anywhere outside a text field", () => {
+    press("Escape", { ctrlKey: false });
+    expect(sidebar.clearFind).toHaveBeenCalled();
+  });
+
+  it("leaves it alone while typing elsewhere or under a dialog", () => {
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    expect(sidebar.clearFind).not.toHaveBeenCalled();
+
+    const overlay = document.createElement("div");
+    overlay.className = "v-overlay--active";
+    overlay.innerHTML = '<div class="v-overlay__scrim"></div>';
+    document.body.appendChild(overlay);
+    press("Escape", { ctrlKey: false });
+    expect(sidebar.clearFind).not.toHaveBeenCalled();
+  });
+});

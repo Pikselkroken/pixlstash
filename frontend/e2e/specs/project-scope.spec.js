@@ -1,6 +1,7 @@
 import { test, expect } from '../fixtures/test.js'
 
-// The project scope in the sidebar's header slot (#2159). It replaced the
+// The project scope (#2159), in the sidebar's header slot until #2448 moved it
+// under the Library / Folders switch. It replaced the
 // Global / Projects / Folders tabs, which were display-only switches; the scope
 // is a navigation instead. Choosing a project narrows the grid and the People
 // and Sets lists and puts the project in the URL; Any project takes both back.
@@ -62,5 +63,66 @@ test.describe('the sidebar project scope', () => {
     })
     expect(entityHeights.length).toBeGreaterThan(0)
     for (const h of entityHeights) expect(h).toBe(Math.max(32, thumb + 8))
+  })
+})
+
+// Below Review, Library | Folders (#2448): Library is the dropdown and the
+// People and Sets it narrows, Folders the DEFAULT_LAYOUT tree. Flipping it is
+// a display choice and never moves the grid; Find filters names in either.
+test.describe('the Library / Folders switch', () => {
+  test.beforeEach(async ({ grid }) => {
+    await grid.goto()
+  })
+
+  test('Folders draws Global and Unassigned and never moves the grid', async ({
+    page,
+    sidebar,
+  }) => {
+    await sidebar.chooseFirstProject()
+    await expect.poll(() => page.url()).toContain('/project/')
+    const url = page.url()
+
+    await page.getByRole('radio', { name: 'Folders' }).click()
+    await expect(sidebar.scopeButton).toBeHidden()
+    await expect(page.getByTestId('sidebar-folder-global')).toBeVisible()
+    await expect(page.getByTestId('sidebar-folder-unassigned')).toBeVisible()
+    await expect(
+      page.locator('[data-testid="sidebar-folder-project"][aria-current="page"]'),
+    ).toHaveCount(1)
+    expect(page.url()).toBe(url)
+
+    await page.getByTestId('sidebar-folder-unassigned').click()
+    await expect.poll(() => page.url()).toContain('/character/UNASSIGNED')
+    await expect.poll(() => page.url()).toContain('project=none')
+
+    // The mode is a preference: it survives a reload. Back in Library, the
+    // dropdown names Unassigned's scope.
+    await page.reload()
+    await expect(page.getByRole('radio', { name: 'Folders' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    )
+    await page.getByRole('radio', { name: 'Library' }).click()
+    await expect(sidebar.scopeButton).toContainText('Not in a project')
+  })
+
+  test('Find keeps only matching names and offers a picture search otherwise', async ({
+    page,
+    sidebar,
+  }) => {
+    await expect(sidebar.characterItems.first()).toBeVisible()
+    const name = (
+      await sidebar.characterItems.first().locator('.sidebar-list-label-text').innerText()
+    ).trim()
+    await sidebar.find.fill(name.slice(0, 3))
+    await expect(page.locator('.sidebar-find-line')).toContainText('match')
+    await expect(sidebar.characterItems.first().locator('mark')).toBeVisible()
+
+    await sidebar.find.fill('zz-no-such-name-zz')
+    await expect(page.locator('.sidebar-find-none')).toContainText(
+      'No project, person or set is called',
+    )
+    await sidebar.find.press('Escape')
+    await expect(sidebar.find).toHaveValue('')
   })
 })

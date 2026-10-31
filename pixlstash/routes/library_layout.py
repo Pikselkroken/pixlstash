@@ -15,8 +15,9 @@ something else - *make it all match, now* - so it is previewed, consented to,
 and reversible in one undo. See ``services/layout_migration_service.py``.
 """
 
+import os
 import re
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -32,15 +33,20 @@ from pixlstash.services.layout_move_service import (
     move_to_match,
     picture_exists,
     picture_layout,
+    tree_node_relative_folder,
 )
 from pixlstash.services.library_settings_service import get_layout, set_layout
 from pixlstash.services.operation_log_service import request_context
+from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.host_open import open_in_file_manager
 from pixlstash.utils.library_layout import (
     DEFAULT_LAYOUT,
     folder_name,
     format_layout,
     parse_layout,
 )
+
+logger = get_logger(__name__)
 
 #: Most ids one "Move to match" request may carry - the same number as
 #: ``ROTATE_MAX_IDS``, and for the same two reasons. Every id is a file
@@ -334,6 +340,24 @@ class MoveToMatchResponse(BaseModel):
     operation_id: Optional[int] = None
 
 
+class OpenTreeFolderRequest(BaseModel):
+    """A node of the Media sidebar's Folders tree (#2448), by ids, never a path."""
+
+    kind: Literal["project", "global", "unassigned", "character", "set"]
+    project_id: Optional[int] = Field(
+        default=None,
+        description="The node's project; null for one under Global.",
+    )
+    entity_id: Optional[int] = Field(
+        default=None, description="The person or set of a character or set node."
+    )
+
+
+class OpenTreeFolderResponse(BaseModel):
+    status: str = "ok"
+    folder: str = Field(description="The folder opened, relative to the library.")
+
+
 def _response(layout: Optional[str], unfiled: Optional[str]) -> LayoutResponse:
     return LayoutResponse(
         layout=layout,
@@ -537,6 +561,58 @@ def create_router(server) -> APIRouter:
             skipped=result["skipped"],
             operation_id=result["operation_id"],
         )
+
+    @router.post(
+        "/library/folders/open",
+        include_in_schema=False,
+        summary="Open a Folders-tree node in the file manager",
+        description=(
+            "Shows the folder a node of the Media sidebar's Folders tree "
+            "stands for in the file manager of the machine PixlStash runs on. "
+            "The node is named by ids; the folder is rendered from their names "
+            "with the default layout, which is how the tree draws it, and must "
+            "lie inside the library root after symlinks are resolved. A folder "
+            "nothing has been filed into yet is 404, not an empty window."
+        ),
+        response_model=OpenTreeFolderResponse,
+        responses={
+            404: {"description": "No such node, or its folder is not on disk."},
+            500: {"description": "This host has no file manager to open."},
+        },
+    )
+    def open_tree_folder(body: OpenTreeFolderRequest = Body(...)):
+        try:
+            relative = tree_node_relative_folder(
+                server.vault, body.kind, body.project_id, body.entity_id
+            )
+        except LookupError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        root = os.path.realpath(server.vault.image_root)
+        folder = os.path.realpath(os.path.join(root, *relative.split("/")))
+        try:
+            inside = os.path.commonpath([root, folder]) == root
+        except ValueError:
+            # Windows: a junction to another drive has no common path at all.
+            inside = False
+        if not inside:
+            # folder_name keeps every component inside the root; a symlinked
+            # directory in the library is the one way out, and it is refused.
+            logger.warning(
+                "Refusing to open %r: it resolves outside the library root %r.",
+                relative,
+                root,
+            )
+            raise HTTPException(status_code=404, detail="Folder not found on disk")
+        if not os.path.isdir(folder):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Nothing is filed in {relative} yet",
+            )
+        if not open_in_file_manager(folder):
+            raise HTTPException(status_code=500, detail="Failed to open the folder")
+        return OpenTreeFolderResponse(folder=relative)
 
     return router
 

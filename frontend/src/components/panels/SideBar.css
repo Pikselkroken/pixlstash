@@ -268,31 +268,14 @@
   padding-left: 0;
 }
 
-.sidebar-collapsed-project-wrap {
-  position: relative;
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-}
-
-/* The surface and rows are the shared `.ctx-*` menu; these only place it. */
-.sidebar-collapsed-project-menu,
-.sidebar-collapsed-project-submenu {
+/* The docked rail's node flyout (#2448): the shared `.ctx-*` menu, placed by
+   hand and scrolled past 70% of the window. */
+.sidebar-rail-flyout {
   position: fixed;
   z-index: var(--z-dropdown);
-  min-width: 180px;
-}
-
-.sidebar-collapsed-project-submenu {
-  z-index: var(--z-dropdown);
-  max-height: 60vh;
+  min-width: 220px;
+  max-height: 70vh;
   overflow-y: auto;
-}
-
-/* The parent row stays washed while its submenu is open. */
-.sidebar-project-menu-has-sub.sub-open {
-  background: var(--hover-wash);
 }
 
 .sidebar-collapsed-item--scrapheap {
@@ -1149,4 +1132,211 @@
 .sidebar-mapping-resume-row,
 .sidebar-mapping-resume-row .v-icon {
   color: rgb(var(--v-theme-accent));
+}
+
+/* ---------------------------------------------------------------------------
+   THE HEADER SLOT, THE LIBRARY / FOLDERS SWITCH AND FIND (#2448)
+   --------------------------------------------------------------------------- */
+.sidebar-find-slot,
+.sidebar-rail-slot {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  height: var(--sidebar-slot-h);
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
+}
+
+.sidebar-find-slot {
+  gap: var(--space-3);
+  padding: 0 var(--space-3) 0 var(--space-4);
+}
+
+.sidebar-rail-slot {
+  justify-content: center;
+  margin-bottom: var(--space-2);
+}
+
+.sidebar-find-field {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--control-h-sm);
+  padding: 0 var(--space-2) 0 var(--space-3);
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-sm);
+  background: rgb(var(--v-theme-input-background));
+  color: rgba(var(--v-theme-sidebar-text), var(--opacity-text-secondary));
+  cursor: text;
+}
+
+.sidebar-find-field:focus-within,
+.sidebar-find-field.typed {
+  border-color: var(--focus-stroke);
+  color: rgb(var(--v-theme-sidebar-text));
+}
+
+.sidebar-find-input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: rgb(var(--v-theme-sidebar-text));
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+}
+
+.sidebar-find-input::placeholder {
+  color: rgba(var(--v-theme-sidebar-text), var(--opacity-text-secondary));
+}
+
+/* The field's own clear button stands in for the browser's. */
+.sidebar-find-input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.sidebar-find-clear,
+.sidebar-slot-btn,
+.sidebar-branch-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: rgba(var(--v-theme-sidebar-text), var(--opacity-text-secondary));
+  cursor: pointer;
+}
+
+.sidebar-find-clear {
+  width: var(--gutter-glyph);
+  height: var(--gutter-glyph);
+}
+
+.sidebar-slot-btn {
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
+}
+
+.sidebar-branch-toggle {
+  width: var(--gutter-glyph);
+  height: var(--gutter-glyph);
+}
+
+.sidebar-find-clear:hover,
+.sidebar-slot-btn:hover,
+.sidebar-branch-toggle:hover {
+  background: var(--hover-wash);
+  color: rgb(var(--v-theme-sidebar-text));
+}
+
+.sidebar-slot-btn:focus-visible,
+.sidebar-find-clear:focus-visible {
+  box-shadow: var(--focus-ring-inset);
+  outline: none;
+}
+
+/* The switch: the design system's Segmented, full width under Review. */
+.sidebar-tree-switch {
+  margin: var(--space-4) var(--space-3) var(--space-2)
+    calc(var(--rail-w) + var(--space-3));
+}
+
+.sidebar-find-line {
+  padding: var(--space-2) var(--space-3) var(--space-2)
+    calc(var(--rail-w) + var(--space-3));
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-sidebar-text), var(--opacity-text-secondary));
+}
+
+.sidebar-kbd {
+  display: inline-block;
+  padding: 0 var(--space-2);
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-sm);
+  background: rgb(var(--v-theme-input-background));
+  color: rgb(var(--v-theme-sidebar-text));
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
+
+.sidebar-find-none {
+  padding: var(--space-5) var(--space-4) 0 calc(var(--rail-w) + var(--space-4));
+  font-size: var(--text-sm);
+  color: rgba(var(--v-theme-sidebar-text), var(--opacity-text-secondary));
+}
+
+.sidebar-find-none p {
+  margin: 0 0 var(--space-4);
+}
+
+/* ---------------------------------------------------------------------------
+   THE TREES (#2448). Library's list wears a faint wash of the scoped project's
+   colour; in Folders, an open project and its children carry their own.
+   --------------------------------------------------------------------------- */
+.sidebar-branch {
+  background: var(--wash, transparent);
+}
+
+.sidebar-project-tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-sm);
+  background: var(--tile-color);
+  color: rgb(var(--v-theme-on-accent));
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  line-height: 1;
+}
+
+/* Context kept while finding: the name steps back, the match stays bright. */
+.sidebar-row--dim .sidebar-list-label-text {
+  color: rgba(var(--v-theme-sidebar-text), var(--opacity-text-secondary));
+}
+
+.sidebar-folder-row {
+  position: relative;
+  background: var(--wash, transparent);
+}
+
+.sidebar-folder-kid {
+  --depth: 1;
+}
+
+/* A child folder's guide: under its parent's chevron, elbowing into the
+   last child. On ::before, since the refused-drop state owns ::after. */
+.sidebar-folder-kid::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--space-3) + var(--gutter-glyph) / 2);
+  border-left: 1px solid var(--tree-guide);
+  pointer-events: none;
+}
+
+.sidebar-folder-kid--last::before {
+  bottom: 50%;
+  width: var(--space-3);
+  border-bottom: 1px solid var(--tree-guide);
+}
+
+/* The rail's mode button: boxed, the switch's track in one cell. */
+.sidebar-rail-mode {
+  background: var(--track-trough);
+  box-shadow: inset 0 0 0 1px var(--track-ring);
+}
+
+.sidebar-rail-node--open {
+  background: var(--hover-wash);
 }

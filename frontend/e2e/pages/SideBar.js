@@ -5,7 +5,7 @@ import { expect } from '@playwright/test'
  * set (§7), project (§8), and character/person (§9). Thin wrapper around the
  * stable selectors verified in source: .sidebar-set-item, the character rows in
  * .sidebar-character-group, and the project scope in the header slot
- * (SidebarScopeSlot.vue, #2159). Per-row counts live in .sidebar-list-count.
+ * (SidebarScopeSlot.vue, #2159; under the Library / Folders switch since #2448). Per-row counts live in .sidebar-list-count.
  */
 export class SideBar {
   constructor(page) {
@@ -17,6 +17,8 @@ export class SideBar {
     // The header slot's project scope and its "Limit view to" menu (#2159).
     this.scopeButton = page.getByTestId('sidebar-scope')
     this.scopeMenu = page.getByTestId('sidebar-scope-menu')
+    // Find in library, in the header slot since #2448.
+    this.find = page.getByTestId('sidebar-find')
     // The menu's project rows: every radio item but Any / Not in a project.
     this.scopeProjects = this.scopeMenu
       .getByRole('menuitemradio')

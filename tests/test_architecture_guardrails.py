@@ -1404,6 +1404,10 @@ _PROJECT_REFS_IN_TYPED_BODY = frozenset(
         # The same body again, held for ComfyUI to open: `destination` is read
         # by nothing there, and the route is OWNER_ONLY like the two above.
         ("POST", "/api/v1/workflows/run/opening", "body.destination.project_id"),
+        # #2448. The Folders tree's Open in File Manager names the node's
+        # project to render its folder, never to filter by. LOOPBACK_OWNER_ONLY
+        # and not in `READ_SAFE_POST_PATHS`.
+        ("POST", "/api/v1/library/folders/open", "body.project_id"),
     }
 )
 

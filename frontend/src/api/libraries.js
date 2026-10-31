@@ -140,3 +140,16 @@ export async function detachLibrary(uuid) {
 export async function discardLibrary(uuid) {
   return unwrap(apiClient.post(`${LIBRARIES_URL}/${uuid}/discard`));
 }
+
+/**
+ * Show the folder a node of the Media sidebar's Folders tree stands for in the
+ * file manager of the machine PixlStash runs on (#2448). Loopback-only: 403
+ * from another machine, 404 when nothing is filed there yet, 500 on a host
+ * with no desktop.
+ *
+ * @param {{kind: string, project_id?: number|null, entity_id?: number}} node
+ * @returns {Promise<{status: string, folder: string}>}
+ */
+export async function openLibraryFolder(node) {
+  return unwrap(apiClient.post("/library/folders/open", node));
+}
