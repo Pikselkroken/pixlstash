@@ -13,7 +13,10 @@ vi.mock("../../api/training", () => ({
   cancelTrainingJob: (...args) => cancelTrainingJob(...args),
   listTrainingJobs: (...args) => listTrainingJobs(...args),
 }));
-vi.mock("../../api/modelImports", () => ({ runSampleUrl: () => "" }));
+vi.mock("../../api/modelImports", () => ({
+  runSampleUrl: (folderId, runName, filename) =>
+    `/samples/${folderId}/${runName}/${filename}`,
+}));
 vi.mock("vue-router", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock("../../stores/useEntityListsStore", () => ({
   useEntityListsStore: () => ({ characters: [], pictureSets: [], refresh: vi.fn() }),
@@ -26,6 +29,10 @@ const stubs = {
     template: "<div><slot name='end' /><slot /></div>",
   },
   LoraLossChart: { template: "<div />" },
+  TrainingSampleDialog: {
+    props: ["sample"],
+    template: "<div class='tsd-stub' :data-sample='JSON.stringify(sample)' />",
+  },
 };
 
 const card = {
@@ -105,5 +112,37 @@ describe("the rail's training card", () => {
     await flushPromises();
     expect(confirm).not.toHaveBeenCalled();
     expect(cancelTrainingJob).toHaveBeenCalledWith(7);
+  });
+
+  it("opens a sample full size on a click", async () => {
+    setActivePinia(createPinia());
+    getTrainingJobLive.mockResolvedValue({
+      ...live,
+      columns: [250, 500],
+      rows: [
+        {
+          index: 0,
+          prompt: "photo of ohwx woman",
+          with_trigger: true,
+          cells: [
+            { state: "sample", filename: "a.jpg" },
+            { state: "sample", filename: "b.jpg" },
+          ],
+        },
+      ],
+      run_folder: { folder_id: 3, run_name: "ohwx_abcd" },
+    });
+    const wrapper = mount(ModelsRailRun, { props: { card }, global: { stubs } });
+    mounted.push(wrapper);
+    await flushPromises();
+
+    const sample = () => JSON.parse(wrapper.find(".tsd-stub").attributes("data-sample"));
+    expect(sample()).toBe(null);
+    await wrapper.findAll(".mrr-cell img")[1].trigger("click");
+    expect(sample()).toEqual({
+      src: "/samples/3/ohwx_abcd/b.jpg",
+      step: 500,
+      prompt: "photo of ohwx woman",
+    });
   });
 });

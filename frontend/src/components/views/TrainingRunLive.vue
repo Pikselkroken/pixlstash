@@ -209,6 +209,11 @@
                     :src="sampleUrl(cell)"
                     :alt="`${row.prompt || `Prompt ${row.index + 1}`}, step ${columns[i]}`"
                     loading="lazy"
+                    role="button"
+                    tabindex="0"
+                    @click="openSample(row, i, cell)"
+                    @keydown.enter="openSample(row, i, cell)"
+                    @keydown.space.prevent="openSample(row, i, cell)"
                   />
                   <span v-else-if="cell.state === 'drawing'" class="trl-cell trl-cell--gen">
                     <span class="trl-spin"></span>
@@ -259,8 +264,13 @@
               :key="id"
               class="trl-strip-pic"
               :src="pictureThumbnailUrl(id)"
-              alt=""
+              alt="Training picture"
               loading="lazy"
+              role="button"
+              tabindex="0"
+              @click="openPicture(id)"
+              @keydown.enter="openPicture(id)"
+              @keydown.space.prevent="openPicture(id)"
             />
             <span v-if="pictures.length > STRIP_SHOWN" class="trl-strip-more">
               +{{ (pictures.length - STRIP_SHOWN).toLocaleString() }}<br />more
@@ -342,6 +352,7 @@
         </span>
       </div>
     </template>
+    <TrainingSampleDialog :sample="openedSample" @close="openedSample = null" />
   </div>
 </template>
 
@@ -369,12 +380,14 @@ import {
   unref,
   watch,
 } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { VIcon } from "vuetify/components";
 
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
 import LoraLossChart from "../widgets/LoraLossChart.vue";
 import Tooltip from "../widgets/Tooltip.vue";
+import TrainingSampleDialog from "../widgets/TrainingSampleDialog.vue";
 import {
   cancelTrainingJob,
   exportTrainingSnapshot,
@@ -415,6 +428,8 @@ const PHASE_LABELS = {
 const SETUP = ["waiting_gpu", "checking", "loading", "caching"];
 
 const names = useEntityNamesStore();
+const route = useRoute();
+const router = useRouter();
 
 const live = ref(null);
 const error = ref("");
@@ -818,6 +833,29 @@ function sampleUrl(cell) {
 }
 
 // ── Actions ─────────────────────────────────────────────────────────────────
+
+/** The sample a click opened at full size, or null. */
+const openedSample = ref(null);
+
+function openSample(row, column, cell) {
+  openedSample.value = {
+    src: sampleUrl(cell),
+    step: columns.value[column],
+    prompt: row.prompt || `Prompt ${row.index + 1}`,
+  };
+}
+
+/**
+ * Open a training picture in the lightbox. It lives in the library grid, which
+ * this screen replaces, so the way there is the picture route; `?from=` is the
+ * full path, `?run=` included, so closing it comes back to this run.
+ */
+function openPicture(pictureId) {
+  router.push({
+    name: "all-pictures",
+    query: { overlay: String(pictureId), from: route.fullPath },
+  });
+}
 
 async function useStep(step) {
   choosing.value = true;
@@ -1365,6 +1403,7 @@ onBeforeUnmount(() => {
 
 img.trl-cell {
   display: block;
+  cursor: zoom-in;
   object-fit: cover;
   object-position: center 18%;
   background: rgb(var(--v-theme-surface));
@@ -1452,6 +1491,7 @@ img.trl-cell {
 }
 
 .trl-strip-pic {
+  cursor: zoom-in;
   object-fit: cover;
   object-position: center 18%;
   background: rgb(var(--v-theme-surface));

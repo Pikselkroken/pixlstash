@@ -35,6 +35,12 @@ vi.mock("../../api/modelImports", () => ({
     `/samples/${folderId}/${runName}/${filename}`,
 }));
 
+const routerPush = vi.fn();
+vi.mock("vue-router", () => ({
+  useRoute: () => ({ fullPath: "/models/runs?run=abcd" }),
+  useRouter: () => ({ push: routerPush }),
+}));
+
 import TrainingRunLive from "./TrainingRunLive.vue";
 
 const stubs = {
@@ -47,6 +53,10 @@ const stubs = {
   AppButton: {
     props: ["disabled", "loading"],
     template: "<button class='app-btn' :disabled='disabled'><slot /></button>",
+  },
+  TrainingSampleDialog: {
+    props: ["sample"],
+    template: "<div class='tsd-stub' :data-sample='JSON.stringify(sample)' />",
   },
 };
 
@@ -133,6 +143,7 @@ beforeEach(() => {
   cancelTrainingJob.mockReset();
   exportTrainingSnapshot.mockReset();
   saveFileAs.mockReset();
+  routerPush.mockReset();
 });
 
 afterEach(() => {
@@ -167,6 +178,30 @@ describe("TrainingRunLive", () => {
     expect(wrapper.findAll(".trl-use").map((b) => b.text())).toEqual([
       "Use this step",
     ]);
+  });
+
+  it("opens a sample full size on a click", async () => {
+    const wrapper = await open(payload());
+    const sample = () => JSON.parse(wrapper.find(".tsd-stub").attributes("data-sample"));
+    expect(sample()).toBe(null);
+    // The second row's third cell: step 500 of "photo of a woman".
+    const cell = wrapper.findAll("img.trl-cell")[7];
+    expect(cell.attributes("src")).toBe("/samples/3/ohwx_abcd/s_2.jpg");
+    await cell.trigger("click");
+    expect(sample()).toEqual({
+      src: "/samples/3/ohwx_abcd/s_2.jpg",
+      step: 500,
+      prompt: "photo of a woman",
+    });
+  });
+
+  it("opens a training picture in the lightbox, coming back to this run", async () => {
+    const wrapper = await open(payload());
+    await wrapper.findAll(".trl-strip-pic")[1].trigger("click");
+    expect(routerPush).toHaveBeenCalledWith({
+      name: "all-pictures",
+      query: { overlay: "2", from: "/models/runs?run=abcd" },
+    });
   });
 
   it("labels every figure, and an unreadable one is Unknown, never 0", async () => {

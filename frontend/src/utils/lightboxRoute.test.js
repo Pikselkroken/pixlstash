@@ -38,6 +38,32 @@ describe("lightboxCloseTarget", () => {
     });
   });
 
+  it("returns to the query the origin had, not just its path", () => {
+    // The open training run is `/models/runs?run=<uuid>`: without its query the
+    // close would land on the list of runs instead of the run.
+    expect(
+      lightboxCloseTarget({
+        overlay: "812",
+        from: "/models/runs?run=abcd",
+        token: "example-share-token",
+      }),
+    ).toEqual({
+      path: "/models/runs",
+      query: { run: "abcd", token: "example-share-token" },
+    });
+  });
+
+  it("never takes an overlay, a from or a token out of from's own query", () => {
+    // `from` comes from the URL bar: a link must not be able to reopen a
+    // picture, chain another return, or plant a share token through it.
+    expect(
+      lightboxCloseTarget({
+        overlay: "812",
+        from: "/models/runs?run=abcd&overlay=5&from=/workflows&token=example-planted#x",
+      }),
+    ).toEqual({ path: "/models/runs", query: { run: "abcd" } });
+  });
+
   it("only drops ?overlay= when there is nowhere to go back to", () => {
     expect(
       lightboxCloseTarget({ overlay: "812", path: "/home/me/shots" }),

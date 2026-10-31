@@ -6514,6 +6514,12 @@ shrinking the cells. The cover column is the olive selected-item frame; the
 hovered one takes `--hover-wash`; "Use this step" is hidden by opacity until the
 column is hovered or the button focused.
 
+**A click opens a picture** (Enter or Space does too, on a focused one). A sample
+is a file in the run folder, not a library picture, so it opens full size in
+`widgets/TrainingSampleDialog.vue` (step as title, prompt beneath); the rail's
+*Samples* grid opens the same dialog. A *Trained on* picture is a library
+picture and opens in the lightbox by way of `?from=` (below).
+
 **Run status is in the shelf's toolbar.** The page teleports its back arrow,
 run name, progress and Stop into `#shelf-run-bar`, a slot `ModelShelf` renders
 while a run is open (hiding the count; the bar's shelf-tab controls are not drawn on the runs tab either). The teleport is
@@ -6974,6 +6980,13 @@ for, with Workflows two clicks away.
   re-select the workflow that link named over whichever one the reader has
   since chosen. That reasoning survives the shelf: the grid honours the same
   query.
+- **A `?from=` that carries a query gets it back.** The training run page
+  (`TrainingRunLive.openPicture`, a click on a *Trained on* picture)
+  sends its full path, `/models/runs?run=<uuid>`, because without `?run=` the
+  close lands on the list of runs rather than the run. `lightboxCloseTarget`
+  splits it into `path` and `query`, drops any hash, and never takes
+  `overlay`, `from` or `token` out of it: `from` comes from the URL bar, and
+  those would let a link reopen a picture or plant a share token.
 
 **Only the reader's own close goes back, and that rule is live regardless.**
 `closeLightbox(returnToOrigin = true)` takes the default from the lightbox's
