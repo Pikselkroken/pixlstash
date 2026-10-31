@@ -13,6 +13,7 @@ import { realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { sep } from 'node:path'
 import { test, expect } from '../fixtures/test.js'
+import { ModelShelfPage, seededFolder } from '../pages/ModelShelfPage.js'
 
 const SEEDED = [
   'Clementine_Portrait.safetensors',
@@ -44,4 +45,20 @@ test('the shelf lists the seeded models and not the preview image', async ({ pag
     await expect(files.filter({ hasText: name })).toHaveCount(1)
   }
   await expect(files.filter({ hasText: '.png' })).toHaveCount(0)
+})
+
+test('a folder row keeps its count beside the hover menu', async ({ page, apiContext }) => {
+  const folder = await seededFolder(apiContext)
+  const shelf = new ModelShelfPage(page)
+  await shelf.goto()
+  const row = shelf.treeRow(folder.id)
+  await row.hover()
+  const count = row.locator('.mft-count')
+  const more = row.getByTestId('model-folder-more')
+  await expect(count).toBeVisible()
+  await expect(count).toHaveText(/\d/)
+  // The ⋯ sits after the count, never on it.
+  const c = await count.boundingBox()
+  const m = await more.boundingBox()
+  expect(c.x + c.width).toBeLessThanOrEqual(m.x)
 })

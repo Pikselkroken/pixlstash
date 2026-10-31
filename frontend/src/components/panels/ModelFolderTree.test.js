@@ -169,11 +169,9 @@ describe("ModelFolderTree", () => {
     const wrapper = mountTree();
     await flushPromises();
     const tail = (id) => item(wrapper, id).element.lastElementChild.className;
-    // No lock trails the count, and the ⋯ is laid over it rather than after.
+    // No lock trails the count; the ⋯ follows it, in its own column.
     expect(tail(1)).toBe("mft-more");
-    expect(item(wrapper, 1).classes()).toContain("mft-row--verbs");
     expect(tail(2)).toBe("mft-count");
-    expect(item(wrapper, 2).classes()).not.toContain("mft-row--verbs");
     expect(item(wrapper, 2).find("[data-testid='model-folder-lock']").classes()).toContain("mft-glyph");
     expect(item(wrapper, 1).find("[data-testid='model-folder-lock']").exists()).toBe(false);
     wrapper.unmount();
