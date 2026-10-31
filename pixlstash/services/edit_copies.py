@@ -238,6 +238,9 @@ def sweep_edit_sessions(
     Untouched means the folder and every file in it: a save over the copy
     changes the file's time, not the folder's, and an edit not yet imported
     (the server was down, another library was active) must survive.
+
+    Never raises on a filesystem error: it runs at start-up and before each
+    new session, and a cleanup that cannot finish is logged and retried then.
     """
     try:
         entries = [e for e in os.scandir(root) if _is_batch_name(e.name)]
@@ -249,9 +252,9 @@ def sweep_edit_sessions(
     cutoff = time.time() - max_age_seconds
     removed = 0
     for entry in entries:
-        if entry.is_symlink() or not entry.is_dir():
-            continue
         try:
+            if entry.is_symlink() or not entry.is_dir():
+                continue
             newest = max(
                 [entry.stat().st_mtime]
                 + [

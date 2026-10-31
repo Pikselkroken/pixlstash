@@ -109,8 +109,11 @@ def list_apps(file_path: str) -> list[OpenWithApp]:
     else:
         apps = _list_linux(file_path)
     apps = editors_first(apps)
-    with _cache_lock:
-        _cache[key] = (now, apps)
+    # Not an empty answer: a tool that failed once (and logged it) is asked
+    # again on the next hover rather than hiding every app for the TTL.
+    if apps:
+        with _cache_lock:
+            _cache[key] = (now, apps)
     return apps
 
 

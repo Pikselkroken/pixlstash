@@ -156,10 +156,14 @@ def test_a_hidden_desktop_entry_and_an_id_with_a_path_are_dropped(
     assert open_with.find_desktop_file("../gone.desktop") is None
 
 
-def test_a_failing_tool_is_an_empty_list_not_an_error(monkeypatch):
-    monkeypatch.setattr(open_with, "_run_tool", lambda argv, env=None: None)
+def test_a_failing_tool_is_an_empty_list_and_asked_again_next_time(monkeypatch):
     monkeypatch.setattr(open_with.sys, "platform", "linux")
+    monkeypatch.setattr(open_with, "_run_tool", lambda argv, env=None: None)
     assert open_with.list_apps("/home/me/a.png") == []
+    # The tool recovers: the empty answer was not cached for the TTL.
+    gimp = OpenWithApp(id="gimp.desktop", name="GIMP")
+    monkeypatch.setattr(open_with, "_list_linux", lambda path: [gimp])
+    assert open_with.list_apps("/home/me/a.png") == [gimp]
 
 
 # ---- macOS and Windows: canned helper output ---------------------------------
@@ -352,6 +356,18 @@ def test_the_sweep_keeps_a_session_an_import_or_a_save_touched(tmp_path):
 
     assert edit_copies.sweep_edit_sessions(root) == 1
     assert sorted(os.listdir(root)) == sorted([imported["session"], saved["session"]])
+
+
+def test_a_sweep_that_cannot_read_a_session_logs_and_carries_on(tmp_path, monkeypatch):
+    class Unreadable:
+        name = "d" * 32
+        path = str(tmp_path / name)
+
+        def is_symlink(self):
+            raise PermissionError("denied")
+
+    monkeypatch.setattr(edit_copies.os, "scandir", lambda root: iter([Unreadable()]))
+    assert edit_copies.sweep_edit_sessions(str(tmp_path)) == 0
 
 
 def test_stop_waits_for_an_import_in_flight_and_runs_none_after(tmp_path):
