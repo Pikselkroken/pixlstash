@@ -2,6 +2,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { setActivePinia, createPinia } from "pinia";
 import { flushPromises, mount } from "@vue/test-utils";
 
+const config = vi.hoisted(() => ({ patchUserConfig: vi.fn() }));
+vi.mock("../../api/config", () => config);
+
 vi.mock("../../api/folders", () => ({
   browseFilesystem: vi.fn().mockResolvedValue({ path: "/home/me", entries: [] }),
   createFilesystemFolder: vi.fn(),
@@ -11,6 +14,7 @@ import TbExportPanel from "./TbExportPanel.vue";
 import FolderBrowser from "../editors/FolderBrowser.vue";
 import { browseFilesystem } from "../../api/folders";
 import { useExportStore } from "../../stores/useExportStore";
+import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 
 function mountPanel() {
   return mount(TbExportPanel, {
@@ -19,6 +23,12 @@ function mountPanel() {
       stubs: {
         "v-icon": true,
         "v-checkbox": true,
+        "v-switch": {
+          props: ["modelValue"],
+          emits: ["update:modelValue"],
+          template:
+            '<input type="checkbox" :checked="modelValue" @change="$emit(\'update:modelValue\', $event.target.checked)" />',
+        },
         Tooltip: true,
         // The picker's chrome is Vuetify's VDialog, which needs an installed
         // Vuetify; the test is about the panel's wiring, not the dialog.
@@ -82,6 +92,30 @@ describe("TbExportPanel export-to-folder (#291)", () => {
     expect(wrapper.emitted("confirm-export")).toHaveLength(1);
     expect(wrapper.emitted("confirm-export-folder")).toBeUndefined();
 
+    wrapper.unmount();
+  });
+});
+
+describe("TbExportPanel keep the workflow (#2417)", () => {
+  it("starts from the Share panel and Export row and writes it back", async () => {
+    config.patchUserConfig.mockResolvedValue({});
+    const prefs = useUserPrefsStore();
+    prefs.hydrateKeepWorkflow({ keep_workflow_share: true });
+    const wrapper = mountPanel();
+    const toggle = wrapper.get(".tb-export-keep-workflow");
+
+    expect(toggle.element.checked).toBe(true);
+    await toggle.setValue(false);
+    await flushPromises();
+
+    expect(config.patchUserConfig).toHaveBeenCalledWith({
+      keep_workflow_share: false,
+    });
+    expect(prefs.keepWorkflow).toEqual({
+      copy: false,
+      drag: false,
+      share: false,
+    });
     wrapper.unmount();
   });
 });

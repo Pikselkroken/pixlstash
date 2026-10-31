@@ -124,6 +124,21 @@
         density="compact"
         hide-details
       />
+      <!-- Starts from, and writes, Settings › Privacy › Shared copies (#2417). -->
+      <v-switch
+        class="tb-export-keep-workflow"
+        :model-value="prefs.keepWorkflow.share"
+        label="Keep the workflow"
+        color="primary"
+        density="compact"
+        hide-details
+        aria-describedby="tb-export-keep-workflow-hint"
+        :disabled="isReadOnly"
+        @update:model-value="(v) => prefs.saveKeepWorkflow('share', v)"
+      />
+      <p id="tb-export-keep-workflow-hint" class="tb-export-hint">
+        Starts from Settings › Privacy › Share panel and Export.
+      </p>
     </div>
 
     <div class="tbm-section">
@@ -158,6 +173,8 @@
 <script setup>
 import { computed, ref } from "vue";
 import { useExportStore } from "../../stores/useExportStore";
+import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
+import { isReadOnly } from "../../utils/apiClient";
 import FolderBrowser from "../editors/FolderBrowser.vue";
 import AppButton from "../widgets/AppButton.vue";
 
@@ -166,6 +183,7 @@ const emit = defineEmits(["confirm-export", "confirm-export-folder"]);
 const folderBrowserOpen = ref(false);
 
 const exportStore = useExportStore();
+const prefs = useUserPrefsStore();
 
 const tbExportTypeModel = computed({
   get: () => exportStore.exportType,
@@ -235,6 +253,12 @@ function onFolderSelected(path) {
 /* Stack the two switches with the section's group gap. */
 .tb-export-panel .v-switch + .v-switch {
   margin-top: var(--space-2);
+}
+
+.tb-export-hint {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), 0.6);
 }
 
 .tb-export-folder-btn {

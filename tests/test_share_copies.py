@@ -6,11 +6,13 @@ import os
 import tempfile
 import time
 from io import BytesIO
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image, ImageCms, PngImagePlugin
 
+from pixlstash.db_models.picture import Picture
 from pixlstash.server import Server
 from pixlstash.utils.image_processing.generation_data import strip_generation_data
 from pixlstash.utils.service.share_copies import (
@@ -21,6 +23,7 @@ from pixlstash.utils.service.share_copies import (
     share_copies_root,
     sweep_share_copies,
 )
+from pixlstash.utils.service.export_utils import ExportUtils
 from tests.utils import API_PREFIX, upload_pictures_and_wait
 
 COMFY_PROMPT = json.dumps({"3": {"class_type": "KSampler", "inputs": {"seed": 1}}})
@@ -478,3 +481,93 @@ def test_route_stages_stripped_copies_beside_the_server_config(env):
     ).json()["files"][0]
     with open(kept["path"], "rb") as fh:
         assert b"KSampler" in fh.read()
+
+
+def test_user_config_remembers_keep_the_workflow_per_way_out(env):
+    """Copy, Drag out and Share/Export each keep their own answer; all strip by
+    default, and a string "false" never turns one on."""
+    client = env["client"]
+    ways = ("keep_workflow_copy", "keep_workflow_drag", "keep_workflow_share")
+    cfg = client.get(f"{API_PREFIX}/users/me/config").json()
+    assert {w: cfg[w] for w in ways} == dict.fromkeys(ways, False)
+
+    try:
+        resp = client.patch(
+            f"{API_PREFIX}/users/me/config", json={"keep_workflow_drag": True}
+        )
+        assert resp.status_code == 200, resp.text
+        cfg = client.get(f"{API_PREFIX}/users/me/config").json()
+        assert {w: cfg[w] for w in ways} == {
+            "keep_workflow_copy": False,
+            "keep_workflow_drag": True,
+            "keep_workflow_share": False,
+        }
+
+        client.patch(
+            f"{API_PREFIX}/users/me/config", json={"keep_workflow_drag": "false"}
+        )
+        assert (
+            client.get(f"{API_PREFIX}/users/me/config").json()["keep_workflow_drag"]
+            is False
+        )
+    finally:
+        client.patch(f"{API_PREFIX}/users/me/config", json=dict.fromkeys(ways, False))
+
+
+def _export(library, scale_factor, **extra):
+    """Run the export writer over *library* into a dict, as a ZIP would."""
+    members = {}
+
+    class Sink:
+        def write(self, full_path, arcname):
+            with open(full_path, "rb") as fh:
+                members[arcname] = fh.read()
+
+        def writestr(self, arcname, data):
+            members[arcname] = data
+
+    params = {
+        "export_type_d": Picture.ExportType.FULL,
+        "caption_mode_d": "description",
+        "include_character_name_enabled": False,
+        "scale_factor": scale_factor,
+        **extra,
+    }
+    pics = [SimpleNamespace(description="a caption", **p) for p in library["pictures"]]
+    server = SimpleNamespace(vault=SimpleNamespace(image_root=library["image_root"]))
+    ExportUtils._write_export_pictures(
+        Sink(), server, "t", {"t": {"processed": 0}}, pics, params, {}, {}, {}
+    )
+    return members
+
+
+@pytest.mark.parametrize("scale_factor", [1.0, 0.5])
+def test_export_strips_unless_asked_to_keep(library, scale_factor):
+    comfy, jpeg = _comfy_png(orientation=6), _a1111_jpeg(orientation=6)
+    library["add"](comfy, "aa11.png")
+    library["add"](jpeg, "bb22.jpg")
+
+    stripped = _export(library, scale_factor, keep_generation_data=False)
+    assert sorted(stripped) == [
+        "image_00001.png",
+        "image_00001.txt",
+        "image_00002.jpg",
+        "image_00002.txt",
+    ]
+    for name, original in (("image_00001.png", comfy), ("image_00002.jpg", jpeg)):
+        _assert_no_generation_data(stripped[name])
+        with Image.open(BytesIO(stripped[name])) as img:
+            # The owner's rotation survives the strip.
+            assert img.getexif().get(0x0112) == 6
+        if scale_factor == 1.0 and name.endswith(".png"):
+            assert _pixels(stripped[name]) == _pixels(original)
+    assert stripped["image_00001.txt"] == "a caption\n"
+
+    kept = _export(library, scale_factor, keep_generation_data=True)
+    assert b"KSampler" in kept["image_00001.png"]
+    assert b"Steps: 20" in kept["image_00002.jpg"]
+    if scale_factor == 1.0:
+        assert kept["image_00001.png"] == comfy
+
+    # A caller that never says (the training dataset) keeps the files as they are.
+    assert b"KSampler" in _export(library, scale_factor)["image_00001.png"]

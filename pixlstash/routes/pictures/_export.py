@@ -133,6 +133,13 @@ def register_routes(router, server):
         export_type: str = Query("full"),
         tag_format: str = Query("spaces"),
         bbox_mode: str = Query("none"),
+        keep_generation_data: bool = Query(
+            False,
+            description=(
+                "Leave the ComfyUI workflow, prompt and A1111 parameters in "
+                "the exported images. Stripped by default."
+            ),
+        ),
     ):
         task_id = str(uuid.uuid4())
         lease = request.state.library_lease
@@ -162,6 +169,7 @@ def register_routes(router, server):
             "export_type": export_type,
             "tag_format": tag_format,
             "bbox_mode": bbox_mode,
+            "keep_generation_data": keep_generation_data,
         }
         background_tasks.add_task(
             PictureServiceUtils.generate_zip,
@@ -201,6 +209,13 @@ def register_routes(router, server):
         export_type: str = Query("full"),
         tag_format: str = Query("spaces"),
         bbox_mode: str = Query("none"),
+        keep_generation_data: bool = Query(
+            False,
+            description=(
+                "Leave the ComfyUI workflow, prompt and A1111 parameters in "
+                "the exported images. Stripped by default."
+            ),
+        ),
     ):
         if server.running_in_docker():
             raise HTTPException(
@@ -291,6 +306,7 @@ def register_routes(router, server):
             "export_type": export_type,
             "tag_format": tag_format,
             "bbox_mode": bbox_mode,
+            "keep_generation_data": keep_generation_data,
         }
         background_tasks.add_task(
             PictureServiceUtils.generate_folder_export,

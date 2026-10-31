@@ -12,6 +12,14 @@ from pixlstash.utils.system_utils import (  # noqa: F401
     max_vram_budget_gb,
 )
 
+# Shared copies: whether Copy, Drag out, and the Share panel with Export keep
+# generation data. Each way out remembers its own answer; all strip by default.
+KEEP_WORKFLOW_FIELDS = (
+    "keep_workflow_copy",
+    "keep_workflow_drag",
+    "keep_workflow_share",
+)
+
 
 def validate_ai_toolkit_settings(repo_path: str | None, python: str | None) -> None:
     """Check the ai-toolkit paths a PUT or a check is about to use.
@@ -153,6 +161,7 @@ def serialize_user_config(user) -> dict:
         "grid_open_gesture",
         "viewer_wheel_action",
         "embed_watermark",
+        *KEEP_WORKFLOW_FIELDS,
     }
 
     # ``getattr(..., None)`` (not bare ``getattr``) so a source object that
@@ -284,6 +293,7 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "grid_open_gesture",
         "viewer_wheel_action",
         "embed_watermark",
+        *KEEP_WORKFLOW_FIELDS,
         "tagger_settings",
     }
 
@@ -434,9 +444,10 @@ def apply_user_config_patch(user, patch_data) -> bool:
                 user.max_vram_gb = new_value
                 updated = True
             continue
-        if key in telemetry_fields:
+        if key in telemetry_fields or key in KEEP_WORKFLOW_FIELDS:
             # Coerce like the other boolean toggles, so a client PATCHing the
-            # string "false" cannot silently enable a telemetry category.
+            # string "false" cannot silently enable a telemetry category or
+            # start handing out workflows.
             if value in ("", None, "null", "false", "False", "0", 0):
                 new_value = False
             else:

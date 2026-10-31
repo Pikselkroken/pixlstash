@@ -92,6 +92,12 @@ class User(SQLModel, table=True):
     grid_open_gesture: Optional[str] = Field(default="double")
     viewer_wheel_action: Optional[str] = Field(default="zoom")
     embed_watermark: bool = Field(default=True)
+    # Shared copies: whether each way a file leaves PixlStash keeps the ComfyUI
+    # workflow, prompt and A1111 parameters - Copy, Drag out, and the Share
+    # panel with Export. Off (strip) by default (#2417); NULL reads as off.
+    keep_workflow_copy: bool = Field(default=False)
+    keep_workflow_drag: bool = Field(default=False)
+    keep_workflow_share: bool = Field(default=False)
     watermark_image: Optional[bytes] = Field(
         default=None,
         sa_column=Column(LargeBinary, nullable=True),

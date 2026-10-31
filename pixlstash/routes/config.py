@@ -291,6 +291,21 @@ def create_router(server) -> APIRouter:
         grid_open_gesture: Optional[str] = None
         viewer_wheel_action: Optional[str] = None
         embed_watermark: Optional[bool] = None
+        keep_workflow_copy: Optional[bool] = Field(
+            default=None,
+            description="Copy (Ctrl/Cmd+C) keeps generation data. Off by default.",
+        )
+        keep_workflow_drag: Optional[bool] = Field(
+            default=None,
+            description="Dragging pictures out keeps generation data. Off by default.",
+        )
+        keep_workflow_share: Optional[bool] = Field(
+            default=None,
+            description=(
+                "The Share panel and Export keep generation data. Off by "
+                "default; their own switch reads and writes it."
+            ),
+        )
         smart_score_penalised_tags: Optional[dict] = None
         hidden_tags: Optional[list] = None
         tagger_settings: Optional[dict] = None
