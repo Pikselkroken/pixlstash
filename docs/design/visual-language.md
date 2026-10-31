@@ -1055,7 +1055,7 @@ it names the shelf's selection and takes the same nudge, and with nothing
 selected it is the same tab reading `All models`, without the selection stripe,
 which also bounces when a card's tray opens. The Media grid's stats rail
 inspects the grid's selection (#2161) and wears the same handle: it names the
-one picture the way the rail's head does, or `N pictures`. Closed, it is **never re-opened by itself**
+one picture the way the rail's head does, or `N pictures`. The Training runs tab wears the Models rail's handle too, naming the picked run or `N runs`. Closed, it is **never re-opened by itself**
 — opening the docked rail takes a column away under the pointer — so the
 closed state has to say what it is hiding. (The reader can still ask for it
 from the content: a **double-click on a card**, a workflow card or a Models set

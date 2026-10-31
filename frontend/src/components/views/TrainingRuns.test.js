@@ -56,6 +56,7 @@ import TrainingRuns from "./TrainingRuns.vue";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useTrainingRunsStore } from "../../stores/useTrainingRunsStore";
 import { useTrainingStore } from "../../stores/useTrainingStore";
 
@@ -1153,5 +1154,44 @@ describe("the runs PixlStash trains (#2118)", () => {
     await cardNamed(wrapper, "Clementine_abcd1234").trigger("contextmenu");
     expect(wrapper.find("[data-testid='tr-menu-stop']").exists()).toBe(false);
     expect(wrapper.find("[data-testid='tr-menu-open']").exists()).toBe(true);
+  });
+});
+
+describe("the closed Models rail's handle", () => {
+  // The nudge every other inspector takes (visual-language "Closed
+  // inspector"): a NEW pick bounces the handle and flashes the toolbar glyph;
+  // re-picking what is picked, or clearing it, is not news.
+  it("names the pick and nudges only on a new one", async () => {
+    const sidebar = useSidebarStore();
+    sidebar.modelsRailOpen = false;
+    const wrapper = await openWith([run(), run("Foxglove")]);
+    const handle = () => wrapper.find("[data-testid='runs-rail-handle']");
+    const before = sidebar.inspectorNudge;
+
+    await tick(wrapper, "Clementine", {});
+    expect(sidebar.inspectorNudge).toBe(before + 1);
+    expect(handle().text()).toContain("Clementine");
+
+    await tick(wrapper, "Clementine", {});
+    expect(sidebar.inspectorNudge).toBe(before + 1);
+
+    await tick(wrapper, "Foxglove");
+    expect(sidebar.inspectorNudge).toBe(before + 2);
+    expect(handle().text()).toContain("2 runs");
+
+    // A reload that drops a picked run narrows the pick: not news either.
+    listRuns.mockResolvedValue([run()]);
+    await useTrainingRunsStore().reload();
+    await settle(wrapper);
+    expect(chosenNow()).toEqual(["run:Clementine"]);
+    expect(sidebar.inspectorNudge).toBe(before + 2);
+
+    useTrainingRunsStore().clearSelection();
+    await wrapper.vm.$nextTick();
+    expect(sidebar.inspectorNudge).toBe(before + 2);
+
+    sidebar.modelsRailOpen = true;
+    await wrapper.vm.$nextTick();
+    expect(handle().exists()).toBe(false);
   });
 });

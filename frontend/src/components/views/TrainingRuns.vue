@@ -286,6 +286,18 @@
       </div>
     </v-menu>
 
+    <!-- The closed Models rail's handle, the one the shelf and Workflows show
+         (visual-language "Closed inspector"): it names the picked runs and
+         bounces on a new pick. -->
+    <InspectorEdgeTab
+      v-if="!sidebarStore.modelsRailOpen"
+      :label="railLabel"
+      :name="`Show runs: ${railLabel}`"
+      :nudge="sidebarStore.inspectorNudge"
+      data-testid="runs-rail-handle"
+      @open="openRailFromTab"
+    />
+
     <!-- The same floating pill the shelf docks over its rows, in the same
          strip. Centred, which is also what keeps it clear of the fixed
          bottom-right shortcuts FAB that a full-width bar ran underneath. -->
@@ -499,11 +511,13 @@ import AiToolkitIcon from "../widgets/AiToolkitIcon.vue";
 import TrainingRunLive from "./TrainingRunLive.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
+import InspectorEdgeTab from "../widgets/InspectorEdgeTab.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import { importRun, runSampleUrl } from "../../api/modelImports";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useTrainingRunsStore } from "../../stores/useTrainingRunsStore";
 import { useTrainingStore } from "../../stores/useTrainingStore";
 import { errorDetail } from "../../utils/apiError";
@@ -564,6 +578,44 @@ const menuCard = computed(
 );
 const stepMenuOpen = ref(false);
 const destMenuOpen = ref(false);
+
+// ── The closed Models rail (visual-language "Closed inspector") ───────────
+
+const sidebarStore = useSidebarStore();
+
+/** What the closed handle names: one run, `N runs`, or "" for none. */
+const railLabel = computed(() => {
+  const n = chosen.value.length;
+  if (n > 1) return `${n.toLocaleString()} runs`;
+  return n ? (cards.value.find((card) => isChosen(card))?.name ?? "") : "";
+});
+
+// A NEW pick nudges the rail: the handle bounces and the toolbar's rail glyph
+// flashes, both only while the rail is closed. "New" means it holds a run the
+// last pick did not, as on the Media grid: re-clicking what is picked, a clear,
+// and a reload dropping a run that vanished are not news. Nor is a queued job's
+// `job:<uuid>` tick moving to its folder card's key when the folder appears.
+// Not on a run's own page, which shows no handle.
+watch(chosen, (keys, previous) => {
+  if (openUuid.value) return;
+  const before = new Set(previous);
+  for (const card of cards.value) {
+    if (card.job && before.has(`job:${card.job.uuid}`)) before.add(card.key);
+  }
+  if (keys.some((key) => !before.has(key))) sidebarStore.inspectorNudge += 1;
+});
+
+// The same act as the toolbar toggle, so it persists. The handle unmounts as
+// the rail opens, so focus is handed into the rail rather than to `body`.
+function openRailFromTab() {
+  sidebarStore.setModelsRailOpen(true);
+  nextTick(() =>
+    (
+      document.querySelector(".mrail .mrail-clear") ??
+      document.querySelector(".mrail .mrail-title")
+    )?.focus(),
+  );
+}
 
 // ── A run's own page ───────────────────────────────────────────────────────
 
@@ -981,9 +1033,10 @@ function batchReceipt(imported, failed) {
 </script>
 
 <style scoped>
-/* The panel sits inside `.shelf`, which owns the toolbar and the positioning
-   context the pill docks against. The bottom inset is what keeps the last row
-   of cards out from under that pill. */
+/* The panel sits inside `.shelf`, under its toolbar, and is itself the
+   positioning context for the pill and the closed rail's handle, so the handle
+   centres below the toolbar as it does on the Models tab. The bottom inset is
+   what keeps the last row of cards out from under that pill. */
 /* The inset matches `.shelf-body`, which carries NO horizontal padding at all -
    its rows run to the edges and take their own `--space-3` inset from the
    shared row rule. A 16px box around this grid put the two tabs on different
@@ -994,6 +1047,7 @@ function batchReceipt(imported, failed) {
    room under the last card for the pill to float over nothing, so the bottom
    cards are readable and clickable at the one moment they matter. */
 .tr {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
