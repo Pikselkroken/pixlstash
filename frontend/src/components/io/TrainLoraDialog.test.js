@@ -617,6 +617,136 @@ describe("memory and speed measured on this machine (#2120)", () => {
   });
 });
 
+describe("the Previews question (#2415)", () => {
+  function previews(pins = {}) {
+    const selected = pins["train.disable_sampling"]
+      ? "after"
+      : pins["sample.width"] === 768
+        ? "smaller"
+        : "while";
+    return {
+      preset: "zimage-turbo",
+      selected,
+      full_size: [1024, 1024],
+      smaller_size: 768,
+      trains_same: true,
+      differs: [],
+      options: [
+        { id: "while", layers_in_ram: 60, seconds: 5640, peak_vram_mb: 23347, free_mb: 819, tight: false, basis: "measured" },
+        { id: "smaller", layers_in_ram: 0, seconds: 3360, peak_vram_mb: 23757, free_mb: 409, tight: true, basis: "estimated" },
+        { id: "after", layers_in_ram: 0, seconds: 3420, peak_vram_mb: 21914, free_mb: 2252, tight: false, basis: "measured" },
+      ],
+    };
+  }
+
+  beforeEach(() => {
+    localStorage.clear();
+    training.resolveTraining.mockImplementation(async (body) => ({
+      ...plan(),
+      previews: previews(body.pins || {}),
+    }));
+  });
+
+  const card = (wrapper, id) => wrapper.find(`[data-testid="tld-previews-${id}"]`);
+
+  it("prices each route and starts on previews while training", async () => {
+    const { wrapper } = await openDialog(
+      { type: "character", id: 4, name: "Grandad" },
+      dataset(),
+    );
+    expect(card(wrapper, "while").attributes("aria-checked")).toBe("true");
+    expect(card(wrapper, "while").text()).toContain("1 h 34 min");
+    expect(card(wrapper, "while").text()).toContain("60% of the model waits in RAM");
+    expect(card(wrapper, "smaller").text()).toContain("56 min · 38 min sooner");
+    expect(card(wrapper, "smaller").text()).toContain("≈23.2 GB peak · 0.4 free");
+    expect(card(wrapper, "smaller").text()).toContain("Estimated, scaled from 1024²");
+    expect(card(wrapper, "smaller").text()).toContain("Tight on this GPU");
+    expect(card(wrapper, "after").text()).toContain("21.4 GB peak · 2.2 free");
+    expect(card(wrapper, "after").text()).not.toContain("Tight");
+    expect(wrapper.find('[data-testid="tld-previews"]').text()).toContain(
+      "The LoRA trains the same either way.",
+    );
+  });
+
+  it("writes each route's pins, and remembers a pick for the next opening", async () => {
+    const { wrapper, store } = await openDialog(
+      { type: "character", id: 4, name: "Grandad" },
+      dataset(),
+    );
+    await card(wrapper, "smaller").trigger("click");
+    expect(store.pins).toEqual({ "sample.width": 768, "sample.height": 768 });
+    await store.resolvePlan();
+    await flushPromises();
+    await card(wrapper, "after").trigger("click");
+    expect(store.pins).toEqual({ "train.disable_sampling": true });
+    await store.resolvePlan();
+    await flushPromises();
+    expect(card(wrapper, "after").attributes("aria-checked")).toBe("true");
+    expect(wrapper.find('[data-testid="tld-previews"]').text()).toContain("1 pinned");
+
+    store.closeDialog();
+    await flushPromises();
+    await store.openForScope({ type: "character", id: 4, name: "Grandad" });
+    expect(store.pins).toEqual({});
+    await store.resolvePlan();
+    await flushPromises();
+    expect(store.pins).toEqual({ "train.disable_sampling": true });
+
+    // Back to the default forgets it.
+    await card(wrapper, "while").trigger("click");
+    expect(store.pins).toEqual({});
+    store.closeDialog();
+    await flushPromises();
+    await store.openForScope({ type: "character", id: 4, name: "Grandad" });
+    await store.resolvePlan();
+    await flushPromises();
+    expect(store.pins).toEqual({});
+  });
+
+  it("keeps a typed 'previews after training: no' when going back to the default", async () => {
+    const { wrapper, store } = await openDialog(
+      { type: "character", id: 4, name: "Grandad" },
+      dataset(),
+    );
+    store.setPin("train.disable_sampling", false);
+    await store.resolvePlan();
+    await flushPromises();
+    await card(wrapper, "while").trigger("click");
+    expect(store.pins).toEqual({ "train.disable_sampling": false });
+  });
+
+  it("never puts a remembered pick over a value typed before it was asked", async () => {
+    localStorage.setItem(
+      "pixlstash.train.previews",
+      JSON.stringify({ "zimage-turbo": "after" }),
+    );
+    // Asked only once the typed pin is in (as when a later resolve is the
+    // first one measured).
+    training.resolveTraining.mockImplementation(async (body) => ({
+      ...plan(),
+      previews: body.pins && "train.disable_sampling" in body.pins ? previews(body.pins) : null,
+    }));
+    const { wrapper, store } = await openDialog(
+      { type: "character", id: 4, name: "Grandad" },
+      dataset(),
+    );
+    store.setPin("train.disable_sampling", false);
+    await store.resolvePlan();
+    await flushPromises();
+    expect(card(wrapper, "while").exists()).toBe(true);
+    expect(store.pins).toEqual({ "train.disable_sampling": false });
+  });
+
+  it("is not asked when the server has no question", async () => {
+    training.resolveTraining.mockImplementation(async () => ({ ...plan(), previews: null }));
+    const { wrapper } = await openDialog(
+      { type: "character", id: 4, name: "Grandad" },
+      dataset(),
+    );
+    expect(wrapper.find('[data-testid="tld-previews"]').exists()).toBe(false);
+  });
+});
+
 describe("recipe updates from pixlstash.dev (#2122)", () => {
   const SCOPE = { type: "character", id: 4, name: "Grandad" };
 

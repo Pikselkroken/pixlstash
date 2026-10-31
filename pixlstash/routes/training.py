@@ -946,6 +946,14 @@ def create_router(server) -> APIRouter:
                 "what a reset returns to."
             ),
         )
+        previews: Optional[dict] = Field(
+            default=None,
+            description=(
+                "The Previews question (#2415): while training, smaller or "
+                "after training, each priced in time and VRAM peak; null when "
+                "only one of them is worth having here."
+            ),
+        )
         error: Optional[dict] = Field(
             default=None,
             description=(
@@ -2485,6 +2493,17 @@ def create_router(server) -> APIRouter:
             }
         except (TunableOverrideError, ValueError) as exc:
             out["error"] = {"message": str(exc)}
+        if "resolution" in out:
+            # The question is extra: pricing it never spoils a plan that holds.
+            try:
+                out["previews"] = presets.preview_choice(preset, pins=pins, **choices)
+            except (TunableOverrideError, ValueError) as exc:
+                logger.warning(
+                    "Could not price the Previews question for %s with pins %s: %s",
+                    preset["id"],
+                    sorted(pins),
+                    exc,
+                )
         out["rules"] = {
             key: _rule(TUNABLE_KEYS[key]) for key in sorted(keys) if key in TUNABLE_KEYS
         }

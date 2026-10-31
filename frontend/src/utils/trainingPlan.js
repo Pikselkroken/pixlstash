@@ -209,6 +209,95 @@ export function fitReadout(resolution) {
   return `${resolution.profile_label} · ${peak}${previews}`;
 }
 
+/** Seconds as "56 min" or "1 h 34 min", never under a minute. */
+export function formatDuration(seconds) {
+  const m = Math.max(1, Math.round((Number(seconds) || 0) / 60));
+  if (m < 60) return `${m} min`;
+  const rest = m % 60;
+  return `${Math.floor(m / 60)} h${rest ? ` ${rest} min` : ""}`;
+}
+
+/** Megabytes as gigabytes to one decimal: "22.8". */
+export function gbTenths(mb) {
+  return ((Number(mb) || 0) / 1024).toFixed(1);
+}
+
+/** The pins the Previews question writes (#2415). */
+export const SAMPLING_KEY = "train.disable_sampling";
+export const PREVIEW_SIZE_KEYS = ["sample.width", "sample.height"];
+
+function sizeName([w, h]) {
+  return w === h ? `${w}²` : `${w}×${h}`;
+}
+
+/**
+ * The Previews question's radio cards, from the resolve response's
+ * `previews` (#2415): each route with its words, its time and its peak.
+ */
+export function previewCards(choice) {
+  if (!choice?.options?.length) return [];
+  const [keep] = choice.options;
+  const fast = choice.options.find((o) => o.id !== "while");
+  const full = sizeName(choice.full_size);
+  const small = sizeName([choice.smaller_size, choice.smaller_size]);
+  const detail = {
+    while: `Full size, as each checkpoint saves. Slower: ${
+      keep.layers_in_ram
+        ? `${keep.layers_in_ram}% of the model waits in RAM to make room.`
+        : "it trains on a setup with more room to spare."
+    }`,
+    smaller: `${small} instead of ${full}, so ${
+      fast && !fast.layers_in_ram
+        ? "the whole model stays on the GPU and trains at full speed."
+        : "training keeps the faster setup."
+    }`,
+    after: "Full size, drawn from every checkpoint at the end.",
+  };
+  const label = {
+    while: "While training",
+    smaller: "Smaller, while training",
+    after: "After training",
+  };
+  return choice.options.map((o) => {
+    const gain = keep.seconds - o.seconds;
+    let time = formatDuration(o.seconds);
+    if (o.id !== "while" && Math.abs(gain) >= 60) {
+      time += ` · ${formatDuration(Math.abs(gain))} ${gain > 0 ? "sooner" : "later"}`;
+    }
+    const approx = o.basis === "estimated" ? "≈" : "";
+    return {
+      id: o.id,
+      label: label[o.id],
+      detail: detail[o.id],
+      time,
+      peak: `${approx}${gbTenths(o.peak_vram_mb)} GB peak`,
+      free: `${gbTenths(o.free_mb)} free`,
+      provenance:
+        o.basis === "estimated" ? `Estimated, scaled from ${full}` : "",
+      tight: !!o.tight,
+    };
+  });
+}
+
+/** The hint under the Previews cards: where the peaks come from, and what changes. */
+export function previewHint(choice) {
+  if (!choice?.options?.length) return "";
+  const [keep] = choice.options;
+  const parts = [
+    "Peaks are measured on this GPU and include drawing the previews.",
+    keep.layers_in_ram
+      ? `Full-size previews only fit beside training with ${keep.layers_in_ram}% of the model in RAM, which is what makes the first choice slower.`
+      : "Full-size previews only fit beside training on a setup with more room to spare, which is what makes the first choice slower.",
+  ];
+  if (choice.trains_same) {
+    parts.push("The LoRA trains the same either way.");
+  } else {
+    const names = choice.differs.map((k) => keyLabel(k).toLowerCase()).join(", ");
+    parts.push(`The faster choices also differ in ${names}, so the LoRA does not train quite the same.`);
+  }
+  return parts.join(" ");
+}
+
 /**
  * The footer's time line: "About 50 min." from this machine's measurements,
  * or a note that the first run of this setup checks memory and speed first.
@@ -216,10 +305,7 @@ export function fitReadout(resolution) {
 export function timeEstimate(resolution) {
   const seconds = resolution?.estimate?.seconds;
   if (resolution?.estimate?.basis === "measured" && seconds != null) {
-    const m = Math.max(1, Math.round(seconds / 60));
-    if (m < 60) return `About ${m} min.`;
-    const rest = m % 60;
-    return `About ${Math.floor(m / 60)} h${rest ? ` ${rest} min` : ""}.`;
+    return `About ${formatDuration(seconds)}.`;
   }
   if (resolution?.probe) return "It checks memory and speed first, so the time is not known yet.";
   return "";

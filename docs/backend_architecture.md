@@ -11885,6 +11885,29 @@ checkpoint when previews are deferred; basis `measured`, or `none` with no
 seconds). `POST /training/resolve` and `POST /training/jobs` both pass the
 lookup, tied to the saved checkout's commit and PixlStash's card.
 
+Previews at another size than the recipe's are a setup of their own (`sample.width`
+and `sample.height` are fingerprint keys), but training peaks the same whatever it
+previews at, so an unmeasured setup whose preview size alone differs is admitted on
+the training needs measured at the recipe's size (evidence `measured`, still a probe).
+
+**The Previews question** (`presets.preview_choice`, #2415) is the trade-off that
+preference costs. `POST /training/resolve` answers it as `previews`, null unless the
+default was measured, passed a profile over for its previews, and a route that keeps
+the fast profile finishes sooner by more than both `CHOICE_MIN_SHARE` (10%) and
+`CHOICE_MIN_SECONDS` (5 min): so a first run asks nothing, and Krea 2's equal-speed
+8-bit profiles never do. The routes are `while` (the default: `train.disable_sampling` not pinned on), `after`
+(`train.disable_sampling` pinned on) and `smaller` (`sample.width`/`sample.height`
+pinned to `SMALLER_PREVIEW`, 768, offered only when `resolve` then keeps the fast
+profile and its peak fits, and never when the full-size previews were short of RAM).
+Each is priced from the pins without the question's own,
+with `seconds`, `peak_vram_mb` (the higher of training's and the preview's; training's
+alone for `after`, whose previews are drawn once training has let go of the card),
+`free_mb`, `tight` (under `TIGHT_MB` free) and `basis`: a 768² peak not measured here
+is `estimated`, the measured training peak plus what a full-size preview adds scaled
+by pixel count, timed at the full-size preview speed. `differs` lists the non-placement
+values a route changes (captions encoded once leave none out), so the dialog says
+whether the LoRA trains the same.
+
 **The probe.** Once its lease is granted, a run resolved with measurements is
 resolved again on its profile at launch, against the checkout and card it now
 has (`TrainingService._check_memory_and_speed`): a setup measured since it was
