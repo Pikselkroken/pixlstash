@@ -21,6 +21,7 @@ from types import SimpleNamespace
 import psutil
 import pytest
 
+from pixlstash.training import local_ai_toolkit as local_ai_toolkit_module
 from pixlstash.training.backend import TrainingHandle, TrainingSpec
 from pixlstash.training.local_ai_toolkit import LocalAiToolkit, safe_job_stem
 
@@ -584,6 +585,73 @@ def test_the_trainer_gets_expandable_segments_unless_the_owner_chose(
     assert got == expected
 
 
+_FAKE_TORCH = """
+class cuda:
+    peak = 3 << 30
+
+    @staticmethod
+    def is_initialized():
+        return True
+
+    @staticmethod
+    def max_memory_reserved():
+        return cuda.peak
+
+    @staticmethod
+    def reset_peak_memory_stats():
+        cuda.peak = 1 << 30
+
+    @staticmethod
+    def memory_reserved():
+        return 1 << 30
+"""
+
+
+def test_the_trainer_writes_the_allocator_peak_a_poll_would_miss(tmp_path):
+    """The hook on the trainer's PYTHONPATH appends the allocator's peak since
+    its last line and what it reserves now, so a 3 GB spike freed before
+    PixlStash's next poll is still read. The interpreter's own sitecustomize
+    is imported after it."""
+    fake = tmp_path / "fake"
+    fake.mkdir()
+    (fake / "torch.py").write_text(_FAKE_TORCH)
+    # Stands in for the interpreter's own, which the hook shadows.
+    (fake / "sitecustomize.py").write_text("")
+    peaks = tmp_path / "peaks"
+    peaks.mkdir()
+    probe = (
+        "import sys, time, torch\n"
+        "time.sleep(0.8)\n"
+        "print(sys.modules['sitecustomize'].__file__ if 'sitecustomize' in "
+        "sys.modules else '')\n"
+    )
+    env = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join(
+            [local_ai_toolkit_module._TRAINER_HOOK_DIR, str(fake)]
+        ),
+        "TRAINER_PEAKS_DIR": str(peaks),
+    }
+    done = subprocess.run(
+        [sys.executable, "-c", probe],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
+    )
+    (log,) = peaks.iterdir()
+    lines = log.read_text().splitlines()
+    assert lines[0] == "3072 1024"
+    assert set(lines[1:]) <= {"1024 1024"}
+    assert done.stdout.strip() == str(fake / "sitecustomize.py")
+    # Off without the folder: nothing is written.
+    env.pop("TRAINER_PEAKS_DIR")
+    log.unlink()
+    subprocess.run([sys.executable, "-c", probe], env=env, timeout=30, check=True)
+    assert not list(peaks.iterdir())
+
+
 def test_the_trainer_does_not_inherit_the_backends_python_path_or_secrets(
     tmp_path, monkeypatch
 ):
@@ -606,7 +674,11 @@ def test_the_trainer_does_not_inherit_the_backends_python_path_or_secrets(
     spec = _make_spec(tmp_path)
     backend.submit(backend.prepare(spec), spec)
 
-    assert "PYTHONPATH" not in launched
+    # Only the folder of the hook that writes its memory peaks, which holds no
+    # package to shadow ai-toolkit's.
+    assert launched["PYTHONPATH"] == local_ai_toolkit_module._TRAINER_HOOK_DIR
+    hook = set(os.listdir(launched["PYTHONPATH"])) - {"__pycache__"}
+    assert hook == {"sitecustomize.py"}
     assert "PYTHONHOME" not in launched
     assert not [key for key in launched if key.startswith("PIXLSTASH_")]
     assert launched["CUDA_HOME"] == "/opt/cuda"
