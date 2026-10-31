@@ -326,8 +326,9 @@ class MoveStatusResponse(BaseModel):
         default=0,
         description=(
             "Bytes read so far by the copies and by the read-back that verifies "
-            "each one, so it climbs towards twice `bytes_to_copy` while a large "
-            "file is in flight. Renames add nothing."
+            "each model file, so it climbs towards twice `bytes_to_copy` while a "
+            "large file is in flight - not all the way, since previews and other "
+            "files are copied but not read back. Renames add nothing."
         ),
     )
     bytes_to_copy: int = Field(
@@ -1225,7 +1226,10 @@ def create_router(server) -> APIRouter:
 
         def _run(job: dict) -> MoveReport:
             outcome = execute_directory_move(
-                server.hub, plan, should_cancel=job["cancel"].is_set
+                server.hub,
+                plan,
+                should_cancel=job["cancel"].is_set,
+                on_bytes=lambda count: _add_bytes(job, count),
             )
             _record_result(job, outcome)
             return MoveReport(

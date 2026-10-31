@@ -1189,9 +1189,10 @@ class ModelMover:
                 which is the ruling, and is also the only answer that does not
                 need a second crash-window argument for the rollback.
             on_progress: Called with each :class:`MoveOutcome` as it is decided.
-            on_bytes: Called with a byte count as each chunk is copied and again
-                as it is read back to verify, so across a batch it adds up to
-                twice the bytes copied. Renames report nothing.
+            on_bytes: Called with a byte count as each chunk of a model file is
+                copied and again as it is read back to verify. Renames report
+                nothing, and nor does a ``<stem>_samples/`` carry, so the sum
+                stays short of twice ``bytes_to_copy`` when previews travel.
 
         Returns:
             A :class:`MoveReport` with one outcome per planned file.

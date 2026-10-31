@@ -195,8 +195,9 @@ export const useModelMovesStore = defineStore("modelMoves", () => {
    * Items alone left one large cross-drive file at 0% for the whole minute it
    * took to copy - it read as stuck. Bytes alone sit at 0% through a same-drive
    * move, where `bytes_to_copy` is ZERO because those are renames. The server
-   * counts every copied byte twice, once copying and once reading it back to
-   * verify, so `bytes_done` climbs to twice `bytes_to_copy`.
+   * counts a model file's bytes twice, once copying and once reading it back
+   * to verify, so `bytes_done` climbs towards twice `bytes_to_copy`; previews
+   * are copied but not read back, and the item count closes the gap.
    */
   const percent = computed(() => {
     const items = total.value ? done.value / total.value : 0;

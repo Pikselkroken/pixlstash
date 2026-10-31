@@ -1897,7 +1897,7 @@ def test_a_cancelled_cross_drive_move_leaves_no_partial_and_repoints_nothing(
 def test_a_copy_that_does_not_verify_is_discarded_and_the_source_kept(
     dir_tree, dir_cross_device, monkeypatch
 ):
-    monkeypatch.setattr(dir_mover_module, "file_digest", lambda path: "0" * 64)
+    monkeypatch.setattr(dir_mover_module, "file_digest", lambda path, **_: "0" * 64)
     before = locations(dir_tree["hub"])
     _, outcome = _move_sdxl(dir_tree)
     assert outcome.status == STATUS_FAILED
@@ -1942,8 +1942,8 @@ def test_a_file_written_into_the_source_during_the_copy_keeps_the_source(
     verify = dir_mover_module._verify
     late = dir_tree["source_dir"] / "sdxl" / "alice_samples" / "step_200.png"
 
-    def verify_then_a_job_writes(plan, copy_root):
-        verify(plan, copy_root)
+    def verify_then_a_job_writes(plan, copy_root, **kwargs):
+        verify(plan, copy_root, **kwargs)
         late.write_bytes(b"written mid-move")
 
     monkeypatch.setattr(dir_mover_module, "_verify", verify_then_a_job_writes)
@@ -1955,23 +1955,39 @@ def test_a_file_written_into_the_source_during_the_copy_keeps_the_source(
     assert_no_dangling_rows(dir_tree["hub"])
 
 
+def test_a_cross_drive_folder_move_reports_its_bytes(dir_tree, dir_cross_device):
+    """Every file in the tree is counted as it copies, and the hashed model is
+    counted again as it is read back - so a folder holding one large model
+    fills the bar instead of sitting at ``0 / 1``."""
+    sdxl = dir_tree["source_dir"] / "sdxl"
+    tree_bytes = sum(p.stat().st_size for p in sdxl.rglob("*") if p.is_file())
+    model_bytes = (sdxl / "alice.safetensors").stat().st_size
+    counts: list[int] = []
+
+    _, outcome = _move_sdxl(dir_tree, on_bytes=counts.append)
+
+    assert outcome.status == STATUS_MOVED
+    assert model_bytes > 0
+    assert sum(counts) == tree_bytes + model_bytes
+
+
 def test_a_file_rewritten_at_the_same_size_during_the_copy_keeps_the_source(
     dir_tree, dir_cross_device, monkeypatch
 ):
     """Size alone cannot tell a same-size rewrite from the file that was copied,
     so the source is kept when a file was written to after its copy began."""
-    copy2 = dir_mover_module.shutil.copy2
+    real_copy = dir_mover_module.copy_and_digest
     notes = dir_tree["source_dir"] / "sdxl" / "notes.txt"
 
-    def copy_then_a_job_rewrites(source, destination):
-        copied = copy2(source, destination)
+    def copy_then_a_job_rewrites(source, destination, **kwargs):
+        copied = real_copy(source, destination, **kwargs)
         if source == str(notes):
             notes.write_text("trained on 41 pictures")
             stat = notes.stat()
             os.utime(notes, ns=(stat.st_atime_ns, stat.st_mtime_ns + 10**9))
         return copied
 
-    monkeypatch.setattr(dir_mover_module.shutil, "copy2", copy_then_a_job_rewrites)
+    monkeypatch.setattr(dir_mover_module, "copy_and_digest", copy_then_a_job_rewrites)
     _, outcome = _move_sdxl(dir_tree)
     assert outcome.status == STATUS_MOVED
     assert "original was kept" in outcome.detail
