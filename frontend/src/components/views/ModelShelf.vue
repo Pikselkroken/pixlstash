@@ -5490,9 +5490,11 @@ button.shelf-head-cell:hover {
    edited would be a field whose text cannot be dragged over or double-clicked. */
 /* One inline field, two columns. Two class names and not one, because
    `startRename` finds its field with a first-match `querySelector` and a shared
-   class would let it land on whichever of the two was drawn first. */
+   class would let it land on whichever of the two was drawn first. The base
+   field is `BaseModelInput`, whose input is not a root this file's scope
+   reaches, hence `:deep()` (see that component's docstring). */
 .shelf-row-rename,
-.shelf-row-base-edit {
+.shelf-col--base :deep(.shelf-row-base-edit) {
   min-width: 0;
   -webkit-user-select: text;
   user-select: text;
@@ -5698,7 +5700,7 @@ button.shelf-head-cell:hover {
    grid the moment somebody double-clicked one row. Regular weight, because the
    Base column is not the row's title and the name field's semibold would make
    it read as one. */
-.shelf-row-base-edit {
+.shelf-col--base :deep(.shelf-row-base-edit) {
   width: 100%;
   font-weight: var(--weight-regular);
 }

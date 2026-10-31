@@ -100,6 +100,12 @@
  * image's own tags, and prising it out is a refactor of a component this change
  * does not otherwise touch. The duplication is the treatment, not the logic,
  * and it is the thing to collapse if a third completion field ever appears.
+ *
+ * **A caller styles the field with `:deep()`.** The template has two roots (the
+ * input and the menu's layer), so Vue gives a scoped parent's attribute to
+ * neither, and a plain `.my-class` rule in the caller's scoped style never
+ * matches. The class still lands on the input through `$attrs`; write
+ * `.wrapper :deep(.my-class)`, or use a global class like `tbm-input`.
  */
 import {
   computed,

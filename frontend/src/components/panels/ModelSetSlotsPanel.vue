@@ -818,7 +818,8 @@ const notchStyle = computed(() => {
   flex: 1 1 16rem;
 }
 
-.mss__baseinput {
+/* `:deep()`: `BaseModelInput` is not a root this file's scope reaches. */
+.mss__base :deep(.mss__baseinput) {
   flex: 0 1 14rem;
   width: auto;
 }
