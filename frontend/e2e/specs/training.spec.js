@@ -381,8 +381,9 @@ test.describe('training a LoRA of a person', () => {
       // it has no card there.
       await training.openRun(uuid)
       await expect(training.liveStatus).toContainText('Failed')
-      await expect(training.liveNotice).toContainText('The run failed.')
-      await expect(training.liveNotice).toContainText(TRAINER_REASON)
+      // The notice's headline is the trainer's reason, not the stock sentence.
+      await expect(training.liveNotice.locator('b')).toContainText(TRAINER_REASON)
+      await expect(training.liveNotice).not.toContainText('The run failed.')
     } finally {
       const restored = await connect(apiContext)
       expect(restored.ok(), await restored.text()).toBe(true)
