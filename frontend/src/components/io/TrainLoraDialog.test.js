@@ -571,6 +571,13 @@ describe("opened from the Models workspace (#2169)", () => {
     const lead = wrapper.find('[data-testid="tld-lead"]');
     expect(lead.find("img").exists()).toBe(false);
     expect(lead.find(".tld-source__img--blank").exists()).toBe(true);
+
+    // The dialog stays mounted: the next open retries the failed face.
+    useTrainingStore().closeDialog();
+    await flushPromises();
+    useTrainingStore().openToPick();
+    await flushPromises();
+    expect(tile("character:4").find("img").exists()).toBe(true);
   });
 
   it("lands on Training runs when Start is pressed from there", async () => {

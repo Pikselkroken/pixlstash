@@ -837,6 +837,13 @@ const sourceOptions = computed(() => [
 
 /** Sources whose thumbnail would not load: they keep their tile, with a glyph. */
 const broken = reactive(new Set());
+// The dialog stays mounted between opens: each open retries every thumbnail.
+watch(
+  () => store.trainDialogOpen,
+  (open) => {
+    if (open) broken.clear();
+  },
+);
 
 const pickedSource = computed(() =>
   store.scopeType && store.scopeId != null
