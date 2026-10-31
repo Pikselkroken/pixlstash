@@ -170,6 +170,19 @@ def test_strip_drops_what_follows_a_jpeg_and_keeps_a_progressive_one_intact():
     assert _pixels(stripped) == _pixels(original)
 
 
+def test_a_png_cut_off_before_iend_is_skipped_as_unreadable(library):
+    png = _comfy_png()
+    iend = png.rindex(b"IEND") - 4  # the start of the IEND chunk
+    with pytest.raises(ValueError, match="IEND"):
+        strip_generation_data(png[:iend])
+    library["add"](png[:iend], "cut.png")
+
+    result = _copy(library)
+
+    assert result["files"] == []
+    assert result["skipped"] == [{"picture_id": 1, "reason": "unreadable"}]
+
+
 def test_strip_leaves_formats_it_does_not_handle():
     buf = BytesIO()
     _pattern().save(buf, format="GIF", comment=b"Steps: 20")

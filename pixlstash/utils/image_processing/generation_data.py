@@ -159,8 +159,10 @@ def _strip_png(data: bytes) -> bytes:
             out.extend(data[position : body_end + 4])
         position = body_end + 4
         if chunk_type == b"IEND":
-            break
-    return bytes(out)
+            return bytes(out)
+    # Cut off on a chunk boundary: say so, as a JPEG without EOI does, rather
+    # than hand on a copy reported clean that will not open.
+    raise ValueError("PNG ended before its IEND chunk")
 
 
 def _strip_jpeg(data: bytes) -> bytes:
