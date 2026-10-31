@@ -3590,12 +3590,15 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   const folderMoveRequest = shallowRef(null);
   let folderMoveAsks = 0;
   /**
-   * A folder removal that needs the dialog (#2207): `{source, plan, at}`, the
-   * plan being the dry run already read. An empty folder never gets here; it
+   * A folder removal that needs the dialog (#2207): `{source, plan, remaining,
+   * at}`, the plan being the dry run already read and `remaining` how many
+   * picked folders wait behind this one. An empty folder never gets here; it
    * goes at once. `ModelShelf` owns the dialog.
    */
   const folderRemoveRequest = shallowRef(null);
   let folderRemoveAsks = 0;
+  /** Answers the open request's promise: true once its folder is removed. */
+  let folderRemoveSettle = null;
 
   /**
    * The selection's copies that can move. In a folder view, only the copy in
@@ -3740,9 +3743,28 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   /**
    * @param {{folderId: number, path: string, name: string}} source
    * @param {Object} plan - the removal's dry run.
+   * @param {{remaining?: number}} [options]
+   * @returns {Promise<boolean>} true once the dialog removed the folder, false
+   *   when it closed without (or was replaced or reset before it did).
    */
-  function requestFolderRemove(source, plan) {
-    folderRemoveRequest.value = { source, plan, at: (folderRemoveAsks += 1) };
+  function requestFolderRemove(source, plan, { remaining = 0 } = {}) {
+    settleFolderRemove(false);
+    return new Promise((resolve) => {
+      folderRemoveSettle = resolve;
+      folderRemoveRequest.value = {
+        source,
+        plan,
+        remaining,
+        at: (folderRemoveAsks += 1),
+      };
+    });
+  }
+
+  /** The removal dialog closed: `removed` is whether its folder went. */
+  function settleFolderRemove(removed) {
+    const settle = folderRemoveSettle;
+    folderRemoveSettle = null;
+    settle?.(Boolean(removed));
   }
 
   /** True once the sets are read, so "in no set" is an answer, not a guess. */
@@ -4902,6 +4924,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     moveRequest.value = null;
     dragFolder.value = null;
     folderMoveRequest.value = null;
+    settleFolderRemove(false);
     folderRemoveRequest.value = null;
     anchorId.value = null;
     anchorOccurrence.value = null;
@@ -5110,6 +5133,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     requestFolderMove,
     folderRemoveRequest,
     requestFolderRemove,
+    settleFolderRemove,
     movableSelection,
     cutSelection,
     clearCut,

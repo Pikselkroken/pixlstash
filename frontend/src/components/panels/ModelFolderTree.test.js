@@ -1041,6 +1041,172 @@ describe("the folder verbs (#2206)", () => {
     wrapper.unmount();
   });
 
+  describe("picking several folders", () => {
+    const EMPTY_READ = (name) => ({ file_count: 0, files: [], fingerprint: `fp-${name}`, name });
+    const removals = () =>
+      removeModelFolderDir.mock.calls.filter(([, body]) => !body.dryRun).map(([, body]) => body.path);
+    // Folder 1 and its Lora open: Lora, Lora/flux, VAE in reading order.
+    async function openFlux() {
+      // The repaint after each removal is not under test; keep it off the wire.
+      vi.spyOn(useModelShelfStore(), "fetchRows").mockResolvedValue();
+      vi.spyOn(useModelFoldersStore(), "refresh").mockResolvedValue();
+      const wrapper = await openLora();
+      await item(wrapper, 1, "Lora").find(".mft-twist").trigger("click");
+      await flushPromises();
+      return wrapper;
+    }
+    const picks = (wrapper) =>
+      wrapper.findAll(".mft-row--picked").map((one) => one.attributes("data-path"));
+
+    it("picks with Ctrl click and Shift click, never opening, and only subfolders", async () => {
+      const wrapper = await openFlux();
+      await item(wrapper, 1, "Lora").trigger("click", { ctrlKey: true });
+      // A root offers no Remove, so it cannot join.
+      await item(wrapper, 1).trigger("click", { ctrlKey: true });
+      expect(picks(wrapper)).toEqual(["Lora"]);
+      await item(wrapper, 1, "VAE").trigger("click", { shiftKey: true });
+      expect(picks(wrapper)).toEqual(["Lora", "Lora/flux", "VAE"]);
+      expect(item(wrapper, 1, "VAE").attributes("aria-selected")).toBe("true");
+      await item(wrapper, 1, "Lora/flux").trigger("click", { metaKey: true });
+      expect(picks(wrapper)).toEqual(["Lora", "VAE"]);
+      expect(wrapper.emitted("select")).toBeFalsy();
+      // A plain click opens, and lets the pick go.
+      await item(wrapper, 1, "VAE").trigger("click");
+      expect(picks(wrapper)).toEqual([]);
+      expect(wrapper.emitted("select")).toHaveLength(1);
+      wrapper.unmount();
+    });
+
+    it("picks a run with Shift+arrows, toggles with Ctrl+Space, lets go on Escape", async () => {
+      const wrapper = await openFlux();
+      item(wrapper, 1, "Lora").element.focus();
+      await item(wrapper, 1, "Lora").trigger("keydown", { key: "ArrowDown", shiftKey: true });
+      expect(picks(wrapper)).toEqual(["Lora", "Lora/flux"]);
+      await item(wrapper, 1, "Lora/flux").trigger("keydown", { key: "ArrowDown", shiftKey: true });
+      expect(picks(wrapper)).toEqual(["Lora", "Lora/flux", "VAE"]);
+      await item(wrapper, 1, "VAE").trigger("keydown", { key: " ", ctrlKey: true });
+      expect(picks(wrapper)).toEqual(["Lora", "Lora/flux"]);
+      const seen = vi.fn();
+      window.addEventListener("keydown", seen);
+      try {
+        await item(wrapper, 1, "VAE").trigger("keydown", { key: "Escape" });
+        expect(picks(wrapper)).toEqual([]);
+        expect(seen).not.toHaveBeenCalled();
+        // With nothing picked, Escape is not the tree's.
+        await item(wrapper, 1, "VAE").trigger("keydown", { key: "Escape" });
+        expect(seen).toHaveBeenCalledTimes(1);
+      } finally {
+        window.removeEventListener("keydown", seen);
+      }
+      wrapper.unmount();
+    });
+
+    it("offers Remove N folders on a picked row, and removes each, a nested one once", async () => {
+      const wrapper = await openFlux();
+      removeModelFolderDir.mockImplementation(async (id, body) =>
+        body.dryRun
+          ? EMPTY_READ(body.path)
+          : { files_removed: 0, removed_models: [], permanent: false, trash_name: "Trash" },
+      );
+      await item(wrapper, 1, "Lora").trigger("click", { ctrlKey: true });
+      await item(wrapper, 1, "VAE").trigger("click", { shiftKey: true });
+      rightClick(item(wrapper, 1, "VAE"));
+      await flushPromises();
+      expect(verbs(wrapper)).toEqual(["remove-many"]);
+      expect(menu(wrapper).text()).toContain("Remove 3 folders…");
+      await menu(wrapper).find('[data-verb="remove-many"]').trigger("click");
+      await flushPromises();
+      // Lora/flux goes with Lora and is not asked about on its own.
+      expect(removals()).toEqual(["Lora", "VAE"]);
+      expect(picks(wrapper)).toEqual([]);
+      wrapper.unmount();
+    });
+
+    it("lets the pick go when the menu opens on a row outside it", async () => {
+      const wrapper = await openFlux();
+      await item(wrapper, 1, "Lora").trigger("click", { ctrlKey: true });
+      await item(wrapper, 1, "Lora/flux").trigger("click", { ctrlKey: true });
+      rightClick(item(wrapper, 1, "VAE"));
+      await flushPromises();
+      expect(picks(wrapper)).toEqual([]);
+      expect(verbs(wrapper)).toEqual(["new", "open", "move", "rename", "remove"]);
+      wrapper.unmount();
+    });
+
+    it("takes Del on a picked row for all of them, a dialog at a time, and stops on cancel", async () => {
+      const wrapper = await openFlux();
+      removeModelFolderDir.mockImplementation(async (id, body) =>
+        body.dryRun
+          ? { file_count: 2, files: [], fingerprint: `fp-${body.path}`, name: body.path }
+          : { files_removed: 2, removed_models: [], permanent: false, trash_name: "Trash" },
+      );
+      await item(wrapper, 1, "Lora/flux").trigger("click", { ctrlKey: true });
+      await item(wrapper, 1, "VAE").trigger("click", { ctrlKey: true });
+      item(wrapper, 1, "VAE").element.focus();
+      await item(wrapper, 1, "VAE").trigger("keydown", { key: "Delete" });
+      await flushPromises();
+      const shelf = useModelShelfStore();
+      expect(shelf.folderRemoveRequest.source.path).toBe("Lora/flux");
+      expect(shelf.folderRemoveRequest.remaining).toBe(1);
+      // The first dialog removed its folder: the next is asked.
+      shelf.settleFolderRemove(true);
+      await flushPromises();
+      expect(shelf.folderRemoveRequest.source.path).toBe("VAE");
+      expect(shelf.folderRemoveRequest.remaining).toBe(0);
+      const asked = shelf.folderRemoveRequest;
+      shelf.settleFolderRemove(false);
+      await flushPromises();
+      expect(shelf.folderRemoveRequest).toBe(asked);
+      // Only the dry runs: the dialog itself does the removing.
+      expect(removals()).toEqual([]);
+      wrapper.unmount();
+    });
+
+    it("stops after a cancel, asking nothing more", async () => {
+      const wrapper = await openFlux();
+      removeModelFolderDir.mockImplementation(async (id, body) => ({
+        file_count: 2,
+        files: [],
+        fingerprint: `fp-${body.path}`,
+        name: body.path,
+      }));
+      await item(wrapper, 1, "Lora/flux").trigger("click", { ctrlKey: true });
+      await item(wrapper, 1, "VAE").trigger("click", { ctrlKey: true });
+      item(wrapper, 1, "VAE").element.focus();
+      await item(wrapper, 1, "VAE").trigger("keydown", { key: "Delete" });
+      await flushPromises();
+      useModelShelfStore().settleFolderRemove(false);
+      await flushPromises();
+      expect(removeModelFolderDir.mock.calls.map(([, body]) => body.path)).toEqual(["Lora/flux"]);
+      wrapper.unmount();
+    });
+
+    it("lets the pick go when Del lands on a row outside it", async () => {
+      const wrapper = await openFlux();
+      removeModelFolderDir.mockResolvedValue({ file_count: 2, files: [], fingerprint: "fp", name: "VAE" });
+      await item(wrapper, 1, "Lora").trigger("click", { ctrlKey: true });
+      await item(wrapper, 1, "Lora/flux").trigger("click", { ctrlKey: true });
+      item(wrapper, 1, "VAE").element.focus();
+      await item(wrapper, 1, "VAE").trigger("keydown", { key: "Delete" });
+      await flushPromises();
+      expect(picks(wrapper)).toEqual([]);
+      expect(useModelShelfStore().folderRemoveRequest.source.path).toBe("VAE");
+      wrapper.unmount();
+    });
+
+    it("drops a picked row whose parent closes", async () => {
+      const wrapper = await openFlux();
+      await item(wrapper, 1, "Lora/flux").trigger("click", { ctrlKey: true });
+      await item(wrapper, 1, "VAE").trigger("click", { ctrlKey: true });
+      await item(wrapper, 1, "Lora").find(".mft-twist").trigger("click");
+      await flushPromises();
+      await item(wrapper, 1, "Lora").find(".mft-twist").trigger("click");
+      await flushPromises();
+      expect(picks(wrapper)).toEqual(["VAE"]);
+      wrapper.unmount();
+    });
+  });
+
   it("lets Move folder to… ask the shelf for the dialog on the pick step", async () => {
     const wrapper = await openLora();
     rightClick(item(wrapper, 1, "Lora"));
