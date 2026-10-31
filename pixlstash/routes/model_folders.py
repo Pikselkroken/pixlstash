@@ -1875,6 +1875,20 @@ def create_router(server) -> APIRouter:
         )
         return _to_response(_fetch_folder(folder_id))
 
+    def _same_directory(old_path: str, new_path: str) -> bool:
+        """Whether *new_path* is *old_path* under another spelling. A target
+        that cannot be statted (a dangling link) is another thing, taken."""
+        try:
+            return os.path.samefile(old_path, new_path)
+        except OSError as exc:
+            logger.info(
+                "Cannot compare %s with %s (%s); treating the name as taken.",
+                new_path,
+                old_path,
+                exc,
+            )
+            return False
+
     def _rename_on_disk_and_hub(folder_id: int, old_path: str, new_path: str) -> None:
         """Rename the directory, then the row; put the directory back if the row
         cannot follow, so the registration never names a folder that is gone."""
@@ -1882,7 +1896,7 @@ def create_router(server) -> APIRouter:
         # directory replaces it. A case-only rename on a case-insensitive drive
         # "exists" but is the same directory. The window between the check and
         # the rename is the one `model_dir_mover` accepts too.
-        if os.path.lexists(new_path) and not os.path.samefile(old_path, new_path):
+        if os.path.lexists(new_path) and not _same_directory(old_path, new_path):
             raise HTTPException(
                 status_code=409,
                 detail=f"{os.path.basename(new_path)!r} already exists there.",

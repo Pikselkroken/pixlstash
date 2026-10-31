@@ -11562,6 +11562,14 @@ def test_a_root_rename_onto_a_taken_name_merges_nothing(shelf_env, tmp_path):
     assert _folder_one(shelf_env)["path"] == str(root)
 
 
+def test_a_root_rename_onto_a_dangling_link_is_a_conflict(shelf_env, tmp_path):
+    os.symlink(str(tmp_path / "nowhere"), str(tmp_path / "Loras"))
+    root, r = _rename_root(shelf_env, tmp_path)
+    assert r.status_code == 409, r.text
+    assert root.is_dir() and os.path.islink(tmp_path / "Loras")
+    assert _folder_one(shelf_env)["path"] == str(root)
+
+
 def test_a_root_rename_onto_a_registered_path_on_an_unplugged_drive_is_refused(
     shelf_env, tmp_path
 ):
