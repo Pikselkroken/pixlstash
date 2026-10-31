@@ -1100,17 +1100,19 @@ defineExpose({
              ahead of the stats panel. -->
         <!-- The Workflows view's Templates tab (#2000) has its own: a template
              is not a workflow yet, so nothing of the Workflow tab applies. -->
-        <!-- Tags to review has no pictures for the stats rail to inspect, and
-             the board needs the width for every column, so it has none. -->
         <!-- Everywhere else the stats panel also inspects the grid's
              selection (#2161). It rates, favourites and tags through the
              grid's own paths, so the rail and the tile cannot disagree. -->
+        <!-- Tags to review owns the centre column and takes no rail on any
+             route it rides over: it has no pictures for the stats rail to
+             inspect, and the board needs the width for every column. -->
+        <template v-if="!reviewSessionsStore.overlayOpen">
         <TemplateInspector
           v-if="isWorkflowsView && workflowTemplatesStore.shown"
         />
         <WorkflowTab v-else-if="isWorkflowsView" />
         <ModelsRail v-else-if="isModelsView" />
-        <StatsSidebar v-else-if="!reviewSessionsStore.overlayOpen"
+        <StatsSidebar v-else
           ref="statsSidebarRef"
           :view-name="activeCategoryLabel"
           :pictures="railPictures"
@@ -1124,6 +1126,7 @@ defineExpose({
           @lightbox-change="(change) => gridContainer?.handleLightboxChange(change)"
           @tags-applied="(change) => gridContainer?.handleTagsApplied(change)"
         />
+        </template>
         <!-- Lightbox teleports here: it lies over the centre column and
              the rail, and draws its own inspector where the rail is. -->
         <div :id="LIGHTBOX_HOST_ID" class="lightbox-host"></div>

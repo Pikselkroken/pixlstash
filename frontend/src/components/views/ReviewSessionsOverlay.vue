@@ -237,10 +237,13 @@ function goBack() {
 }
 
 // The sidebar's "New review…" row asks through the store, since the dialog
-// lives here.
+// lives here. A dialog already up is left alone: reopening it would wipe the
+// tag and scope picked so far.
 watch(
   () => store.newReviewTick,
-  () => openNewReview(),
+  () => {
+    if (!dialog.value) openNewReview();
+  },
 );
 
 const archivedReview = computed(() =>
