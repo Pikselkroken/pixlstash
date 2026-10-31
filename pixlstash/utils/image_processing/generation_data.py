@@ -70,6 +70,7 @@ _PNG_KEEP = frozenset(
 # JPEG markers with no length field.
 _JPEG_STANDALONE = frozenset({0x01, *range(0xD0, 0xD8)})
 _JPEG_SOS = 0xDA
+_JPEG_EOI = 0xD9
 _JPEG_APP0 = 0xE0  # JFIF / JFXX
 _JPEG_APP1 = 0xE1  # EXIF and XMP
 _JPEG_APP2 = 0xE2  # ICC profile (also MPF, which is dropped)
@@ -166,26 +167,37 @@ def _strip_jpeg(data: bytes) -> bytes:
     out = bytearray(b"\xff\xd8")
     exif = _orientation_exif(data)
     position = 2
-    while position + 4 <= len(data):
+    while position + 2 <= len(data):
         if data[position] != 0xFF:
             raise ValueError(f"JPEG marker expected at byte {position}")
         marker = data[position + 1]
         if marker == 0xFF:  # fill byte
             position += 1
             continue
+        if marker == _JPEG_EOI:
+            # Anything after EOI (a trailer, an MPF second image) is not this
+            # picture and is dropped with it.
+            out.extend(b"\xff\xd9")
+            return bytes(out)
         if marker in _JPEG_STANDALONE:
             out.extend(data[position : position + 2])
             position += 2
             continue
+        if position + 4 > len(data):
+            break
+        (length,) = struct.unpack(">H", data[position + 2 : position + 4])
+        end = position + 2 + length
         if marker == _JPEG_SOS:
             if exif is not None:
                 _jpeg_emit_exif(out, exif)
                 exif = None
-            # Entropy-coded data, further scans and EOI: all pixels, copied.
-            out.extend(data[position:])
-            return bytes(out)
-        (length,) = struct.unpack(">H", data[position + 2 : position + 4])
-        end = position + 2 + length
+            # The scan header, then its entropy-coded data up to the next real
+            # marker: pixels, copied. Segments between progressive scans go
+            # back through the keep-list like any other.
+            scan_end = _jpeg_scan_end(data, end)
+            out.extend(data[position:scan_end])
+            position = scan_end
+            continue
         if end > len(data):
             raise ValueError(f"Truncated JPEG segment 0x{marker:02X}")
         body = data[position + 4 : end]
@@ -202,7 +214,27 @@ def _strip_jpeg(data: bytes) -> bytes:
         if keep:
             out.extend(data[position:end])
         position = end
-    raise ValueError("JPEG ended before its image data")
+    raise ValueError("JPEG ended before its EOI marker")
+
+
+def _jpeg_scan_end(data: bytes, start: int) -> int:
+    """The offset of the first marker after the entropy-coded data at *start*.
+
+    Inside a scan ``FF 00`` is a stuffed data byte and ``FF D0``-``FF D7`` are
+    restart markers; both belong to the scan. ``FF FF`` is fill before a marker.
+    """
+    scan = start
+    while True:
+        found = data.find(b"\xff", scan)
+        if found < 0 or found + 1 >= len(data):
+            raise ValueError("JPEG ended inside its image data")
+        following = data[found + 1]
+        if following == 0x00 or 0xD0 <= following <= 0xD7:
+            scan = found + 2
+        elif following == 0xFF:
+            scan = found + 1
+        else:
+            return found
 
 
 def _jpeg_emit_exif(out: bytearray, exif: bytes) -> None:

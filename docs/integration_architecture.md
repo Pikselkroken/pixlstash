@@ -1730,7 +1730,9 @@ sending to a folder) hands over **copies**, never the vault's files.
 the stripper does not handle (GIF, TIFF, HEIC, AVIF, BMP), goes as it is and
 says so, so the dialog can tell the owner instead of promising a clean file.
 An animated image and a video are never resized or watermarked, and report
-`resized`/`watermarked` false.
+`resized`/`watermarked` false, so a dialog that asked for either can say it
+was not applied. A re-encode with `keep_generation_data` keeps the PNG text,
+EXIF, XMP and JPEG comment, and transparency always.
 
 **Staging root, and why main can trust it.** The copies land in
 `<dir of server-config.json>/share-copies/<batch>/`. The Electron main process
@@ -1738,7 +1740,9 @@ starts the backend with `--server-config serverConfigPath()`, so it knows the
 root on its own (`shareCopiesRoot()` in `electron/src/config.ts`) and never
 takes it from the renderer. A path that reaches main for a drag or the
 clipboard comes *through* the renderer, so the IPC handler that hands it to the
-OS must resolve it and check it is inside that root before using it. That
+OS must resolve it and check it is inside that root before using it. Those
+handlers do not exist yet: they arrive with copy-as-files (#2419) and drag-out
+(#2420), and this is the rule they are built to. That
 keeps the `main.ts` rule: the renderer never supplies a filesystem path main
 acts on unchecked.
 
@@ -1747,7 +1751,8 @@ are removed after 12 hours, at start-up and before each new batch. The route
 answers `409` if the root sits inside a library, a reference folder or an
 import folder, the folder export's rule. It is `loopback_owner_only`; remote and
 scoped sessions use the ZIP export (`GET /pictures/export`). Backend:
-`docs/backend_architecture.md` §5, *Share copies*.
+`docs/backend_architecture.md` §5, the *Share copies* paragraph under
+`pictures/` package.
 
 ---
 

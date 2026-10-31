@@ -2,7 +2,8 @@
 
 Every way of sharing a picture from the desktop - the Share dialog, copying as
 files, dragging out, sending to a folder - hands over a copy made here, never
-the vault's own file. See ``docs/backend_architecture.md`` §5 "Share copies".
+the vault's own file. See the "Share copies" paragraph in
+``docs/backend_architecture.md`` §5 and ``docs/integration_architecture.md`` §2.5.
 
 **Where copies go.** ``<config dir>/share-copies/<batch>/``, beside
 ``server-config.json`` like the hub and the managed model store. The Electron
@@ -127,7 +128,8 @@ def make_share_copies(
     """
     batch = uuid.uuid4().hex
     directory = os.path.join(root, batch)
-    os.makedirs(directory, mode=0o700)
+    os.makedirs(root, mode=0o700, exist_ok=True)
+    os.mkdir(directory, mode=0o700)
     claimed: dict = {}
     files, skipped = [], []
     for pic in pictures:
@@ -251,7 +253,16 @@ def _reencode(source, max_long_edge, watermark_bytes, keep_generation_data):
     if resized:
         out.thumbnail((max_long_edge, max_long_edge), Image.LANCZOS)
     if watermark_bytes:
+        # apply_watermark answers RGB; put the picture's own alpha back so a
+        # transparent area stays transparent.
+        alpha = (
+            out.convert("RGBA").getchannel("A")
+            if out.mode in ("RGBA", "LA", "PA") or "transparency" in out.info
+            else None
+        )
         out = apply_watermark(out, watermark_bytes)
+        if alpha is not None:
+            out.putalpha(alpha)
 
     save_kwargs = {}
     if info.get("icc_profile"):
@@ -268,14 +279,19 @@ def _reencode(source, max_long_edge, watermark_bytes, keep_generation_data):
                 if isinstance(value, str):
                     pnginfo.add_text(key, value)
             save_kwargs["pnginfo"] = pnginfo
+        elif info.get("xmp"):
+            save_kwargs["xmp"] = info["xmp"]
+        if fmt == "JPEG" and info.get("comment"):
+            save_kwargs["comment"] = info["comment"]
     if fmt == "JPEG":
         out = out.convert("RGB")
         save_kwargs["quality"] = 92
     elif fmt == "WEBP":
         save_kwargs["quality"] = 92
     # Pillow falls back to ``im.info`` for some blocks (XMP, the ICC profile),
-    # so the copy carries only what is passed above.
-    out.info = {}
+    # so the copy carries only what is passed above - and the palette
+    # transparency, which is pixels rather than metadata.
+    out.info = {k: v for k, v in out.info.items() if k == "transparency"}
     buffer = BytesIO()
     out.save(buffer, format=fmt, **save_kwargs)
     return buffer.getvalue(), fmt, resized

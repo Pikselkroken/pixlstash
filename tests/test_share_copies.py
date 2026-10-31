@@ -154,6 +154,21 @@ def test_strip_keeps_the_orientation_and_colour_profile(make):
         assert img.info.get("icc_profile") == _srgb_icc()
 
 
+def test_strip_drops_what_follows_a_jpeg_and_keeps_a_progressive_one_intact():
+    buf = BytesIO()
+    _pattern(size=(96, 64)).save(
+        buf, format="JPEG", progressive=True, comment=b"Steps: 20"
+    )
+    original = buf.getvalue()
+    trailer = b"\xff\xfe\x00\x0bSteps: 20"  # a COM segment after EOI
+
+    stripped = strip_generation_data(original + trailer)
+
+    _assert_no_generation_data(stripped)
+    assert stripped.endswith(b"\xff\xd9")
+    assert _pixels(stripped) == _pixels(original)
+
+
 def test_strip_leaves_formats_it_does_not_handle():
     buf = BytesIO()
     _pattern().save(buf, format="GIF", comment=b"Steps: 20")
@@ -294,6 +309,51 @@ def test_watermark_is_applied(library):
         copy = fh.read()
     _assert_no_generation_data(copy)
     assert _pixels(copy) != _pixels(_a1111_png())
+
+
+def _transparent_png(mode: str) -> bytes:
+    """64x64 with its left half see-through, as an alpha channel or a tRNS."""
+    buf = BytesIO()
+    if mode == "P":
+        img = Image.new("P", (64, 64), 1)
+        img.putpalette([0, 0, 0, 200, 40, 40])
+        img.paste(0, (0, 0, 32, 64))
+        img.save(buf, format="PNG", transparency=0)
+    else:
+        img = _pattern("RGBA", size=(64, 64))
+        img.putalpha(255)
+        img.paste((0, 0, 0, 0), (0, 0, 32, 64))
+        img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+@pytest.mark.parametrize("mode", ["RGBA", "P"])
+@pytest.mark.parametrize("keep", [False, True])
+def test_a_re_encoded_copy_keeps_its_transparency(library, mode, keep):
+    library["add"](_transparent_png(mode), "clear.png")
+    mark = BytesIO()
+    Image.new("RGBA", (16, 16), (255, 0, 0, 255)).save(mark, format="PNG")
+
+    for kwargs in ({"max_long_edge": 32}, {"watermark_bytes": mark.getvalue()}):
+        (entry,) = _copy(library, keep_generation_data=keep, **kwargs)["files"]
+        with Image.open(entry["path"]) as img:
+            rgba = img.convert("RGBA")
+            assert rgba.getpixel((1, 1))[3] == 0, kwargs
+            assert rgba.getpixel((rgba.width - 1, 1))[3] == 255, kwargs
+
+
+def test_keep_survives_a_re_encode(library):
+    library["add"](_comfy_png(), "a.png")
+    library["add"](_a1111_jpeg(), "b.jpg")
+
+    entries = _copy(library, max_long_edge=24, keep_generation_data=True)["files"]
+
+    with Image.open(entries[0]["path"]) as img:
+        assert img.text["prompt"] == COMFY_PROMPT
+        assert img.text["workflow"] == COMFY_WORKFLOW
+    with Image.open(entries[1]["path"]) as img:
+        assert b"Steps: 20" in img.getexif().get_ifd(0x8769)[0x9286]
+        assert img.info.get("xmp") and img.info.get("comment") == b"Steps: 20"
 
 
 def test_videos_and_unhandled_formats_pass_through_and_say_so(library):
