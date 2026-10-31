@@ -167,31 +167,6 @@ describe("useWindowFileImport", () => {
     expect(last.text).toContain("already inside");
   });
 
-  it("ignores model rows dropped short of a folder (#2204)", async () => {
-    // A row drag carries the private type; on the desktop shell it can carry
-    // a File too. Neither may start an import.
-    for (const types of [
-      ["application/x-pixlstash-model-copies", "Files"],
-      ["text/plain"],
-    ]) {
-      const over = new Event("dragover", { bubbles: true, cancelable: true });
-      over.dataTransfer = { files: [], items: [], types };
-      document.body.dispatchEvent(over);
-      expect(over.defaultPrevented).toBe(false);
-      const event = new Event("drop", { bubbles: true, cancelable: true });
-      event.dataTransfer = {
-        files: [new File(["x"], "holiday.jpg")],
-        items: [],
-        types,
-      };
-      document.body.dispatchEvent(event);
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(event.defaultPrevented).toBe(false);
-    }
-    expect(startLocalImport).not.toHaveBeenCalled();
-    expect(addModelFile).not.toHaveBeenCalled();
-  });
-
   it("still imports a supported picture", async () => {
     await drop("holiday.jpg");
     expect(startLocalImport).toHaveBeenCalledTimes(1);

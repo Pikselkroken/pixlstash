@@ -1287,13 +1287,6 @@ export function copyKey(loc) {
 }
 
 /**
- * The private drag type of model copies dragged off the shelf's rows (#2204).
- * Its own type, so the window's file importer can tell a row dropped short of
- * a folder from a file dropped in from outside.
- */
-export const MODEL_COPIES_TYPE = "application/x-pixlstash-model-copies";
-
-/**
  * Whether a key press came from the Folders tree (#2206).
  *
  * The shelf's window listeners cannot tell the tree's keys from their own by

@@ -37,6 +37,7 @@
         :data-folder-id="node.folderId"
         :data-path="node.path"
         :draggable="canDrag(node) ? 'true' : undefined"
+        :data-model-copies-drop="mode === 'browse' ? '' : undefined"
         @click="activate(node)"
         @contextmenu="onContextMenu($event, node)"
         @focus="focusedKey = node.key"
@@ -45,6 +46,11 @@
         @dragover="onDragOver($event, node)"
         @dragleave="onDragLeave($event, node)"
         @drop="onDrop($event, node)"
+        @model-copies-over="
+          drop.onDragOver($event, node.key, dropDestination(node))
+        "
+        @model-copies-leave="drop.onDragLeave(node.key)"
+        @model-copies-drop="drop.onDrop($event, dropDestination(node))"
       >
         <span
           class="ps-row-glyph mft-twist"
@@ -1018,18 +1024,15 @@ function dropClassFor(key) {
 
 function onDragOver(event, node) {
   if (props.mode !== "browse") return;
-  drop.onDragOver(event, node.key, dropDestination(node));
   folderDrop.onDragOver(event, node.key, dropDestination(node));
 }
 
 function onDragLeave(event, node) {
-  drop.onDragLeave(event, node.key);
   folderDrop.onDragLeave(event, node.key);
 }
 
 function onDrop(event, node) {
   if (props.mode !== "browse") return;
-  drop.onDrop(event, dropDestination(node));
   folderDrop.onDrop(event, dropDestination(node));
 }
 

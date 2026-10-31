@@ -1,8 +1,8 @@
 // Folders dragged in the Folders tree, and the move they ask for (#2206).
 //
-// A folder carries its own private MIME type, distinct from the model rows'
-// (`MODEL_COPIES_TYPE`), so a folder drag can never be taken for a file drag by
-// a drop target that only knows one of them. The drop rules and the one
+// A folder carries its own private MIME type, and model rows never travel by
+// HTML5 drag at all (the shelf drags them with the pointer), so a folder drag
+// can never be taken for a file drag. The drop rules and the one
 // decision about whether a drop asks first live here, once.
 
 import { ref } from "vue";

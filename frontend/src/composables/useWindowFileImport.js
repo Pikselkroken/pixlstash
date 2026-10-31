@@ -7,7 +7,6 @@ import {
   isWorkflowFile,
 } from "../utils/media.js";
 import { addModelFile } from "../api/modelFiles";
-import { MODEL_COPIES_TYPE } from "../utils/modelShelf";
 import { errorDetail } from "../utils/apiError";
 import {
   basename,
@@ -86,9 +85,6 @@ export function useWindowFileImport({ sidebarRef }) {
     // drop and imports the picture instead of assigning it.
     if (isInternalImageDrag(dataTransfer)) return false;
     const types = dataTransfer.types ? Array.from(dataTransfer.types) : [];
-    // Model rows dragged onto a folder (#2204) are a move. One dropped short of
-    // a folder must not become an import of whatever the shell attached.
-    if (types.includes(MODEL_COPIES_TYPE)) return false;
     // A drag from outside the page always says it carries files. Reading
     // `files` instead let an in-page drag through on the desktop shell, which
     // fills it for in-page drags too.

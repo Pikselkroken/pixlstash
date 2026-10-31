@@ -329,11 +329,12 @@ describe("ModelFolderTree", () => {
 });
 
 describe("ModelFolderTree as a drop target (#2204)", () => {
-  const TYPE = "application/x-pixlstash-model-copies";
-
+  // The shelf drags with the pointer and sends the row under it these events.
   function drag(el, type) {
-    const event = new Event(type, { bubbles: true, cancelable: true });
-    event.dataTransfer = { types: [TYPE], dropEffect: "" };
+    const event = new CustomEvent(`model-copies-${type}`, {
+      cancelable: true,
+      detail: { x: 5, y: 6 },
+    });
     el.element.dispatchEvent(event);
     return event;
   }
@@ -352,13 +353,18 @@ describe("ModelFolderTree as a drop target (#2204)", () => {
     await flushPromises();
 
     const lora = item(wrapper, 1, "Lora");
-    const over = drag(lora, "dragover");
+    expect(lora.attributes("data-model-copies-drop")).toBe("");
+    const over = drag(lora, "over");
     await flushPromises();
     expect(over.defaultPrevented).toBe(true);
     expect(lora.classes()).toContain("drop-ring");
     // Same drive: the tip says rename, and names where they go.
     expect(shelf.dropTip.text).toContain("Move to Models/Lora");
     expect(shelf.dropTip.text).toContain("Renamed");
+    expect(shelf.dropTip).toMatchObject({ x: 5, y: 6 });
+    drag(lora, "leave");
+    await flushPromises();
+    expect(lora.classes()).not.toContain("drop-ring");
 
     for (const refused of [
       wrapper.find('[data-key="drive:d1"]'),
@@ -367,7 +373,7 @@ describe("ModelFolderTree as a drop target (#2204)", () => {
     ]) {
       // Each refused drop ends that drag; the next is a new one.
       shelf.dragCopies = copies;
-      const event = drag(refused, "dragover");
+      const event = drag(refused, "over");
       await flushPromises();
       expect(event.defaultPrevented).toBe(false);
       expect(refused.classes()).toContain("not-droppable");
@@ -376,6 +382,7 @@ describe("ModelFolderTree as a drop target (#2204)", () => {
     }
 
     shelf.dragCopies = copies;
+    drag(lora, "over");
     drag(lora, "drop");
     expect(shelf.moveRequest.destination).toEqual({ folderId: 1, path: "Lora" });
     expect(shelf.moveRequest.copies).toBe(copies);
@@ -390,7 +397,8 @@ describe("ModelFolderTree as a drop target (#2204)", () => {
     };
     const wrapper = mountTree({ mode: "pick" });
     await flushPromises();
-    expect(drag(item(wrapper, 1), "dragover").defaultPrevented).toBe(false);
+    // Unmarked, so the shelf never finds it under the pointer.
+    expect(item(wrapper, 1).attributes("data-model-copies-drop")).toBeUndefined();
     wrapper.unmount();
   });
 });
@@ -404,12 +412,13 @@ describe("ModelFolderTree and where ComfyUI loads from (#2205)", () => {
       { folder_id: 1, subpath: "VAE", category: "vae", kind: "vae" },
     ],
   };
-  const TYPE = "application/x-pixlstash-model-copies";
-
   function dragOver(el) {
-    const event = new Event("dragover", { bubbles: true, cancelable: true });
-    event.dataTransfer = { types: [TYPE], dropEffect: "" };
-    el.element.dispatchEvent(event);
+    el.element.dispatchEvent(
+      new CustomEvent("model-copies-over", {
+        cancelable: true,
+        detail: { x: 0, y: 0 },
+      }),
+    );
   }
 
   async function expanded() {
