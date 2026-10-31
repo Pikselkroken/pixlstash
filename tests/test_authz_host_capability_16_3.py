@@ -90,6 +90,7 @@ _LOOPBACK_ROUTE_KEYS = {
     ("POST", "/api/v1/model-folders/{folder_id}/open"),
     ("POST", "/api/v1/server-config/open"),
     ("POST", "/api/v1/pictures/export/folder"),
+    ("POST", "/api/v1/pictures/share-copies"),
     ("POST", "/api/v1/test-hooks/ws-event"),
     ("POST", "/api/v1/test-hooks/reference-folders/{folder_id}/rescan"),
     ("POST", "/api/v1/test-hooks/file-pictures"),
@@ -547,6 +548,12 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     84 = 70 + 14 with ``POST /model-folders/{folder_id}/open``, the folder
     tree's ``Open in file manager``: the host-GUI spawn of
     ``models/{model_id}/open-location`` for a directory.
+    85 = 70 + 15 with ``POST /pictures/share-copies`` (#2417): it writes picture
+    copies into a staging folder on the host and answers with their absolute
+    host paths, which only a process on that machine can open. It is
+    ``export/folder``'s write without the caller-named destination and without
+    the spawn, on that route's tier because the paths it hands back are useless
+    and owner data anywhere but loopback.
 
     Arithmetic, not judgement."""
     loopback = {
@@ -560,7 +567,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
         if rp.policy is AccessPolicy.LOCAL_OWNER_ONLY
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
-    assert len(loopback) == 14, sorted(loopback)
+    assert len(loopback) == 15, sorted(loopback)
     assert len(local) == 70, sorted(local)
 
 
@@ -1256,6 +1263,31 @@ def test_export_folder_loopback_owner_only_public_403():
             assert _is_loopback_403(r), (
                 f"public owner must be 403'd on the red line; got {r.status_code}: {r.text}"
             )
+
+
+_SHARE_COPIES = f"{API}/pictures/share-copies"  # #2417
+
+
+def test_share_copies_is_loopback_only_even_with_the_flag_on():
+    """#2417: share copies hand back absolute host paths, so only a loopback
+    owner passes the gate; RFC1918, Tailscale and public stay 403 with
+    ``allow_remote_host_ops`` on. The positive half names an id no vault holds,
+    so the handler answers 200 with it skipped and copies nothing."""
+    body = {"picture_ids": [999999]}
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server):
+            r = owner.post(_SHARE_COPIES, json=body)
+            assert r.status_code == 200, r.text
+            assert r.json()["skipped"] == [
+                {"picture_id": 999999, "reason": "not_found"}
+            ]
+        with _enforcing(server), _remote_host_ops(server, True):
+            for ip in (LAN_IPV4, "100.64.0.5", "8.8.8.8"):
+                r = owner.post(_SHARE_COPIES, json=body, headers=_xff(ip))
+                assert _is_loopback_403(r), (
+                    f"{ip} must be 403'd on share-copies; got {r.status_code}: {r.text}"
+                )
 
 
 _SHELF_OPEN = f"{API}/models/999999/open-location"  # the #933 red-line route

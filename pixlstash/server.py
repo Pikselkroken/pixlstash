@@ -179,6 +179,7 @@ from pixlstash.utils.atomic_write import write_json_atomic
 from pixlstash.utils.path_mapper import PathMapper
 from pixlstash.utils.rate_limiter import RateLimitMiddleware
 from pixlstash.utils.request_origin import OriginClientMiddleware
+from pixlstash.utils.service.share_copies import share_copies_root, sweep_share_copies
 
 
 # Logging will be set up after config is loaded
@@ -659,6 +660,9 @@ class Server(
         # services/managed_model_store.py for why it is `managed` rather than a
         # seeded `user` folder nobody is allowed to remove.
         ensure_managed_folder(self.hub, os.path.dirname(self._server_config_path))
+        # Share copies from earlier runs that a receiving app has had hours to
+        # read (utils/service/share_copies.py).
+        sweep_share_copies(share_copies_root(os.path.dirname(self._server_config_path)))
         _log_stage("hub bootstrap (open/migrate hub.db)")
         # The three roots PixlStash's models live in, declared rather than
         # scanned. Off in the test suite: they are machine-global, so a Server

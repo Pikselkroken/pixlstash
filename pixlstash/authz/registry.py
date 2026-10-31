@@ -1085,6 +1085,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _LOOPBACK,
         justification="§16.3 RED LINE (#291): writes exported pictures straight onto the host disk and, once done, opens the destination in the host file manager (same host-GUI spawn as pictures/open-location, via pixlstash/utils/host_open.py); loopback-only, allow_remote_host_ops can NOT loosen it",
     ),
+    ("POST", "/api/v1/pictures/share-copies"): RoutePolicy(
+        _LOOPBACK,
+        justification="§16.3 host write (#2417): writes picture copies into a staging folder on the host disk and returns their absolute host paths, which only a process on that machine (the desktop app) can use; loopback-only like its sibling export/folder, allow_remote_host_ops can NOT loosen it. Remote and scoped sessions use the ZIP export",
+    ),
     ("POST", "/api/v1/pictures/import"): RoutePolicy(
         _OWNER,
         justification="Import pictures; POST blocked for READ tokens; owner only",

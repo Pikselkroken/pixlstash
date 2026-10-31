@@ -10,11 +10,19 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.background import BackgroundTask
-from pydantic import BaseModel, ConfigDict
-from typing import Optional
+from pydantic import BaseModel, ConfigDict, Field
+from sqlmodel import select
+from typing import Literal, Optional
 
+from pixlstash.db_models.picture import Picture
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.library_roots import refuse_path_inside_a_library
+from pixlstash.utils.service.share_copies import (
+    make_share_copies,
+    share_copies_root,
+    sweep_share_copies,
+)
+from pixlstash.utils.watermark import get_watermark_bytes
 from pixlstash.utils.reference_folder_validator import validate_reference_folder_path
 
 
@@ -52,6 +60,39 @@ class ExportStatusResponse(BaseModel):
     # only caller that can ever have a folder task is the one that named the
     # folder in the first place and has nothing to learn from it coming back.
     opened: Optional[bool] = None
+
+
+class ShareCopiesRequest(BaseModel):
+    # A share is a handful of pictures; a whole library belongs to the export.
+    picture_ids: list[int] = Field(min_length=1, max_length=500)
+    keep_generation_data: bool = False
+    # The longer side of each image, at most; None keeps the original size.
+    max_long_edge: Optional[int] = Field(default=None, ge=64, le=16384)
+    watermark: bool = False
+    file_names: Literal["original", "pixlstash"] = "original"
+
+
+class ShareCopyFile(BaseModel):
+    picture_id: int
+    path: str
+    name: str
+    size: int
+    # "removed", "kept", or "unchanged" for a format nothing is stripped from.
+    metadata: str
+    resized: bool
+    watermarked: bool
+
+
+class ShareCopySkipped(BaseModel):
+    picture_id: int
+    reason: str
+
+
+class ShareCopiesResponse(BaseModel):
+    batch: str
+    directory: str
+    files: list[ShareCopyFile]
+    skipped: list[ShareCopySkipped]
 
 
 def register_routes(router, server):
@@ -260,6 +301,68 @@ def register_routes(router, server):
             background_data,
         )
         return JSONResponse({"task_id": task_id})
+
+    @router.post(
+        "/pictures/share-copies",
+        summary="Make share-ready copies of pictures",
+        description=(
+            "Writes a copy of each picture into a new staging folder on the "
+            "machine running PixlStash and returns the copies' paths, for the "
+            "desktop app to hand to a drag, the clipboard or a folder. "
+            "Generation data (ComfyUI prompt/workflow, A1111 parameters, "
+            "EXIF/XMP) is removed unless keep_generation_data is set; videos "
+            "and formats other than JPEG, PNG and WebP are copied unchanged "
+            "and say so. Batches are removed after some hours. Local owner, "
+            "on that machine, only - GET /pictures/export is the download "
+            "for everyone else."
+        ),
+        response_model=ShareCopiesResponse,
+    )
+    def make_picture_share_copies(request: Request, payload: ShareCopiesRequest):
+        vault = request.state.library_lease.vault
+        root = share_copies_root(os.path.dirname(server.server_config_path))
+        # The same class the folder export guards: copies written where the
+        # library reads come straight back as pictures.
+        refuse_path_inside_a_library(os.path.realpath(root), server, vault)
+        sweep_share_copies(root)
+
+        ids = list(dict.fromkeys(payload.picture_ids))
+
+        def fetch(session):
+            rows = session.exec(
+                select(Picture.id, Picture.file_path, Picture.original_file_name).where(
+                    Picture.id.in_(ids)
+                )
+            ).all()
+            return {
+                row[0]: {
+                    "id": row[0],
+                    "file_path": row[1],
+                    "original_file_name": row[2],
+                }
+                for row in rows
+            }
+
+        found = vault.db.run_immediate_read_task(fetch)
+        watermark_bytes = None
+        if payload.watermark:
+            user = server.auth.get_user_for_request(request)
+            watermark_bytes = get_watermark_bytes(
+                getattr(user, "watermark_image", None)
+            )
+        result = make_share_copies(
+            [found[i] for i in ids if i in found],
+            vault.image_root,
+            root,
+            keep_generation_data=payload.keep_generation_data,
+            max_long_edge=payload.max_long_edge,
+            watermark_bytes=watermark_bytes,
+            file_names=payload.file_names,
+        )
+        result["skipped"] += [
+            {"picture_id": i, "reason": "not_found"} for i in ids if i not in found
+        ]
+        return result
 
     @router.get(
         "/pictures/export/status",

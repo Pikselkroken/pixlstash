@@ -1,0 +1,383 @@
+"""Share-ready copies (#2417): generation data stripped by default, pixels kept."""
+
+import json
+import os
+import tempfile
+import time
+from io import BytesIO
+
+import pytest
+from fastapi.testclient import TestClient
+from PIL import Image, ImageCms, PngImagePlugin
+
+from pixlstash.server import Server
+from pixlstash.utils.image_processing.generation_data import strip_generation_data
+from pixlstash.utils.service.share_copies import (
+    METADATA_KEPT,
+    METADATA_REMOVED,
+    METADATA_UNCHANGED,
+    make_share_copies,
+    share_copies_root,
+    sweep_share_copies,
+)
+from tests.utils import API_PREFIX, upload_pictures_and_wait
+
+COMFY_PROMPT = json.dumps({"3": {"class_type": "KSampler", "inputs": {"seed": 1}}})
+COMFY_WORKFLOW = json.dumps({"nodes": [{"id": 3, "type": "KSampler"}]})
+A1111_PARAMETERS = "a cat, best quality\nSteps: 20, Sampler: Euler a, Seed: 1"
+XMP = (
+    b'<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF><rdf:Description>'
+    b"<dc:description>a cat</dc:description></rdf:Description></rdf:RDF>"
+    b"</x:xmpmeta>"
+)
+
+# Text that must not survive into a stripped copy, whatever block it is in.
+GENERATION_MARKERS = (b"KSampler", b"best quality", b"Steps: 20", b"a cat")
+
+
+def _pattern(mode="RGB", size=(48, 32)):
+    img = Image.new(mode, size)
+    img.putdata(
+        [
+            tuple((x * 5 + y * 3 + c * 40) % 256 for c in range(len(mode)))
+            for y in range(size[1])
+            for x in range(size[0])
+        ]
+    )
+    return img
+
+
+def _srgb_icc() -> bytes:
+    return ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+
+
+def _exif(orientation=None, comment=None) -> Image.Exif:
+    exif = Image.Exif()
+    if orientation:
+        exif[0x0112] = orientation
+    if comment:
+        exif.get_ifd(0x8769)[0x9286] = b"ASCII\x00\x00\x00" + comment.encode()
+    return exif
+
+
+def _comfy_png(orientation=None) -> bytes:
+    info = PngImagePlugin.PngInfo()
+    info.add_text("prompt", COMFY_PROMPT)
+    info.add_text("workflow", COMFY_WORKFLOW, zip=True)
+    info.add_itxt("XML:com.adobe.xmp", XMP.decode())
+    buf = BytesIO()
+    kwargs = {"pnginfo": info, "icc_profile": _srgb_icc()}
+    if orientation:
+        kwargs["exif"] = _exif(orientation, A1111_PARAMETERS).tobytes()
+    _pattern("RGBA").save(buf, format="PNG", **kwargs)
+    return buf.getvalue()
+
+
+def _a1111_png() -> bytes:
+    info = PngImagePlugin.PngInfo()
+    info.add_text("parameters", A1111_PARAMETERS)
+    buf = BytesIO()
+    _pattern().save(buf, format="PNG", pnginfo=info)
+    return buf.getvalue()
+
+
+def _a1111_jpeg(orientation=None) -> bytes:
+    buf = BytesIO()
+    _pattern().save(
+        buf,
+        format="JPEG",
+        quality=90,
+        exif=_exif(orientation, A1111_PARAMETERS).tobytes(),
+        icc_profile=_srgb_icc(),
+        xmp=XMP,
+        comment=b"Steps: 20",
+    )
+    return buf.getvalue()
+
+
+def _webp(orientation=None) -> bytes:
+    buf = BytesIO()
+    _pattern().save(
+        buf,
+        format="WEBP",
+        lossless=True,
+        exif=_exif(orientation, A1111_PARAMETERS).tobytes(),
+        xmp=XMP,
+        icc_profile=_srgb_icc(),
+    )
+    return buf.getvalue()
+
+
+def _pixels(data: bytes) -> bytes:
+    with Image.open(BytesIO(data)) as img:
+        return img.tobytes()
+
+
+def _assert_no_generation_data(data: bytes):
+    for marker in GENERATION_MARKERS:
+        assert marker not in data, marker
+    with Image.open(BytesIO(data)) as img:
+        img.load()
+        texts = getattr(img, "text", {}) or {}
+        assert not texts, texts
+        assert "xmp" not in img.info and "XML:com.adobe.xmp" not in img.info
+        exif = img.getexif()
+        assert set(exif) <= {0x0112}, dict(exif)
+        assert not exif.get_ifd(0x8769)
+
+
+@pytest.mark.parametrize(
+    "make", [_comfy_png, _a1111_png, _a1111_jpeg, _webp], ids=lambda f: f.__name__
+)
+def test_strip_removes_generation_data_and_keeps_the_pixels(make):
+    original = make()
+    # The fixture really carries what the strip must remove.
+    assert any(marker in original for marker in GENERATION_MARKERS)
+
+    stripped = strip_generation_data(original)
+
+    _assert_no_generation_data(stripped)
+    assert _pixels(stripped) == _pixels(original)
+
+
+@pytest.mark.parametrize(
+    "make", [_comfy_png, _a1111_jpeg, _webp], ids=lambda f: f.__name__
+)
+def test_strip_keeps_the_orientation_and_colour_profile(make):
+    original = make(orientation=6)
+
+    stripped = strip_generation_data(original)
+
+    _assert_no_generation_data(stripped)
+    with Image.open(BytesIO(stripped)) as img:
+        assert img.getexif().get(0x0112) == 6
+        assert img.info.get("icc_profile") == _srgb_icc()
+
+
+def test_strip_leaves_formats_it_does_not_handle():
+    buf = BytesIO()
+    _pattern().save(buf, format="GIF", comment=b"Steps: 20")
+    assert strip_generation_data(buf.getvalue()) is None
+
+
+# ---- make_share_copies ------------------------------------------------------
+
+
+@pytest.fixture
+def library(tmp_path):
+    image_root = tmp_path / "images"
+    image_root.mkdir()
+    pictures = []
+
+    def add(data: bytes, file_name: str, original_file_name=None):
+        (image_root / file_name).write_bytes(data)
+        pictures.append(
+            {
+                "id": len(pictures) + 1,
+                "file_path": file_name,
+                "original_file_name": original_file_name,
+            }
+        )
+        return pictures[-1]
+
+    return {
+        "image_root": str(image_root),
+        "root": str(tmp_path / "share-copies"),
+        "add": add,
+        "pictures": pictures,
+    }
+
+
+def _copy(library, **kwargs):
+    return make_share_copies(
+        library["pictures"], library["image_root"], library["root"], **kwargs
+    )
+
+
+def test_comfyui_and_a1111_pngs_leave_without_generation_data_by_default(library):
+    comfy, a1111 = _comfy_png(), _a1111_png()
+    library["add"](comfy, "aa11.png", "ComfyUI_00001_.png")
+    library["add"](a1111, "bb22.png", "00001-1234.png")
+
+    result = _copy(library)
+
+    assert [f["name"] for f in result["files"]] == [
+        "ComfyUI_00001_.png",
+        "00001-1234.png",
+    ]
+    for entry, original in zip(result["files"], (comfy, a1111)):
+        assert entry["metadata"] == METADATA_REMOVED
+        assert os.path.dirname(entry["path"]) == result["directory"]
+        with open(entry["path"], "rb") as fh:
+            copy = fh.read()
+        assert entry["size"] == len(copy)
+        _assert_no_generation_data(copy)
+        assert _pixels(copy) == _pixels(original)
+    # The vault's own files are never touched.
+    with open(os.path.join(library["image_root"], "aa11.png"), "rb") as fh:
+        assert fh.read() == comfy
+
+
+def test_keep_generation_data_copies_byte_for_byte(library):
+    originals = [_comfy_png(), _a1111_png(), _a1111_jpeg(), _webp()]
+    for index, data in enumerate(originals):
+        library["add"](data, f"p{index}.bin")
+
+    result = _copy(library, keep_generation_data=True)
+
+    assert [f["metadata"] for f in result["files"]] == [METADATA_KEPT] * 4
+    for entry, original in zip(result["files"], originals):
+        with open(entry["path"], "rb") as fh:
+            assert fh.read() == original
+
+
+def test_names_collide_into_suffixes_and_can_be_pixlstash_names(library):
+    library["add"](_a1111_png(), "aa11.png", "photo.png")
+    library["add"](_a1111_png(), "bb22.png", "Photo.jpg")
+    library["add"](_a1111_png(), "cc33.png", "photo_2.png")
+    library["add"](_a1111_png(), "dd44.png", None)
+
+    names = [f["name"] for f in _copy(library)["files"]]
+    # The extension is the copy's real format, not the stored name's.
+    assert names == ["photo.png", "Photo_2.png", "photo_2_3.png", "dd44.png"]
+
+    own = [f["name"] for f in _copy(library, file_names="pixlstash")["files"]]
+    assert own == ["aa11.png", "bb22.png", "cc33.png", "dd44.png"]
+
+
+def test_max_long_edge_shrinks_and_strips(library):
+    library["add"](_comfy_png(), "big.png")
+    library["add"](_a1111_jpeg(), "big.jpg")
+
+    result = _copy(library, max_long_edge=24)
+
+    for entry in result["files"]:
+        assert entry["resized"] is True
+        with open(entry["path"], "rb") as fh:
+            copy = fh.read()
+        _assert_no_generation_data(copy)
+        with Image.open(BytesIO(copy)) as img:
+            assert max(img.size) == 24
+
+
+def test_a_resized_copy_is_turned_upright_rather_than_tagged(library):
+    library["add"](_a1111_jpeg(orientation=6), "turned.jpg")
+
+    (entry,) = _copy(library, max_long_edge=24, keep_generation_data=True)["files"]
+
+    with Image.open(entry["path"]) as img:
+        # 48x32 shown a quarter turn round is 32x48, so 16x24 at this cap.
+        assert img.size == (16, 24)
+        assert img.getexif().get(0x0112) is None
+
+
+def test_max_long_edge_never_enlarges_and_keeps_a_small_picture_untouched(library):
+    original = _a1111_png()
+    library["add"](original, "small.png")
+
+    (entry,) = _copy(library, max_long_edge=4096, keep_generation_data=True)["files"]
+
+    assert entry["resized"] is False
+    with open(entry["path"], "rb") as fh:
+        assert fh.read() == original
+
+
+def test_watermark_is_applied(library):
+    library["add"](_a1111_png(), "a.png")
+    mark = BytesIO()
+    Image.new("RGBA", (16, 16), (255, 0, 0, 255)).save(mark, format="PNG")
+
+    (entry,) = _copy(library, watermark_bytes=mark.getvalue())["files"]
+
+    assert entry["watermarked"] is True
+    with open(entry["path"], "rb") as fh:
+        copy = fh.read()
+    _assert_no_generation_data(copy)
+    assert _pixels(copy) != _pixels(_a1111_png())
+
+
+def test_videos_and_unhandled_formats_pass_through_and_say_so(library):
+    video = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 64
+    library["add"](video, "clip.mp4", "clip.mp4")
+    gif = BytesIO()
+    _pattern().save(gif, format="GIF")
+    library["add"](gif.getvalue(), "anim.gif")
+    library["pictures"].append({"id": 99, "file_path": "gone.png"})
+
+    result = _copy(library)
+
+    assert [f["metadata"] for f in result["files"]] == [METADATA_UNCHANGED] * 2
+    with open(result["files"][0]["path"], "rb") as fh:
+        assert fh.read() == video
+    assert result["skipped"] == [{"picture_id": 99, "reason": "missing"}]
+
+
+def test_sweep_removes_only_old_batches(library):
+    library["add"](_a1111_png(), "a.png")
+    old = _copy(library)["directory"]
+    new = _copy(library)["directory"]
+    stranger = os.path.join(library["root"], "not-a-batch")
+    os.makedirs(stranger)
+    past = time.time() - 13 * 3600
+    for path in (old, stranger):
+        os.utime(path, (past, past))
+
+    assert sweep_share_copies(library["root"]) == 1
+
+    assert not os.path.exists(old)
+    assert os.path.isdir(new)
+    assert os.path.isdir(stranger)
+
+
+# ---- the route --------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def env():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        os.makedirs(os.path.join(temp_dir, "images"))
+        config_path = os.path.join(temp_dir, "server-config.json")
+        with open(config_path, "w") as f:
+            f.write(json.dumps({"port": 8000}))
+        with Server(config_path) as server:
+            client = TestClient(server.api)
+            resp = client.post(
+                "/login", json={"username": "testuser", "password": "testpassword"}
+            )
+            assert resp.status_code == 200
+            yield {"client": client, "config_dir": temp_dir}
+
+
+def test_route_stages_stripped_copies_beside_the_server_config(env):
+    client = env["client"]
+    comfy = _comfy_png()
+    result = upload_pictures_and_wait(
+        client, [("file", ("ComfyUI_00042_.png", BytesIO(comfy), "image/png"))]
+    )
+    picture_id = result["results"][0]["picture_id"]
+
+    resp = client.post(
+        f"{API_PREFIX}/pictures/share-copies",
+        json={"picture_ids": [picture_id, 987654]},
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    root = share_copies_root(env["config_dir"])
+    assert os.path.dirname(body["directory"]) == root
+    (entry,) = body["files"]
+    assert entry["picture_id"] == picture_id
+    assert entry["name"] == "ComfyUI_00042_.png"
+    assert entry["metadata"] == METADATA_REMOVED
+    with open(entry["path"], "rb") as fh:
+        copy = fh.read()
+    _assert_no_generation_data(copy)
+    assert _pixels(copy) == _pixels(comfy)
+    assert body["skipped"] == [{"picture_id": 987654, "reason": "not_found"}]
+
+    kept = client.post(
+        f"{API_PREFIX}/pictures/share-copies",
+        json={"picture_ids": [picture_id], "keep_generation_data": True},
+    ).json()["files"][0]
+    with open(kept["path"], "rb") as fh:
+        assert b"KSampler" in fh.read()
