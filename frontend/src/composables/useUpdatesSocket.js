@@ -363,8 +363,8 @@ export function useUpdatesSocket({
         payload?.type === "pictures_changed" ||
         payload?.type === "picture_imported";
       if (isPictureChange) {
-        // An arrival from an import folder, or a rating or Mark seen that took
-        // one out of the Inbox: the sidebar count and the Inbox header follow.
+        // An arrival from an import folder: the Settings table's counts and
+        // the Filter menu's "Imported from" follow.
         if (!isReadOnly.value) importFoldersStore.refreshSoon();
         // LIKENESS_GROUPS reorders the whole grid wholesale, so a targeted op
         // can't reconcile it - keep the existing wsTagUpdate signal that lets the

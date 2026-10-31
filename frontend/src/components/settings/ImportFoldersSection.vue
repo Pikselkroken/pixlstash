@@ -15,7 +15,7 @@
     <p class="ifs-lead">
       While PixlStash runs it checks these folders and imports anything new into
       this library. Every folder here is watched, and what it brings in waits in
-      the Inbox until you have looked at it.
+      the Inbox until it has a person or a set.
     </p>
 
     <p v-if="!store.loaded" class="ifs-state">Reading the import folders…</p>

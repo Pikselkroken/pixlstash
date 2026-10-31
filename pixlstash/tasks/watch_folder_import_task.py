@@ -117,8 +117,6 @@ class WatchFolderImportTask(BaseTask):
                     subfolder=resolve_placement(self._db),
                 )
                 pic.imported_at = datetime.now(timezone.utc)
-                # What an import folder brings in waits in the Inbox.
-                pic.unseen = True
                 import_source_folder = candidate.get("import_source_folder")
                 if isinstance(import_source_folder, str) and import_source_folder:
                     pic.import_source_folder = import_source_folder

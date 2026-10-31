@@ -106,7 +106,7 @@ import { useRoute } from "vue-router";
 import { useDedupStore, scopeKey } from "../../stores/useDedupStore";
 import { useMovesStore } from "../../stores/useMovesStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
-import { useImportFoldersStore } from "../../stores/useImportFoldersStore";
+import { useInboxStore } from "../../stores/useInboxStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useSearchStore } from "../../stores/useSearchStore";
@@ -148,7 +148,7 @@ function noticeDetail(e) {
 const dedupStore = useDedupStore();
 const movesStore = useMovesStore();
 const reviewSessionsStore = useReviewSessionsStore();
-const importFoldersStore = useImportFoldersStore();
+const inboxStore = useInboxStore();
 const modelShelfStore = useModelShelfStore();
 
 // Store-direct (Phase 3): the sidebar reads the selection, sort, project and
@@ -224,7 +224,8 @@ const READ_ONLY_INSIGHTS_HINT =
 const isMovesView = computed(
   () => route.name === "moves" && !isTagReviewView.value,
 );
-// The Inbox row: what import folders brought in and nobody has looked at yet.
+// The Inbox row: what was added within the chosen period and has no person
+// and no set.
 const isInboxView = computed(
   () => route.name === "inbox" && !isTagReviewView.value,
 );
@@ -3405,6 +3406,9 @@ async function fetchSidebarData() {
       console.warn("Error fetching the not-in-a-project count:", e);
     }
   }
+  // The Inbox row's number, inside the sidebar's project like the grid it
+  // opens. Owner only, as the row is.
+  if (!isReadOnly.value) void inboxStore.refreshCount();
   // Favourites in the whole library, as the row means (#2448): the same
   // `/pictures/count` query the grid's filter makes. Owner only, as the row is.
   if (!isReadOnly.value) {
@@ -4016,8 +4020,6 @@ onMounted(() => {
 // owner-only and the row it would feed is hidden for them regardless.
 onMounted(() => {
   if (!isReadOnly.value) movesStore.fetchPending();
-  // The Inbox row's count, and whether the row shows at all.
-  if (!isReadOnly.value) importFoldersStore.refresh();
 });
 
 function onSidebarCtxOutside(event) {
@@ -4770,15 +4772,11 @@ defineExpose({
           <div class="sidebar-section-header" role="presentation">
             <span class="sidebar-section-title">Review</span>
           </div>
-          <!-- The Inbox: what import folders brought in that has not been
-               looked at. Only once an import folder exists, or while anything
-               waits in it (its folder may since have been removed); caught
+          <!-- The Inbox: added within the chosen period, with no person and
+               no set. The count follows the period the toolbar picks; caught
                up, it stays with a 0 as the other Review rows do. -->
           <button
-            v-if="
-              !isReadOnly &&
-              (importFoldersStore.hasFolders || importFoldersStore.unseenCount > 0)
-            "
+            v-if="!isReadOnly"
             type="button"
             :class="['sidebar-list-item', { active: isInboxView }]"
             :aria-current="isInboxView ? 'page' : undefined"
@@ -4788,8 +4786,8 @@ defineExpose({
               ><v-icon size="16">mdi-inbox-arrow-down-outline</v-icon></span
             >
             <span class="sidebar-list-label">Inbox</span>
-            <span class="sidebar-list-count">{{
-              importFoldersStore.unseenCount.toLocaleString()
+            <span class="sidebar-list-count" data-testid="inbox-count">{{
+              inboxStore.count?.toLocaleString() ?? ""
             }}</span>
           </button>
           <!-- `aria-disabled`, not `disabled`: a read-only session must still

@@ -290,10 +290,7 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
         return;
       }
       if (f.inbox) {
-        pushAppRoute({
-          name: "inbox",
-          query: f.importSourceFolder ? { folder: f.importSourceFolder } : {},
-        });
+        pushAppRoute({ name: "inbox" });
         return;
       }
       // A folder payload with no id of any kind - what an "About your
@@ -500,18 +497,15 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
     pushAppRoute({ name: "moves" });
   }
 
-  // The Inbox is the grid narrowed to what import folders brought in and the
-  // owner has not looked at. Owner-only like Moves (GET /import-folders/inbox).
+  // The Inbox is the grid narrowed to what was added lately and has no person
+  // and no set. The owner's review queue, so owner-only like Moves.
   const isInboxView = computed(
     () => !isReadOnly.value && route.name === "inbox",
   );
 
-  /**
-   * Open the Inbox, or one import folder's part of it.
-   * @param {string|null} folder - an import folder's path, or null for all.
-   */
-  function handleSelectInbox(folder = null) {
-    pushAppRoute({ name: "inbox", query: folder ? { folder } : {} });
+  /** Open the Inbox. */
+  function handleSelectInbox() {
+    pushAppRoute({ name: "inbox" });
   }
 
   /**

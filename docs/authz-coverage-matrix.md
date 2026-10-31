@@ -151,8 +151,6 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 | Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
 |---|---|---|---|---|
 | GET | `/api/v1/import-folders` | scoped_list |  |  |
-| GET | `/api/v1/import-folders/inbox` | owner_only |  | The Inbox: how many of the owner's pictures import folders brought in are not looked at yet, per folder and batch (labels and the folder roots `GET /import-folders` already serves the owner). Untemplated, so `READ_BLOCKED_GET_PATHS` refuses READ tokens ahead of the gate. |
-| POST | `/api/v1/import-folders/inbox/seen` | owner_only |  | Marks pictures seen (`picture.unseen = false`): all, named ids, or one folder's batch. The owner's own review state; no file is touched and no picture leaves the library. |
 | POST | `/api/v1/import-folders` | local_owner_only |  | §16.3 import-folder create; owner + loopback/LAN/Tailscale, or remote owner iff `allow_remote_host_ops=true` (§16.3.1) |
 | PATCH | `/api/v1/import-folders/{folder_id}` | local_owner_only |  | §16.3 import-folder update; owner + loopback/LAN/Tailscale, or remote owner iff `allow_remote_host_ops=true` (§16.3.1) |
 | DELETE | `/api/v1/import-folders/{folder_id}` | local_owner_only |  | §16.3 import-folder delete; owner + loopback/LAN/Tailscale, or remote owner iff `allow_remote_host_ops=true` (§16.3.1) |

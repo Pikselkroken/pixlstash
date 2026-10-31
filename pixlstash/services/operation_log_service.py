@@ -59,7 +59,6 @@ from typing import TYPE_CHECKING, Any, Callable, Iterable, Optional, Union
 from fastapi import HTTPException
 from sqlalchemy import event as sa_event
 from sqlalchemy import or_
-from sqlalchemy import update as sa_update
 from sqlmodel import Session, select
 
 from pixlstash.db_models import (
@@ -743,50 +742,6 @@ def record_operation_in_session(
     return operation
 
 
-# The facets whose change means the owner has looked at the picture, so it
-# leaves the Inbox: rating, tagging (and the tag-review decisions), the caption,
-# filing it in a set or project, and assigning a person. Stacking, the
-# scrapheap, rotating and file moves are not reviews of the picture.
-_REVIEW_FACETS = frozenset(
-    {
-        FACET_TAGS,
-        FACET_TAG_PREDICTIONS,
-        FACET_DESCRIPTION,
-        FACET_SCORE,
-        FACET_FAVOURITE,
-        FACET_SETS,
-        FACET_PROJECTS,
-        FACET_PROJECT_ID,
-        FACET_CHARACTERS,
-        FACET_PENDING_CHARACTER_ID,
-    }
-)
-
-
-def _mark_reviewed_pictures_seen(
-    session: Session, before: dict[str, dict], after: dict[str, dict]
-) -> None:
-    """Take the pictures a recorded edit reviewed out of the Inbox.
-
-    Runs inside the recorded task, so the flag commits with the edit or not at
-    all. ``unseen`` is not a facet: an undo does not put a picture back in the
-    Inbox, since the owner has still looked at it.
-    """
-    _, after_delta = diff_states(before, after)
-    reviewed = [
-        int(picture_id)
-        for picture_id, facets in after_delta.items()
-        if _REVIEW_FACETS.intersection(facets)
-    ]
-    if not reviewed:
-        return
-    session.exec(
-        sa_update(Picture)
-        .where(Picture.id.in_(reviewed), Picture.unseen.is_(True))
-        .values(unseen=False)
-    )
-
-
 def run_recorded_metadata_task(
     vault: "Vault",
     work: Callable[..., Any],
@@ -870,7 +825,6 @@ def run_recorded_metadata_task(
             commit_guard_installed = True
             result = work(session, *args, **kwargs)
             after = capture_state_in_session(session, ids)
-            _mark_reviewed_pictures_seen(session, before, after)
             operation = record_operation_in_session(
                 session,
                 op_type=op_type,

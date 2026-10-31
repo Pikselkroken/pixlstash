@@ -27,9 +27,7 @@ vi.mock("../../api/pictures", () => ({
 }));
 vi.mock("../../api/workflows", () => ({ listWorkflowCards: vi.fn() }));
 vi.mock("../../api/folders", () => ({
-  getInbox: vi.fn().mockResolvedValue({ total: 0, batches: [] }),
   listImportFolders: vi.fn().mockResolvedValue([]),
-  markInboxSeen: vi.fn(),
 }));
 vi.mock("../../api/pictureSets", () => ({
   addPictureToSet: vi.fn(),

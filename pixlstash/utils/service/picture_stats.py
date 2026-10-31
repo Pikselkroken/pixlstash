@@ -2,6 +2,7 @@
 
 import dataclasses
 import time
+from datetime import datetime
 
 from fastapi import HTTPException
 from sqlalchemy import Integer, and_, case, cast, desc, exists, func, or_
@@ -69,7 +70,7 @@ class PictureStatsParams:
     penalised_cooc_both: bool
     scoped_picture_ids: list[int] | None = None
     favourite_only: bool = False
-    unseen_only: bool = False
+    imported_since: datetime | None = None
 
 
 def _empty_stats() -> dict:
@@ -220,7 +221,7 @@ def _build_filtered_picture_subquery(session: Session, params: PictureStatsParam
         file_path_prefix=params.file_path_prefix or None,
         file_path_prefix_children_only=False,
         import_source_folder=params.import_source_folder or None,
-        unseen_only=params.unseen_only,
+        imported_since=params.imported_since,
         tags_filter=params.tags_filter or None,
         tags_rejected_filter=params.rejected_tags or None,
         tags_confidence_above_filter=params.confidence_above or None,
