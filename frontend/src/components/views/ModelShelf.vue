@@ -1179,7 +1179,10 @@
       @close="closeFolderMove"
     />
     <!-- A folder the Folders tree asked to remove, holding files (#2207). -->
+    <!-- Keyed by the request, so a request that replaces an open one (a batch's
+         next folder racing a single Remove) redraws on its own facts. -->
     <ShelfRemoveFolderDialog
+      :key="folderRemoveAt"
       :open="folderRemoveOpen"
       :source="folderRemoveSource"
       :plan="folderRemovePlan"
@@ -1894,6 +1897,8 @@ const folderRemoveOpen = ref(false);
 const folderRemoveSource = ref({ folderId: 0, path: "", name: "" });
 const folderRemovePlan = shallowRef(null);
 const folderRemoveInvoker = shallowRef(null);
+/** The open request's `at`, which keys the dialog. */
+const folderRemoveAt = ref(0);
 /** Picked folders still waiting behind the one shown. */
 const folderRemoveRemaining = ref(0);
 /** Whether the open dialog removed its folder, told to the tree on close. */
@@ -1910,6 +1915,7 @@ watch(
     folderRemoveSource.value = request.source;
     folderRemovePlan.value = request.plan;
     folderRemoveRemaining.value = request.remaining ?? 0;
+    folderRemoveAt.value = request.at;
     folderRemoved.value = false;
     folderRemoveOpen.value = true;
   },
@@ -1926,6 +1932,9 @@ async function closeFolderRemove() {
   // Last, so a next picked folder's dialog opens after this one has gone.
   store.settleFolderRemove(folderRemoved.value);
 }
+
+// A batch waiting on a dialog that is going away stops rather than hanging.
+onUnmounted(() => store.settleFolderRemove(false));
 
 /** *Move the models out first…*: the move dialog, on the folder's copies. */
 async function moveModelsOutFirst(copies) {

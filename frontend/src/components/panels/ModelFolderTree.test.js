@@ -1181,6 +1181,19 @@ describe("the folder verbs (#2206)", () => {
       wrapper.unmount();
     });
 
+    it("lets the pick go when Del lands on a row outside it", async () => {
+      const wrapper = await openFlux();
+      removeModelFolderDir.mockResolvedValue({ file_count: 2, files: [], fingerprint: "fp", name: "VAE" });
+      await item(wrapper, 1, "Lora").trigger("click", { ctrlKey: true });
+      await item(wrapper, 1, "Lora/flux").trigger("click", { ctrlKey: true });
+      item(wrapper, 1, "VAE").element.focus();
+      await item(wrapper, 1, "VAE").trigger("keydown", { key: "Delete" });
+      await flushPromises();
+      expect(picks(wrapper)).toEqual([]);
+      expect(useModelShelfStore().folderRemoveRequest.source.path).toBe("VAE");
+      wrapper.unmount();
+    });
+
     it("drops a picked row whose parent closes", async () => {
       const wrapper = await openFlux();
       await item(wrapper, 1, "Lora/flux").trigger("click", { ctrlKey: true });

@@ -888,6 +888,8 @@ function verbKey(event, node) {
  * refused says why in a notice; a row that does not offer it lets the key on.
  */
 function verbFor(node, key, options = {}) {
+  // A verb on a row outside the pick is that row's alone, as from its menu.
+  if (!picked.value.has(node.key)) clearPicks();
   const entries = isManyPicked(node) ? manyMenu.value : menuFor(node);
   const entry = entries.find((one) => one.key === key);
   if (!entry) return false;
