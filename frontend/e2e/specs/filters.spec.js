@@ -94,6 +94,20 @@ class Filters {
     await sub.getByRole('radio', { name: new RegExp(`^${option}\\b`) }).click()
   }
 
+  /**
+   * Type a tag into a kind's "Add a tag" field and take it with Enter. Enter
+   * takes the highlighted suggestion, and there is none until the menu's /tags
+   * vocabulary has answered, so wait for that row, and for it to be this tag.
+   */
+  async addTag(sub, tag) {
+    const field = sub.getByRole('combobox', { name: 'Add a tag' })
+    await field.fill(tag)
+    await expect(
+      sub.locator('[role="option"][aria-selected="true"] .fm-check-label'),
+    ).toHaveText(tag)
+    await field.press('Enter')
+  }
+
   chip(kind, value) {
     return this.chips.filter({ hasText: kind }).filter({ hasText: value })
   }
@@ -255,9 +269,7 @@ test.describe('grid filters', () => {
 
   test('tags: Has tag, then flipped to Lacks tag', async ({ page, grid, apiContext }) => {
     const sub = await filters.kind('Tags')
-    const field = sub.getByRole('combobox', { name: 'Add a tag' })
-    await field.fill('beard')
-    await field.press('Enter')
+    await filters.addTag(sub, 'beard')
     await expect(filters.chip('Has tag', 'beard')).toBeVisible()
     await expectNarrowedTo(page, apiContext, 'tag=beard')
 
@@ -274,9 +286,7 @@ test.describe('grid filters', () => {
 
   test('tag confidence: Missing at the default 80%', async ({ page, grid, apiContext }) => {
     const sub = await filters.kind('Tag confidence')
-    const field = sub.getByRole('combobox', { name: 'Add a tag' })
-    await field.fill('beard')
-    await field.press('Enter')
+    await filters.addTag(sub, 'beard')
     await expect(filters.chip('Missing tag', 'beard')).toBeVisible()
     await expectNarrowedTo(page, apiContext, 'tag_confidence_above=beard%3A0.80')
     await filters.close()
@@ -336,9 +346,7 @@ test.describe('grid filters', () => {
 
   /** Add a tag to Has tag through the menu's tag field. */
   async function hasTag(tag) {
-    const field = (await filters.kind('Tags')).getByRole('combobox', { name: 'Add a tag' })
-    await field.fill(tag)
-    await field.press('Enter')
+    await filters.addTag(await filters.kind('Tags'), tag)
     await expect(filters.chip('Has tag', tag)).toBeVisible()
   }
 

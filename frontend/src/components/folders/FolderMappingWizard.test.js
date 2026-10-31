@@ -6,8 +6,8 @@
 // resumed autoCommit entry commits on mount with the saved assignments and is
 // immediately downgraded to a plain resume entry.
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { mount, flushPromises } from "@vue/test-utils";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { mount, flushPromises, enableAutoUnmount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 
 vi.mock("vuetify/components", () => ({
@@ -95,6 +95,10 @@ const TreeStub = {
 };
 
 let pinia;
+
+// A wizard left mounted mid-read keeps polling the read status every 300 ms,
+// and that poll lands in whichever test is running next.
+enableAutoUnmount(afterEach);
 
 function mountWizard(props = {}) {
   return mount(FolderMappingWizard, {

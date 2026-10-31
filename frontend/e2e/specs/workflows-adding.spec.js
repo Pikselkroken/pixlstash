@@ -8,16 +8,15 @@ import { test, expect } from "../fixtures/test.js";
 // stores the document, and with no ComfyUI answering `GET /comfyui/templates`
 // lists the templates PixlStash ships.
 //
-// Order matters, and Playwright keeps it (one worker, file order): the empty
-// state is only empty before the first import, and Connect ComfyUI is only
-// offered before the Templates block saves an address. So the empty-state test
-// stores nothing, and every later test works whatever the library holds, which
+// The e2e backend seeds workflows at start-up (#2314), so the library is never
+// empty: the empty-state test fakes an empty `GET /workflows` and checks what
+// the screen offers. Order still matters, and Playwright keeps it (one worker,
+// file order): Connect ComfyUI is only offered before the Templates block
+// saves an address. Every later test works whatever the library holds, which
 // keeps a retry of any one of them honest.
 //
 // Nothing here deletes a workflow, because a delete trashes through the shared
-// inbox (#2313). The same issue is why the empty state can see a machine's own
-// inbox: until it is fixed, the e2e backend imports what that folder holds at
-// start-up, and a file there fails the empty-state test.
+// inbox (#2313).
 
 const WORKFLOWS = "/api/v1/workflows";
 const IMPORT = "/api/v1/comfyui/workflows/import";
@@ -72,14 +71,15 @@ async function dropFiles(page, files) {
 }
 
 test.describe("empty state", () => {
-  test("an unseeded library offers a file and ComfyUI, and Connect opens its pane", async ({
+  test("an empty library offers a file and ComfyUI, and Connect opens its pane", async ({
     page,
-    apiContext,
   }) => {
-    // The state this test is about, checked rather than assumed: if anything
-    // earlier in the run stored a workflow, this says so instead of failing
-    // on a missing button.
-    expect(await workflowIds(apiContext)).toEqual([]);
+    // No hidden workflows and no one-offs either, so the screen has nothing
+    // left out to name.
+    await page.route(
+      (url) => url.pathname === WORKFLOWS,
+      (route) => route.fulfill({ json: { cards: [], hidden: 0, one_offs: 0 } }),
+    );
     await page.goto("/workflows");
     const empty = page.locator(".wfv-empty");
     await expect(empty).toBeVisible({ timeout: 15_000 });

@@ -6,7 +6,8 @@ Playwright's ``webServer`` runs this script. It does NOT touch the committed
 work directory, strips any user/token rows so the server boots in *first-run*
 state (the e2e global-setup then registers an admin and mints an ALL-scope
 token per run — no credentials are committed), seeds a small model folder
-for the shelf specs and a reference folder for the Media specs, writes a lean
+for the shelf specs, a reference folder for the Media specs and a few
+workflows, pictures and recipes for the Workflows specs, writes a lean
 server-config (the task runner runs, the work planner keeps only the folder
 sweeps and an idle face finder, no models, no startup thumbnail generation, CPU
 only), puts refusing ``xdg-open``/``open`` stubs first on ``PATH`` so no spec
@@ -35,6 +36,7 @@ import tempfile
 from pathlib import Path
 
 from PIL import Image
+from PIL.PngImagePlugin import PngInfo
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_DATA = Path(os.environ.get("PIXLSTASH_E2E_DATA") or (REPO_ROOT / "test-data"))
@@ -59,6 +61,7 @@ REFERENCE_MOVED = "Inbox/fern.png"
 # Stands in for the app's data directory: the workflow inbox, the user workflow
 # folder and the trash, all of which are otherwise shared with the owner.
 USER_DATA = WORK_DIR / "user-data"
+WORKFLOW_SEED = WORK_DIR / "workflow-seed"
 
 
 def _ignore_backups(_dir, names):
@@ -170,6 +173,157 @@ def _stub_host_openers(bin_dir: Path) -> None:
     os.environ["PATH"] = f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
 
 
+def _graph(
+    prompt: str, seed: int, loras: tuple[str, ...] = (), img2img: bool = False
+) -> dict:
+    """A ComfyUI API graph: checkpoint, a LoRA loader per name, sampler, save.
+
+    Every model it names is in the seeded model folder, so nothing it shows as
+    missing is missing by accident. ``img2img`` samples over a loaded picture
+    instead of an empty latent, which is another workflow: a second pass or an
+    upscale would be read as a stage of the same one.
+    """
+    g = {
+        "1": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": "RealVisXL_V4.safetensors"},
+        }
+    }
+    model, clip = ["1", 0], ["1", 1]
+    for i, lora in enumerate(loras):
+        node_id = f"1{i}"
+        g[node_id] = {
+            "class_type": "LoraLoader",
+            "inputs": {
+                "lora_name": lora,
+                "strength_model": 1.0,
+                "strength_clip": 1.0,
+                "model": model,
+                "clip": clip,
+            },
+        }
+        model, clip = [node_id, 0], [node_id, 1]
+    g["2"] = {"class_type": "CLIPTextEncode", "inputs": {"text": prompt, "clip": clip}}
+    g["3"] = {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": "blurry", "clip": clip},
+    }
+    if img2img:
+        g["8"] = {"class_type": "LoadImage", "inputs": {"image": "input.png"}}
+        g["4"] = {
+            "class_type": "VAEEncode",
+            "inputs": {"pixels": ["8", 0], "vae": ["1", 2]},
+        }
+    else:
+        g["4"] = {
+            "class_type": "EmptyLatentImage",
+            "inputs": {"width": 1024, "height": 1024, "batch_size": 1},
+        }
+    sampler = {
+        "model": model,
+        "positive": ["2", 0],
+        "negative": ["3", 0],
+        "seed": seed,
+        "steps": 20,
+        "cfg": 6.0,
+        "sampler_name": "euler",
+        "scheduler": "normal",
+        "denoise": 1.0,
+    }
+    g["5"] = {"class_type": "KSampler", "inputs": {**sampler, "latent_image": ["4", 0]}}
+    g["6"] = {
+        "class_type": "VAEDecode",
+        "inputs": {"samples": ["5", 0], "vae": ["1", 2]},
+    }
+    g["7"] = {
+        "class_type": "SaveImage",
+        "inputs": {"images": ["6", 0], "filename_prefix": "seed"},
+    }
+    return g
+
+
+def _median_picture_date(db_path: Path) -> str:
+    """The middle ``created_at`` of the work copy's pictures, as stored."""
+    conn = sqlite3.connect(str(db_path))
+    try:
+        (dated,) = conn.execute(
+            "SELECT created_at FROM picture ORDER BY created_at LIMIT 1 "
+            "OFFSET (SELECT COUNT(*) / 2 FROM picture)"
+        ).fetchone()
+    finally:
+        conn.close()
+    return dated
+
+
+def _seed_workflows(root: Path, picture_date: str) -> None:
+    """Lay out the Workflows specs' seed, under the work dir.
+
+    ``seed.json`` names the stored workflows, the pictures and the recipes; the
+    PNGs beside it carry their graph in the ``prompt`` chunk, as ComfyUI's
+    SaveImage writes it. The server imports all of it at start-up
+    (``e2e_workflow_seed``), through the paths an import and a save take. What
+    it adds up to on ``GET /workflows``:
+
+    * two visible stored workflows, one with a LoRA chain, and one hidden;
+    * a workflow known from three pictures, so it has covers and a count;
+    * a one-off: a workflow known from a single unrated picture;
+    * two recipes on the LoRA workflow and one unfiled.
+
+    The pictures are dated *picture_date*, the fixture's median, so they sit
+    mid-grid whichever way it sorts by date: the specs that open the first or
+    the last few pictures, and rate or tag them, still get fixture ones.
+    """
+    root.mkdir(parents=True)
+    loras = ("Clementine_Portrait.safetensors", "DetailTweaker_v2.safetensors")
+    pictures = []
+    colours = ("#c4a35a", "#5a7fc4", "#7fc45a", "#c45a7f")
+    for i, colour in enumerate(colours):
+        one_off = i == len(colours) - 1
+        graph = (
+            _graph("a lighthouse at dusk", seed=100 + i, img2img=True)
+            if one_off
+            else _graph(f"portrait, take {i + 1}", seed=100 + i, loras=loras[:1])
+        )
+        name = "seed-one-off.png" if one_off else f"seed-portrait-{i + 1}.png"
+        info = PngInfo()
+        info.add_text("prompt", json.dumps(graph))
+        Image.new("RGB", (512, 512), colour).save(root / name, pnginfo=info)
+        pictures.append(name)
+    manifest = {
+        "workflows": [
+            {"name": "Seeded LoRA portrait", "graph": _graph("portrait", 1, loras)},
+            {"name": "Seeded plain txt2img", "graph": _graph("a quiet harbour", 2)},
+            {
+                "name": "Seeded hidden draft",
+                "graph": _graph("a draft", 3, img2img=True),
+                "hidden": True,
+            },
+        ],
+        "pictures": pictures,
+        "picture_date": picture_date,
+        "recipes": [
+            {
+                "name": "Seeded golden hour",
+                "workflow": "Seeded LoRA portrait",
+                "prompt": "portrait, golden hour",
+                "loras": [{"filename": loras[0], "strength": 0.8}],
+            },
+            {
+                "name": "Seeded studio light",
+                "workflow": "Seeded LoRA portrait",
+                "prompt": "portrait, studio light",
+            },
+            {
+                "name": "Seeded unfiled look",
+                "workflow": "Seeded LoRA portrait",
+                "unfiled": True,
+                "prompt": "portrait, overcast",
+            },
+        ],
+    }
+    (root / "seed.json").write_text(json.dumps(manifest, indent=2))
+
+
 def _harden_permissions(root: Path) -> None:
     """Strip group/world write bits from the throwaway work directory.
 
@@ -235,6 +389,8 @@ def server_overrides(work_images: Path) -> dict:
             "path": str(REFERENCE_FOLDER),
             "move": REFERENCE_MOVED,
         },
+        # Read only when enable_test_hooks is on: imported at start-up.
+        "e2e_workflow_seed": str(WORKFLOW_SEED),
         "generate_thumbnails_on_startup": False,
         "default_device": "cpu",
         "daily_snapshots": False,
@@ -267,6 +423,7 @@ def main() -> int:
     _seed_model_folder(MODEL_FOLDER)
     _seed_reference_folder(REFERENCE_FOLDER)
     _stub_host_openers(WORK_DIR / "bin")
+    _seed_workflows(WORKFLOW_SEED, _median_picture_date(work_images / "vault.db"))
 
     # Build a lean server-config from the fixture's own config, overriding the
     # fields that matter for a fast, hermetic, password-auth test server.
