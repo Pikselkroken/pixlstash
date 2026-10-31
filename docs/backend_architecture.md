@@ -445,7 +445,7 @@ The same module also serves the **v1.9 tiered Duplicates queue** — `GET /dedup
 CRUD for reference / import folders; filesystem browsing for picker dialogs.
 
 **The Inbox is a period of unassigned pictures.** `?inbox=<period>` on the
-listing, count and stats routes (`24h`, `7d`, `14d`, `30d`, `90d`, `all`) is
+listing, count, stats and text-search routes (`24h`, `7d`, `14d`, `30d`, `90d`, `all`) is
 the unassigned view, no person and no set (`character_id=UNASSIGNED` with
 both halves, whatever `unassigned_by` says), narrowed to `imported_at` at or
 after the period's cutoff (`predicate_filter.inbox_cutoff`; `all` has none,

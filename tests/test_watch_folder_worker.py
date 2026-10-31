@@ -123,6 +123,7 @@ def _assert_inbox_round_trip(client, server, pictures):
     (row,) = client.get(f"{API_PREFIX}/import-folders").json()["folders"]
     assert "unseen_count" not in row
     assert row["last_imported_at"] is not None
+    assert row["missing"] is False
     # The Inbox is both halves of "unassigned", whatever a filter asks for.
     assert inbox_ids(character_id="UNASSIGNED", unassigned_by="character") == ids
     # An unknown period is refused rather than read as no Inbox at all.

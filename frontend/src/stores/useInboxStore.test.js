@@ -42,6 +42,23 @@ describe("useInboxStore", () => {
   });
 });
 
+describe("useInboxStore counts", () => {
+  it("drops the previous project's counts when the scope changes", async () => {
+    const { apiClient } = await import("../utils/apiClient");
+    apiClient.get.mockImplementation(async (url) => ({
+      data: { count: String(url).includes("project_id=7") ? 5 : 40 },
+    }));
+    const store = useInboxStore();
+    await store.refreshAllCounts();
+    expect(store.counts["90d"]).toBe(40);
+    const projects = useProjectStore();
+    projects.projectViewMode = "project";
+    projects.selectedProjectId = 7;
+    await store.refreshCount();
+    expect(store.counts).toEqual({ "14d": 5 });
+  });
+});
+
 describe("inboxEmptyState", () => {
   const now = new Date(2026, 10, 1, 12); // Sun 1 Nov
 

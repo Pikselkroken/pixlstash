@@ -361,7 +361,7 @@
             </template>
             <div
               ref="inboxMenuEl"
-              class="ctx-menu tb-inbox-menu"
+              class="ctx-menu"
               role="menu"
               tabindex="-1"
               aria-label="Added in"
@@ -1175,12 +1175,6 @@ const gbCollapseAllStacksDisabled = computed(
   justify-content: center;
   flex: 0 0 auto;
   color: inherit;
-}
-
-/* The Inbox period menu: the design's 248px, so the counts line up in a column
-   whatever the longest label. */
-.tb-inbox-menu {
-  min-width: 248px;
 }
 
 /* ── Responsive: progressive label dropping via container queries ─────────── */

@@ -99,7 +99,10 @@ export const useInboxStore = defineStore("inbox", () => {
 
   const period = ref(loadPeriod());
   // Period id → count, filled as each is read; a missing key is "not read yet".
+  // They belong to one project scope (`countedScope`): a read in another scope
+  // starts them over, so no row shows the previous project's number.
   const counts = ref({});
+  let countedScope = null;
   let epoch = 0;
 
   const periodInfo = computed(
@@ -134,6 +137,12 @@ export const useInboxStore = defineStore("inbox", () => {
 
   async function readCounts(ids) {
     if (isReadOnly.value) return;
+    const scope = countQuery("");
+    if (scope !== countedScope) {
+      countedScope = scope;
+      epoch += 1;
+      counts.value = {};
+    }
     const requestEpoch = epoch;
     const results = await Promise.all(
       ids.map((id) =>
@@ -164,6 +173,7 @@ export const useInboxStore = defineStore("inbox", () => {
 
   function reset() {
     epoch += 1;
+    countedScope = null;
     counts.value = {};
   }
 
