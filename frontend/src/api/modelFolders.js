@@ -258,6 +258,23 @@ export async function createModelFolderDir(id, { path = "", name }) {
 }
 
 /**
+ * Ask the server host to show a folder, or a directory inside it, in its
+ * desktop file manager. Loopback-only at the gate, as
+ * `openModelLocation` is: a LAN client gets 403, a headless server 500.
+ *
+ * @param {number|string} id - the registered folder.
+ * @param {string} [path=""] - POSIX, relative to the folder; `""` is its root.
+ * @returns {Promise<{status: string}>}
+ */
+export async function openModelFolder(id, path = "") {
+  return unwrap(
+    apiClient.post(`${MODEL_FOLDERS_URL}/${encodeURIComponent(id)}/open`, null, {
+      params: { path },
+    }),
+  );
+}
+
+/**
  * Move a folder inside the registry, or rename it (#2206).
  *
  * A rename is a move whose destination is the folder's own parent, with a

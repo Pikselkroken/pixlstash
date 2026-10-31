@@ -66,8 +66,10 @@ The walk's per-file progress is in ``GET /workers/progress`` →
 Authorization: the read is ``OWNER_ONLY``; every mutator is
 ``LOCAL_OWNER_ONLY`` with a §16.3 justification, because they take - or walk - a
 caller-supplied host path. That is the same tier and the same reason as the
-``reference-folders`` block. Declared in ``pixlstash/authz/registry.py``, never
-inline.
+``reference-folders`` block. ``POST /model-folders/{folder_id}/open`` spawns the
+host's file manager and is ``LOOPBACK_OWNER_ONLY`` (§16.3.1), as
+``POST /models/{model_id}/open-location`` is. Declared in
+``pixlstash/authz/registry.py``, never inline.
 """
 
 from __future__ import annotations
@@ -121,6 +123,7 @@ from pixlstash.tasks.model_folder_scan_task import (
     scan_state,
 )
 from pixlstash.utils.adapter_header import FILE_ENGINE
+from pixlstash.utils.host_open import open_in_file_manager
 from pixlstash.utils.library_layout import refusal_for_folder_name
 from pixlstash.utils.host_path_utils import is_absolute_host_path, normalize_host_path
 from pixlstash.utils.path_utils import path_is_within, resolve_path_within
@@ -706,6 +709,16 @@ class ModelFolderDirCreateResponse(BaseModel):
     folder_id: int
     path: str = Field(
         description="The new directory's POSIX path relative to the folder."
+    )
+
+
+class ModelFolderOpenResponse(BaseModel):
+    """Body of ``POST /model-folders/{folder_id}/open``."""
+
+    model_config = ConfigDict(extra="allow")
+
+    status: str = Field(
+        description="`ok`: the opener was launched on the server's own desktop."
     )
 
 
@@ -1567,6 +1580,52 @@ def create_router(server) -> APIRouter:
             folder_id=folder_id,
             path=f"{subpath}/{payload.name}" if subpath else payload.name,
         )
+
+    @router.post(
+        "/model-folders/{folder_id}/open",
+        summary="Open a model folder in the file manager",
+        description=(
+            "Opens a registered folder, or a directory inside it, in the file "
+            "manager of the machine PixlStash runs on - the folder tree's "
+            "`Open in file manager`. It drives the server's own desktop, so it "
+            "is `LOOPBACK_OWNER_ONLY` (§16.3.1), as "
+            "`POST /models/{model_id}/open-location` is.\n\n"
+            "`path` is POSIX and relative to the folder, as on "
+            "`GET /model-folders/{folder_id}/dirs`; empty is the root. 404 when "
+            "the folder or the directory is not there, 500 when the host has no "
+            "file manager to open it in."
+        ),
+        tags=["model_shelf"],
+        response_model=ModelFolderOpenResponse,
+    )
+    def open_model_folder(
+        folder_id: int,
+        request: Request,
+        path: str = Query(
+            "",
+            description="Directory to open, relative to the folder. Empty is the root.",
+        ),
+    ):
+        server.auth.ensure_secure_when_required(request)
+        folder = _fetch_folder(folder_id)
+        try:
+            directory = resolve_path_within(folder["path"], *_subpath_segments(path))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400, detail="path must stay within the model folder."
+            ) from exc
+        if not os.path.isdir(directory):
+            raise HTTPException(
+                status_code=404, detail="No such directory in this model folder."
+            )
+        if not open_in_file_manager(directory):
+            # Named rather than swallowed: usually a headless or containerised
+            # server, and the caller's only other clue is a click that did nothing.
+            raise HTTPException(
+                status_code=500,
+                detail="Could not open that folder on the server's desktop.",
+            )
+        return ModelFolderOpenResponse(status="ok")
 
     @router.post(
         "/model-folders",

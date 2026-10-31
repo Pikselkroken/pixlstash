@@ -654,6 +654,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/model-folders/{folder_id}/dirs                                        | model_shelf     | Create a directory inside a model folder                      |
 | POST   | /api/v1/model-folders/{folder_id}/dirs/move                                   | model_shelf     | Move or rename a directory inside a model folder              |
 | POST   | /api/v1/model-folders/{folder_id}/dirs/remove                                 | model_shelf     | Remove a directory inside a model folder                      |
+| POST   | /api/v1/model-folders/{folder_id}/open                                        | model_shelf     | Open a model folder in the file manager                       |
 | POST   | /api/v1/model-folders/{folder_id}/relocate                                    | model_shelf     | Move a folder PixlStash owns to another location              |
 | GET    | /api/v1/model-folders/{folder_id}/runs                                        | model_shelf     | List the training runs in an ai-toolkit output folder         |
 | GET    | /api/v1/model-folders/{folder_id}/runs/{run_name}/samples/{filename}          | model_shelf     | One preview image from a training run                         |

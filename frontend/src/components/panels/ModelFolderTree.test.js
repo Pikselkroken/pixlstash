@@ -9,12 +9,14 @@ const listModelFolderDirs = vi.fn();
 const createModelFolderDir = vi.fn();
 const moveModelFolderDir = vi.fn();
 const removeModelFolderDir = vi.fn();
+const openModelFolder = vi.fn();
 vi.mock("../../api/modelFolders", async (importOriginal) => ({
   ...(await importOriginal()),
   listModelFolderDirs: (...args) => listModelFolderDirs(...args),
   createModelFolderDir: (...args) => createModelFolderDir(...args),
   moveModelFolderDir: (...args) => moveModelFolderDir(...args),
   removeModelFolderDir: (...args) => removeModelFolderDir(...args),
+  openModelFolder: (...args) => openModelFolder(...args),
 }));
 // The move job's watch is not under test here; its reads stay off the wire.
 vi.mock("../../api/modelMoves", () => ({
@@ -31,6 +33,7 @@ import { useLibrariesStore } from "../../stores/useLibrariesStore";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 
 const FOLDERS = [
   { id: 1, path: "/home/me/StabilityMatrix/Models", kind: "user", movable: "per_item" },
@@ -557,7 +560,7 @@ describe("the folder verbs (#2206)", () => {
     expect(item(wrapper, 1, "Lora").find('[data-testid="model-folder-more"]').exists()).toBe(true);
     rightClick(item(wrapper, 1, "Lora"));
     await flushPromises();
-    expect(verbs(wrapper)).toEqual(["new", "move", "rename", "remove"]);
+    expect(verbs(wrapper)).toEqual(["new", "open", "move", "rename", "remove"]);
     expect(menu(wrapper).find('[role="separator"]').exists()).toBe(true);
     expect(menu(wrapper).find('[data-verb="rename"]').text()).toContain("F2");
     expect(menu(wrapper).find('[data-verb="new"]').text()).toContain("Ctrl Shift N");
@@ -567,14 +570,41 @@ describe("the folder verbs (#2206)", () => {
     wrapper.unmount();
   });
 
-  it("gives a registered root New folder and Stop watching, and no Move, Rename or Remove", async () => {
+  it("gives a registered root New folder, Open and Stop watching, and no Move, Rename or Remove", async () => {
     const wrapper = mountTree();
     await flushPromises();
     rightClick(item(wrapper, 1));
     await flushPromises();
-    expect(verbs(wrapper)).toEqual(["new", "stop"]);
+    expect(verbs(wrapper)).toEqual(["new", "open", "stop"]);
     await menu(wrapper).find('[data-verb="stop"]').trigger("click");
     expect(useModelShelfStore().shellRequest.what).toBe("manage-folders");
+    wrapper.unmount();
+  });
+
+  it("opens the row's own directory in the file manager, even while a move runs", async () => {
+    openModelFolder.mockReset().mockResolvedValue({ status: "ok" });
+    const wrapper = await openLora();
+    useModelMovesStore().job = { ...started, status: "running" };
+    rightClick(item(wrapper, 1, "Lora"));
+    await flushPromises();
+    const open = menu(wrapper).find('[data-verb="open"]');
+    expect(open.text()).toContain("Open in file manager");
+    expect(open.attributes("aria-disabled")).toBeUndefined();
+    await open.trigger("click");
+    await flushPromises();
+    expect(openModelFolder).toHaveBeenCalledWith(1, "Lora");
+    expect(menu(wrapper).exists()).toBe(false);
+
+    // Away from the server's desktop the gate answers 403, and the reader is told why.
+    openModelFolder.mockRejectedValue({ response: { status: 403 } });
+    rightClick(item(wrapper, 1));
+    await flushPromises();
+    await menu(wrapper).find('[data-verb="open"]').trigger("click");
+    await flushPromises();
+    expect(openModelFolder).toHaveBeenLastCalledWith(1, "");
+    expect(useNoticeStore().notices.at(-1).text).toContain(
+      "only works when you are sitting at it",
+    );
     wrapper.unmount();
   });
 
@@ -602,7 +632,7 @@ describe("the folder verbs (#2206)", () => {
     const wrapper = await openLora();
     rightClick(item(wrapper, 1, "VAE"));
     await flushPromises();
-    expect(verbs(wrapper)).toEqual(["paste", "new", "move", "rename", "remove"]);
+    expect(verbs(wrapper)).toEqual(["paste", "new", "open", "move", "rename", "remove"]);
     expect(menu(wrapper).find('[data-verb="paste"]').text()).toContain("Ctrl V");
     await menu(wrapper).find('[data-verb="paste"]').trigger("click");
     expect(paste).toHaveBeenCalledWith({ folderId: 1, path: "VAE", locked: false });
