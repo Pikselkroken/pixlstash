@@ -56,10 +56,38 @@
            in ink. -->
       <div v-if="notice" class="trl-notice" :class="`trl-notice--${notice.kind}`">
         <v-icon size="18" class="trl-notice-glyph">{{ notice.icon }}</v-icon>
-        <p>
-          <b>{{ notice.title }}</b>
-          {{ notice.text }}
-        </p>
+        <div class="trl-notice-body">
+          <p>
+            <b>{{ notice.title }}</b>
+            {{ notice.text }}
+          </p>
+          <!-- The trainer's own text, for pasting into an issue; the sentence
+               above is the part someone can act on. -->
+          <pre v-if="notice.full && showFull" class="trl-full" data-testid="trl-full">{{
+            notice.full
+          }}</pre>
+        </div>
+        <div v-if="notice.full" class="trl-notice-acts">
+          <AppButton
+            size="sm"
+            variant="ghost"
+            :icon-left="showFull ? 'chevron-up' : 'chevron-down'"
+            :aria-expanded="String(showFull)"
+            data-testid="trl-full-toggle"
+            @click="showFull = !showFull"
+          >
+            Full message
+          </AppButton>
+          <AppButton
+            size="sm"
+            variant="ghost"
+            icon-left="content-copy"
+            data-testid="trl-full-copy"
+            @click="copyFull(notice.full)"
+          >
+            Copy
+          </AppButton>
+        </div>
       </div>
 
       <div class="trl-body">
@@ -139,6 +167,9 @@
               </span>
               <span class="trl-stepsub">
                 <span v-if="column === 0">before training</span>
+                <span v-else-if="i === failedIndex" class="trl-stepsub--err"
+                  >failed here</span
+                >
                 <span v-else-if="i === coverIndex" class="trl-badge-cover">
                   <v-icon size="12">mdi-star</v-icon>Cover
                 </span>
@@ -157,6 +188,23 @@
                 >
                   Use this step
                 </button>
+              </span>
+            </div>
+            <!-- Where the track ends: the final save and the import. A run
+                 that failed or was stopped never gets there. -->
+            <div
+              v-if="!['error', 'stopped'].includes(live.status)"
+              class="trl-endph"
+              :style="{ gridRow: 1, gridColumn: columns.length + 2 }"
+            >
+              <span
+                v-for="end in endPhases"
+                :key="end.key"
+                :class="{ 'trl-endph--cur': end.state === 'now' }"
+              >
+                <v-icon v-if="end.state === 'done'" size="14">mdi-check</v-icon>
+                <i v-else class="trl-ring" aria-hidden="true"></i>
+                {{ end.label }}
               </span>
             </div>
             <!-- The loss, on the same step axis. -->
@@ -227,69 +275,17 @@
                   <span v-else-if="cell.state === 'deferred'" class="trl-cell trl-cell--deferred"
                     >after training</span
                   >
-                  <span
-                    v-else
-                    class="trl-cell trl-cell--future"
-                    :class="{ 'trl-cell--missing': cell.state !== 'future' }"
-                    >{{ cell.state === "future" ? "" : "No preview" }}</span
-                  >
+                  <!-- A step the run never reached stays a quiet empty cell; only
+                       one it passed without a picture says so. -->
+                  <span v-else class="trl-cell trl-cell--future">{{
+                    cell.state !== "future" && columns[i] <= live.step ? "not drawn" : ""
+                  }}</span>
                 </div>
               </template>
             </template>
           </div>
         </div>
 
-        <!-- The pictures the columns are walking towards. -->
-        <aside class="trl-strip" aria-label="Training pictures">
-          <!-- Where the track ends: the final save and the import. -->
-        <div class="trl-endph">
-            <span
-              v-for="end in endPhases"
-              :key="end.key"
-              :class="{ 'trl-endph--cur': end.state === 'now' }"
-            >
-              <v-icon v-if="end.state === 'done'" size="14">mdi-check</v-icon>
-              <i v-else class="trl-ring" aria-hidden="true"></i>
-              {{ end.label }}
-            </span>
-          </div>
-
-          <span class="section-label">
-            Trained on <span class="trl-n">· {{ pictures.length.toLocaleString() }}</span>
-          </span>
-          <span v-if="subjectName" class="trl-muted">{{ subjectName }}</span>
-          <div class="trl-strip-grid">
-            <img
-              v-for="id in pictures.slice(0, STRIP_SHOWN)"
-              :key="id"
-              class="trl-strip-pic"
-              :src="pictureThumbnailUrl(id)"
-              alt="Training picture"
-              loading="lazy"
-              role="button"
-              tabindex="0"
-              @click="openPicture(id)"
-              @keydown.enter="openPicture(id)"
-              @keydown.space.prevent="openPicture(id)"
-            />
-            <span v-if="pictures.length > STRIP_SHOWN" class="trl-strip-more">
-              +{{ (pictures.length - STRIP_SHOWN).toLocaleString() }}<br />more
-            </span>
-          </div>
-          <!-- The frozen dataset (#2123): what the LoRA was trained on,
-               whatever has happened to the pictures since. -->
-          <AppButton
-            v-if="live.dataset_snapshot_id != null"
-            class="trl-export"
-            size="sm"
-            variant="ghost"
-            icon-left="download"
-            :loading="exporting"
-            @click="exportDataset"
-          >
-            Export dataset
-          </AppButton>
-        </aside>
       </div>
 
       <!-- Memory and speed describe now, not a step: a status bar. -->
@@ -380,7 +376,6 @@ import {
   unref,
   watch,
 } from "vue";
-import { useRoute, useRouter } from "vue-router";
 import { VIcon } from "vuetify/components";
 
 import AppBarButton from "../widgets/AppBarButton.vue";
@@ -390,16 +385,13 @@ import Tooltip from "../widgets/Tooltip.vue";
 import TrainingSampleDialog from "../widgets/TrainingSampleDialog.vue";
 import {
   cancelTrainingJob,
-  exportTrainingSnapshot,
   getTrainingJobLive,
   setTrainingJobCover,
 } from "../../api/training";
 import { runSampleUrl } from "../../api/modelImports";
-import { pictureThumbnailUrl } from "../../api/pictures";
-import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { errorDetail } from "../../utils/apiError";
-import { saveFileAs } from "../../utils/downloadFile";
+import { copyText } from "../../utils/clipboard";
 import {
   isBusyJob,
   isQueuedBehindRun,
@@ -413,7 +405,6 @@ const props = defineProps({
 const emit = defineEmits(["close"]);
 
 const POLL_MS = 2000;
-const STRIP_SHOWN = 9;
 
 const PHASE_LABELS = {
   waiting_gpu: "Waiting for the GPU",
@@ -427,10 +418,6 @@ const PHASE_LABELS = {
 };
 const SETUP = ["waiting_gpu", "checking", "loading", "caching"];
 
-const names = useEntityNamesStore();
-const route = useRoute();
-const router = useRouter();
-
 const live = ref(null);
 const error = ref("");
 // Whether the shelf has a bar slot for this page. Not read off the document:
@@ -441,7 +428,7 @@ const hasBar = unref(inject("shelf-run-bar", false));
 const hoverColumn = ref(null);
 const choosing = ref(false);
 const stopping = ref(false);
-const exporting = ref(false);
+const showFull = ref(false);
 const chartRef = ref(null);
 
 // ── The shape-coded provenance mark and the meter ────────────────────────────
@@ -541,6 +528,19 @@ const drawingIndex = computed(() => {
     if (column <= step) index = i;
   });
   return index;
+});
+
+/**
+ * The column a failed run broke at: the first at or past its step that it did
+ * not finish drawing. Not while it was still setting up (step 0): the set-up
+ * label says that.
+ */
+const failedIndex = computed(() => {
+  const run = live.value;
+  if (run?.status !== "error" || !run.step) return -1;
+  return columns.value.findIndex(
+    (column, i) => column >= run.step && tickOf(i) !== "done",
+  );
 });
 
 function tickOf(i) {
@@ -721,8 +721,12 @@ const notice = computed(() => {
       text: `at ${timeOfDay(run.finished_while_closed.at)}. Loss and previews were read from the run folder; memory for that stretch was not recorded.`,
     };
   }
+  // One sentence, written by the backend from the trainer's text, which sits
+  // behind Full message when it says more.
   if (run.status === "error") {
-    return { kind: "err", icon: "mdi-alert", title: "The run failed.", text: run.error || "" };
+    const title = run.error || "The run failed.";
+    const full = run.report && run.report.trim() !== title ? run.report : "";
+    return { kind: "err", icon: "mdi-alert", title, text: "", full };
   }
   return null;
 });
@@ -758,15 +762,6 @@ const remaining = computed(() => {
   const { remaining_low_s: low, remaining_high_s: high } = live.value?.speed ?? {};
   if (low == null || high == null) return "";
   return span(low, high);
-});
-
-const pictures = computed(() => live.value?.dataset_picture_ids ?? []);
-const subjectName = computed(() => {
-  const run = live.value;
-  if (!run) return "";
-  if (run.character_id != null) return names.characterNames[run.character_id] || "";
-  if (run.set_id != null) return names.setNames[run.set_id] || "";
-  return "";
 });
 
 // ── Formatting ──────────────────────────────────────────────────────────────
@@ -845,18 +840,6 @@ function openSample(row, column, cell) {
   };
 }
 
-/**
- * Open a training picture in the lightbox. It lives in the library grid, which
- * this screen replaces, so the way there is the picture route; `?from=` is the
- * full path, `?run=` included, so closing it comes back to this run.
- */
-function openPicture(pictureId) {
-  router.push({
-    name: "all-pictures",
-    query: { overlay: String(pictureId), from: route.fullPath },
-  });
-}
-
 async function useStep(step) {
   choosing.value = true;
   try {
@@ -899,19 +882,14 @@ async function stop() {
   }
 }
 
-async function exportDataset() {
-  exporting.value = true;
-  try {
-    const { blob, filename } = await exportTrainingSnapshot(props.jobId);
-    await saveFileAs(blob, filename);
-  } catch (err) {
-    useNoticeStore().push({
-      level: "error",
-      text: errorDetail(err) || "Could not export the dataset.",
-    });
-  } finally {
-    exporting.value = false;
-  }
+async function copyFull(text) {
+  const copied = await copyText(text);
+  if (!copied) console.warn(`Could not copy training run ${props.jobId}'s message`);
+  useNoticeStore().push(
+    copied
+      ? { level: "success", text: "Copied the full message." }
+      : { level: "error", text: "Could not copy the message." },
+  );
 }
 
 // ── Polling ─────────────────────────────────────────────────────────────────
@@ -965,6 +943,7 @@ watch(
     clearTimeout(timer);
     live.value = null;
     error.value = "";
+    showFull.value = false;
     notFound = false;
     load().then(schedule);
   },
@@ -1079,8 +1058,31 @@ onBeforeUnmount(() => {
   max-width: 900px;
 }
 
+.trl-notice-body {
+  flex: 1;
+  min-width: 0;
+}
+
 .trl-notice p {
   margin: 0;
+}
+
+.trl-notice-acts {
+  display: flex;
+  flex: none;
+  gap: var(--space-2);
+  margin: calc(-1 * var(--space-2)) calc(-1 * var(--space-2)) 0 0;
+}
+
+.trl-full {
+  margin: var(--space-3) 0 0;
+  max-height: 240px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .trl-notice b {
@@ -1136,7 +1138,7 @@ onBeforeUnmount(() => {
 .trl-board {
   position: relative;
   display: grid;
-  grid-template-columns: var(--trl-label-w) repeat(var(--trl-cols), var(--trl-pitch));
+  grid-template-columns: var(--trl-label-w) repeat(var(--trl-cols), var(--trl-pitch)) auto;
   grid-auto-rows: auto;
   row-gap: var(--space-1);
   width: max-content;
@@ -1257,6 +1259,10 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
+.trl-stepsub--err {
+  color: rgb(var(--v-theme-surface-error));
+}
+
 .trl-badge-cover {
   display: inline-flex;
   align-items: center;
@@ -1295,7 +1301,7 @@ onBeforeUnmount(() => {
 }
 
 .trl-endph {
-  height: 62px;
+  padding-left: var(--space-4);
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -1454,56 +1460,6 @@ img.trl-cell {
     animation-duration: 2s !important;
     animation-iteration-count: infinite !important;
   }
-}
-
-/* ── the training pictures ── */
-.trl-strip {
-  flex: none;
-  width: 140px;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  font-size: var(--text-xs);
-}
-
-.trl-n {
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0;
-}
-
-.trl-strip-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 66px);
-  gap: var(--space-3);
-  margin-top: var(--space-3);
-}
-
-.trl-export {
-  align-self: flex-start;
-  margin-top: var(--space-3);
-}
-
-.trl-strip-pic,
-.trl-strip-more {
-  width: 66px;
-  height: 110px;
-  border-radius: var(--radius-sm);
-}
-
-.trl-strip-pic {
-  cursor: zoom-in;
-  object-fit: cover;
-  object-position: center 18%;
-  background: rgb(var(--v-theme-surface));
-}
-
-.trl-strip-more {
-  border: 1px dashed rgb(var(--v-theme-border));
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  color: rgba(var(--v-theme-on-background), var(--opacity-text-secondary));
 }
 
 /* ── the status bar ── */

@@ -2045,6 +2045,8 @@ def test_job_error_with_spaced_path_and_file_uri_is_redacted():
 
         (listed,) = [j for j in owner.get("/training/jobs").json() if j["id"] == job_id]
         live = owner.get(f"/training/jobs/{job_id}/live").json()
+        # The run page's "Full message" reads it here.
+        assert live["report"] == "wrote <host path>", live.get("report")
         for body in (detail, listed, live):
             assert body["name"] == name, body["name"]
             assert body["trigger_word"] == trigger, body["trigger_word"]

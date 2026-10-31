@@ -716,6 +716,13 @@ def create_router(server) -> APIRouter:
             default_factory=list,
             description="The checkpoint steps, step 0 first, one column each.",
         )
+        report: Optional[str] = Field(
+            default=None,
+            description=(
+                "The trainer's whole text, behind the one-line `error`; host "
+                "paths redacted."
+            ),
+        )
         rows: list[dict] = Field(
             default_factory=list,
             description=(
@@ -1390,6 +1397,7 @@ def create_router(server) -> APIRouter:
                 else None
             ),
             "error": job["error"],
+            "report": job["report"],
             "created_at": job["created_at"],
             "started_at": job["started_at"],
             "completed_at": job["completed_at"],

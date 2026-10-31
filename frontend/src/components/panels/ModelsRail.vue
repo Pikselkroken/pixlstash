@@ -21,10 +21,17 @@
     </template>
 
     <div class="mrail-scroll">
-      <!-- The training runs place (#2169): the picked run, or the folder. -->
+      <!-- The training runs place (#2169): the open run, the picked run, or
+           the folder. -->
       <template v-if="onRuns">
         <ModelsRailRun
-          v-if="pickedRuns.length === 1"
+          v-if="openRun"
+          :key="openRun.key"
+          :card="openRun"
+          open
+        />
+        <ModelsRailRun
+          v-else-if="pickedRuns.length === 1"
           :key="pickedRuns[0].key"
           :card="pickedRuns[0]"
         />
@@ -282,13 +289,26 @@ const kind = computed(() => {
   return "many";
 });
 
+// Clear acts on the grid's ticks, which an open run's page does not show.
 const hasSelection = computed(() =>
-  onRuns.value ? pickedRuns.value.length > 0 : kind.value !== "none",
+  onRuns.value
+    ? !openRun.value && pickedRuns.value.length > 0
+    : kind.value !== "none",
 );
 
 // ── Training runs ─────────────────────────────────────────────────────────
 
 const pickedRuns = computed(() => runsStore.chosenCards);
+
+/**
+ * The run whose page is open (`?run=<uuid>`), whatever the grid has ticked:
+ * the Tasks pill opens a run nobody picked.
+ */
+const openRun = computed(() => {
+  const uuid = onRuns.value ? route.query.run : null;
+  if (typeof uuid !== "string" || !uuid) return null;
+  return runsStore.cards.find((card) => card.job?.uuid === uuid) ?? null;
+});
 
 const runCheckpoints = computed(() => {
   const n = pickedRuns.value.reduce(
@@ -311,6 +331,7 @@ const runsLine = computed(() => {
 
 const title = computed(() => {
   if (onRuns.value) {
+    if (openRun.value) return openRun.value.name;
     const picked = pickedRuns.value;
     if (picked.length === 1) return picked[0].name;
     if (picked.length > 1) return `${picked.length} runs`;

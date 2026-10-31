@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 import { setActivePinia, createPinia } from "pinia";
 
-const routeState = vi.hoisted(() => ({ name: "models", path: "/models" }));
+const routeState = vi.hoisted(() => ({ name: "models", path: "/models", query: {} }));
 
 vi.mock("vuetify/components", async () => {
   const { vuetifyComponentStubs } = await import("../../testing/vuetifyStubs");
@@ -192,6 +192,7 @@ beforeEach(() => {
   setActivePinia(createPinia());
   routeState.name = "models";
   routeState.path = "/models";
+  routeState.query = {};
   listAdapters.mockReset().mockResolvedValue([]);
   listCheckpoints.mockReset().mockResolvedValue([]);
   listFavourites.mockReset().mockResolvedValue({ model: [], workflow: [], set: [] });
@@ -552,6 +553,32 @@ describe("a picked training run (#2169)", () => {
     const mountedRail = await mountRail();
     return { ...mountedRail, runsStore };
   }
+
+  it("describes the run whose page is open, picked or not, by what it was made of", async () => {
+    const job = {
+      ...liveJob,
+      status: "error",
+      run_name: "walter_v2",
+      uuid: "u8",
+      started_at: "2026-10-30T10:00:00Z",
+    };
+    routeState.query = { run: "u8" };
+    const { wrapper } = await mountOnRuns({ runs: [finished], jobs: [job] });
+    expect(title(wrapper)).toBe("walter_v2");
+    // The page shows how it went; the rail does not say it again.
+    expect(wrapper.find('[data-testid="mrr-steps"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="mrr-samples"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain("ar1a");
+    expect(wrapper.text()).toContain("walter_v2_000001000.safetensors");
+    // What the grid ticked is not on screen to clear, even when it is ticked.
+    expect(wrapper.find('[data-testid="mrail-clear"]').exists()).toBe(false);
+    const ticked = await mountOnRuns({
+      runs: [finished],
+      jobs: [job],
+      pick: ["run:walter_v2"],
+    });
+    expect(ticked.wrapper.find('[data-testid="mrail-clear"]').exists()).toBe(false);
+  });
 
   it("with nothing picked names the folder and counts the runs", async () => {
     const { wrapper } = await mountOnRuns({ runs: [finished], jobs: [liveJob] });

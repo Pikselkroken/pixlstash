@@ -512,8 +512,10 @@ import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import {
   baseOf,
   dateOf,
+  defaultDestination,
   failed,
   hasBareFinal,
+  importDestinations,
   jobStatus,
   progressOf,
   stepsOf,
@@ -635,18 +637,8 @@ watch(cardMenuOpen, (open, wasOpen) => {
   });
 });
 
-/**
- * Where an import may land.
- *
- * The same two exclusions a move applies, and for the same reasons: a `source`
- * folder is taken from rather than written into (the server refuses it), and an
- * `external` folder is shared with other software.
- */
-const destinations = computed(() =>
-  folders.folders.filter(
-    (folder) => folder.kind !== "source" && folder.movable !== "external",
-  ),
-);
+/** Where an import may land (`importDestinations` says which and why). */
+const destinations = computed(() => importDestinations(folders.folders));
 
 const destinationName = computed(() => {
   const folder = destinations.value.find((f) => f.id === destinationId.value);
@@ -858,11 +850,7 @@ watch(
   (list) => {
     const stillThere = list.some((f) => f.id === destinationId.value);
     if (destinationId.value != null && stillThere) return;
-    // The default folder from the Model folders dialog, which is the managed
-    // store until the owner picks another.
-    const preferred =
-      list.find((f) => f.is_default) ?? list.find((f) => f.kind === "managed");
-    destinationId.value = preferred?.id ?? list[0]?.id ?? null;
+    destinationId.value = defaultDestination(list)?.id ?? null;
   },
   { immediate: true },
 );
