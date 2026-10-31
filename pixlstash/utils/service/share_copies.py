@@ -105,6 +105,7 @@ def make_share_copies(
     max_long_edge: int | None = None,
     watermark_bytes: bytes | None = None,
     file_names: str = FILE_NAMES_ORIGINAL,
+    link_originals: bool = False,
 ) -> dict:
     """Write one share-ready copy of each picture into a new batch under *root*.
 
@@ -121,6 +122,11 @@ def make_share_copies(
         file_names: :data:`FILE_NAMES_ORIGINAL` (the imported file's name, or
             for a picture without one when it was made) or
             :data:`FILE_NAMES_PIXLSTASH` (the vault's own file name).
+        link_originals: Hand over the originals themselves, generation data and
+            all, as hard links under the share names: nothing is copied, so a
+            drag of a whole view starts at once (#2420). Overrides resizing,
+            watermarking and stripping. Where a link cannot be made (the
+            original is on another drive) the file is copied, and that is logged.
 
     Returns:
         ``{"batch", "directory", "files", "skipped"}``. Each file entry carries
@@ -149,6 +155,7 @@ def make_share_copies(
                 max_long_edge=max_long_edge,
                 watermark_bytes=watermark_bytes,
                 file_names=file_names,
+                link_originals=link_originals,
             )
         except Exception as exc:
             logger.warning(
@@ -203,9 +210,15 @@ def _copy_one(
     max_long_edge,
     watermark_bytes,
     file_names,
+    link_originals=False,
 ) -> dict:
     ext = os.path.splitext(source)[1].lower()
     entry = {"picture_id": pic["id"], "resized": False, "watermarked": False}
+
+    if link_originals:
+        name = _copy_name(pic, source, ext, file_names, claimed)
+        _link_or_copy(source, os.path.join(directory, name))
+        return _finish(entry, directory, name, METADATA_KEPT)
 
     if VideoUtils.is_video_file(source):
         # No container metadata writer here, so a video goes as it is.
@@ -243,6 +256,23 @@ def _copy_one(
     with open(os.path.join(directory, name), "wb") as fh:
         fh.write(data)
     return _finish(entry, directory, name, metadata)
+
+
+def _link_or_copy(source: str, target: str) -> None:
+    """Hard-link *source* at *target*, or copy it where a link cannot be made.
+
+    The link is the original file under a second name: removing the batch
+    later removes only that name. A copy is the one way across drives.
+    """
+    try:
+        os.link(source, target)
+    except OSError as exc:
+        logger.info(
+            "Could not hard-link %s into the share copies (%s); copying it instead",
+            source,
+            exc,
+        )
+        shutil.copyfile(source, target)
 
 
 def _finish(entry: dict, directory: str, name: str, metadata: str) -> dict:

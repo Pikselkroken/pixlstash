@@ -11,7 +11,7 @@ import { useSelectionStore } from "../stores/useSelectionStore";
 import { useProjectStore } from "../stores/useProjectStore";
 import { resolveImportTarget } from "../utils/importTarget.js";
 import { isReadOnly } from "../utils/apiClient";
-import { MAX_COPY_FILES, stageShareFiles } from "../utils/copyAsFiles.js";
+import { stageShareFiles } from "../utils/copyAsFiles.js";
 import {
   canStartShareDrag,
   isOwnShareCopyDrop,
@@ -297,14 +297,12 @@ export function useGridDragDrop(
   }
 
   // ── Drag-out as files (#2420) ─────────────────────────────────────────────
-  // In the desktop app a picture drag is an OS file drag of share copies, so it
-  // lands in a file manager, a mail or a chat like a file manager's own drag,
-  // and the in-app targets take it too (utils/shareDrag.js).
+  // In the desktop app a picture drag is an OS file drag of the original files,
+  // so it lands in a file manager, a mail or a chat like a file manager's own
+  // drag, and the in-app targets take it too (utils/shareDrag.js).
 
   function wantsShareDrag(ids) {
-    return (
-      canStartShareDrag() && !isReadOnly.value && ids.length <= MAX_COPY_FILES
-    );
+    return ids.length > 0 && canStartShareDrag() && !isReadOnly.value;
   }
 
   /** The thumbnail under the pointer as PNG bytes for the OS drag, or undefined. */
@@ -331,8 +329,8 @@ export function useGridDragDrop(
   }
 
   function startShareDrag(img, event, ids) {
-    // The OS drag replaces this one, and it can only start once the copies are
-    // on disk, which takes a request.
+    // The OS drag replaces this one, and it can only start once the files are
+    // linked under their names, which takes a request.
     event.preventDefault();
     dragSource.value = "grid";
     setDragSourceImageIds(ids);
@@ -350,6 +348,8 @@ export function useGridDragDrop(
     void (async () => {
       let staged;
       try {
+        // The originals, hard-linked under the copy-and-paste names, so even a
+        // whole view starts at once.
         staged = await stageShareFiles(ids, { verb: "drag", key: "drag-out" });
       } finally {
         if (body) body.style.cursor = "";

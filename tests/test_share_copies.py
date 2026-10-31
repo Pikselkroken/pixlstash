@@ -272,6 +272,43 @@ def test_keep_generation_data_copies_byte_for_byte(library):
             assert fh.read() == original
 
 
+def test_link_originals_hands_over_the_originals_under_the_share_names(library):
+    # A drag-out (#2420): the vault file itself, named as Ctrl+C names it.
+    comfy, a1111 = _comfy_png(), _a1111_png()
+    library["add"](comfy, "aa11.png", "ComfyUI_00001_.png")
+    library["add"](a1111, "bb22.png", "ComfyUI_00001_.png")
+    plain = _copy(library)
+
+    result = _copy(library, link_originals=True)
+
+    assert [f["name"] for f in result["files"]] == [f["name"] for f in plain["files"]]
+    for entry, stored in zip(result["files"], ("aa11.png", "bb22.png")):
+        original = os.path.join(library["image_root"], stored)
+        assert entry["metadata"] == METADATA_KEPT
+        assert os.path.samefile(entry["path"], original)
+    # Removing the batch removes the second name only.
+    sweep_share_copies(library["root"], max_age_seconds=-1)
+    assert not os.path.exists(result["directory"])
+    with open(os.path.join(library["image_root"], "aa11.png"), "rb") as fh:
+        assert fh.read() == comfy
+
+
+def test_link_originals_copies_where_no_link_can_be_made(library, monkeypatch):
+    comfy = _comfy_png()
+    library["add"](comfy, "aa11.png", "ComfyUI_00001_.png")
+
+    def cross_device(source, target):
+        raise OSError(18, "Invalid cross-device link")
+
+    monkeypatch.setattr(os, "link", cross_device)
+    (entry,) = _copy(library, link_originals=True)["files"]
+
+    original = os.path.join(library["image_root"], "aa11.png")
+    assert not os.path.samefile(entry["path"], original)
+    with open(entry["path"], "rb") as fh:
+        assert fh.read() == comfy
+
+
 def test_names_collide_into_suffixes_and_can_be_pixlstash_names(library):
     library["add"](_a1111_png(), "aa11.png", "photo.png")
     library["add"](_a1111_png(), "bb22.png", "Photo.jpg")
@@ -481,6 +518,27 @@ def test_route_stages_stripped_copies_beside_the_server_config(env):
     ).json()["files"][0]
     with open(kept["path"], "rb") as fh:
         assert b"KSampler" in fh.read()
+
+    linked = client.post(
+        f"{API_PREFIX}/pictures/share-copies",
+        json={"picture_ids": [picture_id], "link_originals": True},
+    ).json()["files"][0]
+    assert linked["name"] == "ComfyUI_00042_.png"
+    assert linked["metadata"] == METADATA_KEPT
+    assert os.stat(linked["path"]).st_nlink >= 2
+
+    # No cap. (The route also reads ids in chunks for SQLite builds with the
+    # 999-parameter limit; this machine's build is not one, so that is unproven here.)
+    many = client.post(
+        f"{API_PREFIX}/pictures/share-copies",
+        json={
+            "picture_ids": [picture_id, *range(10**6, 10**6 + 2500)],
+            "link_originals": True,
+        },
+    )
+    assert many.status_code == 200, many.text
+    assert [f["picture_id"] for f in many.json()["files"]] == [picture_id]
+    assert len(many.json()["skipped"]) == 2500
 
 
 def test_user_config_remembers_whether_an_export_keeps_the_workflow(env):

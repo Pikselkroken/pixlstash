@@ -1,10 +1,12 @@
 // Copy pictures to the OS clipboard as files (#2419), for pasting into a file
 // manager, a mail compose window, a chat or a synced folder.
 //
-// The files are share copies (POST /pictures/share-copies, generation data
-// stripped by default), never the vault's own files, and only the desktop app
-// can put files on the clipboard: main checks every path is one of those
-// copies before the OS sees it (integration_architecture.md §2.5).
+// The files are the originals, hard-linked under their share names into the
+// staging folder (POST /pictures/share-copies with link_originals): nothing is
+// copied and nothing is stripped (owner ruling 2026-10-31; stripping is the
+// export's job). Only the desktop app can put files on the clipboard, and main
+// checks every path is in that staging folder before the OS sees it
+// (integration_architecture.md §2.5).
 
 import { makeShareCopies } from "../api/pictures";
 import { useNoticeStore } from "../stores/useNoticeStore";
@@ -16,9 +18,6 @@ export const KEPT_DATA_BADGE = {
   label: "The workflow, prompt and parameters went with these files.",
 };
 
-// POST /pictures/share-copies takes at most this many ids per request.
-export const MAX_COPY_FILES = 500;
-
 /** Whether this window can copy files at all: the desktop app only. */
 export function canCopyFiles() {
   return (
@@ -28,11 +27,12 @@ export function canCopyFiles() {
 }
 
 /**
- * Stage share copies of `pictureIds` for a gesture that hands them out as
- * files (copy, drag), reporting why when there is nothing to hand out.
+ * Stage `pictureIds` for a gesture that hands them out as files (copy, drag):
+ * the originals, hard-linked under their share names, so it is quick at any
+ * size. Reports why when there is nothing to hand out.
  *
- * Shared by copy-as-files and drag-out (#2420) so both name, strip and refuse
- * the same way.
+ * Shared by copy-as-files and drag-out (#2420) so both name and refuse the
+ * same way.
  *
  * @param {Array<number|string>} pictureIds
  * @param {Object} how
@@ -46,16 +46,11 @@ export function canCopyFiles() {
  */
 export async function stageShareFiles(pictureIds, { verb, key, options = {} }) {
   const noticeStore = useNoticeStore();
-  const Verb = verb[0].toUpperCase() + verb.slice(1);
-  if (pictureIds.length > MAX_COPY_FILES) {
-    noticeStore.error(
-      `${Verb} up to ${MAX_COPY_FILES} pictures at a time as files. ${pictureIds.length} are selected.`,
-      { key },
-    );
-    return null;
-  }
   try {
-    const result = await makeShareCopies(pictureIds, options);
+    const result = await makeShareCopies(pictureIds, {
+      link_originals: true,
+      ...options,
+    });
     const paths = (result?.files || []).map((f) => f.path);
     const skipped = result?.skipped?.length || 0;
     if (!paths.length) {

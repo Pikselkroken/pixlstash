@@ -19,7 +19,6 @@ vi.mock("../api/pictures", () => ({ makeShareCopies: vi.fn() }));
 
 import { isReadOnly } from "../utils/apiClient";
 import { makeShareCopies } from "../api/pictures";
-import { MAX_COPY_FILES } from "../utils/copyAsFiles.js";
 import { resetShareDragForTests } from "../utils/shareDrag.js";
 import { useGridDragDrop } from "./useGridDragDrop.js";
 
@@ -90,7 +89,7 @@ afterEach(() => {
 });
 
 describe("dragging pictures out of the grid (#2420)", () => {
-  it("drags the whole selection's share copies as files, not the thumbnail", async () => {
+  it("drags the whole selection's original files, not the thumbnail", async () => {
     const g = grid();
     const event = dragStart();
     g.handleContainerDragStart({ id: 1 }, event);
@@ -98,7 +97,7 @@ describe("dragging pictures out of the grid (#2420)", () => {
     expect(event.dataTransfer.data.size).toBe(0);
     expect(g.dragSourceImageIds.value).toEqual(new Set(["1", "2"]));
     await flush();
-    expect(makeShareCopies).toHaveBeenCalledWith([1, 2], {});
+    expect(makeShareCopies).toHaveBeenCalledWith([1, 2], { link_originals: true });
     expect(startShareDrag).toHaveBeenCalledWith(
       ["/home/me/share-copies/b/1.png", "/home/me/share-copies/b/2.png"],
       undefined,
@@ -113,6 +112,16 @@ describe("dragging pictures out of the grid (#2420)", () => {
     expect(g.dragSource.value).toBe(null);
   });
 
+  it("drags any number of pictures as files", async () => {
+    const ids = Array.from({ length: 5000 }, (_, i) => i + 1);
+    const g = grid(ids);
+    const event = dragStart();
+    g.handleContainerDragStart({ id: 1 }, event);
+    expect(event.defaultPrevented).toBe(true);
+    await flush();
+    expect(makeShareCopies).toHaveBeenCalledWith(ids, { link_originals: true });
+  });
+
   it("starts nothing when the button was let go before the copies were ready", async () => {
     const g = grid();
     g.handleContainerDragStart({ id: 1 }, dragStart());
@@ -122,7 +131,7 @@ describe("dragging pictures out of the grid (#2420)", () => {
     expect(g.dragSource.value).toBe(null);
   });
 
-  it("stays the in-app HTML5 drag in a browser, read-only, or past the cap", () => {
+  it("stays the in-app HTML5 drag in a browser or a read-only session", () => {
     const html5 = (g, id = 1) => {
       const event = dragStart();
       g.handleContainerDragStart({ id }, event);
@@ -132,7 +141,6 @@ describe("dragging pictures out of the grid (#2420)", () => {
     isReadOnly.value = true;
     html5(grid());
     isReadOnly.value = false;
-    html5(grid(Array.from({ length: MAX_COPY_FILES + 1 }, (_, i) => i + 1)));
     delete window.pixlstashDesktop;
     html5(grid());
     expect(makeShareCopies).not.toHaveBeenCalled();

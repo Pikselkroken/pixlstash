@@ -1714,13 +1714,18 @@ the route would refuse. Backend: `docs/backend_architecture.md`
 
 ### 2.5 The share-copies contract (#2417)
 
-Every desktop way of sharing (the Share dialog, copying as files, dragging out,
-sending to a folder) hands over **copies**, never the vault's files.
-`POST /pictures/share-copies` makes them:
+Every desktop way of handing pictures to another app goes through a staging
+batch made by `POST /pictures/share-copies`, never the vault's own paths.
+**Copying as files and dragging out hand over the originals** (owner ruling
+2026-10-31): `link_originals: true` hard-links each one into the batch under its
+share name, nothing is copied and nothing is stripped, at any selection size;
+stripping generation data is the job of an explicit export (the Share dialog,
+the Export panel). Without that flag the route writes stripped copies:
 
 ```
 {"picture_ids": [..], "keep_generation_data": false, "max_long_edge": null,
- "watermark": false, "file_names": "original" | "pixlstash"}
+ "watermark": false, "file_names": "original" | "pixlstash",
+ "link_originals": false}
 -> {"batch", "directory",
     "files": [{"picture_id", "path", "name", "size", "metadata", "resized", "watermarked"}],
     "skipped": [{"picture_id", "reason": "missing" | "unreadable" | "not_found"}]}
@@ -1747,7 +1752,8 @@ both use it. That keeps the `main.ts` rule: the renderer never supplies
 a filesystem path main acts on unchecked.
 
 **Copy as files (#2419).** Ctrl/⌘+C on a grid selection in the desktop app
-(`useGridKeyboardNav` → `utils/copyAsFiles.js`) stages share copies, then
+(`useGridKeyboardNav` → `utils/copyAsFiles.js`) links the originals into a
+batch (`link_originals`), then
 hands their paths to `media:copyFiles` (app-window gated). There is no
 Electron API for a file list on the clipboard, and `clipboard.writeBuffer`
 keeps one custom format per call (each call replaces the clipboard), so main
@@ -1765,16 +1771,20 @@ apps that only take images. On Linux a GTK desktop's chat apps that read only
 `text/uri-list` get no files; offering both would need a native helper.
 
 **Drag-out (#2420).** In the desktop app a picture drag from the grid is an OS
-file drag of the selection's share copies, so it lands in a file manager, a
+file drag of the selection's original files, so it lands in a file manager, a
 mail or a chat as files, the way a file manager's own drag does. It stages
-through the same `stageShareFiles` as copy-as-files (`utils/copyAsFiles.js`:
-same names, same stripping, same 500 cap), then hands the paths to
-`media:startShareDrag` (app-window gated, `requireShareCopyPaths`), which calls
-`webContents.startDrag({files})` with the tile's thumbnail as the icon. The
-copies must exist before the OS drag begins, so the HTML5 `dragstart` is
-cancelled, the request is made with a busy cursor, and the drag starts once it
-answers, unless the button was let go meanwhile. A browser, a read-only session,
-a remote backend or more than 500 pictures keep the HTML5 drag.
+through the same `stageShareFiles` as copy-as-files (`utils/copyAsFiles.js`),
+so the names are the same, and neither has a cap: the route links rather than
+copies (a copy only where no link can be made, an original on another drive,
+and that is logged), and reads the ids in chunks under SQLite's parameter
+limit. A link is the original under a second name: the sweep removing the
+batch removes that name only, and the OS drag offers copy and link, never move.
+The paths go to `media:startShareDrag` (app-window gated,
+`requireShareCopyPaths`), which calls `webContents.startDrag({files})` with the
+tile's thumbnail as the icon. The files must exist before the OS drag begins,
+so the HTML5 `dragstart` is cancelled, the request is made with a busy cursor,
+and the drag starts once it answers, unless the button was let go meanwhile. A
+browser or a read-only session, or a remote backend, keeps the HTML5 drag.
 
 `startDrag` replaces the HTML5 drag and its JSON payload, so the in-app targets
 (sets, people, projects, stack reorder) read the payload through

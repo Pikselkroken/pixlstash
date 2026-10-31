@@ -799,7 +799,8 @@ export async function startFolderExport(query) {
 /**
  * Stage share-ready copies of pictures on the server host (#2417).
  *
- * Generation data is stripped unless `keep_generation_data` is set. Loopback
+ * Generation data is stripped unless `keep_generation_data` is set;
+ * `link_originals` hands over the originals as hard links instead. Loopback
  * owner only: the answer is host paths, for the desktop app to hand to the
  * clipboard or a drag (integration_architecture.md §2.5).
  *
@@ -811,10 +812,13 @@ export async function startFolderExport(query) {
  */
 export async function makeShareCopies(pictureIds, options = {}) {
   return unwrap(
-    apiClient.post(`/pictures/share-copies`, {
-      picture_ids: pictureIds,
-      ...options,
-    }),
+    apiClient.post(
+      `/pictures/share-copies`,
+      { picture_ids: pictureIds, ...options },
+      // A stripped copy of a whole view is gigabytes to write; the default
+      // minute is too short.
+      { timeout: 5 * 60 * 1000 },
+    ),
   );
 }
 
