@@ -139,7 +139,7 @@ from pixlstash.services import (
     comfyui_templates,
     node_pack_install_service,
 )
-from pixlstash.services.model_downloads import download_source
+from pixlstash.services.model_downloads import download_source, trusted_live_link
 from pixlstash.services.model_icons import IconRefused, store_icon
 from pixlstash.services.workflow_library_service import read_library_ids
 
@@ -2979,7 +2979,13 @@ def create_router(server) -> APIRouter:
                             "directory": item.directory,
                             "url": item.url,
                             "present": normalized_filename(item.name) in present,
-                            "downloadable": download_source(item.name) is not None,
+                            # The live listing's own link too, where it is
+                            # one `start_download` would take from it.
+                            "downloadable": download_source(item.name) is not None
+                            or (
+                                not listing.bundled
+                                and trusted_live_link(item.name, item.url)
+                            ),
                         }
                         for item in template.files
                     ],

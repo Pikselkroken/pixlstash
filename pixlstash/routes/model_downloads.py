@@ -19,6 +19,7 @@ from fastapi import APIRouter, Body, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.event_types import EventType
+from pixlstash.routes.comfyui import _comfyui_url, _read_object_info
 from pixlstash.services.model_downloads import (
     DownloadRefused,
     cancel_download,
@@ -93,7 +94,10 @@ def create_router(server) -> APIRouter:
         summary="Download a missing model onto the shelf",
         description=(
             "Starts fetching a model a workflow names and this machine lacks, "
-            "from the link ComfyUI's template list gives for that file name, "
+            "from the link ComfyUI's template list gives for that file name "
+            "(the list PixlStash ships, else the templates the owner's ComfyUI "
+            "serves, taken only for an https huggingface.co link to a "
+            ".safetensors or .gguf file), "
             "into the download folder (the one marked in Model folders, else "
             "the default folder) and answers at once. When it is complete it "
             "is registered on the shelf and `models_arrived` is announced. "
@@ -108,8 +112,15 @@ def create_router(server) -> APIRouter:
         request: Request, payload: ModelDownloadRequest = Body(...)
     ):
         server.auth.ensure_secure_when_required(request)
+        comfyui_url = _comfyui_url(server.auth.get_user_for_request(request))
         try:
-            return start_download(server.hub, payload.file, on_arrived=_arrived)
+            return start_download(
+                server.hub,
+                payload.file,
+                on_arrived=_arrived,
+                comfyui_url=comfyui_url,
+                object_info=_read_object_info(comfyui_url, cached=True)[0],
+            )
         except DownloadRefused as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 

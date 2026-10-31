@@ -7,6 +7,11 @@ it: a file of the same name in the committed template list
 (``data/workflow_templates.json``, #1999), which gives its link and its
 ComfyUI folder. **The link is the server's, never the caller's**: a request
 names a file, so no client can point the server at an address of its choosing.
+Where the committed list has no such file, the templates the owner's ComfyUI
+serves are asked (:func:`live_download_source`), for one ComfyUI shipped after
+the list was last rebuilt; a link from there is taken only when
+:func:`trusted_live_link` holds (https on ``huggingface.co``, a format loading
+cannot run as code), and carries no digest to check the download against.
 :func:`start_download` fetches it into the download folder (:func:`~pixlstash.services.managed_model_store.find_download_folder`:
 the one marked in the Model folders section, else the default folder) and
 registers it on the shelf, so the next run finds it there.
@@ -51,6 +56,7 @@ import requests
 
 from pixlstash.hub.db import HubDatabase
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services import comfyui_templates
 from pixlstash.services.managed_model_store import find_download_folder
 from pixlstash.services.model_folder_scanner import (
     SHELF_MODEL_SUFFIXES,
@@ -76,6 +82,10 @@ STATUS_CANCELLED = "cancelled"
 
 # Long enough for a client on the idle 5 s poll to see the ending twice.
 FINISHED_KEEP_SECONDS = 30
+
+# What a link from a live ComfyUI template may be (`trusted_live_link`).
+LIVE_HOSTS = frozenset({"huggingface.co"})
+LIVE_SUFFIXES = (".safetensors", ".gguf")
 
 _CHUNK_BYTES = 1 << 20
 # Connect, then the longest silence between two reads.
@@ -128,6 +138,56 @@ def download_source(file: str) -> Optional[dict]:
     return _sources().get(name.casefold()) if name else None
 
 
+def trusted_live_link(name: str, url: Optional[str]) -> bool:
+    """Whether a link a live ComfyUI template gives for *name* may be fetched.
+
+    Only ``https://huggingface.co/...``, exactly that host (no userinfo, no
+    port), and only for a file format that loading cannot run as code: not
+    ``.pth``, which is a pickle. The committed list's links were reviewed; a
+    live template's were not, so it gets the narrower rule.
+    """
+    if not isinstance(url, str) or not name.lower().endswith(LIVE_SUFFIXES):
+        return False
+    parsed = urlparse(url)
+    return parsed.scheme == "https" and parsed.netloc in LIVE_HOSTS
+
+
+def live_download_source(
+    file: str, comfyui_url: Optional[str], object_info: Optional[dict] = None
+) -> Optional[dict]:
+    """Where *file* can be downloaded from by the templates *comfyui_url* serves.
+
+    The fallback to :func:`download_source`, for a template ComfyUI shipped
+    after the committed list was last rebuilt. ``{url, directory, sha256}``
+    with ``sha256`` None (a live template records no digest), or None when no
+    template the listing holds links the name through :func:`trusted_live_link`.
+
+    The listing is the one ``GET /comfyui/templates`` keeps for ten minutes
+    (:func:`~pixlstash.services.comfyui_templates.read_listing`); *object_info*
+    goes to it only to say which packs loaded, should this call be the one that
+    reads it.
+    """
+    name = os.path.basename((file or "").replace("\\", "/")).casefold()
+    if not name or not comfyui_url:
+        return None
+    try:
+        listing = comfyui_templates.read_listing(comfyui_url, object_info)
+    except comfyui_templates.TemplatesUnavailable as exc:
+        logger.info(
+            "No templates from ComfyUI at %s to find a link for %s: %s",
+            comfyui_url,
+            file,
+            exc,
+        )
+        return None
+    for template in listing.templates:
+        for item in template.files:
+            item_name = os.path.basename(item.name.replace("\\", "/"))
+            if item_name.casefold() == name and trusted_live_link(item_name, item.url):
+                return {"url": item.url, "directory": item.directory, "sha256": None}
+    return None
+
+
 def digest_source(sha256: str) -> Optional[dict]:
     """The file the template list links under *sha256*, or None.
 
@@ -172,6 +232,8 @@ def start_download(
     hub: HubDatabase,
     file: str,
     on_arrived: Optional[Callable[[int], None]] = None,
+    comfyui_url: Optional[str] = None,
+    object_info: Optional[dict] = None,
 ) -> dict:
     """Start fetching *file* onto the shelf, and return its entry.
 
@@ -179,11 +241,16 @@ def start_download(
         hub: The hub database holding the shelf tables.
         file: The model name the workflow asks for, as its loader spells it.
         on_arrived: Called with the new model id once it is on the shelf.
+        comfyui_url: The owner's ComfyUI, whose templates are asked for a link
+            when the committed list has none (:func:`live_download_source`).
+        object_info: That ComfyUI's map, for the listing should it be read.
 
     Raises:
         DownloadRefused: Nothing was fetched; ``status_code`` says why.
     """
-    source = download_source(file)
+    source = download_source(file) or live_download_source(
+        file, comfyui_url, object_info
+    )
     if source is None:
         raise DownloadRefused(
             f"PixlStash does not know where to download {file} from.", 404

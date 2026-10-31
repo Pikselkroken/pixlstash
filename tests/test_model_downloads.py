@@ -16,7 +16,8 @@ from types import SimpleNamespace
 import pytest
 
 from pixlstash.hub.db import HubDatabase
-from pixlstash.services import model_downloads
+from pixlstash.routes.workflows import RunGroup, _mark_live_downloads
+from pixlstash.services import comfyui_templates, model_downloads
 from pixlstash.services.model_downloads import (
     STATUS_CANCELLED,
     STATUS_DONE,
@@ -25,8 +26,10 @@ from pixlstash.services.model_downloads import (
     cancel_download,
     digest_source,
     download_source,
+    live_download_source,
     live_downloads,
     start_download,
+    trusted_live_link,
 )
 from pixlstash.services.model_folder_scanner import ModelFolderScanner
 from pixlstash.services.model_mover import PARTIAL_SUFFIX, SHELF_IO_LOCK
@@ -872,3 +875,132 @@ def test_a_thread_that_will_not_start_leaves_no_entry_behind(
     with pytest.raises(DownloadRefused) as caught:
         start_download(hub, "unstarted.safetensors")
     assert "already in" in str(caught.value)
+
+
+# A ComfyUI address for the live-template tests; nothing is ever asked there.
+COMFYUI = "http://127.0.0.1:1"
+HF_LINK = "https://huggingface.co/someone/repo/resolve/main/loras/{}"
+
+
+@pytest.fixture
+def live_listing(monkeypatch):
+    """The owner's ComfyUI serves one template linking *files* ``{name: url}``."""
+
+    def serve(files):
+        listing = comfyui_templates.Listing(
+            [
+                comfyui_templates.Template(
+                    module="default",
+                    name="example_edit",
+                    source="builtin",
+                    title="Example edit",
+                    files=[
+                        comfyui_templates.TemplateFile(name, "loras", url)
+                        for name, url in files.items()
+                    ],
+                )
+            ],
+            read_at=0.0,
+        )
+        monkeypatch.setattr(
+            comfyui_templates, "read_listing", lambda url, object_info=None: listing
+        )
+
+    return serve
+
+
+@pytest.mark.parametrize(
+    "name, url, trusted",
+    [
+        ("a.safetensors", HF_LINK.format("a.safetensors"), True),
+        ("a.gguf", HF_LINK.format("a.gguf"), True),
+        ("a.safetensors", "http://huggingface.co/x/a.safetensors", False),
+        ("a.safetensors", "https://example.com/x/a.safetensors", False),
+        ("a.safetensors", "https://huggingface.co.example.com/a.safetensors", False),
+        ("a.safetensors", "https://user@huggingface.co/a.safetensors", False),
+        ("a.safetensors", "https://huggingface.co:8443/a.safetensors", False),
+        # A pickle: loading it runs code, so a live link never fetches one.
+        ("a.pth", HF_LINK.format("a.pth"), False),
+        ("a.ckpt", HF_LINK.format("a.ckpt"), False),
+        ("a.safetensors", None, False),
+    ],
+)
+def test_a_live_template_link_is_taken_only_from_hugging_face(name, url, trusted):
+    assert trusted_live_link(name, url) is trusted
+
+
+def test_a_file_only_the_live_templates_link_is_found_there(live_listing):
+    live_listing(
+        {
+            "Fresh_Edit_LoRA.safetensors": HF_LINK.format(
+                "Fresh_Edit_LoRA.safetensors"
+            ),
+            "elsewhere.safetensors": "https://example.com/elsewhere.safetensors",
+        }
+    )
+    assert download_source("fresh_edit_lora.safetensors") is None
+    found = live_download_source("loras/fresh_edit_lora.safetensors", COMFYUI)
+    assert found == {
+        "url": HF_LINK.format("Fresh_Edit_LoRA.safetensors"),
+        "directory": "loras",
+        "sha256": None,
+    }
+    assert live_download_source("elsewhere.safetensors", COMFYUI) is None
+    assert live_download_source("fresh_edit_lora.safetensors", None) is None
+
+
+def test_no_live_templates_is_no_live_link(monkeypatch):
+    def unavailable(url, object_info=None):
+        raise comfyui_templates.TemplatesUnavailable("nothing answers")
+
+    monkeypatch.setattr(comfyui_templates, "read_listing", unavailable)
+    assert live_download_source("fresh.safetensors", COMFYUI) is None
+
+
+def test_a_download_falls_back_to_the_live_templates(hub, target, live_listing):
+    chosen, _ = target
+    live_listing({"fresh.safetensors": HF_LINK.format("fresh.safetensors")})
+    # Already there: refused only after a link was found, so nothing is fetched.
+    (chosen / "loras" / "fresh.safetensors").write_bytes(b"x")
+    with pytest.raises(DownloadRefused) as caught:
+        start_download(hub, "fresh.safetensors", comfyui_url=COMFYUI)
+    assert caught.value.status_code == 409
+    with pytest.raises(DownloadRefused) as caught:
+        start_download(hub, "fresh.safetensors")
+    assert caught.value.status_code == 404
+    assert live_downloads() == []
+
+
+def test_the_preflight_marks_what_only_the_live_templates_link(live_listing):
+    live_listing({"fresh.safetensors": HF_LINK.format("fresh.safetensors")})
+    group = RunGroup(
+        reasons=[
+            {
+                "code": MISSING_MODELS,
+                "models": [
+                    {"file": "fresh.safetensors", "folder": "loras"},
+                    {"file": "own_merge.safetensors", "folder": "checkpoints"},
+                    # Named by digest: a live template has none to match.
+                    {"file": "fresh.safetensors", "sha256": "ab" * 32},
+                ],
+            }
+        ],
+        bypassed_loras=[
+            {"file": "fresh.safetensors", "requested": False},
+            {"file": "fresh.safetensors", "requested": True},
+        ],
+    )
+    _mark_live_downloads([group], COMFYUI, object_info={})
+    models = group.reasons[0]["models"]
+    assert [model.get("downloadable") for model in models] == [True, None, None]
+    assert [lora.get("downloadable") for lora in group.bypassed_loras] == [True, None]
+
+
+def test_the_preflight_asks_no_templates_while_comfyui_is_down(monkeypatch):
+    def never(url, object_info=None):
+        raise AssertionError("asked a ComfyUI that is not answering")
+
+    monkeypatch.setattr(comfyui_templates, "read_listing", never)
+    group = RunGroup(bypassed_loras=[{"file": "fresh.safetensors"}])
+    _mark_live_downloads([group], COMFYUI, object_info=None)
+    assert "downloadable" not in group.bypassed_loras[0]

@@ -206,6 +206,7 @@ from pixlstash.services.inpaint_conversion import (
     InpaintConversionRefused,
     convert_to_inpaint,
 )
+from pixlstash.services.model_downloads import live_download_source
 from pixlstash.services.edit_selection import (
     UNREADABLE_PICTURE,
     Selection,
@@ -2506,6 +2507,39 @@ class RunPreflight(BaseModel):
     ok: bool = False
     runs: int = 0
     groups: list[RunGroup] = Field(default_factory=list)
+
+
+def _mark_live_downloads(
+    groups: list[RunGroup], comfyui_url: str, object_info: dict | None
+) -> None:
+    """Mark ``downloadable`` what only the owner's ComfyUI's templates link.
+
+    The run service marks a missing model or a left-out LoRA downloadable
+    from the committed template list alone; one ComfyUI shipped since is
+    found in the templates it serves (``live_download_source``), asked only
+    when something is still unmarked and ComfyUI answered. A model a loader
+    names by digest is left alone: a live template records no digest to
+    match.
+    """
+    if object_info is None:
+        return
+    entries = [
+        model
+        for group in groups
+        for reason in group.reasons
+        if reason.get("code") == run_service.MISSING_MODELS
+        for model in reason.get("models") or []
+    ] + [lora for group in groups for lora in group.bypassed_loras]
+    for entry in entries:
+        if (
+            isinstance(entry, dict)
+            and entry.get("file")
+            and not entry.get("downloadable")
+            and "sha256" not in entry
+            and not entry.get("requested")
+            and live_download_source(str(entry["file"]), comfyui_url, object_info)
+        ):
+            entry["downloadable"] = True
 
 
 class RunResult(BaseModel):
@@ -8075,6 +8109,7 @@ def create_router(server) -> APIRouter:
                     f"{MAX_RUNS_PER_REQUEST}."
                 ),
             )
+        _mark_live_downloads(planned, comfyui_url, object_info)
         return Plan(
             body=body,
             groups=planned,
