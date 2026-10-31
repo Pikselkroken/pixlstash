@@ -46,6 +46,12 @@ def _png(colour=(10, 20, 30)) -> bytes:
     return buf.getvalue()
 
 
+def _jpeg() -> bytes:
+    buf = BytesIO()
+    Image.effect_noise((64, 64), 50).convert("RGB").save(buf, format="JPEG")
+    return buf.getvalue()
+
+
 @pytest.fixture(autouse=True)
 def _empty_cache():
     open_with._cache.clear()
@@ -306,6 +312,8 @@ def test_which_files_count_as_a_saved_edit(tmp_path):
         ("backup.png~", edited),
         ("notes.txt", edited),
         ("half.png", edited[: len(edited) // 2]),
+        # A JPEG cut off mid-write still passes Image.verify().
+        ("half.jpg", _jpeg()[: len(_jpeg()) * 2 // 3]),
     ):
         (tmp_path / name).write_bytes(data)
         assert changed_file(str(tmp_path / name), seen) is None, name
@@ -404,6 +412,22 @@ def test_the_watcher_debounces_per_session_and_survives_a_raising_callback(tmp_p
             dest_path="",
         )
     )
+    # A move from another drive (Windows: no relative path) is skipped, not
+    # raised into watchdog's thread.
+    real_relpath = os.path.relpath
+
+    def cross_drive(path, start=None):
+        if str(path).startswith("D:"):
+            raise ValueError("path is on mount 'D:', start on mount 'C:'")
+        return real_relpath(path, start)
+
+    edit_copies.os.path.relpath = cross_drive
+    try:
+        handler.on_any_event(
+            SimpleNamespace(**vars(event), src_path="D:\\elsewhere\\t", dest_path="")
+        )
+    finally:
+        edit_copies.os.path.relpath = real_relpath
     # A rename into the folder counts by its destination.
     handler.on_any_event(
         SimpleNamespace(

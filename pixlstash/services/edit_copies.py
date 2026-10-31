@@ -176,9 +176,11 @@ def changed_file(path: str, seen_sha: str | None) -> tuple[bytes, str, str] | No
     if sha == seen_sha:
         return None
     try:
+        # load(), not verify(): verify() reads headers and trailers only, and a
+        # JPEG cut off mid-write passes it.
         with Image.open(BytesIO(data)) as img:
             fmt = img.format or ""
-            img.verify()
+            img.load()
     except Exception as exc:
         logger.debug("Edit copy %s does not decode yet: %s", path, exc)
         return None
@@ -370,7 +372,12 @@ class _Handler(FileSystemEventHandler):
         for path in (getattr(event, "src_path", ""), getattr(event, "dest_path", "")):
             if not path:
                 continue
-            rel = os.path.relpath(os.fsdecode(path), self._root)
+            try:
+                rel = os.path.relpath(os.fsdecode(path), self._root)
+            except ValueError:
+                # Windows: a move from another drive has no relative path,
+                # and an exception here would reach watchdog's own thread.
+                continue
             session = rel.split(os.sep, 1)[0]
             if _is_batch_name(session):
                 self._schedule(session)
