@@ -1918,10 +1918,15 @@ async function moveModelsOutFirst(copies) {
 
 /** How far the pointer moves before a press becomes a drag. */
 const DRAG_START_PX = 4;
+/** How close to a scrolling list's edge a drag scrolls it, and how fast. */
+const EDGE_PX = 48;
+const EDGE_SPEED_PX = 18;
 
 /** `{row, x, y}` from the press, until it becomes a drag or is let go. */
 let press = null;
 let dragging = false;
+let point = { x: 0, y: 0 };
+let edgeFrame = 0;
 /** The folder row under the pointer, and whether it takes the drop. */
 let overEl = null;
 let overOk = false;
@@ -1941,6 +1946,13 @@ function onRowPointerDown(event, row) {
 
 function onDragMove(event) {
   if (!press) return;
+  // The release happened somewhere this window never heard it (another
+  // window, a lost grab): the drag is over, and nothing drops.
+  if (event.buttons === 0) {
+    endDrag();
+    return;
+  }
+  point = { x: event.clientX, y: event.clientY };
   if (!dragging) {
     const travel = Math.hypot(
       event.clientX - press.x,
@@ -1981,7 +1993,43 @@ function startDrag(row) {
   }
   store.dragCopies = copies;
   dragging = true;
+  // A wheel or the edge scroll moves a folder under a still pointer.
+  window.addEventListener("scroll", onDragScroll, true);
+  edgeFrame = requestAnimationFrame(edgeScroll);
   return true;
+}
+
+function onDragScroll() {
+  trackDrag(point.x, point.y);
+}
+
+/**
+ * Scroll whatever list is under the pointer when the pointer nears its top or
+ * bottom edge, as the browser's own drag did: a folder further down the tree
+ * is otherwise out of reach.
+ */
+function edgeScroll() {
+  if (!dragging) return;
+  let list = document.elementFromPoint?.(point.x, point.y) ?? null;
+  while (
+    list &&
+    !(
+      list.scrollHeight > list.clientHeight &&
+      /auto|scroll/.test(getComputedStyle(list).overflowY)
+    )
+  ) {
+    list = list.parentElement;
+  }
+  if (list) {
+    const box = list.getBoundingClientRect();
+    const top = point.y - box.top;
+    const bottom = box.bottom - point.y;
+    if (top < EDGE_PX) list.scrollTop -= EDGE_SPEED_PX * (1 - top / EDGE_PX);
+    else if (bottom < EDGE_PX) {
+      list.scrollTop += EDGE_SPEED_PX * (1 - bottom / EDGE_PX);
+    }
+  }
+  edgeFrame = requestAnimationFrame(edgeScroll);
 }
 
 /** Light the folder under the pointer, and move the tip along with it. */
@@ -2026,12 +2074,16 @@ function onDragRelease() {
     new CustomEvent("model-copies-drop", { cancelable: true }),
   );
   endDrag();
-  // The release would otherwise land as a click where the drag began, and
-  // narrow the selection to that row.
-  if (wasDragging) {
-    window.addEventListener("click", swallowClick, true);
-    setTimeout(() => window.removeEventListener("click", swallowClick, true));
-  }
+  if (wasDragging) swallowReleaseClick();
+}
+
+/**
+ * The release would otherwise land as a click where the drag began, and
+ * narrow the selection to that row.
+ */
+function swallowReleaseClick() {
+  window.addEventListener("click", swallowClick, true);
+  setTimeout(() => window.removeEventListener("click", swallowClick, true));
 }
 
 function swallowClick(event) {
@@ -2046,6 +2098,8 @@ function onDragKeydown(event) {
   event.stopPropagation();
   event.preventDefault();
   endDrag();
+  // The button is still down, and its release is still a click to eat.
+  window.addEventListener("pointerup", swallowReleaseClick, { once: true });
 }
 
 function endDrag() {
@@ -2053,6 +2107,8 @@ function endDrag() {
   window.removeEventListener("pointerup", onDragRelease);
   window.removeEventListener("pointercancel", endDrag);
   window.removeEventListener("keydown", onDragKeydown, true);
+  window.removeEventListener("scroll", onDragScroll, true);
+  cancelAnimationFrame(edgeFrame);
   overEl?.dispatchEvent(new CustomEvent("model-copies-leave"));
   press = null;
   overEl = null;
@@ -5702,4 +5758,3 @@ button.shelf-head-cell:hover {
   background: rgba(var(--v-theme-background), 0.55);
 }
 </style>
-

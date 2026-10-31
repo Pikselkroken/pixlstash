@@ -4643,7 +4643,13 @@ describe("the open folder (#2203)", () => {
     /** A main-button press on `el`, and the pointer moved to `x`, `y`. */
     const pointer = (el, type, x = 0, y = 0) =>
       el.dispatchEvent(
-        new MouseEvent(type, { button: 0, clientX: x, clientY: y, bubbles: true }),
+        new MouseEvent(type, {
+          button: 0,
+          buttons: type === "pointerup" ? 0 : 1,
+          clientX: x,
+          clientY: y,
+          bubbles: true,
+        }),
       );
 
     it("drags an unselected row alone, selecting it first", async () => {
@@ -4704,6 +4710,34 @@ describe("the open folder (#2203)", () => {
       wrapper.unmount();
     });
 
+    it("drops on what a scroll put under the pointer, not what was there", async () => {
+      const { wrapper, store } = await openFolder();
+      const folder = document.createElement("div");
+      folder.dataset.modelCopiesDrop = "";
+      const drops = vi.fn();
+      folder.addEventListener("model-copies-over", (event) => event.preventDefault());
+      folder.addEventListener("model-copies-drop", drops);
+      document.body.appendChild(folder);
+      const was = document.elementFromPoint;
+      let under = folder;
+      document.elementFromPoint = () => under;
+      try {
+        pointer(wrapper.find(".shelf-row").element, "pointerdown");
+        pointer(window, "pointermove", 20, 0);
+        expect(store.dropTip).toBe(null);
+        // The wheel scrolls the folder away from a pointer that stays put.
+        under = document.body;
+        document.dispatchEvent(new Event("scroll"));
+        expect(store.dropTip.text).toBe("loose.safetensors");
+        pointer(window, "pointerup", 20, 0);
+        expect(drops).not.toHaveBeenCalled();
+      } finally {
+        document.elementFromPoint = was;
+        folder.remove();
+      }
+      wrapper.unmount();
+    });
+
     it("puts a drag back with Escape, keeping the selection", async () => {
       const { wrapper, store } = await selectLoose();
       pointer(wrapper.find(".shelf-row").element, "pointerdown");
@@ -4712,6 +4746,25 @@ describe("the open folder (#2203)", () => {
       await press("Escape");
       expect(store.dragCopies).toBe(null);
       expect(store.selectedRows.map((one) => one.id)).toEqual([1]);
+      // Its release is still a click, which must not narrow the selection.
+      const clicked = vi.fn();
+      document.body.addEventListener("click", clicked);
+      pointer(window, "pointerup", 10, 0);
+      document.body.click();
+      document.body.removeEventListener("click", clicked);
+      expect(clicked).not.toHaveBeenCalled();
+      wrapper.unmount();
+    });
+
+    it("drops nothing when the release was never heard", async () => {
+      const { wrapper, store } = await openFolder();
+      pointer(wrapper.find(".shelf-row").element, "pointerdown");
+      pointer(window, "pointermove", 10, 0);
+      expect(store.dragCopies).not.toBe(null);
+      // A move with no button held: the release happened elsewhere.
+      window.dispatchEvent(new MouseEvent("pointermove", { clientX: 30 }));
+      expect(store.dragCopies).toBe(null);
+      expect(store.dropTip).toBe(null);
       wrapper.unmount();
     });
 
@@ -4794,7 +4847,9 @@ describe("the open folder (#2203)", () => {
       gone.element.dispatchEvent(
         new MouseEvent("pointerdown", { button: 0, bubbles: true }),
       );
-      window.dispatchEvent(new MouseEvent("pointermove", { clientX: 10 }));
+      window.dispatchEvent(
+        new MouseEvent("pointermove", { buttons: 1, clientX: 10 }),
+      );
       expect(store.dragCopies).toBe(null);
       expect(store.selectedRows.map((one) => one.id)).toEqual([1]);
       // Says why, rather than the row simply refusing to lift.

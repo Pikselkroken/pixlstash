@@ -5845,7 +5845,10 @@ dialog, which says so on its button.
   lifted the row late and lagged the gesture, as it once did the Models rail's.
   A main-button mouse or pen press becomes a drag after 4 px; Escape puts the
   files back, and the click the release fires is swallowed so it cannot narrow
-  the selection. Dragging an unselected row makes it the selection first, alone, as
+  the selection. The list under the pointer scrolls near its edges, as the
+  browser's drag did; a scroll re-checks the folder under the pointer; and a
+  move with no button held ends the drag without a drop (a release the window
+  never heard). Dragging an unselected row makes it the selection first, alone, as
   a file manager does, unless it has nothing movable, when it refuses before
   touching the selection and says why in a notice (the cut's sentence). A row
   that is there but cannot move ends its file line `· in a locked folder`
