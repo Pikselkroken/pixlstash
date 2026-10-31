@@ -5018,9 +5018,15 @@ the row is the one stop), or by Shift+F10 and the Menu key on the focused row. F
 renames and Ctrl+Shift+N makes a folder, on the focused row. `menuFor(node)`
 decides what a row offers. A subfolder gets *New folder*, *Open in file manager*,
 *Move folder to…*, *Rename*, a rule, and *Remove folder…* (`Del`, below). A
-registered root gets *New folder*, *Open in file manager* and *Stop watching…*,
-which asks the shelf for Manage model folders, and nothing that would move its
-directory, because the server refuses to move a root. *Open in file manager*
+registered root gets *New folder*, *Open in file manager*, *Rename* and *Stop
+watching…*, which asks the shelf for Manage model folders, and no *Move* or
+*Remove*, because the server refuses to move a root. Its *Rename* (an unlocked,
+owner-added root only, since a locked one has no menu) starts the field from the
+directory's own name rather than the row's tool label, and goes through
+`useModelFoldersStore.renameFolder` (`POST /model-folders/{folder_id}/rename`),
+which re-reads the folder list (so the settings dialog's rows follow), where
+ComfyUI loads from and the shelf's rows. The row key is the folder id, so the
+tree's open state needs no fix-up. *Open in file manager*
 posts `POST /model-folders/{folder_id}/open` with the row's path. It is
 loopback-only at the gate, takes no gate reason here (it only looks), and a
 refusal is a notice saying which one. The route itself does not refuse a
@@ -5043,8 +5049,9 @@ see them. A refusal is the server's `detail`, shown under the field in the
 danger ink, and the field stays open with what was typed. A create goes
 through `useModelFoldersStore.createDir`, which re-reads the parent's listing;
 the tree that shows the new folder calls its exposed `reveal(folderId, parent,
-newPath)`, which opens the way down, lists it and takes the focus. A rename is a
-move with `newName`, through the one job slot.
+newPath)`, which opens the way down, lists it and takes the focus. A subfolder
+rename is a move with `newName`, through the one job slot; a root rename is the
+synchronous route above.
 
 **A folder drag has a type of its own.** Subfolder rows are `draggable` and
 carry `application/x-pixlstash-model-folder` (`FOLDER_TYPE`), not the model

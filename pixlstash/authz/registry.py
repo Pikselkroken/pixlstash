@@ -665,6 +665,13 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _LOCAL,
         justification="§16.3 model-folder update; sets the Docker bind host path; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
+    # Renames the registered folder itself on the host (a folder the owner
+    # added, never a locked one) and repoints its row: the dirs/move rename,
+    # one level up.
+    ("POST", "/api/v1/model-folders/{folder_id}/rename"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 renames a registered model folder on the host within its own parent and repoints its model_folder row - the rename half of POST /model-folders/{folder_id}/dirs/move, applied to the registered root; one named segment, only per-item folders the owner added, refused in Docker; takes no host path; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
     ("DELETE", "/api/v1/model-folders/{folder_id}"): RoutePolicy(
         _LOCAL,
         justification="§16.3 model-folder delete; drops a registered host path and tombstones its location rows; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",

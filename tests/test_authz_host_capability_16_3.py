@@ -560,6 +560,9 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     lists the applications installed on the host, the POST writes an edit copy
     to the host disk and spawns one of those applications on it, which is
     ``open-location``'s authority.
+    88 = 71 + 17 with ``POST /model-folders/{folder_id}/rename``, which renames a
+    registered folder on the host within its parent: the ``dirs/move`` rename
+    applied to the registered root.
 
     Arithmetic, not judgement."""
     loopback = {
@@ -574,7 +577,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 17, sorted(loopback)
-    assert len(local) == 70, sorted(local)
+    assert len(local) == 71, sorted(local)
 
 
 # ===========================================================================

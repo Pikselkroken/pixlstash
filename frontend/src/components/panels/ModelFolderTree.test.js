@@ -11,6 +11,8 @@ const createModelFolderDir = vi.fn();
 const moveModelFolderDir = vi.fn();
 const removeModelFolderDir = vi.fn();
 const openModelFolder = vi.fn();
+const renameModelFolder = vi.fn();
+const listModelFolders = vi.fn();
 vi.mock("../../api/modelFolders", async (importOriginal) => ({
   ...(await importOriginal()),
   listModelFolderDirs: (...args) => listModelFolderDirs(...args),
@@ -18,6 +20,9 @@ vi.mock("../../api/modelFolders", async (importOriginal) => ({
   moveModelFolderDir: (...args) => moveModelFolderDir(...args),
   removeModelFolderDir: (...args) => removeModelFolderDir(...args),
   openModelFolder: (...args) => openModelFolder(...args),
+  renameModelFolder: (...args) => renameModelFolder(...args),
+  listModelFolders: (...args) => listModelFolders(...args),
+  getComfyuiReads: async () => ({ known: false, reads: [] }),
 }));
 // The move job's watch is not under test here; its reads stay off the wire.
 vi.mock("../../api/modelMoves", () => ({
@@ -611,12 +616,13 @@ describe("the folder verbs (#2206)", () => {
     wrapper.unmount();
   });
 
-  it("gives a registered root New folder, Open and Stop watching, and no Move, Rename or Remove", async () => {
+  it("gives a registered root New folder, Open, Rename and Stop watching, and no Move or Remove", async () => {
     const wrapper = mountTree();
     await flushPromises();
     rightClick(item(wrapper, 1));
     await flushPromises();
-    expect(verbs(wrapper)).toEqual(["new", "open", "stop"]);
+    expect(verbs(wrapper)).toEqual(["new", "open", "rename", "stop"]);
+    expect(menu(wrapper).find('[data-verb="rename"]').text()).toContain("F2");
     await menu(wrapper).find('[data-verb="stop"]').trigger("click");
     expect(useModelShelfStore().shellRequest.what).toBe("manage-folders");
     wrapper.unmount();
@@ -843,6 +849,57 @@ describe("the folder verbs (#2206)", () => {
     });
     expect(field(wrapper).exists()).toBe(true);
     expect(wrapper.find('[role="alert"]').text()).toContain("already exists there");
+    wrapper.unmount();
+  });
+
+  it("renames a registered root's directory, not its tool label, and re-reads the list", async () => {
+    const folders = useModelFoldersStore();
+    folders.folders = [{ ...FOLDERS[0], tool: "StabilityMatrix" }, ...FOLDERS.slice(1)];
+    const renamed = { ...FOLDERS[0], path: "/home/me/StabilityMatrix/Checkpoints" };
+    renameModelFolder.mockReset().mockResolvedValue(renamed);
+    listModelFolders.mockReset().mockResolvedValue([renamed, ...FOLDERS.slice(1)]);
+    const fetchRows = vi.spyOn(useModelShelfStore(), "fetchRows").mockResolvedValue();
+    const wrapper = mountTree();
+    await flushPromises();
+    item(wrapper, 1).element.focus();
+    await item(wrapper, 1).trigger("keydown", { key: "F2" });
+    await flushPromises();
+    expect(field(wrapper).element.value).toBe("Models");
+    expect(field(wrapper).attributes("aria-label")).toBe("Rename StabilityMatrix");
+
+    renameModelFolder.mockRejectedValueOnce({
+      response: { data: { detail: "'Lora' already exists there." } },
+    });
+    await field(wrapper).setValue("Lora");
+    await field(wrapper).trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    expect(field(wrapper).exists()).toBe(true);
+    expect(wrapper.find('[role="alert"]').text()).toContain("already exists there");
+    expect(listModelFolders).not.toHaveBeenCalled();
+
+    await field(wrapper).setValue("Checkpoints");
+    await field(wrapper).trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    expect(renameModelFolder).toHaveBeenLastCalledWith(1, "Checkpoints");
+    expect(moveModelFolderDir).not.toHaveBeenCalled();
+    expect(field(wrapper).exists()).toBe(false);
+    // The list behind the tree and the settings dialog is the server's again.
+    expect(folders.folders[0].path).toBe("/home/me/StabilityMatrix/Checkpoints");
+    expect(fetchRows).toHaveBeenCalled();
+    expect(document.activeElement).toBe(item(wrapper, 1).element);
+    wrapper.unmount();
+  });
+
+  it("offers no rename on a locked root, by menu or by F2", async () => {
+    renameModelFolder.mockReset();
+    const wrapper = mountTree();
+    await flushPromises();
+    item(wrapper, 2).element.focus();
+    await item(wrapper, 2).trigger("keydown", { key: "F2" });
+    await flushPromises();
+    expect(field(wrapper).exists()).toBe(false);
+    expect(item(wrapper, 2).find('[data-testid="model-folder-more"]').exists()).toBe(false);
+    expect(renameModelFolder).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 
