@@ -46,6 +46,7 @@ describe("copyPicturesAsFiles", () => {
     expect(await copyPicturesAsFiles([1, 2])).toBe(2);
     expect(makeShareCopies).toHaveBeenCalledWith([1, 2], {
       link_originals: true,
+      file_names: "made",
     });
     expect(copyFilesToClipboard).toHaveBeenCalledWith([
       "/home/me/a.png",
@@ -114,7 +115,7 @@ describe("copyPicturesAsFiles", () => {
     });
     const ids = Array.from({ length: 5000 }, (_, i) => i + 1);
     expect(await copyPicturesAsFiles(ids)).toBe(1);
-    expect(makeShareCopies).toHaveBeenCalledWith(ids, { link_originals: true });
+    expect(makeShareCopies).toHaveBeenCalledWith(ids, { link_originals: true, file_names: "made" });
   });
 
   it("reports the server's reason when staging is refused", async () => {

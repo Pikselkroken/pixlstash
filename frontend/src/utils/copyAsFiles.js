@@ -47,8 +47,11 @@ export function canCopyFiles() {
 export async function stageShareFiles(pictureIds, { verb, key, options = {} }) {
   const noticeStore = useNoticeStore();
   try {
+    // The originals, linked, each named PixlStash-<date>-<time>[-n] after when
+    // it was made (owner ruling: sensible, unique, the same for both gestures).
     const result = await makeShareCopies(pictureIds, {
       link_originals: true,
+      file_names: "made",
       ...options,
     });
     const paths = (result?.files || []).map((f) => f.path);

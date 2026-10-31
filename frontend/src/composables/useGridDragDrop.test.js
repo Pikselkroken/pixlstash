@@ -97,7 +97,7 @@ describe("dragging pictures out of the grid (#2420)", () => {
     expect(event.dataTransfer.data.size).toBe(0);
     expect(g.dragSourceImageIds.value).toEqual(new Set(["1", "2"]));
     await flush();
-    expect(makeShareCopies).toHaveBeenCalledWith([1, 2], { link_originals: true });
+    expect(makeShareCopies).toHaveBeenCalledWith([1, 2], { link_originals: true, file_names: "made" });
     expect(startShareDrag).toHaveBeenCalledWith(
       ["/home/me/share-copies/b/1.png", "/home/me/share-copies/b/2.png"],
       undefined,
@@ -119,7 +119,7 @@ describe("dragging pictures out of the grid (#2420)", () => {
     g.handleContainerDragStart({ id: 1 }, event);
     expect(event.defaultPrevented).toBe(true);
     await flush();
-    expect(makeShareCopies).toHaveBeenCalledWith(ids, { link_originals: true });
+    expect(makeShareCopies).toHaveBeenCalledWith(ids, { link_originals: true, file_names: "made" });
   });
 
   it("starts nothing when the button was let go before the copies were ready", async () => {

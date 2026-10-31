@@ -71,7 +71,7 @@ class ShareCopiesRequest(BaseModel):
     # The longer side of each image, at most; None keeps the original size.
     max_long_edge: Optional[int] = Field(default=None, ge=64, le=16384)
     watermark: bool = False
-    file_names: Literal["original", "pixlstash"] = "original"
+    file_names: Literal["original", "pixlstash", "made"] = "original"
     # The originals themselves, hard-linked under the share names: a drag-out
     # (#2420) starts at once, generation data included. Overrides the rest.
     link_originals: bool = False

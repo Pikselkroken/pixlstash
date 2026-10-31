@@ -338,6 +338,30 @@ def test_link_originals_falls_back_link_by_link_and_copies_only_last(
         assert fh.read() == comfy
 
 
+def test_made_names_are_when_it_was_made_with_a_suffix_only_when_needed(library):
+    # Drag and Ctrl/Cmd+C (#2420): PixlStash-<date>-<time>[-n], whatever the
+    # picture's original name, so a drop never asks to replace anything.
+    made = datetime.datetime(2026, 10, 24, 14, 22, 42, tzinfo=datetime.timezone.utc)
+    stem = made.astimezone().strftime("PixlStash-%Y-%m-%d-%H.%M.%S")
+    library["add"](_comfy_png(), "a.png", "ComfyUI_00001_.png", made)
+    library["add"](_comfy_png(), "b.png", "ComfyUI_00001_.png", made)
+    library["add"](_a1111_jpeg(), "c.jpg", "1fea4e4c-a7a3-47b3-a909.jpg", made)
+    library["add"](_comfy_png(), "d.png", None, made + datetime.timedelta(seconds=1))
+    library["add"](_comfy_png(), "e.png", "x.png", None)
+
+    names = [f["name"] for f in _link(library, file_names="made")["files"]]
+
+    later = (made + datetime.timedelta(seconds=1)).astimezone()
+    assert names == [
+        f"{stem}.png",
+        f"{stem}-2.png",
+        f"{stem}-3.jpg",
+        later.strftime("PixlStash-%Y-%m-%d-%H.%M.%S") + ".png",
+        "PixlStash-5.png",
+    ]
+    assert len({n.casefold() for n in names}) == len(names)
+
+
 def test_names_collide_into_suffixes_and_can_be_pixlstash_names(library):
     library["add"](_a1111_png(), "aa11.png", "photo.png")
     library["add"](_a1111_png(), "bb22.png", "Photo.jpg")

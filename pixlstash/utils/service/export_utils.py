@@ -109,13 +109,14 @@ def _safe_archive_stem(name: str, fallback: str, *, is_extension: bool = False) 
     return candidate
 
 
-def _unique_export_stem(stem: str, claimed: dict) -> str:
+def _unique_export_stem(stem: str, claimed: dict, sep: str = "_") -> str:
     """Return a member-name stem no earlier member of this export has taken.
 
     Args:
         stem: The candidate stem, already through :func:`_safe_archive_stem`.
         claimed: Case-folded stem -> highest suffix tried for it. Updated in
             place, so one dict per export run is the whole bookkeeping.
+        sep: What goes between the stem and the suffix (``photo_2``).
 
     Returns:
         A stem that is free, ``stem`` itself the first time it is asked for.
@@ -148,7 +149,7 @@ def _unique_export_stem(stem: str, claimed: dict) -> str:
     candidate = stem
     while _key(candidate) in claimed:
         suffix += 1
-        candidate = f"{stem}_{suffix}"
+        candidate = f"{stem}{sep}{suffix}"
     claimed[key] = suffix
     claimed[_key(candidate)] = suffix
     return candidate

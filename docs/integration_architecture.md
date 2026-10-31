@@ -1724,7 +1724,7 @@ the Export panel). Without that flag the route writes stripped copies:
 
 ```
 {"picture_ids": [..], "keep_generation_data": false, "max_long_edge": null,
- "watermark": false, "file_names": "original" | "pixlstash",
+ "watermark": false, "file_names": "original" | "pixlstash" | "made",
  "link_originals": false}
 -> {"batch", "directory",
     "files": [{"picture_id", "path", "name", "size", "metadata", "resized", "watermarked"}],
@@ -1774,7 +1774,11 @@ apps that only take images. On Linux a GTK desktop's chat apps that read only
 file drag of the selection's original files, so it lands in a file manager, a
 mail or a chat as files, the way a file manager's own drag does. It stages
 through the same `stageShareFiles` as copy-as-files (`utils/copyAsFiles.js`),
-so the names are the same, and neither has a cap: the route links rather than
+so the names are the same: `file_names: "made"` names every file after when
+the picture was made, `PixlStash-2026-10-24-14.22.42.png`, with `-2`, `-3` only
+where two pictures share a second (owner ruling: sensible and unique, so a drop
+into an empty folder never asks to replace anything; an imported picture's
+original name is not used). Neither has a cap: the route links rather than
 copies, and reads the ids in chunks under SQLite's parameter limit. A hard link
 works only within one drive, so the links go **inside the library**, in
 `<image_root>/.pixlstash-share/<batch>/` (`share_links_root`): every walk of a

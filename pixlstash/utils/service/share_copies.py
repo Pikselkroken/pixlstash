@@ -56,6 +56,9 @@ SHARE_COPY_MAX_AGE_SECONDS = 12 * 60 * 60
 
 FILE_NAMES_ORIGINAL = "original"
 FILE_NAMES_PIXLSTASH = "pixlstash"
+# ``PixlStash-2026-10-24-14.22.42.png``, ``-2`` on only where two share a
+# second: what a drag or a copy names every file (owner ruling, #2420).
+FILE_NAMES_MADE = "made"
 
 # What a copy says about its generation data.
 METADATA_REMOVED = "removed"
@@ -133,8 +136,10 @@ def make_share_copies(
             enlarges.
         watermark_bytes: Composite this watermark onto each image.
         file_names: :data:`FILE_NAMES_ORIGINAL` (the imported file's name, or
-            for a picture without one when it was made) or
-            :data:`FILE_NAMES_PIXLSTASH` (the vault's own file name).
+            for a picture without one when it was made),
+            :data:`FILE_NAMES_PIXLSTASH` (the vault's own file name) or
+            :data:`FILE_NAMES_MADE` (always when it was made, see
+            :func:`_made_name`).
         link_originals: Hand over the originals themselves, generation data and
             all, as hard links under the share names: nothing is copied, so a
             drag of a whole view starts at once (#2420). Overrides resizing,
@@ -206,7 +211,26 @@ def _made_at_stem(created_at) -> str | None:
     return created_at.astimezone().strftime("PixlStash %Y-%m-%d %H.%M.%S")
 
 
+def _made_name(pic: dict, ext: str, claimed: dict) -> str:
+    """``PixlStash-2026-10-24-14.22.42.png``, when the picture was made.
+
+    Local time, one name per file of a batch: a second picture from the same
+    second gets ``-2``, and only then. A picture with no time is named by its
+    id, which is just as unique.
+    """
+    made = pic.get("created_at")
+    if isinstance(made, datetime.datetime):
+        if made.tzinfo is None:
+            made = made.replace(tzinfo=datetime.timezone.utc)
+        stem = made.astimezone().strftime("PixlStash-%Y-%m-%d-%H.%M.%S")
+    else:
+        stem = f"PixlStash-{pic['id']}"
+    return f"{_unique_export_stem(stem, claimed, sep='-')}{ext}"
+
+
 def _copy_name(pic: dict, source: str, ext: str, file_names: str, claimed: dict):
+    if file_names == FILE_NAMES_MADE:
+        return _made_name(pic, ext, claimed)
     fallback = f"picture_{pic['id']}"
     if file_names == FILE_NAMES_ORIGINAL and pic.get("original_file_name"):
         stem = os.path.splitext(pic["original_file_name"])[0]
