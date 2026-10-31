@@ -8070,12 +8070,14 @@ destinations.
   `/pictures/count` per row).
 - **The sidebar row** (Review › Inbox) is there for every owner and shows the
   chosen period's count (`useInboxStore.count`), read with the other sidebar
-  counts and again on a period change. Counts are stack leaders inside the
+  counts, on a period change, and (debounced, `refreshSoon`, re-reading every
+  count on show) on the `pictures_changed` / `picture_imported` /
+  `characters_changed` events that arrivals and filings send. Counts are stack leaders inside the
   sidebar's project, like the tiles (`countQuery`).
 - **Leaving it.** Filing a picture in a set or under a person drops its tile
   at once, as the Unassigned view does; an unfiled picture ages out of the
   period. There is no Mark seen.
-- **Empty.** With no filter on, an empty Inbox names its period and the date it
+- **Empty.** With no filter or search on, an empty Inbox names its period and the date it
   reaches back to, and offers the narrowest wider period that holds anything
   (`inboxEmptyState`), so a narrow period never hides an older pile.
 

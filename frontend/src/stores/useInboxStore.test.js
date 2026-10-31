@@ -59,6 +59,29 @@ describe("useInboxStore counts", () => {
   });
 });
 
+describe("useInboxStore refreshSoon", () => {
+  it("coalesces a burst into one read of the counts on show", async () => {
+    vi.useFakeTimers();
+    try {
+      const { apiClient } = await import("../utils/apiClient");
+      apiClient.get.mockReset();
+      apiClient.get.mockResolvedValue({ data: { count: 3 } });
+      const store = useInboxStore();
+      store.counts = { "14d": 1, "90d": 2 };
+      for (let i = 0; i < 5; i += 1) store.refreshSoon();
+      expect(apiClient.get).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1500);
+      const periods = apiClient.get.mock.calls.map(([url]) =>
+        new URLSearchParams(String(url).split("?")[1]).get("inbox"),
+      );
+      expect(periods.sort()).toEqual(["14d", "90d"]);
+      expect(store.counts).toEqual({ "14d": 3, "90d": 3 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("inboxEmptyState", () => {
   const now = new Date(2026, 10, 1, 12); // Sun 1 Nov
 

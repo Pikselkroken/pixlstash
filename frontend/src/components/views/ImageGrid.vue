@@ -7683,10 +7683,15 @@ function importChosenFiles(chosen) {
   emit("local-import", { files });
 }
 
-// The Inbox is empty for its period with no filter on: the one empty grid
-// whose way out is a wider period rather than clearing a filter.
+// The Inbox is empty for its period with no filter or search on: the one
+// empty grid whose way out is a wider period rather than clearing a filter.
+// The per-period counts ignore both, so with either on they would offer a
+// period the narrowed grid cannot fill.
 const inboxEmptyUnfiltered = computed(
-  () => isInboxView.value && !filterChips(filterStore).length,
+  () =>
+    isInboxView.value &&
+    !filterChips(filterStore).length &&
+    !searchStore.isSearchActive,
 );
 const inboxEmpty = computed(() =>
   inboxEmptyUnfiltered.value

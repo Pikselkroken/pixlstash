@@ -26,6 +26,7 @@ export const INBOX_PERIODS = [
 export const DEFAULT_INBOX_PERIOD = "14d";
 
 const STORAGE_KEY = "pixlstash:inboxPeriod";
+const REFRESH_DEBOUNCE_MS = 1500;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
@@ -104,6 +105,7 @@ export const useInboxStore = defineStore("inbox", () => {
   const counts = ref({});
   let countedScope = null;
   let epoch = 0;
+  let refreshTimer = null;
 
   const periodInfo = computed(
     () => INBOX_PERIODS.find((p) => p.id === period.value) ?? INBOX_PERIODS[2],
@@ -171,7 +173,22 @@ export const useInboxStore = defineStore("inbox", () => {
     return readCounts(INBOX_PERIODS.map((p) => p.id));
   }
 
+  /**
+   * Re-read the counts already on show (the chosen period's, and the menu's
+   * rows once it has opened), coalescing a burst of picture events (one per
+   * imported file) into one read.
+   */
+  function refreshSoon() {
+    if (refreshTimer) clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(() => {
+      refreshTimer = null;
+      void readCounts([...new Set([period.value, ...Object.keys(counts.value)])]);
+    }, REFRESH_DEBOUNCE_MS);
+  }
+
   function reset() {
+    if (refreshTimer) clearTimeout(refreshTimer);
+    refreshTimer = null;
     epoch += 1;
     countedScope = null;
     counts.value = {};
@@ -189,6 +206,7 @@ export const useInboxStore = defineStore("inbox", () => {
     countQuery,
     refreshCount,
     refreshAllCounts,
+    refreshSoon,
     reset,
   };
 });

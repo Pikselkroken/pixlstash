@@ -17,6 +17,7 @@ import { useSnapshotsStore } from "../stores/useSnapshotsStore";
 import { useDedupStore } from "../stores/useDedupStore";
 import { useMovesStore } from "../stores/useMovesStore";
 import { useImportFoldersStore } from "../stores/useImportFoldersStore";
+import { useInboxStore } from "../stores/useInboxStore";
 import { useNoticeStore } from "../stores/useNoticeStore";
 import { useTasksStore } from "../stores/useTasksStore";
 import { useWorkflowsStore } from "../stores/useWorkflowsStore";
@@ -151,6 +152,7 @@ export function useUpdatesSocket({
   const dedupStore = useDedupStore();
   const movesStore = useMovesStore();
   const importFoldersStore = useImportFoldersStore();
+  const inboxStore = useInboxStore();
   const noticeStore = useNoticeStore();
   const workflowsStore = useWorkflowsStore();
   const modelShelfStore = useModelShelfStore();
@@ -362,6 +364,14 @@ export function useUpdatesSocket({
       const isPictureChange =
         payload?.type === "pictures_changed" ||
         payload?.type === "picture_imported";
+      // An arrival joins the Inbox and a filing (a set is a picture change, a
+      // person a character change) takes one out: its counts follow.
+      if (
+        !isReadOnly.value &&
+        (isPictureChange || payload?.type === "characters_changed")
+      ) {
+        inboxStore.refreshSoon();
+      }
       if (isPictureChange) {
         // An arrival from an import folder: the Settings table's counts and
         // the Filter menu's "Imported from" follow.
