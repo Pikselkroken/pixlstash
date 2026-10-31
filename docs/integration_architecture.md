@@ -1764,16 +1764,18 @@ the lightbox's Ctrl/⌘+C stays "Copy picture" (a PNG via `media:copyPng`) for
 apps that only take images. On Linux a GTK desktop's chat apps that read only
 `text/uri-list` get no files; offering both would need a native helper.
 
-**Which way out keeps the workflow.** Each way out remembers its own answer in
-the user config: `keep_workflow_copy` (copying as files, #2419),
-`keep_workflow_drag` (dragging out, #2420) and `keep_workflow_share` (the Share
-panel and the Export panel), all false by default. The frontend holds them as
-`useUserPrefsStore().keepWorkflow.{copy,drag,share}` and saves one with
-`saveKeepWorkflow(way, value)`, which changes the local value only once the
-PATCH succeeds. A gesture sends its row as `keep_generation_data`; the backend
-does not look the row up. They are set in Settings › Sharing (`SharingSection.vue`);
-the Export panel's *Keep the workflow* switch starts from the share row and
-writes it back.
+**Only an export strips.** Copying as files (#2419) and dragging out (#2420)
+always hand over the generation data: stripping during a drag costs too much,
+so stripping is what an explicit export does (owner ruling 2026-10-31). Whether
+an export keeps it is one user-config boolean, `keep_workflow_on_export`, false
+by default, held as `useUserPrefsStore().keepWorkflowOnExport` and saved with
+`saveKeepWorkflowOnExport(value)`, which changes the local value only once the
+PATCH succeeds. The Export panel sends it as `keep_generation_data`; the backend
+does not look it up. It is set in Settings › Sharing (`SharingSection.vue`) or
+by the Export panel's *Keep the workflow* switch, which reads and writes it.
+A copy receipt whose files kept their data (`metadata` other than `removed`)
+carries the notice `badge` (`KEPT_DATA_BADGE` in `utils/copyAsFiles.js`), a
+shield in warning ink that `NoticeHost.vue` reads out by its label.
 
 Batches outlive the drop or paste (a receiving app may read the file later) and
 are removed after 12 hours, at start-up and before each new batch. The route

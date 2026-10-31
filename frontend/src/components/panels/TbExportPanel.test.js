@@ -97,10 +97,10 @@ describe("TbExportPanel export-to-folder (#291)", () => {
 });
 
 describe("TbExportPanel keep the workflow (#2417)", () => {
-  it("starts from the Share panel and Export row and writes it back", async () => {
+  it("starts from the remembered setting and writes it back", async () => {
     config.patchUserConfig.mockResolvedValue({});
     const prefs = useUserPrefsStore();
-    prefs.hydrateKeepWorkflow({ keep_workflow_share: true });
+    prefs.keepWorkflowOnExport = true;
     const wrapper = mountPanel();
     const toggle = wrapper.get(".tb-export-keep-workflow");
 
@@ -109,13 +109,9 @@ describe("TbExportPanel keep the workflow (#2417)", () => {
     await flushPromises();
 
     expect(config.patchUserConfig).toHaveBeenCalledWith({
-      keep_workflow_share: false,
+      keep_workflow_on_export: false,
     });
-    expect(prefs.keepWorkflow).toEqual({
-      copy: false,
-      drag: false,
-      share: false,
-    });
+    expect(prefs.keepWorkflowOnExport).toBe(false);
     wrapper.unmount();
   });
 });

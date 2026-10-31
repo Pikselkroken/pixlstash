@@ -247,9 +247,7 @@ _USER_COLUMNS_TO_COPY = (
     "check_for_updates",
     "embed_watermark",
     "watermark_image",
-    "keep_workflow_copy",
-    "keep_workflow_drag",
-    "keep_workflow_share",
+    "keep_workflow_on_export",
 )
 
 _TOKEN_COLUMNS_TO_COPY = (

@@ -25,10 +25,10 @@ export const useUserPrefsStore = defineStore("userPrefs", () => {
   // a purge. Persisted server-side per user (hydrated from the user config in
   // App.vue), so it follows the account across devices/browsers.
   const hidePurgeSnapshotWarning = ref(false);
-  // Shared copies: whether each way a file leaves keeps its ComfyUI workflow,
-  // prompt and A1111 parameters. Copy, Drag out, and the Share panel with
-  // Export each remember their own answer; all strip by default (#2417).
-  const keepWorkflow = ref({ copy: false, drag: false, share: false });
+  // Whether an export (the Export panel, the Share panel) keeps the ComfyUI
+  // workflow, prompt and A1111 parameters. Strips by default (#2417); copy and
+  // drag-out always keep them.
+  const keepWorkflowOnExport = ref(false);
 
   // Opt-in telemetry. Every category is off until the user turns it on, on
   // every install and every install type. `telemetryConsentPrompted` records
@@ -95,32 +95,22 @@ export const useUserPrefsStore = defineStore("userPrefs", () => {
     telemetryConsentPrompted.value = Boolean(cfg?.telemetry_consent_prompted);
   }
 
-  /** Hydrate {@link keepWorkflow} from a fetched user-config payload. */
-  function hydrateKeepWorkflow(cfg) {
-    keepWorkflow.value = Object.fromEntries(
-      Object.keys(keepWorkflow.value).map((way) => [
-        way,
-        cfg?.[`keep_workflow_${way}`] === true,
-      ]),
-    );
-  }
-
   /**
-   * Persist whether one way out (`"copy"`, `"drag"`, `"share"`) keeps the
-   * workflow. The local value changes only once the server has it, so a failed
-   * save never shows "Keeps" while files still leave stripped, or the reverse.
+   * Persist whether an export keeps the workflow. The local value changes only
+   * once the server has it, so a failed save never shows "Keeps" while files
+   * still leave stripped, or the reverse.
    * @returns {Promise<boolean>} whether it was saved.
    */
-  async function saveKeepWorkflow(way, value) {
-    if (!(way in keepWorkflow.value) || isReadOnly.value) return false;
+  async function saveKeepWorkflowOnExport(value) {
+    if (isReadOnly.value) return false;
     const next = Boolean(value);
     try {
-      await patchUserConfig({ [`keep_workflow_${way}`]: next });
+      await patchUserConfig({ keep_workflow_on_export: next });
     } catch (e) {
-      console.error(`Failed to persist keep_workflow_${way}:`, e);
+      console.error("Failed to persist keep_workflow_on_export:", e);
       return false;
     }
-    keepWorkflow.value = { ...keepWorkflow.value, [way]: next };
+    keepWorkflowOnExport.value = next;
     return true;
   }
 
@@ -206,9 +196,8 @@ export const useUserPrefsStore = defineStore("userPrefs", () => {
     embedWatermark,
     hidePurgeSnapshotWarning,
     setHidePurgeSnapshotWarning,
-    keepWorkflow,
-    hydrateKeepWorkflow,
-    saveKeepWorkflow,
+    keepWorkflowOnExport,
+    saveKeepWorkflowOnExport,
     telemetrySendInstallId,
     telemetrySendFeatureUsage,
     telemetrySendErrorReports,

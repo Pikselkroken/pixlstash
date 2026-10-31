@@ -124,20 +124,20 @@
         density="compact"
         hide-details
       />
-      <!-- Starts from, and writes, Settings › Sharing › Shared copies (#2417). -->
+      <!-- Starts from, and writes, Settings › Sharing (#2417). -->
       <v-switch
         class="tb-export-keep-workflow"
-        :model-value="prefs.keepWorkflow.share"
+        :model-value="prefs.keepWorkflowOnExport"
         label="Keep the workflow"
         color="primary"
         density="compact"
         hide-details
         aria-describedby="tb-export-keep-workflow-hint"
         :disabled="isReadOnly"
-        @update:model-value="(v) => prefs.saveKeepWorkflow('share', v)"
+        @update:model-value="(v) => prefs.saveKeepWorkflowOnExport(v)"
       />
       <p id="tb-export-keep-workflow-hint" class="tb-export-hint">
-        Starts from Settings › Sharing › Share panel and Export.
+        Starts from Settings › Sharing.
       </p>
     </div>
 

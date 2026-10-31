@@ -1477,15 +1477,14 @@ def test_0133_adds_mouse_preferences_on_a_fresh_and_a_populated_vault():
         assert again.returncode == 0, again.stderr
 
 
-def test_0139_adds_keep_workflow_preferences_on_a_fresh_and_a_populated_vault():
-    """All three columns arrive either way, an existing user reads NULL (strip),
-    and a re-run is a no-op."""
-    columns = ("keep_workflow_copy", "keep_workflow_drag", "keep_workflow_share")
+def test_0139_adds_keep_workflow_on_export_on_a_fresh_and_a_populated_vault():
+    """The column arrives either way, an existing user reads NULL (strip), and
+    a re-run is a no-op."""
     before = "0138_add_picture_unseen"
 
-    def has_columns(conn):
+    def has_column(conn):
         present = {row[1] for row in conn.execute("PRAGMA table_info(user)")}
-        return set(columns) <= present
+        return "keep_workflow_on_export" in present
 
     with tempfile.TemporaryDirectory() as tmp:
         db_path = os.path.join(tmp, "vault.db")
@@ -1493,22 +1492,22 @@ def test_0139_adds_keep_workflow_preferences_on_a_fresh_and_a_populated_vault():
         up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
         assert up.returncode == 0, up.stderr
         with contextlib.closing(sqlite3.connect(db_path)) as conn:
-            assert has_columns(conn), "the baseline's create_all()"
+            assert has_column(conn), "the baseline's create_all()"
 
         down = _run_alembic(["downgrade", before], db_url, _MIGRATIONS_DIR)
         assert down.returncode == 0, down.stderr
         with contextlib.closing(sqlite3.connect(db_path)) as conn:
-            assert not has_columns(conn)
+            assert not has_column(conn)
             _insert_minimal_row(conn, "user", username="owner")
             conn.commit()
 
         up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
         assert up.returncode == 0, up.stderr
         with contextlib.closing(sqlite3.connect(db_path)) as conn:
-            assert has_columns(conn), "migration 0139"
+            assert has_column(conn), "migration 0139"
             assert conn.execute(
-                f"SELECT username, {', '.join(columns)} FROM user"
-            ).fetchall() == [("owner", None, None, None)]
+                "SELECT username, keep_workflow_on_export FROM user"
+            ).fetchall() == [("owner", None)]
             conn.execute("UPDATE alembic_version SET version_num = ?", (before,))
             conn.commit()
         again = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)

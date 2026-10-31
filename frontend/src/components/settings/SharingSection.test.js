@@ -1,7 +1,7 @@
-// Settings › Sharing: whether each way out keeps the workflow (#2417).
+// Settings › Sharing: whether an export keeps the workflow (#2417).
 //
-// What is pinned: every row strips until told otherwise, each row reads and
-// saves only its own key, and a failed save never shows "Keeps".
+// What is pinned: it strips until told otherwise, reads the remembered value,
+// saves its own key, and a failed save never shows "Keeps".
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
@@ -23,8 +23,6 @@ vi.mock("../../api/config", () => config);
 import SharingSection from "./SharingSection.vue";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 
-const WAYS = ["copy", "drag", "share"];
-
 async function mountPane() {
   const wrapper = mount(SharingSection, {
     global: { stubs: { "v-icon": true } },
@@ -33,53 +31,41 @@ async function mountPane() {
   return wrapper;
 }
 
-const state = (wrapper, way) =>
-  wrapper.find(`[data-way="${way}"] .sh__state`).text();
+const state = (wrapper) => wrapper.find(".sh__state").text();
 
 beforeEach(() => {
   setActivePinia(createPinia());
   config.patchUserConfig.mockReset();
 });
 
-describe("shared copies", () => {
-  it("strips on every way out until told otherwise", async () => {
-    const wrapper = await mountPane();
-    expect(WAYS.map((w) => state(wrapper, w))).toEqual([
-      "Strips",
-      "Strips",
-      "Strips",
-    ]);
+describe("keep the workflow when exporting", () => {
+  it("strips until told otherwise", async () => {
+    expect(state(await mountPane())).toBe("Strips");
   });
 
-  it("reads each way out from the user config on its own", async () => {
-    useUserPrefsStore().hydrateKeepWorkflow({ keep_workflow_drag: true });
-    const wrapper = await mountPane();
-    expect(WAYS.map((w) => state(wrapper, w))).toEqual([
-      "Strips",
-      "Keeps",
-      "Strips",
-    ]);
+  it("reads the remembered value", async () => {
+    useUserPrefsStore().keepWorkflowOnExport = true;
+    expect(state(await mountPane())).toBe("Keeps");
   });
 
-  it("saves only the row that was switched", async () => {
+  it("saves its own key", async () => {
     config.patchUserConfig.mockResolvedValue({});
     const wrapper = await mountPane();
-    await wrapper.find('[data-way="copy"] input').setValue(true);
+    await wrapper.find("input").setValue(true);
     await flushPromises();
     expect(config.patchUserConfig).toHaveBeenCalledWith({
-      keep_workflow_copy: true,
+      keep_workflow_on_export: true,
     });
-    expect(state(wrapper, "copy")).toBe("Keeps");
-    expect(state(wrapper, "drag")).toBe("Strips");
+    expect(state(wrapper)).toBe("Keeps");
   });
 
   it("keeps saying Strips when the save fails", async () => {
     config.patchUserConfig.mockRejectedValue(new Error("offline"));
     const wrapper = await mountPane();
-    await wrapper.find('[data-way="share"] input').setValue(true);
+    await wrapper.find("input").setValue(true);
     await flushPromises();
-    expect(state(wrapper, "share")).toBe("Strips");
-    expect(useUserPrefsStore().keepWorkflow.share).toBe(false);
+    expect(state(wrapper)).toBe("Strips");
+    expect(useUserPrefsStore().keepWorkflowOnExport).toBe(false);
     expect(wrapper.find("[role='alert']").text()).toContain(
       "previous choice was kept",
     );

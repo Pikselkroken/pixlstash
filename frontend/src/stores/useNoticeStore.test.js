@@ -23,6 +23,16 @@ describe("useNoticeStore - basics", () => {
     });
   });
 
+  it("carries a badge, and a coalesced repeat replaces it", () => {
+    const store = useNoticeStore();
+    const badge = { icon: "mdi-shield-alert-outline", label: "Kept" };
+    store.push({ text: "a", key: "k", badge, timeout: 0 });
+    expect(store.notices[0].badge).toEqual(badge);
+    store.push({ text: "b", key: "k", timeout: 0 });
+    expect(store.notices).toHaveLength(1);
+    expect(store.notices[0].badge).toBeNull();
+  });
+
   it("dismiss removes a single notice by id", () => {
     const store = useNoticeStore();
     const a = store.push({ text: "a", timeout: 0 });

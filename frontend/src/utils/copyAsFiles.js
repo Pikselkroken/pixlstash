@@ -10,6 +10,12 @@ import { makeShareCopies } from "../api/pictures";
 import { useNoticeStore } from "../stores/useNoticeStore";
 import { errorMessage } from "./apiError";
 
+// On the receipt of copied files that still carry generation data (#2417).
+export const KEPT_DATA_BADGE = {
+  icon: "mdi-shield-alert-outline",
+  label: "The workflow, prompt and parameters went with these files.",
+};
+
 // POST /pictures/share-copies takes at most this many ids per request.
 export const MAX_COPY_FILES = 500;
 
@@ -55,9 +61,12 @@ export async function copyPicturesAsFiles(pictureIds, options = {}) {
     await window.pixlstashDesktop.copyFilesToClipboard(paths);
     const n = paths.length;
     const copied = `Copied ${n} file${n === 1 ? "" : "s"}`;
+    // A file the server did not strip ("kept", or "unchanged" for a format it
+    // cannot strip) may carry the workflow: say so with the badge.
+    const keptData = result.files.some((f) => f.metadata !== "removed");
     noticeStore.success(
       skipped ? `${copied}. ${skipped} could not be read.` : `${copied}.`,
-      { key },
+      { key, badge: keptData ? KEPT_DATA_BADGE : null },
     );
     return n;
   } catch (err) {

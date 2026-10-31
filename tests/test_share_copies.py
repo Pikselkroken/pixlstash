@@ -483,35 +483,21 @@ def test_route_stages_stripped_copies_beside_the_server_config(env):
         assert b"KSampler" in fh.read()
 
 
-def test_user_config_remembers_keep_the_workflow_per_way_out(env):
-    """Copy, Drag out and Share/Export each keep their own answer; all strip by
-    default, and a string "false" never turns one on."""
+def test_user_config_remembers_whether_an_export_keeps_the_workflow(env):
+    """Strip by default; a string "false" never turns it on."""
     client = env["client"]
-    ways = ("keep_workflow_copy", "keep_workflow_drag", "keep_workflow_share")
-    cfg = client.get(f"{API_PREFIX}/users/me/config").json()
-    assert {w: cfg[w] for w in ways} == dict.fromkeys(ways, False)
+    url = f"{API_PREFIX}/users/me/config"
+    assert client.get(url).json()["keep_workflow_on_export"] is False
 
     try:
-        resp = client.patch(
-            f"{API_PREFIX}/users/me/config", json={"keep_workflow_drag": True}
-        )
+        resp = client.patch(url, json={"keep_workflow_on_export": True})
         assert resp.status_code == 200, resp.text
-        cfg = client.get(f"{API_PREFIX}/users/me/config").json()
-        assert {w: cfg[w] for w in ways} == {
-            "keep_workflow_copy": False,
-            "keep_workflow_drag": True,
-            "keep_workflow_share": False,
-        }
+        assert client.get(url).json()["keep_workflow_on_export"] is True
 
-        client.patch(
-            f"{API_PREFIX}/users/me/config", json={"keep_workflow_drag": "false"}
-        )
-        assert (
-            client.get(f"{API_PREFIX}/users/me/config").json()["keep_workflow_drag"]
-            is False
-        )
+        client.patch(url, json={"keep_workflow_on_export": "false"})
+        assert client.get(url).json()["keep_workflow_on_export"] is False
     finally:
-        client.patch(f"{API_PREFIX}/users/me/config", json=dict.fromkeys(ways, False))
+        client.patch(url, json={"keep_workflow_on_export": False})
 
 
 def _export(library, scale_factor, **extra):

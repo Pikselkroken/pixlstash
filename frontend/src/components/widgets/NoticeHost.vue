@@ -136,6 +136,16 @@ const hostEl = ref(null);
           {{ GLYPHS[card.level] || GLYPHS.info }}
         </v-icon>
         <span class="notice-message" :title="card.text">{{ card.text }}</span>
+        <v-icon
+          v-if="card.badge"
+          class="notice-badge"
+          size="16"
+          role="img"
+          :aria-label="card.badge.label"
+          :title="card.badge.label"
+        >
+          {{ card.badge.icon }}
+        </v-icon>
         <span
           v-if="card.count > 1"
           class="notice-count"
@@ -300,6 +310,16 @@ const hostEl = ref(null);
   color: rgb(var(--v-theme-on-surface));
   /* Optical centre on the message's first line. */
   margin-top: 1px;
+}
+
+/* A privacy fact the sentence does not carry, in warning ink (#2417). */
+.notice-badge {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: rgb(var(--v-theme-surface-warning));
+}
+.notice-host--on-dark .notice-badge {
+  color: rgb(var(--v-theme-dark-surface-warning));
 }
 
 .notice-message {

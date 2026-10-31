@@ -119,7 +119,7 @@ export function useAppEntityActions({
       useOriginalFileNames: exportStore.exportUseOriginalFileNames,
       resolution: exportStore.exportResolution,
       bboxMode: exportStore.exportBboxMode,
-      keepGenerationData: userPrefsStore.keepWorkflow.share,
+      keepGenerationData: userPrefsStore.keepWorkflowOnExport,
     });
     exportStore.exportMenuOpen = false;
   }
@@ -134,7 +134,7 @@ export function useAppEntityActions({
       useOriginalFileNames: exportStore.exportUseOriginalFileNames,
       resolution: exportStore.exportResolution,
       bboxMode: exportStore.exportBboxMode,
-      keepGenerationData: userPrefsStore.keepWorkflow.share,
+      keepGenerationData: userPrefsStore.keepWorkflowOnExport,
     });
     exportStore.exportMenuOpen = false;
   }
