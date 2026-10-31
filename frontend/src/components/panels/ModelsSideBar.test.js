@@ -160,22 +160,30 @@ describe("ModelsSideBar", () => {
     const wrapper = mountBar();
     await flushPromises();
     expect(wrapper.text()).not.toContain("Limit to folder");
-    // Folders and Training are the only sections under the places.
+    // Training and Folders are the only sections under the places.
     expect(wrapper.findAll("h3").map((one) => one.text())).toEqual([
-      "Folders",
       "Training",
+      "Folders",
     ]);
     expect(wrapper.find("[data-type]").exists()).toBe(false);
     expect(wrapper.find("[data-base]").exists()).toBe(false);
   });
 
-  it("draws the Folders tree between the places and Training", async () => {
+  it("pins Training under the places and scrolls only the Folders tree", async () => {
     const wrapper = mountBar();
     await flushPromises();
     const html = wrapper.html();
-    const tree = html.indexOf('data-testid="model-folder-tree"');
-    expect(tree).toBeGreaterThan(html.indexOf('data-place="loose"'));
-    expect(tree).toBeLessThan(html.indexOf('data-place="runs"'));
+    const runs = html.indexOf('data-place="runs"');
+    expect(runs).toBeGreaterThan(html.indexOf('data-place="loose"'));
+    expect(html.indexOf('data-testid="model-folder-tree"')).toBeGreaterThan(
+      html.indexOf('data-testid="models-sidebar-new-run"'),
+    );
+    // Training sits in the fixed block; the tree is alone in the scroll pane.
+    const pane = wrapper.find(".msb-scroll");
+    expect(pane.find('[data-testid="model-folder-tree"]').exists()).toBe(true);
+    expect(pane.find('[data-place="runs"]').exists()).toBe(false);
+    expect(pane.find('[data-testid="models-sidebar-new-run"]').exists()).toBe(false);
+    expect(wrapper.find(".msb-fixed [data-place='runs']").exists()).toBe(true);
     const folders = wrapper
       .findAll('[role="treeitem"][data-folder-id]')
       .map((one) => one.attributes("data-folder-id"));
@@ -335,12 +343,78 @@ describe("ModelsSideBar", () => {
     expect(runs.find("[data-testid='models-sidebar-live-dot']").exists()).toBe(true);
   });
 
-  it("opens the Train a LoRA dialog on its picker from the Training +", async () => {
+  it("opens the Train a LoRA dialog on its picker from its own row", async () => {
     const training = useTrainingStore();
     training.openToPick = vi.fn();
     const wrapper = mountBar();
     await flushPromises();
-    await wrapper.find("[data-testid='models-sidebar-new-run']").trigger("click");
+    const verb = wrapper.find("[data-testid='models-sidebar-new-run']");
+    expect(verb.text()).toBe("Train a LoRA…");
+    expect(verb.classes()).toContain("sidebar-list-item");
+    await verb.trigger("click");
     expect(training.openToPick).toHaveBeenCalled();
+  });
+
+  it("names the live run and its progress on the runs row", async () => {
+    const wrapper = mountBar();
+    await flushPromises();
+    const status = () =>
+      wrapper.find("[data-testid='models-sidebar-runs-status']");
+    useTasksStore().resources = {
+      leases: [
+        {
+          tenant: "aitoolkit",
+          state: "granted",
+          job_id: "u1",
+          label: "LoRA training 'aria_v4'",
+          progress: { step: 41, total: 100 },
+        },
+      ],
+    };
+    await flushPromises();
+    // The job's name, not the lease's Tasks-tab label.
+    expect(status().text()).toBe("aria_v4 · 41%");
+    expect(row(wrapper, "place", "runs").classes()).toContain("msb-row--two");
+  });
+
+  it("reads the jobs again for a live run it has not seen", async () => {
+    const { listTrainingJobs } = await import("../../api/training");
+    const wrapper = mountBar();
+    await flushPromises();
+    listTrainingJobs.mockClear();
+    useTasksStore().resources = {
+      leases: [{ tenant: "aitoolkit", state: "granted", job_id: "u9" }],
+    };
+    await flushPromises();
+    expect(listTrainingJobs).toHaveBeenCalledTimes(1);
+    // Still unknown after the read: no loop, and a plain line meanwhile.
+    expect(
+      wrapper.find("[data-testid='models-sidebar-runs-status']").text(),
+    ).toBe("Training now");
+  });
+
+  it("says when the last run was while nothing trains", async () => {
+    const { useTrainingRunsStore } = await import(
+      "../../stores/useTrainingRunsStore"
+    );
+    const wrapper = mountBar();
+    await flushPromises();
+    const runs = useTrainingRunsStore();
+    // Nothing dated: no second line, and the row keeps one line's height.
+    expect(
+      wrapper.find("[data-testid='models-sidebar-runs-status']").exists(),
+    ).toBe(false);
+    expect(row(wrapper, "place", "runs").classes()).not.toContain(
+      "msb-row--two",
+    );
+    const twoHoursAgo = Date.now() / 1000 - 2 * 3600 - 60;
+    runs.runs = [
+      { name: "aria_v3", modified_at: twoHoursAgo - 86400, checkpoints: [] },
+      { name: "walter_v2", modified_at: twoHoursAgo, checkpoints: [] },
+    ];
+    await flushPromises();
+    expect(
+      wrapper.find("[data-testid='models-sidebar-runs-status']").text(),
+    ).toBe("Last run 2h ago");
   });
 });

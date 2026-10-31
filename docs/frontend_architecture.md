@@ -1560,7 +1560,7 @@ Load-bearing behaviours:
 - **Recipe updates (#2122).** "Check for recipe updates" under Base model calls `POST /training/presets/check` (`store.checkPresetUpdates`); the backend fetches from pixlstash.dev, never the browser. A replaced recipe is listed again and the preview re-resolved; the outcome is one sentence in a `role="status"` span. The first check asks inline whether to check daily (Yes/No buttons, so Enter-accepts stays off them); the answer is `user.training_presets_auto_check`, which Settings › AI-toolkit's switch also sets, so the question is asked once. With it on, opening the dialog sends the automatic check and the server skips it when one ran today; an automatic check that changed nothing says nothing.
 - **A typed value is a pin.** `setPin` drops a value equal to the derived one; the row reads *Typed by you, so it stays put* with a reset, the choice keeps its name and shows *N pinned · unpin* (`TrainLoraPinnedChip.vue`), and the Advanced caret says *N pinned by you*. A typed field keeps its text only while focused and pins only a value inside its `TUNABLE_KEYS` rule; an invalid one blocks Start with its reason.
 - **Sample prompts** are lines `{text, alt}` from `GET /training/sample-prompts`, `text` holding `{{TRIGGER_WORD}}` and shown with the trigger word in place; the word's chip swaps a written line to its other form (or adds/strips the token on an edited one), each line has a remove (at least one stays) and *Add a prompt* adds one. Lines that differ from the written set are sent as the `sample.samples[*].prompt` pin, which both the preview and Start send, so the set the dialog holds at Start is the run's set.
-- **Opened from the Models workspace** (#2169: the sidebar's Training `+` and the runs grid's *New training run* tile), which has no set or person in view, `openToPick()` opens it with nothing chosen and `pickable` set, and it leads with a **Train on** radiogroup of people (`image_count`) and sets (`picture_count`; reference sets left out, since they train as their person) from `useEntityListsStore`. A pick goes through `pickScope`, which is `openForScope` with `pickable` kept, so the dialog then reads exactly as it does from the library (*Character LoRA of …* or *What is this set of?*). From there, Start reloads the runs store's jobs and lands on `models-runs`; from anywhere else it stays put.
+- **Opened from the Models workspace** (#2169: the sidebar's *Train a LoRA…* row and the runs grid's *New training run* tile), which has no set or person in view, `openToPick()` opens it with nothing chosen and `pickable` set, and it leads with a **Train on** radiogroup of people (`image_count`) and sets (`picture_count`; reference sets left out, since they train as their person) from `useEntityListsStore`. A pick goes through `pickScope`, which is `openForScope` with `pickable` kept, so the dialog then reads exactly as it does from the library (*Character LoRA of …* or *What is this set of?*). From there, Start reloads the runs store's jobs and lands on `models-runs`; from anywhere else it stays put.
 - **Start** (Enter, but never from an Advanced field: the table marks that Enter handled, so `AppDialog` does not accept) is disabled, with the first reason in the footer, until the run resolves; it sends the scope (`set_id` and `character_id` together for a reference set), the recipe, the three choices and every pin. Not built yet: the time estimate (#2120), the busy-GPU offer, offering to caption untagged pictures, and *Check for preset updates*.
 
 #### `WorkflowCard.vue`, `ChipRow.vue`, `InfoPopover.vue` (`widgets/`, v1.12 Workflows & Recipes)
@@ -4878,8 +4878,14 @@ neither edge moves on a workspace switch.
   since hiding is a view choice; a hidden evidence card does not), and is disabled until the sets are read rather than calling every
   model loose. Picking any place clears the open folder and the Type/Base
   picks: one row is lit at a time, and *All models* is how a folder is left.
-- **The Folders tree** (`panels/ModelFolderTree.vue`, between the places and
-  Training) is drives (label or mount point, free space, the 3px fullness bar
+- **Two regions: places and Training fixed, the Folders pane scrolling.** The
+  places and the Training section are one block that never scrolls
+  (`.msb-fixed`); under it the Folders section is the sidebar's only scroll
+  region (`.msb-scroll`), its *FOLDERS* label `position: sticky`, so expanding
+  any folder grows that pane and can never push Training out of sight. The
+  fixed block is about 330px, so a short window gives the tree little room;
+  the release valve, if it bites, is a collapsible places group.
+- **The Folders tree** (`panels/ModelFolderTree.vue`, under Training) is drives (label or mount point, free space, the 3px fullness bar
   from `driveFullness`, in the warning colour from 90% full), then each
   registered folder on that drive with its model count, then its subfolders on
   expand. Subfolders come from `GET /model-folders/{id}/dirs?path=` one level
@@ -4956,13 +4962,19 @@ neither edge moves on a workspace switch.
   unset) and the slot's button go through `store.requestShell(what, el)`;
   `ModelShelf` watches `store.shellRequest` and opens the dialog it always
   owned, returning focus to `el`.
-- **Training**, last: a `+` at the head's right edge (*New training run…*,
-  `trainingStore.openToPick()`) and the **Training runs** row, the
+- **Training**, directly under the places: the **Training runs** row, the
   `models-runs` route, with the amber dot while an AI Toolkit lease is held or
   waiting (the tasks poll, which runs on every screen; the runs store's job
-  list is re-read only while the runs view is up) and the run count. The
-  sidebar calls `runsStore.ensureLoaded()` on mount so the count is there on
-  every place, not only after the runs view has been opened.
+  list is re-read only while the runs view is up) and the run count, then
+  **Train a LoRA…**, an ordinary row (`mdi-school-outline`, the selection
+  pill's glyph) that calls `trainingStore.openToPick()`. The section head has
+  no `+`: the verb is in words. The runs row is two lines when it has
+  something to say: live, the run's name and percent (`aria_v4 · 41%`, the
+  name from the runs store's job by the lease's `job_id`, since the lease's
+  own label is the Tasks tab's sentence; a lease naming a job the store has
+  not read re-reads the jobs once); idle, *Last run 2h ago* from the newest
+  card. The sidebar calls `runsStore.ensureLoaded()` on mount so the count is
+  there on every place, not only after the runs view has been opened.
 
 #### Folder verbs in the tree (`panels/ModelFolderTree.vue`, #2206)
 
