@@ -1224,6 +1224,7 @@ import {
   nextTick,
   onMounted,
   onUnmounted,
+  provide,
   ref,
   shallowRef,
   watch,
@@ -2825,6 +2826,9 @@ const runOpen = computed(
     typeof route.query.run === "string" &&
     route.query.run !== "",
 );
+// TrainingRunLive teleports its status into `#shelf-run-bar` while it is
+// rendered, and draws it in place otherwise.
+provide("shelf-run-bar", runOpen);
 
 // Set receipts exist only while this tab shows them: their Undo means nothing
 // on the runs tab or another screen, and a write landing after the reader left

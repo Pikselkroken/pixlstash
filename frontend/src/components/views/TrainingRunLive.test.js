@@ -501,4 +501,20 @@ describe("TrainingRunLive", () => {
     expect(wrapper.find(".trl-status").text()).not.toContain("Waiting for the GPU");
     expect(wrapper.text()).toContain("Waiting for the run ahead of it.");
   });
+
+  it("puts its status in the shelf's bar when it mounts with the shelf", async () => {
+    // Opened from another tab: the shelf and this page mount in one pass, so
+    // the bar's slot is not in the document while this page sets up.
+    getTrainingJobLive.mockResolvedValue(payload());
+    const Shelf = {
+      components: { TrainingRunLive },
+      provide: { "shelf-run-bar": true },
+      template: '<div><div id="shelf-run-bar"></div><TrainingRunLive :job-id="7" /></div>',
+    };
+    const wrapper = mount(Shelf, { attachTo: document.body, global: { stubs } });
+    mounted.push(wrapper);
+    await flushPromises();
+    expect(wrapper.find("#shelf-run-bar .trl-status").exists()).toBe(true);
+    expect(wrapper.find(".trl > .trl-bar").exists()).toBe(false);
+  });
 });

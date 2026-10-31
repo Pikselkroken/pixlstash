@@ -362,9 +362,11 @@ import {
   computed,
   defineComponent,
   h,
+  inject,
   onBeforeUnmount,
   onMounted,
   ref,
+  unref,
   watch,
 } from "vue";
 import { VIcon } from "vuetify/components";
@@ -416,9 +418,11 @@ const names = useEntityNamesStore();
 
 const live = ref(null);
 const error = ref("");
-// The shelf renders its bar's slot before this page, so it is in the
-// document by the time this runs.
-const hasBar = Boolean(document.getElementById("shelf-run-bar"));
+// Whether the shelf has a bar slot for this page. Not read off the document:
+// opened from another tab, the shelf mounts together with this page and its
+// slot is not in the document yet, so a probe here drew the bar in the page.
+// The deferred Teleport resolves the slot after the whole tree is in.
+const hasBar = unref(inject("shelf-run-bar", false));
 const hoverColumn = ref(null);
 const choosing = ref(false);
 const stopping = ref(false);
