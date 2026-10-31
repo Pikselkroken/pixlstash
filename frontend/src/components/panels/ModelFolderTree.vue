@@ -223,7 +223,11 @@
 import { computed, nextTick, ref, toRef, watch } from "vue";
 import { VIcon, VMenu } from "vuetify/components";
 
-import { DOWNLOADS_KIND, SOURCE_KIND } from "../../api/modelFolders";
+import {
+  DOWNLOADS_KIND,
+  SOURCE_KIND,
+  openModelFolder,
+} from "../../api/modelFolders";
 import { useContextMenuAt } from "../../composables/useContextMenuAt";
 import { useModelCopyDrop } from "../../composables/useModelCopyDrop";
 import {
@@ -526,6 +530,14 @@ function activate(node) {
 
 // ── Folder verbs (#2206) ────────────────────────────────────────────────────
 
+/** Every row with a menu offers it. It only looks, so nothing busy refuses it. */
+const OPEN_ENTRY = {
+  key: "open",
+  label: "Open in file manager",
+  icon: "mdi-folder-open-outline",
+  reason: "",
+};
+
 /**
  * The menu a row offers, in the order the design draws it. Empty for a drive,
  * a locked folder (it shows its lock and nothing else), and every row in pick
@@ -566,6 +578,7 @@ function menuFor(node) {
         shortcut: "Ctrl Shift N",
         reason: busy,
       },
+      OPEN_ENTRY,
       {
         key: "stop",
         label: "Stop watching…",
@@ -585,6 +598,7 @@ function menuFor(node) {
       shortcut: "Ctrl Shift N",
       reason: busy,
     },
+    OPEN_ENTRY,
     {
       key: "move",
       label: "Move folder to…",
@@ -637,9 +651,39 @@ function act(key, node, options = {}) {
   else if (key === "new") startNew(node);
   else if (key === "rename") startRename(node);
   else if (key === "move") shelf.requestFolderMove(sourceOf(node));
+  else if (key === "open") void openInFileManager(node);
   else if (key === "remove") void startFolderRemove(sourceOf(node), options);
   else if (key === "stop") {
     shelf.requestShell("manage-folders", rowEls.get(node.key) ?? null);
+  }
+}
+
+/**
+ * Show the row's directory in the server host's file manager. Nothing visible
+ * happens here when it works, so each failure says which one it was: 403 is a
+ * tree opened from another machine (the route is loopback-only), 400 or 404 a
+ * directory that is gone or became a link since the tree was drawn, anything
+ * else a server with no desktop to open it on.
+ */
+async function openInFileManager(node) {
+  try {
+    await openModelFolder(node.folderId, node.path);
+  } catch (err) {
+    const status = err?.response?.status;
+    notices.push({
+      level: "warning",
+      text:
+        status === 403
+          ? "A file manager opens on the machine running PixlStash, so this only works when you are sitting at it."
+          : status === 400 || status === 404
+            ? "That folder is not where the tree last saw it."
+            : "Couldn't open that folder - the machine running PixlStash has no desktop file manager.",
+      key: "model-folder-open",
+    });
+    console.warn(
+      `Failed to open model folder ${node.folderId} at ${JSON.stringify(node.path)}`,
+      err,
+    );
   }
 }
 

@@ -9998,6 +9998,97 @@ def test_the_spawn_helper_reads_the_openers_exit_status(tmp_path):
         assert host_open.open_in_file_manager(str(tmp_path)) is False
 
 
+# ---------------------------------------------------------------------------
+# The folder tree's `Open in file manager`: the same spawn, for a directory
+# ---------------------------------------------------------------------------
+
+_FOLDER_OPEN_ROUTE = ("POST", "/api/v1/model-folders/{folder_id}/open")
+
+
+@pytest.fixture
+def folder_opener(monkeypatch):
+    """The host spawn behind the folder route, replaced by a list of paths."""
+    opened: list[str] = []
+
+    def fake(path):
+        opened.append(path)
+        return True
+
+    monkeypatch.setattr(model_folders_routes, "open_in_file_manager", fake)
+    return opened
+
+
+def _open_folder(client, folder_id=1, path=None, **kwargs):
+    params = {} if path is None else {"path": path}
+    return client.post(f"{API}/model-folders/{folder_id}/open", params=params, **kwargs)
+
+
+def test_open_folder_hands_the_root_or_the_named_directory_to_the_file_manager(
+    shelf_env, tmp_path, folder_opener
+):
+    root = tmp_path / "loras"
+    (root / "sub" / "deep").mkdir(parents=True)
+    _seeded_folder_at(shelf_env.server, str(root))
+
+    r = _open_folder(shelf_env.owner)
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "ok"
+    r = _open_folder(shelf_env.owner, path="sub/deep")
+    assert r.status_code == 200, r.text
+    assert folder_opener == [
+        os.path.realpath(root),
+        os.path.realpath(root / "sub" / "deep"),
+    ], folder_opener
+
+
+def test_open_folder_spawns_nothing_for_a_path_it_will_not_open(
+    shelf_env, tmp_path, folder_opener
+):
+    """Outside the folder is 400, not there is 404, and neither reaches the
+    desktop. The escape through a link is the one the string check cannot see."""
+    root = tmp_path / "loras"
+    root.mkdir()
+    (root / "notes.txt").write_text("not a folder")
+    os.symlink(tmp_path, root / "escape")
+    _seeded_folder_at(shelf_env.server, str(root))
+
+    for bad in ("..", "../loras", "/etc", "a//b", "escape"):
+        r = _open_folder(shelf_env.owner, path=bad)
+        assert r.status_code == 400, f"{bad!r} answered {r.status_code}: {r.text}"
+    assert _open_folder(shelf_env.owner, path="missing").status_code == 404
+    assert _open_folder(shelf_env.owner, path="notes.txt").status_code == 404
+    assert _open_folder(shelf_env.owner, folder_id=999).status_code == 404
+    assert folder_opener == [], folder_opener
+
+
+def test_open_folder_on_a_host_with_no_file_manager_is_500(
+    shelf_env, tmp_path, monkeypatch
+):
+    _seeded_folder_at(shelf_env.server, str(tmp_path))
+    monkeypatch.setattr(
+        model_folders_routes, "open_in_file_manager", lambda path: False
+    )
+    assert _open_folder(shelf_env.owner).status_code == 500
+
+
+def test_open_folder_is_loopback_owner_only(shelf_env, tmp_path, folder_opener):
+    """Declared on the red line, and refused from the LAN, where a
+    ``LOCAL_OWNER_ONLY`` route would answer. The owner's loopback 200 is the
+    positive control, so the refusal cannot pass on a dead route. A READ token
+    is not probed: the middleware refuses its POST by method before the gate."""
+    declared = ROUTE_POLICIES.get(_FOLDER_OPEN_ROUTE)
+    assert declared is not None, f"{_FOLDER_OPEN_ROUTE} has no ROUTE_POLICIES entry"
+    assert declared.policy is AccessPolicy.LOOPBACK_OWNER_ONLY, declared.policy
+    _seeded_folder_at(shelf_env.server, str(tmp_path))
+
+    r = _open_folder(shelf_env.owner, headers={"X-Forwarded-For": LAN_IPV4})
+    assert r.status_code == 403, f"a LAN caller reached the host desktop: {r.text}"
+    assert folder_opener == [], "a refused caller spawned something on the host"
+    assert _open_folder(shelf_env.owner).status_code == 200, (
+        "the owner lost a verb they are meant to have"
+    )
+
+
 # ===========================================================================
 # Merge duplicate copies (#1439) - keep one, resolve the rest at use
 # ===========================================================================

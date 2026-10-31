@@ -87,6 +87,7 @@ _LOOPBACK_ROUTE_KEYS = {
     ("POST", "/api/v1/reference-folders/{folder_id}/open"),
     ("POST", "/api/v1/pictures/{id}/open-location"),
     ("POST", "/api/v1/models/{model_id}/open-location"),
+    ("POST", "/api/v1/model-folders/{folder_id}/open"),
     ("POST", "/api/v1/server-config/open"),
     ("POST", "/api/v1/pictures/export/folder"),
     ("POST", "/api/v1/test-hooks/ws-event"),
@@ -543,6 +544,9 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     as the filesystem watcher does, and is loopback for ``ws-event``'s reasons.
     83 = 70 + 13 with ``POST /test-hooks/file-pictures`` (#2315), the third: it
     files pictures on a workflow, as a run's import does, for the same reasons.
+    84 = 70 + 14 with ``POST /model-folders/{folder_id}/open``, the folder
+    tree's ``Open in file manager``: the host-GUI spawn of
+    ``models/{model_id}/open-location`` for a directory.
 
     Arithmetic, not judgement."""
     loopback = {
@@ -556,7 +560,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
         if rp.policy is AccessPolicy.LOCAL_OWNER_ONLY
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
-    assert len(loopback) == 13, sorted(loopback)
+    assert len(loopback) == 14, sorted(loopback)
     assert len(local) == 70, sorted(local)
 
 

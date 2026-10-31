@@ -4977,10 +4977,15 @@ neither edge moves on a workspace switch.
 ⋯ (shown on hover or on the row's focus, and kept out of the tab order: the
 row is the one stop), or by Shift+F10 and the Menu key on the focused row. F2
 renames and Ctrl+Shift+N makes a folder, on the focused row. `menuFor(node)`
-decides what a row offers. A subfolder gets *New folder*, *Move folder to…*,
-*Rename*, a rule, and *Remove folder…* (`Del`, below). A registered root gets *New folder* and *Stop watching…*,
-which asks the shelf for Manage model folders, and nothing that would move
-its directory, because the server refuses to move a root. A locked folder has
+decides what a row offers. A subfolder gets *New folder*, *Open in file manager*,
+*Move folder to…*, *Rename*, a rule, and *Remove folder…* (`Del`, below). A
+registered root gets *New folder*, *Open in file manager* and *Stop watching…*,
+which asks the shelf for Manage model folders, and nothing that would move its
+directory, because the server refuses to move a root. *Open in file manager*
+posts `POST /model-folders/{folder_id}/open` with the row's path. It is
+loopback-only at the gate, takes no gate reason here (it only looks), and a
+refusal is a notice saying which one. The route itself does not refuse a
+locked folder: opening one changes nothing, so the lock rule is the menu's. A locked folder has
 no menu at all: its lock is what it shows. Pick mode has no menus; it chooses.
 
 **Every verb goes through `useModelFolderGates`.** `folderVerbReason(folder)`
