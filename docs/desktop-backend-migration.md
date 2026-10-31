@@ -23,7 +23,7 @@ This is option **C** from the design discussion.
 
 | Runner / platform | Bundled in the installer | Fetched on demand (from PyPI/PyTorch) |
 | --- | --- | --- |
-| Linux x64 | CPython + all deps + **CPU** torch + onnxruntime | NVIDIA → `torch+cu128`, `onnxruntime-gpu`; AMD → `torch+rocm` (ORT stays CPU — ROCm ORT isn't on PyPI) |
+| Linux x64 | CPython + all deps + **CPU** torch + onnxruntime | NVIDIA → `torch+cu128`, `onnxruntime-gpu`; AMD → `torch+rocm` (ORT stays CPU — `onnxruntime-migraphx` needs MIGraphX from a system ROCm install) |
 | Windows x64 | CPython + all deps + **CPU** torch + onnxruntime | NVIDIA → `torch+cu128`, `onnxruntime-gpu` |
 | macOS arm64 | CPython + all deps + **Metal** torch (default PyPI macOS wheel) + onnxruntime | nothing — MPS is already in the bundled torch |
 
@@ -349,8 +349,8 @@ sub-option). Also deferred: wiring automatic update checks.
   pip still verifies index hashes over TLS.
 - **`--target` shadowing** for torch/onnxruntime must be validated (fallback: `venv
   --system-site-packages`, accepting base-path-coupling and recreate-on-update).
-- **AMD ROCm**: torch from the rocm index, but `onnxruntime` stays CPU (no PyPI ROCm ORT) —
-  same limitation as today.
+- **AMD ROCm**: torch from the rocm index, but `onnxruntime` stays CPU (`onnxruntime-migraphx`
+  needs MIGraphX from a system ROCm install) — same limitation as today.
 
 ## Verification
 - **Local CPU**: `build_desktop_runtime.py --accel cpu` → `npm start` → app opens into the

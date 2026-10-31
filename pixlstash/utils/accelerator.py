@@ -695,6 +695,11 @@ def onnx_execution_providers(
         ]
     if "ROCMExecutionProvider" in available:
         return [("ROCMExecutionProvider", {}), "CPUExecutionProvider"]
+    # AMD's only build from ONNX Runtime 1.23 on, when the ROCm provider was
+    # removed (`onnxruntime-migraphx`). After ROCm because MIGraphX compiles the
+    # graph per input shape, so a changing batch size costs a recompile.
+    if "MIGraphXExecutionProvider" in available:
+        return [("MIGraphXExecutionProvider", {}), "CPUExecutionProvider"]
     return ["CPUExecutionProvider"]
 
 

@@ -470,14 +470,35 @@ class StartupChecks:
                 exc,
             )
         if is_rocm:
-            # The ROCm/MIGraphX ONNX Runtime build isn't on PyPI, so we bundle the
-            # CPU ORT on ROCm; the InsightFace face-extraction and optional WD14
-            # ONNX models run on CPU by design while PyTorch (HIP) uses the GPU for
-            # embeddings, captioning and the other torch workloads. This is expected
-            # on ROCm, so it's a note rather than a warning.
+            # We bundle the CPU ORT on ROCm: the AMD build (`onnxruntime-migraphx`)
+            # needs MIGraphX from the system ROCm install, which a torch wheel does
+            # not carry. With the CPU build the InsightFace face-extraction and
+            # WD14 ONNX models run on CPU while PyTorch (HIP) uses the GPU. That is
+            # expected on ROCm, so it's a note rather than a warning; an owner who
+            # installed an AMD ORT build gets both models on the GPU (#458).
+            amd_provider = next(
+                (
+                    p
+                    for p in ("ROCMExecutionProvider", "MIGraphXExecutionProvider")
+                    if p in providers
+                ),
+                None,
+            )
+            if amd_provider:
+                onnx_note = (
+                    f"the ONNX face-extraction and WD14 tagger models will try "
+                    f"{amd_provider}."
+                )
+            else:
+                onnx_note = (
+                    "the ONNX face-extraction and WD14 tagger models run on CPU "
+                    "(for the GPU: pip uninstall -y onnxruntime && pip install "
+                    "onnxruntime-migraphx, which needs MIGraphX from your ROCm "
+                    "install)."
+                )
             outcome.notes.append(
                 "AMD GPU (ROCm) is experimental and unverified. PyTorch will use the "
-                "GPU; the ONNX face-extraction and WD14 tagger models run on CPU."
+                f"GPU; {onnx_note}"
             )
         elif requested == MPS:
             # CoreML is how ONNX Runtime reaches the same GPU torch reaches
