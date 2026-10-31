@@ -205,6 +205,7 @@ from pixlstash.services.comfyui_service import (
     pixlstash_node_refusals,
     swap_pixlstash_savers,
 )
+from pixlstash.services.inpaint_conversion import convert_to_inpaint
 from pixlstash.services.model_shelf_service import people_who_fit, shelf_uuid
 from pixlstash.hub import workflow_group_writes
 
@@ -280,6 +281,7 @@ _WORKFLOW_WRITE_ROUTES = (
     # The file gestures (v1.12 B8). Each resolves the card's graph out of the
     # whole library the way the run route does, and write a file.
     ("POST", "/api/v1/workflows/{workflow_id}/duplicate"),
+    ("POST", "/api/v1/workflows/{workflow_id}/inpaint-copy"),
     ("POST", "/api/v1/workflows/{workflow_id}/fixed-copy"),
     ("PUT", "/api/v1/workflows/{workflow_id}/lora-chain"),
     ("POST", "/api/v1/workflows/{workflow_id}/clone-with-models"),
@@ -7354,6 +7356,7 @@ def test_no_scoped_token_can_write_a_workflow_card(workflow_env):
             {"picture_ids": [1], "target": BUSY_WF},
         ),
         ("POST", f"{API}/workflows/{BUSY_WF}/duplicate", None),
+        ("POST", f"{API}/workflows/{BUSY_WF}/inpaint-copy", None),
         ("POST", f"{API}/workflows/{BUSY_WF}/fixed-copy", None),
         ("PUT", f"{API}/workflows/{BUSY_WF}/lora-chain", {"entries": []}),
         (
@@ -7475,6 +7478,12 @@ _EVERY_WORKFLOW_ROUTE = (
         "POST",
         "/workflows/{workflow_id}/duplicate",
         f"/workflows/{BUSY_WF}/duplicate",
+        None,
+    ),
+    (
+        "POST",
+        "/workflows/{workflow_id}/inpaint-copy",
+        f"/workflows/{BUSY_WF}/inpaint-copy",
         None,
     ),
     (
@@ -16138,6 +16147,59 @@ def test_duplicating_twice_puts_a_second_file_beside_the_first(exportable, tmp_p
     second = exportable.owner.post(f"{API}/workflows/{RUN_WF}/duplicate").json()
     assert first["workflow_id"] != second["workflow_id"], "one copy replaced another"
     assert _written(exportable, first) == _written(exportable, second)
+
+
+def _full_i2i_graph() -> dict:
+    """An SDXL img2img graph that decodes and saves, so it can be converted."""
+    graph = _i2i_graph()
+    graph["6"] = {
+        "class_type": "VAEEncode",
+        "inputs": {"pixels": ["5", 0], "vae": ["1", 2]},
+    }
+    graph["3"]["inputs"].update(latent_image=["6", 0], denoise=0.6)
+    graph["7"] = {
+        "class_type": "VAEDecode",
+        "inputs": {"samples": ["3", 0], "vae": ["1", 2]},
+    }
+    graph["4"]["inputs"]["images"] = ["7", 0]
+    return graph
+
+
+def test_converting_to_inpainting_stores_a_new_workflow_beside_the_original(i2i):
+    """#2446: a new manual workflow; the original's graph and version stand."""
+    i2i.graph = _full_i2i_graph()
+    owner = i2i.owner
+    graph_before = owner.get(f"{API}/workflows/{RUN_WF}/graph").json()
+    card_before = _by_key(_cards(owner))[RUN_WF]
+    r = owner.post(f"{API}/workflows/{RUN_WF}/inpaint-copy")
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["workflow_id"].startswith("manual:")
+    assert body["name"].endswith(" (inpaint)")
+    written = _written(i2i, body)
+    classes = {node["class_type"] for node in written.values() if "class_type" in node}
+    assert {"InpaintCropImproved", "SetLatentNoiseMask", "InpaintStitchImproved"} <= (
+        classes
+    )
+    card = _by_key(_cards(owner, "?include_one_offs=true"))[body["workflow_id"]]
+    assert (card["manual"], card["type"]) == (True, "inpaint")
+    assert owner.get(f"{API}/workflows/{RUN_WF}/graph").json() == graph_before
+    after = _by_key(_cards(owner))[RUN_WF]
+    assert (after["version"], after["versions"]) == (
+        card_before["version"],
+        card_before["versions"],
+    )
+
+
+def test_converting_an_inpaint_workflow_is_refused_with_its_reason(i2i):
+    """422 with the transform's reason, and nothing is stored."""
+    graph = convert_to_inpaint(_full_i2i_graph())
+    i2i.graph = graph
+    stored = _manual_ids(i2i)
+    r = i2i.owner.post(f"{API}/workflows/{RUN_WF}/inpaint-copy")
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"] == "This workflow already inpaints."
+    assert _manual_ids(i2i) == stored
 
 
 # ---------------------------------------------------------------------------

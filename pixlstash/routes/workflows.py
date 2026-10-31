@@ -202,6 +202,10 @@ from pixlstash.services import (
 from pixlstash.resources import comfyui_tenant
 from pixlstash.resources.arbiter import LeaseKind, LeaseState, Tenant, arbiter
 from pixlstash.services.model_icons import MAX_ICON_BYTES, IconRefused, store_icon
+from pixlstash.services.inpaint_conversion import (
+    InpaintConversionRefused,
+    convert_to_inpaint,
+)
 from pixlstash.services.edit_selection import (
     UNREADABLE_PICTURE,
     Selection,
@@ -10350,6 +10354,62 @@ def create_router(server) -> APIRouter:
             f"{_file_stem(card, workflow.name)} "
             + (f"(version {version})" if version is not None else "(copy)"),
             source.graph,
+            source.bindings,
+            "duplicate",
+            workflow,
+            card,
+        )
+        _announce(request, [landed], "imported")
+        return WorkflowFile(name=name, workflow_id=landed)
+
+    @router.post(
+        "/workflows/{workflow_id}/inpaint-copy",
+        summary="Convert a workflow to inpainting",
+        description=(
+            "Store a new manual workflow made from this img2img or image-edit "
+            "workflow that inpaints with Crop & Stitch: it redraws only the "
+            "selection at the workflow's working resolution and stitches the "
+            "result back into the original picture. The original is not changed."
+        ),
+        response_model=WorkflowFile,
+        status_code=201,
+        responses={
+            404: {"description": "This machine has no such card."},
+            409: {"description": "There is no graph to convert."},
+            413: {
+                "description": "The graph is past the size a stored workflow may be."
+            },
+            422: {
+                "description": "This graph cannot be converted; the detail says why."
+            },
+            500: {"description": "The copy could not be written."},
+        },
+    )
+    def inpaint_copy_workflow(request: Request, workflow_id: str):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        workflow, card = _require_base(hub, workflow_id)
+        source = _card_source(
+            card,
+            workflow_id=workflow.workflow_id,
+            comfyui_url=_comfyui_url(_user(request)),
+        )
+        try:
+            graph = convert_to_inpaint(source.graph)
+        except InpaintConversionRefused as exc:
+            logger.info(
+                "[workflows] Workflow %s was not converted to inpainting: %s",
+                workflow.workflow_id,
+                exc.reason,
+            )
+            raise HTTPException(status_code=422, detail=exc.reason) from exc
+        # Stored as a duplicate: `workflow_document.origin` is a CHECK list a
+        # new value would have to rebuild the table for, and nothing reads it
+        # but `pull`. Where the copy came from is `from_workflow_id`.
+        name, landed = _store_copy(
+            hub,
+            f"{_file_stem(card, workflow.name)} (inpaint)",
+            graph,
             source.bindings,
             "duplicate",
             workflow,
