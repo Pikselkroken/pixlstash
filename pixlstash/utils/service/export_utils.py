@@ -206,13 +206,34 @@ class _StripGenerationDataSink:
     def _strippable(arcname: str) -> bool:
         return os.path.splitext(arcname)[1].lower() in _STRIPPABLE_EXTS
 
+    @staticmethod
+    def _strip(data: bytes, arcname: str, source: str):
+        """Stripped bytes, ``None`` for an unhandled format, ``False`` if broken."""
+        try:
+            return strip_generation_data(data)
+        except ValueError as exc:
+            # Fail closed: a file whose structure cannot be walked cannot be
+            # promised clean, so it is left out rather than sent as it is, and
+            # one broken picture does not fail the rest of the export.
+            logger.warning(
+                "Left %s (%s) out of the export: could not strip its "
+                "generation data: %s",
+                arcname,
+                source,
+                exc,
+            )
+            return False
+
     def write(self, full_path: str, arcname: str) -> None:
         if not self._strippable(arcname):
             self._sink.write(full_path, arcname=arcname)
             return
+        # ponytail: reads the whole image into memory; fine for pictures, a
+        # streaming chunk walker if huge originals ever show up here.
         with open(full_path, "rb") as fh:
-            data = fh.read()
-        stripped = strip_generation_data(data)
+            stripped = self._strip(fh.read(), arcname, full_path)
+        if stripped is False:
+            return
         if stripped is None:
             self._sink.write(full_path, arcname=arcname)
             return
@@ -220,7 +241,9 @@ class _StripGenerationDataSink:
 
     def writestr(self, arcname: str, data) -> None:
         if isinstance(data, (bytes, bytearray)) and self._strippable(arcname):
-            stripped = strip_generation_data(bytes(data))
+            stripped = self._strip(bytes(data), arcname, "re-encoded")
+            if stripped is False:
+                return
             if stripped is not None:
                 data = stripped
         self._sink.writestr(arcname, data)

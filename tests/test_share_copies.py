@@ -571,3 +571,21 @@ def test_export_strips_unless_asked_to_keep(library, scale_factor):
 
     # A caller that never says (the training dataset) keeps the files as they are.
     assert b"KSampler" in _export(library, scale_factor)["image_00001.png"]
+
+
+def test_an_export_request_strips_unless_it_says_keep():
+    request = SimpleNamespace(query_params=SimpleNamespace(get=lambda k: None))
+    request.query_params.getlist = lambda k: []
+    parse = ExportUtils._parse_export_params
+    assert parse(request, {})["keep_generation_data"] is False
+    assert parse(request, {"keep_generation_data": True})["keep_generation_data"]
+
+
+def test_a_picture_that_cannot_be_stripped_is_left_out_not_sent(library):
+    library["add"](_comfy_png()[:60], "aa11.png")
+    library["add"](_comfy_png(), "bb22.png")
+
+    members = _export(library, 1.0, keep_generation_data=False)
+
+    assert "image_00001.png" not in members
+    _assert_no_generation_data(members["image_00002.png"])
