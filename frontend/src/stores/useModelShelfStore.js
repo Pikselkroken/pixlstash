@@ -3811,11 +3811,22 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   /**
    * In the open folder: a copy directly in it, or anywhere under a locked one.
    * A relpath is stored with the host's separator, so it is read as POSIX.
+   *
+   * A model whose file is present somewhere counts only where it is present.
+   * The copy a moved file left behind stays on record as `missing` (detection
+   * proposes, it never deletes), and listing the model by that record put it
+   * in a folder it had left. A model with no present copy still lists where
+   * its copies were, so a missing or offline one is not lost from view.
    */
   function inFolderScope(row) {
     const scope = folderScope.value;
     if (scope == null) return true;
-    return (row.locations ?? []).some((loc) => inFolderScopeOf(loc, scope));
+    const locations = row.locations ?? [];
+    const present = locations.some((loc) => loc?.state === "present");
+    return locations.some(
+      (loc) =>
+        (!present || loc?.state === "present") && inFolderScopeOf(loc, scope),
+    );
   }
 
   /**

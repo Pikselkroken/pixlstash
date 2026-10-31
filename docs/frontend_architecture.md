@@ -4936,7 +4936,10 @@ neither edge moves on a workspace switch.
   no). The view is **one level**: a row is in it when one of its copies has
   that folder id and its relpath's directory (read as POSIX, since a Windows
   host stores `\`) is exactly `path`; a locked folder matches recursively.
-  `ModelShelf` draws the open folder's own models only, unbanded: no
+  A model with a `present` copy anywhere matches only by its present copies,
+  so the `missing` record a moved file leaves behind does not keep it in the
+  folder it left; a model with no present copy still lists where its copies
+  were. `ModelShelf` draws the open folder's own models only, unbanded: no
   subfolder rows and no breadcrumb, since the Folders tree is where the
   subfolders and the way back up live. Under the list, a status bar gives the
   drive's free space of its total and a fullness bar.
