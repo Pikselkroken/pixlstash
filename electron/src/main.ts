@@ -125,6 +125,22 @@ function loadAppIcon(): Electron.NativeImage {
 
 const APP_ICON = loadAppIcon();
 
+/** What a drag-out shows under the pointer: the dragged picture's thumbnail as
+ * PNG bytes from the renderer, else the app icon, since macOS refuses a drag
+ * without one. A bad icon never stops the drag. */
+function shareDragIcon(bytes: unknown): Electron.NativeImage {
+  if (bytes != null) {
+    try {
+      const image = nativeImage.createFromBuffer(pngClipboardPayload(bytes));
+      if (!image.isEmpty()) return image;
+      console.warn('[drag] the drag icon could not be decoded; using the app icon');
+    } catch (err) {
+      console.warn('[drag] ignoring an unusable drag icon; using the app icon:', err);
+    }
+  }
+  return APP_ICON.resize({ width: 64, height: 64 });
+}
+
 // Keep the desktop app's data dir distinct from a standalone pip/Docker server's
 // (~/.config/pixlstash). Electron's default name ('PixlStash') differs from it
 // only by case - fine on Linux, but a COLLISION on case-insensitive filesystems
@@ -1788,6 +1804,21 @@ function registerIpc(): void {
     }
     return { copied: files.length };
   });
+  // Drag a grid selection out as files (#2420): the share copies the backend
+  // just staged, under the same check as media:copyFiles. The renderer cancels
+  // its own HTML5 drag and asks for this one. Electron's Linux and Windows
+  // startDrag run the OS drag to its end before returning, which is how the
+  // renderer learns the drag is over; macOS returns at once (shareDrag.js).
+  ipcMain.handle(
+    'media:startShareDrag',
+    async (event, request: { paths?: unknown; icon?: unknown }) => {
+      requireAppRenderer(event, 'media:startShareDrag');
+      const files = await requireShareCopyPaths(request?.paths, shareCopiesRoot());
+      event.sender.startDrag({ file: files[0], files, icon: shareDragIcon(request?.icon) });
+      // The resolved paths: a drop back onto the window reports these.
+      return { files };
+    },
+  );
 
   // Desktop-shell preferences (e.g. hide-to-tray-on-close).
   //

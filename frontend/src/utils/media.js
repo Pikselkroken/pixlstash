@@ -1,5 +1,7 @@
 // media.js - Shared media/file helpers for PixlStash frontend
 
+import { isOwnShareCopyDrop, outgoingDragIds } from "./shareDrag.js";
+
 export const PIL_IMAGE_EXTENSIONS = [
   "jpg",
   "jpeg",
@@ -252,6 +254,10 @@ export async function extractSupportedImportFilesFromDataTransfer(
   { accept = isSupportedImportFile } = {},
 ) {
   if (!dataTransfer) return [];
+  // A drag-out dropped back onto the window carries PixlStash's own share
+  // copies. Every import path reads its files here, so this is the one place
+  // that keeps them out of the library.
+  if (isOwnShareCopyDrop(dataTransfer)) return [];
 
   const unique = new Map();
   const items = dataTransfer.items ? Array.from(dataTransfer.items) : [];
@@ -498,7 +504,33 @@ export function isFileDrag(dataTransfer) {
 export function isInternalImageDrag(dataTransfer) {
   if (!dataTransfer) return false;
   const types = dataTransfer.types ? Array.from(dataTransfer.types) : [];
-  return types.includes("application/json");
+  // A desktop drag-out is an OS file drag with no JSON (utils/shareDrag.js).
+  return (
+    types.includes("application/json") || outgoingDragIds(dataTransfer) != null
+  );
+}
+
+/**
+ * The internal payload a drag carries: its JSON body, or for a desktop
+ * drag-out (an OS file drag, utils/shareDrag.js) the pictures it is dragging.
+ * Null when there is none, or the JSON does not parse.
+ *
+ * Every drop target reads its payload here, so the two kinds of picture drag
+ * cannot be told apart by the targets that take them.
+ */
+export function readInternalDragPayload(dataTransfer) {
+  if (!dataTransfer) return null;
+  const raw = dataTransfer.getData?.("application/json");
+  if (raw) {
+    try {
+      return JSON.parse(raw);
+    } catch (err) {
+      console.error("Could not parse the drag payload", { raw, err });
+      return null;
+    }
+  }
+  const ids = outgoingDragIds(dataTransfer);
+  return ids ? { type: "image-ids", imageIds: ids } : null;
 }
 
 /**
@@ -545,7 +577,9 @@ export function setInternalDragPayload(dataTransfer, payload) {
 export function isPictureDrag(dataTransfer) {
   if (!dataTransfer) return false;
   const types = dataTransfer.types ? Array.from(dataTransfer.types) : [];
-  return types.includes(PICTURE_DRAG_MIME);
+  return (
+    types.includes(PICTURE_DRAG_MIME) || outgoingDragIds(dataTransfer) != null
+  );
 }
 
 /** True when the drag carries face bounding boxes. */

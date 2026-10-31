@@ -2,6 +2,7 @@ import { ref } from "vue";
 import {
   extractSupportedImportFilesFromDataTransfer,
   isFileDrag,
+  isInternalImageDrag,
   isVideo,
   setInternalDragPayload,
 } from "../utils/media.js";
@@ -9,6 +10,13 @@ import { useNoticeStore } from "../stores/useNoticeStore";
 import { useSelectionStore } from "../stores/useSelectionStore";
 import { useProjectStore } from "../stores/useProjectStore";
 import { resolveImportTarget } from "../utils/importTarget.js";
+import { isReadOnly } from "../utils/apiClient";
+import { MAX_COPY_FILES, stageShareFiles } from "../utils/copyAsFiles.js";
+import {
+  canStartShareDrag,
+  isOwnShareCopyDrop,
+  runShareDrag,
+} from "../utils/shareDrag.js";
 
 /**
  * Manages all drag-and-drop interactions in the image grid:
@@ -174,15 +182,14 @@ export function useGridDragDrop(
     clearGridDragOverlay();
 
     // Ignore drag-and-drop if the source is the grid itself
-    if (
-      dragSource.value === "grid" ||
-      e.dataTransfer.types.includes("application/json")
-    ) {
+    if (dragSource.value === "grid" || isInternalImageDrag(e.dataTransfer)) {
       dragSource.value = null;
       return;
     }
 
     if (!e.dataTransfer) return;
+    // Our own drag-out dropped back: the window-level handler says so.
+    if (isOwnShareCopyDrop(e.dataTransfer)) return;
     const files = await extractSupportedImportFilesFromDataTransfer(
       e.dataTransfer,
     );
@@ -289,7 +296,91 @@ export function useGridDragDrop(
     });
   }
 
+  // ── Drag-out as files (#2420) ─────────────────────────────────────────────
+  // In the desktop app a picture drag is an OS file drag of share copies, so it
+  // lands in a file manager, a mail or a chat like a file manager's own drag,
+  // and the in-app targets take it too (utils/shareDrag.js).
+
+  function wantsShareDrag(ids) {
+    return (
+      canStartShareDrag() && !isReadOnly.value && ids.length <= MAX_COPY_FILES
+    );
+  }
+
+  /** The thumbnail under the pointer as PNG bytes for the OS drag, or undefined. */
+  function dragIconPng(element) {
+    if (!(element instanceof HTMLImageElement) || !element.naturalWidth) {
+      return undefined;
+    }
+    try {
+      // ponytail: one fixed ghost size; size it from the tile if it looks off.
+      const scale = Math.min(
+        1,
+        96 / Math.max(element.naturalWidth, element.naturalHeight),
+      );
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(element.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(element.naturalHeight * scale));
+      canvas.getContext("2d").drawImage(element, 0, 0, canvas.width, canvas.height);
+      const base64 = canvas.toDataURL("image/png").split(",")[1];
+      return Uint8Array.from(atob(base64), (c) => c.charCodeAt(0)).buffer;
+    } catch (err) {
+      console.warn("No drag icon from the thumbnail; the app icon stands in", err);
+      return undefined;
+    }
+  }
+
+  function startShareDrag(img, event, ids) {
+    // The OS drag replaces this one, and it can only start once the copies are
+    // on disk, which takes a request.
+    event.preventDefault();
+    dragSource.value = "grid";
+    setDragSourceImageIds(ids);
+    const icon = dragIconPng(thumbnailRefs[img.id]);
+    // Let go before the copies were ready: no drag. A cancelled dragstart
+    // leaves the button's own release to reach the page.
+    let released = false;
+    const release = () => {
+      released = true;
+    };
+    window.addEventListener("pointerup", release, true);
+    window.addEventListener("mouseup", release, true);
+    const body = typeof document !== "undefined" ? document.body : null;
+    if (body) body.style.cursor = "progress";
+    void (async () => {
+      let staged;
+      try {
+        staged = await stageShareFiles(ids, { verb: "drag", key: "drag-out" });
+      } finally {
+        if (body) body.style.cursor = "";
+        window.removeEventListener("pointerup", release, true);
+        window.removeEventListener("mouseup", release, true);
+      }
+      if (!staged || released) {
+        handleDragEnd();
+        return;
+      }
+      if (staged.skipped) {
+        noticeStore.warning(
+          `${staged.skipped} could not be read and ${staged.skipped === 1 ? "was" : "were"} left out of the drag.`,
+          { key: "drag-out" },
+        );
+      }
+      try {
+        await runShareDrag(ids, staged.paths, { icon, onEnd: handleDragEnd });
+      } catch (err) {
+        console.error("Starting the drag-out failed", { ids, err });
+        noticeStore.error(
+          `Couldn't start the drag. ${err?.message || err}`,
+          { key: "drag-out" },
+        );
+      }
+    })();
+  }
+
   function handleThumbnailNativeDragStart(img, event) {
+    // The tile's own capture handler already took this drag out as files.
+    if (event.defaultPrevented) return;
     // No grid drag-and-drop while the Review Sessions overlay is up (it stays
     // mounted over the grid as a modal review surface).
     if (reviewOverlayOpen?.value) {
@@ -300,8 +391,12 @@ export function useGridDragDrop(
       event.preventDefault();
       return;
     }
-    dragSource.value = "grid";
     const selectionIds = getDragSelectionIds(img);
+    if (wantsShareDrag(selectionIds)) {
+      startShareDrag(img, event, selectionIds);
+      return;
+    }
+    dragSource.value = "grid";
     if (selectionIds.length > 1) {
       setDragSourceImageIds(selectionIds);
       setupMultiExportDrag(event, selectionIds);
@@ -346,8 +441,12 @@ export function useGridDragDrop(
     }
     const existing = event.dataTransfer.getData("application/json");
     if (existing) return;
-    dragSource.value = "grid";
     const selectionIds = getDragSelectionIds(img);
+    if (wantsShareDrag(selectionIds)) {
+      startShareDrag(img, event, selectionIds);
+      return;
+    }
+    dragSource.value = "grid";
     if (selectionIds.length > 1) {
       setDragSourceImageIds(selectionIds);
       setupMultiExportDrag(event, selectionIds);

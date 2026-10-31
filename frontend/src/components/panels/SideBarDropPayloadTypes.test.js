@@ -66,6 +66,10 @@ vi.mock("vue-router", () => ({
 
 import { isReadOnly, sessionContext } from "../../utils/apiClient";
 import { FACE_DRAG_MIME, PICTURE_DRAG_MIME } from "../../utils/media.js";
+import {
+  resetShareDragForTests,
+  runShareDrag,
+} from "../../utils/shareDrag.js";
 import SideBar from "./SideBar.vue";
 
 /**
@@ -261,6 +265,75 @@ describe("sidebar drops read the payload kind, not just imageIds", () => {
     );
     expect(setPosts).toEqual([]);
 
+    wrapper.unmount();
+  });
+});
+
+// In the desktop app a picture drag is an OS file drag of share copies with no
+// JSON (#2420). The rows must still take it: dropping on sets must not break.
+describe("sidebar rows take a desktop drag-out", () => {
+  const COPY = "/home/me/share-copies/0123abcd/101.png";
+  function fileTransfer(path) {
+    const name = path ? path.split("/").pop() : "";
+    const files = path ? [Object.assign(new File(["x"], name), { path })] : [];
+    return {
+      types: ["Files"],
+      dropEffect: "",
+      effectAllowed: "copyLink",
+      files,
+      items: [],
+      getData: () => "",
+    };
+  }
+
+  beforeEach(() => {
+    resetShareDragForTests();
+    window.pixlstashDesktop = {
+      startShareDrag: () => new Promise(() => {}),
+      getDroppedFilePath: (file) => file.path,
+    };
+    void runShareDrag(PICTURES.imageIds, [COPY]);
+  });
+  afterEach(() => {
+    resetShareDragForTests();
+    delete window.pixlstashDesktop;
+  });
+
+  it("accepts it during dragover and files the pictures into a set on drop", async () => {
+    const wrapper = await mountSidebar();
+    const row = rowByTitle(wrapper, `${SET.name} (`);
+
+    const over = await fire(row, "dragover", fileTransfer());
+    expect(over.defaultPrevented).toBe(true);
+    await fire(row, "drop", fileTransfer(COPY));
+
+    expect(wrapper.emitted("images-moved")?.[0]?.[0]).toEqual({
+      imageIds: PICTURES.imageIds,
+    });
+    wrapper.unmount();
+  });
+
+  it("assigns the pictures to a person on drop", async () => {
+    const wrapper = await mountSidebar();
+    const row = rowByTitle(wrapper, `${ADA.name} (`);
+
+    await fire(row, "drop", fileTransfer(COPY));
+
+    expect(wrapper.emitted("images-assigned-to-character")?.[0]?.[0]).toEqual({
+      characterId: ADA.id,
+      imageIds: PICTURES.imageIds,
+    });
+    wrapper.unmount();
+  });
+
+  it("never files the dragged pictures for another file dropped meanwhile", async () => {
+    const wrapper = await mountSidebar();
+    const row = rowByTitle(wrapper, `${SET.name} (`);
+
+    // Not a picture, so the import it rightly falls to has nothing to take.
+    await fire(row, "drop", fileTransfer("/home/me/Documents/other.bin"));
+
+    expect(wrapper.emitted("images-moved")).toBeUndefined();
     wrapper.unmount();
   });
 });

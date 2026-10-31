@@ -1742,8 +1742,8 @@ takes it from the renderer. A path that reaches main for a drag or the
 clipboard comes *through* the renderer, so the IPC handler that hands it to the
 OS must resolve it and check it is inside that root before using it
 (`requireShareCopyPaths` in `electron/src/fileClipboard.ts`, which follows
-symlinks and refuses anything that is not a regular file). Drag-out (#2420)
-is to use the same check. That keeps the `main.ts` rule: the renderer never supplies
+symlinks and refuses anything that is not a regular file); copy and drag-out
+both use it. That keeps the `main.ts` rule: the renderer never supplies
 a filesystem path main acts on unchecked.
 
 **Copy as files (#2419).** Ctrl/⌘+C on a grid selection in the desktop app
@@ -1763,6 +1763,37 @@ So files and a bitmap cannot share the clipboard here. The grid copies files;
 the lightbox's Ctrl/⌘+C stays "Copy picture" (a PNG via `media:copyPng`) for
 apps that only take images. On Linux a GTK desktop's chat apps that read only
 `text/uri-list` get no files; offering both would need a native helper.
+
+**Drag-out (#2420).** In the desktop app a picture drag from the grid is an OS
+file drag of the selection's share copies, so it lands in a file manager, a
+mail or a chat as files, the way a file manager's own drag does. It stages
+through the same `stageShareFiles` as copy-as-files (`utils/copyAsFiles.js`:
+same names, same stripping, same 500 cap), then hands the paths to
+`media:startShareDrag` (app-window gated, `requireShareCopyPaths`), which calls
+`webContents.startDrag({files})` with the tile's thumbnail as the icon. The
+copies must exist before the OS drag begins, so the HTML5 `dragstart` is
+cancelled, the request is made with a busy cursor, and the drag starts once it
+answers, unless the button was let go meanwhile. A browser, a read-only session,
+a remote backend or more than 500 pictures keep the HTML5 drag.
+
+`startDrag` replaces the HTML5 drag and its JSON payload, so the in-app targets
+(sets, people, projects, stack reorder) read the payload through
+`readInternalDragPayload` and judge it with `isPictureDrag` /
+`isInternalImageDrag` (`utils/media.js`), which answer for a drag-out from
+`utils/shareDrag.js`. During dragover the files are hidden and the drag in
+flight is all there is; on drop every file must be one the drag handed out
+(matched by batch folder and name), so a stranger's file can never be filed as
+the dragged pictures. Electron's Linux and Windows `startDrag` run the OS drag
+in a nested loop and return when it ends, which is when the renderer forgets
+it. A `startDrag` that returns within 300 ms did not (macOS), so the drag ends
+at the first sign it is over: a pointer press or a move with no button held, a
+drop on the window, or 30 s. Until then a file dragged in from outside is
+refused on dragover, never filed as the dragged pictures: dragover sees only
+the in-flight drag, so this is the price of not being told. Over a spot no
+target claims, the window refuses the drag-out, so the browser never opens the
+file. The copies themselves never import: `extractSupportedImportFilesFromDataTransfer`
+returns nothing for a drop made only of them, and the project files panel,
+which reads `dataTransfer.files` itself, checks `isOwnShareCopyDrop`.
 
 **Only an export strips.** Copying as files (#2419) and dragging out (#2420)
 always hand over the generation data: stripping during a drag costs too much,

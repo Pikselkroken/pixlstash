@@ -24,7 +24,7 @@ export async function requireShareCopyPaths(value: unknown, root: string): Promi
     const real = await realpath(item);
     const rel = relative(realRoot, real);
     if (!rel || rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) {
-      throw new Error('Only share copies can be put on the clipboard.');
+      throw new Error('Only share copies can be put on the clipboard or dragged out.');
     }
     if (!(await stat(real)).isFile()) throw new Error('A share copy is not a file.');
     out.push(real);
