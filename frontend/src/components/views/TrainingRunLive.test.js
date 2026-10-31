@@ -180,14 +180,14 @@ describe("TrainingRunLive", () => {
     ]);
   });
 
-  it("opens a sample full size on a double-click", async () => {
+  it("opens a sample full size on a click", async () => {
     const wrapper = await open(payload());
     const sample = () => JSON.parse(wrapper.find(".tsd-stub").attributes("data-sample"));
     expect(sample()).toBe(null);
     // The second row's third cell: step 500 of "photo of a woman".
     const cell = wrapper.findAll("img.trl-cell")[7];
     expect(cell.attributes("src")).toBe("/samples/3/ohwx_abcd/s_2.jpg");
-    await cell.trigger("dblclick");
+    await cell.trigger("click");
     expect(sample()).toEqual({
       src: "/samples/3/ohwx_abcd/s_2.jpg",
       step: 500,
@@ -197,7 +197,7 @@ describe("TrainingRunLive", () => {
 
   it("opens a training picture in the lightbox, coming back to this run", async () => {
     const wrapper = await open(payload());
-    await wrapper.findAll(".trl-strip-pic")[1].trigger("dblclick");
+    await wrapper.findAll(".trl-strip-pic")[1].trigger("click");
     expect(routerPush).toHaveBeenCalledWith({
       name: "all-pictures",
       query: { overlay: "2", from: "/models/runs?run=abcd" },

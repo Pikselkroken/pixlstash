@@ -6514,7 +6514,7 @@ shrinking the cells. The cover column is the olive selected-item frame; the
 hovered one takes `--hover-wash`; "Use this step" is hidden by opacity until the
 column is hovered or the button focused.
 
-**Double-click opens a picture** (Enter does too, on a focused one). A sample
+**A click opens a picture** (Enter or Space does too, on a focused one). A sample
 is a file in the run folder, not a library picture, so it opens full size in
 `widgets/TrainingSampleDialog.vue` (step as title, prompt beneath); the rail's
 *Samples* grid opens the same dialog. A *Trained on* picture is a library
@@ -6981,7 +6981,7 @@ for, with Workflows two clicks away.
   since chosen. That reasoning survives the shelf: the grid honours the same
   query.
 - **A `?from=` that carries a query gets it back.** The training run page
-  (`TrainingRunLive.openPicture`, a double-click on a *Trained on* picture)
+  (`TrainingRunLive.openPicture`, a click on a *Trained on* picture)
   sends its full path, `/models/runs?run=<uuid>`, because without `?run=` the
   close lands on the list of runs rather than the run. `lightboxCloseTarget`
   splits it into `path` and `query`, drops any hash, and never takes

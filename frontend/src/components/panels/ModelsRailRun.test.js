@@ -114,7 +114,7 @@ describe("the rail's training card", () => {
     expect(cancelTrainingJob).toHaveBeenCalledWith(7);
   });
 
-  it("opens a sample full size on a double-click", async () => {
+  it("opens a sample full size on a click", async () => {
     setActivePinia(createPinia());
     getTrainingJobLive.mockResolvedValue({
       ...live,
@@ -138,7 +138,7 @@ describe("the rail's training card", () => {
 
     const sample = () => JSON.parse(wrapper.find(".tsd-stub").attributes("data-sample"));
     expect(sample()).toBe(null);
-    await wrapper.findAll(".mrr-cell img")[1].trigger("dblclick");
+    await wrapper.findAll(".mrr-cell img")[1].trigger("click");
     expect(sample()).toEqual({
       src: "/samples/3/ohwx_abcd/b.jpg",
       step: 500,

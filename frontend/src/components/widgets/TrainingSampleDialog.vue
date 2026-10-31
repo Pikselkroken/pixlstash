@@ -21,7 +21,7 @@
 /**
  * One training sample at full size. A sample is a file in the run's folder,
  * not a library picture, so the lightbox (which opens pictures by id) cannot
- * show it; this is what a double-click on one opens, in the run page and in
+ * show it; this is what a click on one opens, in the run page and in
  * the Models rail.
  */
 import { nextTick, watch } from "vue";

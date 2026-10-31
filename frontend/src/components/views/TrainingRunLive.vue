@@ -211,8 +211,9 @@
                     loading="lazy"
                     role="button"
                     tabindex="0"
-                    @dblclick="openSample(row, i, cell)"
+                    @click="openSample(row, i, cell)"
                     @keydown.enter="openSample(row, i, cell)"
+                    @keydown.space.prevent="openSample(row, i, cell)"
                   />
                   <span v-else-if="cell.state === 'drawing'" class="trl-cell trl-cell--gen">
                     <span class="trl-spin"></span>
@@ -267,8 +268,9 @@
               loading="lazy"
               role="button"
               tabindex="0"
-              @dblclick="openPicture(id)"
+              @click="openPicture(id)"
               @keydown.enter="openPicture(id)"
+              @keydown.space.prevent="openPicture(id)"
             />
             <span v-if="pictures.length > STRIP_SHOWN" class="trl-strip-more">
               +{{ (pictures.length - STRIP_SHOWN).toLocaleString() }}<br />more
@@ -832,7 +834,7 @@ function sampleUrl(cell) {
 
 // ── Actions ─────────────────────────────────────────────────────────────────
 
-/** The sample a double-click opened at full size, or null. */
+/** The sample a click opened at full size, or null. */
 const openedSample = ref(null);
 
 function openSample(row, column, cell) {

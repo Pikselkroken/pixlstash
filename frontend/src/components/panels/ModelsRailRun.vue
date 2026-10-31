@@ -87,8 +87,9 @@
               loading="lazy"
               role="button"
               tabindex="0"
-              @dblclick="openSample(row, c, file)"
+              @click="openSample(row, c, file)"
               @keydown.enter="openSample(row, c, file)"
+              @keydown.space.prevent="openSample(row, c, file)"
             />
           </span>
         </template>
@@ -235,7 +236,7 @@ function sampleUrl(filename) {
   return runSampleUrl(sourceId, props.card.run.name, filename);
 }
 
-/** The sample a double-click opened at full size, or null. */
+/** The sample a click opened at full size, or null. */
 const openedSample = ref(null);
 
 function openSample(row, column, file) {
