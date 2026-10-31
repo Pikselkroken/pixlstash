@@ -10,6 +10,9 @@ import { makeShareCopies } from "../api/pictures";
 import { useNoticeStore } from "../stores/useNoticeStore";
 import { errorMessage } from "./apiError";
 
+// POST /pictures/share-copies takes at most this many ids per request.
+export const MAX_COPY_FILES = 500;
+
 /** Whether this window can copy files at all: the desktop app only. */
 export function canCopyFiles() {
   return (
@@ -29,6 +32,13 @@ export function canCopyFiles() {
 export async function copyPicturesAsFiles(pictureIds, options = {}) {
   const noticeStore = useNoticeStore();
   const key = "copy-as-files";
+  if (pictureIds.length > MAX_COPY_FILES) {
+    noticeStore.error(
+      `Copy up to ${MAX_COPY_FILES} pictures at a time as files. ${pictureIds.length} are selected.`,
+      { key },
+    );
+    return 0;
+  }
   try {
     const result = await makeShareCopies(pictureIds, options);
     const paths = (result?.files || []).map((f) => f.path);

@@ -1767,11 +1767,17 @@ function registerIpc(): void {
     requireAppRenderer(event, 'media:copyFiles');
     const files = await requireShareCopyPaths(paths, shareCopiesRoot());
     if (process.platform === 'win32') {
-      await execFileP(
-        'powershell',
-        ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_COPY_FILES_SCRIPT],
-        { env: { ...process.env, PIXLSTASH_COPY_FILES: files.join('\n') }, windowsHide: true },
-      );
+      const list = join(app.getPath('temp'), `pixlstash-copy-${randomUUID()}.txt`);
+      await writeFile(list, files.join('\r\n'), 'utf8');
+      try {
+        await execFileP(
+          'powershell',
+          ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_COPY_FILES_SCRIPT],
+          { env: { ...process.env, PIXLSTASH_COPY_FILES: list }, windowsHide: true },
+        );
+      } finally {
+        await rm(list, { force: true });
+      }
     } else {
       const { format, data } = fileClipboardPayload(
         files,

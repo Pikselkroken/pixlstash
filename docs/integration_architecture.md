@@ -1743,7 +1743,7 @@ clipboard comes *through* the renderer, so the IPC handler that hands it to the
 OS must resolve it and check it is inside that root before using it
 (`requireShareCopyPaths` in `electron/src/fileClipboard.ts`, which follows
 symlinks and refuses anything that is not a regular file). Drag-out (#2420)
-uses the same check. That keeps the `main.ts` rule: the renderer never supplies
+is to use the same check. That keeps the `main.ts` rule: the renderer never supplies
 a filesystem path main acts on unchecked.
 
 **Copy as files (#2419).** Ctrl/⌘+C on a grid selection in the desktop app
@@ -1755,7 +1755,7 @@ writes the one the file manager reads:
 
 | OS | Format |
 |---|---|
-| Windows | `CF_HDROP`, via `Set-Clipboard -LiteralPath` in Windows PowerShell 5.1 (paths passed in an environment variable). A `writeBuffer('CF_HDROP')` would register a new format by that name, not the standard one. |
+| Windows | `CF_HDROP`, via `Set-Clipboard -LiteralPath` in Windows PowerShell 5.1 (paths passed in a temporary UTF-8 list file). A `writeBuffer('CF_HDROP')` would register a new format by that name, not the standard one. |
 | macOS | `NSFilenamesPboardType` (a plist array of paths) |
 | Linux | `x-special/gnome-copied-files` (Nautilus, Nemo, Caja, Thunar); `text/uri-list` when `XDG_CURRENT_DESKTOP` names KDE (Dolphin) |
 

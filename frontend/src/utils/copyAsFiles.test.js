@@ -72,6 +72,14 @@ describe("copyPicturesAsFiles", () => {
     expect(n.error).toHaveBeenCalled();
   });
 
+  it("refuses more pictures than the server takes in one batch", async () => {
+    const n = notices();
+    const ids = Array.from({ length: 501 }, (_, i) => i + 1);
+    expect(await copyPicturesAsFiles(ids)).toBe(0);
+    expect(makeShareCopies).not.toHaveBeenCalled();
+    expect(n.error.mock.calls[0][0]).toContain("501 are selected");
+  });
+
   it("reports the server's reason when staging is refused", async () => {
     const n = notices();
     vi.spyOn(console, "error").mockImplementation(() => {});

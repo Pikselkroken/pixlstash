@@ -31,7 +31,13 @@ describe('requireShareCopyPaths: only share copies reach the clipboard', () => {
     await assert.rejects(requireShareCopyPaths([batch], root), /not a file/);
   });
 
-  it('refuses a symlink inside the root that points out of it', async () => {
+  it('accepts a copy whose name starts with two dots', async () => {
+    writeFileSync(join(root, '..x.png'), 'x');
+    assert.equal((await requireShareCopyPaths([join(root, '..x.png')], root)).length, 1);
+  });
+
+  // Windows needs Developer Mode to make a symlink; the gate runs on Linux.
+  it('refuses a symlink inside the root that points out of it', { skip: process.platform === 'win32' }, async () => {
     const link = join(batch, 'link.png');
     symlinkSync(outside, link);
     await assert.rejects(requireShareCopyPaths([link], root), /Only share copies/);

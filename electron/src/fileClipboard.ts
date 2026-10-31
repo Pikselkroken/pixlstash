@@ -1,5 +1,5 @@
 import { realpath, stat } from 'node:fs/promises';
-import { isAbsolute, relative } from 'node:path';
+import { isAbsolute, relative, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 /**
@@ -23,7 +23,7 @@ export async function requireShareCopyPaths(value: unknown, root: string): Promi
     }
     const real = await realpath(item);
     const rel = relative(realRoot, real);
-    if (!rel || rel.startsWith('..') || isAbsolute(rel)) {
+    if (!rel || rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) {
       throw new Error('Only share copies can be put on the clipboard.');
     }
     if (!(await stat(real)).isFile()) throw new Error('A share copy is not a file.');
@@ -73,8 +73,9 @@ export function fileClipboardPayload(
 
 /**
  * Windows PowerShell 5.1 (on every Windows 10/11) writes a real `CF_HDROP`.
- * The paths travel in an environment variable, never in the command line, so
- * no file name is ever parsed as script.
+ * The paths travel in a UTF-8 list file named by an environment variable,
+ * never in the command line (no file name is parsed as script) and never in
+ * the variable itself (500 long paths overrun its 32,767-character limit).
  */
 export const WINDOWS_COPY_FILES_SCRIPT =
-  'Set-Clipboard -LiteralPath ($env:PIXLSTASH_COPY_FILES -split "`n")';
+  'Set-Clipboard -LiteralPath (Get-Content -LiteralPath $env:PIXLSTASH_COPY_FILES -Encoding UTF8)';
