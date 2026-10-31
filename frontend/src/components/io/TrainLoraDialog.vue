@@ -724,8 +724,11 @@ watch(previewChoice, (choice) => {
   if (!choice || previewsRestored.has(choice.preset)) return;
   previewsRestored.add(choice.preset);
   const id = readRememberedPreviews()[choice.preset];
+  // A value the owner typed into the question's own keys wins over memory.
+  const typed = [SAMPLING_KEY, ...PREVIEW_SIZE_KEYS].some((k) => k in store.pins);
   if (
     choice.selected === "while" &&
+    !typed &&
     id &&
     choice.options.some((o) => o.id === id)
   ) {

@@ -715,6 +715,28 @@ describe("the Previews question (#2415)", () => {
     expect(store.pins).toEqual({ "train.disable_sampling": false });
   });
 
+  it("never puts a remembered pick over a value typed before it was asked", async () => {
+    localStorage.setItem(
+      "pixlstash.train.previews",
+      JSON.stringify({ "zimage-turbo": "after" }),
+    );
+    // Asked only once the typed pin is in (as when a later resolve is the
+    // first one measured).
+    training.resolveTraining.mockImplementation(async (body) => ({
+      ...plan(),
+      previews: body.pins && "train.disable_sampling" in body.pins ? previews(body.pins) : null,
+    }));
+    const { wrapper, store } = await openDialog(
+      { type: "character", id: 4, name: "Grandad" },
+      dataset(),
+    );
+    store.setPin("train.disable_sampling", false);
+    await store.resolvePlan();
+    await flushPromises();
+    expect(card(wrapper, "while").exists()).toBe(true);
+    expect(store.pins).toEqual({ "train.disable_sampling": false });
+  });
+
   it("is not asked when the server has no question", async () => {
     training.resolveTraining.mockImplementation(async () => ({ ...plan(), previews: null }));
     const { wrapper } = await openDialog(
