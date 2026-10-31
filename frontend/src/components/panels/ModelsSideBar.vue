@@ -1,6 +1,7 @@
 <template>
   <!-- The Models workspace's own sidebar (#2168): the Model folders slot, the
-       places, the Folders tree (#2203), Training, and the amber Add band.
+       places and Training (fixed), the Folders tree (#2203, the one part that
+       scrolls), and the amber Add band.
        It replaces the library's sidebar on /models, as the shelf replaces the
        grid: nothing in the library's navigation is about files on this disk. -->
   <aside
@@ -32,111 +33,131 @@
       >
     </button>
 
-    <nav class="msb-scroll sidebar-nav-list" aria-label="Model places">
-      <button
-        v-for="row in placeRows"
-        :key="row.id"
-        type="button"
-        class="sidebar-list-item"
-        :class="{
-          active: row.active,
-          'sidebar-list-item--unavailable': row.disabled,
-        }"
-        :aria-current="row.active ? 'page' : undefined"
-        :aria-disabled="row.disabled ? 'true' : undefined"
-        :data-place="row.id"
-        @click="pickPlace(row)"
-      >
-        <Tooltip v-if="row.reason" :text="row.reason" activator="parent" />
-        <span class="sidebar-list-icon" aria-hidden="true"
-          ><v-icon size="16">{{ row.icon }}</v-icon></span
-        >
-        <span class="sidebar-list-label sidebar-list-label-text">{{
-          row.label
-        }}</span>
-        <span class="sidebar-list-count">{{ row.count }}</span>
-      </button>
-
-      <!-- The Folders heading's + makes a folder in the open one (#2206). -->
-      <div class="sidebar-section-header">
-        <h3 class="sidebar-section-title msb-head-title">Folders</h3>
-        <span class="sidebar-header-actions">
+    <!-- Places and Training are one fixed block, and only the Folders tree
+         scrolls under it, so no expansion can push Training out of sight. -->
+    <nav class="msb-nav" aria-label="Model places">
+      <div class="msb-fixed sidebar-nav-list">
         <button
+          v-for="row in placeRows"
+          :key="row.id"
           type="button"
-          class="sidebar-section-add"
-          :aria-label="newFolderReason ? 'New folder, unavailable' : 'New folder'"
-          :aria-disabled="newFolderReason ? 'true' : undefined"
-          ref="newFolderButton"
-          data-testid="models-sidebar-new-folder"
-          @click="openNewFolder"
+          class="sidebar-list-item"
+          :class="{
+            active: row.active,
+            'sidebar-list-item--unavailable': row.disabled,
+          }"
+          :aria-current="row.active ? 'page' : undefined"
+          :aria-disabled="row.disabled ? 'true' : undefined"
+          :data-place="row.id"
+          @click="pickPlace(row)"
         >
-          <Tooltip
-            :text="newFolderReason || 'New folder in the open folder'"
-            activator="parent"
-            :describe="false"
-          />
-          <v-icon size="16" aria-hidden="true">mdi-folder-plus-outline</v-icon>
+          <Tooltip v-if="row.reason" :text="row.reason" activator="parent" />
+          <span class="sidebar-list-icon" aria-hidden="true"
+            ><v-icon size="16">{{ row.icon }}</v-icon></span
+          >
+          <span class="sidebar-list-label sidebar-list-label-text">{{
+            row.label
+          }}</span>
+          <span class="sidebar-list-count">{{ row.count }}</span>
         </button>
-        </span>
-      </div>
-      <div v-if="newFolder" ref="newFolderRow" class="msb-new">
-        <ModelFolderNameField
-          :model-value="newFolder.name"
-          :label="`New folder in ${newFolderScopeName}`"
-          :error="newFolder.error"
-          @update:model-value="(value) => (newFolder.name = value)"
-          @submit="commitNewFolder"
-          @cancel="cancelNewFolder"
-        />
-      </div>
-      <ModelFolderTree
-        ref="tree"
-        :selected="onRuns || store.place !== 'folder' ? null : store.folderScope"
-        @select="openFolder"
-      />
 
-      <!-- Training, last (#2169): its place, and the door to a new run. -->
-      <div class="sidebar-section-header">
-        <h3 class="sidebar-section-title msb-head-title">Training</h3>
-        <span class="sidebar-header-actions">
+        <!-- Training (#2169): its place, and the door to a new run in words. -->
+        <div class="sidebar-section-header">
+          <h3 class="sidebar-section-title msb-head-title">Training</h3>
+        </div>
         <button
           type="button"
-          class="sidebar-section-add"
-          aria-label="New training run…"
+          class="sidebar-list-item"
+          :class="{ active: onRuns, 'msb-row--two': runsStatus }"
+          :aria-current="onRuns ? 'page' : undefined"
+          data-place="runs"
+          @click="openRuns"
+        >
+          <span class="sidebar-list-icon" aria-hidden="true"
+            ><v-icon size="16">mdi-chart-line-variant</v-icon></span
+          >
+          <!-- Two lines, as a registered folder is: the name, and what the
+               runs are doing, so the row answers "is something training?". -->
+          <span class="msb-stack">
+            <span class="msb-line">
+              <span class="sidebar-list-label sidebar-list-label-text"
+                >Training runs</span
+              >
+              <span
+                v-if="trainingNow"
+                class="msb-live"
+                data-testid="models-sidebar-live-dot"
+                aria-hidden="true"
+              ></span>
+              <span v-if="trainingNow" class="visually-hidden">, training now</span>
+            </span>
+            <span
+              v-if="runsStatus"
+              class="msb-sub"
+              data-testid="models-sidebar-runs-status"
+              >{{ runsStatus }}</span
+            >
+          </span>
+          <span class="sidebar-list-count" data-testid="models-sidebar-runs-count">{{
+            count(runsStore.count)
+          }}</span>
+        </button>
+
+        <button
+          type="button"
+          class="sidebar-list-item"
           aria-haspopup="dialog"
           data-testid="models-sidebar-new-run"
           @click="training.openToPick()"
         >
-          <Tooltip text="New training run…" activator="parent" :describe="false" />
-          <v-icon size="16" aria-hidden="true">mdi-plus</v-icon>
+          <span class="sidebar-list-icon" aria-hidden="true"
+            ><v-icon size="16">mdi-school-outline</v-icon></span
+          >
+          <span class="sidebar-list-label sidebar-list-label-text"
+            >Train a LoRA…</span
+          >
         </button>
-        </span>
       </div>
-      <button
-        type="button"
-        class="sidebar-list-item"
-        :class="{ active: onRuns }"
-        :aria-current="onRuns ? 'page' : undefined"
-        data-place="runs"
-        @click="openRuns"
-      >
-        <span class="sidebar-list-icon" aria-hidden="true"
-          ><v-icon size="16">mdi-chart-line-variant</v-icon></span
-        >
-        <span class="sidebar-list-label sidebar-list-label-text"
-          >Training runs</span
-        >
-        <span
-          v-if="trainingNow"
-          class="msb-live"
-          data-testid="models-sidebar-live-dot"
-          aria-hidden="true"
-        ></span>
-        <span v-if="trainingNow" class="visually-hidden">, training now</span>
-        <span class="sidebar-list-count" data-testid="models-sidebar-runs-count">{{
-          count(runsStore.count)
-        }}</span>
-      </button>
+
+      <div class="msb-scroll msb-folders sidebar-nav-list">
+        <!-- The Folders heading's + makes a folder in the open one (#2206). -->
+        <div class="sidebar-section-header">
+          <h3 class="sidebar-section-title msb-head-title">Folders</h3>
+          <span class="sidebar-header-actions">
+          <button
+            type="button"
+            class="sidebar-section-add"
+            :aria-label="newFolderReason ? 'New folder, unavailable' : 'New folder'"
+            :aria-disabled="newFolderReason ? 'true' : undefined"
+            ref="newFolderButton"
+            data-testid="models-sidebar-new-folder"
+            @click="openNewFolder"
+          >
+            <Tooltip
+              :text="newFolderReason || 'New folder in the open folder'"
+              activator="parent"
+              :describe="false"
+            />
+            <v-icon size="16" aria-hidden="true">mdi-folder-plus-outline</v-icon>
+          </button>
+          </span>
+        </div>
+        <div v-if="newFolder" ref="newFolderRow" class="msb-new">
+          <ModelFolderNameField
+            :model-value="newFolder.name"
+            :label="`New folder in ${newFolderScopeName}`"
+            :error="newFolder.error"
+            @update:model-value="(value) => (newFolder.name = value)"
+            @submit="commitNewFolder"
+            @cancel="cancelNewFolder"
+          />
+        </div>
+        <ModelFolderTree
+          ref="tree"
+          :selected="onRuns || store.place !== 'folder' ? null : store.folderScope"
+          @select="openFolder"
+        />
+      </div>
     </nav>
 
     <!-- The one amber action on this screen. -->
@@ -219,6 +240,7 @@ import { useTrainingRunsStore } from "../../stores/useTrainingRunsStore";
 import { useTrainingStore } from "../../stores/useTrainingStore";
 import { useSidebarWidth } from "../../composables/useSidebarWidth";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
+import { relativeDate } from "../../utils/snapshots.js";
 import { withRef } from "../../utils/withRef.js";
 import AiToolkitIcon from "../widgets/AiToolkitIcon.vue";
 import AppButton from "../widgets/AppButton.vue";
@@ -270,11 +292,57 @@ watch(
 // The leases, not the runs store: the tasks poll runs on every screen, and the
 // store's job list is only re-read while the runs view is up, so it would keep
 // the dot lit after a run ended elsewhere.
-const trainingNow = computed(() =>
-  (tasksStore.resources?.leases ?? []).some(
+// Held or waiting lights it; the one holding the card names the second line.
+const trainingLease = computed(() => {
+  const leases = (tasksStore.resources?.leases ?? []).filter(
     (lease) => lease.tenant === "aitoolkit",
-  ),
+  );
+  return leases.find((lease) => lease.state === "granted") ?? leases[0] ?? null;
+});
+const trainingNow = computed(() => trainingLease.value != null);
+
+// The lease is labelled for the Tasks tab, so the run's own name comes from
+// its job: one started since the jobs were read is read again for it, once.
+// The tasks poll replaces the lease every few seconds, so the watch is on the
+// id string, which a poll does not change.
+watch(
+  () => (runsStore.jobsLoaded ? (trainingLease.value?.job_id ?? "") : ""),
+  (jobId) => {
+    if (!jobId || runsStore.jobs.some((job) => job.uuid === jobId)) return;
+    runsStore.loadJobs();
+  },
+  { immediate: true },
 );
+
+/**
+ * The runs row's second line: "aria_v4 · 41%" training, "aria_v4 · waiting"
+ * queued for the card, else "Last run 2h ago".
+ */
+const runsStatus = computed(() => {
+  const lease = trainingLease.value;
+  if (lease) {
+    const job = runsStore.jobs.find((one) => one.uuid === lease.job_id);
+    const name = job?.name || "A run";
+    if (lease.state !== "granted") return `${name} · waiting`;
+    const total = Number(lease.progress?.total);
+    if (!(total > 0)) return name;
+    const done = Number(lease.progress.step) || 0;
+    return `${name} · ${Math.min(100, Math.round((done / total) * 100))}%`;
+  }
+  const whenOf = (card) =>
+    card.run?.modified_at != null
+      ? card.run.modified_at * 1000
+      : utcMs(card.job?.created_at ?? "");
+  const newest = Math.max(0, ...runsStore.cards.map(whenOf).filter(Boolean));
+  if (!newest) return "";
+  return `Last run ${relativeDate(new Date(newest).toISOString())}`;
+});
+
+/** An ISO time in ms, a naive one read as UTC as relativeDate reads it; 0 if none. */
+function utcMs(at) {
+  const naive = at.includes("T") && !/(Z|[+-]\d{2}:\d{2})$/.test(at);
+  return Date.parse(naive ? `${at}Z` : at) || 0;
+}
 
 // ── The Model folders slot and the tree ──────────────────────────────────
 
@@ -510,16 +578,40 @@ function openRuns() {
   opacity: var(--opacity-text-secondary);
 }
 
-/* No top padding: the first row meets the slot's rule, as the Media list's
-   does. The Folders tree's rows take the nav rows' type size from here. The
-   list is the shared nav list's flex column, whose children never shrink
-   (SidebarNav.css), so an expanded folder scrolls rather than squeezes. */
+/* The places and Training over the Folders pane, between the slot and the
+   band. No top padding: the first row meets the slot's rule, as the Media
+   list's does. */
+.msb-nav {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.msb-fixed {
+  flex-shrink: 0;
+}
+
+/* The one region that scrolls, so no expansion moves Training. The tree's
+   rows take the nav rows' type size from here. The list is the shared nav
+   list's flex column, whose children never shrink (SidebarNav.css), so an
+   expanded folder scrolls rather than squeezes. */
 .msb-scroll {
   font-size: var(--text-base);
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  margin-top: var(--space-3);
   padding: 0 0 var(--space-2);
+  border-top: 1px solid rgb(var(--v-theme-divider));
+}
+
+/* The FOLDERS label stays at the top of its pane while the tree scrolls. */
+.msb-folders > .sidebar-section-header {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  background: rgb(var(--v-theme-sidebar));
 }
 
 /* A heading for the outline; the head's own type, not the h3's. */
@@ -536,7 +628,40 @@ function openRuns() {
     calc(var(--space-3) + var(--rail-w));
 }
 
+/* The runs row's two lines: 40px, as a registered folder's are. */
+.sidebar-nav-list .sidebar-list-item.msb-row--two {
+  height: calc(var(--control-h-bar) + var(--space-3));
+}
+
+.msb-stack {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: var(--leading-tight);
+}
+
+.msb-line {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.msb-line .sidebar-list-label-text {
+  flex: 0 1 auto;
+  width: auto;
+}
+
+.msb-sub {
+  font-size: var(--text-2xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: var(--opacity-text-secondary);
+}
+
 .msb-live {
+  flex-shrink: 0;
   width: 8px;
   height: 8px;
   margin-left: var(--space-2);
