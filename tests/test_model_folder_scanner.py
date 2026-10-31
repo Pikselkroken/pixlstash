@@ -1594,7 +1594,8 @@ class _FakeWatcher:
         self.watched: dict[int, str] = {}
 
     def watch_folder(self, folder_id, path):
-        if os.path.isdir(path):
+        # As the real watcher: an id already watched keeps its first path.
+        if folder_id not in self.watched and os.path.isdir(path):
             self.watched[folder_id] = path
 
     def unwatch_folder(self, folder_id):

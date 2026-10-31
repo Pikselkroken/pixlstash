@@ -90,7 +90,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.builtin_caches import huggingface_cache_dir
 from pixlstash.services.builtin_models import BUILTIN_OWNER
-from pixlstash.services import comfyui_link_service
+from pixlstash.services import comfyui_link_service, model_downloads
 from pixlstash.services.comfyui_service import (
     comfyui_folder_paths,
     comfyui_model_roots,
@@ -889,7 +889,9 @@ def _normalize_optional_host_path(value: Optional[str]) -> Optional[str]:
     return normalized
 
 
-def _validate_folder_conflicts(server, path: str) -> None:
+def _validate_folder_conflicts(
+    server, path: str, exclude_id: Optional[int] = None
+) -> None:
     """Refuse a path that overlaps the vault or an already-registered folder.
 
     Containment, not just equality, for the same reason
@@ -902,6 +904,8 @@ def _validate_folder_conflicts(server, path: str) -> None:
     Args:
         server: The Server instance, for ``vault`` and ``hub``.
         path: The resolved candidate path.
+        exclude_id: A folder not to compare against: the one being renamed,
+            whose new name may differ from its old one only in case.
 
     Raises:
         HTTPException: 409 if the path overlaps something already registered.
@@ -914,7 +918,9 @@ def _validate_folder_conflicts(server, path: str) -> None:
     )
     if detail:
         raise HTTPException(status_code=409, detail=detail)
-    for row in server.hub.fetchall("SELECT path FROM model_folder"):
+    for row in server.hub.fetchall("SELECT id, path FROM model_folder"):
+        if row["id"] == exclude_id:
+            continue
         other = str(row["path"])
         if path_is_within(path, other):
             raise HTTPException(
@@ -1788,7 +1794,7 @@ def create_router(server) -> APIRouter:
             "and download marks, the shelf's copies and their curation follow "
             "without a rescan. 409 for a locked folder, a name already taken or "
             "a registered path, and while a move, an import or a scan of this "
-            "folder runs; 400 with the reason for a name the drive cannot hold; "
+            "folder or a download into it runs; 400 with the reason for a name the drive cannot hold; "
             "404 when the folder is not on disk. Refused in Docker, as creating "
             "a host folder is. Tools outside PixlStash that name the old path "
             "(ComfyUI, StabilityMatrix) are not told."
@@ -1829,7 +1835,7 @@ def create_router(server) -> APIRouter:
             )
         # A row naming the new path, or a folder inside it, may be registered
         # while its drive is unplugged, so the disk alone cannot rule it out.
-        _validate_folder_conflicts(server, new_path)
+        _validate_folder_conflicts(server, new_path, exclude_id=folder_id)
         # The slot a move or an import takes: either may be writing a path
         # under the old name.
         if not SHELF_IO_LOCK.acquire(blocking=False):
@@ -1838,6 +1844,17 @@ def create_router(server) -> APIRouter:
                 detail="A move or an import is running. Try again when it is done.",
             )
         try:
+            # A download writes a partial under the old path and publishes to
+            # it by name, so a rename under it would strand the partial.
+            if any(
+                entry["status"] == model_downloads.STATUS_RUNNING
+                and entry["folder_path"] == old_path
+                for entry in model_downloads.live_downloads()
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="A model is downloading into this folder. Try again when it is done.",
+                )
             # Holding the folder's scan slot keeps the finder from handing out a
             # scan of the old path while it is renamed: that scan would find the
             # folder gone and mark every model in it unreachable.

@@ -12270,7 +12270,7 @@ bytes, and the route answers 400 with it. The route is refused in Docker, as
 /api/v1/model-folders/{folder_id}/dirs/move {path, destination_folder_id,
 destination_path, new_name?, dry_run?}` moves a directory into another directory
 of the same or another registered folder. A rename is a move into the same
-parent with `new_name`; there is no rename route. The work is
+parent with `new_name`; there is no rename route for a directory inside a folder (the registered folder itself has one, below). The work is
 `pixlstash/services/model_dir_mover.py`, in the two phases `ModelMover` has.
 
 - **`plan_directory_move` refuses before anything is touched:** the registered
@@ -12344,7 +12344,7 @@ drive included, `_validate_folder_conflicts`) are 409; a folder not on disk is
 the finder cannot hand out a scan of the old path that would mark every copy
 `unreachable`. If the row cannot be written the directory is renamed back. Tools
 outside PixlStash that name the old path (ComfyUI's model paths, StabilityMatrix)
-are not edited, and a download still writing into the folder fails its publish.
+are not edited. A running download into the folder (`model_downloads.live_downloads`) is also a 409, since it publishes to the old path by name.
 `LOCAL_OWNER_ONLY`, the tier of the `dirs/move` rename.
 
 ### 25.27 Removing a folder inside a model folder (#2207)

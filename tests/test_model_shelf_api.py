@@ -11610,6 +11610,38 @@ def test_a_root_rename_waits_for_a_scan_a_move_and_docker(
     assert root.is_dir() and not (tmp_path / "Loras").exists()
 
 
+def test_a_root_rename_waits_for_a_download_into_the_folder(
+    shelf_env, tmp_path, monkeypatch
+):
+    root = tmp_path / "loras"
+    root.mkdir()
+    _seeded_folder_at(shelf_env.server, str(root))
+    running = [{"status": "running", "folder_path": str(root)}]
+    monkeypatch.setattr(model_downloads, "live_downloads", lambda: running)
+    r = shelf_env.owner.post(_RENAME, json={"name": "Loras"})
+    assert r.status_code == 409 and "downloading" in r.text, r.text
+    assert root.is_dir() and not (tmp_path / "Loras").exists()
+    # One into another folder, or one that has ended, is no reason to wait.
+    running[0] = {"status": "running", "folder_path": str(tmp_path / "other")}
+    assert shelf_env.owner.post(_RENAME, json={"name": "Loras"}).status_code == 200
+
+
+def test_a_case_only_root_rename_is_not_refused_as_overlapping_itself(
+    shelf_env, tmp_path, monkeypatch
+):
+    """Windows compares paths case-folded, so the folder's own row reads as the
+    new path; that row must be left out of the overlap check."""
+
+    def within_folded(path, base):
+        path, base = path.casefold(), base.casefold()
+        return path == base or path.startswith(base.rstrip(os.sep) + os.sep)
+
+    monkeypatch.setattr(model_folders_routes, "path_is_within", within_folded)
+    root, r = _rename_root(shelf_env, tmp_path, "LORAS")
+    assert r.status_code == 200, r.text
+    assert _folder_one(shelf_env)["path"] == str(tmp_path / "LORAS")
+
+
 def test_a_root_rename_the_hub_refuses_is_renamed_back(
     shelf_env, tmp_path, monkeypatch
 ):
