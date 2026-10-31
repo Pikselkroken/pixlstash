@@ -42,6 +42,63 @@ def test_preview_progress_reads_the_sample_being_drawn():
     assert live_view.preview_progress("Training") is None
 
 
+# torch's CUDA OOM paragraph, as ai-toolkit stores it in its job row.
+_TORCH_OOM = (
+    "CUDA out of memory. Tried to allocate 5.06 GiB. GPU 0 has a total capacity "
+    "of 31.41 GiB of which 5.08 GiB is free. Including non-PyTorch memory, this "
+    "process has 21.72 GiB memory in use. Process 101 has 498.00 MiB memory in "
+    "use. Process 102 has 1.50 GiB memory in use. Of the allocated memory 20.70 "
+    "GiB is allocated by PyTorch, and 370.02 MiB is reserved by PyTorch but "
+    "unallocated. If reserved but unallocated memory is large try setting "
+    "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation."
+)
+
+
+@pytest.mark.parametrize(
+    "info, step, summary",
+    [
+        (
+            _TORCH_OOM,
+            500,
+            "Ran out of GPU memory at step 500: it needed 5.06 GiB more, with "
+            "5.08 GiB of 31.41 GiB free. 2 other programs held 1.99 GiB of the "
+            "card; close them and train again.",
+        ),
+        (
+            _TORCH_OOM.replace("Process 102 has 1.50 GiB memory in use. ", ""),
+            7,
+            "Ran out of GPU memory at step 7: it needed 5.06 GiB more, with "
+            "5.08 GiB of 31.41 GiB free. 1 other program held 0.49 GiB of the "
+            "card; close them and train again.",
+        ),
+        (
+            "torch.OutOfMemoryError: CUDA out of memory.",
+            0,
+            "Ran out of GPU memory at step 0.",
+        ),
+        (
+            "Error loading model\nTraceback (most recent call last):",
+            0,
+            "Error loading model",
+        ),
+        (
+            _TORCH_OOM.replace("1.50 GiB", "0 bytes"),
+            7,
+            "Ran out of GPU memory at step 7: it needed 5.06 GiB more, with "
+            "5.08 GiB of 31.41 GiB free. 2 other programs held 0.49 GiB of the "
+            "card; close them and train again.",
+        ),
+        ("could not read /data/oom/cat.png", 12, "could not read /data/oom/cat.png"),
+        ("host out of memory while pinning", 3, "host out of memory while pinning"),
+        ("x" * 300, 0, "x" * 199 + "…"),
+        ("", 0, "Training failed."),
+        (None, 0, "Training failed."),
+    ],
+)
+def test_a_failure_reads_as_one_sentence(info, step, summary):
+    assert live_view.failure_summary(info, step) == summary
+
+
 def test_the_phase_log_appends_only_a_new_phase():
     log = []
     assert live_view.append_phase(log, "loading", "2026-10-26T00:00:00+00:00")

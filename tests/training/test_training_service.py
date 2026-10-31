@@ -1094,6 +1094,40 @@ def test_an_importer_failure_marks_the_completed_job_error(hub, repo_dir):
     assert lease.acquire_count == lease.release_count == 1
 
 
+def test_a_failed_run_stores_a_summary_and_keeps_the_trainers_words(hub, repo_dir):
+    """The card shows the summary; the whole OOM paragraph stays in the report."""
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(grant=True),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    job = service.enqueue(
+        set_id=_SET_ID,
+        name="oom",
+        base_model="m",
+        trigger_word="t",
+        template_path=_write_template(repo_dir, steps=4, save_every=2),
+        resolution=_RESOLUTION,
+    )
+    info = (
+        "CUDA out of memory. Tried to allocate 5.06 GiB. GPU 0 has a total "
+        "capacity of 31.41 GiB of which 5.08 GiB is free. Process 101 has "
+        "498.00 MiB memory in use."
+    )
+    ended = TrainingProgress(
+        status="error", info=info, step=500, total_steps=1500, speed=""
+    )
+
+    service._finalize(None, None, {"uuid": job["uuid"]}, ended)
+
+    final = _job_status(hub, job["uuid"])
+    assert final.status == "error"
+    assert final.error.startswith("Ran out of GPU memory at step 500:")
+    assert final.report == info
+
+
 def test_reconcile_on_startup_dead_running_job_finalizes(hub, repo_dir):
     """A job left 'running' with a dead pid is finalized; lease not left held.
 

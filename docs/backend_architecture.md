@@ -11733,6 +11733,11 @@ calls except each run's last swap counters.
   after training are named by the worker's phase telemetry on the run's lease
   (`progress.shown_as`, §25.20), since the trainer's info line cannot tell
   those passes from training.
+- **Why it failed.** A failed run's `error` is `live_view.failure_summary` of
+  the trainer's info line, the sentence every surface shows: torch's CUDA OOM
+  paragraph becomes the step, what it asked for, what was free and what other
+  processes held; anything else is its first line, cut at 200 characters. The
+  trainer's whole text stays in `report`.
 - **Phase log.** `training_run.phase_log` is the JSON list of `{phase, at}` the
   worker appends when the run enters a new phase (`TrainingService._note_phase`:
   at enqueue, at launch, and on each poll), so setup folds to "Set up in 2:35"

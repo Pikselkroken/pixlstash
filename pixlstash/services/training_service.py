@@ -72,8 +72,6 @@ RAM_GUARD_MB = 1024
 RELEASE_GRACE_S = 10.0
 # How often a probe or an after-training preview pass is polled.
 _SHORT_POLL_S = 1.0
-# ai-toolkit's out-of-memory errors, from torch and from its own messages.
-_OOM_RE = re.compile(r"out of memory|outofmemoryerror|\bOOM\b", re.I)
 # A checkpoint's step: ``<stem>_<step:09d>.safetensors``.
 _CHECKPOINT_STEP_RE = re.compile(r"_(\d{4,})\.safetensors$")
 
@@ -1346,13 +1344,17 @@ class TrainingService:
             )
             return "stopped", None
         text = f"{progress.info or ''}\n{self._read_log_tail(handle.log_path) or ''}"
-        if _OOM_RE.search(text):
+        if live_view.OOM_RE.search(text):
             return "oom", settled["profile_label"]
         if progress.status != "completed" or not progress.final_checkpoint:
             self._fail(
                 job_uuid,
                 "Checking memory and speed failed: "
-                + (progress.info or "the trainer stopped with an error").rstrip(".")
+                + (
+                    live_view.failure_summary(progress.info, progress.step)
+                    if progress.info
+                    else "the trainer stopped with an error"
+                ).rstrip(".")
                 + ". See the trainer log.",
             )
             return "stopped", None
@@ -1719,8 +1721,11 @@ class TrainingService:
 
         # stopped / error / anything else terminal.
         final_status = "stopped" if status == "stopped" else "error"
+        # The card shows the error; the trainer's whole text stays in the report.
         error_msg = (
-            None if final_status == "stopped" else (progress.info or "Training failed")
+            None
+            if final_status == "stopped"
+            else live_view.failure_summary(progress.info, progress.step)
         )
         self._update_job(
             job_uuid,
@@ -1735,7 +1740,7 @@ class TrainingService:
             status=final_status,
             current=progress.step,
             total=progress.total_steps,
-            message=progress.info or final_status,
+            message=error_msg or progress.info or final_status,
         )
         logger.info("Job %s finalized as %s.", job_uuid, final_status)
 
