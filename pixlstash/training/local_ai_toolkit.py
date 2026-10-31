@@ -18,6 +18,7 @@ import glob
 import json
 import os
 import re
+import shutil
 import signal
 import sqlite3
 import subprocess
@@ -82,6 +83,9 @@ _ORPHAN_LAUNCHER = (
 )
 # How long the launcher may take to start the trainer (seconds).
 _ORPHAN_LAUNCH_TIMEOUT_SECONDS = 60.0
+
+# Put on the trainer's PYTHONPATH, so it writes its allocator peaks.
+_TRAINER_HOOK_DIR = os.path.join(os.path.dirname(__file__), "trainer_hook")
 
 # The trainer's CUDA allocator setting, unless the owner set their own.
 _ALLOC_CONF = "expandable_segments:True"
@@ -261,6 +265,15 @@ class LocalAiToolkit(TrainerBackend):
             pid=pid,
         )
 
+    @staticmethod
+    def peaks_folder(work_dir: str) -> str:
+        """Where a trainer launched for *work_dir* writes its allocator peaks.
+
+        See ``trainer_hook/sitecustomize.py`` and
+        :func:`pixlstash.training.measurements.allocator_overshoot_mb`.
+        """
+        return os.path.join(os.path.abspath(work_dir), "allocator_peaks")
+
     # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
@@ -359,6 +372,15 @@ class LocalAiToolkit(TrainerBackend):
         if spec.hf_token:
             env["HF_TOKEN"] = spec.hf_token
             set_env_keys.append("HF_TOKEN")
+        # The trainer writes its CUDA allocator's peaks, which a poll misses
+        # (trainer_hook/sitecustomize.py). trainer_env() dropped the backend's
+        # own PYTHONPATH, so the hook's folder is all of it.
+        peaks = self.peaks_folder(handle.work_dir)
+        shutil.rmtree(peaks, ignore_errors=True)
+        os.makedirs(peaks, exist_ok=True)
+        env["PYTHONPATH"] = _TRAINER_HOOK_DIR
+        env["TRAINER_PEAKS_DIR"] = peaks
+        set_env_keys += ["PYTHONPATH", "TRAINER_PEAKS_DIR"]
 
         cmd = [
             self.ai_toolkit_python,

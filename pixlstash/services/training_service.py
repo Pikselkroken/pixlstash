@@ -90,6 +90,7 @@ class _Watch:
         from_start: Whether the loop saw the trainer start (a run re-attached
             after a restart did not, so its setup time is unknown).
         shrunk: Whether the run's lease has been lowered to its peak.
+        offsets: Where each of the trainer's allocator peak files was read to.
     """
 
     peaks: dict = field(default_factory=dict)
@@ -97,6 +98,7 @@ class _Watch:
     pids: set = field(default_factory=set)
     from_start: bool = True
     shrunk: bool = False
+    offsets: dict = field(default_factory=dict)
     _last: tuple | None = None
 
     def see(self, phase: str | None, usage: dict, now: float) -> None:
@@ -106,7 +108,14 @@ class _Watch:
             )
         self._last = (phase, now)
         self.pids |= usage["pids"]
-        measurements.note_peak(self.peaks, phase, usage["vram_mb"], usage["ram_mb"])
+        measurements.note_peak(
+            self.peaks, phase, usage.get("peak_vram_mb"), usage["ram_mb"]
+        )
+
+    @property
+    def phase(self) -> str | None:
+        """The phase the last poll saw."""
+        return self._last[0] if self._last is not None else None
 
     def peak_vram_mb(self) -> int | None:
         figures = [e["vram_mb"] for e in self.peaks.values() if e["vram_mb"]]
@@ -671,7 +680,12 @@ class TrainingService:
         with self._active_lock:
             self._active_backend = backend
             self._active_job_uuid = info["uuid"]
-        watch = _Watch(from_start=False)
+        watch = _Watch(
+            from_start=False,
+            offsets=measurements.peaks_read_to_end(
+                LocalAiToolkit.peaks_folder(handle.work_dir)
+            ),
+        )
         try:
             progress = self._poll_until_done(
                 backend, handle, info["uuid"], lease, watch
@@ -1006,7 +1020,12 @@ class TrainingService:
         The lease's progress is the worker's phase telemetry: the Tasks tab
         and the live view read the phase and the trainer's memory from it.
         """
-        usage = measurements.trainer_usage(handle.pid, lease.device)
+        usage = measurements.trainer_usage(
+            handle.pid,
+            lease.device,
+            LocalAiToolkit.peaks_folder(handle.work_dir),
+            watch.offsets,
+        )
         watch.see(phase, usage, time.monotonic())
         if self._tenant is not None:
             self._tenant.track(usage["pids"])
@@ -1031,7 +1050,9 @@ class TrainingService:
         """Lower the lease to the run's peak once its first checkpoint is saved.
 
         By then it has loaded, cached, trained, saved and (unless its previews
-        are deferred) drawn a round of previews, so its peak has been seen.
+        are deferred) drawn a round of previews, so its peak has been seen. A
+        round is drawn once the run has left the previews phase: the first
+        poll inside it comes before the VAE decode each preview ends with.
         The lease stops being exclusive, and other GPU work may use what the
         run does not. An adopted lease refuses while it is quiet; the next
         poll tries again.
@@ -1040,7 +1061,9 @@ class TrainingService:
             return
         if "training" not in watch.peaks:
             return
-        if not deferred and "previews" not in watch.peaks:
+        if not deferred and (
+            "previews" not in watch.peaks or watch.phase == "previews"
+        ):
             return
         peak = watch.peak_vram_mb()
         if peak is None:

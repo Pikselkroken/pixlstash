@@ -55,6 +55,14 @@ def test_fingerprint_follows_what_moves_memory_and_speed_only():
         assert changed != base
 
 
+def test_a_setup_measured_by_polling_alone_is_measured_again(monkeypatch):
+    """Polls missed a preview's VAE decode, so a measurement taken that way
+    must not admit a run: reading the allocator's peaks is a new setup."""
+    base = _key()
+    monkeypatch.setattr(measurements, "MEASURED_BY", "polls")
+    assert _key() != base
+
+
 def test_a_clip_recipe_fingerprints_its_sound_and_preview_length():
     """Sound and preview length move a motion run's memory; a recipe that
     resolves neither keeps the key it was measured under."""
@@ -88,6 +96,49 @@ def test_peaks_keep_the_highest_figure_per_phase():
     measurements.note_peak(peaks, "training", None, 13000)
     measurements.note_peak(peaks, None, 99999, 99999)
     assert peaks == {"training": {"vram_mb": 9000, "ram_mb": 13000}}
+
+
+def test_a_spike_freed_between_two_polls_still_reaches_the_peak(tmp_path, monkeypatch):
+    """A preview's VAE decode is freed before the next poll; the trainer's
+    allocator lines carry it, read once each, a half-written line left for
+    the next read."""
+    monkeypatch.setattr(measurements, "process_tree", lambda pid: [])
+    monkeypatch.setattr(measurements, "rss_mb", lambda tree: None)
+    monkeypatch.setattr(measurements, "gpu_mb", lambda pids, device: 20_000)
+    tree = {4242}
+    log = tmp_path / "4242.log"
+    log.write_text("19000 19000\n24200 19000\n19100 19100\n19500 1")
+    offsets: dict = {}
+
+    assert measurements.allocator_overshoot_mb(str(tmp_path), tree, offsets) == 5100
+    # Read once: the same lines are not counted again.
+    assert measurements.allocator_overshoot_mb(str(tmp_path), tree, offsets) == 0
+    with log.open("a") as out:
+        out.write("9500\n")
+    # The finished line is whole now; nothing rose above what is held.
+    assert measurements.allocator_overshoot_mb(str(tmp_path), tree, offsets) == 0
+    # A process that never had a CUDA context wrote nothing.
+    assert measurements.allocator_overshoot_mb(str(tmp_path), {77}, {}) == 0
+
+    monkeypatch.setattr(
+        measurements, "process_tree", lambda pid: [type("P", (), {"pid": 4242})()]
+    )
+    with log.open("a") as out:
+        out.write("25000 19500\n")
+    usage = measurements.trainer_usage(4242, "GPU-test", str(tmp_path), offsets)
+    assert (usage["vram_mb"], usage["peak_vram_mb"]) == (20_000, 25_500)
+    # Without a folder the poll is all there is.
+    usage = measurements.trainer_usage(4242, "GPU-test")
+    assert usage["peak_vram_mb"] == 20_000
+
+
+def test_a_run_watched_from_its_middle_skips_the_peaks_before(tmp_path):
+    (tmp_path / "4242.log").write_text("30000 19000\n19000 19000\n190")
+    (tmp_path / "notes.txt").write_text("not a trainer's\n")
+    offsets = measurements.peaks_read_to_end(str(tmp_path))
+    assert offsets == {4242: len("30000 19000\n19000 19000\n")}
+    assert measurements.allocator_overshoot_mb(str(tmp_path), {4242}, offsets) == 0
+    assert measurements.peaks_read_to_end(str(tmp_path / "missing")) == {}
 
 
 def test_needs_put_previews_apart_with_a_margin():

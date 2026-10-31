@@ -11823,8 +11823,23 @@ fingerprint, machine-wide (no `library_uuid`): `phase_peaks` (JSON `{phase:
 memory for its process tree and its resident memory), `seconds_per_update` (the
 warm median, `live_view.speed`), `setup_seconds` (loading plus caching, once),
 `seconds_per_preview` (one picture) and `source` (`probe` or `run`). A setup
-measured again keeps the higher of each phase peak, because a poll can miss a
-short peak but never invents one, and the newer timings where it has them.
+measured again keeps the higher of each phase peak, and the newer timings where
+it has them.
+
+**Reading a peak.** A poll reads NVML's per-process figure, which misses
+anything freed before the next poll: each preview ends with a full-size VAE
+decode that ai-toolkit frees at once, and Krea 2's 1024 decode takes 5 GB for
+less than a second. A probe that polled alone measured previews 7 GB below what
+they took, a run admitted on it drew previews while training, and a later app
+on the card left too little for the decode. So the trainer is launched with
+`training/trainer_hook/` on its `PYTHONPATH` (`sitecustomize.py`, SEAM.md),
+which appends the CUDA allocator's own peak since the last line and what it
+reserves now to `<work dir>/allocator_peaks/<pid>.log` four times a second.
+Each poll adds how far the new lines rose above the latest figure to NVML's
+reading (`measurements.allocator_overshoot_mb`, `peak_vram_mb`), so every
+phase peak includes what was freed between polls. A run re-attached after a
+restart starts at the end of those files (`peaks_read_to_end`). The fingerprint
+carries `MEASURED_BY`, so a setup measured by polls alone is probed again.
 
 **Admission.** `presets.resolve(lookup=...)` asks `measurements.make_lookup`
 for each candidate profile's fingerprint and measurement. A measured profile's
@@ -11900,8 +11915,9 @@ LoRAs would need ai-toolkit's generate job, if the time matters.
 probe for the trainer: the worker tells it the trainer's processes each poll,
 so what the trainer holds is AI Toolkit's to the arbiter and a reservation is
 not counted on top of it. **Shrink after the first checkpoint**: once a
-checkpoint is saved and the run has been seen training (and drawing previews,
-unless they are deferred), its lease is lowered to its highest peak ×1.1 and
+checkpoint is saved and the run has been seen training (and has finished a round
+of previews, unless they are deferred: the first poll inside the round comes
+before its decodes), its lease is lowered to its highest peak ×1.1 and
 stops being exclusive (`Lease.shrink`), so PixlStash's own work can use the
 rest. **Adoption at boot**: `Vault.start` calls
 `TrainingService.adopt_live_runs` before the task runner starts, and a run whose
@@ -11916,10 +11932,12 @@ still hold is announced on the lease (`aitoolkit_memory_not_released`) and named
 "AI Toolkit · memory not released" in the Tasks tab instead of other apps'.
 
 **Ceilings.** Peaks are polled (every 5 s for a run, 1 s for a probe or a
-preview pass), so a peak shorter than that is missed; the margin and the
-max-merge carry it. Where NVML cannot attribute memory per process (Windows
-WDDM, Docker) no GPU peak is measured, the seed stays the need and the lease
-keeps its whole reservation. Not verified on hardware in this change: an
+preview pass); the allocator lines carry what was freed between polls, but are
+credited to the phase the next poll sees, so a decode at the very end of a
+phase can count as the next one's (training's, which only over-asks). Memory
+outside PyTorch's allocator is still only polled. Where NVML cannot attribute
+memory per process (Windows WDDM, Docker) no GPU peak is measured, the seed
+stays the need and the lease keeps its whole reservation. Not verified on hardware in this change: an
 ai-toolkit probe end to end, and the after-training pass's
 `pretrained_lora_path` + `start_step` behaviour.
 

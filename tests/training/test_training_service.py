@@ -1228,7 +1228,9 @@ def test_a_polling_run_keeps_its_lease_step_total_and_loss_live(hub, repo_dir):
         notify=_CapturingNotify(),
         dataset_builder=_make_dataset_builder(),
     )
-    handle = SimpleNamespace(log_path=os.path.join(repo_dir, "missing.log"), pid=None)
+    handle = SimpleNamespace(
+        log_path=os.path.join(repo_dir, "missing.log"), pid=None, work_dir=repo_dir
+    )
 
     service._poll_until_done(_Backend(), handle, "abc123", lease)
 
@@ -1802,7 +1804,12 @@ def test_the_lease_shrinks_to_the_peak_once_the_first_checkpoint_is_saved(
     service._maybe_shrink("job", lease, watch, before, deferred=False)
     service._maybe_shrink("job", lease, watch, saved, deferred=False)
     assert lease.events == []  # its previews' peak has not been seen yet
-    measurements.note_peak(watch.peaks, "previews", 12_000, None)
+    # Inside the previews, before the VAE decode each one ends with: wait.
+    usage = {"pids": set(), "peak_vram_mb": 12_000, "ram_mb": None}
+    watch.see("previews", usage, 1.0)
+    service._maybe_shrink("job", lease, watch, saved, deferred=False)
+    assert lease.events == []
+    watch.see("training", {**usage, "peak_vram_mb": 9_000}, 2.0)
     service._maybe_shrink("job", lease, watch, saved, deferred=False)
     service._maybe_shrink("job", lease, watch, saved, deferred=False)
     assert lease.events == ["shrink 13200"]
@@ -2148,12 +2155,16 @@ def test_a_re_attached_run_leaves_a_later_runs_backend_in_the_slot(
         return ended
 
     monkeypatch.setattr(service, "_poll_until_done", take_over_while_polling)
-    service._poll_and_finalize_reattached(mine, None, {"uuid": "old-job"}, _StubLease())
+    service._poll_and_finalize_reattached(
+        mine, SimpleNamespace(work_dir=repo_dir), {"uuid": "old-job"}, _StubLease()
+    )
     assert service._active_backend is later
     assert service._active_job_uuid == "later-job"
 
     monkeypatch.setattr(service, "_poll_until_done", lambda *args, **kwargs: ended)
-    service._poll_and_finalize_reattached(mine, None, {"uuid": "old-job"}, _StubLease())
+    service._poll_and_finalize_reattached(
+        mine, SimpleNamespace(work_dir=repo_dir), {"uuid": "old-job"}, _StubLease()
+    )
     assert service._active_backend is None and service._active_job_uuid is None
 
 
