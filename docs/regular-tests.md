@@ -158,15 +158,23 @@ provides both since #2320; until #2353 runs them for real, they stay manual.
 | sets a rating that persists across a reload | Click the Nth star in the overlay; the score round-trips to the backend and survives a reload | ✅ |
 | a grid star click saves, survives a reload, and matches the overlay | The compact hover star badge on a thumbnail card: click the Nth star, reload — the grid badge still shows N and the overlay for the same picture agrees (grid↔overlay sync). Uses the 2nd card so the two tests never share a picture | ✅ |
 
-## Picture import — `import.spec.js` (plan §2, partial)
+## Picture import — `import.spec.js` (plan §2)
 | Test | Covers | Status |
 |------|--------|--------|
 | dragging files over the grid raises the import overlay; leaving clears it | A synthetic DataTransfer with a real JPEG File dispatched on the grid scroll wrapper raises the "Drop files here to import" overlay; dragleave clears it | ✅ |
+| the Import panel imports one file, then several, and All media counts them | `setInputFiles` on the panel's input: the upload is held so the staging dialog is seen, then the import completes, the new cards render and All media rises by one, then by three more | ✅ |
+| a real drop on the grid uploads the dropped file and imports it | The drop handler's upload carries the dropped file by name, and the picture lands | ✅ |
+| a drop on /set/:id joins that set | The session opens with the set's id; `GET /picture_sets/{id}/members` lists exactly the new picture | ✅ |
+| a drop on /character/:id is filed for that character | The session opens with the character's id; the picture's `pending_character_id` names it (face extraction, which turns that into a face, does not run in e2e) | ✅ |
+| the Import panel inside a project imports into that project | The session opens with the project's id; `GET /pictures?project_id=` lists exactly the new picture | ✅ |
+| a locked set refuses the import and says why | The session open answers 409, nothing is uploaded or imported, and the dialog shows the server's reason | ✅ |
+| unsupported files are left out, and a drop of nothing else is reported | Beside a picture an unsupported file is never uploaded; alone, it opens no session and raises the "None of those files…" notice | ✅ |
+| importing the same picture twice keeps one copy | The second import reports one duplicate and no new picture; the counts stay put | ✅ |
+| a .txt beside an image tags it | A same-stem caption sidecar's comma-separated tags land on the picture | ✅ |
+| a video imports and plays in the lightbox | A canvas-recorded VP8 clip imports as a video and its playback advances in the lightbox | ✅ |
 
-> An import through the Import dialog completing, and the picture reaching the
-> grid, is covered by `media-fixture.spec.js`. The e2e backend runs submitted
-> tasks but no model work, so faces, captions and tags on imported pictures
-> stay in the manual plan (Import & background processing).
+Every test purges the pictures it imported and deletes the sets, characters and
+projects it made, so the Scrapheap is left as the fixture had it.
 
 ## Media fixture — `media-fixture.spec.js`
 | Test | Covers | Status |
@@ -363,12 +371,9 @@ Tracked so they aren't forgotten — weighted by blast radius:
   Restore from snapshot) has no spec. Data-loss territory.
 - **Bulk operations at scale** — select-all/range and apply-to-many beyond a
   handful of pictures are only smoke-covered.
-- **Import completion blocked by the worker requirement.** The import endpoint
-  hard-requires the face worker, and the harness disables workers — so
-  drop→import, malformed/huge/unsupported file handling, and everything
-  downstream of an import (progress UI, caption/tag/face generation) is
-  manual-only. A worker-enabled harness mode (or an import test hook) would
-  unlock a large block of legacy §2/§16 automation at once.
+- **Everything downstream of an import is manual.** The harness runs the import
+  task but loads no models, so caption, tag, face and score generation on new
+  pictures never happen in e2e; neither do malformed or huge files.
 - **Infinite scroll needs a bigger fixture.** The ~110-picture fixture renders
   in a single page (108 thumbnails mount eagerly), so "scroll loads more" has
   nothing to assert; it lives in the manual Performance section. A multi-page
