@@ -650,6 +650,18 @@ describe("importing the batch", () => {
     });
   });
 
+  it("re-reads the jobs after an import, so Go to model can name what landed", async () => {
+    const wrapper = await openWith([run()]);
+    await tick(wrapper, "Clementine");
+    importRun.mockResolvedValue({ run_name: "Clementine", files: [] });
+    listTrainingJobs.mockClear();
+
+    await importBtn(wrapper).trigger("click");
+    await settle(wrapper);
+
+    expect(listTrainingJobs).toHaveBeenCalled();
+  });
+
   it("sends every checkpoint of every run when several are chosen", async () => {
     const wrapper = await openWith([run(), run("Foxglove")]);
     await tick(wrapper, "Clementine");
@@ -1236,6 +1248,33 @@ describe("the runs PixlStash trains (#2118)", () => {
       name: "models-runs",
       query: { run: "abcd1234ef" },
     });
+  });
+
+  it("goes to the model a run put on the shelf, its stack's cover", async () => {
+    listTrainingJobs.mockResolvedValue([
+      job({ status: "completed", completed_at: DONE_AT, model_ids: [12, 11] }),
+    ]);
+    const wrapper = await openWith([run("Clementine_abcd1234"), run("Foxglove")]);
+    await cardNamed(wrapper, "Clementine_abcd1234").trigger("contextmenu");
+    await wrapper.find("[data-testid='tr-menu-model']").trigger("click");
+    expect(nav.push).toHaveBeenCalledWith({
+      name: "models",
+      query: { model: "12" },
+    });
+  });
+
+  it("offers no Go to model for a run with nothing on the shelf", async () => {
+    listTrainingJobs.mockResolvedValue([
+      job({ status: "completed", completed_at: DONE_AT, model_ids: [] }),
+    ]);
+    const wrapper = await openWith([run("Clementine_abcd1234"), run("Foxglove")]);
+    await cardNamed(wrapper, "Clementine_abcd1234").trigger("contextmenu");
+    expect(wrapper.find("[data-testid='tr-menu-open']").exists()).toBe(true);
+    expect(wrapper.find("[data-testid='tr-menu-model']").exists()).toBe(false);
+    // Nor for one trained elsewhere: only a job knows its models.
+    await cardNamed(wrapper, "Foxglove").trigger("contextmenu");
+    expect(wrapper.find("[data-testid='tr-menu-open']").exists()).toBe(true);
+    expect(wrapper.find("[data-testid='tr-menu-model']").exists()).toBe(false);
   });
 
   it("keeps the batch when the right-clicked card is already in it", async () => {

@@ -887,10 +887,25 @@ def test_a_runs_snapshot_reads_back_and_exports_what_it_trained_on():
                 "INSERT INTO model (file_kind, filename, sha256, provenance) "
                 "VALUES ('checkpoint', 'base.safetensors', 'beef', 'scanned')"
             )
+            # A row with no stack position and a stepped checkpoint, both
+            # ahead of the cover in id order: the cover still leads, and the
+            # unstacked row comes last.
+            loose_id = conn.execute(
+                "INSERT INTO model (file_kind, kind, filename, sha256, provenance, "
+                "training_run_id) VALUES ('adapter', 'lora', "
+                "'my_run_000000250.safetensors', 'c0de', 'trained', ?)",
+                (job_id,),
+            ).lastrowid
+            step_id = conn.execute(
+                "INSERT INTO model (file_kind, kind, filename, sha256, provenance, "
+                "training_run_id, stack_position) VALUES ('adapter', 'lora', "
+                "'my_run_000000500.safetensors', 'f00d', 'trained', ?, 1)",
+                (job_id,),
+            ).lastrowid
             lora_id = conn.execute(
                 "INSERT INTO model (file_kind, kind, filename, sha256, provenance, "
-                "training_run_id) VALUES ('adapter', 'lora', 'my_run.safetensors', "
-                "'feed', 'trained', ?)",
+                "training_run_id, stack_position) VALUES ('adapter', 'lora', "
+                "'my_run.safetensors', 'feed', 'trained', ?, 0)",
                 (job_id,),
             ).lastrowid
 
@@ -926,11 +941,11 @@ def test_a_runs_snapshot_reads_back_and_exports_what_it_trained_on():
             row["id"]: row
             for row in owner.get("/training/jobs", params={"set_id": set_id}).json()
         }
-        assert rows[job_id]["model_ids"] == [lora_id]
+        assert rows[job_id]["model_ids"] == [lora_id, step_id, loose_id]
         assert rows[job_id]["dataset_snapshot_id"] == body["id"]
         assert rows[bare_id]["model_ids"] == []
         detail = owner.get(f"/training/jobs/{job_id}").json()
-        assert detail["model_ids"] == [lora_id]
+        assert detail["model_ids"] == [lora_id, step_id, loose_id]
         live = owner.get(f"/training/jobs/{job_id}/live").json()
         assert live["dataset_snapshot_id"] == body["id"]
 

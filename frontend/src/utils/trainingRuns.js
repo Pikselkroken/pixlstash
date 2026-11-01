@@ -29,6 +29,15 @@ export function failed(card) {
   return card?.job?.status === "error";
 }
 
+/**
+ * The shelf model a run made, for "Go to model": its stack's cover, which the
+ * job listing names first. Null for a run that put nothing on the shelf, and
+ * for one trained elsewhere (only a job knows its models).
+ */
+export function resultModelId(card) {
+  return card?.job?.model_ids?.[0] ?? null;
+}
+
 /** The backend's own cap on a failure summary (`live_view._FAILURE_CHARS`). */
 const FAILURE_CHARS = 200;
 

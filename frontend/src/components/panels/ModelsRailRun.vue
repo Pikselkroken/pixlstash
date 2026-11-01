@@ -184,6 +184,17 @@
       title="Checkpoints"
       :count="checkpoints.length"
     >
+      <!-- What the checkpoints became: the LoRA on the shelf, opened there. -->
+      <template v-if="modelId != null" #end>
+        <button
+          class="mrs-link-btn"
+          type="button"
+          data-testid="mrr-model"
+          @click="goToModel"
+        >
+          Go to model
+        </button>
+      </template>
       <div v-for="cp in checkpoints" :key="cp.filename" class="mrs-row">
         <span class="mrs-num mrr-step">{{
           cp.step == null ? "final" : cp.step.toLocaleString()
@@ -258,6 +269,7 @@ import {
   jobStatus,
   lastCheckpoint,
   progressOf,
+  resultModelId,
   sampleGrid,
   stepsOf,
   timeLeft,
@@ -368,6 +380,13 @@ function openSample(row, column, file) {
 }
 
 const checkpoints = computed(() => props.card.run?.checkpoints ?? []);
+
+/** The shelf model the run made, which "Go to model" opens the shelf on. */
+const modelId = computed(() => resultModelId(props.card));
+
+function goToModel() {
+  router.push({ name: "models", query: { model: String(modelId.value) } });
+}
 
 const subjectName = computed(() => {
   const job = props.card.job;

@@ -277,6 +277,21 @@ describe("the rail's training card", () => {
     });
   });
 
+  it("goes to the model the run put on the shelf, in the grid and on its page", async () => {
+    const onShelf = { ...failedCard, job: { ...failedCard.job, model_ids: [31, 30] } };
+    for (const open of [false, true]) {
+      routerPush.mockReset();
+      const wrapper = await openRail({ card: onShelf, open });
+      await wrapper.find("[data-section='ckpts'] [data-testid='mrr-model']").trigger("click");
+      expect(routerPush).toHaveBeenCalledWith({ name: "models", query: { model: "31" } });
+    }
+  });
+
+  it("offers no Go to model for a run with nothing on the shelf", async () => {
+    const wrapper = await openRail({ card: failedCard });
+    expect(wrapper.find("[data-testid='mrr-model']").exists()).toBe(false);
+  });
+
   it("keeps the whole summary while the run is only picked in the grid", async () => {
     const wrapper = await openRail({ card: failedCard });
     expect(sections(wrapper)).toEqual(["progress", "samples", "ckpts", "setup"]);

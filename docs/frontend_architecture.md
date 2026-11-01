@@ -6627,7 +6627,9 @@ run's page (the pair's second click does not toggle). The view does
 not follow the picture grid's `gridOpenGesture`: like the Workflow set grid, a
 click here always picks. Right-click, the ContextMenu key or Shift+F10 opens a menu anchored to
 the pointer: the card becomes the selection unless it is already in it, and the
-menu offers **Open run**, the pill's **Import** verb, **Stop
+menu offers **Open run**, **Go to model** (a run PixlStash trained that put a
+model on the shelf: `/models?model=` on `model_ids[0]` of the job listing, a
+stack cover), the pill's **Import** verb, **Stop
 training** (a run still training; Skip previews stays on the rail, which polls
 the phase the job list lacks) and Select all / Clear selection. It reads its
 card by key from the live list, so a reload while it is open acts on the job as
@@ -6915,7 +6917,8 @@ set's own slot ＋ pickers; nothing drags from the rail any more.
   trains, *Skip previews* while a trained run draws them), *Samples* (prompts × the last four sampled steps, the no-trigger
   check prompt marked, *Open run*, which opens a run trained elsewhere from its
   folder), *Checkpoints*
-  (each save with its step and size), *Set-up* (trained on, base, trigger, rank ·
+  (each save with its step and size, and *Go to model* once the run has a model
+  on the shelf, as on the card menu), *Set-up* (trained on, base, trigger, rank ·
   LR, folder). The loss is the chart's smoothed value, the one the run page
   shows, and says so. A run PixlStash trains is read from
   `GET /training/jobs/{id}/live`, polled every 2 s while it trains; one trained

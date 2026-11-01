@@ -271,6 +271,18 @@
           <v-icon class="ctx-icon">mdi-open-in-new</v-icon>
           <span class="ctx-label-text">Open run</span>
         </button>
+        <!-- The LoRA the run put on the shelf, opened on that row. -->
+        <button
+          v-if="resultModelId(menuCard) != null"
+          class="ctx-item"
+          type="button"
+          role="menuitem"
+          data-testid="tr-menu-model"
+          @click="goToModel(menuCard)"
+        >
+          <v-icon class="ctx-icon">mdi-bookshelf</v-icon>
+          <span class="ctx-label-text">Go to model</span>
+        </button>
         <button
           v-if="importable.length"
           class="ctx-item"
@@ -562,6 +574,7 @@ import {
   importDestinations,
   jobStatus,
   progressOf,
+  resultModelId,
   stepsOf,
 } from "../../utils/trainingRuns.js";
 
@@ -715,6 +728,11 @@ function openCard(card) {
   else if (card?.run) {
     router.push({ name: "models-runs", query: { "folder-run": card.run.name } });
   }
+}
+
+/** The shelf, opened on the model the run made (`?model=` picks that row). */
+function goToModel(card) {
+  router.push({ name: "models", query: { model: String(resultModelId(card)) } });
 }
 
 /**
@@ -1080,7 +1098,8 @@ async function submit() {
     // count and `shelf_bytes` moved with them, so the drive bands are stale too.
     await Promise.all([shelf.fetchRows(), folders.refresh({ quiet: true })]);
     clearSelection();
-    await loadRuns();
+    // The jobs too: their `model_ids` now name what landed (Go to model).
+    await Promise.all([loadRuns(), runsStore.loadJobs()]);
   } finally {
     working.value = false;
   }
