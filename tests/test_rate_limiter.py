@@ -24,6 +24,11 @@ def _make_app() -> FastAPI:
     def fake_login():
         return {"ok": True}
 
+    # A built SPA chunk, public like the login page.
+    @app.get("/assets/{name}")
+    def fake_asset(name: str):
+        return {"ok": True}
+
     # One authenticated endpoint that is NOT in AUTH_EXCLUDED_PATHS.
     @app.get("/api/v1/protected")
     def fake_protected():
@@ -57,6 +62,22 @@ def test_authenticated_path_is_not_rate_limited(client):
     for _ in range(20):
         r = client.get("/protected")
         assert r.status_code == 200
+
+
+def test_spa_assets_are_not_counted(client):
+    """A page load's many chunks neither get refused nor spend the bucket.
+
+    One boot of the app fetches more chunks than the whole limit, so a reload
+    after a library switch used to 429 its own JavaScript.
+    """
+    # Absolute, because conftest prefixes relative paths with /api/v1.
+    for i in range(20):
+        url = f"http://testserver/assets/chunk-{i}.js"
+        assert client.get(url).status_code == 200
+
+    for _ in range(3):
+        assert client.get("/login").status_code == 200
+    assert client.get("/login").status_code == 429
 
 
 def test_window_expiry_resets_limit():
