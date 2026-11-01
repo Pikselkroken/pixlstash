@@ -18,7 +18,11 @@ import {
   getStackColorIndexFromId,
   shiftRangesForDelta,
 } from "../utils/utils.js";
-import { getPictureId, readInternalDragPayload } from "../utils/media.js";
+import {
+  dropEffectFor,
+  getPictureId,
+  readInternalDragPayload,
+} from "../utils/media.js";
 import {
   isLockedRefusal,
   lockedSetsSentence,
@@ -914,7 +918,7 @@ export function useStackOrdering(
       setStackReorderHoverSide(side);
     }
     if (event?.dataTransfer) {
-      event.dataTransfer.dropEffect = "move";
+      event.dataTransfer.dropEffect = dropEffectFor(event.dataTransfer);
     }
   }
 

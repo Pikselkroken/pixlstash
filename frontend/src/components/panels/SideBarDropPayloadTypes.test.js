@@ -174,9 +174,11 @@ describe("sidebar rows judge the drag payload during dragover", () => {
     const wrapper = await mountSidebar();
     const row = rowByTitle(wrapper, `${SET.name} (`);
 
-    const event = await fire(row, "dragover", transfer(PICTURES));
+    const dataTransfer = transfer(PICTURES);
+    const event = await fire(row, "dragover", dataTransfer);
 
     expect(event.defaultPrevented).toBe(true);
+    expect(dataTransfer.dropEffect).toBe("move");
     expect(row.classes()).toContain("droppable");
     expect(row.classes()).not.toContain("not-droppable");
 
@@ -303,13 +305,28 @@ describe("sidebar rows take a desktop drag-out", () => {
     const wrapper = await mountSidebar();
     const row = rowByTitle(wrapper, `${SET.name} (`);
 
-    const over = await fire(row, "dragover", fileTransfer());
+    const overTransfer = fileTransfer();
+    const over = await fire(row, "dragover", overTransfer);
     expect(over.defaultPrevented).toBe(true);
+    // The OS drag allows copy and link only; "move" makes Chromium drop
+    // nothing, with no drop event at all.
+    expect(overTransfer.dropEffect).toBe("copy");
     await fire(row, "drop", fileTransfer(COPY));
 
     expect(wrapper.emitted("images-moved")?.[0]?.[0]).toEqual({
       imageIds: PICTURES.imageIds,
     });
+    wrapper.unmount();
+  });
+
+  it("asks only for an effect the drag allows", async () => {
+    const wrapper = await mountSidebar();
+    const row = rowByTitle(wrapper, `${ADA.name} (`);
+
+    const moveOnly = { ...fileTransfer(), effectAllowed: "move" };
+    await fire(row, "dragover", moveOnly);
+
+    expect(moveOnly.dropEffect).toBe("move");
     wrapper.unmount();
   });
 

@@ -61,6 +61,7 @@ import { getSharedResourceIds, revokeTokensByResource } from "../../api/users";
 import { listSortMechanisms } from "../../api/session";
 import { listAdapters } from "../../api/modelShelf";
 import {
+  dropEffectFor,
   extractSupportedImportFilesFromDataTransfer,
   isFaceDrag,
   isFileDrag,
@@ -3940,7 +3941,8 @@ function acceptDrop(event, kinds) {
     (kinds.includes("files") && isFileDrag(dt));
   if (accepted) {
     event.preventDefault();
-    if (dt) dt.dropEffect = "move";
+    // A file drag asks to copy where the drag lets it: the import copies.
+    if (dt) dt.dropEffect = dropEffectFor(dt, isFileDrag(dt) ? "copy" : "move");
     return "accept";
   }
   return isInternalImageDrag(dt) ? "reject" : "ignore";
