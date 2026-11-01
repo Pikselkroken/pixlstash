@@ -210,7 +210,7 @@ async function selectN(grid, n = 3) {
   const cards = grid.thumbnails
   const count = Math.min(n, await cards.count())
   for (let i = 0; i < count; i++) {
-    await cards.nth(i).click({ modifiers: ['Control'] })
+    await cards.nth(i).click({ modifiers: ['ControlOrMeta'] })
   }
   await grid.page.waitForTimeout(300)
   return count

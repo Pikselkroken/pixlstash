@@ -246,7 +246,7 @@ test.describe('Getting started videos', () => {
       expect(picks, `the search for "${SEARCH}" drew too few of her pictures`).toHaveLength(3)
       for (const [n, id] of picks.entries()) {
         const card = page.locator(`.thumbnail-card:has(.thumbnail-img[src*="/thumbnails/${id}."])`)
-        await glideClick(page, card, { modifiers: n ? ['Control'] : [] })
+        await glideClick(page, card, { modifiers: n ? ['ControlOrMeta'] : [] })
       }
       await glideClick(page, grid.selectionMenuButton)
       const setPerson = grid.selectionMenuPanel.getByRole('button', { name: 'Set character' })
@@ -281,7 +281,7 @@ test.describe('Getting started videos', () => {
     const { grid } = await start(page)
     await record(page, '03-Tagging', async () => {
       for (const i of [0, 1, 2, 3]) {
-        await glideClick(page, grid.thumbnails.nth(i), { modifiers: i ? ['Control'] : [] })
+        await glideClick(page, grid.thumbnails.nth(i), { modifiers: i ? ['ControlOrMeta'] : [] })
       }
       await page.waitForTimeout(400)
       await glideClick(page, page.locator('.selection-ctx-bar').getByRole('button', { name: /^Tag/ }).first())
