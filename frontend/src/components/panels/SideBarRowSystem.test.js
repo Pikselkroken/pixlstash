@@ -177,10 +177,16 @@ describe("optional glyphs keep their box", () => {
     expect(body).toContain("width: var(--gutter-glyph)");
   });
 
-  it("no section head in the media list is dimmed", () => {
-    // Dimming a caption to 0.7 once made it the quietest thing in the column,
-    // between full-strength rows above and below, which inverts the hierarchy.
-    // Rank is size, weight and tracking. Not opacity, and not a faded colour.
+  it("section heads wear the section label's ink, and only that", () => {
+    // Full ink made an 11px caps head read as one more row (design "Quiet
+    // label"). The head takes .section-label's 70%; nothing dims it further.
+    const ink =
+      "color: rgba(var(--v-theme-sidebar-text), var(--opacity-text-secondary))";
+    expect(
+      ruleBodies(scopedCss, ".sidebar-section-header").some((b) =>
+        b.includes(ink),
+      ),
+    ).toBe(true);
     for (const sel of [
       ".sidebar-section-header",
       ".sidebar-section-title",
@@ -188,10 +194,7 @@ describe("optional glyphs keep their box", () => {
     ]) {
       for (const body of ruleBodies(scopedCss, sel)) {
         expect(body, `${sel} must not carry its own opacity`).not.toMatch(
-          /opacity\s*:/,
-        );
-        expect(body, `${sel} must not fade its ink`).not.toMatch(
-          /color\s*:\s*rgba\([^)]*opacity/,
+          /(^|[;{\s])opacity\s*:/,
         );
       }
     }

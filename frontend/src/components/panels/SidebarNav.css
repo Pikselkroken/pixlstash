@@ -49,7 +49,7 @@
   position: relative;
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
-  letter-spacing: 0.07em;
+  letter-spacing: var(--tracking-label);
   text-transform: uppercase;
   min-height: clamp(18px, calc(var(--sidebar-thumb-size) * 0.65), 24px);
   padding-top: clamp(var(--space-1), calc(var(--sidebar-thumb-size) * 0.1), var(--space-3));
@@ -57,21 +57,26 @@
   padding-right: var(--sidebar-header-action-right-edge, 0px) !important;
   display: flex;
   align-items: center;
-  color: rgb(var(--v-theme-sidebar-text));
+  /* The system's section label ink (.section-label, visual-language.md "The
+     section label"): 70% of the sidebar's text, 4.95:1 light / 6.64:1 dark.
+     The rows it heads stay at full ink, so tone tells a head from a row. */
+  color: rgba(var(--v-theme-sidebar-text), var(--opacity-text-secondary));
 }
 
 /* Section heads: the uppercase label, with the section's "+" at the right
-   edge (visual-language.md, "The section label"). */
+   edge (visual-language.md, "The section label"). The head belongs to the group
+   under it: --space-5 above the label, --space-2 below it. The 24px box holds
+   the "+" and centres the label in it, so --space-4 of margin plus the box's
+   own slack makes the 16px above and leaves 4px below. */
 .sidebar-nav-list .sidebar-section-header {
   min-height: 0;
-  height: var(--control-h-bar);
-  margin-top: var(--space-3);
+  height: var(--control-h-sm);
+  margin-top: var(--space-4);
   padding-top: 0;
   padding-bottom: 0;
 }
 
-/* Type comes from .sidebar-section-header; at full ink, since a structural
-   label must not be dimmer than the rows it heads (visual-language.md §5.1). */
+/* Type and ink come from .sidebar-section-header. */
 .sidebar-section-title {
   flex: 1;
   min-width: 0;
