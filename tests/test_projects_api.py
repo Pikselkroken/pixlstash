@@ -207,6 +207,7 @@ def test_project_attachment_upload_list_delete():
             "java\tscript:alert(1)",
             "data:text/html,<script>alert(1)</script>",
             "//example.com/no-scheme",
+            "http://[::1",  # urlsplit raises on this; must be a 400, not a 500
         ):
             resp = client.post(
                 f"/projects/{project_id}/attachments/url", json={"url": bad}

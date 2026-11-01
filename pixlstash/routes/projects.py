@@ -1112,7 +1112,11 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=400, detail="url is required")
         # Every viewer of the project opens this link, so a javascript: or
         # data: URL would run in their session (stored XSS). Web links only.
-        if urlsplit(url).scheme.lower() not in ("http", "https"):
+        try:
+            scheme = urlsplit(url).scheme.lower()
+        except ValueError:
+            scheme = ""
+        if scheme not in ("http", "https"):
             raise HTTPException(
                 status_code=400, detail="url must start with http:// or https://"
             )
