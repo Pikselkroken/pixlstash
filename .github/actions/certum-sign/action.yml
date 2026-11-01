@@ -195,12 +195,14 @@ runs:
           # Click the E-mail field, type id; click the One-time code field, type
           # OTP; Enter submits. The login form is a web page served by Certum,
           # so its layout can change without any client update (it did in
-          # Oct 2026: fields moved from 39%/Tab to 45%/55%, and the Sign In
-          # button went right-aligned, hence Enter rather than a click).
+          # Oct 2026: fields moved from 39%/Tab to 45%/55% and the Sign In
+          # button went right-aligned, hence Enter rather than a click; in
+          # Nov 2026 they moved again to 55%/74%). A miss types the OTP into
+          # the E-mail field and the form says "Password is required".
           # Re-validate with a local replay (docs/windows-signing-setup.md).
-          xdotool mousemove $((BX + BW/2)) $((BY + BH*45/100)) click 1; sleep 1
-          xdotool type --clearmodifiers --delay 50 "$CERTUM_USER_ID"
           xdotool mousemove $((BX + BW/2)) $((BY + BH*55/100)) click 1; sleep 1
+          xdotool type --clearmodifiers --delay 50 "$CERTUM_USER_ID"
+          xdotool mousemove $((BX + BW/2)) $((BY + BH*74/100)) click 1; sleep 1
           OTP="$(gen_otp)"
           echo "::add-mask::$OTP"
           xdotool type --clearmodifiers --delay 50 "$OTP"
