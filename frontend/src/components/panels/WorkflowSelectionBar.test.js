@@ -23,10 +23,17 @@ vi.mock("../../api/comfyui", () => ({
   getPixlstashNode: (...args) => getPixlstashNode(...args),
 }));
 
+const preflightWorkflowRun = vi.fn();
+vi.mock("../../api/workflows", async (importOriginal) => ({
+  ...(await importOriginal()),
+  preflightWorkflowRun: (...args) => preflightWorkflowRun(...args),
+}));
+
 import WorkflowSelectionBar from "./WorkflowSelectionBar.vue";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { useFavouritesStore } from "../../stores/useFavouritesStore";
+import { useTasksStore } from "../../stores/useTasksStore";
 
 // `v-menu` is stubbed because Vuetify is not installed in these mounts, and an
 // UNRESOLVED component renders its default slot while silently dropping its
@@ -890,6 +897,79 @@ describe("Download missing models", () => {
     );
     await row.trigger("click");
     expect(wrapper.emitted("download-missing")).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  // The menu opening asks each selected workflow's pre-flight what it lacks.
+  const answer = (...files) => ({
+    groups: [
+      {
+        reasons: [
+          {
+            code: "missing_models",
+            models: files.map((file) => ({ file, downloadable: true })),
+          },
+        ],
+      },
+    ],
+  });
+  async function opened(keys) {
+    const store = useWorkflowsStore();
+    store.cards = CARDS;
+    store.selectRange(keys);
+    const wrapper = mount(WorkflowSelectionBar, globalOpts);
+    await wrapper.vm.openContextMenu(0, 0);
+    await flushPromises();
+    return wrapper;
+  }
+
+  it("is refused once the workflows lack nothing it can fetch", async () => {
+    preflightWorkflowRun.mockReset().mockResolvedValue(answer());
+    const wrapper = await opened(["a", "b"]);
+    expect(preflightWorkflowRun.mock.calls.map(([body]) => body.workflow_id)).toEqual([
+      "a",
+      "b",
+    ]);
+    const row = rowOf(wrapper);
+    expect(row.attributes("aria-disabled")).toBe("true");
+    expect(row.find(".tip").attributes("data-text")).toBe(
+      "Nothing these workflows are missing can be downloaded",
+    );
+    await row.trigger("click");
+    expect(wrapper.emitted("download-missing")).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it("is offered when one of them lacks a file it can fetch", async () => {
+    preflightWorkflowRun
+      .mockReset()
+      .mockResolvedValueOnce(answer())
+      .mockResolvedValueOnce(answer("vae.safetensors"));
+    const wrapper = await opened(["a", "b"]);
+    expect(rowOf(wrapper).attributes("aria-disabled")).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it("stays offered when a workflow could not be asked", async () => {
+    preflightWorkflowRun.mockReset().mockRejectedValue(new Error("gone"));
+    const wrapper = await opened(["a"]);
+    expect(rowOf(wrapper).attributes("aria-disabled")).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it("is refused while everything it lacks is already downloading", async () => {
+    preflightWorkflowRun
+      .mockReset()
+      .mockResolvedValue(answer("vae/vae.safetensors"));
+    useTasksStore().modelDownloads = [
+      { id: "d1", file: "vae.safetensors", status: "running" },
+    ];
+    const wrapper = await opened(["a"]);
+    const row = rowOf(wrapper);
+    expect(row.attributes("aria-disabled")).toBe("true");
+    expect(row.find(".tip").attributes("data-text")).toBe(
+      "Already downloading: the Tasks list in the title bar shows how far",
+    );
     wrapper.unmount();
   });
 });

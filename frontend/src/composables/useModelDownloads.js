@@ -5,6 +5,7 @@
 // download's own bar and cancel are; `useTasksStore` tells how each ended.
 
 import { startModelDownload } from "../api/modelDownloads";
+import { preflightWorkflowRun } from "../api/workflows";
 import { DEFAULT_TIMEOUTS, useNoticeStore } from "../stores/useNoticeStore";
 import { useSidebarStore } from "../stores/useSidebarStore";
 import { useTasksStore } from "../stores/useTasksStore";
@@ -37,6 +38,32 @@ export function downloadableInPreflight(answer) {
     .filter((lora) => !lora.requested && !lora.recipe)
     .map((lora) => String(lora.file));
   return [...models, ...loras];
+}
+
+/**
+ * What *cards* lack that PixlStash knows where to get, by asking each one's
+ * run pre-flight (cached: ComfyUI's node list as last read).
+ *
+ * @param {Object[]} cards - workflow cards; not drafts, which have no graph.
+ * @returns {Promise<{files: string[], unasked: number}>} the files, and how
+ *   many cards could not be asked (logged).
+ */
+export async function downloadableInWorkflows(cards) {
+  const files = [];
+  let unasked = 0;
+  for (const card of cards) {
+    try {
+      const answer = await preflightWorkflowRun(
+        { workflow_id: card.id, values: [] },
+        { cached: true },
+      );
+      files.push(...downloadableInPreflight(answer));
+    } catch (err) {
+      unasked += 1;
+      console.warn("Could not check what a workflow is missing", card.id, err);
+    }
+  }
+  return { files, unasked };
 }
 
 /**

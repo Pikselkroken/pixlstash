@@ -498,15 +498,11 @@ import { VIcon, VMenu } from "vuetify/components";
 
 import { existingWorkflow, importWorkflow } from "../../api/comfyui";
 import { listImportFolders } from "../../api/folders";
-import {
-  exportWorkflow,
-  preflightWorkflowRun,
-  workflowCoverUrl,
-} from "../../api/workflows";
+import { exportWorkflow, workflowCoverUrl } from "../../api/workflows";
 import { openWorkflowInComfyui } from "../../composables/useComfyuiOpen";
 import { useConfirm } from "../../composables/useConfirm";
 import {
-  downloadableInPreflight,
+  downloadableInWorkflows,
   downloadModels,
 } from "../../composables/useModelDownloads";
 import { useWorkflowPictures } from "../../composables/useWorkflowPictures";
@@ -1697,20 +1693,7 @@ async function downloadMissingSelected() {
 }
 
 async function downloadMissingOf(cards) {
-  const files = [];
-  let unasked = 0;
-  for (const card of cards) {
-    try {
-      const answer = await preflightWorkflowRun(
-        { workflow_id: card.id, values: [] },
-        { cached: true },
-      );
-      files.push(...downloadableInPreflight(answer));
-    } catch (err) {
-      unasked += 1;
-      console.warn("Could not check what a workflow is missing", card.id, err);
-    }
-  }
+  const { files, unasked } = await downloadableInWorkflows(cards);
   if (unasked === cards.length && cards.length) {
     notices.error(
       cards.length === 1
