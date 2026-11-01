@@ -150,6 +150,21 @@ describe("TrainingRunLive", () => {
     expect(wrapper.find(".trl-status").text()).toContain("Training 1,000 / 1,500");
     expect(wrapper.find(".trl-status").text()).toContain("Generating previews 2 of 2");
     expect(wrapper.find(".trl-setup").text()).toContain("Started training after 2:35");
+    // The end phases sit under it in the label column, not in a column of
+    // their own after the last step.
+    expect(
+      wrapper.findAll(".trl-lab--setup .trl-endph span").map((s) => s.text()),
+    ).toEqual(["Saving", "Importing to the shelf"]);
+    expect(wrapper.findAll(".trl-board > .trl-endph")).toHaveLength(0);
+    // Scrolled sideways, Step 0 takes the set-up line's slot; the end phases stay.
+    expect(wrapper.find('[data-testid="trl-to-start"]').exists()).toBe(false);
+    const scroller = wrapper.find(".trl-scroll");
+    scroller.element.scrollLeft = 40;
+    await scroller.trigger("scroll");
+    const slot = wrapper.find(".trl-setup-slot");
+    expect(slot.find('[data-testid="trl-to-start"]').exists()).toBe(true);
+    expect(slot.find(".trl-setup").exists()).toBe(false);
+    expect(wrapper.findAll(".trl-lab--setup .trl-endph span")).toHaveLength(2);
     expect(wrapper.findAll(".trl-stepn").map((n) => n.text())).toEqual([
       "Step 0", "250", "500", "750", "1,000", "1,250", "1,500",
     ]);

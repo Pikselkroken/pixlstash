@@ -6736,8 +6736,11 @@ bold, with the trainer's whole text (`report`, host paths redacted) behind
 *Full message* and *Copy* when it says more. A step the run never reached is a
 quiet dashed cell; one it passed without a picture says "not drawn", and the
 column a failed run broke at says "failed here". The end phases (*Saving*,
-*Importing to the shelf*) sit after the last column, and are not drawn for a
-run that failed or was stopped.
+*Importing to the shelf*) sit in the timeline's pinned label, under the set-up
+line, rather than in a column of their own after the last step, and are not
+drawn for a run that failed or was stopped. While the run is scrolled sideways
+the *Step 0* button takes the set-up line's slot, which is a button tall either
+way, so the end phases never move.
 
 **Export dataset** is the rail's *Trained on* section action once the run's
 payload names a `dataset_snapshot_id` (#2123): it fetches
