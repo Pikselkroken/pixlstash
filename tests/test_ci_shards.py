@@ -80,6 +80,7 @@ PRIVILEGED_WORKFLOW_PATHS = tuple(
         "electron.yml",
         "pages.yml",
         "publish-pypi.yml",
+        "rebuild-release.yml",
         "record-test-durations.yml",
         "release-test-issues.yml",
         "release-version.yml",
@@ -333,7 +334,12 @@ def test_privileged_workflow_actions_are_immutable():
     """Third-party code in release-capable jobs must use reviewed commits."""
     for path, _workflow, text in _privileged_workflows():
         matches = list(_ACTION_USE_RE.finditer(text))
-        assert matches, f"Expected at least one action in {path}"
+        if not matches:
+            # A workflow that runs no actions (rebuild-release.yml only calls
+            # gh) has nothing to pin. A `uses:` the regex missed is still a
+            # failure: that is a broken pattern, not an action-free workflow.
+            assert "uses:" not in text, f"Unparsed action reference in {path}"
+            continue
         for match in matches:
             action, version_comment = match.groups()
             if action.startswith("./"):
@@ -404,11 +410,29 @@ def test_electron_apple_signing_requires_validated_release_tag():
     }
     validation = steps_by_name["Classify and validate release ref"]
     assert "if" not in validation, "Ref classification must run for branch dispatch too"
+    # A rebuild (release_tag input) classifies the named tag instead of the
+    # dispatched ref, which is only safe because it runs main's workflow: the
+    # guard below must refuse a release_tag dispatched from any other branch
+    # before anything can be marked a validated tag.
     assert validation["env"] == {
-        "RELEASE_REF": "${{ github.ref }}",
-        "RELEASE_TAG": "${{ github.ref_name }}",
+        "REBUILD_TAG": "${{ inputs.release_tag }}",
+        "DISPATCH_REF": "${{ github.ref }}",
+        "RELEASE_REF": (
+            "${{ inputs.release_tag && format('refs/tags/{0}', "
+            "inputs.release_tag) || github.ref }}"
+        ),
+        "RELEASE_TAG": "${{ inputs.release_tag || github.ref_name }}",
         "EXPECTED_VERSION": "${{ steps.version.outputs.version }}",
     }
+    guard = 'if [ -n "$REBUILD_TAG" ] && [ "$DISPATCH_REF" != "refs/heads/main" ]; then'
+    assert guard in validation["run"], "release_tag must be refused off main"
+    guard_at = validation["run"].index(guard)
+    assert guard_at < validation["run"].index("exit 1"), (
+        "The off-main guard must exit before any other branch of the step"
+    )
+    assert guard_at < validation["run"].index("validated_release_tag="), (
+        "The off-main guard must run before the tag can be classified"
+    )
     assert "validated_release_tag=false" in validation["run"]
     assert "validated_release_tag=true" in validation["run"]
     assert '"refs/tags/$RELEASE_TAG"' in validation["run"]
