@@ -957,6 +957,15 @@ describe("Download missing models", () => {
     wrapper.unmount();
   });
 
+  it("stays offered when ComfyUI did not answer the check", async () => {
+    preflightWorkflowRun.mockReset().mockResolvedValue({
+      groups: [{ reasons: [{ code: "comfyui_unreachable" }] }],
+    });
+    const wrapper = await opened(["a"]);
+    expect(rowOf(wrapper).attributes("aria-disabled")).toBeUndefined();
+    wrapper.unmount();
+  });
+
   it("is refused while everything it lacks is already downloading", async () => {
     preflightWorkflowRun
       .mockReset()

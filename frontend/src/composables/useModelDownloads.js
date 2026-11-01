@@ -10,6 +10,7 @@ import { DEFAULT_TIMEOUTS, useNoticeStore } from "../stores/useNoticeStore";
 import { useSidebarStore } from "../stores/useSidebarStore";
 import { useTasksStore } from "../stores/useTasksStore";
 import { errorDetail } from "../utils/apiError";
+import { UNCHECKED_CODES } from "../utils/runReasons";
 
 /** A loader's name without the subfolder it may put in front. */
 export function modelBaseName(file) {
@@ -46,7 +47,7 @@ export function downloadableInPreflight(answer) {
  *
  * @param {Object[]} cards - workflow cards; not drafts, which have no graph.
  * @returns {Promise<{files: string[], unasked: number}>} the files, and how
- *   many cards could not be asked (logged).
+ *   many cards could not be asked or ComfyUI did not answer for (logged).
  */
 export async function downloadableInWorkflows(cards) {
   const files = [];
@@ -57,6 +58,18 @@ export async function downloadableInWorkflows(cards) {
         { workflow_id: card.id, values: [] },
         { cached: true },
       );
+      // ComfyUI never answered: an empty list means unknown, not nothing.
+      const unchecked = (answer?.groups ?? [])
+        .flatMap((group) => group.reasons ?? [])
+        .some((reason) => UNCHECKED_CODES.includes(reason.code));
+      if (unchecked) {
+        unasked += 1;
+        console.warn(
+          "Could not check what a workflow is missing: ComfyUI did not answer",
+          card.id,
+        );
+        continue;
+      }
       files.push(...downloadableInPreflight(answer));
     } catch (err) {
       unasked += 1;
