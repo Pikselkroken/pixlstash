@@ -775,12 +775,22 @@ function watchTraining(entry) {
   router.push({ name: "models-runs", query: { run: entry.jobId } });
 }
 
+/** What a side pass (the lease's shown_as) is doing, in place of its steps. */
+const AITOOLKIT_SIDE_PASS = {
+  checking: "checking memory and speed",
+  previews: "generating previews",
+};
+
 /**
  * The AI Toolkit row's "step 2750/4000 · loss 0.123", or "" until the run has
- * reported a total. The loss is left out until the run has one.
+ * reported a total. The loss is left out until the run has one. A side pass
+ * (the memory probe before training, previews after) counts its own few steps,
+ * not the run's, so it is named instead.
  */
 function aitoolkitProgress(entry) {
   const progress = entry.progress;
+  const pass = progress?.shown_as;
+  if (pass) return AITOOLKIT_SIDE_PASS[pass] ?? pass;
   if (!progress || !(Number(progress.total) > 0)) return "";
   const step = `step ${Number(progress.step) || 0}/${Number(progress.total)}`;
   if (progress.loss == null || !Number.isFinite(Number(progress.loss))) return step;

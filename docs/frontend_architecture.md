@@ -5019,6 +5019,11 @@ neither edge moves on a workspace switch.
   own label is the Tasks tab's sentence; a lease naming a job the store has
   not read re-reads the jobs once, the watch keyed on the id since every
   tasks poll replaces the lease); queued for the card, *aria_v4 · waiting*;
+  while the lease carries `progress.shown_as` (set by the probe and preview
+  passes, kept until the real run's first poll or the release), the pass
+  (*aria_v4 · checking*, *aria_v4 · previews*), since its step and total are
+  the pass's own (the 6-step memory probe read as *100%* before training began;
+  the Tasks tab's AI Toolkit row names it the same way instead of *step 6/6*);
   idle, *Last run 2h ago* from the newest card (a job's naive `created_at`
   read as UTC, as `relativeDate` reads it). The sidebar calls `runsStore.ensureLoaded()` on mount so the count is
   there on every place, not only after the runs view has been opened.
