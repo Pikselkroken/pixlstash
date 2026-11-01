@@ -1167,8 +1167,10 @@ function followNewest() {
   const el = scrollRef.value;
   if (!el || !following || el.scrollWidth <= el.clientWidth) return;
   // The newest checkpoint and the one after it, at the right edge.
+  // The board starts after the scroller's own left padding.
   const shown = Math.min(columns.value.length, drawingIndex.value + 2);
-  const target = Math.max(0, LABEL_W + shown * pitch.value - el.clientWidth);
+  const padLeft = parseFloat(getComputedStyle(el).paddingLeft) || 0;
+  const target = Math.max(0, padLeft + LABEL_W + shown * pitch.value - el.clientWidth);
   if (Math.abs(el.scrollLeft - target) <= 1) return;
   placedAt = Math.min(target, el.scrollWidth - el.clientWidth);
   el.scrollLeft = target;
