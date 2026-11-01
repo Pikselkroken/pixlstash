@@ -188,6 +188,10 @@ export function useComfyuiOpen() {
       }
     } catch (err) {
       console.warn("[workflows] could not ask ComfyUI for the PixlStash node", err);
+      // A refusal already standing keeps being re-asked, or it would stick.
+      if (check === nodeCheck && comfyuiDown.value) {
+        recheck = setTimeout(() => ask(url), COMFYUI_RECHECK_MS);
+      }
     }
   }
 

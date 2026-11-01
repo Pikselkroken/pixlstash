@@ -2409,7 +2409,8 @@ own row.
   A ComfyUI the server cannot reach (all `null`) refuses it too, *ComfyUI is
   not running at <address>*, and is asked again every 5 s until it answers
   and on window focus, so starting ComfyUI wakes the button where it is; a
-  failed ask of PixlStash itself leaves it to try. The reason links `ComfyUI-PixlStash`
+  failed ask of PixlStash itself changes nothing (an open button stays open,
+  a refused one keeps being re-asked). The reason links `ComfyUI-PixlStash`
   to the pack's repo (`PIXLSTASH_PACK_URL`), an `https:` `target="_blank"` link
   the desktop shell hands to the OS browser. In a browser it is a synchronous `window.open`
   (one after an await is a blocked popup). **On the desktop it goes through
