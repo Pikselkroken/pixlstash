@@ -187,6 +187,7 @@ below.
 | The same four, **inside a `dark-surface`** | `dark-surface-success` / `-error` / `-warning` / `-info` |
 | `primary` as a foreground **inside a `dark-surface`** | `dark-surface-primary` |
 | Hover / selection wash | `--hover-wash` / `--active-wash` (in `style.css`) |
+| A row that is locked in place (cannot be moved) | `--lock-hatch` (in `style.css`): a diagonal hatch, never a hue |
 | Shadow color (for elevation) | `shadow` |
 
 Status meaning never rides on color alone — pair it with an icon or text. The many
