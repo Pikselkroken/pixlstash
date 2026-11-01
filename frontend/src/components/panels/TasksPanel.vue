@@ -258,10 +258,9 @@
             </div>
             <div class="tm-comfy-message">{{ entry.run.message }}</div>
           </div>
-          <!-- Async import (#459): the two-phase dialog auto-hides at the safe
-               transition and the import lands here as a determinate task row.
-               data-import-task-row is the FLIP flight target the import dialog
-               flies its count chip into. -->
+          <!-- Async import (#459): a determinate task row from the drop on
+               (#2512), the record for anyone not looking at the grid's
+               arriving tiles. -->
           <div
             v-else-if="entry.kind === 'import'"
             class="tm-worker-row tm-import-row"

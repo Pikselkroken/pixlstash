@@ -21,7 +21,7 @@ from sqlalchemy import (
 )
 from pydantic import BaseModel, ConfigDict
 from sqlmodel import select, Session
-from typing import Optional
+from typing import Literal, Optional
 
 from pixlstash.database import DBPriority
 
@@ -196,6 +196,18 @@ class StagingCommitResponse(BaseModel):
     staged_count: int
 
 
+class StagingOutcome(BaseModel):
+    """What the import decided for one staged file (#2512)."""
+
+    key: Optional[str] = None
+    """The ``key`` form field the file was streamed with, or ``None``."""
+
+    outcome: Literal["new", "duplicate", "scrapheaped", "failed"]
+
+    picture_id: Optional[int] = None
+    """The picture a duplicate or scrapheaped file matched, when known."""
+
+
 class StagingStatusResponse(BaseModel):
     """Progress/status for a staging session and its background import."""
 
@@ -238,6 +250,19 @@ class StagingStatusResponse(BaseModel):
     the buckets still sum to ``total`` on a cancelled run."""
 
     error: Optional[str] = None
+
+    outcomes: list[StagingOutcome] = []
+    """Per-file outcomes the import has decided so far, in the order it decided
+    them, starting at the ``outcomes_from`` the caller asked for. Each is
+    ``{"key", "outcome", "picture_id"}``: ``key`` is the ``key`` form field the
+    file was streamed with (``None`` when the client sent none; every entry
+    extracted from one zip shares the zip's key), ``outcome`` is one of
+    ``new`` (imported when the run commits), ``duplicate``, ``scrapheaped`` or
+    ``failed``, and ``picture_id`` names the picture a duplicate or scrapheaped
+    file matched (``None`` for a repeat inside the same batch, whose twin is
+    not inserted yet). Files a cancelled run never reached have no entry. This
+    is what lets the grid mark each arriving tile as it is checked instead of
+    reporting one total at the end (#2512)."""
 
 
 class ImportStartResponse(BaseModel):
@@ -1176,6 +1201,7 @@ def register_routes(router, server):
         request: Request,
         staging_id: str,
         file: list[UploadFile] = File(None),
+        key: list[str] = Form(None),
     ):
         session = _get_session_or_404(request, staging_id)
         if session["stage"] != "staging":
@@ -1194,6 +1220,12 @@ def register_routes(router, server):
         sidecar_text_by_stem: dict[str, str] = session["sidecar_text_by_stem"]
         received: list[str] = []
         skipped: list[str] = []
+        # The client's own handle for each file, sent as one ``key`` field per
+        # ``file`` in the same order. Carried onto the staged entry so the
+        # import can say which file each outcome belongs to (#2512). Optional:
+        # a caller that sends none gets ``None`` keys.
+        keys: list[str] = list(key or [])
+        current_key: Optional[str] = None
 
         def _stage_media_bytes(data: bytes, ext: str, original_name: str) -> bool:
             """Write already-read media bytes into the staging dir (zip entries)."""
@@ -1223,11 +1255,13 @@ def register_routes(router, server):
                 {
                     "file_path": dest_path,
                     "original_file_name": os.path.basename(original_name),
+                    "client_key": current_key,
                 }
             )
             return True
 
-        for upload in file:
+        for upload_index, upload in enumerate(file):
+            current_key = keys[upload_index] if upload_index < len(keys) else None
             if not upload.filename:
                 continue
             ext = os.path.splitext(upload.filename)[1].lower()
@@ -1422,6 +1456,7 @@ def register_routes(router, server):
                 {
                     "file_path": dest_path,
                     "original_file_name": os.path.basename(upload.filename),
+                    "client_key": current_key,
                 }
             )
             received.append(upload.filename)
@@ -1613,7 +1648,7 @@ def register_routes(router, server):
         ),
         response_model=StagingStatusResponse,
     )
-    def staging_status(request: Request, staging_id: str):
+    def staging_status(request: Request, staging_id: str, outcomes_from: int = 0):
         session = _get_session_or_404(request, staging_id)
         staged_files: list[dict] = session.get("staged_files") or []
         task = session.get("task")
@@ -1623,11 +1658,15 @@ def register_routes(router, server):
         imported_count = duplicate_count = failed_count = None
         scrapheaped_count = cancelled_count = None
         scrapheaped_picture_ids: list[int] = []
+        outcomes: list[dict] = []
         error = session.get("error")
 
         if task is not None:
             total = int(getattr(task, "_total_count", total) or total)
             processed = int(getattr(task, "_processed_count", 0) or 0)
+            # Only the tail the caller has not seen: a 2,000-file import is
+            # polled every second, and the whole list each time grows with it.
+            outcomes = list(task.outcomes[max(0, outcomes_from) :])
             status = getattr(task, "status", None)
             status_value = getattr(status, "value", status)
             if status_value == "completed":
@@ -1672,4 +1711,5 @@ def register_routes(router, server):
             "failed_count": failed_count,
             "cancelled_count": cancelled_count,
             "error": error,
+            "outcomes": outcomes,
         }

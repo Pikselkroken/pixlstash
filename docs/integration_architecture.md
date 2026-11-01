@@ -2336,7 +2336,14 @@ so no summary line can overstate what happened):
 | Endpoint | Fields |
 |---|---|
 | `GET /pictures/import/status?task_id=…` | `imported_count`, `duplicate_count`, `scrapheaped_count`, `scrapheaped_picture_ids[]`; per-file `results[].status` is `success` / `duplicate` / `scrapheaped` |
-| `GET /pictures/import/staging/{id}/status` | the same three plus `failed_count` and `cancelled_count` |
+| `GET /pictures/import/staging/{id}/status` | the same three plus `failed_count` and `cancelled_count`, and live per-file `outcomes[]` (below) |
+
+**Per-file outcomes on the staging path (#2512).** Each `file` part of `POST .../staging/{id}/files` may carry a
+`key` form field (same order); the status then returns `outcomes[]`, `{key, outcome, picture_id}` per file in the
+order the task decided it, `outcome` one of `new` / `duplicate` / `scrapheaped` / `failed`, `picture_id` the matched
+picture for the two match outcomes. `?outcomes_from=N` returns only the tail, so a poll costs what changed. A zip's
+entries share the zip's key; a cancelled run's unreached files have no entry. This drives the grid's arriving
+tiles; the pictures still arrive through the `CHANGED_PICTURES` broadcast, not this list.
 
 **Both status endpoints are `OWNER_ONLY`** (corrected 2026-08-01; they were
 `ANY_TOKEN`). The table above is the reason: `results[].picture_id`,

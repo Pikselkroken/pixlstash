@@ -45,6 +45,7 @@ import { notifySessionReset } from "../utils/apiClient";
 import { useLockedSetsStore } from "./useLockedSetsStore";
 import { useEntityNamesStore } from "./useEntityNamesStore";
 import { useEntityListsStore } from "./useEntityListsStore";
+import { useImportArrivalsStore } from "./useImportArrivalsStore";
 import { useProjectStore } from "./useProjectStore";
 import { useSelectionStore } from "./useSelectionStore";
 import { useSnapshotsStore } from "./useSnapshotsStore";
@@ -220,6 +221,16 @@ const STORES = [
       s.ids = new Set([11, 12]);
     },
     isEmpty: (s) => !s.isNew(11) && !s.isNew(12),
+  },
+  {
+    // An import's arriving tiles name the pictures they matched (#2512).
+    name: "useImportArrivalsStore",
+    use: useImportArrivalsStore,
+    seed: (s) => {
+      const [key] = s.begin("r1", [new File(["x"], "a.png")]);
+      s.applyOutcomes("r1", [{ key, outcome: "duplicate", picture_id: 11 }]);
+    },
+    isEmpty: (s) => s.runs.length === 0,
   },
   {
     // Owner-only hub rows: the next credential may be a share token that

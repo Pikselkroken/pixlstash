@@ -47,15 +47,22 @@ import { apiClient } from "../utils/apiClient";
  *
  * ENDPOINTS (final, all under /api/v1, mutating routes OWNER_ONLY):
  *   POST   {backendUrl}/pictures/import/staging                   → { staging_id, safe_threshold }
- *   POST   {backendUrl}/pictures/import/staging/{id}/files         multipart `file` (repeatable)
+ *   POST   {backendUrl}/pictures/import/staging/{id}/files         multipart `file` (repeatable), with an
+ *                                                                 optional `key` per file, in the same order
  *                                                                 → { staging_id, staged, received[], skipped[] }
  *   POST   {backendUrl}/pictures/import/staging/{id}/commit        → { staging_id, task_id, staged_count }
  *                                                                   400 empty/face-worker-down, 409 committed, 507 disk
  *   DELETE {backendUrl}/pictures/import/staging/{id}               (pre-commit only) → { stage:"cancelled", … }
  *   GET    {backendUrl}/pictures/import/staging/{id}/status        → { stage, staged, total, processed, task_id,
- *                                                                       imported_count, duplicate_count, scrapheaped_count,
+ *          ?outcomes_from=N                                             imported_count, duplicate_count, scrapheaped_count,
  *                                                                       scrapheaped_picture_ids[], failed_count,
- *                                                                       cancelled_count, error }
+ *                                                                       cancelled_count, error, outcomes[] }
+ *
+ * PER-FILE OUTCOMES (#2512): each file is streamed with the client's own `key`,
+ * and the status carries `outcomes[]` - `{ key, outcome, picture_id }` for every
+ * file the import has decided, from `outcomes_from` on - so the grid's arriving
+ * tiles can each show what became of their file while the import runs. The
+ * pictures themselves still reach the grid through the broadcast above.
  *
  * NOTE: the staging file endpoint accepts media, `.zip` archives (extracted
  * server-side) and `.txt` caption sidecars, and the client streams whatever the
@@ -142,6 +149,8 @@ export async function openStagingSession({
  * @param {string} args.backendUrl
  * @param {string} args.stagingId
  * @param {File[]} args.files
+ * @param {string[]} [args.keys]  One handle per file, same order; named back in
+ *   the status `outcomes[]`.
  * @param {AbortSignal} [args.signal]
  * @param {number} [args.timeoutMs]
  * @param {(e: ProgressEvent) => void} [args.onUploadProgress]
@@ -151,12 +160,14 @@ export async function stageFiles({
   backendUrl,
   stagingId,
   files,
+  keys = [],
   signal,
   timeoutMs,
   onUploadProgress,
 }) {
   const formData = new FormData();
   files.forEach((file) => formData.append("file", file));
+  keys.forEach((key) => formData.append("key", key));
   const res = await apiClient.post(
     IMPORT_ENDPOINTS.stageFiles(backendUrl, stagingId),
     formData,
@@ -238,6 +249,9 @@ export async function cancelStaging({ backendUrl, stagingId }) {
  * @property {number|null} failedCount     Failed files (on completion).
  * @property {number|null} cancelledCount  Staged files never reached (cancelled run).
  * @property {string|null} error
+ * @property {{key: string|null, outcome: string, picture_id: number|null}[]} outcomes
+ *   Per-file outcomes decided since `outcomesFrom`: `new`, `duplicate`,
+ *   `scrapheaped` or `failed`.
  * @property {Object} raw
  *
  * The five counts are disjoint and sum to `total`; none is derived by subtracting
@@ -250,11 +264,17 @@ export async function cancelStaging({ backendUrl, stagingId }) {
  * @param {Object} args
  * @param {string} args.backendUrl
  * @param {string} args.stagingId
+ * @param {number} [args.outcomesFrom] How many outcomes the caller already has.
  * @returns {Promise<StagingStatus>}
  */
-export async function fetchStagingStatus({ backendUrl, stagingId }) {
+export async function fetchStagingStatus({
+  backendUrl,
+  stagingId,
+  outcomesFrom = 0,
+}) {
   const res = await apiClient.get(
     IMPORT_ENDPOINTS.status(backendUrl, stagingId),
+    { params: { outcomes_from: outcomesFrom } },
   );
   const d = res?.data ?? {};
   return {
@@ -272,6 +292,7 @@ export async function fetchStagingStatus({ backendUrl, stagingId }) {
     failedCount: d.failed_count ?? null,
     cancelledCount: d.cancelled_count ?? null,
     error: d.error ?? null,
+    outcomes: Array.isArray(d.outcomes) ? d.outcomes : [],
     raw: d,
   };
 }

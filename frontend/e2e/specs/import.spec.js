@@ -104,7 +104,9 @@ function importCompleted(page) {
   return page
     .waitForResponse(
       async (r) => {
-        if (!/\/pictures\/import\/staging\/[^/]+\/status$/.test(r.url()) || !r.ok())
+        // The path: the poll carries `?outcomes_from=` (#2512).
+        const path = new URL(r.url()).pathname
+        if (!/\/pictures\/import\/staging\/[^/]+\/status$/.test(path) || !r.ok())
           return false
         const body = await r.json().catch(() => null)
         return body?.stage === 'completed'
@@ -287,7 +289,8 @@ test.describe('picture import', () => {
     await grid.goto()
     const startCount = await pictureCount(apiContext)
     await expect(allMediaCount(page)).toHaveText(String(startCount))
-    const importDialog = page.getByRole('dialog', { name: 'Import pictures' })
+    // The import happens in the grid: arriving tiles under one band (#2512).
+    const arriving = page.getByTestId('arriving-tiles')
 
     // ── One file. Hold its upload so the staging phase can be seen. ──
     let releaseUpload
@@ -301,14 +304,19 @@ test.describe('picture import', () => {
     const done = importCompleted(page)
     await chooseFiles(page, [pngFile('panel-one.png', 101)])
 
-    await expect(importDialog).toBeVisible()
-    await expect(importDialog).toContainText('Keep this tab open while files upload')
-    await expect(importDialog).toContainText('Uploading')
+    // Acknowledged before a byte has gone up: the file's own tile, marked.
+    await expect(arriving).toContainText('Keep this tab open until the upload finishes')
+    await expect(arriving).toContainText('Uploading')
+    await expect(arriving.locator('[data-arriving-state="uploading"]')).toHaveCount(1)
     releaseUpload()
     await page.unroute('**/pictures/import/staging/*/files')
 
     expect(await done).toMatchObject({ imported_count: 1, duplicate_count: 0 })
-    await expect(importDialog).toBeHidden()
+    // The band becomes the receipt and stays until Done.
+    await expect(arriving).toContainText('Added just now')
+    await expect(arriving).toContainText('1 picture')
+    await arriving.getByRole('button', { name: 'Done' }).click()
+    await expect(arriving).toBeHidden()
     const [oneId, ...extra] = await newPictureIds(apiContext, before)
     expect(extra).toEqual([])
     expect((await metadata(apiContext, oneId)).original_file_name).toBe('panel-one.png')
@@ -448,17 +456,17 @@ test.describe('picture import', () => {
     await dropFiles(page, grid.scrollWrapper, [pngFile('into-locked.png', 601)])
     expect((await refused).status()).toBe(409)
 
-    const importDialog = page.getByRole('dialog', { name: 'Import pictures' })
-    await expect(importDialog).toContainText('Import failed')
-    await expect(importDialog).toContainText(
+    const arriving = page.getByTestId('arriving-tiles')
+    await expect(arriving).toContainText('Import failed')
+    await expect(arriving).toContainText(
       `Picture set '${set.name}' is locked and cannot take new members`,
     )
     expect(uploaded).toBe(false)
     expect(await pictureCount(apiContext)).toBe(startCount)
     const members = await apiContext.get(`/api/v1/picture_sets/${set.id}/members`)
     expect((await members.json()).picture_ids).toEqual([])
-    await importDialog.getByRole('button', { name: 'Dismiss' }).click()
-    await expect(importDialog).toBeHidden()
+    await arriving.getByRole('button', { name: 'Dismiss' }).click()
+    await expect(arriving).toBeHidden()
   })
 
   test('unsupported files are left out, and a drop of nothing else is reported (§2)', async ({
@@ -517,6 +525,35 @@ test.describe('picture import', () => {
     expect(await newPictureIds(apiContext, before)).toEqual([id])
     expect(await pictureCount(apiContext)).toBe(countAfterFirst)
     await expect(allMediaCount(page)).toHaveText(String(countAfterFirst))
+  })
+
+  test('leaving is guarded until the commit has returned (§2)', async ({ page, grid }) => {
+    await grid.goto()
+    // Would the browser ask before leaving? (A synthetic event: no dialog.)
+    const leaveGuarded = () =>
+      page.evaluate(() => {
+        const e = new Event('beforeunload', { cancelable: true })
+        window.dispatchEvent(e)
+        return e.defaultPrevented
+      })
+    let releaseCommit
+    const commitHeld = new Promise((r) => (releaseCommit = r))
+    let commitSeen
+    const commitStarted = new Promise((r) => (commitSeen = r))
+    await page.route('**/pictures/import/staging/*/commit', async (route) => {
+      commitSeen()
+      await commitHeld
+      await route.continue()
+    })
+    const done = importCompleted(page)
+    await dropFiles(page, grid.scrollWrapper, [pngFile('guarded.png', 851)])
+
+    // Mid-commit the staged session has no owner but this tab.
+    await commitStarted
+    expect(await leaveGuarded()).toBe(true)
+    releaseCommit()
+    expect(await done).toMatchObject({ imported_count: 1 })
+    expect(await leaveGuarded()).toBe(false)
   })
 
   test('a .txt beside an image tags it (§2)', async ({ page, grid, apiContext }) => {
