@@ -6,9 +6,6 @@ import json
 import logging
 import sqlite3
 import os
-import sys
-import threading
-import traceback
 import pathlib
 import shutil
 import time
@@ -1289,50 +1286,10 @@ def test_a_put_back_that_fails_names_where_the_workflow_is(
     assert "no trash on this mount" in caplog.text
 
 
-def _watcher_timeout_report(trace: list[str], inbox: pathlib.Path) -> str:
-    """What a CI-only timeout needs: what ran, what is in the inbox, every thread."""
-    frames = sys._current_frames()
-    stacks = [
-        f"--- {thread.name} (daemon={thread.daemon})\n"
-        + "".join(traceback.format_stack(frames[thread.ident]))
-        for thread in threading.enumerate()
-        if thread.ident in frames
-    ]
-    return (
-        "the watcher never imported the file\n"
-        f"trace: {trace}\n"
-        f"INBOX_LOCK held: {workflow_inbox.INBOX_LOCK.locked()}\n"
-        f"inbox: {sorted(os.listdir(inbox))}\n" + "\n".join(stacks)
-    )
-
-
 def test_the_watcher_imports_a_file_put_in_the_inbox(import_route, monkeypatch):
     call, _user_dir, _built_in, _hub = import_route
     monkeypatch.setattr(workflow_inbox, "_DEBOUNCE_S", 0.05)
-    # Each step the import takes, so a timeout says which one never happened.
-    trace: list[str] = []
-    reconcile = workflow_inbox.reconcile
-
-    def traced_reconcile(folder, store):
-        trace.append("reconcile entered")
-        try:
-            return reconcile(folder, store)
-        finally:
-            trace.append("reconcile left")
-
-    def traced_store(name, workflow):
-        trace.append(f"store {name}")
-        return call.store(name, workflow)
-
-    monkeypatch.setattr(workflow_inbox, "reconcile", traced_reconcile)
-    watcher = workflow_inbox.WorkflowInboxWatcher(str(call.inbox), traced_store)
-    schedule = watcher._schedule
-
-    def traced_schedule():
-        trace.append("event")
-        schedule()
-
-    monkeypatch.setattr(watcher, "_schedule", traced_schedule)
+    watcher = workflow_inbox.WorkflowInboxWatcher(str(call.inbox), call.store)
     watcher.start()
     try:
         (call.inbox / "dropped.json").write_text(
@@ -1342,8 +1299,7 @@ def test_the_watcher_imports_a_file_put_in_the_inbox(import_route, monkeypatch):
         deadline = time.monotonic() + 10
         # The rename is the last thing a reconcile does.
         while not (call.inbox / f"dropped.{digest}.json").exists():
-            if time.monotonic() >= deadline:
-                pytest.fail(_watcher_timeout_report(trace, call.inbox))
+            assert time.monotonic() < deadline, "the watcher never imported the file"
             time.sleep(0.05)
     finally:
         watcher.stop()
