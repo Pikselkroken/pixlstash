@@ -77,7 +77,7 @@ RUN pip install --no-cache-dir \
     nvidia-ml-py \
     psutil \
     piexif \
-    watchdog \
+    "watchdog<7" \
     python-dotenv \
     click \
     accelerate \
