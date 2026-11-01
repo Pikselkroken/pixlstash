@@ -505,6 +505,20 @@ function pickGroup(event) {
   event.target.blur();
 }
 
+// A chosen group that leaves the map (another library, a reload without it)
+// would narrow the board to nothing with no word why: it falls back to Any.
+// Ungrouped stays meaningful while any group exists, and goes with the last.
+watch(
+  () => tagGroups.groups,
+  (groups) => {
+    const scope = groupScope.value;
+    if (scope == null) return;
+    const gone =
+      scope === "none" ? !groups.length : !groups.some((g) => g.id === scope);
+    if (gone) groupScope.value = null;
+  },
+);
+
 function inGroupScope(tag) {
   if (groupScope.value == null) return true;
   const group = tagGroups.groupFor(tag);

@@ -61,7 +61,7 @@ def _has_private_vault_access(source: str) -> list[tuple[int, str]]:
 def test_no_private_vault_access_from_routes():
     violations = []
     for path in sorted(_iter_python_files(ROUTES_DIR)):
-        source = path.read_text()
+        source = path.read_text(encoding="utf-8")
         hits = _has_private_vault_access(source)
         for lineno, snippet in hits:
             violations.append(
@@ -118,7 +118,7 @@ def test_no_new_direct_db_calls_from_routes():
         # as_posix(): the allowlist uses "/" separators, but relative_to()
         # yields "\" on Windows - str() would never match the allowlist there.
         rel = path.relative_to(REPO_ROOT).as_posix()
-        if not _DB_CALL_PATTERN.search(path.read_text()):
+        if not _DB_CALL_PATTERN.search(path.read_text(encoding="utf-8")):
             continue
         if rel not in _DIRECT_DB_CALL_ALLOWLIST:
             unlisted_violations.append(rel)
@@ -207,7 +207,7 @@ def test_services_no_direct_db_calls():
     for path in sorted(_iter_python_files(SERVICES_DIR)):
         # as_posix(): allowlist uses "/" separators (see note above).
         rel = path.relative_to(REPO_ROOT).as_posix()
-        source = path.read_text()
+        source = path.read_text(encoding="utf-8")
         if not _DB_CALL_PATTERN.search(source):
             continue
         if rel in _direct_db_call_service_allowlist:
@@ -251,7 +251,7 @@ def _collect_finder_info() -> tuple[set[str], set[str]]:
 
     for path in sorted(TASKS_DIR.glob("*.py")):
         try:
-            tree = ast.parse(path.read_text(), filename=str(path))
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         except SyntaxError:
             continue
         for node in ast.walk(tree):
@@ -540,7 +540,7 @@ def _iter_sink_files():
 def _scan_label_sinks():
     """Yield (rel_path, lineno, enclosing_func_name, guarded, line) for each sink."""
     for path in _iter_sink_files():
-        source = path.read_text()
+        source = path.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(path))
         func_src = {
             node: (ast.get_source_segment(source, node) or "")
@@ -613,7 +613,7 @@ def test_label_sink_guardrail_detects_a_removed_guard():
     # detection is token-driven (not incidental) for a representative sink.
     sample_rel, sample_name = guarded_now[0]
     path = REPO_ROOT / sample_rel
-    source = path.read_text()
+    source = path.read_text(encoding="utf-8")
     stripped = source
     for token in _LOCK_GUARD_TOKENS:
         stripped = stripped.replace(token, "REMOVED_GUARD")
@@ -642,7 +642,7 @@ _LOCK_TAG_CHOKEPOINTS = ("_set_tag", "_reverse_review", "_resolve", "_apply_writ
 def test_lock_chokepoint_callers_are_guarded():
     path = SERVICES_DIR / "tag_suggestion_service.py"
     rel = path.relative_to(REPO_ROOT).as_posix()
-    source = path.read_text()
+    source = path.read_text(encoding="utf-8")
     tree = ast.parse(source, filename=str(path))
     call_res = [re.compile(rf"\b{re.escape(cp)}\s*\(") for cp in _LOCK_TAG_CHOKEPOINTS]
 
@@ -3359,7 +3359,7 @@ def _hub_tables_keyed_on_a_workflow_key() -> set[str]:
     nothing declares a reference to it, so the column's presence is the only
     thing that says a row belongs to a card.
     """
-    source = (REPO_ROOT / "pixlstash" / "hub" / "schema.py").read_text()
+    source = (REPO_ROOT / "pixlstash" / "hub" / "schema.py").read_text(encoding="utf-8")
     return {
         match.group(1)
         for match in re.finditer(

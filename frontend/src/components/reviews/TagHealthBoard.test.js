@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { setActivePinia, createPinia } from "pinia";
 import { mount } from "@vue/test-utils";
-import { h } from "vue";
+import { h, nextTick } from "vue";
 
 vi.mock("../../utils/apiClient", () => ({
   API_BASE_URL: "/api/v1",
@@ -726,5 +726,19 @@ describe("TagHealthBoard: Group scope in Health", () => {
 
     await groupSelect(w).setValue("");
     expect(shownTags(w).sort()).toEqual(["hat", "shirt"]);
+  });
+
+  it("falls back to Any when the chosen group leaves the map", async () => {
+    const tg = seedGroups();
+    store.healthRows = [healthRow({ tag: "shirt" }), healthRow({ tag: "hat" })];
+    const w = mount(TagHealthBoard, { global: globalOpts });
+    await groupSelect(w).setValue("1");
+    expect(shownTags(w)).toEqual(["shirt"]);
+
+    tg.groups = [{ id: 2, name: "Meta", position: 0 }];
+    tg.groupOf = new Map();
+    await nextTick();
+    expect(shownTags(w).sort()).toEqual(["hat", "shirt"]);
+    expect(groupSelect(w).element.value).toBe("");
   });
 });
