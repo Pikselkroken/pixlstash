@@ -117,7 +117,8 @@ export function isQueuedBehindRun(waiting) {
 export function jobStatus(job) {
   switch (job?.status) {
     case "queued":
-      return "Waiting for the GPU";
+      // Only the live view knows a probe is running, as it does a phase.
+      return job.phase === "checking" ? "Checking memory and speed" : "Waiting for the GPU";
     case "running":
       return job.total_steps
         ? `Training ${(job.step ?? 0).toLocaleString()} / ${job.total_steps.toLocaleString()}`

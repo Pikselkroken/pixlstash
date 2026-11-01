@@ -53,6 +53,12 @@ describe("a run's status", () => {
       "Training 0 / 10",
     );
   });
+
+  it("says a queued run whose probe is running is checking, not waiting", () => {
+    expect(jobStatus({ status: "queued", phase: "checking" })).toBe("Checking memory and speed");
+    expect(jobStatus({ status: "queued", phase: "waiting_gpu" })).toBe("Waiting for the GPU");
+    expect(jobStatus({ status: "queued" })).toBe("Waiting for the GPU");
+  });
 });
 
 describe("whether the worker is done with a job (#2291)", () => {

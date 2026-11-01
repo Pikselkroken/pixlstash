@@ -1546,7 +1546,7 @@ _SMALL = {"train.steps": 4, "save.save_every": 2, "sample.sample_every": 2}
 _HOLDS_MB = 9000
 
 
-def _resolve_small(hub, *, vram_mb=22_800, profile=None):
+def _resolve_small(hub, *, vram_mb=22_800, profile=None, prompts=None):
     """The recipe resolved for a two-picture set, with this hub's measurements."""
     return presets.resolve(
         _ZIT,
@@ -1559,6 +1559,7 @@ def _resolve_small(hub, *, vram_mb=22_800, profile=None):
         pins=dict(_SMALL),
         lookup=measurements.make_lookup(hub, _ZIT, commit=None, device=None),
         profile=profile,
+        prompts=prompts,
     )
 
 
@@ -1645,7 +1646,8 @@ def test_an_unmeasured_setup_is_checked_then_learned_from(
         notify=_CapturingNotify(),
         dataset_builder=_make_dataset_builder(),
     )
-    resolution = _resolve_small(hub)
+    prompts = ["t reading", "a man reading", "t at a cafe"]
+    resolution = _resolve_small(hub, prompts=prompts)
     assert resolution["probe"] is True and resolution["profile"] == "q8"
     job = _enqueue_resolved(
         service, resolution, _write_template(repo_dir, steps=4, save_every=2)
@@ -1677,8 +1679,17 @@ def test_an_unmeasured_setup_is_checked_then_learned_from(
         pid is not None and pid == row_pid for pid, row_pid in seen["probe"]
     )
     assert seen["checked"], "the probe never checked for an orphaned pass"
+    # The probe draws one preview; the run draws every prompt.
+    probe_config = os.path.join(
+        os.path.dirname(hub.path), "training", job["uuid"], "probe", ".job_config.json"
+    )
+    with open(probe_config, encoding="utf-8") as fh:
+        probe_samples = json.load(fh)["config"]["process"][0]["sample"]["samples"]
+    assert [s["prompt"] for s in probe_samples] == prompts[:1]
+    run_samples = json.loads(row.rendered_config)["config"]["process"][0]["sample"]
+    assert [s["prompt"] for s in run_samples["samples"]] == prompts
     # The next run of the same setup is admitted on it, with no probe.
-    again = _resolve_small(hub)
+    again = _resolve_small(hub, prompts=prompts)
     assert (again["probe"], again["evidence"]) == (False, "measured")
     assert again["estimate"]["basis"] == "measured"
 

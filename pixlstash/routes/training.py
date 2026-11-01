@@ -58,6 +58,7 @@ from pixlstash.training.config_render import (
     TunableOverrideError,
     normalise_trigger_word,
 )
+from pixlstash.training.local_ai_toolkit import LocalAiToolkit
 from pixlstash.utils.aitoolkit_run import read_output_root, read_run
 from pixlstash.utils.path_utils import path_is_within, resolve_path_within
 from pixlstash.utils.service.export_utils import ExportUtils
@@ -1294,6 +1295,19 @@ def create_router(server) -> APIRouter:
         ):
             phase = shown
         previews = live_view.preview_progress(info) if phase == "previews" else None
+        # A model the trainer has not loaded before is fetched while it loads,
+        # by the probe while checking or by the run itself.
+        downloading = False
+        if phase in ("checking", "loading"):
+            log_path = handle.log_path
+            if phase == "checking":
+                log_path = LocalAiToolkit.handle_for(
+                    os.path.join(handle.work_dir, "probe"),
+                    job["uuid"],
+                    job["name"],
+                    job.get("pid"),
+                ).log_path
+            downloading = live_view.downloading(log_path)
         deferred = bool(resolution.get("previews_deferred"))
 
         columns = live_view.checkpoint_columns(
@@ -1364,6 +1378,7 @@ def create_router(server) -> APIRouter:
             "status": job["status"],
             "phase": phase,
             "previews": previews,
+            "downloading": downloading,
             "previews_deferred": deferred,
             "step": step,
             "total_steps": total,
