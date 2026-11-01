@@ -338,10 +338,14 @@
             data-testid="trl-tips-toggle"
             @update:collapsed="toggleTips"
           />
-          <div v-if="tipsOpen" class="trl-tips-body" data-testid="trl-tips">
-            <div v-for="tip in TIPS" :key="tip.title">
-              <b>{{ tip.title }}</b>
-              <p>{{ tip.text }}</p>
+          <!-- Folded by height, not v-if, so fit() can still measure the tips
+               at the current width. -->
+          <div class="trl-tips-fold" :class="{ 'trl-tips-fold--shut': !tipsOpen }">
+            <div class="trl-tips-body" data-testid="trl-tips">
+              <div v-for="tip in TIPS" :key="tip.title">
+                <b>{{ tip.title }}</b>
+                <p>{{ tip.text }}</p>
+              </div>
             </div>
           </div>
         </section>
@@ -1027,6 +1031,10 @@ const PITCH_MIN = 124;
 const PITCH_MAX = 240;
 const CHART_MIN = 92;
 const CHART_MAX = 280;
+// The cells keep 104 x 76 at the pitch less this gutter (the CSS's
+// --trl-cell-w and --trl-cell-h say the same).
+const CELL_GUTTER = 20;
+const cellHeightAt = (p) => ((p - CELL_GUTTER) * 76) / 104;
 const pitch = ref(PITCH_MIN);
 const chartHeight = ref(CHART_MIN);
 
@@ -1045,7 +1053,7 @@ const TIPS = [
   },
   {
     title: "Pick the step",
-    text: "Use this step under a column makes it the cover: the checkpoint the set or character uses. With none picked, it is the last step.",
+    text: "The Use this step button under a column makes that step the cover: the checkpoint the set or character uses. With none picked, it is the last step.",
   },
 ];
 
@@ -1056,7 +1064,7 @@ const tipsFit = ref(true);
 const tipsOpen = computed(() =>
   tipsChoice.value ? tipsChoice.value === "open" : tipsFit.value,
 );
-// The open tips' height, kept while they are folded to judge whether they fit.
+// The open tips' height, measured folded or not, to judge whether they fit.
 let tipsBodyHeight = 0;
 
 function readTipsChoice() {
@@ -1089,30 +1097,40 @@ function fit() {
   if (!body || !scroll || !board || !row) return;
   const n = columns.value.length || 1;
   const pad = getComputedStyle(scroll);
-  const width =
-    scroll.clientWidth -
-    parseFloat(pad.paddingLeft) -
-    parseFloat(pad.paddingRight) -
-    LABEL_W -
-    (endRef.value?.offsetWidth ?? 0);
-  pitch.value = Math.max(PITCH_MIN, Math.min(PITCH_MAX, Math.floor(width / n)));
-
-  const tipsBody = tipsRef.value?.querySelector(".trl-tips-body");
-  if (tipsBody) tipsBodyHeight = tipsBody.offsetHeight;
-  const tipsHead = (tipsRef.value?.offsetHeight ?? 0) - (tipsBody?.offsetHeight ?? 0);
+  const tipsFold = tipsRef.value?.querySelector(".trl-tips-fold");
+  tipsBodyHeight = tipsRef.value?.querySelector(".trl-tips-body")?.offsetHeight ?? 0;
+  const tipsHead = (tipsRef.value?.offsetHeight ?? 0) - (tipsFold?.offsetHeight ?? 0);
   // The scroller's own padding and its sideways scrollbar.
   const frame =
     scroll.offsetHeight -
     scroll.clientHeight +
     parseFloat(pad.paddingTop) +
     parseFloat(pad.paddingBottom);
+  // Everything in the page but the chart, with the tips folded.
+  const rest =
+    board.offsetHeight - chartHeight.value + frame + tipsHead;
+
+  const width =
+    scroll.clientWidth -
+    parseFloat(pad.paddingLeft) -
+    parseFloat(pad.paddingRight) -
+    LABEL_W -
+    (endRef.value?.offsetWidth ?? 0);
+  // Nor so tall that the prompt rows push the page past the window: a wide,
+  // short window would otherwise scroll down.
+  const rows = live.value?.rows?.length ?? 0;
+  const cellsNow = rows * cellHeightAt(pitch.value);
+  const tallest = rows
+    ? Math.floor(((body.clientHeight - (rest - cellsNow) - CHART_MIN) / rows) * (104 / 76)) +
+      CELL_GUTTER
+    : PITCH_MAX;
+  pitch.value = Math.max(
+    PITCH_MIN,
+    Math.min(PITCH_MAX, Math.floor(width / n), tallest),
+  );
+
   // The height left for the chart with the tips folded.
-  const room =
-    body.clientHeight -
-    (board.offsetHeight - row.offsetHeight) -
-    (row.offsetHeight - chartHeight.value) -
-    frame -
-    tipsHead;
+  const room = body.clientHeight - rest;
   tipsFit.value = room - tipsBodyHeight >= CHART_MIN;
   const left = room - (tipsOpen.value ? tipsBodyHeight : 0);
   chartHeight.value = Math.max(CHART_MIN, Math.min(CHART_MAX, left));
@@ -1817,6 +1835,13 @@ img.trl-cell {
   flex: none;
   padding: 0 var(--space-4);
   border-top: 1px solid rgb(var(--v-theme-divider));
+}
+
+/* Folded: no height and out of the accessibility tree, still laid out. */
+.trl-tips-fold--shut {
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
 }
 
 .trl-tips-body {

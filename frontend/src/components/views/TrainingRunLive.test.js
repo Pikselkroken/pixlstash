@@ -730,15 +730,16 @@ describe("leaving the run with Escape, as the back button's keycap says", () => 
     window.localStorage.removeItem("pixlstash.trainingRunTips");
     const first = await open(payload());
     // jsdom lays nothing out, so nothing says the tips do not fit.
-    expect(first.find("[data-testid='trl-tips']").exists()).toBe(true);
+    expect(first.find(".trl-tips-fold--shut").exists()).toBe(false);
     await first.find(".section-head__chevron").trigger("click");
-    expect(first.find("[data-testid='trl-tips']").exists()).toBe(false);
+    expect(first.find(".trl-tips-fold--shut").exists()).toBe(true);
     expect(first.find(".trl-tips").text()).toContain("4 tips on what to look for");
     first.unmount();
     mounted.length = 0;
     const second = await open(payload());
-    expect(second.find("[data-testid='trl-tips']").exists()).toBe(false);
+    expect(second.find(".trl-tips-fold--shut").exists()).toBe(true);
     await second.find(".section-head__chevron").trigger("click");
+    expect(second.find(".trl-tips-fold--shut").exists()).toBe(false);
     expect(second.find("[data-testid='trl-tips']").text()).toContain("Pick the step");
     expect(window.localStorage.getItem("pixlstash.trainingRunTips")).toBe("open");
     window.localStorage.removeItem("pixlstash.trainingRunTips");
