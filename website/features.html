@@ -7,7 +7,7 @@
     <title>Features | PixlStash</title>
     <meta
       name="description"
-      content="Explore PixlStash features including full undo and redo, duplicate review, AI tagging, semantic search, smart scoring, face detection, and more."
+      content="Explore PixlStash features: AI tagging, semantic search and face recognition, ComfyUI workflows and recipes, inpainting, the folders you already have, several libraries, a model shelf, undo, duplicate review and more."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -348,48 +348,114 @@
             machine.
           </p>
         </div>
-        <div class="feature-grid feature-grid--primary">
-          <div class="feature-card">
-            <h3>Semantic search</h3>
+        <div class="shot-grid">
+          <div class="shot">
+            <div class="shot-label"><h4>Semantic search</h4></div>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/SemanticSearch.jpg"
+                data-full="assets/SemanticSearch.jpg"
+                alt="The search field with a plain-language query typed in: search descriptions and text for a person smiling outdoors"
+                loading="lazy"
+              />
+            </button>
             <p>
               Describe what you are looking for and get pictures back, tagged or
-              not. CLIP embeddings, computed locally.
+              not. CLIP embeddings, computed locally. Text in documents,
+              receipts and screenshots is read too, and every search matches
+              it.
             </p>
           </div>
-          <div class="feature-card">
-            <h3>Face recognition</h3>
+          <div class="shot">
+            <div class="shot-label"><h4>Face recognition</h4></div>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/ScreenshotGridSimilarity.jpg"
+                data-full="assets/ScreenshotGridSimilarity.jpg"
+                alt="The grid sorted by likeness to one person, every picture of her face first"
+                loading="lazy"
+              />
+            </button>
             <p>
-              Faces are detected, embedded and grouped into characters you name.
-              Search the library by uploading one face.
+              Faces are detected, embedded and grouped into people you name.
+              Sort the grid by likeness to a person to find the pictures they
+              are in, or search the library by one face.
             </p>
           </div>
-          <div class="feature-card">
-            <h3>Tagging and captions</h3>
+          <div class="shot">
+            <div class="shot-label"><h4>Tagging and captions</h4></div>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/ScreenshotImageOverlay2.jpg"
+                data-full="assets/ScreenshotImageOverlay2.jpg"
+                alt="The picture viewer with a labelled box on the face, and beside it the picture's tags, the tags it rejected with their confidence, and its generated description"
+                loading="lazy"
+              />
+            </button>
             <p>
               PixlStash Tagger, WD14, Florence-2 or JoyCaption, chosen per
-              request rather than per install. Re-tag any selection from the
-              context menu.
+              request rather than per install. Review and edit the tags and
+              description, or re-tag any selection from the context menu.
             </p>
           </div>
-          <div class="feature-card">
-            <h3>Label review queue</h3>
+          <div class="shot">
+            <div class="shot-label"><h4>Label review queue</h4></div>
+            <div class="shot-image-pair">
+              <button class="shot-image-btn" type="button">
+                <img
+                  src="assets/ScreenshotReview1.jpg"
+                  data-full="assets/ScreenshotReview1.jpg"
+                  alt="A tag review card asking whether a picture should have the tag malformed hand, with similar pictures beside it"
+                  loading="lazy"
+                />
+              </button>
+              <button class="shot-image-btn" type="button">
+                <img
+                  src="assets/ScreenshotReview3.jpg"
+                  data-full="assets/ScreenshotReview3.jpg"
+                  alt="The tag health table ranking tags by review priority with estimated wrong and missing counts"
+                  loading="lazy"
+                />
+              </button>
+            </div>
             <p>
-              A ranked queue of the tags the models most likely got wrong, plus
-              a health board per tag. Auto-tags become tags you can trust.
+              A ranked queue of the tags the models most likely got wrong or
+              missed, one question per picture, answered with a click or a
+              key. A health board per tag shows where to look next.
             </p>
           </div>
-          <div class="feature-card">
-            <h3>Quality and anomaly scoring</h3>
+          <div class="shot">
+            <div class="shot-label"><h4>Object detection</h4></div>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/ScreenshotSegmentation.jpg"
+                data-full="assets/ScreenshotSegmentation.jpg"
+                alt="Labelled boxes drawn around a camera, a toy car and starfish in a picture of a desk"
+                loading="lazy"
+              />
+            </button>
             <p>
-              Smart score sorts a large set by what is worth looking at, with a
-              calibrated penalty for malformed anatomy and render defects.
+              Detect the objects in a picture and draw labelled boxes over them.
+              Export the boxes as COCO or Ideogram JSON for training and
+              annotation pipelines.
             </p>
           </div>
-          <div class="feature-card">
-            <h3>Round trip to ComfyUI</h3>
+          <div class="shot">
+            <div class="shot-label">
+              <h4>Context menus and reverse search</h4>
+            </div>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/ReverseImageSearch.jpg"
+                data-full="assets/ReverseImageSearch.jpg"
+                alt="The grid's right-click menu with its Find &amp; compare submenu open, offering Reverse image search and Compare"
+                loading="lazy"
+              />
+            </button>
             <p>
-              Generate from a selection and the results come back tagged, with
-              their people, sets and projects already attached.
+              Right-click a picture to tag, assign, share or delete it without
+              leaving the view, or to find visually similar pictures and other
+              pictures of the same face.
             </p>
           </div>
         </div>
@@ -407,77 +473,217 @@
             workflow needs, downloaded where you want them.
           </p>
         </div>
-        <div class="feature-grid feature-grid--primary">
-          <div class="feature-card">
-            <h3>A Workflows screen</h3>
+        <div class="shot-grid">
+          <div class="shot">
+            <div class="shot-label"><h4>A Workflows screen</h4></div>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/Workflows.jpg"
+                data-full="assets/Workflows.jpg"
+                alt="The Workflows screen: a grid of workflow cards, each covered with the pictures it made and labelled with its checkpoint, LoRAs and type, beside the inspector for the selected workflow"
+                loading="lazy"
+              />
+            </button>
             <p>
               Every workflow your pictures were made with, plus the files you
               add, as a card covered with the pictures it made. The one-offs
-              are folded away until you ask for them.
+              are folded away until you ask for them. Drop a workflow .json on
+              the screen to add it.
             </p>
           </div>
-          <div class="feature-card">
-            <h3>A recipe on every picture</h3>
+          <div class="shot">
+            <div class="shot-label"><h4>A recipe on every picture</h4></div>
+            <video
+              src="assets/WorkflowPictures.mp4"
+              aria-label="Going from a workflow card to the pictures it made, and from a picture to its Recipe tab"
+              autoplay
+              loop
+              muted
+              playsinline
+              preload="metadata"
+            ></video>
             <p>
               The workflow, prompt, models, LoRA strengths, settings and seed
               behind a picture made in ComfyUI, A1111 or Forge. Videos too.
-              Save the look as a recipe and run it again.
+              Save the look as a recipe and run it again, or open a workflow's
+              pictures in one click.
             </p>
           </div>
-          <div class="feature-card">
-            <h3>One Run window</h3>
+          <div class="shot">
+            <div class="shot-label"><h4>One Run window</h4></div>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/RunWorkflow.jpg"
+                data-full="assets/RunWorkflow.jpg"
+                alt="The Run workflow window with the prompt, a choice of person, LoRAs, size, steps, CFG, count, seed and checkpoint"
+                loading="lazy"
+              />
+            </button>
             <p>
               Run a workflow, make more like a picture, or run a workflow on a
               selection from the same window, with every value filled in and
-              editable. A run that does not fit in GPU memory waits for room
-              instead of running out of it.
+              editable.
             </p>
           </div>
-          <div class="feature-card">
-            <h3>Create with LoRA</h3>
+          <div class="shot">
+            <div class="shot-label"><h4>Create with LoRA</h4></div>
+            <video
+              src="assets/LinkingComfyUIAndCharacter.mp4"
+              aria-label="Connecting ComfyUI from Settings, then right-clicking a person and choosing Create with LoRA"
+              autoplay
+              loop
+              muted
+              playsinline
+              preload="metadata"
+            ></video>
             <p>
-              Right-click a person or set to make new pictures with their LoRA.
-              Or pick two people in the Run window, describe them both, and get
+              One click in Settings installs the PixlStash nodes into your
+              ComfyUI and links the two apps. Then right-click a person or set
+              to make new pictures with their LoRA, filed back under them.
+            </p>
+          </div>
+          <div class="shot">
+            <div class="shot-label"><h4>Two people in one picture</h4></div>
+            <video
+              src="assets/WorkflowsMultipleLoRAs.mp4"
+              aria-label="Picking two people in the Run window, each with their own LoRA row, and the picture that comes back"
+              autoplay
+              loop
+              muted
+              playsinline
+              preload="metadata"
+            ></video>
+            <p>
+              Pick two people in the Run window, describe them both, and get
               one picture with both in it.
             </p>
           </div>
-          <div class="feature-card">
-            <h3>ComfyUI, linked both ways</h3>
+          <div class="shot">
+            <div class="shot-label"><h4>Open in ComfyUI, save back</h4></div>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/EditInComfyUI.jpg"
+                data-full="assets/EditInComfyUI.jpg"
+                alt="A workflow opened in ComfyUI from PixlStash, with PixlStash loader nodes in the graph and a notice that it was saved to PixlStash as version 6"
+                loading="lazy"
+              />
+            </button>
             <p>
-              One click in Settings installs the PixlStash nodes into your
-              ComfyUI and links the two apps. Open a workflow in
-              ComfyUI and Ctrl+S saves it back to PixlStash as a new version.
+              Open a workflow in ComfyUI with its models loading off your
+              shelf, and Ctrl+S saves it back to PixlStash as a new version.
+              The version menu takes you back to any earlier one.
             </p>
           </div>
-          <div class="feature-card">
-            <h3>Workflows that fix themselves</h3>
+          <div class="shot">
+            <div class="shot-label"><h4>Pin or expose parameters</h4></div>
+            <video
+              src="assets/WorkflowParameters.mp4"
+              aria-label="Locking a parameter in the Workflow tab and adding a node setting as a new named parameter"
+              autoplay
+              loop
+              muted
+              playsinline
+              preload="metadata"
+            ></video>
+            <p>
+              Lock a parameter and the Run window stops asking for it, or
+              expose any setting of any node under a name you choose.
+            </p>
+          </div>
+          <div class="shot">
+            <div class="shot-label"><h4>Workflows that fix themselves</h4></div>
+            <video
+              src="assets/FixingWorkflows.mp4"
+              aria-label="A workflow card reporting a missing checkpoint, and a replacement picked from the model shelf"
+              autoplay
+              loop
+              muted
+              playsinline
+              preload="metadata"
+            ></video>
             <p>
               Swap a missing checkpoint, VAE or text encoder for one on your
               shelf. A missing LoRA or custom seed node no longer stops a run.
             </p>
           </div>
-          <div class="feature-card">
-            <h3>Inpaint in the picture viewer</h3>
+          <div class="shot">
+            <div class="shot-label"><h4>Workflow sets</h4></div>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/WorkflowSets.jpg"
+                data-full="assets/WorkflowSets.jpg"
+                alt="Workflow sets on the model shelf: a card per checkpoint, one opened to show its text encoders, VAE, LoRAs and upscalers"
+                loading="lazy"
+              />
+            </button>
             <p>
-              Mark an area with the Edit tab's paint tools and an inpaint
-              workflow redraws only that. Three come with PixlStash, Qwen Image
-              2.1, Qwen Image Edit 2511 and FLUX.2 Klein 9B, or use your own.
+              A card per checkpoint lists every VAE, text encoder and LoRA that
+              has run beside it, and picks up new ones by itself. Use a set to
+              swap a workflow's models in one go.
             </p>
           </div>
-          <div class="feature-card">
-            <h3>Every ComfyUI template</h3>
+          <div class="shot">
+            <div class="shot-label"><h4>Every ComfyUI template</h4></div>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/TemplateDownloads.jpg"
+                data-full="assets/TemplateDownloads.jpg"
+                alt="The Workflows screen's Templates tab: a grid of ComfyUI template cards marked Ready to run or with how many files are missing, and the inspector for FLUX.2 Klein 9B Image Edit listing its three models, two of them on the shelf and one with a download button"
+                loading="lazy"
+              />
+            </button>
             <p>
               A Templates tab lists the templates your ComfyUI serves, with the
               files each needs and the ones you have. One you add loads from
               your library and shelf.
             </p>
           </div>
-          <div class="feature-card">
-            <h3>Missing models, downloaded</h3>
+          <div class="shot">
+            <div class="shot-label"><h4>Missing models, downloaded</h4></div>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/ModelDownload.jpg"
+                data-full="assets/ModelDownload.jpg"
+                alt="The Tasks tab during a model download: the GPU memory bar, and a running row for a 19 GB Qwen Image checkpoint with a progress bar and a cancel button"
+                loading="lazy"
+              />
+            </button>
             <p>
               Download a missing model or LoRA from inside PixlStash, into the
-              Download folder you set in Settings › Model folders, straight onto your
-              shelf.
+              Download folder you set in Settings › Model folders, straight onto
+              your shelf.
+            </p>
+          </div>
+          <div class="shot">
+            <div class="shot-label"><h4>Runs wait for the GPU</h4></div>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/WaitingForGPU.png"
+                data-full="assets/WaitingForGPU.png"
+                alt="The Tasks tab with a ComfyUI inpaint run under Waiting for the GPU, needing 16.1 GB while 4.4 GB of 31.8 GB is free, and PixlStash's own CPU, RAM and VRAM use below"
+                loading="lazy"
+              />
+            </button>
+            <p>
+              A run that does not fit in GPU memory waits for room instead of
+              running out of it, and PixlStash steps aside for ComfyUI.
+            </p>
+          </div>
+          <div class="shot">
+            <div class="shot-label"><h4>Runs in the Tasks tab</h4></div>
+            <video
+              src="assets/RunningWorkflow.mp4"
+              aria-label="A workflow run progressing in the Tasks tab and its pictures arriving in the library"
+              autoplay
+              loop
+              muted
+              playsinline
+              preload="metadata"
+            ></video>
+            <p>
+              A run keeps its row in the Tasks tab until ComfyUI is done, and
+              the results come back tagged, with their people, sets and
+              projects already attached. A failed run says which node failed.
             </p>
           </div>
         </div>
@@ -488,12 +694,13 @@
 
       <section class="section">
         <div class="section-header">
-          <h2 class="section-title">Inpaint and compare</h2>
+          <h2 class="section-title">Inpaint, crop and compare</h2>
           <p class="section-subtitle">
             Mark part of a picture in the Edit tab, say what goes there, and an
             inpaint workflow redraws only that part. Three come with PixlStash,
             Qwen Image 2.1, Qwen Image Edit 2511 and FLUX.2 Klein 9B, and your
-            own inpaint workflows show up in the same list.
+            own inpaint workflows show up in the same list. Cropping needs no
+            ComfyUI at all.
           </p>
         </div>
         <div class="shot-grid">
@@ -501,6 +708,7 @@
             <div class="shot-label"><h4>Paint a selection</h4></div>
             <video
               src="assets/Inpainting.mp4"
+              aria-label="Marking part of a picture with the Edit tab's paint tools and running an inpaint edit on it"
               autoplay
               loop
               muted
@@ -517,6 +725,7 @@
             <div class="shot-label"><h4>One edit after another</h4></div>
             <video
               src="assets/InpaintBoth.mp4"
+              aria-label="Two inpaint edits on a picture of garden gnomes: an axe head on one rod, blue lipstick on another gnome"
               autoplay
               loop
               muted
@@ -533,6 +742,7 @@
             <div class="shot-label"><h4>Compare any two pictures</h4></div>
             <video
               src="assets/ComparisonSlider.mp4"
+              aria-label="Two pictures laid over each other with a slider dragged across to compare them"
               autoplay
               loop
               muted
@@ -553,60 +763,90 @@
           <h2 class="section-title">The folders you already have</h2>
           <p class="section-subtitle">
             Point PixlStash at a folder and it reads it where it sits, turning
-            the folder names you already chose into projects, people and sets, without moving, renaming or copying a file.
+            the folder names you already chose into projects, people and sets,
+            without moving, renaming or copying a file.
           </p>
         </div>
-        <div class="feature-grid feature-grid--primary">
-          <div class="feature-card">
-            <h3>Add a library from Settings</h3>
+        <div class="shot-grid">
+          <div class="shot">
+            <div class="shot-label"><h4>Add a library from Settings</h4></div>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/ScreenshotAddLibrary.jpg"
+                data-full="assets/ScreenshotAddLibrary.jpg"
+                alt="The Add a library dialog with a folder picked, PixlStash reporting what that folder is and what adding it would mean"
+                loading="lazy"
+              />
+            </button>
             <p>
               One folder picker, and the folder answers. A library you already
-              made is added as it is, with its tags, scores and people. A folder
-              of pictures is counted and offered. An empty folder starts a fresh
-              library. A folder another library already covers is refused, and
-              the refusal names that library.
+              made is added as it is, a folder of pictures is counted and
+              offered, and an empty folder starts a fresh library. A folder
+              another library already covers is refused, by name.
             </p>
           </div>
-          <div class="feature-card">
-            <h3>Read what your folders mean</h3>
+          <div class="shot">
+            <div class="shot-label"><h4>Read what your folders mean</h4></div>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/ScreenshotMapTree.jpg"
+                data-full="assets/ScreenshotMapTree.jpg"
+                alt="The folder mapping screen with three folder levels, each labelled as a project, a person or a set, with per-row overrides"
+                loading="lazy"
+              />
+            </button>
             <p>
               PixlStash proposes what each folder level is: project, set,
-              person, tag or just a folder based on the context of each picture.
+              person, tag or just a folder, from what the pictures in it show.
+              You make the final decision.
             </p>
           </div>
-          <div class="feature-card">
-            <h3>Nothing written until you agree</h3>
+          <div class="shot">
+            <div class="shot-label"><h4>Nothing written until you agree</h4></div>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/ScreenshotMapPreview.jpg"
+                data-full="assets/ScreenshotMapPreview.jpg"
+                alt="The review screen listing the projects, sets and people the folders will become, above a summary of what pressing the button does"
+                loading="lazy"
+              />
+            </button>
             <p>
-              The review screen names every project, set and person your folders
-              are about to become, and says plainly that no file is copied, moved
-              or renamed. Organise later brings the pictures in and leaves the
-              naming for another day; an interrupted import resumes.
+              The review screen names every project, set and person your
+              folders are about to become, and says plainly that no file is
+              copied, moved or renamed. An interrupted import resumes.
             </p>
           </div>
-          <div class="feature-card">
-            <h3>A folder layout for what comes next</h3>
+          <div class="shot">
+            <div class="shot-label"><h4>A new library's first screen</h4></div>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/ScreenshotEmptyLibrary.jpg"
+                data-full="assets/ScreenshotEmptyLibrary.jpg"
+                alt="The first screen of a new library, offering a folder you already have, dropping pictures in, or connecting ComfyUI"
+                loading="lazy"
+              />
+            </button>
             <p>
-              Give a library a layout (with folders for projects, people or sets) and
-              PixlStash writes new pictures into this layout. This does not move pictures
-              already in the library.
+              An empty library offers three ways in: a folder you already have,
+              pictures dropped onto the window, or a ComfyUI to connect.
             </p>
           </div>
-          <div class="feature-card">
-            <h3>Move to match, never behind your back</h3>
-            <p>
-              A picture moves only when its folder stops being true, so adding a
-              second project or person moves nothing. Where a picture is filed
-              truthfully but not where the layout would put it today, the move is
-              offered, counted first, and undone as one batch.
-            </p>
-          </div>
-          <div class="feature-card">
-            <h3>Export straight into a folder</h3>
+          <div class="shot">
+            <div class="shot-label"><h4>Export straight into a folder</h4></div>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/ScreenshotExportFolder.jpg"
+                data-full="assets/ScreenshotExportFolder.jpg"
+                alt="The export panel for the selected pictures, with Export to Folder under the Export button"
+                loading="lazy"
+              />
+            </button>
             <p>
               Export the pictures you selected into a folder on the machine
-              running PixlStash, which then opens in your file manager. Captions,
-              resolution, sidecars and face crops come out as the zip export
-              produces them, without the round trip through downloads.
+              running PixlStash. Captions, resolution, sidecars and face crops
+              come out as the zip export produces them, without the round trip
+              through downloads.
             </p>
           </div>
         </div>
@@ -621,133 +861,24 @@
             terminal.
           </p>
         </div>
-        <div class="feature-grid feature-grid--primary">
-          <div class="feature-card">
-            <h3>Several picture libraries</h3>
+        <div class="shot-grid">
+          <div class="shot">
+            <div class="shot-label"><h4>Several picture libraries</h4></div>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/ScreenshotLibrariesManage.jpg"
+                data-full="assets/ScreenshotLibrariesManage.jpg"
+                alt="Settings with several libraries listed and one row's menu open, offering switch, rename and stop using"
+                loading="lazy"
+              />
+            </button>
             <p>
               Register more than one library and keep one open at a time.
-              Pictures, tags, scores and snapshots stay with their library, while
-              your account, your preferences and the model shelf stay with the
-              installation. Switch from Settings → Libraries & imports.
+              Pictures, tags, scores, snapshots, API tokens and share links stay
+              with their library; your account, preferences and model shelf stay
+              with the installation. Move pictures from one library to another.
             </p>
           </div>
-          <div class="feature-card">
-            <h3>Tokens and links per library</h3>
-            <p>
-              API tokens and share links belong to the library that created them.
-              They go quiet while another library is open and work again when you
-              switch back, and Settings warns you before you switch away from a
-              library with live share links.
-            </p>
-          </div>
-          <div class="feature-card">
-            <h3>Model shelf</h3>
-            <p>
-              Register the folders holding your checkpoints and LoRAs and see
-              what is in them: kind, base model, size, and every folder a copy
-              sits in. Group and sort the shelf, move a model between folders, or
-              delete one to your Trash.
-            </p>
-          </div>
-          <div class="feature-card">
-            <h3>Training runs and versions</h3>
-            <p>
-              Read an ai-toolkit run where it was written, then import it with
-              its sample images. Versions of one subject group behind a single
-              row, so a character you have trained four times is one entry with
-              its history under it.
-            </p>
-          </div>
-          <div class="feature-card">
-            <h3>A command line</h3>
-            <p>
-              pixlstash-cli manages libraries, writes and restores backups, and
-              installs plugins. Every command documents itself, including the
-              exit codes a script needs, so a nightly backup is one cron line.
-              The desktop app can run it without being open.
-            </p>
-          </div>
-          <div class="feature-card">
-            <h3>Folder permission repair</h3>
-            <p>
-              The desktop app checks at start-up whether another account on the
-              computer can write to your library folder, and offers to tighten
-              the permissions. It changes permissions only, and leaves your own
-              access alone.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      <section class="section">
-        <div class="section-header">
-          <h2 class="section-title">Work with confidence</h2>
-          <p class="section-subtitle">
-            Reverse everyday edits across your library, review duplicate
-            candidates, and keep people and sets organised across projects.
-          </p>
-        </div>
-        <div class="feature-grid feature-grid--primary">
-          <div class="feature-card">
-            <h3>Undo, redo, and history</h3>
-            <p>
-              Reverse soft-deletion, tagging, description edits, image
-              assignments, moves, and duplicate decisions with standard keyboard
-              shortcuts or toolbar controls. Open the history to inspect recent changes or step
-              back several steps at once.
-            </p>
-          </div>
-          <div class="feature-card">
-            <h3>Duplicate review</h3>
-            <p>
-              Work through likely duplicate groups in a dedicated queue. Compare
-              candidates, group pictures, exclude mismatches, stack the group,
-              or keep it separate. Undo the decision if it was not right.
-              Optional near-duplicate tiers and a similarity threshold put you
-              in control of how broadly PixlStash searches.
-            </p>
-          </div>
-          <div class="feature-card">
-            <h3>Stack cleanup</h3>
-            <p>
-              Filter a view to stacked or unstacked pictures. Keep cover only
-              previews a stack cleanup, keeps its cover, and sends the other
-              copies to the recoverable Scrapheap without deleting originals
-              from disk.
-            </p>
-          </div>
-          <div class="feature-card">
-            <h3>Multi-project organisation</h3>
-            <p>
-              Add one character or picture set to several projects at the same
-              time. Its pictures appear in each project, while removing one
-              membership leaves every other project alone.
-            </p>
-          </div>
-          <div class="feature-card">
-            <h3>Suggest more pictures</h3>
-            <p>
-              Start from a person and rank the library by face likeness. Adjust
-              the match, review the result, and assign all found pictures or
-              only your current selection in one action.
-            </p>
-          </div>
-          <div class="feature-card">
-            <h3>Privacy controls</h3>
-            <p>
-              Update checks and anonymous install telemetry have their own
-              independent controls. Both are off until you enable them, and the
-              Privacy pane states what is and is not sent.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      <section class="section">
-        <div class="section-header">
-          <h2 class="section-title">A UI focused on the work</h2>
-        </div>
-        <div class="shot-grid">
           <div class="shot">
             <div class="shot-label"><h4>Model shelf</h4></div>
             <button class="shot-image-btn" type="button">
@@ -759,38 +890,102 @@
               />
             </button>
             <p>
-              See the checkpoints and LoRAs in the folders you register, grouped
-              by kind, base model, folder or feature.
+              Register the folders holding your checkpoints and LoRAs and see
+              what is in them: kind, base model, size, and every folder a copy
+              sits in. Group and sort the shelf, move a model between folders,
+              or delete one to your Trash.
             </p>
           </div>
           <div class="shot">
-            <div class="shot-label"><h4>Libraries</h4></div>
+            <div class="shot-label"><h4>Training runs and versions</h4></div>
             <button class="shot-image-btn" type="button">
               <img
-                src="assets/ScreenshotLibraries.jpg"
-                data-full="assets/ScreenshotLibraries.jpg"
-                alt="PixlStash Settings with two registered picture libraries and the active one marked"
+                src="assets/ScreenshotAiToolkitImport.jpg"
+                data-full="assets/ScreenshotAiToolkitImport.jpg"
+                alt="The Training runs view with three discovered ai-toolkit runs selected for import"
                 loading="lazy"
               />
             </button>
             <p>
-              Switch between registered libraries from Settings. Each one keeps
-              its own pictures, tags, scores and snapshots.
+              Read an ai-toolkit run where it was written, then import it with
+              its sample images. Versions of one subject group behind a single
+              row.
             </p>
           </div>
           <div class="shot">
-            <div class="shot-label"><h4>Full undo and redo</h4></div>
+            <div class="shot-label"><h4>A command line</h4></div>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/ScreenshotCli.jpg"
+                data-full="assets/ScreenshotCli.jpg"
+                alt="pixlstash-cli --help in a terminal, listing the libraries and plugins command groups and the exit codes"
+                loading="lazy"
+              />
+            </button>
+            <p>
+              pixlstash-cli manages libraries, writes and restores backups, and
+              installs plugins. Every command documents itself, including the
+              exit codes a script needs, so a nightly backup is one cron line.
+            </p>
+          </div>
+          <div class="shot">
+            <div class="shot-label"><h4>Plugins</h4></div>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/ScreenshotCliPlugins.jpg"
+                data-full="assets/ScreenshotCliPlugins.jpg"
+                alt="pixlstash-cli plugins available listing the published captioning plugins and image filters with their licences"
+                loading="lazy"
+              />
+            </button>
+            <p>
+              Extend PixlStash with Python plugins for captioning and image
+              filters. Find a published one by name and install it from the
+              command line, then apply filters to a selection from the grid.
+            </p>
+          </div>
+          <div class="shot">
+            <div class="shot-label"><h4>Folder permission repair</h4></div>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/ScreenshotPermissionRepair.jpg"
+                data-full="assets/ScreenshotPermissionRepair.jpg"
+                alt="The start-up screen listing library folders whose permissions are open to other accounts, with Quit and Fix it"
+                loading="lazy"
+              />
+            </button>
+            <p>
+              The desktop app checks at start-up whether another account on the
+              computer can write to your library folder, and offers to tighten
+              the permissions. Your own access is left alone.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-header">
+          <h2 class="section-title">Work with confidence</h2>
+          <p class="section-subtitle">
+            Reverse everyday edits, review duplicate candidates, roll back to
+            a snapshot, and keep people and sets organised across projects.
+          </p>
+        </div>
+        <div class="shot-grid">
+          <div class="shot">
+            <div class="shot-label"><h4>Undo, redo, and history</h4></div>
             <button class="shot-image-btn" type="button">
               <img
                 src="assets/ScreenshotUndoHistory.jpg"
                 data-full="assets/ScreenshotUndoHistory.jpg"
-                alt="PixlStash history showing several recent library changes and multi-step undo"
+                alt="The history menu listing several recent library changes with Undo and Redo controls"
                 loading="lazy"
               />
             </button>
             <p>
-              Inspect named changes, undo one or several steps, and redo them
-              across metadata edits, assignments, moves, and stack decisions.
+              Reverse soft-deletion, tagging, description edits, assignments,
+              moves and duplicate decisions with the usual shortcuts or the
+              toolbar. Open the history to step back several changes at once.
             </p>
           </div>
           <div class="shot">
@@ -799,13 +994,56 @@
               <img
                 src="assets/ScreenshotDuplicates.jpg"
                 data-full="assets/ScreenshotDuplicates.jpg"
-                alt="PixlStash Duplicates view with likely copies grouped for review"
+                alt="The Duplicates view with likely copies grouped for review"
                 loading="lazy"
               />
             </button>
             <p>
-              Compare likely copies, choose a cover, stack the group, keep it
-              separate, and undo the decision when it was not right.
+              Work through likely duplicate groups in a dedicated queue:
+              compare, choose a cover, stack the group or keep it separate, and
+              undo the decision if it was not right. A similarity threshold sets
+              how broadly PixlStash searches.
+            </p>
+          </div>
+          <div class="shot">
+            <div class="shot-label"><h4>Stack cleanup</h4></div>
+            <div class="shot-image-pair">
+              <button class="shot-image-btn" type="button">
+                <img
+                  src="assets/ScreenshotStackFilter.jpg"
+                  data-full="assets/ScreenshotStackFilter.jpg"
+                  alt="The grid filtered to show only stacked pictures"
+                  loading="lazy"
+                />
+              </button>
+              <button class="shot-image-btn" type="button">
+                <img
+                  src="assets/ScreenshotKeepCoverOnly2.jpg"
+                  data-full="assets/ScreenshotKeepCoverOnly2.jpg"
+                  alt="The Keep cover only preview showing three pictures moving to the recoverable Scrapheap in one undoable step"
+                  loading="lazy"
+                />
+              </button>
+            </div>
+            <p>
+              Filter a view to stacked or unstacked pictures. Keep cover only
+              previews a cleanup, keeps the stack's cover, and sends the other
+              copies to the recoverable Scrapheap.
+            </p>
+          </div>
+          <div class="shot">
+            <div class="shot-label"><h4>Stacks that no longer fit</h4></div>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/ScreenshotMixedStacks.jpg"
+                data-full="assets/ScreenshotMixedStacks.jpg"
+                alt="The Mixed stacks view showing stacks flagged for review"
+                loading="lazy"
+              />
+            </button>
+            <p>
+              Stacks whose pictures no longer look like one another are flagged
+              in a review queue of their own.
             </p>
           </div>
           <div class="shot">
@@ -814,128 +1052,47 @@
               <img
                 src="assets/ScreenshotMultiProject.jpg"
                 data-full="assets/ScreenshotMultiProject.jpg"
-                alt="One PixlStash character assigned to more than one project"
+                alt="The sidebar showing one person listed under more than one project"
                 loading="lazy"
               />
             </button>
             <p>
-              Keep one person or picture set in several projects without
-              duplicating it or moving it back and forth.
+              Add one person or picture set to several projects. Its pictures
+              appear in each, and removing one membership leaves the others
+              alone.
             </p>
           </div>
           <div class="shot">
-            <div class="shot-label"><h4>Image grid</h4></div>
-            <button class="shot-image-btn" type="button">
-              <img
-                src="assets/ScreenshotGrid.jpg"
-                data-full="assets/ScreenshotGrid.jpg"
-                alt="PixlStash grid view"
-                loading="lazy"
-              />
-            </button>
-            <p>Pretty image view with scoring, stacking and sorting.</p>
-          </div>
-          <div class="shot">
-            <div class="shot-label"><h4>Justified or square layout</h4></div>
-            <div class="shot-image-pair">
-              <button class="shot-image-btn" type="button">
-                <img
-                  src="assets/ScreenshotsJustified.jpg"
-                  data-full="assets/ScreenshotsJustified.jpg"
-                  alt="PixlStash justified grid with thumbnails at their own aspect ratios filling each row to the full grid width"
-                  loading="lazy"
-                />
-              </button>
-              <button class="shot-image-btn" type="button">
-                <img
-                  src="assets/ScreenshotsJustifiedSettings.jpg"
-                  data-full="assets/ScreenshotsJustifiedSettings.jpg"
-                  alt="PixlStash Appearance settings with a Square and Justified thumbnail layout picker"
-                  loading="lazy"
-                />
-              </button>
-            </div>
+            <div class="shot-label"><h4>Suggest more pictures</h4></div>
+            <video
+              src="assets/SuggestMorePictures.mp4"
+              aria-label="Starting from a person, ranking the library by face likeness and assigning the matches"
+              autoplay
+              loop
+              muted
+              playsinline
+              preload="metadata"
+            ></video>
             <p>
-              Thumbnails can keep their own aspect ratio and fill each row to
-              the full grid width, or stay as squares. One size control in the
-              toolbar, from Tiny to Huge, sets the thumbnail size in both
-              layouts.
+              Start from a person or a picture set and rank the library by
+              likeness. Adjust the match, review the result, and assign what
+              was found in one action.
             </p>
           </div>
           <div class="shot">
-            <div class="shot-label"><h4>Project Organisation</h4></div>
+            <div class="shot-label"><h4>Lock a set when it is done</h4></div>
             <button class="shot-image-btn" type="button">
               <img
-                src="assets/ScreenshotProject.jpg"
-                data-full="assets/ScreenshotProject.jpg"
-                alt="PixlStash project organisation view"
+                src="assets/ScreenshotLockSets.jpg"
+                data-full="assets/ScreenshotLockSets.jpg"
+                alt="A picture set's right-click menu in the sidebar with Lock set among its options"
                 loading="lazy"
               />
             </button>
             <p>
-              Organise your projects efficiently with intuitive controls and
-              additional metadata (here in dark theme)
-            </p>
-          </div>
-          <div class="shot">
-            <div class="shot-label"><h4>Similarity sorting</h4></div>
-            <button class="shot-image-btn" type="button">
-              <img
-                src="assets/ScreenshotGridSimilarity.jpg"
-                data-full="assets/ScreenshotGridSimilarity.jpg"
-                alt="PixlStash grid sorted by character similarity"
-                loading="lazy"
-              />
-            </button>
-            <p>Easily find pictures containing particular characters.</p>
-          </div>
-          <div class="shot">
-            <div class="shot-label">
-              <h4>Reverse image &amp; face search</h4>
-            </div>
-            <button class="shot-image-btn" type="button">
-              <img
-                src="assets/ReverseImageSearch.jpg"
-                data-full="assets/ReverseImageSearch.jpg"
-                alt="PixlStash context menu with reverse image search and find similar faces"
-                loading="lazy"
-              />
-            </button>
-            <p>
-              Right-click any picture to run a reverse image search for visually
-              similar pictures, or find other pictures containing the same face.
-            </p>
-          </div>
-          <div class="shot">
-            <div class="shot-label"><h4>Tag review</h4></div>
-            <button class="shot-image-btn" type="button">
-              <img
-                src="assets/ScreenshotReview1.jpg"
-                data-full="assets/ScreenshotReview1.jpg"
-                alt="PixlStash tag review card asking whether a picture should have a tag"
-                loading="lazy"
-              />
-            </button>
-            <p>
-              A review queue finds the tags most likely to be wrong or missing
-              and asks one question per picture. Answer with a click or a single
-              key to clean up your tags.
-            </p>
-          </div>
-          <div class="shot">
-            <div class="shot-label"><h4>Object detection</h4></div>
-            <button class="shot-image-btn" type="button">
-              <img
-                src="assets/ScreenshotSegmentation.jpg"
-                data-full="assets/ScreenshotSegmentation.jpg"
-                alt="PixlStash object detection drawing labelled bounding boxes in a picture"
-                loading="lazy"
-              />
-            </button>
-            <p>
-              Detect the objects in a picture and draw labelled boxes over them.
-              Export the boxes as COCO or Ideogram JSON for training and
-              annotation pipelines.
+              Lock a finished picture set to freeze its pictures' tags,
+              descriptions and scores, for eval sets and training data that
+              must not drift.
             </p>
           </div>
           <div class="shot">
@@ -944,14 +1101,14 @@
               <img
                 src="assets/ScreenshotSnapshots.jpg"
                 data-full="assets/ScreenshotSnapshots.jpg"
-                alt="PixlStash snapshots panel with daily, weekly, and monthly restore points"
+                alt="The Recovery settings: Scrapheap auto-empty above a list of daily snapshots, each with restore and delete buttons"
                 loading="lazy"
               />
             </button>
             <p>
               Automatic, compressed snapshots of your metadata, on a daily,
-              weekly, and monthly schedule. Roll back to any restore point in a
-              few clicks; a safety snapshot is taken first.
+              weekly and monthly schedule. Roll back to any restore point; a
+              safety snapshot is taken first.
             </p>
           </div>
           <div class="shot">
@@ -960,13 +1117,75 @@
               <img
                 src="assets/ScreenshotSelectiveRestore.jpg"
                 data-full="assets/ScreenshotSelectiveRestore.jpg"
-                alt="PixlStash selective restore of selected pictures from a snapshot"
+                alt="The picture menu's Restore from snapshot submenu listing daily snapshots to restore the three selected pictures from"
                 loading="lazy"
               />
             </button>
             <p>
-              Don't want to roll back everything? Restore just the pictures you
-              select. Anything not selected is left untouched.
+              Restore just the pictures you select from a snapshot. Anything
+              not selected is left untouched.
+            </p>
+          </div>
+          <div class="shot">
+            <div class="shot-label"><h4>Privacy controls</h4></div>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/ScreenshotPrivacy.jpg"
+                data-full="assets/ScreenshotPrivacy.jpg"
+                alt="The Privacy &amp; sharing settings with separate switches for update checks and an anonymous install ID, both off"
+                loading="lazy"
+              />
+            </button>
+            <p>
+              Update checks and anonymous install telemetry have their own
+              controls. Both are off until you enable them, and the Privacy
+              pane states what is and is not sent.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-header">
+          <h2 class="section-title">Browse and organise</h2>
+        </div>
+        <div class="shot-grid">
+          <div class="shot">
+            <div class="shot-label"><h4>Image grid</h4></div>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/ScreenshotGrid.jpg"
+                data-full="assets/ScreenshotGrid.jpg"
+                alt="The PixlStash grid of pictures with the library sidebar on the left: media, review queues and people"
+                loading="lazy"
+              />
+            </button>
+            <p>A fast picture grid with scoring, stacking and sorting.</p>
+          </div>
+          <div class="shot">
+            <div class="shot-label"><h4>Justified or square layout</h4></div>
+            <div class="shot-image-pair">
+              <button class="shot-image-btn" type="button">
+                <img
+                  src="assets/ScreenshotsJustified.jpg"
+                  data-full="assets/ScreenshotsJustified.jpg"
+                  alt="The justified grid with thumbnails at their own aspect ratios filling each row to the full grid width"
+                  loading="lazy"
+                />
+              </button>
+              <button class="shot-image-btn" type="button">
+                <img
+                  src="assets/ScreenshotsJustifiedSettings.jpg"
+                  data-full="assets/ScreenshotsJustifiedSettings.jpg"
+                  alt="The Appearance settings with a Square and Justified thumbnail layout picker"
+                  loading="lazy"
+                />
+              </button>
+            </div>
+            <p>
+              Thumbnails can keep their own aspect ratio and fill each row, or
+              stay as squares. One size control in the toolbar, from Tiny to
+              Huge, sets the thumbnail size in both layouts.
             </p>
           </div>
           <div class="shot">
@@ -975,56 +1194,14 @@
               <img
                 src="assets/ScreenshotGridSelection.jpg"
                 data-full="assets/ScreenshotGridSelection.jpg"
-                alt="PixlStash grid selection with set and character actions"
+                alt="Five pictures selected in the grid, with the selection bar offering tag, add to set, export and more"
                 loading="lazy"
               />
             </button>
             <p>
-              Select images, tag or assign to sets or characters and perform
-              batch actions.
+              Select pictures, then tag them, assign them to sets or people, or
+              run any batch action on them at once.
             </p>
-          </div>
-          <div class="shot">
-            <div class="shot-label"><h4>ComfyUI Integration</h4></div>
-            <button class="shot-image-btn" type="button">
-              <img
-                src="assets/ScreenshotComfyUi.jpg"
-                data-full="assets/ScreenshotComfyUi.jpg"
-                alt="PixlStash ComfyUI integration view"
-                loading="lazy"
-              />
-            </button>
-            <p>
-              Run the workflows behind your pictures directly from PixlStash,
-              with progress in the Tasks tab, and open any of them in ComfyUI.
-            </p>
-            <a class="shot-link" href="comfyui.html"
-              >See the ComfyUI nodes &amp; workflows →</a
-            >
-          </div>
-          <div class="shot">
-            <div class="shot-label"><h4>Picture inspection</h4></div>
-            <button class="shot-image-btn" type="button">
-              <img
-                src="assets/ScreenshotImageOverlay.jpg"
-                data-full="assets/ScreenshotImageOverlay.jpg"
-                alt="PixlStash image overlay view"
-                loading="lazy"
-              />
-            </button>
-            <p>Review and edit automatic descriptions and tags.</p>
-          </div>
-          <div class="shot">
-            <div class="shot-label"><h4>Face detection</h4></div>
-            <button class="shot-image-btn" type="button">
-              <img
-                src="assets/ScreenshotImageOverlay2.jpg"
-                data-full="assets/ScreenshotImageOverlay2.jpg"
-                alt="PixlStash image overlay tag management"
-                loading="lazy"
-              />
-            </button>
-            <p>Detect and assign faces to people in your photos.</p>
           </div>
           <div class="shot">
             <div class="shot-label"><h4>Tag autocompletion</h4></div>
@@ -1032,7 +1209,7 @@
               <img
                 src="assets/ScreenshotTagging.jpg"
                 data-full="assets/ScreenshotTagging.jpg"
-                alt="Tag autocompletion"
+                alt="Typing a tag in the picture viewer with matching tags suggested below the field"
                 loading="lazy"
               />
             </button>
@@ -1042,17 +1219,17 @@
             </p>
           </div>
           <div class="shot">
-            <div class="shot-label"><h4>People management</h4></div>
+            <div class="shot-label"><h4>People</h4></div>
             <button class="shot-image-btn" type="button">
               <img
                 class="shot-img--tall"
                 src="assets/ScreenshotCharacters.jpg"
                 data-full="assets/ScreenshotCharacters.jpg"
-                alt="PixlStash character management view"
+                alt="The sidebar's People list, each person with a face thumbnail and a picture count"
                 loading="lazy"
               />
             </button>
-            <p>Manage and organize people in your dataset efficiently.</p>
+            <p>Name the people in your pictures and keep their pictures together.</p>
           </div>
           <div class="shot">
             <div class="shot-label"><h4>Lots of keyboard shortcuts</h4></div>
@@ -1060,7 +1237,7 @@
               <img
                 src="assets/ScreenshotKeyboard.jpg"
                 data-full="assets/ScreenshotKeyboard.jpg"
-                alt="PixlStash keyboard shortcuts view"
+                alt="The keyboard shortcuts dialog listing the grid view shortcuts for search, rating, tagging, selection and navigation"
                 loading="lazy"
               />
             </button>
@@ -1076,7 +1253,7 @@
                 <img
                   src="assets/ScreenshotTagStatistics.jpg"
                   data-full="assets/ScreenshotTagStatistics.jpg"
-                  alt="Tag distribution and statistics sidebar in PixlStash"
+                  alt="The statistics sidebar's Tags tab: how many pictures are tagged, the most used tags as bars, and tag confidence"
                   loading="lazy"
                 />
               </button>
@@ -1084,14 +1261,14 @@
                 <img
                   src="assets/ScreenshotPictureStatistics.jpg"
                   data-full="assets/ScreenshotPictureStatistics.jpg"
-                  alt="Picture statistics sidebar in PixlStash"
+                  alt="The statistics sidebar's Pictures tab: picture, tag and tags-per-picture counts above bars for score, smart score and resolution"
                   loading="lazy"
                 />
               </button>
             </div>
             <p>
-              Get a rapid overview of your picture sets, tag distribution, tag
-              prediction confidence, and picture statistics at a glance.
+              Tag distribution, co-occurrences, tag confidence and picture
+              statistics for whatever the grid is showing.
             </p>
           </div>
           <div class="shot">
@@ -1100,76 +1277,13 @@
               <img
                 src="assets/ScreenshotOverlapNew.jpg"
                 data-full="assets/ScreenshotOverlapNew.jpg"
-                alt="PixlStash boolean set operations toolbar"
+                alt="Two picture sets selected in the sidebar, the grid showing their union, with the operation picker in the bottom bar"
                 loading="lazy"
               />
             </button>
             <p>
               Ctrl-click multiple characters or picture sets, then combine them
               with Union, Overlap, Difference, or Unique (XOR) operations.
-            </p>
-          </div>
-          <div class="shot">
-            <div class="shot-label">
-              <h4>Add your own image filter plugins</h4>
-            </div>
-            <button class="shot-image-btn" type="button">
-              <img
-                src="assets/ScreenshotPlugins.jpg"
-                data-full="assets/ScreenshotPlugins.jpg"
-                alt="PixlStash plugins"
-                loading="lazy"
-              />
-            </button>
-            <p>
-              Extend PixlStash's functionality with custom Python plugins for
-              image processing.
-            </p>
-          </div>
-          <div class="shot">
-            <div class="shot-label"><h4>Picture sharing</h4></div>
-            <button class="shot-image-btn" type="button">
-              <img
-                src="assets/ScreenshotShare1.jpg"
-                data-full="assets/ScreenshotShare1.jpg"
-                alt="Sharing dialog in PixlStash showing a generated share link"
-                loading="lazy"
-              />
-            </button>
-            <p>
-              Share pictures, sets, characters, and projects with a read-only
-              link with no account required for viewers. Tokens are scoped and
-              revocable. Optionally add your own watermarks for branding.
-            </p>
-          </div>
-          <div class="shot">
-            <div class="shot-label"><h4>Context menus</h4></div>
-            <button class="shot-image-btn" type="button">
-              <img
-                src="assets/ScreenshotContext.jpg"
-                data-full="assets/ScreenshotContext.jpg"
-                alt="Context menu in the PixlStash image grid"
-                loading="lazy"
-              />
-            </button>
-            <p>
-              Right-click anywhere in the grid or sidebar to rate, tag, assign,
-              move, share, or delete without leaving your current view.
-            </p>
-          </div>
-          <div class="shot">
-            <div class="shot-label"><h4>Custom icons for sets</h4></div>
-            <button class="shot-image-btn" type="button">
-              <img
-                src="assets/ScreenshotIconColor.jpg"
-                data-full="assets/ScreenshotIconColor.jpg"
-                alt="Coloured icon picker for picture sets in PixlStash"
-                loading="lazy"
-              />
-            </button>
-            <p>
-              Give each picture set its own coloured icon for instant
-              recognition, no matter how similar the contents look.
             </p>
           </div>
         </div>
@@ -1185,52 +1299,81 @@
         </div>
         <div class="feature-grid">
           <div class="feature-card">
-            <h3>Plugin system</h3>
+            <h3>Smart score</h3>
             <p>
-              Extend PixlStash's functionality with custom Python plugins for
-              image processing.
+              Sort a large set by what is worth looking at, with a calibrated
+              penalty for malformed anatomy and render defects.
             </p>
           </div>
           <div class="feature-card">
-            <h3>Keyboard shortcuts</h3>
+            <h3>Picture sharing</h3>
             <p>
-              Navigate and control PixlStash efficiently using standard keyboard
-              shortcuts for selection, scoring, deletion, etc.
+              Share pictures, sets, people and projects with a read-only link,
+              no account needed to view. Links are scoped and revocable, and
+              can carry your own watermark.
+            </p>
+          </div>
+          <div class="feature-card">
+            <h3>Custom icons for sets</h3>
+            <p>
+              Give each picture set its own icon and colour so it stands out in
+              the sidebar.
+            </p>
+          </div>
+          <div class="feature-card">
+            <h3>A folder layout for what comes next</h3>
+            <p>
+              Give a library a layout, with folders for projects, people or
+              sets, and new pictures are written where it says. A picture moves
+              only when its folder stops being true; Move to match is offered,
+              counted first, and undone as one batch.
+            </p>
+          </div>
+          <div class="feature-card">
+            <h3>Favourites</h3>
+            <p>
+              Press H on a model, workflow set or workflow and it comes first in
+              every list you pick from.
+            </p>
+          </div>
+          <div class="feature-card">
+            <h3>AI agents</h3>
+            <p>
+              pixlstash-mcp lets an AI agent search your library and read
+              recipes, with a token from Connect AI agent.
             </p>
           </div>
           <div class="feature-card">
             <h3>Scrapheap auto-empty</h3>
             <p>
-              Deleted pictures go to the scrapheap first and can be put back.
-              PixlStash can empty it after 30, 60, 90, or 120 days, or leave it
-              alone if the retention is set to Never. Auto-empty is off by
-              default, and deleting for good asks you to type to confirm.
+              Deleted pictures go to the Scrapheap first and can be put back.
+              PixlStash can empty it after 30, 60, 90 or 120 days, or never.
+              Auto-empty is off by default, and deleting for good asks you to
+              type to confirm.
             </p>
           </div>
           <div class="feature-card">
             <h3>Background imports</h3>
             <p>
-              Imports stream to the server and complete there, so closing the
-              tab or navigating away does not cancel them. Progress shows in the
-              task manager, and a running import can be aborted from there.
+              Imports complete on the server, so closing the tab does not cancel
+              them. Progress shows in the Tasks tab, and a running import can be
+              aborted from there.
             </p>
           </div>
           <div class="feature-card">
             <h3>Security notifications</h3>
             <p>
-              PixlStash checks for known security issues and alerts you in the
-              UI when a fix is available, along with the severity and affected
-              versions.
+              PixlStash checks for known security issues and tells you in the
+              title bar when a fix is available, with its severity.
             </p>
           </div>
           <div class="feature-card">
-            <h3>Faster background processing</h3>
+            <h3>Your GPU, used well</h3>
             <p>
-              Each picture moves to the next model as soon as its own rows land
-              rather than waiting for the whole batch, models stay resident for a
-              pass, decoding and resizing happen off the GPU worker, and the VRAM
-              budget follows your card. Watch real-time progress in the
-              statistics sidebar.
+              Models stay resident for a pass, decoding happens off the GPU
+              worker, and the VRAM budget follows your card. Pick which GPU to
+              use on a machine with more than one; Apple Silicon Macs tag,
+              search and match faces on the GPU too.
             </p>
           </div>
         </div>
