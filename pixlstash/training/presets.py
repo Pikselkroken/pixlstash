@@ -634,7 +634,8 @@ def resolve(
     )
     put("pinned", pins)
     kept = values.get(PRESERVATION_KEY)
-    if kept and kept["value"] and not values.get(PRESERVATION_CLASS_KEY):
+    described = str(values.get(PRESERVATION_CLASS_KEY, {}).get("value") or "")
+    if kept and kept["value"] and not described.strip():
         raise TunableOverrideError(
             "Keeping the description generic needs a person's description; "
             "this run has none."

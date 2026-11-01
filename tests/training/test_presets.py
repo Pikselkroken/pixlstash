@@ -340,6 +340,10 @@ def test_preservation_pinned_on_without_a_description_is_refused():
     # otherwise stand in for the trigger word.
     with pytest.raises(TunableOverrideError, match="description"):
         _resolve(pins={presets.PRESERVATION_KEY: True})
+    # Nor may the class word be pinned blank under it: ai-toolkit would swap
+    # the trigger word for nothing.
+    with pytest.raises(TunableOverrideError, match="description"):
+        _resolve(preservation=_KEEP, pins={presets.PRESERVATION_CLASS_KEY: "  "})
 
 
 def test_pins_win_over_every_derived_value():
