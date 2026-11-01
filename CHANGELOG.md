@@ -4,9 +4,11 @@
   address. Other kinds of link could run script in the session of whoever
   clicked them, share-link viewers included, and old ones are no longer
   opened. Please update.
-- Fixed: share-link tokens are no longer written to the server log. Logs
-  written by earlier versions still hold them, so if you have passed a log on,
-  delete its share tokens in Settings › Account and share again.
+- Fixed: read-only share-link tokens are no longer written to the server log.
+  Full-access tokens are never accepted in a link, so they were not affected.
+  Logs written by earlier versions still hold the read-only ones, so if you
+  have passed a log on, delete those share tokens in Settings › Account and
+  share again.
 - Fixed: the desktop app now checks that it is talking to the backend it
   started before signing in, refuses web permissions such as camera and
   location, and lets only the PixlStash window use its desktop features.
