@@ -3,6 +3,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  baseMarkOf,
+  cardBaseMark,
   failureText,
   folderRunLive,
   isBusyJob,
@@ -161,5 +163,40 @@ describe("why a run failed, short enough for a card", () => {
   it("cuts a paragraph with no spaces mid-word rather than not at all", () => {
     const { short } = failureText({ error: "x".repeat(500) });
     expect(short).toBe(`${"x".repeat(199)}…`);
+  });
+});
+
+describe("the base model's mark", () => {
+  const tile = { label: "Z-Image Turbo", mark: ["ZIT"], mark_band: true, mark_letters: "Z" };
+
+  it("names a known base by its label and carries the server's tile", () => {
+    expect(baseMarkOf({ base_model: "Tongyi-MAI/Z-Image-Turbo", base_tile: tile })).toEqual({
+      ...tile,
+      display_name: "Z-Image Turbo",
+      base_model: "Z-Image Turbo",
+    });
+  });
+
+  it("names an unknown base by its id's last segment", () => {
+    expect(baseMarkOf({ base_model: "C:\\models\\my_base.safetensors" }).display_name).toBe(
+      "my_base",
+    );
+    expect(baseMarkOf({ base_model: "someone/my-base " }).display_name).toBe("my-base");
+    expect(baseMarkOf({ base_model: null })).toBeNull();
+    expect(baseMarkOf({ base_model: "   " })).toBeNull();
+  });
+
+  it("reads a card's folder run before its job, as its base fact does", () => {
+    const card = {
+      run: { base_model: "a/run-base", base_tile: null },
+      job: { base_model: "a/job-base", base_tile: null },
+    };
+    expect(cardBaseMark(card).display_name).toBe("run-base");
+    expect(cardBaseMark({ ...card, run: null }).display_name).toBe("job-base");
+  });
+
+  it("carries a folder run's base model onto the run page", () => {
+    const live = folderRunLive({ name: "r", base_model: "a/b", base_tile: tile }, 1);
+    expect([live.base_model, live.base_tile]).toEqual(["a/b", tile]);
   });
 });

@@ -60,6 +60,7 @@ from pixlstash.training.config_render import (
 )
 from pixlstash.training.local_ai_toolkit import LocalAiToolkit
 from pixlstash.utils.aitoolkit_run import read_output_root, read_run
+from pixlstash.utils.known_base_models import training_base_tile
 from pixlstash.utils.path_utils import path_is_within, resolve_path_within
 from pixlstash.utils.service.export_utils import ExportUtils
 from pixlstash.utils.service.user_settings_utils import (
@@ -534,6 +535,16 @@ def create_router(server) -> APIRouter:
         )
         base_model: Optional[str] = Field(
             default=None, description="Base checkpoint for the run."
+        )
+        base_tile: Optional[dict] = Field(
+            default=None,
+            description=(
+                "The tile the base model wears, as `mark`, `mark_tab`, "
+                "`mark_colors`, `mark_icon`, `mark_letters` and `mark_band` on a "
+                "shelf row (no tab), plus `label`, its canonical name (null for "
+                "a re-branded fine-tune). Null for a base model no known one "
+                "matches."
+            ),
         )
         trigger_word: Optional[str] = Field(
             default=None, description="Caption trigger word for the run."
@@ -1201,6 +1212,7 @@ def create_router(server) -> APIRouter:
                 "set_id": job["set_id"],
                 "character_id": job["character_id"],
                 "base_model": job["base_model"],
+                "base_tile": training_base_tile(job["base_model"]),
                 "trigger_word": job["trigger_word"],
                 "step": job["step"],
                 "total_steps": job["total_steps"],
@@ -1456,6 +1468,8 @@ def create_router(server) -> APIRouter:
             "total_steps": total,
             "set_id": job["set_id"],
             "character_id": job["character_id"],
+            "base_model": job["base_model"],
+            "base_tile": training_base_tile(job["base_model"]),
             "trigger_word": job["trigger_word"],
             "phases": live_view.phase_durations(log, until),
             "columns": columns,

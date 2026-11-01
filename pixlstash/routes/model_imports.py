@@ -52,6 +52,7 @@ from pixlstash.utils.aitoolkit_run import (
     is_sample_filename,
     read_output_root,
 )
+from pixlstash.utils.known_base_models import training_base_tile
 from pixlstash.utils.path_utils import resolve_path_within
 
 logger = get_logger(__name__)
@@ -112,6 +113,14 @@ class RunResponse(BaseModel):
     base_model: Optional[str] = Field(
         default=None,
         description="`name_or_path` from the run's `config.yaml`, verbatim.",
+    )
+    base_tile: Optional[dict] = Field(
+        default=None,
+        description=(
+            "The tile the base model wears (`mark`, `mark_icon`, ... as on a "
+            "shelf row, no tab, plus `label`), or null for a base no known one "
+            "matches."
+        ),
     )
     trigger_words: list[str] = Field(default_factory=list)
     rank: Optional[int] = Field(
@@ -321,6 +330,7 @@ def _to_run_response(run) -> RunResponse:
             for sample in run.samples
         ],
         base_model=run.base_model,
+        base_tile=training_base_tile(run.base_model),
         trigger_words=list(run.trigger_words),
         rank=run.rank,
         total_steps=run.total_steps,

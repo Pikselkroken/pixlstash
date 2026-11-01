@@ -191,6 +191,32 @@ export function baseOf(card) {
   return card.run?.base_model || card.job?.base_model || "Base model not recorded";
 }
 
+/**
+ * The row `ModelMark` draws a run's base model from, or null with none
+ * recorded. `source` is a job, a folder run or a live view: anything with
+ * `base_model` and the server's `base_tile` (null for a base it does not
+ * know, which then wears the generated mark, named by its last segment less
+ * a model file's extension).
+ */
+export function baseMarkOf(source) {
+  const raw = String(source?.base_model || "").trim();
+  if (!raw) return null;
+  const tile = source.base_tile || {};
+  const name =
+    tile.label ||
+    raw
+      .replace(/[\\/]+$/, "")
+      .split(/[\\/]/)
+      .pop()
+      .replace(/\.(safetensors|sft|ckpt|pt|pth|bin|gguf)$/i, "");
+  return { ...tile, display_name: name, base_model: tile.label || raw };
+}
+
+/** The base model's mark for a card: the same source `baseOf` names. */
+export function cardBaseMark(card) {
+  return baseMarkOf(card.run?.base_model ? card.run : card.job);
+}
+
 /** The run's day: its newest checkpoint, else when its job was asked for. */
 export function dateOf(card) {
   const seconds = card.run?.modified_at;
@@ -245,6 +271,8 @@ export function folderRunLive(run, folderId) {
     phase: null,
     step: hasBareFinal(run) ? Math.max(last, run.total_steps ?? 0) : last,
     total_steps: run.total_steps ?? null,
+    base_model: run.base_model ?? null,
+    base_tile: run.base_tile ?? null,
     trigger_word: run.trigger_words?.[0] || "",
     columns,
     rows: indexes.map((index) => {

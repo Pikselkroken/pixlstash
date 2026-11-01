@@ -676,6 +676,19 @@ def test_a_listed_run_is_dated_by_its_newest_checkpoint(shelf):
     assert _to_run_response(run).modified_at == 2_000_000_000
 
 
+def test_a_listed_run_carries_its_base_models_tile(shelf):
+    """The card's mark: FLUX.1 dev's release tile, and none for a base unknown."""
+    run = read_output_root(str(shelf["output_root"]))[0]
+    tile = _to_run_response(run).base_tile
+    assert (tile["label"], tile["mark_icon"], tile["mark_band"]) == (
+        "FLUX.1 dev",
+        "flux",
+        True,
+    )
+    run.base_model = "someone/my-private-base"
+    assert _to_run_response(run).base_tile is None
+
+
 def _a_training_run(hub, run_uuid="run-clementine"):
     """The hub row a PixlStash training run writes before it starts."""
     return training_runs.create_run(

@@ -318,6 +318,16 @@ def test_create_job_takes_base_model_from_the_recipe_and_refuses_a_client_one():
         assert r.status_code == 200, r.text
         assert r.json()["base_model"] == expected
         assert server.vault.training_service.enqueue_calls[-1]["base_model"] == expected
+        # The listing and the live view carry the tile the run's card wears.
+        listed = next(
+            j for j in owner.get("/training/jobs").json() if j["name"] == "Alice"
+        )
+        assert listed["base_tile"]["label"] == "Z-Image Turbo"
+        live = owner.get(f"/training/jobs/{listed['id']}/live").json()
+        assert (live["base_model"], live["base_tile"]) == (
+            expected,
+            listed["base_tile"],
+        )
 
         calls_before = len(server.vault.training_service.enqueue_calls)
         r = owner.post("/training/jobs", json={**body, "base_model": "Other/Model"})
