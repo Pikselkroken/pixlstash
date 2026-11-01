@@ -765,6 +765,10 @@ describe("leaving the run with Escape, as the back button's keycap says", () => 
     await second.find(".section-head__chevron").trigger("click");
     expect(second.find(".trl-tips-fold--shut").exists()).toBe(false);
     expect(second.find("[data-testid='trl-tips']").text()).toContain("Pick the step");
+    // Leakage is fixed on the next run; an earlier step may lose likeness.
+    const tips = second.find("[data-testid='trl-tips']").text();
+    expect(tips).toContain("stop the leak on the next run");
+    expect(tips).not.toContain("earlier step is the better one");
     expect(window.localStorage.getItem("pixlstash.trainingRunTips")).toBe("open");
     window.localStorage.removeItem("pixlstash.trainingRunTips");
   });
