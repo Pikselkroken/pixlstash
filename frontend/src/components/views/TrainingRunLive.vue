@@ -1049,7 +1049,7 @@ const TIPS = [
   {
     title: "Without it",
     // An earlier step is not the cure: it leaks less but may lose likeness.
-    text: "These rows should stay close to step 0. If they drift toward the subject, the LoRA is leaking into everything. An earlier step may leak less but look less like the subject, so stop the leak on the next run instead: train on pictures that vary in background, clothing and framing, so the subject is all they share, and keep the words that describe the subject generic where the Train dialog offers it.",
+    text: "These rows should stay close to step 0. If they drift toward the subject, the LoRA is leaking into everything. An earlier step may leak less but also look less like the subject, so fix the leak on the next run instead: train on pictures that vary in everything but the subject, such as background, clothing and framing.",
   },
   {
     title: "Loss",
