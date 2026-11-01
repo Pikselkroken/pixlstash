@@ -1338,6 +1338,8 @@ describe("the GPU queue in the task manager", () => {
     expect(done.find(".tm-mark").attributes("data-state")).toBe("done");
     expect(done.find("canvas.tm-sparkline").exists()).toBe(false);
     expect(done.find(".tm-fig-text").text()).toBe("");
+    // Nor does it read out the rate its last batch left behind.
+    expect(done.find(".visually-hidden").exists()).toBe(false);
     expect(working.find(".tm-mark").attributes("data-state")).toBeUndefined();
     expect(working.find("canvas.tm-sparkline").exists()).toBe(true);
   });

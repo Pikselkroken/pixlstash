@@ -949,7 +949,7 @@ function childDetail(child) {
   const parts = [];
   if (child.stopped) parts.push(child.text || "Stopped to make room; nothing was lost");
   else if (child.onCpu) parts.push("Running on the CPU");
-  const rate = child.snapshot ? tmGetLatestRate(child.workerKey) : 0;
+  const rate = child.snapshot && !childDone(child) ? tmGetLatestRate(child.workerKey) : 0;
   if (rate > 0) parts.push(`${tmFormatRate(rate)}/s`);
   const progress = child.snapshot ?? child.progress;
   const left = Number(progress?.total || 0) - Number(progress?.current || 0);
