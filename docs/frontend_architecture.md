@@ -7391,9 +7391,14 @@ unchanged by the tab's existence.
   downloading, through `downloadModels` (`composables/useModelDownloads.js`,
   which the one-file `ModelDownloadButton` uses too). Refused with the reason
   when there is none, and in a read-only session. Mine's card menu and `⋯`
-  carry the same row; there the view asks the run pre-flight (cached) of each
-  selected non-draft workflow, as the Workflow tab does, and downloads what
-  `downloadableInPreflight` reads off the answer.
+  carry the same row; there `downloadableInWorkflows` asks the run pre-flight
+  (cached) of each selected non-draft workflow, as the Workflow tab does, and
+  the press downloads what `downloadableInPreflight` reads off the answers. The
+  menu asks too, each time it opens (and again when a download lands), and
+  refuses the row once every answer says nothing is left to fetch. An answer
+  ComfyUI did not give (`comfyui_unreachable`, `comfyui_not_configured`) counts
+  as not asked, so the row stays offered. So does a selection over 12, which
+  is not checked.
 
 ---
 

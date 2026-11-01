@@ -683,6 +683,8 @@ watch(
   () => [
     contextOpen.value || moreMenuOpen.value,
     store.selectedKeys.join("\n"),
+    // A landed file leaves the running list; ask again rather than re-offer it.
+    tasksStore.downloadsLanded,
   ],
   async ([open]) => {
     const check = ++missingCheck;
