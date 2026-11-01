@@ -547,10 +547,10 @@ async function startImport(files, options = {}) {
 
     // All bytes are staged - commit the SAFE HANDOFF to the background import.
     // From here Cancel has nothing to stop, so neither the band nor the Tasks
-    // row offers it.
+    // row offers it. The leave guard stays armed until the commit returns:
+    // closing the tab mid-commit would strand the staged session.
     uploadBytesUploaded.value = uploadBytesTotal.value;
     committing = true;
-    disarmGuard();
     arrivals.markChecking(importRunId);
     tasksStore.setImportRun(importRunId, {
       status: "running",
@@ -586,6 +586,7 @@ async function startImport(files, options = {}) {
     }
 
     // The session is committed; it can no longer be cancelled from the client.
+    disarmGuard();
     const stagingId = currentStagingId;
     currentStagingId = null;
     importTotal.value = commit.stagedCount || files.length;

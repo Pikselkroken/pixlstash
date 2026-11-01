@@ -527,6 +527,35 @@ test.describe('picture import', () => {
     await expect(allMediaCount(page)).toHaveText(String(countAfterFirst))
   })
 
+  test('leaving is guarded until the commit has returned (§2)', async ({ page, grid }) => {
+    await grid.goto()
+    // Would the browser ask before leaving? (A synthetic event: no dialog.)
+    const leaveGuarded = () =>
+      page.evaluate(() => {
+        const e = new Event('beforeunload', { cancelable: true })
+        window.dispatchEvent(e)
+        return e.defaultPrevented
+      })
+    let releaseCommit
+    const commitHeld = new Promise((r) => (releaseCommit = r))
+    let commitSeen
+    const commitStarted = new Promise((r) => (commitSeen = r))
+    await page.route('**/pictures/import/staging/*/commit', async (route) => {
+      commitSeen()
+      await commitHeld
+      await route.continue()
+    })
+    const done = importCompleted(page)
+    await dropFiles(page, grid.scrollWrapper, [pngFile('guarded.png', 851)])
+
+    // Mid-commit the staged session has no owner but this tab.
+    await commitStarted
+    expect(await leaveGuarded()).toBe(true)
+    releaseCommit()
+    expect(await done).toMatchObject({ imported_count: 1 })
+    expect(await leaveGuarded()).toBe(false)
+  })
+
   test('a .txt beside an image tags it (§2)', async ({ page, grid, apiContext }) => {
     await grid.goto()
     const before = await pictureIds(apiContext)
