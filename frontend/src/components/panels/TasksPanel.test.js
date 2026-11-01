@@ -1226,6 +1226,7 @@ describe("the GPU queue in the task manager", () => {
     expect(bar.findAll(".tm-legend li").map((item) => item.text())).toEqual([
       "PixlStash",
       "ComfyUI",
+      "AI Toolkit",
       "Other apps",
       "Spare",
     ]);

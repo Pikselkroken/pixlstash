@@ -154,8 +154,12 @@ def test_outstanding_shrinks_as_the_tenant_grows_into_it():
     # The tenant now really holds 6000 of it, and the card says so.
     comfy.usage = 6000
     fake.used_mb = 6000
-    assert arb.snapshot()["devices"][0]["reserved_mb"] == 2000
+    device = arb.snapshot()["devices"][0]
+    assert device["reserved_mb"] == 2000
+    # The bar draws it as AI Toolkit's, not as spare.
+    assert device["reserved_by"] == {"aitoolkit": 2000}
     first.release()
+    assert arb.snapshot()["devices"][0]["reserved_by"] == {}
 
 
 def test_a_tenant_unreadable_at_grant_counts_growth_from_its_first_reading():
