@@ -18,6 +18,7 @@
  *   height: the plot's height in px.
  *   compact: the caption is read out but not shown, and there is no table
  *     toggle, for a chart laid into a grid whose rows must stay aligned.
+ *   emptyText: what stands in for the chart before it has two points.
  *
  * Drawn in teal, the chart hue, in the shelf's run band and the live view alike.
  */
@@ -30,6 +31,7 @@ const props = defineProps({
   smooth: { type: Boolean, default: false },
   height: { type: Number, default: 80 },
   compact: { type: Boolean, default: false },
+  emptyText: { type: String, default: "Not enough loss data to chart." },
 });
 
 // The weight of each new point in the smoothed line: a 20-point EMA.
@@ -249,9 +251,7 @@ watch(
         :style="{ height: `${height}px` }"
         aria-hidden="true"
       ></canvas>
-      <p v-if="!hasData" class="lora-loss-empty">
-        Not enough loss data to chart.
-      </p>
+      <p v-if="!hasData" class="lora-loss-empty">{{ emptyText }}</p>
       <figcaption
         class="lora-loss-caption"
         :class="{ 'visually-hidden': compact }"

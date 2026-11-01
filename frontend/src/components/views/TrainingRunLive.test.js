@@ -157,7 +157,7 @@ describe("TrainingRunLive", () => {
     const groups = wrapper.findAll(".trl-gline").map((g) => g.text());
     expect(groups[0]).toContain("With the trigger word");
     expect(groups[1]).toContain("Without it");
-    expect(groups[1]).toContain("should not change from step 0");
+    expect(groups[1]).toContain("should change little from step 0");
     expect(wrapper.find(".trl-trig").text()).toBe("ohwx");
     // Samples point at the run folder; the one being drawn spins.
     const img = wrapper.find("img.trl-cell");
@@ -686,5 +686,61 @@ describe("leaving the run with Escape, as the back button's keycap says", () => 
     document.body.appendChild(input);
     press(input);
     expect(wrapper.emitted("close")).toBeUndefined();
+  });
+
+  it("says Setting up in the bar and names the step only in the corner", async () => {
+    const wrapper = await open(
+      payload({
+        phase: "loading",
+        step: 0,
+        previews: null,
+        phases: [{ phase: "loading", seconds: 42 }],
+        rows: payload().rows.map((row) => ({ ...row, cells: cells(Array(7).fill("future")) })),
+        coverable: [],
+        cover_step: null,
+      }),
+    );
+    expect(wrapper.find(".trl-status").text()).toContain("Setting up");
+    expect(wrapper.find(".trl-status").text()).not.toContain("Loading");
+    expect(wrapper.find(".trl-setup").text()).toBe("Loading the model");
+    // Step 0 is drawn after set-up; later steps say when they are due, from
+    // the status bar's 16-21 min spread over the 1,500 steps.
+    const future = wrapper.findAll(".trl-cell--future");
+    expect(future[0].text()).toBe("after set-up");
+    expect(future[1].text()).toBe("");
+    const subs = wrapper.findAll(".trl-stepsub").map((n) => n.text());
+    expect(subs[1]).toBe("~3 min");
+    expect(subs[6]).toBe("~19 min");
+  });
+
+  it("dates a future column from the steps still to train", async () => {
+    // Step 1,000 of 1,500 with 16-21 min left: 1,250 is half way there.
+    const wrapper = await open(payload());
+    expect(wrapper.findAll(".trl-stepsub")[5].text()).toBe("~9 min");
+  });
+
+  it("gives a finished run no due times", async () => {
+    const wrapper = await open(
+      payload({ status: "completed", phase: null, completed_at: "2026-10-26T02:00:00+00:00" }),
+    );
+    expect(wrapper.findAll(".trl-stepsub").map((n) => n.text()).join(" ")).not.toContain("~");
+  });
+
+  it("remembers the tips folded or opened by hand", async () => {
+    window.localStorage.removeItem("pixlstash.trainingRunTips");
+    const first = await open(payload());
+    // jsdom lays nothing out, so nothing says the tips do not fit.
+    expect(first.find("[data-testid='trl-tips']").exists()).toBe(true);
+    await first.find(".section-head__chevron").trigger("click");
+    expect(first.find("[data-testid='trl-tips']").exists()).toBe(false);
+    expect(first.find(".trl-tips").text()).toContain("4 tips on what to look for");
+    first.unmount();
+    mounted.length = 0;
+    const second = await open(payload());
+    expect(second.find("[data-testid='trl-tips']").exists()).toBe(false);
+    await second.find(".section-head__chevron").trigger("click");
+    expect(second.find("[data-testid='trl-tips']").text()).toContain("Pick the step");
+    expect(window.localStorage.getItem("pixlstash.trainingRunTips")).toBe("open");
+    window.localStorage.removeItem("pixlstash.trainingRunTips");
   });
 });

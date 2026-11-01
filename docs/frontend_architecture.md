@@ -6651,15 +6651,30 @@ waiting, read from `useTasksStore().resources`, the poll that already runs; the
 listing itself is still not polled.
 
 **One step axis.** The page is the "step axis" design: a CSS grid of a 224 px
-label column and one fixed 124 px pitch per checkpoint column. The timeline is
+label column and one pitch per checkpoint column. The timeline is
 the column header (step, tick, and "before training" / Cover / Use this step /
-"previews n of m"), `LoraLossChart` spans the columns with an injected `xScale`
+"previews n of m", or "~6 min" on a future column: the status bar's time left
+spread over the steps still to train), `LoraLossChart` spans the columns with an injected `xScale`
 that puts each column's step at its centre (piecewise-linear between columns,
 so a last step off the preview pitch still lands under its column), and each
-prompt row's 104 × 76 cells hang under it. Long runs scroll sideways rather than
-shrinking the cells. The cover column is the olive selected-item frame; the
+prompt row's cells hang under it. The cover column is the olive selected-item frame; the
 hovered one takes `--hover-wash`; "Use this step" is hidden by opacity until the
 column is hovered or the button focused.
+
+**The board fills the window** (design "Board fills the window"). A
+`ResizeObserver` runs `fit()`: the pitch is the width left after the label and
+end-phase columns, divided by the checkpoints, between 124 and 240 px, and the
+cells keep the 104 × 76 shape at the pitch less 20 px. Below 124 px the board
+scrolls sideways instead: the labels are `position: sticky`, the view follows
+the newest checkpoint until the reader scrolls it themselves (and again once
+they scroll back to the end), and a *Step 0* button in the corner jumps back.
+The loss chart takes the height the board and the tips leave, 92 to 280 px.
+Under the board, a *Tips* section (`SectionHeader`) opens by itself when it fits
+without scrolling and folds to its header when it does not; once toggled by
+hand the choice is kept in `localStorage` and the rule stops applying. Opened
+on a short window, the page scrolls down rather than squeezing the board. A run
+read from its folder has no tips. While the run sets up, the toolbar says
+"Setting up" and the board's corner names the step.
 
 **A click opens a picture** (Enter or Space does too, on a focused one). A sample
 is a file in the run folder, not a library picture, so it opens full size in
@@ -6669,7 +6684,8 @@ picture and opens in the lightbox by way of `?from=` (below).
 
 **Run status is in the shelf's toolbar.** The page teleports its way back,
 run name, progress and Stop into `#shelf-run-bar`, a slot `ModelShelf` renders
-while a run is open (hiding the count; the bar's shelf-tab controls are not drawn on the runs tab either). The teleport is
+while a run is open (hiding the count; the bar's shelf-tab controls are not drawn on the runs tab either). The slot takes the free width itself, so the toolbar's own spacer is
+hidden beside it and Stop sits at the end, by the rail toggle. The teleport is
 `disabled` where that slot is absent and is never toggled after mount: Vue
 cannot move a teleport to a target it did not find when it mounted.
 

@@ -4955,6 +4955,12 @@ watch(
   min-width: 0;
 }
 
+/* The run bar takes the free width itself: a second spacer split it in two
+   and left Stop half way along the toolbar. */
+.shelf-run-bar ~ .shelf-spacer {
+  display: none;
+}
+
 /* Raised so the focus ring is not clipped by the welded sibling. */
 .shelf-viewseg:focus-visible {
   position: relative;
