@@ -198,6 +198,12 @@ Context: the overlay fallback, per-accel ORT pin, and backend-list dedup all
 shipped after live incidents verified **on Linux only**; Windows and macOS
 have never been manually exercised and are the priority columns.
 
+If a tag's desktop installers are missing because the build failed for a CI
+reason (a retired runner image, a signing outage), rebuild them without a new
+tag: Actions → *Build Electron Desktop App* → **Run workflow** from `main`
+with `release_tag` set to the tag. That builds the tag's source with `main`'s
+current workflow and attaches the installers to the tag's existing release.
+
 Overlay expectations per OS: **Windows/Linux** offer the cu128 (CUDA) overlay
 from Settings (ROCm where applicable on Linux); **macOS has no overlay UI at
 all** — Metal is bundled in the runtime.
