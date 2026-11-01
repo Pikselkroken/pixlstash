@@ -80,9 +80,9 @@ test.describe('notice surface', () => {
     expect(text).toBe('NEW')
   })
 
-  // Spec §6: errors must not auto-dismiss; a failure the user has to act on
-  // cannot vanish while they are reading it.
-  test('an error never auto-dismisses while a success does', async ({
+  // Spec §6: an error gets the longest window (10s), not a sticky one; it
+  // outlives a success and then goes on its own.
+  test('an error outlives a success, then auto-dismisses', async ({
     notices,
   }) => {
     await notices.push({ level: 'error', text: "Couldn't restore the scrapheap." })
@@ -92,9 +92,10 @@ test.describe('notice surface', () => {
     // 'Saved.' resolves to max(3000, 2000 + 60*6) = 3360ms.
     await expect(notices.card('Saved.')).toHaveCount(0, { timeout: 9_000 })
     await expect(notices.card("Couldn't restore the scrapheap.")).toBeVisible()
-    // Still there well past every level default and the 12s ceiling.
-    await notices.page.waitForTimeout(3_000)
-    await expect(notices.card("Couldn't restore the scrapheap.")).toBeVisible()
+    // The error resolves to max(10000, 2000 + 60*31) = 10000ms.
+    await expect(notices.card("Couldn't restore the scrapheap.")).toHaveCount(0, {
+      timeout: 12_000,
+    })
   })
 
   // Spec §6 rule 1 + check 6 — a 3s window to hit "Undo" fails WCAG 2.2.1.
@@ -114,7 +115,7 @@ test.describe('notice surface', () => {
 
   // ── Coalescing (check 5) ────────────────────────────────────────────────
   // The bulk-selection case the key exists for: 50 per-picture failures inside
-  // one Promise.all must not bury the app under 50 sticky error cards.
+  // one Promise.all must not bury the app under 50 error cards.
 
   test('50 identical failures collapse into one card with ×50', async ({
     notices,

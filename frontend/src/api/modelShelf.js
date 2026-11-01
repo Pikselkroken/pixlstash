@@ -105,8 +105,9 @@ export async function listBaseModelCompletions() {
  *
  * @param {Array<number>} ids - hub `model.id` values. Ids rather than hashes:
  *   an unhashed 24 GB checkpoint has no hash to be addressed by.
- * @param {Object} changes - any of `display_name` (one id only), `base_model`,
- *   `kind`, `file_kind`, `capabilities`, `trigger_words`. `capabilities` is the
+ * @param {Object} changes - any of `display_name` (one id, or members of one
+ *   stack, which names the whole stack), `base_model`, `kind`, `file_kind`,
+ *   `capabilities`, `trigger_words`. `capabilities` is the
  *   COMPLETE feature set for every id sent, so `[]` clears it; the server
  *   replaces rather than merges, or there would be no way to take one off.
  *   `trigger_words` is the complete list too, and its `[]` is an answer ("needs

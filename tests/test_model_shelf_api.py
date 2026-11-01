@@ -6787,7 +6787,7 @@ def test_a_rename_is_refused_across_a_selection(shelf_env):
         f"{API}/models", json={"ids": [alice, bob], "display_name": "Both"}
     )
     assert r.status_code == 400
-    assert "one model at a time" in r.text
+    assert "one model, or on the members of one stack" in r.text
     assert _model_row(shelf_env, alice)["display_name"] == "Alice", (
         "the refusal still wrote"
     )
@@ -6798,6 +6798,52 @@ def test_a_rename_is_refused_across_a_selection(shelf_env):
     )
     assert ok.status_code == 200, ok.text
     assert _model_row(shelf_env, alice)["display_name"] == "Alice Prime"
+
+
+def test_a_rename_names_every_member_of_one_stack(shelf_env):
+    """A collapsed stack is one row on the shelf, and renaming it sends every
+    member it shows. That is one name for one run, not a bulk rename, so it is
+    written to all of them - and only when they really are one stack."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    dana = shelf_env.model_ids["dana.safetensors"]
+    bob = shelf_env.model_ids["bob.safetensors"]
+    assert _model_row(shelf_env, alice)["stack_id"] == STACK_ID
+    assert _model_row(shelf_env, dana)["stack_id"] == STACK_ID
+    assert _model_row(shelf_env, bob)["stack_id"] is None
+
+    # A stack member plus an outsider is still a selection, and still refused.
+    r = shelf_env.owner.patch(
+        f"{API}/models", json={"ids": [alice, dana, bob], "display_name": "Run"}
+    )
+    assert r.status_code == 400, r.text
+    assert _model_row(shelf_env, dana)["display_name"] == "Dana"
+    # Two unstacked models share no stack either: "no stack" is not one stack.
+    noname = shelf_env.model_ids["sd_xl_noname.safetensors"]
+    r = shelf_env.owner.patch(
+        f"{API}/models", json={"ids": [bob, noname], "display_name": "Run"}
+    )
+    assert r.status_code == 400, r.text
+    assert _model_row(shelf_env, bob)["display_name"] == "Bob"
+
+    r = shelf_env.owner.patch(
+        f"{API}/models", json={"ids": [alice, dana], "display_name": "Run"}
+    )
+    assert r.status_code == 200, r.text
+    assert sorted(r.json()["updated"]) == sorted([alice, dana])
+    assert _model_row(shelf_env, alice)["display_name"] == "Run"
+    assert _model_row(shelf_env, dana)["display_name"] == "Run"
+    assert _model_row(shelf_env, bob)["display_name"] == "Bob"
+
+    # A filter can hide members, so the shelf sends only the ones it shows.
+    # The name still goes to the whole run: here Dana is not sent at all (the
+    # other id names nothing) and is renamed with Alice.
+    ghost = max(shelf_env.model_ids.values()) + 1000
+    r = shelf_env.owner.patch(
+        f"{API}/models", json={"ids": [alice, ghost], "display_name": "Whole"}
+    )
+    assert r.status_code == 200, r.text
+    assert sorted(r.json()["updated"]) == sorted([alice, dana])
+    assert _model_row(shelf_env, dana)["display_name"] == "Whole"
 
 
 def test_an_unhashed_checkpoint_cannot_be_called_an_adapter(shelf_env):
