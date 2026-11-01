@@ -595,6 +595,11 @@ class ResourceArbiter:
                         "used_mb": reading.used_mb,
                         "free_mb": reading.free_mb,
                         "reserved_mb": sum(outstanding.values()),
+                        # Whose that reservation is, so the bar can draw it
+                        # in the tenant's colour rather than as spare.
+                        "reserved_by": {
+                            tenant.value: mb for tenant, mb in outstanding.items() if mb
+                        },
                         "budget_mb": max(0, self._budget_locked(reading)),
                         "measurable": reading.measurable,
                         "pixlstash": reading.uuid == pixlstash_device,

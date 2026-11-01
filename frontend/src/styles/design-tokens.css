@@ -433,12 +433,19 @@
   --tenant-pixlstash: var(--v-theme-accent);      /* PixlStash's own work */
   --tenant-comfyui: var(--v-theme-tertiary);      /* ComfyUI */
   --tenant-aitoolkit: var(--v-theme-quaternary);  /* AI Toolkit */
-  /* One hatch for memory that is not any tenant's: other apps, the spare
-     margin. A texture, so it reads without colour. */
+  /* Memory in use that is not any tenant's (other apps). A texture, so it
+     reads without colour. */
   --hatch-not-ours: repeating-linear-gradient(
     -45deg,
     rgba(var(--v-theme-on-surface), 0.35) 0 2px,
     transparent 2px 5px
+  );
+  /* Free memory PixlStash keeps back (the spare margin): thin upright lines,
+     sparser than the hatch, so the two never read as one. */
+  --spare-margin: repeating-linear-gradient(
+    90deg,
+    rgba(var(--v-theme-on-surface), 0.35) 0 1px,
+    transparent 1px 4px
   );
 }
 

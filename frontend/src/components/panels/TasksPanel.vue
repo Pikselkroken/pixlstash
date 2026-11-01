@@ -32,9 +32,12 @@
         >
           <span
             v-for="segment in bar.segments"
-            :key="segment.kind"
+            :key="segment.key"
             class="tm-vram-seg"
-            :class="`tm-vram-seg--${segment.kind}`"
+            :class="[
+              `tm-vram-seg--${segment.kind}`,
+              { 'tm-vram-seg--reserved': segment.reserved },
+            ]"
             :style="{ width: pctText(segment.pct) }"
           >
             <Tooltip
@@ -48,8 +51,9 @@
       <ul class="tm-legend" aria-label="What the bars show">
         <li><span class="tm-swatch tm-vram-seg--pixlstash"></span>PixlStash</li>
         <li><span class="tm-swatch tm-vram-seg--comfyui"></span>ComfyUI</li>
+        <li><span class="tm-swatch tm-vram-seg--aitoolkit"></span>AI Toolkit</li>
         <li><span class="tm-swatch tm-vram-seg--other"></span>Other apps</li>
-        <li><span class="tm-swatch tm-vram-seg--spare"></span>Spare</li>
+        <li><span class="tm-swatch tm-vram-seg--spare"></span>Headroom</li>
       </ul>
     </div>
 
@@ -818,14 +822,17 @@ const SEGMENT_NAMES = {
   comfyui: "ComfyUI",
   aitoolkit: "AI Toolkit",
   other: "Other apps",
-  spare: "Spare",
+  spare: "Headroom",
 };
 
 /** A bar segment's tooltip: whose it is, how big, and what holds it. */
 function segmentTip(segment) {
   const name = SEGMENT_NAMES[segment.kind] ?? segment.kind;
   if (segment.kind === "spare") {
-    return `Spare · ${formatGb(segment.mb)} kept back from new requests`;
+    return `Headroom · ${formatGb(segment.mb)} kept free so a job that overshoots its estimate doesn't run the card out`;
+  }
+  if (segment.reserved) {
+    return `${name} · ${formatGb(segment.mb)} reserved, not in use yet`;
   }
   if (segment.kind === "pixlstash") {
     const count = tasksStore.pixlstashEntry?.count ?? 0;
@@ -1868,13 +1875,27 @@ const tmSystemItems = computed(() => {
 .tm-swatch.tm-vram-seg--aitoolkit {
   background: rgb(var(--tenant-aitoolkit));
 }
-/* One hatch for every memory that is not PixlStash's or ComfyUI's: other
-   apps, and the spare margin. */
+/* A tenant's reservation it has not grown into yet: its colour, paler, since
+   the memory is free on the card but promised to it. */
+.tm-vram-seg--pixlstash.tm-vram-seg--reserved {
+  background: rgba(var(--tenant-pixlstash), 0.4);
+}
+.tm-vram-seg--comfyui.tm-vram-seg--reserved {
+  background: rgba(var(--tenant-comfyui), 0.4);
+}
+.tm-vram-seg--aitoolkit.tm-vram-seg--reserved {
+  background: rgba(var(--tenant-aitoolkit), 0.4);
+}
+/* Memory in use that is no tenant's: the hatch. */
 .tm-vram-seg--other,
-.tm-vram-seg--spare,
-.tm-swatch.tm-vram-seg--other,
-.tm-swatch.tm-vram-seg--spare {
+.tm-swatch.tm-vram-seg--other {
   background: var(--hatch-not-ours);
+}
+/* Free memory PixlStash keeps back: thin upright lines, sparser than other
+   apps' diagonal hatch, so the two read apart without colour. */
+.tm-vram-seg--spare,
+.tm-swatch.tm-vram-seg--spare {
+  background: var(--spare-margin);
 }
 
 .tm-legend {
