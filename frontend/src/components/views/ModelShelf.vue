@@ -570,6 +570,7 @@
                     'shelf-row--offline': row.locState === 'unreachable',
                     'shelf-row--broken': BROKEN_STATES.has(row.locState),
                     'shelf-row--cut': store.isCut(row.id),
+                    'shelf-row--locked': !!lockedNote(row),
                   }"
                   role="row"
                   aria-level="1"
@@ -619,6 +620,22 @@
                            (#2168 took the ring off the list; `bare` keeps it
                            off). -->
                       <ModelMark v-else :row="row" :ring="ringFor(row)" bare />
+                      <!-- The lock rides the mark, where the eye already lands
+                           to tell one model from another; the hatch behind the
+                           row is what reads from across the list. The top-start
+                           corner, because the other three hold the version
+                           pill, the deck ticks and the cover chip. The words
+                           stay on the file line, so this is aria-hidden. -->
+                      <span
+                        v-if="lockedNote(row)"
+                        class="shelf-row-lock"
+                        aria-hidden="true"
+                        ><Tooltip
+                          text="In a locked folder"
+                          activator="parent"
+                          :describe="false"
+                        /><v-icon>mdi-lock</v-icon></span
+                      >
                     </span>
                     <!-- Which file the run is being drawn from, said in words
                          rather than by position: once the strip is open the
@@ -5336,6 +5353,26 @@ button.shelf-head-cell:hover {
   box-shadow: var(--selection-edge);
 }
 
+/* Locked in place: every copy sits in a folder whose files do not leave it.
+   The hatch layers UNDER the hover and selection washes rather than being
+   replaced by them, so a locked row that is also selected reads as both. The
+   hover rule comes last, as `.shelf-row:hover` already outranks selection. */
+.shelf-row--locked {
+  background: var(--lock-hatch);
+}
+
+.shelf-row--locked.shelf-row--selected {
+  background:
+    linear-gradient(var(--active-wash), var(--active-wash)),
+    var(--lock-hatch);
+}
+
+.shelf-row--locked:hover {
+  background:
+    linear-gradient(var(--hover-wash), var(--hover-wash)),
+    var(--lock-hatch);
+}
+
 /* Cut, waiting for a paste (#2204): the file manager's dim. */
 .shelf-row--cut > * {
   opacity: var(--opacity-disabled);
@@ -5394,6 +5431,42 @@ button.shelf-head-cell:hover {
   display: inline-flex;
   width: var(--entity-thumb);
   height: var(--entity-thumb);
+}
+
+/* The lock badge: a disc in the row's own ground, cut out of the mark's
+   top-start corner and hung as far past it as the version pill hangs past the
+   other (half the slot's padding), so it reads as sitting ON the mark. The
+   disc follows the row's wash so it never shows as a hole in a selection. */
+.shelf-row-lock {
+  position: absolute;
+  top: calc(var(--space-4) / -2);
+  left: calc(var(--space-4) / -2);
+  z-index: var(--z-raised);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--space-5);
+  height: var(--space-5);
+  border-radius: var(--radius-pill);
+  background: rgb(var(--v-theme-background));
+  box-shadow: 0 0 0 1px rgb(var(--v-theme-border));
+  color: rgb(var(--v-theme-on-background));
+}
+
+.shelf-row--selected .shelf-row-lock {
+  background:
+    linear-gradient(var(--active-wash), var(--active-wash)),
+    rgb(var(--v-theme-background));
+}
+
+.shelf-row:hover .shelf-row-lock {
+  background:
+    linear-gradient(var(--hover-wash), var(--hover-wash)),
+    rgb(var(--v-theme-background));
+}
+
+.shelf-row-lock .v-icon {
+  font-size: var(--text-xs);
 }
 
 /* A missing file's glyph, in the mark's place and at its size. */

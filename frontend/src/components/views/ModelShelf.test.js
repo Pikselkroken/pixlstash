@@ -4916,6 +4916,13 @@ describe("the open folder (#2203)", () => {
         wrapper.find(`.shelf-row[data-row-key='${id}'] .shelf-row-file`).text();
       expect(fileLine(2)).toContain("in a locked folder");
       expect(fileLine(1)).not.toContain("locked");
+      // And it is seen before it is read: the hatch on the row, the padlock
+      // on its mark, on the locked row alone.
+      const rowEl = (id) => wrapper.find(`.shelf-row[data-row-key='${id}']`);
+      expect(rowEl(2).classes()).toContain("shelf-row--locked");
+      expect(rowEl(2).find(".shelf-row-mark .shelf-row-lock").exists()).toBe(true);
+      expect(rowEl(1).classes()).not.toContain("shelf-row--locked");
+      expect(rowEl(1).find(".shelf-row-lock").exists()).toBe(false);
       wrapper.unmount();
     });
 

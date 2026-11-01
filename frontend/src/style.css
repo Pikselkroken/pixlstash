@@ -98,6 +98,16 @@ body {
      the panel. Inset so the track stays --control-h-bar; a border makes it 34. */
   --track-trough: rgba(var(--v-theme-scrim), 0.34);
   --track-ring: rgba(var(--v-theme-on-surface), 0.4);
+  /* LOCKED IS A HATCH: a row whose file cannot leave its folder (the model
+     shelf). 1px diagonal ink lines, 7px apart, at 6% ink: a texture rather
+     than a hue, because olive, amber and the type tints already mean something
+     on that row, and a texture survives greyscale. Low enough that text over
+     it keeps its contrast. A background IMAGE, so it layers under a wash. */
+  --lock-hatch: repeating-linear-gradient(
+    135deg,
+    rgba(var(--v-theme-on-surface), 0.06) 0 1px,
+    transparent 1px 7px
+  );
 
   /* Drive-band capacity meter (#893). Three segments, so TWO adjacencies to
      keep readable: ours|other and other|free. `ours` is `primary` in both
@@ -168,6 +178,12 @@ body {
   /* See the dark block. A light ground needs far less of the tint. */
   --track-trough: rgba(var(--v-theme-scrim), 0.1);
   --track-ring: rgba(var(--v-theme-scrim), 0.26);
+  /* See the dark block. A light ground needs a step more ink to show. */
+  --lock-hatch: repeating-linear-gradient(
+    135deg,
+    rgba(var(--v-theme-on-surface), 0.07) 0 1px,
+    transparent 1px 7px
+  );
 
   /* Drive-band capacity meter (#893) - see the dark block above for the rule.
      Here the canvas is near-white, so the neutral goes to the DARK extreme,
