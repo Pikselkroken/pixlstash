@@ -20,6 +20,7 @@ vi.mock("../api/pictures", () => ({ makeShareCopies: vi.fn() }));
 import { isReadOnly } from "../utils/apiClient";
 import { makeShareCopies } from "../api/pictures";
 import { resetShareDragForTests } from "../utils/shareDrag.js";
+import { useNoticeStore } from "../stores/useNoticeStore";
 import { useGridDragDrop } from "./useGridDragDrop.js";
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -144,5 +145,37 @@ describe("dragging pictures out of the grid (#2420)", () => {
     delete window.pixlstashDesktop;
     html5(grid());
     expect(makeShareCopies).not.toHaveBeenCalled();
+  });
+});
+
+describe("a drop on the grid that imports nothing", () => {
+  /** A drop event: `types` as the browser reports them, `files` as File objects. */
+  function drop(types, files = []) {
+    return {
+      dataTransfer: {
+        types,
+        files,
+        items: files.map((file) => ({ kind: "file", getAsFile: () => file })),
+        getData: () => "",
+      },
+    };
+  }
+
+  it("says the drop carried no files when it held only text", async () => {
+    // A huge selection dragged out of Nemo on X11 arrives as this.
+    delete window.pixlstashDesktop;
+    await grid().handleGridDrop(drop(["text/plain"]));
+    const last = useNoticeStore().notices.at(-1);
+    expect(last.text).toContain("carried no files");
+    expect(last.text).not.toContain("supported");
+  });
+
+  it("still says the files are unsupported when it held only unsupported files", async () => {
+    delete window.pixlstashDesktop;
+    await grid().handleGridDrop(
+      drop(["Files"], [new File(["x"], "notes.psd", { type: "image/vnd.adobe.photoshop" })]),
+    );
+    const last = useNoticeStore().notices.at(-1);
+    expect(last.text).toContain("None of those files are a supported");
   });
 });
