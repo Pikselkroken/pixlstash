@@ -1802,6 +1802,10 @@ describe("the receipts", () => {
     expect(editReceipt(5, { display_name: "Clementine" })).toBe(
       "Renamed to Clementine.",
     );
+    // A rename beside another column names both, not just the rename.
+    expect(
+      editReceipt(1, { display_name: "Clementine", base_model: "SDXL" }),
+    ).toBe("Set the name and base model on 1 model.");
   });
 
   it("reports the refusals, which are the interesting half", () => {

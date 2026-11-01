@@ -425,8 +425,11 @@ export function editReceipt(count, changes) {
     .map((key) => FIELD_WORDS[key] || key)
     .join(" and ");
   // A rename is one model or one stack (the server refuses anything wider), so
-  // a stack's member count is not news: it is still one name on one row.
-  if (changes.display_name !== undefined) {
+  // a stack's member count is not news: it is still one name on one row. Only
+  // when the name is all that was written: beside another column, the general
+  // receipt below names both.
+  const renameOnly = Object.keys(changes).length === 1;
+  if (changes.display_name !== undefined && renameOnly) {
     return changes.display_name
       ? `Renamed to ${changes.display_name}.`
       : "Cleared the name. The shelf shows one derived from the filename.";
