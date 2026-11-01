@@ -294,11 +294,12 @@
               :class="{
                 'rail-chip--conf': !many && !t.anomaly,
                 'rail-chip--anomaly': t.anomaly,
+                'rail-chip--neutral': chipNeutral(t),
                 'rail-chip--selected': isSelected(t.name),
                 'rail-chip--remove-hot': removeHot && isSelected(t.name),
                 'rail-chip--source': isDragSource('applied', t.name),
               }"
-              :style="{ '--tint': t.tint }"
+              :style="chipStyle(t)"
               :data-tag="t.name"
               :draggable="readOnly ? undefined : 'true'"
               @dragstart="onDragStart('applied', t.name, $event)"
@@ -665,6 +666,7 @@ import { useContextMenuAt } from "../../composables/useContextMenuAt";
 import { errorDetail } from "../../utils/apiError";
 import { hasNativeCopyContext, isTypingTarget } from "../../utils/dom.js";
 import { formatSentinelTag } from "../../utils/tags.js";
+import { chipText, colourKey, NEUTRAL_KEYS } from "../../utils/tagColour.js";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import { vSubmenuFit } from "../../utils/submenuFit";
 import Tooltip from "../widgets/Tooltip.vue";
@@ -838,6 +840,55 @@ const applied = computed(() => {
         a.name.localeCompare(b.name),
     );
 });
+
+// Colour-named tags fill with their colour (tagColour.js). The text ink depends
+// on the surface behind the chip, which the host decides: the rail's own, or the
+// lightbox's dark pane. So read the nearest opaque background once a mount and
+// again when the theme changes; a chip never reads its own ground.
+const ground = ref(null);
+const darkTheme = ref(false);
+
+function opaqueBehind(el) {
+  for (let node = el; node; node = node.parentElement) {
+    const m = getComputedStyle(node).backgroundColor.match(/^rgba?\(([^)]+)\)$/);
+    if (!m) continue;
+    const [r, g, b, a = 1] = m[1].split(",").map(Number);
+    if (a >= 1) return [r, g, b];
+  }
+  return null;
+}
+
+function readGround() {
+  darkTheme.value = document.documentElement.classList.contains(
+    "v-theme--pixlStashDark",
+  );
+  ground.value = opaqueBehind(rootRef.value);
+}
+
+onMounted(readGround);
+watch(
+  () => userPrefsStore.themeMode,
+  () => nextTick(readGround),
+);
+
+/**
+ * The chip's inline custom properties. An applied tag that names a colour
+ * takes its `--tag-*` fill and the ink its alpha needs over this ground; every
+ * other chip, anomalies included, carries only its tint, as before.
+ */
+function chipStyle(t) {
+  const style = { "--tint": t.tint };
+  const key = t.anomaly ? null : colourKey(t.name);
+  if (!key) return style;
+  const { ink } = chipText(key, t.tint, !many.value, ground.value, darkTheme.value);
+  style["--ink"] = `var(--tag-${key})`;
+  style["--chip-ink"] = ink.join(", ");
+  return style;
+}
+
+/** Black and white chips draw an on-surface edge; see `.rail-chip--neutral`. */
+const chipNeutral = (t) =>
+  !t.anomaly && NEUTRAL_KEYS.has(colourKey(t.name));
 
 // On three or more, the long tail of tags on just one picture folds behind a
 // link; anomalies never fold.
@@ -1827,7 +1878,8 @@ defineExpose({
   border: 1px solid rgba(var(--ink), var(--b));
   border-radius: var(--radius-sm);
   background: rgba(var(--ink), var(--a));
-  color: rgb(var(--v-theme-on-surface));
+  /* A colour-named chip sets --chip-ink (tagColour.js); the rest stay on-surface. */
+  color: rgb(var(--chip-ink, var(--v-theme-on-surface)));
   font-size: var(--tag-chip-font, var(--text-xs));
   overflow-wrap: anywhere;
 }
@@ -1841,6 +1893,13 @@ defineExpose({
 .rail-chip--anomaly {
   --ink: var(--v-theme-error);
   --b: calc(var(--a) + 0.25);
+}
+
+/* Black and white fill with no edge of their own: on the light surface white
+   vanishes and on the dark one black does. The edge is the on-surface ink, so
+   it re-inks with the lightbox pane like every other rail edge. */
+.rail-chip--neutral {
+  border-color: rgba(var(--v-theme-on-surface), 0.45);
 }
 
 .rail-chip__warn {

@@ -47,3 +47,30 @@ export async function assignTagsToGroup(tags, groupId) {
     apiClient.post(`/tag_groups/assign`, { tags, group_id: groupId }),
   );
 }
+
+/**
+ * Import a Danbooru tag database (.xlsx or .csv with english / category /
+ * subcategory columns) as the library's tag groups. The file always wins over
+ * PixlStash's default filings. Tags the user filed by hand, in another group
+ * in the file, move only with `overwriteUser`. One undoable operation unless
+ * `dryRun`, which parses and answers the plan without changing anything.
+ *
+ * Sent as multipart: the content type is left to the browser (the transport
+ * clears the JSON default for a FormData body). The timeout is raised because
+ * a 13 MB sheet takes seconds to parse, and a timed-out commit may still have
+ * landed.
+ *
+ * @param {File|Blob} file
+ * @param {{dryRun?: boolean, overwriteUser?: boolean}} [options]
+ * @returns {Promise<{plan: Object, groups?: Array, tags?: Object}>} the plan,
+ *   plus the whole map when this was not a dry run.
+ */
+export async function importTagGroups(file, { dryRun = false, overwriteUser = false } = {}) {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("dry_run", dryRun ? "true" : "false");
+  form.append("overwrite_user", overwriteUser ? "true" : "false");
+  return unwrap(
+    apiClient.post(`/tag_groups/import`, form, { timeout: 180_000 }),
+  );
+}

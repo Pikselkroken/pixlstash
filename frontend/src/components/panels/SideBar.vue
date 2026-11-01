@@ -21,6 +21,7 @@ import UserSettingsDialog from "../settings/UserSettingsDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
 import Segmented from "../widgets/Segmented.vue";
 import Tooltip from "../widgets/Tooltip.vue";
+import ReviewAbortDialog from "../reviews/ReviewAbortDialog.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import FolderMappingWizard from "../folders/FolderMappingWizard.vue";
 import { useFolderMappingStore } from "../../stores/useFolderMappingStore";
@@ -176,7 +177,7 @@ const route = useRoute();
 const hasFolderFilter = computed(
   () => selectionStore.selectedFolderFilter != null,
 );
-// Tags to review is a view drawn over whichever route it was opened from
+// Tags is a view drawn over whichever route it was opened from
 // (`?review=` on that route, useReviewRoute.js), so while it is up it owns the
 // highlight and the route's own destination row must not light beside it.
 const isTagReviewView = computed(() => reviewSessionsStore.overlayOpen);
@@ -236,7 +237,7 @@ const isInboxView = computed(
   () => route.name === "inbox" && !isTagReviewView.value,
 );
 
-// The board is the "Tags to review" row's page; a review is its own child's.
+// The board is the "Tags" row's page; a review is its own child's.
 const reviewBoardShown = computed(
   () => reviewSessionsStore.view.type === "board",
 );
@@ -367,6 +368,12 @@ const setCtxAppearanceMenuPos = ref({ top: 0, left: 0, openUp: false });
 const sidebarCtxProject = ref(null); // { id, name } or null
 const sidebarCtxAllPictures = ref(false); // true when ctx opened from All Pictures row
 const sidebarCtxScrapheap = ref(false); // true when ctx opened from the Scrapheap row
+const sidebarCtxReview = ref(null); // { id, tag } when ctx opened from an open review row
+// The review row the menu was opened from: the abort dialog hands focus back
+// to it. Not reactive, only read when the dialog closes.
+let sidebarCtxReviewEl = null;
+const reviewAbortRef = ref(null);
+const tagReviewRowEl = ref(null);
 const sidebarCtxDeleteIds = ref([]); // character IDs to delete via context menu
 // Right-click on a section HEADER (not an item): 'people' | 'sets', or null. Offers the "create/add" action.
 const sidebarCtxHeader = ref(null);
@@ -2176,6 +2183,7 @@ function openSidebarCtxMenu(type, item, event) {
   // Reset here rather than in every branch: only the scrapheap branch turns it
   // on, so a single top-level reset keeps the per-type blocks below untouched.
   sidebarCtxScrapheap.value = false;
+  sidebarCtxReview.value = null;
   // Same treatment for the header/empty targets - reset up front so the legacy
   // per-item branches below never have to clear them.
   sidebarCtxHeader.value = null;
@@ -2192,6 +2200,19 @@ function openSidebarCtxMenu(type, item, event) {
     sidebarCtxDeleteIds.value = [];
     if (type === "header") sidebarCtxHeader.value = item;
     else if (type === "empty") sidebarCtxEmpty.value = true;
+    sidebarCtxX.value = event.clientX;
+    sidebarCtxY.value = event.clientY;
+    sidebarCtxVisible.value = true;
+    return;
+  }
+  if (type === "review") {
+    sidebarCtxCharacter.value = null;
+    sidebarCtxSet.value = null;
+    sidebarCtxProject.value = null;
+    sidebarCtxAllPictures.value = false;
+    sidebarCtxDeleteIds.value = [];
+    sidebarCtxReview.value = item;
+    sidebarCtxReviewEl = event.currentTarget ?? null;
     sidebarCtxX.value = event.clientX;
     sidebarCtxY.value = event.clientY;
     sidebarCtxVisible.value = true;
@@ -2252,6 +2273,56 @@ function closeSidebarCtxMenu() {
   sidebarCtxVisible.value = false;
   setCtxIconMenuOpen.value = false;
   setCtxColorMenuOpen.value = false;
+}
+
+// The Menu key and Shift+F10 on a focused review row: its menu, anchored to
+// the row, with the first item focused (as the chip menus in RailTags do).
+function onReviewRowKey(review, event) {
+  if (event.key !== "ContextMenu" && !(event.key === "F10" && event.shiftKey)) return;
+  event.preventDefault();
+  const rowEl = event.currentTarget;
+  const rect = rowEl.getBoundingClientRect();
+  openSidebarCtxMenu("review", review, {
+    clientX: rect.left,
+    clientY: rect.bottom,
+    currentTarget: rowEl,
+  });
+  nextTick(() => sidebarCtxMenuEl.value?.querySelector(".ctx-item")?.focus());
+}
+
+// "Abort review…" in the row menu: the same Keep / Undo / Cancel dialog the
+// board rail used to own.
+function abortReviewFromCtx() {
+  const review = sidebarCtxReview.value;
+  const rowEl = sidebarCtxReviewEl;
+  sidebarCtxReviewEl = null;
+  closeSidebarCtxMenu();
+  if (!review) return;
+  reviewAbortRowEl = rowEl;
+  reviewAbortRef.value?.open(review.id);
+}
+
+// "Archive review" in the row menu: ends the review keeping its decisions, the
+// same store call as the session view's Archive button. No confirm, since
+// nothing is discarded. The row goes, so focus moves to the Tags row.
+function archiveReviewFromCtx() {
+  const review = sidebarCtxReview.value;
+  closeSidebarCtxMenu();
+  if (!review) return;
+  reviewSessionsStore.archiveSession(review.id);
+  nextTick(() => tagReviewRowEl.value?.focus());
+}
+
+// Focus goes back to the review row the abort was opened from. An abort
+// removes that row, so then it falls to the Tags row.
+let reviewAbortRowEl = null;
+function onReviewAbortClosed() {
+  const rowEl = reviewAbortRowEl;
+  reviewAbortRowEl = null;
+  nextTick(() => {
+    const target = rowEl?.isConnected ? rowEl : tagReviewRowEl.value;
+    target?.focus();
+  });
 }
 
 // True when the Scrapheap holds nothing to empty - drives the disabled state of
@@ -5014,12 +5085,13 @@ defineExpose({
               <Tooltip text="There are duplicates to review" activator="parent" />
             </span>
           </button>
-          <!-- Tags to review: a view like Duplicates, so it lights while it is
+          <!-- Tags: a view like Duplicates, so it lights while it is
                up. Its open reviews nest under it, each lit while it is the one
                on screen, then "New review…". The list is the view's own data,
                so the children show while the view is open. -->
           <button
             v-if="!isReadOnly"
+            ref="tagReviewRowEl"
             type="button"
             :class="['sidebar-list-item', { active: isTagReviewView }]"
             :aria-current="
@@ -5030,7 +5102,7 @@ defineExpose({
             <span class="sidebar-list-icon"
               ><v-icon size="16">mdi-tag-check-outline</v-icon></span
             >
-            <span class="sidebar-list-label">Tags to review</span>
+            <span class="sidebar-list-label">Tags</span>
           </button>
           <template v-if="!isReadOnly && isTagReviewView">
             <button
@@ -5047,6 +5119,10 @@ defineExpose({
               "
               :aria-label="`Review “${review.tag}”, ${reviewProgressText(review)} decided`"
               @click="reviewSessionsStore.openSession(review.id)"
+              @contextmenu.prevent="
+                openSidebarCtxMenu('review', review, $event)
+              "
+              @keydown="onReviewRowKey(review, $event)"
             >
               <span class="sidebar-list-icon"
                 ><v-icon size="14">mdi-tag-outline</v-icon></span
@@ -6243,6 +6319,12 @@ defineExpose({
     {{ sidebarNotice }}
   </div>
 
+  <!-- Abort confirmation for an open review; opened from its row menu. -->
+  <ReviewAbortDialog
+    ref="reviewAbortRef"
+    @closed="onReviewAbortClosed"
+  />
+
   <!-- ── Sidebar context menu ──────────────────────────────────── -->
   <Teleport to="body">
     <div
@@ -6306,6 +6388,24 @@ defineExpose({
         >
           <v-icon class="ctx-icon">mdi-share-variant-outline</v-icon>
           Share
+        </button>
+      </template>
+      <template v-if="sidebarCtxReview">
+        <button
+          class="ctx-item ctx-item--danger"
+          :disabled="isReadOnly"
+          @click="abortReviewFromCtx()"
+        >
+          <v-icon class="ctx-icon">mdi-close-circle-outline</v-icon>
+          Abort review…
+        </button>
+        <button
+          class="ctx-item"
+          :disabled="isReadOnly"
+          @click="archiveReviewFromCtx()"
+        >
+          <v-icon class="ctx-icon">mdi-archive-check-outline</v-icon>
+          Archive review
         </button>
       </template>
       <template v-if="sidebarCtxScrapheap">

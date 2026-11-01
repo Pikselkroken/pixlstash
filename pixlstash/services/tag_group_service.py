@@ -1,37 +1,66 @@
-"""Tag groups: the library-wide tag-name -> group map, and its undo (issue #2469).
+"""Tag groups: the library-wide tag-name -> group map, its undo, the default
+seeding and the Danbooru tag-file import (issue #2469).
 
-Every public function takes a pre-opened session (the ``*_in_session`` rule,
-docs/backend_architecture.md section 10.1) and runs on the DB writer through the
-route, so the change and its operation row commit together. The map is library
-vocabulary, not a picture facet, so an undoable move records its own payload
-(:func:`operation_log_service.record_payload_operation_in_session`) and a
-post-restore hook writes that payload back on undo and redo. The route module
-imports this module, which is what registers the hook at start-up.
+Every public writer function takes a pre-opened session (the ``*_in_session``
+rule, docs/backend_architecture.md section 10.1) and runs on the DB writer, so the
+change and its operation row commit together. The map is library vocabulary, not
+a picture facet, so an undoable change records its own payload
+(:func:`operation_log_service.record_payload_operation_in_session`). Each tag's
+payload is ``{"group": id|null, "default": bool}``, so undo restores provenance as
+well as the group; the post-restore hook also accepts the older bare ``id|null``
+value. The route module imports this module, which registers the hook at start-up.
+
+Provenance: ``is_default`` is True for a filing seeding made and False for one the
+user made. A user move and an import both write False. Seeding never rewrites an
+existing row.
 """
 
+import csv
+import io
 import json
+import os
+from pathlib import Path
 from typing import Any, Optional
 
 from sqlalchemy import func
 from sqlmodel import Session, select
 
 from pixlstash.db_models import TagGroup, TagGroupMember
+from pixlstash.db_models.library_settings import LibrarySettings
 from pixlstash.db_models.operation import TARGET_TAG_GROUP
-from pixlstash.db_models.tag import is_tag_sentinel
+from pixlstash.db_models.tag import Tag, is_tag_sentinel
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import operation_log_service
 from pixlstash.services.operation_log_service import (
     RESTORE_UNDO,
     record_payload_operation_in_session,
 )
+from pixlstash.services.tag_group_defaults import (
+    DEFAULT_GROUP_NAMES,
+    group_for,
+    normalise_tag,
+)
 from pixlstash.utils.sql_chunking import chunked
+from pixlstash.utils.xlsx_reader import XlsxError, iter_first_sheet_rows
 
 logger = get_logger(__name__)
 
+# One op type for every change to the map. An import reuses it rather than
+# registering its own: undo runs one hook call per op_type, so a batch that mixes
+# a move and an import of the same tag would otherwise restore them out of order.
 OP_TYPE_MOVE = "tag_groups.move"
 NAME_MAX_LENGTH = 64
 MAX_ASSIGN_TAGS = 5000
 UNGROUPED = "Ungrouped"
+
+DEFAULT_TAGS_FILE = (
+    Path(__file__).resolve().parent.parent
+    / "data"
+    / "tag_groups"
+    / "default_tag_groups.json"
+)
+IMPORT_MAX_BYTES = 64 * 1024 * 1024
+IMPORT_CONFLICT_SAMPLE = 10
 
 
 class TagGroupError(Exception):
@@ -143,6 +172,25 @@ def _move_summary(count: int, tag_names: list[str], destination: str) -> str:
     return f"Move {count} tags to {destination}"
 
 
+def _state(member: Optional[TagGroupMember]) -> tuple[Optional[int], bool]:
+    """A tag's (group_id, is_default); an unfiled tag is (None, False)."""
+    if member is None:
+        return None, False
+    return member.group_id, bool(member.is_default)
+
+
+def _payload(group_id: Optional[int], is_default: bool) -> dict[str, Any]:
+    return {"group": group_id, "default": bool(is_default)}
+
+
+def _decode_payload(value: Any) -> tuple[Optional[int], bool]:
+    """A recorded tag state: ``{"group", "default"}``, or the older bare group id."""
+    if isinstance(value, dict):
+        group_id = value.get("group")
+        return (None if group_id is None else int(group_id)), bool(value.get("default"))
+    return (None if value is None else int(value)), False
+
+
 def create_group(db, name: str) -> dict[str, Any]:
     """Create a group on the writer queue; see :func:`create_group_in_session`."""
     return db.run_task(create_group_in_session, name)
@@ -178,8 +226,10 @@ def assign_tags_in_session(
 ) -> dict[str, Any]:
     """File *tags* under *group_id* (``None`` = Ungrouped) and record one undo.
 
-    Only tags whose group actually changes are written and recorded; a request
-    that changes nothing records no operation.
+    A tag already in *group_id* is left alone, default or not: moving it there is
+    not a move, so it keeps its provenance. A tag that does move becomes a user
+    filing (``is_default`` False). Only changed tags are written and recorded; a
+    request that changes nothing records no operation.
 
     Args:
         session: The writer's session; commits the change and its row together.
@@ -204,10 +254,8 @@ def assign_tags_in_session(
                 select(TagGroupMember).where(TagGroupMember.tag.in_(chunk))
             ).all():
                 members[member.tag] = member
-        before: dict[str, Optional[int]] = {
-            name: members[name].group_id if name in members else None for name in names
-        }
-        changed = [name for name in names if before[name] != group_id]
+        before = {name: _state(members.get(name)) for name in names}
+        changed = [name for name in names if before[name][0] != group_id]
         if not changed:
             return read_map_in_session(session)
 
@@ -218,17 +266,20 @@ def assign_tags_in_session(
                     session.delete(member)
             elif member is not None:
                 member.group_id = group_id
+                member.is_default = False
                 session.add(member)
             else:
-                session.add(TagGroupMember(tag=name, group_id=group_id))
+                session.add(
+                    TagGroupMember(tag=name, group_id=group_id, is_default=False)
+                )
         session.flush()
 
         record_payload_operation_in_session(
             session,
             op_type=OP_TYPE_MOVE,
             target_type=TARGET_TAG_GROUP,
-            before={"tags": {name: before[name] for name in changed}},
-            after={"tags": {name: group_id for name in changed}},
+            before={"tags": {n: _payload(*before[n]) for n in changed}},
+            after={"tags": {n: _payload(group_id, False) for n in changed}},
             summary=_move_summary(len(changed), changed, destination),
             actor=request_context.get("actor"),
             source=request_context.get("source", "external"),
@@ -242,10 +293,407 @@ def assign_tags_in_session(
         raise
 
 
+# ---------------------------------------------------------------------------
+# Default groups: seeding
+# ---------------------------------------------------------------------------
+
+
+def load_default_tags(path: Optional[Path] = None) -> Optional[dict[str, Any]]:
+    """Read the default filings file.
+
+    Returns:
+        ``{"version": int, "groups": [(name, [tag, ...]), ...]}`` in file order,
+        or ``None`` when the file is absent (logged): a build without it seeds
+        nothing rather than failing to open a library.
+
+    Raises:
+        ValueError: The file is not valid JSON or does not have the expected shape.
+    """
+    target = Path(path) if path is not None else DEFAULT_TAGS_FILE
+    try:
+        text = target.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        logger.warning(
+            "tag_groups: default tag file %s is missing; no default groups are seeded",
+            target,
+        )
+        return None
+    try:
+        raw = json.loads(text)
+    except ValueError as exc:
+        raise ValueError(f"{target} is not valid JSON: {exc}") from None
+    version = raw.get("version") if isinstance(raw, dict) else None
+    if not isinstance(version, int) or isinstance(version, bool):
+        raise ValueError(f"{target} has no integer 'version'")
+    groups: list[tuple[str, list[str]]] = []
+    for entry in raw.get("groups") or []:
+        name = str((entry or {}).get("name") or "").strip()
+        if not 1 <= len(name) <= NAME_MAX_LENGTH:
+            raise ValueError(f"{target} has a group with no usable name")
+        tags = [normalise_tag(t) for t in (entry.get("tags") or [])]
+        groups.append((name, [t for t in tags if t]))
+    return {"version": version, "groups": groups}
+
+
+def seed_defaults_in_session(
+    session: Session, defaults: dict[str, Any]
+) -> Optional[dict[str, Any]]:
+    """Seed the default groups and filings if this library is behind the file.
+
+    Creates each :data:`DEFAULT_GROUP_NAMES` group that does not exist yet
+    (case-insensitive name match reuses one), then files every default tag that
+    has no member row. Existing rows are never touched, so a user's filing
+    survives any re-seed. Not an undoable operation. Does not undo anything the
+    user later changes.
+
+    Returns:
+        Counts for the log line, or ``None`` when the library is already current.
+    """
+    settings = session.exec(select(LibrarySettings)).first()
+    if settings is None:
+        settings = LibrarySettings()
+        session.add(settings)
+        session.flush()
+    seeded = settings.tag_groups_seeded_version
+    if seeded is not None and seeded >= defaults["version"]:
+        return None
+    try:
+        groups = session.exec(select(TagGroup)).all()
+        by_key = {g.name.casefold(): g for g in groups}
+        position = max((g.position for g in groups), default=-1) + 1
+        wanted = list(DEFAULT_GROUP_NAMES) + [
+            name
+            for name, _ in defaults["groups"]
+            if name.casefold() not in {d.casefold() for d in DEFAULT_GROUP_NAMES}
+        ]
+        created = 0
+        for name in wanted:
+            if name.casefold() in by_key:
+                continue
+            group = TagGroup(name=name, position=position)
+            position += 1
+            session.add(group)
+            session.flush()
+            by_key[name.casefold()] = group
+            created += 1
+
+        filed_already = set(session.exec(select(TagGroupMember.tag)).all())
+        rows: list[dict[str, Any]] = []
+        for name, tags in defaults["groups"]:
+            group_id = by_key[name.casefold()].id
+            for tag in tags:
+                if tag in filed_already:
+                    continue
+                filed_already.add(tag)
+                rows.append({"tag": tag, "group_id": group_id, "is_default": True})
+        if rows:
+            session.execute(TagGroupMember.__table__.insert(), rows)
+        settings.tag_groups_seeded_version = defaults["version"]
+        session.add(settings)
+        session.commit()
+        return {
+            "version": defaults["version"],
+            "groups_created": created,
+            "tags_filed": len(rows),
+        }
+    except BaseException:
+        session.rollback()
+        raise
+
+
+def seed_default_groups(db, path: Optional[Path] = None) -> Optional[dict[str, Any]]:
+    """Seed this library's default groups on the writer; logs one info line when it acts.
+
+    The file is read here, off the writer, and only the filing runs on it. Raises
+    on a malformed file or a database error; the caller decides whether a library
+    still opens without its defaults (the server logs and carries on).
+    """
+    defaults = load_default_tags(path)
+    if defaults is None:
+        return None
+    result = db.run_task(seed_defaults_in_session, defaults)
+    if result is not None:
+        logger.info(
+            "tag_groups: seeded default groups from version %d: %d group(s) created, "
+            "%d tag(s) filed",
+            result["version"],
+            result["groups_created"],
+            result["tags_filed"],
+        )
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Import of a Danbooru tag file
+# ---------------------------------------------------------------------------
+
+
+def parse_tag_file(filename: str, data: bytes) -> list[tuple[str, str, str]]:
+    """Read an uploaded .xlsx or .csv into ``(english, category, subcategory)`` rows.
+
+    The ``*_en`` columns are preferred when present and non-empty. Rows with no
+    ``english`` are dropped. Runs off the writer.
+
+    Raises:
+        TagGroupError: 400 for an unsupported type, an unreadable file, or a file
+            with no ``english`` or ``category`` column.
+    """
+    lower = (filename or "").lower()
+    if lower.endswith(".xlsx"):
+        try:
+            raw_rows = list(iter_first_sheet_rows(data))
+        except XlsxError as exc:
+            logger.warning("tag_groups: refused import file %r: %s", filename, exc)
+            raise TagGroupError(400, f"Could not read the .xlsx file: {exc}") from None
+    elif lower.endswith(".csv"):
+        try:
+            text = data.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            raise TagGroupError(400, "The .csv file is not UTF-8 text") from None
+        try:
+            raw_rows = [
+                row
+                for row in csv.reader(io.StringIO(text))
+                if any(cell.strip() for cell in row)
+            ]
+        except csv.Error as exc:
+            raise TagGroupError(400, f"Could not read the .csv file: {exc}") from None
+    else:
+        raise TagGroupError(400, "Upload a .xlsx or .csv tag file")
+    if not raw_rows:
+        raise TagGroupError(400, "The tag file is empty")
+
+    index: dict[str, int] = {}
+    for position, name in enumerate(str(c).strip().lower() for c in raw_rows[0]):
+        index.setdefault(name, position)
+    missing = [name for name in ("english", "category") if name not in index]
+    if missing:
+        raise TagGroupError(
+            400, f"The tag file has no column named {', '.join(missing)}"
+        )
+
+    def cell(row: list, position: Optional[int]) -> str:
+        if position is None or position >= len(row):
+            return ""
+        return str(row[position]).strip()
+
+    english_at = index["english"]
+    category_at = index["category"]
+    category_en_at = index.get("category_en")
+    subcategory_at = index.get("subcategory")
+    subcategory_en_at = index.get("subcategory_en")
+    rows: list[tuple[str, str, str]] = []
+    for raw in raw_rows[1:]:
+        english = cell(raw, english_at)
+        if not english:
+            continue
+        category = cell(raw, category_en_at) or cell(raw, category_at)
+        subcategory = cell(raw, subcategory_en_at) or cell(raw, subcategory_at)
+        rows.append((english, category, subcategory))
+    return rows
+
+
+def _import_summary(count: int, filename: str) -> str:
+    base = os.path.basename((filename or "").replace("\\", "/")) or "tag file"
+    noun = "tag" if count == 1 else "tags"
+    return f"Import {count:,} {noun} from {base[:80]}"
+
+
+def import_tags_in_session(
+    session: Session,
+    rows: list[tuple[str, str, str]],
+    default_tags: frozenset[str],
+    *,
+    filename: str,
+    dry_run: bool,
+    overwrite_user: bool,
+    request_context: dict[str, Any],
+) -> dict[str, Any]:
+    """File an imported tag table on the writer; one undoable operation.
+
+    The file wins over PixlStash's defaults and over Ungrouped tags. A tag the
+    user filed (``is_default`` False) under a different group is a conflict: it is
+    kept unless *overwrite_user* is set. Only tags the library holds or the
+    default vocabulary names are filed; the rest are counted and ignored. Groups
+    the import needs are created, and they stay (empty) after an undo.
+
+    Args:
+        session: The writer's session.
+        rows: ``(english, category, subcategory)`` from :func:`parse_tag_file`.
+        default_tags: Tag names of the default vocabulary.
+        filename: The uploaded name, for the undo summary.
+        dry_run: Report the plan and change nothing.
+        overwrite_user: Re-file tags the user filed, instead of keeping them.
+        request_context: ``operation_log_service.request_context(request)``.
+
+    Returns:
+        ``{"plan": {...}}`` for a dry run; otherwise the whole map plus ``plan``.
+    """
+    try:
+        targets: dict[str, str] = {}
+        adult: set[str] = set()
+        for english, category, subcategory in rows:
+            tag = normalise_tag(english)
+            if not tag:
+                continue
+            group = group_for(tag, category, subcategory)
+            if group is None:
+                adult.add(tag)
+            elif tag not in targets:
+                # Names are capped to the column's length; a longer category
+                # would otherwise be a group no UI can show whole.
+                targets[tag] = group[:NAME_MAX_LENGTH]
+        skipped_adult = len(adult.difference(targets))
+
+        library_tags = {
+            t
+            for t in session.exec(select(Tag.tag).distinct()).all()
+            if not is_tag_sentinel(t)
+        }
+        groups = session.exec(
+            select(TagGroup).order_by(TagGroup.position, TagGroup.id)
+        ).all()
+        by_key = {g.name.casefold(): g for g in groups}
+        members = {m.tag: m for m in session.exec(select(TagGroupMember)).all()}
+
+        skipped_not_in_library = 0
+        changes: list[tuple[str, str, Optional[TagGroupMember]]] = []
+        conflicts: list[str] = []
+        from_defaults = from_ungrouped = overwritten = 0
+        for tag in sorted(targets):
+            if tag not in library_tags and tag not in default_tags:
+                skipped_not_in_library += 1
+                continue
+            name = targets[tag]
+            member = members.get(tag)
+            if member is None:
+                changes.append((tag, name, None))
+                from_ungrouped += 1
+            elif member.is_default:
+                changes.append((tag, name, member))
+                from_defaults += 1
+            else:
+                target = by_key.get(name.casefold())
+                if target is not None and member.group_id == target.id:
+                    continue
+                conflicts.append(tag)
+                if overwrite_user:
+                    changes.append((tag, name, member))
+                    overwritten += 1
+
+        # Keyed by casefold: "Artist" and "artist" are one group, not two.
+        groups_created: list[str] = []
+        created_keys: set[str] = set()
+        for _, name, _ in changes:
+            key = name.casefold()
+            if key not in by_key and key not in created_keys:
+                created_keys.add(key)
+                groups_created.append(name)
+        plan = {
+            "rows": len(rows),
+            "filed": len(changes),
+            "from_defaults": from_defaults,
+            "from_ungrouped": from_ungrouped,
+            "user_conflicts": len(conflicts),
+            "user_conflict_sample": conflicts[:IMPORT_CONFLICT_SAMPLE],
+            "user_overwritten": overwritten,
+            "groups_created": groups_created,
+            "skipped_adult_or_uncategorised": skipped_adult,
+            "skipped_not_in_library": skipped_not_in_library,
+        }
+        if dry_run:
+            return {"plan": plan}
+
+        if changes:
+            position = max((g.position for g in groups), default=-1) + 1
+            for name in groups_created:
+                group = TagGroup(name=name, position=position)
+                position += 1
+                session.add(group)
+                session.flush()
+                by_key[name.casefold()] = group
+
+            before_map: dict[str, Any] = {}
+            after_map: dict[str, Any] = {}
+            inserts: list[dict[str, Any]] = []
+            for tag, name, member in changes:
+                target = by_key[name.casefold()]
+                if member is None:
+                    before_map[tag] = _payload(None, False)
+                    inserts.append(
+                        {"tag": tag, "group_id": target.id, "is_default": False}
+                    )
+                else:
+                    before_map[tag] = _payload(member.group_id, member.is_default)
+                    member.group_id = target.id
+                    member.is_default = False
+                    session.add(member)
+                after_map[tag] = _payload(target.id, False)
+            if inserts:
+                session.execute(TagGroupMember.__table__.insert(), inserts)
+            session.flush()
+            record_payload_operation_in_session(
+                session,
+                op_type=OP_TYPE_MOVE,
+                target_type=TARGET_TAG_GROUP,
+                before={"tags": before_map},
+                after={"tags": after_map},
+                summary=_import_summary(len(changes), filename),
+                actor=request_context.get("actor"),
+                source=request_context.get("source", "external"),
+                origin_client_id=request_context.get("origin_client_id"),
+                batch_id=request_context.get("batch_id"),
+            )
+            session.commit()
+        result = read_map_in_session(session)
+        result["plan"] = plan
+        return result
+    except BaseException:
+        session.rollback()
+        raise
+
+
+def import_tag_file(
+    db,
+    *,
+    filename: str,
+    data: bytes,
+    dry_run: bool,
+    overwrite_user: bool,
+    request_context: dict[str, Any],
+) -> dict[str, Any]:
+    """Parse off the writer, then file on the writer; see :func:`import_tags_in_session`."""
+    rows = parse_tag_file(filename, data)
+    defaults = load_default_tags()
+    default_tags = (
+        frozenset(tag for _, tags in defaults["groups"] for tag in tags)
+        if defaults
+        else frozenset()
+    )
+    return db.run_task(
+        import_tags_in_session,
+        rows,
+        default_tags,
+        filename=filename,
+        dry_run=dry_run,
+        overwrite_user=overwrite_user,
+        request_context=request_context,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Undo / redo
+# ---------------------------------------------------------------------------
+
+
 def _write_member(
-    session: Session, tag: str, group_id: Optional[int], operation_id: Optional[int]
+    session: Session,
+    tag: str,
+    group_id: Optional[int],
+    is_default: bool,
+    operation_id: Optional[int],
 ) -> None:
-    """Set one tag's group, or make it Ungrouped. A vanished group is Ungrouped."""
+    """Set one tag's filing, or make it Ungrouped. A vanished group is Ungrouped."""
     if group_id is not None and session.get(TagGroup, int(group_id)) is None:
         logger.warning(
             "tag_groups: operation %s restores %r into group %s, which no longer "
@@ -261,9 +709,12 @@ def _write_member(
             session.delete(member)
     elif member is not None:
         member.group_id = int(group_id)
+        member.is_default = bool(is_default)
         session.add(member)
     else:
-        session.add(TagGroupMember(tag=tag, group_id=int(group_id)))
+        session.add(
+            TagGroupMember(tag=tag, group_id=int(group_id), is_default=bool(is_default))
+        )
 
 
 def restore_tag_group_moves_in_session(
@@ -271,9 +722,10 @@ def restore_tag_group_moves_in_session(
 ) -> None:
     """Post-restore hook for ``tag_groups.move``: write the recorded map back.
 
-    Undo walks newest-first, so the oldest recorded "before" of a tag wins; redo
-    walks oldest-first, so the newest "after" wins. Sorting here rather than
-    trusting the caller's order keeps that true for any batch. Does not commit.
+    Restores each tag's group and provenance. Undo walks newest-first, so the
+    oldest recorded "before" of a tag wins; redo walks oldest-first, so the newest
+    "after" wins. Sorting here rather than trusting the caller's order keeps that
+    true for any batch. Does not commit.
     """
     undo = direction == RESTORE_UNDO
     ordered = sorted(operations, key=lambda op: op.id or 0, reverse=undo)
@@ -290,8 +742,9 @@ def restore_tag_group_moves_in_session(
                 exc,
             )
             raise
-        for tag, group_id in (payload.get("tags") or {}).items():
-            _write_member(session, tag, group_id, operation.id)
+        for tag, value in (payload.get("tags") or {}).items():
+            group_id, is_default = _decode_payload(value)
+            _write_member(session, tag, group_id, is_default, operation.id)
 
 
 operation_log_service.register_post_restore_hook(

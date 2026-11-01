@@ -25,6 +25,7 @@ vi.mock("../../api/tagGroups", () => ({
   createTagGroup: vi.fn(),
   reorderTagGroups: vi.fn(),
   assignTagsToGroup: vi.fn(),
+  importTagGroups: vi.fn(),
 }));
 
 vi.mock("../../api/tags", () => ({
@@ -36,10 +37,25 @@ vi.mock("../../stores/useOperationStore", () => ({
   useOperationStore: () => ({ refresh: vi.fn().mockResolvedValue() }),
 }));
 
+// The import dialog sits on AppDialog, which sits on Vuetify's VDialog: a
+// passthrough that renders its slot only while open, as the real one does.
+vi.mock("vuetify/components", () => ({
+  VIcon: { name: "v-icon", template: "<i><slot /></i>" },
+  VDialog: {
+    name: "v-dialog",
+    props: ["modelValue"],
+    template: '<div v-if="modelValue" class="v-dialog-stub"><slot /></div>',
+  },
+  VTooltip: {
+    template: '<slot name="activator" :props="{}" :is-active="false" />',
+  },
+}));
+
 import TagGroupsBoard from "./TagGroupsBoard.vue";
 import { useTagGroupsStore } from "../../stores/useTagGroupsStore";
 import * as tagGroupsApi from "../../api/tagGroups";
 import * as tagsApi from "../../api/tags";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 
 const VIcon = {
   name: "v-icon",
@@ -485,5 +501,188 @@ describe("TagGroupsBoard: read-only", () => {
     expect(tagRow(wrapper, "aiko").attributes("draggable")).toBe("false");
     await tagRow(wrapper, "aiko").trigger("click");
     expect(wrapper.find(".tgb-pill").exists()).toBe(false);
+  });
+});
+
+describe("TagGroupsBoard: import a tag file", () => {
+  // Small counts only: the notice's thousands separator is the locale's.
+  const PLAN = {
+    rows: 900,
+    filed: 42,
+    from_defaults: 0,
+    from_ungrouped: 42,
+    user_conflicts: 0,
+    user_conflict_sample: [],
+    user_overwritten: 0,
+    groups_created: ["Wildlife", "Mood"],
+    skipped_adult_or_uncategorised: 5,
+    skipped_not_in_library: 900,
+  };
+  const PLAN_CONFLICT = {
+    ...PLAN,
+    user_conflicts: 2,
+    user_conflict_sample: ["red hood", "moss"],
+  };
+
+  function pickFile(wrapper, name = "danbooru_tags.xlsx") {
+    const input = wrapper.find('input[type="file"]');
+    Object.defineProperty(input.element, "files", {
+      value: [new File(["x"], name)],
+      configurable: true,
+    });
+    return input.trigger("change");
+  }
+
+  const importButton = (wrapper) => wrapper.find('[data-testid="tgb-import"]');
+  const questionText = (wrapper) =>
+    wrapper.find('[data-testid="tid-message"]');
+  const notices = () => useNoticeStore().notices.map((n) => n.text);
+
+  beforeEach(() => {
+    tagGroupsApi.importTagGroups.mockReset();
+  });
+
+  it("with no conflicts: one dry run, then the import, with the file's win and no move of the user's", async () => {
+    tagGroupsApi.importTagGroups
+      .mockResolvedValueOnce({ plan: PLAN })
+      .mockResolvedValueOnce({ plan: PLAN, ...GROUP_MAP });
+    const wrapper = await mountBoard();
+    await pickFile(wrapper);
+    await flushPromises();
+
+    expect(tagGroupsApi.importTagGroups).toHaveBeenCalledTimes(2);
+    expect(tagGroupsApi.importTagGroups.mock.calls[0][1]).toEqual({ dryRun: true });
+    expect(tagGroupsApi.importTagGroups.mock.calls[1][1]).toEqual({
+      dryRun: false,
+      overwriteUser: false,
+    });
+    expect(questionText(wrapper).exists()).toBe(false);
+    expect(notices()).toEqual([
+      "Filed 42 tags from danbooru_tags.xlsx · 2 new groups · 900 not in your library",
+    ]);
+  });
+
+  it("with tags the user filed by hand, asks first; Keep my filing commits without moving them", async () => {
+    tagGroupsApi.importTagGroups
+      .mockResolvedValueOnce({ plan: PLAN_CONFLICT })
+      .mockResolvedValueOnce({ plan: PLAN_CONFLICT, ...GROUP_MAP });
+    const wrapper = await mountBoard();
+    await pickFile(wrapper);
+    await flushPromises();
+
+    expect(tagGroupsApi.importTagGroups).toHaveBeenCalledTimes(1);
+    expect(questionText(wrapper).text()).toBe(
+      "2 tags you filed yourself are in other groups in this file.",
+    );
+    expect(wrapper.text()).toContain("For example: red hood, moss");
+
+    await wrapper.find('[data-testid="tid-keep"]').trigger("click");
+    await flushPromises();
+    expect(tagGroupsApi.importTagGroups).toHaveBeenCalledTimes(2);
+    expect(tagGroupsApi.importTagGroups.mock.calls[1][1]).toEqual({
+      dryRun: false,
+      overwriteUser: false,
+    });
+    expect(questionText(wrapper).exists()).toBe(false);
+    expect(notices()).toHaveLength(1);
+  });
+
+  it("Move them too commits with overwriteUser true", async () => {
+    tagGroupsApi.importTagGroups
+      .mockResolvedValueOnce({ plan: PLAN_CONFLICT })
+      .mockResolvedValueOnce({ plan: PLAN_CONFLICT, ...GROUP_MAP });
+    const wrapper = await mountBoard();
+    await pickFile(wrapper);
+    await flushPromises();
+
+    await wrapper.find('[data-testid="tid-move"]').trigger("click");
+    await flushPromises();
+    expect(tagGroupsApi.importTagGroups).toHaveBeenCalledTimes(2);
+    expect(tagGroupsApi.importTagGroups.mock.calls[1][1]).toEqual({
+      dryRun: false,
+      overwriteUser: true,
+    });
+  });
+
+  it("Cancel and Esc both commit nothing", async () => {
+    tagGroupsApi.importTagGroups.mockResolvedValue({ plan: PLAN_CONFLICT });
+    const wrapper = await mountBoard();
+
+    await pickFile(wrapper);
+    await flushPromises();
+    const cancel = wrapper
+      .findAll(".app-btn")
+      .find((b) => b.text().startsWith("Cancel"));
+    await cancel.trigger("click");
+    await flushPromises();
+    expect(questionText(wrapper).exists()).toBe(false);
+
+    await pickFile(wrapper);
+    await flushPromises();
+    await wrapper.find(".app-dialog").trigger("keydown", { key: "Escape" });
+    await flushPromises();
+    expect(questionText(wrapper).exists()).toBe(false);
+
+    // Dry runs only: nothing was committed.
+    expect(tagGroupsApi.importTagGroups).toHaveBeenCalledTimes(2);
+    expect(
+      tagGroupsApi.importTagGroups.mock.calls.every((c) => c[1].dryRun),
+    ).toBe(true);
+    expect(notices()).toEqual([]);
+  });
+
+  it("focus returns to Import once the question is answered", async () => {
+    tagGroupsApi.importTagGroups.mockResolvedValue({ plan: PLAN_CONFLICT });
+    const wrapper = mount(TagGroupsBoard, {
+      attachTo: document.body,
+      global: globalOpts,
+    });
+    await flushPromises();
+    try {
+      await pickFile(wrapper);
+      await flushPromises();
+      expect(document.activeElement).not.toBe(importButton(wrapper).element);
+      await wrapper.find('[data-testid="tid-keep"]').trigger("click");
+      await flushPromises();
+      expect(document.activeElement).toBe(importButton(wrapper).element);
+    } finally {
+      wrapper.unmount();
+    }
+  });
+
+  it("an error shows the server's detail and commits nothing", async () => {
+    tagGroupsApi.importTagGroups.mockRejectedValueOnce(
+      Object.assign(new Error("Request failed"), {
+        response: { status: 400, data: { detail: "Missing columns: english" } },
+      }),
+    );
+    const wrapper = await mountBoard();
+    await pickFile(wrapper);
+    await flushPromises();
+    expect(tagGroupsApi.importTagGroups).toHaveBeenCalledTimes(1);
+    const notice = useNoticeStore().notices.at(-1);
+    expect(notice.level).toBe("error");
+    expect(notice.text).toContain("Missing columns: english");
+  });
+
+  it("while the file is read, the control says so and cannot be pressed again", async () => {
+    let answer;
+    tagGroupsApi.importTagGroups.mockReturnValueOnce(new Promise((r) => (answer = r)));
+    const wrapper = await mountBoard();
+    await pickFile(wrapper);
+    await flushPromises();
+    expect(importButton(wrapper).text()).toBe("Importing…");
+    expect(importButton(wrapper).attributes("disabled")).toBeDefined();
+    answer({ plan: PLAN });
+    tagGroupsApi.importTagGroups.mockResolvedValueOnce({ plan: PLAN, ...GROUP_MAP });
+    await flushPromises();
+    expect(importButton(wrapper).text()).toBe("Import…");
+  });
+
+  it("a read-only session has no Import control", async () => {
+    session.readOnly.value = true;
+    const wrapper = await mountBoard();
+    expect(importButton(wrapper).exists()).toBe(false);
+    expect(wrapper.find('input[type="file"]').exists()).toBe(false);
   });
 });

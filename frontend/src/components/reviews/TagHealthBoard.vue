@@ -30,7 +30,7 @@
           }}
         </button>
         <span class="rs-board-controls-sep" aria-hidden="true"></span>
-        <!-- Health or Groups, the app's boxed switch. Read-only sessions have no
+        <!-- Groups (the default) or Health, the app's boxed switch. Read-only sessions have no
              groups to show, so the board stays the health list for them. -->
         <div v-if="showViewSwitch" class="rs-board-view">
           <Segmented
@@ -428,7 +428,7 @@
       <!-- Below the table: the open reviews with their scope and Abort, the
            archived receipts, and the sticker shelf. The sidebar lists the open
            reviews for getting to them; this is where they are managed. -->
-      <ReviewRail class="rs-board-reviews" @new-review="emit('new-review')" />
+      <ReviewRail class="rs-board-reviews" />
     </div>
   </div>
 </template>
@@ -471,7 +471,7 @@ defineProps({
   // Where the controls draw: the view's toolbar line. Null draws them in place.
   toolbarTarget: { type: String, default: null },
 });
-const emit = defineEmits(["start-review", "new-review"]);
+const emit = defineEmits(["start-review"]);
 const store = useReviewSessionsStore();
 const tagGroups = useTagGroupsStore();
 
@@ -484,8 +484,8 @@ const sort = ref({ key: "score", dir: "desc" });
 // The switch is this machine's choice (tagGroups.boardView). A read-only
 // session cannot read the groups, so it has no switch and stays on Health.
 const BOARD_VIEWS = [
-  { id: "health", label: "Health" },
   { id: "groups", label: "Groups" },
+  { id: "health", label: "Health" },
 ];
 const showViewSwitch = computed(() => !isReadOnly.value);
 const boardView = computed(() =>

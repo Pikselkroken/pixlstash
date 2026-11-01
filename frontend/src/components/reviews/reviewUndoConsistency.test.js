@@ -131,6 +131,9 @@ function mountSession() {
 }
 
 beforeEach(() => {
+  // The board opens on Groups by default; these tests are about the health
+  // board and the review, and the Groups cases choose Groups themselves.
+  window.localStorage.setItem("pixlstash.tagReview.view", "health");
   setActivePinia(createPinia());
 });
 
@@ -372,6 +375,23 @@ describe("ReviewSessionsOverlay - Ctrl+Z is no longer dead", () => {
       w.unmount();
     } finally {
       tagGroups.setBoardView("health");
+    }
+  });
+
+  it("stands down while the sidebar's abort dialog is up: Esc does not leave the review", async () => {
+    const { store, w } = await mountOverlayWithSession();
+    const backdrop = document.createElement("div");
+    backdrop.className = "rs-abort-backdrop";
+    document.body.appendChild(backdrop);
+    try {
+      press("Escape");
+      press("z", { ctrlKey: true });
+      await nextTick();
+      expect(store.view.type).toBe("session");
+      expect(SessionStub.lastHandleKey).not.toHaveBeenCalled();
+    } finally {
+      backdrop.remove();
+      w.unmount();
     }
   });
 

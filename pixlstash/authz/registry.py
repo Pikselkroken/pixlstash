@@ -1908,6 +1908,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Library-wide tag vocabulary (tag name -> group), not a picture fact; a share token's scope cannot narrow it meaningfully (same reasoning as tag_health); owner only",
     ),
+    ("POST", "/api/v1/tag_groups/import"): RoutePolicy(
+        _OWNER,
+        justification="Library-wide tag vocabulary: files a whole tag table into the tag-name -> group map; not a picture fact, so a share token's scope cannot narrow it meaningfully (same reasoning as tag_health); owner only",
+    ),
     # ── tag_suggestions.py ──────────────────────────────────────────────────
     ("GET", "/api/v1/tag_suggestions"): _LIST_AWARE,
     (

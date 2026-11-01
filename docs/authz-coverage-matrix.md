@@ -537,6 +537,7 @@ and the declarations themselves are pinned by
 | POST | `/api/v1/tag_groups` | owner_only |  | Creates a library-wide group; owner-only write |
 | PUT | `/api/v1/tag_groups/order` | owner_only |  | Reorders the library-wide groups; owner-only write |
 | POST | `/api/v1/tag_groups/assign` | owner_only |  | Files tag names under a group across the whole library; owner-only write, recorded as one undoable operation |
+| POST | `/api/v1/tag_groups/import` | owner_only |  | Files a whole uploaded tag table (xlsx/csv) into the library-wide map; owner-only write, recorded as one undoable operation |
 
 ### tag_suggestions.py
 

@@ -47,16 +47,41 @@
 
         <div class="tgb-section-head">
           <span class="tgb-label">Groups</span>
-          <button
-            v-if="!readOnly"
-            type="button"
-            class="tgb-icon-btn"
-            aria-label="New group"
-            @click="startNew"
-          >
-            <Tooltip text="New group" activator="parent" :describe="false" />
-            <v-icon size="14">mdi-plus</v-icon>
-          </button>
+          <span class="tgb-section-actions">
+            <template v-if="!readOnly">
+              <button
+                ref="importBtnRef"
+                type="button"
+                class="tgb-text-btn"
+                :disabled="importing"
+                :aria-busy="importing ? 'true' : undefined"
+                data-testid="tgb-import"
+                @click="pickFile"
+              >
+                {{ importing ? "Importing…" : "Import…" }}
+              </button>
+              <input
+                ref="fileRef"
+                type="file"
+                accept=".xlsx,.csv"
+                hidden
+                tabindex="-1"
+                aria-hidden="true"
+                data-testid="tgb-file"
+                @change="onFilePicked"
+              />
+            </template>
+            <button
+              v-if="!readOnly"
+              type="button"
+              class="tgb-icon-btn"
+              aria-label="New group"
+              @click="startNew"
+            >
+              <Tooltip text="New group" activator="parent" :describe="false" />
+              <v-icon size="14">mdi-plus</v-icon>
+            </button>
+          </span>
         </div>
 
         <div v-if="creating" class="tgb-new">
@@ -234,6 +259,17 @@
         </template>
       </Tooltip>
     </div>
+
+    <!-- Mounted only while it asks: a closed dialog has nothing to draw. -->
+    <TagImportDialog
+      v-if="conflict"
+      :open="Boolean(conflict)"
+      :count="conflict?.plan.user_conflicts ?? 0"
+      :sample="conflict?.plan.user_conflict_sample ?? []"
+      @keep="answerConflict(false)"
+      @move="answerConflict(true)"
+      @close="answerConflict(null)"
+    />
   </div>
 </template>
 
@@ -247,10 +283,12 @@
 // Character scope does not narrow this view; the filter field does.
 import { computed, nextTick, onMounted, ref } from "vue";
 import { listTags } from "../../api/tags";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useTagGroupsStore } from "../../stores/useTagGroupsStore";
 import { isReadOnly } from "../../utils/apiClient";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import Tooltip from "../widgets/Tooltip.vue";
+import TagImportDialog from "./TagImportDialog.vue";
 
 const props = defineProps({
   // The board's filter field: narrows the tag list here too.
@@ -632,6 +670,79 @@ async function commitNew() {
   if (group) choose(group.id);
 }
 
+// --- Import a Danbooru tag file --------------------------------------------
+
+// Preview first (a dry run answers the plan), then commit. Only a file with
+// tags the user filed by hand in other groups asks: the dialog decides
+// whether those move too.
+const importing = ref(false);
+const importBtnRef = ref(null);
+const fileRef = ref(null);
+// { file, plan } while the question is open.
+const conflict = ref(null);
+
+function pickFile() {
+  if (!importing.value) fileRef.value?.click();
+}
+
+function focusImport() {
+  nextTick(() => importBtnRef.value?.focus());
+}
+
+async function onFilePicked(event) {
+  const file = event.target.files?.[0];
+  // Cleared so picking the same file again still fires a change.
+  event.target.value = "";
+  if (!file) return;
+  importing.value = true;
+  try {
+    const plan = await tagGroups.previewImport(file);
+    if (!plan) return;
+    if (plan.user_conflicts > 0) {
+      conflict.value = { file, plan };
+      return;
+    }
+    await applyImport(file, false);
+  } finally {
+    importing.value = false;
+    if (!conflict.value) focusImport();
+  }
+}
+
+async function applyImport(file, overwriteUser) {
+  importing.value = true;
+  try {
+    const plan = await tagGroups.commitImport(file, overwriteUser);
+    if (plan) useNoticeStore().success(importSummary(plan, file.name));
+  } finally {
+    importing.value = false;
+  }
+}
+
+// `null` is a dismissal: nothing is filed, the question just closes.
+async function answerConflict(overwriteUser) {
+  const pending = conflict.value;
+  conflict.value = null;
+  if (overwriteUser !== null && pending) {
+    await applyImport(pending.file, overwriteUser);
+  }
+  focusImport();
+}
+
+// The notice's sentence: the filing, then only the parts that are non-zero.
+function importSummary(plan, name) {
+  const parts = [`Filed ${fmt(plan.filed)} tags from ${name}`];
+  const made = plan.groups_created?.length || 0;
+  if (made) parts.push(`${fmt(made)} new group${made === 1 ? "" : "s"}`);
+  if (plan.user_overwritten) {
+    parts.push(`${fmt(plan.user_overwritten)} of your own filings moved`);
+  }
+  if (plan.skipped_not_in_library) {
+    parts.push(`${fmt(plan.skipped_not_in_library)} not in your library`);
+  }
+  return parts.join(" · ");
+}
+
 // Esc, as the overlay routes it: an open Move menu closes first, then the
 // selection clears. Returns whether a layer was spent.
 function escape() {
@@ -706,6 +817,30 @@ defineExpose({ clearSelection, escape, selected });
 }
 .tgb-icon-btn:hover {
   background: rgba(var(--v-theme-on-dark-surface), 0.16);
+}
+.tgb-section-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.tgb-text-btn {
+  height: var(--control-h-sm);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: transparent;
+  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.tgb-text-btn:hover:not(:disabled) {
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
+}
+.tgb-text-btn:disabled {
+  opacity: var(--opacity-disabled);
+  cursor: progress;
 }
 .tgb-new {
   padding: 0 var(--space-2);

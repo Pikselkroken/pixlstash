@@ -10,6 +10,7 @@ include pixlstash/training/trainer_hook/sitecustomize.py
 recursive-include pixlstash/data/anchors *.npy
 recursive-include pixlstash/data/comfyui-workflows/built-in *.json
 recursive-include pixlstash/data/scalar-assets *
+recursive-include pixlstash/data/tag_groups *.json *.txt
 include pixlstash/data/workflow_templates.json
 include pixlstash/data/workflow_templates_index.json
 recursive-include pixlstash/data/workflow_templates *.json

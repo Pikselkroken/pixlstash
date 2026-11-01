@@ -15,6 +15,7 @@ import {
   assignTagsToGroup,
   createTagGroup,
   getTagGroups,
+  importTagGroups,
   reorderTagGroups,
 } from "../api/tagGroups";
 import { isReadOnly, onSessionReset } from "../utils/apiClient";
@@ -246,6 +247,51 @@ export const useTagGroupsStore = defineStore("tagGroups", () => {
     }
   }
 
+  /**
+   * Parse a tag file without changing anything: the plan the import would
+   * make, for the board to ask about before it commits.
+   * @returns {Promise<Object|null>} the plan, or null when it failed.
+   */
+  async function previewImport(file) {
+    if (isReadOnly.value) return null;
+    const started = generation;
+    try {
+      const body = await importTagGroups(file, { dryRun: true });
+      if (started !== generation) return null;
+      return body?.plan ?? null;
+    } catch (e) {
+      if (started !== generation) return null;
+      report(`read ${file?.name || "the tag file"}`, e);
+      return null;
+    }
+  }
+
+  /**
+   * Apply the import: the file's filings win over the defaults, and tags the
+   * user filed by hand move only when `overwriteUser`. One undoable operation;
+   * the history control is re-read so it offers the undo.
+   * @returns {Promise<Object|null>} the plan, or null when it failed.
+   */
+  async function commitImport(file, overwriteUser) {
+    if (isReadOnly.value) return null;
+    const started = generation;
+    try {
+      const body = await importTagGroups(file, {
+        dryRun: false,
+        overwriteUser: Boolean(overwriteUser),
+      });
+      if (started !== generation) return null;
+      apply(body);
+      refilterGroupTerms();
+      await useOperationStore().refresh();
+      return body?.plan ?? null;
+    } catch (e) {
+      if (started !== generation) return null;
+      report(`import the tags from ${file?.name || "the tag file"}`, e);
+      return null;
+    }
+  }
+
   /** Put the groups in this order. */
   async function reorder(ids) {
     if (isReadOnly.value) return false;
@@ -290,10 +336,14 @@ export const useTagGroupsStore = defineStore("tagGroups", () => {
     writePref(COLLAPSED_KEY, JSON.stringify([...next]));
   }
 
-  /** Tags to review's switch: `"health"` or `"groups"`. */
-  const boardView = ref(readPref(BOARD_VIEW_KEY, "health") === "groups" ? "groups" : "health");
+  /**
+   * Tags to review's switch: `"groups"` or `"health"`. Groups is the default;
+   * only a remembered Health reads back as Health. A read-only session is held
+   * on Health by TagHealthBoard, not here.
+   */
+  const boardView = ref(readPref(BOARD_VIEW_KEY, "groups") === "health" ? "health" : "groups");
   function setBoardView(view) {
-    boardView.value = view === "groups" ? "groups" : "health";
+    boardView.value = view === "health" ? "health" : "groups";
     writePref(BOARD_VIEW_KEY, boardView.value);
   }
 
@@ -321,6 +371,8 @@ export const useTagGroupsStore = defineStore("tagGroups", () => {
     nameOf,
     createGroup,
     moveTags,
+    previewImport,
+    commitImport,
     reorder,
     railView,
     setRailView,

@@ -79,6 +79,8 @@ function seedSets(rows) {
 }
 
 beforeEach(() => {
+  // The board opens on Groups by default; these tests are about Health.
+  window.localStorage.setItem("pixlstash.tagReview.view", "health");
   setActivePinia(createPinia());
   store = useReviewSessionsStore();
 });
@@ -638,10 +640,19 @@ describe("TagHealthBoard: Health | Groups switch", () => {
       .find((b) => b.text() === label);
   }
 
-  it("is drawn with Health chosen by default, and Groups hides the health table", async () => {
+  it("puts Groups first and opens on it, and Health brings the table back", async () => {
+    setActivePinia(createPinia());
+    store = useReviewSessionsStore();
     store.healthRows = [healthRow({ tag: "shirt" })];
     const w = mount(TagHealthBoard, { global: globalOpts });
-    expect(viewButton(w, "Health").attributes("aria-checked")).toBe("true");
+    expect(
+      w.findAll(".rs-board-view [role='radio']").map((b) => b.text()),
+    ).toEqual(["Groups", "Health"]);
+    expect(viewButton(w, "Groups").attributes("aria-checked")).toBe("true");
+    expect(w.findComponent(TagGroupsBoard).exists()).toBe(true);
+    expect(w.find(".rs-board-table").exists()).toBe(false);
+
+    await viewButton(w, "Health").trigger("click");
     expect(w.find(".rs-board-table").exists()).toBe(true);
     expect(w.findComponent(TagGroupsBoard).exists()).toBe(false);
 
@@ -657,17 +668,18 @@ describe("TagHealthBoard: Health | Groups switch", () => {
   });
 
   it("the choice is remembered on this machine, and read back on the next mount", async () => {
+    setActivePinia(createPinia());
     const w = mount(TagHealthBoard, { global: globalOpts });
-    await viewButton(w, "Groups").trigger("click");
-    expect(window.localStorage.getItem(VIEW_KEY)).toBe("groups");
+    await viewButton(w, "Health").trigger("click");
+    expect(window.localStorage.getItem(VIEW_KEY)).toBe("health");
 
     setActivePinia(createPinia());
     const again = mount(TagHealthBoard, { global: globalOpts });
-    expect(useTagGroupsStore().boardView).toBe("groups");
-    expect(again.findComponent(TagGroupsBoard).exists()).toBe(true);
+    expect(useTagGroupsStore().boardView).toBe("health");
+    expect(again.findComponent(TagGroupsBoard).exists()).toBe(false);
 
-    await viewButton(again, "Health").trigger("click");
-    expect(window.localStorage.getItem(VIEW_KEY)).toBe("health");
+    await viewButton(again, "Groups").trigger("click");
+    expect(window.localStorage.getItem(VIEW_KEY)).toBe("groups");
   });
 
   it("is not drawn for a read-only session, which stays on Health", () => {
@@ -685,6 +697,9 @@ describe("TagHealthBoard: Health | Groups switch", () => {
 describe("TagHealthBoard: Group scope in Health", () => {
   beforeEach(() => {
     window.localStorage.clear();
+    window.localStorage.setItem("pixlstash.tagReview.view", "health");
+    setActivePinia(createPinia());
+    store = useReviewSessionsStore();
   });
 
   function seedGroups() {

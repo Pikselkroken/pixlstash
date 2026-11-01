@@ -11,7 +11,7 @@ a tag need not exist on any picture yet to be filed.
 
 from typing import Optional
 
-from sqlalchemy import Column, ForeignKey, Integer
+from sqlalchemy import Boolean, Column, ForeignKey, Integer
 from sqlmodel import Field, SQLModel
 
 
@@ -26,7 +26,12 @@ class TagGroup(SQLModel, table=True):
 
 
 class TagGroupMember(SQLModel, table=True):
-    """The group a tag name is filed under. Deleting a group cascades to its members."""
+    """The group a tag name is filed under. Deleting a group cascades to its members.
+
+    ``is_default`` is provenance: True for a filing the seeding of the default
+    groups made, False for one the user made (a move, or an import). Seeding
+    never rewrites an existing row, and a user move or an import clears it.
+    """
 
     __tablename__ = "tag_group_member"
 
@@ -39,4 +44,8 @@ class TagGroupMember(SQLModel, table=True):
             nullable=False,
             index=True,
         )
+    )
+    is_default: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, nullable=False, server_default="0"),
     )

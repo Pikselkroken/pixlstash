@@ -90,7 +90,7 @@ test.describe('review sessions — session loop', () => {
     // The cover-sheet receipt reports the scan.
     await expect(reviews.sessionReceipt).toContainText('Scanned')
     await expect(reviews.sessionReceipt).toContainText('suspects')
-    // The sidebar nests this session under "Tags to review", lit, with a
+    // The sidebar nests this session under "Tags", lit, with a
     // done/found progress hint.
     const row = reviews.sidebarSessions.filter({ hasText: 'man' }).first()
     await expect(row).toHaveAttribute('aria-current', 'page')
@@ -173,10 +173,8 @@ test.describe('review sessions — session loop', () => {
     const beforeSkipped = await tallyNum(reviews.tallySkipped)
     await reviews.skipButton.click()
     await expect.poll(async () => tallyNum(reviews.tallySkipped)).toBe(beforeSkipped + 1)
-    // The board footer's progress hint reads "done/found · N skipped".
-    await reviews.back.click()
-    const rail = reviews.railSessions.filter({ hasText: 'smile' }).first()
-    await expect(rail.locator('.rs-rail-session-count')).toContainText(`${beforeSkipped + 1} skipped`)
+    // The skipped count is reported on the session's own tally (asserted
+    // above); the board footer no longer lists open reviews.
     // Skip writes nothing to the receipt's decided counts.
     await expect.poll(async () => (await receiptOf(apiContext, rid)).skipped).toBe(beforeSkipped + 1)
     const receipt = await receiptOf(apiContext, rid)
@@ -241,7 +239,7 @@ test.describe('review sessions — session loop', () => {
     // Archiving lands on the board, and the session leaves the open list.
     await expect(reviews.board).toBeVisible()
     await expect(reviews.session).toBeHidden()
-    await expect(reviews.railSessions.filter({ hasText: 'closed eyes' })).toHaveCount(0)
+    await expect(reviews.sidebarSession('closed eyes')).toHaveCount(0)
 
     // The archived receipt opens from the rail and renders with the tally.
     await reviews.railArchived.filter({ hasText: 'closed eyes' }).first().click()
@@ -251,5 +249,64 @@ test.describe('review sessions — session loop', () => {
     // Backend confirms ARCHIVED.
     const detail = await (await apiContext.get(`/api/v1/reviews/${rid}`)).json()
     expect(detail.status).toBe('ARCHIVED')
+  })
+
+  // The row menu is the sidebar's: Abort and Archive live there, not on the
+  // board's footer. A review with a decision made opens the Keep / Undo / Cancel
+  // dialog. Cancel changes nothing and focus returns to the row. The keyboard
+  // path (Shift+F10, Enter, then Shift+Tab to Keep) aborts it, and focus moves
+  // to the Tags row, since the aborted row has gone.
+  test('Abort from the sidebar row asks Keep / Undo / Cancel, by mouse and by keyboard', async ({ reviews, apiContext, page }) => {
+    await reviews.createReview('beard')
+    const rid = await openReviewId(apiContext, 'beard')
+    await expect(reviews.noButton.or(reviews.doneState).first()).toBeVisible()
+    // One decision, so the dialog has a change to keep or undo.
+    if (await reviews.noButton.isVisible().catch(() => false)) await reviews.noButton.click()
+    await expect.poll(async () => {
+      const r = await receiptOf(apiContext, rid)
+      return r.removed + r.added + r.kept
+    }).toBeGreaterThan(0)
+
+    // Mouse: right-click the row, Abort review…, then Cancel.
+    await reviews.openSidebarMenu('beard')
+    await reviews.sidebarAbortItem.click()
+    await expect(reviews.abortDialog).toBeVisible()
+    await expect(reviews.abortKeep).toContainText('Keep')
+    await expect(reviews.abortUndo).toContainText('Undo')
+    await reviews.abortCancel.click()
+    await expect(reviews.abortDialog).toBeHidden()
+    await expect(reviews.sidebarSession('beard')).toBeFocused()
+    expect(await openReviewId(apiContext, 'beard')).toBe(rid)
+
+    // Keyboard: focus the row, Shift+F10, Enter on Abort review…, then Shift+Tab
+    // twice from the initially focused Cancel to Keep, and Enter.
+    await reviews.sidebarSession('beard').focus()
+    await page.keyboard.press('Shift+F10')
+    await expect(reviews.sidebarAbortItem).toBeFocused()
+    await page.keyboard.press('Enter')
+    await expect(reviews.abortDialog).toBeVisible()
+    await expect(reviews.abortCancel).toBeFocused()
+    await page.keyboard.press('Shift+Tab')
+    await page.keyboard.press('Shift+Tab')
+    await expect(reviews.abortKeep).toBeFocused()
+    await page.keyboard.press('Enter')
+    await expect(reviews.abortDialog).toBeHidden()
+    await expect(reviews.sidebarSessions.filter({ hasText: 'beard' })).toHaveCount(0)
+    await expect(reviews.sidebarRow).toBeFocused()
+    await expect.poll(async () => (await (await apiContext.get(`/api/v1/reviews/${rid}`)).json()).status).toBe('ABORTED')
+  })
+
+  // Archive is the row menu's other verb: it ends the review keeping its
+  // decisions, with no confirm, and files the receipt under Archived.
+  test('Archive from the sidebar row ends the review and files its receipt', async ({ reviews, apiContext }) => {
+    await reviews.createReview('grin')
+    const rid = await openReviewId(apiContext, 'grin')
+    await reviews.openSidebarMenu('grin')
+    await reviews.sidebarArchiveItem.click()
+    await expect(reviews.abortDialog).toBeHidden()
+    await expect(reviews.sidebarSessions.filter({ hasText: 'grin' })).toHaveCount(0)
+    await expect(reviews.sidebarRow).toBeFocused()
+    await expect.poll(async () => (await (await apiContext.get(`/api/v1/reviews/${rid}`)).json()).status).toBe('ARCHIVED')
+    await expect(reviews.railArchived.filter({ hasText: 'grin' })).toHaveCount(1)
   })
 })

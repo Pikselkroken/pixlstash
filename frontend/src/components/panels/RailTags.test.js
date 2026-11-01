@@ -27,7 +27,7 @@ vi.mock("../../api/tags", () => ({
 }));
 vi.mock("../../api/config", () => ({
   getUserConfig: vi.fn(async () => ({
-    smart_score_penalised_tags: ["watermark"],
+    smart_score_penalised_tags: ["watermark", "red flag"],
   })),
 }));
 vi.mock("../../api/users", () => ({ getPenalisedTags: vi.fn() }));
@@ -953,5 +953,67 @@ describe("tags by group", () => {
     await chip(wrapper, "rain").trigger("contextmenu", { clientX: 1, clientY: 1 });
     await flush();
     expect(menuItems(wrapper)).toContain("Remove from all 2");
+  });
+});
+
+describe("colour-named tags", () => {
+  beforeEach(() => {
+    bulkFetchTags.mockReset().mockResolvedValue([
+      {
+        id: 1,
+        tags: [
+          { id: 11, tag: "blue eyes" },
+          { id: 12, tag: "red flag" },
+          { id: 13, tag: "black hair" },
+          { id: 14, tag: "rain" },
+        ],
+      },
+    ]);
+  });
+
+  it("fills a colour-named chip with its token and leaves the rest alone", async () => {
+    const wrapper = await mountTags([1]);
+    expect(chip(wrapper, "blue eyes").attributes("style")).toContain(
+      "--ink: var(--tag-blue)",
+    );
+    expect(chip(wrapper, "rain").attributes("style")).not.toContain("--ink");
+    expect(chip(wrapper, "rain").attributes("style")).not.toContain("--chip-ink");
+  });
+
+  it("keeps an anomaly chip on its own look, colour word and all", async () => {
+    const wrapper = await mountTags([1]);
+    const anomaly = chip(wrapper, "red flag");
+    expect(anomaly.classes()).toContain("rail-chip--anomaly");
+    expect(anomaly.attributes("style")).not.toContain("--tag-red");
+    expect(anomaly.attributes("style")).not.toContain("--chip-ink");
+  });
+
+  it("marks black with the neutral edge", async () => {
+    const wrapper = await mountTags([1]);
+    expect(chip(wrapper, "black hair").classes()).toContain("rail-chip--neutral");
+    expect(chip(wrapper, "blue eyes").classes()).not.toContain("rail-chip--neutral");
+  });
+
+  it("chooses the ink from the surface behind the chip", async () => {
+    // Full-confidence blue: white on a black host, black on the light rail.
+    const dark = document.createElement("div");
+    dark.style.background = "rgb(0, 0, 0)";
+    document.body.append(dark);
+    const onDark = mount(RailTags, {
+      props: { ids: [1] },
+      global: { stubs: STUBS },
+      attachTo: dark,
+    });
+    await flush();
+    expect(chip(onDark, "blue eyes").attributes("style")).toContain(
+      "--chip-ink: 255, 255, 255",
+    );
+    onDark.unmount();
+    dark.remove();
+
+    const wrapper = await mountTags([1]);
+    expect(chip(wrapper, "blue eyes").attributes("style")).toContain(
+      "--chip-ink: 0, 0, 0",
+    );
   });
 });

@@ -19,15 +19,22 @@ vi.mock("../api/tagGroups", () => ({
   createTagGroup: vi.fn(),
   reorderTagGroups: vi.fn(),
   assignTagsToGroup: vi.fn(),
+  importTagGroups: vi.fn(),
 }));
 const refresh = vi.fn().mockResolvedValue();
 vi.mock("./useOperationStore", () => ({
   useOperationStore: () => ({ refresh }),
 }));
 
-import { assignTagsToGroup, getTagGroups, reorderTagGroups } from "../api/tagGroups";
+import {
+  assignTagsToGroup,
+  getTagGroups,
+  importTagGroups,
+  reorderTagGroups,
+} from "../api/tagGroups";
 import { groupToken, isGroupToken, useTagGroupsStore } from "./useTagGroupsStore";
 import { useFilterStore } from "./useFilterStore";
+import { useNoticeStore } from "./useNoticeStore";
 
 const MAP = {
   groups: [
@@ -177,17 +184,17 @@ describe("forced reads and late answers", () => {
 });
 
 describe("view choices", () => {
-  it("default to List and Health and are remembered", () => {
+  it("default to List and Groups, and are remembered", () => {
     const store = useTagGroupsStore();
     expect(store.railView).toBe("list");
-    expect(store.boardView).toBe("health");
+    expect(store.boardView).toBe("groups");
     store.setRailView("groups");
-    store.setBoardView("groups");
+    store.setBoardView("health");
     store.toggleCollapsed(null);
     setActivePinia(createPinia());
     const again = useTagGroupsStore();
     expect(again.railView).toBe("groups");
-    expect(again.boardView).toBe("groups");
+    expect(again.boardView).toBe("health");
     expect(again.isCollapsed(null)).toBe(true);
     expect(again.isCollapsed(2)).toBe(false);
   });
@@ -203,5 +210,61 @@ describe("filter terms", () => {
     expect(isGroupToken("__group:abc")).toBe(false);
     expect(isGroupToken("__group:")).toBe(false);
     expect(isGroupToken("__group:3 ")).toBe(false);
+  });
+});
+
+describe("importing a tag file", () => {
+  const PLAN = { filed: 3, groups_created: [], user_conflicts: 0 };
+  const file = new File(["x"], "danbooru_tags.csv");
+
+  it("a preview answers the plan and files nothing", async () => {
+    const store = useTagGroupsStore();
+    await store.fetch();
+    importTagGroups.mockResolvedValue({ plan: PLAN });
+    expect(await store.previewImport(file)).toEqual(PLAN);
+    expect(importTagGroups).toHaveBeenCalledWith(file, { dryRun: true });
+    expect(store.groupFor("red hood")?.name).toBe("Character");
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("a commit takes the map, bumps the revision, re-reads history and passes the choice on", async () => {
+    const store = useTagGroupsStore();
+    await store.fetch();
+    importTagGroups.mockResolvedValue({ plan: PLAN, groups: MAP.groups, tags: { forest: 2 } });
+    const before = store.revision;
+    expect(await store.commitImport(file, true)).toEqual(PLAN);
+    expect(importTagGroups).toHaveBeenCalledWith(file, {
+      dryRun: false,
+      overwriteUser: true,
+    });
+    expect(store.groupFor("forest")?.name).toBe("Character");
+    expect(store.revision).toBe(before + 1);
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("a commit answered after a library switch files nothing in the new one", async () => {
+    let answer;
+    importTagGroups.mockReturnValueOnce(new Promise((r) => (answer = r)));
+    const store = useTagGroupsStore();
+    const imported = store.commitImport(file, false);
+    resetHandlers.at(-1)();
+    answer({ plan: PLAN, groups: MAP.groups, tags: { forest: 2 } });
+    expect(await imported).toBeNull();
+    expect(store.hasGroups).toBe(false);
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("a refused preview says why, through the server's detail, and returns nothing", async () => {
+    const store = useTagGroupsStore();
+    importTagGroups.mockRejectedValue(
+      Object.assign(new Error("Request failed"), {
+        response: { status: 400, data: { detail: "Missing columns: english" } },
+      }),
+    );
+    expect(await store.previewImport(file)).toBeNull();
+    const notice = useNoticeStore().notices.at(-1);
+    expect(notice.level).toBe("error");
+    expect(notice.text).toContain("Missing columns: english");
+    expect(refresh).not.toHaveBeenCalled();
   });
 });
