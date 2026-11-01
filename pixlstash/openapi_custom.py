@@ -383,7 +383,7 @@ Tokens have one of two access types:
 
 ## Creating a token
 
-**1. Open Settings** - click the gear icon in the top toolbar.
+**1. Open Settings** - click the gear icon at the right end of the title bar.
 
 ![Open Settings from the top toolbar](scalar-assets/WhereIsUserSettings.jpg)
 
@@ -391,11 +391,12 @@ Tokens have one of two access types:
 
 ![The Account & tokens pane](scalar-assets/ScreenshotsUserSettings.jpg)
 
-**3. Create the token** - in the **API Tokens** section, type a description, choose an
-access type (*Full access* or *Read-only*), optionally tick *Apply watermark*, then click
-**Create Token**.
+**3. Create the token** - in the **API Tokens** section, click **New token**, type a
+description, choose an access type (*Full access* or *Read-only*), optionally set an expiry
+date, then click **Create token**. To watermark what a token downloads, switch on its
+**Mark** column in the token list afterwards.
 
-![The API Tokens section in Account & tokens](scalar-assets/ScreenshotTokens.jpg)
+![The New API token dialog over Account & tokens](scalar-assets/ScreenshotTokens.jpg)
 
 **4. Copy it now** - the token is shown **only once**. Copy it and store it somewhere safe;
 you won't be able to see it again.

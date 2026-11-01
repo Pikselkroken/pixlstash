@@ -5,15 +5,19 @@
 // illustrations are listed in `manual` with a reason.
 //
 // Runs against the demo-data library (varied photos, populated people/projects/
-// sets) in a forced dark theme, rendered as the desktop app (title bar + window
+// sets) in a forced dark theme, in the real desktop app (title bar + window
 // controls) — see capture.spec.js. ctx = { page, grid, lightbox, settings,
-// sidebar, api }.
+// sidebar, api }. setup() returns a locator to shoot, `{ clip }` for a region
+// of the window, or null for the whole window; an optional teardown(ctx) undoes
+// anything it persisted, since every scene shares one app and one library.
 import { cpSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { expect } from '@playwright/test'
+
+import { ReviewSessions } from '../pages/ReviewSessions.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -115,33 +119,31 @@ async function readFoldersIntoMapping(ctx) {
   return wizard
 }
 
-// listAccelerators() payloads for the desktop bridge, one per GPU vendor. Labels
-// mirror electron/src/config.ts ACCEL_LABELS and the shape mirrors main.ts's
-// describeAccelerators(): a bundled CPU runtime plus the single GPU overlay the
-// hardware detector offers for that machine, not yet installed.
-const cudaAccelerators = {
-  bundled: { accel: 'cpu', label: 'CPU', active: true },
-  items: [
-    {
-      accel: 'cu128',
-      label: 'NVIDIA GPU (CUDA 12.8)',
-      installed: false,
-      active: false,
-      recommended: true,
-    },
-  ],
-}
-const rocmAccelerators = {
-  bundled: { accel: 'cpu', label: 'CPU', active: true },
-  items: [
-    {
-      accel: 'rocm',
-      label: 'AMD GPU (ROCm, experimental)',
-      installed: false,
-      active: false,
-      recommended: true,
-    },
-  ],
+const SECOND_LIBRARY = 'Client work'
+// A demo-data tag the tagger has suspects for, so a review has cards to show.
+const REVIEW_TAG = 'woman'
+
+/**
+ * Register a second, empty library beside demo-data, once per run.
+ *
+ * A row's full ⋯ menu (open / rename / stop using) only exists on a library
+ * that is NOT the active one, and demo-data registers exactly one. An EMPTY
+ * folder is the one verdict that adds a library outright, with no mapping step
+ * in the way. The hub lives in the throwaway work dir, so this registers
+ * nothing outside the capture.
+ */
+async function addSecondLibrary(api) {
+  const listed = await api.get('/api/v1/libraries')
+  expect(listed.ok(), `could not list libraries: ${listed.status()}`).toBe(true)
+  const { libraries } = await listed.json()
+  if (libraries.some((library) => library.name === SECOND_LIBRARY)) return
+  const root = join(tmpdir(), 'pixlstash-shots-second-library')
+  rmSync(root, { recursive: true, force: true })
+  mkdirSync(root, { recursive: true })
+  const res = await api.post('/api/v1/libraries', {
+    data: { path: root, name: SECOND_LIBRARY },
+  })
+  expect(res.ok(), `could not add the second library: ${res.status()}`).toBe(true)
 }
 
 async function readyGrid(grid) {
@@ -308,29 +310,6 @@ export const scenes = [
     },
   },
   {
-    id: 'search',
-    assets: ['SemanticSearch.jpg', 'ScreenshotSearchEdit.jpg'],
-    title: 'Search overlay',
-    async setup({ grid, page }) {
-      await readyGrid(grid)
-      await grid.searchButton.click()
-      await expect(grid.searchOverlay).toBeVisible()
-      await grid.searchInput.fill('a person smiling outdoors')
-      await page.waitForTimeout(500)
-      return grid.searchOverlay
-    },
-  },
-  {
-    id: 'settings',
-    assets: ['ScreenshotUserSettings.jpg', 'ScreenshotsUserSettings.jpg', 'ScreenshotsUserSettings.png'],
-    title: 'User settings dialog',
-    async setup({ grid, settings }) {
-      await readyGrid(grid)
-      await settings.open()
-      return settings.card
-    },
-  },
-  {
     id: 'backend-settings',
     assets: ['ScreenshotBackend.jpg'],
     title: 'Desktop Backend settings (remote access + desktop)',
@@ -338,42 +317,8 @@ export const scenes = [
       await readyGrid(grid)
       await settings.open()
       // The desktop-only "Server" rail item: remote access + desktop.
-      // Compute acceleration is under "GPU & compute" (backend-cuda /
-      // backend-rocm below).
       await settings.openTab('Server')
       await expect(page.getByText('Remote access')).toBeVisible()
-      await page.waitForTimeout(400)
-      return settings.card
-    },
-  },
-  {
-    id: 'backend-cuda',
-    assets: ['ScreenshotBackendCuda.jpg'],
-    title: 'Desktop Backend settings — NVIDIA CUDA acceleration available',
-    // Show GPU & compute on an NVIDIA machine: the CUDA overlay is offered
-    // with an "Install (recommended)" action (the post-install "active" state
-    // can't be shown without a real lightbox download).
-    bridge: { accelerators: cudaAccelerators },
-    async setup({ grid, settings, page }) {
-      await readyGrid(grid)
-      await settings.open()
-      await settings.openTab('GPU & compute')
-      await expect(page.getByText('NVIDIA GPU (CUDA 12.8)')).toBeVisible()
-      await page.waitForTimeout(400)
-      return settings.card
-    },
-  },
-  {
-    id: 'backend-rocm',
-    assets: ['ScreenshotBackendRocm.jpg'],
-    title: 'Desktop Backend settings — AMD ROCm acceleration available',
-    // Same tab on an AMD machine: the experimental ROCm overlay is offered.
-    bridge: { accelerators: rocmAccelerators },
-    async setup({ grid, settings, page }) {
-      await readyGrid(grid)
-      await settings.open()
-      await settings.openTab('GPU & compute')
-      await expect(page.getByText('AMD GPU (ROCm, experimental)')).toBeVisible()
       await page.waitForTimeout(400)
       return settings.card
     },
@@ -414,27 +359,26 @@ export const scenes = [
     },
   },
   {
-    id: 'libraries-manage',
-    assets: ['ScreenshotLibrariesManage.jpg'],
-    title: 'Settings → Libraries with a row\'s ⋯ menu open',
-    async setup({ grid, settings, page }) {
+    id: 'libraries',
+    assets: ['ScreenshotLibraries.jpg'],
+    title: 'Settings → Libraries with two registered libraries',
+    async setup({ grid, settings, api, page }) {
+      await addSecondLibrary(api)
       await readyGrid(grid)
       await settings.open()
       await settings.openTab('Libraries & imports')
-      // The full menu (open / rename / stop using) only exists on a row that is
-      // NOT the active library, and demo-data registers exactly one. Add a
-      // second so the menu has every verb in it — an EMPTY folder, which is the
-      // one verdict that adds a library outright with no mapping step in the
-      // way. The hub is per-run and thrown away with the work dir, so this
-      // registers nothing outside the capture.
-      const secondRoot = join(tmpdir(), 'pixlstash-shots-second-library')
-      rmSync(secondRoot, { recursive: true, force: true })
-      mkdirSync(secondRoot, { recursive: true })
-      const res = await page.request.post('/api/v1/libraries', {
-        data: { path: secondRoot, name: 'Client work' },
-      })
-      expect(res.ok(), `could not add the second library: ${res.status()}`).toBe(true)
-      await page.reload()
+      await expect(page.locator('.library-row')).toHaveCount(2)
+      await page.waitForTimeout(300)
+      return settings.card
+    },
+  },
+  {
+    id: 'libraries-manage',
+    assets: ['ScreenshotLibrariesManage.jpg'],
+    title: 'Settings → Libraries with a row\'s ⋯ menu open',
+    async setup({ grid, settings, api, page }) {
+      await addSecondLibrary(api)
+      await readyGrid(grid)
       await settings.open()
       await settings.openTab('Libraries & imports')
       const row = page.locator('.library-row:not(.library-row--active)').first()
@@ -496,6 +440,7 @@ export const scenes = [
       await readyGrid(grid)
       await grid.statsToggle.click()
       await expect(grid.statsSidebar).toBeVisible()
+      await grid.statsTabs.filter({ hasText: /pictures/i }).first().click()
       await page.waitForTimeout(700)
       return grid.statsSidebar
     },
@@ -508,8 +453,7 @@ export const scenes = [
       await readyGrid(grid)
       await grid.statsToggle.click()
       await expect(grid.statsSidebar).toBeVisible()
-      const tagsTab = grid.statsTabs.filter({ hasText: 'Tags' }).first()
-      if (await tagsTab.count()) await tagsTab.click()
+      await grid.statsTabs.filter({ hasText: /tags/i }).first().click()
       await page.waitForTimeout(700)
       return grid.statsSidebar
     },
@@ -531,9 +475,10 @@ export const scenes = [
     id: 'projects',
     assets: ['ScreenshotProject.jpg'],
     title: 'Project organisation',
-    async setup({ grid, sidebar }) {
+    async setup({ grid, sidebar, page }) {
       await readyGrid(grid)
       await sidebar.openScopeMenu()
+      await page.waitForTimeout(500) // the menu fades in
       return null
     },
   },
@@ -565,11 +510,163 @@ export const scenes = [
       await readyGrid(grid)
       await openLightbox({ grid, lightbox, page })
       await expect(lightbox.mainImage).toBeVisible()
-      await lightbox.addTagButton.click()
+      // The tag field sits in the inspector rail; typing in it opens the list.
       await expect(lightbox.tagInput).toBeVisible()
       await lightbox.tagInput.fill('su')
       await page.waitForTimeout(600)
       return lightbox.root
+    },
+  },
+  // ── 2.0: the remaining features.html illustrations ─────────────────────
+  {
+    id: 'keyboard',
+    assets: ['ScreenshotKeyboard.jpg'],
+    title: 'Keyboard shortcuts (F1)',
+    async setup({ grid, page }) {
+      await readyGrid(grid)
+      await page.keyboard.press('F1')
+      const dialog = page.locator('.app-dialog:has(.shortcuts-table)')
+      await expect(dialog).toBeVisible()
+      await page.waitForTimeout(400)
+      return dialog
+    },
+  },
+  {
+    id: 'justified-settings',
+    assets: ['ScreenshotsJustifiedSettings.jpg'],
+    title: 'Appearance settings: square or justified thumbnails',
+    async setup({ grid, settings, page }) {
+      await readyGrid(grid)
+      await settings.open()
+      await settings.openTab('Appearance')
+      await expect(page.getByText('Thumbnail layout')).toBeVisible()
+      await page.waitForTimeout(300)
+      return settings.card
+    },
+  },
+  {
+    id: 'justified',
+    assets: ['ScreenshotsJustified.jpg'],
+    title: 'Justified grid (thumbnails at their own aspect ratio)',
+    // Persisted per owner, so teardown puts it back: every later grid scene is
+    // a square grid.
+    async setup({ grid, api, page }) {
+      const res = await api.patch('/api/v1/users/me/config', {
+        data: { thumbnail_mode: 'justified' },
+      })
+      expect(res.ok(), `could not switch to justified: ${res.status()}`).toBe(true)
+      await readyGrid(grid)
+      await page.waitForTimeout(600)
+      return null
+    },
+    async teardown({ api }) {
+      await api.patch('/api/v1/users/me/config', { data: { thumbnail_mode: 'square' } })
+    },
+  },
+  {
+    id: 'share',
+    assets: ['ScreenshotShare1.jpg'],
+    title: 'Share dialog with a generated link',
+    async setup({ grid, page }) {
+      await readyGrid(grid)
+      await grid.openContextMenu(grid.thumbnails.first())
+      await grid.contextMenuItem('Share image').click()
+      const card = page.locator('.app-dialog:has(.share-dialog-hint)')
+      await expect(card).toBeVisible()
+      await card.getByRole('button', { name: 'Create link' }).click()
+      await expect(page.locator('.share-dialog-url')).toBeVisible()
+      await page.waitForTimeout(300)
+      return card
+    },
+  },
+  {
+    id: 'plugins',
+    assets: ['ScreenshotPlugins.jpg'],
+    title: 'Image-filter plugins (Adjust → Filters…)',
+    async setup({ grid, page }) {
+      await readyGrid(grid)
+      await selectN(grid, 3)
+      await grid.openContextMenu(grid.thumbnails.first())
+      // The image-filter plugins are behind Adjust → Filters…, which opens the
+      // filter dialog. It stops short of running one.
+      await grid.contextMenu.locator('.ctx-item', { hasText: 'Adjust' }).first().hover()
+      await grid.contextMenu.locator('.ctx-item', { hasText: 'Filters' }).first().click()
+      // SelectionBar's "Apply Filters" panel, anchored to the selection pill.
+      await expect(page.locator('.plugin-menu-panel')).toBeVisible()
+      await page.waitForTimeout(600)
+      return null
+    },
+  },
+  {
+    id: 'tag-review',
+    assets: ['ScreenshotReview1.jpg'],
+    title: 'Tag review card',
+    async setup({ grid, api, page }) {
+      await readyGrid(grid)
+      await ReviewSessions.ensureHealthBuilt(api)
+      const reviews = new ReviewSessions(page)
+      await reviews.open()
+      await expect(reviews.boardRows.first()).toBeVisible()
+      await reviews.createReview(REVIEW_TAG)
+      await expect(reviews.card).toBeVisible()
+      await page.waitForTimeout(800)
+      return null
+    },
+  },
+  // ── API docs (pixlstash/data/scalar-assets): creating an API token ────────
+  {
+    id: 'where-settings',
+    assets: ['WhereIsUserSettings.jpg'],
+    title: 'The Settings gear in the title bar',
+    async setup({ grid, settings, page }) {
+      await readyGrid(grid)
+      await settings.openButton.hover()
+      await page.waitForTimeout(300)
+      // The right end of the title bar and the top of the grid under it.
+      const box = await settings.openButton.boundingBox()
+      return { clip: { x: box.x - 560, y: 0, width: 640, height: 440 } }
+    },
+  },
+  {
+    id: 'account-tokens',
+    assets: ['ScreenshotsUserSettings.jpg'],
+    title: 'Settings → Account & tokens',
+    async setup({ grid, settings }) {
+      await readyGrid(grid)
+      await settings.open()
+      await settings.openAccountTab()
+      return settings.card
+    },
+  },
+  {
+    id: 'token-create',
+    assets: ['ScreenshotTokens.jpg'],
+    title: 'The New token dialog, filled in',
+    async setup({ grid, settings, page }) {
+      await readyGrid(grid)
+      await settings.open()
+      await settings.openAccountTab()
+      await settings.openCreateTokenDialog()
+      await settings.tokenDescription.fill('LM Studio')
+      await page.waitForTimeout(300)
+      // The settings dialog's box, with the New token dialog drawn over it.
+      return settings.card
+    },
+  },
+  {
+    id: 'token-shown',
+    assets: ['ScreenshotToken.jpg'],
+    title: 'A new token, shown once',
+    async setup({ grid, settings, page }) {
+      await readyGrid(grid)
+      await settings.open()
+      await settings.openAccountTab()
+      await settings.openCreateTokenDialog()
+      await settings.tokenDescription.fill('LM Studio')
+      await settings.createTokenButton.click()
+      await expect(page.getByText(/only once|won.t be able to see it again/i).first()).toBeVisible()
+      await page.waitForTimeout(300)
+      return settings.card
     },
   },
   {
@@ -630,17 +727,17 @@ export const scenes = [
     id: 'empty-library',
     assets: ['ScreenshotEmptyLibrary.jpg'],
     title: 'The first screen of a new library (three ways in)',
-    async setup({ grid, page }) {
+    async setup({ grid, api, page }) {
       await readyGrid(grid)
       const root = join(tmpdir(), 'pixlstash-shots-empty-library')
       rmSync(root, { recursive: true, force: true })
       mkdirSync(root, { recursive: true })
-      const added = await page.request.post('/api/v1/libraries', {
+      const added = await api.post('/api/v1/libraries', {
         data: { path: root, name: 'New library' },
       })
       expect(added.ok(), `could not add the empty library: ${added.status()}`).toBe(true)
       const { uuid } = await added.json()
-      const switched = await page.request.post('/api/v1/libraries/active', {
+      const switched = await api.post('/api/v1/libraries/active', {
         data: { uuid },
       })
       expect(switched.ok(), `could not switch library: ${switched.status()}`).toBe(true)
@@ -656,6 +753,34 @@ export const scenes = [
 ]
 
 export const manual = {
+  'ScreenshotModelShelf.jpg':
+    'The model shelf — the shelf also lists the capture machine\'s own model folders, ' +
+    'so a capture would publish its owner\'s model inventory; needs a manual capture ' +
+    'on a machine whose shelf is fit to show',
+  // ComfyUI illustrations. The 1.11 run overwrote these two with the SPA's
+  // search box from a "search" scene; the originals are the ComfyUI nodes.
+  'SemanticSearch.jpg': 'ComfyUI Semantic Search node — external app',
+  'ScreenshotSearchEdit.jpg': 'Face likeness search into a ComfyUI image edit — external app',
+  // 1.12–1.13. Each needs a live ComfyUI (a connection, a run, its templates
+  // or a model download in flight), which the capture backend does not have.
+  'ComfyAdapterLoader.jpg': 'ComfyUI graph — external app',
+  'ComfyAdapterPicker.jpg': 'PixlStash picker inside ComfyUI — external app',
+  'ComfyCheckpointPicker.jpg': 'PixlStash picker inside ComfyUI — external app',
+  'ComfyPictureLikenessGate.jpg': 'ComfyUI graph — external app',
+  'ConnectComfyUI.jpg': 'Connect ComfyUI dialog with its checks passed — needs a live ComfyUI',
+  'EditInComfyUI.jpg': 'ComfyUI with a PixlStash workflow open — external app',
+  'OpenInComfyUI.jpg': 'Open in ComfyUI menu — needs a live ComfyUI',
+  'OpenOriginalInComfyUI.jpg': 'Open original in ComfyUI — needs a live ComfyUI',
+  'RunWorkflow.jpg': 'Run window — needs a live ComfyUI and real workflows',
+  'SaveToPixlStash.jpg': 'Saving back from ComfyUI — external app',
+  'Workflows.jpg': 'Workflows grid — needs real workflows with real pictures',
+  'WorkflowSets.jpg': 'Workflow sets — needs real workflows and checkpoints',
+  'ModelDownload.jpg': 'Tasks tab with a model download in flight — needs a live download',
+  'TemplateDownloads.jpg': 'ComfyUI templates tab — needs a live ComfyUI',
+  'WaitingForGPU.png': 'A run waiting for the GPU — needs a live ComfyUI run',
+  'ScreenshotWizard.jpg':
+    'First-run setup (1.11) — the shell shows it only when it has no server-config, ' +
+    'and the captures start from one',
   // Dropped as a scene: the panel is empty by the time the captures run.
   'ScreenshotTaskManager.jpg':
     'Task manager throughput — demo-data is fully processed before the captures start, ' +
@@ -666,10 +791,6 @@ export const manual = {
   'ScreenshotCli.jpg': 'pixlstash-cli --help in a terminal — not the SPA',
   'ScreenshotCliLibraries.jpg': 'pixlstash-cli libraries in a terminal — not the SPA',
   'ScreenshotCliPlugins.jpg': 'pixlstash-cli plugins in a terminal — not the SPA',
-  'ScreenshotLibraries.jpg':
-    'Settings → Libraries with two registered libraries — superseded on the site by ScreenshotLibrariesManage.jpg, which the libraries-manage scene reproduces',
-  'ScreenshotModelShelf.jpg':
-    'The model shelf — reproducible next: the e2e launcher now seeds a model folder (#2209); the scene must set the flat list view',
   'ScreenshotAiToolkitImport.jpg':
     'Discovered ai-toolkit training runs — needs a real ai-toolkit output folder to read',
   'ScreenshotDeleteLora.jpg':
@@ -690,12 +811,6 @@ export const manual = {
     'One character in more than one project — needs a multi-project fixture',
   'ScreenshotUndoHistory.jpg':
     'Undo/redo history dropdown — needs a library with recent operations; demo-data is freshly imported',
-  'ScreenshotsJustified.jpg':
-    'Justified grid — reproducible next; the scene must persist thumbnail_mode and restore it so later captures stay square',
-  'ScreenshotsJustifiedSettings.jpg':
-    'Appearance settings layout picker — reproducible next, alongside ScreenshotsJustified.jpg',
-  'ScreenshotReview1.jpg':
-    'Tag review card (1.7) — hand-shot against a curated library; needs a review-session fixture scene',
   'ScreenshotReview3.jpg':
     'Tag health table (1.7) — hand-shot; needs review history to populate the rankings',
   'ScreenshotLockSets.jpg':
@@ -720,8 +835,6 @@ export const manual = {
   'ScreenshotChat3.jpg': 'LM Studio chat — external app',
   'ScreenshotJoyCaption.jpg': 'Historical (1.3) tagger settings — needs a settings-tab scene + matching plugins',
   'ScreenshotTaggers.jpg': 'Historical (1.3) tagger settings — needs a settings-tab scene',
-  'ScreenshotPlugins.jpg': 'Image-filter plugin settings — needs a settings-tab scene + installed plugins',
-  'ScreenshotKeyboard.jpg': 'No standalone keyboard-shortcuts dialog located in the current UI',
   'ScreenshotDemo.jpg': 'The public demo site itself (pixlstash.dev demo), not a local app state',
   'ScreenshotUrl.jpg': 'Browser URL bar — outside the app viewport',
   'ScreenshotWhatsNew1_2.jpg': 'Historical composite from the 1.2 release notes',
@@ -733,7 +846,6 @@ export const manual = {
   'ScreenshotReferenceFoldersNew.jpg': 'demo-data has no reference folders',
   'FaceLikenessSearch.jpg': 'Face-likeness search — needs a face-search fixture + indexed faces',
   'MultiLikenessSearch.jpg': 'Multi-face likeness search — needs a face-search fixture',
-  'ScreenshotShare1.jpg': 'Share dialog — reproducible next; ShareDialog page object exists',
   'ScreenshotShare2.jpg': 'Recipient share view — needs a minted public share link',
   'ScreenshotDragCharacters.jpg': 'Live HTML5 drag (drag ghost + drop-zone highlight) is not reliably capturable headless — needs a manual capture',
   'SmartScreen.jpg': 'Windows SmartScreen OS dialog — not the app',
