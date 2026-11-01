@@ -968,6 +968,24 @@ describe("the runs PixlStash trains (#2118)", () => {
     expect(importBtn(wrapper)).toBeUndefined();
   });
 
+  it("pulses a slot still to come only while its run trains", async () => {
+    const halfDrawn = () =>
+      run("Clementine_abcd1234", {
+        sample_prompts: ["a", "b"],
+        samples: [{ filename: "s_500_0.jpg", step: 500, index: 0 }],
+      });
+    listTrainingJobs.mockResolvedValue([job()]);
+    let wrapper = await openWith([halfDrawn()]);
+    expect(wrapper.findAll(".tr-card-blank--live")).toHaveLength(1);
+
+    listTrainingJobs.mockResolvedValue([
+      job({ status: "completed", completed_at: DONE_AT }),
+    ]);
+    wrapper = await openWith([halfDrawn()]);
+    expect(wrapper.findAll(".tr-card-blank")).toHaveLength(1);
+    expect(wrapper.findAll(".tr-card-blank--live")).toHaveLength(0);
+  });
+
   it("picks a live run on its own, and offers no import for it", async () => {
     listTrainingJobs.mockResolvedValue([job()]);
     const wrapper = await openWith([run("Clementine_abcd1234"), run("Foxglove")]);
