@@ -1798,6 +1798,10 @@ describe("the receipts", () => {
     expect(editReceipt(1, { display_name: null })).toContain(
       "derived from the filename",
     );
+    // A collapsed stack's rename writes every member, and is still one name.
+    expect(editReceipt(5, { display_name: "Clementine" })).toBe(
+      "Renamed to Clementine.",
+    );
   });
 
   it("reports the refusals, which are the interesting half", () => {

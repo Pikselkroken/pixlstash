@@ -2626,7 +2626,8 @@ def create_router(server) -> APIRouter:
         description=(
             "Four of the shelf's verbs on one route, because all of them "
             "write a curated column and differ only in which one: **Rename** "
-            "(`display_name`, one id), **Set base model** (`base_model`), "
+            "(`display_name`, one model or one stack), **Set base model** "
+            "(`base_model`), "
             "**Set kind** (`kind`, `file_kind`, `capabilities`, "
             "`suggest_kind`) and **Set trigger words** (`trigger_words`). Only the "
             "fields present in the body are written, so setting a base model "
@@ -2675,13 +2676,18 @@ def create_router(server) -> APIRouter:
                     ),
                 )
 
-        if "display_name" in changes and len(payload.ids) > 1:
-            # A name is a fact about one file. Applying one across a selection
-            # would give every row the same name, which is not a rename anyone
-            # asked for and cannot be undone.
+        if "display_name" in changes and not _is_one_model_or_one_stack(payload.ids):
+            # A name is a fact about one file, or about one stack: a run's
+            # members share its name, and renaming its collapsed row names
+            # the run. Applying one across any other selection would give
+            # every row the same name, which is not a rename anyone asked for
+            # and cannot be undone.
             raise HTTPException(
                 status_code=400,
-                detail="display_name can only be set on one model at a time.",
+                detail=(
+                    "display_name can only be set on one model, or on the "
+                    "members of one stack, at a time."
+                ),
             )
         if (
             changes.get("file_kind") is not None
@@ -2710,6 +2716,23 @@ def create_router(server) -> APIRouter:
             "Shelf edit wrote %s on %d model(s).", ", ".join(sent), len(updated)
         )
         return ModelEditResponse(updated=updated, fields=sent)
+
+    def _is_one_model_or_one_stack(ids: list[int]) -> bool:
+        """Whether ``ids`` name one model, or members of one stack only.
+
+        The shelf draws a stack as one row and writes to every member it
+        shows, so a rename there arrives as several ids. Ids that name no row
+        are ignored, as :func:`update_models` ignores them.
+        """
+        unique = set(ids)
+        if len(unique) <= 1:
+            return True
+        placeholders = ", ".join("?" for _ in unique)
+        stacks = server.hub.fetchall(
+            f"SELECT DISTINCT stack_id FROM model WHERE id IN ({placeholders})",
+            tuple(unique),
+        )
+        return len(stacks) == 1 and stacks[0]["stack_id"] is not None
 
     def _refuse_builtin_engines(ids: list[int]) -> None:
         """Refuse any verb aimed at a model PixlStash downloaded for itself.

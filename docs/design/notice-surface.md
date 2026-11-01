@@ -477,8 +477,11 @@ matching the dialogs it is a sibling of.
   into one card carrying a `×N` count (`--text-2xs`, `--weight-semibold`,
   `font-variant-numeric: tabular-nums`, `color: rgba(var(--v-theme-on-surface), 0.7)`,
   placed immediately after the message). This is not a nicety: a bulk operation over 50
-  selected pictures that fails per-picture would otherwise push 50 sticky error cards and
-  bury the application. Requires a store change — §9.1.
+  selected pictures that fails per-picture would otherwise push 50 error cards and
+  bury the application. Requires a store change — §9.1. A caller may name the card with a
+  coalescing key; without one the store applies this rule itself, by variant and text.
+  A notice carrying an action is never folded onto another that way: the repeat would
+  replace its handler, and the first card's Undo would act on the second.
 - Stack reflow when a card is added or removed animates per §7.
 
 ---
@@ -492,7 +495,7 @@ The store's `DEFAULT_TIMEOUTS` are close to right and are kept:
 | `success` | 3000 ms | keep |
 | `info` | 4000 ms | keep |
 | `warning` | 6000 ms | keep — a partial outcome takes longer to parse than a confirmation |
-| `error` | `0` = **sticky** | keep. **Errors must not auto-dismiss.** A failure the user has to act on cannot vanish while they are reading it. |
+| `error` | 10000 ms | The longest window, not a sticky one (changed 2026-11-01). Sticky errors piled up: a rename refused twice left two cards that only the ✕ took down. Rule 3's pause keeps an error up while it is being read; a caller that needs one to stay passes `timeout: 0`. |
 
 Three rules on top, none of which the store enforces today:
 
@@ -911,7 +914,8 @@ exists to stop.
 4. Push 6 notices. Exactly 3 render, newest at the bottom; the other 3 arrive as the
    earlier ones dismiss; none expires unseen.
 5. Push the same error text 50 times. One card, `×50`.
-6. An error card never auto-dismisses. A success card with an action never auto-dismisses.
+6. An error card stays 10 s (longer for a long sentence). A success card with an action
+   never auto-dismisses.
 7. Hovering any card stops its countdown; leaving resumes it.
 8. Focus never moves to a notice on appearance. Tabbing from the last page control
    reaches the action, then the dismiss, both with a visible `--focus-ring`.

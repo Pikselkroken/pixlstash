@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { setActivePinia, createPinia } from "pinia";
-import { useNoticeStore, resolveTimeout } from "./useNoticeStore";
+import {
+  useNoticeStore,
+  resolveTimeout,
+  DEFAULT_TIMEOUTS,
+} from "./useNoticeStore";
 
 beforeEach(() => {
   setActivePinia(createPinia());
@@ -95,11 +99,30 @@ describe("resolveTimeout - reading-time floor (§6 rule 2)", () => {
   });
 });
 
-describe("useNoticeStore - sticky errors (§6)", () => {
-  it("never auto-dismisses an error", () => {
+describe("useNoticeStore - durations (§6)", () => {
+  it("gives an error the longest window, then lets it go", () => {
     const store = useNoticeStore();
     store.error("Couldn't delete the picture.");
-    expect(store.notices[0].timeout).toBe(0);
+    const effective = store.notices[0].timeout;
+    expect(effective).toBe(DEFAULT_TIMEOUTS.error);
+    expect(effective).toBeGreaterThan(DEFAULT_TIMEOUTS.warning);
+    vi.advanceTimersByTime(effective - 1);
+    expect(store.notices).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    expect(store.notices).toHaveLength(0);
+  });
+
+  it("still keeps an error up while it is hovered", () => {
+    const store = useNoticeStore();
+    const id = store.error("Couldn't delete the picture.");
+    store.pause(id);
+    vi.advanceTimersByTime(120000);
+    expect(store.notices).toHaveLength(1);
+  });
+
+  it("keeps an error sticky when the caller asks for it", () => {
+    const store = useNoticeStore();
+    store.error("Couldn't delete the picture.", { timeout: 0 });
     vi.advanceTimersByTime(120000);
     expect(store.notices).toHaveLength(1);
   });
@@ -150,9 +173,38 @@ describe("useNoticeStore - coalescing (§9.1)", () => {
     expect(store.notices).toHaveLength(2);
   });
 
-  it("does not coalesce keyless notices", () => {
+  it("coalesces keyless notices with the same level and text (§5)", () => {
     const store = useNoticeStore();
     store.push({ level: "error", text: "same" });
+    store.push({ level: "error", text: "same" });
+    expect(store.notices).toHaveLength(1);
+    expect(store.notices[0].count).toBe(2);
+  });
+
+  it("keeps keyless notices apart when level or text differ", () => {
+    const store = useNoticeStore();
+    store.push({ level: "error", text: "same" });
+    store.push({ level: "warning", text: "same" });
+    store.push({ level: "error", text: "other" });
+    expect(store.notices).toHaveLength(3);
+  });
+
+  it("never coalesces a keyless notice with an action onto another", () => {
+    const store = useNoticeStore();
+    const first = vi.fn();
+    const second = vi.fn();
+    store.success("Moved.", { action: { label: "Undo", handler: first } });
+    store.success("Moved.", { action: { label: "Undo", handler: second } });
+    store.success("Moved.");
+    expect(store.notices).toHaveLength(3);
+    store.invokeAction(store.notices[0].id);
+    expect(first).toHaveBeenCalledOnce();
+    expect(second).not.toHaveBeenCalled();
+  });
+
+  it("does not fold a keyless notice into a keyed one", () => {
+    const store = useNoticeStore();
+    store.push({ level: "error", text: "same", key: "k" });
     store.push({ level: "error", text: "same" });
     expect(store.notices).toHaveLength(2);
   });
