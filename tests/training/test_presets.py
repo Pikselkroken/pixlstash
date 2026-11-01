@@ -294,6 +294,47 @@ def test_prompts_written_from_the_captions_come_from_captions_unless_pinned():
     }
 
 
+_KEEP = {
+    presets.PRESERVATION_KEY: True,
+    presets.PRESERVATION_CLASS_KEY: "an elderly man",
+}
+
+
+def test_keeping_the_description_generic_comes_from_captions_unless_pinned():
+    values = _resolve(preservation=_KEEP)["values"]
+    assert values[presets.PRESERVATION_KEY] == {"value": True, "source": "captions"}
+    assert values[presets.PRESERVATION_CLASS_KEY] == {
+        "value": "an elderly man",
+        "source": "captions",
+    }
+    off = _resolve(preservation=_KEEP, pins={presets.PRESERVATION_KEY: False})
+    assert off["values"][presets.PRESERVATION_KEY] == {
+        "value": False,
+        "source": "pinned",
+    }
+    assert presets.PRESERVATION_KEY not in _resolve()["values"]
+    # The patch reaches the template's own keys under train.
+    train = presets.to_patch(presets.resolved_values(_resolve(preservation=_KEEP)))[
+        "config"
+    ]["process"][0]["train"]
+    assert train["diff_output_preservation"] is True
+    assert train["diff_output_preservation_class"] == "an elderly man"
+
+
+def test_a_text_encoder_that_trains_turns_preservation_off_or_refuses_it():
+    # ai-toolkit refuses the two together, so the derived switch gives way...
+    values = _resolve(preservation=_KEEP, pins={"train.train_text_encoder": True})[
+        "values"
+    ]
+    assert values[presets.PRESERVATION_KEY] == {"value": False, "source": "captions"}
+    # ...and the owner asking for both is told before the run is queued.
+    with pytest.raises(TunableOverrideError, match="text encoder"):
+        _resolve(
+            preservation=_KEEP,
+            pins={"train.train_text_encoder": True, presets.PRESERVATION_KEY: True},
+        )
+
+
 def test_pins_win_over_every_derived_value():
     values = _resolve(pins={"network.linear": 8, "train.steps": 777})["values"]
     assert values["train.steps"] == {"value": 777, "source": "pinned"}

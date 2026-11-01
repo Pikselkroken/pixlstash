@@ -335,6 +335,47 @@
       <span>{{ planError }}</span>
     </p>
 
+    <!-- Most captions describe the person the same way: the LoRA would learn
+         that everyone so described is them, unless the words are kept
+         generic (ai-toolkit's output preservation). -->
+    <div
+      v-if="keepGeneric"
+      class="tld-notice tld-notice--warn tld-keep"
+      data-testid="tld-keep-generic"
+    >
+      <v-icon size="16">mdi-alert-outline</v-icon>
+      <div class="tld-keep__body">
+        <span>
+          <b>{{ keepGeneric.headline }}</b> Left alone, the LoRA learns that every
+          {{ keepGeneric.bare }} is {{ keepGeneric.name }}. Keeping the words
+          generic holds &ldquo;{{ keepGeneric.description }}&rdquo; to what the
+          model drew before training.
+        </span>
+        <span v-if="keepGeneric.example" class="tld-keep__cap" data-testid="tld-keep-caption"
+          >{{ keepGeneric.example[0] }}<mark v-if="keepGeneric.example[1]">{{
+            keepGeneric.example[1]
+          }}</mark>{{ keepGeneric.example[2] }}</span
+        >
+        <div class="tld-keep__row">
+          <v-switch
+            :model-value="keepGeneric.on"
+            color="primary"
+            density="compact"
+            hide-details
+            :aria-label="keepGeneric.label"
+            data-testid="tld-keep-switch"
+            @update:model-value="(v) => store.setPin(PRESERVATION_KEY, !!v)"
+          />
+          <span class="tld-keep__label">
+            <span>{{ keepGeneric.label }}</span>
+            <span class="tld-hint">slower steps, a little less likeness</span>
+          </span>
+          <span class="tld-sp" />
+          <span class="tld-hint" data-testid="tld-keep-source">{{ keepGeneric.source }}</span>
+        </div>
+      </div>
+    </div>
+
     <!-- Checks before Start: warnings, never a block (but an empty set). -->
     <ul v-if="checks.length" class="tld-checks" data-testid="tld-checks">
       <li
@@ -517,6 +558,14 @@
                     >
                       <v-icon size="16">mdi-close</v-icon>
                     </button>
+                    <span
+                      v-if="lineRole(line)"
+                      class="tld-prompt-role"
+                      data-testid="tld-prompt-role"
+                    >
+                      <span class="tld-role">{{ lineRole(line).label }}</span>
+                      <span class="tld-hint">{{ lineRole(line).text }}</span>
+                    </span>
                   </div>
                   <AppButton
                     size="sm"
@@ -526,7 +575,14 @@
                     @click="store.addPrompt()"
                     >Add a prompt</AppButton
                   >
-                  <span class="tld-hint tld-prompts-note">
+                  <span v-if="hasRoles" class="tld-hint tld-prompts-note">
+                    Prompts without
+                    <span class="tld-mono">{{ triggerShown }}</span> show what the
+                    LoRA does to pictures it wasn't asked for: one of someone like
+                    {{ store.displayName || pronoun }}, and one of someone who is
+                    not. Click the word on a prompt to add or leave it out.
+                  </span>
+                  <span v-else class="tld-hint tld-prompts-note">
                     Prompts without
                     <span class="tld-mono">{{ triggerShown }}</span> show whether
                     the LoRA changes pictures it wasn't asked for. Click the word
@@ -592,6 +648,11 @@ import {
   FIT_LABELS,
   PRIMARY_ROWS,
   AUDIO_KEY,
+  PRESERVATION_KEY,
+  PRESERVATION_CLASS_KEY,
+  pronounOf,
+  promptRole,
+  roleText,
   PREVIEW_SIZE_KEYS,
   SAMPLING_KEY,
   PROMPTS_KEY,
@@ -900,6 +961,71 @@ const promptsSummary = computed(
     `${store.prompts.length} · ${withTrigger.value} with the trigger word`,
 );
 
+/** Whether the run keeps the person's description generic, as resolved. */
+const keptGeneric = computed(() => !!values.value?.[PRESERVATION_KEY]?.value);
+const pronoun = computed(() => pronounOf(store.promptsInfo?.description));
+
+/**
+ * The notice over the run's settings when most captions describe the person
+ * the same way, with the switch that keeps those words generic. Null when
+ * they do not, or before the plan carries the switch.
+ */
+const keepGeneric = computed(() => {
+  const info = store.promptsInfo;
+  const entry = values.value?.[PRESERVATION_KEY];
+  if (!info?.keep_generic || !entry) return null;
+  const description = values.value?.[PRESERVATION_CLASS_KEY]?.value || info.description;
+  const name = store.displayName || "them";
+  const count = info.description_count;
+  const total = info.caption_count;
+  const headline =
+    count === total
+      ? `All ${formatCount(total)} captions call ${name} “${description}”.`
+      : `${formatCount(count)} of ${formatCount(total)} captions call ${name} “${description}”.`;
+  let example = null;
+  if (info.description_example) {
+    const text = info.description_example;
+    const at = text.toLowerCase().indexOf(description.toLowerCase());
+    example =
+      at < 0
+        ? [text, "", ""]
+        : [
+            text.slice(0, at),
+            text.slice(at, at + description.length),
+            text.slice(at + description.length),
+          ];
+  }
+  let source;
+  if (PRESERVATION_KEY in store.allPins) source = "Set by you";
+  else if (entry.value) source = `On because ${count} of ${total} captions use it`;
+  else source = "Off: training the text encoder cannot keep words generic";
+  return {
+    headline,
+    description,
+    bare: description.replace(/^an? /i, ""),
+    name,
+    example,
+    on: !!entry.value,
+    label: `Keep “${description}” generic`,
+    source,
+  };
+});
+
+/** A prompt line's control role and what it should do, or null. */
+function lineRole(line) {
+  const role = promptRole(line.text, store.promptsInfo);
+  const words = roleText(role, {
+    kept: keptGeneric.value,
+    description: store.promptsInfo?.description,
+  });
+  if (!words) return null;
+  return {
+    label: words.label,
+    text: role === "lookalike" ? `${words.expect}: ${words.detail}` : words.expect,
+  };
+}
+const hasRoles = computed(() => store.prompts.some((line) => lineRole(line)));
+
 const presetOptions = computed(() => {
   const verdicts = Object.fromEntries(
     (plan.value?.presets || []).map((p) => [p.id, p.verdict]),
@@ -972,8 +1098,9 @@ const pinnedBy = computed(() => {
   const out = { subject: [], effort: [], fit: [], model: [], previews: [] };
   const asked = previewChoice.value;
   for (const key of Object.keys(store.allPins)) {
-    // The Sound choice is its own control, not a pin on the recipe.
-    if (key === AUDIO_KEY) continue;
+    // The Sound choice and the keep-generic switch are their own controls,
+    // not pins on the recipe.
+    if (key === AUDIO_KEY || key === PRESERVATION_KEY) continue;
     // The Previews question's own pins sit beside it.
     if (
       asked &&
@@ -1548,6 +1675,64 @@ function goToSettings() {
 
 .tld-notice--ask {
   align-items: center;
+}
+
+.tld-keep__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* The quoted caption, its shared phrase marked in the warning hue. */
+.tld-keep__cap {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tld-keep__cap mark {
+  background: color-mix(in srgb, rgb(var(--v-theme-surface-warning)) 22%, transparent);
+  color: rgb(var(--v-theme-on-surface));
+  border-radius: var(--space-1);
+  padding: 0 var(--space-1);
+}
+
+.tld-keep__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.tld-keep__row .v-switch {
+  flex: none;
+}
+
+.tld-keep__label {
+  display: flex;
+  flex-direction: column;
+}
+
+/* A control prompt's role (a neutral count badge) and what it should do. */
+.tld-prompt-role {
+  grid-column: 2 / -1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: calc(-1 * var(--space-2));
+}
+
+.tld-role {
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, rgb(var(--v-theme-on-surface)) 12%, transparent);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  line-height: var(--badge-size);
 }
 
 .tld-link {

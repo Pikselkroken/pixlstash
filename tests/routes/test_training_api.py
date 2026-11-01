@@ -1307,7 +1307,28 @@ def test_sample_prompts_keep_the_trigger_word_out_of_the_description():
             params={"character_id": char_id, "trigger_word": "ohwx"},
         )
         assert r.status_code == 200, r.text
-        assert r.json()["description"] == "an elderly man"
+        body = r.json()
+        assert body["description"] == "an elderly man"
+        # Every caption calls him that, so the run keeps the words generic.
+        assert (body["description_count"], body["caption_count"]) == (1, 1)
+        assert body["description_example"] == "a photo of an ohwx elderly man reading"
+        assert body["keep_generic"] is True
+        assert body["stranger"] == "a young woman"
+        r = owner.post(
+            "/training/resolve",
+            json={
+                "character_id": char_id,
+                "subject": "person",
+                "picture_count": 24,
+                "trigger_word": "ohwx",
+            },
+        )
+        assert r.status_code == 200, r.text
+        planned = r.json()["resolution"]["values"]
+        assert planned["train.diff_output_preservation"] == {
+            "value": True,
+            "source": "captions",
+        }
         r = owner.post(
             "/training/jobs",
             json={"character_id": char_id, "name": "x", "trigger_word": "ohwx"},
@@ -1315,6 +1336,10 @@ def test_sample_prompts_keep_the_trigger_word_out_of_the_description():
         assert r.status_code == 200, r.text
         written = r.json()["resolved_profile"]["values"]["sample.samples[*].prompt"]
         assert not any("ohwx" in prompt for prompt in written["value"])
+        call = server.vault.training_service.enqueue_calls[-1]
+        train = call["config_overrides"]["config"]["process"][0]["train"]
+        assert train["diff_output_preservation"] is True
+        assert train["diff_output_preservation_class"] == "an elderly man"
     finally:
         ExportUtils.training_captions = staticmethod(real)
         _teardown(temp_dir, server)

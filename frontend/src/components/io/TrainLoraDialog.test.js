@@ -390,6 +390,103 @@ describe("TrainLoraDialog", () => {
   });
 });
 
+describe("keeping the description generic", () => {
+  const KEEP = "train.diff_output_preservation";
+  const CLASS = "train.diff_output_preservation_class";
+
+  beforeEach(() => {
+    training.getTrainingSamplePrompts.mockResolvedValue({
+      prompts: [
+        { prompt: `${T} reading`, with_trigger: `${T} reading`, without_trigger: "an elderly man reading" },
+        { prompt: "an elderly man reading", with_trigger: `${T} reading`, without_trigger: "an elderly man reading" },
+        { prompt: `${T} at a cafe`, with_trigger: `${T} at a cafe`, without_trigger: "a young woman at a cafe" },
+        { prompt: "a young woman at a cafe", with_trigger: `${T} at a cafe`, without_trigger: "a young woman at a cafe" },
+      ],
+      description: "an elderly man",
+      description_source: "captions",
+      stranger: "a young woman",
+      description_count: 24,
+      caption_count: 24,
+      description_example: "grandad, an elderly man with glasses on a bench",
+      keep_generic: true,
+    });
+    training.resolveTraining.mockImplementation(async (body) => {
+      const p = plan();
+      const on = body.pins?.[KEEP] ?? true;
+      p.resolution.values[KEEP] = { value: on, source: KEEP in (body.pins || {}) ? "pinned" : "captions" };
+      p.resolution.values[CLASS] = { value: "an elderly man", source: "captions" };
+      p.derived[KEEP] = { value: true, source: "captions" };
+      return p;
+    });
+  });
+
+  function keepSwitch(wrapper) {
+    return wrapper
+      .findAllComponents({ name: "VSwitch" })
+      .find((c) => c.attributes("data-testid") === "tld-keep-switch");
+  }
+
+  it("says most captions share the description, and the switch is on", async () => {
+    const { wrapper } = await openDialog(
+      { type: "character", id: 4, name: "Grandad" },
+      dataset(),
+    );
+    // The resolve reads the same captions the prompts were written from.
+    expect(training.resolveTraining).toHaveBeenLastCalledWith(
+      expect.objectContaining({ set_id: 40, character_id: 4, trigger_word: "grandad" }),
+    );
+    const notice = wrapper.find('[data-testid="tld-keep-generic"]');
+    expect(notice.text()).toContain("All 24 captions call Grandad “an elderly man”.");
+    expect(notice.text()).toContain("every elderly man is Grandad");
+    expect(notice.find("mark").text()).toBe("an elderly man");
+    expect(notice.text()).toContain("Keep “an elderly man” generic");
+    expect(wrapper.find('[data-testid="tld-keep-source"]').text()).toBe(
+      "On because 24 of 24 captions use it",
+    );
+    expect(keepSwitch(wrapper).attributes("model-value")).toBe("true");
+  });
+
+  it("turning it off pins it, and the lookalike is then expected to drift", async () => {
+    const { wrapper, store } = await openDialog(
+      { type: "character", id: 4, name: "Grandad" },
+      dataset(),
+    );
+    await wrapper.find('[data-testid="tld-advanced"]').trigger("click");
+    const roles = () =>
+      wrapper
+        .findAll('[data-testid="tld-prompt-role"]')
+        .map((r) => r.findAll("span").map((t) => t.text()).join(" "));
+    expect(roles()).toEqual([
+      "Like him Should not change: kept generic",
+      "Someone else Should not change",
+    ]);
+
+    keepSwitch(wrapper).vm.$emit("update:modelValue", false);
+    await store.resolvePlan();
+    await flushPromises();
+    expect(store.pins[KEEP]).toBe(false);
+    expect(wrapper.find('[data-testid="tld-keep-source"]').text()).toBe("Set by you");
+    expect(roles()[0]).toBe("Like him Expected to drift: the words that describe him");
+  });
+
+  it("asks nothing when most captions do not share it", async () => {
+    training.getTrainingSamplePrompts.mockResolvedValue({
+      prompts: [],
+      description: "an elderly man",
+      description_source: "captions",
+      stranger: "a young woman",
+      description_count: 1,
+      caption_count: 24,
+      keep_generic: false,
+    });
+    const { wrapper } = await openDialog(
+      { type: "character", id: 4, name: "Grandad" },
+      dataset(),
+    );
+    expect(wrapper.find('[data-testid="tld-keep-generic"]').exists()).toBe(false);
+  });
+});
+
 describe("a recipe that trains on clips (#2179)", () => {
   const AUDIO = "datasets[*].do_audio";
 

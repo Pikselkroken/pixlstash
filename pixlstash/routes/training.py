@@ -736,8 +736,17 @@ def create_router(server) -> APIRouter:
         rows: list[dict] = Field(
             default_factory=list,
             description=(
-                "One per sample prompt: {index, prompt, with_trigger, cells}, "
-                "each cell {state, filename} in column order."
+                "One per sample prompt: {index, prompt, with_trigger, role, "
+                "cells}, each cell {state, filename} in column order. role is "
+                "lookalike or stranger on a prompt without the trigger word "
+                "when the run knows its person's description, else null."
+            ),
+        )
+        preservation: Optional[dict] = Field(
+            default=None,
+            description=(
+                "{on, description} for a person's run: whether training kept "
+                "the description generic. Null for a run that did not decide."
             ),
         )
 
@@ -861,6 +870,32 @@ def create_router(server) -> APIRouter:
         description_source: Optional[str] = Field(
             default=None,
             description="captions, tags or generic; None for a style.",
+        )
+        stranger: Optional[str] = Field(
+            default=None,
+            description=(
+                "A person's alone: who the second scene's prompt without the "
+                "trigger word names, the description's opposite ('a young "
+                "woman'), so it should never change."
+            ),
+        )
+        description_count: Optional[int] = Field(
+            default=None,
+            description="A person's alone: captions that use the description.",
+        )
+        caption_count: Optional[int] = Field(
+            default=None, description="A person's alone: captions that are not empty."
+        )
+        description_example: Optional[str] = Field(
+            default=None,
+            description="A person's alone: the first caption using the description.",
+        )
+        keep_generic: Optional[bool] = Field(
+            default=None,
+            description=(
+                "A person's alone: whether most captions use the description, "
+                "which turns train.diff_output_preservation on by default."
+            ),
         )
 
     class DatasetCharacter(BaseModel):
@@ -1217,12 +1252,6 @@ def create_router(server) -> APIRouter:
             subject, captions, tags, normalise_trigger_word(trigger_word)
         )
 
-    def _sample_prompt_texts(set_id, character_id, subject, trigger_word) -> list[str]:
-        """The prompt strings a run stores. Create and resolve both plan from these."""
-        return sample_prompts.prompt_texts(
-            _default_prompts(set_id, character_id, subject, trigger_word)
-        )
-
     def _cover_state(job: dict, run_dir_info) -> dict:
         """Which steps can cover the run, and which one does.
 
@@ -1353,7 +1382,12 @@ def create_router(server) -> APIRouter:
         by_cell = {}
         for sample in sorted(samples, key=lambda s: s.timestamp):
             by_cell[(sample.step, sample.index)] = sample.filename
-        rows = live_view.prompt_rows(settings["prompts"], job["trigger_word"])
+        preservation = live_view.preservation(resolution)
+        rows = live_view.prompt_rows(
+            settings["prompts"],
+            job["trigger_word"],
+            (preservation or {}).get("description"),
+        )
         if not rows:
             rows = [
                 {"index": index, "prompt": "", "with_trigger": None}
@@ -1424,6 +1458,7 @@ def create_router(server) -> APIRouter:
             "phases": live_view.phase_durations(log, until),
             "columns": columns,
             "rows": rows,
+            "preservation": preservation,
             "run_folder": (
                 {"folder_id": folder_id, "run_name": _run_name(job)}
                 if folder_id is not None
@@ -1595,11 +1630,10 @@ def create_router(server) -> APIRouter:
                 status_code=422,
                 detail="There are no pictures to train on.",
             )
+        written = _default_prompts(set_id, character_id, subject, payload.trigger_word)
         prompts = None
         if presets.PROMPTS_KEY not in pins:
-            prompts = _sample_prompt_texts(
-                set_id, character_id, subject, payload.trigger_word
-            )
+            prompts = sample_prompts.prompt_texts(written)
         room = server.vault.training_room()
         if room["ram_mb"] is None:
             logger.warning(
@@ -1627,6 +1661,7 @@ def create_router(server) -> APIRouter:
                 ram_mb=room["ram_mb"],
                 pins=pins,
                 prompts=prompts,
+                preservation=sample_prompts.preservation(written),
                 lookup=_lookup(preset, _measured(repo_path)),
             )
         except presets.NoProfileFits as exc:
@@ -2493,11 +2528,12 @@ def create_router(server) -> APIRouter:
         set_id = character_id = None
         if payload.set_id is not None or payload.character_id is not None:
             set_id, character_id = _scope(payload.set_id, payload.character_id)
-        # The same prompts POST /training/jobs plans from, so the previews
-        # counted here are the ones a run gets.
-        prompts = _sample_prompt_texts(
+        # The same prompts and preservation POST /training/jobs plans from,
+        # so the previews counted here are the ones a run gets.
+        written = _default_prompts(
             set_id, character_id, payload.subject, payload.trigger_word
         )
+        prompts = sample_prompts.prompt_texts(written)
         choices = {
             "subject": payload.subject,
             "effort": payload.effort,
@@ -2506,6 +2542,7 @@ def create_router(server) -> APIRouter:
             "vram_mb": room["vram_mb"],
             "ram_mb": room["ram_mb"],
             "prompts": prompts,
+            "preservation": sample_prompts.preservation(written),
         }
         user = server.auth.get_user()
         repo_path = user.ai_toolkit_repo_path if user is not None else None

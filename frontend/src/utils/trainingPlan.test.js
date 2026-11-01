@@ -16,6 +16,9 @@ import {
   sourceLabel,
   toggleTrigger,
   triggerFromName,
+  pronounOf,
+  promptRole,
+  roleText,
 } from "./trainingPlan";
 
 const STANDARD = {
@@ -247,5 +250,37 @@ describe("runName", () => {
     const long = runName("x".repeat(300), "Z-Image Turbo", []);
     expect(long.length).toBeLessThanOrEqual(200);
     expect(long).toMatch(/^x+ Z-Image Turbo #1$/);
+  });
+});
+
+describe("the control prompts' roles", () => {
+  const info = { description: "an elderly man", stranger: "a young woman" };
+
+  it("names a person by their description's noun", () => {
+    expect(pronounOf("an elderly man")).toBe("him");
+    expect(pronounOf("a young woman")).toBe("her");
+    expect(pronounOf("a person")).toBe("them");
+    expect(pronounOf(undefined)).toBe("them");
+  });
+
+  it("tells the lookalike from the stranger, and claims nothing else", () => {
+    expect(promptRole("an elderly man reading", info)).toBe("lookalike");
+    expect(promptRole("A young woman at a cafe", info)).toBe("stranger");
+    expect(promptRole("{{TRIGGER_WORD}} reading", info)).toBeNull();
+    expect(promptRole("a dog in a park", info)).toBeNull();
+    // A thing's prompts carry no stranger, so no roles.
+    expect(promptRole("a red bicycle", { description: "a red bicycle" })).toBeNull();
+  });
+
+  it("words the lookalike by whether the description was kept generic", () => {
+    const d = { description: "an elderly man" };
+    expect(roleText("lookalike", { ...d, kept: true })).toEqual({
+      label: "Like him",
+      expect: "Should not change",
+      detail: "kept generic",
+    });
+    expect(roleText("lookalike", { ...d, kept: false }).expect).toBe("Expected to drift");
+    expect(roleText("stranger", { ...d, kept: false }).expect).toBe("Should not change");
+    expect(roleText(null, d)).toBeNull();
   });
 });

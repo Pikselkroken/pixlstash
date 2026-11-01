@@ -279,22 +279,56 @@ def _positive_int(value) -> int | None:
     return number if number > 0 else None
 
 
-def prompt_rows(prompts: list[str], trigger_word: str | None) -> list[dict]:
+def preservation(resolution: dict | None) -> dict | None:
+    """Whether a person's run kept its description generic, and the description.
+
+    Read from the run's resolved values (``sample_prompts.preservation``). A run
+    that never decided (queued before it existed, or not of a person) has no
+    description there and answers None.
+    """
+    values = (resolution or {}).get("values") or {}
+    described = values.get("train.diff_output_preservation_class") or {}
+    if not isinstance(described, dict) or not described.get("value"):
+        return None
+    kept = values.get("train.diff_output_preservation") or {}
+    return {
+        "on": bool(isinstance(kept, dict) and kept.get("value")),
+        "description": str(described["value"]),
+    }
+
+
+def _words(phrase: str) -> re.Pattern:
+    return re.compile(rf"(?<!\w){re.escape(phrase)}(?!\w)", re.I)
+
+
+def prompt_rows(
+    prompts: list[str], trigger_word: str | None, description: str | None = None
+) -> list[dict]:
     """The view's rows: each prompt by its sample index, and whether it has the word.
 
     ai-toolkit numbers a step's samples in prompt order, so a row's ``index`` is
-    the ``_<index>`` of its samples' filenames.
+    the ``_<index>`` of its samples' filenames. With the person's *description*
+    a prompt without the word is a ``lookalike`` when it names the description
+    and a ``stranger`` when it does not; otherwise its ``role`` is None.
     """
     word = (trigger_word or "").strip()
-    pattern = re.compile(rf"(?<!\w){re.escape(word)}(?!\w)", re.I) if word else None
-    return [
-        {
-            "index": index,
-            "prompt": prompt,
-            "with_trigger": bool(pattern and pattern.search(prompt)),
-        }
-        for index, prompt in enumerate(prompts)
-    ]
+    pattern = _words(word) if word else None
+    described = _words(description) if description else None
+    rows = []
+    for index, prompt in enumerate(prompts):
+        with_trigger = bool(pattern and pattern.search(prompt))
+        role = None
+        if described is not None and not with_trigger:
+            role = "lookalike" if described.search(prompt) else "stranger"
+        rows.append(
+            {
+                "index": index,
+                "prompt": prompt,
+                "with_trigger": with_trigger,
+                "role": role,
+            }
+        )
+    return rows
 
 
 def checkpoint_columns(

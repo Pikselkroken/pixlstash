@@ -20,21 +20,90 @@ def _texts(subject, captions=(), tags=()):
     )
 
 
-def test_two_pairs_differ_only_by_the_trigger_word():
+def test_a_person_gets_a_lookalike_and_a_stranger():
     result = sample_prompts.generate("person", _GRANDAD, [[]] * 3)
     assert result["description"] == "an elderly man"
     assert result["description_source"] == "captions"
+    assert result["stranger"] == "a young woman"
     prompts = result["prompts"]
     assert len(prompts) == 4
-    for with_word, without in (prompts[0:2], prompts[2:4]):
+    # The first scene's control names him, the second's someone he is not.
+    for (with_word, without), who in zip(
+        (prompts[0:2], prompts[2:4]), ("an elderly man", "a young woman")
+    ):
         assert with_word["prompt"] == with_word["with_trigger"]
         assert without["prompt"] == without["without_trigger"]
         assert with_word["with_trigger"] == without["with_trigger"]
         assert TRIGGER in with_word["prompt"] and TRIGGER not in without["prompt"]
-        assert without["prompt"] == with_word["prompt"].replace(
-            TRIGGER, "an elderly man"
-        )
+        assert without["prompt"] == with_word["prompt"].replace(TRIGGER, who)
     assert prompts[0]["prompt"] != prompts[2]["prompt"]
+
+
+def test_a_thing_keeps_its_description_in_both_pairs():
+    result = sample_prompts.generate("thing", ["A red bicycle by a wall."], [[]])
+    prompts = result["prompts"]
+    for with_word, without in (prompts[0:2], prompts[2:4]):
+        assert without["prompt"] == with_word["prompt"].replace(
+            TRIGGER, "a red bicycle"
+        )
+    assert result["stranger"] is None and result["keep_generic"] is None
+    assert sample_prompts.preservation(result) == {}
+
+
+@pytest.mark.parametrize(
+    "description, other",
+    [
+        ("an elderly man", "a young woman"),
+        ("a young woman", "an elderly man"),
+        ("an old lady", "a young man"),
+        ("a man", "a woman"),
+        ("a blonde woman", "a man"),
+        ("a little girl", "an elderly man"),
+        ("a boy", "an elderly woman"),
+        ("a child", "an elderly person"),
+        ("a teenager", "an elderly person"),
+        ("an old person", "a young person"),
+        ("a person", "a child"),
+    ],
+)
+def test_the_stranger_is_the_descriptions_opposite(description, other):
+    assert sample_prompts.stranger(description) == other
+
+
+def test_most_captions_sharing_the_description_keep_it_generic():
+    captions = [
+        "ohwx, an elderly man with glasses.",
+        "An elderly man on a bench.",
+        "A man in a hat.",
+        "",
+    ]
+    result = sample_prompts.generate("person", captions, [[]] * 4, "ohwx")
+    # Two of the three captions that say anything: most.
+    assert (result["description_count"], result["caption_count"]) == (2, 3)
+    assert result["description_example"] == captions[0]
+    assert result["keep_generic"] is True
+    assert sample_prompts.preservation(result) == {
+        sample_prompts.PRESERVATION_KEY: True,
+        sample_prompts.PRESERVATION_CLASS_KEY: "an elderly man",
+    }
+
+
+def test_half_the_captions_is_not_most():
+    captions = ["An elderly man.", "A woman."]
+    result = sample_prompts.generate("person", captions, [[], []])
+    assert result["description"] == "an elderly man"
+    assert (result["description_count"], result["caption_count"]) == (1, 2)
+    assert result["keep_generic"] is False
+    assert sample_prompts.preservation(result)[sample_prompts.PRESERVATION_KEY] is False
+
+
+def test_a_description_from_tags_is_never_kept_generic_by_default():
+    # The captions never say it, so nothing in training binds it to him.
+    result = sample_prompts.generate("person", ["", ""], [["old man"], ["old man"]])
+    assert result["description_source"] == "tags"
+    assert result["description_count"] == 0
+    assert result["keep_generic"] is False
+    assert result["description_example"] is None
 
 
 def test_the_same_dataset_gives_the_same_prompts():

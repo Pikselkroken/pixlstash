@@ -67,6 +67,10 @@ FINGERPRINT_KEYS = (
 #: without them keeps the fingerprints it was measured under.
 CLIP_FINGERPRINT_KEYS = ("datasets[*].do_audio", "sample.num_frames")
 
+#: Switches that slow every step, named only while on, so a run with them off
+#: keeps the fingerprint it was measured under.
+ON_FINGERPRINT_KEYS = ("train.diff_output_preservation",)
+
 #: The phase whose peak is the preview need; every other phase is training's.
 PREVIEW_PHASE = "previews"
 
@@ -109,6 +113,7 @@ def fingerprint(preset: dict, values: dict, *, commit: str | None, device: str |
         "measured_by": MEASURED_BY,
         **{key: values.get(key) for key in FINGERPRINT_KEYS},
         **{key: values[key] for key in CLIP_FINGERPRINT_KEYS if key in values},
+        **{key: True for key in ON_FINGERPRINT_KEYS if values.get(key)},
     }
     blob = json.dumps(named, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:32]

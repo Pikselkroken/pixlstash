@@ -95,6 +95,9 @@ export const useTrainingStore = defineStore("training", () => {
   // kept so an edited set is a pin and a reset can go back.
   const defaultPrompts = ref([]);
   const prompts = ref([]);
+  // What the written prompts were written from: the person's description,
+  // the stranger, and how many captions use the description (keep_generic).
+  const promptsInfo = ref(null);
   const plan = ref(null); // POST /training/resolve
   const planLoading = ref(false);
 
@@ -199,6 +202,7 @@ export const useTrainingStore = defineStore("training", () => {
     childSet.value = null;
     pins.value = {};
     defaultPrompts.value = [];
+    promptsInfo.value = null;
     prompts.value = [];
     dataset.value = null;
     plan.value = null;
@@ -255,6 +259,7 @@ export const useTrainingStore = defineStore("training", () => {
     trainOn.value = "all";
     pins.value = {};
     defaultPrompts.value = [];
+    promptsInfo.value = null;
     prompts.value = [];
     dataset.value = null;
     datasetError.value = "";
@@ -376,6 +381,9 @@ export const useTrainingStore = defineStore("training", () => {
       });
       if (seq !== promptsSeq) return;
       const edited = promptsPinned.value;
+      const info = { ...(data || {}) };
+      delete info.prompts;
+      promptsInfo.value = info;
       defaultPrompts.value = promptLines(data?.prompts);
       if (!edited) prompts.value = defaultPrompts.value.map((l) => ({ ...l }));
     } catch (err) {
@@ -406,11 +414,15 @@ export const useTrainingStore = defineStore("training", () => {
     const key = choicesKey.value;
     try {
       const body = {
+        ...scopePayload.value,
         subject: effectiveSubject.value,
         effort: effort.value,
         fit: fit.value,
         picture_count: pictureCount.value,
       };
+      // The captions decide whether the description is kept generic.
+      const word = triggerWord.value.trim();
+      if (word) body.trigger_word = word;
       if (selectedPreset.value) body.preset = selectedPreset.value;
       if (Object.keys(allPins.value).length) body.pins = allPins.value;
       const data = await resolveTraining(body);
@@ -453,6 +465,8 @@ export const useTrainingStore = defineStore("training", () => {
       pictureCount.value,
       dataset.value,
       JSON.stringify(allPins.value),
+      JSON.stringify(scopePayload.value),
+      triggerWord.value.trim(),
     ],
     () => {
       if (trainDialogOpen.value) resolveSoon();
@@ -699,6 +713,7 @@ export const useTrainingStore = defineStore("training", () => {
     pins.value = {};
     prompts.value = [];
     defaultPrompts.value = [];
+    promptsInfo.value = null;
   }
 
   const unsubscribeSessionReset = onSessionReset(resetForSession);
@@ -754,6 +769,7 @@ export const useTrainingStore = defineStore("training", () => {
     planLoading,
     defaultPrompts,
     prompts,
+    promptsInfo,
     promptsPinned,
     resetPrompts,
     setPromptText,

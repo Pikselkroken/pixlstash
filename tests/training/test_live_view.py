@@ -142,6 +142,41 @@ def test_prompt_rows_mark_the_trigger_word_as_a_whole_word():
     assert [row["index"] for row in rows] == [0, 1, 2]
 
 
+def test_prompt_rows_tell_the_lookalike_from_the_stranger():
+    prompts = [
+        "skpr reading a newspaper",
+        "an elderly man reading a newspaper",
+        "skpr at a cafe",
+        "a young woman at a cafe",
+    ]
+    rows = live_view.prompt_rows(prompts, "skpr", "an elderly man")
+    assert [row["role"] for row in rows] == [None, "lookalike", None, "stranger"]
+    # Without the description the run makes no claim about either.
+    assert {row["role"] for row in live_view.prompt_rows(prompts, "skpr")} == {None}
+
+
+def test_preservation_is_read_from_the_resolved_values():
+    def resolution(on):
+        return {
+            "values": {
+                "train.diff_output_preservation": {"value": on, "source": "captions"},
+                "train.diff_output_preservation_class": {
+                    "value": "an elderly man",
+                    "source": "captions",
+                },
+            }
+        }
+
+    assert live_view.preservation(resolution(True)) == {
+        "on": True,
+        "description": "an elderly man",
+    }
+    assert live_view.preservation(resolution(False))["on"] is False
+    # A run from before the switch, or not of a person, never decided.
+    assert live_view.preservation({"values": {}}) is None
+    assert live_view.preservation(None) is None
+
+
 def test_sample_settings_read_the_rendered_config():
     config = {
         "config": {
