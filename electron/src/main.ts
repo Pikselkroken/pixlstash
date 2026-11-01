@@ -325,6 +325,17 @@ function createMainWindow(): void {
   };
   mainWindow.webContents.on('will-navigate', guardNavigation);
   mainWindow.webContents.on('will-redirect', guardNavigation);
+  // will-navigate and will-redirect cover the top frame only, and the preload
+  // runs in every frame, so an iframe navigated off-origin would keep the
+  // bridge. Subframes get the same origin policy, without the external hand-off.
+  const guardFrameNavigation = (
+    event: Electron.Event<Electron.WebContentsWillFrameNavigateEventParams>,
+  ): void => {
+    if (event.isMainFrame || isAllowedTarget(event.url)) return;
+    event.preventDefault();
+    console.warn(`[nav] blocked subframe navigation to off-origin URL: ${redactUrl(event.url)}`);
+  };
+  mainWindow.webContents.on('will-frame-navigate', guardFrameNavigation);
   // A child window inherits the parent's webPreferences (preload included), so
   // its navigation must be governed too: validating only the URL it opened with
   // would let it navigate off-origin one hop later, bridge and all.
@@ -332,6 +343,7 @@ function createMainWindow(): void {
     child.webContents.setWindowOpenHandler(openHandler);
     child.webContents.on('will-navigate', guardNavigation);
     child.webContents.on('will-redirect', guardNavigation);
+    child.webContents.on('will-frame-navigate', guardFrameNavigation);
   });
 }
 
@@ -1343,6 +1355,40 @@ function downloadsDir(): string | null {
  * with " (n)" applied on collision) is what the notice already promises. Save As
  * keeps its own dialog via media:beginSaveAs.
  */
+/** What the app window actually uses: clipboard copy and fullscreen. */
+const GRANTED_PERMISSIONS = new Set<string>(['clipboard-sanitized-write', 'fullscreen']);
+
+/**
+ * Deny every web permission except GRANTED_PERMISSIONS, and those only to the
+ * backend origin. Without a handler Electron grants every request, so any
+ * frame could get the camera, microphone, geolocation or notifications.
+ * An external-protocol link (mailto:) arrives as the openExternal permission
+ * and goes through the same scheme allowlist as every other outbound open.
+ */
+function registerPermissionPolicy(): void {
+  const fromApp = (url: string | undefined): boolean =>
+    Boolean(url) && isBackendOrigin(url as string, currentUrl);
+  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback, details) => {
+    if (permission === 'openExternal') {
+      const external = (details as Electron.OpenExternalPermissionRequest).externalURL;
+      if (external && fromApp(details.requestingUrl)) openExternalSafely(external);
+      callback(false);
+      return;
+    }
+    const granted = GRANTED_PERMISSIONS.has(permission) && fromApp(details.requestingUrl);
+    if (!granted) {
+      console.warn(
+        `[permissions] denied ${permission} for ${redactUrl(details.requestingUrl ?? '')}`,
+      );
+    }
+    callback(granted);
+  });
+  session.defaultSession.setPermissionCheckHandler(
+    (_wc, permission, requestingOrigin) =>
+      GRANTED_PERMISSIONS.has(permission) && fromApp(requestingOrigin),
+  );
+}
+
 function registerDownloadHandling(): void {
   session.defaultSession.on('will-download', (_event, item) => {
     const dir = downloadsDir();
@@ -1659,8 +1705,14 @@ function registerIpc(): void {
     return true;
   });
 
-  ipcMain.handle('desktop:openLibraryFolder', () => openLibraryFolder());
-  ipcMain.handle('desktop:showLogs', () => showServerLogs());
+  ipcMain.handle('desktop:openLibraryFolder', (event) => {
+    requireAppRenderer(event, 'desktop:openLibraryFolder');
+    return openLibraryFolder();
+  });
+  ipcMain.handle('desktop:showLogs', (event) => {
+    requireAppRenderer(event, 'desktop:showLogs');
+    return showServerLogs();
+  });
   // The Workflow tab's and the Run popup's Open in ComfyUI. Its own channel
   // because ComfyUI is plain http:, which openExternalSafely refuses for every
   // other link; the app window only, and only a URL comfyuiOpenTarget accepts.
@@ -1685,6 +1737,9 @@ function registerIpc(): void {
   // preserving read-only share tokens), then hands opaque bytes to these two
   // narrowly-scoped native capabilities. It never supplies a filesystem path.
   ipcMain.handle('media:beginSaveAs', async (event, requestedName: unknown) => {
+    // completeSaveAs writes the caller's bytes to the chosen path; only the app
+    // may start that. The saveId then binds complete/cancel to this caller.
+    requireAppRenderer(event, 'media:beginSaveAs');
     const suggestedName = safeMediaFilename(requestedName);
     const extension = suggestedName.includes('.')
       ? suggestedName.split('.').pop()?.toLowerCase() || ''
@@ -1739,7 +1794,8 @@ function registerIpc(): void {
     pendingMediaSaves.delete(saveId);
     clearTimeout(pending.timeout);
   });
-  ipcMain.handle('media:copyPng', (_e, data: unknown) => {
+  ipcMain.handle('media:copyPng', (event, data: unknown) => {
+    requireAppRenderer(event, 'media:copyPng');
     const image = nativeImage.createFromBuffer(pngClipboardPayload(data));
     if (image.isEmpty()) throw new Error('The PNG image could not be decoded.');
     clipboard.writeImage(image);
@@ -1768,14 +1824,19 @@ function registerIpc(): void {
       : dir;
   };
 
-  ipcMain.handle('desktop:getPrefs', () => ({
-    hideToTrayOnClose,
-    shellCommand: shellCommandState(),
-    shellCommandDir: shellCommandDir(),
-  }));
+  ipcMain.handle('desktop:getPrefs', (event) => {
+    requireAppRenderer(event, 'desktop:getPrefs');
+    return {
+      hideToTrayOnClose,
+      shellCommand: shellCommandState(),
+      shellCommandDir: shellCommandDir(),
+    };
+  });
   ipcMain.handle(
     'desktop:setPrefs',
-    (_e, prefs: { hideToTrayOnClose?: boolean; shellCommand?: boolean }) => {
+    (event, prefs: { hideToTrayOnClose?: boolean; shellCommand?: boolean }) => {
+      // Writes a shim onto the user's PATH.
+      requireAppRenderer(event, 'desktop:setPrefs');
       if (typeof prefs?.hideToTrayOnClose === 'boolean') {
         hideToTrayOnClose = prefs.hideToTrayOnClose;
         saveDesktopPrefs();
@@ -1833,14 +1894,22 @@ function registerIpc(): void {
   });
   ipcMain.handle('window:close', () => mainWindow?.close());
 
-  ipcMain.handle('accel:list', async () => acceleratorState());
+  ipcMain.handle('accel:list', async (event) => {
+    requireAppRenderer(event, 'accel:list');
+    return acceleratorState();
+  });
 
   // Where on-demand GPU overlays are stored. Lets the user keep the multi-GB
   // download off the system drive (the first-run wizard offers the same choice).
-  ipcMain.handle('backend:getLocation', () => ({
-    dir: offerPath(backendsRoot(), 'backends'),
-    default: offerPath(defaultBackendsRoot(), 'backends'),
-  }));
+  // Gated with setLocation: getLocation hands out offered paths, so an ungated
+  // one would let any frame satisfy setLocation's provenance check.
+  ipcMain.handle('backend:getLocation', (event) => {
+    requireAppRenderer(event, 'backend:getLocation');
+    return {
+      dir: offerPath(backendsRoot(), 'backends'),
+      default: offerPath(defaultBackendsRoot(), 'backends'),
+    };
+  });
 
   ipcMain.handle('backend:pickLocation', async (_e, current?: string) => {
     const res = await dialog.showOpenDialog({
@@ -1854,7 +1923,8 @@ function registerIpc(): void {
   // The destination reaches moveDir, which recursively deletes `<dir>/<accel>`.
   // Item 13 made the last segment a validated Accel; this makes the root one
   // PixlStash itself offered (see requireOfferedPath).
-  ipcMain.handle('backend:setLocation', async (_e, raw: unknown) => {
+  ipcMain.handle('backend:setLocation', async (event, raw: unknown) => {
+    requireAppRenderer(event, 'backend:setLocation');
     await changeBackendsLocation(
       requireOfferedPath(raw, 'backends', 'GPU install location'),
     );
@@ -1867,7 +1937,10 @@ function registerIpc(): void {
   // The three handlers below take an accelerator straight from the renderer, and
   // an `Accel` is a path segment (see requireAccel). Validate at the boundary,
   // before the value can reach a directory join.
-  ipcMain.handle('accel:install', async (_e, raw: unknown) => {
+  // Install downloads gigabytes, and all three restart the backend or delete an
+  // overlay: app window only.
+  ipcMain.handle('accel:install', async (event, raw: unknown) => {
+    requireAppRenderer(event, 'accel:install');
     refuseAccelChangeInDev();
     const accel = requireAccel(raw);
     if (!runtime) throw new Error('No bundled runtime available');
@@ -1891,7 +1964,8 @@ function registerIpc(): void {
     return acceleratorState();
   });
 
-  ipcMain.handle('accel:use', async (_e, raw: unknown) => {
+  ipcMain.handle('accel:use', async (event, raw: unknown) => {
+    requireAppRenderer(event, 'accel:use');
     // null - and undefined, which is what an argument-less invoke() sends -
     // means "back to the bundled env". Anything else must be a known Accel.
     // Deactivating is the safe reading of a missing argument: it is the one
@@ -1908,7 +1982,8 @@ function registerIpc(): void {
     return acceleratorState();
   });
 
-  ipcMain.handle('accel:remove', async (_e, raw: unknown) => {
+  ipcMain.handle('accel:remove', async (event, raw: unknown) => {
+    requireAppRenderer(event, 'accel:remove');
     refuseAccelChangeInDev();
     await manager.remove(requireAccel(raw));
     // Relaunch on whatever remains active (another overlay or null). A remaining
@@ -2022,6 +2097,7 @@ if (cliArgs !== null) {
     applyShellCommand();
     buildMenu();
     registerDownloadHandling();
+    registerPermissionPolicy();
     registerIpc();
     createMainWindow();
     createTray();
