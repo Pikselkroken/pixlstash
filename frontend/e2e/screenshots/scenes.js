@@ -312,6 +312,21 @@ export const scenes = [
     },
   },
   {
+    id: 'semantic-search',
+    // Not SemanticSearch.jpg: that one is the ComfyUI node (see `manual`).
+    assets: ['ScreenshotSemanticSearch.jpg'],
+    title: 'Semantic search from the toolbar search field',
+    async setup({ grid, page }) {
+      await readyGrid(grid)
+      await grid.searchButton.click()
+      await grid.searchInput.pressSequentially('old man surrounded by photographs')
+      await grid.searchInput.press('Enter')
+      await grid.waitForThumbnailLoaded()
+      await page.waitForTimeout(500)
+      return null
+    },
+  },
+  {
     id: 'selection',
     assets: ['ScreenshotGridSelection.jpg'],
     title: 'Batch selection',
