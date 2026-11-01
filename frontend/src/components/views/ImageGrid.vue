@@ -421,6 +421,10 @@
       ref="arrivingWrapper"
       class="grid-arriving"
       :style="arrivingWrapperStyle"
+      @dragenter.prevent="handleGridDragEnter"
+      @dragover.prevent="handleGridDragOver"
+      @dragleave.prevent="handleGridDragLeave"
+      @drop.capture.prevent="handleArrivingGridDrop"
     >
       <ArrivingTiles
         :columns="gridStore.columns"

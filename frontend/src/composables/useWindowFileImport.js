@@ -63,7 +63,10 @@ export function useWindowFileImport({ sidebarRef }) {
   function isInsideImageGrid(event) {
     const target = event?.target;
     if (!(target instanceof Element)) return false;
-    return Boolean(target.closest(".image-grid, .grid-scroll-wrapper"));
+    // The arriving tiles above the grid are the grid's drop target too.
+    return Boolean(
+      target.closest(".image-grid, .grid-scroll-wrapper, .grid-arriving"),
+    );
   }
 
   /**

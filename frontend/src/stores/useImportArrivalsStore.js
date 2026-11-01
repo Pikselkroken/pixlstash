@@ -51,7 +51,7 @@ function previewUrlFor(file, kind) {
 }
 
 function emptyCounts() {
-  return { added: 0, duplicate: 0, scrapheaped: 0, unsupported: 0 };
+  return { added: 0, duplicate: 0, scrapheaped: 0, unsupported: 0, failed: 0 };
 }
 
 export const useImportArrivalsStore = defineStore("importArrivals", () => {
@@ -170,6 +170,17 @@ export const useImportArrivalsStore = defineStore("importArrivals", () => {
   }
 
   /**
+   * The server's own progress. Not a count of outcomes: a zip is one tile and
+   * many staged files, so only the server knows what "of how many" means.
+   */
+  function setProgress(runId, processed, total) {
+    const run = runById(runId);
+    if (!run) return;
+    run.checked = processed;
+    run.total = total;
+  }
+
+  /**
    * Apply the server's per-file outcomes. A zip's entries all carry the zip's
    * key, so its one tile settles on the best thing that happened inside it.
    */
@@ -178,16 +189,25 @@ export const useImportArrivalsStore = defineStore("importArrivals", () => {
     if (!run || !outcomes?.length) return;
     const byKey = new Map(run.tiles.map((tile) => [tile.key, tile]));
     for (const { key, outcome, picture_id: pictureId } of outcomes) {
-      run.checked += 1;
       if (outcome === "new") run.counts.added += 1;
       else if (outcome === "duplicate") run.counts.duplicate += 1;
       else if (outcome === "scrapheaped") run.counts.scrapheaped += 1;
-      else run.counts.unsupported += 1;
+      else run.counts.failed += 1;
       const tile = byKey.get(key);
       if (!tile || tile.state === "new") continue;
       tile.state = outcome === "failed" ? "failed" : outcome;
       tile.pictureId = pictureId ?? null;
     }
+  }
+
+  /** A Scrapheap match was restored: it is in the library now. */
+  function markRestored(runId, tileKey) {
+    const run = runById(runId);
+    const tile = run?.tiles.find((t) => t.key === tileKey);
+    if (!tile || tile.state !== "scrapheaped") return;
+    tile.state = "duplicate";
+    run.counts.scrapheaped = Math.max(0, run.counts.scrapheaped - 1);
+    run.counts.duplicate += 1;
   }
 
   /** The run committed: what was new is now in the library. */
@@ -247,7 +267,9 @@ export const useImportArrivalsStore = defineStore("importArrivals", () => {
     setBytesSent,
     markSkipped,
     markChecking,
+    setProgress,
     applyOutcomes,
+    markRestored,
     land,
     fail,
     beginReading,

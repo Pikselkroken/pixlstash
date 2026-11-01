@@ -164,6 +164,8 @@ const currentImportController = ref(null);
 let importRunId = null;
 // The current staging session id (Phase A/B backend handle), or null when idle.
 let currentStagingId = null;
+// True from the commit request on: the bytes are handed over, cancel is over.
+let committing = false;
 let hideTimerId = null;
 
 // ── beforeunload guard (the hard backstop for the unsafe upload window) ───────
@@ -261,7 +263,8 @@ function finalizeError(message) {
 // upload - once committed, the import is a background server task the client
 // cannot stop (see the abortable notes in startImport / useTasksStore).
 function handleCancelImport() {
-  if (!importActive.value) return;
+  // Once the commit is sent there is nothing a client abort can stop.
+  if (!importActive.value || committing) return;
   cancelImport.value = true;
   if (currentImportController.value) {
     try {
@@ -288,8 +291,14 @@ async function startImport(files, options = {}) {
       clearHideTimer();
       importActive.value = false;
     } else {
+      // Said, not swallowed: this importer runs one import at a time, and a
+      // server-side import can take minutes after the upload is done.
       console.info(
         "Import request ignored because another import is in progress.",
+      );
+      noticeStore.warning(
+        "Another import is still running here. Drop these again when it finishes.",
+        { key: "import-busy" },
       );
       return;
     }
@@ -298,6 +307,7 @@ async function startImport(files, options = {}) {
   clearHideTimer();
   cancelImport.value = false;
   currentStagingId = null;
+  committing = false;
   // Drop any lingering handler from a previous run before minting a new id.
   if (importRunId) tasksStore.unregisterImportAbort(importRunId);
   importRunId = `import-${crypto?.randomUUID?.() ?? Date.now().toString(36)}`;
@@ -531,7 +541,20 @@ async function startImport(files, options = {}) {
     }
 
     // All bytes are staged - commit the SAFE HANDOFF to the background import.
+    // From here Cancel has nothing to stop, so neither the band nor the Tasks
+    // row offers it.
     uploadBytesUploaded.value = uploadBytesTotal.value;
+    committing = true;
+    disarmGuard();
+    arrivals.markChecking(importRunId);
+    tasksStore.setImportRun(importRunId, {
+      status: "running",
+      percent: 0,
+      current: 0,
+      total: importTotal.value,
+      message: "Handing over to the server…",
+      label: "Importing pictures",
+    });
 
     let commit;
     try {
@@ -563,11 +586,8 @@ async function startImport(files, options = {}) {
     importTotal.value = commit.stagedCount || files.length;
     importProgress.value = 0;
 
-    // The safe transition: the bytes are on the server, leaving is harmless,
-    // and nothing is left to cancel. The tiles turn to "checking".
-    disarmGuard();
+    // The safe transition: the bytes are on the server and leaving is harmless.
     importPhase.value = "processing";
-    arrivals.markChecking(importRunId);
     tasksStore.setImportRun(importRunId, {
       status: "running",
       percent: 0,
@@ -597,6 +617,7 @@ async function startImport(files, options = {}) {
       const processed = Math.min(st.processed, total);
       importProgress.value = processed;
       importTotal.value = Math.max(importTotal.value, total);
+      arrivals.setProgress(importRunId, processed, total);
 
       const pct = importTotal.value
         ? Math.min(100, (processed / importTotal.value) * 100)

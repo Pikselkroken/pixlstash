@@ -116,13 +116,17 @@ function chips(run) {
       action: "List",
       n: c.unsupported,
     },
+    {
+      id: "failed",
+      icon: "mdi-alert-circle-outline",
+      text: `${count(c.failed)} could not be read`,
+      action: "List",
+      n: c.failed,
+    },
   ].filter((chip) => chip && (chip.id === "added" || chip.n > 0));
 }
 
 function matchesFilter(tile, filter) {
-  if (filter === "unsupported") {
-    return tile.state === "unsupported" || tile.state === "failed";
-  }
   return tile.state === filter;
 }
 
@@ -173,13 +177,13 @@ function markBroken(tile) {
 }
 
 const restoring = ref(new Set());
-async function restore(tile) {
+async function restore(run, tile) {
   if (!tile.pictureId || restoring.value.has(tile.key)) return;
   restoring.value = new Set(restoring.value).add(tile.key);
   try {
     const data = await restoreScrapheap([tile.pictureId]);
     if (Number(data?.restored_count ?? 0) > 0) {
-      tile.state = "duplicate";
+      arrivals.markRestored(run.id, tile.key);
       noticeStore.success("Restored from the Scrapheap.");
     } else {
       noticeStore.warning("That picture had already left the Scrapheap.");
@@ -259,11 +263,15 @@ onBeforeUnmount(() => {
       :data-arriving-run="run.id"
       :aria-label="`${sectionLabel(run)}: ${stageText(run)}`"
     >
-      <div class="arr-band" role="status" aria-live="polite">
+      <div class="arr-band">
         <span class="arr-label">{{
           run.stage === "error" ? "Arriving" : sectionLabel(run)
         }}</span>
-        <span class="arr-what">{{ stageText(run) }}</span>
+        <!-- Only the stage words are live: the counts change every poll, and
+             a 2,000-file import would never stop talking. -->
+        <span class="arr-what" role="status" aria-live="polite">{{
+          stageText(run)
+        }}</span>
         <span v-if="progressText(run)" class="arr-of">{{
           progressText(run)
         }}</span>
@@ -326,20 +334,23 @@ onBeforeUnmount(() => {
           :key="tile.key"
           class="arr-tile"
           :class="`arr-tile--${tile.state}`"
-          role="img"
-          :aria-label="tileLabel(tile)"
           :data-arriving-state="tile.state"
         >
           <img
             v-if="tile.previewUrl && !broken.has(tile.key)"
             :src="tile.previewUrl"
-            alt=""
+            :alt="tileLabel(tile)"
             loading="lazy"
             decoding="async"
             draggable="false"
             @error="markBroken(tile)"
           />
-          <div v-else class="arr-named">
+          <div
+            v-else
+            class="arr-named"
+            role="img"
+            :aria-label="tileLabel(tile)"
+          >
             <VIcon size="28">{{
               tile.state === "unsupported"
                 ? "mdi-file-cancel-outline"
@@ -369,15 +380,27 @@ onBeforeUnmount(() => {
             <VIcon size="14">{{ markIcon(tile) }}</VIcon>
           </span>
           <div
-            v-if="tile.state === 'duplicate' || tile.state === 'scrapheaped'"
+            v-if="
+              tile.state === 'duplicate' ||
+              tile.state === 'scrapheaped' ||
+              (tile.state === 'failed' && tile.previewUrl)
+            "
             class="arr-strip"
           >
             <VIcon size="14">{{
               tile.state === "duplicate"
                 ? "mdi-content-copy"
-                : "mdi-delete-restore"
+                : tile.state === "failed"
+                  ? "mdi-alert-circle-outline"
+                  : "mdi-delete-restore"
             }}</VIcon>
-            {{ tile.state === "duplicate" ? "In library" : "In Scrapheap" }}
+            {{
+              tile.state === "duplicate"
+                ? "In library"
+                : tile.state === "failed"
+                  ? "Could not be read"
+                  : "In Scrapheap"
+            }}
             <button
               v-if="tile.state === 'duplicate' && tile.pictureId"
               type="button"
@@ -391,7 +414,7 @@ onBeforeUnmount(() => {
               type="button"
               class="arr-strip-link"
               :disabled="restoring.has(tile.key)"
-              @click="restore(tile)"
+              @click="restore(run, tile)"
             >
               Restore
             </button>
@@ -467,7 +490,7 @@ onBeforeUnmount(() => {
 
 .arr-track {
   flex: 1;
-  min-width: 120px;
+  min-width: calc(2 * var(--space-9));
   height: var(--space-2);
   border-radius: var(--radius-pill);
   background: var(--track-trough);
