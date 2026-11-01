@@ -6739,8 +6739,12 @@ column a failed run broke at says "failed here". The end phases (*Saving*,
 *Importing to the shelf*) sit in the timeline's pinned label, under the set-up
 line, rather than in a column of their own after the last step, and are not
 drawn for a run that failed or was stopped. While the run is scrolled sideways
-the *Step 0* button takes the set-up line's slot, which is a button tall either
-way, so the end phases never move.
+the *Step 0* button takes the set-up line's slot, which is at least a button
+tall, so the end phases never move (only the error line wraps past it, and a
+failed run draws no end phases). The board's fit sizes the chart for the rows
+at the pitch it has just chosen: sized for the old pitch, a wider one
+overflowed the page, the page's scrollbar narrowed the board, and the pitch
+flipped back every frame.
 
 **Export dataset** is the rail's *Trained on* section action once the run's
 payload names a `dataset_snapshot_id` (#2123): it fetches

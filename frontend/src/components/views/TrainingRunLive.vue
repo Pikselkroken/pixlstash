@@ -138,7 +138,7 @@
             <!-- The timeline is the column header. Its label says how the run
                  began and where it ends. -->
             <div class="trl-lab trl-lab--setup" :style="{ gridRow: 1 }">
-              <!-- One slot, a button tall: the set-up line describes the time
+              <!-- One slot, at least a button tall: the set-up line describes the time
                    before step 0, so while the prompts are pinned over a run
                    scrolled sideways the button back to step 0 stands in for it,
                    and the lines below never move. -->
@@ -1133,8 +1133,13 @@ function fit() {
     Math.min(PITCH_MAX, Math.floor(width / n), tallest),
   );
 
-  // The height left for the chart with the tips folded.
-  const room = body.clientHeight - rest;
+  // The height left for the chart with the tips folded, at the pitch just
+  // chosen: `rest` was measured at the old one, and a chart sized for shorter
+  // rows overflows the page, whose scrollbar narrows the board and flips the
+  // pitch back, every frame.
+  const room = Math.floor(
+    body.clientHeight - (rest - cellsNow + rows * cellHeightAt(pitch.value)),
+  );
   tipsFit.value = room - tipsBodyHeight >= CHART_MIN;
   const left = room - (tipsOpen.value ? tipsBodyHeight : 0);
   chartHeight.value = Math.max(CHART_MIN, Math.min(CHART_MAX, left));
@@ -1533,8 +1538,9 @@ onBeforeUnmount(() => {
   padding-top: var(--space-2);
 }
 
-/* A button tall, whichever of the set-up line or Step 0 is in it, so the end
-   phases under it never move. */
+/* At least a button tall, so swapping the one-line set-up line for Step 0
+   never moves the end phases under it. Only the error line can wrap past it,
+   and a failed run draws no end phases. */
 .trl-setup-slot {
   min-height: var(--control-h-sm);
   display: flex;
