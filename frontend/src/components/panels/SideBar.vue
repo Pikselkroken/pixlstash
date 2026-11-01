@@ -2805,6 +2805,13 @@ const findQuery = ref("");
 const findInputRef = ref(null);
 const isFinding = computed(() => findQuery.value.trim() !== "");
 
+// A find opens folded People and Sets, so the matches it counts are on screen.
+watch(isFinding, (finding) => {
+  if (!finding) return;
+  peopleCollapsed.value = false;
+  setsCollapsed.value = false;
+});
+
 /**
  * Does a Folders row stand for what the grid shows? In a project's scope, only
  * the rows under that project. With no scope (a deep link to a person, say),

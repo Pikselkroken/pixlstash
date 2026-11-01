@@ -67,7 +67,7 @@ import SideBar from "./SideBar.vue";
 // head's "+" must not.
 
 const CHARACTERS = [{ id: 7, name: "Ada", image_count: 3, project_image_count: 3 }];
-const SETS = [{ id: 4, name: "Beach", image_count: 2, project_image_count: 2 }];
+const SETS = [{ id: 4, name: "Ada at the beach", image_count: 2, project_image_count: 2 }];
 
 function respond(url) {
   const u = String(url ?? "");
@@ -156,6 +156,8 @@ describe("collapsing People and Sets", () => {
     it(`leaves ${label} open when its "+" is clicked`, async () => {
       const wrapper = await mountSidebar();
       const s = section(wrapper, key);
+      // Starts open, so the assertion below is about the "+", not the order.
+      expect(s.shown()).toBe(true);
       await wrapper
         .find(`[aria-controls="sidebar-section-${key}"] ~ * .sidebar-section-add`)
         .trigger("click");
@@ -163,4 +165,18 @@ describe("collapsing People and Sets", () => {
       wrapper.unmount();
     });
   }
+
+  it("opens folded sections when a find starts", async () => {
+    const wrapper = await mountSidebar();
+    await section(wrapper, "people").caret.trigger("click");
+    await section(wrapper, "sets").caret.trigger("click");
+    expect(section(wrapper, "people").shown()).toBe(false);
+    expect(section(wrapper, "sets").shown()).toBe(false);
+
+    await wrapper.find(".sidebar-find-input").setValue("Ada");
+    await flushPromises();
+    expect(section(wrapper, "people").shown()).toBe(true);
+    expect(section(wrapper, "sets").shown()).toBe(true);
+    wrapper.unmount();
+  });
 });

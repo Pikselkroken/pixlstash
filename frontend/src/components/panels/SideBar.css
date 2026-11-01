@@ -889,8 +889,8 @@
   z-index: var(--z-raised);
 }
 
-/* Items within People/Sets sit one step under their section header, which puts
-   the thumbnail directly below the header's label. */
+/* Items within People/Sets sit one step in, which puts the thumbnail directly
+   below the section head's label (the head steps in past its caret). */
 .sidebar-section-scroll .sidebar-list-item {
   --depth: 1;
 }
@@ -915,7 +915,7 @@
 
 .sidebar-section-toggle:focus-visible {
   outline: var(--focus-width) solid var(--focus-stroke);
-  outline-offset: calc(-1 * var(--focus-width));
+  outline-offset: var(--focus-offset);
 }
 
 /* All-pictures row: same compact height as regular items */
