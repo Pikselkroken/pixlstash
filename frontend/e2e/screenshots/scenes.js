@@ -599,7 +599,8 @@ export const scenes = [
       return null
     },
     async teardown({ api }) {
-      await api.patch('/api/v1/users/me/config', { data: { thumbnail_mode: 'square' } })
+      const res = await api.patch('/api/v1/users/me/config', { data: { thumbnail_mode: 'square' } })
+      expect(res.ok(), `could not restore the square grid: ${res.status()}`).toBe(true)
     },
   },
   {
