@@ -45,7 +45,8 @@ function save() {
  * @param {string} name - the section's stable name ("tags", "faces").
  * @param {Object} [options]
  * @param {boolean} [options.defaultCollapsed=false]
- * @param {string} [options.scope] - the inspector, when the caller is it.
+ * @param {string} [options.scope] - the inspector, when the caller is it, or
+ *   a place outside any inspector (the sidebar's People and Sets: "sidebar").
  * @returns {import("vue").WritableComputedRef<boolean>}
  */
 export function useSectionCollapse(

@@ -106,6 +106,7 @@ import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useSetTreeExpansion } from "../../composables/useSetTreeExpansion";
+import { useSectionCollapse } from "../../composables/useSectionCollapse";
 import { useSidebarWidth } from "../../composables/useSidebarWidth";
 import { useRoute } from "vue-router";
 import { useDedupStore, scopeKey } from "../../stores/useDedupStore";
@@ -299,6 +300,11 @@ const dragOverSet = ref(null);
 // localStorage so the tree's shape survives a reload.
 const { expandedTreeKeys, toggleTreeKey, expandTreeKeys } =
   useSetTreeExpansion();
+
+// The People and Sets sections fold away under their heads, remembered across
+// reloads like an inspector section.
+const peopleCollapsed = useSectionCollapse("people", { scope: "sidebar" });
+const setsCollapsed = useSectionCollapse("sets", { scope: "sidebar" });
 
 // --- Sorting State ---
 const sortOptions = ref([]);
@@ -2799,6 +2805,11 @@ const findQuery = ref("");
 const findInputRef = ref(null);
 const isFinding = computed(() => findQuery.value.trim() !== "");
 
+// A find shows folded People and Sets, so the matches it counts are on screen,
+// without writing over the fold: it comes back when the find is cleared.
+const peopleOpen = computed(() => !peopleCollapsed.value || isFinding.value);
+const setsOpen = computed(() => !setsCollapsed.value || isFinding.value);
+
 /**
  * Does a Folders row stand for what the grid shows? In a project's scope, only
  * the rows under that project. With no scope (a deep link to a person, say),
@@ -5211,11 +5222,25 @@ defineExpose({
                 class="sidebar-section-block"
               >
                 <div
-                  class="sidebar-section-header"
+                  class="sidebar-section-header sidebar-section-header--collapsible"
+                  @click="isFinding || (peopleCollapsed = peopleOpen)"
                   @contextmenu.prevent.stop="
                     openSidebarCtxMenu('header', 'people', $event)
                   "
                 >
+                  <button
+                    type="button"
+                    class="sidebar-tree-toggle sidebar-section-toggle"
+                    :aria-expanded="String(peopleOpen)"
+                    :disabled="isFinding"
+                    aria-controls="sidebar-section-people"
+                    :aria-label="`${peopleOpen ? 'Collapse' : 'Expand'} People`"
+                    @click.stop="isFinding || (peopleCollapsed = peopleOpen)"
+                  >
+                    <v-icon size="16">{{
+                      peopleOpen ? "mdi-chevron-down" : "mdi-chevron-right"
+                    }}</v-icon>
+                  </button>
                   <span class="sidebar-section-title">People</span>
                   <span
                     v-if="!isReadOnly"
@@ -5242,7 +5267,11 @@ defineExpose({
                     </button>
                   </span>
                 </div>
-                <div class="sidebar-section-scroll">
+                <div
+                  v-show="peopleOpen"
+                  id="sidebar-section-people"
+                  class="sidebar-section-scroll"
+                >
                   <div
                     v-if="!isFinding && branch.characters.length === 0"
                     class="sidebar-collections-help-row"
@@ -5594,11 +5623,25 @@ defineExpose({
                 class="sidebar-section-block"
               >
                 <div
-                  class="sidebar-section-header"
+                  class="sidebar-section-header sidebar-section-header--collapsible"
+                  @click="isFinding || (setsCollapsed = setsOpen)"
                   @contextmenu.prevent.stop="
                     openSidebarCtxMenu('header', 'sets', $event)
                   "
                 >
+                  <button
+                    type="button"
+                    class="sidebar-tree-toggle sidebar-section-toggle"
+                    :aria-expanded="String(setsOpen)"
+                    :disabled="isFinding"
+                    aria-controls="sidebar-section-sets"
+                    :aria-label="`${setsOpen ? 'Collapse' : 'Expand'} Sets`"
+                    @click.stop="isFinding || (setsCollapsed = setsOpen)"
+                  >
+                    <v-icon size="16">{{
+                      setsOpen ? "mdi-chevron-down" : "mdi-chevron-right"
+                    }}</v-icon>
+                  </button>
                   <span class="sidebar-section-title">Sets</span>
                   <span
                     v-if="!isReadOnly"
@@ -5623,7 +5666,11 @@ defineExpose({
                     </button>
                   </span>
                 </div>
-                <div class="sidebar-section-scroll">
+                <div
+                  v-show="setsOpen"
+                  id="sidebar-section-sets"
+                  class="sidebar-section-scroll"
+                >
                   <div
                     v-if="!isFinding && branch.sets.length === 0"
                     class="sidebar-collections-help-row"

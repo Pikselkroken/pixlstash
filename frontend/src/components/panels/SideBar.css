@@ -889,14 +889,33 @@
   z-index: var(--z-raised);
 }
 
-/* Items within People/Sets sit one step under their section header, which puts
-   the thumbnail directly below the header's label. */
+/* Items within People/Sets sit one step in, which puts the thumbnail directly
+   below the section head's label (the head steps in past its caret). */
 .sidebar-section-scroll .sidebar-list-item {
   --depth: 1;
 }
 
 .sidebar-section-block .sidebar-section-header {
   padding-bottom: var(--space-1);
+}
+
+/* People and Sets fold under their heads. The caret takes the gutter the rows'
+   own carets use, so the label steps one level in and sits over the rows'
+   marks. The whole head toggles, like an inspector section's. */
+.sidebar-section-header--collapsible {
+  --depth: 1;
+  cursor: pointer;
+  user-select: none;
+}
+
+/* The caret takes its head's ink, never its own (visual-language §5.1). */
+.sidebar-section-header--collapsible > .sidebar-section-toggle {
+  color: inherit;
+}
+
+.sidebar-section-toggle:focus-visible {
+  outline: var(--focus-width) solid var(--focus-stroke);
+  outline-offset: var(--focus-offset);
 }
 
 /* All-pictures row: same compact height as regular items */
