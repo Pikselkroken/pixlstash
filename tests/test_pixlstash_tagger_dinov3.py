@@ -13,6 +13,7 @@ from PIL import Image
 from safetensors.torch import save_file
 from torchvision import transforms
 
+from pixlstash.utils.model_utils import MODEL_CONSTRUCTION_LOCK
 from pixlstash.tagger_plugins.pixlstash_tagger import (
     PIXLSTASH_TAGGER_CONFIG_FILENAME,
     PIXLSTASH_TAGGER_DINOV3_ARCH,
@@ -89,6 +90,23 @@ def test_the_trainers_state_dict_loads_strictly_and_scores_the_same(model_dir):
     with torch.inference_mode():
         assert torch.equal(service._model(x), reference(x))
     assert service._model.classifier[2].out_features == len(LABELS)
+
+
+def test_the_model_is_built_under_the_process_wide_construction_lock(
+    model_dir, monkeypatch
+):
+    """A Transformers load elsewhere can switch construction to the meta device."""
+    folder, _ = model_dir
+    held = []
+    real_build = PixlStashTaggerService._build_model
+
+    def spy(self, arch, num_labels):
+        held.append(MODEL_CONSTRUCTION_LOCK._is_owned())
+        return real_build(self, arch, num_labels)
+
+    monkeypatch.setattr(PixlStashTaggerService, "_build_model", spy)
+    _service(folder)
+    assert held == [True]
 
 
 def test_a_missing_config_is_named_rather_than_crashing_in_transformers(model_dir):

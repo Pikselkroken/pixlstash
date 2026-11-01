@@ -24,6 +24,7 @@ if TYPE_CHECKING:  # annotations only - see the function-local import note below
 
 from pixlstash.tagger_plugins.base import TagResult, TaggerPlugin
 from pixlstash.utils.accelerator import is_accelerated, supports_fp16
+from pixlstash.utils.model_utils import MODEL_CONSTRUCTION_LOCK
 from pixlstash.utils.service.caption_utils import naturalize_tags, sanitise_tag
 from pixlstash.utils.vram_utils import empty_device_cache, is_vram_oom
 
@@ -397,7 +398,9 @@ class PixlStashTaggerService:
             raise FileNotFoundError(
                 f"PixlStash tagger DINOv3 config not found: {self._config_path}"
             )
-        self._model = self._build_model(arch, len(labels))
+        # Built under the process-wide lock; see MODEL_CONSTRUCTION_LOCK.
+        with MODEL_CONSTRUCTION_LOCK:
+            self._model = self._build_model(arch, len(labels))
         self._arch = arch
         # Normalise dtype first: safetensors weights may be FP16 while the
         # freshly-built classifier head is FP32.  Cast everything to FP32,
