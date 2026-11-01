@@ -6,8 +6,11 @@ import { defineConfig } from '@playwright/test'
 // real-world photos, populated people / projects / sets — so the shots look
 // like the product users run, not a wall of identical headshots. The global
 // setup builds the SPA and the shell and lays out the library; the shell then
-// starts the backend itself. The capture spec forces a dark theme + sensible
-// grid density to match the originals.
+// starts the backend itself. The fixture forces a dark theme + sensible grid
+// density to match the originals. capture.spec.js takes the stills;
+// videos.spec.js records the Getting started videos (needs ffmpeg) and runs
+// second, since it changes the library. Everything lands in the gitignored
+// website/screenshots/output/; copying into website/assets/ is by hand.
 //
 // Run:  npm run screenshots          (from frontend/)
 //       npm run screenshots 2.0.0    (stamp the captures with a version)

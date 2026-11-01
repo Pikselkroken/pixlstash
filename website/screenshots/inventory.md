@@ -8,7 +8,8 @@ and the newest release tag at that commit, which is the UI it shows.
 Status:
 
 - **regenerated**: re-captured from the 2.0 Electron app by `npm run screenshots 2.0.0`
-  (`frontend/e2e/screenshots/scenes.js` names the scene). A run writes every
+  (`frontend/e2e/screenshots/scenes.js` names the scene; the Getting started videos
+  are `videos.spec.js`). A run writes every
   scene to the gitignored `website/screenshots/output/`; nothing reaches
   `website/assets/` until it is copied there, and this table is what says which
   files to copy. Scenes for **historical** files still run, so a release that
@@ -28,14 +29,14 @@ Pages are those that link the file; README is the repository README.
 |---|---|---|---|---|---|
 | `docs/design/assets/logo/PixlStash-Logo.png` | 2026-07-24 | v1.7.1 | docs/design/visual-language.md | current | branding |
 | `docs/design/assets/logo/PixlStash-Watermark.png` | 2026-06-20 | v1.7.0-dev.1 | docs/design/visual-language.md | current | branding |
-| `website/assets/01-PictureImport.mp4` | 2026-05-30 | v1.4.1 | introduction | stale, manual | screen recording |
+| `website/assets/01-PictureImport.mp4` | 2026-05-30 | v1.4.1 | introduction | regenerated | recorded from the 2.0 Electron app (`frontend/e2e/screenshots/videos.spec.js`) |
 | `website/assets/02-CharacterAssignment.gif` | 2026-04-13 | v1.0.0 |  | unreferenced | no page links it |
-| `website/assets/02-CharacterAssignment.mp4` | 2026-05-30 | v1.4.1 | introduction | stale, manual | screen recording |
+| `website/assets/02-CharacterAssignment.mp4` | 2026-05-30 | v1.4.1 | introduction | regenerated | recorded from the 2.0 Electron app (`frontend/e2e/screenshots/videos.spec.js`) |
 | `website/assets/03-Tagging.gif` | 2026-05-18 | v1.2.1 |  | unreferenced | no page links it |
-| `website/assets/03-Tagging.mp4` | 2026-05-30 | v1.4.1 | introduction | stale, manual | screen recording |
-| `website/assets/04-SmartScore.mp4` | 2026-05-30 | v1.4.1 | introduction | stale, manual | screen recording |
-| `website/assets/05-SemanticSearch.mp4` | 2026-05-30 | v1.4.1 | introduction, index | stale, manual | screen recording |
-| `website/assets/06-Export.mp4` | 2026-05-30 | v1.4.1 | introduction | stale, manual | screen recording |
+| `website/assets/03-Tagging.mp4` | 2026-05-30 | v1.4.1 | introduction | regenerated | recorded from the 2.0 Electron app (`frontend/e2e/screenshots/videos.spec.js`) |
+| `website/assets/04-SmartScore.mp4` | 2026-05-30 | v1.4.1 | introduction | regenerated | recorded from the 2.0 Electron app (`frontend/e2e/screenshots/videos.spec.js`) |
+| `website/assets/05-SemanticSearch.mp4` | 2026-05-30 | v1.4.1 | introduction, index | regenerated | recorded from the 2.0 Electron app (`frontend/e2e/screenshots/videos.spec.js`) |
+| `website/assets/06-Export.mp4` | 2026-05-30 | v1.4.1 | introduction | regenerated | recorded from the 2.0 Electron app (`frontend/e2e/screenshots/videos.spec.js`) |
 | `website/assets/07-CreatingToken.mp4` | 2026-05-30 | v1.4.1 | introduction | stale, manual | screen recording |
 | `website/assets/08-ComfyUI-FaceSearch.mp4` | 2026-05-30 | v1.4.1 | comfyui, introduction | stale, manual | screen recording with ComfyUI |
 | `website/assets/09-ComfyUI-OutPaint.mp4` | 2026-05-30 | v1.4.1 | comfyui, introduction | stale, manual | screen recording with ComfyUI |

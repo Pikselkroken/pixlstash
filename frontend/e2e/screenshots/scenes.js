@@ -849,15 +849,18 @@ export const scenes = [
   },
   {
     // LAST on purpose: it switches the active library, and every scene above
-    // wants demo-data. An empty folder is the one verdict POST /libraries
-    // attaches outright, with no mapping step in the way; the hub is per-run
-    // and thrown away with the work dir, so nothing outside the capture is
-    // registered.
+    // wants demo-data; teardown switches back for videos.spec.js. An empty
+    // folder is the one verdict POST /libraries attaches outright, with no
+    // mapping step in the way; the hub is per-run and thrown away with the
+    // work dir, so nothing outside the capture is registered.
     id: 'empty-library',
     assets: ['ScreenshotEmptyLibrary.jpg'],
     title: 'The first screen of a new library (three ways in)',
     async setup({ grid, api, page }) {
       await readyGrid(grid)
+      const listed = await (await api.get('/api/v1/libraries')).json()
+      demoLibrary = listed.libraries.find((library) => library.is_active)?.uuid
+      expect(demoLibrary, 'no active library to come back to').toBeTruthy()
       const root = join(tmpdir(), 'pixlstash-shots-empty-library')
       rmSync(root, { recursive: true, force: true })
       mkdirSync(root, { recursive: true })
@@ -878,8 +881,17 @@ export const scenes = [
       await page.waitForTimeout(600)
       return null
     },
+    async teardown({ api, grid }) {
+      const back = await api.post('/api/v1/libraries/active', { data: { uuid: demoLibrary } })
+      expect(back.ok(), `could not switch back to demo-data: ${back.status()}`).toBe(true)
+      // The switch reloads the window; wait for demo-data's grid to be back.
+      await expect(grid.thumbnailImages.first()).toBeVisible({ timeout: 30_000 })
+    },
   },
 ]
+
+// The library empty-library switches away from, for its teardown.
+let demoLibrary = null
 
 export const manual = {
   // ComfyUI illustrations. The 1.11 run overwrote these two with the SPA's
