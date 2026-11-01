@@ -594,11 +594,18 @@ the only way to make rank legible was a bigger step. Three levels of that pushed
 entity names to 91px in a 240px rail. Two ramp steps of size between project and
 caption is what makes a 16px indent enough.
 
-**Rank is size, weight and tracking. It is never opacity.** A structural label
-must not be dimmer than the content it heads. Dimming the section captions to 0.7
-made them the quietest thing in the column, sitting between a full-strength
-project above and full-strength entity names below, which reads as a hole rather
-than a hierarchy. Chrome recedes by being *smaller*, not by fading.
+**Rows rank by size, weight and tracking, never by opacity. A sidebar section
+head is the exception: it is the section label, at the section label's 0.7.**
+Dimming a caption alone once made it the quietest thing in the column, sitting
+between a full-strength project above and full-strength entity names below, which
+read as a hole rather than a hierarchy. At full ink, though, an 11px caps head
+sits at the same brightness as the 14px rows beside it, and the eye reads it as
+one more row. So the head takes `.section-label`'s ink (`--opacity-text-secondary`,
+4.95:1 light / 6.64:1 dark on the sidebar) *and* space: `--space-5` above the
+label, `--space-2` below, so it attaches to the group it names rather than
+floating between two (design "Quiet label", 2026-11). Space is what keeps the
+dimmed head from reading as a hole. Do not dim it further, and do not take the
+space away.
 
 **A row's caret takes its row's colour and never its own opacity.** When only the
 caption was dimmed, its caret was not, so the caret outshone the label it
