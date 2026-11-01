@@ -529,6 +529,13 @@
   background-color: var(--hover-wash);
 }
 
+/* Hover layers over the selection rather than replacing it (§11), as the
+   expanded rows do. */
+.sidebar-collapsed-item.active:hover {
+  background:
+    linear-gradient(var(--hover-wash), var(--hover-wash)), var(--active-wash);
+}
+
 .sidebar-collapsed-item--has-flyout {
   position: relative;
 }
