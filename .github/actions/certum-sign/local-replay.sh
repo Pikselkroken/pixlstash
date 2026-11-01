@@ -59,10 +59,10 @@ pkill -x xmessage && echo "closed fbsetbg xmessage" || true
 xdotool windowactivate --sync "$WID" || xdotool windowactivate "$WID" || true
 xdotool windowraise "$WID" || true
 sleep 1
-xdotool mousemove $((BX + BW/2)) $((BY + BH*45/100)) click 1; sleep 1
+xdotool mousemove $((BX + BW/2)) $((BY + BH*55/100)) click 1; sleep 1
 shot 2-clicked-email-field
 xdotool type --clearmodifiers --delay 50 "$CERTUM_USER_ID"
-xdotool mousemove $((BX + BW/2)) $((BY + BH*55/100)) click 1; sleep 1
+xdotool mousemove $((BX + BW/2)) $((BY + BH*74/100)) click 1; sleep 1
 shot 3-email-typed
 
 read -rsp "Open the phone app, then enter the CURRENT code and press Enter: " OTP; echo
