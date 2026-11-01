@@ -599,6 +599,7 @@ jobs:
           tests/test_pictures_stream.py
           tests/test_pipeline_stage_contracts.py
           tests/test_pipeline_throughput_verification.py
+          tests/test_pixlstash_tagger_dinov3.py
           tests/test_plugin_create.py
           tests/test_plugin_install.py
           tests/test_plugin_lifecycle_gaps.py

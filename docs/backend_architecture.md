@@ -1755,7 +1755,7 @@ cache and provider answer in the three functions that switch on the name.
 
 | Model | CUDA | Apple Silicon | Notes |
 |---|---|---|---|
-| `pixlstash_tagger` | fp16 | **MPS, fp16** | 23.7x over CPU. fp16 is tag-identical to fp32 and to CPU (max confidence drift 0.0019, no label moved >0.01) and costs ~45 % less device memory |
+| `pixlstash_tagger` | fp16 | **MPS, fp16** | Measured on the ConvNeXt-B tagger: 23.7x over CPU, fp16 tag-identical to fp32 and to CPU (max confidence drift 0.0019, no label moved >0.01), ~45 % less device memory. The DINOv3 ViT-B/16 that replaced it is tag-identical in fp16 on CUDA against fp32 on CPU (max drift 0.003); its MPS speed and fp16 parity are not yet measured |
 | `wd14` | ONNX CUDA EP | **CoreML EP** | 3.4x. `ModelFormat: MLProgram` is mandatory — the provider's `NeuralNetwork` default fails on this model outright |
 | CLIP (`clip_service`) | fp16 | **MPS, fp32** | 1.8x. fp16 not adopted: embedding drift under cosine search is unmeasured |
 | SBERT (`sbert`) | inherits device | **MPS** | 2.1x, no code change — the device string passes straight through |
@@ -1815,7 +1815,11 @@ the CPU copies".
 tagger load and the Grad-CAM pass to an `AnomalyRegionTask`
 (`tasks/anomaly_region_task.py`) on the GPU queue at `URGENT` priority and waits
 for it with `submit_and_wait`; the request thread only checks the cache, finds
-the file and decodes it. This runs on every host, not only Metal: Grad-CAM casts
+the file and decodes it. On the DINOv3 ViT tagger the CAM hooks the encoder's
+final layernorm and reshapes the patch tokens (CLS and the four registers
+dropped) to the `H/16 x W/16` grid. The head mean-pools those tokens, so their
+gradient is the same everywhere and the map is the plain class-activation map of
+that half of the head. This runs on every host, not only Metal: Grad-CAM casts
 the shared tagger to fp32 in place for its backward pass, so on CUDA too a tag
 batch beside it would have met fp32 weights. A request that times out (503
 after 120 s) cancels its task, as every `submit_and_wait` timeout does, so a
@@ -1850,11 +1854,13 @@ unified memory it would hand a small machine half its total RAM. The ceiling the
 slider offers stays `max_vram_budget_gb()`, i.e. Metal's working set, so the
 owner can raise the budget but not past what the driver will honour.
 
-Batch sizing charges a **measured** memory model per device *and* per dtype.
-`PIXLSTASH_TAGGER_MPS_*` (450 MB + 240 MB/image, halving to 120 MB/image in
-fp16) come from fresh-process peak `driver_allocated_memory` at batch 8, and are
-kept beside the untouched CUDA pair (`700 + 90n`) rather than replacing it —
-neither was measured against the other's hardware. **WD14's figures are CUDA
+Batch sizing charges a memory model per device *and* per dtype.
+`PIXLSTASH_TAGGER_MPS_*` (450 MB + 340 MB/image, 280 MB/image in fp16) are an
+**estimate** for the DINOv3 ViT tagger: the ConvNeXt tagger's measured MPS peak
+plus what the ViT's unfused attention adds at batch 8 on CUDA, since MPS is
+assumed to materialise the attention matrix. They are kept beside the CUDA pair
+(`700 + 90n`, which the ViT measures under with fused attention) rather than
+replacing it; neither was measured against the other's hardware. **WD14's figures are CUDA
 measurements reused unverified on the CoreML path**, where ORT's arena
 accounting is not comparable; the concurrency cap binds first on Apple Silicon,
 but a batch sized from them there is not sized from evidence.

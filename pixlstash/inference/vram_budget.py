@@ -52,21 +52,27 @@ WD14_PER_ITEM_MB = 220
 #: the concurrency cap binds first on Apple Silicon anyway, but a batch sized
 #: from them on CoreML is not sized from evidence. Measure before relying on it.
 
-#: The PixlStash tagger (convnext_base @ 576 px) on **Apple Silicon**, in MiB.
-#: Measured as fresh-process peak ``torch.mps.driver_allocated_memory()`` at
-#: batch 8: 2347 MiB in fp32 and 1319 MiB in fp16. The linear model below
-#: reproduces both slightly conservatively (450 + 8x240 = 2370; 450 + 8x120 =
-#: 1410), which is the direction a memory gate should err in.
+#: The PixlStash tagger (DINOv3 ViT-B/16 @ 576 px) on **Apple Silicon**, in
+#: MiB. An **estimate, not yet measured on a Mac**. The ConvNeXt-B tagger it
+#: replaced measured 2347 MiB fp32 and 1319 MiB fp16 at batch 8 (fresh-process
+#: peak ``torch.mps.driver_allocated_memory()``). On CUDA at batch 8 the ViT
+#: costs *less* than ConvNeXt with fused attention, but 794 MiB (fp32) and
+#: 1216 MiB (fp16) *more* with the unfused path that materialises the
+#: 1301x1301 attention matrix, which is the case to assume on MPS. Adding that
+#: to the ConvNeXt measurement gives 3141 / 2535 MiB; the model below covers
+#: both (450 + 8x340 = 3170; 450 + 8x280 = 2690). Replace with a measurement.
 #:
 #: Kept separate from the CUDA figures rather than replacing them: the CUDA
 #: path's 700 + 90n is a different card, a different allocator and a different
 #: dtype policy, and nothing here was measured against it.
 PIXLSTASH_TAGGER_MPS_BASE_MB = 450
-PIXLSTASH_TAGGER_MPS_PER_ITEM_MB = 240
-PIXLSTASH_TAGGER_MPS_PER_ITEM_FP16_MB = 120
+PIXLSTASH_TAGGER_MPS_PER_ITEM_MB = 340
+PIXLSTASH_TAGGER_MPS_PER_ITEM_FP16_MB = 280
 
 #: The CUDA figures the tagger has always used, named rather than inline so the
 #: two memory models sit side by side and neither can be changed by accident.
+#: Re-measured for the DINOv3 ViT on an RTX 5090 (fused SDPA): 618 MiB reserved
+#: at batch 8 in fp16 against ConvNeXt's 962, so they still cover it.
 PIXLSTASH_TAGGER_CUDA_BASE_MB = 700
 PIXLSTASH_TAGGER_CUDA_PER_ITEM_MB = 90
 
