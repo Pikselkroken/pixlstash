@@ -302,8 +302,15 @@ jobs:
     concurrency:
       group: certum-simplysign-session
       cancel-in-progress: false
+    # Depends on the Windows installer artifact, not on the whole matrix: the
+    # default success() gate skipped this job whenever the macOS leg failed or
+    # was cancelled, so a mac-only problem cost the release its Windows exe.
+    # !cancelled() keeps a cancelled run from signing; a missing Windows
+    # artifact fails the download step below, loudly.
     needs: [build-wheel, build-electron]
-    if: startsWith(github.ref, 'refs/tags/v') && vars.WINDOWS_SIGNING_ENABLED == 'true'
+    if: >-
+      !cancelled() && needs.build-wheel.result == 'success'
+      && startsWith(github.ref, 'refs/tags/v') && vars.WINDOWS_SIGNING_ENABLED == 'true'
     runs-on: ubuntu-latest
     environment: windows-signing
     container:
@@ -359,8 +366,11 @@ jobs:
   # '1') then attaches no Windows exe at all — loud — instead of silently
   # shipping unsigned while the operator believes signing is on.
   attach-windows-desktop-unsigned:
+    # Same independence from the macOS leg as sign-windows-desktop above.
     needs: [build-wheel, build-electron]
-    if: startsWith(github.ref, 'refs/tags/v') && vars.WINDOWS_SIGNING_ENABLED == ''
+    if: >-
+      !cancelled() && needs.build-wheel.result == 'success'
+      && startsWith(github.ref, 'refs/tags/v') && vars.WINDOWS_SIGNING_ENABLED == ''
     runs-on: ubuntu-latest
     permissions:
       contents: read
