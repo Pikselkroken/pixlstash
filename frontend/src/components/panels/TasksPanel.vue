@@ -142,13 +142,13 @@
               </span>
             </span>
           </div>
-          <!-- PixlStash's own background work: one folded row with its count
-               and the VRAM its leases hold. The caret lists one line per task:
-               a worker with its sparkline, a lease or stopped task no worker
-               reports as a plain line. -->
+          <!-- PixlStash's own background work: one card, its row on top and,
+               open, one line per task below a hairline, on the same columns:
+               the task's mark under the padlock, its name where the parent's
+               starts, a row-sized sparkline, and its figure under VRAM. -->
           <div
             v-else-if="entry.kind === 'pixlstash'"
-            class="tm-fold"
+            class="tm-fold tm-fold--card"
             data-testid="tm-pixlstash"
           >
             <div class="tm-row tm-row--fold">
@@ -157,7 +157,7 @@
                 :class="pixlstashRunning(entry) ? 'tm-mark--running' : ''"
                 aria-hidden="true"
               ></span>
-              <span class="tm-app-gap" aria-hidden="true"></span>
+              <span class="tm-system-mark tm-app-logo" aria-hidden="true"></span>
               <span class="tm-name">
                 PixlStash processing
                 <span class="tm-count" data-testid="tm-pixl-count">{{ entry.count }}</span>
@@ -179,62 +179,47 @@
               <Tooltip :text="foldTip(entry)" activator="parent" :describe="false" />
             </div>
             <div v-if="pixlOpen" id="tm-pixl-children" class="tm-children">
-              <template v-for="child in entry.children" :key="child.key">
-                <!-- A backend worker: throughput sparkline + rate, and what its
-                     lease holds while it holds one. -->
-                <div v-if="child.snapshot" class="tm-worker-row">
-                  <div class="tm-worker-row-top">
-                    <span
-                      class="tm-status-dot"
-                      :class="{ 'tm-status-dot--running': childRunning(child) }"
-                      :data-state="child.stopped ? 'stopped' : undefined"
-                    ></span>
-                    <span class="tm-worker-label">{{
-                      tmFormatLabel(child.workerKey, child.snapshot.label)
-                    }}</span>
-                    <span class="tm-worker-progress">{{
-                      tmFormatProgress(child.snapshot)
-                    }}</span>
-                    <span
-                      v-if="child.stopped || child.onCpu || child.mb"
-                      class="tm-worker-progress"
-                      data-testid="tm-worker-figure"
-                    >{{ childFigure(child) }}</span>
-                  </div>
-                  <div class="tm-worker-row-bottom">
-                    <canvas
-                      :ref="(el) => tmRegisterCanvas(child.workerKey, el)"
-                      class="tm-sparkline"
-                    ></canvas>
-                    <span class="tm-worker-rate">
-                      {{ tmFormatRate(tmGetLatestRate(child.workerKey)) }}/s
-                    </span>
-                  </div>
-                  <Tooltip
-                    v-if="child.stopped || child.onCpu"
-                    :text="childTip(child)"
-                    activator="parent"
-                    :describe="false"
-                  />
-                </div>
-                <div
-                  v-else
-                  class="tm-row tm-row--child"
+              <div
+                v-for="child in entry.children"
+                :key="child.key"
+                class="tm-row--child"
+                :class="{ 'tm-row--child-done': childDone(child) }"
+                data-testid="tm-pixl-child"
+              >
+                <span
+                  v-if="childDone(child)"
+                  class="tm-mark tm-mark--done"
+                  data-state="done"
+                  aria-hidden="true"
                 >
-                  <span
-                    class="tm-mark"
-                    :class="child.stopped ? '' : 'tm-mark--running'"
-                    :data-state="child.stopped ? 'stopped' : undefined"
+                  <v-icon size="14">mdi-check</v-icon>
+                </span>
+                <span
+                  v-else
+                  class="tm-mark"
+                  :class="{ 'tm-mark--running': childRunning(child) }"
+                  :data-state="child.stopped ? 'stopped' : undefined"
+                  aria-hidden="true"
+                ></span>
+                <span class="tm-name tm-child-name">
+                  {{ childName(child) }}
+                  <span v-if="childProgress(child)" class="tm-child-n">{{
+                    childProgress(child)
+                  }}</span>
+                </span>
+                <span class="tm-child-spark">
+                  <canvas
+                    v-if="child.snapshot && !childDone(child)"
+                    :ref="(el) => tmRegisterCanvas(child.workerKey, el)"
+                    class="tm-sparkline"
                     aria-hidden="true"
-                  ></span>
-                  <span class="tm-app-gap" aria-hidden="true"></span>
-                  <span class="tm-name">{{ childLabel(child) }}</span>
-                  <span class="tm-figure">
-                    <span class="tm-fig-text">{{ childFigure(child) }}</span>
-                  </span>
-                  <Tooltip :text="childTip(child)" activator="parent" :describe="false" />
-                </div>
-              </template>
+                  ></canvas>
+                </span>
+                <span class="tm-figure">
+                  <span class="tm-fig-text">{{ childFigure(child) }}</span>
+                </span>
+                <Tooltip :text="childTip(child)" activator="parent" :describe="false" />
+              </div>
             </div>
           </div>
           <!-- A model downloading for a workflow: its bytes as a bar, and a
@@ -923,20 +908,46 @@ function childLabel(child) {
     : child.label;
 }
 
+/** A fold child's name: a worker's own label, else the lease's or the task's. */
+function childName(child) {
+  return child.snapshot
+    ? tmFormatLabel(child.workerKey, child.snapshot.label)
+    : childLabel(child);
+}
+
+/** How far a fold child is, "812 / 1190", or "" when it reports nothing. */
+function childProgress(child) {
+  if (child.snapshot) return tmFormatProgress(child.snapshot);
+  return child.progress?.total ? `${child.progress.current} / ${child.progress.total}` : "";
+}
+
+/**
+ * A worker that has worked through all it was given and is not moving: a
+ * check in place of its dot, and no chart or figure.
+ */
+function childDone(child) {
+  if (!child.snapshot || child.stopped || child.mb || childRunning(child)) return false;
+  const total = Number(child.snapshot.total || 0);
+  return total > 0 && Number(child.snapshot.current || 0) >= total;
+}
+
 /** What a PixlStash task holds, in the figure column: stopped, CPU, or VRAM. */
 function childFigure(child) {
   if (child.stopped) return "stopped";
   if (child.onCpu) return "CPU";
-  return formatGb(child.mb);
+  return child.mb ? formatGb(child.mb) : "";
 }
 
+/** A fold child's tooltip: its name, why it is unusual, its rate and what is left. */
 function childTip(child) {
-  const parts = [childLabel(child)];
+  const parts = [childName(child)];
   if (child.stopped) parts.push(child.text || "Stopped to make room; nothing was lost");
   else if (child.onCpu) parts.push("Running on the CPU");
-  if (child.progress?.total) {
-    parts.push(`${child.progress.current} / ${child.progress.total}`);
-  }
+  const rate = child.snapshot ? tmGetLatestRate(child.workerKey) : 0;
+  if (rate > 0) parts.push(`${tmFormatRate(rate)}/s`);
+  const progress = child.snapshot ?? child.progress;
+  const left = Number(progress?.total || 0) - Number(progress?.current || 0);
+  if (Number(progress?.total) > 0 && left > 0) parts.push(`${left} to go`);
   return parts.join(" · ");
 }
 
@@ -1358,9 +1369,9 @@ function tmDrawSparkline(canvas, samples) {
   const dpr = window.devicePixelRatio || 1;
   const width = Math.max(
     4,
-    Math.floor(rect.width || canvas.parentElement?.clientWidth || 200),
+    Math.floor(rect.width || 48),
   );
-  const height = Math.max(4, Math.floor(rect.height || 28));
+  const height = Math.max(4, Math.floor(rect.height || 14));
   const tw = Math.floor(width * dpr);
   const th = Math.floor(height * dpr);
   if (canvas.width !== tw || canvas.height !== th) {
@@ -1391,7 +1402,7 @@ function tmDrawSparkline(canvas, samples) {
     else ctx.lineTo(x, y);
   });
   ctx.strokeStyle = tmThemeRgba(canvas, "tertiary", 0.85, "142,166,4");
-  ctx.lineWidth = 1.5;
+  ctx.lineWidth = 1.25;
   ctx.stroke();
 
   const last = plotSamples[plotSamples.length - 1];
@@ -1564,29 +1575,11 @@ const tmSystemItems = computed(() => {
   min-width: 0;
 }
 
-.tm-worker-row-bottom {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  min-width: 0;
-}
-
+/* A fold child's throughput: a trend at row size, not a readable history. */
 .tm-sparkline {
-  flex: 1;
-  height: 28px;
-  min-width: 0;
   display: block;
-  border-radius: var(--radius-sm);
-}
-
-.tm-worker-rate {
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-surface), 0.45);
-  white-space: nowrap;
-  flex-shrink: 0;
-  font-variant-numeric: tabular-nums;
-  min-width: 38px;
-  text-align: right;
+  width: 48px;
+  height: 14px;
 }
 
 .tm-status-dot {
@@ -1959,18 +1952,75 @@ const tmSystemItems = computed(() => {
   font-size: var(--text-xs);
 }
 
-.tm-row--child {
+/* PixlStash processing and its tasks are one card: the parent's row on top,
+   its tasks below one hairline. The rows inside draw no box of their own, so
+   their columns line up with the bordered rows beside the card. */
+.tm-fold--card {
+  gap: 0;
+  border-radius: var(--radius-md);
+  background: rgba(var(--v-theme-on-surface), 0.04);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.07);
+}
+
+.tm-fold--card > .tm-row {
   background: none;
-  border-color: transparent;
-  padding-top: var(--space-1);
-  padding-bottom: var(--space-1);
+  border: 0;
 }
 
 .tm-children {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
-  padding-left: var(--indent-step);
+  padding: var(--space-1) 0 var(--space-2);
+  border-top: 1px solid rgba(var(--v-theme-on-surface), 0.07);
+}
+
+/* A task: the parent's columns, its mark moved under the padlock so its name
+   starts where "PixlStash processing" does, then a sparkline and the figure. */
+.tm-row--child {
+  display: grid;
+  grid-template-columns: var(--gutter-glyph) 18px minmax(0, 1fr) 48px 56px;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  min-height: 28px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+}
+
+.tm-row--child:hover {
+  background: var(--hover-wash);
+}
+
+.tm-row--child > .tm-mark {
+  grid-column: 2;
+}
+
+.tm-row--child .tm-figure {
+  min-width: 0;
+}
+
+.tm-child-name {
+  font-weight: var(--weight-regular);
+}
+
+.tm-row--child-done .tm-child-name {
+  color: rgba(var(--v-theme-on-surface), 0.55);
+}
+
+.tm-child-n {
+  margin-left: var(--space-3);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+  color: rgba(var(--v-theme-on-surface), 0.6);
+}
+
+/* The parent's app mark: the padlock, as the resource-usage footer draws it. */
+.tm-app-logo {
+  width: 16px;
+  height: 16px;
+  margin: 1px;
+  color: rgb(var(--v-theme-on-surface));
 }
 
 .tm-mark {

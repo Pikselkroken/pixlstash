@@ -1256,11 +1256,11 @@ describe("the GPU queue in the task manager", () => {
     expect(fold.find('[data-testid="tm-pixl-count"]').text()).toBe("2");
     expect(fold.find(".tm-fig-text").text()).toBe("1.8 GB");
     // Collapsed by default: no task lines.
-    expect(wrapper.findAll(".tm-row--child")).toHaveLength(0);
+    expect(wrapper.findAll('[data-testid="tm-pixl-child"]')).toHaveLength(0);
     expect(fold.find(".tm-caret").attributes("aria-expanded")).toBe("false");
 
     await fold.find(".tm-caret").trigger("click");
-    const children = wrapper.findAll(".tm-row--child");
+    const children = wrapper.findAll('[data-testid="tm-pixl-child"]');
     expect(children).toHaveLength(2);
     // A task on the CPU says so in its figure column, and is still running.
     expect(children[1].find(".tm-fig-text").text()).toBe("CPU");
@@ -1283,7 +1283,7 @@ describe("the GPU queue in the task manager", () => {
     // Both idle between batches: the fold does not pulse for them.
     expect(fold.find(".tm-mark").classes("tm-mark--running")).toBe(false);
     // Collapsed: no worker is listed anywhere, inside the fold or beside it.
-    expect(wrapper.findAll(".tm-worker-row")).toHaveLength(0);
+    expect(wrapper.findAll('[data-testid="tm-pixl-child"]')).toHaveLength(0);
     expect(wrapper.findAll("canvas.tm-sparkline")).toHaveLength(0);
 
     tasksStore.workerSnapshots = {
@@ -1294,16 +1294,36 @@ describe("the GPU queue in the task manager", () => {
     expect(fold.find(".tm-mark").classes("tm-mark--running")).toBe(true);
 
     await fold.find(".tm-caret").trigger("click");
-    const rows = fold.findAll(".tm-worker-row");
-    expect(rows.map((row) => row.find(".tm-worker-label").text())).toEqual([
-      "Image Embeddings",
-      "Tags",
+    // One line each, inside the fold's own card, with its progress by its name.
+    const rows = fold.findAll('[data-testid="tm-pixl-child"]');
+    expect(rows.map((row) => row.find(".tm-child-name").text())).toEqual([
+      "Image Embeddings 5 / 9",
+      "Tags 1 / 9",
     ]);
     expect(rows.every((row) => row.find("canvas.tm-sparkline").exists())).toBe(true);
     // The tagger's lease shows on the tagger's row, and is not a line of its own.
-    expect(rows[1].find('[data-testid="tm-worker-figure"]').text()).toBe("1.2 GB");
-    expect(rows[0].find('[data-testid="tm-worker-figure"]').exists()).toBe(false);
-    expect(wrapper.findAll(".tm-row--child")).toHaveLength(0);
+    expect(rows[1].find(".tm-fig-text").text()).toBe("1.2 GB");
+    expect(rows[0].find(".tm-fig-text").text()).toBe("");
+    expect(rows[1].find(".tm-mark").classes("tm-mark--running")).toBe(true);
+    expect(wrapper.find(".tm-worker-row").exists()).toBe(false);
+  });
+
+  it("checks off a worker that has finished, with no chart and no figure", () => {
+    const tasksStore = setGpu(gpuAnswer({ leases: [] }));
+    tasksStore.workerSnapshots = {
+      TextEmbeddingTask: { label: "Text embeddings", current: 9, total: 9, running: false, active: true },
+      ImageEmbeddingTask: { label: "Image embeddings", current: 5, total: 9, running: true, active: true },
+    };
+    localStorage.setItem("pixlstash:tasks:pixlstash-fold", "1");
+    const wrapper = mount(TasksPanel, globalOpts);
+    const rows = wrapper.findAll('[data-testid="tm-pixl-child"]');
+    const done = rows.find((row) => row.text().includes("Text Embeddings"));
+    const working = rows.find((row) => row.text().includes("Image Embeddings"));
+    expect(done.find(".tm-mark").attributes("data-state")).toBe("done");
+    expect(done.find("canvas.tm-sparkline").exists()).toBe(false);
+    expect(done.find(".tm-fig-text").text()).toBe("");
+    expect(working.find(".tm-mark").attributes("data-state")).toBeUndefined();
+    expect(working.find("canvas.tm-sparkline").exists()).toBe(true);
   });
 
   it("marks a task the backend stopped as stopped, not as lost", async () => {
@@ -1315,7 +1335,7 @@ describe("the GPU queue in the task manager", () => {
     );
     localStorage.setItem("pixlstash:tasks:pixlstash-fold", "1");
     const wrapper = mount(TasksPanel, globalOpts);
-    const children = wrapper.findAll(".tm-row--child");
+    const children = wrapper.findAll('[data-testid="tm-pixl-child"]');
     expect(children.map((child) => child.find(".tm-fig-text").text())).toEqual(["1.2 GB", "stopped"]);
     expect(children[1].find(".tm-mark").attributes("data-state")).toBe("stopped");
   });
