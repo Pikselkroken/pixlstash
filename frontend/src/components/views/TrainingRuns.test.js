@@ -1255,7 +1255,7 @@ describe("the runs PixlStash trains (#2118)", () => {
       job({ status: "completed", completed_at: DONE_AT, model_ids: [12, 11] }),
     ]);
     const wrapper = await openWith([run("Clementine_abcd1234"), run("Foxglove")]);
-    await cardNamed(wrapper, "Clementine_abcd1234").trigger("contextmenu");
+    await cardNamed(wrapper, "Clementine").trigger("contextmenu");
     await wrapper.find("[data-testid='tr-menu-model']").trigger("click");
     expect(nav.push).toHaveBeenCalledWith({
       name: "models",
@@ -1268,7 +1268,7 @@ describe("the runs PixlStash trains (#2118)", () => {
       job({ status: "completed", completed_at: DONE_AT, model_ids: [] }),
     ]);
     const wrapper = await openWith([run("Clementine_abcd1234"), run("Foxglove")]);
-    await cardNamed(wrapper, "Clementine_abcd1234").trigger("contextmenu");
+    await cardNamed(wrapper, "Clementine").trigger("contextmenu");
     expect(wrapper.find("[data-testid='tr-menu-open']").exists()).toBe(true);
     expect(wrapper.find("[data-testid='tr-menu-model']").exists()).toBe(false);
     // Nor for one trained elsewhere: only a job knows its models.
