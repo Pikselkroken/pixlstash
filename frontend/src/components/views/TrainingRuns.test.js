@@ -449,6 +449,44 @@ describe("drawing the grid", () => {
     expect(srcs[0]).toContain("s_500_0.jpg");
     expect(srcs[1]).toContain("s_500_1.jpg");
   });
+
+  it("reserves a slot per prompt while a step's samples are still landing", async () => {
+    // Three prompts, and step 500 has drawn only the second so far: the strip
+    // keeps three slots in prompt order rather than shrinking to one frame.
+    const wrapper = await openWith([
+      run("Clementine", {
+        sample_prompts: ["a", "b", "c"],
+        samples: [
+          { filename: "s_250_0.jpg", step: 250, index: 0 },
+          { filename: "s_250_1.jpg", step: 250, index: 1 },
+          { filename: "s_500_1.jpg", step: 500, index: 1 },
+        ],
+      }),
+    ]);
+    const slots = wrapper.findAll(".tr-card-strip > *");
+    expect(slots.map((el) => el.element.tagName)).toEqual(["SPAN", "IMG", "SPAN"]);
+    expect(slots[1].attributes("src")).toContain("s_500_1.jpg");
+    expect(wrapper.findAll(".tr-card-blank")).toHaveLength(2);
+    // No job is training it, so nothing is coming: the blanks hold still.
+    expect(wrapper.findAll(".tr-card-blank--live")).toHaveLength(0);
+  });
+
+  it("counts slots from the samples when the config names no prompts", async () => {
+    const wrapper = await openWith([
+      run("Clementine", {
+        samples: [
+          { filename: "s_250_0.jpg", step: 250, index: 0 },
+          { filename: "s_250_1.jpg", step: 250, index: 1 },
+          { filename: "s_500_0.jpg", step: 500, index: 0 },
+        ],
+      }),
+    ]);
+    expect(wrapper.findAll(".tr-card-strip > *")).toHaveLength(2);
+    expect(wrapper.find(".tr-card-strip img").attributes("src")).toContain(
+      "s_500_0.jpg",
+    );
+    expect(wrapper.findAll(".tr-card-blank")).toHaveLength(1);
+  });
 });
 
 describe("choosing runs", () => {
@@ -952,6 +990,24 @@ describe("the runs PixlStash trains (#2118)", () => {
     await card.trigger("click");
     expect(card.attributes("aria-selected")).toBe("true");
     expect(importBtn(wrapper)).toBeUndefined();
+  });
+
+  it("pulses a slot still to come only while its run trains", async () => {
+    const halfDrawn = () =>
+      run("Clementine_abcd1234", {
+        sample_prompts: ["a", "b"],
+        samples: [{ filename: "s_500_0.jpg", step: 500, index: 0 }],
+      });
+    listTrainingJobs.mockResolvedValue([job()]);
+    let wrapper = await openWith([halfDrawn()]);
+    expect(wrapper.findAll(".tr-card-blank--live")).toHaveLength(1);
+
+    listTrainingJobs.mockResolvedValue([
+      job({ status: "completed", completed_at: DONE_AT }),
+    ]);
+    wrapper = await openWith([halfDrawn()]);
+    expect(wrapper.findAll(".tr-card-blank")).toHaveLength(1);
+    expect(wrapper.findAll(".tr-card-blank--live")).toHaveLength(0);
   });
 
   it("picks a live run on its own, and offers no import for it", async () => {
