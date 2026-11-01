@@ -503,7 +503,11 @@ export const scenes = [
         await sidebar.characterItems.first().scrollIntoViewIfNeeded()
       }
       await page.waitForTimeout(400)
-      return page.locator('.sidebar').first()
+      // The sidebar from the top down to just under the last person: the Sets
+      // header and the Import button below them are not what the shot shows.
+      const bar = await page.locator('.sidebar').first().boundingBox()
+      const last = await sidebar.characterItems.last().boundingBox()
+      return { clip: { x: bar.x, y: bar.y, width: bar.width, height: last.y + last.height + 8 - bar.y } }
     },
   },
   {
