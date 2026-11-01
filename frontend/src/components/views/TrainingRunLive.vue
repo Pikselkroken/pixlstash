@@ -146,37 +146,59 @@
               aria-hidden="true"
             ></div>
 
-            <!-- The timeline is the column header. -->
+            <!-- The timeline is the column header. Its label says how the run
+                 began and where it ends. -->
             <div class="trl-lab trl-lab--setup" :style="{ gridRow: 1 }">
-              <span v-if="setupDone" class="trl-setup">
-                <Tooltip :text="setupTooltip" activator="parent" />
-                <v-icon size="14">mdi-check</v-icon>
-                Started training after {{ clock(setupSeconds) }}
-              </span>
-              <span
-                v-else-if="live.phase"
-                class="trl-setup"
+              <!-- One slot, at least a button tall: the set-up line describes the time
+                   before step 0, so while the prompts are pinned over a run
+                   scrolled sideways the button back to step 0 stands in for it,
+                   and the lines below never move. -->
+              <div class="trl-setup-slot">
+                <AppButton
+                  v-if="scrolledLeft"
+                  class="trl-to-start"
+                  size="sm"
+                  variant="outline"
+                  icon-left="chevron-left"
+                  data-testid="trl-to-start"
+                  @click="scrollToStart"
+                >
+                  Step 0
+                </AppButton>
+                <span v-else-if="setupDone" class="trl-setup">
+                  <Tooltip :text="setupTooltip" activator="parent" />
+                  <v-icon size="14">mdi-check</v-icon>
+                  Started training after {{ clock(setupSeconds) }}
+                </span>
+                <span
+                  v-else-if="live.phase"
+                  class="trl-setup"
+                >
+                  <span class="trl-spin trl-spin--sm" aria-hidden="true"></span>
+                  {{ PHASE_LABELS[live.phase] }}
+                </span>
+                <span v-else-if="live.status === 'error'" class="trl-setup trl-setup--err">
+                  <v-icon size="14">mdi-alert</v-icon>
+                  Stopped at {{ PHASE_LABELS[lastPhase] || "setup" }}
+                </span>
+              </div>
+              <!-- Where the track ends: the final save and the import. A run
+                   that failed or was stopped never gets there, and one read
+                   from its folder was not trained here. -->
+              <div
+                v-if="!fromFolder && !['error', 'stopped'].includes(live.status)"
+                class="trl-endph"
               >
-                <span class="trl-spin trl-spin--sm" aria-hidden="true"></span>
-                {{ PHASE_LABELS[live.phase] }}
-              </span>
-              <span v-else-if="live.status === 'error'" class="trl-setup trl-setup--err">
-                <v-icon size="14">mdi-alert</v-icon>
-                Stopped at {{ PHASE_LABELS[lastPhase] || "setup" }}
-              </span>
-              <!-- The prompts stay pinned while a long run scrolls sideways;
-                   this brings the view back to the start. -->
-              <AppButton
-                v-if="scrolledLeft"
-                class="trl-to-start"
-                size="sm"
-                variant="outline"
-                icon-left="chevron-left"
-                data-testid="trl-to-start"
-                @click="scrollToStart"
-              >
-                Step 0
-              </AppButton>
+                <span
+                  v-for="end in endPhases"
+                  :key="end.key"
+                  :class="{ 'trl-endph--cur': end.state === 'now' }"
+                >
+                  <v-icon v-if="end.state === 'done'" size="14">mdi-check</v-icon>
+                  <i v-else class="trl-ring" aria-hidden="true"></i>
+                  {{ end.label }}
+                </span>
+              </div>
             </div>
             <div
               class="trl-track"
@@ -225,25 +247,6 @@
                   Use this step
                 </button>
                 <span v-else-if="dueIn(column)">{{ dueIn(column) }}</span>
-              </span>
-            </div>
-            <!-- Where the track ends: the final save and the import. A run
-                 that failed or was stopped never gets there, and one read from
-                 its folder was not trained here. -->
-            <div
-              v-if="!fromFolder && !['error', 'stopped'].includes(live.status)"
-              ref="endRef"
-              class="trl-endph"
-              :style="{ gridRow: 1, gridColumn: columns.length + 2 }"
-            >
-              <span
-                v-for="end in endPhases"
-                :key="end.key"
-                :class="{ 'trl-endph--cur': end.state === 'now' }"
-              >
-                <v-icon v-if="end.state === 'done'" size="14">mdi-check</v-icon>
-                <i v-else class="trl-ring" aria-hidden="true"></i>
-                {{ end.label }}
               </span>
             </div>
             <!-- The loss, on the same step axis. -->
@@ -550,7 +553,6 @@ const bodyRef = ref(null);
 const scrollRef = ref(null);
 const boardRef = ref(null);
 const chartRowRef = ref(null);
-const endRef = ref(null);
 const tipsRef = ref(null);
 
 // ── The shape-coded provenance mark and the meter ────────────────────────────
@@ -1167,8 +1169,7 @@ function fit() {
     scroll.clientWidth -
     parseFloat(pad.paddingLeft) -
     parseFloat(pad.paddingRight) -
-    LABEL_W -
-    (endRef.value?.offsetWidth ?? 0);
+    LABEL_W;
   // Nor so tall that the prompt rows push the page past the window: a wide,
   // short window would otherwise scroll down.
   const rows = live.value?.rows?.length ?? 0;
@@ -1182,8 +1183,13 @@ function fit() {
     Math.min(PITCH_MAX, Math.floor(width / n), tallest),
   );
 
-  // The height left for the chart with the tips folded.
-  const room = body.clientHeight - rest;
+  // The height left for the chart with the tips folded, at the pitch just
+  // chosen: `rest` was measured at the old one, and a chart sized for shorter
+  // rows overflows the page, whose scrollbar narrows the board and flips the
+  // pitch back, every frame.
+  const room = Math.floor(
+    body.clientHeight - (rest - cellsNow + rows * cellHeightAt(pitch.value)),
+  );
   tipsFit.value = room - tipsBodyHeight >= CHART_MIN;
   const left = room - (tipsOpen.value ? tipsBodyHeight : 0);
   chartHeight.value = Math.max(CHART_MIN, Math.min(CHART_MAX, left));
@@ -1543,7 +1549,7 @@ onBeforeUnmount(() => {
   --trl-cell-h: calc(var(--trl-cell-w) * 76 / 104);
   position: relative;
   display: grid;
-  grid-template-columns: var(--trl-label-w) repeat(var(--trl-cols), var(--trl-pitch)) auto;
+  grid-template-columns: var(--trl-label-w) repeat(var(--trl-cols), var(--trl-pitch));
   grid-auto-rows: auto;
   row-gap: var(--space-1);
   width: max-content;
@@ -1593,11 +1599,19 @@ onBeforeUnmount(() => {
   background: rgb(var(--v-theme-background));
 }
 
-/* Top-aligned with the step numbers, so the Step 0 button appearing below
-   never moves the line above it. */
+/* Top-aligned with the step numbers. */
 .trl-lab--setup {
   justify-content: flex-start;
   padding-top: var(--space-2);
+}
+
+/* At least a button tall, so swapping the one-line set-up line for Step 0
+   never moves the end phases under it. Only the error line can wrap past it,
+   and a failed run draws no end phases. */
+.trl-setup-slot {
+  min-height: var(--control-h-sm);
+  display: flex;
+  align-items: center;
 }
 
 .trl-lab--z {
@@ -1611,10 +1625,6 @@ onBeforeUnmount(() => {
 
 .trl-scroll--moved .trl-lab {
   box-shadow: inset -1px 0 0 rgb(var(--v-theme-divider));
-}
-
-.trl-to-start {
-  align-self: flex-start;
 }
 
 .trl-setup {
@@ -1746,7 +1756,6 @@ onBeforeUnmount(() => {
 }
 
 .trl-endph {
-  padding-left: var(--space-4);
   display: flex;
   flex-direction: column;
   justify-content: center;
