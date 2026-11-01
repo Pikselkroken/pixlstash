@@ -987,6 +987,15 @@ def test_read_version(server):
     assert data["install_type"] in set(Server.INSTALL_TYPES)
 
 
+def test_read_version_echoes_desktop_nonce(server, monkeypatch):
+    """The Electron shell only trusts a backend that echoes its launch nonce."""
+    client = TestClient(server.api)
+    monkeypatch.delenv("PIXLSTASH_DESKTOP_HEALTH_NONCE", raising=False)
+    assert client.get("/version").json().get("desktop_nonce") is None
+    monkeypatch.setenv("PIXLSTASH_DESKTOP_HEALTH_NONCE", "test-nonce-1234")
+    assert client.get("/version").json()["desktop_nonce"] == "test-nonce-1234"
+
+
 def test_read_version_install_type_docker(server, monkeypatch):
     """The env flag makes /version report the reliable ``docker`` signal."""
     monkeypatch.setenv("PIXLSTASH_IN_DOCKER", "1")

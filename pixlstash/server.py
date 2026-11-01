@@ -247,6 +247,15 @@ class VersionResponse(BaseModel):
         ),
         examples=["gpu", "cpu"],
     )
+    desktop_nonce: str | None = Field(
+        default=None,
+        description=(
+            "Desktop app only: echoes `PIXLSTASH_DESKTOP_HEALTH_NONCE`, a "
+            "per-launch value the Electron shell uses to confirm it is talking "
+            "to the backend it started before handing over its session cookie. "
+            "Absent on every other install."
+        ),
+    )
 
 
 class SessionStatusResponse(BaseModel):
@@ -1740,6 +1749,7 @@ class Server(
                 "version": version,
                 "install_type": install_type,
                 "docker_variant": docker_variant,
+                "desktop_nonce": os.environ.get("PIXLSTASH_DESKTOP_HEALTH_NONCE"),
             }
 
         @self.api.get("/scalar", include_in_schema=False)
