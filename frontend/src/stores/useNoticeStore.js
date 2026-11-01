@@ -347,7 +347,9 @@ export const useNoticeStore = defineStore("notice", () => {
     // §9.1 - coalesce onto a live notice with the same key. Without a key,
     // §5's rule: the same level and the same text is the same card. A notice
     // carrying an action is left out of that, because a repeat would replace
-    // its handler and the first card's Undo would quietly act on the second.
+    // its handler and the first card's Undo would quietly act on the second;
+    // so is one with a different window, or a repeat would turn a card its
+    // caller made sticky into one that expires.
     const existing =
       key != null
         ? notices.value.find((n) => n.key === key)
@@ -358,7 +360,8 @@ export const useNoticeStore = defineStore("notice", () => {
                 n.key == null &&
                 !n.action &&
                 n.level === safeLevel &&
-                n.text === message,
+                n.text === message &&
+                n.timeout === resolved,
             );
     if (existing) {
       existing.count += 1;

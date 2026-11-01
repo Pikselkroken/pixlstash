@@ -481,7 +481,8 @@ matching the dialogs it is a sibling of.
   bury the application. Requires a store change — §9.1. A caller may name the card with a
   coalescing key; without one the store applies this rule itself, by variant and text.
   A notice carrying an action is never folded onto another that way: the repeat would
-  replace its handler, and the first card's Undo would act on the second.
+  replace its handler, and the first card's Undo would act on the second. Nor is one
+  with a different window, which would turn a sticky card into a timed one.
 - Stack reflow when a card is added or removed animates per §7.
 
 ---
@@ -495,7 +496,7 @@ The store's `DEFAULT_TIMEOUTS` are close to right and are kept:
 | `success` | 3000 ms | keep |
 | `info` | 4000 ms | keep |
 | `warning` | 6000 ms | keep — a partial outcome takes longer to parse than a confirmation |
-| `error` | 10000 ms | The longest window, not a sticky one (changed 2026-11-01). Sticky errors piled up: a rename refused twice left two cards that only the ✕ took down. Rule 3's pause keeps an error up while it is being read; a caller that needs one to stay passes `timeout: 0`. |
+| `error` | 10000 ms | The longest window, not a sticky one: a card that never leaves piles up behind the next attempt. Rule 3's pause keeps an error up while it is being read; a caller that needs one to stay passes `timeout: 0`. |
 
 Three rules on top, none of which the store enforces today:
 

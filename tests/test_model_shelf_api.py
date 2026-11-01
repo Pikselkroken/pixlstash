@@ -6834,6 +6834,17 @@ def test_a_rename_names_every_member_of_one_stack(shelf_env):
     assert _model_row(shelf_env, dana)["display_name"] == "Run"
     assert _model_row(shelf_env, bob)["display_name"] == "Bob"
 
+    # A filter can hide members, so the shelf sends only the ones it shows.
+    # The name still goes to the whole run: here Dana is not sent at all (the
+    # other id names nothing) and is renamed with Alice.
+    ghost = max(shelf_env.model_ids.values()) + 1000
+    r = shelf_env.owner.patch(
+        f"{API}/models", json={"ids": [alice, ghost], "display_name": "Whole"}
+    )
+    assert r.status_code == 200, r.text
+    assert sorted(r.json()["updated"]) == sorted([alice, dana])
+    assert _model_row(shelf_env, dana)["display_name"] == "Whole"
+
 
 def test_an_unhashed_checkpoint_cannot_be_called_an_adapter(shelf_env):
     """The hub's own CHECK would reject it. Left to SQLite that is a 500 naming

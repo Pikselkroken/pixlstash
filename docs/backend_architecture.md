@@ -8910,7 +8910,7 @@ lives beside are the rest of §13.
 
 Three guards on it, none of them authz:
 
-- **`display_name` is refused for more than one id, unless every id is a member of one stack.** A name is a fact about one file, or about one run: the shelf draws a stack as one row and a rename there sends every member it shows. Across any other selection it would give every row the same name, and there is no undo.
+- **`display_name` is refused for more than one id, unless every id is a member of one stack.** A name is a fact about one file, or about one run: the shelf draws a stack as one row and a rename there sends the members it shows, so the name is written to every member of that stack, including any a filter hides. Across any other selection it would give every row the same name, and there is no undo.
 - **`file_kind` cannot be cleared, only corrected.** Every file is something and `unknown` is how the shelf says so; a null would leave a row neither list block matches.
 - **A correction the hub's own CHECK would reject is refused by name.** `model` carries `CHECK (file_kind <> 'adapter' OR sha256 IS NOT NULL)` and the same for `kind`. Left to SQLite a violation surfaces as a 500 naming `CHECK constraint failed`, which tells the owner nothing about the file they picked. The guard decides on the **post-write** state (`changes.get(col, row[col])`), not on the body, because three different bodies reach the same violation and only one mentions `file_kind`: promoting an unhashed checkpoint; `{"kind": null}` on a row that is already an adapter, which names no `file_kind` at all; and `{"kind": null, "file_kind": "adapter"}`, which a guard reading the *stored* kind waves through. Both of the latter were 500s until the CSO review of #869 found them.
 

@@ -202,6 +202,15 @@ describe("useNoticeStore - coalescing (§9.1)", () => {
     expect(second).not.toHaveBeenCalled();
   });
 
+  it("never turns a sticky card into a timed one by coalescing", () => {
+    const store = useNoticeStore();
+    store.warning("Stopped.", { timeout: 0 });
+    store.warning("Stopped.");
+    expect(store.notices).toHaveLength(2);
+    vi.advanceTimersByTime(120000);
+    expect(store.notices.map((n) => n.timeout)).toEqual([0]);
+  });
+
   it("does not fold a keyless notice into a keyed one", () => {
     const store = useNoticeStore();
     store.push({ level: "error", text: "same", key: "k" });

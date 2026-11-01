@@ -2676,7 +2676,10 @@ def create_router(server) -> APIRouter:
                     ),
                 )
 
-        if "display_name" in changes and not _is_one_model_or_one_stack(payload.ids):
+        ids = payload.ids
+        if "display_name" in changes:
+            ids = _rename_targets(ids)
+        if ids is None:
             # A name is a fact about one file, or about one stack: a run's
             # members share its name, and renaming its collapsed row names
             # the run. Applying one across any other selection would give
@@ -2708,31 +2711,41 @@ def create_router(server) -> APIRouter:
                 detail="file_kind cannot be cleared; use 'unknown'.",
             )
 
-        _refuse_builtin_engines(payload.ids)
-        _refuse_impossible_adapters(payload.ids, changes)
+        _refuse_builtin_engines(ids)
+        _refuse_impossible_adapters(ids, changes)
 
-        updated = update_models(server.hub, payload.ids, changes)
+        updated = update_models(server.hub, ids, changes)
         logger.info(
             "Shelf edit wrote %s on %d model(s).", ", ".join(sent), len(updated)
         )
         return ModelEditResponse(updated=updated, fields=sent)
 
-    def _is_one_model_or_one_stack(ids: list[int]) -> bool:
-        """Whether ``ids`` name one model, or members of one stack only.
+    def _rename_targets(ids: list[int]) -> list[int] | None:
+        """The models a rename of ``ids`` writes, or None to refuse it.
 
-        The shelf draws a stack as one row and writes to every member it
-        shows, so a rename there arrives as several ids. Ids that name no row
-        are ignored, as :func:`update_models` ignores them.
+        One id is that model. Several are accepted only when every one that
+        exists is a member of the same stack, and then the name goes to the
+        WHOLE stack: the shelf draws a run as one row and sends the members it
+        shows, and a filter can hide some. Naming only those would leave the
+        hidden ones under the old name, and the row would show it again once
+        the filter is cleared. Ids that name no row add no stack of their own.
         """
-        unique = set(ids)
+        unique = list(dict.fromkeys(ids))
         if len(unique) <= 1:
-            return True
+            return unique
         placeholders = ", ".join("?" for _ in unique)
         stacks = server.hub.fetchall(
             f"SELECT DISTINCT stack_id FROM model WHERE id IN ({placeholders})",
             tuple(unique),
         )
-        return len(stacks) == 1 and stacks[0]["stack_id"] is not None
+        if len(stacks) != 1 or stacks[0]["stack_id"] is None:
+            return None
+        return [
+            int(row["id"])
+            for row in server.hub.fetchall(
+                "SELECT id FROM model WHERE stack_id = ?", (stacks[0]["stack_id"],)
+            )
+        ]
 
     def _refuse_builtin_engines(ids: list[int]) -> None:
         """Refuse any verb aimed at a model PixlStash downloaded for itself.
