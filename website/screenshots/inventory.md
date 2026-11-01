@@ -146,6 +146,7 @@ Pages are those that link the file; README is the repository README.
 | `website/assets/ScreenshotSearchEdit.jpg` | 2026-09-02 | v1.11.0rc1 | comfyui | restored | v1.4.1 original restored (the 1.11 run had overwritten it with the search box) |
 | `website/assets/ScreenshotSegmentation.jpg` | 2026-07-20 | v1.7.0rc5 | features, whatsnew | regenerated | captured from the 2.0 Electron app |
 | `website/assets/ScreenshotSelectiveRestore.jpg` | 2026-09-02 | v1.11.0rc1 | features, whatsnew | regenerated | captured from the 2.0 Electron app |
+| `website/assets/ScreenshotSemanticSearch.jpg` | 2026-11-01 | v2.0.0.dev.1 | features | regenerated | captured from the 2.0 Electron app |
 | `website/assets/ScreenshotSettings.jpg` | 2026-07-20 | v1.7.0rc5 | whatsnew | historical | only in What's New, beside the release it shows |
 | `website/assets/ScreenshotShare1.jpg` | 2026-05-15 | v1.2.0rc4 | features, whatsnew | regenerated | captured from the 2.0 Electron app |
 | `website/assets/ScreenshotShare2.jpg` | 2026-05-18 | v1.2.1 | whatsnew | historical | only in What's New, beside the release it shows |
