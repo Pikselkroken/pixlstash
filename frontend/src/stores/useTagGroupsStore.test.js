@@ -96,6 +96,15 @@ describe("the map", () => {
     expect(filters.tagRejectedFilter).toEqual(["__group:1"]);
   });
 
+  it("never asks in a read-only session, which cannot read the map", async () => {
+    isReadOnly.value = true;
+    const store = useTagGroupsStore();
+    await store.fetch();
+    await store.fetch({ force: true });
+    expect(getTagGroups).not.toHaveBeenCalled();
+    expect(store.hasGroups).toBe(false);
+  });
+
   it("does not ask again on every mount after a refusal", async () => {
     getTagGroups.mockRejectedValue(Object.assign(new Error("403"), { response: { status: 403 } }));
     const store = useTagGroupsStore();

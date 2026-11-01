@@ -218,10 +218,16 @@ def _cell_text(cell: ET.Element, shared: list[str]) -> str:
 
 def _row_values(row: ET.Element, shared: list[str]) -> list[str]:
     cells: dict[int, str] = {}
+    # ``r`` is optional in OOXML: a cell without it sits in the column after the
+    # previous cell, so the position is tracked and used when ``r`` is absent.
+    next_column = 0
     for cell in row:
         if _local(cell.tag) != "c":
             continue
-        cells[_column_index(cell.get("r", ""))] = _cell_text(cell, shared)
+        ref = cell.get("r")
+        column = _column_index(ref) if ref else next_column
+        cells[column] = _cell_text(cell, shared)
+        next_column = column + 1
     if not cells:
         return []
     width = max(cells) + 1

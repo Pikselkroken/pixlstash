@@ -132,9 +132,11 @@ export const useTagGroupsStore = defineStore("tagGroups", () => {
 
   /**
    * Read the map, unless it was read in the last 30 s. A read share session
-   * cannot read it (owner only): it stays empty, and the rail stays a list.
+   * cannot read it (owner only), so it never asks: the map stays empty and
+   * every surface stays as it is without groups.
    */
   async function fetch({ force = false } = {}) {
+    if (isReadOnly.value) return;
     if (!force) {
       if (fetchedAt && Date.now() - fetchedAt < STALE_MS) return;
       return inflight || startRead();

@@ -164,13 +164,9 @@ MANUAL_PLACEMENTS: dict[str, tuple[str, ...]] = {
         "bare pectorals",
         "bear tail",
         "belly button hair",
-        "bouncing breasts",
         "breast conscious",
         "breast envy",
-        "breast expansion",
         "breasts",
-        "breasts apart",
-        "buttocks",
         "cleavage",
         "flat chest",
         "foot",
@@ -221,7 +217,6 @@ MANUAL_PLACEMENTS: dict[str, tuple[str, ...]] = {
         "unaligned breasts",
         "upper body tattoo",
         "veiny breasts",
-        "bursting breasts",
     ),
     "Clothing": (
         "argyle legwear",
@@ -335,19 +330,13 @@ MANUAL_PLACEMENTS: dict[str, tuple[str, ...]] = {
         "high-leg swimsuit",
         "jacket removed",
         "off-shoulder",
-        "see-through",
-        "see-through swimsuit",
         "knee-high socks",
         "ribbon-trimmed legwear",
         "sarashi (cloth wrap)",
         "striped",
         "strap dress",
         "strap over shoulder",
-        "strap slipping",
         "shirt tied at waist",
-        "wearing only a bikini top",
-        "clothes lifted",
-        "shirt lifted",
         "ridiculous clothing",
     ),
     "Accessories": (
@@ -1073,6 +1062,11 @@ def build_groups(
                 problems.append(f"{raw!r} ({group}) is already {automatic[tag]!r}")
             elif tag in anomaly:
                 problems.append(f"{raw!r} ({group}) is an anomaly tag")
+            elif tag in NSFW_DROP or NSFW_WORDS.search(tag):
+                problems.append(
+                    f"{raw!r} ({group}) is dropped by the NSFW guard: remove it "
+                    "from MANUAL_PLACEMENTS or from the guard"
+                )
             else:
                 automatic[tag] = group
     if problems:

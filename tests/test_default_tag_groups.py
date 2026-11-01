@@ -350,13 +350,30 @@ def _groups() -> dict[str, list[str]]:
     return {group["name"]: group["tags"] for group in _load()["groups"]}
 
 
-def _nsfw_words():
+def _build_module():
     spec = importlib.util.spec_from_file_location(
         "build_default_tag_groups", BUILD_SCRIPT
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.NSFW_WORDS
+    return module
+
+
+def _nsfw_words():
+    return _build_module().NSFW_WORDS
+
+
+def test_no_manual_placement_is_one_the_nsfw_guard_drops():
+    # A placement the guard removes is dead: it reads as filed and never is.
+    build = _build_module()
+    dead = sorted(
+        tag
+        for tags in build.MANUAL_PLACEMENTS.values()
+        for tag in tags
+        if normalise_tag(tag) in build.NSFW_DROP
+        or build.NSFW_WORDS.search(normalise_tag(tag))
+    )
+    assert dead == []
 
 
 def test_json_parses_with_source_and_groups():

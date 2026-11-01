@@ -495,8 +495,13 @@ def load_default_tags(path: Optional[Path] = None) -> Optional[dict[str, Any]]:
     if not isinstance(version, int) or isinstance(version, bool):
         raise ValueError(f"{target} has no integer 'version'")
     groups: list[tuple[str, list[str]]] = []
-    for entry in raw.get("groups") or []:
-        name = str((entry or {}).get("name") or "").strip()
+    entries = raw.get("groups") or []
+    if not isinstance(entries, list):
+        raise ValueError(f"{target} has a 'groups' that is not a list")
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError(f"{target} has a group entry that is not an object")
+        name = str(entry.get("name") or "").strip()
         if not 1 <= len(name) <= NAME_MAX_LENGTH:
             raise ValueError(f"{target} has a group with no usable name")
         tags = [normalise_tag(t) for t in (entry.get("tags") or [])]

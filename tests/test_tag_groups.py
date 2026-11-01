@@ -1469,3 +1469,38 @@ def test_a_big_import_undoes_and_redoes_exactly(client, server, use_defaults):
     assert _provenance(server) == after
     assert client.post(f"{API}/operations/undo", json={}).status_code == 200
     assert _provenance(server) == before
+
+
+def test_cells_without_a_reference_take_the_next_column():
+    # `r` is optional in OOXML; a writer that omits it means "the next column".
+    sheet = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        "<sheetData>"
+        '<row><c t="inlineStr"><is><t>english</t></is></c>'
+        '<c t="inlineStr"><is><t>category</t></is></c></row>'
+        '<row><c t="inlineStr"><is><t>long hair</t></is></c>'
+        '<c r="C2" t="inlineStr"><is><t>skipped b</t></is></c>'
+        '<c t="inlineStr"><is><t>after c</t></is></c></row>'
+        "</sheetData></worksheet>"
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("xl/worksheets/sheet1.xml", sheet)
+    rows = list(xlsx_reader.iter_first_sheet_rows(buf.getvalue()))
+    assert rows == [
+        ["english", "category"],
+        ["long hair", "", "skipped b", "after c"],
+    ]
+
+
+@pytest.mark.parametrize(
+    "groups", [["a string, not an object"], [None], {"name": "not a list"}]
+)
+def test_a_defaults_file_with_a_malformed_group_entry_is_a_value_error(
+    tmp_path, groups
+):
+    path = tmp_path / "defaults.json"
+    path.write_text(json.dumps({"version": 1, "groups": groups}), encoding="utf-8")
+    with pytest.raises(ValueError):
+        tag_group_service.load_default_tags(path)
