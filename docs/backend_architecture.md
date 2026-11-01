@@ -11949,7 +11949,7 @@ from the lease, and a cancel or a shutdown simply stops the probe. The probe is
 the run's own config with `PROBE_STEPS` (6) updates at the largest bucket only,
 no "before" sample, one save and one preview (the first prompt) at the end,
 written under `<work dir>/probe` and polled every second. One preview peaks and
-takes as long as the rest, and every further one cost a whole preview before
+takes as long as the rest, and every further one costs a whole preview before
 the run (a minute each on Krea 2). The probe and each after-training
 preview pass write their trainer's pid on the run row as the main trainer does,
 and a pass stops a trainer that row names (when `psutil` says its command line

@@ -54,7 +54,7 @@ _DOWNLOAD_RE = re.compile(
     r"|\.(?:safetensors|bin|gguf|pth?)\S*:\s+\d+%",
     re.I,
 )
-_DOWNLOAD_DONE_RE = re.compile(r"complete|100%")
+_DOWNLOAD_DONE_RE = re.compile(r"\bcomplete\b|100%", re.I)
 # Enough of the log's end to hold its last progress line.
 _DOWNLOAD_TAIL_BYTES = 2048
 

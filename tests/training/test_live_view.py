@@ -260,6 +260,7 @@ def test_a_malformed_step_time_is_skipped_not_fatal(tmp_path):
         ("Loading transformer\n\rDownloading bytes: ##  | 1.2GB, 30MB/s", True),
         ("x: reconstructing file:  17%|#7  | 2.1GB / 12.3GB", True),
         ("Fetching 3 files:  33%|###3      | 1/3 [01:55<03:50]", True),
+        ("Reconstructing (incomplete total...):   0%|  0.00B / 8.04GB", True),
         ("model-00001-of-00002.safetensors:  45%|####5  | 2.2G/4.9G", True),
         # Done fetching, or never fetching.
         ("\rDownloading bytes: ##########| 6.97GB\rDownload complete: : 6.97GB", False),
