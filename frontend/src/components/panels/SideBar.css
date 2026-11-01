@@ -1299,6 +1299,17 @@
   line-height: 1;
 }
 
+/* The All of <project> row's mark: the tile alone, at the places' glyph size. */
+.sidebar-project-tile--mark {
+  width: var(--gutter-glyph);
+  height: var(--gutter-glyph);
+}
+
+/* First under the dropdown, 8px below it, like a section head would be. */
+.sidebar-all-of-scope {
+  margin-top: var(--space-3);
+}
+
 /* Context kept while finding: the name steps back, the match stays bright. */
 .sidebar-row--dim .sidebar-list-label-text {
   color: rgba(var(--v-theme-sidebar-text), var(--opacity-text-secondary));
