@@ -1,3 +1,197 @@
+# [1.13.1] [Security:High]
+
+- Fixed: a link saved to a project's files must now be an http or https
+  address. Other kinds of link could run script in the session of whoever
+  clicked them, share-link viewers included, and old ones are no longer
+  opened. Please update.
+- Fixed: share-link tokens are no longer written to the server log. Logs
+  written by earlier versions still hold them, so if you have passed a log on,
+  delete its share tokens in Settings › Account and share again.
+- Fixed: the desktop app now checks that it is talking to the backend it
+  started before signing in, refuses web permissions such as camera and
+  location, and lets only the PixlStash window use its desktop features.
+- Fixed: watched folders and the workflow inbox could stop noticing new
+  files after a library snapshot, until PixlStash was restarted.
+- Fixed: the window could go black after switching library, and stay black
+  until PixlStash was restarted.
+- Updated the web UI's HTTP library and its build tools for upstream security
+  advisories.
+
+# [1.13.0]
+
+- Favourites for models, workflow sets and workflows. Click the heart on a
+  shelf row, a set card or a workflow card, or press H, and it leads its group
+  everywhere you choose from a list: the shelf, the set grid, the Workflows
+  view, the slot pickers and the Run popup. Show › Favourites only narrows to
+  them, and Sort › Favourites first can be turned off.
+- A workflow's version menu now lets you duplicate an earlier version or open
+  it in ComfyUI without going back to it. Pick an older version to choose
+  *Go back to this version*, *Duplicate* or *Open in ComfyUI*.
+- Every workflow can now upscale. The Run popup's Stages list has an Upscale
+  row even when the workflow has no upscale of its own: tick it, pick 1.5×, 2×
+  or 4× and an upscale model from your shelf (or a plain resize), and that run
+  comes out bigger. The workflow itself is not changed.
+- Upscale… on the selection bar and in the lightbox upscales the pictures you
+  pick after a run, with the same factor and model, and stacks each result on
+  top of its original. It warns when a picture was already upscaled.
+- When a run finishes its pictures are marked New, so you can pick the keepers.
+- Workflow sets now follow their checkpoint. A set you make on a checkpoint
+  holds every model the pictures made with it used, and a model new pictures
+  start using joins it by itself, marked New. Your own additions and removals
+  stay on top: a model you remove stays out, and Reset to automatic undoes your
+  changes. The badge reads Automatic until you change something, then Custom.
+- Sets you already have grow on upgrade: models their checkpoint's pictures
+  used that you never added join them, marked New. A model you had answered
+  "Stop asking" for is shown as removed, with Restore. The "Add to set"
+  question about models your pictures used is gone, since those now join by
+  themselves; a ComfyUI template still suggests the files it loads.
+- Fixed: a checkpoint no longer shows up twice on the Workflow set grid. While
+  you have a set on a checkpoint, the automatic card for it is gone.
+- Sets on the same checkpoint can be merged from the set's menu or the
+  selection pill. Merge keeps every model either set held, and Undo brings
+  both back.
+- Fixed: a model downloaded into one of your model folders after it was last
+  scanned no longer has to wait for a rescan. When the Workflow tab or the Run
+  window finds it missing, PixlStash looks in your model folders and adds it to
+  your shelf, with a short "Found in your model folders" note while it does.
+- A workflow set holding a checkpoint from one of ComfyUI's templates now
+  suggests the rest of that template's files: the ones on your shelf to add,
+  and a download link for the ones that are not.
+- The New workflow set picker marks templates that need custom nodes.
+- Workflows has a Templates tab beside your own workflows: every workflow
+  template your ComfyUI serves, its own and those of your custom-node packs,
+  with what each one would download and which of those files you already
+  have. Add one, or several at once, to your workflows. Most run straight
+  away; one PixlStash cannot read yet becomes a draft that you finish by
+  opening it in ComfyUI and saving it there. With ComfyUI not running, the
+  tab still lists ComfyUI's own templates from a copy PixlStash ships; one
+  added then is a draft you finish the same way once ComfyUI is running.
+- New workflow set on the Model shelf now opens a list of ComfyUI's workflow
+  templates. The ones whose files are all on your shelf come first, and one
+  press makes their set. A template a set already covers opens that set
+  instead, and Make your own still gives you an empty one.
+- When a download completes a template's files, PixlStash says so and offers
+  to make its workflow set.
+- Updated Pillow, the library PixlStash reads pictures with, to 13.0.0 for
+  upstream security fixes in its JPEG, TIFF and GIF readers: a crafted picture
+  could crash PixlStash or corrupt its memory when imported. Please update.
+- More ComfyUI workflows open as runnable instead of as drafts, and more
+  pictures saved without an API graph can be run again: PixlStash now reads
+  the deprecated Primitive node, seed controls, colour and bounding-box
+  widgets, and the extra buttons and previews ComfyUI and some node packs add
+  to their nodes.
+- The Tasks tab lists the runs that finished, one line each, with how many
+  pictures each made. Open one to see its pictures and when it ran. A run
+  that changed something from its workflow says so, and that is where you
+  save those changes or dismiss them. The list survives a restart, and Clear
+  empties it without throwing away changes you have not saved yet.
+- When a workflow needs ComfyUI-Inpaint-CropAndStitch, which the built-in
+  inpaint workflows use, PixlStash offers to have ComfyUI-Manager install it
+  and restart ComfyUI: in the Run popup, Make More and the lightbox Edit tab.
+- Fixed: installing the PixlStash nodes now restarts ComfyUI with
+  ComfyUI-Manager 3.40 and later, instead of asking you to restart it
+  yourself, and never restarts a ComfyUI that is running or has queued a job.
+- The lightbox Edit tab now lists edit workflows that are only missing
+  models, marked with a warning. Choose one to see which files are missing
+  and download them from there; Run turns on once they arrive.
+- The Workflow tab no longer swaps in a different precision of a missing model
+  (a `bf16` file for an `fp8mixed` one) as its automatic fix, and no longer
+  makes that fix for a missing model you can download or are downloading.
+  When a download lands, a stand-in the tab picked for that file is dropped.
+- A model PixlStash is still downloading can already go into a workflow set or
+  a workflow: it is offered in a set slot's picker and in a workflow's model
+  pickers, marked with a small animated download icon. A run that needs it is
+  refused, saying it is still downloading, until the download has finished.
+- Two inpainting workflows ship built in, for the Edit tab's Paint tools:
+  Inpaint-Qwen-Image-Edit-2511 and Inpaint-Flux2-Klein-9B. Each edits
+  only the area you select, at the model's own resolution, and blends it back
+  into the untouched picture. They need the ComfyUI-Inpaint-CropAndStitch
+  node pack; PixlStash offers to download any model you are missing.
+- A third built-in inpainting workflow, Inpaint-Qwen-Image-2.1, runs
+  Qwen-Image-2.1, Qwen's newest edit model, on smaller files than Qwen Image
+  Edit 2511.
+- The picture viewer's side panel has a Tasks tab, so a run started from its
+  Edit tab can be followed, stopped or read back without closing the picture.
+- A missing model in the Workflow tab now says it in two short lines: that the
+  model is not in ComfyUI (or PixlStash, for a checkpoint), and that you can
+  download it or pick a replacement. Why the list may hold every checkpoint is
+  a tooltip on the help mark.
+- The Workflow tab's picker for a missing checkpoint now lists every checkpoint
+  the workflow can load, sorted under *Likely to work*, *Might work*, *Not
+  known* and *Unlikely to work* by its base model, with that base model on each
+  row. The group's mark stays beside your pick, with a line saying what it
+  means. A missing VAE or text encoder is sorted the same way, by what has run
+  with the checkpoint.
+- A model a workflow is missing can now be downloaded from inside PixlStash
+  when ComfyUI's template list knows where to get it: press the download icon
+  beside its name in the Workflow tab or in Run's refusal. A LoRA the run
+  would leave out gets the same offer, on its row in the Workflow tab and in
+  Run's notice. So does a missing file before you have added its template: in
+  the Templates tab's inspector, in a set's "Not on your shelf" line, and in
+  the New workflow set picker. The Tasks tab shows its progress and can cancel
+  it. Downloads land in the Download folder under Settings › Models, which is
+  your default folder until you pick another.
+- The lightbox's Edit tab has Paint tools: mark where the edit goes with a
+  rectangle, ellipse, lasso, brush, eraser or colour wand (drag on from the
+  click to widen or narrow it, as in GIMP), then grow, feather or fill the
+  holes in the selection, which start at values suited to the picture's size.
+  A selection picks an inpaint workflow, which changes only what is marked,
+  "How to write it" says how to word the prompt for an edit or an inpaint,
+  and the result can be compared with the original on a before/after slider.
+- Crop a picture from the Edit tab, to a square on the face, 3:4, the nearest
+  training bucket or a frame you drag. The crop is a new picture in the
+  original's stack and needs no ComfyUI.
+- "Edit with ComfyUI…" in the grid's menus is now "Edit…". It opens the
+  lightbox on the Edit tab, and with several pictures selected the edit can be
+  applied to all of them.
+- Compare any two pictures: select two in the grid and choose Compare, or
+  right-click (or Ctrl-click) a second picture in the lightbox filmstrip and
+  choose Compare. One
+  is laid over the other with a slider; the pill at the bottom, or the
+  Before and After tags, leave onto either picture.
+- Drop a model file on a folder in the Models screen's folder view and it is
+  added to that folder instead of the default one. Drop it on a workflow card
+  and it goes beside that workflow's models; if those live somewhere other than
+  your default folder, PixlStash asks which folder to use.
+- ComfyUI workflows with LTX-2 nodes, saved from the editor rather than in API
+  format, now convert and run: PixlStash used to misread the audio latent's
+  frame rate and refuse the whole workflow.
+- ComfyUI runs wait for GPU memory instead of running out of it. A run that
+  does not fit waits in the Tasks tab under "Waiting for the GPU", saying what
+  it needs, what is free and who holds the rest, and starts by itself once
+  there is room. You can start it anyway or cancel it.
+- The Tasks tab shows a memory bar for each GPU: what PixlStash, ComfyUI and
+  other apps hold, and what is free. PixlStash's own work is one folded
+  "PixlStash processing" row.
+- PixlStash learns how much memory each workflow needs from its runs, at the
+  image size each run worked on, so one run on a very large picture does not
+  hold back the small ones after it. The workflow card shows it, and the
+  Workflow tab shows the measured runs, a Reset that forgets them, and a
+  "Run alone" switch. A workflow whose last 3 runs all ran out of memory runs
+  alone from then on, with a notice that can turn it off; you can turn that
+  off altogether in Settings › Compute.
+- PixlStash steps aside for ComfyUI: it pauses its own GPU work and unloads its
+  models when a run needs the room, and nothing it was doing is lost.
+- Settings › Compute lets you pick which GPU PixlStash uses on a machine with
+  more than one. Auto picks a spare GPU that ComfyUI is not using.
+- Fixed: starting PixlStash next to a ComfyUI that had a model loaded could
+  switch it to the CPU for the whole session, or refuse to start when the GPU
+  was chosen explicitly.
+- Fixed: the "GPU ran out of memory" notice now names the other program
+  holding the card where the system can tell.
+- Right-click a template on the Workflows screen's Templates tab for a menu
+  with Add to my workflows and Download missing models. Your own workflows'
+  card menu has Download missing models too: it fetches every model the
+  selected workflows lack that PixlStash knows where to get.
+- A workflow card can show a picture of your own choosing: right-click it and
+  pick *Choose thumbnail…*. It stays on the card over the pictures you make
+  with it until you pick *Show generated pictures*. A workflow added from a
+  ComfyUI template starts out with the template's picture, which your own
+  pictures replace once you run it.
+- Drop a workflow `.json` file onto the Workflows view to add it, the same as
+  Add…. Several files at once work too, and a picture dropped alongside still
+  goes into the library.
+
 # [1.12.2] [Security:High]
 
 - Updated Pillow, the library PixlStash reads pictures with, to 13.0.0 for
