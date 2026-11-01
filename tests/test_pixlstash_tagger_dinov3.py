@@ -126,5 +126,6 @@ def test_gradcam_runs_on_a_non_square_token_grid(model_dir, monkeypatch):
     monkeypatch.setattr(service, "_get_transform", lambda size: non_square)
     cam = service._compute_gradcam(Image.new("RGB", (120, 70), (200, 90, 40)), 0)
     assert cam.shape == (64, 64)
-    assert float(cam.min()) >= 0.0 and float(cam.max()) <= 1.0
+    # Normalised to its peak, so a dead hook (an all-zero map) fails here.
+    assert float(cam.min()) == 0.0 and float(cam.max()) == pytest.approx(1.0)
     assert service._model.classifier[2].weight.grad is None  # zeroed afterwards

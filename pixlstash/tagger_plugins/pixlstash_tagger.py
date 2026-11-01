@@ -404,10 +404,12 @@ class PixlStashTaggerService:
         # load the state dict (now a consistent dtype), then promote to FP16
         # on an accelerator.  CPU always stays FP32.
         #
-        # On CUDA fp16 buys speed. On MPS it buys *headroom* - measured
-        # tag-identical to fp32 and to the CPU, no measurable speed change, and
-        # ~45 % less device memory at the same batch - which on unified memory
-        # is the thing that keeps a batch from taking the machine with it.
+        # On CUDA fp16 buys speed. On MPS it buys *headroom* - on the ConvNeXt
+        # tagger it measured tag-identical to fp32 and to the CPU, no
+        # measurable speed change, and ~45 % less device memory at the same
+        # batch - which on unified memory is the thing that keeps a batch from
+        # taking the machine with it. The DINOv3 ViT is tag-identical in fp16
+        # on CUDA; its MPS parity is not yet measured.
         self._model.float()
         self._model.load_state_dict(state_dict)
         self._model.to(self._device)
@@ -507,6 +509,7 @@ class PixlStashTaggerService:
         """
         with self._load_lock:
             self._model = None
+            self._arch = None
             self._labels = None
             self._label_to_idx = None
             self._transform = None
@@ -997,9 +1000,9 @@ class PixlStashTaggerService:
         Hooks the last ConvNeXt stage (or, for the DINOv3 ViT, its final
         layernorm, whose patch tokens are reshaped to a grid), runs one
         forward+backward pass at the full image size, and resizes the
-        class-activation map to the input resolution. The shared model is temporarily upcast to fp32 (CUDA keeps
-        it in fp16 for the hot path, which produces NaN gradients) and restored
-        to its original dtype in ``finally`` so the hot tagging path is
+        class-activation map to the input resolution. The shared model is
+        temporarily upcast to fp32 (CUDA keeps it in fp16 for the hot path,
+        which produces NaN gradients) and restored to its original dtype in ``finally`` so the hot tagging path is
         unaffected.
         """
         import torch.nn.functional as F
@@ -1162,7 +1165,7 @@ class PixlStashTaggerPlugin(TaggerPlugin):
     models: list[dict[str, str]] = [
         {
             "name": "PersonalJeebus/pixlvault-anomaly-tagger",
-            "license": "DINOv3 License (per LICENSE.md in the repo)",
+            "license": "DINOv3 License (LICENSE.md in the model repo)",
         },
     ]
     supports_tags: bool = True
