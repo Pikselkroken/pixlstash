@@ -79,7 +79,7 @@ RUN pip install --no-cache-dir \
     "bcrypt<4.0.0" \
     nvidia-ml-py \
     piexif \
-    watchdog \
+    "watchdog<7" \
     psutil \
     python-dotenv \
     click \
