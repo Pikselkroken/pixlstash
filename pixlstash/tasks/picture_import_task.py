@@ -71,6 +71,9 @@ class PictureImportTask(BaseTask):
         _staging_dir: Absolute path of the staging directory to remove when done.
         _origin_client_id: The originating tab's client id (for origin-stamped
             WebSocket events), or ``None`` for an external caller.
+        outcomes: Per-file outcomes in the order they were decided, read live
+            by the staging status route so the grid can mark each arriving
+            tile (#2512). Append-only while the task runs.
     """
 
     def __init__(
@@ -131,6 +134,7 @@ class PictureImportTask(BaseTask):
         # Live progress, read by Vault.get_worker_progress for the task manager.
         self._total_count = len(staged_files)
         self._processed_count = 0
+        self.outcomes: list[dict] = []
         self._stop_event = threading.Event()
 
     @property
@@ -141,6 +145,25 @@ class PictureImportTask(BaseTask):
 
     def on_cancel(self) -> None:
         self._stop_event.set()
+
+    def _record_outcome(
+        self, entry: dict, outcome: str, picture_id: Optional[int] = None
+    ) -> None:
+        """Note one staged file's outcome for the live status (#2512).
+
+        Args:
+            entry: The staged entry; its ``client_key`` names the file to the
+                client that streamed it.
+            outcome: ``new``, ``duplicate``, ``scrapheaped`` or ``failed``.
+            picture_id: The picture a duplicate or scrapheaped file matched.
+        """
+        self.outcomes.append(
+            {
+                "key": entry.get("client_key"),
+                "outcome": outcome,
+                "picture_id": picture_id,
+            }
+        )
 
     def _run_task(self):
         new_pictures: list[Picture] = []
@@ -205,6 +228,7 @@ class PictureImportTask(BaseTask):
                     self._staging_id,
                 )
                 failed_count += 1
+                self._record_outcome(entry, "failed")
                 self._processed_count += 1
                 continue
 
@@ -221,6 +245,7 @@ class PictureImportTask(BaseTask):
                     exc,
                 )
                 failed_count += 1
+                self._record_outcome(entry, "failed")
                 self._processed_count += 1
                 continue
 
@@ -260,6 +285,7 @@ class PictureImportTask(BaseTask):
                 if match.id not in seen_scrapheaped_ids:
                     seen_scrapheaped_ids.add(match.id)
                     scrapheaped_picture_ids.append(match.id)
+                self._record_outcome(entry, "scrapheaped", match.id)
                 self._processed_count += 1
                 continue
             intra_batch_key = (size_bytes, full_sha)
@@ -271,6 +297,9 @@ class PictureImportTask(BaseTask):
                     file_path,
                 )
                 duplicate_count += 1
+                self._record_outcome(
+                    entry, "duplicate", match.id if match is not None else None
+                )
                 self._processed_count += 1
                 continue
 
@@ -289,6 +318,7 @@ class PictureImportTask(BaseTask):
                     pic.original_file_name = original_file_name
                 new_pictures.append(pic)
                 seen_fingerprints.add(intra_batch_key)
+                self._record_outcome(entry, "new")
             except Exception as exc:
                 logger.warning(
                     "PictureImportTask: failed to ingest staged file %s "
@@ -298,6 +328,7 @@ class PictureImportTask(BaseTask):
                     exc,
                 )
                 failed_count += 1
+                self._record_outcome(entry, "failed")
             finally:
                 self._processed_count += 1
 

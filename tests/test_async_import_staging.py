@@ -151,7 +151,12 @@ def test_staging_import_happy_path(owner_server):
 
 
 def test_staging_import_dedupes_identical_files(owner_server):
-    """Two byte-identical staged files import once; the second is a duplicate."""
+    """Two byte-identical staged files import once; the second is a duplicate.
+
+    Each file is streamed with the client's own ``key``, and the status names
+    every file's outcome by that key (#2512), so the grid can mark the tile
+    that turned out to be a duplicate rather than report a total at the end.
+    """
     _srv, client = owner_server
     data = _png_bytes(color=(10, 200, 30))
 
@@ -164,6 +169,7 @@ def test_staging_import_dedupes_identical_files(owner_server):
             ("file", ("a.png", data, "image/png")),
             ("file", ("b.png", data, "image/png")),
         ],
+        data={"key": ["tile-a", "tile-b"]},
     )
     assert r.status_code == 200, r.text
     assert r.json()["staged"] == 2
@@ -174,6 +180,36 @@ def test_staging_import_dedupes_identical_files(owner_server):
     status = _wait_for_stage(client, staging_id, target=("completed",))
     assert status["imported_count"] == 1, status
     assert status["duplicate_count"] == 1, status
+    assert status["outcomes"] == [
+        {"key": "tile-a", "outcome": "new", "picture_id": None},
+        {"key": "tile-b", "outcome": "duplicate", "picture_id": None},
+    ], status
+
+    # The caller asks only for what it has not seen yet.
+    r = client.get(
+        f"{API}/pictures/import/staging/{staging_id}/status",
+        params={"outcomes_from": 1},
+    )
+    assert r.status_code == 200, r.text
+    assert [o["key"] for o in r.json()["outcomes"]] == ["tile-b"]
+
+    # A second import of the same content is a duplicate OF that picture, and
+    # says which one, so the tile can link to it.
+    picture_id = _only_picture_id(_srv)
+    r = client.post(f"{API}/pictures/import/staging", json={})
+    again_id = r.json()["staging_id"]
+    r = client.post(
+        f"{API}/pictures/import/staging/{again_id}/files",
+        files=[("file", ("c.png", data, "image/png"))],
+        data={"key": ["tile-c"]},
+    )
+    assert r.status_code == 200, r.text
+    r = client.post(f"{API}/pictures/import/staging/{again_id}/commit")
+    assert r.status_code == 200, r.text
+    status = _wait_for_stage(client, again_id, target=("completed",))
+    assert status["outcomes"] == [
+        {"key": "tile-c", "outcome": "duplicate", "picture_id": picture_id},
+    ], status
 
     imported = _srv.vault.db.run_task(lambda s: s.query(Picture).count())
     assert imported == 1
