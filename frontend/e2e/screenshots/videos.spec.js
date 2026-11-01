@@ -267,7 +267,7 @@ test.describe('Getting started videos', () => {
     await record(page, '06-Export', async () => {
       await glideClick(page, personRow(sidebar, 'Jimmy Carr'))
       await page.waitForTimeout(900)
-      await page.keyboard.press('Control+a')
+      await page.keyboard.press('ControlOrMeta+a')
       await page.waitForTimeout(500)
       await glideClick(page, page.locator('.tb-export-btn').first())
       await expect(page.locator('.tb-export-folder-btn')).toBeVisible()
