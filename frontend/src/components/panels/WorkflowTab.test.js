@@ -3251,12 +3251,19 @@ describe("Open in ComfyUI", () => {
       await vi.advanceTimersByTimeAsync(COMFYUI_RECHECK_MS);
       expect(getPixlstashNode).toHaveBeenCalledTimes(2);
 
+      // A failed ask of PixlStash itself does not end the asking.
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      getPixlstashNode.mockRejectedValueOnce(new Error("network down"));
+      await vi.advanceTimersByTimeAsync(COMFYUI_RECHECK_MS);
+      expect(getPixlstashNode).toHaveBeenCalledTimes(3);
+      expect(openButton(wrapper).attributes("aria-disabled")).toBe("true");
+
       getPixlstashNode.mockResolvedValue({ can_open_workflows: true });
       await vi.advanceTimersByTimeAsync(COMFYUI_RECHECK_MS);
       expect(openButton(wrapper).attributes("aria-disabled")).toBeUndefined();
       // Answered: no more asking.
       await vi.advanceTimersByTimeAsync(COMFYUI_RECHECK_MS * 3);
-      expect(getPixlstashNode).toHaveBeenCalledTimes(3);
+      expect(getPixlstashNode).toHaveBeenCalledTimes(4);
     } finally {
       vi.useRealTimers();
     }
