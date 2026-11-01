@@ -25,6 +25,12 @@ from pixlstash.auth import is_auth_excluded_path
 _LIMIT = 120  # max requests
 _WINDOW = 60  # per this many seconds
 
+# The built SPA bundle. One page load fetches well over ``_LIMIT`` of these, so
+# counting them let a library switch's reload exhaust the global bucket and
+# 429 the app's own JavaScript: a black window until the backend restarted.
+# They are static files that guard nothing, so they are never counted.
+_UNCOUNTED_PREFIXES: tuple[str, ...] = ("/assets/", "/scalar-assets/")
+
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """Global sliding-window rate limiter for unauthenticated routes.
@@ -59,7 +65,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         path = request.url.path
 
         is_public = is_auth_excluded_path(path)
-        if not is_public:
+        if not is_public or path.startswith(_UNCOUNTED_PREFIXES):
             return await call_next(request)
 
         limit = _LIMIT if self._limit is None else self._limit
