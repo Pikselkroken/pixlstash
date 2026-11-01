@@ -1,23 +1,14 @@
 # [1.13.1] [Security:High]
 
-- Fixed: a link saved to a project's files must now be an http or https
-  address. Other kinds of link could run script in the session of whoever
-  clicked them, share-link viewers included, and old ones are no longer
-  opened. Please update.
-- Fixed: read-only share-link tokens are no longer written to the server log.
-  Full-access tokens are never accepted in a link, so they were not affected.
-  Logs written by earlier versions still hold the read-only ones, so if you
-  have passed a log on, delete those share tokens in Settings › Account and
-  share again.
-- Fixed: the desktop app now checks that it is talking to the backend it
-  started before signing in, refuses web permissions such as camera and
-  location, and lets only the PixlStash window use its desktop features.
-- Fixed: watched folders and the workflow inbox could stop noticing new
-  files after a library snapshot, until PixlStash was restarted.
-- Fixed: the window could go black after switching library, and stay black
-  until PixlStash was restarted.
-- Updated the web UI's HTTP library and its build tools for upstream security
-  advisories.
+- Fixed: project links could run script for whoever clicked them. Only http(s)
+  links are accepted now. Please update.
+- Fixed: read-only share tokens were written to the server log. Delete any
+  share token whose log you have passed on.
+- Fixed: the desktop app trusted any local backend answering on its port, and
+  allowed web permissions and desktop features too widely.
+- Fixed: the window could go black after switching library.
+- Fixed: watched folders could stop noticing new files until a restart.
+- Updated dependencies for upstream security advisories.
 
 # [1.13.0]
 
