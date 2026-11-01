@@ -1,3 +1,49 @@
+# [1.13.1] [Security:High]
+
+- Fixed: project links could run script for whoever clicked them. Only http(s)
+  links are accepted now. Please update.
+- Fixed: read-only share tokens were written to the server log. Delete any
+  share token whose log you have passed on.
+- Fixed: the desktop app trusted any local backend answering on its port, and
+  allowed web permissions and desktop features too widely.
+- Fixed: the window could go black after switching library.
+- Fixed: watched folders could stop noticing new files until a restart.
+- Updated dependencies for upstream security advisories.
+
+# [1.13.0]
+
+## Editing pictures
+
+- Paint tools and inpainting in the lightbox Edit tab, with three built-in
+  inpaint workflows.
+- Crop pictures without ComfyUI.
+- Compare two pictures on a before/after slider.
+- Edit several selected pictures at once.
+
+## Workflows
+
+- Templates tab with every workflow template your ComfyUI serves.
+- Download missing models from inside PixlStash.
+- Upscale with any workflow, or upscale pictures you already have.
+- Favourites for models, workflow sets and workflows.
+- Workflow sets fill themselves from their checkpoint's pictures, and can be
+  merged.
+- Finished runs listed in the Tasks tab, also in the lightbox.
+- More ComfyUI workflows open ready to run, LTX-2 included.
+- Custom workflow thumbnails, and drag-and-drop of workflow `.json` files.
+
+## GPU
+
+- ComfyUI runs wait for free GPU memory instead of running out of it.
+- Per-GPU memory bars in the Tasks tab.
+- Choose which GPU PixlStash uses in Settings › Compute.
+
+## Fixes
+
+- Fixed: PixlStash could fall back to the CPU for the whole session when
+  started next to a ComfyUI with a model loaded.
+- Many other bug fixes.
+
 # [1.12.2] [Security:High]
 
 - Updated Pillow, the library PixlStash reads pictures with, to 13.0.0 for
