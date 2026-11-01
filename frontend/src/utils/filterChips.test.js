@@ -259,10 +259,17 @@ describe("filterChips: a group term reads as its words (#2469)", () => {
 
   it("names a group that is gone, or not loaded, without crashing", () => {
     const s = useFilterStore();
-    s.tagFilter = ["__group:9", "__group:x"];
+    s.tagFilter = ["__group:9"];
+    expect(chipText(s)).toEqual(["Has tag any tag in a group"]);
+  });
+
+  it("keeps a malformed term as the literal tag the server reads it as", () => {
+    const s = useFilterStore();
+    s.tagFilter = ["__group:x", "__group:", "__group:3a"];
     expect(chipText(s)).toEqual([
-      "Has tag any tag in a group",
-      "Has tag any tag in a group",
+      "Has tag __group:x",
+      "Has tag __group:",
+      "Has tag __group:3a",
     ]);
   });
 

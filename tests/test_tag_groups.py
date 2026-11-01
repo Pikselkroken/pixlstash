@@ -411,3 +411,36 @@ def test_one_batch_of_moves_on_the_same_tag_undoes_and_redoes_in_order(client, s
     redone = client.post(f"{API}/operations/redo")
     assert redone.status_code == 200, redone.text
     assert client.get(f"{API}/tag_groups").json()["tags"] == {}
+
+
+def test_a_group_term_of_any_length_never_fails(client, server):
+    meta = _create(client, "Meta")
+    _assign(client, ["grain-z"], meta)
+    pic = _upload(client)
+    _seed_tags(server, pic, ["grain-z"])
+
+    # Leading zeros name the same group; thousands of digits name none, and
+    # neither turns the listing into a 500 (int() caps digits on 3.11+).
+    padded = "__group:" + "0" * 5000 + str(meta)
+    assert _filter_ids(client, [pic], tag=padded) == [pic]
+    assert _filter_ids(client, [pic], tag="__group:" + "9" * 5000) == []
+    assert _filter_ids(client, [pic], rejected="__group:" + "9" * 5000) == [pic]
+
+
+def test_group_filtered_stats_follow_a_move_and_its_undo(client, server):
+    meta = _create(client, "Meta")
+    pic = _upload(client)
+    _seed_tags(server, pic, ["grain-s"])
+    params = {"tag": f"__group:{meta}"}
+
+    def stats():
+        resp = client.get(f"{API}/pictures/stats", params=params)
+        assert resp.status_code == 200, resp.text
+        return resp.json()
+
+    empty = stats()
+    _assign(client, ["grain-s"], meta)
+    filed = stats()
+    assert filed != empty, "a cached pre-move answer was served after the move"
+    assert client.post(f"{API}/operations/undo", json={}).status_code == 200
+    assert stats() == empty, "a cached post-move answer was served after the undo"

@@ -170,7 +170,9 @@ import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useProjectStore } from "../../stores/useProjectStore";
 import { formatKeyHint, undoKeyHint } from "../../utils/shortcutHints";
-import { API_BASE_URL } from "../../utils/apiClient";
+import { API_BASE_URL, isReadOnly } from "../../utils/apiClient";
+import { useOperationStore } from "../../stores/useOperationStore";
+import { useTagGroupsStore } from "../../stores/useTagGroupsStore";
 // Sidebar selection sentinels (mirrors useSelectionStore.js / App.vue).
 const ALL_PICTURES_ID = "ALL";
 const UNASSIGNED_PICTURES_ID = "UNASSIGNED";
@@ -190,6 +192,19 @@ const store = useReviewSessionsStore();
 const selectionStore = useSelectionStore();
 const projectStore = useProjectStore();
 const noticeStore = useNoticeStore();
+const operationStore = useOperationStore();
+const tagGroups = useTagGroupsStore();
+
+// The board's Groups view files tags, and a tag move is the app-wide stack's
+// (one library-wide operation, no review decision in it): there, Ctrl+Z,
+// Ctrl+Y and `U` act on that stack rather than saying there is nothing here.
+const onGroupsBoard = computed(
+  () =>
+    store.view.type === "board" &&
+    !archivedReview.value &&
+    !isReadOnly.value &&
+    tagGroups.boardView === "groups",
+);
 
 const sessionRef = ref(null);
 const boardRef = ref(null);
@@ -521,6 +536,10 @@ function handleUndoRequest() {
     closeZoom();
     return;
   }
+  if (onGroupsBoard.value) {
+    void operationStore.undo();
+    return;
+  }
   noticeStore.push({
     level: "info",
     text: "Nothing to undo here. Close the review sessions to undo earlier changes from the toolbar.",
@@ -535,6 +554,10 @@ function handleUndoRequest() {
  * app-wide redo behind the overlay.
  */
 function reportNoRedo() {
+  if (onGroupsBoard.value) {
+    void operationStore.redo();
+    return;
+  }
   noticeStore.push({
     level: "info",
     text: "Nothing to redo in this review. Answer the card again to reapply a decision you undid.",

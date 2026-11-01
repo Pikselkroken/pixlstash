@@ -36,6 +36,10 @@ import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useWsStore } from "../../stores/useWsStore";
 import { useInboxStore } from "../../stores/useInboxStore";
 import {
+  isGroupToken,
+  useTagGroupsStore,
+} from "../../stores/useTagGroupsStore";
+import {
   ALL_PICTURES_ID,
   SCRAPHEAP_PICTURES_ID,
 } from "../../stores/useViewStore";
@@ -44,6 +48,7 @@ import {
 // grid queries from straight from the stores, and writes filter changes back
 // itself. App.vue no longer mirrors any of it through props.
 const filterStore = useFilterStore();
+const tagGroups = useTagGroupsStore();
 const selectionStore = useSelectionStore();
 const projectStore = useProjectStore();
 const userPrefsStore = useUserPrefsStore();
@@ -491,7 +496,17 @@ async function fetchConf() {
 // over it tracks exactly the right dependencies. Unlike the old per-prop
 // watch list, it also doesn't refire when a store write leaves the resulting
 // query string identical.
-const statsQueryParams = computed(() => buildQueryParams());
+//
+// A group term (`__group:3`) reads the same while a move or its undo changes
+// which pictures it matches, so such a query also carries the map's revision.
+const statsQueryParams = computed(() => {
+  const qs = buildQueryParams();
+  const filters = [
+    ...(filterStore.tagFilter || []),
+    ...(filterStore.tagRejectedFilter || []),
+  ];
+  return filters.some(isGroupToken) ? `${qs}#groups=${tagGroups.revision}` : qs;
+});
 watch(
   statsQueryParams,
   () => {

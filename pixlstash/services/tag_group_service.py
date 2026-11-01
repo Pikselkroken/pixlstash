@@ -24,6 +24,7 @@ from pixlstash.services.operation_log_service import (
     RESTORE_UNDO,
     record_payload_operation_in_session,
 )
+from pixlstash.utils.sql_chunking import chunked
 
 logger = get_logger(__name__)
 
@@ -195,16 +196,23 @@ def assign_tags_in_session(
             destination = group.name
         names = _clean_tags(tags)
 
-        before: dict[str, Optional[int]] = {}
-        for name in names:
-            member = session.get(TagGroupMember, name)
-            before[name] = member.group_id if member is not None else None
+        # One bounded read per chunk, kept for both the undo record and the
+        # write, rather than two lookups per tag on the shared writer.
+        members: dict[str, TagGroupMember] = {}
+        for chunk in chunked(names):
+            for member in session.exec(
+                select(TagGroupMember).where(TagGroupMember.tag.in_(chunk))
+            ).all():
+                members[member.tag] = member
+        before: dict[str, Optional[int]] = {
+            name: members[name].group_id if name in members else None for name in names
+        }
         changed = [name for name in names if before[name] != group_id]
         if not changed:
             return read_map_in_session(session)
 
         for name in changed:
-            member = session.get(TagGroupMember, name)
+            member = members.get(name)
             if group_id is None:
                 if member is not None:
                     session.delete(member)

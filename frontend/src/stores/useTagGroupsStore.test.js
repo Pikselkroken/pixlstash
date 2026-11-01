@@ -125,6 +125,57 @@ describe("a library switch", () => {
   });
 });
 
+describe("forced reads and late answers", () => {
+  it("a forced read never joins a read that started before it was asked for", async () => {
+    let first;
+    getTagGroups.mockReturnValueOnce(new Promise((r) => (first = r)));
+    const store = useTagGroupsStore();
+    const early = store.fetch();
+    const after = { ...MAP, tags: { forest: 2 } };
+    getTagGroups.mockResolvedValueOnce(after);
+    const forced = store.fetch({ force: true });
+    first(MAP);
+    await early;
+    await forced;
+    expect(getTagGroups).toHaveBeenCalledTimes(2);
+    expect(store.groupFor("forest")?.name).toBe("Character");
+    expect(store.groupFor("red hood")).toBeNull();
+  });
+
+  it("a move answered after a library switch does not file anything in the new one", async () => {
+    let answer;
+    assignTagsToGroup.mockReturnValueOnce(new Promise((r) => (answer = r)));
+    const store = useTagGroupsStore();
+    const moved = store.moveTags(["forest"], 1);
+    resetHandlers.at(-1)();
+    answer(MAP);
+    expect(await moved).toBe(false);
+    expect(store.hasGroups).toBe(false);
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("a reorder refused after a library switch does not put the old groups back", async () => {
+    const store = useTagGroupsStore();
+    await store.fetch();
+    let refuse;
+    reorderTagGroups.mockReturnValueOnce(new Promise((_, r) => (refuse = r)));
+    const reordered = store.reorder([1, 2]);
+    resetHandlers.at(-1)();
+    refuse(new Error("gone"));
+    expect(await reordered).toBe(false);
+    expect(store.groups).toEqual([]);
+  });
+
+  it("bumps its revision when a move changes the map", async () => {
+    const store = useTagGroupsStore();
+    await store.fetch();
+    assignTagsToGroup.mockResolvedValue(MAP);
+    const before = store.revision;
+    await store.moveTags(["forest"], 2);
+    expect(store.revision).toBe(before + 1);
+  });
+});
+
 describe("view choices", () => {
   it("default to List and Health and are remembered", () => {
     const store = useTagGroupsStore();
@@ -148,5 +199,9 @@ describe("filter terms", () => {
     expect(groupToken(null)).toBe("__group:none");
     expect(isGroupToken("__group:3")).toBe(true);
     expect(isGroupToken("group:3")).toBe(false);
+    // The server reads these as literal tag names, so they are not groups.
+    expect(isGroupToken("__group:abc")).toBe(false);
+    expect(isGroupToken("__group:")).toBe(false);
+    expect(isGroupToken("__group:3 ")).toBe(false);
   });
 });

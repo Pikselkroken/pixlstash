@@ -36,6 +36,8 @@ vi.mock("../../api/tags", () => ({
 import StatsSidebar from "./StatsSidebar.vue";
 import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
+import { useFilterStore } from "../../stores/useFilterStore";
+import { useTagGroupsStore } from "../../stores/useTagGroupsStore";
 import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
 import { SCRAPHEAP_PICTURES_ID } from "../../stores/useViewStore";
 import { useSelectionTags } from "../../composables/useSelectionTags";
@@ -745,5 +747,29 @@ describe("the head's title", () => {
     expect(pictureTitle({ description: "Theatre seats" }, [], String).title).toBe(
       "Theatre seats",
     );
+  });
+});
+
+describe("stats narrowed by a tag group (#2469)", () => {
+  it("re-read when a move changes the group, and only when a group term is in the query", async () => {
+    const filters = useFilterStore();
+    const tagGroups = useTagGroupsStore();
+    const wrapper = mountRail();
+    await flush();
+
+    filters.tagFilter = ["hat"];
+    await flush();
+    const plain = getPictureStats.mock.calls.length;
+    tagGroups.refilterGroupTerms();
+    await flush();
+    expect(getPictureStats.mock.calls.length).toBe(plain);
+
+    filters.tagFilter = ["__group:3"];
+    await flush();
+    const grouped = getPictureStats.mock.calls.length;
+    tagGroups.refilterGroupTerms();
+    await flush();
+    expect(getPictureStats.mock.calls.length).toBeGreaterThan(grouped);
+    wrapper.unmount();
   });
 });

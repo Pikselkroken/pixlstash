@@ -40,9 +40,13 @@ export function groupToken(groupId) {
   return groupId == null ? UNGROUPED_TOKEN : `${GROUP_TOKEN_PREFIX}${groupId}`;
 }
 
+// What the server reads as a group: `none` or ASCII digits. Anything else
+// after the prefix (`__group:abc`) is a literal tag name there, so here too.
+const GROUP_TOKEN_RE = /^__group:(?:none|[0-9]+)$/;
+
 /** @returns {boolean} the filter value is a group term, not a tag. */
 export function isGroupToken(value) {
-  return String(value ?? "").startsWith(GROUP_TOKEN_PREFIX);
+  return GROUP_TOKEN_RE.test(String(value ?? ""));
 }
 
 const RAIL_VIEW_KEY = "pixlstash.railTags.view";
@@ -84,10 +88,20 @@ export const useTagGroupsStore = defineStore("tagGroups", () => {
   /** Tag name -> group id. A tag missing here is Ungrouped. */
   const groupOf = ref(new Map());
   const loaded = ref(false);
+  /**
+   * Bumped whenever a move or its undo changed which tags a group holds, so a
+   * view narrowed by a group term (the stats sidebar) knows to re-read.
+   */
+  const revision = ref(0);
   let fetchedAt = 0;
   let inflight = null;
-  // Bumped on a session reset: a read that started under the previous
-  // library must not fill the new one's map when it lands.
+  // Reads started, and the number of the one in flight: a forced read joins
+  // only a read that started after it was asked for.
+  let readsStarted = 0;
+  let inflightNo = 0;
+  // Bumped on a session reset. Every answer, error and rollback checks it: a
+  // request made under the previous library or credential must not touch the
+  // new one's map when it lands.
   let generation = 0;
 
   const hasGroups = computed(() => groups.value.length > 0);
@@ -108,10 +122,26 @@ export const useTagGroupsStore = defineStore("tagGroups", () => {
    * cannot read it (owner only): it stays empty, and the rail stays a list.
    */
   async function fetch({ force = false } = {}) {
-    if (!force && fetchedAt && Date.now() - fetchedAt < STALE_MS) return;
-    if (inflight) return inflight;
+    if (!force) {
+      if (fetchedAt && Date.now() - fetchedAt < STALE_MS) return;
+      return inflight || startRead();
+    }
+    // Forced (after an undo): a read already in flight may have started
+    // before the change committed, so wait it out and read again.
+    const askedAfter = readsStarted;
     const started = generation;
-    inflight = (async () => {
+    while (inflight && inflightNo <= askedAfter) {
+      await inflight;
+      if (started !== generation) return;
+    }
+    return inflight || startRead();
+  }
+
+  function startRead() {
+    const started = generation;
+    readsStarted += 1;
+    inflightNo = readsStarted;
+    const read = (async () => {
       try {
         const body = await getTagGroups();
         if (started !== generation) return;
@@ -125,9 +155,10 @@ export const useTagGroupsStore = defineStore("tagGroups", () => {
         }
       }
     })().finally(() => {
-      if (started === generation) inflight = null;
+      if (inflight === read) inflight = null;
     });
-    return inflight;
+    inflight = read;
+    return read;
   }
 
   /** @returns {Object|null} the group `tag` is filed under. */
@@ -149,6 +180,7 @@ export const useTagGroupsStore = defineStore("tagGroups", () => {
    * arrays so the grid re-reads. A grid with no group term is left alone.
    */
   function refilterGroupTerms() {
+    revision.value += 1;
     const filters = useFilterStore();
     if ((filters.tagFilter || []).some(isGroupToken)) {
       filters.tagFilter = [...filters.tagFilter];
@@ -174,11 +206,14 @@ export const useTagGroupsStore = defineStore("tagGroups", () => {
   async function createGroup(name) {
     const clean = String(name ?? "").trim();
     if (!clean || isReadOnly.value) return null;
+    const started = generation;
     try {
       const body = await createTagGroup(clean);
+      if (started !== generation) return null;
       apply(body);
       return body?.group ?? groups.value.find((g) => g.name === clean) ?? null;
     } catch (e) {
+      if (started !== generation) return null;
       report(`make the group “${clean}”`, e);
       return null;
     }
@@ -195,12 +230,16 @@ export const useTagGroupsStore = defineStore("tagGroups", () => {
     // Always sent, even when this copy says they are there already: it can be
     // 30 s old, and the server records nothing for a move that changes nothing.
     const target = groupId == null ? null : Number(groupId);
+    const started = generation;
     try {
-      apply(await assignTagsToGroup(names, target));
+      const body = await assignTagsToGroup(names, target);
+      if (started !== generation) return false;
+      apply(body);
       refilterGroupTerms();
       await useOperationStore().refresh();
       return true;
     } catch (e) {
+      if (started !== generation) return false;
       const what = names.length === 1 ? `“${names[0]}”` : `${names.length} tags`;
       report(`move ${what} to ${nameOf(target)}`, e);
       return false;
@@ -216,10 +255,14 @@ export const useTagGroupsStore = defineStore("tagGroups", () => {
     groups.value = [...before].sort(
       (a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0),
     );
+    const started = generation;
     try {
-      apply(await reorderTagGroups(ids.map(Number)));
+      const body = await reorderTagGroups(ids.map(Number));
+      if (started !== generation) return false;
+      apply(body);
       return true;
     } catch (e) {
+      if (started !== generation) return false;
       groups.value = before;
       report("reorder the tag groups", e);
       return false;
@@ -262,12 +305,14 @@ export const useTagGroupsStore = defineStore("tagGroups", () => {
     fetchedAt = 0;
     generation += 1;
     inflight = null;
+    revision.value += 1;
   });
 
   return {
     groups,
     groupOf,
     loaded,
+    revision,
     hasGroups,
     byId,
     fetch,

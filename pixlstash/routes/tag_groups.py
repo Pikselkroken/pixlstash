@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import operation_log_service, tag_group_service
 from pixlstash.services.tag_group_service import TagGroupError
+from pixlstash.utils.service.picture_stats import clear_stats_cache
 
 logger = get_logger(__name__)
 
@@ -118,12 +119,16 @@ def create_router(server) -> APIRouter:
         request: Request, payload: AssignTagGroupRequest
     ) -> dict[str, Any]:
         try:
-            return tag_group_service.assign_tags(
+            result = tag_group_service.assign_tags(
                 server.vault.db,
                 payload.tags,
                 payload.group_id,
                 request_context=operation_log_service.request_context(request),
             )
+            # Committed: a stats query narrowed by a group term now counts
+            # different pictures, and no picture event will clear it.
+            clear_stats_cache()
+            return result
         except TagGroupError as exc:
             raise _refuse(exc)
         except Exception:

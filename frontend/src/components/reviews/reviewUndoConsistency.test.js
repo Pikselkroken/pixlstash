@@ -36,6 +36,8 @@ import ReviewSessionsOverlay from "../views/ReviewSessionsOverlay.vue";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useOperationStore } from "../../stores/useOperationStore";
+import { useTagGroupsStore } from "../../stores/useTagGroupsStore";
 
 
 const VIcon = {
@@ -333,6 +335,44 @@ describe("ReviewSessionsOverlay - Ctrl+Z is no longer dead", () => {
       "Nothing to undo here",
     );
     w.unmount();
+  });
+
+  it("on the Groups board, sends the chords to the app-wide stack a tag move is on", async () => {
+    const notices = useNoticeStore();
+    const tagGroups = useTagGroupsStore();
+    tagGroups.setBoardView("groups");
+    const ops = useOperationStore();
+    const undo = vi.spyOn(ops, "undo").mockResolvedValue(null);
+    const redo = vi.spyOn(ops, "redo").mockResolvedValue(null);
+    try {
+      const w = mount(ReviewSessionsOverlay, overlayOpts);
+      await flushPromises();
+      expect(press("z", { ctrlKey: true }).defaultPrevented).toBe(true);
+      expect(press("y", { ctrlKey: true }).defaultPrevented).toBe(true);
+      expect(undo).toHaveBeenCalledTimes(1);
+      expect(redo).toHaveBeenCalledTimes(1);
+      expect(notices.notices.map((n) => n.text).join(" ")).not.toContain(
+        "Nothing to",
+      );
+      w.unmount();
+    } finally {
+      tagGroups.setBoardView("health");
+    }
+  });
+
+  it("keeps a review's own undo when a review is open over the Groups board", async () => {
+    const tagGroups = useTagGroupsStore();
+    tagGroups.setBoardView("groups");
+    const undo = vi.spyOn(useOperationStore(), "undo").mockResolvedValue(null);
+    try {
+      const { w } = await mountOverlayWithSession();
+      press("z", { ctrlKey: true });
+      expect(SessionStub.lastHandleKey).toHaveBeenCalledWith("undo");
+      expect(undo).not.toHaveBeenCalled();
+      w.unmount();
+    } finally {
+      tagGroups.setBoardView("health");
+    }
   });
 
   it("teaches both keys, and the scope, in the cheat-sheet", async () => {

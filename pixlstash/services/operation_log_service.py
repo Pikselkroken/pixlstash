@@ -99,6 +99,7 @@ from pixlstash.utils.service.smart_score_invalidation import (
     InteractiveRescoreRegistry,
     invalidate_on_anomaly_change,
 )
+from pixlstash.utils.service.picture_stats import clear_stats_cache
 from pixlstash.utils.service.scope_table import scope_id_subquery
 from pixlstash.utils.service.tag_prediction_utils import (
     recompute_anomaly_tag_uncertainty,
@@ -2435,6 +2436,11 @@ def _finish(
     vault: "Vault", members, touched, facets, lifecycle, origin_client_id
 ) -> dict:
     _emit(vault, touched, set(facets), origin_client_id, lifecycle)
+    # A restore of a non-picture operation (a tag-group move) announces no
+    # picture, so no event clears the stats cache, yet a stats query narrowed
+    # by a group term now counts different pictures. Runs after the commit.
+    if any(member.get("target_type") != TARGET_PICTURE for member in members):
+        clear_stats_cache()
     return {
         "operations": members,
         "picture_ids": touched,

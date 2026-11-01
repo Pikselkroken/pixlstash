@@ -238,7 +238,12 @@ def _group_term_id(term: str) -> Optional[int]:
     digits = term[len(GROUP_TERM_PREFIX) :]
     if not digits or not digits.isascii() or not digits.isdigit():
         return None
-    value = int(digits)
+    # Leading zeros name the same id; past 19 significant digits no 64-bit id
+    # fits, and int() of a few thousand digits raises on Python 3.11+.
+    significant = digits.lstrip("0") or "0"
+    if len(significant) > len(str(_SQLITE_MAX_INT)):
+        return -1
+    value = int(significant)
     return value if value <= _SQLITE_MAX_INT else -1
 
 
