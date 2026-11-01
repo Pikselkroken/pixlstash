@@ -2405,8 +2405,11 @@ own row.
   `GET /workflows/{id}/graph`. Without that node ComfyUI
   opens on whatever it had last, so the tab asks `GET /comfyui/pixlstash-node`
   once per address (the server reads ComfyUI's `/extensions` for the node's
-  `open_workflow.js`) and refuses the button with a reason on a definite no;
-  an unreachable ComfyUI leaves it to try. The reason links `ComfyUI-PixlStash`
+  `open_workflow.js`) and refuses the button with a reason on a definite no.
+  A ComfyUI the server cannot reach (all `null`) refuses it too, *ComfyUI is
+  not running at <address>*, and is asked again every 5 s until it answers
+  and on window focus, so starting ComfyUI wakes the button where it is; a
+  failed ask of PixlStash itself leaves it to try. The reason links `ComfyUI-PixlStash`
   to the pack's repo (`PIXLSTASH_PACK_URL`), an `https:` `target="_blank"` link
   the desktop shell hands to the OS browser. In a browser it is a synchronous `window.open`
   (one after an await is a blocked popup). **On the desktop it goes through
@@ -2467,7 +2470,7 @@ own row.
   mounts, and again if the address arrives or changes while it is open), and on
   `opens_runs: false` (no `open_run.js` in ComfyUI's extensions) the button is
   `aria-disabled` with the reason as its tooltip; an invalid seed refuses it
-  the same way, and a ComfyUI that cannot be asked leaves it to try. It is
+  the same way, and so does a ComfyUI that is not running, as on the tab. It is
   natively disabled where *Save as recipe* is (no workflow, a form still being
   read, a run or a save out). **In a browser the tab is opened before the
   request and sent on after it** (`window.open("", "_blank")`, `opener = null`,

@@ -88,7 +88,10 @@
           :versions="shownVersions?.versions ?? null"
           :failed="versionsFailed"
           :can-open-comfyui="
-            canOpenComfyui && !comfyuiLacksNode && !comfyuiOpensNoRuns
+            canOpenComfyui &&
+            !comfyuiLacksNode &&
+            !comfyuiOpensNoRuns &&
+            !comfyuiDown
           "
           @open="reopenVersions"
           @go-back="goBack"
@@ -1101,7 +1104,7 @@
           icon-only
           :tooltip="comfyuiOpensACopy ? 'Open a copy in ComfyUI' : 'Open in ComfyUI'"
           data-testid="wftab-open-comfyui"
-          :aria-disabled="runTarget && !comfyuiLacksNode ? undefined : 'true'"
+          :aria-disabled="runTarget && !comfyuiLacksNode && !comfyuiDown ? undefined : 'true'"
           :aria-describedby="openDescribedBy"
           @click="openInComfyui()"
         >
@@ -1131,7 +1134,7 @@
                    queued there comes back. This opens it with its own nodes.
                    Offered only where the button beside it would open. -->
               <button
-                v-if="canOpenComfyui && runTarget && !comfyuiLacksNode"
+                v-if="canOpenComfyui && runTarget && !comfyuiLacksNode && !comfyuiDown"
                 class="wftab-item"
                 type="button"
                 data-testid="wftab-open-original"
@@ -1155,6 +1158,13 @@
           class="wftab-note wftab-quiet"
         >
           Open one workflow at a time
+        </p>
+        <p
+          v-else-if="comfyuiDown && canOpenComfyui"
+          id="wftab-open-down-reason"
+          class="wftab-note wftab-quiet"
+        >
+          {{ comfyuiDownReason }}.
         </p>
         <p
           v-else-if="comfyuiLacksNode && canOpenComfyui"
@@ -1398,6 +1408,8 @@ const {
   comfyuiLacksNode,
   comfyuiOpensACopy,
   comfyuiOpensNoRuns,
+  comfyuiDown,
+  comfyuiDownReason,
 } = useComfyuiOpen();
 const runDialog = useRunDialogStore();
 const tasksStore = useTasksStore();
@@ -4452,6 +4464,7 @@ const runDescribedBy = computed(() => {
 /** What Open in ComfyUI is described by: why it refuses, or what it opens. */
 const openDescribedBy = computed(() => {
   if (multiple.value) return "wftab-open-reason";
+  if (comfyuiDown.value) return "wftab-open-down-reason";
   if (comfyuiLacksNode.value) return "wftab-open-node-reason";
   return changeCount.value ? "wftab-open-unsaved" : undefined;
 });
@@ -4489,7 +4502,7 @@ function run() {
  */
 function openInComfyui(original = false) {
   const target = runTarget.value;
-  if (!target || comfyuiLacksNode.value) return;
+  if (!target || comfyuiLacksNode.value || comfyuiDown.value) return;
   openWorkflowInComfyui(target.id, original);
 }
 

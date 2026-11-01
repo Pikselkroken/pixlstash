@@ -390,13 +390,19 @@ const runTitle = computed(() => {
 // *Open in ComfyUI*, the Workflow tab's two open verbs under one row. Absent
 // with no ComfyUI to open, as the tab's button is; refused for several cards,
 // or a ComfyUI without the node that loads the link.
-const { canOpenComfyui, comfyuiLacksNode, comfyuiOpensACopy } =
-  useComfyuiOpen();
+const {
+  canOpenComfyui,
+  comfyuiLacksNode,
+  comfyuiOpensACopy,
+  comfyuiDown,
+  comfyuiDownReason,
+} = useComfyuiOpen();
 const comfyuiOpenable = computed(
-  () => runnable.value && !comfyuiLacksNode.value,
+  () => runnable.value && !comfyuiLacksNode.value && !comfyuiDown.value,
 );
 const comfyuiTitle = computed(() => {
   if (!runnable.value) return "Select one workflow to open it in ComfyUI";
+  if (comfyuiDown.value) return comfyuiDownReason.value;
   if (comfyuiLacksNode.value) {
     return (
       "Opening a workflow needs the ComfyUI-PixlStash node in ComfyUI. " +

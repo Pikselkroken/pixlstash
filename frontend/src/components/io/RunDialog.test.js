@@ -6330,8 +6330,28 @@ describe("Open in ComfyUI", () => {
     expect(openButton(wrapper).attributes("aria-disabled")).toBeUndefined();
   });
 
-  it("is left to try when ComfyUI cannot be asked", async () => {
-    getPixlstashNode.mockResolvedValue({ opens_runs: null });
+  it("is refused, and says why, while ComfyUI is not running", async () => {
+    getPixlstashNode.mockResolvedValue({
+      can_open_workflows: null,
+      saves_back: null,
+      opens_runs: null,
+    });
+    const wrapper = await mountRun(fromCard);
+    const button = openButton(wrapper);
+    expect(button.attributes("aria-disabled")).toBe("true");
+    expect(button.attributes("tooltip")).toBe(
+      "ComfyUI is not running at http://127.0.0.1:8188/. " +
+        "Start ComfyUI to open it there.",
+    );
+    await button.trigger("click");
+    await flushPromises();
+    expect(openWorkflowRun).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it("is left to try when PixlStash's own server cannot be asked", async () => {
+    getPixlstashNode.mockRejectedValue(new Error("network down"));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
     const wrapper = await mountRun(fromCard);
     expect(openButton(wrapper).attributes("aria-disabled")).toBeUndefined();
   });
