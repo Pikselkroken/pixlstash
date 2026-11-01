@@ -98,7 +98,7 @@ const SEGMENT_NAMES = {
   comfyui: "ComfyUI",
   aitoolkit: "Training",
   other: "Other apps",
-  spare: "Kept spare",
+  spare: "Headroom",
 };
 
 const title = computed(() => `Run ${props.label || "this run"} anyway?`);

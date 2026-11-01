@@ -1228,7 +1228,7 @@ describe("the GPU queue in the task manager", () => {
       "ComfyUI",
       "AI Toolkit",
       "Other apps",
-      "Spare",
+      "Headroom",
     ]);
     // ComfyUI's 9.8 GB is its own segment, and a spare margin is drawn.
     expect(bar.find(".tm-vram-seg--comfyui").exists()).toBe(true);

@@ -53,7 +53,7 @@
         <li><span class="tm-swatch tm-vram-seg--comfyui"></span>ComfyUI</li>
         <li><span class="tm-swatch tm-vram-seg--aitoolkit"></span>AI Toolkit</li>
         <li><span class="tm-swatch tm-vram-seg--other"></span>Other apps</li>
-        <li><span class="tm-swatch tm-vram-seg--spare"></span>Spare</li>
+        <li><span class="tm-swatch tm-vram-seg--spare"></span>Headroom</li>
       </ul>
     </div>
 
@@ -812,14 +812,14 @@ const SEGMENT_NAMES = {
   comfyui: "ComfyUI",
   aitoolkit: "AI Toolkit",
   other: "Other apps",
-  spare: "Spare",
+  spare: "Headroom",
 };
 
 /** A bar segment's tooltip: whose it is, how big, and what holds it. */
 function segmentTip(segment) {
   const name = SEGMENT_NAMES[segment.kind] ?? segment.kind;
   if (segment.kind === "spare") {
-    return `Spare · ${formatGb(segment.mb)} kept back from new requests`;
+    return `Headroom · ${formatGb(segment.mb)} kept free so a job that overshoots its estimate doesn't run the card out`;
   }
   if (segment.reserved) {
     return `${name} · ${formatGb(segment.mb)} reserved, not in use yet`;
