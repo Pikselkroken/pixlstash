@@ -106,6 +106,7 @@ import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useSetTreeExpansion } from "../../composables/useSetTreeExpansion";
+import { useSectionCollapse } from "../../composables/useSectionCollapse";
 import { useSidebarWidth } from "../../composables/useSidebarWidth";
 import { useRoute } from "vue-router";
 import { useDedupStore, scopeKey } from "../../stores/useDedupStore";
@@ -299,6 +300,11 @@ const dragOverSet = ref(null);
 // localStorage so the tree's shape survives a reload.
 const { expandedTreeKeys, toggleTreeKey, expandTreeKeys } =
   useSetTreeExpansion();
+
+// The People and Sets sections fold away under their heads, remembered across
+// reloads like an inspector section.
+const peopleCollapsed = useSectionCollapse("people", { scope: "sidebar" });
+const setsCollapsed = useSectionCollapse("sets", { scope: "sidebar" });
 
 // --- Sorting State ---
 const sortOptions = ref([]);
@@ -5211,11 +5217,24 @@ defineExpose({
                 class="sidebar-section-block"
               >
                 <div
-                  class="sidebar-section-header"
+                  class="sidebar-section-header sidebar-section-header--collapsible"
+                  @click="peopleCollapsed = !peopleCollapsed"
                   @contextmenu.prevent.stop="
                     openSidebarCtxMenu('header', 'people', $event)
                   "
                 >
+                  <button
+                    type="button"
+                    class="sidebar-tree-toggle sidebar-section-toggle"
+                    :aria-expanded="String(!peopleCollapsed)"
+                    aria-controls="sidebar-section-people"
+                    :aria-label="`${peopleCollapsed ? 'Expand' : 'Collapse'} People`"
+                    @click.stop="peopleCollapsed = !peopleCollapsed"
+                  >
+                    <v-icon size="16">{{
+                      peopleCollapsed ? "mdi-chevron-right" : "mdi-chevron-down"
+                    }}</v-icon>
+                  </button>
                   <span class="sidebar-section-title">People</span>
                   <span
                     v-if="!isReadOnly"
@@ -5242,7 +5261,11 @@ defineExpose({
                     </button>
                   </span>
                 </div>
-                <div class="sidebar-section-scroll">
+                <div
+                  v-show="!peopleCollapsed"
+                  id="sidebar-section-people"
+                  class="sidebar-section-scroll"
+                >
                   <div
                     v-if="!isFinding && branch.characters.length === 0"
                     class="sidebar-collections-help-row"
@@ -5594,11 +5617,24 @@ defineExpose({
                 class="sidebar-section-block"
               >
                 <div
-                  class="sidebar-section-header"
+                  class="sidebar-section-header sidebar-section-header--collapsible"
+                  @click="setsCollapsed = !setsCollapsed"
                   @contextmenu.prevent.stop="
                     openSidebarCtxMenu('header', 'sets', $event)
                   "
                 >
+                  <button
+                    type="button"
+                    class="sidebar-tree-toggle sidebar-section-toggle"
+                    :aria-expanded="String(!setsCollapsed)"
+                    aria-controls="sidebar-section-sets"
+                    :aria-label="`${setsCollapsed ? 'Expand' : 'Collapse'} Sets`"
+                    @click.stop="setsCollapsed = !setsCollapsed"
+                  >
+                    <v-icon size="16">{{
+                      setsCollapsed ? "mdi-chevron-right" : "mdi-chevron-down"
+                    }}</v-icon>
+                  </button>
                   <span class="sidebar-section-title">Sets</span>
                   <span
                     v-if="!isReadOnly"
@@ -5623,7 +5659,11 @@ defineExpose({
                     </button>
                   </span>
                 </div>
-                <div class="sidebar-section-scroll">
+                <div
+                  v-show="!setsCollapsed"
+                  id="sidebar-section-sets"
+                  class="sidebar-section-scroll"
+                >
                   <div
                     v-if="!isFinding && branch.sets.length === 0"
                     class="sidebar-collections-help-row"

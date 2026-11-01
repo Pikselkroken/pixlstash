@@ -899,6 +899,25 @@
   padding-bottom: var(--space-1);
 }
 
+/* People and Sets fold under their heads. The caret takes the gutter the rows'
+   own carets use, so the label steps one level in and sits over the rows'
+   marks. The whole head toggles, like an inspector section's. */
+.sidebar-section-header--collapsible {
+  --depth: 1;
+  cursor: pointer;
+  user-select: none;
+}
+
+/* The caret takes its head's ink, never its own (visual-language §5.1). */
+.sidebar-section-header--collapsible > .sidebar-section-toggle {
+  color: inherit;
+}
+
+.sidebar-section-toggle:focus-visible {
+  outline: var(--focus-width) solid var(--focus-stroke);
+  outline-offset: calc(-1 * var(--focus-width));
+}
+
 /* All-pictures row: same compact height as regular items */
 
 /* Keep All Pictures / Scrapheap rows compact but slightly prominent */
