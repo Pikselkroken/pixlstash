@@ -618,6 +618,13 @@ describe('redactUrl', () => {
     assert.equal(redactUrl('not a url'), '<unparseable URL>');
   });
 
+  it('never logs a share token, which is the file name of a share link', () => {
+    assert.equal(
+      redactUrl('http://127.0.0.1:8723/share/test-secret-token.jpg'),
+      'http://127.0.0.1:8723/share/<redacted>',
+    );
+  });
+
   it('never echoes a page-authored payload back into the log', () => {
     assert.equal(redactUrl('data:text/plain,' + 'a'.repeat(500)), 'data:text/plain,<redacted>');
     assert.equal(redactUrl('javascript:alert(document.cookie)'), 'javascript:<redacted>');

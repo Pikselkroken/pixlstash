@@ -2,6 +2,7 @@ import logging as logging_
 import re
 import threading
 from contextlib import contextmanager
+from urllib.parse import unquote_plus
 
 from uvicorn.logging import ColourizedFormatter as ColourisedFormatter
 
@@ -25,20 +26,32 @@ class _SuppressFilter(logging_.Filter):
         return not any(msg.startswith(p) for p in _UVICORN_NOISE_PREFIXES)
 
 
-_TOKEN_QUERY_PARAM = re.compile(r"([?&]token=)[^&\s\"]*")
+# /share/<token>.<ext> carries the raw token as the file name.
+_SHARE_PATH = re.compile(r"(/share/)[^/?#\s\"]+")
+_QUERY_PAIR = re.compile(r"([?&])([^=&#\s\"]+)=([^&#\s\"]*)")
+
+
+def _redact_query_token(match: re.Match) -> str:
+    # Starlette decodes the key, so ?%74oken= authenticates exactly like ?token=.
+    if unquote_plus(match[2]).lower() != "token":
+        return match[0]
+    return f"{match[1]}{match[2]}=<redacted>"
 
 
 class RedactTokenFilter(logging_.Filter):
-    """Blank the value of a ``token`` query parameter in a log line.
+    """Blank share tokens in uvicorn's request log lines.
 
-    Share tokens travel as ``?token=`` (image URLs and WebSockets cannot set a
-    header), and uvicorn's access and WebSocket lines print the full path with
-    its query string, so without this every share token lands in the log.
+    Share tokens travel in the URL (``?token=``, because image URLs and
+    WebSockets cannot set a header, and ``/share/<token>.<ext>`` links), and
+    uvicorn's access and WebSocket lines print the full path with its query
+    string, so without this every share token lands in the log.
     """
 
     def filter(self, record: logging_.LogRecord) -> bool:
         msg = record.getMessage()
-        redacted = _TOKEN_QUERY_PARAM.sub(r"\1<redacted>", msg)
+        redacted = _QUERY_PAIR.sub(
+            _redact_query_token, _SHARE_PATH.sub(r"\1<redacted>", msg)
+        )
         if redacted != msg:
             record.msg = redacted
             record.args = ()

@@ -59,6 +59,20 @@ def test_websocket_line_token_is_redacted(uvicorn_loggers):
     assert "&token=<redacted>" in line
 
 
+def test_share_link_and_encoded_key_are_redacted(uvicorn_loggers):
+    access = logging.getLogger("uvicorn.access")
+    # /share/<token>.<ext>: the file name is the token.
+    access.info('%s - "GET %s HTTP/1.1" 200', "c", "/share/test-secret-token.jpg")
+    # Starlette decodes the key, so %74oken authenticates like token.
+    access.info(
+        '%s - "GET %s HTTP/1.1" 200', "c", "/pictures?%74oken=test-secret-token"
+    )
+    share_line, encoded_line = uvicorn_loggers.lines
+    assert "test-secret-token" not in share_line + encoded_line
+    assert "/share/<redacted>" in share_line
+    assert "?%74oken=<redacted>" in encoded_line
+
+
 def test_lines_without_a_token_are_untouched():
     record = logging.LogRecord(
         "uvicorn.access", logging.INFO, __file__, 1, "%s", ("/x?share_token=ok",), None
