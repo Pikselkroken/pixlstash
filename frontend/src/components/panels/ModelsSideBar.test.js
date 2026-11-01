@@ -386,6 +386,23 @@ describe("ModelsSideBar", () => {
     expect(row(wrapper, "place", "runs").classes()).toContain("msb-row--two");
   });
 
+  it("names a probe or preview pass rather than its steps as a percentage", async () => {
+    const wrapper = mountBar();
+    await flushPromises();
+    const lease = (progress) => ({
+      leases: [{ tenant: "aitoolkit", state: "granted", job_id: "u1", progress }],
+    });
+    const status = () =>
+      wrapper.find("[data-testid='models-sidebar-runs-status']").text();
+    // The memory probe before training finishes its own 6 of 6 steps.
+    useTasksStore().resources = lease({ step: 6, total: 6, shown_as: "checking" });
+    await flushPromises();
+    expect(status()).toBe("aria_v4 · checking");
+    useTasksStore().resources = lease({ step: 40, total: 40, shown_as: "previews" });
+    await flushPromises();
+    expect(status()).toBe("aria_v4 · previews");
+  });
+
   it("reads the jobs again for a live run it has not seen", async () => {
     const { listTrainingJobs } = await import("../../api/training");
     const wrapper = mountBar();

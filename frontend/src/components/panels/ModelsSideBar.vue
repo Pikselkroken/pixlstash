@@ -316,7 +316,8 @@ watch(
 
 /**
  * The runs row's second line: "aria_v4 · 41%" training, "aria_v4 · waiting"
- * queued for the card, else "Last run 2h ago".
+ * queued for the card, "aria_v4 · checking" probing before it trains, else
+ * "Last run 2h ago".
  */
 const runsStatus = computed(() => {
   const lease = trainingLease.value;
@@ -324,6 +325,10 @@ const runsStatus = computed(() => {
     const job = runsStore.jobs.find((one) => one.uuid === lease.job_id);
     const name = job?.name || "A run";
     if (lease.state !== "granted") return `${name} · waiting`;
+    // A short pass around training ("checking", "previews"): its step and
+    // total are the pass's own, so the 6-step probe would read 100%.
+    const pass = lease.progress?.shown_as;
+    if (pass) return `${name} · ${pass}`;
     const total = Number(lease.progress?.total);
     if (!(total > 0)) return name;
     const done = Number(lease.progress.step) || 0;

@@ -1567,6 +1567,31 @@ describe("the AI Toolkit run in the task manager", () => {
     expect(row.find(".tm-mark").classes("tm-mark--running")).toBe(true);
   });
 
+  it("names the memory probe instead of its own steps", () => {
+    setGpu(
+      gpuAnswer({
+        leases: [
+          trainingLease({ progress: { step: 6, total: 6, shown_as: "checking" } }),
+        ],
+      }),
+    );
+    const wrapper = mount(TasksPanel, globalOpts);
+    expect(wrapper.find('[data-testid="tm-aitoolkit-progress"]').text()).toBe(
+      "checking memory and speed",
+    );
+    setGpu(
+      gpuAnswer({
+        leases: [
+          trainingLease({ progress: { step: 40, total: 40, shown_as: "previews" } }),
+        ],
+      }),
+    );
+    const after = mount(TasksPanel, globalOpts);
+    expect(after.find('[data-testid="tm-aitoolkit-progress"]').text()).toBe(
+      "generating previews",
+    );
+  });
+
   it("opens the run's page in the shelf's Training runs tab", async () => {
     nav.push = vi.fn();
     setGpu(gpuAnswer({ leases: [trainingLease()] }));
