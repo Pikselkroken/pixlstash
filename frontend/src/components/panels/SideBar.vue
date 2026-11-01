@@ -4802,10 +4802,10 @@ defineExpose({
               :aria-current="
                 isTagReviewView && reviewBoardShown ? 'page' : undefined
               "
-              aria-label="Tags to review"
+              aria-label="Tags"
               @click="openTagReviewBoard"
             >
-              <Tooltip text="Tags to review" activator="parent" :describe="false" />
+              <Tooltip text="Tags" activator="parent" :describe="false" />
               <v-icon>mdi-tag-check-outline</v-icon>
             </button>
           </div>
