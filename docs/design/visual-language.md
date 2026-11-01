@@ -724,8 +724,10 @@ one weight, one grid. Mixing icon sets is an instant tell of an unloved UI.
   3. **An icon-only control 32px (`--control-h-bar`) or taller takes a 24px glyph**:
      MDI is drawn on a 24-unit grid, so 24 is the only size that renders as drawn.
      Below 32px the control keeps its own smaller glyph. The discriminator is the
-     control's height, not the icon's. The one exception: the dialog close button
-     stays 20px beside its 18px title.
+     control's height, not the icon's. Two exceptions: the dialog close button
+     stays 20px beside its 18px title, and the docked sidebar rail's 40x36
+     buttons take 18px glyphs, as the design draws them (24px read as bold in
+     a 56px rail).
 
   13px and under is an inline mark (a lock inside a label) and follows the text it
   sits in; above 28px is display art and is exempt. Align the icon's optical centre

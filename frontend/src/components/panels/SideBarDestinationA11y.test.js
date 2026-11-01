@@ -123,13 +123,6 @@ const DESTINATIONS = [
   "Duplicates",
   "Tags to review",
 ];
-const DOCKED_DESTINATIONS = [
-  "Find in library",
-  "All media",
-  "Favourites",
-  "Scrapheap",
-  "Duplicates",
-];
 
 function respond(url) {
   const u = String(url ?? "");
@@ -207,14 +200,18 @@ describe("the sidebar's destinations are keyboard-operable", () => {
     wrapper.unmount();
   });
 
-  it("renders the docked rail's destinations as buttons too", async () => {
-    // The rail is the same three destinations in the narrow layout. Fixing only
-    // the wide one leaves a keyboard user stranded whenever the sidebar docks.
+  it("gives the docked rail a button for every destination the expanded list has", async () => {
+    // The rail is the same destinations in the narrow layout: one added to the
+    // expanded list only (Inbox, Tags to review) is out of reach while docked.
     const wrapper = await mountSidebar();
+    const expanded = wrapper
+      .findAll(".sidebar-list-item .sidebar-list-label")
+      .map((el) => el.text());
+    expect(expanded).toEqual(expect.arrayContaining([...DESTINATIONS, "Inbox"]));
     useSidebarStore().setSidebarDocked(true);
     await wrapper.vm.$nextTick();
 
-    for (const label of DOCKED_DESTINATIONS) {
+    for (const label of expanded) {
       const item = dockedDestination(wrapper, label);
       expect(item, `${label} rail item is missing`).toBeTruthy();
       expect(item.element.tagName, label).toBe("BUTTON");

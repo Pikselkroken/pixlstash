@@ -307,7 +307,7 @@ describe("the docked rail's node flyout (#2448)", () => {
     const wrapper = await mountSidebar({ docked: true });
     const trigger = wrapper
       .findAll(".sidebar-collapsed-item")
-      .find((b) => b.attributes("aria-label") === "People");
+      .find((b) => b.attributes("aria-label") === "Any project");
 
     expect(trigger.element.tagName).toBe("BUTTON");
     expect(trigger.attributes()).toMatchObject({
@@ -320,13 +320,15 @@ describe("the docked rail's node flyout (#2448)", () => {
 
     const menu = document.querySelector(".sidebar-rail-flyout");
     expect(menu.getAttribute("role")).toBe("menu");
-    expect(menu.getAttribute("aria-label")).toBe("People");
-    const items = Array.from(menu.querySelectorAll('[role="menuitem"]'));
-    // The people of the dropdown's scope (Any project: everyone).
-    expect(items.map((item) => item.textContent.trim())).toEqual([
-      "Ada",
-      "Grace",
-    ]);
+    expect(menu.getAttribute("aria-label")).toBe("Any project");
+    // Limit view to (radios), then the people of its scope (Any project:
+    // everyone) as plain items.
+    const people = Array.from(menu.querySelectorAll('[role="menuitem"]'));
+    expect(people.map((item) => item.textContent.trim())).toEqual(
+      expect.arrayContaining(["Ada", "Grace"]),
+    );
+    const items = Array.from(menu.querySelectorAll(".ctx-item"));
+    expect(items[0].getAttribute("role")).toBe("menuitemradio");
     expect(document.activeElement).toBe(items[0]);
 
     items[0].dispatchEvent(
