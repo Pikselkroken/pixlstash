@@ -166,17 +166,34 @@ describe("collapsing People and Sets", () => {
     });
   }
 
-  it("opens folded sections when a find starts", async () => {
+  it("shows folded sections during a find without unfolding them", async () => {
     const wrapper = await mountSidebar();
     await section(wrapper, "people").caret.trigger("click");
     await section(wrapper, "sets").caret.trigger("click");
     expect(section(wrapper, "people").shown()).toBe(false);
     expect(section(wrapper, "sets").shown()).toBe(false);
 
-    await wrapper.find(".sidebar-find-input").setValue("Ada");
+    const stored = () =>
+      JSON.parse(window.localStorage.getItem("pixlstash:collapsedSections"));
+    const before = stored();
+    expect(before["sidebar:people"]).toBe(true);
+    expect(before["sidebar:sets"]).toBe(true);
+
+    const find = wrapper.find(".sidebar-find-input");
+    await find.setValue("Ada");
     await flushPromises();
     expect(section(wrapper, "people").shown()).toBe(true);
     expect(section(wrapper, "sets").shown()).toBe(true);
+    expect(section(wrapper, "people").caret.attributes("aria-expanded")).toBe(
+      "true",
+    );
+    // The find wrote nothing: the fold is the user's, not the search's.
+    expect(stored()).toEqual(before);
+
+    await find.setValue("");
+    await flushPromises();
+    expect(section(wrapper, "people").shown()).toBe(false);
+    expect(section(wrapper, "sets").shown()).toBe(false);
     wrapper.unmount();
   });
 });

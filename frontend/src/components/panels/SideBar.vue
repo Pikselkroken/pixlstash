@@ -2805,12 +2805,10 @@ const findQuery = ref("");
 const findInputRef = ref(null);
 const isFinding = computed(() => findQuery.value.trim() !== "");
 
-// A find opens folded People and Sets, so the matches it counts are on screen.
-watch(isFinding, (finding) => {
-  if (!finding) return;
-  peopleCollapsed.value = false;
-  setsCollapsed.value = false;
-});
+// A find shows folded People and Sets, so the matches it counts are on screen,
+// without writing over the fold: it comes back when the find is cleared.
+const peopleOpen = computed(() => !peopleCollapsed.value || isFinding.value);
+const setsOpen = computed(() => !setsCollapsed.value || isFinding.value);
 
 /**
  * Does a Folders row stand for what the grid shows? In a project's scope, only
@@ -5225,7 +5223,7 @@ defineExpose({
               >
                 <div
                   class="sidebar-section-header sidebar-section-header--collapsible"
-                  @click="peopleCollapsed = !peopleCollapsed"
+                  @click="peopleCollapsed = peopleOpen"
                   @contextmenu.prevent.stop="
                     openSidebarCtxMenu('header', 'people', $event)
                   "
@@ -5233,13 +5231,13 @@ defineExpose({
                   <button
                     type="button"
                     class="sidebar-tree-toggle sidebar-section-toggle"
-                    :aria-expanded="String(!peopleCollapsed)"
+                    :aria-expanded="String(peopleOpen)"
                     aria-controls="sidebar-section-people"
-                    :aria-label="`${peopleCollapsed ? 'Expand' : 'Collapse'} People`"
-                    @click.stop="peopleCollapsed = !peopleCollapsed"
+                    :aria-label="`${peopleOpen ? 'Collapse' : 'Expand'} People`"
+                    @click.stop="peopleCollapsed = peopleOpen"
                   >
                     <v-icon size="16">{{
-                      peopleCollapsed ? "mdi-chevron-right" : "mdi-chevron-down"
+                      peopleOpen ? "mdi-chevron-down" : "mdi-chevron-right"
                     }}</v-icon>
                   </button>
                   <span class="sidebar-section-title">People</span>
@@ -5269,7 +5267,7 @@ defineExpose({
                   </span>
                 </div>
                 <div
-                  v-show="!peopleCollapsed"
+                  v-show="peopleOpen"
                   id="sidebar-section-people"
                   class="sidebar-section-scroll"
                 >
@@ -5625,7 +5623,7 @@ defineExpose({
               >
                 <div
                   class="sidebar-section-header sidebar-section-header--collapsible"
-                  @click="setsCollapsed = !setsCollapsed"
+                  @click="setsCollapsed = setsOpen"
                   @contextmenu.prevent.stop="
                     openSidebarCtxMenu('header', 'sets', $event)
                   "
@@ -5633,13 +5631,13 @@ defineExpose({
                   <button
                     type="button"
                     class="sidebar-tree-toggle sidebar-section-toggle"
-                    :aria-expanded="String(!setsCollapsed)"
+                    :aria-expanded="String(setsOpen)"
                     aria-controls="sidebar-section-sets"
-                    :aria-label="`${setsCollapsed ? 'Expand' : 'Collapse'} Sets`"
-                    @click.stop="setsCollapsed = !setsCollapsed"
+                    :aria-label="`${setsOpen ? 'Collapse' : 'Expand'} Sets`"
+                    @click.stop="setsCollapsed = setsOpen"
                   >
                     <v-icon size="16">{{
-                      setsCollapsed ? "mdi-chevron-right" : "mdi-chevron-down"
+                      setsOpen ? "mdi-chevron-down" : "mdi-chevron-right"
                     }}</v-icon>
                   </button>
                   <span class="sidebar-section-title">Sets</span>
@@ -5667,7 +5665,7 @@ defineExpose({
                   </span>
                 </div>
                 <div
-                  v-show="!setsCollapsed"
+                  v-show="setsOpen"
                   id="sidebar-section-sets"
                   class="sidebar-section-scroll"
                 >
