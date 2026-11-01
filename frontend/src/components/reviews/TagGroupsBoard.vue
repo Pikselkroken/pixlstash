@@ -392,7 +392,9 @@ const currentTotal = computed(() => {
 
 const PAGE = 200;
 // The filter text the server sees: the board's field, debounced.
-const q = ref("");
+// Starts from the filter the board is opened with (text typed on Health
+// carries over), so the first page is already filtered; typing is debounced.
+const q = ref(String(props.filter ?? "").trim());
 const applyQ = debounce((text) => {
   q.value = String(text ?? "").trim();
 }, 250);

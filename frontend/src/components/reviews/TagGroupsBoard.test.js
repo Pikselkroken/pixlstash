@@ -281,6 +281,16 @@ describe("TagGroupsBoard: the chooser", () => {
     expect(visibleNames(wrapper)).toEqual(["pine"]);
   });
 
+  it("a filter it opens with is in the first page asked for", async () => {
+    tagGroupsApi.listGroupTags.mockClear();
+    const wrapper = await mountBoard({ filter: " pin " });
+    expect(tagGroupsApi.listGroupTags).toHaveBeenCalledTimes(1);
+    expect(tagGroupsApi.listGroupTags).toHaveBeenLastCalledWith(
+      expect.objectContaining({ q: "pin", offset: 0 }),
+    );
+    expect(visibleNames(wrapper)).toEqual(["pine"]);
+  });
+
   it("Show more asks for the next offset and appends the page", async () => {
     const big = Array.from({ length: 450 }, (_, i) => ({
       tag: `tag ${String(i).padStart(3, "0")}`,
