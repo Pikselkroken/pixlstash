@@ -23,7 +23,9 @@
       can be undone. A heart after a name marks a favourite. A name in italics
       has not been given one. A row that stands for a training run says how many
       files it holds; Right and Left open and close it. Right-click a row for
-      everything that can be done to it. Escape clears the selection.
+      everything that can be done to it. Escape clears the selection. In a
+      narrow window the Sets column, then the letter at a row's start, are left
+      out.
     </p>
 
     <!-- One announcement for a resort, because the rows reorder silently: the
