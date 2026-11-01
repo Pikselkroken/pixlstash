@@ -244,6 +244,9 @@ def _row_values(row: ET.Element, shared: list[str]) -> list[str]:
             continue
         ref = cell.get("r")
         column = _column_index(ref) if ref else next_column
+        # The positional fallback is held to the same limit as a reference.
+        if column >= MAX_COLUMNS:
+            raise XlsxError("a row has more cells than the reader's column limit")
         cells[column] = _cell_text(cell, shared)
         next_column = column + 1
     if not cells:

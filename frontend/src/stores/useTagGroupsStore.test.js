@@ -105,6 +105,19 @@ describe("the map", () => {
     expect(store.hasGroups).toBe(false);
   });
 
+  it("asks again on the next mount after a dropped connection or a server error", async () => {
+    getTagGroups
+      .mockRejectedValueOnce(new Error("Network Error"))
+      .mockRejectedValueOnce(Object.assign(new Error("500"), { response: { status: 500 } }))
+      .mockResolvedValueOnce(MAP);
+    const store = useTagGroupsStore();
+    await store.fetch();
+    await store.fetch();
+    await store.fetch();
+    expect(getTagGroups).toHaveBeenCalledTimes(3);
+    expect(store.hasGroups).toBe(true);
+  });
+
   it("does not ask again on every mount after a refusal", async () => {
     getTagGroups.mockRejectedValue(Object.assign(new Error("403"), { response: { status: 403 } }));
     const store = useTagGroupsStore();
@@ -112,6 +125,25 @@ describe("the map", () => {
     await store.fetch();
     expect(getTagGroups).toHaveBeenCalledTimes(1);
     expect(store.hasGroups).toBe(false);
+  });
+
+  it("keeps a group a partial order leaves out in its place, after the listed ones", async () => {
+    getTagGroups.mockResolvedValue({
+      groups: [
+        { id: 1, name: "A", position: 0 },
+        { id: 2, name: "B", position: 1 },
+        { id: 3, name: "C", position: 2 },
+      ],
+      tags: {},
+    });
+    const store = useTagGroupsStore();
+    await store.fetch();
+    let answer;
+    reorderTagGroups.mockReturnValueOnce(new Promise((r) => (answer = r)));
+    const pending = store.reorder([3]);
+    expect(store.groups.map((g) => g.id)).toEqual([3, 1, 2]);
+    answer({ groups: store.groups.map((g, i) => ({ ...g, position: i })), tags: {} });
+    await pending;
   });
 
   it("puts the old order back when a reorder fails", async () => {

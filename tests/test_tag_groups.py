@@ -1554,3 +1554,17 @@ def test_a_defaults_group_whose_tags_are_not_names_is_a_value_error(tmp_path, ta
     path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ValueError):
         tag_group_service.load_default_tags(path)
+
+
+def test_positional_cells_are_held_to_the_column_limit():
+    ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"'
+    cells = '<c t="inlineStr"><is><t>x</t></is></c>' * (xlsx_reader.MAX_COLUMNS + 1)
+    sheet = (
+        f'<?xml version="1.0" encoding="UTF-8"?><worksheet {ns}><sheetData>'
+        f"<row>{cells}</row></sheetData></worksheet>"
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("xl/worksheets/sheet1.xml", sheet)
+    with pytest.raises(xlsx_reader.XlsxError):
+        list(xlsx_reader.iter_first_sheet_rows(buf.getvalue()))

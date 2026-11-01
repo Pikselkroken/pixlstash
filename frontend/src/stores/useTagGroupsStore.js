@@ -163,8 +163,11 @@ export const useTagGroupsStore = defineStore("tagGroups", () => {
         apply(body);
       } catch (e) {
         if (started !== generation) return;
-        // A refusal (a share session) is not retried on every rail mount.
-        fetchedAt = Date.now();
+        // A refusal (a token that may not read the map) is not retried on
+        // every rail mount; a dropped connection or a server error is, by
+        // leaving the map stale so the next mount asks again.
+        const status = e?.response?.status;
+        if (status === 401 || status === 403) fetchedAt = Date.now();
         if (!isReadOnly.value) {
           console.warn("Couldn't read the tag groups; tags show ungrouped", e);
         }
@@ -311,10 +314,13 @@ export const useTagGroupsStore = defineStore("tagGroups", () => {
     if (isReadOnly.value) return false;
     const before = groups.value;
     const rank = new Map(ids.map((id, i) => [Number(id), i]));
-    // Drawn in the new order at once; the server's answer replaces it.
-    groups.value = [...before].sort(
-      (a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0),
-    );
+    // Drawn in the new order at once; the server's answer replaces it. A group
+    // the list leaves out keeps its place relative to the others, after them.
+    const place = (g, i) => rank.get(g.id) ?? ids.length + i;
+    groups.value = before
+      .map((g, i) => [place(g, i), g])
+      .sort((a, b) => a[0] - b[0])
+      .map(([, g]) => g);
     const started = generation;
     try {
       const body = await reorderTagGroups(ids.map(Number));
