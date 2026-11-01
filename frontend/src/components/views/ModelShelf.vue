@@ -2102,14 +2102,17 @@ function trackDrag(x, y) {
 
 /**
  * What the tip says away from a folder: the file, or how many, and how many
- * selected models stay behind (locked, missing or offline). Without the second
- * half a three-model drag that carries one file reads as a lost selection.
+ * selected models stay behind (see `movableCopies`). Without the second half a
+ * three-model drag that carries one file reads as a lost selection. Models,
+ * not files: a model with two movable copies carries two files.
  */
 function carriedWords(copies) {
   const items = copies?.items ?? [];
   const carried =
     items.length === 1 ? basename(items[0].relpath) : `${items.length} files`;
-  return copies?.stays ? `${carried} · ${copies.stays} more can't move` : carried;
+  const stays = copies?.stays ?? 0;
+  if (!stays) return carried;
+  return `${carried} · ${stays} ${stays === 1 ? "model" : "models"} can't move`;
 }
 
 function onDragRelease() {

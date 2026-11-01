@@ -4709,8 +4709,8 @@ describe("the open folder (#2203)", () => {
     });
 
     it("says how many selected models a drag leaves behind", async () => {
-      // The report: three models selected, two of them in a locked folder, and
-      // the tip named one file as if the selection had been dropped.
+      // The report: several models selected, the others in a locked folder,
+      // and the tip named one file as if the selection had been dropped.
       const LOCKED = { ...FOLDER, id: 2, path: "/home/me/.cache/hub", movable: "external" };
       listModelFolders.mockResolvedValue([FOLDER, LOCKED]);
       const wrapper = await mountShelf([
@@ -4731,7 +4731,7 @@ describe("the open folder (#2203)", () => {
       pointer(wrapper.find(".shelf-row").element, "pointerdown");
       pointer(window, "pointermove", 10, 0);
       expect(store.dragCopies.items).toEqual([LOOSE]);
-      expect(store.dropTip.text).toBe("loose.safetensors · 1 more can't move");
+      expect(store.dropTip.text).toBe("loose.safetensors · 1 model can't move");
       pointer(window, "pointerup", 10, 0);
       wrapper.unmount();
     });

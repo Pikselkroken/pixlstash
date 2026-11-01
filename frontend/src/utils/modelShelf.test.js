@@ -1467,6 +1467,22 @@ describe("movableCopies", () => {
     expect(stays).toBe(2);
   });
 
+  it("does not count a row whose copies are outside the open folder", () => {
+    // In a folder view a copy elsewhere is not this file; it is not "can't
+    // move". A locked copy inside the folder still is.
+    const { items, stays } = movableCopies(
+      [
+        locRow([{ folder_id: 1, relpath: "Lora/a.st", state: "present" }]),
+        locRow([{ folder_id: 1, relpath: "b.st", state: "present" }]),
+        locRow([{ folder_id: 1, relpath: "c.st", state: "missing" }]),
+      ],
+      folders,
+      { folderId: 1, path: "" },
+    );
+    expect(items).toEqual([{ folder_id: 1, relpath: "b.st" }]);
+    expect(stays).toBe(1);
+  });
+
   it("applies only the present rule when no folder map is given", () => {
     const { items } = movableCopies([
       locRow([{ folder_id: 2, relpath: "tagger.onnx", state: "present" }]),
