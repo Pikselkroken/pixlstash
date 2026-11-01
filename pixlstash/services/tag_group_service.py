@@ -61,6 +61,9 @@ DEFAULT_TAGS_FILE = (
 )
 IMPORT_MAX_BYTES = 64 * 1024 * 1024
 IMPORT_CONFLICT_SAMPLE = 10
+# An import may name at most this many categories that are not groups yet; a file
+# with more is refused, so one upload cannot create an unbounded number of groups.
+MAX_IMPORT_NEW_GROUPS = 50
 
 
 class TagGroupError(Exception):
@@ -340,11 +343,14 @@ def seed_defaults_in_session(
 ) -> Optional[dict[str, Any]]:
     """Seed the default groups and filings if this library is behind the file.
 
-    Creates each :data:`DEFAULT_GROUP_NAMES` group that does not exist yet
-    (case-insensitive name match reuses one), then files every default tag that
-    has no member row. Existing rows are never touched, so a user's filing
-    survives any re-seed. Not an undoable operation. Does not undo anything the
-    user later changes.
+    Creates each default group that does not exist yet (case-insensitive name
+    match reuses one), then files every default tag that has no member row.
+    Seeding runs once per version: version 1 files the defaults once, and a
+    later version bump runs it again. An existing row is never rewritten, so a
+    user's filing survives a re-seed. A tag the user made Ungrouped has no row,
+    though, so a version bump files it again as a default. Remembering that
+    choice would take a tombstone row, and none is kept: whoever bumps the
+    version decides whether that re-filing is wanted. Not an undoable operation.
 
     Returns:
         Counts for the log line, or ``None`` when the library is already current.
@@ -556,6 +562,20 @@ def import_tags_in_session(
         by_key = {g.name.casefold(): g for g in groups}
         members = {m.tag: m for m in session.exec(select(TagGroupMember)).all()}
 
+        # Counted over the whole file, before the library filter, so the refusal
+        # names every category the file asks for.
+        unknown = {
+            name.casefold()
+            for name in targets.values()
+            if name.casefold() not in by_key
+        }
+        if len(unknown) > MAX_IMPORT_NEW_GROUPS:
+            raise TagGroupError(
+                400,
+                f"The file has {len(unknown)} categories that are not groups yet; "
+                f"an import may create at most {MAX_IMPORT_NEW_GROUPS}",
+            )
+
         skipped_not_in_library = 0
         changes: list[tuple[str, str, Optional[TagGroupMember]]] = []
         conflicts: list[str] = []
@@ -566,6 +586,14 @@ def import_tags_in_session(
                 continue
             name = targets[tag]
             member = members.get(tag)
+            target = by_key.get(name.casefold())
+            if (
+                member is not None
+                and target is not None
+                and member.group_id == target.id
+            ):
+                # Already filed under the file's group: left alone, default or not.
+                continue
             if member is None:
                 changes.append((tag, name, None))
                 from_ungrouped += 1
@@ -573,9 +601,6 @@ def import_tags_in_session(
                 changes.append((tag, name, member))
                 from_defaults += 1
             else:
-                target = by_key.get(name.casefold())
-                if target is not None and member.group_id == target.id:
-                    continue
                 conflicts.append(tag)
                 if overwrite_user:
                     changes.append((tag, name, member))

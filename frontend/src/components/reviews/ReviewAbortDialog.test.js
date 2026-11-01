@@ -173,4 +173,66 @@ describe("ReviewAbortDialog", () => {
     expect(w.emitted("closed")).toHaveLength(1);
     w.unmount();
   });
+
+  it("Tab from the last control wraps to the first", async () => {
+    seed(2);
+    const w = mountDialog();
+    await w.vm.open(5);
+    await flushPromises();
+
+    const keep = button("--keep");
+    const cancel = [...document.querySelectorAll(".rs-abort-btn")].find(
+      (b) => b.textContent.trim() === "Cancel",
+    );
+    expect(document.activeElement).toBe(cancel);
+    const ev = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+    document.activeElement.dispatchEvent(ev);
+
+    expect(ev.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(keep);
+    w.unmount();
+  });
+
+  it("Shift+Tab from the first control wraps to the last", async () => {
+    seed(2);
+    const w = mountDialog();
+    await w.vm.open(5);
+    await flushPromises();
+
+    const keep = button("--keep");
+    const cancel = [...document.querySelectorAll(".rs-abort-btn")].find(
+      (b) => b.textContent.trim() === "Cancel",
+    );
+    keep.focus();
+    const ev = new KeyboardEvent("keydown", {
+      key: "Tab",
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    document.activeElement.dispatchEvent(ev);
+
+    expect(ev.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(cancel);
+    w.unmount();
+  });
+
+  it("pulls focus back in when it moves outside the dialog", async () => {
+    seed(2);
+    const w = mountDialog();
+    await w.vm.open(5);
+    await flushPromises();
+
+    const outside = document.createElement("button");
+    outside.textContent = "outside";
+    document.body.appendChild(outside);
+    outside.focus();
+
+    const cancel = [...document.querySelectorAll(".rs-abort-btn")].find(
+      (b) => b.textContent.trim() === "Cancel",
+    );
+    expect(document.activeElement).toBe(cancel);
+    expect(w.emitted("closed")).toBeUndefined();
+    w.unmount();
+  });
 });

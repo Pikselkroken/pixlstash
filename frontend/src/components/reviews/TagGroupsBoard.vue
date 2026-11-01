@@ -58,12 +58,21 @@
                 data-testid="tgb-import"
                 @click="pickFile"
               >
+                <Tooltip :text="IMPORT_HINT" activator="parent" />
+                <v-icon
+                  size="14"
+                  aria-hidden="true"
+                  :class="{ 'mdi-spin': importing }"
+                  >{{
+                    importing ? "mdi-loading" : "mdi-file-excel-outline"
+                  }}</v-icon
+                >
                 {{ importing ? "Importing…" : "Import…" }}
               </button>
               <input
                 ref="fileRef"
                 type="file"
-                accept=".xlsx,.csv"
+                :accept="IMPORT_ACCEPT"
                 hidden
                 tabindex="-1"
                 aria-hidden="true"
@@ -289,6 +298,18 @@ import { isReadOnly } from "../../utils/apiClient";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import Tooltip from "../widgets/Tooltip.vue";
 import TagImportDialog from "./TagImportDialog.vue";
+
+// What Import reads. The MIME types matter as much as the extensions: a Linux
+// desktop file chooser (the portal Electron and Chromium use) builds its
+// filter from MIME types and shows every file when given extensions alone.
+const IMPORT_ACCEPT = [
+  ".xlsx",
+  ".csv",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "text/csv",
+].join(",");
+const IMPORT_HINT =
+  "Import tag groups from a Danbooru tag database: an .xlsx or .csv file with english, category and subcategory columns, such as the ComfyUI Danbooru Tag Toolkit's danbooru_tags.xlsx. Tags are filed by their category.";
 
 const props = defineProps({
   // The board's filter field: narrows the tag list here too.
@@ -824,6 +845,9 @@ defineExpose({ clearSelection, escape, selected });
   gap: var(--space-1);
 }
 .tgb-text-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
   height: var(--control-h-sm);
   padding: 0 var(--space-2);
   border-radius: var(--radius-sm);

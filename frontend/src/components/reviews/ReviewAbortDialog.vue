@@ -7,6 +7,7 @@
       class="rs-abort-backdrop"
       @click.self="cancel"
       @keydown.esc.stop.prevent="cancel"
+      @keydown.tab="trapTab"
     >
       <div
         ref="dialogRef"
@@ -64,7 +65,7 @@
 </template>
 
 <script setup>
-import { nextTick, ref } from "vue";
+import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import Tooltip from "../widgets/Tooltip.vue";
 
@@ -113,6 +114,39 @@ async function undo() {
   if (d) await store.undoChangesAndAbort(d.id);
   emit("closed");
 }
+
+// Focus trap. Tab and Shift+Tab wrap between the dialog's own buttons (DOM
+// order: Keep, Undo, Cancel). Focus that lands outside the dialog while it is
+// up is pulled back to Cancel, the dialog's default control. Esc is already
+// handled on the backdrop, so the Tags view's key handler never sees it.
+function dialogControls() {
+  return [...(dialogRef.value?.querySelectorAll("button") ?? [])];
+}
+
+function trapTab(event) {
+  const controls = dialogControls();
+  if (!controls.length) return;
+  const first = controls[0];
+  const last = controls[controls.length - 1];
+  const active = document.activeElement;
+  const inside = controls.includes(active);
+  if (event.shiftKey && (!inside || active === first)) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && (!inside || active === last)) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+function holdFocus(event) {
+  if (!target.value) return;
+  if (dialogRef.value?.contains(event.target)) return;
+  cancelRef.value?.focus();
+}
+
+onMounted(() => document.addEventListener("focusin", holdFocus));
+onBeforeUnmount(() => document.removeEventListener("focusin", holdFocus));
 
 defineExpose({ open });
 </script>

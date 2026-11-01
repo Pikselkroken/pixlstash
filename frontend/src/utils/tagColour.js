@@ -147,8 +147,10 @@ function luminance([r, g, b]) {
 
 /**
  * The text ink for a colour chip: pure black or pure white, whichever contrasts
- * more with the fill blended over the surface. The better of the two always
- * clears 4.5:1 on any ground, so no fixed ink is needed per colour.
+ * more with the fill blended over the ground. That choice is always at least
+ * about 4.58:1 against the blend, for any colour, by the WCAG formula; only the
+ * 4:1 text floor is asserted. The contrast sweep in tagColour.test.js checks
+ * every palette key at every tint, in both themes, on every ground.
  *
  * @param {string} key a PALETTE key.
  * @param {number} tint 0..1.

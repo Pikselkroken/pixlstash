@@ -1099,7 +1099,11 @@ before the vault starts. It acts only when the library's `tag_groups_seeded_vers
 is NULL or older than the file's `version`. It creates each missing default group
 (case-insensitive name reuse), then files each default tag that has **no** member
 row, with `is_default` True. An existing row is never rewritten, so a user filing
-survives any re-seed. Seeding is not an operation and writes one info log line. A
+survives a re-seed. Seeding runs once per `version`: version 1 files the defaults
+once. A tag the user made Ungrouped has no row, so a later version bump files it
+again as a default; there are no tombstone rows, and whoever bumps the version
+decides whether that re-filing is wanted. Seeding is not an operation and writes
+one info log line. A
 missing file logs a warning and seeds nothing; a malformed one is logged by the
 caller and the library still opens. Cost, measured on an in-memory database:
 about 0.05 s to file 8 000 default tags into a fresh library, and under 2 ms for a
@@ -1126,13 +1130,19 @@ made. A move (`assign`) and an import both write False.
 - **Import.** `POST /tag_groups/import` (§2.6 of the integration doc) parses an
   uploaded `.xlsx` or `.csv` off the writer and files it in one writer task. The
   `.xlsx` is read by `utils/xlsx_reader.py`, a stdlib reader over the first sheet
-  only: each member is streamed under a hard uncompressed cap, the archive is limited
-  to 256 entries, every member is scanned for a DTD before parsing, and nothing is
-  written to disk. A 13 MB, 221 789-row sample parses in about 5 s at 53 MB peak
-  (off the writer), and its filing step takes about 0.4 s dry and 0.8 s real against
-  a 30 000-tag library.
-  Each row files its tag under `tag_group_defaults.group_for`; `None` (adult or
-  uncategorised) is skipped. A tag is filed only if the library holds it (outside
+  only. Every part must be UTF-8 XML (a UTF-16/32 byte order mark, a NUL byte or
+  another declared encoding is refused first), then each part is scanned for a DTD
+  before parsing. All parts read draw on one 512 MB uncompressed budget, the archive
+  is limited to 256 entries, the sheet to 2 000 000 rows and 10 000 000 padded cells,
+  and corrupt or encrypted members are a 400. Nothing is written to disk. A 13 MB,
+  221 789-row sample parses in about 5 s at 53 MB peak (off the writer; measured
+  before the row and cell caps), and its filing step takes about 0.4 s dry and
+  0.8 s real against a 30 000-tag library.
+  Each row files its tag under `tag_group_defaults.group_for`; `None` (adult,
+  uncategorised, or an empty or "Ungrouped" category) is skipped. A file naming more
+  than 50 categories that are not groups yet is refused with 400, so one upload
+  cannot create unbounded groups. A tag already under the file's group is left alone,
+  default or not. A tag is filed only if the library holds it (outside
   the pending-retag sentinels) or the default file names it. The file wins over
   defaults and Ungrouped tags. A tag the user filed under another group is a
   conflict, kept unless `overwrite_user`. A dry run returns the plan and changes

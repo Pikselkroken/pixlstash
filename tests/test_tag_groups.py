@@ -52,6 +52,7 @@ from pixlstash.services import operation_log_service, tag_group_service
 from pixlstash.services.operation_log_service import record_payload_operation_in_session
 from pixlstash.services.tag_group_defaults import DEFAULT_GROUP_NAMES
 from pixlstash.tasks import TaskType
+from pixlstash.utils import xlsx_reader
 from tests.utils import bearer_client, mint_read_token, upload_pictures_and_wait
 
 API = "/api/v1"
@@ -642,6 +643,22 @@ def test_a_bumped_version_files_only_the_new_tags(server, use_defaults, client):
     assert _seeded_version(server) == 2
 
 
+def test_a_bumped_version_refiles_a_default_the_user_made_ungrouped(
+    server, use_defaults, client
+):
+    """Documents the rule: no tombstones, so an Ungrouped default is filed again."""
+    use_defaults({"People": ["ungr-girl"]}, version=1)
+    _seed(server)
+    _assign(client, ["ungr-girl"], None)
+    assert "ungr-girl" not in _provenance(server)["members"]
+
+    use_defaults({"People": ["ungr-girl"]}, version=2)
+    assert _seed(server)["tags_filed"] == 1
+
+    people = next(g["id"] for g in _map(server)["groups"] if g["name"] == "People")
+    assert _provenance(server)["members"]["ungr-girl"] == (people, True)
+
+
 def test_opening_the_library_seeds_it(server, use_defaults):
     use_defaults({"People": ["open-girl"]})
     server.reconcile_library_settings(server.vault)
@@ -742,6 +759,26 @@ def test_defaults_and_ungrouped_tags_are_refiled_by_the_file(
     clothing = next(g["id"] for g in _map(server)["groups"] if g["name"] == "Clothing")
     assert _provenance(server)["members"]["refile-girl"] == (hair, False)
     assert _provenance(server)["members"]["refile-shirt"] == (clothing, False)
+
+
+def test_a_default_already_under_the_files_group_is_left_alone(
+    client, server, use_defaults
+):
+    use_defaults({"People": ["same-girl"]})
+    _seed(server)
+    before = _provenance(server)
+    recorded = len(_operations(server))
+    rows = [
+        ["english", "category", "subcategory"],
+        ["same-girl", "Person", "Subject"],  # the default's own group: no move
+    ]
+
+    resp = _import(client, _csv(rows), "same.csv")
+
+    plan = resp.json()["plan"]
+    assert (plan["filed"], plan["from_defaults"], plan["user_conflicts"]) == (0, 0, 0)
+    assert _provenance(server) == before
+    assert len(_operations(server)) == recorded
 
 
 def test_a_user_filing_is_a_conflict_kept_unless_overwritten(
@@ -1033,3 +1070,157 @@ def test_categories_differing_only_by_case_make_one_group(client, server, use_de
     lore = [g for g in real["groups"] if g["name"].casefold() == "weather lore"]
     assert len(lore) == 1
     assert real["tags"]["case-a"] == real["tags"]["case-b"] == lore[0]["id"]
+
+
+_NS_MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+_SHEET_OPEN = f'<worksheet xmlns="{_NS_MAIN}"><sheetData>'
+_SHEET_CLOSE = "</sheetData></worksheet>"
+
+
+def _book(sheet, shared=None):
+    """A workbook holding *sheet* (and *shared* strings, when given), in memory."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as archive:
+        if shared is not None:
+            archive.writestr("xl/sharedStrings.xml", shared)
+        archive.writestr("xl/worksheets/sheet1.xml", sheet)
+    return buf.getvalue()
+
+
+def test_a_utf16_part_is_refused_before_its_dtd_is_scanned(
+    client, server, use_defaults
+):
+    use_defaults({"People": ["u16-girl"]})
+    xml = (
+        '<?xml version="1.0" encoding="UTF-16"?>'
+        '<!DOCTYPE worksheet [<!ENTITY a "aaaa">]>'
+        f'<worksheet xmlns="{_NS_MAIN}"><sheetData><row r="1">'
+        '<c r="A1" t="inlineStr"><is><t>&a;</t></is></c>'
+        "</row></sheetData></worksheet>"
+    )
+    with_bom = xml.encode("utf-16")
+    # The byte scan alone would miss the DTD: UTF-16 puts a NUL between letters.
+    assert b"<!DOCTYPE" not in with_bom
+
+    bom = _import(client, _book(with_bom), "u16.xlsx", dry_run=True)
+    assert bom.status_code == 400, bom.text
+    assert "UTF-16" in bom.json()["detail"]
+
+    no_bom = _import(client, _book(xml.encode("utf-16-le")), "u16le.xlsx", dry_run=True)
+    assert no_bom.status_code == 400, no_bom.text
+    assert "NUL byte" in no_bom.json()["detail"]
+
+
+def test_a_non_numeric_shared_string_index_is_a_400(client, server, use_defaults):
+    use_defaults({"People": ["sst-girl"]})
+    sheet = (
+        _SHEET_OPEN + '<row r="1"><c r="A1" t="s"><v>one</v></c></row>' + _SHEET_CLOSE
+    )
+    shared = f'<sst xmlns="{_NS_MAIN}"><si><t>english</t></si></sst>'
+
+    resp = _import(
+        client, _book(sheet.encode(), shared.encode()), "sst.xlsx", dry_run=True
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "not a whole number" in resp.json()["detail"]
+
+
+def test_a_corrupt_deflate_member_is_a_400(client, server, use_defaults):
+    use_defaults({"People": ["zlib-girl"]})
+    data = bytearray(_xlsx([["english", "category"], ["zlib-girl", "Person"]]))
+    # The sheet is the first member; its deflated bytes follow the local header.
+    name_len = int.from_bytes(data[26:28], "little")
+    extra_len = int.from_bytes(data[28:30], "little")
+    start = 30 + name_len + extra_len
+    data[start : start + 16] = bytes(b ^ 0xFF for b in data[start : start + 16])
+
+    resp = _import(client, bytes(data), "zlib.xlsx", dry_run=True)
+
+    assert resp.status_code == 400, resp.text
+    assert "Could not read the .xlsx" in resp.json()["detail"]
+
+
+def test_the_row_cap_refuses_a_longer_sheet_with_a_400(monkeypatch):
+    monkeypatch.setattr(xlsx_reader, "MAX_ROWS", 2)
+    at_cap = _xlsx([["english", "category"], ["a", "Person"]])
+    assert len(tag_group_service.parse_tag_file("rows.xlsx", at_cap)) == 1
+
+    over = _xlsx([["english", "category"], ["a", "Person"], ["b", "Person"]])
+    with pytest.raises(tag_group_service.TagGroupError) as caught:
+        tag_group_service.parse_tag_file("rows.xlsx", over)
+    assert caught.value.status_code == 400
+    assert "rows" in caught.value.detail
+
+
+def test_the_cell_cap_counts_a_row_padded_to_its_last_column(monkeypatch):
+    monkeypatch.setattr(xlsx_reader, "MAX_CELLS", 100)
+    sheet = (
+        _SHEET_OPEN
+        + '<row r="1"><c r="A1" t="inlineStr"><is><t>english</t></is></c></row>'
+        + '<row r="2"><c r="XFD2" t="inlineStr"><is><t>x</t></is></c></row>'
+        + _SHEET_CLOSE
+    )
+
+    with pytest.raises(tag_group_service.TagGroupError) as caught:
+        tag_group_service.parse_tag_file("wide.xlsx", _book(sheet.encode()))
+    assert caught.value.status_code == 400
+    assert "cells" in caught.value.detail
+
+
+def test_one_uncompressed_budget_covers_every_member_read(monkeypatch):
+    limit = 1000
+    monkeypatch.setattr(xlsx_reader, "MAX_UNCOMPRESSED_BYTES", limit)
+    shared = f'<sst xmlns="{_NS_MAIN}"><si><t>{"s" * 300}</t></si></sst>'.encode()
+    padding = "<!-- " + "p" * 700 + " -->"
+    sheet = (
+        _SHEET_OPEN
+        + padding
+        + '<row r="1"><c r="A1" t="inlineStr"><is><t>english</t></is></c></row>'
+        + _SHEET_CLOSE
+    ).encode()
+    # Each member is under the limit on its own; read together they are over it.
+    assert len(shared) + 300 < limit and len(sheet) < limit
+    assert len(shared) + 300 + len(sheet) > limit
+
+    with pytest.raises(tag_group_service.TagGroupError) as caught:
+        tag_group_service.parse_tag_file("budget.xlsx", _book(sheet, shared))
+    assert caught.value.status_code == 400
+    assert "larger than the reader allows" in caught.value.detail
+
+
+def test_an_import_naming_too_many_new_categories_is_a_400(
+    client, server, use_defaults
+):
+    use_defaults({})
+
+    def rows_for(categories):
+        return [["english", "category", "subcategory"]] + [
+            [f"cap-{n}", f"Lore {n}", "Night"] for n in range(categories)
+        ]
+
+    at_cap = _import(client, _csv(rows_for(50)), "cap.csv", dry_run=True)
+    assert at_cap.status_code == 200, at_cap.text
+    over = _import(client, _csv(rows_for(51)), "cap.csv", dry_run=True)
+    assert over.status_code == 400, over.text
+    assert "51 categories" in over.json()["detail"]
+
+
+def test_an_ungrouped_or_blank_category_creates_no_group(client, server, use_defaults):
+    use_defaults({})
+    _seed(server)
+    pic = _upload(client)
+    _seed_tags(server, pic, ["loose-tag", "blank-tag"])
+    rows = [
+        ["english", "category", "subcategory"],
+        ["loose-tag", "Ungrouped", "Night"],
+        ["blank-tag", "", ""],
+    ]
+
+    plan = _import(client, _csv(rows), "loose.csv", dry_run=True).json()["plan"]
+    assert plan["groups_created"] == []
+    assert plan["skipped_adult_or_uncategorised"] == 2
+
+    real = _import(client, _csv(rows), "loose.csv").json()
+    assert "Ungrouped" not in [g["name"] for g in real["groups"]]
+    assert real["tags"] == {}

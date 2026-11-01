@@ -542,6 +542,22 @@ describe("TagGroupsBoard: import a tag file", () => {
     tagGroupsApi.importTagGroups.mockReset();
   });
 
+  it("says what it reads, shows a spreadsheet glyph, and filters the picker by type", async () => {
+    const wrapper = await mountBoard();
+    const button = importButton(wrapper);
+    const tip = button.find(".tip").attributes("data-tip");
+    expect(tip).toMatch(/\.xlsx or \.csv/);
+    expect(tip).toMatch(/english, category and subcategory/);
+    expect(button.text()).toContain("mdi-file-excel-outline");
+    const accept = wrapper.find('[data-testid="tgb-file"]').attributes("accept");
+    expect(accept.split(",")).toEqual([
+      ".xlsx",
+      ".csv",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "text/csv",
+    ]);
+  });
+
   it("with no conflicts: one dry run, then the import, with the file's win and no move of the user's", async () => {
     tagGroupsApi.importTagGroups
       .mockResolvedValueOnce({ plan: PLAN })
@@ -671,12 +687,12 @@ describe("TagGroupsBoard: import a tag file", () => {
     const wrapper = await mountBoard();
     await pickFile(wrapper);
     await flushPromises();
-    expect(importButton(wrapper).text()).toBe("Importing…");
+    expect(importButton(wrapper).text()).toBe("mdi-loading Importing…");
     expect(importButton(wrapper).attributes("disabled")).toBeDefined();
     answer({ plan: PLAN });
     tagGroupsApi.importTagGroups.mockResolvedValueOnce({ plan: PLAN, ...GROUP_MAP });
     await flushPromises();
-    expect(importButton(wrapper).text()).toBe("Import…");
+    expect(importButton(wrapper).text()).toBe("mdi-file-excel-outline Import…");
   });
 
   it("a read-only session has no Import control", async () => {

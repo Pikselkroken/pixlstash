@@ -5,25 +5,41 @@ the reader is deliberately narrow:
 
 * Only ``xl/worksheets/sheet1.xml`` and, when the book has one,
   ``xl/sharedStrings.xml`` are opened. Nothing else in the archive is read.
-* Every member is streamed with a hard cap on its uncompressed size, measured as
-  the bytes actually read, not the size the zip header claims. The archive may
-  hold at most :data:`MAX_MEMBERS` entries.
-* Each member is scanned for a DTD (``<!DOCTYPE`` / ``<!ENTITY``) before the
-  parser sees the bytes that would define an entity. A DTD in any position is
-  refused, so no entity is ever expanded.
+* The archive may hold at most :data:`MAX_MEMBERS` entries. Every member read
+  draws on one budget, :data:`MAX_UNCOMPRESSED_BYTES`, counted as the bytes
+  actually read plus the text of every shared string. The size a zip header
+  claims is never trusted.
+* Each part must be UTF-8 XML. A UTF-16 or UTF-32 part (a byte order mark, or a
+  NUL byte, which XML forbids) and a part whose XML declaration names another
+  encoding are refused before anything else, so the DTD scan below reads the
+  same bytes the parser does.
+* Each part is then scanned for a DTD (``<!DOCTYPE`` / ``<!ENTITY``) before the
+  parser sees it. A DTD in any position is refused, so no entity is expanded.
+* The sheet is capped at :data:`MAX_ROWS` rows and :data:`MAX_CELLS` cells, where
+  a row counts every column up to its last one.
+* A corrupt, encrypted or unsupported member, a non-numeric shared-string index
+  and a malformed sheet all raise :class:`XlsxError`, the only error that leaves
+  this module.
 * Nothing is extracted to disk.
-* Completed rows and shared strings are detached from their parent as they are
-  yielded, so memory stays flat on a sheet of hundreds of thousands of rows.
+
+Memory: the parser holds one completed row at a time, and shared strings are held
+in full within the budget. :func:`iter_first_sheet_rows` yields each row to its
+caller, which decides what to keep. The caps bound what a caller can collect; they
+do not make a large sheet cheap.
 """
 
+import codecs
 import io
 import re
 import xml.etree.ElementTree as ET
 import zipfile
+import zlib
 from typing import Iterator, Optional
 
 MAX_MEMBERS = 256
-MAX_MEMBER_BYTES = 512 * 1024 * 1024
+MAX_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
+MAX_ROWS = 2_000_000
+MAX_CELLS = 10_000_000
 MAX_COLUMNS = 16384
 
 SHEET_MEMBER = "xl/worksheets/sheet1.xml"
@@ -34,42 +50,95 @@ _DTD_MARKERS = (b"<!DOCTYPE", b"<!ENTITY")
 _TAIL = max(len(m) for m in _DTD_MARKERS) - 1
 _CHUNK = 1 << 20
 _COLUMN_RE = re.compile(r"^([A-Z]+)")
+# A UTF-32 byte order mark begins with the UTF-16 one, so these two cover both.
+_UTF16_32_BOMS = (codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)
+_DECLARATION_RE = re.compile(
+    rb"""^\s*<\?xml[^>]*?encoding\s*=\s*["']([A-Za-z0-9._-]+)["']"""
+)
+_READ_ERRORS = (
+    zipfile.BadZipFile,
+    zlib.error,
+    RuntimeError,
+    NotImplementedError,
+    EOFError,
+)
 
 
 class XlsxError(ValueError):
     """The upload is not a readable workbook, or breaks one of the limits above."""
 
 
+class _Budget:
+    """The uncompressed bytes left for one workbook, shared by every member read."""
+
+    def __init__(self, limit: int):
+        self.left = limit
+
+    def spend(self, count: int, name: str) -> None:
+        self.left -= count
+        if self.left < 0:
+            raise XlsxError(
+                f"the workbook's parts are larger than the reader allows ({name})"
+            )
+
+
 def _local(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
 
-def _streamed(zf: zipfile.ZipFile, name: str) -> Iterator[bytes]:
-    """Yield a member's bytes in chunks, refusing a DTD or an over-size member."""
+def _check_encoding(name: str, head: bytes) -> None:
+    """Refuse a part that is not UTF-8 XML, before any byte is scanned for a DTD."""
+    if head.startswith(_UTF16_32_BOMS):
+        raise XlsxError(f"{name} is UTF-16 or UTF-32, not UTF-8 XML, and is refused")
+    body = head[len(codecs.BOM_UTF8) :] if head.startswith(codecs.BOM_UTF8) else head
+    match = _DECLARATION_RE.match(body[:256])
+    if match is None:
+        return
+    declared = match.group(1).decode("ascii")
+    try:
+        found = codecs.lookup(declared).name
+    except LookupError:
+        found = declared
+    if found != "utf-8":
+        raise XlsxError(
+            f"{name} declares the encoding {declared!r}, not UTF-8, and is refused"
+        )
+
+
+def _streamed(zf: zipfile.ZipFile, name: str, budget: _Budget) -> Iterator[bytes]:
+    """Yield a member's bytes in chunks, refusing a non-UTF-8, DTD-bearing or over-size part."""
     try:
         info = zf.getinfo(name)
     except KeyError:
         raise XlsxError(f"the workbook has no {name}") from None
-    if info.file_size > MAX_MEMBER_BYTES:
+    if info.file_size > budget.left:
         raise XlsxError(f"{name} is larger than the reader allows")
-    total = 0
     tail = b""
-    with zf.open(info) as stream:
-        while True:
-            chunk = stream.read(_CHUNK)
-            if not chunk:
-                return
-            total += len(chunk)
-            if total > MAX_MEMBER_BYTES:
-                raise XlsxError(f"{name} is larger than the reader allows")
-            window = tail + chunk
-            if any(marker in window for marker in _DTD_MARKERS):
-                raise XlsxError(f"{name} declares a DTD, which is refused")
-            tail = window[-_TAIL:]
-            yield chunk
+    try:
+        with zf.open(info) as stream:
+            checked = False
+            while True:
+                chunk = stream.read(_CHUNK)
+                if not chunk:
+                    return
+                if not checked:
+                    _check_encoding(name, chunk)
+                    checked = True
+                if b"\x00" in chunk:
+                    raise XlsxError(f"{name} holds a NUL byte, so it is not UTF-8 XML")
+                budget.spend(len(chunk), name)
+                window = tail + chunk
+                if any(marker in window for marker in _DTD_MARKERS):
+                    raise XlsxError(f"{name} declares a DTD, which is refused")
+                tail = window[-_TAIL:]
+                yield chunk
+    except _READ_ERRORS as exc:
+        raise XlsxError(f"{name} could not be read: {exc}") from None
 
 
-def _completed(zf: zipfile.ZipFile, name: str, want: str) -> Iterator[ET.Element]:
+def _completed(
+    zf: zipfile.ZipFile, name: str, want: str, budget: _Budget
+) -> Iterator[ET.Element]:
     """Yield each element with local tag *want*, detached from its parent once used."""
     parser = ET.XMLPullParser(events=("start", "end"))
     stack: list[ET.Element] = []
@@ -91,7 +160,7 @@ def _completed(zf: zipfile.ZipFile, name: str, want: str) -> Iterator[ET.Element
                 parent.remove(elem)
 
     try:
-        for chunk in _streamed(zf, name):
+        for chunk in _streamed(zf, name, budget):
             parser.feed(chunk)
             yield from _drain(parser.read_events())
         parser.close()
@@ -100,12 +169,14 @@ def _completed(zf: zipfile.ZipFile, name: str, want: str) -> Iterator[ET.Element
     yield from _drain(parser.read_events())
 
 
-def _shared_strings(zf: zipfile.ZipFile) -> list[str]:
+def _shared_strings(zf: zipfile.ZipFile, budget: _Budget) -> list[str]:
     if SHARED_STRINGS_MEMBER not in zf.namelist():
         return []
     strings: list[str] = []
-    for si in _completed(zf, SHARED_STRINGS_MEMBER, "si"):
-        strings.append("".join(t.text or "" for t in si.iter() if _local(t.tag) == "t"))
+    for si in _completed(zf, SHARED_STRINGS_MEMBER, "si", budget):
+        text = "".join(t.text or "" for t in si.iter() if _local(t.tag) == "t")
+        budget.spend(len(text), SHARED_STRINGS_MEMBER)
+        strings.append(text)
     return strings
 
 
@@ -133,7 +204,12 @@ def _cell_text(cell: ET.Element, shared: list[str]) -> str:
     if value is None or value.text is None:
         return ""
     if kind == "s":
-        index = int(value.text)
+        try:
+            index = int(value.text)
+        except ValueError:
+            raise XlsxError(
+                f"a cell names shared string {value.text!r}, which is not a whole number"
+            ) from None
         if not 0 <= index < len(shared):
             raise XlsxError(f"a cell names shared string {index}, which does not exist")
         return shared[index]
@@ -159,18 +235,28 @@ def iter_first_sheet_rows(data: bytes) -> Iterator[list[str]]:
         data: The uploaded file's bytes.
 
     Raises:
-        XlsxError: The bytes are not a zip workbook, a member is missing, a DTD
-            is present, or a size or structure limit is exceeded.
+        XlsxError: The bytes are not a zip workbook, a member is missing or is not
+            UTF-8 XML, a DTD is present, a member cannot be decompressed, or a size
+            or structure limit is exceeded.
     """
     try:
         zf = zipfile.ZipFile(io.BytesIO(data))
-    except zipfile.BadZipFile as exc:
+    except (zipfile.BadZipFile, EOFError, ValueError, NotImplementedError) as exc:
         raise XlsxError(f"not a readable .xlsx workbook: {exc}") from None
+    budget = _Budget(MAX_UNCOMPRESSED_BYTES)
+    rows_seen = 0
+    cells_seen = 0
     with zf:
         if len(zf.infolist()) > MAX_MEMBERS:
             raise XlsxError("the workbook holds too many parts")
-        shared = _shared_strings(zf)
-        for row in _completed(zf, SHEET_MEMBER, "row"):
+        shared = _shared_strings(zf, budget)
+        for row in _completed(zf, SHEET_MEMBER, "row", budget):
+            rows_seen += 1
+            if rows_seen > MAX_ROWS:
+                raise XlsxError(f"the sheet has more than {MAX_ROWS:,} rows")
             values = _row_values(row, shared)
             if values:
+                cells_seen += len(values)
+                if cells_seen > MAX_CELLS:
+                    raise XlsxError(f"the sheet has more than {MAX_CELLS:,} cells")
                 yield values

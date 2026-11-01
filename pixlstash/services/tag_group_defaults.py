@@ -139,8 +139,12 @@ SUBCATEGORY_GROUPS: dict[tuple[str, str], Optional[str]] = {
     ("Artwork", "Artist Style"): "Style & meta",
 }
 
-# A database's own "no category" bucket is not a group.
-UNGROUPED_CATEGORIES: frozenset[str] = frozenset({"uncategorized", "uncategorised"})
+# A database's own "no category" bucket is not a group. "Ungrouped" is the name
+# the service gives a tag with no group, so a category of that name must not
+# create a group of it.
+UNGROUPED_CATEGORIES: frozenset[str] = frozenset(
+    {"uncategorized", "uncategorised", "ungrouped"}
+)
 
 # Defect labels of the PixlStash tagger beyond the penalised and merged tags.
 # Several also read as ordinary vocabulary ("noise", "cyclops"); in this tagger
@@ -244,9 +248,10 @@ def group_for(tag: str, category: str, subcategory: str) -> Optional[str]:
 
     Returns:
         ``"Anomaly"`` for a known defect; the mapped default group for a known
-        (category, subcategory); ``None`` for an adult subcategory or a row with
-        no category; otherwise the file's own category name, so an import of a
-        database with categories this mapping does not know still groups them.
+        (category, subcategory); ``None`` for an adult subcategory, a row with
+        no category (empty, or "Uncategorized" / "Ungrouped" in any case);
+        otherwise the file's own category name, so an import of a database with
+        categories this mapping does not know still groups them.
     """
     if normalise_tag(tag) in anomaly_tags():
         return ANOMALY
