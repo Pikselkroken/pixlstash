@@ -1380,7 +1380,8 @@ def training_base_tile(raw: Optional[str]) -> Optional[dict]:
     checkpoint with.
 
     Returns :func:`model_tile`'s fields plus ``label``, the canonical name
-    (``None`` for a re-branded fine-tune, which wears its own mark), with no
+    (``None`` for a re-branded fine-tune, which wears its own mark and is not
+    its base: ``juggernaut_sdxl`` is Juggernaut, not SDXL 1.0), with no
     tab: *raw* is free text, so a role or a few-step bolt read from it would
     claim more than it says (a Klein *base* id reads as few-step).
     """
@@ -1389,4 +1390,7 @@ def training_base_tile(raw: Optional[str]) -> Optional[dict]:
     tail = re.split(r"[\\/]", raw.strip().rstrip("\\/"))[-1]
     canonical, _ = identify((raw, tail), (tail,))
     tile = model_tile(canonical, tail, checkpoint=True)
-    return {**tile, "label": canonical, "mark_tab": None} if tile else None
+    if not tile:
+        return None
+    label = canonical if tile["mark_band"] else None
+    return {**tile, "label": label, "mark_tab": None}

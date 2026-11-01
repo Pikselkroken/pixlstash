@@ -853,6 +853,8 @@ def test_a_training_run_wears_its_base_models_release_tile():
     assert training_base_tile("someone/my-sdxl-anime-lora")["mark_tab"] is None
     # A re-branded fine-tune wears its own mark, with no canonical label.
     assert training_base_tile("RunDiffusion/Juggernaut-XL")["label"] is None
+    # Even where its id names the base it was tuned from.
+    assert training_base_tile("someone/juggernaut_sdxl_v9")["label"] is None
     assert training_base_tile("/home/me/models/flux1-dev.safetensors")["mark"] == [
         "Dev",
         "1",
