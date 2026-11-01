@@ -253,10 +253,8 @@ const STORES = [
     seed: (s) => {
       s.groups = [{ id: 1, name: "Character", position: 0 }];
       s.groupOf = new Map([["red hood", 1]]);
-      s.loaded = true;
     },
-    isEmpty: (s) =>
-      s.groups.length === 0 && s.groupOf.size === 0 && s.loaded === false,
+    isEmpty: (s) => s.groups.length === 0 && s.groupOf.size === 0,
   },
   {
     name: "useLockedSetsStore",

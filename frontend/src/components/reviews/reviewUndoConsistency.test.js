@@ -380,9 +380,10 @@ describe("ReviewSessionsOverlay - Ctrl+Z is no longer dead", () => {
 
   it("stands down while the sidebar's abort dialog is up: Esc does not leave the review", async () => {
     const { store, w } = await mountOverlayWithSession();
-    const backdrop = document.createElement("div");
-    backdrop.className = "rs-abort-backdrop";
-    document.body.appendChild(backdrop);
+    // The abort dialog is an AppDialog: a v-dialog overlay that is active.
+    const dialog = document.createElement("div");
+    dialog.className = "v-overlay v-overlay--active v-dialog";
+    document.body.appendChild(dialog);
     try {
       press("Escape");
       press("z", { ctrlKey: true });
@@ -390,7 +391,7 @@ describe("ReviewSessionsOverlay - Ctrl+Z is no longer dead", () => {
       expect(store.view.type).toBe("session");
       expect(SessionStub.lastHandleKey).not.toHaveBeenCalled();
     } finally {
-      backdrop.remove();
+      dialog.remove();
       w.unmount();
     }
   });

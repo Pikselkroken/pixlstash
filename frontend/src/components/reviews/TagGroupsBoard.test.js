@@ -634,19 +634,6 @@ describe("TagGroupsBoard: new group", () => {
   });
 });
 
-describe("TagGroupsBoard: read-only", () => {
-  it("offers no drag, no +, and no pill", async () => {
-    session.readOnly.value = true;
-    const wrapper = await mountBoard();
-    expect(wrapper.find('button[aria-label="New group"]').exists()).toBe(
-      false,
-    );
-    expect(tagRow(wrapper, "aiko").attributes("draggable")).toBe("false");
-    await tagRow(wrapper, "aiko").trigger("click");
-    expect(wrapper.find(".tgb-pill").exists()).toBe(false);
-  });
-});
-
 describe("TagGroupsBoard: import a tag file", () => {
   // Small counts only: the notice's thousands separator is the locale's.
   const PLAN = {
@@ -711,7 +698,6 @@ describe("TagGroupsBoard: import a tag file", () => {
     expect(tagGroupsApi.importTagGroups).toHaveBeenCalledTimes(2);
     expect(tagGroupsApi.importTagGroups.mock.calls[0][1]).toEqual({ dryRun: true });
     expect(tagGroupsApi.importTagGroups.mock.calls[1][1]).toEqual({
-      dryRun: false,
       overwriteUser: false,
     });
     expect(questionText(wrapper).exists()).toBe(false);
@@ -739,7 +725,6 @@ describe("TagGroupsBoard: import a tag file", () => {
     await flushPromises();
     expect(tagGroupsApi.importTagGroups).toHaveBeenCalledTimes(2);
     expect(tagGroupsApi.importTagGroups.mock.calls[1][1]).toEqual({
-      dryRun: false,
       overwriteUser: false,
     });
     expect(questionText(wrapper).exists()).toBe(false);
@@ -758,7 +743,6 @@ describe("TagGroupsBoard: import a tag file", () => {
     await flushPromises();
     expect(tagGroupsApi.importTagGroups).toHaveBeenCalledTimes(2);
     expect(tagGroupsApi.importTagGroups.mock.calls[1][1]).toEqual({
-      dryRun: false,
       overwriteUser: true,
     });
   });
@@ -836,12 +820,5 @@ describe("TagGroupsBoard: import a tag file", () => {
     tagGroupsApi.importTagGroups.mockResolvedValueOnce({ plan: PLAN, ...GROUP_MAP });
     await flushPromises();
     expect(importButton(wrapper).text()).toBe("mdi-file-excel-outline Import…");
-  });
-
-  it("a read-only session has no Import control", async () => {
-    session.readOnly.value = true;
-    const wrapper = await mountBoard();
-    expect(importButton(wrapper).exists()).toBe(false);
-    expect(wrapper.find('input[type="file"]').exists()).toBe(false);
   });
 });

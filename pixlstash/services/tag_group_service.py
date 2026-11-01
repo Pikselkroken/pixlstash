@@ -260,10 +260,6 @@ def list_tags(db, **params) -> dict[str, Any]:
     return db.run_immediate_read_task(list_tags_in_session, **params)
 
 
-def _group_dict(group: TagGroup) -> dict[str, Any]:
-    return {"id": group.id, "name": group.name, "position": group.position}
-
-
 def _create_in_session(session: Session, name: str) -> TagGroup:
     cleaned = (name or "").strip()
     if not 1 <= len(cleaned) <= NAME_MAX_LENGTH:
@@ -291,7 +287,11 @@ def create_group_in_session(session: Session, name: str) -> dict[str, Any]:
         group = _create_in_session(session, name)
         session.commit()
         result = read_map_in_session(session)
-        result["group"] = _group_dict(group)
+        result["group"] = {
+            "id": group.id,
+            "name": group.name,
+            "position": group.position,
+        }
         return result
     except BaseException:
         session.rollback()
@@ -301,11 +301,10 @@ def create_group_in_session(session: Session, name: str) -> dict[str, Any]:
 def reorder_groups_in_session(session: Session, ids: list[int]) -> dict[str, Any]:
     """Set group positions to *ids*, which must be exactly the existing ids."""
     try:
-        groups = session.exec(select(TagGroup)).all()
-        existing = {g.id for g in groups}
-        if len(ids) != len(set(ids)) or set(ids) != existing:
+        by_id = {g.id: g for g in session.exec(select(TagGroup)).all()}
+        # Sorted lists, not sets: a duplicate id makes the lengths differ.
+        if sorted(ids) != sorted(by_id):
             raise TagGroupError(400, "ids must name every existing group exactly once")
-        by_id = {g.id: g for g in groups}
         for position, group_id in enumerate(ids):
             by_id[group_id].position = position
             session.add(by_id[group_id])
@@ -317,12 +316,8 @@ def reorder_groups_in_session(session: Session, ids: list[int]) -> dict[str, Any
 
 
 def _clean_tags(tags: list[str]) -> list[str]:
-    seen: dict[str, None] = {}
-    for raw in tags or []:
-        name = (raw or "").strip()
-        if name:
-            seen.setdefault(name, None)
-    cleaned = list(seen)
+    stripped = ((raw or "").strip() for raw in tags or [])
+    cleaned = list(dict.fromkeys(name for name in stripped if name))
     for name in cleaned:
         if is_tag_sentinel(name):
             raise TagGroupError(
@@ -339,13 +334,6 @@ def _move_summary(count: int, tag_names: list[str], destination: str) -> str:
     if count == 1:
         return f"Move “{tag_names[0]}” to {destination}"
     return f"Move {count} tags to {destination}"
-
-
-def _state(member: Optional[TagGroupMember]) -> tuple[Optional[int], bool]:
-    """A tag's (group_id, is_default); an unfiled tag is (None, False)."""
-    if member is None:
-        return None, False
-    return member.group_id, bool(member.is_default)
 
 
 def _payload(group_id: Optional[int], is_default: bool) -> dict[str, Any]:
@@ -415,34 +403,13 @@ def assign_tags_in_session(
             destination = group.name
         names = _clean_tags(tags)
 
-        # One bounded read per chunk, kept for both the undo record and the
-        # write, rather than two lookups per tag on the shared writer.
-        members: dict[str, TagGroupMember] = {}
-        for chunk in chunked(names):
-            for member in session.exec(
-                select(TagGroupMember).where(TagGroupMember.tag.in_(chunk))
-            ).all():
-                members[member.tag] = member
-        before = {name: _state(members.get(name)) for name in names}
+        filed = _filings_of(session, names)
+        before = {name: filed.get(name, (None, False)) for name in names}
         changed = [name for name in names if before[name][0] != group_id]
         if not changed:
             return read_map_in_session(session)
 
-        for name in changed:
-            member = members.get(name)
-            if group_id is None:
-                if member is not None:
-                    session.delete(member)
-            elif member is not None:
-                member.group_id = group_id
-                member.is_default = False
-                session.add(member)
-            else:
-                session.add(
-                    TagGroupMember(tag=name, group_id=group_id, is_default=False)
-                )
-        session.flush()
-
+        _write_members(session, {name: (group_id, False) for name in changed})
         record_payload_operation_in_session(
             session,
             op_type=OP_TYPE_MOVE,
@@ -450,10 +417,7 @@ def assign_tags_in_session(
             before={"tags": {n: _payload(*before[n]) for n in changed}},
             after={"tags": {n: _payload(group_id, False) for n in changed}},
             summary=_move_summary(len(changed), changed, destination),
-            actor=request_context.get("actor"),
-            source=request_context.get("source", "external"),
-            origin_client_id=request_context.get("origin_client_id"),
-            batch_id=request_context.get("batch_id"),
+            **request_context,
         )
         session.commit()
         return read_map_in_session(session)
@@ -545,11 +509,8 @@ def seed_defaults_in_session(
         groups = session.exec(select(TagGroup)).all()
         by_key = {g.name.casefold(): g for g in groups}
         position = max((g.position for g in groups), default=-1) + 1
-        wanted = list(DEFAULT_GROUP_NAMES) + [
-            name
-            for name, _ in defaults["groups"]
-            if name.casefold() not in {d.casefold() for d in DEFAULT_GROUP_NAMES}
-        ]
+        # A file name that matches a default is skipped by the loop's by_key check.
+        wanted = [*DEFAULT_GROUP_NAMES, *(name for name, _ in defaults["groups"])]
         created = 0
         for name in wanted:
             if name.casefold() in by_key:
@@ -585,14 +546,14 @@ def seed_defaults_in_session(
         raise
 
 
-def seed_default_groups(db, path: Optional[Path] = None) -> Optional[dict[str, Any]]:
+def seed_default_groups(db) -> Optional[dict[str, Any]]:
     """Seed this library's default groups on the writer; logs one info line when it acts.
 
     The file is read here, off the writer, and only the filing runs on it. Raises
     on a malformed file or a database error; the caller decides whether a library
     still opens without its defaults (the server logs and carries on).
     """
-    defaults = load_default_tags(path)
+    defaults = load_default_tags()
     if defaults is None:
         return None
     result = db.run_task(seed_defaults_in_session, defaults)
@@ -768,13 +729,12 @@ def import_tags_in_session(
                     changes.append((tag, name, before))
                     overwritten += 1
 
-        groups_created: list[str] = []
-        created_keys: set[str] = set()
+        # Keyed by casefold, first spelling wins, in order of first use.
+        pending: dict[str, str] = {}
         for _, name, _ in changes:
-            key = name.casefold()
-            if key not in by_key and key not in created_keys:
-                created_keys.add(key)
-                groups_created.append(name)
+            if name.casefold() not in by_key:
+                pending.setdefault(name.casefold(), name)
+        groups_created = list(pending.values())
         # Counted over the groups this import would really make: a category
         # whose tags are all kept (the user's own filings, without overwrite)
         # makes none, so it does not count against the cap.
@@ -831,10 +791,7 @@ def import_tags_in_session(
                 before={"tags": before_tags, "unfiled": before_unfiled},
                 after={"groups": after_groups},
                 summary=_import_summary(len(changes), filename),
-                actor=request_context.get("actor"),
-                source=request_context.get("source", "external"),
-                origin_client_id=request_context.get("origin_client_id"),
-                batch_id=request_context.get("batch_id"),
+                **request_context,
             )
             session.commit()
         result = read_map_in_session(session)

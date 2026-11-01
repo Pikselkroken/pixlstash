@@ -48,40 +48,37 @@
         <div class="tgb-section-head">
           <span class="tgb-label">Groups</span>
           <span class="tgb-section-actions">
-            <template v-if="!readOnly">
-              <button
-                ref="importBtnRef"
-                type="button"
-                class="tgb-text-btn"
-                :disabled="importing"
-                :aria-busy="importing ? 'true' : undefined"
-                data-testid="tgb-import"
-                @click="pickFile"
-              >
-                <Tooltip :text="IMPORT_HINT" activator="parent" />
-                <v-icon
-                  size="14"
-                  aria-hidden="true"
-                  :class="{ 'mdi-spin': importing }"
-                  >{{
-                    importing ? "mdi-loading" : "mdi-file-excel-outline"
-                  }}</v-icon
-                >
-                {{ importing ? "Importing…" : "Import…" }}
-              </button>
-              <input
-                ref="fileRef"
-                type="file"
-                :accept="IMPORT_ACCEPT"
-                hidden
-                tabindex="-1"
-                aria-hidden="true"
-                data-testid="tgb-file"
-                @change="onFilePicked"
-              />
-            </template>
             <button
-              v-if="!readOnly"
+              ref="importBtnRef"
+              type="button"
+              class="tgb-text-btn"
+              :disabled="importing"
+              :aria-busy="importing ? 'true' : undefined"
+              data-testid="tgb-import"
+              @click="pickFile"
+            >
+              <Tooltip :text="IMPORT_HINT" activator="parent" />
+              <v-icon
+                size="14"
+                aria-hidden="true"
+                :class="{ 'mdi-spin': importing }"
+                >{{
+                  importing ? "mdi-loading" : "mdi-file-excel-outline"
+                }}</v-icon
+              >
+              {{ importing ? "Importing…" : "Import…" }}
+            </button>
+            <input
+              ref="fileRef"
+              type="file"
+              :accept="IMPORT_ACCEPT"
+              hidden
+              tabindex="-1"
+              aria-hidden="true"
+              data-testid="tgb-file"
+              @change="onFilePicked"
+            />
+            <button
               type="button"
               class="tgb-icon-btn"
               aria-label="New group"
@@ -120,9 +117,9 @@
             'tgb-row--dragging': dragKind === 'group' && dragGroupId === g.id,
           }"
           :data-group-id="g.id"
-          :draggable="!readOnly"
+          draggable="true"
           :aria-pressed="current === g.id"
-          :aria-keyshortcuts="readOnly ? undefined : 'Alt+ArrowUp Alt+ArrowDown'"
+          aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
           @click="choose(g.id)"
           @keydown="onGroupKey(g, $event)"
           @dragstart="onGroupDragStart(g, $event)"
@@ -197,7 +194,7 @@
               'tgb-tag--dragging': dragging.includes(t.tag),
             }"
             :aria-pressed="selected.has(t.tag)"
-            :draggable="!readOnly"
+            draggable="true"
             @click="onTagClick(t.tag, $event)"
             @dragstart="onTagDragStart(t.tag, $event)"
             @dragend="onDragEnd"
@@ -219,10 +216,9 @@
       </section>
     </div>
 
-    <!-- The selection pill: the app's selection bar, copied from its look.
-         Read-only has no verbs, so it is not drawn at all. -->
+    <!-- The selection pill: the app's selection bar, copied from its look. -->
     <div
-      v-if="!readOnly && selected.size"
+      v-if="selected.size"
       class="tgb-pill selbar"
       role="toolbar"
       aria-label="Selected tags"
@@ -294,9 +290,8 @@
     <!-- Mounted only while it asks: a closed dialog has nothing to draw. -->
     <TagImportDialog
       v-if="conflict"
-      :open="Boolean(conflict)"
-      :count="conflict?.plan.user_conflicts ?? 0"
-      :sample="conflict?.plan.user_conflict_sample ?? []"
+      :count="conflict.plan.user_conflicts ?? 0"
+      :sample="conflict.plan.user_conflict_sample ?? []"
       @keep="answerConflict(false)"
       @move="answerConflict(true)"
       @close="answerConflict(null)"
@@ -325,7 +320,6 @@ import {
 import { listGroupTags } from "../../api/tagGroups";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useTagGroupsStore } from "../../stores/useTagGroupsStore";
-import { isReadOnly } from "../../utils/apiClient";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import { debounce } from "../../utils/utils";
 import AppButton from "../widgets/AppButton.vue";
@@ -351,7 +345,6 @@ const props = defineProps({
 const emit = defineEmits(["start-review"]);
 
 const tagGroups = useTagGroupsStore();
-const readOnly = computed(() => isReadOnly.value);
 
 // The chooser's keys: the two fixed rows, or a group id.
 const ALL = "all";
@@ -412,19 +405,13 @@ const knownCounts = new Map();
 
 const hasMore = computed(() => visibleTags.value.length < total.value);
 
-function choiceParam(key) {
-  if (key === ALL) return "all";
-  if (key === NONE) return "none";
-  return String(key);
-}
-
 async function readPage(offset) {
   const seq = ++reqSeq;
   if (!offset) visibleTags.value = [];
   loading.value = true;
   try {
     const page = await listGroupTags({
-      group: choiceParam(current.value),
+      group: String(current.value),
       q: q.value || undefined,
       sort: sortKey.value,
       offset,
@@ -584,10 +571,9 @@ const dropKey = ref(null); // a group id, or NONE
 const dragGroupId = ref(null);
 const groupTarget = ref(null); // a group row a dragged group would land on
 
-const canDrop = computed(() => !readOnly.value && dragKind.value === "tags");
+const canDrop = computed(() => dragKind.value === "tags");
 
 function onTagDragStart(name, event) {
-  if (readOnly.value) return;
   // Dragging an unselected tag drags just that tag, as a file manager does.
   if (!selected.value.has(name)) setSelection([name], name);
   dragging.value = [...selected.value];
@@ -653,7 +639,6 @@ const dropLabel = computed(() => {
 const groupIds = computed(() => tagGroups.groups.map((g) => g.id));
 
 function onGroupDragStart(group, event) {
-  if (readOnly.value) return;
   dragKind.value = "group";
   dragGroupId.value = group.id;
   if (event.dataTransfer) {
@@ -663,7 +648,6 @@ function onGroupDragStart(group, event) {
 }
 
 function onGroupDragOver(group, event) {
-  if (readOnly.value) return;
   if (dragKind.value === "group") {
     if (group.id === dragGroupId.value) return;
     event.preventDefault();
@@ -701,7 +685,7 @@ function moveGroupTo(fromId, toId) {
 // Keyboard path for reordering: Alt+Up / Alt+Down moves the focused group one
 // place. Focus follows the group, so a second press keeps moving it.
 function onGroupKey(group, event) {
-  if (readOnly.value || !event.altKey) return;
+  if (!event.altKey) return;
   if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
   event.preventDefault();
   const ids = groupIds.value;
@@ -846,7 +830,6 @@ defineExpose({ clearSelection, escape, selected });
 .tgb-scope-note {
   display: block;
   margin-top: var(--space-1);
-  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
 }
 .tgb-body {
   display: grid;

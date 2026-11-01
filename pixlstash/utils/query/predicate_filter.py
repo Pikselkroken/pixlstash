@@ -223,12 +223,6 @@ GROUP_TERM_NONE = "__group:none"
 # SQLite's INTEGER is 64-bit; an id beyond it cannot name a group, so it binds to
 # a value no group can have (ids start at 1) rather than overflowing the driver.
 _SQLITE_MAX_INT = 2**63 - 1
-# A tag is unfiled when no tag_group_member row names it. Pending-retag sentinels
-# are machine bookkeeping, not user tags, so they never count as unfiled.
-_UNFILED_TAG_SQL = (
-    "tag.tag NOT LIKE :{prefix}_pattern ESCAPE '{esc}' "
-    "AND NOT EXISTS (SELECT 1 FROM tag_group_member m WHERE m.tag = tag.tag)"
-)
 
 
 def _group_term_id(term: str) -> Optional[int]:
@@ -270,10 +264,13 @@ def _group_term_clause(
         params: dict = {name: group_id}
     elif term == GROUP_TERM_NONE:
         prefix = f"tg_unfiled_{side}_{index}"
+        # A tag is unfiled when no tag_group_member row names it. Pending-retag
+        # sentinels are machine bookkeeping, not user tags, so they never count.
         body = (
             "EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND "
-            + _UNFILED_TAG_SQL.format(prefix=prefix, esc=TAG_SENTINEL_ESCAPE_CHAR)
-            + ")"
+            f"tag.tag NOT LIKE :{prefix}_pattern ESCAPE '{TAG_SENTINEL_ESCAPE_CHAR}' "
+            "AND NOT EXISTS (SELECT 1 FROM tag_group_member m WHERE m.tag = tag.tag)"
+            ")"
         )
         params = {f"{prefix}_pattern": TAG_SENTINEL_LIKE_PATTERN}
     else:

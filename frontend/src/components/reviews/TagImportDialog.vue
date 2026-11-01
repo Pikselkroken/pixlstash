@@ -1,6 +1,6 @@
 <template>
   <AppDialog
-    :open="open"
+    :open="true"
     title="Import tag groups"
     size="sm"
     @close="emit('close')"
@@ -40,12 +40,11 @@
 // The question an import asks before it moves a tag the user filed by hand.
 // Keep my filing is the default focus: the safe answer is the one Enter or a
 // quick Tab-and-Space gives, and Esc (or Cancel) commits nothing.
-import { nextTick, ref, watch } from "vue";
+import { nextTick, onMounted, ref } from "vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 
-const props = defineProps({
-  open: { type: Boolean, default: false },
+defineProps({
   // Tags the user filed in a group the file puts them out of.
   count: { type: Number, default: 0 },
   // Up to ten of their names, for the reader to recognise.
@@ -56,14 +55,9 @@ const emit = defineEmits(["keep", "move", "close"]);
 
 const keepRef = ref(null);
 
-watch(
-  () => props.open,
-  async (open) => {
-    if (!open) return;
-    await nextTick();
-    keepRef.value?.$el?.focus?.();
-  },
-);
+// Mounted only while it asks, so it opens with Keep focused: AppDialog's
+// v-dialog focuses its box only when Keep is not already inside it.
+onMounted(() => nextTick(() => keepRef.value?.$el?.focus?.()));
 </script>
 
 <style scoped>

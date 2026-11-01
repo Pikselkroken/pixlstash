@@ -252,20 +252,21 @@ const browsing = computed(
   () => props.grouped && tagGroups.hasGroups && !query.value.trim(),
 );
 
+// A group's row; the BY GROUP list adds its fold state on top.
+const groupRow = (g, q) => ({
+  kind: "group",
+  key: `g:${g.key}`,
+  id: g.id,
+  name: g.name,
+  count: g.tags.length,
+  ...around(g.name, q),
+});
+
 const browseItems = computed(() => {
   const out = [];
   for (const g of groupLists.value) {
     const open = openGroups.value.has(g.key);
-    out.push({
-      kind: "group",
-      key: `g:${g.key}`,
-      id: g.id,
-      name: g.name,
-      groupKey: g.key,
-      open,
-      count: g.tags.length,
-      ...around(g.name, ""),
-    });
+    out.push({ ...groupRow(g, ""), groupKey: g.key, open });
     const shown = open ? g.tags.slice(0, GROUP_PREVIEW) : [];
     for (const t of shown) {
       out.push({
@@ -294,14 +295,7 @@ const suggestions = computed(() => {
             .filter((h) => h.at >= 0),
         )
           .slice(0, MAX_GROUP_SUGGESTIONS)
-          .map(({ g }) => ({
-            kind: "group",
-            key: `g:${g.key}`,
-            id: g.id,
-            name: g.name,
-            count: g.tags.length,
-            ...around(g.name, q),
-          }))
+          .map(({ g }) => groupRow(g, q))
       : [];
   const hits = props.tags
     .map((t) => ({ ...t, at: t.tag.toLowerCase().indexOf(q) }))

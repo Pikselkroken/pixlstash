@@ -308,10 +308,7 @@ describe("importing a tag file", () => {
     importTagGroups.mockResolvedValue({ plan: PLAN, groups: MAP.groups, tags: { forest: 2 } });
     const before = store.revision;
     expect(await store.commitImport(file, true)).toEqual(PLAN);
-    expect(importTagGroups).toHaveBeenCalledWith(file, {
-      dryRun: false,
-      overwriteUser: true,
-    });
+    expect(importTagGroups).toHaveBeenCalledWith(file, { overwriteUser: true });
     expect(store.groupFor("forest")?.name).toBe("Character");
     expect(store.revision).toBe(before + 1);
     expect(refresh).toHaveBeenCalledTimes(1);

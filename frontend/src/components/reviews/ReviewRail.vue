@@ -45,7 +45,7 @@
         </div>
         <!-- Each row is a wrapper DIV so the per-item delete can be a real
              sibling <button> (never nested inside the receipt button), revealed
-             on hover / focus-within - mirrors the open-session rows above. -->
+             on hover / focus-within. -->
         <div
           v-for="a in store.archived"
           :key="a.id"
@@ -195,10 +195,6 @@ let archivedClearTimer = null;
 // fallback target BEFORE the store call (it's still mounted), then move focus
 // once the removal has rendered. The rail root is the fallback: it is the only
 // thing left in the footer once the Archived section is gone.
-function railFallbackEl() {
-  return railRootRef.value ?? null;
-}
-
 async function onClearArchivedClick() {
   clearTimeout(archivedClearTimer);
   if (!archivedClearArmed.value) {
@@ -209,7 +205,7 @@ async function onClearArchivedClick() {
     return;
   }
   archivedClearArmed.value = false;
-  const fallback = railFallbackEl();
+  const fallback = railRootRef.value;
   await store.clearArchived();
   await nextTick();
   fallback?.focus();
@@ -220,7 +216,7 @@ async function onClearArchivedClick() {
 async function onDeleteArchived(id) {
   const index = store.archived.findIndex((a) => a.id === id);
   const wasLast = store.archived.length <= 1;
-  const fallback = railFallbackEl();
+  const fallback = railRootRef.value;
   await store.deleteArchived(id);
   await nextTick();
   if (wasLast) {

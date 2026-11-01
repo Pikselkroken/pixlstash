@@ -499,9 +499,7 @@ const groupScope = ref(null);
 
 function pickGroup(event) {
   const raw = event.target.value;
-  if (raw === "") groupScope.value = null;
-  else if (raw === "none") groupScope.value = "none";
-  else groupScope.value = Number(raw);
+  groupScope.value = raw === "" ? null : raw === "none" ? "none" : Number(raw);
   event.target.blur();
 }
 

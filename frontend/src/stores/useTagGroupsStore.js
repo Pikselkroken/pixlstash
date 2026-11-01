@@ -24,8 +24,6 @@ import { useFilterStore } from "./useFilterStore";
 import { useNoticeStore } from "./useNoticeStore";
 import { useOperationStore } from "./useOperationStore";
 
-/** Op type of a tag move, as the server records it. */
-export const OP_TAG_GROUPS_MOVE = "tag_groups.move";
 /** `Operation.target_type` of a tag move: no picture is its target. */
 export const TARGET_TAG_GROUP = "tag_group";
 
@@ -98,7 +96,6 @@ export const useTagGroupsStore = defineStore("tagGroups", () => {
   const ungroupedCount = ref(0);
   /** Distinct known tags: the library's plus every filed one. */
   const allCount = ref(0);
-  const loaded = ref(false);
   /**
    * Bumped whenever a move or its undo changed which tags a group holds, so a
    * view narrowed by a group term (the stats sidebar) knows to re-read.
@@ -126,7 +123,6 @@ export const useTagGroupsStore = defineStore("tagGroups", () => {
     groupOf.value = new Map(Object.entries(body.tags || {}));
     ungroupedCount.value = Number(body.ungrouped_count) || 0;
     allCount.value = Number(body.all_count) || 0;
-    loaded.value = true;
     fetchedAt = Date.now();
   }
 
@@ -200,11 +196,10 @@ export const useTagGroupsStore = defineStore("tagGroups", () => {
   function refilterGroupTerms() {
     revision.value += 1;
     const filters = useFilterStore();
-    if ((filters.tagFilter || []).some(isGroupToken)) {
-      filters.tagFilter = [...filters.tagFilter];
-    }
-    if ((filters.tagRejectedFilter || []).some(isGroupToken)) {
-      filters.tagRejectedFilter = [...filters.tagRejectedFilter];
+    for (const key of ["tagFilter", "tagRejectedFilter"]) {
+      if ((filters[key] || []).some(isGroupToken)) {
+        filters[key] = [...filters[key]];
+      }
     }
   }
 
@@ -229,7 +224,7 @@ export const useTagGroupsStore = defineStore("tagGroups", () => {
       const body = await createTagGroup(clean);
       if (started !== generation) return null;
       apply(body);
-      return body?.group ?? groups.value.find((g) => g.name === clean) ?? null;
+      return body?.group ?? null;
     } catch (e) {
       if (started !== generation) return null;
       report(`make the group “${clean}”`, e);
@@ -293,10 +288,7 @@ export const useTagGroupsStore = defineStore("tagGroups", () => {
     if (isReadOnly.value) return null;
     const started = generation;
     try {
-      const body = await importTagGroups(file, {
-        dryRun: false,
-        overwriteUser: Boolean(overwriteUser),
-      });
+      const body = await importTagGroups(file, { overwriteUser });
       if (started !== generation) return null;
       apply(body);
       refilterGroupTerms();
@@ -316,11 +308,9 @@ export const useTagGroupsStore = defineStore("tagGroups", () => {
     const rank = new Map(ids.map((id, i) => [Number(id), i]));
     // Drawn in the new order at once; the server's answer replaces it. A group
     // the list leaves out keeps its place relative to the others, after them.
-    const place = (g, i) => rank.get(g.id) ?? ids.length + i;
-    groups.value = before
-      .map((g, i) => [place(g, i), g])
-      .sort((a, b) => a[0] - b[0])
-      .map(([, g]) => g);
+    groups.value = [...before].sort(
+      (a, b) => (rank.get(a.id) ?? ids.length) - (rank.get(b.id) ?? ids.length),
+    );
     const started = generation;
     try {
       const body = await reorderTagGroups(ids.map(Number));
@@ -373,7 +363,6 @@ export const useTagGroupsStore = defineStore("tagGroups", () => {
     groupOf.value = new Map();
     ungroupedCount.value = 0;
     allCount.value = 0;
-    loaded.value = false;
     fetchedAt = 0;
     generation += 1;
     inflight = null;
@@ -385,7 +374,6 @@ export const useTagGroupsStore = defineStore("tagGroups", () => {
     groupOf,
     ungroupedCount,
     allCount,
-    loaded,
     revision,
     hasGroups,
     byId,

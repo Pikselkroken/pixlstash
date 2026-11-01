@@ -81,6 +81,13 @@ function respond(url) {
   return { data: [] };
 }
 
+// AppDialog without Vuetify: its slots while open, and the title it is given.
+const AppDialogStub = {
+  props: ["open", "title"],
+  emits: ["close"],
+  template: `<div v-if="open" class="app-dialog"><h2>{{ title }}</h2><slot /><div class="app-dialog__footer"><slot name="footer" /></div></div>`,
+};
+
 async function mountWithReviews(sessions = [REVIEW]) {
   apiGet.mockImplementation(async (url) => respond(url));
   const reviews = useReviewSessionsStore();
@@ -97,10 +104,14 @@ async function mountWithReviews(sessions = [REVIEW]) {
       config: {
         compilerOptions: { isCustomElement: (tag) => tag.startsWith("v-") },
       },
-      // Teleports are flattened in place, and the abort dialog is the real one.
+      // Teleports are flattened in place, and the abort dialog is the real one
+      // over a passthrough AppDialog (its Vuetify overlay is tested in
+      // ReviewAbortDialog.test.js): open renders its slots, close is its emit.
       stubs: {
         teleport: { template: '<div class="tp"><slot /></div>' },
         ReviewAbortDialog: false,
+        AppButton: false,
+        AppDialog: AppDialogStub,
       },
     },
   });
@@ -121,7 +132,13 @@ function menuItem(label) {
 }
 
 function dialog() {
-  return document.querySelector('.rs-abort[role="dialog"]');
+  return document.querySelector(".app-dialog");
+}
+
+function dialogAction(label) {
+  return [...document.querySelectorAll(".app-dialog__footer button")].find((b) =>
+    b.textContent.trim().startsWith(label),
+  );
 }
 
 beforeEach(() => {
@@ -144,11 +161,11 @@ describe("sidebar review row menu", () => {
     await rowOf(wrapper, "hair").trigger("contextmenu");
     await flushPromises();
     menuItem("Abort review").click();
-    await flushPromises();
+    for (let i = 0; i < 5; i += 1) await flushPromises();
 
     expect(dialog()).not.toBeNull();
     expect(dialog().textContent).toContain("hair");
-    dialog().querySelector(".rs-abort-btn--keep").click();
+    dialogAction("Keep").click();
     await flushPromises();
 
     expect(abort).toHaveBeenCalledTimes(1);
@@ -162,13 +179,10 @@ describe("sidebar review row menu", () => {
     await rowOf(wrapper, "hair").trigger("contextmenu");
     await flushPromises();
     menuItem("Abort review").click();
-    await flushPromises();
+    for (let i = 0; i < 5; i += 1) await flushPromises();
 
-    const cancel = [...dialog().querySelectorAll(".rs-abort-btn")].find(
-      (b) => b.textContent.trim() === "Cancel",
-    );
-    cancel.click();
-    await flushPromises();
+    dialogAction("Cancel").click();
+    for (let i = 0; i < 5; i += 1) await flushPromises();
 
     expect(dialog()).toBeNull();
     expect(abort).not.toHaveBeenCalled();

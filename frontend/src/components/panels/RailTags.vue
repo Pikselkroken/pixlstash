@@ -89,7 +89,7 @@
           :aria-selected="showGroups ? 'false' : 'true'"
           :aria-controls="tagsPanelId"
           :tabindex="showGroups ? -1 : 0"
-          @click="pickView('list')"
+          @click="tagGroups.setRailView('list')"
         >
           Tags
           <span class="rail-sec__count">{{ applied.length.toLocaleString() }}</span>
@@ -103,7 +103,7 @@
           :aria-selected="showGroups ? 'true' : 'false'"
           :aria-controls="tagsPanelId"
           :tabindex="showGroups ? 0 : -1"
-          @click="pickView('groups')"
+          @click="tagGroups.setRailView('groups')"
         >
           By group
           <span class="rail-sec__count">{{ groupBlocks.length.toLocaleString() }}</span>
@@ -941,9 +941,7 @@ const shownBlocks = computed(() =>
     : [
         {
           key: "all",
-          id: null,
           heading: false,
-          name: "",
           all: applied.value,
           chips: shownApplied.value,
         },
@@ -1240,17 +1238,12 @@ async function commitNaming() {
   }
 }
 
-/** This machine's choice of Tags or By group, for every rail. */
-function pickView(view) {
-  tagGroups.setRailView(view);
-}
-
 /** Left and Right move between the two tabs, and take the chosen one. */
 function onTabKey(event) {
   if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
   event.preventDefault();
   const next = showGroups.value ? "list" : "groups";
-  pickView(next);
+  tagGroups.setRailView(next);
   nextTick(() => (next === "groups" ? groupsTabRef : listTabRef).value?.focus());
 }
 

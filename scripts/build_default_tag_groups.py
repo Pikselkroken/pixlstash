@@ -985,13 +985,6 @@ NSFW_WORDS = re.compile(
 )
 
 
-def load_tagger_labels(path: Path) -> set[str]:
-    """The PixlStash anomaly tagger's labels, normalised."""
-    with path.open(encoding="utf-8") as handle:
-        meta = json.load(handle)
-    return {normalise_tag(label) for label in meta["labels"]}
-
-
 def load_wd14_category(path: Path, category: str) -> set[str]:
     """The WD14 tags of one category ("0" general, "4" character), normalised."""
     with path.open(encoding="utf-8", newline="") as handle:
@@ -1051,9 +1044,6 @@ def build_groups(
         for tag in sorted(unplaced_artists)
     ]
     for group, tags in MANUAL_PLACEMENTS.items():
-        if group not in DEFAULT_GROUP_NAMES:
-            problems.append(f"unknown group {group!r}")
-            continue
         for raw in tags:
             tag = normalise_tag(raw)
             if tag not in union:
@@ -1085,9 +1075,7 @@ def build_groups(
             continue
         groups[group].add(tag)
 
-    for name in DEFAULT_GROUP_NAMES:
-        if name == ANOMALY:
-            groups[name].update(anomaly)
+    groups[ANOMALY].update(anomaly)
     return groups
 
 
@@ -1096,7 +1084,8 @@ def main(argv: list[str]) -> int:
         print(__doc__, file=sys.stderr)
         return 2
     tagger_path, wd14_path, toolkit_path = (Path(arg) for arg in argv)
-    labels = load_tagger_labels(tagger_path)
+    meta = json.loads(tagger_path.read_text(encoding="utf-8"))
+    labels = {normalise_tag(label) for label in meta["labels"]}
     general = load_wd14_category(wd14_path, "0")
     characters = load_wd14_category(wd14_path, "4")
     toolkit = load_toolkit(toolkit_path)
@@ -1118,7 +1107,6 @@ def main(argv: list[str]) -> int:
             {"name": name, "tags": sorted(groups[name])} for name in DEFAULT_GROUP_NAMES
         ],
     }
-    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT_PATH.write_text(
         json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )

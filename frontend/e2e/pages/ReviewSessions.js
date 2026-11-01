@@ -109,10 +109,11 @@ export class ReviewSessions {
     this.tagApplyPanel = page.locator('.rs-tag-apply-panel')
 
     // Abort dialog (ReviewAbortDialog, teleported to the body)
-    this.abortDialog = page.locator('.rs-abort[role="dialog"]')
-    this.abortKeep = page.locator('.rs-abort-btn--keep')
-    this.abortUndo = page.locator('.rs-abort-btn--undo')
-    this.abortCancel = page.locator('.rs-abort', { hasText: 'Cancel' }).locator('.rs-abort-btn', { hasText: 'Cancel' })
+    // The abort dialog is AppDialog: a v-dialog overlay, shown while active.
+    this.abortDialog = page.locator('.v-overlay--active .app-dialog')
+    this.abortKeep = this.abortDialog.locator('.app-dialog__footer button', { hasText: 'Keep' })
+    this.abortUndo = this.abortDialog.locator('.app-dialog__footer button', { hasText: 'Undo' })
+    this.abortCancel = this.abortDialog.locator('.app-dialog__footer button', { hasText: 'Cancel' })
 
     // Archived receipt
     this.archived = page.locator('.rs-archived')

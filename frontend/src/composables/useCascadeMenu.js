@@ -3,7 +3,7 @@
 // `ShelfShowPanel`): a root list of rows, each opening one submenu beside it,
 // so somebody who has learnt one knows the others.
 
-import { getCurrentInstance, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue";
+import { nextTick, onBeforeUnmount, reactive, ref, watch } from "vue";
 
 /**
  * @param {() => boolean} isOpen - the v-menu keeps its content mounted, so a
@@ -98,9 +98,7 @@ export function useCascadeMenu(isOpen, focusIn) {
     }
   });
 
-  if (getCurrentInstance()) {
-    onBeforeUnmount(() => resizeObserver?.disconnect());
-  }
+  onBeforeUnmount(() => resizeObserver?.disconnect());
 
   return {
     sub,

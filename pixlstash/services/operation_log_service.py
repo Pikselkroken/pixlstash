@@ -755,7 +755,7 @@ def _append_operation_row(
         actor=actor,
         op_type=op_type,
         target_type=target_type,
-        target_ids=json.dumps(list(target_ids)),
+        target_ids=json.dumps(target_ids),
         target_count=len(target_ids),
         before_state=json.dumps(before_payload),
         after_state=json.dumps(after_payload),
@@ -793,8 +793,6 @@ def record_payload_operation_in_session(
     source: str = "external",
     origin_client_id: Optional[str] = None,
     batch_id: Optional[str] = None,
-    target_ids: Iterable[Any] = (),
-    commit: bool = False,
 ) -> Operation:
     """Append one operation whose before/after are NOT picture facets.
 
@@ -811,15 +809,12 @@ def record_payload_operation_in_session(
         before: JSON-serialisable state before the change (undo writes it back).
         after: JSON-serialisable state after the change (redo writes it back).
         summary: Human sentence for the undo toast.
-        target_ids: Optional ids the operation names (may be empty).
-        commit: Commit before returning. Defaults to ``False`` so the change and
-            the row commit together in the caller's transaction.
     """
     return _append_operation_row(
         session,
         op_type=op_type,
         target_type=target_type,
-        target_ids=_normalize_ids(target_ids),
+        target_ids=[],
         before_payload=before,
         after_payload=after,
         actor=actor,
@@ -828,7 +823,7 @@ def record_payload_operation_in_session(
         batch_id=batch_id,
         summary=summary,
         undoable=True,
-        commit=commit,
+        commit=False,
     )
 
 

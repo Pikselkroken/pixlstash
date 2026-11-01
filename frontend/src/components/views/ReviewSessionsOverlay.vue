@@ -568,7 +568,7 @@ function handleKeyDown(event) {
   if (isEditable(event.target) || isEditable(document.activeElement)) return;
   // The sidebar's abort dialog sits over this view but outside it: while it
   // is up its own keys (Esc cancels it) are the only ones that act.
-  if (document.querySelector(".rs-abort-backdrop")) return;
+  if (document.querySelector(".v-overlay--active.v-dialog")) return;
 
   // Undo/redo are checked BEFORE the modifier bail below - that bail is what
   // made Ctrl+Z dead in a review session, while App's global handler skips the

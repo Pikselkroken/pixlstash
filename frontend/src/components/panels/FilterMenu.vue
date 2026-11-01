@@ -793,6 +793,7 @@ function toggleIn(field, value, on) {
 const TAG_FIELDS = { has: "tagFilter", lacks: "tagRejectedFilter" };
 
 // A group term (`__group:<id>`) is shown as its words, "any Character tag".
+const tagChip = (tag) => ({ tag, label: tagTermLabel(tag) });
 const tagFieldRows = computed(() => [
   {
     id: "has",
@@ -800,7 +801,7 @@ const tagFieldRows = computed(() => [
     short: "has",
     tone: "has",
     icon: "mdi-check",
-    chips: store.tagFilter.map((tag) => ({ tag, label: tagTermLabel(tag) })),
+    chips: store.tagFilter.map(tagChip),
   },
   {
     id: "lacks",
@@ -808,10 +809,7 @@ const tagFieldRows = computed(() => [
     short: "lacks",
     tone: "lacks",
     icon: "mdi-cancel",
-    chips: store.tagRejectedFilter.map((tag) => ({
-      tag,
-      label: tagTermLabel(tag),
-    })),
+    chips: store.tagRejectedFilter.map(tagChip),
   },
 ]);
 

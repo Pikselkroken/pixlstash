@@ -2294,11 +2294,8 @@ function onReviewRowKey(review, event) {
 // board rail used to own.
 function abortReviewFromCtx() {
   const review = sidebarCtxReview.value;
-  const rowEl = sidebarCtxReviewEl;
-  sidebarCtxReviewEl = null;
   closeSidebarCtxMenu();
   if (!review) return;
-  reviewAbortRowEl = rowEl;
   reviewAbortRef.value?.open(review.id);
 }
 
@@ -2315,10 +2312,10 @@ function archiveReviewFromCtx() {
 
 // Focus goes back to the review row the abort was opened from. An abort
 // removes that row, so then it falls to the Tags row.
-let reviewAbortRowEl = null;
+// Only the row menu writes sidebarCtxReviewEl, and that menu cannot open while
+// the modal abort dialog holds the screen and its focus.
 function onReviewAbortClosed() {
-  const rowEl = reviewAbortRowEl;
-  reviewAbortRowEl = null;
+  const rowEl = sidebarCtxReviewEl;
   nextTick(() => {
     const target = rowEl?.isConnected ? rowEl : tagReviewRowEl.value;
     target?.focus();

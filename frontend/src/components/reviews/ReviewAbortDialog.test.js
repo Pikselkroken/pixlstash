@@ -9,6 +9,12 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { setActivePinia, createPinia } from "pinia";
 import { mount, flushPromises } from "@vue/test-utils";
+import { createVuetify } from "vuetify";
+import * as components from "vuetify/components";
+
+// The real VDialog: its focus handling (focus into the box on open, pulled
+// back in when it leaves) is what these tests check.
+const vuetify = createVuetify({ components });
 
 vi.mock("../../utils/apiClient", () => ({
   API_BASE_URL: "/api/v1",
@@ -26,9 +32,9 @@ import ReviewAbortDialog from "./ReviewAbortDialog.vue";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 
 const globalOpts = {
+  plugins: [vuetify],
   stubs: {
     Tooltip: true,
-    teleport: true,
   },
 };
 
@@ -47,8 +53,22 @@ function mountDialog() {
   return mount(ReviewAbortDialog, { global: globalOpts, attachTo: document.body });
 }
 
-function button(cls) {
-  return document.querySelector(`.rs-abort-btn${cls}`);
+// The dialog is AppDialog, a v-dialog teleported to the body: its footer
+// buttons are found by their words.
+function dialog() {
+  return document.querySelector(".app-dialog");
+}
+
+// Shown means its overlay is active: the box can linger through the leave
+// transition, which the test renderer runs for real.
+function isShown() {
+  return document.querySelector(".v-overlay--active .app-dialog") != null;
+}
+
+function action(label) {
+  return [...document.querySelectorAll(".app-dialog__footer button")].find((b) =>
+    b.textContent.trim().startsWith(label),
+  );
 }
 
 beforeEach(() => {
@@ -63,9 +83,9 @@ describe("ReviewAbortDialog", () => {
     await w.vm.open(5);
     await flushPromises();
 
-    expect(document.querySelector('.rs-abort[role="dialog"]')).not.toBeNull();
-    expect(button("--keep").textContent).toContain("Keep 2 changes");
-    expect(button("--undo").textContent).toContain("Undo 2 changes");
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(action("Keep").textContent).toContain("Keep 2 changes");
+    expect(action("Undo").textContent).toContain("Undo 2 changes");
     w.unmount();
   });
 
@@ -77,14 +97,14 @@ describe("ReviewAbortDialog", () => {
     await w.vm.open(5);
     await flushPromises();
 
-    button("--keep").click();
+    action("Keep").click();
     await flushPromises();
 
     expect(abort).toHaveBeenCalledTimes(1);
     expect(abort).toHaveBeenCalledWith(5);
     expect(undo).not.toHaveBeenCalled();
     expect(w.emitted("closed")).toHaveLength(1);
-    expect(document.querySelector(".rs-abort")).toBeNull();
+    expect(isShown()).toBe(false);
     w.unmount();
   });
 
@@ -96,7 +116,7 @@ describe("ReviewAbortDialog", () => {
     await w.vm.open(5);
     await flushPromises();
 
-    button("--undo").click();
+    action("Undo").click();
     await flushPromises();
 
     expect(undo).toHaveBeenCalledTimes(1);
@@ -114,16 +134,13 @@ describe("ReviewAbortDialog", () => {
     await w.vm.open(5);
     await flushPromises();
 
-    const cancel = [...document.querySelectorAll(".rs-abort-btn")].find(
-      (b) => b.textContent.trim() === "Cancel",
-    );
-    cancel.click();
+    action("Cancel").click();
     await flushPromises();
 
     expect(abort).not.toHaveBeenCalled();
     expect(undo).not.toHaveBeenCalled();
     expect(w.emitted("closed")).toHaveLength(1);
-    expect(document.querySelector(".rs-abort")).toBeNull();
+    expect(isShown()).toBe(false);
     w.unmount();
   });
 
@@ -141,7 +158,7 @@ describe("ReviewAbortDialog", () => {
     await flushPromises();
     window.removeEventListener("keydown", beyond);
 
-    expect(document.querySelector(".rs-abort")).toBeNull();
+    expect(isShown()).toBe(false);
     expect(abort).not.toHaveBeenCalled();
     expect(w.emitted("closed")).toHaveLength(1);
     expect(beyond).not.toHaveBeenCalled();
@@ -154,10 +171,7 @@ describe("ReviewAbortDialog", () => {
     await w.vm.open(5);
     await flushPromises();
 
-    const cancel = [...document.querySelectorAll(".rs-abort-btn")].find(
-      (b) => b.textContent.trim() === "Cancel",
-    );
-    expect(document.activeElement).toBe(cancel);
+    expect(document.activeElement).toBe(action("Cancel"));
     w.unmount();
   });
 
@@ -169,55 +183,12 @@ describe("ReviewAbortDialog", () => {
     await flushPromises();
 
     expect(abort).toHaveBeenCalledWith(5);
-    expect(document.querySelector(".rs-abort")).toBeNull();
+    expect(dialog()).toBeNull();
     expect(w.emitted("closed")).toHaveLength(1);
     w.unmount();
   });
 
-  it("Tab from the last control wraps to the first", async () => {
-    seed(2);
-    const w = mountDialog();
-    await w.vm.open(5);
-    await flushPromises();
-
-    const keep = button("--keep");
-    const cancel = [...document.querySelectorAll(".rs-abort-btn")].find(
-      (b) => b.textContent.trim() === "Cancel",
-    );
-    expect(document.activeElement).toBe(cancel);
-    const ev = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
-    document.activeElement.dispatchEvent(ev);
-
-    expect(ev.defaultPrevented).toBe(true);
-    expect(document.activeElement).toBe(keep);
-    w.unmount();
-  });
-
-  it("Shift+Tab from the first control wraps to the last", async () => {
-    seed(2);
-    const w = mountDialog();
-    await w.vm.open(5);
-    await flushPromises();
-
-    const keep = button("--keep");
-    const cancel = [...document.querySelectorAll(".rs-abort-btn")].find(
-      (b) => b.textContent.trim() === "Cancel",
-    );
-    keep.focus();
-    const ev = new KeyboardEvent("keydown", {
-      key: "Tab",
-      shiftKey: true,
-      bubbles: true,
-      cancelable: true,
-    });
-    document.activeElement.dispatchEvent(ev);
-
-    expect(ev.defaultPrevented).toBe(true);
-    expect(document.activeElement).toBe(cancel);
-    w.unmount();
-  });
-
-  it("pulls focus back in when it moves outside the dialog", async () => {
+  it("focus that moves outside the dialog is pulled back in", async () => {
     seed(2);
     const w = mountDialog();
     await w.vm.open(5);
@@ -228,10 +199,8 @@ describe("ReviewAbortDialog", () => {
     document.body.appendChild(outside);
     outside.focus();
 
-    const cancel = [...document.querySelectorAll(".rs-abort-btn")].find(
-      (b) => b.textContent.trim() === "Cancel",
-    );
-    expect(document.activeElement).toBe(cancel);
+    expect(dialog().contains(document.activeElement)).toBe(true);
+    expect(document.activeElement).not.toBe(outside);
     expect(w.emitted("closed")).toBeUndefined();
     w.unmount();
   });

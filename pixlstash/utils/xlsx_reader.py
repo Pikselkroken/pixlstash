@@ -34,7 +34,7 @@ import re
 import xml.etree.ElementTree as ET
 import zipfile
 import zlib
-from typing import Iterator, Optional
+from typing import Iterator
 
 MAX_MEMBERS = 256
 MAX_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
@@ -155,9 +155,8 @@ def _completed(
             # The parser builds a whole chunk's tree before its events are
             # drained, so this element is rarely the parent's last child. Rows
             # complete in document order, so it is almost always the first one.
-            parent = stack[-1] if stack else None
-            if parent is not None:
-                parent.remove(elem)
+            if stack:
+                stack[-1].remove(elem)
 
     try:
         for chunk in _streamed(zf, name, budget):
@@ -214,11 +213,7 @@ def _cell_text(cell: ET.Element, shared: list[str]) -> str:
     if kind == "inlineStr":
         inline = next((c for c in cell if _local(c.tag) == "is"), None)
         return _rich_text(inline) if inline is not None else ""
-    value: Optional[ET.Element] = None
-    for child in cell:
-        if _local(child.tag) == "v":
-            value = child
-            break
+    value = next((c for c in cell if _local(c.tag) == "v"), None)
     if value is None or value.text is None:
         return ""
     if kind == "s":

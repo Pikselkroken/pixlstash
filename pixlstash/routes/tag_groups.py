@@ -94,18 +94,15 @@ def _refuse(exc: TagGroupError) -> HTTPException:
 
 
 def _read_capped(upload: UploadFile) -> bytes:
-    """The upload's bytes, refused (413) as soon as they pass the import cap."""
-    buffer = bytearray()
-    while True:
-        chunk = upload.file.read(1 << 20)
-        if not chunk:
-            return bytes(buffer)
-        buffer.extend(chunk)
-        if len(buffer) > IMPORT_MAX_BYTES:
-            raise TagGroupError(
-                413,
-                f"The tag file is larger than {IMPORT_MAX_BYTES // (1024 * 1024)} MB",
-            )
+    """The upload's bytes, refused (413) when they pass the import cap."""
+    # One byte past the cap is enough to tell that the cap was passed.
+    data = upload.file.read(IMPORT_MAX_BYTES + 1)
+    if len(data) > IMPORT_MAX_BYTES:
+        raise TagGroupError(
+            413,
+            f"The tag file is larger than {IMPORT_MAX_BYTES // (1024 * 1024)} MB",
+        )
+    return data
 
 
 def create_router(server) -> APIRouter:

@@ -107,12 +107,7 @@ const MULTI_PHRASES = ["two tone"];
  * @returns {string|null} a PALETTE key, or null.
  */
 export function colourKey(name) {
-  const words = String(name ?? "")
-    .toLowerCase()
-    .replace(/[^a-z]+/g, " ")
-    .trim()
-    .split(" ")
-    .filter(Boolean);
+  const words = String(name ?? "").toLowerCase().split(/[^a-z]+/).filter(Boolean);
   const joined = ` ${words.join(" ")} `;
   if (words.some((w) => MULTI_WORDS.has(w))) return null;
   if (MULTI_PHRASES.some((p) => joined.includes(` ${p} `))) return null;
