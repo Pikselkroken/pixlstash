@@ -99,7 +99,7 @@ body {
   --track-trough: rgba(var(--v-theme-scrim), 0.34);
   --track-ring: rgba(var(--v-theme-on-surface), 0.4);
   /* LOCKED IS A HATCH: a row whose file cannot leave its folder (the model
-     shelf). 1px ink lines at 45deg, 7px apart, at 6% ink: a texture rather
+     shelf). 1px diagonal ink lines, 7px apart, at 6% ink: a texture rather
      than a hue, because olive, amber and the type tints already mean something
      on that row, and a texture survives greyscale. Low enough that text over
      it keeps its contrast. A background IMAGE, so it layers under a wash. */
