@@ -730,6 +730,9 @@ export const scenes = [
         .first()
       await folder.click()
       await expect(page.locator('.shelf-row').first()).toBeVisible()
+      // Each folder row's location line names where it is on the capture
+      // machine (the work dir, its own caches); the labels say enough.
+      await mask(page, '.mft-origin', [''])
       await page.waitForTimeout(800)
       return null
     },
