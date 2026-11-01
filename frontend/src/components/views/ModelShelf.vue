@@ -548,7 +548,10 @@
                   :aria-sort="columnSortState(DATE_COLUMN.sort)"
                   >{{ DATE_COLUMN.label }}</span
                 >
-                <span role="columnheader" :aria-sort="columnSortState('sets')"
+                <span
+                  role="columnheader"
+                  class="shelf-sets-header"
+                  :aria-sort="columnSortState('sets')"
                   >Sets</span
                 >
               </li>
@@ -4341,14 +4344,14 @@ const SHELF_COLUMNS = computed(() => [
 const RESIZE_STEP = 8;
 
 /**
- * The Name track's floor, and the only thing standing between the grips and a
- * shelf that scrolls sideways.
+ * The Name track's floor, for the gesture AND the stylesheet.
  *
- * Not a `min-width` in the stylesheet: a genuinely narrow window is still
- * allowed to squeeze the name - that is what the flexible track IS - and a CSS
- * floor would make those windows overflow instead. This bounds the GESTURE, so
- * the reader cannot do it to themselves. 200px is about 24 characters of the
- * name line, past which the second line's filename is what is being read.
+ * It bounds the drag (`widenable`), so the reader cannot squeeze the name
+ * themselves, and it is the `min-width` of the Name track (`--shelf-name-min`),
+ * so a narrow PANEL cannot either: there the fixed columns give way instead,
+ * down to their own `MIN_COLUMN_WIDTHS`, after the `shelflist` rungs have
+ * dropped Sets and the thumbnail. 200px is about 24 characters of the name
+ * line, past which the second line's filename is what is being read.
  */
 const MIN_NAME_WIDTH = 200;
 
@@ -4359,16 +4362,19 @@ const resizing = ref(null);
  * The remembered widths, handed to the row rules as the custom properties they
  * already read. Bound on the root rather than per cell so the headings, the
  * rows and a stack's member rows cannot drift apart: there is one declaration
- * of each width and every cell resolves the same variable.
+ * of each width and every cell resolves the same variable. The floors ride
+ * along so a narrow panel shrinks the columns to the same minimums the grips
+ * stop at, rather than to a second set of figures in the stylesheet.
  */
-const columnStyle = computed(() =>
-  Object.fromEntries(
-    Object.entries(store.view.columnWidths).map(([key, px]) => [
-      `--shelf-col-${key}`,
-      `${px}px`,
+const columnStyle = computed(() => ({
+  ...Object.fromEntries(
+    Object.entries(store.view.columnWidths).flatMap(([key, px]) => [
+      [`--shelf-col-${key}`, `${px}px`],
+      [`--shelf-col-${key}-min`, `${MIN_COLUMN_WIDTHS[key]}px`],
     ]),
   ),
-);
+  "--shelf-name-min": `${MIN_NAME_WIDTH}px`,
+}));
 
 /** `"ascending"` / `"descending"` / `"none"`, for `aria-sort`. */
 function columnSortState(key) {
@@ -4679,7 +4685,8 @@ watch(
      numbers with nothing keeping them equal, which is how a "cannot disagree"
      comment becomes false. One declaration, in the store.
 
-     FIXED widths, not `auto`: grouping makes one list per group, so `auto`
+     STATED widths, not `auto` (they are the flex basis, and shrink only to
+     their floors on a narrow panel): grouping makes one list per group, so `auto`
      tracks would be measured against that group's contents alone and the
      columns would step sideways from one folder to the next - the alignment
      #891 exists to hold. */
@@ -4875,6 +4882,11 @@ watch(
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  /* `shelflist`: the list's own ladder (the rungs after the column rules),
+     measured on the panel the rows are laid out in, not the window - the
+     Models rail takes a third of it when open. */
+  container-type: inline-size;
+  container-name: shelflist;
 }
 
 .shelf-scroll {
@@ -5078,34 +5090,45 @@ watch(
    cells, several selectors reach for them by name, and a heading answering to
    the same class is how `.shelf-col--base span` came to find a column name
    instead of a base model. The variable is what the two share. */
+/* Shrinkable down to the column's floor, exactly as `.shelf-col` is: the two
+   must give way by the same amount or the headings leave their columns. */
 .shelf-head-col {
   position: relative;
-  flex: none;
+  flex: 0 1 auto;
 }
 
+/* Basis 0, not auto, here and on `.shelf-row-label`: an `auto` basis is the
+   row's own name, so when the fixed columns shrink they would shrink by a
+   different amount on every row. From 0 the name never shrinks (it is held at
+   its floor) and every row hands the columns the same room. */
 .shelf-head-col--label {
-  flex: 1 1 auto;
-  min-width: 0;
+  flex: 1 1 0;
+  min-width: var(--shelf-name-min);
 }
 
 .shelf-head-col--kind {
   width: var(--shelf-col-kind);
+  min-width: var(--shelf-col-kind-min);
 }
 
 .shelf-head-col--base {
   width: var(--shelf-col-base);
+  min-width: var(--shelf-col-base-min);
 }
 
 .shelf-head-col--size {
   width: var(--shelf-col-size);
+  min-width: var(--shelf-col-size-min);
 }
 
 .shelf-head-col--date {
   width: var(--shelf-col-date);
+  min-width: var(--shelf-col-date-min);
 }
 
 .shelf-head-col--sets {
   width: var(--shelf-col-sets);
+  min-width: var(--shelf-col-sets-min);
 }
 
 /* The type, the weight, the tracking, the case and the 0.7 ink all come from
@@ -5428,8 +5451,8 @@ button.shelf-head-cell:hover {
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-2);
-  flex: 1 1 auto;
-  min-width: 0;
+  flex: 1 1 0;
+  min-width: var(--shelf-name-min);
 }
 
 /* The filename takes the whole of the second line. It is what the file is
@@ -5663,8 +5686,12 @@ button.shelf-head-cell:hover {
   color: rgb(var(--v-theme-surface-success));
 }
 
+/* The remembered width is the BASIS, and a panel too narrow for it shrinks
+   every column in proportion down to its floor, never below: an explicit
+   `min-width` rather than `auto`, which would be each cell's content and
+   leave the rows disagreeing with each other and with the headings. */
 .shelf-col {
-  flex: none;
+  flex: 0 1 auto;
   font-size: var(--text-xs);
   white-space: nowrap;
   overflow: hidden;
@@ -5674,10 +5701,12 @@ button.shelf-head-cell:hover {
 
 .shelf-col--kind {
   width: var(--shelf-col-kind);
+  min-width: var(--shelf-col-kind-min);
 }
 
 .shelf-col--base {
   width: var(--shelf-col-base);
+  min-width: var(--shelf-col-base-min);
 }
 
 /* A guessed value carries its tag UNDER the label, as the name carries its
@@ -5748,6 +5777,7 @@ button.shelf-head-cell:hover {
    them being able to. */
 .shelf-col--size {
   width: var(--shelf-col-size);
+  min-width: var(--shelf-col-size-min);
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
@@ -5758,6 +5788,7 @@ button.shelf-head-cell:hover {
    as a magnitude rather than as one more figure in a row of them. */
 .shelf-col--date {
   width: var(--shelf-col-date);
+  min-width: var(--shelf-col-date-min);
   font-variant-numeric: tabular-nums;
 }
 
@@ -5765,8 +5796,35 @@ button.shelf-head-cell:hover {
    same right-aligned tabular figures. */
 .shelf-col--sets {
   width: var(--shelf-col-sets);
+  min-width: var(--shelf-col-sets-min);
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+/* ── The list's ladder ─────────────────────────────────────────────────────
+   What goes when the panel is too narrow for Name to keep its floor at the
+   default widths: Sets first (a count the rail and the set cards also give),
+   then the whole identity slot. That slot is more than the picture: the deck
+   ticks, a member's arrow, the broken-file glyph and an open run's Cover chip
+   go with it. The stack badge beside the name still counts the run, the
+   member indent still nests its steps, and a broken row keeps its error rail
+   and the filename line's note; the Cover chip has no stand-in, which is the
+   price of the room. Both rungs sit just under where Name would drop below
+   `--shelf-name-min` at the default widths - with a widened column they fire
+   late rather than early, and the columns' own shrink covers the gap. */
+@container shelflist (max-width: 820px) {
+  .shelf-head-col--sets,
+  .shelf-col--sets,
+  .shelf-sets-header {
+    display: none;
+  }
+}
+
+@container shelflist (max-width: 740px) {
+  .shelf-head-ident,
+  .shelf-row-ident {
+    display: none;
+  }
 }
 
 /* The favourite heart after the name: an indicator, not a control. Toggling it
@@ -5790,6 +5848,13 @@ button.shelf-head-cell:hover {
 .shelf-row--member {
   padding-left: var(--space-7);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+/* The indent comes out of the name's floor, not the columns: at the floor a
+   full one would leave the member's columns that much narrower than the
+   cover's above it. */
+.shelf-row--member .shelf-row-label {
+  min-width: calc(var(--shelf-name-min) - var(--space-7) + var(--space-6));
 }
 
 /* The run's loss chart: a full-width band, not a grid cell, so the chart takes

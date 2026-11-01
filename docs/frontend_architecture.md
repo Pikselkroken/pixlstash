@@ -4748,7 +4748,28 @@ down a grouped list. So the strip is a `role="group"` of controls —
   pinned Name at about half the width and had to be re-derived every time a
   column was added. An unmeasured track (0, so not laid out
   — or jsdom) means unlimited, because a grip that silently refuses to move is
-  the worse failure. Widths are written into the same versioned view
+  the worse failure.
+
+  **A narrow PANEL meets the same floors.** `columnStyle` also writes
+  `--shelf-col-<key>-min` and `--shelf-name-min` from `MIN_COLUMN_WIDTHS` and
+  `MIN_NAME_WIDTH`. Name is `flex: 1 1 0` and is held at its minimum, and the
+  fixed columns are `flex: 0 1 auto` with their remembered width as the basis and
+  their floor as `min-width`. So when the panel is too narrow, the columns shrink in
+  proportion, and they shrink by the same amount on every row and heading,
+  because neither the basis nor the minimum comes from the cell's content. A
+  stack member's name floor is reduced by its extra indent so that its columns
+  line up with the cover row. `.shelf-body` is the `shelflist` container, and it
+  drops columns in steps measured at the default widths: **Sets below 820px,
+  then the thumbnail below 740px**. The thumbnail step hides the whole
+  `.shelf-row-ident` slot and its heading placeholder, so the deck ticks, a
+  member's arrow, the broken-file glyph and an open run's Cover chip go too.
+  Most of these have a stand-in: the stack badge still gives the run's count, the indent
+  still marks member rows, and a broken row keeps its rail and the note on its
+  filename line. The Cover chip has no stand-in.
+  The list scrolls sideways only once every column is at its floor, which
+  happens at about 575px. While a column is squeezed, its grip still reports and edits
+  the stored width, and `widenable` refuses to widen it, because Name is
+  already at its floor and has no room to give up. Widths are written into the same versioned view
   blob **once per gesture, not per frame** — `rememberView` rebuilds the whole
   blob synchronously, so `setColumnWidth(key, px, persist)` takes `false` during
   a drag and is called once on pointerup — and read back per column through
