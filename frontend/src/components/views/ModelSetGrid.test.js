@@ -807,6 +807,42 @@ describe("the cards", () => {
     expect(sidebar.cardTabRequest).toBe(1);
   });
 
+  it("does the double-click's work from a card's Edit button", async () => {
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5")],
+      support: [row(2, "sdxl_vae", "vae")],
+      combinations: [combination("1,2", [CKPT, VAE])],
+    });
+    const sidebar = useSidebarStore();
+    const edit = () =>
+      wrapper.find(".msg__row[data-key='model:1'] [data-testid='set-edit']");
+
+    await edit().trigger("click");
+    expect(store.openSetKey).toBe("model:1");
+    expect(sidebar.modelsRailOpen).toBe(true);
+    expect(sidebar.cardTabRequest).toBe(1);
+    // The press opens the tray; it does not select the card.
+    expect([...store.selectedIds]).toEqual([]);
+
+    await edit().trigger("click");
+    expect(store.openSetKey).toBe("");
+
+    // A double click on the button opens once: its second press, still over
+    // the button, must not shut the tray the first one opened.
+    for (const [type, detail] of [
+      ["click", 1],
+      ["click", 2],
+      ["dblclick", 2],
+    ]) {
+      edit().element.dispatchEvent(
+        new MouseEvent(type, { detail, bubbles: true }),
+      );
+      await wrapper.vm.$nextTick();
+    }
+    expect(store.openSetKey).toBe("model:1");
+    wrapper.unmount();
+  });
+
   it("opens and closes a tray from the keyboard", async () => {
     const { wrapper, store } = await mountGrid({
       rows: [row(1, "realvisXL_v5")],
@@ -1282,6 +1318,24 @@ describe("selection and the verbs", () => {
       await press(cards[1], "click", 2);
       await press(cards[1], "dblclick", 2);
       expect(store.openSetKey).toBe("");
+    });
+
+    it("swallows the rest of a double click on Edit that moved the tray", async () => {
+      const { wrapper, store, cards, key } = await twoCards();
+      const press = async (el, type, detail) => {
+        el.element.dispatchEvent(
+          new MouseEvent(type, { bubbles: true, cancelable: true, detail }),
+        );
+        await wrapper.vm.$nextTick();
+      };
+      store.toggleSet(key(cards[0]));
+
+      // Edit on the second card closes the first card's tray above it, so the
+      // second press lands on the first card, not on the button.
+      await press(cards[1].find('[data-testid="set-edit"]'), "click", 1);
+      await press(cards[0], "click", 2);
+      await press(cards[0], "dblclick", 2);
+      expect(store.openSetKey).toBe(key(cards[1]));
     });
   });
 

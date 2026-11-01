@@ -176,6 +176,25 @@
           :verdict="card.verdict"
           :label="`Your verdict: ${setVerdictText(card.verdict)}`"
         />
+        <!-- Edit is the double-click on a button: it opens (or closes) this
+             set's tray and a shut Models rail. Mouse-only, like Hide: Enter
+             on the card does the same from the keyboard. A second press of a
+             double click is dropped: the first already toggled the tray. When
+             that press moved a tray open on another card, the rows shift and
+             the second press lands elsewhere; the grid's `onCardEdit` arms its
+             reflow guard for that. -->
+        <AppButton
+          class="msc__edit"
+          variant="ghost"
+          size="sm"
+          icon-left="pencil-outline"
+          icon-only
+          tabindex="-1"
+          :tooltip="expanded ? 'Close this set' : 'Open this set to edit it'"
+          data-testid="set-edit"
+          @click.stop="$event.detail > 1 || emit('edit')"
+          @dblclick.stop
+        />
         <!-- A set from pictures is read off the library, so it is hidden rather
              than deleted (the next read would only draw it again). A hand-made
              set is the owner's own and can be deleted, and hiding it is the
@@ -242,7 +261,7 @@
 // **A card is one base model** - a checkpoint, or the diffusion file a Flux or
 // Wan graph loads instead - and opening its tray shows the models that have run
 // with it. The tray is opened by the grid's own gestures (Enter, double-click),
-// and by the rail's Edit set; the card carries no button for it.
+// by the card's Edit button (the double-click's twin), and by the rail's Edit set.
 //
 // **Deliberately not `WorkflowCard`.** The shape is the same on purpose - the
 // cover mosaic, the scrim badges, the layered count, the rhythm of its meta rows
@@ -303,6 +322,7 @@ const emit = defineEmits([
   "keep-separate",
   "hide",
   "unhide",
+  "edit",
 ]);
 
 /** An evidence card is automatic by definition; a hand-made one says. */
@@ -537,10 +557,15 @@ const accessibleName = computed(() => {
   opacity: var(--opacity-disabled);
 }
 
+.msc__edit,
 .msc__hide {
   flex-shrink: 0;
-  margin-left: auto;
   color: rgb(var(--v-theme-on-surface));
+}
+
+/* Edit leads the pair to the row's end; Hide sits right after it. */
+.msc__edit {
+  margin-left: auto;
 }
 
 .msc__cover--hand {
