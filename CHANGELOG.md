@@ -1,3 +1,7 @@
+# [1.13.2]
+
+- Windows installers, which failed to sign for 1.13.1. No other changes.
+
 # [1.13.1] [Security:High]
 
 - Fixed: project links could run script for whoever clicked them. Only http(s)
