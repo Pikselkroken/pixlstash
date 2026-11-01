@@ -23,7 +23,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Existing release tag to rebuild with this workflow (e.g. v1.13.2). Run from main."
+        description: "Existing release tag to rebuild with this workflow (e.g. v1.13.2). Run from main; see rebuild-release.yml."
         required: false
         type: string
 
