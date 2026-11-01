@@ -1,4 +1,5 @@
 import logging as logging_
+import re
 import threading
 from contextlib import contextmanager
 
@@ -22,6 +23,26 @@ class _SuppressFilter(logging_.Filter):
     def filter(self, record: logging_.LogRecord) -> bool:
         msg = record.getMessage()
         return not any(msg.startswith(p) for p in _UVICORN_NOISE_PREFIXES)
+
+
+_TOKEN_QUERY_PARAM = re.compile(r"([?&]token=)[^&\s\"]*")
+
+
+class RedactTokenFilter(logging_.Filter):
+    """Blank the value of a ``token`` query parameter in a log line.
+
+    Share tokens travel as ``?token=`` (image URLs and WebSockets cannot set a
+    header), and uvicorn's access and WebSocket lines print the full path with
+    its query string, so without this every share token lands in the log.
+    """
+
+    def filter(self, record: logging_.LogRecord) -> bool:
+        msg = record.getMessage()
+        redacted = _TOKEN_QUERY_PARAM.sub(r"\1<redacted>", msg)
+        if redacted != msg:
+            record.msg = redacted
+            record.args = ()
+        return True
 
 
 class PixlStashColourisedHandler(logging_.StreamHandler):
@@ -119,6 +140,7 @@ def get_logger(name=None):
 uvicorn_log_config = {
     "version": 1,
     "disable_existing_loggers": False,
+    "filters": {"redact_token": {"()": RedactTokenFilter}},
     "formatters": {
         "default": {
             "()": ColourisedFormatter,
@@ -135,15 +157,18 @@ uvicorn_log_config = {
     },
     "loggers": {
         "uvicorn": {"handlers": ["default"], "level": "INFO", "propagate": False},
+        # uvicorn.error carries the "WebSocket <path>" lines, query string included.
         "uvicorn.error": {
             "handlers": ["default"],
             "level": "INFO",
             "propagate": False,
+            "filters": ["redact_token"],
         },
         "uvicorn.access": {
             "handlers": ["default"],
             "level": "INFO",
             "propagate": False,
+            "filters": ["redact_token"],
         },
         "alembic.runtime.plugins": {"level": "WARNING", "propagate": True},
         "alembic.runtime.migration": {"level": "WARNING", "propagate": True},

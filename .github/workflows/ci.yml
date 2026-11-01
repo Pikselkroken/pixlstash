@@ -541,6 +541,7 @@ jobs:
           tests/test_library_switch.py
           tests/test_likeness_and_face_search.py
           tests/test_likeness_worker.py
+          tests/test_log_token_redaction.py
           tests/test_managed_model_store.py
           tests/test_many_to_many_face_data.py
           tests/test_mcp_server.py
