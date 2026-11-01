@@ -190,12 +190,21 @@ export function useGridDragDrop(
     if (!e.dataTransfer) return;
     // Our own drag-out dropped back: the window-level handler says so.
     if (isOwnShareCopyDrop(e.dataTransfer)) return;
+    // Read before the walk awaits: the drop's payload is gone after dispatch.
+    // A drop with no files in it at all is not a drop of unsupported files.
+    // On X11 a file manager hands a very large selection (thousands of paths)
+    // over incrementally, which Chromium cannot read, so the drop arrives as
+    // a scrap of text; saying "not supported" there sent the owner hunting a
+    // regression in the importer.
+    const carriedFiles = isFileDrag(e.dataTransfer);
     const files = await extractSupportedImportFilesFromDataTransfer(
       e.dataTransfer,
     );
     if (!files.length) {
       noticeStore.warning(
-        "None of those files are a supported image, video or archive.",
+        carriedFiles
+          ? "None of those files are a supported image, video or archive."
+          : "That drop carried no files. If you dragged a lot of files at once, drag fewer at a time, or use Import.",
         { key: "import-unsupported-files" },
       );
       return;
