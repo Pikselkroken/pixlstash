@@ -623,17 +623,19 @@ class InferenceEngine:
         )
         if pixlstash_tagger_service.needs_download():
             pixlstash_tagger_service.download()
-        if not all(
-            os.path.isfile(path)
+        missing_tagger_files = [
+            path
             for path in (
                 pixlstash_tagger_service._model_path,
                 pixlstash_tagger_service._meta_path,
                 pixlstash_tagger_service._config_path,
             )
-        ):
+            if not os.path.isfile(path)
+        ]
+        if missing_tagger_files:
             logger.warning(
-                "PixlStash tagger not found at %s, disabling.",
-                pixlstash_tagger_service._model_path,
+                "PixlStash tagger files missing (%s), disabling.",
+                ", ".join(missing_tagger_files),
             )
             pixlstash_tagger_enabled = False
         else:
