@@ -12122,8 +12122,9 @@ copied anywhere else, so the zip can only hold what the dataset folder still
 holds.
 
 The set links to its LoRAs through the runs: `GET /training/jobs?set_id=` lists
-each run with `model_ids`, the shelf models carrying its `training_run_id` (its
-stack's cover first: the runs grid's and rail's *Go to model* open that one), and
+each run with `model_ids`, the shelf models carrying its `training_run_id` (a
+stack cover first, the row the shelf draws for a closed stack: the runs grid's
+and rail's *Go to model* open that one), and
 `dataset_snapshot_id`.
 
 ### 25.23 Browsing a model folder by directory (#2203)

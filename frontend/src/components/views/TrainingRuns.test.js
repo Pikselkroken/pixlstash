@@ -588,6 +588,18 @@ describe("importing the batch", () => {
     });
   });
 
+  it("re-reads the jobs after an import, so Go to model can name what landed", async () => {
+    const wrapper = await openWith([run()]);
+    await tick(wrapper, "Clementine");
+    importRun.mockResolvedValue({ run_name: "Clementine", files: [] });
+    listTrainingJobs.mockClear();
+
+    await importBtn(wrapper).trigger("click");
+    await settle(wrapper);
+
+    expect(listTrainingJobs).toHaveBeenCalled();
+  });
+
   it("sends every checkpoint of every run when several are chosen", async () => {
     const wrapper = await openWith([run(), run("Foxglove")]);
     await tick(wrapper, "Clementine");

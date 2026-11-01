@@ -1063,7 +1063,8 @@ async function submit() {
     // count and `shelf_bytes` moved with them, so the drive bands are stale too.
     await Promise.all([shelf.fetchRows(), folders.refresh({ quiet: true })]);
     clearSelection();
-    await loadRuns();
+    // The jobs too: their `model_ids` now name what landed (Go to model).
+    await Promise.all([loadRuns(), runsStore.loadJobs()]);
   } finally {
     working.value = false;
   }

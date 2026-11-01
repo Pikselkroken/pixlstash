@@ -564,7 +564,7 @@ def create_router(server) -> APIRouter:
         model_ids: list[int] = Field(
             default_factory=list,
             description=(
-                "The shelf models (LoRAs) this run made, its stack's cover "
+                "The shelf models (LoRAs) this run made, a stack cover "
                 "first. Listing a set's runs with ?set_id= names the LoRAs "
                 "trained from that set."
             ),
@@ -635,7 +635,7 @@ def create_router(server) -> APIRouter:
         )
         model_ids: list[int] = Field(
             default_factory=list,
-            description="The shelf models this run made, its stack's cover first.",
+            description="The shelf models this run made, a stack cover first.",
         )
 
     class SnapshotItemResponse(BaseModel):
@@ -1108,7 +1108,7 @@ def create_router(server) -> APIRouter:
     def _models_by_run(run_ids: list[int]) -> dict[int, list[int]]:
         """The shelf models each run made, by run id (one query for the lot).
 
-        Cover first: the stack's position 0 is the row the shelf draws for a
+        A stack cover first: position 0 is the row the shelf draws for a
         closed stack, so it is the one "Go to model" opens.
         """
         if not run_ids:
