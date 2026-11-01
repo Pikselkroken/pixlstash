@@ -751,6 +751,27 @@ describe("the All of <project> row under the dropdown", () => {
     wrapper.unmount();
   });
 
+  it("leaves dropped files to the window's importer", async () => {
+    const wrapper = mountSidebar();
+    await refreshAndSettle(wrapper);
+    wrapper.vm.chooseScope(3);
+    const startImport = vi.fn();
+    wrapper.vm.imageImporterRef = { startImport };
+    await wrapper.vm.handleDropOnScope({
+      preventDefault: () => {},
+      dataTransfer: {
+        types: ["Files"],
+        files: [new File(["x"], "a.png", { type: "image/png" })],
+        items: [],
+        getData: () => "",
+      },
+    });
+    await flushPromises();
+    expect(startImport).not.toHaveBeenCalled();
+    expect(apiPatch).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
   it("takes no drop in a read-only session", async () => {
     isReadOnly.value = true;
     const wrapper = mountSidebar();

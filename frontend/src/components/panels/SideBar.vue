@@ -2711,23 +2711,13 @@ function dragLeaveScopeItem(event) {
   dragOverScopeRow.value = false;
 }
 
-/** Pictures dropped on the row join the project; files import into it. */
+/** Pictures dropped on the row join the project. Files are left to the
+ * window's importer (useWindowFileImport), which already files them in the
+ * project in view, this row's own; a second import here would race it. */
 async function handleDropOnScope(event) {
   dragOverScopeRow.value = false;
   const projectId = libraryScope.value;
   if (projectId == null || isReadOnly.value) return;
-  // An internal grid drag skips the file-import path: browsers also populate
-  // dataTransfer.files for <img> drags, and a desktop drag-out IS a file drag.
-  if (
-    !isInternalImageDrag(event?.dataTransfer) &&
-    event?.dataTransfer?.files?.length > 0
-  ) {
-    const files = await extractSupportedImportFilesFromDataTransfer(
-      event.dataTransfer,
-    );
-    if (files.length) imageImporterRef.value?.startImport(files, { projectId });
-    return;
-  }
   const imageIds = readDraggedImageIds(event);
   if (imageIds.length === 0) return;
   try {

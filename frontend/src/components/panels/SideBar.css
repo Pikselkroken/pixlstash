@@ -1305,8 +1305,10 @@
   height: var(--gutter-glyph);
 }
 
-/* First under the dropdown, 8px below it, like a section head would be. */
+/* First under the dropdown, 8px below it, like a section head would be. Full
+   width: a block parent does not stretch a button as the flex list does. */
 .sidebar-all-of-scope {
+  width: 100%;
   margin-top: var(--space-3);
 }
 
