@@ -149,7 +149,7 @@ describe("TrainingRunLive", () => {
     expect(getTrainingJobLive).toHaveBeenCalledWith(7);
     expect(wrapper.find(".trl-status").text()).toContain("Training 1,000 / 1,500");
     expect(wrapper.find(".trl-status").text()).toContain("Generating previews 2 of 2");
-    expect(wrapper.find(".trl-setup").text()).toContain("Set up in 2:35");
+    expect(wrapper.find(".trl-setup").text()).toContain("Started training after 2:35");
     expect(wrapper.findAll(".trl-stepn").map((n) => n.text())).toEqual([
       "Step 0", "250", "500", "750", "1,000", "1,250", "1,500",
     ]);
