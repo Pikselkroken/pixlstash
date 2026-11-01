@@ -215,7 +215,12 @@ import AppBarButton from "../widgets/AppBarButton.vue";
 import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import { useComfyuiOpen } from "../../composables/useComfyuiOpen";
+import {
+  downloadableInWorkflows,
+  modelBaseName,
+} from "../../composables/useModelDownloads";
 import { isReadOnly } from "../../utils/apiClient";
+import { useTasksStore } from "../../stores/useTasksStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import {
   favouriteVerb,
@@ -658,16 +663,66 @@ const useSetTitle = computed(() =>
 
 /**
  * *Download missing models*: what the run pre-flight says each selected
- * workflow lacks and PixlStash knows where to get. The view asks; the card
- * alone cannot name a missing file. A draft has no graph to ask about.
+ * workflow lacks and PixlStash knows where to get. The card alone cannot name
+ * a missing file, so a menu opening asks (cached, as the Workflow tab does)
+ * and the row is refused once every answer says there is nothing to fetch.
+ * Until then, or when one could not be asked, the row stays offered and the
+ * view's press asks again. A draft has no graph to ask about.
  */
 const downloadable = computed(
   () => !isReadOnly.value && cards.value.some((card) => !card.draft),
+);
+const tasksStore = useTasksStore();
+/**
+ * The selection's answer, or null while not known: `files` it can fetch and
+ * `downloading`, the missing ones already on their way.
+ */
+const missing = ref(null);
+// ponytail: one pre-flight per card, serially, on every open; past this many
+// the row stays offered unchecked. A batched pre-flight would lift the cap.
+const MISSING_CHECK_LIMIT = 12;
+let missingCheck = 0;
+watch(
+  () => [
+    contextOpen.value || moreMenuOpen.value,
+    store.selectedKeys.join("\n"),
+    // A download landing, failing or cancelled leaves the running list, and
+    // only a fresh answer says whether that file is now there or fetchable.
+    [...tasksStore.runningDownloadFiles].sort().join("\n"),
+  ],
+  async ([open]) => {
+    const check = ++missingCheck;
+    missing.value = null;
+    const asked = cards.value.filter((card) => !card.draft);
+    if (!open || !downloadable.value || asked.length > MISSING_CHECK_LIMIT) {
+      return;
+    }
+    const { files, downloading, unasked } =
+      await downloadableInWorkflows(asked);
+    if (check === missingCheck && !unasked) {
+      missing.value = { files, downloading };
+    }
+  },
+);
+/** Of those, the ones not already downloading; null while not known. */
+const toDownload = computed(
+  () =>
+    missing.value?.files.filter(
+      (file) => !tasksStore.runningDownloadFiles.has(modelBaseName(file)),
+    ) ?? null,
 );
 const downloadTitle = computed(() => {
   if (isReadOnly.value) return "This session cannot download models";
   if (!downloadable.value) {
     return "A draft has no graph to check yet: open it in ComfyUI and save it";
+  }
+  if (toDownload.value?.length === 0) {
+    if (missing.value.files.length || missing.value.downloading.length) {
+      return "Already downloading: the Tasks list in the title bar shows how far";
+    }
+    return single.value
+      ? "Nothing this workflow is missing can be downloaded"
+      : "Nothing these workflows are missing can be downloaded";
   }
   return single.value
     ? "Download every model this workflow lacks that PixlStash knows where to get"
@@ -926,7 +981,8 @@ const VerbMenu = () => {
       }),
       item("mdi-download-outline", "Download missing models", {
         verb: "download-missing",
-        disabled: !downloadable.value || busy.value,
+        disabled:
+          !downloadable.value || busy.value || toDownload.value?.length === 0,
         title: downloadTitle.value,
       }),
       sep(),
