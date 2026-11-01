@@ -189,16 +189,18 @@ describe("the docked rail (#2448)", () => {
       .map((b) => b.attributes("aria-label"));
   }
 
-  it("offers the owner the dropdown, People and Sets in Library, a folder each in Folders", async () => {
+  it("offers the owner one Library button holding the dropdown, People and Sets, a folder each in Folders", async () => {
     const wrapper = mountSidebar({ docked: true });
     await refreshAndSettle(wrapper);
     expect(railNames(wrapper)).toEqual(
-      expect.arrayContaining([
-        "Showing Library. Switch to Folders",
-        "Any project",
-        "People",
-        "Sets",
-      ]),
+      expect.arrayContaining(["Showing Library. Switch to Folders", "Any project"]),
+    );
+    expect(railNames(wrapper)).not.toContain("People");
+    expect(railNames(wrapper)).not.toContain("Sets");
+    const library = wrapper.vm.railNodes.find((n) => n.kind === "library");
+    const items = library.items();
+    expect(items.map((i) => i.section ?? i.label)).toEqual(
+      expect.arrayContaining(["Limit view to", "Any project", "Book", "People", "Ada"]),
     );
     wrapper.vm.setTreeMode("folders");
     await flushPromises();
@@ -208,7 +210,11 @@ describe("the docked rail (#2448)", () => {
     );
     expect(railNames(wrapper)).not.toContain("Cards");
     const book = wrapper.vm.railNodes.find((n) => n.label === "Book");
-    expect(book.items().map((i) => i.label)).toEqual(["All of Book", "Ada"]);
+    expect(book.items().map((i) => i.label ?? (i.sep && "—"))).toEqual([
+      "All of Book",
+      "—",
+      "Ada",
+    ]);
     expect(railNames(wrapper)).not.toContain("Any project");
     wrapper.vm.setTreeMode("library");
     wrapper.unmount();
@@ -240,11 +246,11 @@ describe("the docked rail (#2448)", () => {
     wrapper.unmount();
   });
 
-  it("lights People only for a listed person, never for a place or no selection", async () => {
+  it("lights Library for a listed person, never for a place or no selection", async () => {
     const wrapper = mountSidebar({ docked: true });
     await refreshAndSettle(wrapper);
     const selection = useSelectionStore();
-    const people = wrapper.vm.railNodes.find((n) => n.kind === "people");
+    const people = wrapper.vm.railNodes.find((n) => n.kind === "library");
 
     for (const id of [null, "", "ALL", "UNASSIGNED", "SCRAPHEAP"]) {
       selection.selectedCharacter = id;
@@ -268,6 +274,11 @@ describe("the docked rail (#2448)", () => {
     expect(payload.id).toBe("ALL");
     expect(payload.projectContext).toEqual({ mode: "project", projectId: 3 });
     expect(wrapper.vm.railFlyout).toBeNull();
+    // With a project in view, its flyout leads with all of it.
+    wrapper.vm.chooseScope(3);
+    await flushPromises();
+    const library = wrapper.vm.railNodes.find((n) => n.kind === "library");
+    expect(library.items()[0].label).toBe("All of Book");
     wrapper.unmount();
   });
 });

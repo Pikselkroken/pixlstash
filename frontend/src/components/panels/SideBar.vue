@@ -3051,12 +3051,6 @@ function openSetRow(pset, event = null) {
   );
 }
 
-/** The docked rail's search button: expand, with the cursor in Find. */
-function expandToFind() {
-  sidebarStore.setSidebarDocked(false);
-  nextTick(() => findInputRef.value?.focus());
-}
-
 // The Folders branch holding the selection is forced open: a project chosen
 // from anywhere (the dropdown, Back, a deep link) opens in place there, with
 // every folder above it. Re-run when the folders first arrive, not on every
@@ -3092,6 +3086,14 @@ function projectInitial(project) {
 /** A Folders node's flyout: all of it (the owner's own folder, which names
  * nothing, opens in the file manager instead), then the people and sets
  * filed in it, each labelled by its path below the node. */
+const RAIL_ICONS = {
+  global: "mdi-earth",
+  unassigned: "mdi-folder-question-outline",
+  folder: "mdi-folder-outline",
+  character: "mdi-account-outline",
+  set: "mdi-image-album",
+};
+
 function folderNodeItems(node) {
   const below = `${node.row.path}/`;
   const kids = folderTreeRows({
@@ -3106,87 +3108,118 @@ function folderNodeItems(node) {
   );
   return [
     node.row.kind !== "folder"
-      ? { key: "all", label: `All of ${node.label}`, run: () => openFolderRow(node.row) }
+      ? {
+          key: "all",
+          label: `All of ${node.label}`,
+          icon: "mdi-image-multiple-outline",
+          run: () => openFolderRow(node.row),
+        }
       : {
           key: "open",
           label: "Open in file manager",
+          icon: "mdi-folder-open-outline",
           run: () => openFolderInFileManager(node.row),
         },
+    ...(kids.length ? [{ key: "sep", sep: true }] : []),
     ...kids.map((row) => ({
       key: row.key,
       label: row.path.slice(below.length).split("/").join(" › "),
+      icon: RAIL_ICONS[row.kind],
       run: () => openFolderRow(row),
     })),
   ];
 }
 
-/** The dropdown on the rail: Limit view to, as the expanded one offers it. */
-function scopeNodeItems() {
+/** Library's one rail button: All of the project in view, Limit view to as
+ * the expanded dropdown offers it, then the People and Sets it narrows. A
+ * token for one project has no dropdown: it keeps All of its own project,
+ * its only way back to the whole of it from a person or set, and the lists. */
+function libraryNodeItems() {
   const scope = libraryScope.value;
+  const [list] = libraryBranches.value;
+  const people = list.characters.map((c) => ({
+    key: `c-${c.id}`,
+    label: c.name,
+    icon: RAIL_ICONS.character,
+    run: () => selectCharacter(c.id, c.name),
+  }));
+  const sets = list.sets.map((pset) => ({
+    key: `s-${pset.id}`,
+    label: pset.name,
+    icon: RAIL_ICONS.set,
+    run: () => selectSet(pset.id, pset.name),
+  }));
+  const project = scopedProjectObj.value;
+  return [
+    // As the design opens it: all of the project in view comes first.
+    ...(project
+      ? [
+          {
+            key: "all",
+            label: `All of ${project.name}`,
+            icon: "mdi-image-multiple-outline",
+            run: () => chooseScope(project.id),
+          },
+        ]
+      : []),
+    ...(scopedResourceType.value === "project" ? [] : scopeItems(scope)),
+    ...(people.length ? [{ key: "hp", section: "People" }, ...people] : []),
+    ...(sets.length ? [{ key: "hs", section: "Sets" }, ...sets] : []),
+  ];
+}
+
+function scopeItems(scope) {
   return [
     { key: "h", section: "Limit view to" },
-    { key: "any", label: "Any project", checked: scope === undefined, run: () => chooseScope("any") },
+    {
+      key: "any",
+      label: "Any project",
+      icon: "mdi-folder-multiple-outline",
+      checked: scope === undefined,
+      run: () => chooseScope("any"),
+    },
     ...sortedProjects.value.map((p) => ({
       key: `p-${p.id}`,
       label: p.name,
+      icon: RAIL_ICONS.folder,
       checked: scope === p.id,
       run: () => chooseScope(p.id),
     })),
-    { key: "none", label: "Not in a project", checked: scope === null, run: () => chooseScope("none") },
+    {
+      key: "none",
+      label: "Not in a project",
+      icon: "mdi-folder-off-outline",
+      checked: scope === null,
+      run: () => chooseScope("none"),
+    },
   ];
 }
 
 const railNodes = computed(() => {
   if (!foldersMode.value) {
-    const [list] = libraryBranches.value;
-    const nodes = [];
-    // A project token has one project to see, so no dropdown.
-    if (scopedResourceType.value !== "project") {
-      nodes.push({
-        key: "r:scope",
-        kind: "scope",
-        label: scopedProjectObj.value?.name ?? (libraryScope.value === null ? "Not in a project" : "Any project"),
-        project: scopedProjectObj.value,
-        icon: libraryScope.value === null ? "mdi-folder-off-outline" : "mdi-folder-multiple-outline",
-        items: scopeNodeItems,
-      });
-    }
-    nodes.push(
+    // One button, as the design draws it: the project in view, its flyout
+    // the dropdown with the People and Sets below it.
+    const project =
+      scopedResourceType.value === "project" ? null : scopedProjectObj.value;
+    return [
       {
-        key: "r:people",
-        kind: "people",
-        label: "People",
-        icon: "mdi-account-multiple-outline",
-        items: () =>
-          list.characters.map((c) => ({
-            key: `c-${c.id}`,
-            label: c.name,
-            run: () => selectCharacter(c.id, c.name),
-          })),
+        key: "r:library",
+        kind: "library",
+        label:
+          scopedResourceType.value === "project"
+            ? "People and sets"
+            : project?.name ??
+              (libraryScope.value === null ? "Not in a project" : "Any project"),
+        project,
+        icon:
+          libraryScope.value === null
+            ? "mdi-folder-off-outline"
+            : "mdi-folder-multiple-outline",
+        items: libraryNodeItems,
       },
-      {
-        key: "r:sets",
-        kind: "sets",
-        label: "Sets",
-        icon: "mdi-image-album",
-        items: () =>
-          list.sets.map((pset) => ({
-            key: `s-${pset.id}`,
-            label: pset.name,
-            run: () => selectSet(pset.id, pset.name),
-          })),
-      },
-    );
-    return nodes;
+    ];
   }
   // Folders: one button per top-level folder.
-  const icons = {
-    global: "mdi-earth",
-    unassigned: "mdi-folder-question-outline",
-    folder: "mdi-folder-outline",
-    character: "mdi-account-outline",
-    set: "mdi-image-album",
-  };
   return folderTreeRows({
     folders: libraryFolders.value,
     projects: sortedProjects.value,
@@ -3200,7 +3233,7 @@ const railNodes = computed(() => {
       projectId: row.projectId,
       project: row.kind === "project" ? row.entity : undefined,
       label: row.name,
-      icon: icons[row.kind],
+      icon: RAIL_ICONS[row.kind],
       leaf: row.kind === "unassigned",
       row,
     };
@@ -3212,16 +3245,15 @@ const railNodes = computed(() => {
 function railNodeActive(node) {
   if (!selectionOwnsHighlight.value) return false;
   const character = selectionStore.selectedCharacter;
-  if (node.kind === "scope")
-    return isAllPicturesRowActive.value && projectViewMode.value === "project";
+  // Library's button lights for all of a project, a listed person or a set.
   // A person is selected when the selection names a listed person: the
   // places' ids are strings, and no selection at all (null) is not one.
-  if (node.kind === "people")
+  if (node.kind === "library")
     return (
-      selectedSetIdSet.value.size === 0 &&
+      (isAllPicturesRowActive.value && projectViewMode.value === "project") ||
+      selectedSetIdSet.value.size > 0 ||
       characters.value.some((c) => c.id === Number(character) && character != null)
     );
-  if (node.kind === "sets") return selectedSetIdSet.value.size > 0;
   if (node.row && !["project", "global", "unassigned"].includes(node.row.kind))
     return folderRowActive(node.row);
   if (!branchIsScope(node.projectId)) return false;
@@ -4513,21 +4545,12 @@ defineExpose({
           class="sidebar-collapsed-list"
           @contextmenu.prevent="openSidebarCtxMenu('empty', null, $event)"
         >
-          <!-- Find: expands the sidebar with the cursor in Find. -->
-          <div class="sidebar-collapsed-row">
-            <button
-              type="button"
-              class="sidebar-collapsed-item"
-              aria-label="Find in library"
-              @click="expandToFind"
-            >
-              <Tooltip text="Find in library" activator="parent" :describe="false" />
-              <v-icon>mdi-magnify</v-icon>
-            </button>
-          </div>
-          <div class="sidebar-collapsed-divider"></div>
-          <!-- The places: global, as they are expanded. -->
-          <div :class="['sidebar-collapsed-row', { active: isAllMediaRowActive }]">
+          <!-- The places, then Review: every row the expanded list has above
+               the switch, under the same conditions. -->
+          <div
+            v-if="!scopedResourceType"
+            :class="['sidebar-collapsed-row', { active: isAllMediaRowActive }]"
+          >
             <button
               type="button"
               :class="['sidebar-collapsed-item', { active: isAllMediaRowActive }]"
@@ -4543,7 +4566,7 @@ defineExpose({
             </button>
           </div>
           <div
-            v-if="!isReadOnly"
+            v-if="!scopedResourceType && !isReadOnly"
             :class="['sidebar-collapsed-row', { active: isFavouritesRowActive }]"
           >
             <button
@@ -4563,11 +4586,7 @@ defineExpose({
           >
             <button
               type="button"
-              :class="[
-                'sidebar-collapsed-item',
-                'sidebar-collapsed-item--scrapheap',
-                { active: isScrapheapRowActive },
-              ]"
+              :class="['sidebar-collapsed-item', { active: isScrapheapRowActive }]"
               :aria-current="isScrapheapRowActive ? 'page' : undefined"
               aria-label="Scrapheap"
               @click="selectCharacter(SCRAPHEAP_PICTURES_ID, 'Scrapheap')"
@@ -4580,6 +4599,22 @@ defineExpose({
             </button>
           </div>
           <div class="sidebar-collapsed-divider"></div>
+
+          <div
+            v-if="!isReadOnly"
+            :class="['sidebar-collapsed-row', { active: isInboxView }]"
+          >
+            <button
+              type="button"
+              :class="['sidebar-collapsed-item', { active: isInboxView }]"
+              :aria-current="isInboxView ? 'page' : undefined"
+              aria-label="Inbox"
+              @click="emit('select-inbox')"
+            >
+              <Tooltip text="Inbox" activator="parent" :describe="false" />
+              <v-icon>mdi-inbox-arrow-down-outline</v-icon>
+            </button>
+          </div>
 
           <!-- Duplicates keeps its dock row so the count stays reachable when
                the sidebar is narrow; the badge is the only thing here that
@@ -4616,6 +4651,24 @@ defineExpose({
             </button>
           </div>
 
+          <div
+            v-if="!isReadOnly"
+            :class="['sidebar-collapsed-row', { active: isTagReviewView }]"
+          >
+            <button
+              type="button"
+              :class="['sidebar-collapsed-item', { active: isTagReviewView }]"
+              :aria-current="
+                isTagReviewView && reviewBoardShown ? 'page' : undefined
+              "
+              aria-label="Tags to review"
+              @click="openTagReviewBoard"
+            >
+              <Tooltip text="Tags to review" activator="parent" :describe="false" />
+              <v-icon>mdi-tag-check-outline</v-icon>
+            </button>
+          </div>
+
           <!-- Moves in the dock: reachable whenever the queue holds anything
                at all (movesStore.hasAnyPending), never shown-and-disabled the
                way Duplicates above is - see the
@@ -4629,7 +4682,7 @@ defineExpose({
           >
             <button
               type="button"
-              class="sidebar-collapsed-item sidebar-destination-btn"
+              class="sidebar-collapsed-item"
               :class="{ active: isMovesView }"
               :aria-current="isMovesView ? 'page' : undefined"
               aria-label="Moves made outside PixlStash"
@@ -4666,7 +4719,7 @@ defineExpose({
               >
                 <Tooltip :text="railModeLabel" activator="parent" :describe="false" />
                 <v-icon>{{
-                  treeMode === "library" ? "mdi-file-tree-outline" : "mdi-folder-outline"
+                  treeMode === "library" ? "mdi-bookshelf" : "mdi-folder-outline"
                 }}</v-icon>
               </button>
             </div>
@@ -4717,7 +4770,14 @@ defineExpose({
               :style="{ top: railFlyout.top + 'px', left: railFlyout.left + 'px' }"
               @keydown="onRailFlyoutKeydown"
             >
-              <template v-for="item in railFlyout.items" :key="item.key">
+              <!-- A rule above every group and a glyph on every row, so the
+                   rows sit in under their heading and the groups read apart. -->
+              <template v-for="(item, i) in railFlyout.items" :key="item.key">
+                <div
+                  v-if="item.sep || (item.section && i > 0)"
+                  class="ctx-sep"
+                  role="separator"
+                ></div>
                 <div
                   v-if="item.section"
                   class="section-label ctx-label"
@@ -4726,7 +4786,7 @@ defineExpose({
                   {{ item.section }}
                 </div>
                 <button
-                  v-else
+                  v-else-if="!item.sep"
                   type="button"
                   :role="item.checked === undefined ? 'menuitem' : 'menuitemradio'"
                   :aria-checked="
@@ -4736,6 +4796,7 @@ defineExpose({
                   class="ctx-item"
                   @click="pickRailEntry(item.run)"
                 >
+                  <v-icon class="ctx-icon" aria-hidden="true">{{ item.icon }}</v-icon>
                   <span class="ctx-label-text">{{ item.label }}</span>
                   <v-icon v-if="item.checked" class="ctx-check">mdi-check</v-icon>
                 </button>

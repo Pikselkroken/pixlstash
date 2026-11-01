@@ -278,20 +278,12 @@
   overflow-y: auto;
 }
 
-.sidebar-collapsed-item--scrapheap {
-  opacity: 0.6;
-  transition:
-    opacity 0.15s,
-    background-color 0.18s ease,
-    color 0.18s ease;
-}
-
-.sidebar-collapsed-item--scrapheap:hover {
-  opacity: 1;
-}
-
-.sidebar-collapsed-item--scrapheap.active {
-  opacity: 1;
+/* Its group headings in full ink on the flyout header's band, so a heading
+   never reads as one more row. */
+.sidebar-rail-flyout .ctx-label {
+  padding-block: var(--space-2);
+  color: rgb(var(--v-theme-on-surface));
+  background: rgba(var(--v-theme-tertiary), 0.2);
 }
 
 .sidebar-collapsed-flyout-menu {
@@ -395,8 +387,11 @@
   scrollbar-color: rgb(var(--v-theme-accent)) rgba(var(--v-theme-shadow), 0.15);
 }
 
+/* The docked rail is fixed at the design's geometry: a 56px rail of 40x36
+   buttons with 18px glyphs. It holds icons only, so the thumbnail-size
+   setting no longer sizes it. */
 .sidebar.sidebar-docked {
-  width: calc(var(--sidebar-thumb-size) + 20px);
+  width: 56px;
   overflow: hidden;
 }
 
@@ -423,12 +418,11 @@
 .sidebar-collapsed-row::before {
   content: "";
   position: absolute;
-  left: 2px;
+  left: 0;
   top: 50%;
   transform: translateY(-50%) scaleY(0);
-  width: 3px;
-  height: 60%;
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  width: var(--rail-w);
+  height: 36px;
   background: var(--active-bar);
   transition: transform 0.18s ease;
   pointer-events: none;
@@ -477,8 +471,8 @@
 }
 
 .sidebar-collapsed-item {
-  width: var(--sidebar-thumb-size);
-  height: var(--sidebar-thumb-size);
+  width: 40px;
+  height: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -499,6 +493,7 @@
 
 .sidebar-collapsed-item.active {
   color: rgb(var(--v-theme-sidebar-text));
+  background: var(--active-wash);
 }
 
 .sidebar-collapsed-item--add {
@@ -542,12 +537,19 @@
   background-color: var(--hover-wash);
 }
 
+/* Hover layers over the selection rather than replacing it (§11), as the
+   expanded rows do. */
+.sidebar-collapsed-item.active:hover {
+  background:
+    linear-gradient(var(--hover-wash), var(--hover-wash)), var(--active-wash);
+}
+
 .sidebar-collapsed-item--has-flyout {
   position: relative;
 }
 
 .sidebar-collapsed-divider {
-  width: 70%;
+  width: 24px;
   height: 1px;
   margin: var(--space-1) auto;
   background: rgba(var(--v-theme-sidebar-text), 0.15);
@@ -697,21 +699,17 @@
   color: rgb(var(--v-theme-sidebar-text));
 }
 
+/* 18px, as the design draws the rail: scaled with the thumbnail setting the
+   glyphs grew to 44px and read as bold. */
 .sidebar-collapsed-item .v-icon {
-  /* Fill most of the box so the line-art icons read the same size as the
-     edge-to-edge thumbnails (MDI glyphs carry ~8% internal margin, so this
-     stops just short of the edge rather than touching it). */
-  font-size: calc(var(--sidebar-thumb-size) * 0.92) !important;
-  width: calc(var(--sidebar-thumb-size) * 0.92) !important;
-  height: calc(var(--sidebar-thumb-size) * 0.92) !important;
+  font-size: var(--text-lg) !important;
+  width: 18px !important;
+  height: 18px !important;
 }
 
-/* An inline SVG mark (Workflows' ComfyUI logomark) is cropped to its own edge,
-   with none of an MDI glyph's internal margin, so it takes a smaller box to
-   read the same size as the line-art icons beside it. */
 .sidebar-collapsed-item svg {
-  width: calc(var(--sidebar-thumb-size) * 0.75);
-  height: calc(var(--sidebar-thumb-size) * 0.75);
+  width: 18px;
+  height: 18px;
 }
 
 .sidebar-character-thumb {
@@ -1108,22 +1106,6 @@
   font-size: var(--text-base);
   line-height: var(--leading-body);
   color: rgba(var(--v-theme-on-surface), 0.85);
-}
-
-/* A fixed destination rendered as a real button rather than a clickable div,
-   so it is reachable by Tab. It carries the row classes and needs only the
-   defaults a <button> does not inherit: full width, left-aligned text, and the
-   UI font. The three older destinations are still divs; making them buttons is
-   the same four-line change and is filed, not forgotten. */
-.sidebar-destination-btn {
-  width: 100%;
-  text-align: left;
-  font: inherit;
-  font-size: var(--text-sm);
-}
-
-.sidebar-collapsed-item.sidebar-destination-btn {
-  text-align: center;
 }
 
 /* The "finish organising" resume row. Accented rather than the plain
