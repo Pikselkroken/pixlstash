@@ -257,11 +257,26 @@ describe("the workspace switch", () => {
     expect(router.currentRoute.value.fullPath).toBe(back);
   });
 
-  it("returns Models to the row it was left on", async () => {
-    const wrapper = await mountBar("/models/runs?run=7");
-    await segment(wrapper, "Media").trigger("click");
+  it.each([
+    ["/models/runs", "/models/runs"],
+    // A training run's own page is where you were (#2118).
+    ["/models/runs?run=7", "/models/runs?run=7"],
+    ["/models/runs?folder-run=lora-a", "/models/runs?folder-run=lora-a"],
+    // Only boot reads a share session's `?token=`, so the link keeps it.
+    [
+      "/models/runs?run=7&token=example-share",
+      "/models/runs?run=7&token=example-share",
+    ],
+    // A Recipe chip's one-shot jump to a model is not.
+    ["/models?model=4", "/models"],
+  ])("returns Models from %s to %s", async (start, back) => {
+    const wrapper = await mountBar(start);
+    await segment(wrapper, "Workflows").trigger("click");
     await flushPromises();
-    expect(segment(wrapper, "Models").attributes("href")).toBe("/models/runs");
+    expect(segment(wrapper, "Models").attributes("href")).toBe(back);
+    await segment(wrapper, "Models").trigger("click");
+    await flushPromises();
+    expect(router.currentRoute.value.fullPath).toBe(back);
   });
 
   it("changes nothing in the bar but the lit segment", async () => {

@@ -58,9 +58,10 @@ const currentWorkspace = computed(() =>
 // row you were on (Favourites in a project, a set, Duplicates, the shelf's
 // Runs) rather than on the workspace's front page. Overlays over the grid -
 // the lightbox with its one-close `?from=`, and a tag review - are not where
-// you were, and the shelf keeps only its
-// row: `?run=` opens one run. Workflows needs nothing, its places live in
-// its store.
+// you were. Models keeps its row, the training run open on it (`?run=`,
+// `?folder-run=`) and the share `?token=`, but not `?model=`, a one-shot jump
+// that would re-select that model on return. Workflows needs nothing, its
+// places live in its store.
 const OVERLAY_QUERY = [
   "overlay",
   "from",
@@ -69,6 +70,7 @@ const OVERLAY_QUERY = [
   "review_set",
   "review_character",
 ];
+const MODELS_KEPT_QUERY = ["run", "folder-run", "token"];
 const leftAt = ref({});
 watch(
   () => route.fullPath,
@@ -78,7 +80,11 @@ watch(
       for (const key of OVERLAY_QUERY) delete query[key];
       leftAt.value.media = { path: route.path, query };
     } else if (currentWorkspace.value === "models") {
-      leftAt.value.models = route.path;
+      const query = {};
+      for (const key of MODELS_KEPT_QUERY) {
+        if (key in route.query) query[key] = route.query[key];
+      }
+      leftAt.value.models = { path: route.path, query };
     }
   },
   { immediate: true },
@@ -108,7 +114,7 @@ const workspaces = computed(() => {
     {
       id: "models",
       label: "Models",
-      to: at(leftAt.value.models ?? "/models"),
+      to: leftAt.value.models ?? at("/models"),
       locked: isReadOnly.value
         ? "The model shelf is only available in your own library"
         : "",
