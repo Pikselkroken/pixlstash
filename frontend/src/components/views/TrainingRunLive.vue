@@ -672,6 +672,8 @@ const headline = computed(() => {
     : "Training";
   switch (run.status) {
     case "queued":
+      // A probe runs while the row is still queued, with the GPU in hand.
+      if (run.phase === "checking") return PHASE_LABELS.checking;
       return isQueuedBehindRun(run.waiting) ? WAITING_BEHIND_RUN : PHASE_LABELS.waiting_gpu;
     case "stopping":
       return `Stopping at step ${run.step.toLocaleString()}`;
@@ -701,6 +703,7 @@ const subline = computed(() => {
     return `Generating previews ${run.previews.drawing} of ${run.previews.total}`;
   }
   if (run.phase === "saving") return "Saving a checkpoint";
+  if (run.downloading) return "Downloading the model, once per model";
   if (run.status === "completed" && run.imported) return "On the shelf";
   return "";
 });

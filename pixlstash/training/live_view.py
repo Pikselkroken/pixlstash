@@ -14,6 +14,7 @@ and a figure that could not be read is ``None``, never 0: the view draws
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
 import statistics
@@ -44,6 +45,18 @@ NOT_MEASURED = "none"
 
 # ai-toolkit's "Generating images - 3/6": the sample being drawn, of how many.
 _PREVIEWS_RE = re.compile(r"generating images\s*-\s*(\d+)\s*/\s*(\d+)", re.I)
+
+# huggingface_hub's progress lines while it fetches a model: the xet
+# "Downloading bytes", "<file>: reconstructing file" and "Fetching n files",
+# or a plain "<file>.safetensors:  12%|" bar.
+_DOWNLOAD_RE = re.compile(
+    r"\bdownloading\b|reconstructing|fetching \d+ files"
+    r"|\.(?:safetensors|bin|gguf|pth?)\S*:\s+\d+%",
+    re.I,
+)
+_DOWNLOAD_DONE_RE = re.compile(r"\bcomplete\b|100%", re.I)
+# Enough of the log's end to hold its last progress line.
+_DOWNLOAD_TAIL_BYTES = 2048
 
 # How many of the latest steps the speed is taken over.
 _SPEED_WINDOW = 50
@@ -111,6 +124,29 @@ def preview_progress(info: str | None) -> dict | None:
     if match is None:
         return None
     return {"drawing": int(match.group(1)), "total": int(match.group(2))}
+
+
+def downloading(log_path: str) -> bool:
+    """True while the trainer's log ends on a model download's progress line.
+
+    A model a trainer has not loaded before is fetched while it loads, which
+    on a first run is most of the wait; its info line says only that it loads.
+    """
+    try:
+        with open(log_path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(fh.tell() - _DOWNLOAD_TAIL_BYTES, 0))
+            tail = fh.read().decode("utf-8", errors="replace")
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        logger.warning("Could not read the trainer log %s: %s", log_path, exc)
+        return False
+    lines = [line for line in re.split(r"[\r\n]", tail) if line.strip()]
+    if not lines:
+        return False
+    last = lines[-1]
+    return bool(_DOWNLOAD_RE.search(last)) and not _DOWNLOAD_DONE_RE.search(last)
 
 
 def failure_summary(info: str | None, step: int) -> str:
@@ -421,6 +457,7 @@ __all__ = [
     "append_phase",
     "cell_state",
     "checkpoint_columns",
+    "downloading",
     "parse_phase_log",
     "phase_durations",
     "phase_of",

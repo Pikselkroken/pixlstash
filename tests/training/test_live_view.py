@@ -251,3 +251,36 @@ def test_a_malformed_step_time_is_skipped_not_fatal(tmp_path):
     path = str(tmp_path / "loss_log.db")
     _loss_db(path, [(1, 10.0), (2, "not a time"), (3, 14.0)])
     assert live_view.read_step_times(path) == [(1, 10.0), (3, 14.0)]
+
+
+@pytest.mark.parametrize(
+    ("log", "fetching"),
+    [
+        # huggingface_hub's xet lines, as ai-toolkit's log carries them.
+        ("Loading transformer\n\rDownloading bytes: ##  | 1.2GB, 30MB/s", True),
+        ("x: reconstructing file:  17%|#7  | 2.1GB / 12.3GB", True),
+        ("Fetching 3 files:  33%|###3      | 1/3 [01:55<03:50]", True),
+        ("Reconstructing (incomplete total...):   0%|  0.00B / 8.04GB", True),
+        ("model-00001-of-00002.safetensors:  45%|####5  | 2.2G/4.9G", True),
+        # Done fetching, or never fetching.
+        ("\rDownloading bytes: ##########| 6.97GB\rDownload complete: : 6.97GB", False),
+        ("Fetching 3 files: 100%|##########| 3/3 [01:55<00:00]\n", False),
+        (
+            "Downloading bytes: ##| 1GB\nQuantizing (qfloat8)\n - quantizing 36 blocks\n",
+            False,
+        ),
+        ("Loading weights: 100%|##########| 398/398\n", False),
+        ("Loading model from /home/me/Downloads/zimage\n", False),
+        ("", False),
+    ],
+)
+def test_a_download_is_read_from_the_last_line_of_the_trainer_log(
+    tmp_path, log, fetching
+):
+    path = tmp_path / "log.txt"
+    path.write_text(log, encoding="utf-8")
+    assert live_view.downloading(str(path)) is fetching
+
+
+def test_a_missing_trainer_log_is_not_a_download(tmp_path):
+    assert live_view.downloading(str(tmp_path / "absent.txt")) is False

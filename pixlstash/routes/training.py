@@ -58,6 +58,7 @@ from pixlstash.training.config_render import (
     TunableOverrideError,
     normalise_trigger_word,
 )
+from pixlstash.training.local_ai_toolkit import LocalAiToolkit
 from pixlstash.utils.aitoolkit_run import read_output_root, read_run
 from pixlstash.utils.path_utils import path_is_within, resolve_path_within
 from pixlstash.utils.service.export_utils import ExportUtils
@@ -566,6 +567,13 @@ def create_router(server) -> APIRouter:
             description=(
                 "The shelf models (LoRAs) this run made. Listing a set's runs "
                 "with ?set_id= names the LoRAs trained from that set."
+            ),
+        )
+        phase: Optional[str] = Field(
+            default=None,
+            description=(
+                "'checking' while a queued run's memory and speed are checked; "
+                "otherwise null (the live view names every phase)."
             ),
         )
 
@@ -1118,13 +1126,35 @@ def create_router(server) -> APIRouter:
             models.setdefault(row["training_run_id"], []).append(row["id"])
         return models
 
-    def _job_to_summary(job: dict, model_ids: list[int]) -> dict:
+    def _checking_uuids() -> set[str]:
+        """The runs whose granted lease the worker shows as checking (#2120)."""
+        try:
+            leases = arbiter().snapshot()["leases"]
+        except Exception as exc:
+            logger.warning("Could not read the leases for the job list: %s", exc)
+            return set()
+        return {
+            row.get("job_id")
+            for row in leases
+            if row.get("state") == "granted"
+            and (row.get("progress") or {}).get("shown_as") == "checking"
+        }
+
+    def _job_to_summary(
+        job: dict, model_ids: list[int], checking: set[str] = frozenset()
+    ) -> dict:
         return _redact_job(
             {
                 "id": job["id"],
                 "uuid": job["uuid"],
                 "name": job["name"],
                 "status": job["status"],
+                # A probe runs while the row is still queued.
+                "phase": (
+                    "checking"
+                    if job["status"] == "queued" and job["uuid"] in checking
+                    else None
+                ),
                 "set_id": job["set_id"],
                 "character_id": job["character_id"],
                 "base_model": job["base_model"],
@@ -1294,6 +1324,19 @@ def create_router(server) -> APIRouter:
         ):
             phase = shown
         previews = live_view.preview_progress(info) if phase == "previews" else None
+        # A model the trainer has not loaded before is fetched while it loads,
+        # by the probe while checking or by the run itself.
+        downloading = False
+        if phase in ("checking", "loading"):
+            log_path = handle.log_path
+            if phase == "checking":
+                log_path = LocalAiToolkit.handle_for(
+                    os.path.join(handle.work_dir, "probe"),
+                    job["uuid"],
+                    job["name"],
+                    job.get("pid"),
+                ).log_path
+            downloading = live_view.downloading(log_path)
         deferred = bool(resolution.get("previews_deferred"))
 
         columns = live_view.checkpoint_columns(
@@ -1364,6 +1407,7 @@ def create_router(server) -> APIRouter:
             "status": job["status"],
             "phase": phase,
             "previews": previews,
+            "downloading": downloading,
             "previews_deferred": deferred,
             "step": step,
             "total_steps": total,
@@ -1642,7 +1686,10 @@ def create_router(server) -> APIRouter:
             hub, library_uuid, set_id=set_id, character_id=character_id
         )
         models = _models_by_run([run["id"] for run in runs])
-        return [_job_to_summary(run, models.get(run["id"], [])) for run in runs]
+        checking = _checking_uuids()
+        return [
+            _job_to_summary(run, models.get(run["id"], []), checking) for run in runs
+        ]
 
     @router.get(
         "/training/jobs/{job_id}",

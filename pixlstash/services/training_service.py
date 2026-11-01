@@ -1118,8 +1118,8 @@ class TrainingService:
     ) -> bool:
         """Probe a run whose setup this machine has not measured yet.
 
-        The probe trains a few updates at the largest bucket, draws one round
-        of previews and saves once, under a RAM guard, and records what each
+        The probe trains a few updates at the largest bucket, draws one preview
+        and saves once, under a RAM guard, and records what each
         phase peaked at. Running out of GPU memory steps to the next profile
         of the fit choice (more offloading); a loader error, a Triton error or
         the RAM guard ends the search. A profile that held but whose previews
@@ -1348,6 +1348,10 @@ class TrainingService:
         job_uuid = info["uuid"]
         pending = self._load_pending_spec(job_uuid)
         values = presets.resolved_values(settled)
+        # One preview peaks and takes as long as any other, and each one more
+        # costs a whole preview (a minute on a large model) before the run.
+        if values.get(presets.PROMPTS_KEY):
+            values[presets.PROMPTS_KEY] = values[presets.PROMPTS_KEY][:1]
         process: dict = {
             "train": {
                 "steps": PROBE_STEPS,

@@ -578,6 +578,30 @@ describe("TrainingRunLive", () => {
     expect(wrapper.text()).toContain("Waiting for the run ahead of it.");
   });
 
+  it("says it is checking memory and speed, not waiting, while its probe runs", async () => {
+    const wrapper = await open(
+      payload({
+        status: "queued",
+        phase: "checking",
+        step: 0,
+        phases: [{ phase: "checking", seconds: 40 }],
+        waiting: null,
+        downloading: true,
+      }),
+    );
+    const status = wrapper.find(".trl-status").text();
+    expect(status).toContain("Checking memory and speed");
+    expect(status).not.toContain("Waiting for the GPU");
+    expect(status).toContain("Downloading the model, once per model");
+  });
+
+  it("says nothing of a download when the trainer is not fetching one", async () => {
+    const wrapper = await open(
+      payload({ status: "running", phase: "loading", step: 0, downloading: false }),
+    );
+    expect(wrapper.find(".trl-status").text()).not.toContain("Downloading");
+  });
+
   it("puts its status in the shelf's bar when it mounts with the shelf", async () => {
     // Opened from another tab: the shelf and this page mount in one pass, so
     // the bar's slot is not in the document while this page sets up.

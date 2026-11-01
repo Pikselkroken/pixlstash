@@ -38,6 +38,7 @@ from pixlstash.routes import training as training_routes
 from pixlstash.routes.training import _redact_host_paths
 from pixlstash.training import preset_updates, presets
 from pixlstash.server import Server
+from pixlstash.training.local_ai_toolkit import LocalAiToolkit
 from pixlstash.utils.service.export_utils import ExportUtils
 
 
@@ -759,11 +760,36 @@ def test_a_run_that_ended_without_a_finish_time_has_no_growing_last_phase():
             lease.set_progress(step=0, total=6, phase="loading", shown_as="checking")
             live = owner.get(f"/training/jobs/{queued_id}/live").json()
             assert live["phase"] == "checking"
+            assert live["downloading"] is False  # the probe has no log yet
+            # The job list says so too, for the runs grid's card.
+            listed = {j["uuid"]: j for j in owner.get("/training/jobs").json()}
+            assert listed[queued_uuid]["phase"] == "checking"
+            # The probe's log ends on a model download: the view says so, and
+            # stops once the download is complete.
+            probe_log = LocalAiToolkit.handle_for(
+                os.path.join(server.vault.image_root, "training", queued_uuid, "probe"),
+                queued_uuid,
+                "seeded-job",
+                None,
+            ).log_path
+            os.makedirs(os.path.dirname(probe_log), exist_ok=True)
+            with open(probe_log, "w", encoding="utf-8") as fh:
+                fh.write(
+                    "Loading transformer\n\rDownloading bytes: ##  | 1.2GB, 30MB/s"
+                )
+            live = owner.get(f"/training/jobs/{queued_id}/live").json()
+            assert live["downloading"] is True
+            with open(probe_log, "a", encoding="utf-8") as fh:
+                fh.write("\rDownload complete: : ##########| 6.97GB\nQuantizing\n")
+            live = owner.get(f"/training/jobs/{queued_id}/live").json()
+            assert live["downloading"] is False
         finally:
             lease.release()
         assert owner.get(f"/training/jobs/{queued_id}/live").json()["phase"] == (
             "waiting_gpu"
         )
+        listed = {j["uuid"]: j for j in owner.get("/training/jobs").json()}
+        assert listed[queued_uuid]["phase"] is None
     finally:
         _teardown(temp_dir, server)
 
