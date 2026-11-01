@@ -78,7 +78,12 @@ function respond(url) {
   return { data: [] };
 }
 
-async function mountSidebar() {
+/**
+ * The fold map is read once per module and kept in memory, so clearing
+ * localStorage would not reset it between tests. Each mount opens what an
+ * earlier test folded instead; `keepFolds` is the reload check.
+ */
+async function mountSidebar({ keepFolds = false } = {}) {
   const wrapper = mount(SideBar, {
     shallow: true,
     props: { backendUrl: "/api/v1" },
@@ -90,6 +95,14 @@ async function mountSidebar() {
   });
   wrapper.vm.refreshSidebar();
   for (let i = 0; i < 5; i += 1) await flushPromises();
+  if (!keepFolds) {
+    for (const key of ["people", "sets"]) {
+      const caret = wrapper.find(`[aria-controls="sidebar-section-${key}"]`);
+      if (caret.attributes("aria-expanded") === "false") {
+        await caret.trigger("click");
+      }
+    }
+  }
   return wrapper;
 }
 
@@ -143,7 +156,7 @@ describe("collapsing People and Sets", () => {
       wrapper.unmount();
 
       // A fresh sidebar comes back folded.
-      const again = await mountSidebar();
+      const again = await mountSidebar({ keepFolds: true });
       expect(section(again, key).shown()).toBe(false);
 
       // Clicking the head itself opens it again.
@@ -194,6 +207,21 @@ describe("collapsing People and Sets", () => {
     await flushPromises();
     expect(section(wrapper, "people").shown()).toBe(false);
     expect(section(wrapper, "sets").shown()).toBe(false);
+
+    // With People stored open, a find offers no fold: the caret is disabled
+    // and a click on the head writes nothing.
+    await section(wrapper, "people").caret.trigger("click");
+    expect(stored()["sidebar:people"]).toBe(false);
+    await find.setValue("Ada");
+    await flushPromises();
+    const people = section(wrapper, "people");
+    expect(people.caret.attributes("disabled")).toBeDefined();
+    people.head.click();
+    await flushPromises();
+    expect(stored()["sidebar:people"]).toBe(false);
+    await find.setValue("");
+    await flushPromises();
+    expect(section(wrapper, "people").shown()).toBe(true);
     wrapper.unmount();
   });
 });

@@ -5223,7 +5223,7 @@ defineExpose({
               >
                 <div
                   class="sidebar-section-header sidebar-section-header--collapsible"
-                  @click="peopleCollapsed = peopleOpen"
+                  @click="isFinding || (peopleCollapsed = peopleOpen)"
                   @contextmenu.prevent.stop="
                     openSidebarCtxMenu('header', 'people', $event)
                   "
@@ -5232,9 +5232,10 @@ defineExpose({
                     type="button"
                     class="sidebar-tree-toggle sidebar-section-toggle"
                     :aria-expanded="String(peopleOpen)"
+                    :disabled="isFinding"
                     aria-controls="sidebar-section-people"
                     :aria-label="`${peopleOpen ? 'Collapse' : 'Expand'} People`"
-                    @click.stop="peopleCollapsed = peopleOpen"
+                    @click.stop="isFinding || (peopleCollapsed = peopleOpen)"
                   >
                     <v-icon size="16">{{
                       peopleOpen ? "mdi-chevron-down" : "mdi-chevron-right"
@@ -5623,7 +5624,7 @@ defineExpose({
               >
                 <div
                   class="sidebar-section-header sidebar-section-header--collapsible"
-                  @click="setsCollapsed = setsOpen"
+                  @click="isFinding || (setsCollapsed = setsOpen)"
                   @contextmenu.prevent.stop="
                     openSidebarCtxMenu('header', 'sets', $event)
                   "
@@ -5632,9 +5633,10 @@ defineExpose({
                     type="button"
                     class="sidebar-tree-toggle sidebar-section-toggle"
                     :aria-expanded="String(setsOpen)"
+                    :disabled="isFinding"
                     aria-controls="sidebar-section-sets"
                     :aria-label="`${setsOpen ? 'Collapse' : 'Expand'} Sets`"
-                    @click.stop="setsCollapsed = setsOpen"
+                    @click.stop="isFinding || (setsCollapsed = setsOpen)"
                   >
                     <v-icon size="16">{{
                       setsOpen ? "mdi-chevron-down" : "mdi-chevron-right"
