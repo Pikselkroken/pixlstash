@@ -172,6 +172,21 @@ describe("TrainingRunLive", () => {
     ]);
   });
 
+  it("says what it trains on in the bar: the base model's tile and name", async () => {
+    const wrapper = await open(
+      payload({ base_model: "black-forest-labs/FLUX.1-dev", base_tile: { label: "FLUX.1 Dev", mark: ["Dev", "1"], mark_tab: null, mark_colors: ["#484c53"], mark_icon: "flux", mark_letters: null, mark_band: true } }),
+    );
+    const base = wrapper.find("[data-testid='trl-base']");
+    expect(base.text()).toContain("FLUX.1 Dev");
+    expect(base.find(".mmark-named--release img").exists()).toBe(true);
+    // Unknown to the table: the trainer's id, last segment, on a generated mark.
+    const plain = await open(payload({ base_model: "someone/my-base/", base_tile: null }));
+    expect(plain.find("[data-testid='trl-base']").text()).toContain("my-base");
+    expect(plain.find("[data-testid='trl-base'] .mmark-initials").exists()).toBe(true);
+    const none = await open(payload({ base_model: null }));
+    expect(none.find("[data-testid='trl-base']").exists()).toBe(false);
+  });
+
   it("opens a sample full size on a click", async () => {
     const wrapper = await open(payload());
     const sample = () => JSON.parse(wrapper.find(".tsd-stub").attributes("data-sample"));

@@ -193,6 +193,16 @@
 
           <div class="tr-card-body">
             <span class="tr-card-title">
+              <!-- What it trains on, in the tile a workflow card draws that
+                   base model with; the fact below names it in words. -->
+              <ModelMark
+                v-if="cardBaseMark(card)"
+                class="tr-card-mark"
+                :row="cardBaseMark(card)"
+                named
+                aria-hidden="true"
+                data-testid="tr-card-mark"
+              />
               <span class="tr-card-name">{{ card.name }}</span>
               <span v-if="card.live" class="tr-card-chip">{{
                 card.job?.status === "completed" ? "Finishing" : "Training"
@@ -554,6 +564,7 @@ import TrainingRunLive from "./TrainingRunLive.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import InspectorEdgeTab from "../widgets/InspectorEdgeTab.vue";
+import ModelMark from "../widgets/ModelMark.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import { importRun, runSampleUrl } from "../../api/modelImports";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
@@ -567,6 +578,7 @@ import { formatModelSize } from "../../utils/modelShelf";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import {
   baseOf,
+  cardBaseMark,
   dateOf,
   defaultDestination,
   failed,
@@ -1369,6 +1381,12 @@ function batchReceipt(imported, failed) {
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
+}
+
+/* The pills hang off the tile's corners (`ModelMark`), so the name keeps a
+   step clear of the top-end one. */
+.tr-card-mark {
+  margin-inline-end: var(--space-1);
 }
 
 /* Amber is the attention colour: this run is training now. Outlined, the

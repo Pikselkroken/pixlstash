@@ -182,6 +182,25 @@ describe("drawing the grid", () => {
     expect(importRun).not.toHaveBeenCalled();
   });
 
+  it("marks each run with its base model's tile, or none with no base model", async () => {
+    const tile = { label: "FLUX.1 Dev", mark: ["Dev", "1"], mark_tab: null, mark_colors: ["#484c53"], mark_icon: "flux", mark_letters: null, mark_band: true };
+    const wrapper = await openWith([
+      run("Known", { base_tile: tile }),
+      run("Unknown", { base_model: "someone/my-base", base_tile: null }),
+      run("Unrecorded", { base_model: null }),
+    ]);
+    const mark = (name) =>
+      wrapper
+        .findAll(".tr-card")
+        .find((c) => c.find(".tr-card-name").text() === name)
+        .find("[data-testid='tr-card-mark']");
+    // The release's glyph, the tile a workflow card draws FLUX.1 Dev with.
+    expect(mark("Known").find(".mmark-named--release img").exists()).toBe(true);
+    // A base nobody knows still wears a mark: the generated one.
+    expect(mark("Unknown").find(".mmark-initials").exists()).toBe(true);
+    expect(mark("Unrecorded").exists()).toBe(false);
+  });
+
   it("covers with the first prompt at the highest step", async () => {
     // Highest step is what the run has learned so far. First PROMPT, not the
     // last rendered: `index` separates prompts within a step rather than time,

@@ -13,6 +13,17 @@
         />
         <span class="trl-vsep" aria-hidden="true"></span>
         <span class="trl-name">{{ live?.name || "Training run" }}</span>
+        <!-- What it trains on: the base model's tile, as the run's card and a
+             workflow card draw it, and its name; the trainer's own id in the
+             tooltip. -->
+        <template v-if="baseMark">
+          <span class="trl-vsep" aria-hidden="true"></span>
+          <span class="trl-base" data-testid="trl-base">
+            <Tooltip :text="`Trains on ${live.base_model}`" activator="parent" />
+            <ModelMark :row="baseMark" named aria-hidden="true" />
+            <span class="trl-base-name">{{ baseMark.display_name }}</span>
+          </span>
+        </template>
         <template v-if="live">
           <span class="trl-vsep" aria-hidden="true"></span>
           <span class="trl-status" role="status">
@@ -445,6 +456,7 @@ import { VIcon } from "vuetify/components";
 
 import AppButton from "../widgets/AppButton.vue";
 import LoraLossChart from "../widgets/LoraLossChart.vue";
+import ModelMark from "../widgets/ModelMark.vue";
 import SectionHeader from "../widgets/SectionHeader.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import TrainingSampleDialog from "../widgets/TrainingSampleDialog.vue";
@@ -461,6 +473,7 @@ import { errorDetail } from "../../utils/apiError";
 import { copyText } from "../../utils/clipboard";
 import { isTypingTarget } from "../../utils/dom.js";
 import {
+  baseMarkOf,
   failureText,
   FOLDER_RUN_STATUS,
   folderRunLive,
@@ -497,6 +510,7 @@ const SETUP = ["waiting_gpu", "checking", "loading", "caching"];
 const live = ref(null);
 const error = ref("");
 const fromFolder = computed(() => Boolean(props.run));
+const baseMark = computed(() => baseMarkOf(live.value));
 // The tab re-lists its folder when it is looked at again: follow it.
 watch(
   () => [props.run, props.folderId],
@@ -1317,6 +1331,23 @@ onBeforeUnmount(() => {
 .trl-name {
   font-size: var(--text-base);
   font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 24ch;
+}
+
+/* The pills hang off the tile's corners, so the name keeps a step clear. */
+.trl-base {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  font-size: var(--text-sm);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.trl-base-name {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
