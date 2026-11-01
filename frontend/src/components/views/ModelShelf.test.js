@@ -4708,6 +4708,34 @@ describe("the open folder (#2203)", () => {
       wrapper.unmount();
     });
 
+    it("says how many selected models a drag leaves behind", async () => {
+      // The report: several models selected, the others in a locked folder,
+      // and the tip named one file as if the selection had been dropped.
+      const LOCKED = { ...FOLDER, id: 2, path: "/home/me/.cache/hub", movable: "external" };
+      listModelFolders.mockResolvedValue([FOLDER, LOCKED]);
+      const wrapper = await mountShelf([
+        adapter({ id: 1, locations: at("loose.safetensors") }),
+        adapter({
+          id: 2,
+          sha256: "b".repeat(64),
+          locations: [
+            { state: "present", folder_id: 2, folder_path: LOCKED.path, relpath: "x.safetensors" },
+          ],
+        }),
+      ]);
+      await useModelFoldersStore().refresh();
+      const store = useModelShelfStore();
+      store.toggleSelected(1);
+      store.toggleSelected(2);
+      await flushPromises();
+      pointer(wrapper.find(".shelf-row").element, "pointerdown");
+      pointer(window, "pointermove", 10, 0);
+      expect(store.dragCopies.items).toEqual([LOOSE]);
+      expect(store.dropTip.text).toBe("loose.safetensors · 1 model can't move");
+      pointer(window, "pointerup", 10, 0);
+      wrapper.unmount();
+    });
+
     it("hands the drop to the folder under the pointer, and eats the release's click", async () => {
       const { wrapper, store } = await openFolder();
       const folder = document.createElement("div");

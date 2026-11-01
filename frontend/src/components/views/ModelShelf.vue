@@ -2117,12 +2117,19 @@ function trackDrag(x, y) {
   if (!overOk) store.dropTip = { x, y, text: carriedWords(store.dragCopies) };
 }
 
-/** What the tip says away from a folder: the file, or how many. */
+/**
+ * What the tip says away from a folder: the file, or how many, and how many
+ * selected models stay behind (see `movableCopies`). Without the second half a
+ * three-model drag that carries one file reads as a lost selection. Models,
+ * not files: a model with two movable copies carries two files.
+ */
 function carriedWords(copies) {
   const items = copies?.items ?? [];
-  return items.length === 1
-    ? basename(items[0].relpath)
-    : `${items.length} files`;
+  const carried =
+    items.length === 1 ? basename(items[0].relpath) : `${items.length} files`;
+  const stays = copies?.stays ?? 0;
+  if (!stays) return carried;
+  return `${carried} · ${stays} ${stays === 1 ? "model" : "models"} can't move`;
 }
 
 function onDragRelease() {

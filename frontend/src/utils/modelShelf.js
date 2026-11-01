@@ -1244,19 +1244,26 @@ export function importReceipt(report) {
  *   the open folder, or null for every copy.
  * @returns {{items: Array<{folder_id: number, relpath: string}>,
  *   totalBytes: number, bytesByFolderId: Map<number, number>,
- *   kinds: Map<string, string>}} `kinds` is each copy's Type by
- *   {@link copyKey}, for the drop tip's ComfyUI name; the items stay bare
- *   because the move route refuses any other field.
+ *   kinds: Map<string, string>, stays: number}} `kinds` is each copy's Type
+ *   by {@link copyKey}, for the drop tip's ComfyUI name; the items stay bare
+ *   because the move route refuses any other field. `stays` counts the rows
+ *   that have a copy in scope but none that can move (missing, offline,
+ *   PixlStash's own or locked), so a drag can say what it leaves behind; a
+ *   row with no copy in the open folder is not here, and is not counted.
  */
 export function movableCopies(rows, foldersById = null, scope = null) {
   const items = [];
   const kinds = new Map();
   const bytesByFolderId = new Map();
   let totalBytes = 0;
+  let stays = 0;
   for (const row of Array.isArray(rows) ? rows : []) {
+    const before = items.length;
+    let here = false;
     for (const loc of row?.locations || []) {
-      if (loc?.state !== "present") continue;
       if (scope && !inFolderScopeOf(loc, scope)) continue;
+      here = true;
+      if (loc?.state !== "present") continue;
       const folder = foldersById?.get(Number(loc.folder_id));
       if (folder?.owner === "pixlstash") continue;
       // A locked folder (the lock in the Folders tree): files do not leave it
@@ -1272,8 +1279,9 @@ export function movableCopies(rows, foldersById = null, scope = null) {
       );
       totalBytes += bytes;
     }
+    if (here && items.length === before) stays += 1;
   }
-  return { items, totalBytes, bytesByFolderId, kinds };
+  return { items, totalBytes, bytesByFolderId, kinds, stays };
 }
 
 /**
