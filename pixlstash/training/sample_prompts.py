@@ -265,16 +265,22 @@ def describe(
     return _GENERIC[subject], "generic"
 
 
-def stranger(description: str) -> str:
+def stranger(description: str) -> str | None:
     """Somebody a person's description does not fit: its opposite.
 
     The noun takes the other sex and an age word the other end of life
     ("an elderly man" is "a young woman"); any other modifier is dropped, as
     it could be the subject's own ("a blonde woman" is "a man"). A child is
     "an elderly" adult, and a description with no sex and no age ("a person")
-    is "a child".
+    is "a child". A description typed in by hand may carry no article or no
+    words at all ("person", ""): the first is read the same, the second has
+    no opposite and answers None.
     """
-    words = description.split()[1:]
+    words = description.lower().split()
+    if words and words[0] in ("a", "an"):
+        words = words[1:]
+    if not words:
+        return None
     noun, modifiers = words[-1], set(words[:-1])
     if noun in _CHILD_NOUNS:
         return _article(

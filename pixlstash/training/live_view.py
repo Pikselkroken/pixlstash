@@ -289,13 +289,16 @@ def preservation(resolution: dict | None) -> dict | None:
     """
     values = (resolution or {}).get("values") or {}
     described = values.get("train.diff_output_preservation_class") or {}
-    if not isinstance(described, dict) or not described.get("value"):
+    description = (
+        str(described.get("value") or "").strip() if isinstance(described, dict) else ""
+    )
+    if not description:
         return None
     kept = values.get("train.diff_output_preservation") or {}
     return {
         "on": bool(isinstance(kept, dict) and kept.get("value")),
-        "description": str(described["value"]),
-        "stranger": sample_prompts.stranger(str(described["value"])),
+        "description": description,
+        "stranger": sample_prompts.stranger(description),
     }
 
 

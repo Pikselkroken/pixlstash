@@ -70,6 +70,14 @@ def test_the_stranger_is_the_descriptions_opposite(description, other):
     assert sample_prompts.stranger(description) == other
 
 
+def test_a_hand_typed_description_never_breaks_the_stranger():
+    # A pinned class word reaches stranger() from the run screen as typed.
+    assert sample_prompts.stranger("person") == "a child"
+    assert sample_prompts.stranger("An Old Man") == "a young woman"
+    assert sample_prompts.stranger("an") is None
+    assert sample_prompts.stranger("   ") is None
+
+
 def test_most_captions_sharing_the_description_keep_it_generic():
     captions = [
         "ohwx, an elderly man with glasses.",

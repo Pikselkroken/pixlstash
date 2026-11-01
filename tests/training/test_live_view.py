@@ -178,6 +178,13 @@ def test_preservation_is_read_from_the_resolved_values():
         "stranger": "a young woman",
     }
     assert live_view.preservation(resolution(False))["on"] is False
+    # A class word pinned blank, or one word, never breaks the run screen.
+    blank = resolution(True)
+    blank["values"]["train.diff_output_preservation_class"]["value"] = "  "
+    assert live_view.preservation(blank) is None
+    bare = resolution(True)
+    bare["values"]["train.diff_output_preservation_class"]["value"] = "person"
+    assert live_view.preservation(bare)["stranger"] == "a child"
     # A run from before the switch, or not of a person, never decided.
     assert live_view.preservation({"values": {}}) is None
     assert live_view.preservation(None) is None
