@@ -23,53 +23,35 @@
 
 ## Editing pictures
 
-- The lightbox Edit tab has Paint tools: select the area to change with a
-  rectangle, ellipse, lasso, brush or colour wand, and an inpaint workflow
-  changes only that area. Three inpaint workflows ship built in
-  (Qwen-Image-Edit-2511, Flux2-Klein-9B and Qwen-Image-2.1), and PixlStash
-  offers to install the node pack and models they need.
-- Crop a picture from the Edit tab, to the face, 3:4, a training bucket or a
-  frame you drag. No ComfyUI needed.
-- Compare any two pictures on a before/after slider, from the grid or the
-  lightbox filmstrip.
-- "Edit with ComfyUI…" is now "Edit…", and can apply one edit to several
-  selected pictures.
+- Paint tools and inpainting in the lightbox Edit tab, with three built-in
+  inpaint workflows.
+- Crop pictures without ComfyUI.
+- Compare two pictures on a before/after slider.
+- Edit several selected pictures at once.
 
 ## Workflows
 
-- Workflows has a Templates tab: every workflow template your ComfyUI serves,
-  with which of its files you already have. Add one or several to your
-  workflows, or start a workflow set from one on the Model shelf.
-- Download a missing model from inside PixlStash wherever a workflow, set or
-  template needs it. A model still downloading can already go into a set or
-  workflow.
-- Every workflow can upscale: tick Upscale in the Run popup. Upscale… on the
-  selection bar and in the lightbox upscales pictures you already have.
-- Favourites for models, workflow sets and workflows, which lead their group
-  everywhere you pick from a list.
-- Workflow sets follow their checkpoint: models the checkpoint's pictures use
-  join the set by themselves, and sets on the same checkpoint can be merged.
-- The Tasks tab lists finished runs and the pictures they made, and the
-  lightbox has a Tasks tab of its own.
-- A missing checkpoint's picker sorts every checkpoint by how likely it is to
-  work with the workflow.
-- More ComfyUI workflows open ready to run instead of as drafts, LTX-2 ones
-  included.
-- Choose a workflow card's thumbnail, and drop workflow `.json` files onto the
-  Workflows view to add them.
+- Templates tab with every workflow template your ComfyUI serves.
+- Download missing models from inside PixlStash.
+- Upscale with any workflow, or upscale pictures you already have.
+- Favourites for models, workflow sets and workflows.
+- Workflow sets fill themselves from their checkpoint's pictures, and can be
+  merged.
+- Finished runs listed in the Tasks tab, also in the lightbox.
+- More ComfyUI workflows open ready to run, LTX-2 included.
+- Custom workflow thumbnails, and drag-and-drop of workflow `.json` files.
 
 ## GPU
 
-- ComfyUI runs wait for GPU memory instead of running out of it, and start by
-  themselves once there is room. PixlStash pauses its own GPU work to make
-  that room.
-- The Tasks tab shows each GPU's memory and who holds it, and PixlStash learns
-  how much memory each workflow needs from its runs.
-- Settings › Compute lets you pick which GPU PixlStash uses.
+- ComfyUI runs wait for free GPU memory instead of running out of it.
+- Per-GPU memory bars in the Tasks tab.
+- Choose which GPU PixlStash uses in Settings › Compute.
 
 ## Fixes
 
-- Many bug fixes.
+- Fixed: PixlStash could fall back to the CPU for the whole session when
+  started next to a ComfyUI with a model loaded.
+- Many other bug fixes.
 
 # [1.12.2] [Security:High]
 
