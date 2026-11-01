@@ -436,6 +436,23 @@ class Server(
     DEV_MACHINE_ENV_VAR = "PIXLSTASH_TELEMETRY_DEV"
 
     @staticmethod
+    def _desktop_nonce_for(request: Request) -> str | None:
+        """The desktop launch nonce, answered only on the loopback listener.
+
+        The Electron shell checks it before trusting a port with its session
+        cookie. The same app also serves the optional LAN listener, which must
+        not hand the nonce to anyone who can reach it.
+        """
+        nonce = os.environ.get("PIXLSTASH_DESKTOP_HEALTH_NONCE")
+        port = os.environ.get("PIXLSTASH_PORT", "").strip()
+        if not nonce or not port.isdigit():
+            return None
+        served_on = request.scope.get("server") or (None, None)
+        if served_on[0] != "127.0.0.1" or served_on[1] != int(port):
+            return None
+        return nonce
+
+    @staticmethod
     def detect_install_type() -> str:
         """Return the install type for telemetry: one of ``INSTALL_TYPES``.
 
@@ -1722,7 +1739,7 @@ class Server(
             return {"message": "PixlStash REST API", "version": version}
 
         @self.api.get("/version", tags=["server"], response_model=VersionResponse)
-        async def read_version():
+        async def read_version(request: Request):
             version = self._get_version()
             install_type = Server.detect_install_type()
             # Defensive guard: detect_install_type() already constrains its
@@ -1749,7 +1766,7 @@ class Server(
                 "version": version,
                 "install_type": install_type,
                 "docker_variant": docker_variant,
-                "desktop_nonce": os.environ.get("PIXLSTASH_DESKTOP_HEALTH_NONCE"),
+                "desktop_nonce": Server._desktop_nonce_for(request),
             }
 
         @self.api.get("/scalar", include_in_schema=False)
