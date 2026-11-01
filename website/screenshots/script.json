@@ -32,7 +32,7 @@
     "kind": "video"
   },
   {
-    "page": "introduction.html",
+    "page": "index.html",
     "asset": "05-SemanticSearch.mp4",
     "label": null,
     "alt": null,
@@ -81,6 +81,30 @@
   },
   {
     "page": "comfyui.html",
+    "asset": "ComfyAdapterLoader.jpg",
+    "label": "Adapter (LoRA) Loader",
+    "alt": "A ComfyUI graph with the PixlStash Checkpoint, Character, CLIP and Adapter (LoRA) Loaders, the adapter node showing the picked LoRA's thumbnail",
+    "caption": "Applies a LoRA from the shelf and adds a trigger_words output. Wire in a Set or Character Loader to see only their adapters, and base_model narrows the grid to one family: Krea 2 shows the Krea 2, Raw and Turbo adapters alike. Requires PixlStash v1.10+.",
+    "kind": "image"
+  },
+  {
+    "page": "comfyui.html",
+    "asset": "ComfyAdapterPicker.jpg",
+    "label": "Pick by picture, not by filename",
+    "alt": "The PixlStash Adapters picker in ComfyUI listing the people who have a LoRA for this workflow, each with their trigger word",
+    "caption": "Every loader opens the same grid, searchable by name, filename or trigger word. For LoRAs, People who fit lists the people with an adapter for the workflow's base model, by face, with a choice when more than one of theirs fits.",
+    "kind": "image"
+  },
+  {
+    "page": "comfyui.html",
+    "asset": "ComfyCheckpointPicker.jpg",
+    "label": "Pick by picture, not by filename",
+    "alt": "The PixlStash Checkpoints picker in ComfyUI: a searchable grid of checkpoints, each with its base model's icon",
+    "caption": "Every loader opens the same grid, searchable by name, filename or trigger word. For LoRAs, People who fit lists the people with an adapter for the workflow's base model, by face, with a choice when more than one of theirs fits.",
+    "kind": "image"
+  },
+  {
+    "page": "comfyui.html",
     "asset": "ComfyFaceLikenessGate.jpg",
     "label": "Face Likeness Gate write scope",
     "alt": "PixlStash Face Likeness Gate splitting a batch into accepted and rejected by character match",
@@ -121,6 +145,14 @@
   },
   {
     "page": "comfyui.html",
+    "asset": "ComfyPictureLikenessGate.jpg",
+    "label": "Picture Likeness Gate read scope",
+    "alt": "PixlStash Picture Likeness Gate splitting a batch by likeness to a reference set, with the accepted and rejected pictures saved back to PixlStash",
+    "caption": "The same split, judged on whole-picture likeness to a reference set rather than a face. combine decides how the set's members vote: min means match every member, max means match any. Requires PixlStash v1.4+.",
+    "kind": "image"
+  },
+  {
+    "page": "comfyui.html",
     "asset": "ComfyResult.jpg",
     "label": "Results land back in your vault",
     "alt": "Generated and edited images saved back into a PixlStash set",
@@ -144,6 +176,22 @@
     "kind": "image"
   },
   {
+    "page": "features.html",
+    "asset": "ComparisonSlider.mp4",
+    "label": "Compare any two pictures",
+    "alt": null,
+    "caption": "Select two pictures in the grid and choose Compare, or right-click a second one in the viewer's filmstrip. One is laid over the other with a slider, whether or not one was made from the other.",
+    "kind": "video"
+  },
+  {
+    "page": "comfyui.html",
+    "asset": "ConnectComfyUI.jpg",
+    "label": "PixlStash's Connect ComfyUI dialog with four checks passed: reach ComfyUI, PixlStash nodes installed, link the two apps, check both directions",
+    "alt": "PixlStash's Connect ComfyUI dialog with four checks passed: reach ComfyUI, PixlStash nodes installed, link the two apps, check both directions",
+    "caption": null,
+    "kind": "image"
+  },
+  {
     "page": "install.html",
     "asset": "docker-mark-black.svg",
     "label": "",
@@ -160,6 +208,14 @@
     "kind": "video"
   },
   {
+    "page": "whatsnew.html",
+    "asset": "EditInComfyUI.jpg",
+    "label": "A workflow opened in ComfyUI from PixlStash, with PixlStash loader nodes in the graph and a notice that it was saved to PixlStash as version 6",
+    "alt": "A workflow opened in ComfyUI from PixlStash, with PixlStash loader nodes in the graph and a notice that it was saved to PixlStash as version 6",
+    "caption": null,
+    "kind": "image"
+  },
+  {
     "page": "comfyui.html",
     "asset": "FaceLikenessSearch.jpg",
     "label": "Likeness Search read scope",
@@ -168,10 +224,58 @@
     "kind": "image"
   },
   {
+    "page": "whatsnew.html",
+    "asset": "FixingWorkflows.mp4",
+    "label": null,
+    "alt": null,
+    "caption": null,
+    "kind": "video"
+  },
+  {
+    "page": "features.html",
+    "asset": "InpaintBoth.mp4",
+    "label": "One edit after another",
+    "alt": null,
+    "caption": "An axe head for one gnome, blue lipstick for another. Each edit is a new picture in the original's stack, so the next one can start while the last is still running.",
+    "kind": "video"
+  },
+  {
+    "page": "features.html",
+    "asset": "Inpainting.mp4",
+    "label": "Paint a selection",
+    "alt": null,
+    "caption": "Rectangle, ellipse, lasso, brush, eraser and colour wand, then grow, feather or fill the holes. A before/after slider shows what changed.",
+    "kind": "video"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "InpaintingOwnWorkflow.mp4",
+    "label": null,
+    "alt": null,
+    "caption": null,
+    "kind": "video"
+  },
+  {
+    "page": "comfyui.html",
+    "asset": "LinkingComfyUIAndCharacter.mp4",
+    "label": null,
+    "alt": null,
+    "caption": null,
+    "kind": "video"
+  },
+  {
     "page": "demo-holiday.html",
     "asset": "logo.png",
     "label": "PixlStash logo",
     "alt": "PixlStash logo",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "index.html",
+    "asset": "ModelDownload.jpg",
+    "label": "The Tasks tab downloading a 19 GB checkpoint, with a progress bar and a cancel button",
+    "alt": "The Tasks tab downloading a 19 GB checkpoint, with a progress bar and a cancel button",
     "caption": null,
     "kind": "image"
   },
@@ -192,11 +296,51 @@
     "kind": "video"
   },
   {
+    "page": "whatsnew.html",
+    "asset": "OpenInComfyUI.jpg",
+    "label": "The Open in ComfyUI button beside Run… in the Workflow inspector",
+    "alt": "The Open in ComfyUI button beside Run… in the Workflow inspector",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "OpenOriginalInComfyUI.jpg",
+    "label": "The Workflow inspector's ⋯ menu offering Open original in ComfyUI",
+    "alt": "The Workflow inspector's ⋯ menu offering Open original in ComfyUI",
+    "caption": null,
+    "kind": "image"
+  },
+  {
     "page": "features.html",
     "asset": "ReverseImageSearch.jpg",
     "label": "Reverse image & face search",
     "alt": "PixlStash context menu with reverse image search and find similar faces",
     "caption": "Right-click any picture to run a reverse image search for visually similar pictures, or find other pictures containing the same face.",
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "RunningWorkflow.mp4",
+    "label": null,
+    "alt": null,
+    "caption": null,
+    "kind": "video"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "RunWorkflow.jpg",
+    "label": "The Run workflow window with the prompt, a choice of person, LoRAs, size, steps, CFG, count, seed and checkpoint",
+    "alt": "The Run workflow window with the prompt, a choice of person, LoRAs, size, steps, CFG, count, seed and checkpoint",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "SaveToPixlStash.jpg",
+    "label": "The ComfyUI menu with a PixlStash submenu offering Save to PixlStash and Save as new workflow in PixlStash",
+    "alt": "The ComfyUI menu with a PixlStash submenu offering Save to PixlStash and Save as new workflow in PixlStash",
+    "caption": null,
     "kind": "image"
   },
   {
@@ -300,7 +444,7 @@
     "asset": "ScreenshotComfyUi.jpg",
     "label": "ComfyUI Integration",
     "alt": "PixlStash ComfyUI integration view",
-    "caption": "Run your own ComfyUI workflows directly from PixlStash with progress tracking.",
+    "caption": "Run the workflows behind your pictures directly from PixlStash, with progress in the Tasks tab, and open any of them in ComfyUI.",
     "kind": "image"
   },
   {
@@ -496,7 +640,7 @@
     "kind": "image"
   },
   {
-    "page": "index.html",
+    "page": "whatsnew.html",
     "asset": "ScreenshotMapTree.jpg",
     "label": "PixlStash reading a folder of pictures, with each folder level labelled as a project, a person or a set",
     "alt": "PixlStash reading a folder of pictures, with each folder level labelled as a project, a person or a set",
@@ -597,14 +741,6 @@
     "label": "PixlStash screenshot with reference folders, context menu, and statistics sidebar",
     "alt": "PixlStash screenshot with reference folders, context menu, and statistics sidebar",
     "caption": null,
-    "kind": "image"
-  },
-  {
-    "page": "features.html",
-    "asset": "ScreenshotReferenceFoldersNew.jpg",
-    "label": "Reference folders",
-    "alt": "PixlStash reference folders and import folders",
-    "caption": "Keep your existing folder structure while still benefiting from PixlStash's organisation and metadata features. Manage reference and import folders directly from the UI.",
     "kind": "image"
   },
   {
@@ -776,6 +912,14 @@
     "kind": "image"
   },
   {
+    "page": "whatsnew.html",
+    "asset": "ScreenshotWizard.jpg",
+    "label": "The Add a library wizard, reading a folder of pictures and proposing what each folder level means",
+    "alt": "The Add a library wizard, reading a folder of pictures and proposing what each folder level means",
+    "caption": null,
+    "kind": "image"
+  },
+  {
     "page": "comfyui.html",
     "asset": "SemanticSearch.jpg",
     "label": "Semantic Search read scope",
@@ -809,7 +953,71 @@
   },
   {
     "page": "index.html",
+    "asset": "TemplateDownloads.jpg",
+    "label": "The Templates tab: ComfyUI template cards marked Ready to run or with how many files are missing",
+    "alt": "The Templates tab: ComfyUI template cards marked Ready to run or with how many files are missing",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "index.html",
     "asset": "VideoMain.mp4",
+    "label": null,
+    "alt": null,
+    "caption": null,
+    "kind": "video"
+  },
+  {
+    "page": "index.html",
+    "asset": "WaitingForGPU.png",
+    "label": "The Tasks tab with a ComfyUI run waiting for the GPU, showing what it needs and what is free",
+    "alt": "The Tasks tab with a ComfyUI run waiting for the GPU, showing what it needs and what is free",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "WorkflowClementine.mp4",
+    "label": null,
+    "alt": null,
+    "caption": null,
+    "kind": "video"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "WorkflowParameters.mp4",
+    "label": null,
+    "alt": null,
+    "caption": null,
+    "kind": "video"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "WorkflowPictures.mp4",
+    "label": null,
+    "alt": null,
+    "caption": null,
+    "kind": "video"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "Workflows.jpg",
+    "label": "The Workflows screen: a grid of workflow cards, each covered with the pictures it made and labelled with its checkpoint, LoRAs and type, beside the inspector for the selected workflow",
+    "alt": "The Workflows screen: a grid of workflow cards, each covered with the pictures it made and labelled with its checkpoint, LoRAs and type, beside the inspector for the selected workflow",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "WorkflowSets.jpg",
+    "label": "Workflow sets on the model shelf: a card per checkpoint, one opened to show its text encoders, VAE, LoRAs and upscalers",
+    "alt": "Workflow sets on the model shelf: a card per checkpoint, one opened to show its text encoders, VAE, LoRAs and upscalers",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "WorkflowsMultipleLoRAs.mp4",
     "label": null,
     "alt": null,
     "caption": null,
