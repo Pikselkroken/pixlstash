@@ -1267,6 +1267,11 @@
   background: var(--wash, transparent);
 }
 
+/* Headed by the project dropdown: the gap above it stays outside the wash. */
+.sidebar-branch--headed {
+  margin-top: var(--space-3);
+}
+
 .sidebar-project-tile {
   display: inline-flex;
   align-items: center;
@@ -1279,6 +1284,19 @@
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   line-height: 1;
+}
+
+/* The All of <project> row's mark: the tile alone, at the places' glyph size. */
+.sidebar-project-tile--mark {
+  width: var(--gutter-glyph);
+  height: var(--gutter-glyph);
+}
+
+/* First under the dropdown, 8px below it, like a section head would be. Full
+   width: a block parent does not stretch a button as the flex list does. */
+.sidebar-all-of-scope {
+  width: 100%;
+  margin-top: var(--space-3);
 }
 
 /* Context kept while finding: the name steps back, the match stays bright. */

@@ -193,22 +193,20 @@ function onTriggerContext(event) {
 
 <style scoped>
 .scope-slot {
-  /* A bar-height trigger on the list's own left edge (past the selection
-     rail), under the Library / Folders switch. */
+  /* A full-width bar-height band heading the box it scopes, its tile on the
+     rows' icon line. With no project there is no box, so hairlines frame it. */
   flex-shrink: 0;
   height: var(--control-h-bar);
   box-sizing: border-box;
-  margin: var(--space-3) var(--space-3) 0 calc(var(--rail-w) + var(--space-3));
-  border: 1px solid rgb(var(--v-theme-border));
-  border-radius: var(--radius-sm);
+  border-block: 1px solid rgb(var(--v-theme-border));
   overflow: hidden;
 }
 
-/* The project's colour, worn as a tint: the trigger carries the stronger one,
-   the People and Sets under it a faint wash. */
+/* The project's colour, worn as a tint: the band carries the stronger one,
+   the People and Sets under it a faint wash, and needs no frame. */
 .scope-slot--project {
   background: color-mix(in srgb, var(--scope-color) 16%, transparent);
-  border-color: color-mix(in srgb, var(--scope-color) 45%, transparent);
+  border-color: transparent;
 }
 
 .scope-trigger {
@@ -217,7 +215,7 @@ function onTriggerContext(event) {
   gap: var(--space-3);
   width: 100%;
   height: 100%;
-  padding: 0 var(--space-3);
+  padding: 0 var(--space-3) 0 calc(var(--rail-w) + var(--space-3));
   border: 0;
   background: transparent;
   color: rgb(var(--v-theme-sidebar-text));

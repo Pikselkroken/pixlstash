@@ -56,7 +56,7 @@ import { deleteProject, getProjectSummary } from "../../api/projects";
 import {
   listReferenceFolders,
 } from "../../api/folders";
-import { getPictureCount } from "../../api/pictures";
+import { getPictureCount, setPicturesProject } from "../../api/pictures";
 import { getSharedResourceIds, revokeTokensByResource } from "../../api/users";
 import { listSortMechanisms } from "../../api/session";
 import { listAdapters } from "../../api/modelShelf";
@@ -2682,6 +2682,63 @@ function openProjectBranch(projectId) {
   chooseScope(projectId == null ? "none" : projectId);
 }
 
+// The All of <project> row under the dropdown: the scope itself as a row, lit
+// while the grid shows all of it (not its favourites, as All media splits).
+const isAllOfScopeRowActive = computed(
+  () =>
+    isAllPicturesRowActive.value &&
+    projectViewMode.value === "project" &&
+    !filterStore.favouriteOnlyFilter,
+);
+const allOfScopeLabel = computed(() =>
+  libraryScope.value === null
+    ? "All not in a project"
+    : `All of ${scopedProjectObj.value?.name ?? "this project"}`,
+);
+const dragOverScopeRow = ref(false);
+// The dropdown heads the box it scopes; a project token has no dropdown.
+const showsScopeSlot = computed(
+  () => showsTree.value && scopedResourceType.value !== "project",
+);
+
+// Only a project takes a drop: Not in a project names nowhere to add to.
+function dragOverScopeItem(event) {
+  if (libraryScope.value == null || isReadOnly.value) return;
+  const verdict = acceptDrop(event, ["pictures", "files"]);
+  if (verdict === "ignore") return;
+  dropRejected.value = verdict === "reject";
+  dragOverScopeRow.value = true;
+}
+
+function dragLeaveScopeItem(event) {
+  if (event && !leftDropRow(event)) return;
+  dragOverScopeRow.value = false;
+}
+
+/** Pictures dropped on the row join the project. Files are left to the
+ * window's importer (useWindowFileImport), which already files them in the
+ * project in view, this row's own; a second import here would race it. */
+async function handleDropOnScope(event) {
+  dragOverScopeRow.value = false;
+  const projectId = libraryScope.value;
+  if (projectId == null || isReadOnly.value) return;
+  const imageIds = readDraggedImageIds(event);
+  if (imageIds.length === 0) return;
+  try {
+    await setPicturesProject(imageIds, projectId, { mode: "add" });
+    emit("images-moved", { imageIds, refresh: true });
+  } catch (e) {
+    console.error(
+      `Failed to add ${imageIds.length} picture(s) to project ${projectId}`,
+      e,
+    );
+    noticeStore.error(
+      `Couldn't add those pictures to the project. ${noticeDetail(e)}`,
+      { key: "project-drop" },
+    );
+  }
+}
+
 // How the tree below the switch is drawn: a user preference, remembered per
 // library and never in the URL, so flipping it never moves the grid.
 const TREE_MODE_KEY = "pixlstash:sidebar:treeMode";
@@ -5078,24 +5135,71 @@ defineExpose({
                it narrows. A project token has one project to see, so no
                dropdown; a person or set token has no switch either. -->
           <template v-if="!foldersMode">
-            <SidebarScopeSlot
-              v-if="showsTree && scopedResourceType !== 'project'"
-              :projects="sortedProjects"
-              :mode="projectViewMode"
-              :project-id="selectedProjectId"
-              :counts="scopeCounts"
-              :read-only="isReadOnly"
-              @choose="chooseScope"
-              @new-project="createProject"
-              @edit-project="openProjectEditor"
-              @project-menu="(p, e) => openSidebarCtxMenu('project', p, e)"
-            />
             <div
               v-for="branch in libraryBranches"
               :key="branch.key"
-              class="sidebar-branch"
+              :class="['sidebar-branch', { 'sidebar-branch--headed': showsScopeSlot }]"
               :style="scopeWashStyle"
             >
+              <!-- The dropdown is the box's top band, so it plainly owns the
+                   rows under it. -->
+              <SidebarScopeSlot
+                v-if="showsScopeSlot"
+                :projects="sortedProjects"
+                :mode="projectViewMode"
+                :project-id="selectedProjectId"
+                :counts="scopeCounts"
+                :read-only="isReadOnly"
+                @choose="chooseScope"
+                @new-project="createProject"
+                @edit-project="openProjectEditor"
+                @project-menu="(p, e) => openSidebarCtxMenu('project', p, e)"
+              />
+              <!-- The whole scope as a row: the view choosing a project lands
+                   on, lit while it is up, and the way back to it from a person
+                   or set. Any project has none; All media is the library. -->
+              <button
+                v-if="libraryScope !== undefined && !isFinding"
+                type="button"
+                :class="[
+                  'sidebar-list-item',
+                  'sidebar-all-of-scope',
+                  {
+                    active: isAllOfScopeRowActive,
+                    droppable: dragOverScopeRow && !dropRejected,
+                    'not-droppable': dragOverScopeRow && dropRejected,
+                  },
+                ]"
+                :aria-current="isAllOfScopeRowActive ? 'page' : undefined"
+                data-testid="sidebar-all-of-scope"
+                @click="openProjectBranch(libraryScope)"
+                @contextmenu.prevent="
+                  scopedProjectObj
+                    ? openSidebarCtxMenu('project', scopedProjectObj, $event)
+                    : openSidebarCtxMenu('empty', null, $event)
+                "
+                @dragover="dragOverScopeItem($event)"
+                @dragleave="dragLeaveScopeItem($event)"
+                @drop.prevent="handleDropOnScope($event)"
+              >
+                <span class="sidebar-list-icon">
+                  <span
+                    v-if="libraryScope !== null"
+                    class="sidebar-project-tile sidebar-project-tile--mark"
+                    :style="{ '--tile-color': projectColor(libraryScope) }"
+                    aria-hidden="true"
+                  />
+                  <v-icon v-else size="16">mdi-folder-outline</v-icon>
+                </span>
+                <span class="sidebar-list-label">
+                  <span class="sidebar-list-label-text">{{ allOfScopeLabel }}</span>
+                </span>
+                <span class="sidebar-list-count">{{
+                  (libraryScope === null
+                    ? scopeCounts.none
+                    : scopeCounts.byId?.[libraryScope]) ?? ""
+                }}</span>
+              </button>
               <div>
               <div
                 v-if="

@@ -90,6 +90,7 @@ vi.mock("vue-router", () => ({
 import { isReadOnly, sessionContext } from "../../utils/apiClient";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useSelectionStore } from "../../stores/useSelectionStore";
+import { useFilterStore } from "../../stores/useFilterStore";
 import SideBar from "./SideBar.vue";
 
 const PROJECTS = [
@@ -637,5 +638,186 @@ describe("a project's move menus", () => {
     expect(wrapper.vm.characterMoveMenuOpen).toBe(true);
 
     wrapper.unmount();
+  });
+});
+
+describe("the All of <project> row under the dropdown", () => {
+  const allOfRow = (wrapper) => wrapper.find('[data-testid="sidebar-all-of-scope"]');
+
+  /** A picture drag from the grid, as the drop sees it. */
+  function pictureDrop(imageIds) {
+    const payload = JSON.stringify({ type: "image-ids", imageIds });
+    return {
+      preventDefault: () => {},
+      dataTransfer: {
+        types: ["application/json", "application/x-pixlstash-pictures"],
+        files: [],
+        getData: (type) => (type === "application/json" ? payload : ""),
+      },
+    };
+  }
+
+  it("names the project with its count, lit until a person is chosen", async () => {
+    const wrapper = mountSidebar();
+    await refreshAndSettle(wrapper);
+    expect(allOfRow(wrapper).exists(), "Any project has no row").toBe(false);
+
+    wrapper.vm.chooseScope(3);
+    await flushPromises();
+    const row = allOfRow(wrapper);
+    expect(row.text()).toContain("All of Book");
+    expect(row.find(".sidebar-list-count").text()).toBe("118");
+    expect(row.classes()).toContain("active");
+    expect(row.attributes("aria-current")).toBe("page");
+
+    // The route, not the emit, moves the selection: App writes the store.
+    useSelectionStore().selectedCharacter = 1;
+    await flushPromises();
+    expect(allOfRow(wrapper).classes()).not.toContain("active");
+    expect(allOfRow(wrapper).attributes("aria-current")).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it("goes back to all of the project on a click", async () => {
+    const wrapper = mountSidebar();
+    await refreshAndSettle(wrapper);
+    wrapper.vm.chooseScope(3);
+    useSelectionStore().selectedCharacter = 1;
+    await flushPromises();
+
+    const before = wrapper.emitted("select-character").length;
+    await allOfRow(wrapper).trigger("click");
+    expect(wrapper.emitted("select-character")).toHaveLength(before + 1);
+    const [payload] = wrapper.emitted("select-character").at(-1);
+    expect(payload.id).toBe("ALL");
+    expect(payload.projectContext).toEqual({ mode: "project", projectId: 3 });
+    wrapper.unmount();
+  });
+
+  it("stays unlit over the project's favourites, and a click shows all of it", async () => {
+    const wrapper = mountSidebar();
+    await refreshAndSettle(wrapper);
+    const filters = useFilterStore();
+    filters.favouriteOnlyFilter = true;
+    wrapper.vm.chooseScope(3);
+    await flushPromises();
+    expect(allOfRow(wrapper).classes()).not.toContain("active");
+
+    await allOfRow(wrapper).trigger("click");
+    expect(filters.favouriteOnlyFilter).toBe(false);
+    expect(allOfRow(wrapper).classes()).toContain("active");
+    wrapper.unmount();
+  });
+
+  it("steps aside while Find is on", async () => {
+    const wrapper = mountSidebar();
+    await refreshAndSettle(wrapper);
+    wrapper.vm.chooseScope(3);
+    await flushPromises();
+    expect(allOfRow(wrapper).exists()).toBe(true);
+    wrapper.vm.findQuery = "Ada";
+    await flushPromises();
+    expect(allOfRow(wrapper).exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("reads All not in a project for the pictures in none", async () => {
+    apiGet.mockImplementation((url) =>
+      Promise.resolve(
+        String(url).includes("/projects/UNASSIGNED/summary")
+          ? { data: { image_count: 9 } }
+          : respond(url),
+      ),
+    );
+    const wrapper = mountSidebar();
+    await refreshAndSettle(wrapper);
+    wrapper.vm.chooseScope("none");
+    await flushPromises();
+    const row = allOfRow(wrapper);
+    expect(row.text()).toContain("All not in a project");
+    expect(row.find(".sidebar-list-count").text()).toBe("9");
+    expect(row.find(".sidebar-project-tile").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("adds pictures dropped on it to the project, and none to Not in a project", async () => {
+    const wrapper = mountSidebar();
+    await refreshAndSettle(wrapper);
+
+    wrapper.vm.chooseScope("none");
+    await wrapper.vm.handleDropOnScope(pictureDrop([7, 8]));
+    expect(apiPatch).not.toHaveBeenCalled();
+
+    wrapper.vm.chooseScope(3);
+    await wrapper.vm.handleDropOnScope(pictureDrop([7, 8]));
+    expect(apiPatch).toHaveBeenCalledWith("/pictures/project", {
+      picture_ids: [7, 8],
+      project_id: 3,
+      mode: "add",
+    });
+    expect(wrapper.emitted("images-moved").at(-1)[0]).toEqual({
+      imageIds: [7, 8],
+      refresh: true,
+    });
+    wrapper.unmount();
+  });
+
+  it("leaves dropped files to the window's importer", async () => {
+    const wrapper = mountSidebar();
+    await refreshAndSettle(wrapper);
+    wrapper.vm.chooseScope(3);
+    const startImport = vi.fn();
+    wrapper.vm.imageImporterRef = { startImport };
+    await wrapper.vm.handleDropOnScope({
+      preventDefault: () => {},
+      dataTransfer: {
+        types: ["Files"],
+        files: [new File(["x"], "a.png", { type: "image/png" })],
+        items: [],
+        getData: () => "",
+      },
+    });
+    await flushPromises();
+    expect(startImport).not.toHaveBeenCalled();
+    expect(apiPatch).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it("takes no drop in a read-only session", async () => {
+    isReadOnly.value = true;
+    const wrapper = mountSidebar();
+    await refreshAndSettle(wrapper);
+    wrapper.vm.chooseScope(3);
+    const drag = pictureDrop([7]);
+    let accepted = false;
+    drag.preventDefault = () => {
+      accepted = true;
+    };
+    wrapper.vm.dragOverScopeItem(drag);
+    expect(accepted, "the row accepted the drag").toBe(false);
+    await wrapper.vm.handleDropOnScope(pictureDrop([7]));
+    expect(apiPatch).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it("is a project token's first row, which has no dropdown", async () => {
+    isReadOnly.value = true;
+    sessionContext.value = { scope: "READ", resource_type: "project", resource_id: 3 };
+    const wrapper = mountSidebar();
+    await refreshAndSettle(wrapper);
+    expect(wrapper.findComponent({ name: "SidebarScopeSlot" }).exists()).toBe(false);
+    expect(allOfRow(wrapper).text()).toContain("All of Book");
+    wrapper.unmount();
+  });
+
+  it("is not drawn for a person or set token, which has no project", async () => {
+    for (const resourceType of ["character", "picture_set"]) {
+      setActivePinia(createPinia());
+      scopeSessionTo(resourceType);
+      const wrapper = mountSidebar();
+      await refreshAndSettle(wrapper);
+      expect(allOfRow(wrapper).exists(), resourceType).toBe(false);
+      wrapper.unmount();
+    }
   });
 });
