@@ -1500,7 +1500,7 @@ onBeforeUnmount(() => {
   grid-column: 1;
   position: sticky;
   left: calc(-1 * var(--space-3));
-  z-index: 1;
+  z-index: var(--z-sticky);
   background: rgb(var(--v-theme-background));
   display: flex;
   flex-direction: column;
