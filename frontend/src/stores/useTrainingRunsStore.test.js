@@ -96,3 +96,27 @@ describe("the cards of jobs with no folder", () => {
     expect(failed.run).toBe(null);
   });
 });
+
+describe("a card's name", () => {
+  it("is its job's name, and the folder's for a run trained elsewhere", () => {
+    const store = useTrainingRunsStore();
+    store.runs = [walter(), { name: "elsewhere_v1", checkpoints: [] }];
+    store.jobs = [
+      {
+        uuid: "abcd1234",
+        name: "Walter Z-Image Turbo #2",
+        status: "completed",
+        run_name: "walter_v2",
+        started_at: "2026-10-01T00:01:00Z",
+        completed_at: "2026-10-01T01:00:00Z",
+        created_at: "2026-10-01T00:00:00Z",
+      },
+    ];
+
+    const names = Object.fromEntries(store.cards.map((c) => [c.key, c.name]));
+    expect(names).toEqual({
+      "run:walter_v2": "Walter Z-Image Turbo #2",
+      "run:elsewhere_v1": "elsewhere_v1",
+    });
+  });
+});

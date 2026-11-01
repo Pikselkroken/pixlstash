@@ -6584,7 +6584,10 @@ written in the same update as the run's folder, and not `run_name`, which is
 also null for a run under an output root since moved. A run with a folder is keyed `run:<name>` whether or not its job
 has been read, so a tick survives the job list landing or failing; a queued job
 with no folder is `job:<uuid>`, and the tick moves to its folder card when the
-folder appears. Cards sort live first,
+folder appears. A card's `name` is its job's (`<subject> <recipe label> #N`,
+numbered by `runName` in `utils/trainingPlan.js` when the run is started), and
+the folder's only for a run with no job; the folder name, with its uuid suffix,
+stays the key and what every API call takes. Cards sort live first,
 then newest (`modified_at`, else the job's `created_at`). The read guards
 (generation per read, ticks reconciled to what is still listed, the old root's
 rows dropped the moment the root changes) moved from the view into the store

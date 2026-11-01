@@ -28,6 +28,7 @@ import {
   promptLines,
   promptTexts,
   promptsEdited,
+  runName,
   sameValue,
   toggleTrigger,
   triggerFromName,
@@ -542,9 +543,15 @@ export const useTrainingStore = defineStore("training", () => {
       // CreateJobRequest forbids extra fields. The base model is the
       // recipe's, read by the server.
       const trigger = triggerWord.value.trim();
+      const model = presets.value.find((p) => p.id === selectedPreset.value)?.label;
+      const existing = await listTrainingJobs();
       const body = {
         ...scopePayload.value,
-        name: `${displayName.value || "LoRA"} (${trigger})`.trim(),
+        name: runName(
+          displayName.value,
+          model,
+          (Array.isArray(existing) ? existing : []).map((j) => j.name),
+        ),
         trigger_word: trigger,
         effort: effort.value,
         fit: fit.value,

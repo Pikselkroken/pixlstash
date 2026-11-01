@@ -564,7 +564,7 @@ describe("a picked training run (#2169)", () => {
     };
     routeState.query = { run: "u8" };
     const { wrapper } = await mountOnRuns({ runs: [finished], jobs: [job] });
-    expect(title(wrapper)).toBe("walter_v2");
+    expect(title(wrapper)).toBe("aria_v4");
     // The page shows how it went; the rail does not say it again.
     expect(wrapper.find('[data-testid="mrr-steps"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="mrr-samples"]').exists()).toBe(false);
