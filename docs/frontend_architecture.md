@@ -2544,9 +2544,11 @@ own row.
   recipe…" rather than drawing the grid card's slots as if they were the
   default; a failed read offers Retry. **LoRAs** holds the default's `loras`
   (labelled *Default*) and, under a hairline, the *Also used* pile.
-  **Where the defaults come from is drawn once, in the head**: a five-bar
+  **Where the defaults come from is drawn once, in the head**: a six-bar
   histogram of the card's `rating_counts` (`WorkflowStarChart.vue`), the 4★
-  and 5★ bars at full ink, every bar when none is rated 4★+, no chart when
+  and 5★ bars solid `secondary` raspberry (the Stats sidebar's manual-score
+  hue) and the rest at half strength, every bar solid when none is rated 4★+
+  or the workflow is manual, no chart when
   nothing is rated; its accessible name and tooltip give every count and the
   source. A row is marked only when it is the exception: "Yours"
   (`provenance: edited`) under its label, or *Edited* / *Removed* while a

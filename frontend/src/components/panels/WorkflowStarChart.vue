@@ -1,7 +1,7 @@
 <template>
   <!-- Where the workflow's defaults come from, drawn: its pictures by star
        rating, unrated first and then 1★ to 5★, in one 32px histogram. The
-       bars the defaults are read from are at full ink. The accessible name
+       bars the defaults are read from are solid raspberry. The accessible name
        carries every count, and so does the tooltip. -->
   <div
     class="wfstars"
@@ -127,14 +127,16 @@ const summary = computed(() => {
   white-space: nowrap;
 }
 
-/* Ink, never hue: amber and olive stay with Run and selection. The quiet bars
-   take the secondary fade. */
+/* Raspberry, the hue the Stats sidebar's manual-score chart wears for the
+   same ratings. Amber and olive stay with Run and selection, teal with
+   unsaved. The source bars are solid; the rest take that chart's half-strength
+   resting fill. */
 .wfstars-hi {
-  background: rgb(var(--v-theme-on-surface));
+  background: rgb(var(--v-theme-secondary));
 }
 
 .wfstars-lo {
-  background: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  background: rgba(var(--v-theme-secondary), 0.5);
 }
 
 .wfstars:focus-visible {

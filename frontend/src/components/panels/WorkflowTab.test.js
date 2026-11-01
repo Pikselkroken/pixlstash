@@ -1974,7 +1974,7 @@ describe("the DEFAULT RECIPE section (#1653)", () => {
   }
 
 
-  it("draws its star ratings in the head, the 4★+ bars the defaults come from at full ink", async () => {
+  it("draws its star ratings in the head, the 4★+ bars the defaults come from solid", async () => {
     const counts = [0, 2, 5, 8, 4];
     const { wrapper } = await mountWith([KEY], [card({ rating_counts: counts })]);
     // In the rail's lead, not the body: the histogram is the head's own.
@@ -1983,7 +1983,7 @@ describe("the DEFAULT RECIPE section (#1653)", () => {
       "Pictures by rating: Unrated 165, 1 star 0, 2 stars 2, 3 stars 5, 4 stars 8, 5 stars 4. " +
         "The defaults come from its pictures rated 4 stars or more.",
     );
-    // Six bars, unrated first; the 4★+ two are the defaults' at full ink.
+    // Six bars, unrated first; the 4★+ two are the defaults', solid.
     const bars = chart.findAll(".wfstars-bar");
     expect(bars.map((bar) => bar.classes().find((name) => /^wfstars-(hi|lo)$/.test(name)))).toEqual([
       "wfstars-lo",
